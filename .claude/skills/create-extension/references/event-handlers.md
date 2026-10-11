@@ -39,9 +39,6 @@ Source: `lib/events/types.ts`. Every payload includes `userId`.
 | `customer.created` | `{ customer: Customer, userId }` |
 | `receipt.extracted` | `{ receipt, documentId, confidence, userId }` |
 | `receipt.matched` | `{ receipt, transaction, confidence, autoMatched, userId }` |
-| `receipt.confirmed` | `{ receipt, businessTotal, privateTotal, userId }` |
-| `supplier_invoice.received` | `{ inboxItem: InvoiceInboxItem, userId }` |
-| `supplier_invoice.extracted` | `{ inboxItem, confidence, userId }` |
 | `supplier_invoice.confirmed` | `{ inboxItem, supplierInvoice, userId }` |
 
 ## Standard Handler Pattern

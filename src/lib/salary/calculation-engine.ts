@@ -798,8 +798,8 @@ export function calculateSalary(
     //
     // The tillägg is a share of the MONTHLY salary per vacation day, never of
     // the dagslön. Valuing it off a daily rate under-provisioned 2920 by the
-    // whole divisor, while absence-calculator.ts relieves that same 2920 at
-    // the correct monthly base when a day is taken, so the liability drifted
+    // whole divisor, while a taken day's tillägg is valued at the monthly
+    // base (dayValueSek in semesterberedning.ts), so the liability drifted
     // further negative with every taken day.
     //
     // Only the month's earned share accrues. The full annual entitlement used
@@ -1033,133 +1033,6 @@ export function calculateAvgifterRate(
     output: null,
   })
   return { rate: config.avgifterTotal, amount: 0, basis: 0, category: 'standard', steps }
-}
-
-// ============================================================
-// Sjuklön helpers
-// ============================================================
-
-/**
- * Calculate karensavdrag (sick leave deduction day 1).
- * Formula: 20% × (monthly_salary × 12 / 52 × sjuklön_rate)
- */
-export function calculateKarensavdrag(monthlySalary: number, config: PayrollConfig): number {
-  const weeklySjuklon = r(monthlySalary * 12 / 52 * config.sjuklonRate)
-  return r(weeklySjuklon * config.karensavdragFactor)
-}
-
-/**
- * Calculate sjuklön for days 2-14.
- * Formula: 80% × daily_rate × (sick_days - 1)
- */
-export function calculateSjuklon(
-  monthlySalary: number,
-  sickDays: number,
-  config: PayrollConfig,
-  // Arbetsschema-lite: legacy 21 unless the employee's schedule differs.
-  dailyDivisor: number = 21
-): { karensavdrag: number; sjuklon: number; totalDeduction: number; steps: CalculationStep[] } {
-  const steps: CalculationStep[] = []
-  const dailyRate = r(monthlySalary / dailyDivisor)
-
-  // Karensavdrag
-  const karensavdrag = calculateKarensavdrag(monthlySalary, config)
-  steps.push({
-    label: 'Karensavdrag',
-    formula: `20 % × (månadslön × 12/52 × ${fmtPct(config.sjuklonRate)})`,
-    input: { monthly_salary: monthlySalary },
-    output: karensavdrag,
-  })
-
-  // Sjuklön day 2-14
-  const sjuklonDays = Math.min(Math.max(sickDays - 1, 0), 13)
-  const sjuklon = r(dailyRate * config.sjuklonRate * sjuklonDays)
-  steps.push({
-    label: 'Sjuklön dag 2-14',
-    formula: `dagslön × ${fmtPct(config.sjuklonRate)} × (sjukdagar − 1)`,
-    input: { daily_rate: dailyRate, sjuklon_rate: config.sjuklonRate, days: sjuklonDays },
-    output: sjuklon,
-  })
-
-  // Total deduction from pay = salary they would have earned - sjuklön they get
-  const fullPayForPeriod = r(dailyRate * sickDays)
-  const totalDeduction = r(-(fullPayForPeriod - sjuklon + karensavdrag))
-  steps.push({
-    label: 'Netto sjukavdrag',
-    formula: '−(full lön − sjuklön + karensavdrag)',
-    input: { full_pay: fullPayForPeriod, sjuklon, karensavdrag },
-    output: totalDeduction,
-  })
-
-  return { karensavdrag, sjuklon, totalDeduction, steps }
-}
-
-/**
- * Calculate vacation accrual.
- */
-export function calculateVacationAccrual(params: {
-  monthlySalary: number
-  vacationRule: 'procentregeln' | 'sammaloneregeln' | 'none' | 'semesterersattning'
-  vacationDaysPerYear: number
-  semestertillaggRate: number
-  /** Kollektivavtal rate override; see SalaryCalculationInput.vacationPayRate. */
-  vacationPayRate?: number | null
-  vacationBasis: number
-}): { accrual: number; steps: CalculationStep[] } {
-  const steps: CalculationStep[] = []
-
-  if (params.vacationRule === 'none') {
-    steps.push({
-      label: 'Semesteravsättning (avstängd)',
-      formula: 'ingen semesteravsättning',
-      input: {},
-      output: 0,
-    })
-    return { accrual: 0, steps }
-  }
-
-  if (params.vacationRule === 'semesterersattning') {
-    steps.push({
-      label: 'Semesteravsättning (semesterersättning betald direkt)',
-      formula: `ingen avsättning: ${fmtPct(resolveVacationPayRate(params.vacationDaysPerYear, params.vacationPayRate))} betalas ut på varje lön`,
-      input: {},
-      output: 0,
-    })
-    return { accrual: 0, steps }
-  }
-
-  if (params.vacationRule === 'procentregeln') {
-    const rate = resolveVacationPayRate(params.vacationDaysPerYear, params.vacationPayRate)
-    const accrual = r(params.vacationBasis * rate)
-    steps.push({
-      label: `Semesteravsättning (procentregeln ${fmtPct(rate)})`,
-      formula: `semesterunderlag × ${fmtPct(rate)}`,
-      input: { vacation_basis: params.vacationBasis, rate },
-      output: accrual,
-    })
-    return { accrual, steps }
-  } else {
-    // Sammalöneregeln: tillägg per vacation day, valued on the MONTHLY salary
-    // and accrued one month's earned share at a time. See the mirrored branch
-    // in calculateSalary for why neither a dagslön base nor the full annual
-    // entitlement belongs here. Use vacationBasis as the degree-adjusted
-    // reference: callers must pass the part-time-adjusted monthly amount,
-    // never the raw full-time monthlySalary.
-    const daysEarnedThisMonth = params.vacationDaysPerYear / 12
-    const accrual = r(params.vacationBasis * params.semestertillaggRate * daysEarnedThisMonth)
-    steps.push({
-      label: `Semesteravsättning (sammalöneregeln ${fmtPct(params.semestertillaggRate)})`,
-      formula: `månadslön × ${fmtPct(params.semestertillaggRate)} × semesterdagar / 12`,
-      input: {
-        monthly_base: params.vacationBasis,
-        rate: params.semestertillaggRate,
-        vacation_days_per_year: params.vacationDaysPerYear,
-        days_earned_this_month: r(daysEarnedThisMonth),
-      },
-      output: accrual,
-    })
-    return { accrual, steps }
-  }
 }
 
 // ============================================================

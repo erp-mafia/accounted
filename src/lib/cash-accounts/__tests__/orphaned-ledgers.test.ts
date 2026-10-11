@@ -7,10 +7,7 @@
 import { describe, it, expect } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
-  getOrphanedCounterLedgers,
   findOrphanedCounterLedger,
-  listSiblingCashAccounts,
-  listSiblingLedgerAccounts,
   describeCashAccountSiblings,
   findPairableCashAccountByIban,
   guardCounterLegs,
@@ -20,6 +17,16 @@ import {
 } from '../service'
 
 const IBAN = 'SE4550000000058398257466'
+
+/** The orphan set the live readers use (loadCounterLegTopology). */
+async function orphanedLedgers(supabase: unknown, companyId: string): Promise<ReadonlySet<string>> {
+  return (await loadCounterLegTopology(supabase as never, companyId))?.orphaned ?? new Set()
+}
+
+/** The sibling rows the live readers use (describeCashAccountSiblings). */
+async function siblingsOf(supabase: unknown, companyId: string, cashAccountId: string) {
+  return (await describeCashAccountSiblings(supabase as never, companyId, cashAccountId))?.siblings ?? []
+}
 
 function row(overrides: Record<string, unknown> = {}) {
   return {
@@ -35,7 +42,7 @@ function row(overrides: Record<string, unknown> = {}) {
   }
 }
 
-describe('getOrphanedCounterLedgers', () => {
+describe('orphaned counter ledgers (loadCounterLegTopology)', () => {
   it('flags a revoked-held twin of an actively connected row', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
@@ -51,7 +58,7 @@ describe('getOrphanedCounterLedgers', () => {
       ],
     })
 
-    const orphaned = await getOrphanedCounterLedgers(supabase as never, 'company-1')
+    const orphaned = await orphanedLedgers(supabase, 'company-1')
     expect(orphaned.has('1931')).toBe(true)
     expect(orphaned.has('1940')).toBe(false)
   })
@@ -69,7 +76,7 @@ describe('getOrphanedCounterLedgers', () => {
     })
     enqueue({ data: [{ id: 'conn-old', status: 'revoked' }] })
 
-    const orphaned = await getOrphanedCounterLedgers(supabase as never, 'company-1')
+    const orphaned = await orphanedLedgers(supabase, 'company-1')
     expect(orphaned.size).toBe(0)
   })
 
@@ -84,7 +91,7 @@ describe('getOrphanedCounterLedgers', () => {
     })
     enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
 
-    const orphaned = await getOrphanedCounterLedgers(supabase as never, 'company-1')
+    const orphaned = await orphanedLedgers(supabase, 'company-1')
     expect(orphaned.has('1931')).toBe(true)
   })
 
@@ -103,7 +110,7 @@ describe('getOrphanedCounterLedgers', () => {
       ],
     })
 
-    const orphaned = await getOrphanedCounterLedgers(supabase as never, 'company-1')
+    const orphaned = await orphanedLedgers(supabase, 'company-1')
     expect(orphaned.has('1931')).toBe(true)
     expect(orphaned.has('1940')).toBe(false)
   })
@@ -113,7 +120,7 @@ describe('getOrphanedCounterLedgers', () => {
     enqueue({ data: [row({ id: 'ca-expired', ledger_account: '1930', bank_connection_id: 'conn-expired' })] })
     enqueue({ data: [{ id: 'conn-expired', status: 'expired' }] })
 
-    const orphaned = await getOrphanedCounterLedgers(supabase as never, 'company-1')
+    const orphaned = await orphanedLedgers(supabase, 'company-1')
     expect(orphaned.size).toBe(0)
   })
 
@@ -129,14 +136,14 @@ describe('getOrphanedCounterLedgers', () => {
     })
     enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
 
-    const orphaned = await getOrphanedCounterLedgers(supabase as never, 'company-1')
+    const orphaned = await orphanedLedgers(supabase, 'company-1')
     expect(orphaned.size).toBe(0)
   })
 
   it('returns an empty set on lookup failure', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: null, error: { message: 'boom' } })
-    const orphaned = await getOrphanedCounterLedgers(supabase as never, 'company-1')
+    const orphaned = await orphanedLedgers(supabase, 'company-1')
     expect(orphaned.size).toBe(0)
   })
 
@@ -153,7 +160,7 @@ describe('getOrphanedCounterLedgers', () => {
     })
     enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
 
-    const orphaned = await getOrphanedCounterLedgers(supabase as never, 'company-1')
+    const orphaned = await orphanedLedgers(supabase, 'company-1')
     expect(orphaned.size).toBe(0)
   })
 })
@@ -180,7 +187,7 @@ describe('findOrphanedCounterLedger', () => {
   })
 })
 
-describe('listSiblingCashAccounts', () => {
+describe('sibling rows (describeCashAccountSiblings)', () => {
   it('returns the same-currency sibling rows with id, ledger, currency and liveness so a link can re-point at one', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
@@ -194,7 +201,7 @@ describe('listSiblingCashAccounts', () => {
     })
     enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
 
-    const siblings = await listSiblingCashAccounts(supabase as never, 'company-1', 'ca-orphan')
+    const siblings = await siblingsOf(supabase, 'company-1', 'ca-orphan')
     expect(siblings).toEqual([{ id: 'ca-live', ledger_account: '1940', currency: 'SEK', live: true, released: false }])
   })
 
@@ -202,7 +209,7 @@ describe('listSiblingCashAccounts', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: null, error: { message: 'boom' } })
 
-    const siblings = await listSiblingCashAccounts(supabase as never, 'company-1', 'ca-orphan')
+    const siblings = await siblingsOf(supabase, 'company-1', 'ca-orphan')
     expect(siblings).toEqual([])
   })
 })
@@ -221,7 +228,7 @@ describe('same-connection re-registration twins (#1643, deliberately out of scop
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: twins() })
     enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
-    expect((await getOrphanedCounterLedgers(supabase as never, 'company-1')).size).toBe(0)
+    expect((await orphanedLedgers(supabase, 'company-1')).size).toBe(0)
 
     const again = createQueuedMockSupabase()
     again.enqueue({
@@ -325,7 +332,7 @@ describe('shouldRepointToSibling', () => {
   })
 })
 
-describe('listSiblingLedgerAccounts', () => {
+describe('sibling ledgers (describeCashAccountSiblings)', () => {
   it('returns the other ledgers sharing the row\'s IBAN, normalized', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
@@ -338,21 +345,21 @@ describe('listSiblingLedgerAccounts', () => {
     })
     enqueue({ data: [{ id: 'conn-live', status: 'active' }] })
 
-    const siblings = await listSiblingLedgerAccounts(supabase as never, 'company-1', 'ca-orphan')
+    const siblings = (await siblingsOf(supabase, 'company-1', 'ca-orphan')).map((r) => r.ledger_account)
     expect(siblings).toEqual(['1940'])
   })
 
   it('returns [] for a row without an IBAN', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [row({ id: 'ca-kassa', ledger_account: '1910', iban: null, bank_connection_id: null })] })
-    const siblings = await listSiblingLedgerAccounts(supabase as never, 'company-1', 'ca-kassa')
+    const siblings = (await siblingsOf(supabase, 'company-1', 'ca-kassa')).map((r) => r.ledger_account)
     expect(siblings).toEqual([])
   })
 
   it('returns [] when the row cannot be found', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [] })
-    const siblings = await listSiblingLedgerAccounts(supabase as never, 'company-1', 'missing')
+    const siblings = (await siblingsOf(supabase, 'company-1', 'missing')).map((r) => r.ledger_account)
     expect(siblings).toEqual([])
   })
 })

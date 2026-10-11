@@ -15,8 +15,6 @@ import {
   reverseChargeKindForBasisAccount,
   REVERSE_CHARGE_KINDS,
   generateInputVatLine,
-  extractNetAmount,
-  extractVatAmount,
   type ReverseChargeKind,
 } from '../vat-entries'
 
@@ -425,53 +423,5 @@ describe('generateInputVatLine', () => {
   it('defaults to vatRate=0.25 when omitted', () => {
     const line = generateInputVatLine(1250)
     expect(line!.debit_amount).toBe(250)
-  })
-})
-
-describe('extractNetAmount', () => {
-  it('extracts 1000 net from 1250 gross at 25%', () => {
-    expect(extractNetAmount(1250, 0.25)).toBe(1000)
-  })
-
-  it('extracts 1000 net from 1120 gross at 12%', () => {
-    expect(extractNetAmount(1120, 0.12)).toBe(1000)
-  })
-
-  it('extracts 1000 net from 1060 gross at 6%', () => {
-    expect(extractNetAmount(1060, 0.06)).toBe(1000)
-  })
-
-  it('returns total unchanged at zero rate', () => {
-    expect(extractNetAmount(1000, 0)).toBe(1000)
-  })
-})
-
-describe('extractVatAmount', () => {
-  it('extracts 250 VAT from 1250 gross at 25%', () => {
-    expect(extractVatAmount(1250, 0.25)).toBe(250)
-  })
-
-  it('extracts 120 VAT from 1120 gross at 12%', () => {
-    expect(extractVatAmount(1120, 0.12)).toBe(120)
-  })
-
-  it('extracts 60 VAT from 1060 gross at 6%', () => {
-    expect(extractVatAmount(1060, 0.06)).toBe(60)
-  })
-
-  it('returns 0 at zero rate', () => {
-    expect(extractVatAmount(1000, 0)).toBe(0)
-  })
-})
-
-describe('extractNetAmount + extractVatAmount round-trip', () => {
-  it.each([
-    [1250, 0.25],
-    [1120, 0.12],
-    [1060, 0.06],
-  ])('reconstructs total %s from net + vat at rate %s', (total, rate) => {
-    const net = extractNetAmount(total, rate)
-    const vat = extractVatAmount(total, rate)
-    expect(net + vat).toBe(total)
   })
 })

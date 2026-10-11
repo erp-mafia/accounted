@@ -159,7 +159,6 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/settings/peppol': covered([`POST ${V}/peppol/registration`, 'gnubok_register_peppol_participant']),
   'DELETE /api/settings/peppol': gap('P3', 'Peppol deregistration'),
   'POST /api/settings/peppol/access': covered([`POST ${V}/peppol/access-request`, 'gnubok_request_peppol_access']),
-  'PATCH /api/extensions/:sector/:slug/settings': uiOnly('extension toggle and per-extension UI settings'),
   'POST /api/extensions/:sector/:slug/data': uiOnly('internal extension key-value state'),
   'DELETE /api/extensions/:sector/:slug/data': uiOnly('internal extension key-value state'),
   'PATCH /api/rules/:id': gap('P3', 'edit a counterparty booking rule'),
@@ -189,7 +188,6 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/bookkeeping/no-doc-required/bulk-missing': gap('P3', 'filter-wide "inget underlag krävs"'),
   'POST /api/bookkeeping/journal-entry-lines/:lineId/retag': covered([`POST ${V}/dimensions/retag`, 'gnubok_tag_journal_lines']),
   'POST /api/bookkeeping/voucher-gaps': covered([`POST ${V}/voucher-gap-explanations`, 'gnubok_explain_voucher_gap']),
-  'POST /api/bookkeeping/fix-cash-mismatch': uiOnly('one-off remediation of a historical matcher bug, reviewed payment by payment'),
 
   // ── Accruals (periodiseringar) ─────────────────────────────────────
   'POST /api/bookkeeping/fiscal-periods/:id/accruals': covered(
@@ -264,7 +262,6 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/transactions/:id/match-expense-payout': covered([`POST ${V}/transactions/:id/match-expense-payout`, 'gnubok_match_expense_payout']),
   'POST /api/transactions/:id/match-rot-rut-payout': covered(['gnubok_settle_rot_rut_payout']),
   'POST /api/transactions/:id/refresh-exchange-rate': covered([`POST ${V}/transactions/:id/refresh-exchange-rate`]),
-  'POST /api/transactions/batch-match-invoices': covered(['gnubok_auto_match_period'], 'auto-match proposals rather than an explicit pair list'),
   'POST /api/transactions/bulk-book': covered([`POST ${V}/transactions/bulk-book`, 'gnubok_bulk_book_transactions']),
   'POST /api/transactions/suggest-categories': covered(['gnubok_suggest_categories']),
 
@@ -301,7 +298,6 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/documents/:id/links': gap('P3', 'link a document to a party/agreement/asset (not a verifikat)'),
   'DELETE /api/documents/:id/links/:linkId': gap('P3'),
   'POST /api/arkiv/facts/:id/revert': gap('P3', 'revert a company fact (gnubok_propose_fact stages new ones)'),
-  'POST /api/arkiv/facts/derive': gap('P3', 'recompute company facts now (nightly cron does it)'),
   'POST /api/arkiv/findings/:id': gap('P3', 'close an Arkiv finding'),
 
   // ── Imports ────────────────────────────────────────────────────────
@@ -309,9 +305,6 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/import/sie/upload': covered([`POST ${V}/imports/sie/upload`, 'gnubok_create_sie_upload']),
   'POST /api/import/sie/execute': covered([`POST ${V}/imports/sie`, 'gnubok_import_sie']),
   'POST /api/import/sie/create-accounts': covered(['gnubok_import_sie'], 'the API import creates missing accounts itself'),
-  'POST /api/import/sie/mappings': gap('P3', 'saved SIE account mappings'),
-  'PUT /api/import/sie/mappings': gap('P3'),
-  'DELETE /api/import/sie/mappings': gap('P3'),
   'POST /api/import/sie/:id/action': covered([`POST ${V}/imports/sie/:id/undo`, `POST ${V}/imports/sie/:id/resume`]),
   'POST /api/import/sie/:id/replace': covered([`POST ${V}/imports/sie/:id/undo`], 'compat route: queues the same batch storno'),
   'DELETE /api/import/sie/:id': gap('P3', 'delete a failed/pending SIE import record'),
@@ -614,14 +607,8 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'DELETE /api/extensions/ext/skatteverket/declaration/lock': gap('P3', 'unlock a declaration awaiting signature'),
   'POST /api/extensions/ext/skatteverket/declaration/submit': covered(['gnubok_vat_declaration_submit']),
   'POST /api/extensions/ext/skatteverket/agi/submit': covered(['gnubok_agi_submit']),
-  'POST /api/extensions/ext/skatteverket/agi/spara': covered(['gnubok_agi_submit'], 'submit saves the underlag and locks it for signing in one step'),
-  'POST /api/extensions/ext/skatteverket/agi/las': covered(['gnubok_agi_submit'], 'submit saves the underlag and locks it for signing in one step'),
   'POST /api/extensions/ext/skatteverket/agi/lasUpp': gap('P3', 'unlock an AGI awaiting signature'),
-  'DELETE /api/extensions/ext/skatteverket/agi/underlag': gap('P3'),
-  'DELETE /api/extensions/ext/skatteverket/agi/sparad': gap('P3'),
   'POST /api/extensions/ext/skatteverket/agi/granskningsunderlag': gap('P3', 'fetch Skatteverket\'s granskningsunderlag'),
-  'POST /api/extensions/ext/skatteverket/agi/kontrollera/hu': covered([`POST ${V}/skatteverket/agi/validate-huvuduppgift`, 'gnubok_agi_validate_huvuduppgift']),
-  'POST /api/extensions/ext/skatteverket/agi/kontrollera/iu': covered([`POST ${V}/skatteverket/agi/validate-individuppgift`], 'v1 only: the payload carries personnummer'),
   'POST /api/extensions/ext/skatteverket/skattekonto/sync': covered([`POST ${V}/skattekonto/sync`]),
   'POST /api/extensions/ext/skatteverket/skattekonto/transaktioner/bokfor-batch': covered(['gnubok_book_skattekonto_rows']),
   'POST /api/extensions/ext/skatteverket/skattekonto/transaktioner/:id/bokfor': covered(['gnubok_book_skattekonto_row']),
@@ -640,9 +627,6 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/extensions/ext/invoice-inbox/upload/create': covered(['gnubok_create_document_upload']),
   'POST /api/extensions/ext/invoice-inbox/upload/complete': covered(['gnubok_complete_document_upload']),
   'PATCH /api/extensions/ext/invoice-inbox/items/:id/fields': covered([`PATCH ${V}/inbox-items/:id`, 'gnubok_set_inbox_extracted_data']),
-  'PUT /api/extensions/ext/invoice-inbox/items/:id/extracted-data': covered(['gnubok_set_inbox_extracted_data']),
-  'POST /api/extensions/ext/invoice-inbox/items/:id/attach-document': gap('P3', 'add a source file to an existing inbox item'),
-  'POST /api/extensions/ext/invoice-inbox/items/:id/match-supplier': covered([`POST ${V}/inbox-items/:id/match-supplier`, 'gnubok_create_supplier_invoice_from_inbox']),
   'POST /api/extensions/ext/invoice-inbox/items/:id/match-transaction': covered([`POST ${V}/inbox-items/:id/match-transaction`, 'gnubok_attach_document_to_transaction']),
   'POST /api/extensions/ext/invoice-inbox/items/:id/unmatch-transaction': covered([`POST ${V}/inbox-items/:id/unmatch-transaction`, 'gnubok_unmatch_inbox_item_transaction']),
   'POST /api/extensions/ext/invoice-inbox/items/:id/retry-extraction': gap('P3'),
@@ -707,4 +691,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 135
+export const GAP_CEILING = 128

@@ -8,7 +8,6 @@ import { deleteDocument } from '@/lib/core/documents/document-service'
 import { recordHumanClassification } from '@/lib/documents/classify/classify'
 import { enqueueDocumentJob } from '@/lib/documents/jobs/queue'
 import { isDocType } from '@/lib/documents/classify/taxonomy'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 // Classification emits document.classified; the inbox extension's handler must be wired to route it.
@@ -27,7 +26,6 @@ const bodySchema = z.object({
 })
 
 export const POST = withRouteContext('document.admission', async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const { id } = await params
   const parsed = await validateBody(request, bodySchema)
   if (!parsed.success) return parsed.response

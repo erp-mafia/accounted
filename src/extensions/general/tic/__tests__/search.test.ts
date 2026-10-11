@@ -3,10 +3,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('../lib/tic-client', () => ({
   searchCompanyByOrgNumber: vi.fn(),
   searchCompaniesByName: vi.fn(),
-  getBankAccounts: vi.fn(),
-  getIndustryCodes: vi.fn(),
-  getEmails: vi.fn(),
-  getPhones: vi.fn(),
   getFiscalYears: vi.fn(),
 }))
 

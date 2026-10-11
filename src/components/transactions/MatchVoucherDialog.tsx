@@ -301,7 +301,6 @@ export function MatchVoucherDialog({
                 glLines={glLines}
                 selectedIds={selected}
                 onToggle={toggleVoucher}
-                inline
               />
               {(selectedLine?.linked_transaction_count ?? 0) > 0 && (
                 <p className="text-xs text-muted-foreground">

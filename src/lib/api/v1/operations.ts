@@ -149,24 +149,6 @@ export async function failOperation(
 }
 
 /**
- * Update progress on a running operation. Non-blocking: a write failure is
- * logged but not raised: the work continues regardless.
- */
-export async function updateOperationProgress(
-  supabase: SupabaseClient,
-  args: { id: string; progress: OperationProgress },
-  log: Logger,
-): Promise<void> {
-  const { error } = await supabase
-    .from('operations')
-    .update({ progress: args.progress })
-    .eq('id', args.id)
-  if (error) {
-    log.warn('updateOperationProgress failed', { operationId: args.id, errorCode: error.code })
-  }
-}
-
-/**
  * Read an operation row, scoped to the caller's company. Returns null when
  * the id is not found (or belongs to another company; RLS already excludes
  * those, but the explicit `.eq('company_id')` keeps the contract clear).

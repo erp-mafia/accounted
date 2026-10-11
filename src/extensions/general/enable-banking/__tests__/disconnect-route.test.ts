@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('../lib/api-client', () => ({
-  startAuthorization: vi.fn(), getASPSPs: vi.fn(), getPreferredAuthMethod: vi.fn(),
+  startAuthorization: vi.fn(), getASPSPs: vi.fn(),
   getPreferredAuthMethodDetails: vi.fn(), deleteSession: vi.fn().mockResolvedValue(undefined),
   isSandboxMode: vi.fn(() => true), SessionExpiredError: class SessionExpiredError extends Error {},
 }))

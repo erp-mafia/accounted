@@ -41,19 +41,6 @@ export function seriesNumberOf(
   return Number.isSafeInteger(n) && n > 0 && n <= MAX_SERIES_NUMBER ? n : null
 }
 
-/** The highest series number among `invoiceNumbers`, or null when none is in the series. */
-export function highestSeriesNumber(
-  invoiceNumbers: Iterable<string | null | undefined>,
-  invoicePrefix: string | null | undefined,
-): number | null {
-  let highest: number | null = null
-  for (const number of invoiceNumbers) {
-    const n = seriesNumberOf(number, invoicePrefix)
-    if (n !== null && (highest === null || n > highest)) highest = n
-  }
-  return highest
-}
-
 /** A jump larger than this is not a series continuing: never applied automatically. */
 export const MAX_SERIES_JUMP = 10_000
 

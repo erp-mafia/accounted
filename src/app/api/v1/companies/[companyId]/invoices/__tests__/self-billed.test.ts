@@ -35,6 +35,7 @@ vi.mock('@/lib/invoices/self-billed-sale', () => ({
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { resolveSelfBilledSaleDraft, createSelfBilledSaleInvoice } from '@/lib/invoices/self-billed-sale'
 import { POST as createInvoice } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -45,21 +46,6 @@ const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const CUSTOMER_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
 const INVOICE_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 const USER_ID = 'user-1'
-
-function makeFlexibleSupabase(byTable: Record<string, { data?: unknown; error?: unknown }>) {
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => resolve(byTable[table] ?? { data: null, error: null })
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 function companyParams(companyId: string) {
   return { params: Promise.resolve({ companyId }) }
@@ -133,7 +119,7 @@ beforeEach(() => {
     mode: 'live',
   })
   mockServiceClient.mockReturnValue(
-    makeFlexibleSupabase({ company_members: { data: { user_id: USER_ID, company_id: COMPANY_ID }, error: null } }),
+    createTableMockSupabase({ company_members: { data: { user_id: USER_ID, company_id: COMPANY_ID }, error: null } }).supabase,
   )
 })
 

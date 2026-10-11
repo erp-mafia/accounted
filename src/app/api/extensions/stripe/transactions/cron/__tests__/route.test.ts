@@ -36,10 +36,7 @@ vi.mock('@/extensions/general/stripe/lib/transaction-sync', () => ({
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { syncStripeBalanceTransactions } from '@/extensions/general/stripe/lib/transaction-sync'
 import { GET } from '../route'
-
-function cronRequest(): Request {
-  return new Request('http://localhost:3000/api/extensions/stripe/transactions/cron')
-}
+import { createCronRequest } from '@/tests/helpers'
 
 function makeConnection(id: string, companyId: string) {
   return {
@@ -82,7 +79,7 @@ describe('GET /api/extensions/stripe/transactions/cron', () => {
       new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 }),
     )
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/extensions/stripe/transactions/cron'))
 
     expect(response.status).toBe(401)
     expect(vi.mocked(syncStripeBalanceTransactions)).not.toHaveBeenCalled()
@@ -91,7 +88,7 @@ describe('GET /api/extensions/stripe/transactions/cron', () => {
   it('no-ops when Stripe Connect is not configured', async () => {
     vi.stubEnv('STRIPE_CONNECT_CLIENT_ID', '')
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/extensions/stripe/transactions/cron'))
     const json = await response.json()
 
     expect(response.status).toBe(200)
@@ -101,7 +98,7 @@ describe('GET /api/extensions/stripe/transactions/cron', () => {
   it('no-ops when no connection has transaction sync enabled', async () => {
     connectionsResult.data = []
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/extensions/stripe/transactions/cron'))
     const json = await response.json()
 
     expect(json.processed).toBe(0)
@@ -114,7 +111,7 @@ describe('GET /api/extensions/stripe/transactions/cron', () => {
       makeConnection('conn-2', 'company-2'),
     ]
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/extensions/stripe/transactions/cron'))
     const json = await response.json()
 
     expect(response.status).toBe(200)
@@ -137,7 +134,7 @@ describe('GET /api/extensions/stripe/transactions/cron', () => {
       companyId !== 'company-1',
     )
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/extensions/stripe/transactions/cron'))
     const json = await response.json()
 
     expect(vi.mocked(syncStripeBalanceTransactions)).toHaveBeenCalledTimes(1)
@@ -154,7 +151,7 @@ describe('GET /api/extensions/stripe/transactions/cron', () => {
       .mockRejectedValueOnce(new Error('stripe boom'))
       .mockResolvedValueOnce({ fetched: 1, imported: 1, duplicates: 0, linked: 0, errors: 0 })
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/extensions/stripe/transactions/cron'))
     const json = await response.json()
 
     expect(response.status).toBe(200)

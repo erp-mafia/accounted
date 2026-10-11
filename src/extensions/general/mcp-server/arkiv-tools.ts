@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { DOCUMENT_TEXT_NOTICE, fenceDocumentText, fenceNullable } from '@/lib/arkiv/untrusted'
 import { dbError } from '@/lib/errors/db-error'
 import { toSameOriginStorageUrl } from '@/lib/core/documents/storage-proxy'
-import { isArkivBrainEnabled, isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { factHistory, listLiveFacts, type FactRow } from '@/lib/arkiv/facts/store'
 import { PREDICATES, predicateDef, type FactSubjectKind } from '@/lib/arkiv/facts/predicates'
 import { isSearchKind, searchRecords, SEARCH_LIMIT_DEFAULT } from '@/lib/arkiv/search'
@@ -54,9 +54,6 @@ const coded = (code: string, message: string): Error => Object.assign(new Error(
 const invalid = (message: string) => coded('VALIDATION_ERROR', message)
 const notFound = (message: string) => coded('NOT_FOUND', message)
 
-function assertEnabled(companyId: string): void {
-  if (!isArkivEnabled(companyId)) throw coded('ARKIV_NOT_ENABLED', 'Arkiv is not enabled for this company yet. Nothing to retry: the other tools work as usual.')
-}
 /** The brain (facts, agreements, findings, the graph) rolls out per company; the shelf tools (search, get_record, get_source) work for everyone. */
 function assertBrain(companyId: string): void {
   if (!isArkivBrainEnabled(companyId)) throw coded('ARKIV_NOT_ENABLED', 'The company brain is not switched on for this company yet. The archive tools work as usual: gnubok_list_records and gnubok_search_records find documents, gnubok_read_document and gnubok_get_source read their pages, and gnubok_ask_document answers one question with page and quote.')
@@ -403,7 +400,6 @@ export function createArkivTools(deps: Deps): McpTool[] {
       },
       annotations: deps.readOnly,
       async execute(args, companyId, _userId, supabase) {
-        assertEnabled(companyId)
         if (String(args.query ?? '').trim().length < 2) throw invalid('query must be at least two characters')
         const asked = Array.isArray(args.kinds) ? (args.kinds as unknown[]).filter(isSearchKind) : []
         // Agreements and facts are the brain's interpretations: outside it the documents are the archive.
@@ -457,7 +453,6 @@ export function createArkivTools(deps: Deps): McpTool[] {
       },
       annotations: deps.readOnly,
       async execute(args, companyId, _userId, supabase) {
-        assertEnabled(companyId)
         const ref = parseRecordRef(args.record_ref)
         const asOf = typeof args.as_of === 'string' ? args.as_of : null
         const base = { record_ref: recordRef(ref.kind, ref.id), kind: ref.kind }
@@ -629,7 +624,6 @@ export function createArkivTools(deps: Deps): McpTool[] {
       async execute(args, companyId, _userId, supabase) {
         // It answers from the raw page text with a verified quote and reads nothing the brain derived, so it works
         // wherever the shelf does (2026-09-25: every call from a company outside the brain was refused).
-        assertEnabled(companyId)
         const ref = parseRecordRef(String(args.record_ref ?? ''))
         if (!ref || ref.kind !== 'document') throw invalid('record_ref must be document:<uuid>')
         const question = String(args.question ?? '').trim()
@@ -803,7 +797,6 @@ export function createArkivTools(deps: Deps): McpTool[] {
       annotations: deps.readOnly,
       catalogVisibility: 'search',
       async execute(args, companyId, _userId, supabase) {
-        assertEnabled(companyId)
         const ref = args.record_ref === undefined ? null : parseRecordRef(args.record_ref)
         if (ref && ref.kind !== 'document') throw invalid('record_ref must be document:<uuid>')
         const documentId = ref ? ref.id : String(args.document_id ?? '')
@@ -876,7 +869,6 @@ export function createArkivTools(deps: Deps): McpTool[] {
       annotations: deps.readOnly,
       catalogVisibility: 'search',
       async execute(args, companyId, _userId, supabase) {
-        assertEnabled(companyId)
         const type = typeof args.type === 'string' && args.type.trim() ? args.type.trim() : null
         try {
           typesFor(type)
@@ -925,7 +917,6 @@ export function createArkivTools(deps: Deps): McpTool[] {
       annotations: deps.readOnly,
       catalogVisibility: 'search',
       async execute(args, companyId, _userId, supabase) {
-        assertEnabled(companyId)
         const ref = args.record_ref === undefined ? null : parseRecordRef(args.record_ref)
         if (ref && ref.kind !== 'document') throw invalid('record_ref must be document:<uuid>')
         const documentId = ref ? ref.id : String(args.document_id ?? '')

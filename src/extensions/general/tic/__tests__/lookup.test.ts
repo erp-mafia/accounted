@@ -1,15 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-// Mock the tic-client functions. /lookup now only calls
-// searchCompanyByOrgNumber: the Phase 2 fetchers stay mocked because the
-// /profile handler shares the module, but we don't expect /lookup to invoke
-// them.
+// Mock the tic-client functions. /lookup only calls searchCompanyByOrgNumber:
+// getFiscalYears stays mocked because the /profile handler shares the module,
+// but we don't expect /lookup to invoke it.
 vi.mock('../lib/tic-client', () => ({
   searchCompanyByOrgNumber: vi.fn(),
-  getBankAccounts: vi.fn(),
-  getIndustryCodes: vi.fn(),
-  getEmails: vi.fn(),
-  getPhones: vi.fn(),
   getFiscalYears: vi.fn(),
 }))
 
@@ -26,10 +21,6 @@ vi.mock('@/lib/parties/scb/client', () => ({
 import { ticExtension } from '../index'
 import {
   searchCompanyByOrgNumber,
-  getBankAccounts,
-  getIndustryCodes,
-  getEmails,
-  getPhones,
   getFiscalYears,
 } from '../lib/tic-client'
 import { TICAPIError } from '../lib/tic-types'
@@ -39,10 +30,6 @@ import { createScbClient } from '@/lib/parties/scb/client'
 import { factsFromScbCompany } from '@/lib/parties/scb/map'
 
 const mockSearch = vi.mocked(searchCompanyByOrgNumber)
-const mockBank = vi.mocked(getBankAccounts)
-const mockIndustries = vi.mocked(getIndustryCodes)
-const mockEmails = vi.mocked(getEmails)
-const mockPhones = vi.mocked(getPhones)
 const mockFiscalYears = vi.mocked(getFiscalYears)
 
 function makeRequest(orgNumber?: string): Request {
@@ -157,10 +144,6 @@ describe('TIC lookup route', () => {
   it('does NOT fan out to Phase 2 endpoints', async () => {
     mockSearch.mockResolvedValue(mockDoc)
     await lookupHandler(makeRequest('556036-0793'))
-    expect(mockBank).not.toHaveBeenCalled()
-    expect(mockIndustries).not.toHaveBeenCalled()
-    expect(mockEmails).not.toHaveBeenCalled()
-    expect(mockPhones).not.toHaveBeenCalled()
     expect(mockFiscalYears).not.toHaveBeenCalled()
   })
 

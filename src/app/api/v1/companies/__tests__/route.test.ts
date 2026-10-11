@@ -36,37 +36,12 @@ vi.mock('@supabase/supabase-js', async () => {
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GET as listCompanies } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
 
 const USER_ID = '930abb54-c5ef-4ae0-b274-30fb16e9a295'
-
-// A Proxy-based supabase stub: every chained builder method returns the chain,
-// and awaiting it resolves to the configured { data, error } for the table.
-function makeFlexibleSupabase(
-  byTable: Record<string, { data?: unknown; error?: unknown }>,
-  calls: Array<{ method: string; args: unknown[] }> = [],
-  tableCalls: Array<{ table: string; method: string; args: unknown[] }> = [],
-) {
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_t, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) =>
-            resolve(byTable[table] ?? { data: null, error: null })
-        }
-        return (...args: unknown[]) => {
-          calls.push({ method: String(prop), args })
-          tableCalls.push({ table, method: String(prop), args })
-          return buildChain(table)
-        }
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 function makeRequest(url = 'https://x.test/api/v1/companies'): Request {
   return new Request(url, {
@@ -108,13 +83,13 @@ beforeEach(() => {
     scopes: ['companies:read'],
     mode: 'live',
   })
-  mockServiceClient.mockReturnValue(makeFlexibleSupabase({ company_members: { data: [], error: null } }))
+  mockServiceClient.mockReturnValue(createTableMockSupabase({ company_members: { data: [], error: null } }).supabase)
 })
 
 describe('GET /api/v1/companies', () => {
   it('returns 200 (not 500) for a static-route context where params is undefined: regression #781', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({ company_members: { data: [membershipRow()], error: null } }),
+      createTableMockSupabase({ company_members: { data: [membershipRow()], error: null } }).supabase,
     )
 
     const res = await listCompanies(makeRequest(), staticRouteContext())
@@ -128,7 +103,7 @@ describe('GET /api/v1/companies', () => {
 
   it('maps each membership row to a company summary in the { data, meta } envelope', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({ company_members: { data: [membershipRow()], error: null } }),
+      createTableMockSupabase({ company_members: { data: [membershipRow()], error: null } }).supabase,
     )
 
     const res = await listCompanies(makeRequest(), staticRouteContext())
@@ -148,12 +123,12 @@ describe('GET /api/v1/companies', () => {
 
   it('drops rows whose joined company was filtered out (archived → null embed)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: {
           data: [membershipRow(), membershipRow({ id: '22222222-2222-4222-8222-222222222222', companies: null })],
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await listCompanies(makeRequest(), staticRouteContext())
@@ -164,7 +139,7 @@ describe('GET /api/v1/companies', () => {
 
   it('returns an empty list (200) when the key user has no memberships', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({ company_members: { data: [], error: null } }),
+      createTableMockSupabase({ company_members: { data: [], error: null } }).supabase,
     )
 
     const res = await listCompanies(makeRequest(), staticRouteContext())
@@ -174,7 +149,6 @@ describe('GET /api/v1/companies', () => {
   })
 
   it('filters the listing by the key company allowlist when the key has one', async () => {
-    const tableCalls: Array<{ table: string; method: string; args: unknown[] }> = []
     mockValidate.mockResolvedValue({
       userId: USER_ID,
       companyId: '8fd5b1f4-0000-4000-8000-000000000001',
@@ -184,9 +158,8 @@ describe('GET /api/v1/companies', () => {
       mode: 'live',
       allowedCompanyIds: ['8fd5b1f4-0000-4000-8000-000000000001'],
     })
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({ company_members: { data: [membershipRow()], error: null } }, [], tableCalls),
-    )
+    const { supabase, calls: tableCalls } = createTableMockSupabase({ company_members: { data: [membershipRow()], error: null } })
+    mockServiceClient.mockReturnValue(supabase)
 
     const res = await listCompanies(makeRequest(), staticRouteContext())
 
@@ -200,10 +173,8 @@ describe('GET /api/v1/companies', () => {
   })
 
   it('adds no allowlist filter for an unrestricted key', async () => {
-    const tableCalls: Array<{ table: string; method: string; args: unknown[] }> = []
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({ company_members: { data: [membershipRow()], error: null } }, [], tableCalls),
-    )
+    const { supabase, calls: tableCalls } = createTableMockSupabase({ company_members: { data: [membershipRow()], error: null } })
+    mockServiceClient.mockReturnValue(supabase)
 
     const res = await listCompanies(makeRequest(), staticRouteContext())
 
@@ -225,13 +196,13 @@ describe('GET /api/v1/companies', () => {
 describe('GET /api/v1/companies display name', () => {
   it('returns the name edited in Inställningar, not the onboarding snapshot: feedback seq 592092', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: [membershipRow()], error: null },
         company_settings: {
           data: [{ company_id: '8fd5b1f4-0000-4000-8000-000000000001', company_name: 'Acme Renamed AB' }],
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await listCompanies(makeRequest(), staticRouteContext())
@@ -242,10 +213,10 @@ describe('GET /api/v1/companies display name', () => {
 
   it('keeps companies.name when the settings read fails', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: [membershipRow()], error: null },
         company_settings: { data: null, error: { message: 'boom' } },
-      }),
+      }).supabase,
     )
 
     const res = await listCompanies(makeRequest(), staticRouteContext())

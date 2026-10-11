@@ -8,7 +8,7 @@ import { recordHumanClassification } from '@/lib/documents/classify/classify'
 import { enqueueDocumentJob } from '@/lib/documents/jobs/queue'
 import { withdrawDerivedAgreement } from '@/lib/arkiv/agreements/store'
 import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
-import { isArkivBrainEnabled, isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 // Classification emits document.classified; the inbox extension's handler must be wired to route it.
@@ -26,7 +26,6 @@ ensureInitialized()
 const bodySchema = z.object({ doc_type: z.enum(DOC_TYPES) })
 
 export const POST = withRouteContext('document.classification', async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const { id } = await params
   const parsed = await validateBody(request, bodySchema)
   if (!parsed.success) return parsed.response

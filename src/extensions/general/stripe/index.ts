@@ -55,11 +55,6 @@ export const stripeExtension: Extension = {
   name: 'Stripe-betalningar',
   version: '1.0.0',
 
-  settingsPanel: {
-    label: 'Betalningar (Stripe)',
-    path: '/import?mode=stripe',
-  },
-
   // Core-callable services, resolved via the extension registry (core never
   // imports extension code). The send routes use this to auto-fill
   // invoices.payment_link_url before the email/PDF render.

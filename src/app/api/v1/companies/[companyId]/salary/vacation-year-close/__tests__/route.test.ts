@@ -47,25 +47,10 @@ vi.mock('@/lib/salary/vacation-ledger', () => ({
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST as closeYear } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-function makeFlexibleSupabase(byTable: Record<string, { data?: unknown; error?: unknown }>) {
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) =>
-            resolve(byTable[table] ?? { data: null, error: null })
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const USER_ID = 'user-1'
@@ -114,10 +99,10 @@ beforeEach(() => {
     mode: 'live',
   })
   mockServiceClient.mockReturnValue(
-    makeFlexibleSupabase({
+    createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       idempotency_keys: { data: null, error: null },
-    }),
+    }).supabase,
   )
 })
 

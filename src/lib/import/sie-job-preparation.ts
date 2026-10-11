@@ -5,7 +5,7 @@ import { ORE_ROUNDING_ACCOUNT, roundOre } from '@/lib/money'
 import { buildSIEAccountRows } from './account-sync'
 import { mappingsToMap } from './account-mapper'
 import { collectSIEDimensionUsage } from './sie-dimensions'
-import { buildSIEMigrationAdjustmentEntry, buildSIEOpeningBalanceEntry, importVouchers, resolveAccumulatingDimensions, validateIBBalance } from './sie-import'
+import { buildSIEMigrationAdjustmentEntry, buildSIEOpeningBalanceEntry, prepareSIEVouchers, resolveAccumulatingDimensions, validateIBBalance } from './sie-import'
 import { getEffectiveObjectOpeningBalances, getEffectiveOpeningBalances, hasOpeningBalanceVoucherCandidate, parseSIEFile,
   selectObjectOpeningBalances, type ObjectOpeningBalanceSource } from './sie-parser'
 import { dimensionBagKey } from '@/lib/bookkeeping/dimension-carry'
@@ -24,7 +24,7 @@ import { resolveCompanyEntityType, resultClosingAccounts } from '@/lib/company/e
 export const SIE_CHECKPOINTS = { accounts: 0, dimensions: 10_000, values: 20_000,
   mappings: 40_000, names: 50_000, noDocuments: 60_000, snapshot: 100_000, prepared: 200_000 } as const
 
-type VoucherPreparation = Awaited<ReturnType<typeof importVouchers>>
+type VoucherPreparation = ReturnType<typeof prepareSIEVouchers>
 interface PreparedSummary {
   entries: number
   skipped: VoucherPreparation['skippedDetails']
@@ -299,9 +299,8 @@ export async function prepareSIEJob(supabase: SupabaseClient, job: SIEJob, deadl
     if (!raw) throw new Error('SIE source group missing')
     const vouchers = raw.map(reviveVoucher)
     validateSIEReportingMappings({...snapshot.parsed,vouchers},accountMap,input.options)
-    const prepared = input.options.importTransactions ? await importVouchers(supabase,job.company_id,
-      job.execution_actor_id ?? job.user_id,job.fiscal_period_id,{...snapshot.parsed,vouchers},
-      accountMap,input.options.voucherSeries ?? 'B',job.id,{startOrdinal:sourceOrdinal,only:true,
+    const prepared = input.options.importTransactions ? prepareSIEVouchers({...snapshot.parsed,vouchers},
+      accountMap,input.options.voucherSeries ?? 'B',job.id,{startOrdinal:sourceOrdinal,
         hasCurrentYearIb:snapshot.hasCurrentYearIb,accountIds}) : null
     const entries = prepared?.preparedEntries ?? []
     totals.openingEntries = (totals.openingEntries ?? 0)+entries.filter(entry => entry.sourceType === 'opening_balance').length

@@ -47,6 +47,7 @@ import {
   DELETE as deleteSupplier,
 } from '../[id]/route'
 import { POST as bulkCreateSuppliers } from '../bulk-create/route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -55,31 +56,6 @@ interface TableResp {
   data?: unknown
   error?: unknown
   count?: number | null
-}
-
-function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) {
-  // Per-table queue: TableResp[] consumes one entry per await, then sticks
-  // on the last entry. Plain TableResp is treated as a constant.
-  const queues = new Map<string, TableResp[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
 }
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -147,10 +123,10 @@ const SAMPLE_SUPPLIER = {
 describe('GET /api/v1/companies/:companyId/suppliers', () => {
   it('returns paginated suppliers, excluding archived by default', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: [SAMPLE_SUPPLIER], error: null },
-      }),
+      }).supabase,
     )
 
     const res = await listSuppliers(
@@ -167,10 +143,10 @@ describe('GET /api/v1/companies/:companyId/suppliers', () => {
 
   it('rejects unknown filter values with 400 VALIDATION_ERROR', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: [], error: null },
-      }),
+      }).supabase,
     )
     const res = await listSuppliers(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/suppliers?supplier_type=individual`),
@@ -185,10 +161,10 @@ describe('GET /api/v1/companies/:companyId/suppliers', () => {
 describe('GET /api/v1/companies/:companyId/suppliers/:id', () => {
   it('returns the supplier when found', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: SAMPLE_SUPPLIER, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await getSupplier(
@@ -203,10 +179,10 @@ describe('GET /api/v1/companies/:companyId/suppliers/:id', () => {
 
   it('returns 404 NOT_FOUND when missing', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await getSupplier(
@@ -221,9 +197,9 @@ describe('GET /api/v1/companies/:companyId/suppliers/:id', () => {
 
   it('rejects a non-UUID id with 400 VALIDATION_ERROR', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await getSupplier(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/suppliers/not-a-uuid`),
@@ -238,10 +214,10 @@ describe('GET /api/v1/companies/:companyId/suppliers/:id?expand=party', () => {
     const party = { id: 'p-1', display_name: 'Office Depot AB', org_number: '5566778899', registry: { status: { label: 'Verksamt', active: true } } }
     expandParty.mockResolvedValue(party)
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: { ...SAMPLE_SUPPLIER, party_id: 'p-1' }, error: null },
-      }),
+      }).supabase,
     )
     const withParty = await getSupplier(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/suppliers/${SUPPLIER_ID}?expand=party`),
@@ -255,10 +231,10 @@ describe('GET /api/v1/companies/:companyId/suppliers/:id?expand=party', () => {
 
     expandParty.mockClear()
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: { ...SAMPLE_SUPPLIER, party_id: 'p-1' }, error: null },
-      }),
+      }).supabase,
     )
     const plain = await getSupplier(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/suppliers/${SUPPLIER_ID}`),
@@ -273,11 +249,11 @@ describe('GET /api/v1/companies/:companyId/suppliers/:id?expand=party', () => {
 describe('POST /api/v1/companies/:companyId/suppliers', () => {
   it('creates a supplier (happy path)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: SAMPLE_SUPPLIER, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await createSupplier(
@@ -299,11 +275,11 @@ describe('POST /api/v1/companies/:companyId/suppliers', () => {
 
   it('returns 409 SUPPLIER_DUPLICATE_ORG_NUMBER on a 23505', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: null, error: { code: '23505', message: 'duplicate' } },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await createSupplier(
@@ -364,9 +340,9 @@ describe('POST /api/v1/companies/:companyId/suppliers', () => {
 
   it('returns 400 when Idempotency-Key is missing', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
 
     const req = new Request(`https://x.test/api/v1/companies/${COMPANY_ID}/suppliers`, {
@@ -384,11 +360,11 @@ describe('PATCH /api/v1/companies/:companyId/suppliers/:id', () => {
   it('updates an existing supplier', async () => {
     const updated = { ...SAMPLE_SUPPLIER, default_payment_terms: 14 }
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: updated, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await updateSupplier(
@@ -406,9 +382,9 @@ describe('PATCH /api/v1/companies/:companyId/suppliers/:id', () => {
 
   it('returns 400 VALIDATION_ERROR for an empty body', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await updateSupplier(
@@ -425,11 +401,11 @@ describe('PATCH /api/v1/companies/:companyId/suppliers/:id', () => {
   it('refuses to edit identifying fields on an archived supplier (BFL 7 kap)', async () => {
     const archived = { ...SAMPLE_SUPPLIER, archived_at: '2026-01-01T00:00:00Z' }
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: archived, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await updateSupplier(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/suppliers/${SUPPLIER_ID}`, {
@@ -448,7 +424,7 @@ describe('PATCH /api/v1/companies/:companyId/suppliers/:id', () => {
   it('allows un-archive (archived_at: null) on an archived supplier', async () => {
     const archived = { ...SAMPLE_SUPPLIER, archived_at: '2026-01-01T00:00:00Z' }
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         // Queue: pre-flight fetch (archived) → final update select (un-archived)
         suppliers: [
@@ -456,7 +432,7 @@ describe('PATCH /api/v1/companies/:companyId/suppliers/:id', () => {
           { data: { ...archived, archived_at: null }, error: null },
         ],
         idempotency_keys: { data: null, error: null },
-      } as Record<string, TableResp | TableResp[]>),
+      } as Record<string, TableResp | TableResp[]>).supabase,
     )
     const res = await updateSupplier(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/suppliers/${SUPPLIER_ID}`, {
@@ -475,14 +451,14 @@ describe('PATCH /api/v1/companies/:companyId/suppliers/:id', () => {
     // referenced by any verifikation, so they remain editable.
     const archived = { ...SAMPLE_SUPPLIER, archived_at: '2026-01-01T00:00:00Z' }
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: [
           { data: archived, error: null },
           { data: { ...archived, notes: 'Updated internal note' }, error: null },
         ],
         idempotency_keys: { data: null, error: null },
-      } as Record<string, TableResp | TableResp[]>),
+      } as Record<string, TableResp | TableResp[]>).supabase,
     )
     const res = await updateSupplier(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/suppliers/${SUPPLIER_ID}`, {
@@ -500,12 +476,12 @@ describe('PATCH /api/v1/companies/:companyId/suppliers/:id', () => {
 describe('DELETE /api/v1/companies/:companyId/suppliers/:id', () => {
   it('archives a supplier with no open invoices (204)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: { data: null, error: null, count: 0 },
         suppliers: { data: { id: SUPPLIER_ID }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await deleteSupplier(
@@ -520,11 +496,11 @@ describe('DELETE /api/v1/companies/:companyId/suppliers/:id', () => {
 
   it('refuses to archive when open invoices exist (409 SUPPLIER_HAS_INVOICES)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: { data: null, error: null, count: 3 },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await deleteSupplier(
@@ -543,7 +519,7 @@ describe('DELETE /api/v1/companies/:companyId/suppliers/:id', () => {
 
 describe('POST /api/v1/companies/:companyId/suppliers/bulk-create', () => {
   it('partial-success: returns per-item ok/error rows', async () => {
-    // First insert succeeds, second hits a 23505. The makeFlexibleSupabase
+    // First insert succeeds, second hits a 23505. The table mock
     // proxy returns the same response for every `from('suppliers')` await, so
     // for this case we wire a tiny custom client that flips on call count.
     let calls = 0
@@ -594,9 +570,9 @@ describe('POST /api/v1/companies/:companyId/suppliers/bulk-create', () => {
 
   it('rejects all_or_nothing: true with 501 NOT_IMPLEMENTED', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await bulkCreateSuppliers(

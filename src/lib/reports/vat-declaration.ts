@@ -764,38 +764,6 @@ export async function calculateVatDeclaration(
 }
 
 /**
- * Get a summary of the VAT declaration for display
- */
-export function getVatDeclarationSummary(declaration: VatDeclaration): {
-  totalOutputVat: number
-  totalInputVat: number
-  vatToPay: number
-  isRefund: boolean
-} {
-  const totalOutputVat = round(
-    declaration.rutor.ruta10 +
-    declaration.rutor.ruta11 +
-    declaration.rutor.ruta12 +
-    declaration.rutor.ruta30 +
-    declaration.rutor.ruta31 +
-    declaration.rutor.ruta32 +
-    declaration.rutor.ruta60 +
-    declaration.rutor.ruta61 +
-    declaration.rutor.ruta62
-  )
-
-  const totalInputVat = declaration.rutor.ruta48
-  const vatToPay = declaration.rutor.ruta49
-
-  return {
-    totalOutputVat,
-    totalInputVat,
-    vatToPay,
-    isRefund: vatToPay < 0,
-  }
-}
-
-/**
  * Format period label for display
  */
 export function formatPeriodLabel(

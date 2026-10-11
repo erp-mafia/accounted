@@ -14,6 +14,8 @@
     "crontabs:generate": "tsx scripts/generate-crontabs.ts",
     "taxonomy:generate": "tsx scripts/generate-taxonomy-registry.ts",
     "taxonomy:check": "tsx scripts/generate-taxonomy-registry.ts --check",
+    "notice:generate": "tsx scripts/generate-notice.ts",
+    "notice:check": "tsx scripts/generate-notice.ts --check",
     "validate:ixbrl": "node scripts/validate-ixbrl.mjs",
     "predev": "npm run setup:extensions && node scripts/inject-public-branding.mjs",
     "dev": "next dev",
@@ -51,7 +53,6 @@
     "@react-pdf/renderer": "^4.5.1",
     "@supabase/ssr": "^0.12.1",
     "@supabase/supabase-js": "^2.110.1",
-    "@tailwindcss/typography": "^0.5.20",
     "@upstash/ratelimit": "^2.0.8",
     "@upstash/redis": "^1.38.0",
     "@vercel/speed-insights": "^2.0.0",
@@ -87,14 +88,15 @@
     "stripe": "^22.3.1",
     "swr": "^2.4.2",
     "tailwind-merge": "^3.6.0",
-    "three": "0.186.0",
     "unpdf": "1.8.1",
     "web-push": "^3.6.7",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@react-pdf/layout": "^4.6.1",
     "@tailwindcss/postcss": "^4",
+    "@tailwindcss/typography": "^0.5.20",
     "@types/heic-convert": "^2.1.1",
     "@types/js-yaml": "4.0.9",
     "@types/mailparser": "^3.4.6",
@@ -104,20 +106,15 @@
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@types/three": "0.186.0",
     "@types/web-push": "^3.6.4",
     "dotenv": "^17.4.2",
     "eslint": "^9",
     "eslint-config-next": "16.3.4",
+    "fast-xml-parser": "^5.7.2",
     "pg": "^8.22.0",
     "tailwindcss": "^4",
     "tsx": "4.20.5",
     "typescript": "^5",
     "vitest": "^4.1.11"
-  },
-  "overrides": {
-    "html-to-text": "10.0.1",
-    "sharp": "^0.35.4",
-    "postcss": "^8.5.18"
   }
 }

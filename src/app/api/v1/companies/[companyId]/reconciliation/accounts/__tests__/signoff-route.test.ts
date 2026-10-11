@@ -40,31 +40,10 @@ import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-key
 import { ReconciliationSignoffError } from '@/lib/reconciliation/signoff'
 import { GET as listGET, POST as signPOST } from '../[accountKey]/signoff/route'
 import { POST as reopenPOST } from '../[accountKey]/signoff/[signoffId]/reopen/route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) queues.set(t, Array.isArray(val) ? [...val] : [val])
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const SIGNOFF_ID = '77777777-7777-4777-8777-777777777777'
@@ -102,10 +81,10 @@ describe('v1 reconciliation sign-off', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { role: 'owner' } },
         idempotency_keys: { data: null },
-      }),
+      }).supabase,
     )
     listMock.mockResolvedValue([{ id: SIGNOFF_ID, account_key: 'skattekonto', through_date: '2026-07-31' }])
     signMock.mockResolvedValue({ dry_run: false, signoff: { id: SIGNOFF_ID, account_key: 'skattekonto', through_date: '2026-07-31' } })

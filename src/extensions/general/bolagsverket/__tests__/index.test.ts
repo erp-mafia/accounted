@@ -30,7 +30,6 @@ function makeCtx(supabase: unknown): ExtensionContext {
     supabase,
     emit: vi.fn(),
     settings: { get: vi.fn(), set: vi.fn(), clear: vi.fn() },
-    storage: {},
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     services: {},
   } as unknown as ExtensionContext
@@ -214,6 +213,25 @@ describe('POST /submissions: config + error mapping', () => {
         ...validBody,
         avsandare_pnr: '198002309879',
       }),
+      makeCtx(supabase),
+    )
+    const { status, body } = await parseJsonResponse<ErrorEnvelope>(res as Response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(submitArsredovisning).not.toHaveBeenCalled()
+  })
+
+  // Each is a 12-digit real-looking number, so only the named rule rejects it.
+  it.each([
+    ['a wrong check digit', '198001019870'],
+    ['a birth year after this year', '209901019878'],
+    ['a samordningsnummer (day + 60)', '198001619876'],
+  ])('rejects a personnummer with %s', async (_label, pnr) => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { role: 'member' }, error: null })
+
+    const res = await route('POST', '/submissions').handler(
+      makePost('/submissions', { ...validBody, avsandare_pnr: pnr }),
       makeCtx(supabase),
     )
     const { status, body } = await parseJsonResponse<ErrorEnvelope>(res as Response)

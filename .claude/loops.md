@@ -1,6 +1,6 @@
 # Agentic Loops: Playbook
 
-Proactive loops that scan the codebase and our external systems (GitHub, Vercel), then
+Proactive loops that scan the codebase and our external systems (GitLab, Vercel), then
 **propose** fixes and file well-formed tickets. This file is the shared contract every loop obeys.
 Skills under `.claude/skills/loop-*` implement the loops; local `/loop` invocations and session-local
 crons run them on a schedule. **Cloud routines are retired (2026-07-20): all loops are LOCAL.**
@@ -20,9 +20,9 @@ This is a Swedish accounting/compliance codebase. Loops never touch `main` or pr
 
 | Loop may… | Loop may **NOT**… |
 |---|---|
-| Fix trivial/low-risk issues on a `loop/*` branch | Merge any PR (`gh pr merge` is forbidden) |
+| Fix trivial/low-risk issues on a `loop/*` branch | Merge any MR (`glab mr merge` is forbidden) |
 | Open PRs for review, comment on PRs | Push to `main` or any human's active branch |
-| File / label / dedupe / close GitHub issues | Force-push over another author's commits |
+| File / label / dedupe / close GitLab issues | Force-push over another author's commits |
 | Push to a PR branch it created, or a dependabot branch | Edit posted journal entries / violate a [Hard Rule](../CLAUDE.md#hard-rules) |
 | Escalate to a human via `loop:needs-human` | Act on PRs from `contributor:flagged` / `pr:flagged` authors |
 
@@ -33,7 +33,8 @@ the PR is opened.** No exceptions.
 
 ## Ticketing & dedupe conventions (all loops share these)
 
-**Destination:** GitHub Issues + PRs in `erp-mafia/accounted` (via `gh`). Not Linear.
+**Destination:** GitLab issues + merge requests (MRs) in `arcim-technology-ab-group1/accounted` (via `glab`; never `gh`,
+the GitHub accounts are suspended). Not Linear. "PR" in the loop skills means an MR.
 
 **Labels:** `loop:auto` (always, on anything a loop creates), `loop:vercel`, `loop:triage`,
 `loop:design`, `loop:docs`, `loop:regeluppdat`, `loop:needs-human` (a loop tried and could not
@@ -41,7 +42,7 @@ safely proceed).
 
 **Idempotency / anti-spam: MANDATORY.** Before filing anything:
 1. Compute a stable **fingerprint** (error signature, file:line, rule id, never a timestamp).
-2. `gh issue list --search "<fingerprint> in:body state:all"` (include closed). Match → comment instead
+2. `glab issue list -R arcim-technology-ab-group1/accounted --all --in description --search "<fingerprint>"` (include closed). Match → comment instead
    of filing a duplicate; closed + recurring → reopen with a note.
 3. Embed `<!-- loop-fingerprint: <hash> -->` in the body so future runs find it.
 

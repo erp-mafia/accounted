@@ -117,7 +117,7 @@ Migration `20240101000017` defines legally-required triggers:
 
 ## Apply
 
-Use `mcp__plugin_supabase_supabase__apply_migration` with snake_case `name`. Never modify existing migration files.
+Never apply a migration to prod by hand (no `apply_migration`, no DDL through `execute_sql`). Commit the file under `supabase/migrations/` and merge: CI's `migrations-production` job (`.gitlab-ci.yml`) runs `supabase db push --include-all` against prod on every push to `main`. Before merging, rename the file above prod's newest version if `main` landed a newer migration meanwhile; after merging, confirm in that job's log that your version was applied. Never modify existing migration files.
 
 ## Common Mistakes
 

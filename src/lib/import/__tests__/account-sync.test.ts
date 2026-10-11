@@ -23,7 +23,7 @@ function mapping(
 }
 
 /**
- * Hand-rolled capturing mock (same approach as the importVouchers tests):
+ * Hand-rolled capturing mock:
  * we need to inspect the rows passed to .insert() and the payload/filters of
  * .update(), which createQueuedMockSupabase cannot do.
  */

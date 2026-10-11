@@ -200,8 +200,3 @@ export const BOX_LABELS: Record<MomsBox, string> = {
 export function getBoxForAccount(accountNumber: string): MomsBox | undefined {
   return ACCOUNT_TO_BOX[accountNumber]
 }
-
-/** Get the Swedish label for a momsdeklaration box */
-export function getBoxLabel(box: MomsBox): string {
-  return BOX_LABELS[box]
-}

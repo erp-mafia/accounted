@@ -3,7 +3,6 @@ import {
   buildVatSettlementProposal,
   findDraftVatSettlement,
   findPostedVatSettlement,
-  vatDeadlineTaxPeriod,
   vatSettlementBookingStatus,
   type VatSettlementExistingEntry,
 } from '../vat-settlement'
@@ -346,11 +345,5 @@ describe('vat settlement UI gate helpers', () => {
     expect(findPostedVatSettlement([])).toBeUndefined()
     expect(vatSettlementBookingStatus([])).toBe('none')
     expect(vatSettlementBookingStatus(undefined)).toBe('none')
-  })
-
-  it('formats the calendar tax_period for monthly and quarterly VAT', () => {
-    expect(vatDeadlineTaxPeriod('monthly', 2026, 6)).toBe('2026-06')
-    expect(vatDeadlineTaxPeriod('quarterly', 2026, 2)).toBe('2026-Q2')
-    expect(vatDeadlineTaxPeriod('yearly', 2026, 1)).toBeNull()
   })
 })

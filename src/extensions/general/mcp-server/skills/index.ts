@@ -1,8 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { Skill } from './types'
+import type { Skill } from '@/lib/agent-skills/types'
 import { workflowSkills as coreWorkflowSkills } from '@/lib/agent-skills/workflows'
 import { kvittojaktenSkills } from '@/lib/agent-skills/workflows/kvittojakten'
-import { loadAtomsAsSkills, loadReferenceById } from './atoms'
+import { loadAtomsAsSkills, loadReferenceById } from '@/lib/agent-skills/atoms'
 import { resolveOwnSkill } from '@/lib/agent-skills/company-skills'
 import { loadSkillCatalog } from '@/lib/agent-skills/catalog'
 
@@ -35,6 +35,6 @@ export async function loadAllSkills(supabase: SupabaseClient, companyId?: string
   return [...workflowSkills, ...atoms]
 }
 
-export type { Skill, SkillTier } from './types'
-export { SKILL_MIME_TYPE, SKILL_URI_PREFIX, skillUri, skillSlugFromUri } from './types'
-export { loadAtomsAsSkills, toSummary, __resetAtomCache } from './atoms'
+export type { Skill, SkillTier } from '@/lib/agent-skills/types'
+export { SKILL_MIME_TYPE, SKILL_URI_PREFIX, skillUri, skillSlugFromUri } from '@/lib/agent-skills/types'
+export { loadAtomsAsSkills, toSummary, __resetAtomCache } from '@/lib/agent-skills/atoms'

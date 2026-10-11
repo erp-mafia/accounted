@@ -52,6 +52,20 @@ export async function insertCompanyMember(params: {
   )
 }
 
+/**
+ * Point the user's active company at companyId. RLS reads it through
+ * current_active_company_id(), so inside withUserContext(userId) a policy
+ * scoped to the active company sees this company.
+ */
+export async function setActiveCompany(userId: string, companyId: string): Promise<void> {
+  await getPool().query(
+    `INSERT INTO public.user_preferences (user_id, active_company_id)
+     VALUES ($1, $2)
+     ON CONFLICT (user_id) DO UPDATE SET active_company_id = EXCLUDED.active_company_id`,
+    [userId, companyId],
+  )
+}
+
 export async function insertFiscalPeriod(params: {
   userId: string
   companyId: string

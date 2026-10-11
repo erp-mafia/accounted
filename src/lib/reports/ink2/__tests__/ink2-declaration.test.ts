@@ -23,7 +23,8 @@ vi.mock('@/lib/bokslut/tax-provision/tax-adjustment-service', () => ({
 }))
 
 import { generateINK2Declaration } from '../ink2-engine'
-import { generateSRUSubmission, validateBlanketterSru } from '../sru-generator'
+import { generateSRUSubmission } from '../sru-generator'
+import { validateInk2BlanketterSru } from '@/tests/sru-validators'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { loadTaxAdjustmentSnapshot } from '@/lib/bokslut/tax-provision/tax-adjustment-service'
 import type { TrialBalanceRow } from '@/types'
@@ -320,7 +321,7 @@ describe('generateINK2Declaration: prior-year deficit (INK2S 4.14 a)', () => {
     const sru = generateSRUSubmission(withDeficit).blanketterSru
     expect(sru).toContain('#UPPGIFT 7763 100000')
     expect(sru).toContain('#UPPGIFT 7670 406000')
-    expect(validateBlanketterSru(sru).isValid).toBe(true)
+    expect(validateInk2BlanketterSru(sru).isValid).toBe(true)
   })
 })
 
@@ -723,7 +724,7 @@ describe('generateINK2Declaration: whole-krona drift (#2597)', () => {
     expect(result.breakdown['7410'].total).toBe(expected)
 
     const { blanketterSru } = generateSRUSubmission(result)
-    expect(validateBlanketterSru(blanketterSru)).toEqual({ isValid: true, errors: [] })
+    expect(validateInk2BlanketterSru(blanketterSru)).toEqual({ isValid: true, errors: [] })
     const revenueFields = blanketterSru.split('\r\n').filter((line) => line.startsWith('#UPPGIFT 7410 '))
     expect(revenueFields).toEqual(expected === 0 ? [] : [`#UPPGIFT 7410 ${expected}`])
   })

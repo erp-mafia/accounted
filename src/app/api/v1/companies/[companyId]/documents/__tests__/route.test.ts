@@ -10,7 +10,7 @@
  * the length of a model call.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { makeDocumentAttachment } from '@/tests/helpers'
+import { makeDocumentAttachment, createTableMockSupabase } from '@/tests/helpers'
 
 beforeAll(() => {
   // Never reach a real DB from this suite: clients are mocked, and this
@@ -56,21 +56,6 @@ const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const JE_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 const URL = `https://x.test/api/v1/companies/${COMPANY_ID}/documents`
 
-/** Every table answers from `byTable`; anything unlisted answers empty. */
-function makeFlexibleSupabase(byTable: Record<string, { data?: unknown; error?: unknown }>) {
-  const buildChain = (table: string): unknown =>
-    new Proxy({}, {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) =>
-            resolve(byTable[table] ?? { data: null, error: null })
-        }
-        return () => buildChain(table)
-      },
-    })
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
-
 const MEMBER = { company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null } }
 
 function pdf(): File {
@@ -104,7 +89,7 @@ beforeEach(() => {
     scopes: ['documents:write'],
     mode: 'live',
   })
-  mockServiceClient.mockReturnValue(makeFlexibleSupabase(MEMBER))
+  mockServiceClient.mockReturnValue(createTableMockSupabase(MEMBER).supabase)
 })
 
 describe('POST /api/v1/companies/:companyId/documents', () => {
@@ -146,7 +131,7 @@ describe('POST /api/v1/companies/:companyId/documents', () => {
 
   it('returns 404 when journal_entry_id does not belong to the company', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({ ...MEMBER, journal_entries: { data: null, error: null } }),
+      createTableMockSupabase({ ...MEMBER, journal_entries: { data: null, error: null } }).supabase,
     )
 
     const res = await POST(makeUpload({ file: pdf(), journal_entry_id: JE_ID }), params())
@@ -159,7 +144,7 @@ describe('POST /api/v1/companies/:companyId/documents', () => {
 
   it('stores the file, answers 201 with row fields only, and defers document.uploaded subscribers', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({ ...MEMBER, journal_entries: { data: { id: JE_ID }, error: null } }),
+      createTableMockSupabase({ ...MEMBER, journal_entries: { data: { id: JE_ID }, error: null } }).supabase,
     )
     uploadDocumentMock.mockResolvedValue(
       makeDocumentAttachment({
@@ -196,7 +181,7 @@ describe('POST /api/v1/companies/:companyId/documents', () => {
   })
 
   it('leaves extraction on for a document that is not linked to a verifikat', async () => {
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({ ...MEMBER }))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({ ...MEMBER }).supabase)
     uploadDocumentMock.mockResolvedValue(
       makeDocumentAttachment({ id: 'doc-2', file_name: 'kvitto.pdf', journal_entry_id: null }),
     )

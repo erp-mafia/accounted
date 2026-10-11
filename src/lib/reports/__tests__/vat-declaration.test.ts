@@ -102,7 +102,6 @@ function seedLedger(
 import {
   calculatePeriodDates,
   formatPeriodLabel,
-  getVatDeclarationSummary,
   calculateVatDeclaration,
   rcInputTotalsFromDeclaration,
   revenueAccountsWithoutRuta,
@@ -110,7 +109,6 @@ import {
 } from '../vat-declaration'
 import { runVatDeclarationChecks } from '../vat-declaration-checks'
 import { fetchDynamicVatAccounts } from '../vat-revenue-accounts'
-import type { VatDeclaration } from '@/types'
 
 let supabase: ReturnType<typeof makeClient>
 
@@ -286,94 +284,6 @@ describe('formatPeriodLabel', () => {
 
   it('formats yearly period', () => {
     expect(formatPeriodLabel('yearly', 2024, 1)).toBe('Helår 2024')
-  })
-})
-
-describe('getVatDeclarationSummary', () => {
-  const emptyRc = { ruta20: 0, ruta21: 0, ruta22: 0, ruta23: 0, ruta24: 0, ruta30: 0, ruta31: 0, ruta32: 0 }
-  const zeroExtras = { ruta08: 0, ruta35: 0, ruta36: 0, ruta37: 0, ruta38: 0, ruta41: 0, ruta42: 0, ruta50: 0, ruta60: 0, ruta61: 0, ruta62: 0 }
-
-  it('calculates totals and detects payment', () => {
-    const declaration: VatDeclaration = {
-      period: { type: 'monthly', year: 2024, period: 1, start: '2024-01-01', end: '2024-01-31' },
-      rutor: {
-        ruta05: 10000, ruta06: 0, ruta07: 0,
-        ruta10: 2500, ruta11: 0, ruta12: 0,
-        ruta20: 0, ruta21: 0, ruta22: 0, ruta23: 0, ruta24: 0,
-        ruta30: 0, ruta31: 0, ruta32: 0,
-        ruta39: 0, ruta40: 0,
-        ruta48: 1000, ruta49: 1500,
-        ...zeroExtras,
-      },
-      invoiceCount: 5,
-      transactionCount: 10,
-      breakdown: {
-        invoices: { ruta05: 10000, ruta06: 0, ruta07: 0, ruta10: 2500, ruta11: 0, ruta12: 0, ruta39: 0, ruta40: 0, base25: 10000, base12: 0, base6: 0 },
-        transactions: { ruta48: 1000 },
-        receipts: { ruta48: 0 },
-        reverseCharge: emptyRc,
-      },
-    }
-
-    const summary = getVatDeclarationSummary(declaration)
-    expect(summary.totalOutputVat).toBe(2500)
-    expect(summary.totalInputVat).toBe(1000)
-    expect(summary.vatToPay).toBe(1500)
-    expect(summary.isRefund).toBe(false)
-  })
-
-  it('identifies refund when ruta49 is negative', () => {
-    const declaration: VatDeclaration = {
-      period: { type: 'monthly', year: 2024, period: 1, start: '2024-01-01', end: '2024-01-31' },
-      rutor: {
-        ruta05: 2000, ruta06: 0, ruta07: 0,
-        ruta10: 500, ruta11: 0, ruta12: 0,
-        ruta20: 0, ruta21: 0, ruta22: 0, ruta23: 0, ruta24: 0,
-        ruta30: 0, ruta31: 0, ruta32: 0,
-        ruta39: 0, ruta40: 0,
-        ruta48: 3000, ruta49: -2500,
-        ...zeroExtras,
-      },
-      invoiceCount: 1,
-      transactionCount: 20,
-      breakdown: {
-        invoices: { ruta05: 2000, ruta06: 0, ruta07: 0, ruta10: 500, ruta11: 0, ruta12: 0, ruta39: 0, ruta40: 0, base25: 2000, base12: 0, base6: 0 },
-        transactions: { ruta48: 3000 },
-        receipts: { ruta48: 0 },
-        reverseCharge: emptyRc,
-      },
-    }
-
-    const summary = getVatDeclarationSummary(declaration)
-    expect(summary.isRefund).toBe(true)
-    expect(summary.vatToPay).toBe(-2500)
-  })
-
-  it('includes ruta30-32 in totalOutputVat', () => {
-    const declaration: VatDeclaration = {
-      period: { type: 'monthly', year: 2024, period: 1, start: '2024-01-01', end: '2024-01-31' },
-      rutor: {
-        ruta05: 10000, ruta06: 0, ruta07: 0,
-        ruta10: 2500, ruta11: 0, ruta12: 0,
-        ruta20: 0, ruta21: 5000, ruta22: 0, ruta23: 0, ruta24: 0,
-        ruta30: 1250, ruta31: 0, ruta32: 0,
-        ruta39: 0, ruta40: 0,
-        ruta48: 2250, ruta49: 1500,
-        ...zeroExtras,
-      },
-      invoiceCount: 2,
-      transactionCount: 0,
-      breakdown: {
-        invoices: { ruta05: 10000, ruta06: 0, ruta07: 0, ruta10: 2500, ruta11: 0, ruta12: 0, ruta39: 0, ruta40: 0, base25: 10000, base12: 0, base6: 0 },
-        transactions: { ruta48: 0 },
-        receipts: { ruta48: 0 },
-        reverseCharge: { ruta20: 0, ruta21: 5000, ruta22: 0, ruta23: 0, ruta24: 0, ruta30: 1250, ruta31: 0, ruta32: 0 },
-      },
-    }
-
-    const summary = getVatDeclarationSummary(declaration)
-    // totalOutputVat = ruta10 + ruta30 = 2500 + 1250 = 3750
-    expect(summary.totalOutputVat).toBe(3750)
   })
 })
 

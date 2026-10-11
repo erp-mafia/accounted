@@ -15,8 +15,8 @@ Licensing: the project is AGPL-3.0 with an extension exception. An extension tha
 
 These rules are enforced by CI:
 
-- **Core never imports from `@/extensions/`.** The "Check no core imports from extensions" step in `.github/workflows/core-build.yml` greps `src/lib/`, `src/app/api/` and `src/components/` for `from '@/extensions/`. The exempt paths are `src/app/api/extensions/`, `src/components/extensions/`, `src/lib/extensions/_generated/` and `src/lib/extensions/loader.ts`. `src/lib/extensions/__tests__/type-decoupling.test.ts` applies the same rule to `src/types/index.ts`.
-- **Core must build and run with zero extensions.** The shared CI setup (`.github/actions/setup-core/action.yml`) writes `{"extensions":[]}` to the config before building and testing. Core reaches extension functionality only through the registry, and it must behave correctly when the lookup finds nothing.
+- **Core never imports from `@/extensions/`.** The `checks` job in `.gitlab-ci.yml` greps `src/lib/`, `src/app/api/` and `src/components/` for `from '@/extensions/`. The exempt paths are `src/app/api/extensions/`, `src/components/extensions/`, `src/lib/extensions/_generated/` and `src/lib/extensions/loader.ts`. `src/lib/extensions/__tests__/type-decoupling.test.ts` applies the same rule to `src/types/index.ts`.
+- **Core must build and run with zero extensions.** The `.setup-core` template in `.gitlab-ci.yml`, which the `checks`, `build` and `unit-tests` jobs extend, writes `{"extensions":[]}` to the config before building and testing. Core reaches extension functionality only through the registry, and it must behave correctly when the lookup finds nothing.
 - **Extension code is loaded through static imports.** The generator writes a plain `import { ... } from '<entryPoint>'` for each enabled extension. Never load extension modules with a module-scope dynamic `import()`. An `await import()` of a core module inside a handler body is fine.
 
 Extensions can write core data (for example, bank sync ingests transactions through `ctx.services.ingestTransactions`). Anything they write follows the same accounting rules as core code: journal writes go through `src/lib/bookkeeping/engine.ts`, and period locks are respected. See the Hard Rules in `CLAUDE.md`.
@@ -75,7 +75,7 @@ It also appends the id to the enum in `src/extensions/extensions.schema.json`. T
 
 The script lags the code in three places:
 
-- **Sector:** always pass `--sector general`. The script also accepts `restaurant`, `construction`, `hotel`, `tech`, `ecommerce` and `export`, but `SectorSlug` in `src/lib/extensions/types.ts` is only `'general'`, and `src/lib/extensions/sectors.ts` defines only the `general` sector. An extension scaffolded with another sector fails type-checking and never shows up in the marketplace or under `/e/`.
+- **Sector:** always pass `--sector general`. The script also accepts `restaurant`, `construction`, `hotel`, `tech`, `ecommerce` and `export`, but `SectorSlug` in `src/lib/extensions/types.ts` is only `'general'`, so an extension scaffolded with another sector fails type-checking.
 - **Printed next steps:** skip steps 4 and 5, which say to edit `src/lib/extensions/loader.ts` and `src/lib/extensions/sectors.ts`. The generator handles both.
 - **Route URL:** the comment in the generated `api-routes.ts` gives the wrong URL. The real one is `/api/extensions/ext/<id>/<path>`.
 
@@ -113,18 +113,17 @@ Abridged from `src/extensions/general/enable-banking/manifest.json`:
 | `workspace` | Import path of a default-exported React component, or `null` |
 | `branding` | Optional. `true` only for an extension that calls `registerBrandingService()` at module load: it is then listed in `_generated/branding-list.ts`. |
 | `requiredEnvVars`, `optionalEnvVars`, `npmDependencies` | See [Enabling extensions](#enabling-extensions) |
-| `definition` | Marketplace metadata. Required: `name`, `category`, `icon` (a Lucide name), `dataPattern` (`core`, `manual` or `both`), `description`, `longDescription`. Optional: `readsCoreTables`, `hasOwnData`, `quickAction` (`{ label, description, icon, href?, event?, order? }`), `subscriptionNotice`. |
+| `definition` | Marketplace metadata. Required: `name`, `category`, `icon` (a Lucide name listed in `src/lib/extensions/icon-resolver.tsx`; any other name renders as `Puzzle`), `dataPattern` (`core`, `manual` or `both`), `description`, `longDescription`. Optional: `readsCoreTables`, `hasOwnData`, `quickAction` (`{ label, description, icon, href?, event?, order? }`), `subscriptionNotice`. |
 
 ## The Extension object
 
-`Extension` in `src/lib/extensions/types.ts` has `id`, `name`, `version` and optional `sector`, plus optional surfaces. Only some surfaces are read by core today:
+`Extension` in `src/lib/extensions/types.ts` has `id`, `name`, `version` and optional `sector`, plus three optional surfaces:
 
 | Surface | Read by |
 |---------|---------|
 | `eventHandlers` | `extensionRegistry.register()`, which subscribes each handler to the event bus |
 | `apiRoutes` | The dispatcher at `src/app/api/extensions/ext/[...path]/route.ts` |
 | `services` | Core callers through `extensionRegistry.get(id)?.services` or `extensionRegistry.getAll()` |
-| `settingsPanel`, `sidebarItems`, `routes`, `reportTypes`, `taxCodes`, `dimensionTypes`, `mappingRuleTypes`, `onInstall`, `onUninstall` | Declared in the type, but no core code reads them. Settings UI is wired separately, see [UI](#ui). |
 
 A minimal event-handler extension, abridged from `src/extensions/general/example-logger/index.ts`:
 
@@ -162,7 +161,6 @@ interface ExtensionContext {
   supabase: SupabaseClient    // the request's user-scoped client, RLS applies
   emit(event: CoreEvent): Promise<void>
   settings: ExtensionSettings // get<T>(key?), set<T>(key, value), clear(key)
-  storage: ExtensionStorage   // download, upload, getPublicUrl (Supabase Storage)
   log: ExtensionLogger        // info, warn, error; logger ext:<id> bound to user/company/request ids
   services: ExtensionServices // core services, see below
 }
@@ -170,7 +168,7 @@ interface ExtensionContext {
 
 **Settings storage.** `ctx.settings` reads and writes the `extension_data` table. There is one row per `(company_id, extension_id, key)`, which is the table's unique constraint, and `extension_id` is the bare extension id. `get()` with no key reads the key `settings`. `set()` upserts and throws on error. To remove a value, call `clear(key)`: `set(key, null)` fails against the NOT NULL `value` column.
 
-**Core services (core to extension).** `ctx.services` exposes `ingestTransactions`, `getCashAccounts` and `getPrimaryCashAccount`. Use them instead of reaching into core internals that another extension may also depend on.
+**Core services (core to extension).** `ctx.services` exposes `ingestTransactions`. Use it instead of reaching into core internals that another extension may also depend on.
 
 ## Event handlers
 
@@ -267,7 +265,7 @@ A related variant is to register an implementation into a core registry when the
 
 An extension without a workspace shows a placeholder instead.
 
-**Marketplace.** The pages are `src/app/(dashboard)/extensions/page.tsx`, `[sector]/page.tsx` and `[sector]/[extension]/page.tsx`. The sidebar lists an extension only when it has both a workspace and `definition.quickAction.href`, ordered by `quickAction.order` (`getExtensionNavItems()` in `src/lib/extensions/sectors.ts`).
+**Marketplace.** The pages are `src/app/(dashboard)/extensions/page.tsx` (every compiled-in extension) and `[sector]/[extension]/page.tsx` (one extension); `[sector]/page.tsx` only redirects old links to `/extensions`. The sidebar lists an extension only when it has both a workspace and `definition.quickAction.href`, ordered by `quickAction.order` (`getExtensionNavItems()` in `src/lib/extensions/sectors.ts`).
 
 **Settings panels.** Register the component by hand in `src/lib/extensions/settings-panel-registry.tsx`, as a `next/dynamic` import keyed by extension id. Core pages render it with `getSettingsPanel('<id>')`, for example `src/app/(dashboard)/import/page.tsx` and `src/components/settings/sections/BankingSettingsContent.tsx`. The panel usually loads and saves through the extension's own `apiRoutes`.
 

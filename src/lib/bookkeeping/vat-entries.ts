@@ -566,19 +566,3 @@ export function generateInputVatLine(
     line_description: `Ingående moms ${vatRate * 100}%`,
   }
 }
-
-/**
- * Calculate the net amount (excl VAT) from a total amount
- */
-export function extractNetAmount(totalAmount: number, vatRate: number): number {
-  if (vatRate === 0) return totalAmount
-  return Math.round((totalAmount / (1 + vatRate)) * 100) / 100
-}
-
-/**
- * Calculate VAT amount from a total amount (VAT-inclusive)
- */
-export function extractVatAmount(totalAmount: number, vatRate: number): number {
-  if (vatRate === 0) return 0
-  return Math.round((totalAmount - totalAmount / (1 + vatRate)) * 100) / 100
-}

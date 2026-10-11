@@ -201,7 +201,6 @@ function makeContext(supabase: ReturnType<typeof buildSupabase>): ExtensionConte
     supabase: supabase as any,
     emit: vi.fn().mockResolvedValue(undefined),
     settings: { get: vi.fn(), set: vi.fn(), getAll: vi.fn() } as never,
-    storage: {} as never,
     log: {
       info: vi.fn(),
       warn: vi.fn(),

@@ -4,7 +4,7 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
 import { createServiceClient } from '@/lib/supabase/server'
-import { isArkivBrainEnabled, isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { documentTitle } from '@/lib/arkiv/documents/title'
 import { runDocumentJobFor } from '@/lib/documents/jobs/queue'
 import type { Payload } from '@/lib/documents/extract/fields'
@@ -45,7 +45,6 @@ const UNDERLAG_HREF = '/e/general/invoice-inbox'
 const querySchema = z.object({ advance: z.enum(['1', '0']).optional() })
 
 export const GET = withRouteContext('document.pipeline', async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const { id } = await params
   const parsed = validateQuery(request, querySchema)
   if (!parsed.success) return parsed.response

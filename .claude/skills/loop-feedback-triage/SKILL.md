@@ -1,6 +1,6 @@
 ---
 name: loop-feedback-triage
-description: Weekly loop that reads new gnubok_feedback reports (agent.feedback rows in prod event_log) and what agents asked for without reporting it (MCP calls to tools or parameters that do not exist, and failures that reached them as UNKNOWN_ERROR) past a sequence watermark, verifies each against current main, appends a dated digest to dev_docs/mcp_feedback_digest.md, and opens small fix PRs for clearly-scoped bugs. Never merges, never files GitHub issues on its own. Run LOCALLY (needs the Supabase MCP). Follows .claude/loops.md.
+description: Weekly loop that reads new gnubok_feedback reports (agent.feedback rows in prod event_log) and what agents asked for without reporting it (MCP calls to tools or parameters that do not exist, and failures that reached them as UNKNOWN_ERROR) past a sequence watermark, verifies each against current main, appends a dated digest to dev_docs/mcp_feedback_digest.md, and opens small fix PRs for clearly-scoped bugs. Never merges, never files GitLab issues on its own. Run LOCALLY (needs the Supabase MCP). Follows .claude/loops.md.
 ---
 
 # loop-feedback-triage
@@ -128,7 +128,7 @@ passes the **[`loop-verify`](../loop-verify/SKILL.md)** gate first. PR body link
 quotes the report's ids so the fix is verifiable. Anything touching posted journal entries, money math,
 a migration, or Swedish tax law is `medium`+ and gets a digest line + `needs-human`, never a loop PR.
 
-Never file GitHub issues from this loop: issue creation is founder-authorised only. Surface gaps in the
+Never file GitLab issues from this loop: issue creation is founder-authorised only. Surface gaps in the
 digest and, when a report is urgent (data loss, wrong filing, a tool 100% broken), say so at the top of
 the run report.
 

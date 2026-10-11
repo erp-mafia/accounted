@@ -1,22 +1,18 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import {
   generateImportPreview,
   validateIBBalance,
   isBalanceSheetAccount,
   ensureFiscalPeriod,
   precheckFiscalPeriod,
-  importVouchers,
+  prepareSIEVouchers,
   buildSIEOpeningBalanceEntry,
-  summarizeUnmappedSkips,
   computeVoucherNumberRanges,
-  linkOpeningBalanceEntryToPeriod,
-  companyHasPriorActivity,
 } from '../sie-import'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { ORE_ROUNDING_ACCOUNT } from '@/lib/money'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import type { ParsedSIEFile, AccountMapping } from '../types'
-import type { SupabaseClient } from '@supabase/supabase-js'
 
 // --- Helpers ---
 
@@ -871,205 +867,6 @@ describe('ensureFiscalPeriod validation', () => {
   })
 })
 
-describe('linkOpeningBalanceEntryToPeriod', () => {
-  // Regression: SIE import created the opening-balance entry but never wrote
-  // its ID back to fiscal_periods. Without the link, getOpeningBalances falls
-  // through to summing all prior journal lines, which inflates balance-sheet
-  // accounts across multi-year imports (each year's IB double-counted against
-  // the prior year's UB).
-  type Supabase = Parameters<typeof linkOpeningBalanceEntryToPeriod>[0]
-
-  it('writes opening_balance_entry_id and opening_balances_set to the fiscal period', async () => {
-    const updates: Array<{ payload: Record<string, unknown>; filters: Record<string, unknown> }> = []
-
-    const supabase = {
-      from: (table: string) => {
-        if (table !== 'fiscal_periods') {
-          throw new Error(`Unexpected table: ${table}`)
-        }
-        let pendingPayload: Record<string, unknown> = {}
-        const filters: Record<string, unknown> = {}
-        const chain = {
-          update: (payload: Record<string, unknown>) => {
-            pendingPayload = payload
-            return chain
-          },
-          eq: (col: string, val: unknown) => {
-            filters[col] = val
-            return chain
-          },
-          then: (resolve: (v: unknown) => void) => {
-            updates.push({ payload: pendingPayload, filters: { ...filters } })
-            resolve({ data: null, error: null })
-          },
-        }
-        return chain
-      },
-    }
-
-    await linkOpeningBalanceEntryToPeriod(
-      supabase as unknown as Supabase,
-      'company-1',
-      'period-1',
-      'ob-entry-1',
-    )
-
-    expect(updates).toHaveLength(1)
-    expect(updates[0].payload).toEqual({
-      opening_balance_entry_id: 'ob-entry-1',
-      opening_balances_set: true,
-    })
-    expect(updates[0].filters).toEqual({
-      id: 'period-1',
-      company_id: 'company-1',
-    })
-  })
-
-  it('throws a descriptive error when the update fails', async () => {
-    const supabase = {
-      from: () => {
-        const chain = {
-          update: () => chain,
-          eq: () => chain,
-          then: (resolve: (v: unknown) => void) =>
-            resolve({ data: null, error: { message: 'permission denied' } }),
-        }
-        return chain
-      },
-    }
-
-    await expect(
-      linkOpeningBalanceEntryToPeriod(
-        supabase as unknown as Supabase,
-        'company-1',
-        'period-1',
-        'ob-entry-1',
-      ),
-    ).rejects.toThrow(/Failed to link opening balance entry.*permission denied/)
-  })
-})
-
-describe('companyHasPriorActivity', () => {
-  // Guards multi-year SIE imports: when the company already has posted
-  // non-IB journal entries, creating another IB entry would double-count
-  // one year's movements against every balance-sheet account.
-  type Supabase = Parameters<typeof companyHasPriorActivity>[0]
-
-  function buildCountingSupabase(count: number) {
-    const capturedFilters: Record<string, unknown> = {}
-
-    const supabase = {
-      from: (table: string) => {
-        if (table !== 'journal_entries') {
-          throw new Error(`Unexpected table: ${table}`)
-        }
-        const chain = {
-          select: (_cols: string, opts?: { count?: string; head?: boolean }) => {
-            capturedFilters['_opts'] = opts
-            return chain
-          },
-          eq: (col: string, val: unknown) => {
-            capturedFilters[`eq:${col}`] = val
-            return chain
-          },
-          neq: (col: string, val: unknown) => {
-            const key = `neq:${col}`
-            const existing = capturedFilters[key]
-            if (Array.isArray(existing)) {
-              existing.push(val)
-            } else if (existing !== undefined) {
-              capturedFilters[key] = [existing, val]
-            } else {
-              capturedFilters[key] = val
-            }
-            return chain
-          },
-          in: (col: string, val: unknown) => {
-            capturedFilters[`in:${col}`] = val
-            return chain
-          },
-          lte: (col: string, val: unknown) => {
-            capturedFilters[`lte:${col}`] = val
-            return chain
-          },
-          then: (resolve: (v: { count: number; error: null }) => void) =>
-            resolve({ count, error: null }),
-        }
-        return chain
-      },
-    }
-    return { supabase, capturedFilters }
-  }
-
-  it('returns false when the company has no prior posted entries', async () => {
-    const { supabase } = buildCountingSupabase(0)
-
-    const result = await companyHasPriorActivity(
-      supabase as unknown as Supabase,
-      'company-1',
-      '2025-12-31',
-    )
-
-    expect(result).toBe(false)
-  })
-
-  it('returns true when the company has prior posted non-IB entries', async () => {
-    const { supabase } = buildCountingSupabase(42)
-
-    const result = await companyHasPriorActivity(
-      supabase as unknown as Supabase,
-      'company-1',
-      '2025-12-31',
-    )
-
-    expect(result).toBe(true)
-  })
-
-  it('excludes opening_balance and storno entries, and only counts posted', async () => {
-    const { supabase, capturedFilters } = buildCountingSupabase(0)
-
-    await companyHasPriorActivity(
-      supabase as unknown as Supabase,
-      'company-1',
-      '2025-12-31',
-    )
-
-    expect(capturedFilters['neq:source_type']).toEqual(['opening_balance', 'storno'])
-    expect(capturedFilters['eq:status']).toBe('posted')
-    expect(capturedFilters['eq:company_id']).toBe('company-1')
-    expect(capturedFilters['lte:entry_date']).toBe('2025-12-31')
-  })
-
-  it('treats null/undefined count as zero', async () => {
-    const supabase = {
-      from: () => ({
-        select: () => ({
-          eq: () => ({
-            neq: () => ({
-              neq: () => ({
-                eq: () => ({
-                  lte: () => ({
-                    then: (resolve: (v: { count: null; error: null }) => void) =>
-                      resolve({ count: null, error: null }),
-                  }),
-                }),
-              }),
-            }),
-          }),
-        }),
-      }),
-    }
-
-    const result = await companyHasPriorActivity(
-      supabase as unknown as Supabase,
-      'company-1',
-      '2025-12-31',
-    )
-
-    expect(result).toBe(false)
-  })
-})
-
 describe('isBalanceSheetAccount', () => {
   it('returns true for class 1 (assets)', () => {
     expect(isBalanceSheetAccount('1510')).toBe(true)
@@ -1126,101 +923,7 @@ describe('computeVoucherNumberRanges', () => {
   })
 })
 
-describe('importVouchers: per-voucher series preservation', () => {
-  // Captures the rows passed to `.insert()` so the test can assert on
-  // voucher_series per inserted record. Uses a hand-rolled mock rather than
-  // createQueuedMockSupabase because we need to inspect arguments, not just
-  // return queued data.
-  function buildCapturingSupabase(options: { failImportRpc?: boolean } = {}) {
-    const journalEntryInserts: Array<Record<string, unknown>> = []
-    const journalEntryLineInserts: Array<Record<string, unknown>> = []
-    const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = []
-
-    const nextNumberBySeries = new Map<string, number>()
-    let syntheticEntryId = 1
-
-    const supabase = {
-      from: vi.fn((table: string) => {
-        if (table === 'chart_of_accounts') {
-          // Return all accounts used in test vouchers as if already active
-          return {
-            select: () => ({
-              eq: () => ({
-                in: (_col: string, accountNumbers: string[]) => ({
-                  then: (resolve: (v: { data: { id: string; account_number: string }[]; error: null }) => void) =>
-                    resolve({
-                      data: accountNumbers.map((num, i) => ({ id: `acc-${i}`, account_number: num })),
-                      error: null,
-                    }),
-                }),
-              }),
-            }),
-          }
-        }
-
-        throw new Error(`Unexpected table: ${table}`)
-      }),
-
-      rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
-        rpcCalls.push({ name, args })
-        if (name === 'import_sie_journal_entries') {
-          if (options.failImportRpc) {
-            return {
-              data: null,
-              error: { message: 'line insert failed' },
-            }
-          }
-
-          const entries = args.p_entries as Array<{
-            sourceId: string
-            series: string
-            sourceType: string
-            lines: Array<Record<string, unknown>>
-          }>
-          const inserted_entries = entries.map((entry) => {
-            const current = nextNumberBySeries.get(entry.series) ?? 0
-            const next = current + 1
-            nextNumberBySeries.set(entry.series, next)
-            const id = `entry-${syntheticEntryId++}`
-            journalEntryInserts.push({
-              ...entry,
-              id,
-              voucher_series: entry.series,
-              voucher_number: next,
-              source_type: entry.sourceType,
-              source_voucher_series: (entry as { sourceSeries?: string | null }).sourceSeries ?? null,
-              source_voucher_number: (entry as { sourceNumber?: number | null }).sourceNumber ?? null,
-            })
-            journalEntryLineInserts.push(...entry.lines.map((line) => ({ ...line, journal_entry_id: id })))
-            return {
-              id,
-              sourceId: entry.sourceId,
-              series: entry.series,
-              voucherNumber: next,
-              sourceType: entry.sourceType,
-            }
-          })
-          return {
-            data: {
-              inserted_entries,
-              skipped_duplicates: [],
-              validation_errors: [],
-            },
-            error: null,
-          }
-        }
-        throw new Error(`Unexpected RPC: ${name}`)
-      }),
-    }
-
-    return {
-      supabase: supabase as unknown as SupabaseClient,
-      journalEntryInserts,
-      journalEntryLineInserts,
-      rpcCalls,
-    }
-  }
-
+describe('prepareSIEVouchers: per-voucher series preservation', () => {
   function makeVoucher(
     series: string,
     number: number,
@@ -1243,8 +946,19 @@ describe('importVouchers: per-voucher series preservation', () => {
     ['3001', '3001'],
   ])
 
-  it('routes each voucher to its source series (B, C, V → B, C, V)', async () => {
-    const { supabase, journalEntryInserts, rpcCalls } = buildCapturingSupabase()
+  function prepare(
+    parsed: ParsedSIEFile,
+    accountMap: Map<string, string>,
+    defaultSeries: string,
+    options: { startOrdinal?: number; sieImportId?: string; accountIds?: Map<string, string> } = {},
+  ) {
+    return prepareSIEVouchers(parsed, accountMap, defaultSeries, options.sieImportId ?? 'import-1', {
+      startOrdinal: options.startOrdinal ?? 0,
+      accountIds: options.accountIds ?? new Map(),
+    })
+  }
+
+  it('routes each voucher to its source series (B, C, V → B, C, V)', () => {
     const parsed = makeParsedFile({
       vouchers: [
         makeVoucher('B', 1),
@@ -1254,29 +968,18 @@ describe('importVouchers: per-voucher series preservation', () => {
       ],
     })
 
-    const result = await importVouchers(
-      supabase,
-      'company-1',
-      'user-1',
-      'period-1',
+    const result = prepare(
       parsed,
       baseMap,
       'B', // fallback (should not be used here: all vouchers have series)
+      { accountIds: new Map([['1510', 'acc-1510'], ['3001', 'acc-3001']]) },
     )
 
-    expect(result.created).toBe(4)
-    expect(new Set(result.seriesUsed)).toEqual(new Set(['B', 'C', 'V']))
-
-    const seriesInInserts = journalEntryInserts.map((r) => r.voucher_series)
-    expect(seriesInInserts).toEqual(['B', 'B', 'C', 'V'])
-
-    const importCalls = rpcCalls.filter((c) => c.name === 'import_sie_journal_entries')
-    expect(importCalls).toHaveLength(1)
-    expect((importCalls[0].args.p_entries as Array<{ series: string }>).map((e) => e.series)).toEqual(['B', 'B', 'C', 'V'])
+    expect(result.preparedEntries.map((e) => e.series)).toEqual(['B', 'B', 'C', 'V'])
+    expect(result.preparedEntries[0].lines.map((l) => l.account_id)).toEqual(['acc-1510', 'acc-3001'])
   })
 
-  it('sends #BTRANS/#RTRANS history as corrections on the RPC payload, never as lines (#2427)', async () => {
-    const { supabase, rpcCalls } = buildCapturingSupabase()
+  it('sends #BTRANS/#RTRANS history as corrections on the payload, never as lines (#2427)', () => {
     const corrected = {
       ...makeVoucher('A', 7, [
         { account: '3001', amount: 1200 },
@@ -1289,22 +992,10 @@ describe('importVouchers: per-voucher series preservation', () => {
     }
     const parsed = makeParsedFile({ vouchers: [makeVoucher('A', 6), corrected] })
 
-    const result = await importVouchers(
-      supabase,
-      'company-1',
-      'user-1',
-      'period-1',
-      parsed,
-      baseMap,
-      'A',
-      'import-42',
-    )
+    const entries = prepare(parsed, baseMap, 'A', { sieImportId: 'import-42' })
+      .preparedEntries as unknown as Array<Record<string, unknown>>
 
-    expect(result.created).toBe(2)
-    const importCalls = rpcCalls.filter((c) => c.name === 'import_sie_journal_entries')
-    expect(importCalls).toHaveLength(1)
-    const entries = importCalls[0].args.p_entries as Array<Record<string, unknown>>
-
+    expect(entries).toHaveLength(2)
     // Every voucher has batch provenance, even when it carries no history.
     expect(entries[0]).not.toHaveProperty('corrections')
     expect(entries[0]).toHaveProperty('sieImportId', 'import-42')
@@ -1322,8 +1013,7 @@ describe('importVouchers: per-voucher series preservation', () => {
     })
   })
 
-  it('keeps the source account on history rows whose account is unmapped', async () => {
-    const { supabase, rpcCalls } = buildCapturingSupabase()
+  it('keeps the source account on history rows whose account is unmapped', () => {
     const corrected = {
       ...makeVoucher('A', 1),
       corrections: {
@@ -1333,23 +1023,19 @@ describe('importVouchers: per-voucher series preservation', () => {
     }
     const parsed = makeParsedFile({ vouchers: [corrected] })
 
-    const result = await importVouchers(supabase, 'company-1', 'user-1', 'period-1', parsed, baseMap, 'A')
+    const entries = prepare(parsed, baseMap, 'A').preparedEntries as unknown as Array<Record<string, unknown>>
 
-    // The voucher itself (mapped #TRANS rows) still imports; only history
+    // The voucher itself (mapped #TRANS rows) is still prepared; only history
     // references the unmapped account, verbatim, as the source showed it.
-    expect(result.created).toBe(1)
-    const entries = rpcCalls.find((c) => c.name === 'import_sie_journal_entries')!.args.p_entries as Array<Record<string, unknown>>
+    expect(entries).toHaveLength(1)
     expect(entries[0].corrections).toEqual({
       struck: [{ account_number: '9999', debit_amount: 0, credit_amount: 1000, line_description: null, sort_order: 0, signature: null }],
       added: [],
       signature: null,
     })
-    // No import record in this call: the id is null, not absent.
-    expect(entries[0].sieImportId).toBeNull()
   })
 
-  it('falls back to defaultSeries when source voucher has empty series (SIE4I)', async () => {
-    const { supabase, journalEntryInserts } = buildCapturingSupabase()
+  it('falls back to defaultSeries when source voucher has empty series (SIE4I)', () => {
     const parsed = makeParsedFile({
       vouchers: [
         { ...makeVoucher('', 1) },
@@ -1357,27 +1043,16 @@ describe('importVouchers: per-voucher series preservation', () => {
       ],
     })
 
-    const result = await importVouchers(
-      supabase,
-      'company-1',
-      'user-1',
-      'period-1',
-      parsed,
-      baseMap,
-      'V', // fallback used because source series is empty
-    )
+    const result = prepare(parsed, baseMap, 'V') // fallback used because source series is empty
 
-    expect(result.created).toBe(2)
-    expect(result.seriesUsed).toEqual(['V'])
-    expect(journalEntryInserts.every((r) => r.voucher_series === 'V')).toBe(true)
+    expect(result.preparedEntries.map((e) => e.series)).toEqual(['V', 'V'])
   })
 
-  it('keeps SIE4I vouchers without series AND without number apart (#2546)', async () => {
-    const { supabase, journalEntryInserts } = buildCapturingSupabase()
+  it('keeps SIE4I vouchers without series AND without number apart (#2546)', () => {
     // `#VER "" ""`: per SIE 4B the receiving system assigns both, so the parser
     // marks the number omitted and leaves a placeholder 0. Both vouchers used
     // to collapse onto the single sourceId "0", so all but the last one
-    // vanished from voucherNumberMapping and from the per-account movements the
+    // vanished from the payload and from the per-account movements the
     // migration adjustment entry is computed from.
     const parsed = makeParsedFile({
       vouchers: [
@@ -1406,38 +1081,20 @@ describe('importVouchers: per-voucher series preservation', () => {
       ],
     })
 
-    const result = await importVouchers(
-      supabase,
-      'company-1',
-      'user-1',
-      'period-1',
-      parsed,
-      baseMap,
-      'V',
-    )
+    const entries = prepare(parsed, baseMap, 'V').preparedEntries
 
-    expect(result.created).toBe(2)
-    expect(result.seriesUsed).toEqual(['V'])
-    expect(journalEntryInserts.map((r) => r.voucher_series)).toEqual(['V', 'V'])
     // Ordinal-based ids: distinct, and they point back at the file's order.
-    expect(result.voucherNumberMapping).toEqual([
-      { sourceId: '#1', series: 'V', targetNumber: 1 },
-      { sourceId: '#2', series: 'V', targetNumber: 2 },
-    ])
+    expect(entries.map((e) => [e.sourceId, e.series])).toEqual([['#1', 'V'], ['#2', 'V']])
     // The file named neither, so nothing is invented for the source columns.
-    expect(journalEntryInserts.map((r) => r.source_voucher_series)).toEqual([null, null])
-    expect(journalEntryInserts.map((r) => r.source_voucher_number)).toEqual([null, null])
-    // Both vouchers count towards the movements, not just the last one.
-    expect(result.movementsByAccount.get('1510')).toBe(3500)
-    expect(result.movementsByAccount.get('3001')).toBe(-3500)
+    expect(entries.map((e) => e.sourceSeries)).toEqual([null, null])
+    expect(entries.map((e) => e.sourceNumber)).toEqual([null, null])
   })
 
-  it('numbers SIE4I sourceIds by position in the FILE, not in the chunk (#2546)', async () => {
-    // A chunked import (#2532) calls importVouchers once per voucher group with
-    // only that group's vouchers, so the loop index restarts at 0 every group.
+  it('numbers SIE4I sourceIds by position in the FILE, not in the chunk (#2546)', () => {
+    // A chunked import (#2532) prepares one voucher group per call with only
+    // that group's vouchers, so the loop index restarts at 0 every group.
     // The ordinal has to come from startOrdinal + index, or group 2 would reuse
     // "#1" and the writer would see a duplicate of group 1's first voucher.
-    const { supabase } = buildCapturingSupabase()
     const secondGroup = makeParsedFile({
       vouchers: [
         {
@@ -1454,25 +1111,13 @@ describe('importVouchers: per-voucher series preservation', () => {
       ],
     })
 
-    const result = await importVouchers(
-      supabase,
-      'company-1',
-      'user-1',
-      'period-1',
-      secondGroup,
-      baseMap,
-      'V',
-      'import-99',
-      { startOrdinal: 2, only: true },
-    )
+    const prepared = prepare(secondGroup, baseMap, 'V', { startOrdinal: 2, sieImportId: 'import-99' }).preparedEntries
 
-    const prepared = result.preparedEntries ?? []
     expect(prepared.map((e) => e.sourceId)).toEqual(['#3'])
     expect(prepared.map((e) => e.sourceOrdinal)).toEqual([2])
   })
 
-  it('records source series in voucherNumberMapping for audit trail', async () => {
-    const { supabase } = buildCapturingSupabase()
+  it('keys each entry by its source voucher reference for the audit trail', () => {
     const parsed = makeParsedFile({
       vouchers: [
         makeVoucher('B', 1),
@@ -1480,61 +1125,15 @@ describe('importVouchers: per-voucher series preservation', () => {
       ],
     })
 
-    const result = await importVouchers(
-      supabase,
-      'company-1',
-      'user-1',
-      'period-1',
-      parsed,
-      baseMap,
-      'B',
-    )
+    const entries = prepare(parsed, baseMap, 'B').preparedEntries
 
-    expect(result.voucherNumberMapping).toEqual([
-      { sourceId: 'B1', series: 'B', targetNumber: 1 },
-      { sourceId: 'C7', series: 'C', targetNumber: 1 },
-    ])
+    expect(entries.map((e) => [e.sourceId, e.series])).toEqual([['B1', 'B'], ['C7', 'C']])
   })
 
-  it('assigns independent sequential target numbers per series', async () => {
-    const { supabase, journalEntryInserts } = buildCapturingSupabase()
-    const parsed = makeParsedFile({
-      vouchers: [
-        makeVoucher('B', 1),
-        makeVoucher('B', 2),
-        makeVoucher('B', 3),
-        makeVoucher('C', 1),
-        makeVoucher('C', 2),
-      ],
-    })
-
-    await importVouchers(
-      supabase,
-      'company-1',
-      'user-1',
-      'period-1',
-      parsed,
-      baseMap,
-      'B',
-    )
-
-    const bNumbers = journalEntryInserts
-      .filter((r) => r.voucher_series === 'B')
-      .map((r) => r.voucher_number)
-    const cNumbers = journalEntryInserts
-      .filter((r) => r.voucher_series === 'C')
-      .map((r) => r.voucher_number)
-
-    // Each series starts at 1 and increments independently, not globally continuous
-    expect(bNumbers).toEqual([1, 2, 3])
-    expect(cNumbers).toEqual([1, 2])
-  })
-
-  it('preserves original source series/number on each imported entry, even across skipped vouchers', async () => {
-    const { supabase, journalEntryInserts } = buildCapturingSupabase()
-    // A2 is an empty voucher (no lines), will be skipped. A1 and A3 survive.
-    // Accounted assigns target numbers 1 and 2 (contiguous), but source_voucher_number
-    // must preserve the SIE originals (1 and 3) so traceability is not lost.
+  it('preserves original source series/number on each prepared entry, even across skipped vouchers', () => {
+    // A2 is an empty voucher (no lines), will be skipped. A1 and A3 survive,
+    // and source_voucher_number must keep the SIE originals (1 and 3) so
+    // traceability is not lost when the target series is numbered contiguously.
     const parsed = makeParsedFile({
       vouchers: [
         { ...makeVoucher('A', 1), description: 'Receipt 2025-001, Acme AB' },
@@ -1543,73 +1142,25 @@ describe('importVouchers: per-voucher series preservation', () => {
       ],
     })
 
-    const result = await importVouchers(
-      supabase,
-      'company-1',
-      'user-1',
-      'period-1',
-      parsed,
-      baseMap,
-      'A',
-    )
+    const result = prepare(parsed, baseMap, 'A')
 
-    expect(result.created).toBe(2)
-    expect(result.skippedEmpty).toBe(1)
-    expect(journalEntryInserts.map((r) => r.voucher_number)).toEqual([1, 2])
-    expect(journalEntryInserts.map((r) => r.source_voucher_series)).toEqual(['A', 'A'])
-    expect(journalEntryInserts.map((r) => r.source_voucher_number)).toEqual([1, 3])
-    expect(journalEntryInserts.map((r) => r.description)).toEqual(['Receipt 2025-001, Acme AB', 'Invoice 2025-003, Jane Doe'])
+    expect(result.skippedDetails.map((d) => [d.voucherId, d.reason])).toEqual([['A2', 'zero_lines']])
+    expect(result.preparedEntries.map((e) => e.sourceSeries)).toEqual(['A', 'A'])
+    expect(result.preparedEntries.map((e) => e.sourceNumber)).toEqual([1, 3])
+    expect(result.preparedEntries.map((e) => e.description)).toEqual(['Receipt 2025-001, Acme AB', 'Invoice 2025-003, Jane Doe'])
   })
 
-  it('does not report imported IDs or counts when the atomic RPC fails', async () => {
-    const { supabase, journalEntryInserts, journalEntryLineInserts } = buildCapturingSupabase({
-      failImportRpc: true,
-    })
-    const parsed = makeParsedFile({
-      vouchers: [
-        makeVoucher('A', 1),
-      ],
-    })
-
-    const result = await importVouchers(
-      supabase,
-      'company-1',
-      'user-1',
-      'period-1',
-      parsed,
-      baseMap,
-      'A',
-    )
-
-    expect(result.created).toBe(0)
-    expect(result.ids).toEqual([])
-    expect(result.importTypedIds).toEqual([])
-    expect(result.voucherNumberMapping).toEqual([])
-    expect(result.errors.join(' ')).toContain('line insert failed')
-    expect(journalEntryInserts).toEqual([])
-    expect(journalEntryLineInserts).toEqual([])
-  })
-
-  it('stores NULL source series/number when the source voucher has no series (SIE4I subsystem import)', async () => {
-    const { supabase, journalEntryInserts } = buildCapturingSupabase()
+  it('stores NULL source series when the source voucher has no series (SIE4I subsystem import)', () => {
     const parsed = makeParsedFile({
       vouchers: [
         { ...makeVoucher('', 1) },
       ],
     })
 
-    await importVouchers(
-      supabase,
-      'company-1',
-      'user-1',
-      'period-1',
-      parsed,
-      baseMap,
-      'V',
-    )
+    const [entry] = prepare(parsed, baseMap, 'V').preparedEntries
 
-    expect(journalEntryInserts[0].source_voucher_series).toBeNull()
-    expect(journalEntryInserts[0].source_voucher_number).toBe(1)
+    expect(entry.sourceSeries).toBeNull()
+    expect(entry.sourceNumber).toBe(1)
   })
 
   describe('opening-balance voucher tagging vs derived IB (issue #675)', () => {
@@ -1618,12 +1169,11 @@ describe('importVouchers: per-voucher series preservation', () => {
       ['2010', '2010'],
     ])
 
-    it('tags a qualifying OB voucher opening_balance even when #UB -1 records exist', async () => {
+    it('tags a qualifying OB voucher opening_balance even when #UB -1 records exist', () => {
       // Precedence 2 beats 3: the OB-voucher candidate makes
       // getEffectiveOpeningBalances yield no balances, so hasCurrentYearIb is
       // false and the voucher keeps serving as the IB. Without that yield, a
       // derived IB entry AND this voucher would both book the same amounts.
-      const { supabase, journalEntryInserts } = buildCapturingSupabase()
       const parsed = makeParsedFile({
         openingBalances: [],
         closingBalances: [
@@ -1644,22 +1194,13 @@ describe('importVouchers: per-voucher series preservation', () => {
         ],
       })
 
-      const result = await importVouchers(
-        supabase,
-        'company-1',
-        'user-1',
-        'period-1',
-        parsed,
-        obMap,
-        'A',
-      )
+      const entries = prepare(parsed, obMap, 'A').preparedEntries
 
-      expect(result.created).toBe(1)
-      expect(journalEntryInserts[0].source_type).toBe('opening_balance')
+      expect(entries).toHaveLength(1)
+      expect(entries[0].sourceType).toBe('opening_balance')
     })
 
-    it('keeps an FY-start voucher without IB wording as import when IB is derived from #UB -1', async () => {
-      const { supabase, journalEntryInserts } = buildCapturingSupabase()
+    it('keeps an FY-start voucher without IB wording as import when IB is derived from #UB -1', () => {
       const parsed = makeParsedFile({
         openingBalances: [],
         closingBalances: [
@@ -1680,22 +1221,13 @@ describe('importVouchers: per-voucher series preservation', () => {
         ],
       })
 
-      await importVouchers(
-        supabase,
-        'company-1',
-        'user-1',
-        'period-1',
-        parsed,
-        obMap,
-        'A',
-      )
+      const entries = prepare(parsed, obMap, 'A').preparedEntries
 
-      expect(journalEntryInserts[0].source_type).toBe('import')
+      expect(entries[0].sourceType).toBe('import')
     })
   })
 
-  it('closes a sub-krona gap on BAS 3740 Öres- och kronutjämning, never on a non-BAS number (#2687)', async () => {
-    const { supabase, journalEntryLineInserts } = buildCapturingSupabase()
+  it('closes a sub-krona gap on BAS 3740 Öres- och kronutjämning, never on a non-BAS number (#2687)', () => {
     // 100.00 debit against 99.63 credit: the importer adds an explicit 0.37
     // credit on the rounding account instead of editing a source line.
     const parsed = makeParsedFile({
@@ -1707,11 +1239,10 @@ describe('importVouchers: per-voucher series preservation', () => {
       ],
     })
 
-    const result = await importVouchers(supabase, 'company-1', 'user-1', 'period-1', parsed, baseMap, 'A')
+    const result = prepare(parsed, baseMap, 'A')
 
-    expect(result.created).toBe(1)
-    expect(result.skippedUnbalanced).toBe(0)
-    const rounding = journalEntryLineInserts.filter((line) => line.line_description === 'Öresutjämning')
+    expect(result.skippedDetails).toEqual([])
+    const rounding = result.preparedEntries[0].lines.filter((line) => line.line_description === 'Öresutjämning')
     expect(rounding).toEqual([
       expect.objectContaining({ account_number: ORE_ROUNDING_ACCOUNT, debit_amount: 0, credit_amount: 0.37 }),
     ])
@@ -2097,27 +1628,5 @@ describe('precheckFiscalPeriod', () => {
     await expect(
       ensureFiscalPeriod(again.supabase as unknown as Supabase, 'company-id', '2025-03-01', '2026-02-28'),
     ).rejects.toThrow(precheck.verdict === 'conflict' ? precheck.message : 'unreachable')
-  })
-})
-
-describe('summarizeUnmappedSkips', () => {
-  // Issue #2212: the result step must name WHICH accounts excluded vouchers,
-  // not just how many vouchers were excluded.
-  it('counts vouchers per unmapped account, most excluded first', () => {
-    const summary = summarizeUnmappedSkips([
-      { reason: 'unmapped', unmappedAccounts: ['0099'] },
-      { reason: 'unmapped', unmappedAccounts: ['0099', '9100'] },
-      { reason: 'unmapped', unmappedAccounts: ['9100', '9100'] },
-      { reason: 'unbalanced' },
-      { reason: 'single_line', unmappedAccounts: ['0099'] },
-    ])
-    expect(summary).toEqual([
-      { account: '0099', vouchers: 2 },
-      { account: '9100', vouchers: 2 },
-    ])
-  })
-
-  it('is empty when nothing was skipped for a missing mapping', () => {
-    expect(summarizeUnmappedSkips([{ reason: 'empty' }])).toEqual([])
   })
 })

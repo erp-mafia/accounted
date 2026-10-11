@@ -30,7 +30,6 @@ const PERSISTED_EVENT_TYPES: CoreEventType[] = [
   'article.deleted',
   'supplier.created',
   'receipt.matched',
-  'receipt.confirmed',
   'supplier_invoice.registered',
   'supplier_invoice.approved',
   'supplier_invoice.paid',
@@ -48,7 +47,6 @@ const PERSISTED_EVENT_TYPES: CoreEventType[] = [
   // agents stall, which skills actually drive completion, and whether the
   // next-field rollout is paying off.
   'mcp.workflow_started',
-  'mcp.workflow_completed',
   'mcp.next_hint_followed',
   // Every successful gnubok_load_skill, all tiers: which atoms agents
   // actually load. Joined against mcp.tool_called error rates to measure
@@ -70,7 +68,6 @@ const PERSISTED_EVENT_TYPES: CoreEventType[] = [
   'bank_connection.account_selection_changed',
   'bank_connection.revoked',
   'bank_connection.superseded',
-  'bank_connection.cash_account_mirror_failed',
   // Every failed bank sync (cron, manual, agent): the server log line was
   // the only trace and it expires (feedback seq 340107).
   'bank_connection.sync_failed',
@@ -78,9 +75,7 @@ const PERSISTED_EVENT_TYPES: CoreEventType[] = [
 
 // Excluded (with reasoning):
 // - journal_entry.drafted: always followed by .committed
-// - receipt.extracted: intermediate AI step; .matched/.confirmed are actionable
-// - supplier_invoice.received: inbox receipt; .confirmed is actionable
-// - supplier_invoice.extracted: intermediate AI step
+// - receipt.extracted: intermediate AI step; .matched is actionable
 
 /**
  * Extract the primary entity ID from an event payload.

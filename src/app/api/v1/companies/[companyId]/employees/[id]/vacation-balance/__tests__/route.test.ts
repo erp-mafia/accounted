@@ -31,25 +31,10 @@ vi.mock('@supabase/supabase-js', async () => {
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GET as getBalance } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-function makeFlexibleSupabase(byTable: Record<string, { data?: unknown; error?: unknown }>) {
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) =>
-            resolve(byTable[table] ?? { data: null, error: null })
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const EMPLOYEE_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -102,11 +87,11 @@ beforeEach(() => {
 describe('GET /employees/:id/vacation-balance', () => {
   it('returns the balance with remaining days and a SEK estimate', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         employees: { data: EMPLOYEE, error: null },
         employee_vacation_balances: { data: BALANCE, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await getBalance(
@@ -129,11 +114,11 @@ describe('GET /employees/:id/vacation-balance', () => {
 
   it('returns 404 VACATION_BALANCE_NOT_FOUND before the ledger seeds', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         employees: { data: EMPLOYEE, error: null },
         employee_vacation_balances: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await getBalance(
@@ -149,10 +134,10 @@ describe('GET /employees/:id/vacation-balance', () => {
 
   it('returns 404 EMPLOYEE_NOT_FOUND for an unknown employee', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         employees: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await getBalance(
       makeRequest(
@@ -167,7 +152,7 @@ describe('GET /employees/:id/vacation-balance', () => {
 
   it('returns 401 without a bearer token', async () => {
     mockValidate.mockResolvedValue(null)
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
     const res = await getBalance(
       new Request(
         `https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}/vacation-balance`,

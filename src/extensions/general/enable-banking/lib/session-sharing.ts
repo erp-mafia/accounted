@@ -483,43 +483,6 @@ export async function fetchCrossCompanyAccountContext(
   return { claims, deselectedIbans, activeCompanyIbans }
 }
 
-/**
- * How many OTHER connections still depend on this session.
- *
- * Must run on a service-role client. RLS would hide a sibling living in a
- * company the user has since left, and an invisible sibling reads as zero,
- * which is precisely the case where revoking kills a feed that is still in use.
- *
- * Counts every non-revoked sibling, including ones parked in 'expired' or
- * 'error'. The asymmetry is deliberate: leaving a consent un-revoked costs us
- * nothing but a row at Enable Banking that lapses on its own within 90 days,
- * while revoking one that another company is still syncing from takes down a
- * working bank feed with no warning.
- */
-export async function countLiveSiblings(
-  serviceSupabase: SupabaseClient,
-  sessionId: string,
-  excludeConnectionId: string,
-): Promise<number> {
-  const { count, error } = await serviceSupabase
-    .from('bank_connections')
-    .select('id', { count: 'exact', head: true })
-    .eq('session_id', sessionId)
-    .neq('id', excludeConnectionId)
-    .neq('status', 'revoked')
-
-  if (error) {
-    log.error('sibling count failed, treating session as shared', {
-      sessionId: '[REDACTED]',
-      error: error.message,
-    })
-    // Fail closed again: pretend a sibling exists rather than revoke a session
-    // we could not prove is unshared.
-    return 1
-  }
-  return count ?? 0
-}
-
 export interface SessionRenewalResult {
   /** Sibling rows moved onto the new session. */
   movedCount: number

@@ -74,6 +74,7 @@ import { skatteverketExtension } from '../index'
 import { skvRequestWithAuth, SkatteverketAuthError } from '../lib/api-client'
 import { getSaldo, getTransaktioner } from '../lib/skattekonto-client'
 import { listOmbudGrants } from '../lib/ombud-client'
+import { runValidateAgiUppgift } from '../lib/core-actions'
 
 /** Upstream answers, consumed in call order. */
 let answers: Array<Response | Error> = []
@@ -346,28 +347,6 @@ describe('routes: exactly one row per outbound call, with its label', () => {
       skvStatus: 'DONE_SUCCESS',
     },
     {
-      name: 'AGI spara',
-      method: 'POST', path: '/agi/spara', url: '/agi/spara',
-      body: { inlamningId: 7, salaryRunId: 'run-1' },
-      answer: () => json(200, {}),
-      endpoint: 'agi/spara',
-      scope: { agRegistreradId: null, redovisningsperiod: null },
-    },
-    {
-      name: 'AGI avbryt',
-      method: 'DELETE', path: '/agi/underlag', url: `/agi/underlag?inlamningId=7&period=${PERIOD}`,
-      answer: () => new Response(null, { status: 204 }),
-      endpoint: 'agi/avbryt',
-      scope: { agRegistreradId: null, redovisningsperiod: PERIOD },
-    },
-    {
-      name: 'AGI ta bort sparad',
-      method: 'DELETE', path: '/agi/sparad', url: `/agi/sparad?${agiPeriod}&inlamningId=7`,
-      answer: () => new Response(null, { status: 204 }),
-      endpoint: 'agi/sparad/ta-bort',
-      scope: { agRegistreradId: REDOVISARE, redovisningsperiod: PERIOD },
-    },
-    {
       name: 'AGI granskningsunderlag',
       method: 'POST', path: '/agi/granskningsunderlag', url: `/agi/granskningsunderlag?${agiPeriod}`,
       answer: () => json(200, { link: 'https://skv.test/agi', tillstand: 'LOCKED_FOR_SIGNING' }),
@@ -383,27 +362,11 @@ describe('routes: exactly one row per outbound call, with its label', () => {
       scope: { agRegistreradId: REDOVISARE, redovisningsperiod: PERIOD },
     },
     {
-      name: 'AGI las',
-      method: 'POST', path: '/agi/las', url: `/agi/las?${agiPeriod}`,
-      answer: () => json(200, {}),
-      endpoint: 'agi/las',
-      scope: { agRegistreradId: REDOVISARE, redovisningsperiod: PERIOD },
-    },
-    {
       name: 'AGI lasUpp',
       method: 'POST', path: '/agi/lasUpp', url: `/agi/lasUpp?${agiPeriod}`,
       answer: () => json(200, {}),
       endpoint: 'agi/lasUpp',
       scope: { agRegistreradId: REDOVISARE, redovisningsperiod: PERIOD },
-    },
-    {
-      name: 'AGI kontrollera HU',
-      method: 'POST', path: '/agi/kontrollera/hu', url: '/agi/kontrollera/hu',
-      body: { agRegistreradId: REDOVISARE, redovisningsPeriod: PERIOD, summaSkatteavdr: 8200 },
-      answer: () => json(200, { status: 'OK', fel: [] }),
-      endpoint: 'agi.kontrollera.hu',
-      scope: { agRegistreradId: REDOVISARE, redovisningsperiod: PERIOD },
-      skvStatus: 'OK',
     },
   ]
 
@@ -420,6 +383,27 @@ describe('routes: exactly one row per outbound call, with its label', () => {
         ...c.scope,
         outcome: 'ok',
         skvStatus: c.skvStatus ?? null,
+      }),
+    ])
+  })
+
+  it('AGI kontrollera HU (the v1 and MCP validate path): one row labelled agi.kontrollera.hu', async () => {
+    answers = [json(200, { status: 'OK', fel: [] })]
+    const result = await runValidateAgiUppgift(makeContext(), {
+      uppgift: 'huvuduppgift',
+      payload: { agRegistreradId: REDOVISARE, redovisningsPeriod: PERIOD, summaSkatteavdr: 8200 },
+    })
+
+    expect(result).toMatchObject({ ok: true })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(rows()).toEqual([
+      expect.objectContaining({
+        actor: { companyId: 'company-1', userId: 'user-1' },
+        endpoint: 'agi.kontrollera.hu',
+        agRegistreradId: REDOVISARE,
+        redovisningsperiod: PERIOD,
+        outcome: 'ok',
+        skvStatus: 'OK',
       }),
     ])
   })

@@ -124,24 +124,6 @@ describe('event-log-handler', () => {
     expect(mockInsert).not.toHaveBeenCalled()
   })
 
-  it('does NOT persist supplier_invoice.received (excluded noise event)', async () => {
-    await eventBus.emit({
-      type: 'supplier_invoice.received',
-      payload: { inboxItem: {} as never, userId: 'user-1', companyId: 'company-1' },
-    })
-
-    expect(mockInsert).not.toHaveBeenCalled()
-  })
-
-  it('does NOT persist supplier_invoice.extracted (excluded noise event)', async () => {
-    await eventBus.emit({
-      type: 'supplier_invoice.extracted',
-      payload: { inboxItem: {} as never, confidence: 0.9, userId: 'user-1', companyId: 'company-1' },
-    })
-
-    expect(mockInsert).not.toHaveBeenCalled()
-  })
-
   it('does not throw when persistence fails', async () => {
     mockInsert.mockResolvedValue({ error: { message: 'DB down' } })
 

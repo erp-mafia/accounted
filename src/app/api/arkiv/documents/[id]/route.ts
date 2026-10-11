@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { documentTitle, underlagPayload } from '@/lib/arkiv/documents/title'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { isArkivBrainEnabled, isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import type { FactRow } from '@/lib/arkiv/facts/store'
 import { predicateDef } from '@/lib/arkiv/facts/predicates'
 import type { Payload } from '@/lib/documents/extract/fields'
@@ -53,7 +53,6 @@ export interface DocumentRecordView {
 
 export const GET = withRouteContext('arkiv.document', async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
   const notFound = () => errorResponseFromCode('NOT_FOUND', ctx.log, { requestId: ctx.requestId })
-  if (!isArkivEnabled(ctx.companyId)) return notFound()
   const { id } = await params
   const { data: doc, error } = await ctx.supabase
     .from('document_attachments')

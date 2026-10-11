@@ -20,7 +20,7 @@ audits. All loops run locally now.
 1. **Audit what is live.**
    - Local schedule: `CronList` for session-local jobs invoking `/loop-*` skills.
    - Evidence of firing: recent `loop/*` branches, PR comments by the loop, `loop:needs-human` labels
-     (`gh pr list`, `gh issue list --label loop:needs-human`).
+     (`glab mr list -R arcim-technology-ab-group1/accounted`, `glab issue list -R arcim-technology-ab-group1/accounted --label loop:needs-human`).
    - Slow loops: last `<!-- loop-docs-freshness-run: ... -->` marker on `loop:docs` issues (due
      weekly) and last `<!-- loop-regeluppdat-run: YYYY-MM -->` marker on the `Regeluppdat scan log`
      issue (due monthly).
@@ -35,7 +35,7 @@ audits. All loops run locally now.
      days (or absent), run `/loop-docs-freshness` once now; if the regeluppdat marker is not from
      the current calendar month, run `/loop-regeluppdat` once now. Both self-gate, so running them
      again is a cheap no-op.
-   - If a loop cannot run at all, file the blocker as a GitHub issue so the gap is visible instead of silent.
+   - If a loop cannot run at all, file the blocker as a GitLab issue so the gap is visible instead of silent.
 4. **Switch-on check (mandatory):** after igniting, verify via `CronList` that the jobs exist.
    End with either "ALL LOOPS LIVE (session-local)" or "NOT SWITCHED ON YET: <loop> - <what remains, who flips it>".
 

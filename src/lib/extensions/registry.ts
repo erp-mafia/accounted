@@ -27,7 +27,7 @@ export function setContextFactory(factory: ContextFactory): void {
  *
  * - register() stores extension and wires event handlers to the bus
  * - unregister() unhooks handlers and removes extension
- * - getAll(), get(), getByCapability() for querying
+ * - getAll(), get() for querying
  */
 class ExtensionRegistry {
   private extensions = new Map<string, Extension>()
@@ -99,13 +99,6 @@ class ExtensionRegistry {
   /** Get a specific extension by ID. */
   get(id: string): Extension | undefined {
     return this.extensions.get(id)
-  }
-
-  /** Get all extensions that have a specific capability. */
-  getByCapability(key: keyof Extension): Extension[] {
-    return [...this.extensions.values()].filter(
-      (ext) => ext[key] !== undefined && ext[key] !== null
-    )
   }
 
   /** Clear all extensions (useful for testing). */

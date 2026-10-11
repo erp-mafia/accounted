@@ -267,11 +267,4 @@ export const pushNotificationsExtension: Extension = {
     { eventType: 'receipt.extracted', handler: handleReceiptExtracted },
     { eventType: 'receipt.matched', handler: handleReceiptMatched },
   ],
-  settingsPanel: {
-    label: 'Push-notiser',
-    path: '/settings/extensions/push-notifications',
-  },
-  async onInstall(ctx) {
-    await ctx.settings.set('settings', DEFAULT_SETTINGS)
-  },
 }

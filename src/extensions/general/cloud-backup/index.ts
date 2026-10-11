@@ -181,15 +181,6 @@ export const cloudBackupExtension: Extension = {
   version: '1.1.0',
   sector: 'general',
 
-  // The canonical entry point for cloud-backup is now `/import#cloud-backup`
-  // (under "Importera/Exportera"). `/settings/backup` is preserved as a
-  // permanent redirect to that anchor so legacy bookmarks and OAuth callbacks
-  // keep working: see `app/(dashboard)/settings/backup/page.tsx`.
-  settingsPanel: {
-    label: 'Molnsynkronisering',
-    path: '/settings/backup',
-  },
-
   apiRoutes: [
     // Kick off OAuth: return the provider's consent URL.
     {
@@ -292,22 +283,6 @@ export const cloudBackupExtension: Extension = {
           schedule: google?.schedule ?? null,
         }
         return NextResponse.json({ data: status })
-      },
-    },
-
-    // Read one provider's auto-sync schedule. Returns the default (disabled)
-    // shape if the user has never configured one.
-    {
-      method: 'GET',
-      path: '/schedule',
-      handler: async (request, ctx) => {
-        if (!ctx) return jsonError('Missing context', 500)
-        const resolved = resolveProvider(request)
-        if ('error' in resolved) return resolved.error
-        const schedule = await ctx.settings.get<CloudSchedule>(
-          resolved.provider.keys.schedule
-        )
-        return NextResponse.json({ data: schedule ?? DEFAULT_SCHEDULE })
       },
     },
 

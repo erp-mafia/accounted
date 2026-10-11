@@ -37,10 +37,7 @@ vi.mock('@/lib/email/service', () => ({
 
 import { GET, POST } from '../route'
 import { REMINDERS_SENDING_ENABLED } from '@/lib/invoices/reminders-enabled'
-
-function cronRequest(): Request {
-  return new Request('http://localhost:3000/api/invoices/reminders/cron')
-}
+import { createCronRequest } from '@/tests/helpers'
 
 describe('REMINDERS_SENDING_ENABLED flag', () => {
   it('is off: re-enabling automatic reminder sending is a deliberate founder decision', () => {
@@ -54,7 +51,7 @@ describe('GET /api/invoices/reminders/cron with sending disabled', () => {
   })
 
   it('returns 503 and never invokes the reminder processor', async () => {
-    const res = await GET(cronRequest())
+    const res = await GET(createCronRequest('/api/invoices/reminders/cron'))
     const body = await res.json()
 
     expect(res.status).toBe(503)
@@ -69,7 +66,7 @@ describe('GET /api/invoices/reminders/cron with sending disabled', () => {
   it('exposes POST as the same gated handler (manual dashboard trigger)', async () => {
     expect(POST).toBe(GET)
 
-    const res = await POST(cronRequest())
+    const res = await POST(createCronRequest('/api/invoices/reminders/cron'))
     expect(res.status).toBe(503)
     expect(h.processOverdueReminders).not.toHaveBeenCalled()
   })
@@ -114,7 +111,7 @@ describe('GET /api/invoices/reminders/cron with sending enabled (flag flipped)',
     })
 
     const { GET: gatedGet } = await importRouteWithFlagOn()
-    const res = await gatedGet(cronRequest())
+    const res = await gatedGet(createCronRequest('/api/invoices/reminders/cron'))
     const body = await res.json()
 
     expect(res.status).toBe(200)
@@ -135,7 +132,7 @@ describe('GET /api/invoices/reminders/cron with sending enabled (flag flipped)',
     h.isConfigured.mockReturnValue(false)
 
     const { GET: gatedGet } = await importRouteWithFlagOn()
-    const res = await gatedGet(cronRequest())
+    const res = await gatedGet(createCronRequest('/api/invoices/reminders/cron'))
 
     expect(res.status).toBeGreaterThanOrEqual(400)
     expect(h.processOverdueReminders).not.toHaveBeenCalled()

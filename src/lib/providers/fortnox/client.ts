@@ -136,51 +136,6 @@ export class FortnoxClient {
     );
   }
 
-  async getText(accessToken: string, path: string): Promise<string> {
-    return withRetry(
-      async () => {
-        await this.rateLimiter.acquire(connectionRateKey(accessToken));
-        const url = `${this.baseUrl}${path}`;
-        const response = await fetchInExecutionBudget(url, {
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-          },
-          signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-        });
-
-        if (!response.ok) {
-          const body = await response.text().catch(() => '');
-          let retryAfterMs: number | undefined;
-          if (response.status === 429) {
-            const retryAfter = response.headers.get('Retry-After');
-            const seconds = fortnoxRetryAfter(retryAfter);
-            retryAfterMs = seconds === undefined ? undefined : seconds * 1000;
-          }
-          throw new FortnoxApiError(
-            `Fortnox API error: ${response.status} ${response.statusText}`,
-            response.status,
-            body,
-            retryAfterMs,
-          );
-        }
-
-        return response.text();
-      },
-      {
-        maxAttempts: 6,
-        initialDelayMs: 2000,
-        maxDelayMs: 60_000,
-        shouldRetry: isRetryableError,
-        getDelayMs: (error) => {
-          if (error instanceof FortnoxApiError && error.retryAfterMs) {
-            return error.retryAfterMs;
-          }
-          return undefined;
-        },
-      },
-    );
-  }
-
   /**
    * Fetch a binary resource with the same rate-limit/retry behavior as get().
    * Used for the SIE export: response.text() would blind-decode as UTF-8 and

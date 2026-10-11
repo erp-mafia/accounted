@@ -329,5 +329,3 @@ export function WhatsAppLinkPanel() {
     </SettingsGroup>
   )
 }
-
-export default WhatsAppLinkPanel

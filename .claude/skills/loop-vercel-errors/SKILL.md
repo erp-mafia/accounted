@@ -1,11 +1,11 @@
 ---
 name: loop-vercel-errors
-description: Loop that pulls recent production runtime errors from Vercel (via the Vercel MCP locally, or the Vercel API with a token), groups + dedupes them, files well-formed GitHub issues, and opens a fix PR only for clearly trivial/safe cases. Best run LOCALLY (the Vercel MCP is available there). Follows .claude/loops.md.
+description: Loop that pulls recent production runtime errors from Vercel (via the Vercel MCP locally, or the Vercel API with a token), groups + dedupes them, files well-formed GitLab issues, and opens a fix PR only for clearly trivial/safe cases. Best run LOCALLY (the Vercel MCP is available there). Follows .claude/loops.md.
 ---
 
 # loop-vercel-errors
 
-**Goal:** every distinct, real production runtime error is tracked as a GitHub issue (deduped), and the
+**Goal:** every distinct, real production runtime error is tracked as a GitLab issue (deduped), and the
 obviously-trivial ones have a proposed fix PR. **Never merge.** Read `.claude/loops.md` first.
 
 Vercel project `erp-base` (`prj_zOvCFaOMXS166cUY5VYEGHKke00X`, team `team_WPj3QZgcSVRWZKcHJQB3wfv8`).
@@ -40,7 +40,7 @@ sample stack, affected route/file.
 ## 3. Dedupe (mandatory, see loops.md)
 Fingerprint = a stable hash of the normalized signature.
 ```bash
-gh issue list --search "<fingerprint> in:body state:all" --json number,state
+glab issue list -R arcim-technology-ab-group1/accounted --all --in description --search "<fingerprint>" -O json   # read iid, state
 ```
 Open match → comment ("still occurring, N since <date>"). Closed + recurring → reopen. No match → file
 new. **Cap 8 new issues/run**; log the rest.

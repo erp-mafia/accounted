@@ -7,7 +7,6 @@ import { describe, it, expect } from 'vitest'
 import { createTableMockSupabase } from '@/tests/helpers'
 import {
   advanceInvoiceSeriesPastImported,
-  highestSeriesNumber,
   isSeriesOutlier,
   seriesNumberOf,
 } from '../invoice-number-series'
@@ -36,11 +35,6 @@ describe('seriesNumberOf', () => {
     expect(seriesNumberOf('0', null)).toBeNull()
     // Past what the integer counter can hold.
     expect(seriesNumberOf('99999999999', null)).toBeNull()
-  })
-
-  it('takes the highest of a set', () => {
-    expect(highestSeriesNumber(['3', 'KR-900', '70', null, '12'], null)).toBe(70)
-    expect(highestSeriesNumber(['KR-1', 'abc'], null)).toBeNull()
   })
 })
 

@@ -8,6 +8,7 @@ Run scripts from the repository root. Prefer the named commands in [package.json
 | Product skill bodies | `npm run skills:generate`, `npm run skills:check` |
 | Installable API skill | `npm run apiskill:generate`, `npm run apiskill:check` |
 | Taxonomy registry | `npm run taxonomy:generate`, `npm run taxonomy:check` |
+| Third-party list in NOTICE | `npm run notice:generate`, `npm run notice:check` |
 | Self-hosted cron schedule | `npm run crontabs:generate` |
 | Bookkeeping packs and community registry | `npm run validate:packs`, `npm run validate:registry` |
 | Existing lint, type, and code guards | `npm run check:lint`, `npm run check:types`, `npm run check:guards` |

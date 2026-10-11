@@ -3,7 +3,7 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { Logger } from '@/lib/logger'
 
 const rpcMock = vi.fn()
-vi.mock('@/lib/import/sie-import', () => ({
+vi.mock('@/lib/supabase/bulk-delete-client', () => ({
   rpcClientForBulkDelete: vi.fn(async () => ({ rpc: (...a: unknown[]) => rpcMock(...a) })),
 }))
 

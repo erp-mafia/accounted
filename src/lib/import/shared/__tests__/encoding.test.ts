@@ -3,8 +3,6 @@ import {
   decodeFileContent,
   decodeStringContent,
   hasEncodingIssues,
-  recoverStringWithFFFD,
-  recoverWordWithFFFD,
   stripBOM,
 } from '../encoding'
 
@@ -121,77 +119,5 @@ describe('stripBOM', () => {
   it('is a no-op on clean content and never strips mid-string', () => {
     expect(stripBOM('Datum;Belopp')).toBe('Datum;Belopp')
     expect(stripBOM('Datum;ï»¿Belopp')).toBe('Datum;ï»¿Belopp')
-  })
-})
-
-// --- U+FFFD heuristic recovery ---
-
-describe('recoverWordWithFFFD', () => {
-  it('recovers uppercase Ö in common Swedish stems', () => {
-    expect(recoverWordWithFFFD('F\uFFFDRENING')).toBe('FÖRENING')
-    expect(recoverWordWithFFFD('F\uFFFDRETAG')).toBe('FÖRETAG')
-    expect(recoverWordWithFFFD('G\uFFFDTEBORG')).toBe('GÖTEBORG')
-    expect(recoverWordWithFFFD('LINK\uFFFDPING')).toBe('LINKÖPING')
-  })
-
-  it('recovers lowercase ö in common Swedish stems', () => {
-    expect(recoverWordWithFFFD('f\uFFFDrening')).toBe('förening')
-    expect(recoverWordWithFFFD('malm\uFFFD')).toBe('malmö')
-    expect(recoverWordWithFFFD('k\uFFFDp')).toBe('köp')
-  })
-
-  it('recovers compound words via substring match', () => {
-    expect(recoverWordWithFFFD('BOSTADSR\uFFFDTTSF\uFFFDRENING')).toBe(
-      'BOSTADSRÄTTSFÖRENING'
-    )
-    expect(recoverWordWithFFFD('Idrottsf\uFFFDrening')).toBe('Idrottsförening')
-  })
-
-  it('is a no-op when the input has no U+FFFD', () => {
-    expect(recoverWordWithFFFD('FÖRENING')).toBe('FÖRENING')
-    expect(recoverWordWithFFFD('hello')).toBe('hello')
-  })
-
-  it('returns null for ambiguous words not in the dictionary', () => {
-    // Random 4-letter word with U+FFFD; no Swedish stem hits.
-    expect(recoverWordWithFFFD('Z\uFFFDXQ')).toBeNull()
-  })
-
-  it('returns null for words with too many U+FFFDs to disambiguate', () => {
-    expect(
-      recoverWordWithFFFD('\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\uFFFD')
-    ).toBeNull()
-  })
-})
-
-describe('recoverStringWithFFFD', () => {
-  it('repairs the canonical "Levbet FÖRENING" case', () => {
-    expect(recoverStringWithFFFD('Levbet F\uFFFDRENING')).toBe('Levbet FÖRENING')
-  })
-
-  it('repairs city + business-name combos', () => {
-    expect(recoverStringWithFFFD('Sjöberg AB, Malm\uFFFD')).toBe('Sjöberg AB, Malmö')
-    expect(recoverStringWithFFFD('Faktura fr\uFFFDn G\uFFFDTEBORG AB')).toBe(
-      'Faktura från GÖTEBORG AB'
-    )
-  })
-
-  it('preserves punctuation, whitespace, and digits', () => {
-    expect(recoverStringWithFFFD('K\uFFFDp 1 234,56 SEK')).toBe('Köp 1 234,56 SEK')
-  })
-
-  it('is a no-op on clean strings', () => {
-    expect(recoverStringWithFFFD('Hello World')).toBe('Hello World')
-    expect(recoverStringWithFFFD('FÖRENING')).toBe('FÖRENING')
-  })
-
-  it('returns null when any word in the string is ambiguous', () => {
-    expect(recoverStringWithFFFD('FÖRENING Z\uFFFDXQ')).toBeNull()
-  })
-
-  it('is idempotent on recovered output', () => {
-    const once = recoverStringWithFFFD('F\uFFFDRENING')
-    expect(once).toBe('FÖRENING')
-    expect(recoverStringWithFFFD(once!)).toBe('FÖRENING')
   })
 })

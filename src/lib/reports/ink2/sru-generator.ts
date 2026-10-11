@@ -219,51 +219,6 @@ export function generateSRUSubmission(declaration: INK2Declaration): SRUSubmissi
 }
 
 /**
- * Validate the generated BLANKETTER.SRU content
- */
-export function validateBlanketterSru(content: string): {
-  isValid: boolean
-  errors: string[]
-} {
-  const errors: string[] = []
-
-  // Check for required blankett blocks
-  const hasINK2 = /^#BLANKETT INK2-/m.test(content)
-  const hasINK2R = /^#BLANKETT INK2R-/m.test(content)
-  const hasINK2S = /^#BLANKETT INK2S-/m.test(content)
-  const hasFilSlut = /^#FIL_SLUT/m.test(content)
-
-  if (!hasINK2) errors.push('Missing INK2 blankett block')
-  if (!hasINK2R) errors.push('Missing INK2R blankett block')
-  if (!hasINK2S) errors.push('Missing INK2S blankett block')
-  if (!hasFilSlut) errors.push('Missing #FIL_SLUT terminator')
-
-  // Count BLANKETTSLUT: should be exactly 3
-  const blankettslutCount = (content.match(/^#BLANKETTSLUT/gm) || []).length
-  if (blankettslutCount !== 3) {
-    errors.push(`Expected 3 BLANKETTSLUT, found ${blankettslutCount}`)
-  }
-
-  // Check that each blankett has #IDENTITET
-  const blankettBlocks = content.split(/^#BLANKETT /m).slice(1)
-  for (const block of blankettBlocks) {
-    if (!block.includes('#IDENTITET')) {
-      const type = block.split('\n')[0]?.split('\r')[0] || 'unknown'
-      errors.push(`Blankett ${type} missing #IDENTITET`)
-    }
-    if (!block.includes('#NAMN')) {
-      const type = block.split('\n')[0]?.split('\r')[0] || 'unknown'
-      errors.push(`Blankett ${type} missing #NAMN`)
-    }
-  }
-
-  return {
-    isValid: errors.length === 0,
-    errors,
-  }
-}
-
-/**
  * Get ZIP filename for download
  */
 export function getZipFilename(declaration: INK2Declaration): string {

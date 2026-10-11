@@ -8,7 +8,6 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
 import {
   buildCutoffLines,
   buildCutoffNote,
-  cutoffCollectionsEqual,
   cutoffPreviewFingerprint,
   collectKontantmetodCutoff,
   distributeOre,
@@ -382,18 +381,24 @@ describe('cut-off snapshot and posting inspection', () => {
       receivables: [...first.receivables].reverse(),
       undatedSettlements: [...first.undatedSettlements].reverse(),
     }
-    expect(cutoffCollectionsEqual(first, reordered)).toBe(true)
+    const fingerprintOf = (collection: typeof first) => cutoffPreviewFingerprint({
+      collection,
+      lines: buildCutoffLines(collection.receivables, collection.payables, 'aktiebolag'),
+      entityType: 'aktiebolag',
+      periodEnd: '2026-12-31',
+    })
+    expect(fingerprintOf(reordered)).toBe(fingerprintOf(first))
     expect(
-      cutoffCollectionsEqual(first, {
+      fingerprintOf({
         ...reordered,
         receivables: [receivable({ id: 'a', outstanding: 1300 }), receivable({ id: 'b' })],
       }),
-    ).toBe(false)
+    ).not.toBe(fingerprintOf(first))
     // The disclosure is part of what the approver saw: a preview whose
     // assumed invoices changed is stale even when the lines did not move.
     expect(
-      cutoffCollectionsEqual(first, { ...reordered, undatedSettlements: ['F-9'] }),
-    ).toBe(false)
+      fingerprintOf({ ...reordered, undatedSettlements: ['F-9'] }),
+    ).not.toBe(fingerprintOf(first))
   })
 
   it('fingerprints the exact preview and all derivation inputs canonically', () => {

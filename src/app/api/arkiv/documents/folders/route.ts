@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { foldersFromCounts, type FolderCount } from '@/lib/arkiv/folders'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -24,7 +23,6 @@ const querySchema = z.object({
 })
 
 export const GET = withRouteContext('arkiv.documents.folders', async (request, ctx) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const parsed = validateQuery(request, querySchema)
   if (!parsed.success) return parsed.response
   const { data, error } = await ctx.supabase.rpc('arkiv_document_type_counts', { p_company_id: ctx.companyId, p_year: parsed.data.year ?? null })

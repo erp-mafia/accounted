@@ -24,40 +24,10 @@ vi.mock('@supabase/supabase-js', async () => {
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { PATCH as patchValue, DELETE as deleteValue } from '../[id]/values/[valueId]/route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-interface TableResp {
-  data?: unknown
-  error?: unknown
-}
-
-function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) {
-  const queues = new Map<string, TableResp[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const buildChain = (key: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(key)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(key)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return {
-    from: vi.fn((table: string) => buildChain(table)),
-    rpc: vi.fn(() => buildChain('rpc')),
-  }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const DIMENSION_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -104,14 +74,14 @@ beforeEach(() => {
 describe('PATCH /api/v1/companies/:companyId/dimensions/:id/values/:valueId', () => {
   it('updates name + is_active (archive) on the value', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         dimension_values: [
           { data: SAMPLE_VALUE, error: null },
           { data: { ...SAMPLE_VALUE, name: 'Nytt namn', is_active: false }, error: null },
         ],
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await patchValue(
@@ -130,7 +100,7 @@ describe('PATCH /api/v1/companies/:companyId/dimensions/:id/values/:valueId', ()
 
   it('sets an end_date on a project value (accumulating dimension)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         dimensions: { data: { id: DIMENSION_ID, resets_annually: false }, error: null },
         dimension_values: [
@@ -138,7 +108,7 @@ describe('PATCH /api/v1/companies/:companyId/dimensions/:id/values/:valueId', ()
           { data: { ...SAMPLE_VALUE, end_date: '2026-08-31' }, error: null },
         ],
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await patchValue(
@@ -156,11 +126,11 @@ describe('PATCH /api/v1/companies/:companyId/dimensions/:id/values/:valueId', ()
 
   it('rejects dates on a resets_annually dimension (kostnadsställe)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         dimensions: { data: { id: DIMENSION_ID, resets_annually: true }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await patchValue(
@@ -178,11 +148,11 @@ describe('PATCH /api/v1/companies/:companyId/dimensions/:id/values/:valueId', ()
 
   it('returns 404 DIMENSION_VALUE_NOT_FOUND when the value is not in the company', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         dimension_values: { data: null, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await patchValue(
@@ -200,10 +170,10 @@ describe('PATCH /api/v1/companies/:companyId/dimensions/:id/values/:valueId', ()
 
   it('rejects an empty body (schema refine)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await patchValue(
@@ -265,7 +235,7 @@ describe('PATCH /api/v1/companies/:companyId/dimensions/:id/values/:valueId', ()
       scopes: ['reports:read'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
 
     const res = await patchValue(
       makeRequest(URL_BASE, { method: 'PATCH', body: JSON.stringify({ name: 'x' }) }),
@@ -279,11 +249,11 @@ describe('PATCH /api/v1/companies/:companyId/dimensions/:id/values/:valueId', ()
 describe('DELETE /api/v1/companies/:companyId/dimensions/:id/values/:valueId', () => {
   it('deletes an unreferenced value', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         dimension_values: { data: [{ id: VALUE_ID }], error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await deleteValue(makeRequest(URL_BASE, { method: 'DELETE' }), routeParams)
@@ -295,14 +265,14 @@ describe('DELETE /api/v1/companies/:companyId/dimensions/:id/values/:valueId', (
 
   it('returns 409 DIMENSION_VALUE_REFERENCED with an archive hint when the retention trigger blocks', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         dimension_values: {
           data: null,
           error: { code: 'P0001', message: 'Värdet "P001" används på bokförda verifikat' },
         },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await deleteValue(makeRequest(URL_BASE, { method: 'DELETE' }), routeParams)
@@ -315,11 +285,11 @@ describe('DELETE /api/v1/companies/:companyId/dimensions/:id/values/:valueId', (
 
   it('returns 404 DIMENSION_VALUE_NOT_FOUND when nothing was deleted', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         dimension_values: { data: [], error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await deleteValue(makeRequest(URL_BASE, { method: 'DELETE' }), routeParams)
@@ -331,10 +301,10 @@ describe('DELETE /api/v1/companies/:companyId/dimensions/:id/values/:valueId', (
 
   it('returns 400 VALIDATION_ERROR for a non-UUID valueId', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await deleteValue(

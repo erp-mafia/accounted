@@ -1,7 +1,7 @@
-// Translation key lookup for extension and sector slugs.
+// Translation key lookup for extension slugs.
 //
 // Extension manifests ship Swedish-only names/descriptions in the data layer
-// (lib/extensions/_generated/sector-definitions.ts and lib/extensions/sectors.ts).
+// (lib/extensions/_generated/sector-definitions.ts).
 // Translation happens at the render layer via these slug → key helpers.
 //
 // For known slugs, return the translation key under the `extensions` namespace.
@@ -47,22 +47,4 @@ export function extensionDescriptionKey(slug: string): string | null {
 
 export function extensionLongDescriptionKey(slug: string): string | null {
   return extensionKey(slug, 'long_description')
-}
-
-export function sectorNameKey(slug: string): string | null {
-  switch (slug) {
-    case 'general':
-      return 'sector_general_name'
-    default:
-      return null
-  }
-}
-
-export function sectorDescriptionKey(slug: string): string | null {
-  switch (slug) {
-    case 'general':
-      return 'sector_general_description'
-    default:
-      return null
-  }
 }

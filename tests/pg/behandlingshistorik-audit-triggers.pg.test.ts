@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { insertAuthUser, insertCashAccount, insertCompany, insertCompanyMember } from './fixtures'
+import { insertAuthUser, insertCashAccount, insertCompany, insertCompanyMember, setActiveCompany } from './fixtures'
 import { getPool, withUserContext } from './setup'
 
 /**
@@ -10,15 +10,6 @@ import { getPool, withUserContext } from './setup'
  * constants are logged without a company, and app_releases is an append-only,
  * read-for-all, service-role-written version log.
  */
-
-async function setActiveCompany(userId: string, companyId: string): Promise<void> {
-  await getPool().query(
-    `INSERT INTO public.user_preferences (user_id, active_company_id)
-     VALUES ($1, $2)
-     ON CONFLICT (user_id) DO UPDATE SET active_company_id = EXCLUDED.active_company_id`,
-    [userId, companyId],
-  )
-}
 
 async function auditActions(table: string, recordId: string): Promise<string[]> {
   const res = await getPool().query<{ action: string }>(

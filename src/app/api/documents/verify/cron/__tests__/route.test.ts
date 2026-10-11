@@ -96,10 +96,7 @@ vi.mock('@supabase/supabase-js', () => ({
 }))
 
 import { GET, maxDuration } from '../route'
-
-function cronRequest(): Request {
-  return new Request('http://localhost:3000/api/documents/verify/cron')
-}
+import { createCronRequest } from '@/tests/helpers'
 
 function makeDoc(overrides: Partial<MockDoc> = {}): MockDoc {
   return {
@@ -146,7 +143,7 @@ describe('GET /api/documents/verify/cron', () => {
       NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     )
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/documents/verify/cron'))
 
     expect(response.status).toBe(401)
     expect(state.rpcCalls).toHaveLength(0)
@@ -157,13 +154,13 @@ describe('GET /api/documents/verify/cron', () => {
   })
 
   it('draws the batch from the ledger queue, 200 by default, env override honored', async () => {
-    await GET(cronRequest())
+    await GET(createCronRequest('/api/documents/verify/cron'))
     expect(state.rpcCalls).toEqual([
       { fn: 'next_documents_for_integrity_check', args: { p_limit: 200 } },
     ])
 
     process.env.DOCUMENT_VERIFY_BATCH_SIZE = '50'
-    await GET(cronRequest())
+    await GET(createCronRequest('/api/documents/verify/cron'))
     expect(state.rpcCalls[1]).toEqual({
       fn: 'next_documents_for_integrity_check',
       args: { p_limit: 50 },
@@ -175,7 +172,7 @@ describe('GET /api/documents/verify/cron', () => {
     const hash = registerObject(doc.storage_path, '%PDF-1.4 demo content')
     state.documents = [{ ...doc, sha256_hash: hash }]
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/documents/verify/cron'))
     const json = await response.json()
 
     expect(json).toEqual({
@@ -205,7 +202,7 @@ describe('GET /api/documents/verify/cron', () => {
     registerObject(doc.storage_path, 'tampered content')
     state.documents = [doc]
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/documents/verify/cron'))
     const json = await response.json()
 
     expect(json.failures).toBe(1)
@@ -234,7 +231,7 @@ describe('GET /api/documents/verify/cron', () => {
     const hash = registerObject('documents/company-1/user-1/1_receipt.pdf', 'healthy bytes')
     state.documents = [{ ...doc, sha256_hash: hash }]
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/documents/verify/cron'))
     const json = await response.json()
 
     expect(state.auditInserts).toHaveLength(0)
@@ -255,7 +252,7 @@ describe('GET /api/documents/verify/cron', () => {
     const healthyHash = registerObject(healthy.storage_path, 'healthy content')
     state.documents = [missing, { ...healthy, sha256_hash: healthyHash }]
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/documents/verify/cron'))
     const json = await response.json()
 
     // The audit row is the incident surface for the missing object.
@@ -292,7 +289,7 @@ describe('GET /api/documents/verify/cron', () => {
     state.documents = [missing]
     state.auditInsertError = { message: 'insert blocked' }
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/documents/verify/cron'))
     const json = await response.json()
 
     expect(state.auditInserts).toHaveLength(1)
@@ -308,7 +305,7 @@ describe('GET /api/documents/verify/cron', () => {
     state.documents = [{ ...doc, sha256_hash: hash }]
     state.ledgerInsertError = { message: 'permission denied for table document_integrity_checks' }
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/documents/verify/cron'))
     const json = await response.json()
 
     expect(state.ledgerInserts).toHaveLength(1)
@@ -328,7 +325,7 @@ describe('GET /api/documents/verify/cron', () => {
     state.documents = [doc]
     state.auditInsertError = { message: 'insert blocked' }
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/documents/verify/cron'))
     const json = await response.json()
 
     expect(state.auditInserts).toHaveLength(1)
@@ -341,13 +338,13 @@ describe('GET /api/documents/verify/cron', () => {
   it('returns an error envelope when the queue fetch fails', async () => {
     state.fetchError = { message: 'db down' }
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/documents/verify/cron'))
 
     expect(response.status).toBeGreaterThanOrEqual(500)
   })
 
   it('reports zero processed when there is nothing to verify', async () => {
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/documents/verify/cron'))
     const json = await response.json()
 
     expect(json).toEqual({ message: 'No documents to verify', processed: 0 })

@@ -699,13 +699,6 @@ export function sortedCutoffCollection(collection: CutoffCollection): CutoffColl
   }
 }
 
-export function cutoffCollectionsEqual(
-  left: CutoffCollection,
-  right: CutoffCollection,
-): boolean {
-  return JSON.stringify(sortedCutoffCollection(left)) === JSON.stringify(sortedCutoffCollection(right))
-}
-
 function canonicalLines(lines: CreateJournalEntryLineInput[]): string[] {
   return lines
     .map((line) => JSON.stringify({

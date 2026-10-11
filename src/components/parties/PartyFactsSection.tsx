@@ -12,7 +12,7 @@ import { isLegalPersonOrgNumber } from '@/lib/parties/scb/org-number'
 import type { ScbCandidate } from '@/lib/parties/scb/client'
 import { formatDate } from '@/lib/utils'
 import { ScbPickerDialog } from './ScbPickerDialog'
-import { regionName } from './SuggestionQueue'
+import { regionName } from './region-name'
 
 /**
  * "Företagsuppgifter" on a supplier or customer page: what only the register

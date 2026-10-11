@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { createServiceClient } from '@/lib/supabase/server'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
@@ -10,7 +9,6 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
  * why it was retired, and a derivation may make the same link again.
  */
 export const DELETE = withRouteContext('document.links.retire', async (_request, ctx, { params }: { params: Promise<{ id: string; linkId: string }> }) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const { id, linkId } = await params
   const { data, error } = await createServiceClient()
     .from('document_links')

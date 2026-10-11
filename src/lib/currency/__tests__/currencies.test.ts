@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { CURRENCIES, FOREIGN_CURRENCIES } from '@/types'
 import { CurrencySchema } from '@/lib/api/schemas'
-import { fetchMultipleRates, formatCurrencyAmount, RIKSBANKEN_CURRENCIES } from '@/lib/currency/riksbanken'
+import { RIKSBANKEN_CURRENCIES } from '@/lib/currency/riksbanken'
 
 /**
  * The currency set lives in two places that cannot share code: the TS tuple
@@ -48,20 +48,6 @@ describe('CURRENCIES', () => {
     // must hold, or a currency offered in a dropdown could never reach SEK.
     for (const c of FOREIGN_CURRENCIES) {
       expect(RIKSBANKEN_CURRENCIES, c).toContain(c)
-    }
-  })
-
-  it('every foreign currency has a fallback rate and a symbol', async () => {
-    const originalFetch = globalThis.fetch
-    globalThis.fetch = (async () => new Response('', { status: 503 })) as typeof fetch
-    try {
-      const rates = await fetchMultipleRates([...FOREIGN_CURRENCIES])
-      for (const c of FOREIGN_CURRENCIES) {
-        expect(rates.get(c)?.rate, c).toBeGreaterThan(0)
-        expect(formatCurrencyAmount(1, c).length).toBeGreaterThan(4)
-      }
-    } finally {
-      globalThis.fetch = originalFetch
     }
   })
 })

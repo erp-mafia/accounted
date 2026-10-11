@@ -16,13 +16,11 @@ Use the `/supabase-migration` skill for new migrations.
 2. Add `updated_at` trigger via `update_updated_at_column()`
 3. UUID PKs: `DEFAULT uuid_generate_v4()`
 4. Company ownership: `company_id UUID REFERENCES companies NOT NULL` + `user_id UUID REFERENCES auth.users ON DELETE CASCADE NOT NULL`. The cascade never fires: deleted accounts keep their `auth.users` row as a tombstone, so classify every new FK to `auth.users` in `tests/pg/account-erasure.pg.test.ts` (erase it in `erase_user_personal_data`, or retain it for the company).
-5. Never modify existing migrations: create new ones
-6. Never modify enforcement triggers (migration 017), legally required
-7. Apply via Supabase MCP `apply_migration`
-8. Always end with `NOTIFY pgrst, 'reload schema'` when altering table structure
-9. GRANT every new public table, view and sequence in the migration that creates it: new relations get no privileges for `anon`/`authenticated`/`service_role` by default (migration `20260929220000_own_default_privileges`; every Supabase project from 2026-10-30). `service_role` gets DML, `authenticated` what its RLS policies allow, `anon` nothing unless public; a role that must not reach it gets `-- no-grant: <role> on public.<table> (<reason>)`. Prefer uuid or identity keys (serial needs a sequence grant). Never bulk-grant (`ON ALL TABLES`, `ALTER DEFAULT PRIVILEGES ... GRANT`). `check:guards` (table-without-grant) enforces it; template in `/supabase-migration`. A replay from an empty database runs `supabase/bootstrap.sql` first.
+5. Merging to `main` is the only way a migration reaches prod; nothing goes there by hand (no `apply_migration`, no DDL through `execute_sql`). CI's `migrations-production` job (`.gitlab-ci.yml`, push to `main` only) runs `supabase db push --include-all` against prod and logs the applied versions before and after; after the merge, confirm there that your version landed. `--include-all` also applies a file older than prod's newest version, but out of repo order: if `main` landed a newer migration while yours was open, rename yours above prod's newest version before merging.
+6. Always end with `NOTIFY pgrst, 'reload schema'` when altering table structure
+7. GRANT every new public table, view and sequence in the migration that creates it: new relations get no privileges for `anon`/`authenticated`/`service_role` by default (migration `20260929220000_own_default_privileges`; every Supabase project from 2026-10-30). `service_role` gets DML, `authenticated` what its RLS policies allow, `anon` nothing unless public; a role that must not reach it gets `-- no-grant: <role> on public.<table> (<reason>)`. Prefer uuid or identity keys (serial needs a sequence grant). Never bulk-grant (`ON ALL TABLES`, `ALTER DEFAULT PRIVILEGES ... GRANT`). `check:guards` (table-without-grant) enforces it; template in `/supabase-migration`. A replay from an empty database runs `supabase/bootstrap.sql` first.
 
-**pg-real tests**: any PR touching a trigger/RPC/RLS/DEFERRABLE must include or extend a `*.pg.test.ts` (`scripts/check-pg-test-coverage.mjs` gates it in CI). New tests go in `tests/pg/<topic>.pg.test.ts`, never under `supabase/migrations/` (that directory holds migrations only). The pg-real Vitest project collects `**/*.pg.test.ts` and runs one file at a time against `supabase/postgres:15.8.1.060`, after `tests/pg/bootstrap.sql`, `supabase/bootstrap.sql` and every migration are replayed. Local: `npm run test:pg`. Helpers: `tests/pg/setup.ts` (`getPool()`, `withUserContext()`), `tests/pg/fixtures.ts` (`seedCompany()`, `insertDraftJournalEntry()`, etc.).
+**pg-real tests** (Definition of Done item 3): any PR touching a trigger/RPC/RLS/DEFERRABLE must include or extend a `*.pg.test.ts` (`scripts/check-pg-test-coverage.mjs` gates it in CI). New tests go in `tests/pg/<topic>.pg.test.ts`, never under `supabase/migrations/` (that directory holds migrations only). The pg-real Vitest project collects `**/*.pg.test.ts` and runs one file at a time against `supabase/postgres:15.8.1.060`, after `tests/pg/bootstrap.sql`, `supabase/bootstrap.sql` and every migration are replayed. Local: `npm run test:pg`. Helpers: `tests/pg/setup.ts` (`getPool()`, `withUserContext()`), `tests/pg/fixtures.ts` (`seedCompany()`, `insertDraftJournalEntry()`, etc.).
 
 ## Key Tables (~170 live tables; the ones that matter)
 
@@ -36,11 +34,11 @@ Use the `/supabase-migration` skill for new migrations.
 - **Documents**: `document_attachments` (WORM), `receipts`, `receipt_line_items`
 - **Settings**: `company_settings`, `mapping_rules`, `categorization_templates`, `booking_template_library`, `extension_data`
 - **Dimensions**: `cost_centers`, `projects`
-- **Tax/Deadlines**: `tax_rates`, `tax_table_rates`, `deadlines`, `calendar_feeds`, `skatteverket_tokens`
+- **Tax/Deadlines**: `tax_table_rates`, `deadlines`, `calendar_feeds`, `skatteverket_tokens`
 - **Skattekonto**: `skattekonto_transactions`, `skattekonto_file_imports`, `skattekonto_rules`, `tax_assessment_notices`
 - **API/Auth**: `api_keys`, `oauth_used_codes`, `bankid_identities`
-- **Audit/Ops**: `audit_log` (immutable), `event_log` (30d TTL), `pending_operations`, `processing_history`, `ai_usage_tracking`, `automation_webhooks`, `company_migration_resets`
-- **Inbox**: `invoice_inbox_items`, `company_inboxes`, `email_connections`
+- **Audit/Ops**: `audit_log` (immutable), `event_log` (30d TTL), `pending_operations`, `processing_history`, `webhooks`, `webhook_deliveries`, `company_migration_resets`
+- **Inbox**: `invoice_inbox_items`, `company_inboxes`, `mail_connections`
 - **WhatsApp**: `whatsapp_phone_links`, `whatsapp_link_codes`, `whatsapp_conversations`, `whatsapp_messages`, `whatsapp_sender_rate_counters`
 - **Webshop**: `webshop_orders` (Shopify/WooCommerce orders)
 - **Salary**: `employees`, `salary_runs`, `salary_run_employees`, `salary_line_items`, `salary_payroll_config`, `agi_declarations`, `employee_vacation_balances`, `vacation_year_closures`
@@ -60,9 +58,9 @@ Use the `/supabase-migration` skill for new migrations.
 - `validate_and_increment_api_key()`: Atomic rate limiting
 - `user_company_ids()`: RLS helper returning user's company IDs
 - `current_active_company_id()`: RLS-side read of `user_preferences.active_company_id`; the same value the middleware resolves, so Next.js and RLS agree
-- `claim_due_webhook_deliveries()`: Concurrent-safe claim of due `automation_webhooks` deliveries for the cron sender
+- `claim_due_webhook_deliveries()`: Concurrent-safe claim of due `webhook_deliveries` rows for the cron sender
 - `create_supplier_payment_batch()`: Atomic betalfil batch creation (locks invoices, rechecks active batches in-transaction, header + items together)
-- `get_unlinked_1930_lines()`: Bank reconciliation helper
+- `get_unlinked_gl_lines()`: Unlinked ledger lines on a settlement account (default `'1930'`) for reconciliation
 - `cleanup_sandbox_user()`, `cleanup_expired_sandbox_users()`: Sandbox lifecycle
 
 ## Key Triggers

@@ -9,7 +9,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   computeAnnualDepreciation,
-  openingAccumulatedBefore,
   openingDepreciationOf,
 } from '../depreciation-engine'
 import {
@@ -68,7 +67,7 @@ const MIGRATED = {
   opening_depreciation_date: '2024-12-31',
 }
 
-describe('openingDepreciationOf / openingAccumulatedBefore', () => {
+describe('openingDepreciationOf', () => {
   it('returns null without an amount or without a date', () => {
     expect(openingDepreciationOf(makeAsset())).toBeNull()
     expect(
@@ -82,12 +81,6 @@ describe('openingDepreciationOf / openingAccumulatedBefore', () => {
         makeAsset({ opening_accumulated_depreciation: '60000.50', opening_depreciation_date: '2024-12-31' }),
       ),
     ).toEqual({ amount: 60_000.5, date: '2024-12-31' })
-  })
-
-  it('counts the opening amount only for periods starting after its date', () => {
-    const asset = makeAsset(MIGRATED)
-    expect(openingAccumulatedBefore(asset, '2025-01-01')).toBe(60_000)
-    expect(openingAccumulatedBefore(asset, '2024-01-01')).toBe(0)
   })
 })
 

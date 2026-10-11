@@ -84,7 +84,6 @@ function makeContext(connection: Record<string, unknown>, updateSpy: Mock): Exte
     } as any,
     emit: vi.fn().mockResolvedValue(undefined),
     settings: { get: vi.fn(), set: vi.fn(), getAll: vi.fn() } as never,
-    storage: {} as never,
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
     services: {} as never,
   }

@@ -7,9 +7,6 @@ import { gronTeknikWorkType } from '@/lib/invoices/rot-rut-rules'
  *
  *   - deriveNextStep: the single dynamic "Nästa steg" line (the page's only
  *     ochre sentence) and the focus-routing target for an invalid submit.
- *   - deriveForvalChips: the Förval chip line summarizing collapsed settings,
- *     surfacing every value that deviates from its default so edit/copy mode
- *     never round-trips values the user cannot see.
  *   - planDueDateSync: keeps förfallodatum on the same payment term when the
  *     user moves fakturadatum, instead of leaving them to count days by hand.
  *   - planCustomerTermsFill: the same term, filled from the picked customer's
@@ -138,86 +135,6 @@ export function deriveNextStep(input: NextStepInput): NextStep {
     if (!input.receivedDate) return { kind: 'received_date' }
   }
   return { kind: 'ready' }
-}
-
-export type ForvalChip =
-  | { kind: 'doc_type'; documentType: 'proforma' | 'delivery_note' | 'quote' }
-  | { kind: 'currency'; currency: string }
-  | { kind: 'invoice_date'; date: string }
-  | { kind: 'due_days'; days: number; date: string }
-  | { kind: 'due_date'; date: string }
-  | { kind: 'valid_until'; date: string }
-  | { kind: 'received'; date: string }
-  | { kind: 'delivery'; date: string }
-  | { kind: 'payment_link'; mode: 'auto' | 'manual' }
-  | { kind: 'ore_off' }
-  | { kind: 'dims'; dims: string }
-
-export interface ForvalChipsInput {
-  isSelfBilled: boolean
-  documentType: 'invoice' | 'proforma' | 'delivery_note' | 'quote'
-  currency: string
-  invoiceDate: string
-  dueDate: string
-  /** Quotes only: the expiry date ("Giltig till"). Replaces the due chips. */
-  validUntil?: string
-  receivedDate: string
-  deliveryDate: string
-  paymentLink: 'auto' | 'manual' | null
-  oreRounding: boolean
-  /** Compact display of the invoice-level default dims, or null when none. */
-  dims: string | null
-}
-
-/**
- * The chip line renders the always-relevant defaults (currency, due terms)
- * plus every collapsed setting whose value deviates from its default. A
- * deviating value MUST surface here: in edit/copy mode the draft may carry a
- * proforma type, an EUR currency, a payment link or dimension defaults that
- * would otherwise round-trip invisibly through PATCH.
- *
- * The references (Vår referens, Er referens, Fakturamärkning) are not
- * collapsed settings: they are per-invoice data rendered in the visible head
- * of the editor next to the customer (crm#136, crm#187), so they need no chip.
- */
-export function deriveForvalChips(input: ForvalChipsInput): ForvalChip[] {
-  const chips: ForvalChip[] = []
-  if (!input.isSelfBilled && input.documentType !== 'invoice') {
-    chips.push({ kind: 'doc_type', documentType: input.documentType })
-  }
-  chips.push({ kind: 'currency', currency: input.currency })
-  // The invoice date always surfaces: it silently defaults to today inside
-  // the collapsed panel, and especially in self-billed mode (where the
-  // counterparty's issue date must be transcribed) an invisible default
-  // registers wrong invoices (issue #1820).
-  if (input.invoiceDate) {
-    chips.push({ kind: 'invoice_date', date: input.invoiceDate })
-  }
-  if (input.documentType === 'quote' && !input.isSelfBilled) {
-    // A quote has no due date, only an expiry: the due chips would describe
-    // a payment term the document does not carry.
-    if (input.validUntil) chips.push({ kind: 'valid_until', date: input.validUntil })
-  } else if (input.dueDate) {
-    const days = dueDays(input.invoiceDate, input.dueDate)
-    if (days !== null && days >= 0) chips.push({ kind: 'due_days', days, date: input.dueDate })
-    else chips.push({ kind: 'due_date', date: input.dueDate })
-  }
-  if (input.isSelfBilled && input.receivedDate) {
-    chips.push({ kind: 'received', date: input.receivedDate })
-  }
-  if (!input.isSelfBilled && input.deliveryDate) {
-    chips.push({ kind: 'delivery', date: input.deliveryDate })
-  }
-  if (!input.isSelfBilled && input.paymentLink) {
-    chips.push({ kind: 'payment_link', mode: input.paymentLink })
-  }
-  if (!input.isSelfBilled && !input.oreRounding && input.currency === 'SEK') {
-    chips.push({ kind: 'ore_off' })
-  }
-  if (!input.isSelfBilled && input.dims) {
-    chips.push({ kind: 'dims', dims: input.dims })
-  }
-  return chips
 }
 
 function dueDays(invoiceDate: string, dueDate: string): number | null {

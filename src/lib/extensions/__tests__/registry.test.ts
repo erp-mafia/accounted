@@ -86,21 +86,6 @@ describe('ExtensionRegistry', () => {
     expect(handler).not.toHaveBeenCalled()
   })
 
-  it('getByCapability() filters correctly', () => {
-    const ext1 = makeExtension({
-      id: 'with-settings',
-      settingsPanel: { label: 'Test', path: '/test' },
-    })
-    const ext2 = makeExtension({ id: 'without-settings' })
-
-    extensionRegistry.register(ext1)
-    extensionRegistry.register(ext2)
-
-    const withSettings = extensionRegistry.getByCapability('settingsPanel')
-    expect(withSettings).toHaveLength(1)
-    expect(withSettings[0].id).toBe('with-settings')
-  })
-
   it('clear() removes all extensions and unsubscribes all handlers', async () => {
     const handler1 = vi.fn()
     const handler2 = vi.fn()

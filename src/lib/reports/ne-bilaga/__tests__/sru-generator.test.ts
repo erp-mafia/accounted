@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import {
   generateNESRUSubmission,
-  validateBlanketterSru,
   getZipFilename,
   NESruBlockedError,
 } from '../sru-generator'
+import { validateNeBlanketterSru } from '@/tests/sru-validators'
 import { encodeISO88591 } from '@/lib/reports/sru-encoding'
 import type { NEDeclaration, NEDeclarationRutor } from '../types'
 
@@ -183,24 +183,24 @@ describe('NE-bilaga SRU generator', () => {
     })
   })
 
-  describe('validateBlanketterSru', () => {
+  describe('validateNeBlanketterSru', () => {
     it('passes on generated output', () => {
       const { blanketterSru } = generateNESRUSubmission(makeDeclaration())
-      const result = validateBlanketterSru(blanketterSru)
+      const result = validateNeBlanketterSru(blanketterSru)
       expect(result.isValid).toBe(true)
       expect(result.errors).toEqual([])
     })
 
     it('fails when #FIL_SLUT is missing', () => {
       const { blanketterSru } = generateNESRUSubmission(makeDeclaration())
-      const result = validateBlanketterSru(blanketterSru.replace('#FIL_SLUT', ''))
+      const result = validateNeBlanketterSru(blanketterSru.replace('#FIL_SLUT', ''))
       expect(result.isValid).toBe(false)
       expect(result.errors).toContain('Missing #FIL_SLUT terminator')
     })
 
     it('fails when the mandatory fiscal-year date field (7011) is missing', () => {
       const { blanketterSru } = generateNESRUSubmission(makeDeclaration())
-      const result = validateBlanketterSru(blanketterSru.replace(/#UPPGIFT 7011 \d+\r?\n/, ''))
+      const result = validateNeBlanketterSru(blanketterSru.replace(/#UPPGIFT 7011 \d+\r?\n/, ''))
       expect(result.isValid).toBe(false)
       expect(result.errors.some((e) => e.includes('7011'))).toBe(true)
     })

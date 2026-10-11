@@ -91,7 +91,7 @@ describe('SIE dimensions round-trip', () => {
     // ── What the importer writes ─────────────────────────────────
     const usage = collectSIEDimensionUsage(parsedSource)
 
-    // Registry rows exactly as importDimensionRegistry inserts them.
+    // Registry rows as the SIE job inserts them from this usage.
     const dimensionRows = [...usage.dims.entries()].map(([sieDimNo, info], i) => ({
       id: `dim-${sieDimNo}`,
       sie_dim_no: sieDimNo,
@@ -105,7 +105,7 @@ describe('SIE dimensions round-trip', () => {
       name: v.name,
     }))
 
-    // Journal lines exactly as importVouchers inserts them (dimensions jsonb
+    // Journal lines as prepareSIEVouchers prepares them (dimensions jsonb
     // via normalizeLineDimensions; SIE amount sign → debit/credit).
     const journalEntries = parsedSource.vouchers.map((v, i) => ({
       id: `e${i + 1}`,

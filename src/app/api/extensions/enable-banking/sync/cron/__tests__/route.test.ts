@@ -67,6 +67,7 @@ import {
 } from '@/extensions/general/enable-banking/lib/api-client'
 import { BANK_ROUTE_NEEDS_CONFIGURATION_MESSAGE } from '@/lib/bank-sync/ingest-route'
 import { GET } from '../route'
+import { createCronRequest } from '@/tests/helpers'
 
 function makeClient(state: ClientState) {
   return {
@@ -192,10 +193,6 @@ afterEach(() => {
   process.env.SUPABASE_SERVICE_ROLE_KEY = originalServiceKey
 })
 
-function cronRequest(): Request {
-  return new Request('http://localhost:3000/api/extensions/enable-banking/sync/cron')
-}
-
 const HOUR_MS = 60 * 60 * 1000
 const hoursAgo = (hours: number) => new Date(Date.now() - hours * HOUR_MS).toISOString()
 const companyId = (index: number) => `11111111-1111-4111-8111-${String(index).padStart(12, '0')}`
@@ -230,7 +227,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: which connections a run 
       connection({ id: 'overdue', company_id: companyId(2), last_synced_at: hoursAgo(30) }),
     ]
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
 
     expect(mocks.syncAccountTransactions).toHaveBeenCalledTimes(1)
     expect(mocks.syncAccountTransactions.mock.calls[0][3]).toBe('overdue')
@@ -255,7 +252,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: which connections a run 
       new Set(['11111111-1111-4111-8111-111111111111']),
     )
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
 
     expect(response.status).toBe(200)
     expect(mocks.syncAccountTransactions).toHaveBeenCalledTimes(1)
@@ -266,16 +263,16 @@ describe('GET /api/extensions/enable-banking/sync/cron: which connections a run 
   it('works through more than one batch of due connections over successive runs', async () => {
     state.active = fleet(650)
 
-    const first = await (await GET(cronRequest())).json()
+    const first = await (await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))).json()
     expect(first).toMatchObject({ due: 650, selected: 300, completed: 300, deferredByBatchLimit: 350 })
 
-    const second = await (await GET(cronRequest())).json()
+    const second = await (await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))).json()
     expect(second).toMatchObject({ due: 350, selected: 300, deferredByBatchLimit: 50 })
 
-    const third = await (await GET(cronRequest())).json()
+    const third = await (await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))).json()
     expect(third).toMatchObject({ due: 50, selected: 50, deferredByBatchLimit: 0 })
 
-    const fourth = await (await GET(cronRequest())).json()
+    const fourth = await (await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))).json()
     expect(fourth).toMatchObject({ due: 0, fresh: 650, processed: 0 })
 
     // Every connection exactly once: a finished sync is fresh for the next run.
@@ -288,7 +285,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: which connections a run 
     // It can never record a sync, so it would sit first in the queue forever.
     state.active = [connection({ accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: false }] })]
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
 
     expect(mocks.syncAccountTransactions).not.toHaveBeenCalled()
     await expect(response.json()).resolves.toMatchObject({ noAccounts: 1, due: 0 })
@@ -314,7 +311,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: which connections a run 
       }),
     ]
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
 
     expect(mocks.syncAccountTransactions).toHaveBeenCalledTimes(1)
     const [, , , connectionId, account] = mocks.syncAccountTransactions.mock.calls[0]
@@ -329,7 +326,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: worker pool', () => {
     const syncs = manualSyncs()
     state.active = fleet(6)
 
-    const responsePromise = GET(cronRequest())
+    const responsePromise = GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
 
     await vi.waitFor(() => expect(syncs.started).toHaveLength(4))
     // One finishes: exactly one more starts. The old waves waited for all four.
@@ -346,7 +343,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: worker pool', () => {
     const syncs = manualSyncs()
     state.active = fleet(12)
 
-    const responsePromise = GET(cronRequest())
+    const responsePromise = GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
 
     await vi.waitFor(() => expect(syncs.started).toHaveLength(4))
     const slow = syncs.started[0]
@@ -373,7 +370,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: worker pool', () => {
       connection({ id: 'other', company_id: 'company-other' }),
     ]
 
-    const responsePromise = GET(cronRequest())
+    const responsePromise = GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
 
     await vi.waitFor(() => expect(syncs.started).toContain('other'))
     expect(syncs.started).toEqual(expect.arrayContaining(['same-a', 'other']))
@@ -396,7 +393,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: worker pool', () => {
     })
     state.active = fleet(4)
 
-    const body = await (await GET(cronRequest())).json()
+    const body = await (await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))).json()
 
     expect(body).toMatchObject({ processed: 4, completed: 3, totalFailed: 1 })
     const failed = body.results.find((r: { connectionId: string }) => r.connectionId === 'conn-0001')
@@ -413,7 +410,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: shared sync lease', () =
       return { imported: 0, duplicates: 0, errors: 0 }
     })
 
-    await GET(cronRequest())
+    await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
 
     expect(state.leaseWrites[0].ids).toEqual(['conn-1'])
     expect(Date.parse(state.leaseWrites[0].until)).toBeGreaterThan(Date.now() + 14 * 60 * 1000)
@@ -423,7 +420,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: shared sync lease', () =
     // An agent-triggered sync, "Synka nu", or a rate-limit cooldown.
     state.active = [connection({ sync_lease_until: new Date(Date.now() + 5 * 60 * 1000).toISOString() })]
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
 
     expect(mocks.syncAccountTransactions).not.toHaveBeenCalled()
     await expect(response.json()).resolves.toMatchObject({ coolingDown: 1, due: 0, processed: 0 })
@@ -433,7 +430,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: shared sync lease', () =
     state.active = [connection()]
     state.claimLosers.add('conn-1')
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
 
     expect(mocks.syncAccountTransactions).not.toHaveBeenCalled()
     await expect(response.json()).resolves.toMatchObject({
@@ -461,7 +458,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: bank rate limit', () => 
       }),
     )
 
-    const body = await (await GET(cronRequest())).json()
+    const body = await (await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))).json()
 
     expect(body).toMatchObject({ totalRateLimited: 1, totalFailed: 0 })
     expect(state.updates).toEqual([])
@@ -472,7 +469,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: bank rate limit', () => 
 
     // The next hourly run does not spend another refused call.
     mocks.syncAccountTransactions.mockClear()
-    const next = await (await GET(cronRequest())).json()
+    const next = await (await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))).json()
     expect(mocks.syncAccountTransactions).not.toHaveBeenCalled()
     expect(next).toMatchObject({ coolingDown: 1, due: 0 })
     consoleWarn.mockRestore()
@@ -495,7 +492,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: time budget', () => {
       return { imported: 0, duplicates: 0, errors: 0 }
     })
 
-    const first = await (await GET(cronRequest())).json()
+    const first = await (await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))).json()
 
     // The four workers were already in flight; nothing new starts.
     expect(first).toMatchObject({ selected: 6, completed: 4, deferredByTimeBudget: 2 })
@@ -505,7 +502,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: time budget', () => {
     // Next hour: only the two left over are due.
     vi.setSystemTime(start + HOUR_MS)
     mocks.syncAccountTransactions.mockResolvedValue({ imported: 0, duplicates: 0, errors: 0 })
-    const second = await (await GET(cronRequest())).json()
+    const second = await (await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))).json()
     expect(second).toMatchObject({ due: 2, completed: 2, deferredByTimeBudget: 0 })
   })
 
@@ -518,7 +515,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: time budget', () => {
         : Promise.resolve({ imported: 0, duplicates: 0, errors: 0 }),
     )
 
-    const responsePromise = GET(cronRequest())
+    const responsePromise = GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
     await vi.advanceTimersByTimeAsync(281_000)
     const body = await (await responsePromise).json()
 
@@ -543,7 +540,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: failure log level', () =
       new SessionExpiredError(401, '{"message":"Session has expired"}'),
     )
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
 
     // The connection still gets the re-auth state and its Swedish message.
     expect(state.updates[0].payload).toMatchObject({
@@ -562,7 +559,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: failure log level', () =
     state.active = [connection()]
     mocks.syncAccountTransactions.mockRejectedValue(new Error('ASPSP 500'))
 
-    await GET(cronRequest())
+    await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
 
     expect(state.updates[0].payload).toMatchObject({ status: 'error' })
     const lines = consoleError.mock.calls.map(call => String(call[0]))
@@ -576,7 +573,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: transient failures leave
     const lastSyncedAt = hoursAgo(24)
     state.active = [connection({ last_synced_at: lastSyncedAt })]
     mocks.syncAccountTransactions.mockRejectedValue(Object.assign(new Error('BANK_CONFIGURATION_CHANGED'), { code: 'PT409' }))
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({ processed: 1, totalFailed: 1 })
     expect(state.updates).toEqual([])
@@ -593,7 +590,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: transient failures leave
       Object.assign(new Error('BANK_INGEST_ROUTE_UNRESOLVED'), { code: 'PT409' }),
     )
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
 
     expect(await response.json()).toMatchObject({ processed: 1, totalFailed: 1 })
     expect(state.updates).toEqual([
@@ -609,7 +606,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: transient failures leave
   it('clears the stored advice on the next successful sync', async () => {
     state.active = [connection({ last_synced_at: hoursAgo(24), error_message: BANK_ROUTE_NEEDS_CONFIGURATION_MESSAGE })]
 
-    await GET(cronRequest())
+    await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
 
     expect(state.active[0]).toMatchObject({ status: 'active', error_message: null })
   })
@@ -627,7 +624,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: transient failures leave
       new ConnectorSyncError(200, 'CONNECTOR_BAD_SHAPE', '{"transactions":[]}', ['transactions.0.amount: Invalid input']),
     )
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
 
     expect(state.updates).toEqual([])
     await expect(response.json()).resolves.toMatchObject({ processed: 1 })
@@ -645,7 +642,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: transient failures leave
       new AspspUnavailableError(400, '{"error":"ASPSP_ERROR"}', 'window-already-accepted', '2026-08-28'),
     )
 
-    await GET(cronRequest())
+    await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
 
     expect(state.updates).toEqual([])
     const errorLines = consoleError.mock.calls.map(call => String(call[0]))
@@ -675,7 +672,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: incremental lookback', (
   it('uses the 7-day window when the connection synced yesterday', async () => {
     state.active = [connection({ last_synced_at: syncedDaysAgo(1) })]
 
-    await GET(cronRequest())
+    await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
 
     expect(mocks.syncAccountTransactions).toHaveBeenCalledTimes(1)
     const [, , , , , fromDate, , , options] = mocks.syncAccountTransactions.mock.calls[0]
@@ -688,7 +685,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: incremental lookback', (
     // 7-day window would silently drop the 13 days in between.
     state.active = [connection({ last_synced_at: syncedDaysAgo(20) })]
 
-    await GET(cronRequest())
+    await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
 
     expect(mocks.syncAccountTransactions).toHaveBeenCalledTimes(1)
     const [, , , , , fromDate] = mocks.syncAccountTransactions.mock.calls[0]
@@ -698,7 +695,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: incremental lookback', (
   it('asks for the deepest history the bank serves on a gap of a month or more', async () => {
     state.active = [connection({ last_synced_at: syncedDaysAgo(40) })]
 
-    await GET(cronRequest())
+    await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
 
     const [, , , , , fromDate, , , options] = mocks.syncAccountTransactions.mock.calls[0]
     expect(fromDate).toBe(isoDate(41 * DAY_MS))
@@ -708,7 +705,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: incremental lookback', (
   it('caps the widened window at 90 days', async () => {
     state.active = [connection({ last_synced_at: syncedDaysAgo(200) })]
 
-    await GET(cronRequest())
+    await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
 
     const [, , , , , fromDate] = mocks.syncAccountTransactions.mock.calls[0]
     expect(fromDate).toBe(isoDate(90 * DAY_MS))
@@ -717,7 +714,7 @@ describe('GET /api/extensions/enable-banking/sync/cron: incremental lookback', (
   it('takes 90 days while the first import is still owed, whatever the last manual sync', async () => {
     state.active = [connection({ initial_sync_completed_at: null, last_synced_at: syncedDaysAgo(1) })]
 
-    await GET(cronRequest())
+    await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
 
     const [, , , , , fromDate, , , options] = mocks.syncAccountTransactions.mock.calls[0]
     expect(fromDate).toBe(isoDate(90 * DAY_MS))

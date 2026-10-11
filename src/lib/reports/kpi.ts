@@ -80,18 +80,6 @@ export function calculateVatLiability(
 }
 
 /**
- * Calculate revenue growth between two periods.
- * Returns percentage or null if no previous period data.
- */
-export function calculateRevenueGrowth(
-  currentRevenue: number,
-  previousRevenue: number | null
-): number | null {
-  if (previousRevenue === null || previousRevenue === 0) return null
-  return Math.round(((currentRevenue - previousRevenue) / previousRevenue) * 10000) / 100
-}
-
-/**
  * Calculate expense ratio from income statement.
  * Expense ratio = total_expenses / total_revenue × 100
  */

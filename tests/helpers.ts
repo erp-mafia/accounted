@@ -650,6 +650,18 @@ export function createMockRequest(
 }
 
 /**
+ * Build the Request a cron route receives. verifyCronSecret reads only the
+ * authorization header (and the path, to name the job in failure reports);
+ * pass `authorization` when a test exercises the secret check itself.
+ */
+export function createCronRequest(path: string, authorization?: string): Request {
+  return new Request(
+    new URL(path, 'http://localhost:3000').toString(),
+    authorization ? { headers: { authorization } } : undefined,
+  )
+}
+
+/**
  * Parse NextResponse to {status, body}.
  */
 export async function parseJsonResponse<T = unknown>(
@@ -868,6 +880,14 @@ export function createTableMockSupabase(
   const findCalls = (table: string, method: string): unknown[][] =>
     calls.filter((c) => c.table === table && c.method === method).map((c) => c.args)
 
+  /**
+   * First argument of every `method` call against `table`, in order: the
+   * rows a test wants from `.insert()`/`.update()`/`.upsert()`, or the
+   * projection of each `.select()`. Empty when the code never called it.
+   */
+  const payloads = (table: string, method: string): unknown[] =>
+    findCalls(table, method).map((args) => args[0])
+
   /** Drop every table answer and recorded call, then re-apply `initial`. */
   const reset = () => {
     queues.clear()
@@ -875,6 +895,12 @@ export function createTableMockSupabase(
     for (const [key, value] of Object.entries(initial)) setTable(key, value)
   }
   reset()
+
+  /**
+   * Every table passed to `from()`, in order, so a test can assert a table
+   * was never touched (or touched once) whatever the chain did after it.
+   */
+  const tables = (): string[] => supabase.from.mock.calls.map(([table]) => table)
 
   const supabase = {
     from: vi.fn((table: string) => buildChain(table)),
@@ -889,7 +915,7 @@ export function createTableMockSupabase(
     },
   }
 
-  return { supabase, setTable, reset, calls, findCall, findCalls }
+  return { supabase, setTable, reset, calls, findCall, findCalls, payloads, tables }
 }
 
 // ============================================================

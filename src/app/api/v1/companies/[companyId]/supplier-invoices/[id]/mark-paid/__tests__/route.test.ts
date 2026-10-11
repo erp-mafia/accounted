@@ -84,6 +84,7 @@ import {
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { POST as markPaid } from '../route'
 import { eventBus } from '@/lib/events'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -94,37 +95,6 @@ const mockCashEntry = createSupplierInvoiceCashEntry as ReturnType<typeof vi.fn>
 // here so a signature change surfaces as one failing constant rather than as
 // assertions that quietly read the wrong slot.
 const PAYMENT_ACCOUNT_ARG = 8
-
-type MockResult = { data?: unknown; error?: unknown }
-type RecordedCall = { table: string; method: string; args: unknown[] }
-function makeFlexibleSupabase(
-  byTable: Record<string, MockResult | MockResult[]>,
-  calls?: RecordedCall[],
-) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (...args: unknown[]) => {
-          calls?.push({ table, method: String(prop), args })
-          return buildChain(table)
-        }
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const SI_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -190,9 +160,7 @@ beforeEach(() => {
 
 describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', () => {
   it('retires the settled invoice suggestions on a full payment (issue #1259)', async () => {
-    const calls: RecordedCall[] = []
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+    const { supabase, calls } = createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: [
           { data: APPROVED_SI, error: null },
@@ -209,7 +177,9 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
         ],
         company_settings: { data: { accounting_method: 'accrual' }, error: null },
         supplier_invoice_payments: { data: null, error: null },
-      }, calls),
+      })
+    mockServiceClient.mockReturnValue(
+      supabase,
     )
 
     const paidHandler = vi.fn()
@@ -242,7 +212,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
 
   it('leaves the suggestions alone on a partial payment: the invoice is still matchable', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: [
           { data: APPROVED_SI, error: null },
@@ -253,7 +223,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
         ],
         company_settings: { data: { accounting_method: 'accrual' }, error: null },
         supplier_invoice_payments: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const paidHandler = vi.fn()
@@ -290,14 +260,14 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
   }
 
   it('returns 409 SI_PAID_LIKELY_DUPLICATE when an outbound bank row carries the abbreviated supplier text (issue #2299)', async () => {
-    const calls: RecordedCall[] = []
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+    const { supabase, calls } = createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: { data: hi3gSI, error: null },
         company_settings: { data: { accounting_method: 'accrual' }, error: null },
         transactions: { data: [hi3gRow], error: null },
-      }, calls),
+      })
+    mockServiceClient.mockReturnValue(
+      supabase,
     )
 
     const res = await markPaid(makeRequest({ payment_date: '2026-05-12' }), detailParams())
@@ -320,9 +290,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
   })
 
   it('force: true bypasses the guard and books the payment', async () => {
-    const calls: RecordedCall[] = []
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+    const { supabase, calls } = createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: [
           { data: hi3gSI, error: null },
@@ -331,7 +299,9 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
         company_settings: { data: { accounting_method: 'accrual' }, error: null },
         transactions: { data: [hi3gRow], error: null },
         supplier_invoice_payments: { data: null, error: null },
-      }, calls),
+      })
+    mockServiceClient.mockReturnValue(
+      supabase,
     )
 
     const res = await markPaid(makeRequest({ payment_date: '2026-05-12', force: true }), detailParams())
@@ -369,7 +339,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
 
   it('force on a partial payment records nothing: the guard never ran there', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: [
           { data: hi3gSI, error: null },
@@ -377,7 +347,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
         ],
         company_settings: { data: { accounting_method: 'accrual' }, error: null },
         supplier_invoice_payments: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await markPaid(
@@ -390,9 +360,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
   })
 
   it('a partial payment skips the guard: it is an explicit, deliberate action', async () => {
-    const calls: RecordedCall[] = []
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+    const { supabase, calls } = createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: [
           { data: hi3gSI, error: null },
@@ -401,7 +369,9 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
         company_settings: { data: { accounting_method: 'accrual' }, error: null },
         transactions: { data: [hi3gRow], error: null },
         supplier_invoice_payments: { data: null, error: null },
-      }, calls),
+      })
+    mockServiceClient.mockReturnValue(
+      supabase,
     )
 
     const res = await markPaid(makeRequest({ payment_date: '2026-05-12', amount: 400 }), detailParams())
@@ -433,8 +403,8 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
       ],
     }
 
-    function accrualClient(calls?: RecordedCall[]) {
-      return makeFlexibleSupabase({
+    function accrualClient() {
+      return createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: [
           { data: APPROVED_SI, error: null },
@@ -445,11 +415,11 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
         ],
         company_settings: { data: { accounting_method: 'accrual' }, error: null },
         supplier_invoice_payments: { data: null, error: null },
-      }, calls)
+      })
     }
 
     it('credits the requested account on the accrual path', async () => {
-      mockServiceClient.mockReturnValue(accrualClient())
+      mockServiceClient.mockReturnValue(accrualClient().supabase)
 
       const res = await markPaid(
         makeRequest({ payment_date: '2026-05-12', payment_account: '1940' }),
@@ -463,7 +433,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
 
     it('credits the requested account on the cash path', async () => {
       mockServiceClient.mockReturnValue(
-        makeFlexibleSupabase({
+        createTableMockSupabase({
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           supplier_invoices: [
             { data: CASH_SI, error: null },
@@ -471,7 +441,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
           ],
           company_settings: { data: { accounting_method: 'cash' }, error: null },
           supplier_invoice_payments: { data: null, error: null },
-        }),
+        }).supabase,
       )
 
       const res = await markPaid(
@@ -486,7 +456,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
     })
 
     it('omitting payment_account leaves the generator default (1930) in charge', async () => {
-      mockServiceClient.mockReturnValue(accrualClient())
+      mockServiceClient.mockReturnValue(accrualClient().supabase)
 
       const res = await markPaid(makeRequest({ payment_date: '2026-05-12' }), detailParams())
 
@@ -501,11 +471,11 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
 
     it('dry-run reports the account the commit would credit', async () => {
       mockServiceClient.mockReturnValue(
-        makeFlexibleSupabase({
+        createTableMockSupabase({
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           supplier_invoices: { data: APPROVED_SI, error: null },
           company_settings: { data: { accounting_method: 'accrual' }, error: null },
-        }),
+        }).supabase,
       )
 
       const res = await markPaid(
@@ -521,8 +491,8 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
     })
 
     it('an account outside the chart returns 400 and books nothing', async () => {
-      const calls: RecordedCall[] = []
-      mockServiceClient.mockReturnValue(accrualClient(calls))
+      const { supabase, calls } = accrualClient()
+      mockServiceClient.mockReturnValue(supabase)
       mockPaymentEntry.mockRejectedValueOnce(new AccountsNotInChartError(['9999']))
 
       const res = await markPaid(
@@ -561,8 +531,8 @@ describe('POST .../supplier-invoices/:id/mark-paid: foreign currency books SEK (
   }
 
   /** The invoice, then the resolver's ledger read, then the commit. */
-  function usdClient(calls?: RecordedCall[], opts: { sharedRegistration?: boolean } = {}) {
-    return makeFlexibleSupabase({
+  function usdClient(opts: { sharedRegistration?: boolean } = {}) {
+    return createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       supplier_invoices: [
         { data: USD_SI, error: null },
@@ -576,12 +546,12 @@ describe('POST .../supplier-invoices/:id/mark-paid: foreign currency books SEK (
         data: [{ id: 'l-1', journal_entry_id: 'je-reg', debit_amount: 0, credit_amount: 361.55 }],
         error: null,
       },
-    }, calls)
+    })
   }
 
   it('returns 401 without a valid API key', async () => {
     mockValidate.mockResolvedValue({ error: 'invalid api key', status: 401 })
-    mockServiceClient.mockReturnValue(usdClient())
+    mockServiceClient.mockReturnValue(usdClient().supabase)
     const res = await markPaid(makeRequest({ exchange_rate_difference: 0 }), detailParams())
     expect(res.status).toBe(401)
     expect(mockPaymentEntry).not.toHaveBeenCalled()
@@ -589,18 +559,18 @@ describe('POST .../supplier-invoices/:id/mark-paid: foreign currency books SEK (
 
   it('returns 404 for an invoice outside the company', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await markPaid(makeRequest({ exchange_rate_difference: 0 }), detailParams())
     expect(res.status).toBe(404)
   })
 
   it('37.50 USD clears the 361.55 kr the registration put on 2440, not 37.50 kr', async () => {
-    const calls: RecordedCall[] = []
-    mockServiceClient.mockReturnValue(usdClient(calls))
+    const { supabase, calls } = usdClient()
+    mockServiceClient.mockReturnValue(supabase)
 
     const res = await markPaid(
       makeRequest({ payment_date: '2026-05-12', exchange_rate_difference: 0 }),
@@ -619,8 +589,8 @@ describe('POST .../supplier-invoices/:id/mark-paid: foreign currency books SEK (
   })
 
   it('amount_sek derives the kursdifferens from the ledger SEK and records it', async () => {
-    const calls: RecordedCall[] = []
-    mockServiceClient.mockReturnValue(usdClient(calls))
+    const { supabase, calls } = usdClient()
+    mockServiceClient.mockReturnValue(supabase)
 
     const res = await markPaid(makeRequest({ payment_date: '2026-05-12', amount_sek: 365 }), detailParams())
 
@@ -632,7 +602,7 @@ describe('POST .../supplier-invoices/:id/mark-paid: foreign currency books SEK (
   })
 
   it('amount_sek together with exchange_rate_difference is a 400', async () => {
-    mockServiceClient.mockReturnValue(usdClient())
+    mockServiceClient.mockReturnValue(usdClient().supabase)
     const res = await markPaid(
       makeRequest({ payment_date: '2026-05-12', amount_sek: 365, exchange_rate_difference: 0 }),
       detailParams(),
@@ -644,8 +614,8 @@ describe('POST .../supplier-invoices/:id/mark-paid: foreign currency books SEK (
   })
 
   it('an ambiguous ledger is a 409 and nothing is booked or flipped', async () => {
-    const calls: RecordedCall[] = []
-    mockServiceClient.mockReturnValue(usdClient(calls, { sharedRegistration: true }))
+    const { supabase, calls } = usdClient({ sharedRegistration: true })
+    mockServiceClient.mockReturnValue(supabase)
 
     const res = await markPaid(
       makeRequest({ payment_date: '2026-05-12', exchange_rate_difference: 0 }),
@@ -667,8 +637,8 @@ describe('POST .../supplier-invoices/:id/mark-paid: foreign currency books SEK (
   // The mock returns every column whatever the select asks for, so each test
   // also pins the column onto the select the routing depends on.
   describe('routes on the booking state, not the current accounting method', () => {
-    function cashCompanyClient(si: typeof APPROVED_SI | typeof USD_SI, calls?: RecordedCall[]) {
-      return makeFlexibleSupabase({
+    function cashCompanyClient(si: typeof APPROVED_SI | typeof USD_SI) {
+      return createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: [
           { data: si, error: null },
@@ -676,12 +646,12 @@ describe('POST .../supplier-invoices/:id/mark-paid: foreign currency books SEK (
         ],
         company_settings: { data: { accounting_method: 'cash' }, error: null },
         supplier_invoice_payments: { data: null, error: null },
-      }, calls)
+      })
     }
 
     it('kontantmetoden, SEK invoice with a registration verifikat: clears 2440, no second cash entry', async () => {
-      const calls: RecordedCall[] = []
-      mockServiceClient.mockReturnValue(cashCompanyClient(APPROVED_SI, calls))
+      const { supabase, calls } = cashCompanyClient(APPROVED_SI)
+      mockServiceClient.mockReturnValue(supabase)
 
       const res = await markPaid(makeRequest({ payment_date: '2026-05-12' }), detailParams())
 
@@ -694,8 +664,8 @@ describe('POST .../supplier-invoices/:id/mark-paid: foreign currency books SEK (
     })
 
     it('kontantmetoden, registered foreign invoice: the SEK outcome is required like under accrual', async () => {
-      const calls: RecordedCall[] = []
-      mockServiceClient.mockReturnValue(cashCompanyClient(USD_SI, calls))
+      const { supabase, calls } = cashCompanyClient(USD_SI)
+      mockServiceClient.mockReturnValue(supabase)
 
       const res = await markPaid(makeRequest({ payment_date: '2026-05-12' }), detailParams())
 
@@ -711,7 +681,7 @@ describe('POST .../supplier-invoices/:id/mark-paid: foreign currency books SEK (
   })
 
   it('dry-run shows the SEK the commit would clear and the kursdifferens', async () => {
-    mockServiceClient.mockReturnValue(usdClient())
+    mockServiceClient.mockReturnValue(usdClient().supabase)
 
     const res = await markPaid(
       makeRequest({ payment_date: '2026-05-12', amount_sek: 365 }, { dryRun: true }),

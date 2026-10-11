@@ -1,15 +1,14 @@
 /**
- * Wraps a single external HTTP call to a third-party provider (Fortnox, Bokio,
- * Visma, Briox, BL/Björn Lundén, Enable Banking, etc.) with structured
- * logging and code-mapped errors.
+ * Code-mapped errors for calls to third-party providers (Fortnox, Bokio,
+ * Visma, Briox, BL/Björn Lundén, Enable Banking, etc.).
  *
- * Translates HTTP failures and network errors into ProviderCallError, which
- * the route wrapper's errorResponse() recognises as a structured code. This
- * keeps the user message + remediation consistent across providers without
- * each call site having to repeat the mapping.
+ * classifyProviderError translates HTTP failures and network errors into a
+ * ProviderCallError code, which the route wrapper's errorResponse()
+ * recognises as a structured code. This keeps the user message + remediation
+ * consistent across providers without each call site having to repeat the
+ * mapping.
  */
 
-import { createLogger, type Logger } from '@/lib/logger'
 // Fortnox is the one provider with a typed predicate for "this account may not
 // read this resource" (403, or 400 with a permission body). classifyProviderError
 // reuses it instead of pattern-matching the Swedish sentence in the body, which
@@ -51,122 +50,6 @@ export class ProviderCallError extends Error {
     this.providerCode = extras.providerCode
     this.credentialRevision = extras.credentialRevision
   }
-}
-
-interface ProviderCallOptions {
-  /** Provider id ('fortnox', 'bokio', 'visma', etc.). */
-  provider: string
-  /** Short label for what this call does, e.g. 'fetch_invoices'. */
-  operation: string
-  /** Optional logger; if omitted a `provider/<provider>` logger is created. */
-  log?: Logger
-  /** Extra context merged into the log line. */
-  context?: Record<string, unknown>
-}
-
-/**
- * Run an async callable that performs the actual HTTP request and translate
- * its failures. The callable should throw a `Response` (preferred) or a
- * regular Error; ProviderCallError is mapped from the response status.
- *
- * Example:
- *   await withProviderCall(
- *     { provider: 'fortnox', operation: 'fetch_invoices' },
- *     async () => {
- *       const res = await fetch(url, { headers })
- *       if (!res.ok) throw res
- *       return res.json()
- *     },
- *   )
- */
-export async function withProviderCall<T>(
-  options: ProviderCallOptions,
-  call: () => Promise<T>,
-): Promise<T> {
-  const log = (options.log ?? createLogger(`provider/${options.provider}`)).child({
-    provider: options.provider,
-    providerOp: options.operation,
-    ...options.context,
-  })
-
-  const start = Date.now()
-  try {
-    const result = await call()
-    log.info('provider call ok', { latencyMs: Date.now() - start })
-    return result
-  } catch (raw) {
-    const latencyMs = Date.now() - start
-
-    if (raw instanceof Response) {
-      const mapped = mapResponseError(raw, options.provider)
-      log.error('provider call failed (http)', mapped, {
-        latencyMs,
-        status: raw.status,
-      })
-      throw mapped
-    }
-
-    if (raw instanceof ProviderCallError) {
-      log.error('provider call failed', raw, { latencyMs })
-      throw raw
-    }
-
-    if (raw instanceof Error && isNetworkError(raw)) {
-      const wrapped = new ProviderCallError(
-        'PROVIDER_UNREACHABLE',
-        options.provider,
-        raw.message,
-      )
-      log.error('provider call unreachable', wrapped, { latencyMs })
-      throw wrapped
-    }
-
-    // Unknown shape: re-throw so the outer handler can decide. We still log it.
-    log.error('provider call failed (unknown)', raw as Error, { latencyMs })
-    throw raw
-  }
-}
-
-function mapResponseError(res: Response, provider: string): ProviderCallError {
-  if (res.status === 401 || res.status === 403) {
-    return new ProviderCallError(
-      'PROVIDER_AUTH_EXPIRED',
-      provider,
-      `Provider authentication failed: ${res.status} ${res.statusText}`,
-      { status: res.status },
-    )
-  }
-  if (res.status === 429) {
-    const retryAfter = parseRetryAfter(res.headers.get('retry-after'))
-    return new ProviderCallError(
-      'PROVIDER_RATE_LIMITED',
-      provider,
-      `Provider rate limit hit: ${res.status} ${res.statusText}`,
-      { status: res.status, retryAfterSeconds: retryAfter },
-    )
-  }
-  if (res.status >= 500) {
-    return new ProviderCallError(
-      'PROVIDER_UPSTREAM_ERROR',
-      provider,
-      `Provider upstream error: ${res.status} ${res.statusText}`,
-      { status: res.status },
-    )
-  }
-  // 4xx other than 401/403/429 is application-level: surface as upstream so
-  // the user gets a meaningful Swedish message; the actual cause is in logs.
-  return new ProviderCallError(
-    'PROVIDER_UPSTREAM_ERROR',
-    provider,
-    `Provider rejected request: ${res.status} ${res.statusText}`,
-    { status: res.status },
-  )
-}
-
-function parseRetryAfter(value: string | null): number | undefined {
-  if (!value) return undefined
-  const n = parseInt(value, 10)
-  return Number.isFinite(n) ? n : undefined
 }
 
 function isNetworkError(err: Error): boolean {
@@ -233,8 +116,8 @@ export function classifyProviderError(
   if (fortnoxCode === '2001103') return 'PROVIDER_LICENSE_MISSING'
   if (fortnoxCode === '2001101' || fortnoxCode === '2000663') return 'PROVIDER_RESOURCE_FORBIDDEN'
   if (error instanceof ProviderCallError) {
-    // mapResponseError() sees one response and cannot know the run's history,
-    // so a 403 it already labelled AUTH_EXPIRED is re-read here with it.
+    // An error labelled from one response cannot know the run's history, so
+    // a 403 already labelled AUTH_EXPIRED is re-read here with it.
     if (error.code === 'PROVIDER_AUTH_EXPIRED' && error.status === 403 && options.grantProven) {
       return 'PROVIDER_RESOURCE_FORBIDDEN'
     }

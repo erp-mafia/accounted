@@ -31,10 +31,7 @@ vi.mock('@supabase/supabase-js', () => ({
 }))
 
 import { GET, maxDuration } from '../route'
-
-function cronRequest(): Request {
-  return new Request('http://localhost:3000/api/sandbox/cleanup/cron')
-}
+import { createCronRequest } from '@/tests/helpers'
 
 function batch(cleaned: number, failed = 0, orphans = 0) {
   return { data: { cleaned, failed, orphans_removed: orphans }, error: null }
@@ -58,7 +55,7 @@ describe('GET /api/sandbox/cleanup/cron', () => {
       .mockResolvedValueOnce(batch(3, 1, 2))
       .mockResolvedValueOnce(batch(0))
 
-    const res = await GET(cronRequest())
+    const res = await GET(createCronRequest('/api/sandbox/cleanup/cron'))
     const body = await res.json()
 
     expect(h.rpc).toHaveBeenCalledWith('cleanup_expired_sandbox_users', {
@@ -81,7 +78,7 @@ describe('GET /api/sandbox/cleanup/cron', () => {
   it('stops immediately when the backlog is empty', async () => {
     h.rpc.mockResolvedValue(batch(0))
 
-    const res = await GET(cronRequest())
+    const res = await GET(createCronRequest('/api/sandbox/cleanup/cron'))
     const body = await res.json()
 
     expect(h.rpc).toHaveBeenCalledTimes(1)
@@ -105,7 +102,7 @@ describe('GET /api/sandbox/cleanup/cron', () => {
         error: null,
       })
 
-    const res = await GET(cronRequest())
+    const res = await GET(createCronRequest('/api/sandbox/cleanup/cron'))
     const body = await res.json()
 
     expect(h.rpc).toHaveBeenCalledTimes(3)
@@ -143,7 +140,7 @@ describe('GET /api/sandbox/cleanup/cron', () => {
         error: null,
       })
 
-    const res = await GET(cronRequest())
+    const res = await GET(createCronRequest('/api/sandbox/cleanup/cron'))
     const body = await res.json()
 
     expect(h.rpc).toHaveBeenCalledTimes(2)
@@ -153,7 +150,7 @@ describe('GET /api/sandbox/cleanup/cron', () => {
   it('with the older summary shape, stops when a batch yields only failures and logs at error level', async () => {
     h.rpc.mockResolvedValueOnce(batch(0, 4, 0))
 
-    const res = await GET(cronRequest())
+    const res = await GET(createCronRequest('/api/sandbox/cleanup/cron'))
     const body = await res.json()
 
     expect(h.rpc).toHaveBeenCalledTimes(1)
@@ -167,7 +164,7 @@ describe('GET /api/sandbox/cleanup/cron', () => {
   it('still accepts the legacy bare-integer return shape', async () => {
     h.rpc.mockResolvedValueOnce({ data: 5, error: null }).mockResolvedValueOnce(batch(0))
 
-    const res = await GET(cronRequest())
+    const res = await GET(createCronRequest('/api/sandbox/cleanup/cron'))
     const body = await res.json()
 
     expect(res.status).toBe(200)
@@ -179,7 +176,7 @@ describe('GET /api/sandbox/cleanup/cron', () => {
       .mockResolvedValueOnce(batch(10))
       .mockResolvedValueOnce({ data: null, error: { message: 'boom', code: 'XX000' } })
 
-    const res = await GET(cronRequest())
+    const res = await GET(createCronRequest('/api/sandbox/cleanup/cron'))
     const body = await res.json()
 
     expect(res.status).toBeGreaterThanOrEqual(400)
@@ -190,7 +187,7 @@ describe('GET /api/sandbox/cleanup/cron', () => {
   it('returns an error when Supabase configuration is missing', async () => {
     delete process.env.SUPABASE_SERVICE_ROLE_KEY
 
-    const res = await GET(cronRequest())
+    const res = await GET(createCronRequest('/api/sandbox/cleanup/cron'))
     const body = await res.json()
 
     expect(res.status).toBeGreaterThanOrEqual(500)

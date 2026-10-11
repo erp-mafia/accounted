@@ -65,4 +65,4 @@ For any new/changed user-facing string, update **both** `messages/en.json` and `
 ## 6. Verdict
 - All required steps green → safe to push the `loop/*` branch and open the PR.
 - Anything red you can't safely fix in-scope → **stop**, label the PR/issue `loop:needs-human`,
-  and comment exactly which step failed and the output. Never merge (`gh pr merge` is forbidden).
+  and comment exactly which step failed and the output. Never merge (`glab mr merge` is forbidden).

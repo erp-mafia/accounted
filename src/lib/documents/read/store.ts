@@ -3,7 +3,6 @@ import type { AiTier } from '@/lib/ai/types'
 import { downloadDocumentObject } from '@/lib/core/documents/document-service'
 import { getAiStatus } from '@/lib/ai'
 import { withAiMeter } from '@/lib/ai/meter'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { createLogger } from '@/lib/logger'
 import { recordArkivUsage } from '@/lib/arkiv/usage'
 import { readDocumentBytes } from './router'
@@ -46,15 +45,15 @@ const RETRY_REASONS = ['ai_gated', 'ai_unconfigured', 'partial:ai_gated', 'parti
  * document so the backfill moves on (read_error names why when no or only some
  * pages were produced). A reader that could not be loaded is an outcome about
  * the environment: nothing is stamped and the document stays unread.
- * Never touches the file itself. The model is called only for companies in
- * the Arkiv rollout; text layers are read for everyone.
+ * Never touches the file itself. The model is called only for a document
+ * that belongs to a company; text layers are read for everyone.
  */
 export async function readAndStoreDocument(
   supabase: SupabaseClient,
   doc: ReadableDocumentRow,
   opts: { allowModel?: boolean; maxModelPages?: number | null; tier?: AiTier } = {},
 ): Promise<StoreOutcome> {
-  const allowModel = opts.allowModel ?? isArkivEnabled(doc.company_id)
+  const allowModel = opts.allowModel ?? !!doc.company_id
   if (!doc.company_id) return stamp(supabase, doc.id, { status: 'skipped', reason: 'no_company' }, null)
   const kind = readerForMime(doc.mime_type)
   if (kind === null) return stamp(supabase, doc.id, { status: 'skipped', reason: 'unsupported_mime' }, null)
@@ -137,7 +136,7 @@ export function storableText(s: string): string {
 
 /** The lane's plan for this document now: null when nothing more is read up front. */
 export function planForDocument(doc: ReadableDocumentRow, now = new Date()): ReadPlan | null {
-  return readPlanFor({ lane: readLaneFor(doc, now), inRollout: isArkivEnabled(doc.company_id), docType: doc.doc_type ?? null, pagesRead: !!doc.pages_read_at, tied: isBooked(doc) })
+  return readPlanFor({ lane: readLaneFor(doc, now), inRollout: !!doc.company_id, docType: doc.doc_type ?? null, pagesRead: !!doc.pages_read_at, tied: isBooked(doc) })
 }
 
 /** Read what the lane says to read. The runner and the backfill both come through here. */
@@ -232,7 +231,7 @@ export async function readUnreadDocuments(
     let taken = 0
     for (const doc of (data ?? []) as ReadableDocumentRow[]) {
       if (taken >= room || spentTime()) break
-      if (!doc.company_id || !isArkivEnabled(doc.company_id)) continue
+      if (!doc.company_id) continue
       const lane = readLaneFor(doc, now)
       const tier = historyReaderTier()
       let plan: { allowModel: boolean; maxModelPages: number | null; tier?: AiTier } | null = null

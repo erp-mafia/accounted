@@ -6,7 +6,6 @@ import type {
   InvoicePayeeDefault,
   InvoicePaymentAccount,
 } from '@/types'
-import { createLogger } from '@/lib/logger'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { syncMappedAccounts } from '@/lib/import/account-sync'
 import {
@@ -15,8 +14,6 @@ import {
   normalizeInvoicePaymentAccount,
 } from '@/lib/invoices/payment-accounts'
 import { findFreeLedgerAccount } from '@/lib/cash-accounts/service'
-
-const log = createLogger('cash-accounts/invoice-payee')
 
 export const PAYEE_FIELDS: readonly (keyof CashAccountPayeeFields)[] = [
   'bank_name',
@@ -108,27 +105,6 @@ export async function loadInvoicePayeeState(
     accounts: ((accountsRes.data ?? []) as CashAccount[]).filter(isBankCashAccount),
     defaults: (defaultsRes.data ?? []) as InvoicePayeeDefault[],
   }
-}
-
-/** The default payee account for `currency`, or null when none is configured. */
-export async function getDefaultInvoicePayee(
-  supabase: SupabaseClient,
-  companyId: string,
-  currency: Currency,
-): Promise<CashAccount | null> {
-  const { data, error } = await supabase
-    .from('invoice_payee_defaults')
-    .select('cash_account:cash_accounts!invoice_payee_defaults_same_company(*)')
-    .eq('company_id', companyId)
-    .eq('currency', currency)
-    .maybeSingle()
-  if (error) {
-    log.warn('getDefaultInvoicePayee failed', { companyId, currency, error: error.message })
-    return null
-  }
-  const account = (data as { cash_account: CashAccount | CashAccount[] | null } | null)?.cash_account
-  if (!account) return null
-  return Array.isArray(account) ? account[0] ?? null : account
 }
 
 export type PayeeUpdate = Partial<CashAccountPayeeFields> & {
@@ -235,9 +211,10 @@ export interface ManualBankAccountPlan {
 }
 
 /**
- * The read-only half of createManualBankAccount: which 19xx slot the new
- * account gets, and whether anything refuses it. Writes nothing, so it is
- * also the dry run of the API door.
+ * The read-only half of creating a bank account the user types in (no PSD2
+ * connection): which 19xx slot the new account gets, and whether anything
+ * refuses it. Writes nothing, so it is also the dry run of the API door.
+ * lib/cash-accounts/manage.ts answers the refusals as codes.
  *
  * Refuses an IBAN another of the company's rows already carries, as its
  * bank identity (iban) or as its printed payee IBAN: two rows for one
@@ -339,31 +316,6 @@ export async function insertManualBankAccount(
     .single()
   if (error) throw new Error(`cash_accounts insert failed: ${error.message}`)
   return data as CashAccount
-}
-
-/**
- * A bank account the user types in (no PSD2 connection). Allocates the next
- * free 19xx slot for the currency unless one is given, and makes sure that
- * number exists in the chart so bookings and pickers can see it. Throws on
- * a refusal; lib/cash-accounts/manage.ts answers the same refusals as codes.
- */
-export async function createManualBankAccount(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
-  input: CreateManualBankAccountInput,
-): Promise<CashAccount> {
-  const planned = await planManualBankAccount(supabase, companyId, input)
-  if (!planned.ok) {
-    if (planned.reason === 'ledger_taken') {
-      throw new Error(`Ledger account ${planned.ledger_account} is already a cash account of this company`)
-    }
-    if (planned.reason === 'iban_duplicate') {
-      throw new Error(`IBAN ${planned.iban} is already on cash account ${planned.cash_account_id}`)
-    }
-    throw new Error('No free 19xx ledger account for a new bank account')
-  }
-  return insertManualBankAccount(supabase, companyId, userId, input, planned.plan)
 }
 
 /**

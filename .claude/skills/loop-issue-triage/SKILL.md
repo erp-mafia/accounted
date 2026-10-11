@@ -1,6 +1,6 @@
 ---
 name: loop-issue-triage
-description: Proactive loop that keeps GitHub Issues in erp-mafia/accounted tidy (label, dedupe, close stale/already-fixed, reconcile with merged PRs) and auto-implements small, well-scoped fixes as PRs. Use on a session-local schedule (/loop) or on-demand via /loop-issue-triage. Follows .claude/loops.md (propose-don't-merge).
+description: Proactive loop that keeps GitLab issues in arcim-technology-ab-group1/accounted tidy (label, dedupe, close stale/already-fixed, reconcile with merged PRs) and auto-implements small, well-scoped fixes as PRs. Use on a session-local schedule (/loop) or on-demand via /loop-issue-triage. Follows .claude/loops.md (propose-don't-merge).
 ---
 
 # loop-issue-triage
@@ -9,22 +9,22 @@ description: Proactive loop that keeps GitHub Issues in erp-mafia/accounted tidy
 and a couple of small fixes ship as PRs each run. **Never merge.** Read `.claude/loops.md` first.
 
 ## Preflight
-`gh auth status`, repo `erp-mafia/accounted`. If it fails, stop and report "environment not provisioned".
+`glab auth status`, repo `arcim-technology-ab-group1/accounted`. If it fails, stop and report "environment not provisioned".
 
 ## 1. Triage every open issue
 ```bash
-gh issue list --state open --limit 100 --json number,title,labels,createdAt,updatedAt,comments
+glab issue list -R arcim-technology-ab-group1/accounted -P 100 -O json   # open issues: iid, title, labels, created_at, updated_at, user_notes_count
 ```
 For each issue lacking a type label:
 - **Classify** → apply one of `bug` / `enhancement` / `question` / `documentation`.
-- **Dedupe** → search for near-duplicates (`gh issue list --search "<keywords> in:title,body state:all"`).
+- **Dedupe** → search for near-duplicates (`glab issue list -R arcim-technology-ab-group1/accounted --all --search "<keywords>"`).
   If a duplicate, label `duplicate`, comment linking the canonical issue, and close the newer one.
 - **Stale** → no activity > 30 days AND not actionable: comment asking if still relevant; don't close
   unilaterally unless clearly obsolete.
 
 ## 2. Reconcile with completed work (the "are tickets up to date?" job)
 - For each open issue, check whether a **merged** PR or recent commit already resolved it:
-  `gh pr list --state merged --search "<#num or keywords>"`, `git log --oneline -S"<keyword>"`.
+  `glab mr list -R arcim-technology-ab-group1/accounted --merged --search "<#num or keywords>"`, `git log --oneline -S"<keyword>"`.
 - If resolved: comment with the PR/commit link, verify the fix exists in `main`, then close.
 - Conversely, if a merged PR said `Closes #N` but #N is still open, close it with a pointer.
 

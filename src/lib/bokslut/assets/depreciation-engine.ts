@@ -96,16 +96,6 @@ export function openingDepreciationOf(asset: Asset): OpeningDepreciation | null 
 }
 
 /**
- * Opening accumulated depreciation that is already on the books at the START
- * of a period beginning `periodStart`: the whole opening amount when it is
- * stated per a date before that, else 0.
- */
-export function openingAccumulatedBefore(asset: Asset, periodStart: string): number {
-  const opening = openingDepreciationOf(asset)
-  return opening && opening.date < periodStart ? opening.amount : 0
-}
-
-/**
  * Linear planenlig avskrivning for an asset that arrived partly depreciated.
  *
  * The remaining depreciable amount (cost - salvage - opening accumulated

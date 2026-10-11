@@ -15,8 +15,6 @@ import {
   getASPSPs,
   getAccountBalance,
   getAccountBalances,
-  getAccountTransactions,
-  getAllTransactions,
   getAllTransactionsWithRaw,
   AspspUnavailableError,
   parseRetryAfter,
@@ -217,7 +215,7 @@ describe('api-client', () => {
         )
       )
 
-      const error = await getAllTransactions('acc-1', '2026-06-01', '2026-06-07').catch((e) => e)
+      const error = await getAllTransactionsWithRaw('acc-1', '2026-06-01', '2026-06-07').catch((e) => e)
 
       expect(error).toBeInstanceOf(AspspUnavailableError)
       expect(error).toMatchObject({ status: 429, reason: 'rate-limited', rateLimit: { dailyQuota: true } })
@@ -287,7 +285,7 @@ describe('api-client', () => {
         new Response('Too Many Requests', { status: 429, headers: { 'Retry-After': inTwoHours } })
       )
 
-      const error = await getAllTransactions('acc-1', '2026-06-01', '2026-06-07').catch((e) => e)
+      const error = await getAllTransactionsWithRaw('acc-1', '2026-06-01', '2026-06-07').catch((e) => e)
 
       expect(fetchSpy).toHaveBeenCalledTimes(1)
       expect(error).toMatchObject({ reason: 'rate-limited', rateLimit: { dailyQuota: false } })
@@ -302,7 +300,7 @@ describe('api-client', () => {
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
       fetchSpy.mockResolvedValue(new Response('Too Many Requests', { status: 429, headers: { 'Retry-After': 'soon' } }))
 
-      const error = await getAllTransactions('acc-1', '2026-06-01', '2026-06-07').catch((e) => e)
+      const error = await getAllTransactionsWithRaw('acc-1', '2026-06-01', '2026-06-07').catch((e) => e)
 
       expect(error).toMatchObject({ reason: 'rate-limited' })
       expect(error.rateLimit.retryAfterSeconds).toBeUndefined()
@@ -315,8 +313,9 @@ describe('api-client', () => {
       const badRequest = new Response('Bad Request', { status: 400 })
       fetchSpy.mockResolvedValueOnce(badRequest)
 
-      // getAccountTransactions throws on non-ok response
-      await expect(getAccountTransactions('acc-1')).rejects.toThrow('Failed to get transactions')
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      await expect(getAllTransactionsWithRaw('acc-1')).rejects.toThrow('Failed to get transactions (400)')
+      errorSpy.mockRestore()
       expect(fetchSpy).toHaveBeenCalledTimes(1)
     })
   })
@@ -341,10 +340,10 @@ describe('api-client', () => {
         )
       })
 
-      const result = await getAllTransactions('acc-1', '2024-01-01', '2024-12-31')
+      const result = await getAllTransactionsWithRaw('acc-1', '2024-01-01', '2024-12-31')
 
       // Should have exactly 100 transactions (1 per page, 100 pages)
-      expect(result).toHaveLength(100)
+      expect(result.transactions).toHaveLength(100)
       expect(fetchSpy).toHaveBeenCalledTimes(100)
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining('Pagination cap reached')
@@ -653,28 +652,13 @@ describe('api-client', () => {
         expect(fetchSpy).toHaveBeenCalledTimes(2)
         warnSpy.mockRestore()
       })
-
-      it('getAllTransactions applies the same policy', async () => {
-        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-        fetchSpy.mockImplementation(() => Promise.resolve(new Response(ASPSP_ERROR_BODY, { status: 400 })))
-
-        const failure = await getAllTransactions('acc-1', '2026-02-07', '2026-06-07', undefined, {
-          acceptedHistoryDays: 120,
-        }).catch((e) => e)
-
-        expect(failure).toBeInstanceOf(AspspUnavailableError)
-        expect(fetchSpy).toHaveBeenCalledTimes(1)
-        warnSpy.mockRestore()
-        errorSpy.mockRestore()
-      })
     })
   })
 
   // -------------------------------------------------------------------------
-  // getAllTransactions: same first-page fallbacks via the paginated path
+  // getAllTransactionsWithRaw: typed 429 and no mid-pagination rewrite
   // -------------------------------------------------------------------------
-  describe('getAllTransactions fallbacks', () => {
+  describe('getAllTransactionsWithRaw fallbacks', () => {
     const ASPSP_ERROR_BODY =
       '{"code":400,"message":"Error interacting with ASPSP","detail":"Unknown error","error":"ASPSP_ERROR"}'
 
@@ -689,7 +673,7 @@ describe('api-client', () => {
         })
       )
 
-      const error = await getAllTransactions('acc-1', '2026-06-01', '2026-06-07').catch(e => e)
+      const error = await getAllTransactionsWithRaw('acc-1', '2026-06-01', '2026-06-07').catch(e => e)
 
       expect(error).toBeInstanceOf(AspspUnavailableError)
       expect(error).toMatchObject({
@@ -698,54 +682,6 @@ describe('api-client', () => {
         rateLimit: { dailyQuota: true, retryAfterSeconds: 120 },
       })
       errorSpy.mockRestore()
-    })
-
-    it('narrows the window when the ASPSP rejects the history range', async () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-      fetchSpy
-        .mockResolvedValueOnce(new Response(ASPSP_ERROR_BODY, { status: 400 })) // full window
-        .mockResolvedValueOnce(
-          new Response(
-            JSON.stringify({ transactions: [{ transaction_amount: { amount: '10', currency: 'SEK' } }] }),
-            { status: 200, headers: { 'Content-Type': 'application/json' } }
-          )
-        ) // narrowed to 90 days → success
-
-      const result = await getAllTransactions('acc-1', '2026-02-07', '2026-06-07')
-
-      expect(result).toHaveLength(1)
-      expect(fetchSpy).toHaveBeenCalledTimes(2)
-      const urls = fetchSpy.mock.calls.map((c: unknown[]) => c[0] as string)
-      expect(urls[0]).toContain('date_from=2026-02-07')
-      expect(urls[1]).toContain('date_from=2026-03-09') // 90 days before date_to
-
-      warnSpy.mockRestore()
-    })
-
-    it('drops the strategy then narrows the window (Danske flow)', async () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-      fetchSpy
-        .mockResolvedValueOnce(new Response(ASPSP_ERROR_BODY, { status: 400 })) // strategy=longest
-        .mockResolvedValueOnce(new Response(ASPSP_ERROR_BODY, { status: 400 })) // no strategy, full window
-        .mockResolvedValueOnce(
-          new Response(JSON.stringify({ transactions: [] }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          })
-        ) // narrowed to 90 days → success
-
-      await getAllTransactions('acc-1', '2026-02-07', '2026-06-07', 'longest')
-
-      expect(fetchSpy).toHaveBeenCalledTimes(3)
-      const urls = fetchSpy.mock.calls.map((c: unknown[]) => c[0] as string)
-      expect(urls[0]).toContain('strategy=longest')
-      expect(urls[1]).not.toContain('strategy=')
-      expect(urls[1]).toContain('date_from=2026-02-07')
-      expect(urls[2]).toContain('date_from=2026-03-09')
-
-      warnSpy.mockRestore()
     })
 
     it('does not rewrite the query mid-pagination', async () => {
@@ -766,7 +702,7 @@ describe('api-client', () => {
       // A continuation_key is scoped to its window, so page 2 must not narrow:
       // it fails fast instead.
       await expect(
-        getAllTransactions('acc-1', '2026-02-07', '2026-06-07')
+        getAllTransactionsWithRaw('acc-1', '2026-02-07', '2026-06-07')
       ).rejects.toThrow('Failed to get transactions (400)')
       expect(fetchSpy).toHaveBeenCalledTimes(2)
 

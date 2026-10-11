@@ -169,8 +169,3 @@ export const CONNECTION_SETTINGS: Record<CheckableConnection, string> = {
 export function isAgentId(value: string): value is RegistrySkillId {
   return value in AGENTS
 }
-
-/** `agent:<id>` for get_task. */
-export function agentTaskKind(id: RegistrySkillId): string {
-  return `agent:${id}`
-}

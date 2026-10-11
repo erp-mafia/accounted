@@ -125,20 +125,6 @@ export type CoreEvent =
       userId: string
       companyId: string
     } }
-  // Emitted when the PSD2 callback fails to mirror a returned account into
-  // cash_accounts. ASVS V16 / ISO 27001 A.8.15: security-relevant failures
-  // must land in a structured audit log (event_log, 30-day TTL) rather than
-  // being lost to console.error.
-  | { type: 'bank_connection.cash_account_mirror_failed'; payload: {
-      connectionId: string
-      bankName: string | null
-      accountUid: string
-      ledgerAccount: string
-      currency: string
-      reason: string
-      userId: string
-      companyId: string
-    } }
   // Emitted on every failed bank sync (cron, the manual button, an agent
   // trigger): one durable row per failure with the class, the connection
   // status after handling and the INTERNAL error text, so a same-day
@@ -208,13 +194,6 @@ export type CoreEvent =
       userId: string;
       companyId: string;
     }}
-  | { type: 'receipt.confirmed'; payload: {
-      receipt: Receipt;
-      businessTotal: number;
-      privateTotal: number;
-      userId: string;
-      companyId: string;
-    }}
   // Supplier Invoice Lifecycle
   | { type: 'supplier_invoice.registered'; payload: { supplierInvoice: SupplierInvoice; userId: string; companyId: string } }
   | { type: 'supplier_invoice.approved'; payload: { supplierInvoice: SupplierInvoice; userId: string; companyId: string } }
@@ -225,8 +204,6 @@ export type CoreEvent =
   | { type: 'invoice.match_confirmed'; payload: { invoice: Invoice; transaction: Transaction; userId: string; companyId: string } }
   | { type: 'supplier_invoice.match_confirmed'; payload: { supplierInvoice: SupplierInvoice; transaction: Transaction; userId: string; companyId: string } }
   // Supplier Invoice Inbox
-  | { type: 'supplier_invoice.received'; payload: { inboxItem: InvoiceInboxItem; userId: string; companyId: string } }
-  | { type: 'supplier_invoice.extracted'; payload: { inboxItem: InvoiceInboxItem; confidence: number; userId: string; companyId: string } }
   | { type: 'supplier_invoice.confirmed'; payload: { inboxItem: InvoiceInboxItem; supplierInvoice: SupplierInvoice; userId: string; companyId: string } }
   // Salary
   | { type: 'salary_run.created'; payload: { salaryRunId: string; periodYear: number; periodMonth: number; userId: string; companyId: string } }
@@ -234,7 +211,6 @@ export type CoreEvent =
   | { type: 'salary_run.approval_reverted'; payload: { salaryRunId: string; revertedBy: string; deletedAgiDeclarationId: string | null; userId: string; companyId: string } }
   | { type: 'salary_run.booked'; payload: { salaryRunId: string; entryIds: string[]; userId: string; companyId: string } }
   | { type: 'agi.generated'; payload: { agiId: string; periodYear: number; periodMonth: number; userId: string; companyId: string } }
-  | { type: 'agi.submitted'; payload: { salaryRunId: string; periodYear: number; periodMonth: number; userId: string; companyId: string } }
   // Bolagsverket: digital inlämning av årsredovisning. Status values follow
   // GUIDE §5.2.2 (arsred_inkommen → … → arsred_registrerad). `uploaded` fires
   // when the iXBRL lands in eget utrymme; the undertecknare then signs the
@@ -328,23 +304,11 @@ export type CoreEvent =
     }}
   // Workflow lifecycle: agents declare "I'm starting month-end-close" via
   // gnubok_load_skill (or implicitly by following a skill's recommended tool
-  // sequence). Phase 3A captures these to measure: how often is a workflow
-  // started? How often does it complete? Where do agents abandon?
+  // sequence). Phase 3A captures these to measure how often a workflow is
+  // started.
   | { type: 'mcp.workflow_started'; payload: {
       slug: string                                  // e.g. 'month-end-close'
       sessionId: string | null
-      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'anonymous'
-      actorId: string | null
-      actorLabel: string | null
-      userId: string
-      companyId: string
-    }}
-  | { type: 'mcp.workflow_completed'; payload: {
-      slug: string
-      sessionId: string | null
-      outcome: 'success' | 'abandoned' | 'failed'
-      stepsCompleted: number | null                 // null when not tracked granularly
-      durationMs: number | null
       actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'anonymous'
       actorId: string | null
       actorLabel: string | null

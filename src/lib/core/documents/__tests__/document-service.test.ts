@@ -91,7 +91,6 @@ import {
   legacyDocumentPath,
   documentStoragePathCandidates,
   downloadDocumentObject,
-  createDocumentSignedUrl,
   _resetBucketVerified,
   validateDocumentFile,
   declaredDocumentType,
@@ -1522,19 +1521,6 @@ describe('dual-layout read helpers', () => {
     expect(result.blob).toBeNull()
     expect(result.resolvedPath).toBeNull()
     expect(result.error?.message).toBe(`missing:${legacy}`)
-  })
-
-  it('createDocumentSignedUrl falls back to the alternate layout', async () => {
-    const createSignedUrl = vi.fn(async (path: string) =>
-      path === scoped
-        ? { data: { signedUrl: 'https://example.com/signed' }, error: null }
-        : { data: null, error: { message: 'Object not found' } },
-    )
-    const supabase = makeClient({ createSignedUrl })
-
-    const result = await createDocumentSignedUrl(supabase as never, legacy, company, 3600)
-    expect(result.signedUrl).toBe('https://example.com/signed')
-    expect(result.resolvedPath).toBe(scoped)
   })
 })
 

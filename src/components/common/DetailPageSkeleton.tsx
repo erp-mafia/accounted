@@ -47,18 +47,3 @@ export function DetailPageSkeleton({ cards = 2, className }: DetailPageSkeletonP
     </div>
   )
 }
-
-/**
- * Silhouette of the invoice editor (single-column snabbflöde): heading, the
- * customer/details block and the lines block. Matches the fallback the
- * "Ny faktura" dialog shows while the editor chunk loads.
- */
-export function InvoiceEditorSkeleton({ className }: { className?: string }) {
-  return (
-    <div className={cn('space-y-4', className)} aria-busy="true" aria-live="polite">
-      <Skeleton className="h-8 w-1/3" />
-      <Skeleton className="h-32 w-full rounded-lg" />
-      <Skeleton className="h-32 w-full rounded-lg" />
-    </div>
-  )
-}

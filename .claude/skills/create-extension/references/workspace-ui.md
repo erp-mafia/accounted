@@ -25,12 +25,7 @@ Set `"workspace": null` for extensions without a dedicated page (event-only, ser
 
 ## Settings Panels
 
-Declare in extension object:
-```typescript
-settingsPanel: { label: 'My Extension', path: '/settings/extensions/my-extension' },
-```
-
-Register panel in `lib/extensions/settings-panel-registry.tsx`:
+Register the panel in `lib/extensions/settings-panel-registry.tsx`:
 ```typescript
 case 'my-extension':
   return dynamic(() => import('@/components/extensions/general/my-extension/MyExtSettings'))
@@ -40,7 +35,7 @@ Settings component fetches/saves via extension API routes (`GET/PUT /settings`).
 
 ## Sidebar
 
-The sidebar lists an enabled extension only when its manifest has both a `workspace` and `definition.quickAction.href`. `sidebarItems` is declared on the `Extension` type, but no core code reads it.
+The sidebar lists an enabled extension only when its manifest has both a `workspace` and `definition.quickAction.href`.
 
 ## Extension Enablement
 

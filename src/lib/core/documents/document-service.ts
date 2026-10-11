@@ -67,9 +67,9 @@ function sanitizeFileName(name: string): string {
  * Both layouts coexist until the Phase B backfill
  * (scripts/backfill-document-storage-paths.ts) has re-homed every legacy
  * object. Read paths must therefore tolerate both: use
- * documentStoragePathCandidates() (or the downloadDocumentObject /
- * createDocumentSignedUrl helpers below) rather than trusting the stored
- * pointer to be the only key that resolves.
+ * documentStoragePathCandidates() (or the downloadDocumentObject helper
+ * below) rather than trusting the stored pointer to be the only key that
+ * resolves.
  */
 export const DOCUMENTS_BUCKET = 'documents'
 const DOCUMENTS_PATH_ROOT = 'documents'
@@ -182,29 +182,6 @@ export async function downloadDocumentObject(
     firstError ??= (error as StorageErrorLike) ?? { message: 'download returned no data' }
   }
   return { blob: null, error: firstError, resolvedPath: null }
-}
-
-/**
- * Create a signed URL for a document object, tolerating both key layouts.
- * Same fallback contract as downloadDocumentObject().
- */
-export async function createDocumentSignedUrl(
-  supabase: SupabaseClient,
-  storagePath: string,
-  companyId: string | null | undefined,
-  expiresInSeconds: number
-): Promise<{ signedUrl: string | null; error: StorageErrorLike; resolvedPath: string | null }> {
-  let firstError: StorageErrorLike = null
-  for (const candidate of documentStoragePathCandidates(storagePath, companyId)) {
-    const { data, error } = await supabase.storage
-      .from(DOCUMENTS_BUCKET)
-      .createSignedUrl(candidate, expiresInSeconds)
-    if (!error && data?.signedUrl) {
-      return { signedUrl: data.signedUrl, error: null, resolvedPath: candidate }
-    }
-    firstError ??= (error as StorageErrorLike) ?? { message: 'createSignedUrl returned no data' }
-  }
-  return { signedUrl: null, error: firstError, resolvedPath: null }
 }
 
 export const MAX_DOCUMENT_SIZE = 10 * 1024 * 1024 // 10 MB

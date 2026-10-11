@@ -1,6 +1,6 @@
 export const meta = {
   name: 'design-scan',
-  description: 'Scan an app area against the Accounted design system; adversarially verify findings; report the survivors for the loop-design-scan skill to file as GitHub issues.',
+  description: 'Scan an app area against the Accounted design system; adversarially verify findings; report the survivors for the loop-design-scan skill to file as GitLab issues.',
   phases: [
     { title: 'Enumerate' },
     { title: 'Scan' },
@@ -12,7 +12,7 @@ export const meta = {
 // Usage: Workflow({ name: 'design-scan', args: { area: 'bookkeeping' } })
 // Pattern: fan-out (one agent per page) -> adversarial verify (skeptic per finding) -> synthesize.
 // This workflow only PRODUCES verified findings. The loop-design-scan skill dedupes + files the
-// GitHub issues (workflow agents shouldn't take high-privilege outward actions).
+// GitLab issues (workflow agents shouldn't take high-privilege outward actions).
 
 const area = (args && args.area) || 'dashboard'
 
@@ -115,5 +115,5 @@ return {
   area,
   pagesScanned: pages.length,
   findings: kept,
-  note: 'Hand these to the loop-design-scan skill to dedupe (loop-fingerprint) and file as GitHub issues labeled loop:auto, loop:design.',
+  note: 'Hand these to the loop-design-scan skill to dedupe (loop-fingerprint) and file as GitLab issues labeled loop:auto, loop:design.',
 }

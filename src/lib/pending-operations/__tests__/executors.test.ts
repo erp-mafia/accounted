@@ -66,10 +66,6 @@ vi.mock('@/lib/import/sie-parser', () => ({
   calculateFileHash: vi.fn(async () => 'mock-hash'),
 }))
 
-vi.mock('@/lib/import/sie-import', () => ({
-  executeSIEImport: vi.fn(),
-}))
-
 vi.mock('@/lib/bokslut/assets/depreciation-engine', () => ({
   commitAnnualPostings: vi.fn(),
 }))

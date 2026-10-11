@@ -1,5 +1,4 @@
 import type { McpResource } from './types'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { sumUsage, usageSince, USAGE_WINDOW_DAYS } from '@/lib/arkiv/usage'
 import { createLogger } from '@/lib/logger'
 import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
@@ -266,9 +265,7 @@ export const companyCurrentResource: McpResource = {
             ? `${(activeInboxRes.data as { local_part: string }).local_part}@${process.env.RESEND_INBOUND_DOMAIN}`
             : null,
       },
-      ...(isArkivEnabled(companyId)
-        ? { arkiv_usage_365d: sumUsage((usageRes.data ?? []) as Array<{ activity: string; units: number }>, usageSince(USAGE_WINDOW_DAYS), USAGE_WINDOW_DAYS) }
-        : {}),
+      arkiv_usage_365d: sumUsage((usageRes.data ?? []) as Array<{ activity: string; units: number }>, usageSince(USAGE_WINDOW_DAYS), USAGE_WINDOW_DAYS),
     }
   },
 }

@@ -75,7 +75,6 @@ function findRoute(method: string, path: string) {
 }
 
 const uploadRoute = findRoute('POST', '/upload')
-const attachRoute = findRoute('POST', '/items/:id/attach-document')
 const retryRoute = findRoute('POST', '/items/:id/retry-extraction')
 
 function buildCtx(supabase: unknown): ExtensionContext {
@@ -86,7 +85,6 @@ function buildCtx(supabase: unknown): ExtensionContext {
     supabase: supabase as ExtensionContext['supabase'],
     emit: vi.fn(),
     settings: { get: vi.fn(), set: vi.fn() },
-    storage: { from: vi.fn() } as unknown as ExtensionContext['storage'],
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as ExtensionContext['log'],
     services: {},
   } as ExtensionContext
@@ -221,47 +219,6 @@ describe('Sandbox companies skip Bedrock extraction', () => {
     })
   })
 
-  describe('POST /items/:id/attach-document', () => {
-    it('skips extraction when company is a sandbox', async () => {
-      // Lookup order: item exists → upload doc → sandbox check → update row.
-      const { supabase, enqueue } = createQueuedMockSupabase()
-      enqueue({
-        data: {
-          id: 'item-1',
-          document_id: null,
-          status: 'received',
-          correlation_id: null,
-          created_supplier_invoice_id: null,
-        },
-        error: null,
-      })
-      // sandbox check inside the try block
-      enqueue({ data: { is_sandbox: true }, error: null })
-      // update row
-      enqueue({ data: null, error: null })
-
-      // uploadDocument is mocked at the module level; no need to enqueue.
-
-      const bytes = await makePdfBuffer(1)
-      const file = new File([bytes as BlobPart], 'attach.pdf', { type: 'application/pdf' })
-      const form = new FormData()
-      form.set('file', file)
-
-      const req = new Request('http://localhost:3000/items/item-1/attach-document?_id=item-1', {
-        method: 'POST',
-        body: form,
-      })
-
-      const res = await attachRoute.handler(req, buildCtx(supabase))
-      const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(res)
-
-      expect(status).toBe(200)
-      expect(extractInvoiceFields).not.toHaveBeenCalled()
-      expect(body.data.extraction_skipped).toBe(true)
-      expect(body.data.skip_reason).toBe('sandbox')
-    })
-  })
-
   describe('POST /items/:id/retry-extraction', () => {
     it('returns 409 with a Swedish message when the company is a sandbox', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
@@ -312,43 +269,6 @@ describe('Free tier (no ai capability) does not run Bedrock extraction', () => {
     expect(body.data.extraction_skipped).toBe(true)
     expect(body.data.skip_reason).toBe('no_ai_entitlement')
     expect(captured.row?.extraction_skipped).toBe(true)
-  })
-
-  it('POST /items/:id/attach-document: skips extraction when the company lacks ai', async () => {
-    vi.mocked(hasCapability).mockResolvedValueOnce(false)
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({
-      data: {
-        id: 'item-1',
-        document_id: null,
-        status: 'received',
-        correlation_id: null,
-        created_supplier_invoice_id: null,
-      },
-      error: null,
-    })
-    // sandbox check → false (so the ai gate, not sandbox, is what skips)
-    enqueue({ data: { is_sandbox: false }, error: null })
-    // update row
-    enqueue({ data: null, error: null })
-
-    const bytes = await makePdfBuffer(1)
-    const file = new File([bytes as BlobPart], 'attach.pdf', { type: 'application/pdf' })
-    const form = new FormData()
-    form.set('file', file)
-
-    const req = new Request('http://localhost:3000/items/item-1/attach-document?_id=item-1', {
-      method: 'POST',
-      body: form,
-    })
-
-    const res = await attachRoute.handler(req, buildCtx(supabase))
-    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(res)
-
-    expect(status).toBe(200)
-    expect(extractInvoiceFields).not.toHaveBeenCalled()
-    expect(body.data.extraction_skipped).toBe(true)
-    expect(body.data.skip_reason).toBe('no_ai_entitlement')
   })
 
   it('POST /items/:id/retry-extraction: hard-blocks with 403 capability_blocked', async () => {

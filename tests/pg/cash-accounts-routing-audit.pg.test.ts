@@ -1,7 +1,7 @@
 import type { PoolClient } from 'pg'
 import { describe, expect, it } from 'vitest'
 import { primaryIneligibleReason } from '@/lib/cash-accounts/primary'
-import { insertAuthUser, insertCashAccount, insertCompany, insertCompanyMember } from './fixtures'
+import { insertAuthUser, insertCashAccount, insertCompany, insertCompanyMember, setActiveCompany } from './fixtures'
 import { getPool, runAsServiceRole, withUserContext } from './setup'
 
 /**
@@ -15,15 +15,6 @@ import { getPool, runAsServiceRole, withUserContext } from './setup'
  * the flag in one transaction; set_cash_account_primary keeps carrying the
  * flag for system merges with no rule.
  */
-
-async function setActiveCompany(userId: string, companyId: string): Promise<void> {
-  await getPool().query(
-    `INSERT INTO public.user_preferences (user_id, active_company_id)
-     VALUES ($1, $2)
-     ON CONFLICT (user_id) DO UPDATE SET active_company_id = EXCLUDED.active_company_id`,
-    [userId, companyId],
-  )
-}
 
 interface RoutingLogRow {
   action: string

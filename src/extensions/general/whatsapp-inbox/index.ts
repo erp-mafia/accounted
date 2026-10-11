@@ -742,11 +742,6 @@ export const whatsappInboxExtension: Extension = {
   version: '1.0.0',
   sector: 'general',
 
-  settingsPanel: {
-    label: 'WhatsApp',
-    path: '/settings/whatsapp',
-  },
-
   apiRoutes: [
     // ── Meta webhook: subscription handshake ────────────────
     {

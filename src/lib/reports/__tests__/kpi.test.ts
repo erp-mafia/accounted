@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest'
 import {
   calculateGrossMargin,
   calculateCashPosition,
-  calculateRevenueGrowth,
   calculateExpenseRatio,
   calculateAvgPaymentDays,
   calculateVatLiability,
@@ -266,26 +265,6 @@ describe('VAT widget account lists (derived from ACCOUNT_RUTA)', () => {
     for (const account of VAT_INPUT_ACCOUNTS) {
       expect(account.startsWith('264')).toBe(true)
     }
-  })
-})
-
-describe('calculateRevenueGrowth', () => {
-  it('returns positive growth', () => {
-    // (120000 - 100000) / 100000 * 100 = 20%
-    expect(calculateRevenueGrowth(120000, 100000)).toBe(20)
-  })
-
-  it('returns negative growth (decline)', () => {
-    // (80000 - 100000) / 100000 * 100 = -20%
-    expect(calculateRevenueGrowth(80000, 100000)).toBe(-20)
-  })
-
-  it('returns null when previous revenue is null', () => {
-    expect(calculateRevenueGrowth(100000, null)).toBeNull()
-  })
-
-  it('returns null when previous revenue is 0', () => {
-    expect(calculateRevenueGrowth(100000, 0)).toBeNull()
   })
 })
 

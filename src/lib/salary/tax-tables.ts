@@ -76,23 +76,6 @@ export class TaxTableUnavailableError extends Error {
 }
 
 /**
- * Look up tax amount for a given monthly income using Skatteverket's API.
- * Returns the tax amount in SEK and the data source used.
- */
-export async function lookupTaxFromApi(
-  tableNumber: number,
-  column: number,
-  monthlyIncome: number,
-  year: number = new Date().getFullYear()
-): Promise<{ taxAmount: number; source: TaxTableSource }> {
-  const { rates, source } = await fetchTaxTableRates(year, tableNumber, column)
-  return {
-    taxAmount: lookupTaxAmount(tableNumber, column, monthlyIncome, rates),
-    source,
-  }
-}
-
-/**
  * Look up the tax amount from pre-loaded rates (pure function, no API call).
  *
  * Throws TaxTableUnavailableError if no rates match the requested table/column.

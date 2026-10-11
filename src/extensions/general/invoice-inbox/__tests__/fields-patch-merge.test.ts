@@ -29,7 +29,6 @@ function buildCtx(supabase: unknown): ExtensionContext {
     supabase: supabase as ExtensionContext['supabase'],
     emit: vi.fn(),
     settings: { get: vi.fn(), set: vi.fn() },
-    storage: { from: vi.fn() } as unknown as ExtensionContext['storage'],
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as ExtensionContext['log'],
     services: {},
   } as unknown as ExtensionContext

@@ -429,53 +429,6 @@ export function shouldRepointToSibling(
 }
 
 /**
- * The sibling rows of `cashAccountId` (see describeCashAccountSiblings), or []
- * when the row has no IBAN or the lookup fails.
- */
-export async function listSiblingCashAccounts(
-  supabase: SupabaseClient,
-  companyId: string,
-  cashAccountId: string,
-): Promise<SiblingCashAccount[]> {
-  const described = await describeCashAccountSiblings(supabase, companyId, cashAccountId)
-  return described?.siblings ?? []
-}
-
-/**
- * Ledger accounts of the sibling rows returned by listSiblingCashAccounts.
- */
-export async function listSiblingLedgerAccounts(
-  supabase: SupabaseClient,
-  companyId: string,
-  cashAccountId: string,
-): Promise<string[]> {
-  const siblings = await listSiblingCashAccounts(supabase, companyId, cashAccountId)
-  return siblings.map((row) => row.ledger_account)
-}
-
-/**
- * Ledger accounts that must never be PROPOSED (or accepted) as the
- * counter-account of a booking, because their cash_accounts row is orphaned
- * (issue #1643): a row that is not live (demoted-to-manual, disabled, held
- * by a REVOKED connection, or by an expired/error connection) whose (IBAN,
- * currency) also belongs to a row on an ACTIVE connection. The active row IS
- * that physical account now, so the stale twin is a leftover of a broken
- * reconnect.
- * A manual/CSV account without a live twin is NOT orphaned, and neither is a
- * row held by a revoked connection without a live twin (a disconnected but
- * real account, often the company's only 1930): transfers to such an account
- * are legitimate, and so is another currency pocket of a multi-currency
- * account that shares the live pocket's IBAN.
- */
-export async function getOrphanedCounterLedgers(
-  supabase: SupabaseClient,
-  companyId: string,
-): Promise<Set<string>> {
-  const topology = await loadCashAccountTopology(supabase, companyId)
-  return topology?.orphaned ?? new Set()
-}
-
-/**
  * The first account in a mapping result that would book the COUNTER leg onto
  * an orphaned cash-account ledger, or null when the result is clean. The
  * settlement account itself is exempt: a transaction stranded on an orphaned
@@ -1384,25 +1337,6 @@ export async function hasOpenTransactions(
 }
 
 /**
- * Remap a cash account to a different BAS ledger account. Triggers RLS + the
- * (company_id, ledger_account) UNIQUE constraint: surface conflict errors so
- * the UI can prompt the user to resolve.
- */
-export async function setLedgerAccount(
-  supabase: SupabaseClient,
-  companyId: string,
-  cashAccountId: string,
-  ledgerAccount: string,
-): Promise<void> {
-  const { error } = await supabase
-    .from('cash_accounts')
-    .update({ ledger_account: ledgerAccount })
-    .eq('company_id', companyId)
-    .eq('id', cashAccountId)
-  if (error) throw new Error(`cash_accounts setLedgerAccount failed: ${error.message}`)
-}
-
-/**
  * Set or clear the verifikationsserie override for a cash account. null means
  * "follow the per-source-type default"; the engine reads this via
  * resolveCashAccountVoucherSeries() when it books from the account.
@@ -1422,26 +1356,4 @@ export async function setVoucherSeries(
     .maybeSingle()
   if (error) throw new Error(`cash_accounts setVoucherSeries failed: ${error.message}`)
   return (data as CashAccount | null) ?? null
-}
-
-/**
- * Mark a cash account as the primary for its company. Delegates to the
- * `set_cash_account_primary` RPC so the clear-old-primary and set-new-primary
- * updates happen inside a single transaction. The intermediate "no primary"
- * state is never visible to concurrent readers: important because
- * skattekonto-booking's __PRIMARY_SEK__ resolver runs through getPrimary() and
- * would otherwise see null in the gap and mis-route the counter account.
- */
-export async function setPrimary(
-  supabase: SupabaseClient,
-  companyId: string,
-  cashAccountId: string,
-): Promise<void> {
-  const { error } = await supabase.rpc('set_cash_account_primary', {
-    p_company_id: companyId,
-    p_cash_account_id: cashAccountId,
-  })
-  if (error) {
-    throw new Error(`cash_accounts setPrimary failed: ${error.message}`)
-  }
 }

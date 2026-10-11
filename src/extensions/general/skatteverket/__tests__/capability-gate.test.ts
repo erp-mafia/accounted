@@ -22,10 +22,6 @@ const GATED: Array<{ method: string; path: string }> = [
   { method: 'POST', path: '/declaration/submit' },
   { method: 'PUT', path: '/declaration/lock' },
   { method: 'POST', path: '/agi/submit' },
-  { method: 'POST', path: '/agi/spara' },
-  { method: 'POST', path: '/agi/las' },
-  { method: 'POST', path: '/agi/kontrollera/hu' },
-  { method: 'POST', path: '/agi/kontrollera/iu' },
   { method: 'POST', path: '/skattekonto/sync' },
 ]
 

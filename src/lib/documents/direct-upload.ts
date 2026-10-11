@@ -31,10 +31,6 @@ export const INBOX_UPLOAD_CREATE_URL = `${INBOX_ROUTE_BASE}/upload/create`
 export const INBOX_UPLOAD_COMPLETE_URL = `${INBOX_ROUTE_BASE}/upload/complete`
 
 export interface DirectUploadOptions {
-  /** Pre-match the new inbox item to a bank transaction (same as /upload). */
-  matchedTransactionId?: string | null
-  /** Bring-your-own-extraction opt-out (same as /upload's skip_extraction). */
-  skipExtraction?: boolean
   /** Injectable for tests; defaults to the global fetch. */
   fetchImpl?: typeof fetch
 }
@@ -102,8 +98,6 @@ export async function uploadViaSignedUrl(
       upload_id: reservation.upload_id,
       file_name: file.name,
       mime_type: file.type,
-      matched_transaction_id: options.matchedTransactionId ?? null,
-      skip_extraction: options.skipExtraction === true,
     }),
   })
 }

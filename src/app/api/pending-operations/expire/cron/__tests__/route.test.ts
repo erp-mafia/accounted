@@ -71,10 +71,7 @@ import { GET } from '../route'
 import { verifyCronSecret } from '@/lib/auth/cron'
 import { createServiceClient } from '@/lib/supabase/server'
 import { recoverStuckCommittingOperations } from '@/lib/pending-operations/recover-stuck-committing'
-
-function cronRequest(): Request {
-  return new Request('http://localhost:3000/api/pending-operations/expire/cron')
-}
+import { createCronRequest } from '@/tests/helpers'
 
 function daysAgo(iso: string): number {
   return (Date.now() - new Date(iso).getTime()) / 86_400_000
@@ -92,7 +89,7 @@ describe('GET /api/pending-operations/expire/cron', () => {
       { data: [{ id: 'op-1', company_id: 'c-1' }, { id: 'op-2', company_id: 'c-2' }], error: null },
     ]
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/pending-operations/expire/cron'))
     const json = await response.json()
 
     expect(json.success).toBe(true)
@@ -128,7 +125,7 @@ describe('GET /api/pending-operations/expire/cron', () => {
   it('reports zero when no rows are stale', async () => {
     updateResults = [{ data: [], error: null }]
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/pending-operations/expire/cron'))
     const json = await response.json()
 
     expect(json).toEqual({
@@ -148,7 +145,7 @@ describe('GET /api/pending-operations/expire/cron', () => {
       skipped: 0,
     })
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/pending-operations/expire/cron'))
     const json = await response.json()
 
     expect(vi.mocked(recoverStuckCommittingOperations)).toHaveBeenCalledTimes(1)
@@ -162,7 +159,7 @@ describe('GET /api/pending-operations/expire/cron', () => {
     updateResults = [{ data: [{ id: 'op-1', company_id: 'c-1' }], error: null }]
     vi.mocked(recoverStuckCommittingOperations).mockRejectedValueOnce(new Error('sweep boom'))
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/pending-operations/expire/cron'))
     const json = await response.json()
 
     expect(response.status).toBe(200)
@@ -177,7 +174,7 @@ describe('GET /api/pending-operations/expire/cron', () => {
       NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     )
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/pending-operations/expire/cron'))
 
     expect(response.status).toBe(401)
     expect(vi.mocked(createServiceClient)).not.toHaveBeenCalled()
@@ -187,7 +184,7 @@ describe('GET /api/pending-operations/expire/cron', () => {
   it('returns an error envelope when the update fails', async () => {
     updateResults = [{ data: null, error: { message: 'boom', code: 'XX000' } }]
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/pending-operations/expire/cron'))
 
     expect(response.status).toBeGreaterThanOrEqual(500)
   })

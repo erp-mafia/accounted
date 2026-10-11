@@ -277,22 +277,6 @@ const MAX_PAGINATION_PAGES = 100
 const DEFAULT_PAGE_SIZE = 500
 
 /**
- * Thrown by getAccountTransactions on a non-OK response. Carries the HTTP
- * status and raw body so the pagination caller (getAllTransactions) can run the
- * same first-page strategy/window fallbacks as getAllTransactionsWithRaw. The
- * message is identical to the previous plain Error for back-compat.
- */
-class TransactionsFetchError extends Error {
-  constructor(
-    readonly status: number,
-    readonly body: string
-  ) {
-    super(`Failed to get transactions (${status}): ${body}`)
-    this.name = 'TransactionsFetchError'
-  }
-}
-
-/**
  * Normalized signatures (uppercase, non-alphanumerics stripped) of the
  * responses Enable Banking (or the upstream ASPSP via Enable Banking's
  * envelope) returns when the PSD2 session can no longer be used: the consent
@@ -349,7 +333,7 @@ export const BANK_UNAVAILABLE_MESSAGE =
 
 /**
  * Thrown when a transactions fetch fails because the PSD2 session is dead
- * (closed/expired/invalid). Distinct from TransactionsFetchError so the sync
+ * (closed/expired/invalid). Distinct from a plain fetch error so the sync
  * handler can flip the connection to 'expired' and prompt re-authorization
  * instead of surfacing a raw error the user can't act on. Carries the status
  * and raw body for logging. See isSessionExpiredResponse for the codes covered.
@@ -612,7 +596,7 @@ export async function getPreferredAuthMethodDetails(
     const aspsp = aspsps.find((a) => a.name === aspspName)
     return selectPreferredAuthMethod(aspsp?.auth_methods, psuType)
   } catch (error) {
-    console.error('[enable-banking] getPreferredAuthMethod failed; using ASPSP default', {
+    console.error('[enable-banking] getPreferredAuthMethodDetails failed; using ASPSP default', {
       aspspName,
       country,
       psuType,
@@ -620,20 +604,6 @@ export async function getPreferredAuthMethodDetails(
     })
     return undefined
   }
-}
-
-/**
- * Name-only convenience wrapper around getPreferredAuthMethodDetails: the
- * value to send as auth_method on POST /auth, or undefined for the ASPSP
- * default.
- */
-export async function getPreferredAuthMethod(
-  aspspName: string,
-  country: string,
-  psuType: 'personal' | 'business'
-): Promise<string | undefined> {
-  const method = await getPreferredAuthMethodDetails(aspspName, country, psuType)
-  return method?.name
 }
 
 /**
@@ -646,7 +616,7 @@ export async function getPreferredAuthMethod(
  * @param psuType - Type of user: 'personal' or 'business'
  * @param authMethod - Optional Enable Banking auth_method name. When omitted,
  *   Enable Banking uses the ASPSP's visible default method. See
- *   getPreferredAuthMethod for why we pin Mobile BankID at some banks.
+ *   getPreferredAuthMethodDetails for why we pin Mobile BankID at some banks.
  */
 export async function startAuthorization(
   aspspName: string,
@@ -1004,138 +974,6 @@ export async function getAccountBalance(
 }
 
 /**
- * Get account transactions
- *
- * @param accountUid - The account UID
- * @param dateFrom - Start date (YYYY-MM-DD)
- * @param dateTo - End date (YYYY-MM-DD)
- * @param continuationKey - Pagination key from previous response
- */
-export async function getAccountTransactions(
-  accountUid: string,
-  dateFrom?: string,
-  dateTo?: string,
-  continuationKey?: string,
-  strategy?: TransactionsFetchStrategy
-): Promise<TransactionsResponse> {
-  const params = new URLSearchParams()
-  if (dateFrom) params.set('date_from', dateFrom)
-  if (dateTo) params.set('date_to', dateTo)
-  if (continuationKey) params.set('continuation_key', continuationKey)
-  if (strategy) params.set('strategy', strategy)
-  params.set('limit', String(DEFAULT_PAGE_SIZE))
-
-  const queryString = params.toString()
-  const endpoint = `/accounts/${accountUid}/transactions${queryString ? `?${queryString}` : ''}`
-
-  const response = await authenticatedFetchWithRetry(endpoint)
-
-  if (!response.ok) {
-    const body = await response.text()
-    console.error('[enable-banking] getAccountTransactions failed', {
-      status: response.status,
-      statusText: response.statusText,
-      body,
-      accountUid,
-      dateFrom,
-      dateTo,
-      strategy,
-      hasContinuationKey: !!continuationKey,
-    })
-    if (isSessionExpiredResponse(response.status, body)) {
-      throw new SessionExpiredError(response.status, body)
-    }
-    if (response.status === 429) throw bankRateLimited(response, body, dateFrom)
-    throw new TransactionsFetchError(response.status, body)
-  }
-
-  return response.json()
-}
-
-/**
- * Get all transactions with pagination
- */
-export async function getAllTransactions(
-  accountUid: string,
-  dateFrom?: string,
-  dateTo?: string,
-  strategy?: TransactionsFetchStrategy,
-  options?: HistoryWindowOptions
-): Promise<Transaction[]> {
-  const allTransactions: Transaction[] = []
-  let continuationKey: string | undefined
-  let page = 0
-  let activeStrategy = strategy
-  // date_from is narrowed in place when the ASPSP rejects the window (below).
-  let activeDateFrom = dateFrom
-
-  while (true) {
-    let response: TransactionsResponse
-    try {
-      response = await getAccountTransactions(
-        accountUid,
-        activeDateFrom,
-        dateTo,
-        continuationKey,
-        activeStrategy
-      )
-    } catch (err) {
-      // Apply the same first-page recovery as getAllTransactionsWithRaw. Only
-      // TransactionsFetchError carries the status/body needed to decide;
-      // network errors and the like propagate untouched.
-      if (err instanceof TransactionsFetchError) {
-        const recovery = planFirstPageRecovery({
-          status: err.status,
-          body: err.body,
-          page,
-          hasContinuationKey: !!continuationKey,
-          activeStrategy,
-          activeDateFrom,
-          dateTo,
-          acceptedHistoryDays: options?.acceptedHistoryDays,
-        })
-        if (recovery.type === 'drop-strategy') {
-          console.warn('[enable-banking] strategy rejected by API, retrying without strategy', {
-            accountUid,
-            strategy: activeStrategy,
-            body: err.body,
-          })
-          activeStrategy = undefined
-          continue
-        }
-        if (recovery.type === 'narrow') {
-          console.warn('[enable-banking] ASPSP rejected history window, retrying with narrower date_from', {
-            accountUid,
-            previousDateFrom: activeDateFrom,
-            nextDateFrom: recovery.dateFrom,
-            dateTo,
-            body: err.body,
-          })
-          activeDateFrom = recovery.dateFrom
-          continue
-        }
-        if (recovery.type === 'aspsp-unavailable') {
-          throw bankUnavailable(accountUid, err.status, err.body, recovery.reason, activeDateFrom, dateTo)
-        }
-      }
-      throw err
-    }
-
-    allTransactions.push(...response.transactions)
-    continuationKey = response.continuation_key
-    page++
-
-    if (page >= MAX_PAGINATION_PAGES) {
-      console.warn(`[enable-banking] Pagination cap reached (${MAX_PAGINATION_PAGES} pages) for account ${accountUid}`)
-      break
-    }
-    if (!continuationKey) break
-  }
-
-  return allTransactions
-}
-
-/**
  * Lookback windows (days before date_to) we step through when an ASPSP rejects
  * the requested transaction history. Descending so each fallback yields a
  * strictly narrower window. PSD2 obliges banks to ~90 days without fresh SCA;
@@ -1144,7 +982,7 @@ export async function getAllTransactions(
 const ASPSP_HISTORY_FALLBACK_DAYS = [90, 60, 30] as const
 
 /**
- * Per-account knowledge the caller can hand the pagination loops (#2202).
+ * Per-account knowledge the caller can hand the pagination loop (#2202).
  */
 export interface HistoryWindowOptions {
   /**
@@ -1200,8 +1038,7 @@ function nextNarrowerDateFrom(
 }
 
 /**
- * First-page recovery policy shared by getAllTransactions and
- * getAllTransactionsWithRaw, so the two pagination loops can't drift. Fallbacks
+ * First-page recovery policy for getAllTransactionsWithRaw. Fallbacks
  * apply only to the very first request (page 0, no continuation_key): a
  * continuation_key is scoped to the window/strategy that produced it, so the
  * query is never rewritten mid-pagination.
@@ -1269,7 +1106,7 @@ function planFirstPageRecovery(args: {
   return { type: 'aspsp-unavailable', reason: 'ladder-exhausted' }
 }
 
-/** Log and build the error both pagination loops throw on 'aspsp-unavailable'. */
+/** Log and build the error the pagination loop throws on 'aspsp-unavailable'. */
 function bankUnavailable(
   accountUid: string,
   status: number,

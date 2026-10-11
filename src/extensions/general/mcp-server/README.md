@@ -26,7 +26,7 @@ For internal Anthropic API usage (the SDK is called from `lib/ai/provider.ts` an
 ## Where things live
 
 - `server.ts`: the tools array + JSON-RPC dispatcher
-- `tool-result.ts`: `withNext()`, `toToolError()` response helpers
+- `tool-result.ts`: `NextActionHint` type and `toToolError()` response helper
 - `resources/`: read-only `Accounted://` URIs, registered in `resources/index.ts`: `company/current`, `period/active`, `recent-activity`, `capabilities`, `attention`, `chart-of-accounts`, `settings/vat-treatments`, `booking-templates`, `ledger/context`, `reconciliation/summary`
 - `widgets/`: inline HTML widgets (receipt-matcher, vat-review, pending-operations)
 - `prompts/`: slash-command-style prompts

@@ -46,7 +46,6 @@ import {
   isSessionExpiredResponse,
   SessionExpiredError,
   getAllTransactionsWithRaw,
-  getPreferredAuthMethod,
   getPreferredAuthMethodDetails,
   startAuthorization,
 } from '../lib/api-client'
@@ -174,7 +173,6 @@ function makeContext(connection: Record<string, unknown>, updateSpy: Mock, inser
     supabase: supabase as any,
     emit: vi.fn().mockResolvedValue(undefined),
     settings: { get: vi.fn(), set: vi.fn(), getAll: vi.fn() } as never,
-    storage: {} as never,
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
     services: {} as never,
   }
@@ -503,7 +501,7 @@ describe('auth_method selection (Handelsbanken Mobile BankID)', () => {
       },
     ])
 
-    expect(await getPreferredAuthMethod('Handelsbanken', 'SE', 'business')).toBe('BANKID')
+    expect((await getPreferredAuthMethodDetails('Handelsbanken', 'SE', 'business'))?.name).toBe('BANKID')
   })
 
   it('does NOT pin a VISIBLE decoupled method (Lunar-class regression from PR #854)', async () => {
@@ -521,7 +519,7 @@ describe('auth_method selection (Handelsbanken Mobile BankID)', () => {
       },
     ])
 
-    expect(await getPreferredAuthMethod('Lunar', 'SE', 'business')).toBeUndefined()
+    expect((await getPreferredAuthMethodDetails('Lunar', 'SE', 'business'))?.name).toBeUndefined()
   })
 
   it('does NOT pin a hidden decoupled method scoped to a different psu_type', async () => {
@@ -540,7 +538,7 @@ describe('auth_method selection (Handelsbanken Mobile BankID)', () => {
       },
     ])
 
-    expect(await getPreferredAuthMethod('Testbank', 'SE', 'business')).toBeUndefined()
+    expect((await getPreferredAuthMethodDetails('Testbank', 'SE', 'business'))?.name).toBeUndefined()
   })
 
   it('pins a hidden decoupled method whose psu_types matches (or is empty)', async () => {
@@ -558,7 +556,7 @@ describe('auth_method selection (Handelsbanken Mobile BankID)', () => {
         ],
       },
     ])
-    expect(await getPreferredAuthMethod('Testbank', 'SE', 'business')).toBe('BANKID_BUSINESS')
+    expect((await getPreferredAuthMethodDetails('Testbank', 'SE', 'business'))?.name).toBe('BANKID_BUSINESS')
 
     // An empty psu_types array is treated like a missing one: applies to all.
     stubAspsps([
@@ -570,7 +568,7 @@ describe('auth_method selection (Handelsbanken Mobile BankID)', () => {
         ],
       },
     ])
-    expect(await getPreferredAuthMethod('Testbank', 'SE', 'personal')).toBe('BANKID_ALL')
+    expect((await getPreferredAuthMethodDetails('Testbank', 'SE', 'personal'))?.name).toBe('BANKID_ALL')
   })
 
   it('returns undefined (ASPSP default) when the bank has no decoupled method', async () => {
@@ -578,12 +576,12 @@ describe('auth_method selection (Handelsbanken Mobile BankID)', () => {
       { name: 'Nordea', country: 'SE', auth_methods: [{ name: 'REDIRECT', approach: 'REDIRECT' }] },
     ])
 
-    expect(await getPreferredAuthMethod('Nordea', 'SE', 'personal')).toBeUndefined()
+    expect((await getPreferredAuthMethodDetails('Nordea', 'SE', 'personal'))?.name).toBeUndefined()
   })
 
   it('returns undefined when the bank is not found in the ASPSP list', async () => {
     stubAspsps([])
-    expect(await getPreferredAuthMethod('Handelsbanken', 'SE', 'business')).toBeUndefined()
+    expect((await getPreferredAuthMethodDetails('Handelsbanken', 'SE', 'business'))?.name).toBeUndefined()
   })
 
   it('getPreferredAuthMethodDetails returns the full method so the connect log can record it', async () => {

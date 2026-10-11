@@ -110,40 +110,10 @@ import { POST as categorizePOST } from '../categorize/route'
 import { POST as uncategorizePOST } from '../uncategorize/route'
 import { POST as matchInvoicePOST } from '../match-invoice/route'
 import { POST as matchSIPOST } from '../match-supplier-invoice/route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  // Every chained builder call, in order. The proxy otherwise swallows its
-  // arguments, which makes update payloads invisible to assertions. Recording
-  // is passive: it changes nothing about what a chain resolves to.
-  const calls: { table: string; method: string; args: unknown[] }[] = []
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (...args: unknown[]) => {
-          calls.push({ table, method: String(prop), args })
-          return buildChain(table)
-        }
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)), calls }
-}
 
 /** Payloads of every `.update()` call made against `table`. */
 function updatePayloads(
@@ -190,7 +160,7 @@ beforeEach(() => {
 describe('POST :id/categorize', () => {
   it('categorizes a fresh business transaction and creates the JE', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: [
           {
@@ -211,7 +181,7 @@ describe('POST :id/categorize', () => {
           data: { entity_type: 'enskild_firma' },
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await categorizePOST(
@@ -230,7 +200,7 @@ describe('POST :id/categorize', () => {
 
   it('dry-run returns mapping preview without creating a JE', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: {
           data: {
@@ -245,7 +215,7 @@ describe('POST :id/categorize', () => {
           error: null,
         },
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await categorizePOST(
@@ -262,10 +232,10 @@ describe('POST :id/categorize', () => {
 
   it('rejects unknown transaction id with TX_CATEGORIZE_TX_NOT_FOUND', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: { data: null, error: { code: 'PGRST116' } },
-      }),
+      }).supabase,
     )
     const res = await categorizePOST(
       makeRequest(
@@ -281,7 +251,7 @@ describe('POST :id/categorize', () => {
 
   it('returns 400 ACCOUNTS_NOT_IN_CHART when mapped accounts are not active in the kontoplan', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: {
           data: {
@@ -296,7 +266,7 @@ describe('POST :id/categorize', () => {
           error: null,
         },
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-      }),
+      }).supabase,
     )
     // Simulate the user-reported bug: a category/template that maps to an
     // account they haven't activated in their kontoplan.
@@ -322,7 +292,7 @@ describe('POST :id/categorize', () => {
 
   it('returns 400 ACCOUNTS_NOT_IN_CHART when the engine throws mid-flight (defense in depth)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: {
           data: {
@@ -338,7 +308,7 @@ describe('POST :id/categorize', () => {
         },
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
         fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
-      }),
+      }).supabase,
     )
     // Pre-validation passes: race condition where an account got
     // deactivated between our chart_of_accounts read and the engine's
@@ -370,7 +340,7 @@ describe('POST :id/categorize', () => {
   // cash account (e.g. a savings or EUR account).
   it('books the bank leg to the transaction\'s linked cash account, not hardcoded 1930', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: [
           {
@@ -390,7 +360,7 @@ describe('POST :id/categorize', () => {
         ],
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
         cash_accounts: { data: { ledger_account: '1940', currency: 'SEK' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await categorizePOST(
@@ -411,7 +381,7 @@ describe('POST :id/categorize', () => {
 
   it('falls back to 1930 when the transaction has no linked cash account', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: [
           {
@@ -430,7 +400,7 @@ describe('POST :id/categorize', () => {
           { data: [{ id: TX_ID }], error: null },
         ],
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await categorizePOST(
@@ -447,7 +417,7 @@ describe('POST :id/categorize', () => {
 
   it('aborts with 500 BOOKKEEPING_DATABASE_ERROR when the cash_accounts lookup errors, mutating nothing', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: {
           data: {
@@ -464,7 +434,7 @@ describe('POST :id/categorize', () => {
         },
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
         cash_accounts: { data: null, error: { message: 'connection reset' } },
-      }),
+      }).supabase,
     )
 
     const res = await categorizePOST(
@@ -484,11 +454,11 @@ describe('POST :id/categorize', () => {
 describe('POST :id/uncategorize', () => {
   it('storno + reset on a booked transaction', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: { data: { id: TX_ID, journal_entry_id: JE_ID }, error: null },
         journal_entries: { data: { id: JE_ID, status: 'posted' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await uncategorizePOST(
       makeRequest(
@@ -503,10 +473,10 @@ describe('POST :id/uncategorize', () => {
 
   it('returns TX_UNCATEGORIZE_NOT_BOOKED when JE missing', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: { data: { id: TX_ID, journal_entry_id: null }, error: null },
-      }),
+      }).supabase,
     )
     const res = await uncategorizePOST(
       makeRequest(
@@ -524,7 +494,7 @@ describe('POST :id/uncategorize', () => {
 describe('POST :id/match-invoice', () => {
   it('matches a positive transaction to an open invoice', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: {
           data: {
@@ -561,7 +531,7 @@ describe('POST :id/match-invoice', () => {
             { data: [], error: null },
             { data: { id: 'ip-1' }, error: null },
           ],
-      }),
+      }).supabase,
     )
     const res = await matchInvoicePOST(
       makeRequest(
@@ -601,10 +571,10 @@ describe('POST :id/match-invoice', () => {
 
   it('rejects negative transaction with MATCH_INVOICE_NOT_INCOME', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: { data: { id: TX_ID, amount: -100, invoice_id: null }, error: null },
-      }),
+      }).supabase,
     )
     const res = await matchInvoicePOST(
       makeRequest(
@@ -619,10 +589,10 @@ describe('POST :id/match-invoice', () => {
 
   it('rejects already-linked transaction', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: { data: { id: TX_ID, amount: 100, invoice_id: 'other-id' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await matchInvoicePOST(
       makeRequest(
@@ -637,7 +607,7 @@ describe('POST :id/match-invoice', () => {
 
   it('rejects a credit note before creating a payment journal entry', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: {
           data: {
@@ -659,7 +629,7 @@ describe('POST :id/match-invoice', () => {
           },
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await matchInvoicePOST(
@@ -684,7 +654,7 @@ describe('POST :id/match-invoice', () => {
   describe('settlement account resolution', () => {
     it('credits the transaction\'s own linked cash account, not 1930', async () => {
       mockServiceClient.mockReturnValue(
-        makeFlexibleSupabase({
+        createTableMockSupabase({
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           transactions: {
             data: {
@@ -723,7 +693,7 @@ describe('POST :id/match-invoice', () => {
             { data: [], error: null },
             { data: { id: 'ip-1' }, error: null },
           ],
-        }),
+        }).supabase,
       )
       const res = await matchInvoicePOST(
         makeRequest(
@@ -747,7 +717,7 @@ describe('POST :id/match-invoice', () => {
 
     it('aborts with 500 BOOKKEEPING_DATABASE_ERROR (mutates nothing) when the cash_accounts lookup errors', async () => {
       mockServiceClient.mockReturnValue(
-        makeFlexibleSupabase({
+        createTableMockSupabase({
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           transactions: {
             data: {
@@ -779,7 +749,7 @@ describe('POST :id/match-invoice', () => {
           },
           company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
           cash_accounts: { data: null, error: { message: 'boom' } },
-        }),
+        }).supabase,
       )
       const res = await matchInvoicePOST(
         makeRequest(
@@ -797,7 +767,7 @@ describe('POST :id/match-invoice', () => {
 
     it('returns 400 ACCOUNTS_NOT_IN_CHART when the linked cash account is deactivated in the kontoplan', async () => {
       mockServiceClient.mockReturnValue(
-        makeFlexibleSupabase({
+        createTableMockSupabase({
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           transactions: {
             data: {
@@ -829,7 +799,7 @@ describe('POST :id/match-invoice', () => {
           },
           company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
           cash_accounts: { data: { ledger_account: '1940' }, error: null },
-        }),
+        }).supabase,
       )
       // Simulate the 1940 account existing in cash_accounts but having been
       // deactivated in chart_of_accounts since.
@@ -856,7 +826,7 @@ describe('POST :id/match-invoice', () => {
 
 describe('POST :id/match-supplier-invoice', () => {
   it('matches a negative transaction to an open supplier invoice', async () => {
-    const supa = makeFlexibleSupabase({
+    const supa = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       transactions: {
         data: {
@@ -889,7 +859,7 @@ describe('POST :id/match-supplier-invoice', () => {
       company_settings: { data: { accounting_method: 'accrual' }, error: null },
       supplier_invoice_payments: { data: null, error: null },
     })
-    mockServiceClient.mockReturnValue(supa)
+    mockServiceClient.mockReturnValue(supa.supabase)
     const res = await matchSIPOST(
       makeRequest(
         `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-supplier-invoice`,
@@ -923,10 +893,10 @@ describe('POST :id/match-supplier-invoice', () => {
 
   it('rejects positive transaction with MATCH_SI_NOT_EXPENSE', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: { data: { id: TX_ID, amount: 100, supplier_invoice_id: null }, error: null },
-      }),
+      }).supabase,
     )
     const res = await matchSIPOST(
       makeRequest(
@@ -947,7 +917,7 @@ describe('POST :id/match-supplier-invoice', () => {
   describe('settlement account resolution (pure-SEK accrual path)', () => {
     it('credits the transaction\'s own linked cash account when it is not the primary 1930', async () => {
       mockServiceClient.mockReturnValue(
-        makeFlexibleSupabase({
+        createTableMockSupabase({
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           transactions: {
             data: {
@@ -981,7 +951,7 @@ describe('POST :id/match-supplier-invoice', () => {
           company_settings: { data: { accounting_method: 'accrual' }, error: null },
           cash_accounts: { data: { ledger_account: '1940' }, error: null },
           supplier_invoice_payments: { data: null, error: null },
-        }),
+        }).supabase,
       )
       const res = await matchSIPOST(
         makeRequest(
@@ -998,7 +968,7 @@ describe('POST :id/match-supplier-invoice', () => {
 
     it('ignores a stale last_supplier_payment_account setting and uses the linked cash account', async () => {
       mockServiceClient.mockReturnValue(
-        makeFlexibleSupabase({
+        createTableMockSupabase({
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           transactions: {
             data: {
@@ -1037,7 +1007,7 @@ describe('POST :id/match-supplier-invoice', () => {
           },
           cash_accounts: { data: { ledger_account: '1930' }, error: null },
           supplier_invoice_payments: { data: null, error: null },
-        }),
+        }).supabase,
       )
       const res = await matchSIPOST(
         makeRequest(
@@ -1054,7 +1024,7 @@ describe('POST :id/match-supplier-invoice', () => {
 
     it('defaults to 1930 when the transaction has no linked cash account', async () => {
       mockServiceClient.mockReturnValue(
-        makeFlexibleSupabase({
+        createTableMockSupabase({
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           transactions: {
             data: {
@@ -1087,7 +1057,7 @@ describe('POST :id/match-supplier-invoice', () => {
           ],
           company_settings: { data: { accounting_method: 'accrual' }, error: null },
           supplier_invoice_payments: { data: null, error: null },
-        }),
+        }).supabase,
       )
       const res = await matchSIPOST(
         makeRequest(
@@ -1103,7 +1073,7 @@ describe('POST :id/match-supplier-invoice', () => {
 
     it('aborts with 500 BOOKKEEPING_DATABASE_ERROR when the cash_accounts lookup errors, mutating nothing', async () => {
       mockServiceClient.mockReturnValue(
-        makeFlexibleSupabase({
+        createTableMockSupabase({
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           transactions: {
             data: {
@@ -1133,7 +1103,7 @@ describe('POST :id/match-supplier-invoice', () => {
           },
           company_settings: { data: { accounting_method: 'accrual' }, error: null },
           cash_accounts: { data: null, error: { message: 'connection reset' } },
-        }),
+        }).supabase,
       )
       const res = await matchSIPOST(
         makeRequest(
@@ -1150,7 +1120,7 @@ describe('POST :id/match-supplier-invoice', () => {
 
     it('returns 400 ACCOUNTS_NOT_IN_CHART when the linked cash account is deactivated in the kontoplan', async () => {
       mockServiceClient.mockReturnValue(
-        makeFlexibleSupabase({
+        createTableMockSupabase({
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           transactions: {
             data: {
@@ -1180,7 +1150,7 @@ describe('POST :id/match-supplier-invoice', () => {
           },
           company_settings: { data: { accounting_method: 'accrual' }, error: null },
           cash_accounts: { data: { ledger_account: '1940' }, error: null },
-        }),
+        }).supabase,
       )
       // Simulate the 1940 account existing in cash_accounts but having been
       // deactivated in chart_of_accounts since.
@@ -1291,7 +1261,7 @@ describe('POST :id/match-supplier-invoice', () => {
     }
 
     it('FX branch: credits the transaction\'s own linked non-1930 account', async () => {
-      mockServiceClient.mockReturnValue(makeFlexibleSupabase(fxTables('ca-1940')))
+      mockServiceClient.mockReturnValue(createTableMockSupabase(fxTables('ca-1940')).supabase)
       const res = await matchSIPOST(
         makeRequest(
           `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-supplier-invoice`,
@@ -1310,7 +1280,7 @@ describe('POST :id/match-supplier-invoice', () => {
     })
 
     it('FX branch: falls back to 1930 when the transaction has no linked cash account', async () => {
-      mockServiceClient.mockReturnValue(makeFlexibleSupabase(fxTables(null)))
+      mockServiceClient.mockReturnValue(createTableMockSupabase(fxTables(null)).supabase)
       const res = await matchSIPOST(
         makeRequest(
           `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-supplier-invoice`,
@@ -1323,7 +1293,7 @@ describe('POST :id/match-supplier-invoice', () => {
     })
 
     it('cash-method branch: credits the transaction\'s own linked non-1930 account', async () => {
-      mockServiceClient.mockReturnValue(makeFlexibleSupabase(cashMethodTables('ca-1940')))
+      mockServiceClient.mockReturnValue(createTableMockSupabase(cashMethodTables('ca-1940')).supabase)
       const res = await matchSIPOST(
         makeRequest(
           `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-supplier-invoice`,
@@ -1346,8 +1316,8 @@ describe('POST :id/match-supplier-invoice', () => {
     // kontantmetoden invoice in full; the builder credits the bank amount and
     // books the residual on 3740. Same rule as the dashboard route.
     it('cash-method branch: a rounded-DOWN whole-krona row settles in full and records the debt settled', async () => {
-      const supa = makeFlexibleSupabase(cashMethodTables('ca-1940', { bank: 1234, remaining: 1234.44 }))
-      mockServiceClient.mockReturnValue(supa)
+      const supa = createTableMockSupabase(cashMethodTables('ca-1940', { bank: 1234, remaining: 1234.44 }))
+      mockServiceClient.mockReturnValue(supa.supabase)
       const res = await matchSIPOST(
         makeRequest(
           `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-supplier-invoice`,
@@ -1368,8 +1338,8 @@ describe('POST :id/match-supplier-invoice', () => {
     })
 
     it('cash-method branch: a rounded-UP whole-krona row records the debt settled, not an overpayment', async () => {
-      const supa = makeFlexibleSupabase(cashMethodTables('ca-1940', { bank: 1235, remaining: 1234.56 }))
-      mockServiceClient.mockReturnValue(supa)
+      const supa = createTableMockSupabase(cashMethodTables('ca-1940', { bank: 1235, remaining: 1234.56 }))
+      mockServiceClient.mockReturnValue(supa.supabase)
       const res = await matchSIPOST(
         makeRequest(
           `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-supplier-invoice`,
@@ -1388,7 +1358,7 @@ describe('POST :id/match-supplier-invoice', () => {
 
     it('cash-method branch: a shortfall of a krona or more is still a rejected partial', async () => {
       mockServiceClient.mockReturnValue(
-        makeFlexibleSupabase(cashMethodTables('ca-1940', { bank: 1233, remaining: 1234.44 })),
+        createTableMockSupabase(cashMethodTables('ca-1940', { bank: 1233, remaining: 1234.44 })).supabase,
       )
       const res = await matchSIPOST(
         makeRequest(
@@ -1405,7 +1375,7 @@ describe('POST :id/match-supplier-invoice', () => {
 
     it('cash-method branch: a previously part-paid invoice stays blocked inside the öre band', async () => {
       mockServiceClient.mockReturnValue(
-        makeFlexibleSupabase(cashMethodTables('ca-1940', { bank: 500, remaining: 500.4, paid: 500 })),
+        createTableMockSupabase(cashMethodTables('ca-1940', { bank: 500, remaining: 500.4, paid: 500 })).supabase,
       )
       const res = await matchSIPOST(
         makeRequest(
@@ -1421,7 +1391,7 @@ describe('POST :id/match-supplier-invoice', () => {
     })
 
     it('cash-method branch: falls back to 1930 when the transaction has no linked cash account', async () => {
-      mockServiceClient.mockReturnValue(makeFlexibleSupabase(cashMethodTables(null)))
+      mockServiceClient.mockReturnValue(createTableMockSupabase(cashMethodTables(null)).supabase)
       const res = await matchSIPOST(
         makeRequest(
           `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-supplier-invoice`,
@@ -1436,7 +1406,7 @@ describe('POST :id/match-supplier-invoice', () => {
     it('cash-method branch: rejects with ACCOUNTS_NOT_IN_CHART when the resolved account is deactivated', async () => {
       // The chart pre-validation guard must cover the branches that now
       // consume paymentAccount, not only the pure-SEK accrual path.
-      mockServiceClient.mockReturnValue(makeFlexibleSupabase(cashMethodTables('ca-1940')))
+      mockServiceClient.mockReturnValue(createTableMockSupabase(cashMethodTables('ca-1940')).supabase)
       findMissingAccountsMock.mockResolvedValueOnce(['1940'])
       const res = await matchSIPOST(
         makeRequest(
@@ -1458,7 +1428,7 @@ describe('POST :id/match-supplier-invoice', () => {
       // effect on a failed request.
       const tables = cashMethodTables('ca-1940')
       ;(tables.transactions.data as { journal_entry_id: string | null }).journal_entry_id = JE_ID
-      mockServiceClient.mockReturnValue(makeFlexibleSupabase(tables))
+      mockServiceClient.mockReturnValue(createTableMockSupabase(tables).supabase)
       findMissingAccountsMock.mockResolvedValueOnce(['1940'])
       const res = await matchSIPOST(
         makeRequest(

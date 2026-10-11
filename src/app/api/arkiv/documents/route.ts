@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
-import { isArkivBrainEnabled, isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { documentDate, documentTitle, underlagPayload } from '@/lib/arkiv/documents/title'
 import type { Payload } from '@/lib/documents/extract/fields'
 import { searchDocumentPages, type PageHit } from '@/lib/documents/read/search'
@@ -59,7 +59,6 @@ const querySchema = z.object({
 const FOLDER_PAGE_MAX = 200
 
 export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const parsed = validateQuery(request, querySchema)
   if (!parsed.success) return parsed.response
   const { q, year, limit, folder, offset } = parsed.data

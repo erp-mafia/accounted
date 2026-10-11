@@ -1,7 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CoreEvent, CoreEventType } from '@/lib/events/types'
 import type {
-  CashAccount,
   EntityType,
   IngestOptions,
   IngestResult,
@@ -49,24 +48,9 @@ export interface ExtensionDefinition {
   subscriptionNotice?: string
 }
 
-/** Sector definition with its extensions */
-export interface Sector {
-  slug: SectorSlug
-  name: string
-  icon: string
-  description: string
-  extensions: ExtensionDefinition[]
-}
-
 // ============================================================
 // Extension Interface & Supporting Types
 // ============================================================
-
-/** A route exposed by an extension (page route) */
-export interface RouteDefinition {
-  path: string
-  label: string
-}
 
 /**
  * An API route exposed by an extension.
@@ -95,48 +79,6 @@ export interface ApiRouteDefinition {
   handler: (request: Request, ctx?: ExtensionContext) => Promise<Response>
 }
 
-/** Sidebar navigation item added by an extension */
-export interface SidebarItem {
-  label: string
-  icon?: string
-  path: string
-  order?: number
-}
-
-/** Report type added by an extension */
-export interface ReportDefinition {
-  id: string
-  name: string
-  description: string
-}
-
-/** Settings panel exposed by an extension */
-export interface SettingsPanelDefinition {
-  label: string
-  path: string
-}
-
-/** Tax code definition added by an extension */
-export interface TaxCodeDefinition {
-  code: string
-  rate: number
-  description: string
-}
-
-/** Dimension type definition added by an extension */
-export interface DimensionDefinition {
-  id: string
-  name: string
-  description: string
-}
-
-/** Mapping rule type added by an extension */
-export interface MappingRuleTypeDefinition {
-  id: string
-  name: string
-  description: string
-}
-
 /** Event handler registration for an extension */
 export interface ExtensionEventHandler {
   eventType: CoreEventType
@@ -163,31 +105,12 @@ export interface ExtensionSettings {
   clear(key: string): Promise<void>
 }
 
-/** Storage accessor wrapping Supabase storage */
-export interface ExtensionStorage {
-  download(bucket: string, path: string): Promise<{ data: Blob | null; error?: string }>
-  upload(bucket: string, path: string, data: ArrayBuffer, options?: { contentType?: string }): Promise<{ path: string; error?: string }>
-  getPublicUrl(bucket: string, path: string): string
-}
-
 /** Core services exposed to extensions */
 export interface ExtensionServices {
   ingestTransactions(supabase: SupabaseClient, companyId: string, userId: string, raw: RawTransaction[], options?: IngestOptions): Promise<IngestResult>
-  /**
-   * List a company's cash accounts (cash_accounts table). Replaces ad-hoc reads
-   * of bank_connections.accounts_data for routing decisions. Returns rows
-   * sorted by `is_primary DESC, ledger_account ASC`.
-   */
-  getCashAccounts(supabase: SupabaseClient, companyId: string, opts?: { enabledOnly?: boolean }): Promise<CashAccount[]>
-  /**
-   * Primary cash account for a company, optionally filtered by currency.
-   * Falls back to the global primary when no currency-specific row matches.
-   * Used by the skattekonto __PRIMARY_SEK__ sentinel and transfer-pairing.
-   */
-  getPrimaryCashAccount(supabase: SupabaseClient, companyId: string, currency?: string): Promise<CashAccount | null>
 }
 
-/** Context passed to extension lifecycle hooks and event handlers */
+/** Context passed to extension API route and event handlers */
 export interface ExtensionContext {
   userId: string
   companyId: string
@@ -201,7 +124,6 @@ export interface ExtensionContext {
   supabase: SupabaseClient
   emit(event: CoreEvent): Promise<void>
   settings: ExtensionSettings
-  storage: ExtensionStorage
   log: ExtensionLogger
   services: ExtensionServices
 }
@@ -209,7 +131,7 @@ export interface ExtensionContext {
 /**
  * Extension interface: the contract for all add-ons.
  *
- * Extensions declare what they provide (routes, event handlers, sidebar items, etc.)
+ * Extensions declare what they provide (API routes, event handlers, services)
  * and the registry wires them into the system.
  */
 export interface Extension {
@@ -219,21 +141,10 @@ export interface Extension {
   sector?: SectorSlug
 
   // Surfaces
-  routes?: RouteDefinition[]
   apiRoutes?: ApiRouteDefinition[]
-  sidebarItems?: SidebarItem[]
   eventHandlers?: ExtensionEventHandler[]
-  mappingRuleTypes?: MappingRuleTypeDefinition[]
-  reportTypes?: ReportDefinition[]
-  settingsPanel?: SettingsPanelDefinition
-  taxCodes?: TaxCodeDefinition[]
-  dimensionTypes?: DimensionDefinition[]
 
   /** Named services this extension provides to core via registry lookup */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   services?: Record<string, (...args: any[]) => Promise<any>>
-
-  // Lifecycle hooks
-  onInstall?(ctx: ExtensionContext): Promise<void>
-  onUninstall?(ctx: ExtensionContext): Promise<void>
 }

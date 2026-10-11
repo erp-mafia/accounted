@@ -95,50 +95,6 @@ export interface TICCompanyDocument {
 }
 
 /**
- * v2 `/companies/{id}/bank-accounts` returns only Bankgirot numbers
- * (`Bankgironumber_Dto[]`), not full bank accounts. v1's IBAN / plusgiro
- * / generic bank-account coverage is gone from this endpoint.
- */
-export interface TICBankgirot {
-  bankgironumber?: number | null
-  terminated?: boolean | null
-  name?: string | null
-  isTaxBankgironumber?: boolean | null
-  updatedAt?: string | null
-}
-
-/** v2 `/companies/{id}/industries` returns `CompanyIndustryCode_Dto[]`. */
-export interface TICIndustryCode {
-  companyIndustryCodeType?: 'sni2007' | 'sni2025' | 'other' | string
-  industryCode?: string | null
-  description?: string | null
-  rank?: number | null
-}
-
-/** v2 `/companies/{id}/email-addresses` returns `View_CompanyEmail[]`. */
-export interface TICEmail {
-  emailAddress?: string | null
-  firstSeenAtUtc?: string | null
-  lastSeenAtUtc?: string | null
-}
-
-/** v2 `/companies/{id}/phone-numbers` returns `CompanyPhoneNumber_Dto[]`. */
-export interface TICPhone {
-  phoneNumberFormatted?: string | null
-  e164PhoneNumber?: string | null
-  firstSeenAtUtc?: string | null
-  lastSeenAtUtc?: string | null
-}
-
-/** v2 `/companies/{id}/purposes` returns `CompanyPurpose_Dto[]`. */
-export interface TICCompanyPurpose {
-  companyPurposeId?: number
-  purpose?: string
-  firstSeenAtUtc?: string
-  lastUpdatedAtUtc?: string
-}
-
-/**
  * Raw Bolagsverket beneficial-owner notification record: one per
  * registration event. The latest active notification is what we care
  * about; older ones describe ownership changes over time.
@@ -301,21 +257,6 @@ export interface TICPayrollMomsAg {
 export interface TICPayrollSummary {
   payroll2?: TICPayroll2[]
   payrolls?: TICPayrollMomsAg[]
-}
-
-/**
- * v2 `/companies/{id}/signatory` returns `CompanySignatory_Dto[]`.
- * Each entry's `signatureDescription` is free-form Swedish text
- * describing firmateckning rules ("Firman tecknas av styrelsen.
- * Firman tecknas två i förening av ledamöterna.").
- */
-export interface TICSignatory {
-  companySignatoryId?: number
-  companyId?: number
-  signatureDescription?: string | null
-  firstSeenAtUtc?: string | null
-  lastSeenAtUtc?: string | null
-  lastUpdatedAtUtc?: string | null
 }
 
 /**

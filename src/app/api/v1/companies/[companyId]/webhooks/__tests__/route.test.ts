@@ -73,39 +73,11 @@ import {
 import { POST as testWebhook } from '../[id]/test/route'
 import { GET as listDeliveries } from '../[id]/deliveries/route'
 import { POST as rotateSecret } from '../[id]/rotate-secret/route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
 const mockUrlGuard = validateWebhookUrl as ReturnType<typeof vi.fn>
-
-interface TableResp {
-  data?: unknown
-  error?: unknown
-  count?: number | null
-}
-
-function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) {
-  const queues = new Map<string, TableResp[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const WEBHOOK_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -176,10 +148,10 @@ beforeEach(() => {
 describe('POST /api/v1/companies/:companyId/webhooks', () => {
   it('returns 201 with the freshly-minted secret on success', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         webhooks: { data: SAMPLE_WEBHOOK, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await createWebhook(
@@ -207,9 +179,9 @@ describe('POST /api/v1/companies/:companyId/webhooks', () => {
 
   it('returns 400 VALIDATION_ERROR when webhook_url is not https', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await createWebhook(
@@ -237,9 +209,9 @@ describe('POST /api/v1/companies/:companyId/webhooks', () => {
       detail: '10.0.0.1 is private',
     })
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await createWebhook(
@@ -272,9 +244,9 @@ describe('POST /api/v1/companies/:companyId/webhooks', () => {
       mode: 'live',
     })
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await createWebhook(
@@ -319,10 +291,10 @@ describe('POST /api/v1/companies/:companyId/webhooks', () => {
 describe('GET /api/v1/companies/:companyId/webhooks', () => {
   it('lists webhooks for the company without exposing secrets', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         webhooks: { data: [SAMPLE_WEBHOOK], error: null },
-      }),
+      }).supabase,
     )
 
     const res = await listWebhooks(
@@ -340,10 +312,10 @@ describe('GET /api/v1/companies/:companyId/webhooks', () => {
 
   it('returns an empty list when no webhooks are registered', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         webhooks: { data: [], error: null },
-      }),
+      }).supabase,
     )
 
     const res = await listWebhooks(
@@ -364,10 +336,10 @@ describe('GET /api/v1/companies/:companyId/webhooks', () => {
 describe('GET /api/v1/companies/:companyId/webhooks/:id', () => {
   it('returns the webhook detail without secret', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         webhooks: { data: SAMPLE_WEBHOOK, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await getWebhook(
@@ -383,10 +355,10 @@ describe('GET /api/v1/companies/:companyId/webhooks/:id', () => {
 
   it('returns 404 NOT_FOUND when the webhook does not exist for this company', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         webhooks: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await getWebhook(
@@ -407,13 +379,13 @@ describe('GET /api/v1/companies/:companyId/webhooks/:id', () => {
 describe('PATCH /api/v1/companies/:companyId/webhooks/:id', () => {
   it('updates the webhook and clears disabled_at when active=true', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         webhooks: {
           data: { ...SAMPLE_WEBHOOK, disabled_at: null, disabled_reason: null },
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await updateWebhook(
@@ -438,9 +410,9 @@ describe('PATCH /api/v1/companies/:companyId/webhooks/:id', () => {
       detail: '169.254.169.254 is the cloud metadata endpoint',
     })
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await updateWebhook(
@@ -460,9 +432,9 @@ describe('PATCH /api/v1/companies/:companyId/webhooks/:id', () => {
 
   it('returns 400 VALIDATION_ERROR for an empty body (no fields to update)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await updateWebhook(
@@ -487,10 +459,10 @@ describe('PATCH /api/v1/companies/:companyId/webhooks/:id', () => {
 describe('DELETE /api/v1/companies/:companyId/webhooks/:id', () => {
   it('returns 204 NO_CONTENT after a successful delete', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         webhooks: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await deleteWebhook(
@@ -511,7 +483,7 @@ describe('DELETE /api/v1/companies/:companyId/webhooks/:id', () => {
 describe('POST /api/v1/companies/:companyId/webhooks/:id/test', () => {
   it('enqueues a synthetic delivery and returns its id', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         webhooks: {
           data: {
@@ -525,7 +497,7 @@ describe('POST /api/v1/companies/:companyId/webhooks/:id/test', () => {
           error: null,
         },
         webhook_deliveries: { data: { id: DELIVERY_ID }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await testWebhook(
@@ -543,10 +515,10 @@ describe('POST /api/v1/companies/:companyId/webhooks/:id/test', () => {
 
   it('returns 404 NOT_FOUND when the webhook does not exist', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         webhooks: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await testWebhook(
@@ -561,7 +533,7 @@ describe('POST /api/v1/companies/:companyId/webhooks/:id/test', () => {
 
   it('refuses to enqueue a test for a disabled webhook', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         webhooks: {
           data: {
@@ -572,7 +544,7 @@ describe('POST /api/v1/companies/:companyId/webhooks/:id/test', () => {
           },
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await testWebhook(
@@ -595,7 +567,7 @@ describe('POST /api/v1/companies/:companyId/webhooks/:id/test', () => {
 describe('GET /api/v1/companies/:companyId/webhooks/:id/deliveries', () => {
   it('returns deliveries for the webhook with status + response details', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         webhooks: { data: { id: WEBHOOK_ID }, error: null },
         webhook_deliveries: {
@@ -617,7 +589,7 @@ describe('GET /api/v1/companies/:companyId/webhooks/:id/deliveries', () => {
           ],
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await listDeliveries(
@@ -637,10 +609,10 @@ describe('GET /api/v1/companies/:companyId/webhooks/:id/deliveries', () => {
 
   it('returns 404 NOT_FOUND when the webhook does not exist for this company (clean signal vs empty list)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         webhooks: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await listDeliveries(
@@ -661,10 +633,10 @@ describe('GET /api/v1/companies/:companyId/webhooks/:id/deliveries', () => {
 describe('POST /api/v1/companies/:companyId/webhooks/:id/rotate-secret', () => {
   it('returns a freshly-minted secret EXACTLY ONCE on rotation', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         webhooks: { data: { id: WEBHOOK_ID, name: 'CRM sync' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await rotateSecret(
@@ -684,10 +656,10 @@ describe('POST /api/v1/companies/:companyId/webhooks/:id/rotate-secret', () => {
 
   it('returns 404 NOT_FOUND when the webhook does not exist for this company', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         webhooks: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await rotateSecret(
@@ -714,9 +686,9 @@ describe('POST /api/v1/companies/:companyId/webhooks/:id/rotate-secret', () => {
 
   it('requires an Idempotency-Key header (write endpoint)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
 
     // Build request WITHOUT the Idempotency-Key header (default makeRequest adds it).
@@ -743,10 +715,10 @@ describe('POST /api/v1/companies/:companyId/webhooks/:id/rotate-secret', () => {
 describe('webhook routes: cross-tenant URL guard', () => {
   it('returns 404 NOT_FOUND when the caller is not a member of the company in the URL', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         // No membership row → wrapper short-circuits to NOT_FOUND.
         company_members: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await listWebhooks(

@@ -4,7 +4,6 @@ import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { createServiceClient } from '@/lib/supabase/server'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { linkByPerson } from '@/lib/arkiv/agreements/store'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -43,7 +42,6 @@ function findTarget(supabase: SupabaseClient, companyId: string, kind: 'party' |
 }
 
 export const GET = withRouteContext('document.links', async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const { id } = await params
   const { data, error } = await ctx.supabase
     .from('document_links')
@@ -57,7 +55,6 @@ export const GET = withRouteContext('document.links', async (_request, ctx, { pa
 })
 
 export const POST = withRouteContext('document.links.create', async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const { id } = await params
   const parsed = await validateBody(request, bodySchema)
   if (!parsed.success) return parsed.response

@@ -1,22 +1,15 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { PayrollConfig } from './payroll-config'
 import { daysBetweenIso } from '@/lib/dates/iso'
-import {
-  calculateVabDeduction,
-  calculateParentalLeaveDeduction,
-} from './absence-calculator'
 import type { SalaryCalculationPolicy } from './calculation-policy'
 import { calendarLeaveDeduction } from './calendar-leave'
 
 /**
  * Derive payroll line items from per-day absence records.
  *
- * Why this lives outside the existing absence-calculator: those formulas
- * still take `sickDays: number`. They cannot determine sjuklöneperiod
- * boundaries, återinsjuknande, or högriskskydd: those depend on actual
- * dates, which now live in `salary_absence_days`. This module is the
- * bridge: it walks the per-day records and emits correctly-classified
- * line items.
+ * Sjuklöneperiod boundaries, återinsjuknande and högriskskydd depend on
+ * actual dates, which live in `salary_absence_days`. This module walks the
+ * per-day records and emits correctly-classified line items.
  *
  * Swedish payroll rules implemented:
  *   - **Sjuklöneperiod** (Sjuklönelagen) = first sick day → calendar-day 14.
@@ -39,11 +32,11 @@ import { calendarLeaveDeduction } from './calendar-leave'
  *     window (inclusive of the new one). The 11th is suppressed.
  *
  * For VAB and parental leave, days are aggregated within the pay period and
- * forwarded to the existing calculators with YTD context. The 120-date
- * semestergrundande cap (SemL 17 § for VAB, 17 a § for parental leave) is
- * applied per date: when the 120th date falls inside the period, the dates
- * up to and including it form one row that is semestergrundande and the
- * dates after it a second row that is not.
+ * priced by calculateVabDeduction / calculateParentalLeaveDeduction below.
+ * The 120-date semestergrundande cap (SemL 17 § for VAB, 17 a § for
+ * parental leave) is applied per date: when the 120th date falls inside the
+ * period, the dates up to and including it form one row that is
+ * semestergrundande and the dates after it a second row that is not.
  *
  * Company conventions (lib/salary/calculation-policy.ts) change HOW a day is
  * priced, never WHICH days are sjuklön, karens or Försäkringskassan:
@@ -221,6 +214,68 @@ export function buildSjukloneperioder(
   // återinsjuknande logic is fully captured by the merge above; we keep the
   // flag for caller introspection if they pass in pre-segmented data.)
   return segments
+}
+
+export interface AbsenceStep {
+  label: string
+  formula: string
+  input: Record<string, number | string>
+  output: number
+}
+
+/**
+ * Calculate VAB (vård av barn) deduction.
+ * Full daily rate deduction: Försäkringskassan compensates the parent.
+ * Semesterlönegrundande for first 120 days (180 for sole custody) per §17b.
+ */
+export function calculateVabDeduction(
+  monthlySalary: number,
+  vabDays: number,
+  totalVabDaysThisYear: number = 0,
+  dailyDivisor: number = 21
+): { deduction: number; semesterGrundande: boolean; steps: AbsenceStep[] } {
+  const r = (x: number) => Math.round(x * 100) / 100
+  const dailyRate = r(monthlySalary / dailyDivisor)
+  const deduction = r(dailyRate * vabDays)
+  const semesterGrundande = totalVabDaysThisYear + vabDays <= 120
+
+  return {
+    deduction,
+    semesterGrundande,
+    steps: [{
+      label: 'VAB-avdrag',
+      formula: 'dagslön × vab_dagar',
+      input: { daily_rate: dailyRate, vab_days: vabDays, ytd_days: totalVabDaysThisYear },
+      output: deduction,
+    }],
+  }
+}
+
+/**
+ * Calculate parental leave deduction.
+ * Semesterlönegrundande for first 120 days per pregnancy per §17a.
+ */
+export function calculateParentalLeaveDeduction(
+  monthlySalary: number,
+  parentalDays: number,
+  totalParentalDaysThisPregnancy: number = 0,
+  dailyDivisor: number = 21
+): { deduction: number; semesterGrundande: boolean; steps: AbsenceStep[] } {
+  const r = (x: number) => Math.round(x * 100) / 100
+  const dailyRate = r(monthlySalary / dailyDivisor)
+  const deduction = r(dailyRate * parentalDays)
+  const semesterGrundande = totalParentalDaysThisPregnancy + parentalDays <= 120
+
+  return {
+    deduction,
+    semesterGrundande,
+    steps: [{
+      label: 'Föräldraledigavdrag',
+      formula: 'dagslön × föräldradagar',
+      input: { daily_rate: dailyRate, parental_days: parentalDays },
+      output: deduction,
+    }],
+  }
 }
 
 export interface DeriveInput {

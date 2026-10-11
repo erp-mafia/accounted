@@ -3,7 +3,6 @@ import { resolveCashAccountVoucherSeries } from './cash-account-voucher-series'
 import { bankBookingContext } from './bank-booking-context'
 import { resolveSekAmountOrNull, buildCurrencyMetadata } from './currency-utils'
 import { coerceDimensionsBag, mergeDimensionBags } from './dimension-resolver'
-import { extractNetAmount, extractVatAmount } from './vat-entries'
 import { roundOre } from '@/lib/money'
 import { InvalidMappingResultError, TransactionMissingSekValueError } from '@/lib/bookkeeping/errors'
 import { createLogger } from '@/lib/logger'
@@ -401,61 +400,4 @@ export async function createTransactionJournalEntry(
   }
 
   return createJournalEntry(supabase, companyId, userId, input)
-}
-
-/**
- * Create a standard domestic expense entry with input VAT deduction
- */
-export function buildDomesticExpenseLines(
-  amount: number,
-  expenseAccount: string,
-  description: string,
-  vatRate: number = 0.25,
-  bankAccount: string = '1930'
-): CreateJournalEntryLineInput[] {
-  const absAmount = Math.abs(amount)
-  const lines: CreateJournalEntryLineInput[] = []
-
-  if (vatRate > 0) {
-    const vatAmount = extractVatAmount(absAmount, vatRate)
-    const netAmount = extractNetAmount(absAmount, vatRate)
-
-    lines.push(
-      {
-        account_number: expenseAccount,
-        debit_amount: netAmount,
-        credit_amount: 0,
-        line_description: description,
-      },
-      {
-        account_number: '2641', // Ingående moms
-        debit_amount: vatAmount,
-        credit_amount: 0,
-        line_description: `Ingående moms ${vatRate * 100}%`,
-      },
-      {
-        account_number: bankAccount,
-        debit_amount: 0,
-        credit_amount: absAmount,
-        line_description: description,
-      }
-    )
-  } else {
-    lines.push(
-      {
-        account_number: expenseAccount,
-        debit_amount: absAmount,
-        credit_amount: 0,
-        line_description: description,
-      },
-      {
-        account_number: bankAccount,
-        debit_amount: 0,
-        credit_amount: absAmount,
-        line_description: description,
-      }
-    )
-  }
-
-  return lines
 }

@@ -328,15 +328,6 @@ export const arcimMigrationExtension: Extension = {
   apiRoutes: [
     ...migrationJobRoutes,
     ...invoiceCompletionRoutes,
-    // ── List available providers ───────────────────────────────────
-    {
-      method: 'GET',
-      path: '/providers',
-      handler: async () => {
-        return NextResponse.json({ providers: enabledProviders() })
-      },
-    },
-
     // ── Check existing connections and import history ──────────────
     {
       method: 'GET',

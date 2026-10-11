@@ -73,11 +73,6 @@ export const mailExtension: Extension = {
   version: '0.1.0',
   sector: 'general',
 
-  settingsPanel: {
-    label: 'Brevlådor',
-    path: '/settings/mail',
-  },
-
   apiRoutes: [
     // Start the consent flow. Returns the URL rather than redirecting so the
     // caller can open it in a deliberate, user-gesture tab.

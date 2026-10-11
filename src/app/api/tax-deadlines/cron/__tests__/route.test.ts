@@ -22,13 +22,10 @@ vi.mock('@/lib/tax/deadline-generator', () => ({
 
 import { verifyCronSecret } from '@/lib/auth/cron'
 import { GET } from '../route'
+import { createCronRequest } from '@/tests/helpers'
 
 const originalUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
 const originalServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-function cronRequest(): Request {
-  return new Request('http://localhost:3000/api/tax-deadlines/cron')
-}
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -52,7 +49,7 @@ afterEach(() => {
 
 describe('GET /api/tax-deadlines/cron', () => {
   it('repairs companies with missing deadlines on the daily run', async () => {
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/tax-deadlines/cron'))
 
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toMatchObject({
@@ -70,7 +67,7 @@ describe('GET /api/tax-deadlines/cron', () => {
     vi.setSystemTime(new Date('2027-01-02T00:00:00.000Z'))
     mocks.annual.mockResolvedValue({ usersProcessed: 8, totalCreated: 80 })
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/tax-deadlines/cron'))
     const body = await response.json()
 
     expect(body).toMatchObject({
@@ -87,7 +84,7 @@ describe('GET /api/tax-deadlines/cron', () => {
       NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     )
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/tax-deadlines/cron'))
 
     expect(response.status).toBe(401)
     expect(mocks.createClient).not.toHaveBeenCalled()

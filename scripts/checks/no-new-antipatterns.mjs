@@ -189,6 +189,7 @@ import {
   UNINITIALIZED_EMITTING_ROUTES,
 } from './event-route-init.mjs'
 import { findLimitsAbovePage, LIMIT_ABOVE_PAGE_ALLOWED } from './limit-above-page.mjs'
+import { findLocalTestMocks, LOCAL_SUPABASE_CHAIN_ALLOWED } from './local-test-mock.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const SOURCE_ROOT = path.join(ROOT, 'src')
@@ -1165,6 +1166,7 @@ const current = {
   uiUniformity: findUiUniformityFindings(SOURCE_ROOT),
   tableWithoutGrant: findTablesWithoutGrant(ROOT),
   limitsAbovePage: findLimitsAbovePage(SOURCE_ROOT),
+  localTestMocks: findLocalTestMocks(ROOT),
 }
 
 const dialogOverflowFiles = [...new Set(current.dialogOverflowRisk.map((f) => f.file))].sort()
@@ -1539,6 +1541,34 @@ if (newUninitializedRoutes.length) {
   )
 }
 
+// 1i. local-test-mock: a test that hand-rolls a helper tests/ already shares
+// (local-test-mock.mjs). The thenable-chain allowlist may only shrink; a local
+// cronRequest or setActiveCompany is a hard failure.
+const { localTestMocks } = current
+const newLocalChains = localTestMocks.supabaseChain.filter((f) => !LOCAL_SUPABASE_CHAIN_ALLOWED.has(f))
+const sharedSinceBaseline = [...LOCAL_SUPABASE_CHAIN_ALLOWED].filter(
+  (f) => !localTestMocks.supabaseChain.includes(f),
+)
+if (newLocalChains.length) {
+  failed = true
+  console.error(`\n✗ local-supabase-chain: ${newLocalChains.length} test file(s) build their own thenable Supabase chain:`)
+  newLocalChains.forEach((f) => console.error(`    ${f}`))
+  console.error(
+    '  → use createTableMockSupabase / createQueuedMockSupabase / createMockSupabase from\n' +
+      '    tests/helpers.ts, and extend them there when a test needs something they lack.',
+  )
+}
+for (const [name, files, fix] of [
+  ['local-cron-request', localTestMocks.cronRequest, 'createCronRequest(path) from tests/helpers.ts'],
+  ['local-set-active-company', localTestMocks.setActiveCompany, 'setActiveCompany from tests/pg/fixtures.ts'],
+]) {
+  if (!files.length) continue
+  failed = true
+  console.error(`\n✗ ${name}: ${files.length} test file(s) define their own copy:`)
+  files.forEach((f) => console.error(`    ${f}`))
+  console.error(`  → use ${fix}.`)
+}
+
 // 1c. ledger-scanning-report: any statement generator not in the baseline set
 // is a NEW violation. Grandfathered files stay until they migrate.
 const ledgerScanBaseline = new Set(baseline.ledgerScanningReports?.files ?? [])
@@ -1747,6 +1777,14 @@ if (pagedSinceBaseline.length) {
       ' Remove them from LIMIT_ABOVE_PAGE_ALLOWED in scripts/checks/limit-above-page.mjs to lock it in:',
   )
   pagedSinceBaseline.forEach((f) => console.log(`    ${f}`))
+}
+
+if (sharedSinceBaseline.length) {
+  console.log(
+    `\n✓ local-supabase-chain progress: ${sharedSinceBaseline.length} allowlisted test file(s) now use the shared mocks.` +
+      ' Remove them from LOCAL_SUPABASE_CHAIN_ALLOWED in scripts/checks/local-test-mock.mjs to lock it in:',
+  )
+  sharedSinceBaseline.forEach((f) => console.log(`    ${f}`))
 }
 
 if (initializedSinceBaseline.length) {

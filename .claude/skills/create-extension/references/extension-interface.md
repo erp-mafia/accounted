@@ -7,22 +7,13 @@ Source: `lib/extensions/types.ts`
 ```typescript
 interface Extension {
   id: string; name: string; version: string; sector?: SectorSlug
-  routes?: RouteDefinition[]
   apiRoutes?: ApiRouteDefinition[]
-  sidebarItems?: SidebarItem[]
   eventHandlers?: ExtensionEventHandler[]
-  mappingRuleTypes?: MappingRuleTypeDefinition[]
-  reportTypes?: ReportDefinition[]
-  settingsPanel?: SettingsPanelDefinition
-  taxCodes?: TaxCodeDefinition[]
-  dimensionTypes?: DimensionDefinition[]
   services?: Record<string, (...args: any[]) => Promise<any>>
-  onInstall?(ctx: ExtensionContext): Promise<void>
-  onUninstall?(ctx: ExtensionContext): Promise<void>
 }
 ```
 
-All surfaces are optional. Core reads only `eventHandlers`, `apiRoutes` and `services` today; the other fields are declared but not wired (settings panels are registered in `lib/extensions/settings-panel-registry.tsx`).
+All three surfaces are optional, and core reads each of them. There is no install or uninstall hook. Settings panels are registered in `lib/extensions/settings-panel-registry.tsx`, not on the extension object.
 
 ## Key Supporting Types
 
@@ -37,11 +28,6 @@ interface ExtensionEventHandler {
   eventType: CoreEventType
   handler: (payload: any, ctx?: ExtensionContext) => Promise<void> | void
 }
-
-interface SidebarItem { label: string; icon?: string; path: string; order?: number }
-interface SettingsPanelDefinition { label: string; path: string }
-interface MappingRuleTypeDefinition { id: string; name: string; description: string }
-interface RouteDefinition { path: string; label: string }
 ```
 
 ## ExtensionContext
@@ -52,12 +38,9 @@ interface ExtensionContext {
   supabase: SupabaseClient
   emit(event: CoreEvent): Promise<void>
   settings: { get<T>(key?: string): Promise<T | null>; set<T>(key: string, value: T): Promise<void> }
-  storage: { download(bucket, path); upload(bucket, path, data, options?); getPublicUrl(bucket, path) }
   log: { info(msg, ...args); warn(msg, ...args); error(msg, ...args) }  // Prefixed ext:{id}
   services: {
     ingestTransactions(supabase, companyId, userId, raw, options?): Promise<IngestResult>
-    getCashAccounts(supabase, companyId, opts?): Promise<CashAccount[]>
-    getPrimaryCashAccount(supabase, companyId, currency?): Promise<CashAccount | null>
   }
 }
 ```
@@ -89,7 +72,7 @@ export const myExtensionExtension: Extension = {
 }
 ```
 
-**Level 4: Full extension** (events + API + settings + mappingRules + onInstall; illustrative, no `receipt-ocr` extension ships):
+**Level 4: Full extension** (events + API + settings; illustrative, no `receipt-ocr` extension ships):
 ```typescript
 export const receiptOcrExtension: Extension = {
   id: 'receipt-ocr', name: 'Receipt OCR', version: '1.0.0', sector: 'general',
@@ -98,8 +81,5 @@ export const receiptOcrExtension: Extension = {
     { eventType: 'document.uploaded', handler: handleDocumentUploaded },
     { eventType: 'transaction.synced', handler: handleTransactionSynced },
   ],
-  mappingRuleTypes: [{ id: 'receipt-ocr-merchant', name: 'OCR Merchant Match', description: '...' }],
-  settingsPanel: { label: 'Receipt OCR', path: '/settings/extensions/receipt-ocr' },
-  async onInstall(ctx) { await ctx.settings.set('settings', DEFAULT_SETTINGS) },
 }
 ```

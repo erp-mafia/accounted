@@ -12,11 +12,11 @@ here. **Never merge.** Read `.claude/loops.md` first.
 
 ## Preflight
 
-`gh auth status`, repo `erp-mafia/accounted`. If it fails, stop and report "environment not provisioned".
+`glab auth status`, repo `arcim-technology-ab-group1/accounted`. If it fails, stop and report "environment not provisioned".
 
 ## 1. Due check (weekly semantics)
 
-Find the most recent trace: `gh issue list --label loop:docs --state all --limit 5 --json number,title,updatedAt`
+Find the most recent trace: `glab issue list -R arcim-technology-ab-group1/accounted --label loop:docs --all -P 5 -O json` (read `iid`, `title`, `updated_at`)
 plus the newest `<!-- loop-docs-freshness-run: YYYY-MM-DD -->` marker in those issues' comments.
 If a run marker is dated **less than 6 days ago**, report "not due" and stop, unless the user
 invoked `/loop-docs-freshness` explicitly (explicit invocation always runs).
@@ -42,7 +42,7 @@ npx tsx scripts/check-docs-freshness.mts
 The script prints a `FINGERPRINT` per drifted page. Compute the run fingerprint = first 12 hex
 chars of sha256 over the sorted page fingerprints, then dedupe per `.claude/loops.md`:
 
-- `gh issue list --search "<run-fingerprint> in:body" --state all` : match open → comment the fresh
+- `glab issue list -R arcim-technology-ab-group1/accounted --all --in description --search "<run-fingerprint>"` : match open → comment the fresh
   script summary instead of filing; match closed → reopen with a note.
 - Otherwise file **one** issue (never one per page):
   - Title: `docs drift: docs.accounted.se out of sync (<N> pages)`

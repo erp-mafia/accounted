@@ -98,43 +98,9 @@ export function templateAppliesToForm(
   return Array.isArray(scope) ? scope.includes(entityType) : scope === entityType
 }
 
-export interface TemplateGroupInfo {
-  group: TemplateGroup
-  label_sv: string
-  label_en: string
-  templates: BookingTemplate[]
-}
-
 export interface TemplateMatch {
   template: BookingTemplate
   confidence: number
-}
-
-// ============================================================
-// Template Group Labels
-// ============================================================
-
-const GROUP_LABELS: Record<TemplateGroup, { sv: string; en: string }> = {
-  premises: { sv: 'Lokalkostnader', en: 'Premises' },
-  vehicle: { sv: 'Fordon', en: 'Vehicle' },
-  it_software: { sv: 'IT & Programvara', en: 'IT & Software' },
-  office_supplies: { sv: 'Kontorsmaterial', en: 'Office Supplies' },
-  marketing: { sv: 'Marknadsföring', en: 'Marketing' },
-  travel: { sv: 'Resor & Transport', en: 'Travel & Transport' },
-  representation: { sv: 'Representation', en: 'Representation' },
-  insurance: { sv: 'Försäkringar', en: 'Insurance' },
-  professional_services: { sv: 'Professionella tjänster', en: 'Professional Services' },
-  bank_finance: { sv: 'Bank & Finans', en: 'Banking & Finance' },
-  telecom: { sv: 'Telekom & Internet', en: 'Telecom & Internet' },
-  education: { sv: 'Utbildning', en: 'Education' },
-  personnel: { sv: 'Personal', en: 'Personnel' },
-  revenue: { sv: 'Intäkter', en: 'Revenue' },
-  financial: { sv: 'Finansiella poster', en: 'Financial Items' },
-  private_transfers: { sv: 'Privata transaktioner', en: 'Private Transfers' },
-  equipment: { sv: 'Inventarier & Utrustning', en: 'Equipment' },
-  goods: { sv: 'Varor & material', en: 'Goods & Materials' },
-  tax: { sv: 'Skatt & moms', en: 'Tax & VAT' },
-  closing: { sv: 'Bokslut', en: 'Year-end' },
 }
 
 // ============================================================
@@ -2334,21 +2300,9 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
 // ============================================================
 
 const templateById = new Map<string, BookingTemplate>()
-const templatesByGroup = new Map<TemplateGroup, BookingTemplate[]>()
-const templatesByMcc = new Map<number, BookingTemplate[]>()
 
 for (const t of BOOKING_TEMPLATES) {
   templateById.set(t.id, t)
-
-  const groupList = templatesByGroup.get(t.group) || []
-  groupList.push(t)
-  templatesByGroup.set(t.group, groupList)
-
-  for (const mcc of t.mcc_codes) {
-    const mccList = templatesByMcc.get(mcc) || []
-    mccList.push(t)
-    templatesByMcc.set(mcc, mccList)
-  }
 }
 
 // ============================================================
@@ -2358,31 +2312,6 @@ for (const t of BOOKING_TEMPLATES) {
 /** O(1) lookup by template ID */
 export function getTemplateById(id: string): BookingTemplate | undefined {
   return templateById.get(id)
-}
-
-/** Get all templates in a group */
-export function getTemplatesByGroup(group: TemplateGroup): BookingTemplate[] {
-  return templatesByGroup.get(group) || []
-}
-
-/** Get templates matching a specific MCC code */
-export function getTemplatesByMcc(mcc: number): BookingTemplate[] {
-  return templatesByMcc.get(mcc) || []
-}
-
-/** Get all groups with labels and their templates */
-export function getTemplateGroups(): TemplateGroupInfo[] {
-  const groups: TemplateGroupInfo[] = []
-  for (const [group, labels] of Object.entries(GROUP_LABELS)) {
-    const g = group as TemplateGroup
-    groups.push({
-      group: g,
-      label_sv: labels.sv,
-      label_en: labels.en,
-      templates: templatesByGroup.get(g) || [],
-    })
-  }
-  return groups
 }
 
 /**

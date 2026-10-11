@@ -1,5 +1,5 @@
 {
-  "totalErrors": 491,
+  "totalErrors": 487,
   "perFile": {
     "src/app/api/assets/__tests__/id.test.ts": 9,
     "src/app/api/auth/email-hook/__tests__/route.test.ts": 1,
@@ -31,7 +31,6 @@
     "src/app/api/onboarding/state/__tests__/route.test.ts": 5,
     "src/app/api/pending-operations/bulk-commit/__tests__/route.test.ts": 11,
     "src/app/api/pending-operations/bulk-reject/__tests__/route.test.ts": 10,
-    "src/app/api/reports/audit-trail/__tests__/route.test.ts": 4,
     "src/app/api/reports/bokslutsbilagor/__tests__/route.test.ts": 8,
     "src/app/api/reports/full-archive/__tests__/route.test.ts": 11,
     "src/app/api/rot-rut/__tests__/routes.test.ts": 13,

@@ -46,38 +46,11 @@ vi.mock('@react-pdf/renderer', () => ({
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { renderToBuffer } from '@react-pdf/renderer'
 import { GET as getPayslipPdf } from '../[employeeId]/pdf/route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
 const mockRender = renderToBuffer as ReturnType<typeof vi.fn>
-
-interface TableResp {
-  data?: unknown
-  error?: unknown
-}
-
-function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) {
-  const queues = new Map<string, TableResp[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const RUN_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
@@ -159,13 +132,13 @@ beforeEach(() => {
 describe('GET /api/v1/companies/:companyId/salary-runs/:id/payslips/:employeeId/pdf', () => {
   it('returns the rendered PDF with attachment disposition (happy path)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: SAMPLE_RUN, error: null },
         salary_run_employees: { data: SAMPLE_SRE, error: null },
         companies: { data: { name: 'Testbolaget AB', org_number: '5560000000' }, error: null },
         company_settings: { data: { company_name: 'Testbolaget AB' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await getPayslipPdf(
@@ -186,10 +159,10 @@ describe('GET /api/v1/companies/:companyId/salary-runs/:id/payslips/:employeeId/
 
   it('returns 404 SALARY_RUN_NOT_FOUND when the run is missing', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await getPayslipPdf(
       makeRequest(
@@ -204,11 +177,11 @@ describe('GET /api/v1/companies/:companyId/salary-runs/:id/payslips/:employeeId/
 
   it('returns 404 NOT_FOUND when the employee is not in the run', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: SAMPLE_RUN, error: null },
         salary_run_employees: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await getPayslipPdf(
       makeRequest(
@@ -230,7 +203,7 @@ describe('GET /api/v1/companies/:companyId/salary-runs/:id/payslips/:employeeId/
       scopes: ['invoices:read'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
 
     const res = await getPayslipPdf(
       makeRequest(
@@ -243,7 +216,7 @@ describe('GET /api/v1/companies/:companyId/salary-runs/:id/payslips/:employeeId/
 
   it('returns 401 without a bearer token', async () => {
     mockValidate.mockResolvedValue(null)
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
 
     const res = await getPayslipPdf(
       new Request(
@@ -257,13 +230,13 @@ describe('GET /api/v1/companies/:companyId/salary-runs/:id/payslips/:employeeId/
   it('maps a render failure to 500 INTERNAL_ERROR rather than crashing', async () => {
     mockRender.mockRejectedValue(new Error('font missing'))
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: SAMPLE_RUN, error: null },
         salary_run_employees: { data: SAMPLE_SRE, error: null },
         companies: { data: { name: 'Testbolaget AB', org_number: '5560000000' }, error: null },
         company_settings: { data: { company_name: 'Testbolaget AB' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await getPayslipPdf(

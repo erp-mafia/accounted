@@ -126,7 +126,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         importTransactions: z.boolean().optional().default(true),
         voucherSeries: z.string().min(1).max(2).optional().default('A'),
         // Series for the Ingående balanser voucher (issue #1882). No default
-        // here: executeSIEImport picks a series the file's vouchers do not
+        // here: the SIE job picks a series the file's vouchers do not
         // use, so the IB entry never shifts the file's own numbering.
         openingBalanceSeries: z.string().min(1).max(2).optional(),
         updateAccountNames: z.boolean().optional().default(true),
@@ -182,7 +182,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // Build account mappings server-side from the file's #KONTO records and
     // any stored per-company overrides, by the same decision the dashboard
     // upload makes (#3312): class 9 amounts to 2999, unused definitions kept.
-    // (This route used to pass [] as mappings, which executeSIEImport's
+    // (This route used to pass [] as mappings, which the import's
     // mapping-coverage guard rejects for any real file.)
     const storedMappings = await fetchAllRows<SIEAccountMappingRecord>(({from,to}) => ctx.supabase
       .from('sie_account_mappings').select('*').eq('company_id',ctx.companyId).order('source_account').range(from,to))
@@ -194,7 +194,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     // Reject unmappable files with a clean 400 before starting the operation
     // row, mirroring the dashboard route: the alternative is a permanently
-    // failed operation from executeSIEImport's coverage guard.
+    // failed operation from the import's coverage guard.
     const unmapped = mappings.filter((m) => !m.targetAccount)
     if (unmapped.length > 0) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {

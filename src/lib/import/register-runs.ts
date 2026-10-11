@@ -11,7 +11,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
-import { rpcClientForBulkDelete } from '@/lib/import/sie-import'
+import { rpcClientForBulkDelete } from '@/lib/supabase/bulk-delete-client'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 export type RegisterKind = 'customers' | 'suppliers' | 'articles'

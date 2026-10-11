@@ -520,7 +520,6 @@ import { toSameOriginStorageUrl } from '@/lib/core/documents/storage-proxy'
 import { createArkivTools } from './arkiv-tools'
 import { createOperationTools, toolOutputSchema } from './operation-tools'
 import { OPERATIONS } from '@/lib/operations/registry'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { createHash, randomUUID } from 'node:crypto'
 import { extractInvoiceFields, ExtractionSchema as InvoiceExtractionSchema, AgentExtractionSchema, fetchOwnCompanyIdentity } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
 import { mirrorExtractionToDocument } from '@/extensions/general/invoice-inbox/lib/mirror-extraction'
@@ -7313,11 +7312,10 @@ export const tools: McpTool[] = [
         }
       })()
 
-      // Arkiv digest: only for companies in the rollout, best-effort, and
-      // short by design (the stanza stays under 1 500 tokens): counts, how
-      // to read the record, and a few refs to start from.
+      // Arkiv digest: best-effort and short by design (the stanza stays
+      // under 1 500 tokens): counts, how to read the record, and a few refs
+      // to start from.
       const safeArkivDigest = (async () => {
-        if (!isArkivEnabled(companyId)) return null
         try {
           const [documents, agreements, facts, anchors] = await Promise.all([
             supabase.from('document_attachments').select('id', { count: 'exact', head: true }).eq('company_id', companyId).eq('admission_state', 'admitted'),

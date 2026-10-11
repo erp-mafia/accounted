@@ -191,11 +191,6 @@ export function normalizeCountryCode(input: string | null | undefined): string |
   return NAME_TO_CODE.get(foldName(trimmed)) ?? null
 }
 
-/** True when the value already is a well-formed uppercase alpha-2 code. */
-export function isCountryCode(value: string | null | undefined): boolean {
-  return typeof value === 'string' && ALPHA2_RE.test(value)
-}
-
 /**
  * Display name for a code in the given locale; the code itself when the
  * country is not in COUNTRY_OPTIONS, and the raw value when it is not a

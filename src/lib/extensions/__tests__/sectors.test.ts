@@ -36,47 +36,18 @@ vi.mock('@/lib/extensions/_generated/sector-definitions', () => ({
 }))
 
 import {
-  SECTORS,
-  getSector,
   getExtensionDefinition,
   getAllExtensions,
-  getExtensionsBySector,
 } from '../sectors'
 
-describe('sectors registry', () => {
-  it('should have 1 sector', () => {
-    expect(SECTORS.length).toBe(1)
-  })
-
+describe('extension definitions', () => {
   it('should have 19 total extensions', () => {
     expect(getAllExtensions().length).toBe(19)
   })
 
-  it('should have unique slugs within each sector', () => {
-    for (const sector of SECTORS) {
-      const slugs = sector.extensions.map(e => e.slug)
-      const uniqueSlugs = new Set(slugs)
-      expect(uniqueSlugs.size).toBe(slugs.length)
-    }
-  })
-
-  it('should have at least one extension per sector', () => {
-    for (const sector of SECTORS) {
-      expect(sector.extensions.length).toBeGreaterThan(0)
-    }
-  })
-
-  it('getSector returns correct sector', () => {
-    const sector = getSector('general')
-    expect(sector).toBeDefined()
-    expect(sector!.slug).toBe('general')
-    expect(sector!.name).toBe('Generella verktyg')
-  })
-
-  it('getSector returns undefined for unknown slug', () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const sector = getSector('invalid' as any)
-    expect(sector).toBeUndefined()
+  it('should have unique slugs', () => {
+    const slugs = getAllExtensions().map(e => e.slug)
+    expect(new Set(slugs).size).toBe(slugs.length)
   })
 
   it('getExtensionDefinition returns correct extension', () => {
@@ -92,9 +63,9 @@ describe('sectors registry', () => {
     expect(ext).toBeUndefined()
   })
 
-  it('getExtensionsBySector returns extensions for a sector', () => {
-    const extensions = getExtensionsBySector('general')
-    expect(extensions.length).toBe(19)
+  it('getExtensionDefinition returns undefined for an unknown sector', () => {
+    expect(getExtensionDefinition('invalid', 'mcp-server')).toBeUndefined()
+    expect(getExtensionDefinition('constructor', 'mcp-server')).toBeUndefined()
   })
 
   it('all extensions have required fields', () => {

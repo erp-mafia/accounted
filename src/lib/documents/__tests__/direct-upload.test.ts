@@ -49,11 +49,7 @@ describe('uploadViaSignedUrl', () => {
     ])
     const file = fakeFile()
 
-    const res = await uploadViaSignedUrl(file, {
-      fetchImpl,
-      matchedTransactionId: 'tx-1',
-      skipExtraction: true,
-    })
+    const res = await uploadViaSignedUrl(file, { fetchImpl })
 
     expect(res).toBe(completeRes)
     expect(calls.map((c) => c.url)).toEqual([INBOX_UPLOAD_CREATE_URL, SIGNED_URL, INBOX_UPLOAD_COMPLETE_URL])
@@ -71,29 +67,12 @@ describe('uploadViaSignedUrl', () => {
     expect(calls[1].init?.headers).toEqual({ 'content-type': 'application/pdf', 'x-upsert': 'false' })
     expect(calls[1].init?.body).toBe(file)
 
-    // 3. complete: the reservation plus the same options /upload takes
+    // 3. complete: the reservation and the declared file metadata
     expect(calls[2].init?.method).toBe('POST')
     expect(JSON.parse(String(calls[2].init?.body))).toEqual({
       upload_id: UPLOAD_ID,
       file_name: 'faktura.pdf',
       mime_type: 'application/pdf',
-      matched_transaction_id: 'tx-1',
-      skip_extraction: true,
-    })
-  })
-
-  it('defaults to no matched transaction and extraction on', async () => {
-    const { fetchImpl, calls } = fetchSequence([
-      reservationResponse(),
-      new Response(null, { status: 200 }),
-      jsonResponse({ data: {} }),
-    ])
-
-    await uploadViaSignedUrl(fakeFile(), { fetchImpl })
-
-    expect(JSON.parse(String(calls[2].init?.body))).toMatchObject({
-      matched_transaction_id: null,
-      skip_extraction: false,
     })
   })
 

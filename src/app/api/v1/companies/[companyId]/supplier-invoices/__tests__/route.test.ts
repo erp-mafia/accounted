@@ -107,6 +107,7 @@ import { GET as getSI, PATCH as updateSI } from '../[id]/route'
 import { POST as approveSI } from '../[id]/approve/route'
 import { POST as markPaidSI } from '../[id]/mark-paid/route'
 import { POST as creditSI } from '../[id]/credit/route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -117,67 +118,29 @@ interface TableResp {
   count?: number | null
 }
 
-/** Payload handed to `.insert()`, recorded per table so writes can be asserted. */
-type InsertRecord = { table: string; payload: Record<string, unknown> }
+// Every client here also answers the arrival-number RPC the create path claims.
+function supabaseFor(byTable: Record<string, TableResp | TableResp[]>) {
+  return createTableMockSupabase({
+    'rpc:get_next_arrival_number': { data: 42, error: null },
+    ...byTable,
+  })
+}
 
-/** Column string handed to `.select()`, recorded per table. The Proxy mock
- * returns fixture rows regardless of projection, so a column dropped from a
- * SELECT never fails these tests by itself: capturing the projection is the
- * only way to regression-test "this route must fetch column X". */
-type SelectRecord = { table: string; columns: string }
+/** First single-row payload `.insert()` got on `table` (a batch insert is an array). */
+function insertedRow(mock: ReturnType<typeof supabaseFor>, table: string) {
+  return mock
+    .payloads(table, 'insert')
+    .find((p): p is Record<string, unknown> => !!p && typeof p === 'object' && !Array.isArray(p))
+}
 
-function makeFlexibleSupabase(
-  byTable: Record<string, TableResp | TableResp[]>,
-  // Opt-in sink for insert payloads: the Proxy chain is otherwise write-only,
-  // and the route echoes back the fixture row rather than what it wrote.
-  insertSink?: InsertRecord[],
-  // Opt-in sink for select projections (see SelectRecord).
-  selectSink?: SelectRecord[],
-) {
-  // Per-table queue: TableResp[] consumes one entry per await, then sticks
-  // on the last entry. Plain TableResp is treated as a constant.
-  const queues = new Map<string, TableResp[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (...args: unknown[]) => {
-          if (
-            insertSink &&
-            prop === 'insert' &&
-            args[0] &&
-            typeof args[0] === 'object' &&
-            !Array.isArray(args[0])
-          ) {
-            insertSink.push({ table, payload: args[0] as Record<string, unknown> })
-          }
-          if (selectSink && prop === 'select' && typeof args[0] === 'string') {
-            selectSink.push({ table, columns: args[0] })
-          }
-          return buildChain(table)
-        }
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return {
-    from: vi.fn((table: string) => buildChain(table)),
-    rpc: vi.fn((name: string) => {
-      if (name === 'get_next_arrival_number') {
-        return Promise.resolve({ data: 42, error: null })
-      }
-      return Promise.resolve({ data: null, error: null })
-    }),
-  }
+/**
+ * The `.select()` projection a route asked `table` for. The mock returns
+ * fixture rows whatever the projection, so a column dropped from a SELECT
+ * never fails a test by itself: asserting the projection is the only way to
+ * pin "this route must fetch column X".
+ */
+function selectedColumns(mock: ReturnType<typeof supabaseFor>, table: string) {
+  return mock.payloads(table, 'select').find((c): c is string => typeof c === 'string')
 }
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -268,13 +231,13 @@ beforeEach(() => {
 describe('GET /api/v1/companies/:companyId/supplier-invoices', () => {
   it('returns paginated SIs with supplier_name inlined', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: {
           data: [{ ...SAMPLE_SI, supplier: { id: SUPPLIER_ID, name: 'Office Depot AB' } }],
           error: null,
         },
-      }),
+      }).supabase,
     )
     const res = await listSIs(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices`),
@@ -289,9 +252,9 @@ describe('GET /api/v1/companies/:companyId/supplier-invoices', () => {
 
   it('rejects malformed date_from with 400', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await listSIs(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices?date_from=2026/05/10`),
@@ -304,10 +267,10 @@ describe('GET /api/v1/companies/:companyId/supplier-invoices', () => {
 describe('GET /api/v1/companies/:companyId/supplier-invoices/:id', () => {
   it('returns the SI when found', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: { data: SAMPLE_SI, error: null },
-      }),
+      }).supabase,
     )
     const res = await getSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}`),
@@ -320,10 +283,10 @@ describe('GET /api/v1/companies/:companyId/supplier-invoices/:id', () => {
 
   it('returns 404 SI_NOT_FOUND when missing', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await getSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}`),
@@ -335,25 +298,19 @@ describe('GET /api/v1/companies/:companyId/supplier-invoices/:id', () => {
   })
 
   it('?expand=items projects apply_slp so the flag is readable back', async () => {
-    const selects: Array<{ table: string; columns: string }> = []
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase(
-        {
-          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-          supplier_invoices: { data: { ...SAMPLE_SI, items: [] }, error: null },
-        },
-        undefined,
-        selects,
-      ),
-    )
+    const selectMock = supabaseFor({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      supplier_invoices: { data: { ...SAMPLE_SI, items: [] }, error: null },
+    })
+    mockServiceClient.mockReturnValue(selectMock.supabase)
     const res = await getSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}?expand=items`),
       detailParams(COMPANY_ID, SI_ID),
     )
     expect(res.status).toBe(200)
-    const siSelect = selects.find((s) => s.table === 'supplier_invoices')
+    const siSelect = selectedColumns(selectMock, 'supplier_invoices')
     expect(siSelect).toBeDefined()
-    expect(siSelect!.columns).toMatch(/items:supplier_invoice_items\([^)]*apply_slp/)
+    expect(siSelect!).toMatch(/items:supplier_invoice_items\([^)]*apply_slp/)
   })
 })
 
@@ -370,7 +327,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
 
   it('registers the SI + posts the registration JE under accrual', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: SAMPLE_SUPPLIER, error: null },
         company_settings: { data: { accounting_method: 'accrual' }, error: null },
@@ -378,7 +335,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
         supplier_invoices: { data: SAMPLE_SI, error: null },
         supplier_invoice_items: { data: null, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await createSI(
@@ -397,11 +354,11 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
 
   it('returns 404 SUPPLIER_NOT_FOUND when supplier does not exist', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: null, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await createSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices`, {
@@ -417,13 +374,13 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
 
   it('returns 400 PERIOD_LOCKED when invoice_date falls in a locked period', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: SAMPLE_SUPPLIER, error: null },
         company_settings: { data: { bookkeeping_locked_through: '2026-12-31' }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await createSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices`, {
@@ -440,7 +397,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
   it('strict-mode: rolls back SI row when registration JE creation throws', async () => {
     mockedReg.mockRejectedValueOnce(new Error('engine boom'))
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: SAMPLE_SUPPLIER, error: null },
         company_settings: { data: { accounting_method: 'accrual' }, error: null },
@@ -448,7 +405,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
         supplier_invoices: { data: SAMPLE_SI, error: null },
         supplier_invoice_items: { data: null, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await createSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices`, {
@@ -467,7 +424,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
     // Engine returns null (not a throw) when no fiscal period covers the date.
     mockedReg.mockResolvedValueOnce(null)
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: SAMPLE_SUPPLIER, error: null },
         company_settings: { data: { accounting_method: 'accrual' }, error: null },
@@ -475,7 +432,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
         supplier_invoices: { data: SAMPLE_SI, error: null },
         supplier_invoice_items: { data: null, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await createSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices`, {
@@ -491,13 +448,13 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
 
   it('returns a dry-run preview when ?dry_run=true', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: SAMPLE_SUPPLIER, error: null },
         company_settings: { data: { bookkeeping_locked_through: null }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await createSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices?dry_run=true`, {
@@ -513,13 +470,13 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
 
   it('rejects a non-Swedish VAT rate with 400 VALIDATION_ERROR', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: SAMPLE_SUPPLIER, error: null },
         company_settings: { data: { bookkeeping_locked_through: null }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await createSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices`, {
@@ -623,13 +580,13 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
 
   it('rejects reverse_charge=true with non-zero item vat_rate (cross-field)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: SAMPLE_SUPPLIER, error: null },
         company_settings: { data: { bookkeeping_locked_through: null }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await createSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices`, {
@@ -737,13 +694,13 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
   for (const treatment of ['exempt', 'export'] as const) {
     it(`rejects vat_treatment='${treatment}' with a non-zero item vat_rate`, async () => {
       mockServiceClient.mockReturnValue(
-        makeFlexibleSupabase({
+        supabaseFor({
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           suppliers: { data: SAMPLE_SUPPLIER, error: null },
           company_settings: { data: { bookkeeping_locked_through: null }, error: null },
           fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
           idempotency_keys: { data: null, error: null },
-        }),
+        }).supabase,
       )
       const res = await createSI(
         makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices`, {
@@ -962,13 +919,13 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
 
   it('dry-run preview carries default_dimensions and per-item dimensions', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: SAMPLE_SUPPLIER, error: null },
         company_settings: { data: { bookkeeping_locked_through: null }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await createSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices?dry_run=true`, {
@@ -1001,7 +958,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices: behaviour shared 
   // These used to be validated by the schema and then dropped on this door;
   // the shared service (lib/supplier-invoices/create.ts) now honours them.
   const DOCUMENT_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
-  const captured: InsertRecord[] = []
+  let mock: ReturnType<typeof supabaseFor>
 
   const baseBody = {
     supplier_id: SUPPLIER_ID,
@@ -1014,21 +971,17 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices: behaviour shared 
   }
 
   function install(overrides: Record<string, TableResp | TableResp[]> = {}) {
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase(
-        {
-          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-          suppliers: { data: SAMPLE_SUPPLIER, error: null },
-          company_settings: { data: { accounting_method: 'accrual' }, error: null },
-          fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
-          supplier_invoices: { data: SAMPLE_SI, error: null },
-          supplier_invoice_items: { data: [{ id: 'item-1', sort_order: 0 }], error: null },
-          idempotency_keys: { data: null, error: null },
-          ...overrides,
-        },
-        captured,
-      ),
-    )
+    mock = supabaseFor({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      suppliers: { data: SAMPLE_SUPPLIER, error: null },
+      company_settings: { data: { accounting_method: 'accrual' }, error: null },
+      fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
+      supplier_invoices: { data: SAMPLE_SI, error: null },
+      supplier_invoice_items: { data: [{ id: 'item-1', sort_order: 0 }], error: null },
+      idempotency_keys: { data: null, error: null },
+      ...overrides,
+    })
+    mockServiceClient.mockReturnValue(mock.supabase)
   }
 
   function post(body: Record<string, unknown>) {
@@ -1041,10 +994,9 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices: behaviour shared 
     )
   }
 
-  const siInsert = () => captured.find((c) => c.table === 'supplier_invoices')?.payload
+  const siInsert = () => insertedRow(mock, 'supplier_invoices')
 
   beforeEach(() => {
-    captured.length = 0
     mockLinkToJournalEntry.mockResolvedValue({ id: DOCUMENT_ID })
     mockCreateSchedules.mockResolvedValue({ created: 1, failed: 0 })
   })
@@ -1105,7 +1057,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices: behaviour shared 
     expect(byAccount['2440']).toBeUndefined()
 
     expect(siInsert()).toMatchObject({ status: 'paid', paid_with_private_funds: true, remaining_amount: 0 })
-    const payment = captured.find((c) => c.table === 'supplier_invoice_payments')?.payload
+    const payment = insertedRow(mock, 'supplier_invoice_payments')
     expect(payment).toMatchObject({ journal_entry_id: JE_ID, amount: 1250 })
   })
 
@@ -1173,7 +1125,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices: behaviour shared 
 })
 
 describe('POST /api/v1/companies/:companyId/supplier-invoices: exchange rate + SEK amounts', () => {
-  const captured: InsertRecord[] = []
+  let mock: ReturnType<typeof supabaseFor>
 
   const validBody = {
     supplier_id: SUPPLIER_ID,
@@ -1186,23 +1138,19 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices: exchange rate + S
   }
 
   function installSupabase() {
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase(
-        {
-          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-          suppliers: { data: SAMPLE_SUPPLIER, error: null },
-          company_settings: { data: { accounting_method: 'cash' }, error: null },
-          fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
-          supplier_invoices: { data: SAMPLE_SI, error: null },
-          supplier_invoice_items: { data: null, error: null },
-          idempotency_keys: { data: null, error: null },
-        },
-        captured,
-      ),
-    )
+    mock = supabaseFor({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      suppliers: { data: SAMPLE_SUPPLIER, error: null },
+      company_settings: { data: { accounting_method: 'cash' }, error: null },
+      fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
+      supplier_invoices: { data: SAMPLE_SI, error: null },
+      supplier_invoice_items: { data: null, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock.supabase)
   }
 
-  const siInsert = () => captured.find((c) => c.table === 'supplier_invoices')?.payload
+  const siInsert = () => insertedRow(mock, 'supplier_invoices')
 
   function post(body: Record<string, unknown>) {
     return createSI(
@@ -1215,7 +1163,6 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices: exchange rate + S
   }
 
   beforeEach(() => {
-    captured.length = 0
     mockFetchExchangeRate.mockReset()
     installSupabase()
   })
@@ -1237,15 +1184,11 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices: exchange rate + S
   })
 
   it('returns 404 SUPPLIER_NOT_FOUND before any rate lookup', async () => {
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase(
-        {
-          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-          suppliers: { data: null, error: null },
-        },
-        captured,
-      ),
-    )
+    mock = supabaseFor({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      suppliers: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock.supabase)
     const res = await post({ ...validBody, currency: 'EUR' })
     expect(res.status).toBe(404)
     const body = await res.json()
@@ -1369,7 +1312,6 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices: exchange rate + S
 
   it('rejects a zero or negative rate the same way', async () => {
     for (const rate of [0, -11.5]) {
-      captured.length = 0
       const res = await post({ ...validBody, currency: 'EUR', exchange_rate: rate })
       expect(res.status).toBe(400)
       const body = await res.json()
@@ -1383,11 +1325,11 @@ describe('PATCH /api/v1/companies/:companyId/supplier-invoices/:id', () => {
   it('updates a registered SI', async () => {
     const updated = { ...SAMPLE_SI, payment_reference: 'OCR-9999' }
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: { data: updated, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await updateSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}`, {
@@ -1403,11 +1345,11 @@ describe('PATCH /api/v1/companies/:companyId/supplier-invoices/:id', () => {
 
   it('refuses to update an approved SI (400 SI_NOT_DRAFT)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: { data: { ...SAMPLE_SI, status: 'approved' }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await updateSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}`, {
@@ -1426,14 +1368,14 @@ describe('PATCH /api/v1/companies/:companyId/supplier-invoices/:id', () => {
   // supplier_invoice_number is in its description.
   it('refuses to move invoice_date on an SI that already has a registration verifikat', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: {
           data: { ...SAMPLE_SI, registration_journal_entry_id: JE_ID },
           error: null,
         },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await updateSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}`, {
@@ -1451,11 +1393,11 @@ describe('PATCH /api/v1/companies/:companyId/supplier-invoices/:id', () => {
   it('still patches due_date on a booked SI, and accepts unchanged verifikat fields', async () => {
     const booked = { ...SAMPLE_SI, registration_journal_entry_id: JE_ID }
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: { data: { ...booked, due_date: '2026-07-31' }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await updateSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}`, {
@@ -1477,7 +1419,7 @@ describe('PATCH /api/v1/companies/:companyId/supplier-invoices/:id', () => {
     // Queue: pre-flight read (unbooked) -> pinned update matches nothing ->
     // re-read shows the entry that landed in between.
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: [
           { data: SAMPLE_SI, error: null },
@@ -1485,7 +1427,7 @@ describe('PATCH /api/v1/companies/:companyId/supplier-invoices/:id', () => {
           { data: { ...SAMPLE_SI, registration_journal_entry_id: JE_ID }, error: null },
         ],
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await updateSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}`, {
@@ -1502,11 +1444,11 @@ describe('PATCH /api/v1/companies/:companyId/supplier-invoices/:id', () => {
 
   it('rejects unknown body keys (V4.5 strict schema)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: { data: SAMPLE_SI, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await updateSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}`, {
@@ -1527,7 +1469,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/approve', () =
     const registered = { ...SAMPLE_SI, status: 'registered' }
     const approved = { ...SAMPLE_SI, status: 'approved' }
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         // Queue: 1st = pre-flight (registered), 2nd = post-update (approved).
         supplier_invoices: [
@@ -1535,7 +1477,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/approve', () =
           { data: approved, error: null },
         ],
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await approveSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/approve`, {
@@ -1553,14 +1495,14 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/approve', () =
     // must stay reachable there, and it does not make late money on time.
     const overdue = { ...SAMPLE_SI, status: 'overdue', due_date: '2000-01-01', approved_at: null }
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: [
           { data: overdue, error: null },
           { data: { ...overdue, approved_at: '2026-07-27T08:00:00Z' }, error: null },
         ],
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await approveSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/approve`, {
@@ -1576,14 +1518,14 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/approve', () =
 
   it('refuses on an already-attested SI (400 SI_APPROVE_NOT_REGISTERED)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: {
           data: { ...SAMPLE_SI, status: 'overdue', approved_at: '2026-07-01T08:00:00Z' },
           error: null,
         },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await approveSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/approve`, {
@@ -1616,30 +1558,30 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
       payment_journal_entry_id: 'je-pay-1',
     }
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: { data: approvedSI, error: null },
         company_settings: { data: { accounting_method: 'accrual' }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
         supplier_invoice_payments: { data: null, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     // The .update() returns a different table-keyed response. To return the
     // updated row we re-mock with a queue once the route updates supplier_invoices.
-    // Simpler: rebind makeFlexibleSupabase to also return `updated` on the
+    // Simpler: rebind the table mock to also return `updated` on the
     // second call. We rely on the fact that the route's first read uses one
     // proxy chain and the update uses another. Returning the same response
     // for every supplier_invoices read works for the happy-path test.
     mockServiceClient.mockReturnValueOnce(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: { data: approvedSI, error: null },
         company_settings: { data: { accounting_method: 'accrual' }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
         supplier_invoice_payments: { data: null, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     // For the update path, simulate the .update().select().maybeSingle()
@@ -1648,14 +1590,14 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
     // the pre-flight read AND the update read will return it. We only check
     // the response shape from the latter, which the route maps directly.
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: { data: { ...approvedSI, ...updated }, error: null },
         company_settings: { data: { accounting_method: 'accrual' }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
         supplier_invoice_payments: { data: null, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await markPaidSI(
@@ -1671,13 +1613,13 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
 
   it('returns 400 SI_PAID_PERIOD_LOCKED when payment_date is in a locked period', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: { data: approvedSI, error: null },
         company_settings: { data: { bookkeeping_locked_through: '2030-01-01' }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await markPaidSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/mark-paid`, {
@@ -1693,11 +1635,11 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
 
   it('returns 409 SI_PAID_ALREADY when SI is already paid', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: { data: { ...approvedSI, status: 'paid' }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await markPaidSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/mark-paid`, {
@@ -1713,13 +1655,13 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
   it('strict-mode: aborts before SI mutation when JE engine throws', async () => {
     mockedPayment.mockRejectedValueOnce(new Error('engine fail'))
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: { data: approvedSI, error: null },
         company_settings: { data: { accounting_method: 'accrual' }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await markPaidSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/mark-paid`, {
@@ -1735,13 +1677,13 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
   it('requires exchange_rate_difference for non-SEK accrual', async () => {
     const eurSI = { ...approvedSI, currency: 'EUR' }
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: { data: eurSI, error: null },
         company_settings: { data: { accounting_method: 'accrual', bookkeeping_locked_through: null }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     // POST with NO body → no exchange_rate_difference supplied.
     const res = await markPaidSI(
@@ -1765,7 +1707,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
     const eurSI = { ...approvedSI, currency: 'EUR', exchange_rate: 11.5 }
     const paidEurSI = { ...eurSI, status: 'paid', paid_amount: 1250, remaining_amount: 0 }
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         // 1st read: pre-flight (approved). 2nd read: post-update select (paid).
         supplier_invoices: [
@@ -1776,7 +1718,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
         supplier_invoice_payments: { data: null, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await markPaidSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/mark-paid`, {
@@ -1793,12 +1735,12 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
 
   it('rejects a future payment_date with 400 VALIDATION_ERROR', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         // The pre-flight fetch should not even fire: the schema check runs first.
         supplier_invoices: { data: approvedSI, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const future = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString().split('T')[0]
     const res = await markPaidSI(
@@ -1846,21 +1788,15 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
       supplier: { id: SUPPLIER_ID, name: 'Avanza Pension', supplier_type: 'swedish_business' },
       items: [slpItem],
     }
-    const selects: Array<{ table: string; columns: string }> = []
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase(
-        {
-          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-          supplier_invoices: { data: cashSI, error: null },
-          company_settings: { data: { accounting_method: 'cash' }, error: null },
-          fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
-          supplier_invoice_payments: { data: null, error: null },
-          idempotency_keys: { data: null, error: null },
-        },
-        undefined,
-        selects,
-      ),
-    )
+    const selectMock = supabaseFor({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      supplier_invoices: { data: cashSI, error: null },
+      company_settings: { data: { accounting_method: 'cash' }, error: null },
+      fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
+      supplier_invoice_payments: { data: null, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(selectMock.supabase)
     const res = await markPaidSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/mark-paid`, {
         method: 'POST',
@@ -1871,9 +1807,9 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
     expect(mockedCash).toHaveBeenCalledTimes(1)
     // The projection must carry the flag: without it the engine can never
     // see apply_slp and silently skips the SLP pair.
-    const siSelect = selects.find((s) => s.table === 'supplier_invoices')
+    const siSelect = selectedColumns(selectMock, 'supplier_invoices')
     expect(siSelect).toBeDefined()
-    expect(siSelect!.columns).toMatch(/items:supplier_invoice_items\([^)]*apply_slp/)
+    expect(siSelect!).toMatch(/items:supplier_invoice_items\([^)]*apply_slp/)
     // And the fetched items flow to createSupplierInvoiceCashEntry intact.
     const passedItems = mockedCash.mock.calls[0]?.[4] as Array<{ apply_slp?: boolean }>
     expect(passedItems[0]?.apply_slp).toBe(true)
@@ -1881,14 +1817,14 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
 
   it('rejects payment amount exceeding remaining_amount', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         // approvedSI.remaining_amount === 1250
         supplier_invoices: { data: approvedSI, error: null },
         company_settings: { data: { accounting_method: 'accrual', bookkeeping_locked_through: null }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await markPaidSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/mark-paid`, {
@@ -2096,11 +2032,11 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/credit', () =>
 
   it('returns 409 SI_CREDIT_ALREADY_CREDITED when status=credited', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: { data: { ...registeredSI, status: 'credited' }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await creditSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/credit`, {
@@ -2115,13 +2051,13 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/credit', () =>
 
   it('returns 400 SI_CREDIT_PERIOD_LOCKED when today falls in a locked period', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: { data: registeredSI, error: null },
         company_settings: { data: { bookkeeping_locked_through: '2030-01-01' }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await creditSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/credit`, {
@@ -2136,13 +2072,13 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/credit', () =>
 
   it('dry-run returns preview without arrival_number allocation or JE creation', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: { data: registeredSI, error: null },
         company_settings: { data: { bookkeeping_locked_through: null }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await creditSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/credit?dry_run=true`, {
@@ -2160,13 +2096,13 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/credit', () =>
     ['the commit', ''],
   ])('returns 409 SI_CREDIT_ROWS_MISMATCH with both figures on %s of an invoice without rows', async (_label, query) => {
     // A migrated header: its rows give the reversal nothing to take off 2440.
-    const flexible = makeFlexibleSupabase({
+    const flexible = supabaseFor({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       supplier_invoices: { data: { ...registeredSI, items: [] }, error: null },
       company_settings: { data: { bookkeeping_locked_through: null }, error: null },
       fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
       idempotency_keys: { data: null, error: null },
-    })
+    }).supabase
     const rpc = vi.fn((_name: string) => Promise.resolve({ data: 43, error: null }))
     mockServiceClient.mockReturnValue({ ...flexible, rpc })
 
@@ -2188,11 +2124,11 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/credit', () =>
 
   it('returns 400 VALIDATION_ERROR for a body with unknown fields', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: { data: registeredSI, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await creditSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/credit`, {
@@ -2224,9 +2160,10 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/credit', () =>
   })
 
   it('credits from an inbox credit note on its date, with its number and document', async () => {
-    const inserts: InsertRecord[] = []
+    // supplier_invoices answers per read below; its insert is recorded here.
+    const inserts: Array<{ table: string; payload: Record<string, unknown> }> = []
     let siReadCount = 0
-    const flexible = makeFlexibleSupabase(
+    const flexible = supabaseFor(
       {
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         company_settings: { data: { accounting_method: 'accrual', bookkeeping_locked_through: null }, error: null },
@@ -2235,8 +2172,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/credit', () =>
         document_attachments: { data: { id: DOC, journal_entry_id: null }, error: null },
         idempotency_keys: { data: null, error: null },
       },
-      inserts,
-    ) as { from: (table: string) => unknown }
+    ).supabase as { from: (table: string) => unknown }
     const from = flexible.from
     mockServiceClient.mockReturnValue({
       ...flexible,
@@ -2286,18 +2222,13 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/credit', () =>
   })
 
   it('refuses a partial credit note with 400 SI_CREDIT_PARTIAL and writes nothing', async () => {
-    const inserts: InsertRecord[] = []
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase(
-        {
-          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-          supplier_invoices: { data: { ...registeredSI, total: 1250 }, error: null },
-          invoice_inbox_items: { data: inboxRow({ total: -500 }), error: null },
-          idempotency_keys: { data: null, error: null },
-        },
-        inserts,
-      ),
-    )
+    const mock = supabaseFor({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      supplier_invoices: { data: { ...registeredSI, total: 1250 }, error: null },
+      invoice_inbox_items: { data: inboxRow({ total: -500 }), error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock.supabase)
     const res = await creditSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/credit`, {
         method: 'POST',
@@ -2308,7 +2239,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/credit', () =>
     expect(res.status).toBe(400)
     const body = await res.json()
     expect(body.error.code).toBe('SI_CREDIT_PARTIAL')
-    expect(inserts.filter((i) => i.table === 'supplier_invoices')).toEqual([])
+    expect(mock.payloads('supplier_invoices', 'insert')).toEqual([])
     expect(mockedCredit).not.toHaveBeenCalled()
   })
 })
@@ -2317,7 +2248,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices honours defer_invo
   it('registers the SI WITHOUT the registration JE when the company defers booking', async () => {
     mockedReg.mockClear()
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: SAMPLE_SUPPLIER, error: null },
         company_settings: {
@@ -2328,7 +2259,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices honours defer_invo
         supplier_invoices: { data: SAMPLE_SI, error: null },
         supplier_invoice_items: { data: null, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await createSI(
@@ -2356,7 +2287,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices honours defer_invo
   // not only the privately paid one.
   it('warns REPRESENTATION_VAT_CAP on an ordinary invoice booked on 6071', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: SAMPLE_SUPPLIER, error: null },
         company_settings: {
@@ -2367,7 +2298,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices honours defer_invo
         supplier_invoices: { data: SAMPLE_SI, error: null },
         supplier_invoice_items: { data: null, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await createSI(

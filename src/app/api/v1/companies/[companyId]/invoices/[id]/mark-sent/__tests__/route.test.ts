@@ -52,37 +52,12 @@ import {
 } from '@/lib/bookkeeping/invoice-entries'
 import { ensureInvoiceNumber as mockedEnsureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { POST as markSent } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
 const mockCreateJournalEntry = mockedCreateEntry as ReturnType<typeof vi.fn>
 const mockEnsureInvoiceNumber = mockedEnsureInvoiceNumber as ReturnType<typeof vi.fn>
-
-type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
-  // Per-table queue: arrays return results in order across multiple calls
-  // to .from('table'); single values return the same result every time.
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const INVOICE_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -140,7 +115,7 @@ beforeEach(() => {
 describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
   it('transitions a draft invoice to sent and writes the journal entry id back', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         // First read: pre-flight (status=draft); second: post-update (status=sent).
         invoices: [
@@ -151,7 +126,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
           data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567' },
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await markSent(
@@ -177,10 +152,10 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
 
   it('returns 409 INVOICE_UPDATE_NOT_DRAFT when the invoice is already sent', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: { ...DRAFT_INVOICE, status: 'sent' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await markSent(
@@ -201,11 +176,11 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
     ['database error', { data: null, error: { message: 'connection reset' } }],
   ])('fails closed when company settings have a %s', async (_label, settingsResult) => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: DRAFT_INVOICE, error: null },
         company_settings: settingsResult,
-      }),
+      }).supabase,
     )
 
     const res = await markSent(
@@ -226,7 +201,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
     'rejects a %s invoice without a payment account before number allocation',
     async (currency) => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: { ...DRAFT_INVOICE, currency }, error: null },
         company_settings: {
@@ -237,7 +212,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
           },
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await markSent(
@@ -257,7 +232,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
 
   it('rejects issuance when the registered company has no VAT number', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: DRAFT_INVOICE, error: null },
         company_settings: {
@@ -270,7 +245,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
           },
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await markSent(
@@ -292,10 +267,10 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
     // so a sent delivery note still returns 400 (per the documented
     // contract) rather than 409 INVOICE_UPDATE_NOT_DRAFT.
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: { ...DRAFT_INVOICE, document_type: 'delivery_note', status: 'sent' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await markSent(
@@ -313,13 +288,13 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
 
   it('rejects credit notes (credited_invoice_id set) with VALIDATION_ERROR', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: {
           data: { ...DRAFT_INVOICE, credited_invoice_id: 'oldoldol-dold-4old-8old-oldoldoldoldold'.slice(0, 36) },
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await markSent(
@@ -337,10 +312,10 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
 
   it('rejects invoices with missing moms_ruta', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: { ...DRAFT_INVOICE, moms_ruta: null }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await markSent(
@@ -358,7 +333,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
 
   it('surfaces a warning in the response when journal entry creation fails', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: [
           { data: DRAFT_INVOICE, error: null },
@@ -368,7 +343,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
           data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567' },
           error: null,
         },
-      }),
+      }).supabase,
     )
     // Force the journal-entry generator to throw.
     mockCreateJournalEntry.mockRejectedValueOnce(new Error('Period closed'))
@@ -392,10 +367,10 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
 
   it('returns 404 when the invoice does not belong to the company', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await markSent(
@@ -412,9 +387,9 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
 
   it('returns 400 VALIDATION_ERROR when :id is not a UUID', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await markSent(
@@ -432,14 +407,14 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
 
   it('dry-run returns 200 + X-Dry-Run; no journal entry is created', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: DRAFT_INVOICE, error: null },
         company_settings: {
           data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567' },
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await markSent(
@@ -462,7 +437,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
 
   it('does NOT create a journal entry when accounting_method=cash', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: [
           { data: DRAFT_INVOICE, error: null },
@@ -472,7 +447,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
           data: { accounting_method: 'cash', entity_type: 'enskild_firma', bankgiro: '123-4567' },
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await markSent(
@@ -496,7 +471,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
       scopes: ['invoices:read'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
 
     const res = await markSent(
       makeMarkSentRequest(
@@ -512,9 +487,9 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
 
   it('rejects requests without Idempotency-Key', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
 
     const req = new Request(
@@ -535,7 +510,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
 describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent honours defer_invoice_booking (#967)', () => {
   it('marks sent WITHOUT a journal entry when the company defers booking', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: [
           { data: DRAFT_INVOICE, error: null },
@@ -550,7 +525,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent honours defer
           },
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await markSent(
@@ -568,7 +543,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent honours defer
 
   it('dry-run preview reports would_create_journal_entry=false when booking is deferred', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: DRAFT_INVOICE, error: null },
         company_settings: {
@@ -580,7 +555,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent honours defer
           },
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await markSent(

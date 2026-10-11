@@ -99,7 +99,6 @@ interface ExtensionContext {
   supabase: SupabaseClient         // Pre-authenticated
   emit(event: CoreEvent): Promise<void>  // Publish core events
   settings: ExtensionSettings      // get<T>(key?) / set<T>(key, value): extension_data, per company
-  storage: ExtensionStorage        // download / upload / getPublicUrl
   log: ExtensionLogger             // info / warn / error (scoped)
   services: ExtensionServices      // Core services (e.g., ingestTransactions)
 }
@@ -113,7 +112,6 @@ interface ExtensionContext {
 | `apiRoutes`: HTTP endpoints | [API Routes](references/api-routes.md) |
 | `services`: named functions for core | [Services](references/services-patterns.md) |
 | Workspace UI and settings panel (manifest `workspace`, `lib/extensions/settings-panel-registry.tsx`) | [Workspace & UI](references/workspace-ui.md) |
-| Other fields on the type (`settingsPanel`, `sidebarItems`, `mappingRuleTypes`, `onInstall`, ...) are declared but not read by core | [Extension Interface](references/extension-interface.md) |
 
 ## Common Mistakes
 

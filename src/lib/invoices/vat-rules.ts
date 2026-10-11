@@ -773,30 +773,6 @@ export function resolveInvoiceVatRules(
 }
 
 /**
- * Calculate VAT amount
- */
-export function calculateVat(subtotal: number, vatRate: number): number {
-  return Math.round(subtotal * vatRate) / 100
-}
-
-/**
- * Calculate total including VAT
- */
-export function calculateTotal(subtotal: number, vatRate: number): number {
-  return Math.round((subtotal + calculateVat(subtotal, vatRate)) * 100) / 100
-}
-
-/**
- * Format VAT rate for display
- */
-export function formatVatRate(rate: number): string {
-  if (rate === 0) {
-    return '0%'
-  }
-  return `${rate}%`
-}
-
-/**
  * Get VAT treatment label in Swedish
  */
 export function getVatTreatmentLabel(treatment: VatTreatment): string {
@@ -810,48 +786,4 @@ export function getVatTreatmentLabel(treatment: VatTreatment): string {
     exempt: 'Momsfritt',
   }
   return labels[treatment]
-}
-
-/**
- * Derive a display-friendly VAT summary from invoice line items.
- *
- * - If all items share a single rate → returns that rate's label and treatment
- * - If items have mixed rates → returns "Blandade momssatser" with null rate/treatment
- */
-export function getVatSummaryFromItems(
-  items: { vat_rate?: number | null }[]
-): { label: string; treatment: VatTreatment | null; rate: number | null; isMixed: boolean } {
-  const rates = new Set(items.map((item) => item.vat_rate ?? 0))
-
-  if (rates.size === 1) {
-    const rate = rates.values().next().value!
-    const treatment = getVatTreatmentForRate(rate)
-    return {
-      label: getVatTreatmentLabel(treatment),
-      treatment,
-      rate,
-      isMixed: false,
-    }
-  }
-
-  return {
-    label: 'Blandade momssatser',
-    treatment: null,
-    rate: null,
-    isMixed: true,
-  }
-}
-
-/**
- * Get moms ruta description
- */
-export function getMomsRutaDescription(ruta: string): string {
-  const descriptions: Record<string, string> = {
-    '05': 'Utgående moms 25%',
-    '06': 'Utgående moms 12%',
-    '07': 'Utgående moms 6%',
-    '39': 'Försäljning av tjänster till annat EU-land',
-    '40': 'Export utanför EU',
-  }
-  return descriptions[ruta] || ruta
 }

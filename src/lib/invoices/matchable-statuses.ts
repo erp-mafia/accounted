@@ -55,24 +55,6 @@ export function getSupplierInvoiceMatchTargetState(
 }
 
 /**
- * A candidate is matchable when its status is still open AND it has an
- * outstanding balance. Both columns are NOT NULL in the schema (migrations
- * 20240101000025 / 20260323120001), so a missing value cannot silently hide a
- * legitimate suggestion here.
- */
-export function isMatchableInvoice(
-  candidate: MatchCandidate | null | undefined,
-): boolean {
-  return getInvoiceMatchTargetState(candidate) === 'matchable'
-}
-
-export function isMatchableSupplierInvoice(
-  candidate: MatchCandidate | null | undefined,
-): boolean {
-  return getSupplierInvoiceMatchTargetState(candidate) === 'matchable'
-}
-
-/**
  * Statuses under which an invoice has NOT been issued: no document exists that
  * could serve as underlag for a verifikat. The schema says the same thing from
  * the other side (migration 20260427150000: an invoice outside these statuses

@@ -1,15 +1,9 @@
 import type {
   TICCompanyResponse,
   TICCompanyDocument,
-  TICBankgirot,
-  TICIndustryCode,
-  TICEmail,
-  TICPhone,
-  TICCompanyPurpose,
   TICDocument,
   TICFiscalYear,
   TICPayrollSummary,
-  TICSignatory,
   TICRepresentatives,
   TICCompanyStatusEntry,
   TICBeneficialOwnerResponse,
@@ -245,39 +239,6 @@ export async function searchCompaniesByName(
 }
 
 /**
- * Get bank accounts for a company. v2 narrows this endpoint to Bankgirot
- * numbers only (returns `Bankgironumber_Dto[]`); v1's IBAN / plusgiro
- * coverage is no longer available from this path.
- */
-export async function getBankAccounts(companyId: number): Promise<TICBankgirot[] | null> {
-  return ticApiFetch<TICBankgirot[]>(`/companies/${companyId}/bank-accounts`)
-}
-
-/**
- * Get industry codes for a company. v2 returns a discriminated array
- * (`CompanyIndustryCode_Dto[]`) covering both SNI 2007 and SNI 2025;
- * callers filter by `companyIndustryCodeType` for the version they want.
- */
-export async function getIndustryCodes(companyId: number): Promise<TICIndustryCode[] | null> {
-  return ticApiFetch<TICIndustryCode[]>(`/companies/${companyId}/industries`)
-}
-
-/** Get email addresses for a company. */
-export async function getEmails(companyId: number): Promise<TICEmail[] | null> {
-  return ticApiFetch<TICEmail[]>(`/companies/${companyId}/email-addresses`)
-}
-
-/** Get phone numbers for a company. */
-export async function getPhones(companyId: number): Promise<TICPhone[] | null> {
-  return ticApiFetch<TICPhone[]>(`/companies/${companyId}/phone-numbers`)
-}
-
-/** Get company purpose / verksamhetsbeskrivning. */
-export async function getCompanyPurpose(companyId: number): Promise<TICCompanyPurpose[] | null> {
-  return ticApiFetch<TICCompanyPurpose[]>(`/companies/${companyId}/purposes`)
-}
-
-/**
  * List all documents filed by the company (annual reports, audit reports,
  * articles of association, minutes, etc.). v2 replaces v1's
  * `/financial-report-summaries` with this broader endpoint. Filter the
@@ -305,16 +266,6 @@ export async function getFiscalYears(companyId: number): Promise<TICFiscalYear[]
  */
 export async function getPayrolls(companyId: number): Promise<TICPayrollSummary | null> {
   return ticApiFetch<TICPayrollSummary>(`/companies/${companyId}/payrolls`)
-}
-
-/**
- * Get firmateckning (signatory) rules for a company. v2 endpoint
- * (renamed from v1 `/signatories`). Free-form Swedish descriptions of
- * who can sign for the company; consumed by the AB invoice/årsredovisning
- * signer-pick flows.
- */
-export async function getSignatory(companyId: number): Promise<TICSignatory[] | null> {
-  return ticApiFetch<TICSignatory[]>(`/companies/${companyId}/signatory`)
 }
 
 /**

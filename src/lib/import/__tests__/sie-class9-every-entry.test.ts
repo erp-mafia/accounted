@@ -14,7 +14,6 @@
  * OBS posting against the bank.
  */
 import { describe, expect, it } from 'vitest'
-import type { SupabaseClient } from '@supabase/supabase-js'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
 import { SIEJobMappingsSchema } from '@/lib/api/schemas'
 import { suggestMappings, isSystemAccount, type MappableAccount } from '../account-mapper'
@@ -22,7 +21,7 @@ import { suggestSIEMappings } from '../sie-preview-mappings'
 import { parseSIEFile } from '../sie-parser'
 import { mergeParsedSIEFiles } from '../sie-merge'
 import { SIEJobValidationError, validateSIEJobInput } from '../sie-jobs'
-import { importVouchers } from '../sie-import'
+import { prepareSIEVouchers } from '../sie-import'
 import type { AccountMapping, SIEAccountMappingRecord } from '../types'
 
 const CHART = [
@@ -88,11 +87,11 @@ function uploadDecision(stored?: SIEAccountMappingRecord[]) {
   return suggestSIEMappings(parseSIEFile(FY2026), BAS_REFERENCE, stored).mappings
 }
 
-async function prepare(mappings: AccountMapping[]) {
+function prepare(mappings: AccountMapping[]) {
   const accountMap = new Map(mappings.map((m) => [m.sourceAccount, m.targetAccount]))
   const accountIds = new Map([...new Set(accountMap.values())].map((n) => [n, `acc-${n}`]))
-  return importVouchers({} as SupabaseClient, 'company-1', 'user-1', 'period-1', parseSIEFile(FY2026),
-    accountMap, 'A', 'import-1', { startOrdinal: 0, only: true, hasCurrentYearIb: true, accountIds })
+  return prepareSIEVouchers(parseSIEFile(FY2026), accountMap, 'A', 'import-1',
+    { startOrdinal: 0, hasCurrentYearIb: true, accountIds })
 }
 
 const target = (mappings: AccountMapping[], source: string) => mappings.find((m) => m.sourceAccount === source)?.targetAccount
@@ -123,19 +122,19 @@ describe('#3312: the class 9 decision on every entry', () => {
     expect(() => validateSIEJobInput(FY2026, parseSIEFile(FY2026), SIEJobMappingsSchema.parse(mappings), OPTIONS)).not.toThrow()
   })
 
-  it.each(STATES)('both paths prepare the same balanced verifikat with %s', async (_label, chart, stored) => {
-    const provider = await prepare(providerDecision(chart, stored))
-    const upload = await prepare(uploadDecision(stored))
+  it.each(STATES)('both paths prepare the same balanced verifikat with %s', (_label, chart, stored) => {
+    const provider = prepare(providerDecision(chart, stored))
+    const upload = prepare(uploadDecision(stored))
 
     // Nothing skipped, the source numbering kept, and the same lines either way.
     expect(provider.skippedDetails).toEqual([])
     expect(upload.skippedDetails).toEqual([])
-    const shape = (r: typeof provider) => (r.preparedEntries ?? []).map((e) => ({ id: e.sourceId, lines: e.lines.map((l) =>
+    const shape = (r: typeof provider) => r.preparedEntries.map((e) => ({ id: e.sourceId, lines: e.lines.map((l) =>
       [l.account_number, l.debit_amount, l.credit_amount]) }))
     expect(shape(provider)).toEqual(shape(upload))
     expect(shape(provider).map((e) => e.id)).toEqual(['A1', 'A2', 'A3'])
 
-    for (const entry of provider.preparedEntries ?? []) {
+    for (const entry of provider.preparedEntries) {
       const debit = entry.lines.reduce((s, l) => Math.round((s + l.debit_amount) * 100) / 100, 0)
       const credit = entry.lines.reduce((s, l) => Math.round((s + l.credit_amount) * 100) / 100, 0)
       expect(debit).toBe(credit)

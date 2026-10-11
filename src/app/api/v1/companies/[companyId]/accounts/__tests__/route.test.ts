@@ -22,40 +22,10 @@ vi.mock('@supabase/supabase-js', async () => {
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GET as listAccounts } from '../route'
 import { GET as listPeriods } from '../../fiscal-periods/route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-type MockResult = { data?: unknown; error?: unknown }
-type ChainCall = { table: string; method: string; args: unknown[] }
-function makeFlexibleSupabase(
-  byTable: Record<string, MockResult | MockResult[]>,
-  calls: ChainCall[] = [],
-) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (...args: unknown[]) => {
-          calls.push({ table, method: String(prop), args })
-          return buildChain(table)
-        }
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 
@@ -80,7 +50,7 @@ beforeEach(() => {
 describe('GET /api/v1/companies/:companyId/accounts', () => {
   it('returns active accounts by default', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         chart_of_accounts: {
           data: [
@@ -101,7 +71,7 @@ describe('GET /api/v1/companies/:companyId/accounts', () => {
           ],
           error: null,
         },
-      }),
+      }).supabase,
     )
     const res = await listAccounts(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/accounts`),
@@ -140,18 +110,15 @@ describe('GET /api/v1/companies/:companyId/accounts', () => {
       ...Array.from({ length: 289 }, (_, i) => makeAccount(2000 + i, 2000 + i === 2100 ? 0 : 2000 + i)),
       makeAccount(9998, null),
     ]
-    const calls: ChainCall[] = []
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase(
-        {
+    const { supabase, calls } = createTableMockSupabase({
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           chart_of_accounts: [
             { data: page1, error: null },
             { data: page2, error: null },
           ],
-        },
-        calls,
-      ),
+        })
+    mockServiceClient.mockReturnValue(
+      supabase,
     )
     const res = await listAccounts(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/accounts`),
@@ -173,15 +140,12 @@ describe('GET /api/v1/companies/:companyId/accounts', () => {
   })
 
   it('accepts class 9 and filters on account_class', async () => {
-    const calls: ChainCall[] = []
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase(
-        {
+    const { supabase, calls } = createTableMockSupabase({
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           chart_of_accounts: { data: [], error: null },
-        },
-        calls,
-      ),
+        })
+    mockServiceClient.mockReturnValue(
+      supabase,
     )
     const res = await listAccounts(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/accounts?class=9`),
@@ -193,9 +157,9 @@ describe('GET /api/v1/companies/:companyId/accounts', () => {
 
   it('rejects invalid class filter', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await listAccounts(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/accounts?class=10`),
@@ -211,7 +175,7 @@ describe('GET /api/v1/companies/:companyId/accounts', () => {
       scopes: ['invoices:read'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
     const res = await listAccounts(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/accounts`),
       { params: Promise.resolve({ companyId: COMPANY_ID }) },
@@ -223,7 +187,7 @@ describe('GET /api/v1/companies/:companyId/accounts', () => {
 describe('GET /api/v1/companies/:companyId/fiscal-periods', () => {
   it('returns fiscal periods sorted by period_start desc', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         fiscal_periods: {
           data: [
@@ -241,7 +205,7 @@ describe('GET /api/v1/companies/:companyId/fiscal-periods', () => {
           ],
           error: null,
         },
-      }),
+      }).supabase,
     )
     const res = await listPeriods(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/fiscal-periods`),

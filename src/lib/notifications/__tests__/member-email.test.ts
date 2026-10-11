@@ -22,7 +22,7 @@ vi.mock('@/lib/logger', () => ({
   }),
 }))
 
-import { resolveMemberEmail, resolveMemberEmails } from '../member-email'
+import { resolveMemberEmail } from '../member-email'
 
 interface QueryRecord {
   table: string
@@ -65,18 +65,11 @@ function makeSupabase(opts: {
         record.filters[key] = value
         return builder
       },
-      in: (key: string, value: unknown) => {
-        record.filters[key] = value
-        return builder
-      },
-      order: () => builder,
-      range: () => builder,
       maybeSingle: async () => {
         const r = result()
         const rows = r.data as Array<Record<string, unknown>> | null
         return { data: rows?.[0] ?? null, error: r.error }
       },
-      then: (resolve: (v: unknown) => void) => resolve(result()),
     })
     return builder
   }
@@ -145,55 +138,5 @@ describe('resolveMemberEmail', () => {
     })
     expect(await resolveMemberEmail(supabase, 'company-1', 'user-1')).toBeNull()
     expect(warnedWith('could not read profile email')).toBe(true)
-  })
-})
-
-describe('resolveMemberEmails', () => {
-  it('maps every member with a profile email, keyed by user id', async () => {
-    const { supabase, queries } = makeSupabase({
-      memberRows: [{ user_id: 'user-1' }, { user_id: 'user-2' }, { user_id: 'user-3' }],
-      profileRows: [
-        { id: 'user-1', email: 'owner@example.com' },
-        { id: 'user-2', email: 'revisor@byra.se' },
-        { id: 'user-3', email: null },
-      ],
-    })
-
-    const emails = await resolveMemberEmails(supabase, 'company-1')
-
-    expect(emails.get('user-1')).toBe('owner@example.com')
-    expect(emails.get('user-2')).toBe('revisor@byra.se')
-    expect(emails.has('user-3')).toBe(false)
-    const memberQuery = queries.find((q) => q.table === 'company_members')
-    expect(memberQuery?.columns).toBe('user_id')
-    const profileQuery = queries.find((q) => q.table === 'profiles')
-    expect(profileQuery?.columns).toBe('id, email')
-    expect(profileQuery?.filters).toMatchObject({ id: ['user-1', 'user-2', 'user-3'] })
-  })
-
-  it('returns an empty map for a company with no members (no profile query)', async () => {
-    const { supabase, queries } = makeSupabase({ memberRows: [] })
-    const emails = await resolveMemberEmails(supabase, 'company-1')
-    expect(emails.size).toBe(0)
-    expect(queries.some((q) => q.table === 'profiles')).toBe(false)
-  })
-
-  it('logs and returns an empty map on a member query error', async () => {
-    const { supabase } = makeSupabase({
-      membersError: { message: 'permission denied for table company_members' },
-    })
-    const emails = await resolveMemberEmails(supabase, 'company-1')
-    expect(emails.size).toBe(0)
-    expect(warnedWith('could not read company members')).toBe(true)
-  })
-
-  it('logs and returns an empty map on a profiles query error', async () => {
-    const { supabase } = makeSupabase({
-      memberRows: [{ user_id: 'user-1' }],
-      profilesError: { message: 'timeout' },
-    })
-    const emails = await resolveMemberEmails(supabase, 'company-1')
-    expect(emails.size).toBe(0)
-    expect(warnedWith('could not read member emails')).toBe(true)
   })
 })

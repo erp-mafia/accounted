@@ -200,37 +200,6 @@ export function generateNESRUSubmission(declaration: NEDeclaration): SRUSubmissi
   }
 }
 
-/** Validate the generated BLANKETTER.SRU content for the mandatory NE structure. */
-export function validateBlanketterSru(content: string): {
-  isValid: boolean
-  errors: string[]
-} {
-  const errors: string[] = []
-
-  if (!/^#BLANKETT NE-/m.test(content)) errors.push('Missing #BLANKETT NE- block')
-  if (!/^#IDENTITET /m.test(content)) errors.push('Missing #IDENTITET')
-  if (!/^#NAMN /m.test(content)) errors.push('Missing #NAMN')
-  // Räkenskapsårets datum are mandatory for income declarations; their absence is
-  // a level-2 rejection at Skatteverket, so catch it in the pre-flight.
-  if (!new RegExp(`^#UPPGIFT ${FISCAL_START_CODE} `, 'm').test(content)) {
-    errors.push(`Missing #UPPGIFT ${FISCAL_START_CODE} (räkenskapsårets början)`)
-  }
-  if (!new RegExp(`^#UPPGIFT ${FISCAL_END_CODE} `, 'm').test(content)) {
-    errors.push(`Missing #UPPGIFT ${FISCAL_END_CODE} (räkenskapsårets slut)`)
-  }
-  if (!/^#FIL_SLUT/m.test(content)) errors.push('Missing #FIL_SLUT terminator')
-
-  const blankettslutCount = (content.match(/^#BLANKETTSLUT/gm) || []).length
-  if (blankettslutCount !== 1) {
-    errors.push(`Expected 1 #BLANKETTSLUT, found ${blankettslutCount}`)
-  }
-
-  return {
-    isValid: errors.length === 0,
-    errors,
-  }
-}
-
 /** Get the ZIP filename for download. Uses the income year (fiscal year END) so the
  * filename matches the blankett type/identity for broken fiscal years. */
 export function getZipFilename(declaration: NEDeclaration): string {

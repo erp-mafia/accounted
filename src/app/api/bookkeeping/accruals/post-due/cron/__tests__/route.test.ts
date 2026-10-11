@@ -48,10 +48,7 @@ vi.mock('@/lib/bookkeeping/accruals/service', () => ({
 }))
 
 import { GET } from '../route'
-
-function cronRequest(): Request {
-  return new Request('http://localhost:3000/api/bookkeeping/accruals/post-due/cron')
-}
+import { createCronRequest } from '@/tests/helpers'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -72,7 +69,7 @@ describe('GET /api/bookkeeping/accruals/post-due/cron', () => {
       .mockResolvedValueOnce({ posted: 2, failed: 0, skipped: 0, errors: [] })
       .mockResolvedValueOnce({ posted: 1, failed: 0, skipped: 0, errors: [] })
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/bookkeeping/accruals/post-due/cron'))
     const json = await response.json()
 
     expect(mockPostDueInstallments).toHaveBeenCalledTimes(2)
@@ -101,7 +98,7 @@ describe('GET /api/bookkeeping/accruals/post-due/cron', () => {
     }
     mockPostDueInstallments.mockResolvedValue({ posted: 1, failed: 0, skipped: 0, errors: [] })
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/bookkeeping/accruals/post-due/cron'))
     const json = await response.json()
 
     expect(json.success).toBe(true)
@@ -121,7 +118,7 @@ describe('GET /api/bookkeeping/accruals/post-due/cron', () => {
       .mockRejectedValueOnce(new Error('database exploded'))
       .mockResolvedValueOnce({ posted: 1, failed: 0, skipped: 0, errors: [] })
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/bookkeeping/accruals/post-due/cron'))
     const json = await response.json()
 
     expect(json.success).toBe(true)
@@ -134,7 +131,7 @@ describe('GET /api/bookkeeping/accruals/post-due/cron', () => {
   it('returns 500 when the due query fails', async () => {
     installmentsResult = { data: null, error: { message: 'boom' } }
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/bookkeeping/accruals/post-due/cron'))
 
     expect(response.status).toBe(500)
     expect(mockPostDueInstallments).not.toHaveBeenCalled()
@@ -147,7 +144,7 @@ describe('GET /api/bookkeeping/accruals/post-due/cron', () => {
       NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     )
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/bookkeeping/accruals/post-due/cron'))
 
     expect(response.status).toBe(401)
     expect(mockPostDueInstallments).not.toHaveBeenCalled()

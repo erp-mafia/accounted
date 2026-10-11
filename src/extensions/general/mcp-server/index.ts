@@ -33,11 +33,6 @@ export const mcpServerExtension: Extension = {
   // without an inlined commit SHA. Same identifier as serverInfo.version.
   version: currentAppVersion() ?? '1.0.0',
 
-  settingsPanel: {
-    label: 'MCP-server (API)',
-    path: '/settings/api',
-  },
-
   apiRoutes: [
     {
       method: 'POST',

@@ -130,31 +130,6 @@ function InfoTooltip({
   )
 }
 
-interface InfoTextProps {
-  term: string
-  explanation: string
-  className?: string
-  termClassName?: string
-}
-
-/**
- * InfoText - Kombination av primär text med fackterm i parentes
- *
- * Användning:
- * <InfoText term="Enkla avdrag" explanation="schablonavdrag" />
- * Visar: "Enkla avdrag (schablonavdrag)"
- */
-function InfoText({ term, explanation, className, termClassName }: InfoTextProps) {
-  return (
-    <span className={className}>
-      {term}
-      <span className={cn('text-muted-foreground ml-1', termClassName)}>
-        ({explanation})
-      </span>
-    </span>
-  )
-}
-
 interface HelpLinkProps {
   href: string
   children: React.ReactNode
@@ -182,7 +157,6 @@ function HelpLink({ href, children, className, external = true }: HelpLinkProps)
 
 export {
   InfoTooltip,
-  InfoText,
   HelpLink,
   Tooltip,
   TooltipTrigger,

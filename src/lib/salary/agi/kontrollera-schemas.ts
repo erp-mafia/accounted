@@ -110,10 +110,3 @@ export const AGIKontrolleraIUSchema = z
       })
     }
   })
-
-/**
- * Hard cap on the raw JSON body for kontrollera endpoints. Even a fully
- * legal IU is < 4 KB serialised; 64 KB is a generous safety margin that
- * still trivially rejects pathological inputs before they reach Zod.
- */
-export const AGI_KONTROLLERA_MAX_BYTES = 64 * 1024

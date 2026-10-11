@@ -1,22 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { withNext, toToolError } from '../tool-result'
-
-describe('withNext', () => {
-  it('returns plain { data } when no hint provided', () => {
-    expect(withNext({ id: 'x' })).toEqual({ data: { id: 'x' } })
-  })
-
-  it('attaches next hint when provided', () => {
-    const result = withNext(
-      { id: 'x' },
-      { description: 'Send the invoice', tool: 'gnubok_send_invoice' }
-    )
-    expect(result).toEqual({
-      data: { id: 'x' },
-      next: { description: 'Send the invoice', tool: 'gnubok_send_invoice' },
-    })
-  })
-})
+import { toToolError } from '../tool-result'
 
 describe('toToolError', () => {
   it('produces structured error from arbitrary throw', () => {

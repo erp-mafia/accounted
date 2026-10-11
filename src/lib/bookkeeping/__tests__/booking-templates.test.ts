@@ -4,9 +4,6 @@ import type { EntityType } from '@/types'
 import {
   BOOKING_TEMPLATES,
   getTemplateById,
-  getTemplatesByGroup,
-  getTemplatesByMcc,
-  getTemplateGroups,
   searchTemplates,
   findMatchingTemplates,
   buildMappingResultFromTemplate,
@@ -161,51 +158,6 @@ describe('getTemplateById', () => {
 
   it('returns undefined for unknown ID', () => {
     expect(getTemplateById('nonexistent')).toBeUndefined()
-  })
-})
-
-describe('getTemplatesByGroup', () => {
-  it('returns templates for the premises group', () => {
-    const templates = getTemplatesByGroup('premises')
-    expect(templates.length).toBeGreaterThan(0)
-    for (const t of templates) {
-      expect(t.group).toBe('premises')
-    }
-  })
-
-  it('returns empty array for non-existent group', () => {
-    expect(getTemplatesByGroup('nonexistent' as never)).toEqual([])
-  })
-})
-
-describe('getTemplatesByMcc', () => {
-  it('returns templates for MCC 5541 (fuel)', () => {
-    const templates = getTemplatesByMcc(5541)
-    expect(templates.length).toBeGreaterThan(0)
-    expect(templates.some((t) => t.id === 'vehicle_fuel')).toBe(true)
-  })
-
-  it('returns empty array for unknown MCC', () => {
-    expect(getTemplatesByMcc(9999)).toEqual([])
-  })
-})
-
-describe('getTemplateGroups', () => {
-  it('returns all 20 groups', () => {
-    const groups = getTemplateGroups()
-    expect(groups).toHaveLength(20)
-    for (const g of groups) {
-      expect(g.group).toBeTruthy()
-      expect(g.label_sv).toBeTruthy()
-      expect(g.label_en).toBeTruthy()
-      expect(Array.isArray(g.templates)).toBe(true)
-    }
-  })
-
-  it('every template is in exactly one group', () => {
-    const groups = getTemplateGroups()
-    const allTemplates = groups.flatMap((g) => g.templates)
-    expect(allTemplates).toHaveLength(87)
   })
 })
 

@@ -1,6 +1,6 @@
 ---
 name: loop-regeluppdat
-description: Monthly loop that scans official Swedish sources for new or changed laws and rules affecting accounting/finance software (VAT, payroll, BFN standards, deadlines, BAS chart, e-invoicing), checks whether the codebase already handles each change, and files deduped GitHub issues for the gaps. Use monthly or on-demand via /loop-regeluppdat. Follows .claude/loops.md (propose-don't-merge, tickets only, no auto-fix).
+description: Monthly loop that scans official Swedish sources for new or changed laws and rules affecting accounting/finance software (VAT, payroll, BFN standards, deadlines, BAS chart, e-invoicing), checks whether the codebase already handles each change, and files deduped GitLab issues for the gaps. Use monthly or on-demand via /loop-regeluppdat. Follows .claude/loops.md (propose-don't-merge, tickets only, no auto-fix).
 ---
 
 # loop-regeluppdat
@@ -13,7 +13,7 @@ auto-fixing: tickets only. Read `.claude/loops.md` first.
 
 ## Preflight
 
-`gh auth status`, repo `erp-mafia/accounted`. If it fails, stop and report "environment not
+`glab auth status`, repo `arcim-technology-ab-group1/accounted`. If it fails, stop and report "environment not
 provisioned". Web access (WebSearch/WebFetch) must be available; without it, stop and report.
 
 ## 1. Due check (monthly semantics)

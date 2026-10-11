@@ -28,37 +28,11 @@ vi.mock('@supabase/supabase-js', async () => {
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GET as listTransactions } from '../route'
 import { GET as getTransaction } from '../[id]/route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
 
-type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (...args: unknown[]) => {
-          calls.push({ table, method: String(prop), args })
-          return buildChain(table)
-        }
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
-const calls: Array<{ table: string; method: string; args: unknown[] }> = []
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const TX_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -73,7 +47,6 @@ function makeRequest(url: string): Request {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  calls.length = 0
   mockValidate.mockResolvedValue({
     userId: USER_ID,
     companyId: COMPANY_ID,
@@ -86,7 +59,7 @@ beforeEach(() => {
 describe('GET /api/v1/companies/:companyId/transactions', () => {
   it('returns a list with pagination metadata', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: {
           data: [
@@ -94,7 +67,7 @@ describe('GET /api/v1/companies/:companyId/transactions', () => {
           ],
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await listTransactions(
@@ -111,7 +84,7 @@ describe('GET /api/v1/companies/:companyId/transactions', () => {
 
   it('passes cash_account_id through as a filter and returns it on each row', async () => {
     const CASH_ACCOUNT_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
-    const supabase = makeFlexibleSupabase({
+    const { supabase, calls } = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       transactions: {
         data: [
@@ -138,10 +111,10 @@ describe('GET /api/v1/companies/:companyId/transactions', () => {
 
   it('rejects a non-UUID cash_account_id filter with 400', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: { data: [], error: null },
-      }),
+      }).supabase,
     )
     const res = await listTransactions(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions?cash_account_id=1930`),
@@ -152,9 +125,9 @@ describe('GET /api/v1/companies/:companyId/transactions', () => {
 
   it('rejects invalid status filter with 400', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await listTransactions(
       makeRequest(
@@ -172,7 +145,7 @@ describe('GET /api/v1/companies/:companyId/transactions', () => {
       scopes: ['invoices:read'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
     const res = await listTransactions(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions`),
       { params: Promise.resolve({ companyId: COMPANY_ID }) },
@@ -184,13 +157,13 @@ describe('GET /api/v1/companies/:companyId/transactions', () => {
 describe('GET /api/v1/companies/:companyId/transactions/:id', () => {
   it('returns 200 with the transaction', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: {
           data: { id: TX_ID, date: '2026-05-12', amount: -100, currency: 'SEK' },
           error: null,
         },
-      }),
+      }).supabase,
     )
     const res = await getTransaction(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}`),
@@ -201,10 +174,10 @@ describe('GET /api/v1/companies/:companyId/transactions/:id', () => {
 
   it('returns 404 NOT_FOUND for unknown id', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const res = await getTransaction(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}`),
@@ -215,9 +188,9 @@ describe('GET /api/v1/companies/:companyId/transactions/:id', () => {
 
   it('rejects non-UUID id with 400', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
     const res = await getTransaction(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions/not-a-uuid`),

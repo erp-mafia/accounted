@@ -28,14 +28,12 @@ vi.mock('@/lib/auth/require-write', () => ({
 }))
 
 const mockGetVatRules = vi.fn()
-const mockCalculateVat = vi.fn()
 const mockGetAvailableVatRates = vi.fn()
 vi.mock('@/lib/invoices/vat-rules', async () => {
   const actual = await vi.importActual<typeof import('@/lib/invoices/vat-rules')>('@/lib/invoices/vat-rules')
   return {
     getVatRules: (...args: unknown[]) => mockGetVatRules(...args),
     deriveInvoiceVatHeader: actual.deriveInvoiceVatHeader,
-    calculateVat: (...args: unknown[]) => mockCalculateVat(...args),
     getAvailableVatRates: (...args: unknown[]) => mockGetAvailableVatRates(...args),
     // The builder gates on the permitted set (taxed-where-performed exceptions);
     // these route tests only care that the gate reads the stubbed rates.
@@ -54,7 +52,6 @@ vi.mock('@/lib/invoices/vat-rules', async () => {
             permittedRates: mockGetAvailableVatRates(customer.customer_type, customer.vat_number_validated, customer.country),
             explainFromCustomer: true,
           },
-    calculateTotal: vi.fn(),
     // Real: the warnings channel is what the response-shape test below pins.
     explainVatTreatment: actual.explainVatTreatment,
   }
@@ -245,7 +242,6 @@ describe('POST /api/invoices (create invoice)', () => {
       details: { cash_account_id: VALID_UUID_2, currency: 'SEK', reason: 'not_payee' },
     })
     mockGetVatRules.mockReturnValue({ treatment: 'standard_25', rate: 25, momsRuta: '10', reverseChargeText: null })
-    mockCalculateVat.mockReturnValue(250)
 
     const request = createMockRequest('/api/invoices', {
       method: 'POST',
@@ -311,7 +307,6 @@ describe('POST /api/invoices (create invoice)', () => {
       momsRuta: '10',
       reverseChargeText: null,
     })
-    mockCalculateVat.mockReturnValue(2500)
     mockGetAvailableVatRates.mockReturnValue([
       { rate: 25, label: '25%', treatment: 'standard_25' },
       { rate: 12, label: '12%', treatment: 'reduced_12' },
@@ -367,7 +362,6 @@ describe('POST /api/invoices (create invoice)', () => {
     const createdInvoice = makeInvoice({ id: 'inv-1', invoice_number: null })
 
     mockGetVatRules.mockReturnValue({ treatment: 'standard_25', rate: 25, momsRuta: '05', reverseChargeText: null })
-    mockCalculateVat.mockReturnValue(2500)
     mockGetAvailableVatRates.mockReturnValue([
       { rate: 25, label: '25%', treatment: 'standard_25' },
       { rate: 0, label: '0% (momsfri)', treatment: 'exempt' },
@@ -416,7 +410,6 @@ describe('POST /api/invoices (create invoice)', () => {
       momsRuta: '10',
       reverseChargeText: null,
     })
-    mockCalculateVat.mockReturnValue(2500)
     mockGetAvailableVatRates.mockReturnValue([
       { rate: 25, label: '25%', treatment: 'standard_25' },
       { rate: 12, label: '12%', treatment: 'reduced_12' },
@@ -468,7 +461,6 @@ describe('POST /api/invoices (create invoice)', () => {
       momsRuta: '10',
       reverseChargeText: null,
     })
-    mockCalculateVat.mockReturnValue(2500)
     mockGetAvailableVatRates.mockReturnValue([
       { rate: 25, label: '25%', treatment: 'standard_25' },
       { rate: 12, label: '12%', treatment: 'reduced_12' },
@@ -512,7 +504,6 @@ describe('POST /api/invoices (create invoice)', () => {
       momsRuta: '10',
       reverseChargeText: null,
     })
-    mockCalculateVat.mockReturnValue(2500)
     mockGetAvailableVatRates.mockReturnValue([
       { rate: 25, label: '25%', treatment: 'standard_25' },
       { rate: 12, label: '12%', treatment: 'reduced_12' },
@@ -940,7 +931,6 @@ describe('POST /api/invoices (create credit note)', () => {
       momsRuta: '10',
       reverseChargeText: null,
     })
-    mockCalculateVat.mockReturnValue(2500)
     mockGetAvailableVatRates.mockReturnValue([
       { rate: 25, label: '25%', treatment: 'standard_25' },
       { rate: 12, label: '12%', treatment: 'reduced_12' },

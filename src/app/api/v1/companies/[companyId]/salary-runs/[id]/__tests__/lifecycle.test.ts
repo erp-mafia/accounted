@@ -75,58 +75,10 @@ import { POST as markPaid } from '../mark-paid/route'
 import { POST as book } from '../book/route'
 import { SalaryRunPartiallyBookedError } from '@/lib/salary/salary-entries'
 import { POST as generateAgi } from '../generate-agi/route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-interface TableResp {
-  data?: unknown
-  error?: unknown
-  count?: number | null
-}
-
-function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) {
-  const queues = new Map<string, TableResp[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  // Every chained call in order, so a test can assert filters and payloads.
-  const calls: Array<{ table: string; method: string; args: unknown[] }> = []
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (...args: unknown[]) => {
-          calls.push({ table, method: String(prop), args })
-          return buildChain(table)
-        }
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  // The generate-agi route also hits supabase.auth.admin.getUserById; stub
-  // that so the helper-mock path doesn't trip on auth.
-  return {
-    calls,
-    // RPCs answer from the 'rpc:<name>' key, like a table.
-    rpc: vi.fn((fn: string, args?: unknown) => {
-      calls.push({ table: `rpc:${fn}`, method: 'rpc', args: [args] })
-      return buildChain(`rpc:${fn}`)
-    }),
-    from: vi.fn((table: string) => buildChain(table)),
-    auth: {
-      admin: {
-        getUserById: vi.fn().mockResolvedValue({ data: { user: { email: 'caller@test' } } }),
-      },
-    },
-  }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const RUN_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
@@ -175,7 +127,7 @@ describe('POST /salary-runs/:id/calculate', () => {
       total_avgifter: 32991, total_employer_cost: 137991,
     }
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: [
           { data: draftRun, error: null }, // pre-flight read
@@ -183,7 +135,7 @@ describe('POST /salary-runs/:id/calculate', () => {
         ],
         salary_run_employees: { data: [], error: null }, // for F-skatt scan
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     mocks.runSalaryCalculation.mockResolvedValue({
       ok: true,
@@ -206,11 +158,11 @@ describe('POST /salary-runs/:id/calculate', () => {
 
   it('refuses to calculate a non-draft run (state-machine enforcement)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: { id: RUN_ID, status: 'review' }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await calculate(
@@ -230,11 +182,11 @@ describe('POST /salary-runs/:id/calculate', () => {
   it('strict-mode: helper failure aborts before the status flip', async () => {
     const draftRun = { id: RUN_ID, status: 'draft', period_year: 2026, period_month: 5, payment_date: '2026-05-25' }
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: draftRun, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     mocks.runSalaryCalculation.mockResolvedValue({
       ok: false,
@@ -257,11 +209,11 @@ describe('POST /salary-runs/:id/calculate', () => {
 
   it('returns a dry-run preview without invoking the helper', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: { id: RUN_ID, status: 'draft' }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await calculate(
@@ -297,7 +249,7 @@ describe('POST /salary-runs/:id/approve', () => {
       },
     }
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: [
           { data: { id: RUN_ID, status: 'review' }, error: null },
@@ -305,7 +257,7 @@ describe('POST /salary-runs/:id/approve', () => {
         ],
         salary_run_employees: { data: [validEmployee], error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await approve(
@@ -338,12 +290,12 @@ describe('POST /salary-runs/:id/approve', () => {
       },
     }
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: { id: RUN_ID, status: 'review' }, error: null },
         salary_run_employees: { data: [noBankEmployee], error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await approve(
@@ -372,12 +324,12 @@ describe('POST /salary-runs/:id/approve', () => {
       },
     }
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: { id: RUN_ID, status: 'review' }, error: null },
         salary_run_employees: { data: [unpayableEmployee], error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await approve(
@@ -399,11 +351,11 @@ describe('POST /salary-runs/:id/approve', () => {
 
   it('refuses to approve a non-review run', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: { id: RUN_ID, status: 'draft' }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await approve(
@@ -426,14 +378,14 @@ describe('POST /salary-runs/:id/approve', () => {
 describe('POST /salary-runs/:id/mark-paid', () => {
   it('advances approved → paid', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: [
           { data: { id: RUN_ID, status: 'approved' }, error: null },
           { data: { id: RUN_ID, status: 'paid', paid_at: '2026-05-25T08:00:00Z' }, error: null },
         ],
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await markPaid(
@@ -450,11 +402,11 @@ describe('POST /salary-runs/:id/mark-paid', () => {
 
   it('refuses to mark a non-approved run as paid', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: { id: RUN_ID, status: 'review' }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await markPaid(
@@ -505,7 +457,7 @@ describe('POST /salary-runs/:id/book', () => {
 
   it('books a paid run and surfaces the audit block', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: [
           { data: paidRun, error: null }, // status precheck
@@ -522,7 +474,7 @@ describe('POST /salary-runs/:id/book', () => {
         salary_run_employees: { data: [employeeRow], error: null },
         'rpc:claim_salary_run_booking': { data: BOOKING_CLAIM, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     mocks.checkPeriodLock.mockResolvedValue({ locked: false })
     mocks.createSalaryRunEntries.mockResolvedValue({
@@ -580,7 +532,7 @@ describe('POST /salary-runs/:id/book', () => {
       avgifter_category: 'standard',
     }
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: [
           { data: paidRun, error: null },
@@ -597,7 +549,7 @@ describe('POST /salary-runs/:id/book', () => {
         salary_run_employees: { data: [overriddenRow, fSkattRow], error: null },
         'rpc:claim_salary_run_booking': { data: BOOKING_CLAIM, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     mocks.checkPeriodLock.mockResolvedValue({ locked: false })
     mocks.createSalaryRunEntries.mockResolvedValue({
@@ -636,7 +588,7 @@ describe('POST /salary-runs/:id/book', () => {
 
   it('books a run without arbetsgivaravgifter: no avgifter entry, avgifter_entry_id null', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: [
           { data: { ...paidRun, total_avgifter: 0 }, error: null },
@@ -653,7 +605,7 @@ describe('POST /salary-runs/:id/book', () => {
         salary_run_employees: { data: [{ ...employeeRow, avgifter_amount: 0 }], error: null },
         'rpc:claim_salary_run_booking': { data: BOOKING_CLAIM, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     mocks.checkPeriodLock.mockResolvedValue({ locked: false })
     mocks.createSalaryRunEntries.mockResolvedValue({
@@ -678,11 +630,11 @@ describe('POST /salary-runs/:id/book', () => {
 
   it('returns PERIOD_LOCKED before invoking the engine when payment_date is locked', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: paidRun, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     mocks.checkPeriodLock.mockResolvedValue({
       locked: true,
@@ -705,13 +657,13 @@ describe('POST /salary-runs/:id/book', () => {
 
   it('strict-mode: engine throw aborts before any state mutation', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: paidRun, error: null },
         salary_run_employees: { data: [employeeRow], error: null },
         'rpc:claim_salary_run_booking': { data: BOOKING_CLAIM, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     mocks.checkPeriodLock.mockResolvedValue({ locked: false })
     mocks.createSalaryRunEntries.mockRejectedValue(new Error('Insufficient BAS account'))
@@ -730,13 +682,13 @@ describe('POST /salary-runs/:id/book', () => {
 
   it('answers 409 SALARY_RUN_PARTIALLY_BOOKED with the vouchers to reverse when the run has posted vouchers that do not match', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: paidRun, error: null },
         salary_run_employees: { data: [employeeRow], error: null },
         'rpc:claim_salary_run_booking': { data: BOOKING_CLAIM, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
     mocks.checkPeriodLock.mockResolvedValue({ locked: false })
     mocks.createSalaryRunEntries.mockRejectedValue(
@@ -758,11 +710,11 @@ describe('POST /salary-runs/:id/book', () => {
 
   it('refuses to book a non-paid run', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: { ...paidRun, status: 'approved' }, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await book(
@@ -845,7 +797,7 @@ describe('POST /salary-runs/:id/book: one booking per run at a time', () => {
 
   it('401 when the API key is rejected', async () => {
     mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
 
     expect((await post()).status).toBe(401)
     expect(mocks.createSalaryRunEntries).not.toHaveBeenCalled()
@@ -853,11 +805,11 @@ describe('POST /salary-runs/:id/book: one booking per run at a time', () => {
 
   it('404 SALARY_RUN_NOT_FOUND for a run outside the company', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: { data: null, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await post()
@@ -868,7 +820,7 @@ describe('POST /salary-runs/:id/book: one booking per run at a time', () => {
   })
 
   it('claims the run before posting and flips it only for the claim holder', async () => {
-    const supabase = makeFlexibleSupabase({
+    const mock = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       salary_runs: [
         { data: paidRun, error: null },
@@ -878,16 +830,16 @@ describe('POST /salary-runs/:id/book: one booking per run at a time', () => {
       'rpc:claim_salary_run_booking': { data: BOOKING_CLAIM, error: null },
       idempotency_keys: { data: null, error: null },
     })
-    mockServiceClient.mockReturnValue(supabase)
+    mockServiceClient.mockReturnValue(mock.supabase)
 
     const res = await post()
 
     expect(res.status).toBe(200)
-    expect(supabase.rpc).toHaveBeenCalledWith('claim_salary_run_booking', {
+    expect(mock.supabase.rpc).toHaveBeenCalledWith('claim_salary_run_booking', {
       p_company_id: COMPANY_ID,
       p_salary_run_id: RUN_ID,
     })
-    const flip = updateFilters(supabase.calls, (payload) => payload.status === 'booked')
+    const flip = updateFilters(mock.calls, (payload) => payload.status === 'booked')
     expect(flip).toEqual(
       expect.arrayContaining([
         ['company_id', COMPANY_ID],
@@ -896,16 +848,16 @@ describe('POST /salary-runs/:id/book: one booking per run at a time', () => {
         ['booking_claim_id', BOOKING_CLAIM],
       ]),
     )
-    const flipPayload = supabase.calls.find(
+    const flipPayload = mock.calls.find(
       (c) => c.table === 'salary_runs' && c.method === 'update',
     )?.args[0] as Record<string, unknown>
     expect(flipPayload).toMatchObject({ booking_claim_id: null, booking_claimed_at: null })
     // Booked: the flip cleared the claim, so there is nothing to release.
-    expect(supabase.calls.filter((c) => c.table === 'salary_runs' && c.method === 'update')).toHaveLength(1)
+    expect(mock.calls.filter((c) => c.table === 'salary_runs' && c.method === 'update')).toHaveLength(1)
   })
 
   it('409 SALARY_RUN_BOOKING_IN_PROGRESS and posts nothing while another call holds the run', async () => {
-    const supabase = makeFlexibleSupabase({
+    const mock = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       // precheck reads paid, the post-refusal re-read still reads paid
       salary_runs: { data: paidRun, error: null },
@@ -913,7 +865,7 @@ describe('POST /salary-runs/:id/book: one booking per run at a time', () => {
       'rpc:claim_salary_run_booking': { data: null, error: null },
       idempotency_keys: { data: null, error: null },
     })
-    mockServiceClient.mockReturnValue(supabase)
+    mockServiceClient.mockReturnValue(mock.supabase)
 
     const res = await post()
 
@@ -921,12 +873,12 @@ describe('POST /salary-runs/:id/book: one booking per run at a time', () => {
     const body = await res.json()
     expect(body.error.code).toBe('SALARY_RUN_BOOKING_IN_PROGRESS')
     expect(mocks.createSalaryRunEntries).not.toHaveBeenCalled()
-    expect(supabase.calls.some((c) => c.table === 'salary_runs' && c.method === 'update')).toBe(false)
+    expect(mock.calls.some((c) => c.table === 'salary_runs' && c.method === 'update')).toBe(false)
   })
 
   it('answers SALARY_RUN_BOOK_NOT_PAID when a concurrent call booked the run after the precheck', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: [
           { data: paidRun, error: null }, // precheck: still paid
@@ -935,7 +887,7 @@ describe('POST /salary-runs/:id/book: one booking per run at a time', () => {
         salary_run_employees: { data: [employeeRow], error: null },
         'rpc:claim_salary_run_booking': { data: null, error: null },
         idempotency_keys: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await post()
@@ -948,21 +900,21 @@ describe('POST /salary-runs/:id/book: one booking per run at a time', () => {
   })
 
   it('releases the claim when the engine throws, so the caller can retry at once', async () => {
-    const supabase = makeFlexibleSupabase({
+    const mock = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       salary_runs: { data: paidRun, error: null },
       salary_run_employees: { data: [employeeRow], error: null },
       'rpc:claim_salary_run_booking': { data: BOOKING_CLAIM, error: null },
       idempotency_keys: { data: null, error: null },
     })
-    mockServiceClient.mockReturnValue(supabase)
+    mockServiceClient.mockReturnValue(mock.supabase)
     mocks.createSalaryRunEntries.mockRejectedValue(new Error('Insufficient BAS account'))
 
     const res = await post()
 
     expect(res.status).toBe(500)
     const release = updateFilters(
-      supabase.calls,
+      mock.calls,
       (payload) => payload.status === undefined && payload.booking_claim_id === null,
     )
     expect(release).toEqual([
@@ -973,7 +925,7 @@ describe('POST /salary-runs/:id/book: one booking per run at a time', () => {
   })
 
   it('releases the claim and reports the lost claim when the flip matches no row', async () => {
-    const supabase = makeFlexibleSupabase({
+    const mock = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       salary_runs: [
         { data: paidRun, error: null },
@@ -983,7 +935,7 @@ describe('POST /salary-runs/:id/book: one booking per run at a time', () => {
       'rpc:claim_salary_run_booking': { data: BOOKING_CLAIM, error: null },
       idempotency_keys: { data: null, error: null },
     })
-    mockServiceClient.mockReturnValue(supabase)
+    mockServiceClient.mockReturnValue(mock.supabase)
 
     const res = await post()
 
@@ -994,7 +946,7 @@ describe('POST /salary-runs/:id/book: one booking per run at a time', () => {
     // The release is conditional on this call's token, so it never touches a
     // claim another call has taken since.
     const release = updateFilters(
-      supabase.calls,
+      mock.calls,
       (payload) => payload.status === undefined && payload.booking_claim_id === null,
     )
     expect(release).toEqual([
@@ -1005,7 +957,7 @@ describe('POST /salary-runs/:id/book: one booking per run at a time', () => {
   })
 
   it('answers a database error and posts nothing when the claim itself fails', async () => {
-    const supabase = makeFlexibleSupabase({
+    const mock = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       salary_runs: { data: paidRun, error: null },
       salary_run_employees: { data: [employeeRow], error: null },
@@ -1015,13 +967,13 @@ describe('POST /salary-runs/:id/book: one booking per run at a time', () => {
       },
       idempotency_keys: { data: null, error: null },
     })
-    mockServiceClient.mockReturnValue(supabase)
+    mockServiceClient.mockReturnValue(mock.supabase)
 
     const res = await post()
 
     expect(res.status).toBeGreaterThanOrEqual(500)
     expect(mocks.createSalaryRunEntries).not.toHaveBeenCalled()
-    expect(supabase.calls.some((c) => c.table === 'salary_runs' && c.method === 'update')).toBe(false)
+    expect(mock.calls.some((c) => c.table === 'salary_runs' && c.method === 'update')).toBe(false)
   })
 })
 
@@ -1030,9 +982,16 @@ describe('POST /salary-runs/:id/book: one booking per run at a time', () => {
 // ────────────────────────────────────────────────────────────────────
 
 describe('POST /salary-runs/:id/generate-agi', () => {
+  // The route also reads the caller's email through auth.admin.getUserById.
+  const agiClient = (byTable: Parameters<typeof createTableMockSupabase>[0]) => {
+    const { supabase } = createTableMockSupabase(byTable)
+    const getUserById = vi.fn().mockResolvedValue({ data: { user: { email: 'caller@test' } } })
+    return { ...supabase, auth: { ...supabase.auth, admin: { getUserById } } }
+  }
+
   it('returns the XML embedded in the v1 envelope', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      agiClient({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         idempotency_keys: { data: null, error: null },
       }),
@@ -1071,7 +1030,7 @@ describe('POST /salary-runs/:id/generate-agi', () => {
 
   it('surfaces AGI_GENERATE_NOT_BOOKABLE when the run is in draft', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      agiClient({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         idempotency_keys: { data: null, error: null },
       }),
@@ -1098,7 +1057,7 @@ describe('POST /salary-runs/:id/generate-agi', () => {
 
   it('surfaces AGI_INCOMPLETE_DATA with missing_fields when company contact info is missing', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      agiClient({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         idempotency_keys: { data: null, error: null },
       }),

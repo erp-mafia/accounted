@@ -10,7 +10,6 @@ import { NextResponse } from 'next/server'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { z } from 'zod'
 import {
-  uploadDocument,
   createPendingDocumentUpload,
   completePendingDocumentUpload,
 } from '@/lib/core/documents/document-service'
@@ -19,7 +18,7 @@ import { validateBody } from '@/lib/api/validate'
 import { hasErrorEntry } from '@/lib/errors/structured-errors'
 import { dbError } from '@/lib/errors/db-error'
 import { matchSupplierId } from '@/lib/suppliers/match-supplier'
-import { extractInvoiceFields, ExtractionSchema, emptyResult, fetchOwnCompanyIdentity } from './lib/extract-invoice-fields'
+import { extractInvoiceFields, fetchOwnCompanyIdentity } from './lib/extract-invoice-fields'
 import { mirrorExtractionToDocument } from './lib/mirror-extraction'
 import {
   uploadAndExtract,
@@ -27,10 +26,7 @@ import {
   sanitiseFilename,
   sanitiseMime,
   isSandboxCompany,
-  countPdfPages,
-  slicePdfForExtraction,
   MAX_FILE_SIZE,
-  maxPagesForAutoExtract,
   UPLOAD_ALLOWED_MIME_TYPES,
   EMAIL_ALLOWED_MIME_TYPES,
   ensureHtmlDocument,
@@ -98,7 +94,7 @@ import type { Transaction, EntityType } from '@/types'
 import { createLogger } from '@/lib/logger'
 import { fetchPurchasesWithoutUnderlag } from '@/lib/transactions/purchases-without-underlag'
 import { sessionFailureResponse } from '@/lib/operations/session'
-import { matchInboxItemSupplier, matchInboxItemTransaction } from '@/lib/documents/inbox-match'
+import { matchInboxItemTransaction } from '@/lib/documents/inbox-match'
 import type { OperationContext } from '@/lib/operations/types'
 import {
   deleteInboxItem,
@@ -160,8 +156,6 @@ const CompleteSignedUploadSchema = z.object({
   upload_id: z.string().uuid(),
   file_name: z.string().trim().min(1).max(255),
   mime_type: z.string().trim().min(1).max(120),
-  matched_transaction_id: z.string().uuid().nullable().optional(),
-  skip_extraction: z.boolean().optional(),
 })
 
 /**
@@ -334,17 +328,6 @@ export const invoiceInboxExtension: Extension = {
 
         const formData = await request.formData()
         const file = formData.get('file') as File | null
-        const matchedTransactionIdRaw = formData.get('matched_transaction_id')
-        const matchedTransactionId =
-          typeof matchedTransactionIdRaw === 'string' && matchedTransactionIdRaw.length > 0
-            ? matchedTransactionIdRaw
-            : null
-        // Opt-out of the built-in Claude/Bedrock OCR. Agents with their own
-        // extraction pipeline upload the document, get the inbox row, then
-        // PUT /items/:id/extracted-data with their parsed fields.
-        const skipExtraction =
-          formData.get('skip_extraction') === 'true' ||
-          formData.get('skip_extraction') === '1'
 
         if (!file) return errorResponseFromCode('INBOX_UPLOAD_NO_FILE', ctx.log)
         if (file.size > MAX_FILE_SIZE) {
@@ -360,34 +343,13 @@ export const invoiceInboxExtension: Extension = {
           })
         }
 
-        // Validate matched_transaction_id belongs to this company before we
-        // spend the AI extraction budget. RLS would also catch a mismatch on
-        // the insert, but failing fast gives a clearer error and lets the
-        // caller distinguish "your context_ref pointed at a tx you don't own"
-        // from a generic upload failure.
-        if (matchedTransactionId) {
-          const { data: tx, error: txErr } = await ctx.supabase
-            .from('transactions')
-            .select('id')
-            .eq('id', matchedTransactionId)
-            .eq('company_id', ctx.companyId)
-            .maybeSingle()
-          if (txErr) {
-            return NextResponse.json({ error: txErr.message }, { status: 500 })
-          }
-          if (!tx) {
-            return errorResponseFromCode('INBOX_UPLOAD_TX_NOT_IN_COMPANY', ctx.log)
-          }
-        }
-
         try {
           const buffer = await file.arrayBuffer()
           // Staged upload: the row lands as 'processing' and the response
           // returns before Bedrock runs; the deferred worker (or the sweep
           // cron) flips it to 'received'. Only this web route defers: email
           // and WhatsApp ingestion already run in background contexts and
-          // consume the returned item synchronously. When skipExtraction is
-          // set the call stays synchronous (see uploadAndExtract).
+          // consume the returned item synchronously.
           const result = await uploadAndExtract(
             ctx.supabase,
             ctx.userId,
@@ -395,8 +357,8 @@ export const invoiceInboxExtension: Extension = {
             { name: file.name, buffer, type: file.type },
             'upload',
             undefined,
-            matchedTransactionId,
-            { skipExtraction, deferExtraction: true },
+            null,
+            { deferExtraction: true },
           )
           return NextResponse.json({ data: result })
         } catch (error) {
@@ -512,8 +474,6 @@ export const invoiceInboxExtension: Extension = {
         const parsed = await validateBody(request, CompleteSignedUploadSchema)
         if (!parsed.success) return parsed.response
         const { upload_id: uploadId, file_name: fileName, mime_type: mimeType } = parsed.data
-        const matchedTransactionId = parsed.data.matched_transaction_id ?? null
-        const skipExtraction = parsed.data.skip_extraction === true
 
         // The declared type drives the magic-byte check on completion, so
         // it is gated exactly like the multipart route's file.type.
@@ -523,25 +483,6 @@ export const invoiceInboxExtension: Extension = {
             messageSv: `Filtypen stöds inte: ${mimeType}. Tillåtna format: PDF, JPEG, PNG, HEIC och WebP.`,
             messageEn: `Unsupported file type: ${mimeType}. Allowed: PDF, JPEG, PNG, HEIC, WebP.`,
           })
-        }
-
-        // Same ownership check as /upload: fail fast with a clear code
-        // rather than letting RLS reject the insert after extraction.
-        if (matchedTransactionId) {
-          const { data: tx, error: txErr } = await ctx.supabase
-            .from('transactions')
-            .select('id')
-            .eq('id', matchedTransactionId)
-            .eq('company_id', ctx.companyId)
-            .maybeSingle()
-          if (txErr) {
-            return errorResponse(txErr, ctx.log, { requestId: ctx.requestId })
-          }
-          if (!tx) {
-            return errorResponseFromCode('INBOX_UPLOAD_TX_NOT_IN_COMPANY', ctx.log, {
-              requestId: ctx.requestId,
-            })
-          }
         }
 
         try {
@@ -578,8 +519,8 @@ export const invoiceInboxExtension: Extension = {
             { name: fileName, buffer: completed.buffer, type: mimeType },
             'upload',
             undefined,
-            matchedTransactionId,
-            { skipExtraction, deferExtraction: true },
+            null,
+            { deferExtraction: true },
           )
           return NextResponse.json({ data: result })
         } catch (error) {
@@ -733,42 +674,6 @@ export const invoiceInboxExtension: Extension = {
       },
     },
 
-    // ── Get processing_history timeline for an inbox item ───
-    {
-      method: 'GET',
-      path: '/items/:id/history',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-        const url = new URL(request.url)
-        const id = url.searchParams.get('_id')
-        if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
-
-        const { data: item } = await ctx.supabase
-          .from('invoice_inbox_items')
-          .select('id, correlation_id, company_id')
-          .eq('id', id)
-          .eq('company_id', ctx.companyId)
-          .maybeSingle()
-
-        if (!item) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-        if (!item.correlation_id) {
-          return NextResponse.json({ data: { events: [] } })
-        }
-
-        const { data: events, error } = await ctx.supabase
-          .from('processing_history')
-          .select('event_id, event_type, occurred_at, payload, actor, causation_id')
-          .eq('company_id', ctx.companyId)
-          .eq('correlation_id', item.correlation_id)
-          .order('occurred_at', { ascending: true })
-          .limit(100)
-
-        if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-        return NextResponse.json({ data: { events: events ?? [] } })
-      },
-    },
-
     // ── Which invoice a credit note in the inbox credits ────
     // Issue #2980: a supplier's credit note is handled by crediting the
     // invoice it references (POST /api/supplier-invoices/:id/credit with the
@@ -913,322 +818,6 @@ export const invoiceInboxExtension: Extension = {
         }
 
         const outcome = await updateInboxItemFields(operationContext(ctx), id, body)
-        if (!outcome.ok) return sessionFailureResponse(outcome, extensionLog, ctx.requestId ?? '')
-        if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
-        return NextResponse.json({ data: outcome.data })
-      },
-    },
-
-    // ── Replace extracted_data wholesale (BYO extraction) ────
-    // Used by agents that ran their own OCR/extraction pipeline. Validates
-    // the full InvoiceExtractionResult shape via the same Zod schema that
-    // gates Bedrock output, so downstream consumers (UI, supplier-invoice
-    // creation) cannot tell apart agent-supplied from AI-extracted data.
-    {
-      method: 'PUT',
-      path: '/items/:id/extracted-data',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-        const url = new URL(request.url)
-        const id = url.searchParams.get('_id')
-        if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
-
-        // Rate-limit BYO extraction the same way fresh uploads are limited:
-        // both paths inject extracted_data into invoice_inbox_items, so an
-        // unbounded BYO loop is the same abuse surface as an upload flood
-        // (ISO 27001 A.8.12, data-injection guard).
-        const rl = await checkInboxUploadRateLimit(ctx.supabase, ctx.companyId)
-        if (!rl.ok) {
-          return NextResponse.json(
-            { error: `För många förfrågningar, försök igen om en stund.` },
-            {
-              status: 429,
-              headers: rl.retryAfterSec ? { 'Retry-After': String(rl.retryAfterSec) } : undefined,
-            }
-          )
-        }
-
-        let extracted: InvoiceExtractionResult
-        try {
-          const json = await request.json()
-          // ExtractionSchema doesn't include `confidence` (the AI path tacks
-          // it on after parsing). BYO data gets 0.95 so downstream UI can
-          // distinguish it from a perfect AI parse: financial-data
-          // provenance per ISO 27001 A.8.12.
-          const parsed = ExtractionSchema.parse(json)
-          extracted = { ...parsed, confidence: 0.95 }
-        } catch (err) {
-          return NextResponse.json(
-            { error: err instanceof Error ? err.message : 'Invalid extracted_data shape' },
-            { status: 400 }
-          )
-        }
-
-        const { data: item } = await ctx.supabase
-          .from('invoice_inbox_items')
-          .select('id, company_id, created_supplier_invoice_id')
-          .eq('id', id)
-          .eq('company_id', ctx.companyId)
-          .maybeSingle()
-
-        if (!item) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-        // Explicit tenant boundary assertion alongside the .eq filter
-        // (V4.5.1 defense-in-depth). Surfaces any future change that
-        // accidentally bypasses the where-clause.
-        if (item.company_id !== ctx.companyId) {
-          return NextResponse.json({ error: 'Not found' }, { status: 404 })
-        }
-        if (item.created_supplier_invoice_id) {
-          return NextResponse.json(
-            { error: 'Posten är redan kopplad till en leverantörsfaktura och kan inte ändras.' },
-            { status: 409 }
-          )
-        }
-
-        // Re-run supplier match so the agent's parsed fields trigger the
-        // same auto-link the AI path uses. Skipped if no key is present.
-        const matchedSupplierId = await matchSupplierId(
-          ctx.supabase,
-          ctx.companyId,
-          extracted.supplier,
-        )
-
-        const { data: updated, error: updateError } = await ctx.supabase
-          .from('invoice_inbox_items')
-          .update({
-            extracted_data: extracted as unknown as Record<string, unknown>,
-            matched_supplier_id: matchedSupplierId,
-          })
-          .eq('id', id)
-          .eq('company_id', ctx.companyId)
-          .select('id, extracted_data, matched_supplier_id')
-          .single()
-
-        if (updateError) {
-          return NextResponse.json({ error: updateError.message }, { status: 500 })
-        }
-
-        // Audit the BYO override so financial-data provenance is traceable
-        // (GDPR Art. 5(1)(f), SOC 2 CC9.2). Failure logged but never blocks
-        // the response: the override has already happened.
-        try {
-          await appendProcessingHistory({
-            companyId: ctx.companyId,
-            correlationId: id,
-            aggregateType: 'Document',
-            aggregateId: id,
-            eventType: 'DocumentExtractionOverridden',
-            payload: {
-              inbox_item_id: id,
-              channel: 'rest_api',
-              has_supplier_org_number: extracted.supplier.orgNumber != null,
-              has_invoice_number: extracted.invoice.invoiceNumber != null,
-              extracted_total: extracted.totals.total,
-              matched_supplier_id: matchedSupplierId,
-            },
-            actor: { type: 'user', id: ctx.userId },
-            occurredAt: new Date(),
-          })
-        } catch (auditErr) {
-          console.error('[invoice-inbox] Failed to append DocumentExtractionOverridden:', auditErr)
-        }
-
-        return NextResponse.json({ data: updated })
-      },
-    },
-
-    // ── Attach a source document to an existing inbox item ──
-    {
-      method: 'POST',
-      path: '/items/:id/attach-document',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-        const url = new URL(request.url)
-        const id = url.searchParams.get('_id')
-        if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
-
-        const formData = await request.formData()
-        const file = formData.get('file') as File | null
-        if (!file) return errorResponseFromCode('INBOX_UPLOAD_NO_FILE', ctx.log)
-        if (file.size > MAX_FILE_SIZE) {
-          return errorResponseFromCode('INBOX_UPLOAD_TOO_LARGE', ctx.log, {
-            messageSv: `Filen är för stor. Maxstorlek är ${MAX_FILE_SIZE / 1024 / 1024} MB.`,
-            messageEn: `File exceeds the ${MAX_FILE_SIZE / 1024 / 1024} MB size limit.`,
-          })
-        }
-        if (!UPLOAD_ALLOWED_MIME_TYPES.has(file.type)) {
-          return errorResponseFromCode('INBOX_UPLOAD_UNSUPPORTED_TYPE', ctx.log, {
-            messageSv: `Filtypen stöds inte: ${file.type || 'okänd'}. Tillåtna format: PDF, JPEG, PNG, HEIC och WebP.`,
-            messageEn: `Unsupported file type: ${file.type || 'unknown'}. Allowed: PDF, JPEG, PNG, HEIC, WebP.`,
-          })
-        }
-
-        const { data: item } = await ctx.supabase
-          .from('invoice_inbox_items')
-          .select('id, document_id, status, correlation_id, created_supplier_invoice_id')
-          .eq('id', id)
-          .eq('company_id', ctx.companyId)
-          .maybeSingle()
-
-        if (!item) return NextResponse.json({ error: 'Inbox item not found' }, { status: 404 })
-        if (item.created_supplier_invoice_id) {
-          return NextResponse.json({ error: 'Redan bokfört, kan inte ersätta bilden.' }, { status: 409 })
-        }
-        if (item.document_id) {
-          return NextResponse.json({ error: 'Posten har redan en bilaga.' }, { status: 409 })
-        }
-
-        try {
-          const buffer = await file.arrayBuffer()
-          const doc = await uploadDocument(ctx.supabase, ctx.userId, ctx.companyId, {
-            name: file.name,
-            buffer,
-            type: file.type,
-          }, {
-            upload_source: 'file_upload',
-            // This route extracts below and mirrors the outcome onto the
-            // document row; the document-extraction extension must not race it.
-            extractionOwner: 'invoice-inbox',
-          })
-
-          // Same page handling as /upload (issue #553): long PDFs extract
-          // from a slice (first pages + the last page); the skip only remains
-          // for unsliceable (encrypted/malformed) PDFs. Sandbox companies
-          // skip Bedrock unconditionally.
-          const mimeType = doc.mime_type ?? file.type
-          const maxAutoExtractPages = maxPagesForAutoExtract()
-          const pageCount =
-            mimeType === 'application/pdf' ? await countPdfPages(buffer) : null
-          const gatedByPageCount =
-            pageCount != null && pageCount > maxAutoExtractPages
-          const sandbox = await isSandboxCompany(ctx.supabase, ctx.companyId)
-          // Paid-tier gate: no `ai` capability → no Bedrock OCR (seed empty
-          // skeleton; the attached document is still stored). Same paywall as
-          // the shared upload path above.
-          const hasAiEntitlement = await hasCapability(ctx.supabase, ctx.companyId, CAPABILITY.ai)
-          const slicedBuffer =
-            gatedByPageCount && hasAiEntitlement && !sandbox
-              ? await slicePdfForExtraction(buffer, maxAutoExtractPages)
-              : null
-          const skipReason: 'no_ai_entitlement' | 'too_many_pages' | 'sandbox' | null =
-            !hasAiEntitlement
-              ? 'no_ai_entitlement'
-              : sandbox
-                ? 'sandbox'
-                : gatedByPageCount && slicedBuffer == null
-                  ? 'too_many_pages'
-                  : null
-          const skipExtraction = skipReason !== null
-
-          const extraction = skipExtraction
-            ? { data: emptyResult(), rawText: null, model: null, skipped: null }
-            : await extractInvoiceFields({
-                buffer: Buffer.from(slicedBuffer ?? buffer),
-                mimeType,
-                fileName: file.name,
-                ownCompany: await fetchOwnCompanyIdentity(ctx.supabase, ctx.companyId),
-              })
-          const { data: extracted } = extraction
-          if (!skipExtraction && slicedBuffer != null && pageCount != null) {
-            extracted.pages = { total: pageCount, analyzed: maxAutoExtractPages }
-          }
-          await mirrorExtractionToDocument(doc.id, {
-            data: extracted,
-            rawText: extraction.rawText,
-            model: extraction.model ?? null,
-            skipped: skipReason ?? extraction.skipped ?? null,
-          })
-
-          const { error: linkError } = await ctx.supabase
-            .from('invoice_inbox_items')
-            .update({
-              document_id: doc.id,
-              extracted_data: extracted as unknown as Record<string, unknown>,
-              extraction_skipped: skipExtraction,
-            })
-            .eq('id', id)
-            .eq('company_id', ctx.companyId)
-          if (linkError) {
-            return NextResponse.json({ error: linkError.message }, { status: 500 })
-          }
-
-          if (item.correlation_id) {
-            try {
-              await appendProcessingHistory({
-                companyId: ctx.companyId,
-                correlationId: item.correlation_id,
-                aggregateType: 'Document',
-                aggregateId: doc.id,
-                eventType: 'DocumentIngested',
-                payload: {
-                  channel: 'upload',
-                  document_id: doc.id,
-                  inbox_item_id: id,
-                  mime_type: mimeType,
-                  size_bytes: file.size,
-                  attached_to_existing: true,
-                },
-                actor: { type: 'user', id: ctx.userId },
-                occurredAt: new Date(),
-              })
-            } catch (err) {
-              console.error('[invoice-inbox/attach-document] appendProcessingHistory failed:', err)
-            }
-          }
-
-          return NextResponse.json({
-            data: {
-              document_id: doc.id,
-              inbox_item_id: id,
-              extracted_data: extracted,
-              extraction_skipped: skipExtraction,
-              skip_reason: skipReason,
-              page_count: pageCount,
-            },
-          })
-        } catch (error) {
-          console.error('[invoice-inbox/attach-document] Failed:', error)
-          // Same pass-through rationale as the /upload catch above.
-          const message = error instanceof Error && error.message.trim() ? error.message : null
-          return NextResponse.json(
-            {
-              error: {
-                code: 'INBOX_ATTACH_FAILED',
-                message: message ?? 'Bilagan kunde inte kopplas. Försök igen.',
-                message_en: message ?? 'Failed to attach the document.',
-              },
-            },
-            { status: 500 }
-          )
-        }
-      },
-    },
-
-    // ── Match a supplier to an inbox item ───────────────────
-    // Rules in lib/documents/inbox-match.ts (v1: inbox-items.match-supplier).
-    {
-      method: 'POST',
-      path: '/items/:id/match-supplier',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-        const url = new URL(request.url)
-        const id = url.searchParams.get('_id')
-        if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
-
-        let body: { supplier_id?: string }
-        try {
-          body = await request.json()
-        } catch {
-          return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
-        }
-        if (!body.supplier_id || typeof body.supplier_id !== 'string') {
-          return NextResponse.json({ error: 'supplier_id required' }, { status: 400 })
-        }
-
-        const outcome = await matchInboxItemSupplier(operationContext(ctx), id, body.supplier_id)
         if (!outcome.ok) return sessionFailureResponse(outcome, extensionLog, ctx.requestId ?? '')
         if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
         return NextResponse.json({ data: outcome.data })

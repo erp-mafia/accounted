@@ -2,15 +2,9 @@ import type { Extension } from '@/lib/extensions/types'
 import { NextResponse } from 'next/server'
 import {
   searchCompanyByOrgNumber,
-  getBankAccounts,
-  getIndustryCodes,
-  getEmails,
-  getPhones,
-  getCompanyPurpose,
   getCompanyDocuments,
   getFiscalYears,
   getPayrolls,
-  getSignatory,
   getRepresentatives,
   getCompanyStatus,
   getBeneficialOwners,

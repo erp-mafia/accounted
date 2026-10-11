@@ -4,8 +4,6 @@ import {
   MATCHABLE_SUPPLIER_INVOICE_STATUSES,
   getInvoiceMatchTargetState,
   getSupplierInvoiceMatchTargetState,
-  isMatchableInvoice,
-  isMatchableSupplierInvoice,
 } from '../matchable-statuses'
 
 // These lists must stay in lockstep with the CAS guards in
@@ -85,57 +83,57 @@ describe('invoice match target states', () => {
   })
 })
 
-describe('isMatchableInvoice', () => {
+describe('getInvoiceMatchTargetState: matchable', () => {
   it('accepts an open invoice with an outstanding balance', () => {
-    expect(isMatchableInvoice({ status: 'sent', remaining_amount: 1250 })).toBe(true)
-    expect(isMatchableInvoice({ status: 'partially_paid', remaining_amount: 20 })).toBe(true)
-    expect(isMatchableInvoice({ status: 'overdue', remaining_amount: 1 })).toBe(true)
+    expect(getInvoiceMatchTargetState({ status: 'sent', remaining_amount: 1250 })).toBe('matchable')
+    expect(getInvoiceMatchTargetState({ status: 'partially_paid', remaining_amount: 20 })).toBe('matchable')
+    expect(getInvoiceMatchTargetState({ status: 'overdue', remaining_amount: 1 })).toBe('matchable')
   })
 
   // The reported bug: an invoice settled by a different transaction keeps
   // status 'paid' / remaining 0, and the dialog measured the bank amount
   // against that 0 and called it a partial payment.
   it('rejects a fully paid invoice', () => {
-    expect(isMatchableInvoice({ status: 'paid', remaining_amount: 0 })).toBe(false)
+    expect(getInvoiceMatchTargetState({ status: 'paid', remaining_amount: 0 })).not.toBe('matchable')
   })
 
   it('rejects an open status whose balance is already zero', () => {
-    expect(isMatchableInvoice({ status: 'sent', remaining_amount: 0 })).toBe(false)
+    expect(getInvoiceMatchTargetState({ status: 'sent', remaining_amount: 0 })).not.toBe('matchable')
   })
 
   it('rejects non-payable statuses', () => {
-    expect(isMatchableInvoice({ status: 'draft', remaining_amount: 500 })).toBe(false)
-    expect(isMatchableInvoice({ status: 'cancelled', remaining_amount: 500 })).toBe(false)
+    expect(getInvoiceMatchTargetState({ status: 'draft', remaining_amount: 500 })).not.toBe('matchable')
+    expect(getInvoiceMatchTargetState({ status: 'cancelled', remaining_amount: 500 })).not.toBe('matchable')
   })
 
   it('rejects a missing or malformed candidate rather than assuming matchable', () => {
-    expect(isMatchableInvoice(null)).toBe(false)
-    expect(isMatchableInvoice(undefined)).toBe(false)
-    expect(isMatchableInvoice({})).toBe(false)
-    expect(isMatchableInvoice({ status: 'sent' })).toBe(false)
-    expect(isMatchableInvoice({ status: 'sent', remaining_amount: null })).toBe(false)
+    expect(getInvoiceMatchTargetState(null)).not.toBe('matchable')
+    expect(getInvoiceMatchTargetState(undefined)).not.toBe('matchable')
+    expect(getInvoiceMatchTargetState({})).not.toBe('matchable')
+    expect(getInvoiceMatchTargetState({ status: 'sent' })).not.toBe('matchable')
+    expect(getInvoiceMatchTargetState({ status: 'sent', remaining_amount: null })).not.toBe('matchable')
   })
 })
 
-describe('isMatchableSupplierInvoice', () => {
+describe('getSupplierInvoiceMatchTargetState: matchable', () => {
   it('accepts the open supplier states', () => {
-    expect(isMatchableSupplierInvoice({ status: 'registered', remaining_amount: 549 })).toBe(true)
-    expect(isMatchableSupplierInvoice({ status: 'approved', remaining_amount: 549 })).toBe(true)
-    expect(isMatchableSupplierInvoice({ status: 'overdue', remaining_amount: 549 })).toBe(true)
-    expect(isMatchableSupplierInvoice({ status: 'partially_paid', remaining_amount: 49 })).toBe(true)
+    expect(getSupplierInvoiceMatchTargetState({ status: 'registered', remaining_amount: 549 })).toBe('matchable')
+    expect(getSupplierInvoiceMatchTargetState({ status: 'approved', remaining_amount: 549 })).toBe('matchable')
+    expect(getSupplierInvoiceMatchTargetState({ status: 'overdue', remaining_amount: 549 })).toBe('matchable')
+    expect(getSupplierInvoiceMatchTargetState({ status: 'partially_paid', remaining_amount: 49 })).toBe('matchable')
   })
 
   it('rejects paid and credited targets, matching MATCH_SI_ALREADY_PAID', () => {
-    expect(isMatchableSupplierInvoice({ status: 'paid', remaining_amount: 0 })).toBe(false)
-    expect(isMatchableSupplierInvoice({ status: 'credited', remaining_amount: 0 })).toBe(false)
+    expect(getSupplierInvoiceMatchTargetState({ status: 'paid', remaining_amount: 0 })).not.toBe('matchable')
+    expect(getSupplierInvoiceMatchTargetState({ status: 'credited', remaining_amount: 0 })).not.toBe('matchable')
   })
 
   it('rejects a zero balance even on an open status', () => {
-    expect(isMatchableSupplierInvoice({ status: 'registered', remaining_amount: 0 })).toBe(false)
+    expect(getSupplierInvoiceMatchTargetState({ status: 'registered', remaining_amount: 0 })).not.toBe('matchable')
   })
 
   it('rejects a missing candidate', () => {
-    expect(isMatchableSupplierInvoice(null)).toBe(false)
-    expect(isMatchableSupplierInvoice({})).toBe(false)
+    expect(getSupplierInvoiceMatchTargetState(null)).not.toBe('matchable')
+    expect(getSupplierInvoiceMatchTargetState({})).not.toBe('matchable')
   })
 })

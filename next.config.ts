@@ -99,7 +99,9 @@ const nextConfig: NextConfig = {
   // reader for Office files: its prebuilt .node binary must be required at
   // runtime, never bundled. unpdf (pdf.js, pure JavaScript) is kept external
   // too, so the hosted function runs the same files Node runs in the tests
-  // rather than a re-bundled copy of pdf.js.
+  // rather than a re-bundled copy of pdf.js. heic-convert is external, so
+  // Node loads its heic-decode and libheif-js (WebAssembly) from node_modules
+  // with it; they need no entries of their own.
   //
   // The Bedrock SDK (lib/ai/provider) is external as well: bundling it splits
   // its AWS SDK / @smithy dependency tree across server chunks, and on
@@ -107,9 +109,10 @@ const nextConfig: NextConfig = {
   // ("Two or more assets with different content were emitted to the same
   // output path"), which failed every production build from main. Loaded
   // from node_modules at runtime, the AWS SDK never enters the bundle.
-  serverExternalPackages: ['@firecrawl/anydoc', 'unpdf', 'heic-convert', 'heic-decode', 'libheif-js', '@anthropic-ai/bedrock-sdk'],
+  serverExternalPackages: ['@firecrawl/anydoc', 'unpdf', 'heic-convert', '@anthropic-ai/bedrock-sdk'],
   experimental: {
-    optimizePackageImports: ['recharts', 'date-fns', 'framer-motion'],
+    // recharts and date-fns are on Next's built-in list already.
+    optimizePackageImports: ['framer-motion'],
     // Client router cache for dynamic routes: a page visited in the last
     // 30 s (back/forward, re-clicking a nav item) re-renders from the cached
     // RSC payload instead of a new server request through the auth proxy.
@@ -175,6 +178,25 @@ const nextConfig: NextConfig = {
         source: '/bookkeeping',
         has: [{ type: 'query', key: 'tab', value: 'accounts' }],
         destination: '/chart-of-accounts',
+        permanent: false,
+      },
+      // Addresses without a page of their own. Temporary, as the page-level
+      // redirect() they replace was; the request's query string is forwarded.
+      {
+        source: '/settings',
+        destination: '/settings/company',
+        permanent: false,
+      },
+      // The Stripe connect/sync surface moved to the import page (2026-07).
+      {
+        source: '/settings/payments',
+        destination: '/import?mode=stripe',
+        permanent: false,
+      },
+      // The Inköp landing until 2026-09-09: the invoice list says more.
+      {
+        source: '/purchases',
+        destination: '/supplier-invoices',
         permanent: false,
       },
       // Docs canonicalised to docs.accounted.se. Every `docs_url` field on the

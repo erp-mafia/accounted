@@ -2,14 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('../lib/tic-client', () => ({
   searchCompanyByOrgNumber: vi.fn(),
-  // The handler no longer calls these: kept mocked so the import doesn't
-  // throw and so we can assert below that they're NOT invoked.
-  getBankAccounts: vi.fn(),
-  getIndustryCodes: vi.fn(),
-  getEmails: vi.fn(),
-  getPhones: vi.fn(),
-  getCompanyPurpose: vi.fn(),
-  getSignatory: vi.fn(),
   getCompanyDocuments: vi.fn(),
   getFiscalYears: vi.fn(),
   getPayrolls: vi.fn(),
@@ -21,15 +13,9 @@ vi.mock('../lib/tic-client', () => ({
 import { ticExtension } from '../index'
 import {
   searchCompanyByOrgNumber,
-  getBankAccounts,
-  getIndustryCodes,
-  getEmails,
-  getPhones,
-  getCompanyPurpose,
   getCompanyDocuments,
   getFiscalYears,
   getPayrolls,
-  getSignatory,
   getRepresentatives,
   getCompanyStatus,
   getBeneficialOwners,
@@ -37,12 +23,6 @@ import {
 import type { TICCompanyDocument } from '../lib/tic-types'
 
 const mockSearch = vi.mocked(searchCompanyByOrgNumber)
-const mockBank = vi.mocked(getBankAccounts)
-const mockIndustries = vi.mocked(getIndustryCodes)
-const mockEmails = vi.mocked(getEmails)
-const mockPhones = vi.mocked(getPhones)
-const mockPurpose = vi.mocked(getCompanyPurpose)
-const mockSignatory = vi.mocked(getSignatory)
 const mockDocuments = vi.mocked(getCompanyDocuments)
 const mockFiscalYears = vi.mocked(getFiscalYears)
 const mockPayrolls = vi.mocked(getPayrolls)
@@ -252,20 +232,6 @@ describe('TIC profile route', () => {
       { type: 'bankgiro', accountNumber: '1234567', bic: null },
     ])
     expect(data.fetchedAt).toBeDefined()
-  })
-
-  it('does NOT fan out to bank/industries/emails/phones/purposes/signatory anymore', async () => {
-    mockSearch.mockResolvedValue(mockDoc)
-    mockKeptSupplementary()
-
-    await profileHandler(makeRequest('556036-0793'))
-
-    expect(mockBank).not.toHaveBeenCalled()
-    expect(mockIndustries).not.toHaveBeenCalled()
-    expect(mockEmails).not.toHaveBeenCalled()
-    expect(mockPhones).not.toHaveBeenCalled()
-    expect(mockPurpose).not.toHaveBeenCalled()
-    expect(mockSignatory).not.toHaveBeenCalled()
   })
 
   it('maps activityStatus to "ceased" when isCeased is true', async () => {

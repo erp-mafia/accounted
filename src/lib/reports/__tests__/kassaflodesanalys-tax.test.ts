@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { generateKassaflodesanalys } from '../kassaflodesanalys'
 import { generateTrialBalance } from '../trial-balance'
 import { CashFlowTaxAllocationError } from '../cash-flow-tax'
@@ -157,9 +157,6 @@ function makeClient(fixture: Fixture) {
   })
   return { from, rpc } as unknown as Parameters<typeof generateKassaflodesanalys>[0]
 }
-
-beforeEach(() => { vi.stubEnv('REPORTS_TB_RPC', 'on') })
-afterEach(() => { vi.unstubAllEnvs() })
 
 describe('cash-flow tax verification against balanced journal fixtures', () => {
   it.each(fixtures)('$name', async (fixture) => {

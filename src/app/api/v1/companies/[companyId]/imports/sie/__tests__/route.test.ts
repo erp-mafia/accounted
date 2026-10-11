@@ -37,33 +37,10 @@ vi.mock('@/lib/import/sie-job-worker', () => ({runSIEWorker:vi.fn()}))
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { SIEJobValidationError } from '@/lib/import/sie-jobs'
 import { POST } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 
@@ -115,10 +92,10 @@ beforeEach(() => {
     id: 'op-1', job_state: 'queued', fiscal_period_id: 'fp-1',
   })
   mockServiceClient.mockReturnValue(
-    makeFlexibleSupabase({
+    createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       sie_account_mappings: { data: [], error: null },
-    }),
+    }).supabase,
   )
 })
 
@@ -212,10 +189,10 @@ describe('POST /imports/sie', () => {
   })
 
   it('replaces a stored class 9 target for an account carrying amounts', async () => {
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({
+    mockServiceClient.mockReturnValue(createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       sie_account_mappings: { data: [{ source_account: '9999', source_name: 'OBS-konto', target_account: '9999', confidence: 1, match_type: 'exact' }], error: null },
-    }))
+    }).supabase)
 
     const res = await callRoute(undefined, WITH_OBS)
 

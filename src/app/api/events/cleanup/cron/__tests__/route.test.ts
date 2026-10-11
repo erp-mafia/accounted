@@ -44,10 +44,7 @@ vi.mock('@/lib/supabase/server', () => ({
 }))
 
 import { GET } from '../route'
-
-function cronRequest(): Request {
-  return new Request('http://localhost:3000/api/events/cleanup/cron')
-}
+import { createCronRequest } from '@/tests/helpers'
 
 function daysAgo(iso: string): number {
   return (Date.now() - new Date(iso).getTime()) / 86_400_000
@@ -66,7 +63,7 @@ describe('GET /api/events/cleanup/cron', () => {
       { error: null, count: 3 },
     ]
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/events/cleanup/cron'))
     const json = await response.json()
 
     expect(json).toEqual({
@@ -99,7 +96,7 @@ describe('GET /api/events/cleanup/cron', () => {
   it('short-circuits with an error envelope when the delivery pass fails', async () => {
     deleteResults = [{ error: { message: 'boom', code: 'XX000' }, count: null }]
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/events/cleanup/cron'))
 
     expect(response.status).toBeGreaterThanOrEqual(500)
     // The 180-day pass never ran.

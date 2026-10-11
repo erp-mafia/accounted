@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { validateSwedishPersonalNumber } from '@/lib/extensions/validation'
+import { validatePersonnummer } from '@/lib/salary/personnummer-format'
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -71,11 +71,10 @@ function filingReleaseEnabled(): boolean {
 /**
  * Resolve the effective Bolagsverket environment for a company.
  *
- * The generic extension settings endpoint
- * (app/api/extensions/[sector]/[slug]/settings) PATCHes ONE JSON blob into
- * extension_data under extension_id 'general/bolagsverket', key 'settings':
- * not per-key rows under this extension's dispatcher id: so read that row
- * directly rather than via ctx.settings.
+ * The setting lives as ONE JSON blob in extension_data under extension_id
+ * 'general/bolagsverket', key 'settings' (written by the generic extension
+ * settings endpoint, since removed): not per-key rows under this extension's
+ * dispatcher id: so read that row directly rather than via ctx.settings.
  *
  * Validation: the value must be one of test|accept|prod and must not exceed
  * the BOLAGSVERKET_ENV ceiling (a member with settings access must not be
@@ -198,7 +197,13 @@ const noContextResponse = () =>
 const PersonnummerSchema = z
   .string()
   .regex(/^\d{12}$/, 'Personnummer ska normaliseras till 12 siffror')
-  .refine((value) => validateSwedishPersonalNumber(value) === null, 'Ogiltigt personnummer')
+  // validatePersonnummer allows birth years up to 2100; a signatory is born
+  // no later than this year.
+  .refine(
+    (value) =>
+      validatePersonnummer(value).valid && Number(value.slice(0, 4)) <= new Date().getFullYear(),
+    'Ogiltigt personnummer',
+  )
   .refine((value) => {
     const year = Number(value.slice(0, 4))
     const month = Number(value.slice(4, 6))
@@ -235,7 +240,6 @@ export const bolagsverketExtension: Extension = {
   id: 'bolagsverket',
   name: 'Bolagsverket: digital årsredovisning',
   version: '1.0.0',
-  settingsPanel: { label: 'Bolagsverket', path: '/settings/extensions' },
   apiRoutes: [
     {
       method: 'GET',

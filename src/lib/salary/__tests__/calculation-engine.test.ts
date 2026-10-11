@@ -1,14 +1,11 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   calculateSalary,
-  calculateKarensavdrag,
-  calculateSjuklon,
   calculateAvgifterRate,
-  calculateVacationAccrual,
   prorateBaseSalaryForPeriod,
 } from '../calculation-engine'
-import { calculateVacationPay } from '../absence-calculator'
 import { recurringLineFlags } from '../recurring-lines'
+import { dailyDivisor } from '../work-schedule'
 import { roundOre } from '@/lib/money'
 import type { PayrollConfig } from '../payroll-config'
 import type { TaxTableRate } from '../tax-tables'
@@ -757,18 +754,6 @@ describe('kollektivavtal semesterlön rate (vacationPayRate, #2477)', () => {
     expect(withRate.vacationAccrual).toBe(without.vacationAccrual)
     expect(withRate.vacationCompensation).toBe(0)
   })
-
-  it('calculateVacationAccrual honours the rate too', () => {
-    const r = calculateVacationAccrual({
-      monthlySalary: 40000,
-      vacationRule: 'procentregeln',
-      vacationDaysPerYear: 25,
-      semestertillaggRate: 0.0043,
-      vacationPayRate: 0.135,
-      vacationBasis: 40000,
-    })
-    expect(r.accrual).toBe(roundOre(40000 * 0.135))
-  })
 })
 
 describe('hardening: vacation rule contract', () => {
@@ -942,7 +927,7 @@ describe('hardening: sammalöneregeln', () => {
     expect(r.vacationAccrual).toBeCloseTo(322.5, 1)
   })
 
-  it('accrues a day at exactly what absence-calculator later pays out for it', () => {
+  it('accrues a day at exactly the tillägg a taken day is valued at', () => {
     const monthlySalary = 36000
     const semestertillaggRate = 0.0043
     const run = calculateSalary(
@@ -953,18 +938,28 @@ describe('hardening: sammalöneregeln', () => {
       config2026, emptyTaxRates
     )
     const accrualPerDay = run.vacationAccrual / (25 / 12)
-    const payoutPerDay = calculateVacationPay({
-      monthlySalary,
-      vacationDaysTaken: 1,
-      vacationRule: 'sammaloneregeln',
-      semestertillaggRate,
-      vacationDaysPerYear: 25,
-    }).tillagg
+    const payoutPerDay = roundOre(monthlySalary * semestertillaggRate)
 
-    // 2920 is credited here and relieved there. When the two bases disagreed
+    // 2920 is credited here and relieved at monthly × tillägg per taken day
+    // (dayValueSek in semesterberedning.ts). When the two bases disagreed
     // the liability drifted negative on every taken day, which is the defect
     // this pins: provision and payout must value a day identically.
     expect(accrualPerDay).toBeCloseTo(payoutPerDay, 2)
+  })
+
+  it('does not take the schedule divisor: a 4-day week accrues the same tillägg', () => {
+    const r = calculateSalary(
+      makeBasicInput({
+        vacationRule: 'sammaloneregeln', monthlySalary: 30000,
+        dailyDivisor: dailyDivisor(4),
+        lineItems: [baseLineItem(30000)],
+      }),
+      config2026, emptyTaxRates
+    )
+    // Semestertillägg is a share of the MONTHLY salary per vacation day, so a
+    // 4-day week earns the same tillägg as a 5-day week on the same monthly
+    // salary: 30000 x 0.43% x 25/12.
+    expect(r.vacationAccrual).toBeCloseTo(268.75, 2)
   })
 })
 
@@ -1118,110 +1113,6 @@ describe('hardening: tax table lookup (not just flat fallback)', () => {
     )
     expect(semer.grossSalary).toBe(28000)
     expect(semer.taxWithheld).toBe(5500) // still bracket 2
-  })
-})
-
-describe('calculateVacationAccrual (standalone export)', () => {
-  it('procentregeln: 12% of vacationBasis under 30 days', () => {
-    const r = calculateVacationAccrual({
-      monthlySalary: 40000,
-      vacationRule: 'procentregeln',
-      vacationDaysPerYear: 25,
-      semestertillaggRate: 0.0043,
-      vacationBasis: 40000,
-    })
-    expect(r.accrual).toBe(4800)
-  })
-
-  it('procentregeln: 14.4% at 30+ days', () => {
-    const r = calculateVacationAccrual({
-      monthlySalary: 40000,
-      vacationRule: 'procentregeln',
-      vacationDaysPerYear: 30,
-      semestertillaggRate: 0.0043,
-      vacationBasis: 40000,
-    })
-    expect(r.accrual).toBeCloseTo(5760, 1)
-  })
-
-  it('sammaloneregeln: uses vacationBasis, not monthlySalary (degree-adjusted)', () => {
-    // 50% worker: caller passes vacationBasis = 20000 (degree-adjusted),
-    // not the raw 40000 monthlySalary. Result must be half the full-time amount.
-    const partTime = calculateVacationAccrual({
-      monthlySalary: 40000, // ignored
-      vacationRule: 'sammaloneregeln',
-      vacationDaysPerYear: 25,
-      semestertillaggRate: 0.0043,
-      vacationBasis: 20000,
-    })
-    const fullTime = calculateVacationAccrual({
-      monthlySalary: 40000,
-      vacationRule: 'sammaloneregeln',
-      vacationDaysPerYear: 25,
-      semestertillaggRate: 0.0043,
-      vacationBasis: 40000,
-    })
-    expect(partTime.accrual).toBeCloseTo(fullTime.accrual / 2, 1)
-    // Independent check: 20000 × 0.43% × 25/12 ≈ 179.17
-    expect(partTime.accrual).toBeCloseTo(179.17, 1)
-  })
-
-  it('semesterersattning: 0 accrual with the correct step label', () => {
-    const r = calculateVacationAccrual({
-      monthlySalary: 40000,
-      vacationRule: 'semesterersattning',
-      vacationDaysPerYear: 25,
-      semestertillaggRate: 0.0043,
-      vacationBasis: 40000,
-    })
-    expect(r.accrual).toBe(0)
-    expect(r.steps[0].label).toContain('semesterersättning betald direkt')
-  })
-
-  it('none: 0 accrual, no "betald direkt" wording', () => {
-    const r = calculateVacationAccrual({
-      monthlySalary: 40000,
-      vacationRule: 'none',
-      vacationDaysPerYear: 25,
-      semestertillaggRate: 0.0043,
-      vacationBasis: 40000,
-    })
-    expect(r.accrual).toBe(0)
-    expect(r.steps[0].label).toBe('Semesteravsättning (avstängd)')
-    expect(r.steps[0].label).not.toContain('semesterersättning')
-  })
-})
-
-describe('calculateKarensavdrag', () => {
-  it('calculates 20% of weekly sjuklön', () => {
-    // Formula: 20% × (40000 × 12/52 × 0.80)
-    const expected = Math.round(0.20 * (40000 * 12 / 52 * 0.80) * 100) / 100
-    expect(calculateKarensavdrag(40000, config2026)).toBe(expected)
-  })
-})
-
-describe('calculateSjuklon', () => {
-  it('calculates karensavdrag + sjuklön for sick days', () => {
-    const result = calculateSjuklon(40000, 5, config2026)
-
-    expect(result.karensavdrag).toBeGreaterThan(0)
-    expect(result.sjuklon).toBeGreaterThan(0)
-    expect(result.steps.length).toBeGreaterThan(0)
-  })
-
-  it('handles 1-day sick leave (karens only)', () => {
-    const result = calculateSjuklon(40000, 1, config2026)
-
-    expect(result.karensavdrag).toBeGreaterThan(0)
-    expect(result.sjuklon).toBe(0) // No sjuklön for day 1
-  })
-
-  it('caps at 13 sjuklön days (day 2-14)', () => {
-    const result14 = calculateSjuklon(40000, 14, config2026)
-    const result20 = calculateSjuklon(40000, 20, config2026)
-
-    // sjuklön should be the same for 14 and 20 days (capped at day 14)
-    expect(result14.sjuklon).toBe(result20.sjuklon)
   })
 })
 

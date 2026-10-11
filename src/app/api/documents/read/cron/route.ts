@@ -3,7 +3,6 @@ import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { readUnreadDocuments } from '@/lib/documents/read/store'
 import { enqueueDocumentJob } from '@/lib/documents/jobs/queue'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { isBooked, readLaneFor } from '@/lib/documents/read/lanes'
 
 /**
@@ -34,7 +33,7 @@ export const GET = withCronContext('documents.read', async (_request, ctx) => {
     // A recent document read here gets typed like one that arrived today. History is typed only under a budget:
     // typing is a model call, and without one it stays text a search finds and a question opens (founder, 2026-09-24).
     onRead: async (doc) => {
-      if (!doc.company_id || doc.doc_type || !isArkivEnabled(doc.company_id)) return
+      if (!doc.company_id || doc.doc_type) return
       // Booked documents are typed when someone opens them, not in the background (goal: agents answer when asked).
       if (isBooked(doc)) return
       if (budget <= 0 && readLaneFor(doc) !== 'live') return

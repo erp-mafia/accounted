@@ -2,9 +2,9 @@
  * Helpers for shaping MCP tool results in an agent-actionable form.
  *
  * Two additive concepts:
- *   1. `next`: when a tool succeeds and there's an obvious follow-up tool or
- *      resource the agent should call, expose it directly so Claude doesn't
- *      have to re-derive it from prose.
+ *   1. `next` (NextActionHint): when a tool succeeds and there's an obvious
+ *      follow-up tool or resource the agent should call, expose it directly
+ *      so Claude doesn't have to re-derive it from prose.
  *   2. structured errors: failures include a stable code, English + Swedish
  *      messages, and a remediation hint when one exists.
  *
@@ -21,22 +21,8 @@ export interface NextActionHint {
   resource?: string
 }
 
-export interface AgentToolResult<T = unknown> {
-  data: T
-  next?: NextActionHint
-}
-
 export interface AgentToolError {
   error: StructuredError
-}
-
-/**
- * Wrap a successful tool payload with an optional `next` hint. Returns the
- * payload as-is if the input is already wrapped (idempotent), or a plain object
- * if no hint is supplied.
- */
-export function withNext<T>(data: T, next?: NextActionHint): AgentToolResult<T> {
-  return next ? { data, next } : { data }
 }
 
 /**

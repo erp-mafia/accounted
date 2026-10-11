@@ -1,12 +1,12 @@
 ---
 name: loop-design-scan
-description: Local loop that scans a given area of the Accounted UI against the locked design system (.claude/rules/design.md) for UX friction, visual inconsistency, missing states, motion gaps, and accessibility issues (rendering pages in Chrome), then files GitHub issues for approved findings. Run locally (needs npm run dev + Chrome). Usage: /loop-design-scan <area> (e.g. bookkeeping, invoices, settings).
+description: Local loop that scans a given area of the Accounted UI against the locked design system (.claude/rules/design.md) for UX friction, visual inconsistency, missing states, motion gaps, and accessibility issues (rendering pages in Chrome), then files GitLab issues for approved findings. Run locally (needs npm run dev + Chrome). Usage: /loop-design-scan <area> (e.g. bookkeeping, invoices, settings).
 ---
 
 # loop-design-scan
 
 **Goal:** for one area of the app, surface concrete, design-system-grounded UI/UX improvements and file
-them as GitHub issues (deduped). Read `.claude/loops.md` first. **Runs locally**: it needs to render the UI.
+them as GitLab issues (deduped). Read `.claude/loops.md` first. **Runs locally**: it needs to render the UI.
 
 ## Why local
 A headless cloud session can't see the UI. This loop starts `npm run dev` and drives Chrome to render

@@ -368,12 +368,10 @@ export async function previewCurrencyRevaluation(
   }
 
   // Fetch closing rates one currency at a time through fetchExchangeRate: it
-  // is the documented booking path and returns null rather than one of the
-  // hardcoded display-only constants in getFallbackRate(). fetchMultipleRates
-  // pads its Map with those constants to keep a fully-populated-Map contract,
-  // which is fine for a rate widget and unacceptable for a verifikat: this
-  // function's output is posted to 3960/7960. Passing `supabase` uses the
-  // shared exchange_rates cache, so a balansdagen rate stays reproducible.
+  // is the documented booking path and returns null rather than a made-up
+  // rate, which matters because this function's output is posted to
+  // 3960/7960. Passing `supabase` uses the shared exchange_rates cache, so a
+  // balansdagen rate stays reproducible.
   const currencyList = Array.from(currencies)
   const fetched = await Promise.all(
     currencyList.map((currency) => fetchExchangeRate(currency, new Date(closingDate), supabase))

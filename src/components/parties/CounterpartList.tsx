@@ -12,7 +12,7 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { AccountChip } from './AccountChip'
 import { BrandMark } from './BrandMark'
 import { reasonText } from './format'
-import { regionName } from './SuggestionQueue'
+import { regionName } from './region-name'
 
 // What named a reading, in the row's own words. A model reading says
 // nothing here: its chip ("läst ur texten") already does.

@@ -50,11 +50,3 @@ export function sumUsage(rows: Array<{ activity: string; units: number }>, since
   }
   return out
 }
-
-export async function arkivUsageSummary(supabase: SupabaseClient, companyId: string, opts: { days?: number; today?: Date } = {}): Promise<ArkivUsage> {
-  const days = opts.days ?? USAGE_WINDOW_DAYS
-  const since = usageSince(days, opts.today)
-  const { data, error } = await supabase.from('arkiv_usage_daily').select('activity, units').eq('company_id', companyId).gte('day', since)
-  if (error) throw new Error(`usage read failed: ${error.message}`)
-  return sumUsage((data ?? []) as Array<{ activity: string; units: number }>, since, days)
-}

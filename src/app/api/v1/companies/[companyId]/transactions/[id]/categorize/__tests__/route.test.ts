@@ -88,41 +88,10 @@ vi.mock('@/lib/processing-history/append', async (importActual) => ({
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { BookkeepingDatabaseError, withUnusedVoucherAllocation } from '@/lib/bookkeeping/errors'
 import { POST } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  // Insert payloads are recorded verbatim: the proxy would happily accept a
-  // phantom column, so the assertion has to inspect the object itself.
-  const inserts: Record<string, unknown[]> = {}
-  const updates: Record<string, unknown[]> = {}
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (...args: unknown[]) => {
-          if (prop === 'insert') (inserts[table] ??= []).push(args[0])
-          if (prop === 'update') (updates[table] ??= []).push(args[0])
-          return buildChain(table)
-        }
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { supabase: { from: vi.fn((table: string) => buildChain(table)) }, inserts, updates }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const TX_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -146,7 +115,7 @@ function routeParams() {
 }
 
 function casRaceSupabase() {
-  return makeFlexibleSupabase({
+  return createTableMockSupabase({
     company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
     transactions: [
       // 1: the fetch. 2: the CAS update, matching no row because a concurrent
@@ -193,7 +162,7 @@ beforeEach(() => {
 })
 
 function happyPathSupabase(transactionOverrides: Record<string, unknown> = {}) {
-  return makeFlexibleSupabase({
+  return createTableMockSupabase({
     company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
     transactions: [
       {
@@ -240,7 +209,7 @@ describe('POST /api/v1/.../transactions/{id}/categorize underlag propagation', (
   })
 
   it('refuses the booking and writes nothing when the journal entry cannot be created (issue #1947)', async () => {
-    const { supabase, updates } = happyPathSupabase()
+    const { supabase, payloads } = happyPathSupabase()
     mockServiceClient.mockReturnValue(supabase)
     createTxJE.mockRejectedValueOnce(
       new BookkeepingDatabaseError('commit_entry', 'Cannot write to locked/closed fiscal period "2026"'),
@@ -260,7 +229,7 @@ describe('POST /api/v1/.../transactions/{id}/categorize underlag propagation', (
     )
     // The row is untouched: is_business/category stay NULL so it remains in
     // the unbooked queue instead of vanishing as categorized-but-unbooked.
-    expect(updates.transactions).toBeUndefined()
+    expect(payloads('transactions', 'update')).toEqual([])
     expect(propagateUnderlagMock).not.toHaveBeenCalled()
     expect(reverseEntryMock).not.toHaveBeenCalled()
   })
@@ -280,7 +249,7 @@ describe('POST /api/v1/.../transactions/{id}/categorize underlag propagation', (
   })
 
   it('returns NO_OPEN_PERIOD_FOR_DATE and writes nothing when the engine finds no covering period', async () => {
-    const { supabase, updates } = happyPathSupabase()
+    const { supabase, payloads } = happyPathSupabase()
     mockServiceClient.mockReturnValue(supabase)
     createTxJE.mockResolvedValueOnce(null)
 
@@ -293,19 +262,19 @@ describe('POST /api/v1/.../transactions/{id}/categorize underlag propagation', (
     expect(res.status).toBe(400)
     expect(body.error.code).toBe('NO_OPEN_PERIOD_FOR_DATE')
     // Refused before the CAS write: no update, no orphan, so no storno.
-    expect(updates.transactions).toBeUndefined()
+    expect(payloads('transactions', 'update')).toEqual([])
     expect(reverseEntryMock).not.toHaveBeenCalled()
     expect(propagateUnderlagMock).not.toHaveBeenCalled()
   })
 
   it('atomically unignores an ignored transaction when categorizing it', async () => {
-    const { supabase, updates } = happyPathSupabase({ is_ignored: true })
+    const { supabase, payloads } = happyPathSupabase({ is_ignored: true })
     mockServiceClient.mockReturnValue(supabase)
 
     const res = await POST(makeRequest({ is_business: false }), routeParams())
 
     expect(res.status).toBe(200)
-    expect(updates.transactions).toContainEqual(
+    expect(payloads('transactions', 'update')).toContainEqual(
       expect.objectContaining({
         is_business: false,
         category: 'private',
@@ -316,7 +285,7 @@ describe('POST /api/v1/.../transactions/{id}/categorize underlag propagation', (
   })
 
   it('maps an ignored-row constraint to a typed conflict and stornos the posted orphan', async () => {
-    const { supabase } = makeFlexibleSupabase({
+    const { supabase } = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       transactions: [
         {
@@ -364,7 +333,7 @@ describe('POST /api/v1/.../transactions/{id}/categorize underlag propagation', (
 
 describe('POST /api/v1/.../transactions/{id}/categorize CAS race', () => {
   it('documents the stranded voucher with the real voucher_gap_explanations columns when the storno fails', async () => {
-    const { supabase, inserts } = casRaceSupabase()
+    const { supabase, payloads } = casRaceSupabase()
     mockServiceClient.mockReturnValue(supabase)
     reverseEntryMock.mockRejectedValueOnce(
       withUnusedVoucherAllocation(new Error('account lookup failed'), {
@@ -382,7 +351,7 @@ describe('POST /api/v1/.../transactions/{id}/categorize CAS race', () => {
     const body = await res.json()
     expect(body.error.code).toBe('TX_CATEGORIZE_RACE')
 
-    const gaps = inserts['voucher_gap_explanations'] as Record<string, unknown>[]
+    const gaps = payloads('voucher_gap_explanations', 'insert') as Record<string, unknown>[]
     expect(gaps).toHaveLength(1)
     // Exhaustive: no gap_number, no created_by, and every NOT NULL column set.
     expect(gaps[0]).toEqual({
@@ -398,7 +367,7 @@ describe('POST /api/v1/.../transactions/{id}/categorize CAS race', () => {
   })
 
   it('writes no gap explanation when the storno succeeds (the series stays unbroken)', async () => {
-    const { supabase, inserts } = casRaceSupabase()
+    const { supabase, payloads } = casRaceSupabase()
     mockServiceClient.mockReturnValue(supabase)
 
     const res = await POST(
@@ -409,13 +378,13 @@ describe('POST /api/v1/.../transactions/{id}/categorize CAS race', () => {
     const body = await res.json()
     expect(body.error.code).toBe('TX_CATEGORIZE_RACE')
     expect(reverseEntryMock).toHaveBeenCalledTimes(1)
-    expect(inserts['voucher_gap_explanations']).toBeUndefined()
+    expect(payloads('voucher_gap_explanations', 'insert')).toEqual([])
   })
 })
 
 describe('POST /api/v1/.../transactions/{id}/categorize orphaned counter-account guard (#1643)', () => {
   it('returns TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT for an account_override on a revoked-held twin of the live row', async () => {
-    const { supabase } = makeFlexibleSupabase({
+    const { supabase } = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       transactions: {
         data: {
@@ -473,7 +442,7 @@ describe('POST /api/v1/.../transactions/{id}/categorize orphaned counter-account
 
 describe('POST /api/v1/.../transactions/{id}/categorize private marking in a locked period (issue #1661)', () => {
   function lockedPeriodSupabase() {
-    return makeFlexibleSupabase({
+    return createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       transactions: {
         data: {
@@ -494,7 +463,7 @@ describe('POST /api/v1/.../transactions/{id}/categorize private marking in a loc
   }
 
   it('answers is_business: false with TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED and suggested_action ignore', async () => {
-    const { supabase, updates } = lockedPeriodSupabase()
+    const { supabase, payloads } = lockedPeriodSupabase()
     mockServiceClient.mockReturnValue(supabase)
 
     const res = await POST(makeRequest({ is_business: false }), routeParams())
@@ -509,11 +478,11 @@ describe('POST /api/v1/.../transactions/{id}/categorize private marking in a loc
       suggested_action: 'ignore',
     })
     expect(createTxJE).not.toHaveBeenCalled()
-    expect(updates.transactions).toBeUndefined()
+    expect(payloads('transactions', 'update')).toEqual([])
   })
 
   it('keeps PERIOD_LOCKED (no suggested_action) for a business categorization', async () => {
-    const { supabase, updates } = lockedPeriodSupabase()
+    const { supabase, payloads } = lockedPeriodSupabase()
     mockServiceClient.mockReturnValue(supabase)
 
     const res = await POST(
@@ -526,7 +495,7 @@ describe('POST /api/v1/.../transactions/{id}/categorize private marking in a loc
     expect(body.error.code).toBe('PERIOD_LOCKED')
     expect(body.error.details.suggested_action).toBeUndefined()
     expect(createTxJE).not.toHaveBeenCalled()
-    expect(updates.transactions).toBeUndefined()
+    expect(payloads('transactions', 'update')).toEqual([])
   })
 })
 
@@ -539,7 +508,7 @@ describe('VAT registration (lib/bookkeeping/vat-registration.ts)', () => {
   ])(
     'books a company with vat_registered = $vat_registered with $vatLineCount moms line(s)',
     async ({ vat_registered, vatLineCount }) => {
-      const { supabase } = makeFlexibleSupabase({
+      const { supabase } = createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: [
           {
@@ -582,7 +551,7 @@ describe('reverse-charge basis pair (#2919)', () => {
   // when the account the cost line lands on (after any account_override)
   // reports ruta 20-24 itself, by the company's momskoder (crm#1096).
   function rcSupabase(chartRow?: Record<string, unknown>, momskoder: Array<Record<string, unknown>> = []) {
-    return makeFlexibleSupabase({
+    return createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       transactions: [
         {
@@ -658,7 +627,7 @@ describe('reverse-charge basis pair (#2919)', () => {
 describe('counterparty template with a learned bag', () => {
   const TEMPLATE_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
   function templateSupabase(template: Record<string, unknown> | null) {
-    return makeFlexibleSupabase({
+    return createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       transactions: [
         {
@@ -786,7 +755,7 @@ describe('POST /api/v1/.../transactions/{id}/categorize duplicate-payment guard 
   })
 
   it('refuses with 409 TRANSACTION_BOOK_POSSIBLE_DUPLICATE and writes nothing when the bank line is already booked', async () => {
-    const { supabase, updates } = happyPathSupabase()
+    const { supabase, payloads } = happyPathSupabase()
     mockServiceClient.mockReturnValue(supabase)
     detectDupMock.mockResolvedValue(candidate)
 
@@ -803,7 +772,7 @@ describe('POST /api/v1/.../transactions/{id}/categorize duplicate-payment guard 
       undefined,
     )
     expect(createTxJE).not.toHaveBeenCalled()
-    expect(updates.transactions).toBeUndefined()
+    expect(payloads('transactions', 'update')).toEqual([])
     expect(appendHistoryMock).not.toHaveBeenCalled()
   })
 
@@ -916,7 +885,7 @@ describe('POST /api/v1/.../transactions/{id}/categorize invoice-match intercept 
   // A supplier payment categorized straight onto leverantörsskulder (244x)
   // while an open supplier invoice from the same supplier covers the amount.
   function supplierPaymentSupabase() {
-    return makeFlexibleSupabase({
+    return createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       transactions: [
         {
@@ -963,7 +932,7 @@ describe('POST /api/v1/.../transactions/{id}/categorize invoice-match intercept 
   // An inbound payment categorized straight onto kundfordringar (151x) while
   // an unpaid customer invoice covers the amount.
   function customerReceiptSupabase() {
-    return makeFlexibleSupabase({
+    return createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       transactions: [
         {
@@ -1010,7 +979,7 @@ describe('POST /api/v1/.../transactions/{id}/categorize invoice-match intercept 
   }
 
   it('intercepts a plain 244x categorization with TX_CATEGORIZE_SUGGEST_SI_MATCH and writes nothing', async () => {
-    const { supabase, updates } = supplierPaymentSupabase()
+    const { supabase, payloads } = supplierPaymentSupabase()
     mockServiceClient.mockReturnValue(supabase)
 
     const res = await POST(
@@ -1030,7 +999,7 @@ describe('POST /api/v1/.../transactions/{id}/categorize invoice-match intercept 
       }),
     ])
     expect(createTxJE).not.toHaveBeenCalled()
-    expect(updates.transactions).toBeUndefined()
+    expect(payloads('transactions', 'update')).toEqual([])
   })
 
   it('books the plain 244x categorization when confirm_no_match: true overrides the intercept', async () => {
@@ -1091,7 +1060,7 @@ describe('POST /api/v1/.../transactions/{id}/categorize already-booked guard', (
   // A bulk-booked samlingsverifikat (N>1) or a 1:N split anchors the bank row
   // through a bank_line voucher link only: journal_entry_id stays NULL.
   function linkOnlySupabase(linkedStatus: 'posted' | 'reversed') {
-    return makeFlexibleSupabase({
+    return createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       transactions: [
         {
@@ -1117,7 +1086,7 @@ describe('POST /api/v1/.../transactions/{id}/categorize already-booked guard', (
   }
 
   it('refuses a link-only row with 409 TRANSACTION_ALREADY_CATEGORIZED and creates no verifikat', async () => {
-    const { supabase, updates } = linkOnlySupabase('posted')
+    const { supabase, payloads } = linkOnlySupabase('posted')
     mockServiceClient.mockReturnValue(supabase)
 
     const res = await POST(makeRequest({ is_business: true, category: 'expense_office' }), routeParams())
@@ -1127,7 +1096,7 @@ describe('POST /api/v1/.../transactions/{id}/categorize already-booked guard', (
     expect(body.error.code).toBe('TRANSACTION_ALREADY_CATEGORIZED')
     expect(body.error.details).toEqual({ journal_entry_id: 'je-samling', via: 'link' })
     expect(createTxJE).not.toHaveBeenCalled()
-    expect(updates.transactions).toBeUndefined()
+    expect(payloads('transactions', 'update')).toEqual([])
   })
 
   it('books a row whose only link names a reversed verifikat', async () => {

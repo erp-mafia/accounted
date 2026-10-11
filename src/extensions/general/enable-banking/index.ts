@@ -110,11 +110,6 @@ export const enableBankingExtension: Extension = {
   name: 'Enable Banking (PSD2)',
   version: '1.0.0',
 
-  settingsPanel: {
-    label: 'Bankintegration (PSD2)',
-    path: '/settings/banking',
-  },
-
   // Registry-resolved services for core callers (core cannot import
   // @/extensions). Contract: lib/bank-sync/trigger-sync-contract.ts.
   services: {

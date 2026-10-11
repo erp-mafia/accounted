@@ -141,12 +141,12 @@ async function lookupPrimary(
  *
  * Lookup failures throw; they never degrade into the unscoped path.
  *
- * NOT a description of every caller in the codebase: the hand-rolled lookups in
- * app/api/reconciliation/bank/status/route.ts and .../run/route.ts use
+ * NOT a description of every caller in the codebase: the hand-rolled lookup in
+ * app/api/reconciliation/bank/run/route.ts uses
  * `Boolean(cashAccount?.is_primary)`, i.e. includeUnassigned = FALSE when no row
  * exists, where this helper says true. The difference is inert (with no row
  * there is no cashAccountId, and scopeTransactionsToAccount ignores the flag on
- * that path), and those routes are deliberately left alone here to keep this
+ * that path), and that route is deliberately left alone here to keep this
  * change scoped to #1290.
  */
 export async function resolveCashAccountScope(

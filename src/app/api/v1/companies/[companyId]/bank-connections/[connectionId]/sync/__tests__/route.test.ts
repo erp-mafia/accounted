@@ -38,31 +38,10 @@ vi.mock('@/lib/extensions/registry', () => ({
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) queues.set(t, Array.isArray(val) ? [...val] : [val])
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const CONNECTION_ID = '11111111-1111-4111-8111-111111111111'
@@ -111,10 +90,10 @@ describe('v1 bank-connections sync', () => {
       id === 'enable-banking' ? { services: { triggerConnectionSync: triggerSyncMock } } : undefined,
     )
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { role: 'owner' } },
         idempotency_keys: { data: null },
-      }),
+      }).supabase,
     )
   })
 
@@ -145,7 +124,7 @@ describe('v1 bank-connections sync', () => {
 
   it('404 when the key user is not a member of the company', async () => {
     authOk(['transactions:write'])
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({ company_members: { data: null } }))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({ company_members: { data: null } }).supabase)
     const res = await POST(req(), params)
     expect(res.status).toBe(404)
     expect(triggerSyncMock).not.toHaveBeenCalled()

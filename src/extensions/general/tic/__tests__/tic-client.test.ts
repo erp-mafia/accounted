@@ -2,11 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   ticApiFetch,
   searchCompanyByOrgNumber,
-  getBankAccounts,
-  getIndustryCodes,
   getFiscalYears,
   getPayrolls,
-  getSignatory,
   getRepresentatives,
   getCompanyStatus,
   __resetTicCacheForTest,
@@ -299,34 +296,6 @@ describe('tic-client', () => {
     })
   })
 
-  describe('getBankAccounts', () => {
-    it('fetches bankgiro numbers for company ID via /companies/{id}/bank-accounts', async () => {
-      const mockFetch = vi.mocked(fetch)
-      const accounts = [{ bankgironumber: 1234567, terminated: false, name: 'Test AB' }]
-      mockFetch.mockResolvedValue(new Response(JSON.stringify(accounts)))
-
-      const result = await getBankAccounts(123)
-      expect(result).toEqual(accounts)
-      const calledUrl = mockFetch.mock.calls[0][0] as string
-      expect(calledUrl).toContain(encodeURIComponent('/companies/123/bank-accounts'))
-    })
-  })
-
-  describe('getIndustryCodes', () => {
-    it('fetches industry codes for company ID via /companies/{id}/industries', async () => {
-      const mockFetch = vi.mocked(fetch)
-      const codes = [
-        { companyIndustryCodeType: 'sni2007', industryCode: '62010', description: 'Dataprogrammering' },
-      ]
-      mockFetch.mockResolvedValue(new Response(JSON.stringify(codes)))
-
-      const result = await getIndustryCodes(123)
-      expect(result).toEqual(codes)
-      const calledUrl = mockFetch.mock.calls[0][0] as string
-      expect(calledUrl).toContain(encodeURIComponent('/companies/123/industries'))
-    })
-  })
-
   describe('getFiscalYears', () => {
     it('hits /companies/{id}/fiscal-years', async () => {
       const mockFetch = vi.mocked(fetch)
@@ -350,19 +319,6 @@ describe('tic-client', () => {
       expect(result).toEqual(payload)
       const calledUrl = mockFetch.mock.calls[0][0] as string
       expect(calledUrl).toContain(encodeURIComponent('/companies/123/payrolls'))
-    })
-  })
-
-  describe('getSignatory', () => {
-    it('hits /companies/{id}/signatory (singular per v2)', async () => {
-      const mockFetch = vi.mocked(fetch)
-      mockFetch.mockResolvedValue(new Response(JSON.stringify([])))
-
-      await getSignatory(123)
-      const calledUrl = mockFetch.mock.calls[0][0] as string
-      expect(calledUrl).toContain(encodeURIComponent('/companies/123/signatory'))
-      // Guard against v1's plural path sneaking back in
-      expect(calledUrl).not.toContain(encodeURIComponent('/signatories'))
     })
   })
 

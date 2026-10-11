@@ -119,21 +119,6 @@ export function vatSettlementBookingStatus(
 }
 
 /**
- * `deadlines.tax_period` key for a VAT picker. Yearly (helårsmoms) is omitted:
- * that row uses a fiscal-year label that needs company settings, and guessing
- * calendar `YYYY` would mis-label broken räkenskapsår.
- */
-export function vatDeadlineTaxPeriod(
-  periodType: VatPeriodType,
-  year: number,
-  period: number,
-): string | null {
-  if (periodType === 'monthly') return `${year}-${String(period).padStart(2, '0')}`
-  if (periodType === 'quarterly') return `${year}-Q${period}`
-  return null
-}
-
-/**
  * Build the settlement verifikat proposal for a VAT period. Reads the same
  * aggregated ledger totals as the momsrapport (fetchVatAccountTotals), so the
  * proposal always ties out with the report on screen and the filed eSKD/PDF

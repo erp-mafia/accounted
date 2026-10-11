@@ -1,4 +1,4 @@
-import type { LedgerStats, PartyRole, RegisterRow } from '@/lib/parties/register'
+import type { LedgerStats, RegisterRow } from '@/lib/parties/register'
 import type { SuggestionReason } from '@/lib/parties/suggest'
 import { formatOrgNumber } from '@/lib/utils'
 
@@ -14,14 +14,6 @@ export function roleLabel(t: Translate, roles: RegisterRow['roles']): string {
   if (roles.supplierId) parts.push(t('role_supplier'))
   if (roles.customerId) parts.push(t('role_customer'))
   return parts.length ? parts.join(' · ') : t('role_none')
-}
-
-/** "Leverantör", "Kund" or "Leverantör · Kund": what a suggestion becomes. */
-export function rolesLabel(t: Translate, roles: PartyRole[]): string {
-  const parts: string[] = []
-  if (roles.includes('supplier')) parts.push(t('role_supplier'))
-  if (roles.includes('customer')) parts.push(t('role_customer'))
-  return parts.join(' · ')
 }
 
 /** "Org.nr 556354-5185 i 3 underlag · 12 verifikat · varje månad": why a row is in the queue. */
@@ -49,12 +41,4 @@ export function formatPaymentIdentity(scheme: string, value: string): string {
   if (scheme === 'bankgiro' && (d.length === 7 || d.length === 8)) return `${d.slice(0, d.length - 4)}-${d.slice(-4)}`
   if (scheme === 'plusgiro' && d.length >= 2) return `${d.slice(0, -1)}-${d.slice(-1)}`
   return value
-}
-
-export function isDuplicateCandidate(row: RegisterRow): boolean {
-  return row.similar.length > 0 || Boolean(row.reason?.similar_to?.length)
-}
-
-export function hasHardKey(row: RegisterRow): boolean {
-  return Boolean(row.reason?.org_number || row.orgNumber)
 }

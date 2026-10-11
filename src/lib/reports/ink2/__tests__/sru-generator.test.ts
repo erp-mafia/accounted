@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
   generateSRUSubmission,
-  validateBlanketterSru,
   getZipFilename,
 } from '../sru-generator'
+import { validateInk2BlanketterSru } from '@/tests/sru-validators'
 import type { INK2Declaration } from '../types'
 
 function makeDeclaration(overrides?: Partial<INK2Declaration>): INK2Declaration {
@@ -131,7 +131,7 @@ describe('INK2 SRU Generator', () => {
     it('validates the generated BLANKETTER.SRU', () => {
       const declaration = makeDeclaration()
       const submission = generateSRUSubmission(declaration)
-      const validation = validateBlanketterSru(submission.blanketterSru)
+      const validation = validateInk2BlanketterSru(submission.blanketterSru)
       expect(validation.isValid).toBe(true)
       expect(validation.errors).toEqual([])
     })
@@ -315,16 +315,16 @@ describe('INK2 SRU Generator', () => {
     })
   })
 
-  describe('validateBlanketterSru', () => {
+  describe('validateInk2BlanketterSru', () => {
     it('validates a correct BLANKETTER.SRU', () => {
       const declaration = makeDeclaration()
       const submission = generateSRUSubmission(declaration)
-      const result = validateBlanketterSru(submission.blanketterSru)
+      const result = validateInk2BlanketterSru(submission.blanketterSru)
       expect(result.isValid).toBe(true)
     })
 
     it('detects missing INK2R block', () => {
-      const result = validateBlanketterSru(
+      const result = validateInk2BlanketterSru(
         '#BLANKETT INK2-2025P4\r\n#IDENTITET 165566778899 20250101 100000\r\n#NAMN Test\r\n#BLANKETTSLUT\r\n' +
         '#BLANKETT INK2S-2025P4\r\n#IDENTITET 165566778899 20250101 100002\r\n#NAMN Test\r\n#BLANKETTSLUT\r\n' +
         '#FIL_SLUT\r\n'
@@ -334,7 +334,7 @@ describe('INK2 SRU Generator', () => {
     })
 
     it('detects missing #FIL_SLUT', () => {
-      const result = validateBlanketterSru(
+      const result = validateInk2BlanketterSru(
         '#BLANKETT INK2-2025P4\r\n#IDENTITET x\r\n#NAMN T\r\n#BLANKETTSLUT\r\n' +
         '#BLANKETT INK2R-2025P4\r\n#IDENTITET x\r\n#NAMN T\r\n#BLANKETTSLUT\r\n' +
         '#BLANKETT INK2S-2025P4\r\n#IDENTITET x\r\n#NAMN T\r\n#BLANKETTSLUT\r\n'

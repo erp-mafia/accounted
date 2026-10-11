@@ -3,6 +3,8 @@ import {
   deriveAbsenceLineItems,
   buildSjukloneperioder,
   sjukloneperiodGapTolerance,
+  calculateVabDeduction,
+  calculateParentalLeaveDeduction,
   type AbsenceDay,
   type DeriveInput,
 } from '../derive-absence-line-items'
@@ -892,5 +894,40 @@ describe('deriveAbsenceLineItems: one working day a week, continuously sick (#28
       }),
     )
     expect(result.lineItems.filter(li => li.item_type === 'sick_karens')).toHaveLength(2)
+  })
+})
+
+const r = (x: number) => Math.round(x * 100) / 100
+
+describe('calculateVabDeduction', () => {
+  it('calculates daily rate deduction', () => {
+    const result = calculateVabDeduction(30000, 3)
+    const expectedDeduction = r(30000 / 21 * 3)
+    expect(result.deduction).toBe(expectedDeduction)
+  })
+
+  it('marks as semesterlönegrundande within 120 days', () => {
+    const result = calculateVabDeduction(30000, 5, 100)
+    expect(result.semesterGrundande).toBe(true) // 100 + 5 = 105 ≤ 120
+  })
+
+  it('marks as not semesterlönegrundande after 120 days', () => {
+    const result = calculateVabDeduction(30000, 5, 118)
+    expect(result.semesterGrundande).toBe(false) // 118 + 5 = 123 > 120
+  })
+})
+
+describe('calculateParentalLeaveDeduction', () => {
+  it('calculates daily rate deduction', () => {
+    const result = calculateParentalLeaveDeduction(30000, 10)
+    // Daily rate is rounded first, then multiplied: r(r(30000/21) * 10)
+    const dailyRate = r(30000 / 21)
+    const expectedDeduction = r(dailyRate * 10)
+    expect(result.deduction).toBe(expectedDeduction)
+  })
+
+  it('marks as semesterlönegrundande within 120 days per pregnancy', () => {
+    const result = calculateParentalLeaveDeduction(30000, 10, 100)
+    expect(result.semesterGrundande).toBe(true) // 100 + 10 = 110 ≤ 120
   })
 })

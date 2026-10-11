@@ -16,10 +16,7 @@ vi.mock('@/lib/core/documents/supplier-invoice-underlag', () => ({
 }))
 
 import { GET } from '../route'
-
-function cronRequest(): Request {
-  return new Request('http://localhost:3000/api/documents/reanchor/cron')
-}
+import { createCronRequest } from '@/tests/helpers'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -32,7 +29,7 @@ describe('GET /api/documents/reanchor/cron', () => {
   it('rejects a request without a valid cron secret', async () => {
     verifyCronSecret.mockReturnValue({ error: 'unauthorized' })
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/documents/reanchor/cron'))
 
     expect(response.status).toBe(401)
     expect(sweepFloatingSupplierInvoiceDocuments).not.toHaveBeenCalled()
@@ -41,7 +38,7 @@ describe('GET /api/documents/reanchor/cron', () => {
   it('runs the sweep under the service-role client and reports the summary', async () => {
     sweepFloatingSupplierInvoiceDocuments.mockResolvedValue({ candidates: 3, anchored: 2 })
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/documents/reanchor/cron'))
     const json = await response.json()
 
     expect(response.status).toBe(200)
@@ -52,7 +49,7 @@ describe('GET /api/documents/reanchor/cron', () => {
   it('fails closed when Supabase configuration is missing', async () => {
     delete process.env.SUPABASE_SERVICE_ROLE_KEY
 
-    const response = await GET(cronRequest())
+    const response = await GET(createCronRequest('/api/documents/reanchor/cron'))
 
     expect(response.status).toBeGreaterThanOrEqual(500)
     expect(sweepFloatingSupplierInvoiceDocuments).not.toHaveBeenCalled()

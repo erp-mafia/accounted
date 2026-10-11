@@ -3,9 +3,10 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { CashAccount } from '@/types'
 import {
   cashAccountPayee,
-  createManualBankAccount,
+  insertManualBankAccount,
   isBankCashAccount,
   isUsableInvoicePayee,
+  planManualBankAccount,
   propagateLegacyPayeeWrite,
   updateCashAccountPayee,
 } from '../invoice-payee'
@@ -130,15 +131,18 @@ describe('updateCashAccountPayee', () => {
   })
 })
 
-describe('createManualBankAccount', () => {
+describe('planManualBankAccount + insertManualBankAccount (the typed-in bank account, lib/cash-accounts/manage.ts)', () => {
   it('allocates a free 19xx slot past every row the company already holds, syncs the chart, and inserts a manual payee row', async () => {
     enqueue({ data: [{ ledger_account: '1930' }] })   // existing rows (the seeded manual 1930)
     enqueue({ data: account({ id: 'ca-new', ledger_account: '1931', source: 'manual', bankgiro: '5050-1234' }) })
-    const created = await createManualBankAccount(supabase as never, 'company-1', 'user-1', {
+    const input = {
       name: 'Sparkonto',
       currency: 'sek',
       payee: { bankgiro: '5050-1234', iban: ' se45 5000 0000 0583 9825 7466 ' },
-    })
+    }
+    const planned = await planManualBankAccount(supabase as never, 'company-1', input)
+    if (!planned.ok) throw new Error(`refused: ${planned.reason}`)
+    const created = await insertManualBankAccount(supabase as never, 'company-1', 'user-1', input, planned.plan)
     expect(created.id).toBe('ca-new')
     const [insert] = findCalls('cash_accounts', 'insert')
     expect(insert[0]).toMatchObject({
@@ -162,9 +166,9 @@ describe('createManualBankAccount', () => {
 
   it('refuses a requested ledger account another row already holds', async () => {
     enqueue({ data: [{ ledger_account: '1930' }, { ledger_account: '1931' }] })
-    await expect(createManualBankAccount(supabase as never, 'company-1', 'user-1', {
-      name: 'X', currency: 'SEK', ledger_account: '1931',
-    })).rejects.toThrow(/already a cash account/)
+    await expect(planManualBankAccount(supabase as never, 'company-1', {
+      currency: 'SEK', ledger_account: '1931',
+    })).resolves.toEqual({ ok: false, reason: 'ledger_taken', ledger_account: '1931' })
     expect(findCalls('cash_accounts', 'insert')).toHaveLength(0)
   })
 })

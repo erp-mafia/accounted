@@ -3,7 +3,6 @@ import {
   ACCOUNT_TO_BOX,
   BOX_LABELS,
   getBoxForAccount,
-  getBoxLabel,
   type MomsBox,
 } from '../moms-box-mapping'
 import { ACCOUNT_RUTA } from '@/lib/reports/vat-declaration'
@@ -106,12 +105,12 @@ describe('getBoxForAccount', () => {
   })
 })
 
-describe('getBoxLabel', () => {
-  it('returns Swedish labels for every box', () => {
-    expect(getBoxLabel('10')).toMatch(/Utgående moms 25%/)
-    expect(getBoxLabel('30')).toMatch(/inköp 25%/)
-    expect(getBoxLabel('48')).toMatch(/Ingående moms/)
-    expect(getBoxLabel('49')).toMatch(/Moms att betala/)
+describe('BOX_LABELS', () => {
+  it('carries the Swedish label of each box', () => {
+    expect(BOX_LABELS['10']).toMatch(/Utgående moms 25%/)
+    expect(BOX_LABELS['30']).toMatch(/inköp 25%/)
+    expect(BOX_LABELS['48']).toMatch(/Ingående moms/)
+    expect(BOX_LABELS['49']).toMatch(/Moms att betala/)
   })
 })
 

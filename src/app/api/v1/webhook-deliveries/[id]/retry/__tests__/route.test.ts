@@ -48,38 +48,11 @@ vi.mock('@/lib/webhooks/url-guard', async () => {
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { validateWebhookUrl } from '@/lib/webhooks/url-guard'
 import { POST as retryDelivery } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
 const mockUrlGuard = validateWebhookUrl as ReturnType<typeof vi.fn>
-
-interface TableResp {
-  data?: unknown
-  error?: unknown
-}
-
-function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) {
-  const queues = new Map<string, TableResp[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const WEBHOOK_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -141,14 +114,14 @@ beforeEach(() => {
 describe('POST /api/v1/webhook-deliveries/:id/retry', () => {
   it('re-enqueues a dead delivery as a fresh pending row', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         webhook_deliveries: [
           { data: DEAD_DELIVERY, error: null }, // lookup
           { data: { id: NEW_DELIVERY_ID }, error: null }, // insert
         ],
         company_members: { data: { company_id: COMPANY_ID }, error: null },
         webhooks: { data: ACTIVE_WEBHOOK, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await retryDelivery(
@@ -178,13 +151,13 @@ describe('POST /api/v1/webhook-deliveries/:id/retry', () => {
       mode: 'live',
     })
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         webhook_deliveries: {
           data: { ...DEAD_DELIVERY, event_type: 'salary_run.booked' },
           error: null,
         },
         company_members: { data: { company_id: COMPANY_ID }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await retryDelivery(
@@ -202,10 +175,10 @@ describe('POST /api/v1/webhook-deliveries/:id/retry', () => {
 
   it('refuses to retry a live delivery (pending/in_flight/failed)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         webhook_deliveries: { data: { ...DEAD_DELIVERY, status: 'failed' }, error: null },
         company_members: { data: { company_id: COMPANY_ID }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await retryDelivery(
@@ -223,11 +196,11 @@ describe('POST /api/v1/webhook-deliveries/:id/retry', () => {
 
   it('returns 404 NOT_FOUND when the caller is not a member of the delivery company', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         webhook_deliveries: { data: DEAD_DELIVERY, error: null },
         // Non-member → 404, not 403, so we don't leak delivery existence.
         company_members: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await retryDelivery(
@@ -242,14 +215,14 @@ describe('POST /api/v1/webhook-deliveries/:id/retry', () => {
 
   it('refuses to retry against a disabled webhook', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         webhook_deliveries: { data: DEAD_DELIVERY, error: null },
         company_members: { data: { company_id: COMPANY_ID }, error: null },
         webhooks: {
           data: { ...ACTIVE_WEBHOOK, active: false, disabled_at: '2026-05-15T11:00:00Z' },
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await retryDelivery(
@@ -271,11 +244,11 @@ describe('POST /api/v1/webhook-deliveries/:id/retry', () => {
       detail: '10.0.0.1 is private',
     })
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         webhook_deliveries: { data: DEAD_DELIVERY, error: null },
         company_members: { data: { company_id: COMPANY_ID }, error: null },
         webhooks: { data: ACTIVE_WEBHOOK, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await retryDelivery(
@@ -293,9 +266,9 @@ describe('POST /api/v1/webhook-deliveries/:id/retry', () => {
 
   it('returns 404 NOT_FOUND when the delivery does not exist', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         webhook_deliveries: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await retryDelivery(
@@ -310,11 +283,11 @@ describe('POST /api/v1/webhook-deliveries/:id/retry', () => {
 
   it('returns 404 NOT_FOUND when the original webhook has been deleted', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         webhook_deliveries: { data: DEAD_DELIVERY, error: null },
         company_members: { data: { company_id: COMPANY_ID }, error: null },
         webhooks: { data: null, error: null }, // webhook deleted between dead and retry
-      }),
+      }).supabase,
     )
 
     const res = await retryDelivery(
@@ -347,14 +320,14 @@ describe('POST /api/v1/webhook-deliveries/:id/retry: per-key company access', ()
   }
 
   function happySupabase(role = 'owner') {
-    const client = makeFlexibleSupabase({
+    const client = createTableMockSupabase({
       webhook_deliveries: [
         { data: DEAD_DELIVERY, error: null }, // lookup
         { data: { id: NEW_DELIVERY_ID }, error: null }, // insert
       ],
       company_members: { data: { company_id: COMPANY_ID, role }, error: null },
       webhooks: { data: ACTIVE_WEBHOOK, error: null },
-    })
+    }).supabase
     mockServiceClient.mockReturnValue(client)
     return client
   }
@@ -366,7 +339,7 @@ describe('POST /api/v1/webhook-deliveries/:id/retry: per-key company access', ()
     )
   }
 
-  function deliveryTableCalls(client: ReturnType<typeof makeFlexibleSupabase>): number {
+  function deliveryTableCalls(client: ReturnType<typeof createTableMockSupabase>['supabase']): number {
     return client.from.mock.calls.filter(([t]) => t === 'webhook_deliveries').length
   }
 

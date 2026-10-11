@@ -1,12 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import {
   BAS_REFERENCE,
-  ACCOUNT_CLASS_LABELS,
-  ACCOUNT_GROUP_LABELS,
   getBASReference,
-  getBASReferenceByClass,
   isStandardBASAccount,
 } from '../bas-reference'
+import { ACCOUNT_CLASS_LABELS } from '../bas-labels'
+
+const accountsInClass = (accountClass: number) =>
+  BAS_REFERENCE.filter((a) => a.account_class === accountClass)
 
 describe('BAS_REFERENCE data integrity', () => {
   it('contains the expected number of accounts (~1,276)', () => {
@@ -231,19 +232,6 @@ describe('K2-excluded accounts', () => {
   })
 })
 
-describe('ACCOUNT_GROUP_LABELS coverage', () => {
-  it('all groups present in BAS_REFERENCE have labels', () => {
-    const groups = new Set(BAS_REFERENCE.map((a) => a.account_group))
-    for (const group of groups) {
-      expect(ACCOUNT_GROUP_LABELS[group]).toBeDefined()
-    }
-  })
-
-  it('covers at least 70 groups', () => {
-    expect(Object.keys(ACCOUNT_GROUP_LABELS).length).toBeGreaterThanOrEqual(70)
-  })
-})
-
 describe('ACCOUNT_CLASS_LABELS', () => {
   it('has labels for all 8 classes', () => {
     for (let i = 1; i <= 8; i++) {
@@ -264,20 +252,6 @@ describe('Helper functions', () => {
     expect(getBASReference('9999')).toBeUndefined()
   })
 
-  it('getBASReferenceByClass returns accounts for each class', () => {
-    for (let cls = 1; cls <= 8; cls++) {
-      const accounts = getBASReferenceByClass(cls)
-      expect(accounts.length).toBeGreaterThan(0)
-      for (const a of accounts) {
-        expect(a.account_class).toBe(cls)
-      }
-    }
-  })
-
-  it('getBASReferenceByClass returns empty array for non-existent class', () => {
-    expect(getBASReferenceByClass(9)).toEqual([])
-  })
-
   it('isStandardBASAccount returns true for standard accounts', () => {
     expect(isStandardBASAccount('1510')).toBe(true)
     expect(isStandardBASAccount('3001')).toBe(true)
@@ -292,19 +266,19 @@ describe('Helper functions', () => {
 
 describe('Account class distribution', () => {
   it('class 1 (assets) has ~230 accounts', () => {
-    const cls = getBASReferenceByClass(1)
+    const cls = accountsInClass(1)
     expect(cls.length).toBeGreaterThanOrEqual(220)
     expect(cls.length).toBeLessThanOrEqual(240)
   })
 
   it('class 2 (equity & liabilities) has ~265 accounts', () => {
-    const cls = getBASReferenceByClass(2)
+    const cls = accountsInClass(2)
     expect(cls.length).toBeGreaterThanOrEqual(255)
     expect(cls.length).toBeLessThanOrEqual(275)
   })
 
   it('class 3 (revenue) has ~100 accounts', () => {
-    const cls = getBASReferenceByClass(3)
+    const cls = accountsInClass(3)
     expect(cls.length).toBeGreaterThanOrEqual(90)
     expect(cls.length).toBeLessThanOrEqual(110)
   })

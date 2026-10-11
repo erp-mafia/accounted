@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Landmark } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { bankLogoFile } from '@/components/banks/BankMark'
+import { bankLogoUrl } from '@/lib/reconciliation/bank-logos'
 import { GoogleMark } from '@/components/ui/provider-marks'
 import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
 import {
@@ -142,7 +142,7 @@ export function ConnectionsSettingsContent() {
     }
   }, [companyId])
 
-  const bankFile = bankLogoFile(status?.bankName ?? null)
+  const bankLogo = bankLogoUrl(status?.bankName)
 
   function row(opts: {
     logo: React.ReactNode
@@ -204,7 +204,7 @@ export function ConnectionsSettingsContent() {
         <SettingsGroup label={t('group_bank_authorities')}>
           {hasBanking &&
             row({
-              logo: bankFile ? <ImgLogo src={`/logos/banks/${bankFile}.png`} /> : <Landmark className="h-4 w-4 text-foreground" aria-hidden="true" />,
+              logo: bankLogo ? <ImgLogo src={bankLogo} /> : <Landmark className="h-4 w-4 text-foreground" aria-hidden="true" />,
               name: t('bank'),
               help: t('bank_help'),
               state: status

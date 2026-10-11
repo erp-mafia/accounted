@@ -330,25 +330,4 @@ describe('schedule routes are per provider', () => {
     expect(store.has('dropbox_schedule')).toBe(true)
     expect(store.has('google_drive_schedule')).toBe(false)
   })
-
-  it('reads each provider schedule separately', async () => {
-    const route = findRoute('GET', '/schedule')
-    const { ctx } = makeContext({
-      google_drive_schedule: { enabled: true, hour_utc: 3, hour_local: 5 },
-      dropbox_schedule: { enabled: false, hour_utc: 9, hour_local: 11 },
-    })
-
-    const google = await route.handler(makeRequest('/schedule', 'GET'), ctx)
-    const dropbox = await route.handler(
-      makeRequest('/schedule?provider=dropbox', 'GET'),
-      ctx
-    )
-
-    await expect(google.json()).resolves.toMatchObject({
-      data: { enabled: true, hour_local: 5 },
-    })
-    await expect(dropbox.json()).resolves.toMatchObject({
-      data: { enabled: false, hour_local: 11 },
-    })
-  })
 })

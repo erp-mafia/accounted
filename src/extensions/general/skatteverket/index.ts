@@ -7,11 +7,6 @@ import { parseEntityType } from '@/lib/company/entity-type'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 import { NextResponse, after } from 'next/server'
-import {
-  AGIKontrolleraHUSchema,
-  AGIKontrolleraIUSchema,
-  AGI_KONTROLLERA_MAX_BYTES,
-} from '@/lib/salary/agi/kontrollera-schemas'
 import { TimeoutError } from '@/lib/http/fetch-with-timeout'
 import { capabilityBlockedResponse, requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -37,7 +32,6 @@ import {
 } from '@/lib/auth/oauth-flows'
 import { storeTokens, getTokens, deleteTokens, getTokenHealth } from './lib/token-store'
 import { skvRequest, skvRequestWithAuth, SkatteverketAuthError, getSkatteverketEnvironment, isApigwClientRefusal } from './lib/api-client'
-import { writeSkatteverketAudit } from './lib/audit'
 import { skvAuthCodeToStructured } from './lib/error-map'
 import {
   buildMomsuppgift,
@@ -72,19 +66,14 @@ import type {
 import {
   agiPostUnderlag,
   agiGetKontrollresultat,
-  agiSparaUnderlag,
-  agiAvbrytUnderlag,
-  agiTaBortSparadInlamning,
   agiSkapaGranskningsunderlag,
   agiGetKvittenser,
-  agiLasPeriod,
   agiLasUppPeriod,
 } from './lib/agi-client'
 import { firstAgiKontrollMessage, summarizeAgiKontrollrapport } from './lib/agi-kontrollrapport'
 import {
   previewSkattekontoSync,
   runSkattekontoSync,
-  runValidateAgiUppgift,
   syncSkattekontoNow,
   validateAgiUppgift,
 } from './lib/core-actions'
@@ -404,11 +393,6 @@ export const skatteverketExtension: Extension = {
   id: 'skatteverket',
   name: 'Skatteverket Integration',
   version: '1.0.0',
-
-  settingsPanel: {
-    label: 'Skatteverket',
-    path: '/settings/account',
-  },
 
   apiRoutes: [
     // ── OAuth: Start authorization ──────────────────────────────────
@@ -1680,8 +1664,8 @@ export const skatteverketExtension: Extension = {
           // Don't flip agi_declarations.status to 'exported' here. SKV's
           // kontrollresultat may still come back DONE_REJECTED, in which case
           // nothing landed in Eget utrymme. The transition belongs in
-          // /agi/spara below, after the user (or auto-spara on success) has
-          // committed the underlag.
+          // /agi/granskningsunderlag below, once SKV has persisted the
+          // underlag.
 
           return NextResponse.json({ data: result.data })
         } catch (err) {
@@ -1725,10 +1709,10 @@ export const skatteverketExtension: Extension = {
           }
 
           if (result.data.status === 'DONE_REJECTED' || result.data.status === 'DONE_FAILED') {
-            // Recover the salaryRunId from cached submission state: same
-            // fallback mechanism /agi/spara uses. We only update when we can
-            // identify the row; a missing local cache means we silently skip
-            // (the alternative would be guessing which declaration to mark).
+            // Recover the salaryRunId from cached submission state. We only
+            // update when we can identify the row; a missing local cache means
+            // we silently skip (the alternative would be guessing which
+            // declaration to mark).
             const { data: rows } = await ctx.supabase
               .from('extension_data')
               .select('value')
@@ -1739,8 +1723,7 @@ export const skatteverketExtension: Extension = {
               try {
                 const v = JSON.parse(row.value as string) as { inlamningId?: number; salaryRunId?: string }
                 if (v.inlamningId === inlamningId && v.salaryRunId) {
-                  // Same monotonicity rule as /agi/spara: never regress
-                  // from a successful filing back to 'rejected'.
+                  // Never regress from a successful filing back to 'rejected'.
                   await ctx.supabase
                     .from('agi_declarations')
                     .update({ status: 'rejected' })
@@ -1754,214 +1737,6 @@ export const skatteverketExtension: Extension = {
           }
 
           return NextResponse.json({ data: result.data })
-        } catch (err) {
-          return handleSkvError(err)
-        }
-      },
-    },
-
-    // ── AGI: Save underlag into Eget utrymme ────────────────────────
-    // Body: { inlamningId, salaryRunId? }. Only meaningful between
-    // POST /underlag and skapaGranskningsunderlag.
-    //
-    // Flips agi_declarations.status to 'pending_signature' on success:
-    // the underlag is durable in SKV's Eget utrymme but is not yet a
-    // filed declaration. /agi/kvittenser later promotes it to 'submitted'
-    // when a uuidKvittens (signature receipt) is observed for the period.
-    // /agi/submit deliberately does NOT update status, because a
-    // DONE_REJECTED kontrollresultat would leave it falsely pending.
-    {
-      method: 'POST',
-      path: '/agi/spara',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
-        const blocked = await requireSkvCapability(ctx)
-        if (blocked) return blocked
-        const roleBlocked = await requireSkvWriteRole(ctx)
-        if (roleBlocked) return roleBlocked
-        try {
-          const body = (await request.json()) as { inlamningId?: number; salaryRunId?: string }
-          const inlamningId = Number(body.inlamningId)
-          if (!Number.isFinite(inlamningId) || inlamningId <= 0) {
-            return NextResponse.json({ error: 'Saknar inlamningId' }, { status: 400 })
-          }
-
-          const result = await agiSparaUnderlag(
-            ctx.supabase, ctx.userId, ctx.companyId, inlamningId, AGI_SCOPE_UNKNOWN,
-          )
-          if (!result.ok) {
-            return NextResponse.json(
-              { error: result.error, code: result.body?.kod },
-              { status: result.status },
-            )
-          }
-
-          // Promote the matching declaration to 'exported'. salaryRunId is
-          // accepted in the body for the happy path; if missing we can still
-          // fall back to the locally-cached submission state, which always
-          // carries it (we wrote it in /agi/submit).
-          let runId = body.salaryRunId
-          if (!runId) {
-            // Last-resort lookup: scan recent agi_submission_* keys for a
-            // matching inlamningId. Cheap because there's at most one active
-            // submission per period and the operator typically has very few.
-            const { data: rows } = await ctx.supabase
-              .from('extension_data')
-              .select('value')
-              .eq('company_id', ctx.companyId)
-              .eq('extension_id', 'skatteverket')
-              .like('key', 'agi_submission_%')
-            for (const row of rows ?? []) {
-              try {
-                const v = JSON.parse(row.value as string) as { inlamningId?: number; salaryRunId?: string }
-                if (v.inlamningId === inlamningId && v.salaryRunId) {
-                  runId = v.salaryRunId
-                  break
-                }
-              } catch { /* skip malformed */ }
-            }
-          }
-          if (runId) {
-            // Monotonicity guard: only flip from a pre-filing state. If the
-            // kvittens cron or the interactive /agi/kvittenser handler has
-            // already promoted this row to 'submitted'/'accepted', don't
-            // regress it: behandlingshistorik must move forward through
-            // the filing milestones (BFNAR 2013:2 kap 8).
-            //
-            // 'rejected' IS allowed as an originating state: a previous
-            // submission failed kontrollresultat, the user fixed the XML
-            // and re-submitted. The same agi_declarations row is reused
-            // (xml-route updates xml_content in place), so this update
-            // promotes the recovered submission back to pending_signature.
-            //
-            // 'exported' is NOT in the allowed-from list. The status value
-            // is preserved in the schema for the legacy manual-download
-            // path (see migration), but no code currently writes it; an
-            // 'exported' row encountered here would represent a parallel
-            // filing attempt that should land in its own row, not reuse
-            // this one (preserves chain of custody per BFL 5 kap 6§).
-            await ctx.supabase
-              .from('agi_declarations')
-              .update({ status: 'pending_signature' })
-              .eq('salary_run_id', runId)
-              .eq('company_id', ctx.companyId)
-              .in('status', ['generated', 'rejected'])
-          }
-
-          return NextResponse.json({ data: result.data })
-        } catch (err) {
-          return handleSkvError(err)
-        }
-      },
-    },
-
-    // ── AGI: Avbryt underlag (before spara) ─────────────────────────
-    // Query: ?inlamningId=...&period=YYYYMM (period optional but recommended)
-    //
-    // The `period` param lets the handler clear the locally-cached
-    // `agi_submission_{period}` record so the UI doesn't sit on a stale
-    // `underlag_submitted` state. If the caller doesn't pass it we fall
-    // back to scanning recent submission keys for the matching inlamningId.
-    {
-      method: 'DELETE',
-      path: '/agi/underlag',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
-        const roleBlocked = await requireSkvWriteRole(ctx)
-        if (roleBlocked) return roleBlocked
-        try {
-          const url = new URL(request.url)
-          const inlamningId = Number(url.searchParams.get('inlamningId'))
-          const period = url.searchParams.get('period')
-          if (!Number.isFinite(inlamningId) || inlamningId <= 0) {
-            return NextResponse.json({ error: 'Saknar parameter: inlamningId' }, { status: 400 })
-          }
-          const result = await agiAvbrytUnderlag(
-            ctx.supabase, ctx.userId, ctx.companyId, inlamningId,
-            { agRegistreradId: null, redovisningsperiod: period },
-          )
-          if (!result.ok) {
-            return NextResponse.json(
-              { error: result.error, code: result.body?.kod },
-              { status: result.status },
-            )
-          }
-
-          // Clear locally-cached submission state so the UI doesn't keep
-          // showing `underlag_submitted` for an inlamning that no longer
-          // exists at SKV. Direct path: caller passed period.
-          if (period) {
-            await ctx.settings.clear(`agi_submission_${period}`)
-          } else {
-            // Fallback: find the period by matching inlamningId across
-            // recent submission keys. Cheap because there's at most one
-            // active submission per period.
-            const { data: rows } = await ctx.supabase
-              .from('extension_data')
-              .select('key, value')
-              .eq('company_id', ctx.companyId)
-              .eq('extension_id', 'skatteverket')
-              .like('key', 'agi_submission_%')
-            for (const row of rows ?? []) {
-              try {
-                const v = JSON.parse(row.value as string) as { inlamningId?: number }
-                if (v.inlamningId === inlamningId) {
-                  await ctx.supabase
-                    .from('extension_data')
-                    .delete()
-                    .eq('company_id', ctx.companyId)
-                    .eq('extension_id', 'skatteverket')
-                    .eq('key', row.key as string)
-                  break
-                }
-              } catch { /* skip malformed */ }
-            }
-          }
-
-          return NextResponse.json({ success: true })
-        } catch (err) {
-          return handleSkvError(err)
-        }
-      },
-    },
-
-    // ── AGI: Ta bort sparad inlämning (after spara) ─────────────────
-    // Query: ?arbetsgivare=...&period=YYYYMM&inlamningId=...
-    {
-      method: 'DELETE',
-      path: '/agi/sparad',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
-        const roleBlocked = await requireSkvWriteRole(ctx)
-        if (roleBlocked) return roleBlocked
-        try {
-          const url = new URL(request.url)
-          const arbetsgivare = url.searchParams.get('arbetsgivare')
-          const period = url.searchParams.get('period')
-          const inlamningId = Number(url.searchParams.get('inlamningId'))
-          if (!arbetsgivare || !period || !Number.isFinite(inlamningId) || inlamningId <= 0) {
-            return NextResponse.json(
-              { error: 'Saknar parametrar: arbetsgivare, period, inlamningId' },
-              { status: 400 },
-            )
-          }
-          const result = await agiTaBortSparadInlamning(
-            ctx.supabase, ctx.userId, ctx.companyId, arbetsgivare, period, inlamningId,
-          )
-          if (!result.ok) {
-            return NextResponse.json(
-              { error: result.error, code: result.body?.kod },
-              { status: result.status },
-            )
-          }
-          await ctx.settings.clear(`agi_submission_${period}`)
-          return NextResponse.json({ success: true })
         } catch (err) {
           return handleSkvError(err)
         }
@@ -2231,223 +2006,6 @@ export const skatteverketExtension: Extension = {
       },
     },
 
-    // ── AGI: Pre-flight kontrollera HU/IU ───────────────────────────
-    // Validate a single HU or IU as JSON without saving anything in
-    // Skatteverket. Lets the UI catch errors per HU/IU before the user
-    // submits a full XML underlag. Body: the HU or IU as JSON per the
-    // v1.7 spec §7 / §8 (property names like agRegistreradId,
-    // redovisningsPeriod, kontantErsattningUlagAG, …).
-    //
-    // Response shape (kontrollsvar):
-    //   { status: 'OK' | 'INFO' | 'ARENDE' | 'STOPP' | 'AVVISANDE',
-    //     fel: [{ status, felmeddelande }, …] }
-    {
-      method: 'POST',
-      path: '/agi/kontrollera/hu',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
-        const blocked = await requireSkvCapability(ctx)
-        if (blocked) return blocked
-        const rbac = await requireSkvWriteRole(ctx)
-        if (rbac) return rbac
-
-        // Read body as bytes first so we can enforce a hard size cap before
-        // JSON.parse: protects against ~MB payloads that would otherwise
-        // hit the Zod validator.
-        const rawBytes = Buffer.byteLength(await request.clone().text(), 'utf8')
-        if (rawBytes > AGI_KONTROLLERA_MAX_BYTES) {
-          await writeSkatteverketAudit(ctx, {
-            endpoint: 'agi.kontrollera.hu',
-            outcome: 'validation_error',
-            responseStatus: 413,
-            requestSizeBytes: rawBytes,
-            errorMessage: 'payload exceeds 64KB cap',
-          })
-          return NextResponse.json(
-            { error: 'Payload överstiger maxstorleken för pre-flight kontroll (64 KB).' },
-            { status: 413 },
-          )
-        }
-
-        let parsedBody: unknown
-        try {
-          parsedBody = await request.json()
-        } catch {
-          await writeSkatteverketAudit(ctx, {
-            endpoint: 'agi.kontrollera.hu',
-            outcome: 'validation_error',
-            responseStatus: 400,
-            requestSizeBytes: rawBytes,
-            errorMessage: 'invalid JSON',
-          })
-          return NextResponse.json({ error: 'Ogiltig JSON i förfrågan.' }, { status: 400 })
-        }
-
-        const parsed = AGIKontrolleraHUSchema.safeParse(parsedBody)
-        if (!parsed.success) {
-          await writeSkatteverketAudit(ctx, {
-            endpoint: 'agi.kontrollera.hu',
-            outcome: 'validation_error',
-            responseStatus: 400,
-            requestSizeBytes: rawBytes,
-            errorMessage: parsed.error.issues
-              .map((iss) => `${iss.path.join('.')}: ${iss.message}`)
-              .join('; ')
-              .slice(0, 1000),
-          })
-          return NextResponse.json(
-            {
-              error: 'HU-payload matchar inte Skatteverkets v1.7 §7-schema.',
-              type: 'validation_error',
-              errors: parsed.error.issues.map((iss) => ({
-                field: iss.path.join('.'),
-                message: iss.message,
-                code: iss.code,
-              })),
-            },
-            { status: 400 },
-          )
-        }
-
-        // The SKV call lives in lib/core-actions.ts, shared with the v1
-        // operation (skatteverket.agi-validate-*); the transport audits it.
-        // The validation_error rows above are the one audit write outside
-        // the transport: refusals of our own, before any call was made.
-        try {
-          const result = await runValidateAgiUppgift(ctx, {
-            uppgift: 'huvuduppgift',
-            payload: parsed.data,
-          })
-          if (!result.ok) return skvActionFailureResponse(result)
-          return NextResponse.json({ data: result.data })
-        } catch (err) {
-          return handleSkvError(err)
-        }
-      },
-    },
-
-    {
-      method: 'POST',
-      path: '/agi/kontrollera/iu',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
-        const blocked = await requireSkvCapability(ctx)
-        if (blocked) return blocked
-        const rbac = await requireSkvWriteRole(ctx)
-        if (rbac) return rbac
-
-        const rawBytes = Buffer.byteLength(await request.clone().text(), 'utf8')
-        if (rawBytes > AGI_KONTROLLERA_MAX_BYTES) {
-          await writeSkatteverketAudit(ctx, {
-            endpoint: 'agi.kontrollera.iu',
-            outcome: 'validation_error',
-            responseStatus: 413,
-            requestSizeBytes: rawBytes,
-            errorMessage: 'payload exceeds 64KB cap',
-          })
-          return NextResponse.json(
-            { error: 'Payload överstiger maxstorleken för pre-flight kontroll (64 KB).' },
-            { status: 413 },
-          )
-        }
-
-        let parsedBody: unknown
-        try {
-          parsedBody = await request.json()
-        } catch {
-          await writeSkatteverketAudit(ctx, {
-            endpoint: 'agi.kontrollera.iu',
-            outcome: 'validation_error',
-            responseStatus: 400,
-            requestSizeBytes: rawBytes,
-            errorMessage: 'invalid JSON',
-          })
-          return NextResponse.json({ error: 'Ogiltig JSON i förfrågan.' }, { status: 400 })
-        }
-
-        const parsed = AGIKontrolleraIUSchema.safeParse(parsedBody)
-        if (!parsed.success) {
-          await writeSkatteverketAudit(ctx, {
-            endpoint: 'agi.kontrollera.iu',
-            outcome: 'validation_error',
-            responseStatus: 400,
-            requestSizeBytes: rawBytes,
-            errorMessage: parsed.error.issues
-              .map((iss) => `${iss.path.join('.')}: ${iss.message}`)
-              .join('; ')
-              .slice(0, 1000),
-          })
-          return NextResponse.json(
-            {
-              error: 'IU-payload matchar inte Skatteverkets v1.7 §8-schema.',
-              type: 'validation_error',
-              errors: parsed.error.issues.map((iss) => ({
-                field: iss.path.join('.'),
-                message: iss.message,
-                code: iss.code,
-              })),
-            },
-            { status: 400 },
-          )
-        }
-
-        // The SKV call lives in lib/core-actions.ts, shared with the v1
-        // operation (skatteverket.agi-validate-*); the transport audits it.
-        // The validation_error rows above are the one audit write outside
-        // the transport: refusals of our own, before any call was made.
-        try {
-          const result = await runValidateAgiUppgift(ctx, {
-            uppgift: 'individuppgift',
-            payload: parsed.data,
-          })
-          if (!result.ok) return skvActionFailureResponse(result)
-          return NextResponse.json({ data: result.data })
-        } catch (err) {
-          return handleSkvError(err)
-        }
-      },
-    },
-
-    // ── AGI: Lås period ─────────────────────────────────────────────
-    // Hantera-API; typically not needed (skapaGranskningsunderlag already
-    // accepts lasPeriod=true). Exposed for recovery / manual control.
-    {
-      method: 'POST',
-      path: '/agi/las',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        const blocked = await requireSkvCapability(ctx)
-        if (blocked) return blocked
-        const roleBlocked = await requireSkvWriteRole(ctx)
-        if (roleBlocked) return roleBlocked
-        try {
-          const url = new URL(request.url)
-          const arbetsgivare = url.searchParams.get('arbetsgivare')
-          const period = url.searchParams.get('period')
-          if (!arbetsgivare || !period) {
-            return NextResponse.json(
-              { error: 'Saknar parametrar: arbetsgivare, period' },
-              { status: 400 },
-            )
-          }
-          const result = await agiLasPeriod(ctx.supabase, ctx.userId, ctx.companyId, arbetsgivare, period)
-          if (!result.ok) {
-            return NextResponse.json(
-              { error: result.error, code: result.body?.kod },
-              { status: result.status },
-            )
-          }
-          return NextResponse.json({ data: result.data })
-        } catch (err) {
-          return handleSkvError(err)
-        }
-      },
-    },
-
     // ── AGI: Lås upp period ─────────────────────────────────────────
     {
       method: 'POST',
@@ -2475,8 +2033,7 @@ export const skatteverketExtension: Extension = {
           }
           // Unlocking abandons the granskningsunderlag, so the locally-cached
           // `awaiting_signing` record no longer reflects SKV: the signing link
-          // it carries points at a released draft. Clear it (mirroring the
-          // DELETE /agi/underlag and /agi/sparad handlers) so the panel drops
+          // it carries points at a released draft. Clear it so the panel drops
           // back to the pre-submission state instead of stranding the user on a
           // stale "redo att signeras" box.
           await ctx.settings.clear(`agi_submission_${period}`)

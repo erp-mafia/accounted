@@ -29,31 +29,10 @@ vi.mock('@/lib/reconciliation/residual', async () => {
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { ReconciliationResidualError } from '@/lib/reconciliation/residual'
 import { POST } from '../[accountKey]/residual/route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
-
-type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) queues.set(t, Array.isArray(val) ? [...val] : [val])
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (..._args: unknown[]) => buildChain(table)
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const CASH = '11111111-1111-4111-8111-111111111111'
@@ -82,7 +61,7 @@ const params = (accountKey = KEY) => ({ params: Promise.resolve({ companyId: COM
 describe('v1 reconciliation residual', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({ company_members: { data: { role: 'owner' } }, idempotency_keys: { data: null } }))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({ company_members: { data: { role: 'owner' } }, idempotency_keys: { data: null } }).supabase)
     residualMock.mockResolvedValue({ dry_run: false, residual_journal_entry_id: 'res-1', residual_amount: -10, applied: [{ external_id: T1, journal_entry_id: E1 }], skipped: [] })
   })
 

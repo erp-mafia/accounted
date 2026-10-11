@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { cashAccountLogoUrl } from '@/lib/cash-accounts/labels'
 import type { AgentConnection } from '@/lib/agent-skills/agents'
-import { GmailMark } from './SkillMarks'
+import { GmailMark } from './GmailMark'
 import styles from './skills.module.css'
 
 export /** A connection with its brand mark: the company's bank, Skatteverket, Peppol, or what lives in the AI. */

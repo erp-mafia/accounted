@@ -55,15 +55,15 @@ Add the op to `OPERATIONS` in `registry.ts`, then follow `operation-contract.tes
 Per-family `route.ts` counts in parentheses are a 2026-08-26 snapshot and drift; regenerate with `find app/api -name route.ts | awk -F/ '{print $3}' | sort | uniq -c`.
 
 - `/api/v1/*` (111): the public API-key REST surface (`withApiV1`, `lib/api/v1/`). Companies (list + create), customers, invoices, suppliers, supplier-invoices, transactions (incl. `{id}/ignore` POST/DELETE: no verifikat, the locked-period escape hatch for non-business rows), journal-entries, fiscal-periods, accounts, articles, documents, dimensions, employees, salary-runs, reports (16, incl. balance-sheet/income-statement PDFs), reconciliation (11, account-keyed), imports, operations, compliance, skatteverket/vat-declarations, settings, inbox-items, voucher-gap-explanations, webhooks, webhook-deliveries, openapi.json, health
-- `/api/bookkeeping/*` (64): accounts, account-balances, fiscal-periods, journal-entries (CRUD/reverse/correct), journal-entry-lines, accruals, voucher-gaps, voucher-sequences, no-doc-required, fix-cash-mismatch
-- `/api/reports/*` (58): GL, TB, BS/IS (+ balansrapport/resultatrapport), AR/supplier ledger, VAT, periodisk sammanställning, SIE, INK2, NE-bilaga, KPI, audit-trail, behandlingshistorik, bokslutsbilagor, continuity, monthly, dimension-pnl, kassaflödesanalys, statement-reconciliation, full-archive, salary-journal, vacation-liability, avgifter-basis
-- `/api/salary/*` (36): employees, payroll-config, tax-tables, KU, runs
+- `/api/bookkeeping/*` (64): accounts, account-balances, fiscal-periods, journal-entries (CRUD/reverse/correct), journal-entry-lines, accruals, voucher-gaps, voucher-sequences, no-doc-required
+- `/api/reports/*` (58): GL, TB, BS/IS (+ balansrapport/resultatrapport), AR/supplier ledger, VAT, periodisk sammanställning, SIE, INK2, NE-bilaga, KPI, behandlingshistorik, bokslutsbilagor, monthly, dimension-pnl, kassaflödesanalys, statement-reconciliation, full-archive, salary-journal, vacation-liability
+- `/api/salary/*` (36): employees, tax-tables, KU, runs
 - `/api/invoices/*` (28), `/api/supplier-invoices/*` (16): CRUD + state transitions, bulk-book, recurring, reminders, self-billed, preview-pdf, next-number; supplier side adds exists + payment-batches (betalfil)
-- `/api/import/*` (26): bank-file, SIE (parse/execute/mappings), skattekonto-file, opening-balance, articles, customers, suppliers, documents
+- `/api/import/*` (26): bank-file, SIE (parse/execute), skattekonto-file, opening-balance, articles, customers, suppliers, documents
 - `/api/extensions/*` (21): `ext/[...path]` dynamic extension routes (catch-all → `/api/extensions/ext/{extensionId}/{routePath}`, path params as `_paramName` query), `[sector]` listing, plus first-party callbacks (enable-banking, cloud-backup, invoice-inbox, whatsapp-inbox, shopify, woocommerce, stripe, skatteverket, push-notifications)
-- `/api/transactions/*` (20): list/detail, categorize/uncategorize, book, ignore, match-{invoice,supplier-invoice} (+ preview), match-batch, batch-match-invoices, bulk-book, suggest-categories, attach-document, link-journal-entry, cash-account, duplicate-payment-check, refresh-exchange-rate
+- `/api/transactions/*` (20): list/detail, categorize/uncategorize, book, ignore, match-{invoice,supplier-invoice} (+ preview), match-batch, bulk-book, suggest-categories, attach-document, link-journal-entry, cash-account, duplicate-payment-check, refresh-exchange-rate
 - `/api/settings/*` (19): company settings, api-keys, oauth-clients, booking-templates, counterparty-templates, logo, invoice-font, peppol, signals (eu-trade, ku, rot-rut)
-- `/api/reconciliation/*` (18): `accounts` + `accounts/[accountKey]/*` (account-keyed engine, #1833: bridge, items + ignore, links, attachments, residual, signoff + reopen) and the legacy `bank/*` verbs (run, status, link, unmatched-entries, confirm-suggestions, mark-opening-balance)
+- `/api/reconciliation/*` (18): `accounts` + `accounts/[accountKey]/*` (account-keyed engine, #1833: bridge, items + ignore, links, attachments, residual, signoff + reopen) and the legacy `bank/*` verbs (run, link, unmatched-entries, confirm-suggestions, mark-opening-balance)
 - `/api/agent/*` (16): ask, invoke, conversations (+ reject-pending), categorize (+ outcome), memory, knowledge, skills, profile (+ verify), feedback, onboarding/stream
 - `/api/documents/*` (12): CRUD, versions, inline, link/detach, integrity, extraction-status, verify cron, counts, inbox-available
 - `/api/company/*` (10), `/api/team/*` (5), `/api/user/*` (4), `/api/account/*` (2): company CRUD, current, members + invites, check-org-number, migration-reset; team invite/accept/members; preferences, profile, locale, ui-state; delete, password
@@ -74,6 +74,6 @@ Per-family `route.ts` counts in parentheses are a 2026-08-26 snapshot and drift;
 - `/api/customers/*` (3, incl. `[id]/personal-number`), `/api/suppliers/*` (2), `/api/articles/*` (2), `/api/assets/*` (3), `/api/cash-accounts`, `/api/export/*` (3: articles, customers, suppliers)
 - `/api/billing/*` (3: checkout, portal, status), `/api/stripe/webhook`
 - `/api/peppol/*` (2: inbound, outbound), `/api/webhooks/*` (2: dispatch cron, peppol/qvalia callback)
-- `/api/receipt-hunt/*` (2: run, cron), `/api/sandbox/*` (2: seed, cleanup), `/api/events/*` (2), `/api/notices/*` (2), `/api/idempotency/cleanup/cron`
+- `/api/receipt-hunt/*` (2: run, cron), `/api/sandbox/*` (2: seed, cleanup), `/api/events/*` (2), `/api/notices/dismiss`, `/api/idempotency/cleanup/cron`
 - `/api/mcp-oauth/*` (3: authorize, token, register), `/api/calendar/feed/[token]`, `/api/payslip/[token]/pdf`, `/api/storage/[...path]`
-- Singletons: `/api/audit-trail`, `/api/auth/heartbeat`, `/api/currency/rate`, `/api/health`, `/api/kpi/preferences`, `/api/log`, `/api/onboarding/state`, `/api/support/contact`, `/api/vat/validate`, `/api/version`, `/api/worklist/counts`
+- Singletons: `/api/auth/heartbeat`, `/api/currency/rate`, `/api/health`, `/api/kpi/preferences`, `/api/log`, `/api/onboarding/state`, `/api/support/contact`, `/api/vat/validate`, `/api/version`, `/api/worklist/counts`

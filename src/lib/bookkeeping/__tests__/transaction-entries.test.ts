@@ -58,25 +58,13 @@ vi.mock('../vat-entries', () => ({
       }
     }
   ),
-  extractNetAmount: vi.fn().mockImplementation(
-    (totalAmount: number, vatRate: number) => {
-      if (vatRate === 0) return totalAmount
-      return Math.round((totalAmount / (1 + vatRate)) * 100) / 100
-    }
-  ),
-  extractVatAmount: vi.fn().mockImplementation(
-    (totalAmount: number, vatRate: number) => {
-      if (vatRate === 0) return 0
-      return Math.round((totalAmount - totalAmount / (1 + vatRate)) * 100) / 100
-    }
-  ),
 }))
 
 const { createJournalEntry, findFiscalPeriod } = await import('../engine')
 const mockedCreateEntry = vi.mocked(createJournalEntry)
 const mockedFindFiscalPeriod = vi.mocked(findFiscalPeriod)
 
-const { createTransactionJournalEntry, buildDomesticExpenseLines, buildTransactionEntryLines } = await import('../transaction-entries')
+const { createTransactionJournalEntry, buildTransactionEntryLines } = await import('../transaction-entries')
 const { TransactionMissingSekValueError } = await import('../errors')
 
 function makeMappingResult(overrides: Partial<MappingResult> = {}): MappingResult {
@@ -847,83 +835,6 @@ describe('buildTransactionEntryLines: a foreign row needs a SEK value', () => {
       const tx = makeTransaction({ amount: -200, currency: currency as Transaction['currency'] })
       const lines = buildTransactionEntryLines(tx, makeMappingResult({ debit_account: '6991', credit_account: '1930' }))
       expect(lines.find(l => l.account_number === '1930')?.credit_amount).toBe(200)
-    }
-  })
-})
-
-describe('buildDomesticExpenseLines', () => {
-  it('25% VAT: 3 lines (expense net + 2641 + 1930)', () => {
-    const lines = buildDomesticExpenseLines(1250, '5410', 'Office supplies', 0.25)
-
-    expect(lines).toHaveLength(3)
-
-    const expense = lines.find(l => l.account_number === '5410')
-    expect(expense?.debit_amount).toBe(1000) // 1250 / 1.25
-
-    const vat = lines.find(l => l.account_number === '2641')
-    expect(vat?.debit_amount).toBe(250) // 1250 - 1000
-
-    const bank = lines.find(l => l.account_number === '1930')
-    expect(bank?.credit_amount).toBe(1250)
-
-    const totalDebit = lines.reduce((sum, l) => sum + l.debit_amount, 0)
-    const totalCredit = lines.reduce((sum, l) => sum + l.credit_amount, 0)
-    expect(totalDebit).toBeCloseTo(totalCredit, 2)
-  })
-
-  it('12% VAT: correct amounts', () => {
-    const lines = buildDomesticExpenseLines(1120, '5400', 'Food supplies', 0.12)
-
-    expect(lines).toHaveLength(3)
-
-    const expense = lines.find(l => l.account_number === '5400')
-    expect(expense?.debit_amount).toBe(1000) // 1120 / 1.12
-
-    const vat = lines.find(l => l.account_number === '2641')
-    expect(vat?.debit_amount).toBe(120) // 1120 - 1000
-
-    const bank = lines.find(l => l.account_number === '1930')
-    expect(bank?.credit_amount).toBe(1120)
-
-    const totalDebit = lines.reduce((sum, l) => sum + l.debit_amount, 0)
-    const totalCredit = lines.reduce((sum, l) => sum + l.credit_amount, 0)
-    expect(totalDebit).toBeCloseTo(totalCredit, 2)
-  })
-
-  it('vatRate=0: 2 lines, no 2641', () => {
-    const lines = buildDomesticExpenseLines(500, '5410', 'No VAT expense', 0)
-
-    expect(lines).toHaveLength(2)
-
-    const expense = lines.find(l => l.account_number === '5410')
-    expect(expense?.debit_amount).toBe(500)
-
-    const bank = lines.find(l => l.account_number === '1930')
-    expect(bank?.credit_amount).toBe(500)
-
-    const vatLine = lines.find(l => l.account_number === '2641')
-    expect(vatLine).toBeUndefined()
-
-    const totalDebit = lines.reduce((sum, l) => sum + l.debit_amount, 0)
-    const totalCredit = lines.reduce((sum, l) => sum + l.credit_amount, 0)
-    expect(totalDebit).toBe(totalCredit)
-  })
-
-  it('negative amount uses Math.abs', () => {
-    const lines = buildDomesticExpenseLines(-750, '5410', 'Negative test', 0)
-
-    expect(lines).toHaveLength(2)
-
-    const expense = lines.find(l => l.account_number === '5410')
-    expect(expense?.debit_amount).toBe(750)
-
-    const bank = lines.find(l => l.account_number === '1930')
-    expect(bank?.credit_amount).toBe(750)
-
-    // All amounts positive
-    for (const line of lines) {
-      expect(line.debit_amount).toBeGreaterThanOrEqual(0)
-      expect(line.credit_amount).toBeGreaterThanOrEqual(0)
     }
   })
 })

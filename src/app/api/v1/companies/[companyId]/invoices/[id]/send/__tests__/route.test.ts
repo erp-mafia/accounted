@@ -138,47 +138,11 @@ import { InvoicePDF } from '@/lib/invoices/pdf-template'
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { ensureInvoiceNumber as mockedEnsureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { POST as sendInvoice } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
 const mockEnsureInvoiceNumber = mockedEnsureInvoiceNumber as ReturnType<typeof vi.fn>
-
-type MockResult = { data?: unknown; error?: unknown }
-function makeFlexibleSupabase(byTable: Record<string, MockResult | MockResult[]>) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [t, val] of Object.entries(byTable)) {
-    queues.set(t, Array.isArray(val) ? [...val] : [val])
-  }
-  // Records every .select() projection string per table so tests can assert
-  // which columns the route actually fetches.
-  const selects: Record<string, string[]> = {}
-  // Every .update() payload per table, in call order.
-  const updates: Record<string, unknown[]> = {}
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) => {
-            const q = queues.get(table)
-            const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (...args: unknown[]) => {
-          if (prop === 'select' && typeof args[0] === 'string') {
-            ;(selects[table] ??= []).push(args[0])
-          }
-          if (prop === 'update') {
-            ;(updates[table] ??= []).push(args[0])
-          }
-          return buildChain(table)
-        }
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)), selects, updates }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const INVOICE_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -277,10 +241,10 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
 
   it('returns 404 when the invoice does not exist', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: null, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await sendInvoice(
@@ -295,7 +259,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
 
   it('rejects a malformed stored customer email before allocation', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: {
           data: {
@@ -304,7 +268,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
           },
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await sendInvoice(
@@ -324,7 +288,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     'rejects a %s invoice without a payment account before number allocation',
     async (currency) => {
       mockServiceClient.mockReturnValue(
-        makeFlexibleSupabase({
+        createTableMockSupabase({
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           invoices: { data: { ...DRAFT_INVOICE, currency }, error: null },
           company_settings: {
@@ -340,7 +304,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
             },
             error: null,
           },
-        }),
+        }).supabase,
       )
 
       const res = await sendInvoice(
@@ -359,14 +323,14 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
 
   it('rejects issuance when the registered company has no VAT number', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: DRAFT_INVOICE, error: null },
         company_settings: {
           data: { ...COMPANY_SETTINGS, vat_registered: true, vat_number: null },
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await sendInvoice(
@@ -383,9 +347,9 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
 
   it('returns VALIDATION_ERROR for malformed JSON', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await sendInvoice(
@@ -416,10 +380,10 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     ['an email_body over 5000 characters', { email_body: 'x'.repeat(5001) }],
   ])('returns VALIDATION_ERROR for %s', async (_label, requestBody) => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: DRAFT_INVOICE, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await sendInvoice(
@@ -437,14 +401,14 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
 
   it('sends a draft invoice end-to-end and returns 200 with messageId', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: [
           { data: DRAFT_INVOICE, error: null }, // pre-flight fetch
           { data: { invoice_number: '2026-0042' }, error: null }, // re-read after allocation
         ],
         company_settings: { data: COMPANY_SETTINGS, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await sendInvoice(
@@ -494,7 +458,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
   })
 
   it('writes the email with this send\'s own subject and message, without storing them', async () => {
-    const supabase = makeFlexibleSupabase({
+    const mock = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       invoices: [
         { data: DRAFT_INVOICE, error: null },
@@ -502,7 +466,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
       ],
       company_settings: { data: COMPANY_SETTINGS, error: null },
     })
-    mockServiceClient.mockReturnValue(supabase)
+    mockServiceClient.mockReturnValue(mock.supabase)
 
     const res = await sendInvoice(
       makeRequest(
@@ -520,7 +484,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     expect(vi.mocked(templates.generateInvoiceEmailSubject)).toHaveBeenCalledWith(expectedData)
     expect(vi.mocked(templates.generateInvoiceEmailHtml)).toHaveBeenCalledWith(expectedData)
     expect(vi.mocked(templates.generateInvoiceEmailText)).toHaveBeenCalledWith(expectedData)
-    for (const payload of supabase.updates.invoices ?? []) {
+    for (const payload of mock.payloads('invoices', 'update')) {
       expect(payload).not.toHaveProperty('email_subject')
       expect(payload).not.toHaveProperty('email_body')
     }
@@ -528,11 +492,11 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
 
   it('rejects custom recipients from a non-admin company member', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'member' }, error: null },
         invoices: { data: DRAFT_INVOICE, error: null },
         company_settings: { data: COMPANY_SETTINGS, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await sendInvoice(
@@ -552,11 +516,11 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
 
   it('rejects a custom recipient collision before allocation', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: DRAFT_INVOICE, error: null },
         company_settings: { data: COMPANY_SETTINGS, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await sendInvoice(
@@ -579,7 +543,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
 
   it('rejects a combined recipient set over the limit before allocation', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: DRAFT_INVOICE, error: null },
         company_settings: {
@@ -590,7 +554,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
           },
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await sendInvoice(
@@ -617,7 +581,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
 
   it('rejects fixed routing over the total limit without per-send additions', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: DRAFT_INVOICE, error: null },
         company_settings: {
@@ -631,7 +595,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
           },
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await sendInvoice(
@@ -653,9 +617,9 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
   it('returns 503 when email service is not configured', async () => {
     mockIsConfigured.mockReturnValue(false)
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await sendInvoice(
@@ -670,14 +634,14 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
 
   it('returns 400 INVOICE_SEND_NO_CUSTOMER_EMAIL when customer lacks email', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: {
           data: { ...DRAFT_INVOICE, customer: { ...DRAFT_INVOICE.customer, email: null } },
           error: null,
         },
         company_settings: { data: COMPANY_SETTINGS, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await sendInvoice(
@@ -692,14 +656,14 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
 
   it('returns 409 INVOICE_CUSTOMER_MISSING when the customer was deleted (crm#263)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: {
           data: { ...DRAFT_INVOICE, customer_id: null, customer: null },
           error: null,
         },
         company_settings: { data: COMPANY_SETTINGS, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await sendInvoice(
@@ -716,10 +680,10 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
 
   it('rejects cancelled invoices with INVOICE_SEND_CANCELLED', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: { ...DRAFT_INVOICE, status: 'cancelled' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await sendInvoice(
@@ -734,10 +698,10 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
 
   it('rejects already-sent invoices with INVOICE_UPDATE_NOT_DRAFT', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: { ...DRAFT_INVOICE, status: 'sent' }, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await sendInvoice(
@@ -753,7 +717,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
   it('returns 502 INVOICE_SEND_ISSUED_NOT_DELIVERED when the email fails after the journal entry posted', async () => {
     const { uploadDocument } = await import('@/lib/core/documents/document-service')
     mockSendEmail.mockResolvedValue({ success: false, error: 'rate_limited' })
-    const supabase = makeFlexibleSupabase({
+    const mock = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       invoices: [
         { data: DRAFT_INVOICE, error: null },
@@ -763,7 +727,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
       ],
       company_settings: { data: COMPANY_SETTINGS, error: null },
     })
-    mockServiceClient.mockReturnValue(supabase)
+    mockServiceClient.mockReturnValue(mock.supabase)
 
     const res = await sendInvoice(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`),
@@ -776,7 +740,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     const body = await res.json()
     expect(body.error.code).toBe('INVOICE_SEND_ISSUED_NOT_DELIVERED')
     expect(body.error.details.journal_entry_id).toBe('jjjjjjjj-jjjj-4jjj-8jjj-jjjjjjjjjjjj')
-    expect(supabase.updates.invoices).not.toContainEqual({ status: 'draft' })
+    expect(mock.payloads('invoices', 'update')).not.toContainEqual({ status: 'draft' })
     expect(uploadDocument).toHaveBeenCalledWith(
       expect.anything(),
       USER_ID,
@@ -788,7 +752,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
 
   it('returns 502 INVOICE_SEND_PROVIDER_FAILED with the draft restored when nothing was booked (kontantmetoden)', async () => {
     mockSendEmail.mockResolvedValue({ success: false, error: 'rate_limited' })
-    const supabase = makeFlexibleSupabase({
+    const mock = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       invoices: [
         { data: DRAFT_INVOICE, error: null },
@@ -798,7 +762,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
       ],
       company_settings: { data: { ...COMPANY_SETTINGS, accounting_method: 'cash' }, error: null },
     })
-    mockServiceClient.mockReturnValue(supabase)
+    mockServiceClient.mockReturnValue(mock.supabase)
 
     const res = await sendInvoice(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`),
@@ -808,7 +772,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     expect(res.status).toBe(502)
     const body = await res.json()
     expect(body.error.code).toBe('INVOICE_SEND_PROVIDER_FAILED')
-    expect(supabase.updates.invoices).toEqual([{ status: 'sent' }, { status: 'draft' }])
+    expect(mock.payloads('invoices', 'update')).toEqual([{ status: 'sent' }, { status: 'draft' }])
   })
 
   it('never emails an invoice whose journal entry the engine refuses: the engine error, the draft restored', async () => {
@@ -819,7 +783,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
         { account_number: '3001', sie_dim_no: '6', dimension_name: 'Projekt' },
       ]),
     )
-    const supabase = makeFlexibleSupabase({
+    const mock = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       invoices: [
         { data: DRAFT_INVOICE, error: null },
@@ -829,7 +793,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
       ],
       company_settings: { data: COMPANY_SETTINGS, error: null },
     })
-    mockServiceClient.mockReturnValue(supabase)
+    mockServiceClient.mockReturnValue(mock.supabase)
 
     const res = await sendInvoice(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`),
@@ -842,16 +806,16 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     expect(body.error.details.violations[0].account_number).toBe('3001')
     expect(mockSendTrackedInvoiceEmail).not.toHaveBeenCalled()
     expect(mockSendEmail).not.toHaveBeenCalled()
-    expect(supabase.updates.invoices).toEqual([{ status: 'sent' }, { status: 'draft' }])
+    expect(mock.payloads('invoices', 'update')).toEqual([{ status: 'sent' }, { status: 'draft' }])
   })
 
   it('dry-run validates the pipeline without sending email or allocating a number', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: DRAFT_INVOICE, error: null },
         company_settings: { data: COMPANY_SETTINGS, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await sendInvoice(
@@ -877,13 +841,13 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
 
   it('rejects credit notes (credited_invoice_id set) with VALIDATION_ERROR', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: {
           data: { ...DRAFT_INVOICE, credited_invoice_id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' },
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await sendInvoice(
@@ -901,7 +865,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     // The issue step runs before delivery: its compare-and-set is the
     // single-winner lock, so the losing request neither books nor emails.
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: [
           { data: DRAFT_INVOICE, error: null },
@@ -909,7 +873,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
           { data: [], error: null }, // status flip: 0 rows matched
         ],
         company_settings: { data: COMPANY_SETTINGS, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await sendInvoice(
@@ -925,14 +889,14 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
 
   it('renders the final PDF as if already sent (no UTKAST banner)', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: [
           { data: DRAFT_INVOICE, error: null }, // pre-flight fetch
           { data: { invoice_number: '2026-0043' }, error: null }, // re-read after allocation
         ],
         company_settings: { data: COMPANY_SETTINGS, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await sendInvoice(
@@ -957,7 +921,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     // The pdf route selects customers(*); this route uses an explicit
     // projection. If customer_number is dropped here, the emailed PDF
     // silently omits the kundnummer that the downloaded PDF shows.
-    const supabaseMock = makeFlexibleSupabase({
+    const supabaseMock = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       invoices: [
         { data: DRAFT_INVOICE, error: null },
@@ -965,7 +929,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
       ],
       company_settings: { data: COMPANY_SETTINGS, error: null },
     })
-    mockServiceClient.mockReturnValue(supabaseMock)
+    mockServiceClient.mockReturnValue(supabaseMock.supabase)
 
     const res = await sendInvoice(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`),
@@ -973,7 +937,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     )
     expect(res.status).toBe(200)
 
-    const invoiceFetchProjection = supabaseMock.selects['invoices']?.[0] ?? ''
+    const invoiceFetchProjection = String(supabaseMock.payloads('invoices', 'select').find((c) => typeof c === 'string') ?? '')
     expect(invoiceFetchProjection).toMatch(/customer:customers\([^)]*\bcustomer_number\b[^)]*\)/)
   })
 
@@ -990,11 +954,11 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
       mode: 'test',
     })
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: DRAFT_INVOICE, error: null },
         company_settings: { data: COMPANY_SETTINGS, error: null },
-      }),
+      }).supabase,
     )
 
     const res = await sendInvoice(
@@ -1018,7 +982,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
       scopes: ['invoices:read'],
       mode: 'live',
     })
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
 
     const res = await sendInvoice(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`),
@@ -1034,7 +998,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send honours defer_invo
     const { createInvoiceJournalEntry } = await import('@/lib/bookkeeping/invoice-entries')
     vi.mocked(createInvoiceJournalEntry).mockClear()
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: [
           { data: DRAFT_INVOICE, error: null },
@@ -1044,7 +1008,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send honours defer_invo
           data: { ...COMPANY_SETTINGS, defer_invoice_booking: true },
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await sendInvoice(
@@ -1060,14 +1024,14 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send honours defer_invo
 
   it('dry-run preview reports would_create_journal_entry=false when booking is deferred', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: { data: DRAFT_INVOICE, error: null },
         company_settings: {
           data: { ...COMPANY_SETTINGS, defer_invoice_booking: true },
           error: null,
         },
-      }),
+      }).supabase,
     )
 
     const res = await sendInvoice(

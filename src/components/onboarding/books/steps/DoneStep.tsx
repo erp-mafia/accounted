@@ -1,12 +1,12 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { ChevronDown, ChevronRight } from 'lucide-react'
+import useSWR from 'swr'
 import { useCapability, useCompany } from '@/contexts/CompanyContext'
 import { useBranding } from '@/lib/branding/brand-context'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-import { useFetch } from '@/lib/hooks/use-fetch'
 import { useFormat } from '@/lib/hooks/use-format'
 import { aiConnectionFromWire, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
 import { createAiStatusPoller, type AiStatusPoller } from '@/lib/onboarding/ai-status-poll'
@@ -18,6 +18,12 @@ import { Confetti } from '../ui/Confetti'
 import { AgentChips } from '../ui/AgentChips'
 import type { BooksCtx } from '../context'
 import { Button } from '@/components/ui/button'
+
+async function fetchWorklistCounts(): Promise<WorklistCounts> {
+  const res = await fetch('/api/worklist/counts')
+  if (!res.ok) throw new Error(`/api/worklist/counts ${res.status}`)
+  return ((await res.json()) as { data: WorklistCounts }).data
+}
 
 /** Null when the status is unavailable: the chips keep what they last showed. */
 async function fetchAiStatus(signal: AbortSignal): Promise<AiConnection | null> {
@@ -53,24 +59,24 @@ export function DoneStep({ ctx, onLeave, leaving }: {
   const [preferredClient, setPreferredClient] = useState<AiClient>()
   const [polled, setPolled] = useState<AiConnection | null>(null)
   const [open, setOpen] = useState(false)
-  const { data: worklist, loading, error, refetch } = useFetch<{ data: WorklistCounts }, WorklistCounts>(
-    '/api/worklist/counts',
-    { select: (body) => body.data },
+  const { data: worklist, isValidating, error, mutate } = useSWR(
+    ['worklist-counts', company?.id ?? null] as const,
+    fetchWorklistCounts,
   )
+  const refetch = useCallback(() => {
+    void mutate()
+  }, [mutate])
   const connection = polled ?? aiConnectionFromWire(findings?.ai.connected ?? [], findings?.ai.agentConnected)
   const connected = connection.clients
   const connectionKey = connected.join(',')
   const tasks = worklist && !error ? listAiTasks(worklist.counts, { hasAi }) : []
 
   // Refresh the same queue Hem uses when OAuth finishes or the user returns
-  // from their agent. Do not keep offering work they have already completed.
+  // from their agent (SWR revalidates on focus). Do not keep offering work
+  // they have already completed.
   useEffect(() => {
     if (connectionKey) refetch()
   }, [connectionKey, refetch])
-  useEffect(() => {
-    window.addEventListener('focus', refetch)
-    return () => window.removeEventListener('focus', refetch)
-  }, [refetch])
 
   // The OAuth sign-in happens in another tab, so the chip turns green by
   // asking the status route (one api_keys read, never the findings): in a
@@ -134,7 +140,7 @@ export function DoneStep({ ctx, onLeave, leaving }: {
       {error ? (
         <p className="found-note" role="alert">
           {t('ai_handoff_failed')}{' '}
-          <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={refetch} disabled={loading}>
+          <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={refetch} disabled={isValidating}>
             {t('ai_handoff_retry')}
           </Button>
         </p>

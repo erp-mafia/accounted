@@ -22,9 +22,8 @@ const mockCtx: ExtensionContext = {
   supabase: createMockSupabase() as any,
   emit: vi.fn().mockResolvedValue(undefined),
   settings: { get: vi.fn().mockResolvedValue({ featureEnabled: true }), set: vi.fn(), clear: vi.fn() },
-  storage: { download: vi.fn(), upload: vi.fn(), getPublicUrl: vi.fn() },
   log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-  services: { ingestTransactions: vi.fn(), getCashAccounts: vi.fn(), getPrimaryCashAccount: vi.fn() },
+  services: { ingestTransactions: vi.fn() },
 }
 ```
 

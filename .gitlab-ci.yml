@@ -104,6 +104,7 @@ checks:
     - npm run skills:check
     - npm run taxonomy:check
     - npm run apiskill:check
+    - npm run notice:check
     # ESLint's result cache sits beside tsc's state. Keyed on content, not
     # mtime: a checkout rewrites every mtime.
     - mkdir -p "$CHECKS_CACHE_DIR"

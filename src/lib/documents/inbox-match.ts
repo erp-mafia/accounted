@@ -1,8 +1,8 @@
 /**
  * Pair an invoice-inbox item with a supplier or a bank transaction. One
- * implementation behind the invoice-inbox extension routes
- * (/api/extensions/ext/invoice-inbox/items/:id/match-supplier and
- * /match-transaction) and the v1 operations (lib/operations/inbox-items.ts):
+ * implementation behind the invoice-inbox extension route
+ * (/api/extensions/ext/invoice-inbox/items/:id/match-transaction) and the v1
+ * operations (lib/operations/inbox-items.ts):
  *
  *   - both the item and the supplier / transaction must belong to the
  *     company (service-role doors skip RLS, so this is the tenant check);

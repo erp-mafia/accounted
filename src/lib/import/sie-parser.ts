@@ -681,7 +681,7 @@ export function parseSIEFile(content: string): ParsedSIEFile {
           // reported and skipped so fiscalYears never carries an entry the
           // rest of the pipeline cannot trust. The one exception is the
           // 18-month BFL 3 kap. cap: an over-long span is reported as a
-          // warning but the entry is KEPT, because executeSIEImport refuses
+          // warning but the entry is KEPT, because ensureFiscalPeriod refuses
           // the current year (#RAR 0) with a precise Swedish error that needs
           // the real dates, and dropping the record here would degrade that
           // message to "no fiscal year defined".

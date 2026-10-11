@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { arkivBrainRollout, isArkivBrainEnabled, isArkivEnabled } from '@/lib/arkiv/flag'
+import { arkivBrainRollout, isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { classifyDocument, loadCompanyIdentity, type CompanyIdentity } from '@/lib/documents/classify/classify'
 import { extractDocument } from '@/lib/documents/extract/store'
 import { agreementKindFor } from '@/lib/arkiv/agreements/derive'
@@ -171,16 +171,13 @@ async function runRead(supabase: SupabaseClient, job: ClaimedJob): Promise<strin
   if (!plan || !out) return 'skipped: lane_done'
   if (out.status === 'error') throw new Error(out.reason)
   if (out.status === 'skipped') return `skipped: ${out.reason}`
-  if (isArkivEnabled(job.company_id)) {
-    // A booked document is typed when someone opens it (goal: agents answer correctly when asked).
-    if (!doc.doc_type && !isBooked(doc)) await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'classify')
-    else if (finishing && doc.admission_state === 'admitted' && isArkivBrainEnabled(job.company_id)) await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'extract')
-  }
+  // A booked document is typed when someone opens it (goal: agents answer correctly when asked).
+  if (!doc.doc_type && !isBooked(doc)) await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'classify')
+  else if (finishing && doc.admission_state === 'admitted' && isArkivBrainEnabled(job.company_id)) await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'extract')
   return `read ${out.pages} pages (${out.reader}, ${plan.lane})${out.partial ? `, partial: ${out.partial}` : ''}`
 }
 
 async function runClassify(supabase: SupabaseClient, job: ClaimedJob, identities: Map<string, CompanyIdentity>): Promise<string> {
-  if (!isArkivEnabled(job.company_id)) return 'skipped: not_in_rollout'
   const out = await classifyDocument(supabase, job.document_id, await identityFor(supabase, job.company_id, identities))
   if (out.status === 'error') throw new Error(out.reason)
   if (out.status === 'skipped') return skipNote(out.reason)

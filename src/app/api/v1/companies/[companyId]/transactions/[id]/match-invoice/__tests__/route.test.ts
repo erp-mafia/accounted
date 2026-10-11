@@ -39,44 +39,13 @@ import {
 } from '@/lib/bookkeeping/engine'
 import { eventBus } from '@/lib/events/bus'
 import { POST as matchInvoice } from '../route'
+import { createTableMockSupabase } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
 const mockCreateJournalEntry = mockedCreateJournalEntry as ReturnType<typeof vi.fn>
 
-type MockResult = { data?: unknown; error?: unknown }
 type RecordedCall = { table: string; method: string; args: unknown[] }
-
-function makeFlexibleSupabase(
-  byTable: Record<string, MockResult | MockResult[]>,
-  calls?: RecordedCall[],
-) {
-  const queues = new Map<string, MockResult[]>()
-  for (const [table, value] of Object.entries(byTable)) {
-    queues.set(table, Array.isArray(value) ? [...value] : [value])
-  }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (value: unknown) => void) => {
-            const queue = queues.get(table)
-            const next = queue && queue.length > 1
-              ? queue.shift()!
-              : (queue?.[0] ?? { data: null, error: null })
-            resolve(next)
-          }
-        }
-        return (...args: unknown[]) => {
-          calls?.push({ table, method: String(prop), args })
-          return buildChain(table)
-        }
-      },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)) }
-}
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const TX_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -142,14 +111,11 @@ beforeEach(() => {
 
 describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () => {
   it('persists and returns the bank transaction date as paid_at', async () => {
-    const calls: RecordedCall[] = []
     const matchedHandler = vi.fn()
     eventBus.on('invoice.match_confirmed', matchedHandler)
     const paidHandler = vi.fn()
     eventBus.on('invoice.paid', paidHandler)
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase(
-        {
+    const { supabase, calls } = createTableMockSupabase({
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           transactions: { data: TRANSACTION, error: null },
           invoices: [
@@ -166,9 +132,9 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
             { data: [], error: null },
             { data: { id: 'ip-1' }, error: null },
           ],
-        },
-        calls,
-      ),
+        })
+    mockServiceClient.mockReturnValue(
+      supabase,
     )
 
     const response = await matchInvoice(
@@ -237,7 +203,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
     const paidHandler = vi.fn()
     eventBus.on('invoice.paid', paidHandler)
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: { data: { ...TRANSACTION, amount: 5000 }, error: null },
         invoices: [
@@ -252,7 +218,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
           { data: [], error: null },
           { data: { id: 'ip-1' }, error: null },
         ],
-      }),
+      }).supabase,
     )
 
     const response = await matchInvoice(
@@ -272,16 +238,9 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
   })
 
   it('3740 residual: the invoice_payments row carries the applied amount, not the cash received (#2250)', async () => {
-    // Remaining 999.60 settled by a whole-krona 1 000.00 bank line: 3740
-    // absorbs the 0.40 and paid_amount advances by the remaining only, so the
-    // AR sub-ledger row must be 999.60 as well (parity with the dashboard
-    // route and the pending-operation commit path).
-    const calls: RecordedCall[] = []
     const paidHandler = vi.fn()
     eventBus.on('invoice.paid', paidHandler)
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase(
-        {
+    const { supabase, calls } = createTableMockSupabase({
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           transactions: { data: { ...TRANSACTION, amount: 1000 }, error: null },
           invoices: [
@@ -301,9 +260,9 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
             { data: [], error: null },
             { data: { id: 'ip-1' }, error: null },
           ],
-        },
-        calls,
-      ),
+        })
+    mockServiceClient.mockReturnValue(
+      supabase,
     )
 
     const response = await matchInvoice(
@@ -359,7 +318,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
     // 1 000 on a never-booked 999,60 invoice: the cash entry recognises
     // revenue and moms on the invoice amounts, 1930 takes what arrived.
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: { data: { ...TRANSACTION, amount: 1000 }, error: null },
         invoices: [
@@ -385,7 +344,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
           { data: [], error: null },
           { data: { id: 'ip-1' }, error: null },
         ],
-      }),
+      }).supabase,
     )
 
     const response = await matchInvoice(
@@ -413,7 +372,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
   })
 
   it('returns 401 when no bearer token is supplied', async () => {
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
     const response = await matchInvoice(
       new Request(
         `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-invoice`,
@@ -435,9 +394,9 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
 
   it('returns 400 VALIDATION_ERROR when invoice_id is missing', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
+      }).supabase,
     )
     const response = await matchInvoice(
       makeRequest(
@@ -453,11 +412,11 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
 
   it('returns 404 when the invoice does not belong to the company', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: { data: TRANSACTION, error: null },
         invoices: { data: null, error: null },
-      }),
+      }).supabase,
     )
     const response = await matchInvoice(
       makeRequest(
@@ -475,7 +434,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice', () 
 describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: custom lines', () => {
   it('books each custom line with its own dimensions', async () => {
     mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
+      createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: { data: TRANSACTION, error: null },
         invoices: [
@@ -490,7 +449,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: cust
           { data: [], error: null },
           { data: { id: 'ip-1' }, error: null },
         ],
-      }),
+      }).supabase,
     )
 
     const response = await matchInvoice(
@@ -530,11 +489,8 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: no v
   }
 
   it('refuses a payment date outside an open period before any write, the storno included', async () => {
-    const calls: RecordedCall[] = []
-    ;(mockedFindFiscalPeriod as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null)
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase(
-        {
+(mockedFindFiscalPeriod as ReturnType<typeof vi.fn>).mockResolvedValueOnce(null)
+    const { supabase, calls } = createTableMockSupabase({
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           // A categorised row: the match would storno its verifikat first.
           transactions: { data: { ...TRANSACTION, journal_entry_id: 'je-categorised' }, error: null },
@@ -544,9 +500,9 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: no v
             error: null,
           },
           invoice_payments: { data: [], error: null },
-        },
-        calls,
-      ),
+        })
+    mockServiceClient.mockReturnValue(
+      supabase,
     )
 
     const response = await matchInvoice(
@@ -565,11 +521,8 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: no v
   })
 
   it('fails closed when the payment entry books nothing: the invoice stays unpaid', async () => {
-    const calls: RecordedCall[] = []
     mockCreateJournalEntry.mockResolvedValueOnce(null)
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase(
-        {
+    const { supabase, calls } = createTableMockSupabase({
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           transactions: { data: TRANSACTION, error: null },
           invoices: [
@@ -584,9 +537,9 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: no v
             { data: [], error: null },
             { data: { id: 'ip-1' }, error: null },
           ],
-        },
-        calls,
-      ),
+        })
+    mockServiceClient.mockReturnValue(
+      supabase,
     )
 
     const response = await matchInvoice(

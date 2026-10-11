@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { generateKassaflodesanalys, type KassaflodesanalysReport } from '../kassaflodesanalys'
 
 // Runs the real report, trial-balance and tax-bridge modules over balanced
@@ -72,9 +72,6 @@ function expectSectionsAddUp(report: KassaflodesanalysReport) {
   expect(report.reconciliation.mismatch_amount).toBe(0)
   expect(report.reconciliation.is_reconciled).toBe(true)
 }
-
-beforeEach(() => { vi.stubEnv('REPORTS_TB_RPC', 'on') })
-afterEach(() => { vi.unstubAllEnvs() })
 
 describe('kassaflödesanalys classifies every account', () => {
   // Deterministic PRNG so a failure reproduces.
