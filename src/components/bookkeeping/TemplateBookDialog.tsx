@@ -11,6 +11,8 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { AmountInput } from '@/components/ui/amount-input'
+import { parseAmountExpression } from '@/lib/money-expression'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -66,9 +68,13 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
     setEntryDate(new Date().toISOString().split('T')[0])
   }, [open])
 
+  // parseAmountExpression, not parseFloat: the field accepts arithmetic
+  // (1200+300, 4500*0,25). Parsing it here as well as on blur keeps the
+  // kontering preview and the Balanserar row live while the sum is typed,
+  // instead of staying empty until focus leaves the field.
   const amount = useMemo(() => {
-    const parsed = parseFloat(amountInput.replace(/\s/g, '').replace(',', '.'))
-    return Number.isFinite(parsed) && parsed > 0 ? roundOre(parsed) : 0
+    const parsed = parseAmountExpression(amountInput)
+    return parsed !== null && parsed > 0 ? parsed : 0
   }, [amountInput])
 
   // The live kontering: recomputed from the template's line pattern on
@@ -185,12 +191,11 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
               </div>
               <div className="space-y-2">
                 <Label htmlFor="tpl-amount">{t('tpl_amount_label')}</Label>
-                <Input
+                <AmountInput
                   id="tpl-amount"
-                  inputMode="decimal"
                   placeholder="0,00"
                   value={amountInput}
-                  onChange={(e) => setAmountInput(e.target.value)}
+                  onValueChange={setAmountInput}
                   autoFocus
                   className="tabular-nums"
                 />

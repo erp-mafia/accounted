@@ -4,7 +4,8 @@ import { useCallback, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { BookOpen } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { AmountInput } from '@/components/ui/amount-input'
+import { parseAmountExpression } from '@/lib/money-expression'
 import { CategoryPopover } from '@/components/transactions/CategoryPopover'
 import TemplatePicker from '@/components/transactions/TemplatePicker'
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
@@ -25,9 +26,12 @@ interface Props {
 
 type Picked = { kind: 'library'; raw: BookingTemplateLibrary } | { kind: 'static'; template: BookingTemplate }
 
+// The field accepts arithmetic (1200+300, 4500*0,25), so read it with the
+// expression parser rather than parseFloat. Evaluating on every render also
+// keeps the submit button's enabled state honest while a sum is still typed.
 function parseAmount(raw: string): number {
-  const n = parseFloat(raw.replace(/\s/g, '').replace(',', '.'))
-  return Number.isFinite(n) && n > 0 ? roundOre(n) : 0
+  const n = parseAmountExpression(raw)
+  return n !== null && n > 0 ? n : 0
 }
 
 /**
@@ -118,13 +122,12 @@ export default function TemplateApplyButton({ onApply, entityType, defaultAmount
             <label htmlFor="template-apply-amount" className="shrink-0 text-[12.5px] text-muted-foreground">
               {t('amount_label')}
             </label>
-            <Input
+            <AmountInput
               id="template-apply-amount"
               ref={amountRef}
-              inputMode="decimal"
               placeholder="0,00"
               value={amount}
-              onChange={(e) => setAmount(e.target.value)}
+              onValueChange={setAmount}
               className="h-8 flex-1 tabular-nums"
             />
             <Button type="submit" size="sm" disabled={!picked || parseAmount(amount) <= 0}>

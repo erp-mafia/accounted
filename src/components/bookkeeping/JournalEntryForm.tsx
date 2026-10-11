@@ -6,6 +6,7 @@ import { useTranslations, useLocale } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { AmountInput } from '@/components/ui/amount-input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -1677,38 +1678,30 @@ export default function JournalEntryForm({
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1">
                 <Label className="text-xs text-muted-foreground">{t('col_debit')}</Label>
-                <Input
+                <AmountInput
                   ref={(el) => { mobileDebitRefs.current[index] = el }}
-                  type="number"
                   value={line.debit_amount}
-                  onChange={(e) => updateLine(index, 'debit_amount', e.target.value)}
+                  onValueChange={(v) => updateLine(index, 'debit_amount', v)}
                   onKeyDown={handleAmountKeyDown(index, 'debit')}
                   onFocus={handleAmountFocus(index, 'debit')}
                   onDoubleClick={() => handleFillBalance(index, 'debit')}
                   title={t('fill_balance_tooltip')}
                   placeholder="0,00"
-                  className="text-right"
-                  inputMode="decimal"
-                  min="0"
-                  step="0.01"
+                  className="text-right tabular-nums"
                 />
               </div>
               <div className="space-y-1">
                 <Label className="text-xs text-muted-foreground">{t('col_credit')}</Label>
-                <Input
+                <AmountInput
                   ref={(el) => { mobileCreditRefs.current[index] = el }}
-                  type="number"
                   value={line.credit_amount}
-                  onChange={(e) => updateLine(index, 'credit_amount', e.target.value)}
+                  onValueChange={(v) => updateLine(index, 'credit_amount', v)}
                   onKeyDown={handleAmountKeyDown(index, 'credit')}
                   onFocus={handleAmountFocus(index, 'credit')}
                   onDoubleClick={() => handleFillBalance(index, 'credit')}
                   title={t('fill_balance_tooltip')}
                   placeholder="0,00"
-                  className="text-right"
-                  inputMode="decimal"
-                  min="0"
-                  step="0.01"
+                  className="text-right tabular-nums"
                 />
               </div>
             </div>
@@ -1833,37 +1826,29 @@ export default function JournalEntryForm({
                     )}
                 </td>
                 <td className="py-1.5 px-1">
-                  <Input
+                  <AmountInput
                     ref={(el) => { desktopDebitRefs.current[index] = el }}
-                    type="number"
                     value={line.debit_amount}
-                    onChange={(e) => updateLine(index, 'debit_amount', e.target.value)}
+                    onValueChange={(v) => updateLine(index, 'debit_amount', v)}
                     onKeyDown={handleAmountKeyDown(index, 'debit')}
                     onFocus={handleAmountFocus(index, 'debit')}
                     onDoubleClick={() => handleFillBalance(index, 'debit')}
                     title={t('fill_balance_tooltip')}
                     placeholder="0,00"
-                    className="text-right h-8"
-                    inputMode="decimal"
-                    min="0"
-                    step="0.01"
+                    className="text-right tabular-nums h-8"
                   />
                 </td>
                 <td className="py-1.5 px-1">
-                  <Input
+                  <AmountInput
                     ref={(el) => { desktopCreditRefs.current[index] = el }}
-                    type="number"
                     value={line.credit_amount}
-                    onChange={(e) => updateLine(index, 'credit_amount', e.target.value)}
+                    onValueChange={(v) => updateLine(index, 'credit_amount', v)}
                     onKeyDown={handleAmountKeyDown(index, 'credit')}
                     onFocus={handleAmountFocus(index, 'credit')}
                     onDoubleClick={() => handleFillBalance(index, 'credit')}
                     title={t('fill_balance_tooltip')}
                     placeholder="0,00"
-                    className="text-right h-8"
-                    inputMode="decimal"
-                    min="0"
-                    step="0.01"
+                    className="text-right tabular-nums h-8"
                   />
                 </td>
                 <td className="py-1.5 px-1 text-right tabular-nums text-muted-foreground">
