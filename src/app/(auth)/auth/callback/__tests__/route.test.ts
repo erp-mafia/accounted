@@ -1,10 +1,18 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { NextRequest } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 
 const verifyOtp = vi.fn()
 const exchangeCodeForSession = vi.fn()
 
+// The redirect origin is resolved from the forwarded host (see route.ts);
+// app.testbrand.example is the registered brand domain in these tests.
+vi.mock('@/lib/branding/resolve', () => ({
+  resolveBrandResultByHost: async (host: string) => ({
+    brand: host === 'app.testbrand.example' ? { domain: host } : null,
+    lookupFailed: false,
+  }),
+}))
 vi.mock('@supabase/ssr', () => ({
   createServerClient: vi.fn(() => ({
     auth: {
@@ -384,5 +392,46 @@ describe('GET /auth/callback: off-origin next after a successful exchange', () =
     const location = response.headers.get('location')
     expect(location).not.toBeNull()
     expect(new URL(location!).origin).toBe('http://localhost:3000')
+  })
+})
+
+describe('GET /auth/callback: redirect origin behind a reverse proxy', () => {
+  const ORIGINAL_APP_URL = process.env.NEXT_PUBLIC_APP_URL
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    process.env.NEXT_PUBLIC_APP_URL = 'https://app.accounted.test'
+    exchangeCodeForSession.mockResolvedValue({
+      error: { message: 'code verifier missing' },
+    })
+  })
+
+  afterEach(() => {
+    if (ORIGINAL_APP_URL === undefined) delete process.env.NEXT_PUBLIC_APP_URL
+    else process.env.NEXT_PUBLIC_APP_URL = ORIGINAL_APP_URL
+  })
+
+  // A standalone Next.js server sees its bind address in request.url; the
+  // redirect must go to the host the browser used, not to 0.0.0.0:3000.
+  it('redirects to the forwarded canonical host, not the bind address', async () => {
+    const request = new NextRequest('http://0.0.0.0:3000/auth/callback?code=xyz&flow=oauth', {
+      headers: { 'x-forwarded-host': 'app.accounted.test', host: '0.0.0.0:3000' },
+    })
+    const response = await GET(request)
+
+    expect(response.headers.get('location')).toBe(
+      'https://app.accounted.test/login?error=auth_error&flow=oauth'
+    )
+  })
+
+  it('falls back to the canonical host for an unknown forwarded host', async () => {
+    const request = new NextRequest('http://0.0.0.0:3000/auth/callback?code=xyz&flow=oauth', {
+      headers: { 'x-forwarded-host': 'evil.example', host: '0.0.0.0:3000' },
+    })
+    const response = await GET(request)
+
+    expect(response.headers.get('location')).toBe(
+      'https://app.accounted.test/login?error=auth_error&flow=oauth'
+    )
   })
 })

@@ -6,6 +6,14 @@ import { NextRequest } from 'next/server'
 // /api/account/email, never as a token_hash. The branch returns before any of
 // the invite/team/landing machinery runs; these mocks only keep the module
 // importable in the test environment.
+// The redirect origin is resolved from the forwarded host (see route.ts);
+// app.testbrand.example is the registered brand domain in these tests.
+vi.mock('@/lib/branding/resolve', () => ({
+  resolveBrandResultByHost: async (host: string) => ({
+    brand: host === 'app.testbrand.example' ? { domain: host } : null,
+    lookupFailed: false,
+  }),
+}))
 vi.mock('@/lib/auth/invite-tokens', () => ({ hashInviteToken: vi.fn() }))
 vi.mock('@/lib/auth/consume-invite-cookie', () => ({
   INVITE_COOKIE_NAME: 'gnubok-invite-token',

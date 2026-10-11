@@ -3,6 +3,7 @@ import { type NextRequest, NextResponse } from 'next/server'
 import { hashInviteToken } from '@/lib/auth/invite-tokens'
 import { INVITE_COOKIE_NAME } from '@/lib/auth/consume-invite-cookie'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
+import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 import { resolveLandingDestination } from '@/lib/company/landing-server'
 import { acceptPendingTeamInviteByToken } from '@/lib/company/pending-invites'
 
@@ -169,7 +170,15 @@ async function resolveStockEmailChangeStatus(
 }
 
 export async function GET(request: NextRequest) {
-  const { searchParams, origin } = new URL(request.url)
+  const { searchParams } = new URL(request.url)
+  // Redirect targets come from the host the browser addressed (forwarded
+  // host, checked against the canonical app URL and registered brand
+  // domains), never from request.url: in a standalone Next.js server behind
+  // a reverse proxy, request.url carries the bind address (for example
+  // http://0.0.0.0:3000), so every post-login redirect left the site.
+  // 'canonical' because this hop only picks a browser destination; a 500
+  // here would strand the user mid-login.
+  const origin = await resolveRequestAppOrigin(request, { onLookupFailure: 'canonical' })
   const code = searchParams.get('code')
   const token_hash = searchParams.get('token_hash')
   const type = searchParams.get('type')
