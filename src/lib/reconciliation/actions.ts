@@ -6,11 +6,15 @@ import { dbError } from '@/lib/errors/db-error'
 import { isUuid } from '@/lib/invariants/uuid'
 import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import { chunk } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import {
+  evaluateSkattekontoLink,
   linkSkattekontoRow,
   linkSkattekontoRows,
   setSkattekontoRowIgnored,
+  skattekontoEntryNet,
   SkattekontoLinkError,
+  skattekontoLinkRefusal,
   unlinkSkattekontoRow,
 } from '@/lib/skatteverket/skattekonto-link'
 import {
@@ -45,6 +49,13 @@ export interface ReconciliationPair {
    * Either way the slices must sum to the transaction amount.
    */
   allocations?: Array<{ journal_entry_id: string; amount: number }>
+  /**
+   * Skattekonto only: link although the rows do not settle the verifikat's
+   * 1630 movement (a summarised verifikat that books more events than these,
+   * crm#1043). The rows' amount leaves both sides; what the verifikat holds
+   * beyond them stays in unmatched_ledger as its remainder. Never a default.
+   */
+  allow_remainder?: boolean
 }
 
 export type PairSkipCode =
@@ -62,9 +73,16 @@ export type PairSkipCode =
 export interface AppliedLink {
   external_id: string
   journal_entry_id: string
-  via?: 'line' | 'entry_total' | 'lines'
+  /** Skattekonto: how the link was accepted; 'partial' = linked with a remainder (allow_remainder). */
+  via?: 'line' | 'entry_total' | 'lines' | 'partial'
   /** Present on the links of a 1:N split: the slice of the row this verifikat settles. */
   allocated_amount?: number
+  /**
+   * Skattekonto, present when not zero: what the verifikat holds on 1630
+   * beyond the rows linked to it once this pair is linked (ledger sign). It
+   * stays in unmatched_ledger with that amount.
+   */
+  remainder_amount?: number
 }
 
 export interface SkippedPair {
@@ -137,21 +155,37 @@ function bankSkipCode(code: BankLinkRefusalCode | undefined): PairSkipCode {
 /** Ids per read: keeps a PostgREST `in` filter well inside URL limits. */
 const FACT_READ_CHUNK = 100
 
+type AccountLine = { account_number: string; debit_amount: number | string; credit_amount: number | string }
+
 interface PairFacts {
-  entries: Map<string, { status: string; voucher_series: string | null; voucher_number: number | null }>
+  entries: Map<
+    string,
+    {
+      status: string
+      voucher_series: string | null
+      voucher_number: number | null
+      /** Skattekonto only: the verifikat's lines, for the amount check. */
+      lines?: AccountLine[] | null
+    }
+  >
   /** Outside rows by id; `linked` already folds in the live-pointer and junction rules. */
-  rows: Map<string, { is_ignored: boolean; linked: boolean }>
+  rows: Map<string, { is_ignored: boolean; linked: boolean; amount?: number; settled?: boolean }>
+  /** Skattekonto only: amounts of the rows already linked to each verifikat. */
+  linkedAmounts: Map<string, number[]>
 }
 
 /**
  * What the commit would refuse before it looks at amounts, for every pair of
  * one verifikat at once: the verifikat is not a posted entry of the company,
  * or an outside row is not the company's, is ignored or is already linked.
- * Two batched reads whatever the pair count. The commit path re-validates
- * all of it and the amounts; this only stops a stage-time preview from
- * offering a pair that can never be linked (feedback seq 740266: a
- * journal_entry_id with one wrong character was staged, approved and only
- * then refused).
+ * Two batched reads whatever the pair count (three on the skattekonto, whose
+ * amounts the dry run checks too: the verifikat's lines ride on the entry
+ * read and the rows already linked to it are one more read). The commit path
+ * re-validates all of it; this only stops a stage-time preview from offering
+ * a pair that can never be linked (feedback seq 740266: a journal_entry_id
+ * with one wrong character was staged, approved and only then refused;
+ * crm#1043: rows against a summarised verifikat were refused only at
+ * approval).
  */
 async function readPairFacts(
   supabase: SupabaseClient,
@@ -168,7 +202,14 @@ async function readPairFacts(
     for (const id of pair.external_ids) if (isUuid(id)) rowIds.add(id)
   }
 
-  const rowFacts: Array<{ id: string; journal_entry_id: string | null; is_ignored: boolean; bank_line: boolean }> = []
+  const rowFacts: Array<{
+    id: string
+    journal_entry_id: string | null
+    is_ignored: boolean
+    bank_line: boolean
+    amount?: number
+    settled?: boolean
+  }> = []
   for (const part of chunk([...rowIds], FACT_READ_CHUNK)) {
     const { data, error } =
       kind === 'bank'
@@ -179,7 +220,7 @@ async function readPairFacts(
             .in('id', part)
         : await supabase
             .from('skattekonto_transactions')
-            .select('id, journal_entry_id, is_ignored')
+            .select('id, journal_entry_id, is_ignored, belopp_skatteverket, status')
             .eq('company_id', companyId)
             .in('id', part)
     if (error) throw dbError(error, 'Kunde inte läsa raderna')
@@ -187,6 +228,8 @@ async function readPairFacts(
       id: string
       journal_entry_id: string | null
       is_ignored: boolean | null
+      belopp_skatteverket?: number | string | null
+      status?: string | null
       transaction_voucher_links?: Array<{ role?: string | null }> | null
     }>) {
       rowFacts.push({
@@ -194,6 +237,9 @@ async function readPairFacts(
         journal_entry_id: row.journal_entry_id,
         is_ignored: row.is_ignored === true,
         bank_line: hasBankLineJunctionRow(row.transaction_voucher_links),
+        ...(kind === 'skattekonto'
+          ? { amount: Number(row.belopp_skatteverket), settled: row.status === 'booked' }
+          : {}),
       })
       // A bank row's pointer blocks a link only while its verifikat is
       // posted (manualLink, issue #988), so its status is read with the rest.
@@ -204,15 +250,46 @@ async function readPairFacts(
   }
 
   const entries: PairFacts['entries'] = new Map()
+  const linkedAmounts: PairFacts['linkedAmounts'] = new Map()
   for (const part of chunk([...entryIds], FACT_READ_CHUNK)) {
-    const { data, error } = await supabase
-      .from('journal_entries')
-      .select('id, status, voucher_series, voucher_number')
-      .eq('company_id', companyId)
-      .in('id', part)
+    // Two literal selects so the phantom-column guard can read each one.
+    const { data, error } =
+      kind === 'skattekonto'
+        ? await supabase
+            .from('journal_entries')
+            .select(
+              'id, status, voucher_series, voucher_number, lines:journal_entry_lines ( account_number, debit_amount, credit_amount )',
+            )
+            .eq('company_id', companyId)
+            .in('id', part)
+        : await supabase
+            .from('journal_entries')
+            .select('id, status, voucher_series, voucher_number')
+            .eq('company_id', companyId)
+            .in('id', part)
     if (error) throw dbError(error, 'Kunde inte läsa verifikaten')
-    for (const e of (data ?? []) as Array<{ id: string; status: string; voucher_series: string | null; voucher_number: number | null }>) {
+    for (const e of (data ?? []) as Array<{
+      id: string
+      status: string
+      voucher_series: string | null
+      voucher_number: number | null
+      lines?: AccountLine[] | null
+    }>) {
       entries.set(e.id, e)
+    }
+    if (kind !== 'skattekonto') continue
+    const { data: linked, error: linkedError } = await supabase
+      .from('skattekonto_transactions')
+      .select('id, journal_entry_id, belopp_skatteverket')
+      .eq('company_id', companyId)
+      .in('journal_entry_id', part)
+    if (linkedError) throw dbError(linkedError, 'Kunde inte läsa kopplade rader')
+    for (const r of (linked ?? []) as Array<{ journal_entry_id: string | null; belopp_skatteverket: number | string | null }>) {
+      if (!r.journal_entry_id) continue
+      linkedAmounts.set(r.journal_entry_id, [
+        ...(linkedAmounts.get(r.journal_entry_id) ?? []),
+        Number(r.belopp_skatteverket),
+      ])
     }
   }
 
@@ -222,9 +299,46 @@ async function readPairFacts(
       kind === 'bank'
         ? r.bank_line || (r.journal_entry_id !== null && entries.get(r.journal_entry_id)?.status === 'posted')
         : r.journal_entry_id !== null
-    rows.set(r.id, { is_ignored: r.is_ignored, linked })
+    rows.set(r.id, {
+      is_ignored: r.is_ignored,
+      linked,
+      ...(kind === 'skattekonto' ? { amount: r.amount, settled: r.settled } : {}),
+    })
   }
-  return { entries, rows }
+  return { entries, rows, linkedAmounts }
+}
+
+/**
+ * The amount half of a skattekonto dry run: the same evaluation the live
+ * link makes (evaluateSkattekontoLink), over the facts already read. Returns
+ * the refusal the live link would give, or how the pair would be linked and
+ * what it leaves on the verifikat.
+ */
+function skattekontoAmountCheck(
+  facts: PairFacts,
+  externalIds: string[],
+  journalEntryId: string,
+  allowRemainder: boolean,
+):
+  | { ok: true; via: 'line' | 'entry_total' | 'lines' | 'partial'; remainder: number }
+  | { ok: false; code: PairSkipCode; message: string } {
+  if (externalIds.some((id) => facts.rows.get(id)?.settled === false)) {
+    return { ok: false, code: 'PAIR_NOT_CLOSED', message: 'En kommande händelse kan inte kopplas ännu.' }
+  }
+  const lines = facts.entries.get(journalEntryId)?.lines ?? null
+  const amounts = externalIds.map((id) => Number(facts.rows.get(id)?.amount))
+  const linked = facts.linkedAmounts.get(journalEntryId) ?? []
+  const evaluation = evaluateSkattekontoLink(lines, linked, amounts, { allowRemainder })
+  if (evaluation.ok && evaluation.via) {
+    return { ok: true, via: evaluation.via, remainder: evaluation.remainder }
+  }
+  const refusal = skattekontoLinkRefusal(evaluation, {
+    entryNet: skattekontoEntryNet(lines).net,
+    rowsTotal: roundOre(amounts.reduce((sum, a) => sum + a, 0)),
+    rowCount: amounts.length,
+    alreadyLinked: linked.length,
+  })
+  return { ok: false, ...skipCodeFor(new SkattekontoLinkError(refusal.message, refusal.code)) }
 }
 
 function entrySkip(facts: PairFacts, journalEntryId: string): { code: PairSkipCode; message: string } | null {
@@ -306,7 +420,9 @@ async function proposalsAsPairs(
 /**
  * Link pairs on one account. A pair is one OR MANY outside rows against
  * exactly one verifikat (bank: independent links per transaction; skattekonto:
- * all-or-nothing with the sum settling the verifikat), or, on a bank account,
+ * all-or-nothing with the sum settling the verifikat, or, with the pair's
+ * allow_remainder, against a summarised verifikat that keeps the rest as its
+ * remainder), or, on a bank account,
  * ONE transaction against SEVERAL verifikat (1:N, issue #1553): all-or-nothing
  * with the slices summing to the transaction. Any other shape is reported as
  * UNSUPPORTED_PAIR_SHAPE, never silently reduced. Dry run validates shapes,
@@ -475,9 +591,26 @@ export async function matchPairs(
           skipped.push({ pair, ...rowProblem })
           continue
         }
-        for (const externalId of externalIds) {
-          applied.push({ external_id: externalId, journal_entry_id: journalEntryId })
+        // The amounts, as the live link checks them: a pair that cannot
+        // close is refused here, not after approval.
+        const amounts = skattekontoAmountCheck(facts, externalIds, journalEntryId, pair.allow_remainder === true)
+        if (!amounts.ok) {
+          skipped.push({ pair, code: amounts.code, message: amounts.message })
+          continue
         }
+        for (const externalId of externalIds) {
+          applied.push({
+            external_id: externalId,
+            journal_entry_id: journalEntryId,
+            via: amounts.via,
+            ...(amounts.remainder !== 0 ? { remainder_amount: amounts.remainder } : {}),
+          })
+        }
+        // A later pair on the same verifikat sees these rows as linked.
+        facts.linkedAmounts.set(journalEntryId, [
+          ...(facts.linkedAmounts.get(journalEntryId) ?? []),
+          ...externalIds.map((id) => Number(facts.rows.get(id)?.amount)),
+        ])
         continue
       }
       // Bank rows link one by one (manualLink per transaction), so a bad row
@@ -495,16 +628,32 @@ export async function matchPairs(
 
     try {
       if (parsed.kind === 'skattekonto') {
+        // Only an explicit allow_remainder reaches the link helpers; every
+        // other pair is called exactly as before.
+        const linkOptions = pair.allow_remainder === true ? ([{ allowRemainder: true }] as const) : ([] as const)
+        const remainderOf = (remainder: unknown) =>
+          typeof remainder === 'number' && remainder !== 0 ? { remainder_amount: remainder } : {}
         if (externalIds.length === 1) {
-          const r = await linkSkattekontoRow(supabase, companyId, externalIds[0], journalEntryId)
-          applied.push({ external_id: externalIds[0], journal_entry_id: journalEntryId, via: r.via })
+          const r = await linkSkattekontoRow(supabase, companyId, externalIds[0], journalEntryId, ...linkOptions)
+          applied.push({
+            external_id: externalIds[0],
+            journal_entry_id: journalEntryId,
+            via: r.via,
+            ...remainderOf(r.remainder),
+          })
           await emitMatched(externalIds[0], journalEntryId)
         } else {
-          // All-or-nothing: the group's sum must settle the verifikat, and a
-          // lost race rolls the whole group back inside the link helper.
-          const r = await linkSkattekontoRows(supabase, companyId, externalIds, journalEntryId)
+          // All-or-nothing: the group's sum must settle the verifikat (or the
+          // pair allows a remainder), and a lost race rolls the whole group
+          // back inside the link helper.
+          const r = await linkSkattekontoRows(supabase, companyId, externalIds, journalEntryId, ...linkOptions)
           for (const externalId of r.skattekonto_transaction_ids) {
-            applied.push({ external_id: externalId, journal_entry_id: journalEntryId, via: r.via })
+            applied.push({
+              external_id: externalId,
+              journal_entry_id: journalEntryId,
+              via: r.via,
+              ...remainderOf(r.remainder),
+            })
             await emitMatched(externalId, journalEntryId)
           }
         }

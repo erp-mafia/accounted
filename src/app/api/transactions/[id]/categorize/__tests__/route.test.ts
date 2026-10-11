@@ -396,6 +396,50 @@ describe('POST /api/transactions/[id]/categorize', () => {
     )
   })
 
+  // crm#1136: a refund (a category booked against its direction) is a mirrored
+  // pair. Saved as a "Learned: <merchant>" rule it would propose every later
+  // sale to the same counterparty with revenue on the debit side.
+  it('books a refund to a customer without learning a mapping rule from it', async () => {
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -125,
+      merchant_name: 'Kund AB',
+      journal_entry_id: null,
+    })
+    const refundMapping = {
+      ...defaultMappingResult,
+      debit_account: '3001',
+      credit_account: '1930',
+      vat_lines: [{ account_number: '2611', debit_amount: 25, credit_amount: 0, description: 'Återföring utgående moms 25%' }],
+      direction_mismatch: true,
+    }
+    mockBuildMappingResultFromCategory.mockReturnValue(refundMapping)
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [{ id: 'period-1' }], error: null })
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'income_services' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ success: boolean; journal_entry_id: string }>(response)
+
+    expect(status).toBe(200)
+    expect(body.journal_entry_id).toBe('je-1')
+    // The verifikat is built from the mirrored pair as the mapping returned it.
+    expect(mockCreateTransactionJournalEntry.mock.calls[0][4]).toMatchObject({
+      debit_account: '3001',
+      credit_account: '1930',
+      direction_mismatch: true,
+    })
+    expect(mockSaveUserMappingRule).not.toHaveBeenCalled()
+  })
+
   it('books a standardmall bank leg on the single enabled cash account when cash_account_id is NULL (#1722)', async () => {
     const tx = makeTransaction({
       id: 'tx-1',

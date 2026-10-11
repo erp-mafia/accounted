@@ -671,6 +671,67 @@ describe('buildTransactionEntryLines', () => {
     expect(previewLines).toEqual(input.lines)
   })
 
+  // crm#1136: a refund to a customer debits the revenue account and the
+  // utgående moms it carried. The money-out branch used to take only 2641 off
+  // the business line, so a 26x1 debit sat on top of the gross: 150 debit
+  // against 125 credit, an entry the balance trigger refuses.
+  it('nets the revenue line against utgående moms taken back on a refund to a customer', () => {
+    const tx = makeTransaction({ amount: -125, description: 'Återbetalning kund' })
+    const mapping = makeMappingResult({
+      debit_account: '3001',
+      credit_account: '1686',
+      vat_lines: [
+        { account_number: '2611', debit_amount: 25, credit_amount: 0, description: 'Återföring utgående moms 25%' },
+      ],
+    })
+
+    const lines = buildTransactionEntryLines(tx, mapping)
+
+    expect(lines.map(l => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['2611', 25, 0],
+      ['3001', 100, 0],
+      ['1686', 0, 125],
+    ])
+    assertBalanced({ lines } as CreateJournalEntryInput)
+  })
+
+  it('keeps the gross on the cost line beside a reverse-charge set (the set nets to zero)', () => {
+    const tx = makeTransaction({ amount: -1000, description: 'EU SaaS' })
+    const mapping = makeMappingResult({
+      debit_account: '6540',
+      credit_account: '1930',
+      vat_lines: [
+        { account_number: '2645', debit_amount: 250, credit_amount: 0, description: 'Fiktiv ingående moms' },
+        { account_number: '2614', debit_amount: 0, credit_amount: 250, description: 'Fiktiv utgående moms' },
+        { account_number: '4535', debit_amount: 1000, credit_amount: 0, description: 'Basbelopp' },
+        { account_number: '4598', debit_amount: 0, credit_amount: 1000, description: 'Motkonto' },
+      ],
+    })
+
+    const lines = buildTransactionEntryLines(tx, mapping)
+
+    expect(lines.find(l => l.account_number === '6540')?.debit_amount).toBe(1000)
+    expect(lines.find(l => l.account_number === '1930')?.credit_amount).toBe(1000)
+    assertBalanced({ lines } as CreateJournalEntryInput)
+  })
+
+  it('books the refund on the bank ledger named in the source snapshot (money out credits it)', async () => {
+    const tx = makeTransaction({ amount: -125, description: 'Återbetalning kund' })
+    const mapping = makeMappingResult({
+      debit_account: '3001',
+      credit_account: '1686',
+      vat_lines: [
+        { account_number: '2611', debit_amount: 25, credit_amount: 0, description: 'Återföring utgående moms 25%' },
+      ],
+    })
+
+    await createTransactionJournalEntry(null as never, 'company-1', 'user-1', tx, mapping)
+
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.bank_booking_context?.[0]).toMatchObject({ transaction_id: tx.id, settlement_account: '1686', amount: -125 })
+    assertBalanced(input)
+  })
+
   it('throws InvalidMappingResultError on missing accounts', () => {
     const tx = makeTransaction()
     expect(() => buildTransactionEntryLines(tx, makeMappingResult({ debit_account: '' })))
@@ -1082,6 +1143,18 @@ describe('buildTransactionEntryLines: the business line carries the bag in every
         vat_lines: [vat('2645', 250, 0), vat('2614', 0, 250), vat('4535', 1000, 0), vat('4598', 0, 1000)],
       },
       business: '6540',
+    },
+    {
+      branch: 'refund to a customer (revenue and output VAT debited)',
+      amount: -1250,
+      mapping: { debit_account: '3001', credit_account: '1930', vat_lines: [vat('2611', 250, 0)] },
+      business: '3001',
+    },
+    {
+      branch: 'refund from a supplier (cost and input VAT credited)',
+      amount: 1250,
+      mapping: { debit_account: '1930', credit_account: '5410', vat_lines: [vat('2641', 0, 250)] },
+      business: '5410',
     },
     {
       branch: 'income with output VAT',

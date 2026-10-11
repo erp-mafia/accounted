@@ -15,6 +15,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { CreateEmployeeSchema, UpdateEmployeeSchema } from '@/lib/api/schemas'
 import { decryptPersonnummer, maskPersonnummer } from '@/lib/salary/personnummer'
 import { getCompanyEntityType } from '@/lib/company/context'
 import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/lib/salary/employment-rules'
@@ -34,51 +35,36 @@ export interface EmployeeSummaryResult {
   is_active: boolean
 }
 
-/** Columns an executor is allowed to write. Anything else in params is
- * ignored (defense in depth against a tampered pending_operations row). */
-const WRITABLE_COLUMNS = new Set([
-  'first_name',
-  'last_name',
-  'employment_type',
-  'employment_start',
-  'employment_end',
-  'employment_degree',
-  'hours_per_week',
-  'workdays_per_week',
-  'salary_type',
-  'monthly_salary',
-  'hourly_rate',
-  'tax_table_number',
-  'tax_column',
-  'tax_municipality',
-  'is_sidoinkomst',
-  'f_skatt_status',
-  'clearing_number',
-  'bank_account_number',
-  'vacation_rule',
-  'vacation_days_per_year',
-  'semestertillagg_rate',
-  'vacation_pay_rate',
-  'email',
-  'phone',
-  'address_line1',
-  'postal_code',
-  'city',
-  'vaxa_stod_eligible',
-  'vaxa_stod_start',
-  'vaxa_stod_end',
-  'jamkning_percentage',
-  'jamkning_valid_from',
-  'jamkning_valid_to',
-  'default_dimensions',
-])
+/**
+ * Columns an executor is allowed to write: the keys of the schema the staging
+ * tool validated the input with, per verb. Anything else in params is ignored
+ * (defense in depth against a tampered pending_operations row).
+ *
+ * Read off the schemas instead of kept as a second hand-written list. The
+ * list used to stand here on its own, so a key the tool advertised and staged
+ * (is_active) was dropped at this last step: sent with another field the
+ * approval answered success with the flag unwritten, sent alone it failed
+ * after the preview had shown the change (crm#1133). The create and update
+ * sets differ exactly where the schemas do: is_active is update-only.
+ * personnummer is in both schemas and never writable here (see the PII
+ * contract above).
+ */
+function writableColumns(shape: Record<string, unknown>): ReadonlySet<string> {
+  return new Set(Object.keys(shape).filter((key) => key !== 'personnummer'))
+}
+
+export const EMPLOYEE_CREATE_COLUMNS = writableColumns(CreateEmployeeSchema.shape)
+export const EMPLOYEE_UPDATE_COLUMNS = writableColumns(UpdateEmployeeSchema.shape)
 
 /** Undefined means absent (column unchanged); null is kept, it clears the
  * column (the update contract, #3008). */
-function pickWritable(fields: Record<string, unknown>): Record<string, unknown> {
+function pickWritable(
+  fields: Record<string, unknown>,
+  writable: ReadonlySet<string>,
+): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(fields)) {
-    if (WRITABLE_COLUMNS.has(key) && value !== undefined) {
+    if (writable.has(key) && value !== undefined) {
       out[key] = value
     }
   }
@@ -103,7 +89,7 @@ export async function createEmployee(
     return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'personnummer_encrypted' } }
   }
 
-  const fields = pickWritable(rest)
+  const fields = pickWritable(rest, EMPLOYEE_CREATE_COLUMNS)
   if (!fields.first_name || !fields.last_name || !fields.employment_start) {
     return {
       ok: false,
@@ -205,7 +191,7 @@ export async function updateEmployee(
     }
   }
 
-  const updates = pickWritable(args.patch)
+  const updates = pickWritable(args.patch, EMPLOYEE_UPDATE_COLUMNS)
   if (Object.keys(updates).length === 0) {
     return {
       ok: false,

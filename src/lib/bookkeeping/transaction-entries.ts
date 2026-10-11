@@ -47,6 +47,21 @@ async function findEarliestFiscalPeriod(
 }
 
 /**
+ * What the moms lines take out of the business line: their net on the
+ * business line's own side. Ingående moms on a purchase and utgående moms
+ * taken back on a refund to a customer are debits beside a debited business
+ * line; utgående moms on a sale and ingående moms taken back on a refund from
+ * a supplier are credits beside a credited one. A reverse-charge set has legs
+ * on both sides and nets to zero, so the business line keeps the gross.
+ */
+function vatBesideBusinessLine(vatLines: VatJournalLine[], businessSide: 'debit' | 'credit'): number {
+  return roundOre(vatLines.reduce(
+    (sum, l) => sum + (businessSide === 'debit' ? l.debit_amount - l.credit_amount : l.credit_amount - l.debit_amount),
+    0,
+  ))
+}
+
+/**
  * Build the journal entry lines for a bank transaction from a mapping engine
  * result. Single source of truth for the gross→net split: the expense account
  * gets the amount net of deductible input VAT while the bank line stays gross.
@@ -75,6 +90,12 @@ async function findEarliestFiscalPeriod(
  * Income pattern:
  *   Debit  1930 Företagskonto          [total]
  *   Credit 3xxx Revenue account        [total]
+ *
+ * Refund patterns (a row against its category's direction, see
+ * isCategoryReversal in category-mapping.ts): the same accounts on the
+ * opposite sides, the bank line still on the side the money moved.
+ *   Refund to a customer:    Debit 3xxx [net], Debit 26x1 [VAT], Credit 1930 [total]
+ *   Refund from a supplier:  Debit 1930 [total], Credit 5xxx/6xxx [net], Credit 2641 [VAT]
  */
 export function buildTransactionEntryLines(
   transaction: Transaction,
@@ -95,6 +116,10 @@ export function buildTransactionEntryLines(
     throw new TransactionMissingSekValueError(transaction.id, transaction.currency, transaction.date)
   }
   const absAmount = Math.abs(sekAmount)
+  // Money out. The name is historical: the sign decides only which side the
+  // bank line sits on (credit for money out), and the mapping's other account
+  // takes the opposite side. So the money-out branches below also book a
+  // refund to a customer, and the money-in branches a refund from a supplier.
   const isExpense = transaction.amount < 0
   const isForeign = transaction.currency !== 'SEK'
   const currencyMeta = buildCurrencyMetadata(
@@ -182,12 +207,13 @@ export function buildTransactionEntryLines(
       }
     }
   } else if (isExpense) {
-    // Business expense (legacy single debit/credit path)
+    // Money out: a business expense, or a refund to a customer (legacy single
+    // debit/credit path)
     const debitAccount = mappingResult.debit_account
     const creditAccount = mappingResult.credit_account || '1930'
 
     if (mappingResult.vat_lines.length > 0) {
-      // Has VAT handling (reverse charge or input VAT)
+      // Has VAT handling (reverse charge, input VAT, or output VAT taken back)
       for (const vatLine of mappingResult.vat_lines) {
         lines.push({
           account_number: vatLine.account_number,
@@ -197,10 +223,11 @@ export function buildTransactionEntryLines(
         })
       }
 
-      // Expense account gets the net amount (total minus VAT if applicable)
-      const vatDebit = mappingResult.vat_lines
-        .filter((l) => l.debit_amount > 0 && l.account_number === '2641')
-        .reduce((sum, l) => sum + l.debit_amount, 0)
+      // The business account gets the net amount (total minus the moms beside
+      // it): ingående moms on 2641 for a purchase, utgående moms taken back on
+      // 26x1 for a refund to a customer. It used to count 2641 alone, which
+      // left a refund's 26x1 debit on top of the gross (crm#1136).
+      const vatDebit = vatBesideBusinessLine(mappingResult.vat_lines, 'debit')
       // Round to 2 decimal places to avoid floating point issues
       const netAmount = Math.round((absAmount - vatDebit) * 100) / 100
 
@@ -229,7 +256,8 @@ export function buildTransactionEntryLines(
       ...(isForeign ? currencyMeta : {}),
     })
   } else {
-    // Income (legacy single debit/credit path)
+    // Money in: income, or a refund from a supplier (legacy single
+    // debit/credit path)
     const debitAccount = mappingResult.debit_account || '1930'
     const creditAccount = mappingResult.credit_account
 
@@ -239,9 +267,7 @@ export function buildTransactionEntryLines(
       // pair that nets to zero, so the business line keeps the gross amount.
       // Ordinary output-VAT lines are credit-only (debit_amount 0), so the
       // net equals the old credit-sum for every non-RC path.
-      const vatCredit = roundOre(
-        mappingResult.vat_lines.reduce((sum, l) => sum + l.credit_amount - l.debit_amount, 0)
-      )
+      const vatCredit = vatBesideBusinessLine(mappingResult.vat_lines, 'credit')
       const netAmount = Math.round((absAmount - vatCredit) * 100) / 100
 
       // Debit bank for gross amount

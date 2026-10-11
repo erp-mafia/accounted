@@ -128,8 +128,21 @@ describe('matchPairs', () => {
 
   it('dry run resolves proposals into pairs without writing', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: [{ id: R1, journal_entry_id: null, is_ignored: false }] }) // skattekonto_transactions
-    enqueue({ data: [{ id: E1, status: 'posted', voucher_series: 'A', voucher_number: 7 }] }) // journal_entries
+    // The dry run checks the amounts too, as the live link does: the row,
+    // the verifikat with its lines, and the rows already linked to it.
+    enqueue({ data: [{ id: R1, journal_entry_id: null, is_ignored: false, belopp_skatteverket: 5000, status: 'booked' }] }) // skattekonto_transactions
+    enqueue({
+      data: [
+        {
+          id: E1,
+          status: 'posted',
+          voucher_series: 'A',
+          voucher_number: 7,
+          lines: [{ account_number: '1630', debit_amount: 5000, credit_amount: 0 }],
+        },
+      ],
+    }) // journal_entries
+    enqueue({ data: [] }) // rows already linked to the verifikat
     skvStatusMock.mockResolvedValue({
       items: {
         proposed: [
@@ -149,7 +162,7 @@ describe('matchPairs', () => {
     )
 
     expect(result).toMatchObject({ dry_run: true, considered: 1 })
-    expect(result?.applied).toEqual([{ external_id: R1, journal_entry_id: E1 }])
+    expect(result?.applied).toEqual([{ external_id: R1, journal_entry_id: E1, via: 'line' }])
     expect(linkMock).not.toHaveBeenCalled()
     expect(emitMock).not.toHaveBeenCalled()
   })
@@ -628,6 +641,211 @@ describe('matchPairs dry run: every pair is checked against the ledger before an
         { dryRun: true },
       ),
     ).rejects.toMatchObject({ code: '57014' })
+  })
+})
+
+// crm#1043: rows against one summarised verifikat (the year booked as one
+// voucher, part of it from before the fetched history). All figures made up.
+describe('matchPairs: skattekonto rows against a summarised verifikat (allow_remainder)', () => {
+  const R3 = '77777777-7777-4777-8777-777777777777'
+  const skvRow = (id: string, belopp: number, over: Record<string, unknown> = {}) => ({
+    id,
+    journal_entry_id: null,
+    is_ignored: false,
+    belopp_skatteverket: belopp,
+    status: 'booked',
+    ...over,
+  })
+  // Net on 1630: 300 000 - 180 000.50 - 82 500.25 = 37 499.25
+  const summarised = (id: string, lines?: unknown[]) => ({
+    id,
+    status: 'posted',
+    voucher_series: 'B',
+    voucher_number: 1,
+    lines: lines ?? [
+      { account_number: '1630', debit_amount: 300000, credit_amount: 0 },
+      { account_number: '1630', debit_amount: 0, credit_amount: 180000.5 },
+      { account_number: '1630', debit_amount: 0, credit_amount: 82500.25 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 300000 },
+    ],
+  })
+  const pair = { external_ids: [R1, R2, R3], journal_entry_ids: [E1] }
+  const rows = [skvRow(R1, 100000), skvRow(R2, -60000.5), skvRow(R3, -20000)]
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    linkMock.mockReset()
+    linkGroupMock.mockReset()
+    emitMock.mockResolvedValue(undefined)
+  })
+
+  it('live: without the flag the helper is called exactly as before and its refusal is PAIR_NOT_CLOSED', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    linkGroupMock.mockRejectedValueOnce(new SkattekontoLinkError('motsvarar inte summan', 'INVALID_CANDIDATE'))
+    const result = await matchPairs(supabase as never, COMPANY, USER, 'skattekonto', { pairs: [pair] })
+    expect(linkGroupMock).toHaveBeenCalledWith(supabase, COMPANY, [R1, R2, R3], E1)
+    expect(result?.applied).toEqual([])
+    expect(result?.skipped.map((s) => s.code)).toEqual(['PAIR_NOT_CLOSED'])
+    expect(emitMock).not.toHaveBeenCalled()
+  })
+
+  it('live: allow_remainder reaches the helper, and every applied link carries via partial and what stays on the verifikat', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    linkGroupMock.mockResolvedValueOnce({
+      journal_entry_id: E1,
+      via: 'partial',
+      skattekonto_transaction_ids: [R1, R2, R3],
+      remainder: 17499.75,
+    })
+    const result = await matchPairs(supabase as never, COMPANY, USER, 'skattekonto', {
+      pairs: [{ ...pair, allow_remainder: true }],
+    })
+    expect(linkGroupMock).toHaveBeenCalledWith(supabase, COMPANY, [R1, R2, R3], E1, { allowRemainder: true })
+    expect(result?.applied).toEqual(
+      [R1, R2, R3].map((id) => ({ external_id: id, journal_entry_id: E1, via: 'partial', remainder_amount: 17499.75 })),
+    )
+    expect(result?.skipped).toEqual([])
+    expect(emitMock).toHaveBeenCalledTimes(3)
+  })
+
+  it('live: one row with allow_remainder goes through the single-row helper with the same option', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    linkMock.mockResolvedValueOnce({ skattekonto_transaction_id: R1, journal_entry_id: E1, via: 'partial', remainder: -62500.75 })
+    const result = await matchPairs(supabase as never, COMPANY, USER, 'skattekonto', {
+      pairs: [{ external_ids: [R1], journal_entry_ids: [E1], allow_remainder: true }],
+    })
+    expect(linkMock).toHaveBeenCalledWith(supabase, COMPANY, R1, E1, { allowRemainder: true })
+    expect(result?.applied).toEqual([{ external_id: R1, journal_entry_id: E1, via: 'partial', remainder_amount: -62500.75 }])
+  })
+
+  it('live: an exact link reports no remainder_amount (the helper says 0)', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    linkMock.mockResolvedValueOnce({ skattekonto_transaction_id: R1, journal_entry_id: E1, via: 'line', remainder: 0 })
+    const result = await matchPairs(supabase as never, COMPANY, USER, 'skattekonto', {
+      pairs: [{ external_ids: [R1], journal_entry_ids: [E1] }],
+    })
+    expect(linkMock).toHaveBeenCalledWith(supabase, COMPANY, R1, E1)
+    expect(result?.applied).toEqual([{ external_id: R1, journal_entry_id: E1, via: 'line' }])
+  })
+
+  it('dry run: the pair is refused at stage time, with both sums, the remainder and allow_remainder named', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: rows })
+    enqueue({ data: [summarised(E1)] })
+    enqueue({ data: [] })
+    const result = await matchPairs(supabase as never, COMPANY, USER, 'skattekonto', { pairs: [pair] }, { dryRun: true })
+    expect(result?.applied).toEqual([])
+    expect(result?.skipped).toHaveLength(1)
+    expect(result?.skipped[0]).toMatchObject({ pair, code: 'PAIR_NOT_CLOSED' })
+    expect(result?.skipped[0].message).toContain('motsvarar inte summan av de valda händelserna')
+    expect(result?.skipped[0].message).toContain('allow_remainder')
+    // Reads only: the rows, the verifikat with its lines, the rows already linked to it.
+    expect(findCalls('skattekonto_transactions', 'update')).toEqual([])
+    expect(findCalls('skattekonto_transactions', 'in')).toEqual([
+      ['id', [R1, R2, R3]],
+      ['journal_entry_id', [E1]],
+    ])
+    expect(linkGroupMock).not.toHaveBeenCalled()
+  })
+
+  it('dry run: with allow_remainder the preview shows via partial and the remainder, and writes nothing', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: rows })
+    enqueue({ data: [summarised(E1)] })
+    enqueue({ data: [] })
+    const result = await matchPairs(
+      supabase as never,
+      COMPANY,
+      USER,
+      'skattekonto',
+      { pairs: [{ ...pair, allow_remainder: true }] },
+      { dryRun: true },
+    )
+    expect(result?.skipped).toEqual([])
+    expect(result?.applied).toEqual(
+      [R1, R2, R3].map((id) => ({ external_id: id, journal_entry_id: E1, via: 'partial', remainder_amount: 17499.75 })),
+    )
+    expect(findCalls('skattekonto_transactions', 'update')).toEqual([])
+    expect(linkGroupMock).not.toHaveBeenCalled()
+    expect(emitMock).not.toHaveBeenCalled()
+  })
+
+  it('dry run: rows already linked to the verifikat count in the remainder, and a second pair sees the first', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [skvRow(R1, -60000.5), skvRow(R2, -20000)] })
+    enqueue({ data: [summarised(E1)] })
+    enqueue({ data: [{ id: 'linked-1', journal_entry_id: E1, belopp_skatteverket: 100000 }] })
+    const result = await matchPairs(
+      supabase as never,
+      COMPANY,
+      USER,
+      'skattekonto',
+      {
+        pairs: [
+          { external_ids: [R1], journal_entry_ids: [E1], allow_remainder: true },
+          { external_ids: [R2], journal_entry_ids: [E1], allow_remainder: true },
+        ],
+      },
+      { dryRun: true },
+    )
+    expect(result?.applied).toEqual([
+      // 37 499.25 - 100 000 + 60 000.50
+      { external_id: R1, journal_entry_id: E1, via: 'partial', remainder_amount: -2500.25 },
+      // ... + 20 000
+      { external_id: R2, journal_entry_id: E1, via: 'partial', remainder_amount: 17499.75 },
+    ])
+  })
+
+  it('dry run: guard rails hold with the flag (no 1630 line, a kommande row)', async () => {
+    const { supabase, enqueue, reset } = createQueuedMockSupabase()
+    enqueue({ data: rows })
+    enqueue({ data: [summarised(E1, [{ account_number: '1930', debit_amount: 0, credit_amount: 5000 }])] })
+    enqueue({ data: [] })
+    const noLine = await matchPairs(
+      supabase as never,
+      COMPANY,
+      USER,
+      'skattekonto',
+      { pairs: [{ ...pair, allow_remainder: true }] },
+      { dryRun: true },
+    )
+    expect(noLine?.applied).toEqual([])
+    expect(noLine?.skipped[0]).toMatchObject({ code: 'PAIR_NOT_CLOSED', message: expect.stringContaining('ingen rad på 1630') })
+
+    reset()
+    enqueue({ data: [skvRow(R1, 100000), skvRow(R2, -60000.5, { status: 'upcoming' }), skvRow(R3, -20000)] })
+    enqueue({ data: [summarised(E1)] })
+    enqueue({ data: [] })
+    const upcoming = await matchPairs(
+      supabase as never,
+      COMPANY,
+      USER,
+      'skattekonto',
+      { pairs: [{ ...pair, allow_remainder: true }] },
+      { dryRun: true },
+    )
+    expect(upcoming?.applied).toEqual([])
+    expect(upcoming?.skipped[0]).toMatchObject({ code: 'PAIR_NOT_CLOSED', message: 'En kommande händelse kan inte kopplas ännu.' })
+  })
+
+  it('dry run: an exact pair previews as before, plus how it settles, and no remainder', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [skvRow(R1, -4521), skvRow(R2, -7704)] })
+    enqueue({ data: [summarised(E1, [{ account_number: '1630', debit_amount: 0, credit_amount: 12225 }])] })
+    enqueue({ data: [] })
+    const result = await matchPairs(
+      supabase as never,
+      COMPANY,
+      USER,
+      'skattekonto',
+      { pairs: [{ external_ids: [R1, R2], journal_entry_ids: [E1] }] },
+      { dryRun: true },
+    )
+    expect(result?.skipped).toEqual([])
+    expect(result?.applied).toEqual([
+      { external_id: R1, journal_entry_id: E1, via: 'line' },
+      { external_id: R2, journal_entry_id: E1, via: 'line' },
+    ])
   })
 })
 

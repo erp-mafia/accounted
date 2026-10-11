@@ -41,6 +41,9 @@ import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { generateKassaflodesanalys } from '@/lib/reports/kassaflodesanalys'
 import { CashFlowTaxAllocationError } from '@/lib/reports/cash-flow-tax'
 import { listAssets } from '@/lib/bokslut/assets/asset-service'
+import type { TrialBalanceRowLike } from '@/lib/bokslut/ixbrl/k2-mapper'
+import { CURRENT, PREVIOUS } from '@/lib/bokslut/ixbrl/__tests__/fixtures'
+import type { TrialBalanceRow } from '@/types'
 // Captured from the sequential (pre-dedupe) implementation: the parallel
 // TB-pair fetch must reproduce it byte for byte.
 import multiYearSnapshot from './arsredovisning-k3-multiyear-snapshot.json'
@@ -908,6 +911,100 @@ describe('buildArsredovisningData: comparison year without bookkeeping', () => {
     const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
 
     expect(data.warnings.find((w) => w.startsWith('Föregående räkenskapsår'))).toBeUndefined()
+  })
+})
+
+describe('buildArsredovisningData: comparison year never closed in the books (crm#1080)', () => {
+  // 2024 was closed in another system and came in without its closing entry:
+  // the 40 000 kr result is still on the result accounts, 2099 is empty. 2025
+  // is closed here. Every consumer below reads the one mapping, so the
+  // statements, the flerårsöversikt and the K3 equity statement agree.
+  const TWO_YEARS = [
+    { id: 'fp1', name: '2025', period_start: '2025-01-01', period_end: '2025-12-31' },
+    { id: 'fp0', name: '2024', period_start: '2024-01-01', period_end: '2024-12-31' },
+  ]
+  const NEVER_CLOSED = { full: PREVIOUS.preClosing, preClosing: PREVIOUS.preClosing }
+  const tbRows = (rows: TrialBalanceRowLike[]): TrialBalanceRow[] =>
+    rows.map((r) => ({
+      ...r,
+      account_class: Number(r.account_number[0]),
+      opening_debit: 0,
+      opening_credit: 0,
+      period_debit: 0,
+      period_credit: 0,
+    }))
+
+  beforeEach(() => {
+    mockFetchAllRows.mockResolvedValue(TWO_YEARS)
+    mockedTrialBalance.mockImplementation(async (_client, _companyId, periodId, opts) => {
+      const pair = periodId === 'fp0' ? NEVER_CLOSED : CURRENT
+      return {
+        rows: tbRows(opts.closingEntry === 'include' ? pair.full : pair.preClosing),
+        totalDebit: 0,
+        totalCredit: 0,
+        isBalanced: true,
+      }
+    })
+  })
+
+  it('K2: the comparison column shows the result and balances, with one notice', async () => {
+    const supabase = makeSupabase({ accountingFramework: 'k2', previousPeriodId: 'fp0' })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+
+    expect(data.balansrakning.total_assets_previous).toBe(253_000)
+    expect(data.balansrakning.total_equity_liabilities_previous).toBe(253_000)
+    const equityRow = (key: string) =>
+      data.balansrakning.equity_liabilities.find((r) => r.semantic_key === key)
+    expect(equityRow('balance_sheet_current_year_result')).toMatchObject({
+      current: 120_000,
+      previous: 40_000,
+    })
+    expect(equityRow('balance_sheet_equity_total')).toMatchObject({
+      current: 245_000,
+      previous: 125_000,
+    })
+    expect(
+      data.resultatrakning.find((r) => r.semantic_key === 'income_statement_result'),
+    ).toMatchObject({ current: 120_000, previous: 40_000 })
+    expect(data.warnings.filter((w) => w.includes('ämförelse'))).toEqual([
+      'Jämförelseåret avslutades aldrig i bokföringen: årets resultat (40000 kr) står kvar på resultatkontona. Årets resultat i jämförelseårets balansräkning är därför hämtat från resultaträkningen. Stäm av jämförelsetalen mot föregående års fastställda årsredovisning.',
+    ])
+    // The current year is as booked: nothing to demand, nothing derived.
+    expect(data.balansrakning.total_assets).toBe(380_000)
+    expect(data.balansrakning.total_equity_liabilities).toBe(380_000)
+    expect(data.warnings.some((w) => w.startsWith('Årets resultat enligt'))).toBe(false)
+  })
+
+  it('K2: the flerårsöversikt computes soliditet for that year on the same equity', async () => {
+    const supabase = makeSupabase({ accountingFramework: 'k2', previousPeriodId: 'fp0' })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+
+    // 2024: (125 000 eget kapital + 79,4 % of 30 000 periodiseringsfond) /
+    // 253 000. On the booked equity (85 000) it read 43,0 %.
+    expect(data.forvaltningsberattelse.flerarsoversikt).toEqual([
+      { year: '2024', net_revenue: 500_000, result_after_financial: 60_000, soliditet_pct: 58.8 },
+      { year: '2025', net_revenue: 1_000_000, result_after_financial: 151_340, soliditet_pct: 72.8 },
+    ])
+  })
+
+  it('K3: the equity statement opens on the derived equity, with no invented movement', async () => {
+    const supabase = makeSupabase({ accountingFramework: 'k3', previousPeriodId: 'fp0' })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+
+    // Opening fritt eget kapital 100 000 (60 000 balanserat + the 40 000
+    // result). Read as booked it was 60 000, and the 40 000 kr gap to the
+    // closing balance was printed as a nyemission that never took place.
+    expect(data.equity_changes_statement?.rows).toEqual([
+      { label: 'Ingående aktiekapital', amount: 25_000 },
+      { label: 'Ingående övriga bundna reserver', amount: 0 },
+      { label: 'Ingående balanserade vinstmedel', amount: 100_000 },
+      { label: 'Summa ingående eget kapital', amount: 125_000 },
+      { label: 'Årets resultat', amount: 120_000 },
+      { label: 'Summa utgående eget kapital', amount: 245_000 },
+    ])
   })
 })
 

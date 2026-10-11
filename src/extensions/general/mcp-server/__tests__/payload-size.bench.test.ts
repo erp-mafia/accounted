@@ -3,7 +3,7 @@ import { tools, deriveToolMeta, isDefaultCatalogTool } from '../server'
 import { isMultiCompanyOnlyTool, projectToolInputSchema } from '../company-routing'
 
 // Ceiling for the catalog a single-company key is served (see the second case).
-const SIMPLE_CATALOG_CEILING = 60_400
+const SIMPLE_CATALOG_CEILING = 60_500
 import { projectToolReferences } from '../tool-namespace'
 
 // Mirror the real tools/list serializer, including the derived staging _meta
@@ -677,6 +677,12 @@ describe('tools/list payload size guard', () => {
     // agents can validate against, and that its lines carry no dimensions)
     // and the description names it, ~99 tokens. tax_code's long note now
     // points at vat_code and paid 22 of them. Measured 60 362, ~38 headroom.
+    // 60 400 to 60 500 on 2026-10-11 (ticket batch, nine fixes landing
+    // together): gnubok_reconcile_match pairs gain allow_remainder (crm#1043),
+    // gnubok_categorize_transaction says that money out on income_* is a
+    // refund (crm#1136) and gnubok_update_employee's is_active says it works
+    // both ways (crm#1133). Each fitted alone; together they measured exactly
+    // 60 400. Measured 60 400 with all three, ~100 headroom.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

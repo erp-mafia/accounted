@@ -2226,6 +2226,10 @@ export interface MappingResult {
   // the transaction sign (e.g. an incoming refund matching an expense-learned
   // template). The result is mirrored and review-gated, and must never be
   // learned back into the template (it would flip the learned accounts).
+  // Also set when a category is booked against its own direction (money out
+  // on an income category, money in on an expense category): the person chose
+  // it, so it is not review-gated, but it is a mirrored pair all the same and
+  // no rule or template learns from it.
   direction_mismatch?: boolean
   // Dimensions bag applied to the business (expense/revenue) lines of the
   // generated entry: a single-pair counterparty template's learned bag or an

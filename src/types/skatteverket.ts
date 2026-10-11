@@ -122,10 +122,34 @@ export interface SkattekontoLedgerTwin {
 }
 
 /**
+ * Unbooked Skatteverket rows that the ledger already holds through verifikat
+ * on 1630 no row is linked to: typically one summarised year-end or month-end
+ * verifikat (crm#1043). The reconciliation proves it with arithmetic, never a
+ * guess (findLedgerCoverPoint): up to `through_date` those verifikat
+ * sum exactly to the open rows ('events_equal'), or 1630 already equals
+ * Skatteverket although the rows are unbooked ('ledger_agrees', the rest of
+ * the verifikat being events from before the fetched history). Booking such
+ * a row would record it a second time, so the booking refuses with
+ * LEDGER_COVER_EXISTS and names these instead; the rows are linked to the
+ * verifikat (with a remainder when the sums differ).
+ */
+export interface SkattekontoLedgerCoverInfo {
+  through_date: string
+  kind: 'events_equal' | 'ledger_agrees'
+  /** Open rows up to through_date, this one included. */
+  event_count: number
+  event_total: number
+  /** The covering verifikat, largest open amount first (at most 5). */
+  entries: Array<SkattekontoLedgerTwin & { open_amount: number }>
+  entry_count: number
+}
+
+/**
  * Per-row outcome from POST /skattekonto/transaktioner/bokfor-batch.
  * `journal_entry_id` is present on success AND on COMMIT_FAILED (the draft
  * was created and stays linked; only the commit step failed).
- * `ledger_twins` is present on LEDGER_TWIN_EXISTS.
+ * `ledger_twins` is present on LEDGER_TWIN_EXISTS, `ledger_cover` on
+ * LEDGER_COVER_EXISTS.
  */
 export interface SkattekontoBatchRowResult {
   id: string
@@ -142,10 +166,12 @@ export interface SkattekontoBatchRowResult {
     | 'ROW_IGNORED'
     | 'TRANSACTION_NOT_FOUND'
     | 'LEDGER_TWIN_EXISTS'
+    | 'LEDGER_COVER_EXISTS'
     | 'COMMIT_FAILED'
     | 'UNKNOWN'
   error_message?: string
   ledger_twins?: SkattekontoLedgerTwin[]
+  ledger_cover?: SkattekontoLedgerCoverInfo
 }
 
 /** Response envelope body for the bokfor-batch endpoint. */

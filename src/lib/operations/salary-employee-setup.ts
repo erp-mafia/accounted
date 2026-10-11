@@ -1033,10 +1033,11 @@ export const employeesDelete = defineOperation({
   id: 'employees.delete',
   kind: 'write',
   scope: 'payroll:write',
-  // Medium although the v1 DELETE declares low: nothing on the API sets
-  // is_active back to true, so the approver gets the irreversibility warning.
+  // Medium although the v1 DELETE declares low: the approver is taking a
+  // person out of payroll. Reversible since crm#1133: gnubok_update_employee
+  // (or the v1 PATCH) with is_active true puts the employee back.
   risk: 'medium',
-  reversible: false,
+  reversible: true,
   docs: {
     summary: 'Remove an employee who has left: the employee is deactivated, never deleted.',
     description:
@@ -1046,7 +1047,7 @@ export const employeesDelete = defineOperation({
     doNotUseFor:
       'Recording the last day of employment: set employment_end with gnubok_update_employee. Erasing personal data: the row, its personnummer and the salary history are all kept.',
     pitfalls: [
-      'Nothing on the API reactivates an employee: confirm the employee_id with gnubok_get_employee before staging.',
+      'Undo with gnubok_update_employee and is_active true (v1: PATCH is_active=true). An inactive employee is only listed by gnubok_list_employees with active_only false.',
       'The row is not removed: registering the same person again with gnubok_create_employee is refused with EMPLOYEE_DUPLICATE_PERSONNUMMER.',
       'Past salary runs, payslips and AGI keep showing the employee.',
     ],
@@ -1066,7 +1067,7 @@ export const employeesDelete = defineOperation({
     name: 'gnubok_delete_employee',
     title: 'Delete Employee',
     description:
-      'Stage removing an employee who has left: the employee is deactivated (is_active=false) and new salary runs leave them out. Nothing is deleted: the row, personnummer and salary history are kept (BFL 7 kap). Nothing on the API reactivates them.',
+      'Stage removing an employee who has left: the employee is deactivated (is_active=false) and new salary runs leave them out. Nothing is deleted: the row, personnummer and salary history are kept (BFL 7 kap). Undo: gnubok_update_employee, is_active true.',
     keywords: ['ta bort anställd', 'inaktivera anställd', 'anställd har slutat', 'slutat', 'avregistrera anställd'],
     stage: {
       pendingType: 'delete_employee',

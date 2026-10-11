@@ -238,7 +238,7 @@ export const singleActionWarnings: Record<string, string> = {
   add_employee_recurring_line: 'Genom att klicka godkänn så läggs raden till på den anställdas lönebesked i kommande lönekörningar.',
   update_employee_recurring_line: 'Genom att klicka godkänn så ändras den återkommande raden i kommande lönekörningar.',
   delete_employee_recurring_line: 'Genom att klicka godkänn så tas den återkommande raden bort från kommande lönekörningar.',
-  delete_employee: 'Genom att klicka godkänn så inaktiveras den anställda och tas inte med i nya lönekörningar. Lönehistoriken finns kvar, men det går inte att återaktivera den anställda via API:et.',
+  delete_employee: 'Genom att klicka godkänn så inaktiveras den anställda och tas inte med i nya lönekörningar. Lönehistoriken finns kvar, och den anställda kan återaktiveras från sidan Anställda (Visa inaktiva).',
   create_supplier_payment_batch: 'Genom att klicka godkänn så skapas en betalfil (pain.001) för de valda leverantörsfakturorna. Inget bokförs, men när filen laddas upp och signeras i banken betalas beloppen ut till leverantörernas konton.',
   cancel_supplier_payment_batch: 'Genom att klicka godkänn så makuleras betalfilen och den kan inte laddas ner igen. En fil som redan laddats upp i banken återkallas inte: stoppa betalningen i banken.',
   prepare_payment_orders: 'Genom att klicka godkänn så förbereds bankbetalningar som utkast för de valda leverantörsfakturorna. Inget skickas till banken: betalningarna godkänns och signeras med BankID av en person på sidan Betalningar.',

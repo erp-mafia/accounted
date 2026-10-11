@@ -2,10 +2,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
   entrySettlesAmount,
+  evaluateSkattekontoLink,
   groupSettlesEntry,
   linkSkattekontoRow,
   linkSkattekontoRows,
   setSkattekontoRowIgnored,
+  skattekontoEntryNet,
   SkattekontoLinkError,
   unlinkSkattekontoRow,
 } from '../skattekonto-link'
@@ -88,7 +90,7 @@ describe('linkSkattekontoRow', () => {
 
     const result = await linkSkattekontoRow(supabase as never, COMPANY, ROW, ENTRY)
 
-    expect(result).toEqual({ skattekonto_transaction_id: ROW, journal_entry_id: ENTRY, via: 'line' })
+    expect(result).toEqual({ skattekonto_transaction_id: ROW, journal_entry_id: ENTRY, via: 'line', remainder: 0 })
     expect(findCalls('skattekonto_transactions', 'update')[0][0]).toEqual({
       journal_entry_id: ENTRY,
       suggested_journal_entry_id: null,
@@ -134,7 +136,7 @@ describe('linkSkattekontoRow', () => {
     enqueue({ data: [{ id: 'row-payment', belopp_skatteverket: 10000 }] })
     enqueue({ data: [{ id: ROW }] })
     const result = await linkSkattekontoRow(supabase as never, COMPANY, ROW, ENTRY)
-    expect(result).toEqual({ skattekonto_transaction_id: ROW, journal_entry_id: ENTRY, via: 'lines' })
+    expect(result).toEqual({ skattekonto_transaction_id: ROW, journal_entry_id: ENTRY, via: 'lines', remainder: 0 })
   })
 
   it('reports a lost race when the guarded update touches no row', async () => {
@@ -200,7 +202,7 @@ describe('linkSkattekontoRows (N:1)', () => {
     enqueue({ data: [] }) // nothing outside the group linked to the entry
     enqueue({ data: [{ id: ROW }, { id: ROW2 }] })
     const result = await linkSkattekontoRows(supabase as never, COMPANY, [ROW, ROW2, ROW], ENTRY)
-    expect(result).toEqual({ journal_entry_id: ENTRY, via: 'line', skattekonto_transaction_ids: [ROW, ROW2] })
+    expect(result).toEqual({ journal_entry_id: ENTRY, via: 'line', skattekonto_transaction_ids: [ROW, ROW2], remainder: 0 })
     const updates = findCalls('skattekonto_transactions', 'update')
     expect(updates).toHaveLength(1)
     expect(updates[0][0]).toMatchObject({ journal_entry_id: ENTRY, suggested_journal_entry_id: null })
@@ -255,7 +257,7 @@ describe('linkSkattekontoRows (N:1)', () => {
     enqueue({ data: [] })
     enqueue({ data: [{ id: ROW }, { id: ROW2 }] })
     const result = await linkSkattekontoRows(supabase as never, COMPANY, [ROW, ROW2], ENTRY)
-    expect(result).toEqual({ journal_entry_id: ENTRY, via: 'line', skattekonto_transaction_ids: [ROW, ROW2] })
+    expect(result).toEqual({ journal_entry_id: ENTRY, via: 'line', skattekonto_transaction_ids: [ROW, ROW2], remainder: 0 })
   })
 
   it('lets a group join rows already on the verifikat when all of them together settle it', async () => {
@@ -290,5 +292,194 @@ describe('linkSkattekontoRows (N:1)', () => {
     enqueue({ data: [row()] })
     await expect(linkSkattekontoRows(supabase as never, COMPANY, [ROW, ROW2], ENTRY)).rejects.toMatchObject({ code: 'TRANSACTION_NOT_FOUND' })
     await expect(linkSkattekontoRows(supabase as never, COMPANY, [], ENTRY)).rejects.toBeInstanceOf(SkattekontoLinkError)
+  })
+})
+
+// crm#1043: one summarised year-end verifikat books the whole year on 1630,
+// one line per counter account, including events from before the fetched
+// history. No group of the rows we hold can settle it.
+describe('linking with a remainder (a summarised verifikat, crm#1043)', () => {
+  const l = (debit: number, credit: number, account = '1630') => ({ account_number: account, debit_amount: debit, credit_amount: credit })
+  // Payments in 300 000, charges out 262 500.75: net +37 499.25 on 1630.
+  const summarised = [l(300000, 0), l(0, 180000.5), l(0, 82500.25), l(0, 300000, '1930'), l(180000.5, 0, '2510'), l(82500.25, 0, '2650')]
+
+  it('skattekontoEntryNet: the signed 1630 net, and whether the entry moves 1630 at all', () => {
+    expect(skattekontoEntryNet(summarised)).toEqual({ net: 37499.25, hasLine: true })
+    expect(skattekontoEntryNet([l(5000, 0, '1930'), l(0, 5000, '2510')])).toEqual({ net: 0, hasLine: false })
+    expect(skattekontoEntryNet([l(100, 0), l(0, 100)])).toEqual({ net: 0, hasLine: true })
+    expect(skattekontoEntryNet(null)).toEqual({ net: 0, hasLine: false })
+  })
+
+  it('an exact group is judged exactly as before, with remainder 0, whatever allowRemainder says', () => {
+    for (const allowRemainder of [false, true]) {
+      expect(evaluateSkattekontoLink([l(0, 12225)], [], [-4521, -7704], { allowRemainder })).toEqual({
+        ok: true,
+        via: 'line',
+        remainder: 0,
+        reason: null,
+      })
+    }
+    expect(evaluateSkattekontoLink([l(0, 12225)], [-4521], [-7704])).toMatchObject({ ok: true, via: 'line', remainder: 0 })
+  })
+
+  it('rows that do not settle the verifikat are refused by default and linked as partial only on allowRemainder', () => {
+    const rows = [100000, -60000.5, -20000]
+    expect(evaluateSkattekontoLink(summarised, [], rows)).toEqual({
+      ok: false,
+      via: null,
+      remainder: 17499.75,
+      reason: 'not_settled',
+    })
+    expect(evaluateSkattekontoLink(summarised, [], rows, { allowRemainder: true })).toEqual({
+      ok: true,
+      via: 'partial',
+      remainder: 17499.75,
+      reason: null,
+    })
+  })
+
+  it('the remainder is the 1630 net minus EVERY linked row: either sign, and larger than the net when the unfetched part had the other sign', () => {
+    // Net +1 000. Rows we hold sum to +5 000: the unfetched part was -4 000.
+    expect(evaluateSkattekontoLink([l(1000, 0)], [], [3000, 2000], { allowRemainder: true })).toMatchObject({ via: 'partial', remainder: -4000 })
+    // Net -2 000, rows +3 000: remainder -5 000, larger than the net.
+    expect(evaluateSkattekontoLink([l(0, 2000)], [], [3000], { allowRemainder: true })).toMatchObject({ via: 'partial', remainder: -5000 })
+    // Rows already on the verifikat count too.
+    expect(evaluateSkattekontoLink(summarised, [100000], [-60000.5], { allowRemainder: true })).toMatchObject({ remainder: -2500.25 })
+  })
+
+  it('a single matched line of a verifikat with more lines on 1630 still links without the flag, and reports the rest as its remainder', () => {
+    expect(evaluateSkattekontoLink(summarised, [], [300000])).toEqual({ ok: true, via: 'line', remainder: -262500.75, reason: null })
+  })
+
+  it('never links to a verifikat without a 1630 line, an empty selection or an unreadable amount, flag or not', () => {
+    const noLine = [l(5000, 0, '1930'), l(0, 5000, '2510')]
+    expect(evaluateSkattekontoLink(noLine, [], [5000], { allowRemainder: true })).toMatchObject({ ok: false, reason: 'no_account_line' })
+    expect(evaluateSkattekontoLink(summarised, [], [], { allowRemainder: true })).toMatchObject({ ok: false, reason: 'not_settled' })
+    expect(evaluateSkattekontoLink(summarised, [], [Number.NaN], { allowRemainder: true })).toMatchObject({ ok: false, reason: 'not_settled' })
+    expect(evaluateSkattekontoLink(summarised, [Number.NaN], [5000], { allowRemainder: true })).toMatchObject({ ok: false, reason: 'not_settled' })
+  })
+
+  const ROW2 = 'row-2'
+  const ROW3 = 'row-3'
+  const group = [
+    row({ belopp_skatteverket: 100000 }),
+    row({ id: ROW2, belopp_skatteverket: -60000.5 }),
+    row({ id: ROW3, belopp_skatteverket: -20000 }),
+  ]
+
+  it('linkSkattekontoRows refuses the group without the flag, naming both sums, the remainder and the way to link anyway', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: group })
+    enqueue({ data: entry(summarised) })
+    enqueue({ data: [] })
+    const err = await linkSkattekontoRows(supabase as never, COMPANY, [ROW, ROW2, ROW3], ENTRY).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(SkattekontoLinkError)
+    expect((err as SkattekontoLinkError).code).toBe('INVALID_CANDIDATE')
+    expect((err as SkattekontoLinkError).message).toContain('motsvarar inte summan av de valda händelserna')
+    expect((err as SkattekontoLinkError).message).toContain('allow_remainder')
+    expect((err as SkattekontoLinkError).message).toContain('I bokföringen, saknas hos Skatteverket')
+    expect(findCalls('skattekonto_transactions', 'update')).toEqual([])
+  })
+
+  it('linkSkattekontoRows links the group on allowRemainder with ONE guarded update and returns what stays on the verifikat', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: group })
+    enqueue({ data: entry(summarised) })
+    enqueue({ data: [] })
+    enqueue({ data: [{ id: ROW }, { id: ROW2 }, { id: ROW3 }] })
+    const result = await linkSkattekontoRows(supabase as never, COMPANY, [ROW, ROW2, ROW3], ENTRY, { allowRemainder: true })
+    expect(result).toEqual({
+      journal_entry_id: ENTRY,
+      via: 'partial',
+      skattekonto_transaction_ids: [ROW, ROW2, ROW3],
+      remainder: 17499.75,
+    })
+    const updates = findCalls('skattekonto_transactions', 'update')
+    expect(updates).toHaveLength(1)
+    // The link is the FK on the rows and nothing else: no ledger table is written.
+    expect(updates[0][0]).toEqual({ journal_entry_id: ENTRY, suggested_journal_entry_id: null, suggested_at: null })
+    expect(findCalls('journal_entries', 'update')).toEqual([])
+    expect(findCalls('journal_entry_lines', 'update')).toEqual([])
+  })
+
+  it('more rows may join a verifikat already linked with a remainder: the remainder counts the rows before them', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [row({ id: ROW3, belopp_skatteverket: -20000 })] })
+    enqueue({ data: entry(summarised) })
+    enqueue({ data: [{ id: ROW, belopp_skatteverket: 100000 }, { id: ROW2, belopp_skatteverket: -60000.5 }] })
+    enqueue({ data: [{ id: ROW3 }] })
+    const result = await linkSkattekontoRows(supabase as never, COMPANY, [ROW3], ENTRY, { allowRemainder: true })
+    expect(result).toMatchObject({ via: 'partial', remainder: 17499.75 })
+  })
+
+  it('without the flag a verifikat that other rows are linked to still answers ENTRY_ALREADY_LINKED', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [row({ id: ROW3, belopp_skatteverket: -20000 })] })
+    enqueue({ data: entry(summarised) })
+    enqueue({ data: [{ id: ROW, belopp_skatteverket: 100000 }] })
+    await expect(linkSkattekontoRows(supabase as never, COMPANY, [ROW3], ENTRY)).rejects.toMatchObject({ code: 'ENTRY_ALREADY_LINKED' })
+  })
+
+  it('guard rails hold with the flag: a verifikat without a 1630 line, a draft, a reversed one', async () => {
+    const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: group })
+    enqueue({ data: entry([l(5000, 0, '1930'), l(0, 5000, '2510')]) })
+    enqueue({ data: [] })
+    await expect(
+      linkSkattekontoRows(supabase as never, COMPANY, [ROW, ROW2, ROW3], ENTRY, { allowRemainder: true }),
+    ).rejects.toMatchObject({ code: 'INVALID_CANDIDATE', message: expect.stringContaining('ingen rad på 1630') })
+    reset()
+    enqueue({ data: group })
+    enqueue({ data: entry(summarised, 'draft') })
+    enqueue({ data: [] })
+    await expect(
+      linkSkattekontoRows(supabase as never, COMPANY, [ROW, ROW2, ROW3], ENTRY, { allowRemainder: true }),
+    ).rejects.toMatchObject({ code: 'INVALID_CANDIDATE', message: expect.stringContaining('bokfört verifikat') })
+    reset()
+    enqueue({ data: group })
+    enqueue({ data: entry(summarised, 'reversed') })
+    await expect(
+      linkSkattekontoRows(supabase as never, COMPANY, [ROW, ROW2, ROW3], ENTRY, { allowRemainder: true }),
+    ).rejects.toMatchObject({ code: 'INVALID_CANDIDATE' })
+    expect(findCalls('skattekonto_transactions', 'update')).toEqual([])
+  })
+
+  it('linkSkattekontoRow (one row): refused without the flag, partial with it, and an exact row still reports remainder 0', async () => {
+    const { supabase, enqueue, reset } = createQueuedMockSupabase()
+    enqueue({ data: row({ belopp_skatteverket: -20000 }) })
+    enqueue({ data: entry(summarised) })
+    enqueue({ data: null })
+    await expect(linkSkattekontoRow(supabase as never, COMPANY, ROW, ENTRY)).rejects.toMatchObject({
+      code: 'INVALID_CANDIDATE',
+      message: expect.stringContaining('allow_remainder'),
+    })
+    reset()
+    enqueue({ data: row({ belopp_skatteverket: -20000 }) })
+    enqueue({ data: entry(summarised) })
+    enqueue({ data: null })
+    enqueue({ data: [{ id: ROW }] })
+    expect(await linkSkattekontoRow(supabase as never, COMPANY, ROW, ENTRY, { allowRemainder: true })).toEqual({
+      skattekonto_transaction_id: ROW,
+      journal_entry_id: ENTRY,
+      via: 'partial',
+      remainder: 57499.25,
+    })
+    reset()
+    enqueue({ data: row() })
+    enqueue({ data: entry([l(5000, 0)]) })
+    enqueue({ data: null })
+    enqueue({ data: [{ id: ROW }] })
+    expect(await linkSkattekontoRow(supabase as never, COMPANY, ROW, ENTRY, { allowRemainder: true })).toMatchObject({ via: 'line', remainder: 0 })
+  })
+
+  it('unlinking is the same pointer clear for a remainder link: nothing else to restore', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: ROW, journal_entry_id: ENTRY } })
+    enqueue({ data: null })
+    expect(await unlinkSkattekontoRow(supabase as never, COMPANY, ROW)).toEqual({
+      skattekonto_transaction_id: ROW,
+      previous_journal_entry_id: ENTRY,
+    })
+    expect(findCalls('skattekonto_transactions', 'update')[0][0]).toEqual({ journal_entry_id: null })
   })
 })

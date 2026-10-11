@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { isRegisteredFromBooks } from './registered-from-books'
 
 /**
  * Coverage of the invoice register (the `invoices` table) relative to the
@@ -131,18 +132,6 @@ interface FirstInvoiceRow {
 }
 
 /**
- * An invoice registered from the books (gnubok_register_booked_invoice,
- * crm#1094): linked to the verifikat that booked it and written without
- * lines (register-booked-invoice.ts never writes any). Invoices issued in
- * Accounted always have lines; one the provider migration linked but could
- * not give lines reads the same way, which only widens the disclosure. A row
- * that did not report its lines is not judged.
- */
-function isRegisteredFromBooks(row: FirstInvoiceRow): boolean {
-  return row.journal_entry_id != null && Array.isArray(row.invoice_items) && row.invoice_items.length === 0
-}
-
-/**
  * The earliest invoice_date among invoices NOT registered from the books:
  * unlinked (kontantmetoden, deferred booking, an unlinked migrated invoice)
  * or with lines. Null when there is none; undefined when a lookup failed.
@@ -190,8 +179,10 @@ export async function fetchInvoiceRegisterCoverage(
 
   // The earliest invoice is an open item registered from an older
   // reskontra: completeness starts at the first invoice the register holds
-  // its whole history for, or nowhere yet.
-  if (isRegisteredFromBooks(first)) {
+  // its whole history for, or nowhere yet. One the provider migration linked
+  // but could not give lines reads the same way, which only widens the
+  // disclosure.
+  if (isRegisteredFromBooks(first, first.invoice_items)) {
     const complete = await earliestCompleteInvoiceDate(supabase, companyId)
     if (complete === undefined) return NO_INVOICE_REGISTER_COVERAGE
     coversFrom = complete ?? options.today ?? todayIsoStockholm()

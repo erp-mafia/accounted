@@ -1420,6 +1420,54 @@ describe('PATCH /accounts (enable-banking)', () => {
       expect(written.find(a => a.uid === 'acc-2')?.ledger_account).toBe('1932')
     })
 
+    // The request a ledger-account suggestion sends (crm#1066,
+    // lib/cash-accounts/ledger-suggestions.ts): every account that syncs stays
+    // in enabled_uids, and only the moved account carries a mapping. The
+    // others must come out of the save exactly as they went in.
+    it('keeps an enabled account without a mapping on its ledger account when another account of the save is moved', async () => {
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        chartAccountNumbers: ['1920'],
+        cashAccountRows: [
+          { id: 'row-1940', external_uid: 'acc-1', bank_connection_id: 'conn-1', ledger_account: '1940' },
+          { id: 'row-1930', external_uid: 'acc-2', bank_connection_id: 'conn-1', ledger_account: '1930' },
+        ],
+        connectionRow: {
+          id: 'conn-1',
+          status: 'active',
+          accounts_data: [
+            { uid: 'acc-1', currency: 'SEK', enabled: true, ledger_account: '1940' },
+            { uid: 'acc-2', currency: 'SEK', enabled: true, ledger_account: '1930' },
+            { uid: 'acc-3', currency: 'SEK', enabled: false, ledger_account: '1931' },
+          ],
+        },
+      }
+      const supabase = buildSupabase(stub)
+      const ctx = makeContext(supabase)
+
+      const res = await accountsRoute.handler(
+        makeRequest({
+          connection_id: 'conn-1',
+          enabled_uids: ['acc-1', 'acc-2'],
+          account_mappings: [{ uid: 'acc-1', ledger_account: '1920' }],
+        }),
+        ctx
+      )
+
+      expect(res.status).toBe(200)
+      // What the database is asked to save: only acc-1 changed.
+      const submitted = (stub.selectionCalls?.[0]?.p_selections as StoredAccount[]).map(a => [a.uid, a.enabled, a.ledger_account])
+      expect(submitted).toEqual([
+        ['acc-1', true, '1920'],
+        ['acc-2', true, '1930'],
+        ['acc-3', false, '1931'],
+      ])
+      const written = stub.selectionReceipts?.[0]?.accounts_data as StoredAccount[]
+      expect(written.map(a => [a.uid, a.enabled, a.ledger_account])).toEqual(submitted)
+      // An active connection: the save starts no sync.
+      expect(mockedSync).not.toHaveBeenCalled()
+    })
+
     it('re-allocates ledger_account when account_mappings entry sets it to null', async () => {
       // Explicit null means "reset to auto". accounts_data must always mirror
       // the effective cash_accounts assignment, so the cleared account gets a

@@ -334,12 +334,13 @@ Example response `200`:
 **Update an employee.**
 `scope:payroll:write · risk:low · idempotent · dry-run`
 
-Partial update of an employee. Only the fields supplied in the body are changed: an omitted key is left unchanged, and an explicit null clears a nullable field (employment_end, salary amounts, tax table and municipality, bank details, contact details, Växa-stöd and jämkning dates). Supports ?dry_run=true to validate the merged record without committing. Personnummer changes are NOT permitted via this endpoint: the natural-person identity is immutable post-creation.
+Partial update of an employee. Only the fields supplied in the body are changed: an omitted key is left unchanged, and an explicit null clears a nullable field (employment_end, salary amounts, tax table and municipality, bank details, contact details, Växa-stöd and jämkning dates). `is_active: true` reactivates a soft-deleted employee, and `is_active: false` deactivates one exactly as DELETE does. Supports ?dry_run=true to validate the merged record without committing. Personnummer changes are NOT permitted via this endpoint: the natural-person identity is immutable post-creation.
 
-**Use when:** You need to change tax configuration, bank details, salary amount, or contact info on an existing employee.
-**Do not use for:** Changing personnummer (not supported: create a new employee if the natural-person identity changes, which is a rare edge case). Soft-deleting (use DELETE).
+**Use when:** You need to change tax configuration, bank details, salary amount, or contact info on an existing employee, or to reactivate an employee that was soft-deleted.
+**Do not use for:** Changing personnummer (not supported: create a new employee if the natural-person identity changes, which is a rare edge case).
 
 **Pitfalls:**
+- is_active only decides whether the employee is on active rosters and picked up by NEW salary runs. Reactivating does not add the employee to a salary run that already exists: add them to a draft run with POST /salary-runs/{id}/employees. A run also leaves out an employee whose employment_end is before the pay period, active or not.
 - personnummer in the body is ignored by this endpoint. To change it you must DELETE and recreate.
 - salary_type changes require the matching salary field in the same request: switching to monthly without monthly_salary returns 400.
 - A cleared field is checked against the stored row: nulling monthly_salary on a monthly employee, tax_table_number on an A-skatt employee without sidoinkomst, vaxa_stod_start while Växa-stöd is on, or only one of clearing_number/bank_account_number returns 400. To end an ongoing employment set employment_end; to reopen it send employment_end: null.
@@ -389,7 +390,8 @@ Request body:
   jamkning_percentage?: number | null,
   jamkning_valid_from?: string | null,
   jamkning_valid_to?: string | null,
-  default_dimensions?: Record<string, string>
+  default_dimensions?: Record<string, string>,
+  is_active?: boolean
 }
 ```
 

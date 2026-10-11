@@ -35,6 +35,12 @@ export interface PairRowProps {
   onIgnore: () => void
   onUnignore: () => void
   onBook: () => void
+  /**
+   * Skattekonto: opens the manual match view. A row the ledger already holds
+   * (covered_by_ledger) is linked there, so it becomes the row's main action
+   * and booking moves behind the menu.
+   */
+  onLinkInstead?: () => void
   /** "Märk som IB" for a ledger row without a bank counterpart (bank accounts). */
   onMarkIb?: () => void
   /** Other bank accounts a stray transaction can be moved to. */
@@ -80,6 +86,7 @@ export function PairRow({
   onIgnore,
   onUnignore,
   onBook,
+  onLinkInstead,
   onMarkIb,
   moveTargets,
   onMove,
@@ -90,6 +97,9 @@ export function PairRow({
     e.voucher_number != null ? formatVoucher({ voucher_series: e.voucher_series, voucher_number: e.voucher_number }) : null
   const money = (n: number) => formatCurrency(n, currency)
   const external = item.side === 'external'
+  // The ledger already holds this event inside an unlinked verifikat on 1630
+  // (a summarised one): link it, never book it a second time.
+  const covered = external && isSkv && item.covered_by_ledger === true
 
   // ---- the ledger side -----------------------------------------------------
   let ledgerDate: string | null = null
@@ -109,6 +119,14 @@ export function PairRow({
         {item.entry_status === 'draft' && <Chip>{t('chip_draft')}</Chip>}
         {item.entry_status === 'reversed' && <Chip>{t('chip_reversed')}</Chip>}
         {item.awaiting_external && <Chip>{t('chip_awaiting', { source: sourceLabel })}</Chip>}
+        {item.partially_linked && (
+          <Chip>
+            {t('chip_remainder', {
+              total: money(item.partially_linked.entry_amount),
+              count: item.partially_linked.linked_count,
+            })}
+          </Chip>
+        )}
       </span>
     )
   } else if (item.proposal && item.proposal.vouchers && item.proposal.vouchers.length > 1) {
@@ -168,6 +186,8 @@ export function PairRow({
         {item.link_problem === 'entry_missing' && <Chip>{t('chip_missing')}</Chip>}
       </span>
     )
+  } else if (covered) {
+    ledgerText = <Chip>{t('chip_covered')}</Chip>
   } else if (item.bucket === 'ignored') {
     ledgerText = <Chip>{t('v2_chip_ignored')}</Chip>
   } else if (item.bucket === 'upcoming') {
@@ -182,6 +202,12 @@ export function PairRow({
   if (can('match') && item.proposal) {
     primary = (
       <Button size="sm" variant="outline" onClick={onMatch} disabled={anyBusy} aria-busy={busy}>
+        {t('row_match')}
+      </Button>
+    )
+  } else if (covered && onLinkInstead) {
+    primary = (
+      <Button size="sm" variant="outline" onClick={onLinkInstead} disabled={anyBusy}>
         {t('row_match')}
       </Button>
     )
@@ -211,6 +237,9 @@ export function PairRow({
     )
   }
   const menu: Array<{ key: string; label: string; onSelect: () => void }> = []
+  // Booking a covered row stays possible, as the deliberate second choice:
+  // the dialog it opens explains what already covers the row.
+  if (covered && onLinkInstead && can('book')) menu.push({ key: 'book', label: t('row_book_anyway'), onSelect: onBook })
   if (can('unmatch')) menu.push({ key: 'unmatch', label: t('row_unmatch'), onSelect: onUnmatch })
   if (can('ignore')) menu.push({ key: 'ignore', label: t('row_ignore'), onSelect: onIgnore })
   if (onMarkIb) menu.push({ key: 'ib', label: t('row_mark_ib'), onSelect: onMarkIb })

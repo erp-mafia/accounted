@@ -26,7 +26,7 @@ vi.mock('@/lib/skatteverket/skattekonto-cancelled-entries', async (importOrigina
   }
 })
 
-import { getSkattekontoReconciliationStatus } from '../skattekonto-reconciliation'
+import { findLedgerCoverPoint, getSkattekontoReconciliationStatus } from '../skattekonto-reconciliation'
 import {
   findImportedStornoPairs,
   type EntryForCancellation,
@@ -854,5 +854,387 @@ describe('getSkattekontoReconciliationStatus', () => {
       expect(s.unexplained_difference).toBe(0)
       expect(s.is_reconciled).toBe(false)
     })
+  })
+})
+
+// crm#1043. The fetched history starts mid-year (Skatteverket returns a
+// limited window), and the whole year's skattekonto is booked as ONE
+// summarised year-end verifikat dated 31 December: one line per counter
+// account against 1630, covering 1 January to 31 December. All figures here
+// are made up.
+describe('a summarised year-end verifikat (crm#1043)', () => {
+  const TODAY_2027 = '2027-01-20'
+  const FETCHED_2027 = Date.UTC(2027, 0, 20, 4, 0, 0)
+  const YEAR_END = head('B1', '2026-12-31', { source_type: 'import', voucher_series: 'B', description: 'Skattekonto 2026' })
+  // One line per counter account on 1630: payments in, F-skatt, moms, AGI, interest.
+  const YEAR_LINES = [600000, -240000, -191500.5, -130400, -212.25]
+  const YEAR_NET = 37887.25
+
+  // 45 events from 2 April to 28 December: five per month, payments in and
+  // charges out. Their sum is NOT the verifikat's net: January to March are
+  // in the verifikat but were never fetched.
+  const EVENTS: Array<{ id: string; date: string; amount: number }> = []
+  for (let month = 4; month <= 12; month++) {
+    const mm = String(month).padStart(2, '0')
+    const day = month === 4 ? ['02', '12', '14', '20', '26'] : ['03', '12', '14', '20', '28']
+    const amounts = [50000, -20000, -15958.25, -10866.5, -17.75 - month]
+    amounts.forEach((amount, i) => EVENTS.push({ id: `ev-${mm}-${i}`, date: `2026-${mm}-${day[i]}`, amount }))
+  }
+  const EVENTS_TOTAL = EVENTS.reduce((sum, e) => roundOre(sum + e.amount), 0)
+  // What the verifikat holds beyond the fetched events: January to March.
+  const BEFORE_HISTORY = roundOre(YEAR_NET - EVENTS_TOTAL)
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    fetchEntryLinesMock.mockReset()
+    sumAccountBalanceMock.mockReset()
+    findOpeningBalanceFloorMock.mockReset()
+    findOpeningBalanceFloorMock.mockResolvedValue(null)
+    loadImportedStornoPairsMock.mockReset()
+    loadImportedStornoPairsMock.mockResolvedValue([])
+  })
+
+  async function statusWith(linked: boolean, extraRows: ReturnType<typeof row>[] = []) {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const rows = [
+      ...EVENTS.map((e) => row(e.id, e.date, e.amount, linked ? { journal_entry_id: 'B1' } : {})),
+      ...extraRows,
+    ]
+    // The books agree with Skatteverket: the saldo is what 1630 says.
+    enqueueBase(enqueue, {
+      saldo: roundOre(YEAR_NET + extraRows.reduce((sum, r) => sum + Number(r.belopp_skatteverket), 0)),
+      rows,
+      heads: [YEAR_END],
+      fetchedAt: FETCHED_2027,
+    })
+    wholeLedger(YEAR_LINES.map((amount) => ledgerLine(YEAR_END, amount)))
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY_2027 })
+    if (!s) throw new Error('expected status')
+    return s
+  }
+
+  it('fixture: 45 events from early April whose sum differs from the verifikat by the unfetched months', () => {
+    expect(EVENTS).toHaveLength(45)
+    expect(EVENTS[0].date).toBe('2026-04-02')
+    expect(roundOre(YEAR_LINES.reduce((sum, a) => sum + a, 0))).toBe(YEAR_NET)
+    expect(BEFORE_HISTORY).not.toBe(0)
+  })
+
+  it('before linking: balance agrees, 0 unexplained, 45 events and the verifikat on opposite sides, and the bridge says the events are already in the ledger', async () => {
+    const s = await statusWith(false)
+    expect(s.external_balance).toBe(YEAR_NET)
+    expect(s.ledger_balance).toBe(YEAR_NET)
+    expect(s.difference).toBe(0)
+    expect(s.unexplained_difference).toBe(0)
+    expect(s.skattekonto?.history_start).toBe('2026-04-02')
+    expect(s.counts).toMatchObject({ unmatched_external: 45, unmatched_ledger: 1, matched: 0 })
+    expect(s.items.unmatched_ledger).toHaveLength(1)
+    expect(s.items.unmatched_ledger[0]).toMatchObject({ item_id: 'B1', amount: YEAR_NET })
+    expect(s.items.unmatched_ledger[0].partially_linked).toBeUndefined()
+    // The ticket's own arithmetic: the events plus the opening difference are the verifikat's net.
+    expect(s.skattekonto?.opening_difference).toBe(BEFORE_HISTORY)
+    expect(roundOre(EVENTS_TOTAL + (s.skattekonto?.opening_difference ?? 0))).toBe(YEAR_NET)
+
+    // The cover: 1630 already equals Skatteverket at 31 December although
+    // 45 events are unbooked, so they are inside the open verifikat.
+    expect(s.cover).toMatchObject({
+      through_date: '2026-12-31',
+      kind: 'ledger_agrees',
+      event_count: 45,
+      event_total: EVENTS_TOTAL,
+      entry_total: YEAR_NET,
+    })
+    expect(s.cover?.event_ids.slice().sort()).toEqual(EVENTS.map((e) => e.id).sort())
+    expect(s.cover?.entries).toEqual([
+      {
+        journal_entry_id: 'B1',
+        voucher_number: 1,
+        voucher_series: 'B',
+        entry_date: '2026-12-31',
+        description: 'Skattekonto 2026',
+        status: 'posted',
+        open_amount: YEAR_NET,
+      },
+    ])
+    expect(s.skattekonto?.covered).toEqual({
+      through_date: '2026-12-31',
+      kind: 'ledger_agrees',
+      event_count: 45,
+      event_total: EVENTS_TOTAL,
+      journal_entry_ids: ['B1'],
+      entry_count: 1,
+    })
+    expect(s.items.unmatched_external.every((i) => i.covered_by_ledger === true)).toBe(true)
+  })
+
+  it('after linking the 45 events: unexplained is unchanged, and the verifikat keeps a remainder equal to the opening difference, same sign', async () => {
+    const before = await statusWith(false)
+    const after = await statusWith(true)
+
+    // What left the Skatteverket side left the ledger side by the same amount.
+    expect(after.unexplained_difference).toBe(before.unexplained_difference)
+    expect(after.unexplained_difference).toBe(0)
+    expect(after.difference).toBe(before.difference)
+    expect(after.external_balance).toBe(before.external_balance)
+    expect(after.ledger_balance).toBe(before.ledger_balance)
+    expect(after.skattekonto?.opening_difference).toBe(before.skattekonto?.opening_difference)
+
+    expect(after.counts).toMatchObject({ unmatched_external: 0, proposed: 0, unmatched_ledger: 1, matched: 45 })
+    expect(after.items.unmatched_external).toEqual([])
+    const [remainder] = after.items.unmatched_ledger
+    expect(remainder).toMatchObject({
+      item_id: 'B1',
+      bucket: 'unmatched_ledger',
+      amount: BEFORE_HISTORY,
+      partially_linked: { entry_amount: YEAR_NET, linked_amount: EVENTS_TOTAL, linked_count: 45 },
+      actions: ['review', 'match'],
+    })
+    // The remainder IS the opening difference: the January to March events.
+    expect(remainder.amount).toBe(after.skattekonto?.opening_difference)
+
+    // The bridge still sums to the ledger balance, line by line.
+    const byKey = Object.fromEntries(after.bridge.map((b) => [b.key, b]))
+    // (Math.abs: the engine negates the total, and -0 is not +0 to toBe.)
+    expect(Math.abs(byKey.unmatched_external.amount)).toBe(0)
+    expect(byKey.unmatched_external.count).toBe(0)
+    expect(byKey.unmatched_ledger).toMatchObject({ amount: BEFORE_HISTORY, count: 1 })
+    expect(byKey.opening_difference.amount).toBe(roundOre(-BEFORE_HISTORY))
+    expect(after.bridge.filter((b) => b.key !== 'ledger_balance').reduce((acc, b) => roundOre(acc + b.amount), 0)).toBe(
+      YEAR_NET,
+    )
+    // Nothing is left to book, so nothing is covered any more.
+    expect(after.cover).toBeNull()
+    expect(after.skattekonto?.covered).toBeNull()
+  })
+
+  it('linking half of the events moves both sides by the same amount, and the rest stay covered', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const half = EVENTS.slice(0, 20)
+    const halfTotal = half.reduce((sum, e) => roundOre(sum + e.amount), 0)
+    enqueueBase(enqueue, {
+      saldo: YEAR_NET,
+      rows: EVENTS.map((e, i) => row(e.id, e.date, e.amount, i < 20 ? { journal_entry_id: 'B1' } : {})),
+      heads: [YEAR_END],
+      fetchedAt: FETCHED_2027,
+    })
+    wholeLedger(YEAR_LINES.map((amount) => ledgerLine(YEAR_END, amount)))
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY_2027 })
+    if (!s) throw new Error('expected status')
+    expect(s.unexplained_difference).toBe(0)
+    expect(s.counts).toMatchObject({ unmatched_external: 25, matched: 20, unmatched_ledger: 1 })
+    expect(s.items.unmatched_ledger[0]).toMatchObject({
+      amount: roundOre(YEAR_NET - halfTotal),
+      partially_linked: { entry_amount: YEAR_NET, linked_amount: halfTotal, linked_count: 20 },
+    })
+    // The cover is invariant under linking: the 25 left are still inside the verifikat.
+    expect(s.cover).toMatchObject({ through_date: '2026-12-31', kind: 'ledger_agrees', event_count: 25 })
+  })
+
+  it('an event after the verifikat that is really unbooked is not covered, and does not uncover the 45', async () => {
+    const s = await statusWith(false, [row('ev-new', '2027-01-12', -4321)])
+    // Unbooked and not in the ledger: the difference is the new event.
+    expect(s.difference).toBe(-4321)
+    expect(s.unexplained_difference).toBe(0)
+    expect(s.cover).toMatchObject({ through_date: '2026-12-31', kind: 'ledger_agrees', event_count: 45 })
+    expect(s.cover?.event_ids).not.toContain('ev-new')
+    const fresh = s.items.unmatched_external.find((i) => i.item_id === 'ev-new')
+    expect(fresh?.covered_by_ledger).toBeUndefined()
+  })
+})
+
+describe('one rule for every link: it explains exactly the linked rows, the rest stays on the ledger side', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    fetchEntryLinesMock.mockReset()
+    sumAccountBalanceMock.mockReset()
+    findOpeningBalanceFloorMock.mockReset()
+    findOpeningBalanceFloorMock.mockResolvedValue(null)
+    loadImportedStornoPairsMock.mockReset()
+    loadImportedStornoPairsMock.mockResolvedValue([])
+  })
+
+  it('an exact link leaves nothing behind: no remainder row, nothing covered', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const A5 = head('A5', '2026-08-03')
+    enqueueBase(enqueue, { saldo: 1000, rows: [row('r1', '2026-08-03', 1000, { journal_entry_id: 'A5' })], heads: [A5] })
+    wholeLedger([ledgerLine(A5, 1000)])
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
+    if (!s) throw new Error('expected status')
+    expect(s.counts).toEqual({ proposed: 0, unmatched_external: 0, unmatched_ledger: 0, matched: 1, ignored: 0 })
+    expect(s.items.unmatched_ledger).toEqual([])
+    expect(s.unexplained_difference).toBe(0)
+    expect(s.is_reconciled).toBe(true)
+    expect(s.cover).toBeNull()
+    expect(s.skattekonto?.covered).toBeNull()
+  })
+
+  it('a row matched on one of several 1630 lines: the other lines are listed as the remainder instead of vanishing into unexplained', async () => {
+    // Imported monthly verifikat with three lines on 1630; only the F-skatt
+    // line has a linked row. Before crm#1043 the whole verifikat left the
+    // ledger side and 13 000 showed as unexplained.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const M1 = head('M1', '2026-08-12', { source_type: 'import' })
+    enqueueBase(enqueue, {
+      saldo: -8000,
+      rows: [row('r-fskatt', '2026-08-12', -8000, { journal_entry_id: 'M1' })],
+      heads: [M1],
+    })
+    wholeLedger([ledgerLine(M1, -8000), ledgerLine(M1, -9000), ledgerLine(M1, -4000)])
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
+    if (!s) throw new Error('expected status')
+    expect(s.ledger_balance).toBe(-21000)
+    expect(s.difference).toBe(13000)
+    expect(s.unexplained_difference).toBe(0)
+    expect(s.counts).toMatchObject({ matched: 1, unmatched_ledger: 1 })
+    expect(s.items.unmatched_ledger[0]).toMatchObject({
+      item_id: 'M1',
+      amount: -13000,
+      partially_linked: { entry_amount: -21000, linked_amount: -8000, linked_count: 1 },
+    })
+    expect(s.is_reconciled).toBe(false)
+  })
+
+  it('a net-zero voucher (payment and the debit it paid) with only the payment linked keeps the debit as a remainder', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const P1 = head('P1', '2026-08-10')
+    enqueueBase(enqueue, {
+      saldo: 0,
+      rows: [
+        row('r-pay', '2026-08-10', 10000, { journal_entry_id: 'P1' }),
+        row('r-debit', '2026-08-12', -10000),
+      ],
+      heads: [P1],
+    })
+    wholeLedger([ledgerLine(P1, 10000), ledgerLine(P1, -10000)])
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
+    if (!s) throw new Error('expected status')
+    expect(s.unexplained_difference).toBe(0)
+    expect(s.items.unmatched_ledger[0]).toMatchObject({
+      item_id: 'P1',
+      amount: -10000,
+      partially_linked: { entry_amount: 0, linked_amount: 10000, linked_count: 1 },
+    })
+    // The debit row is exactly what the voucher still holds: it is covered.
+    expect(s.cover).toMatchObject({ kind: 'events_equal', event_ids: ['r-debit'] })
+  })
+
+  it('a link to a posted verifikat without any 1630 line stays an integrity finding, as before', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const X1 = head('X1', '2026-08-03')
+    enqueueBase(enqueue, { saldo: 700, rows: [row('r1', '2026-08-03', 700, { journal_entry_id: 'X1' })], heads: [X1] })
+    wholeLedger([])
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
+    if (!s) throw new Error('expected status')
+    expect(s.counts).toMatchObject({ matched: 1, unmatched_ledger: 0 })
+    expect(s.unexplained_difference).toBe(700)
+    expect(s.is_reconciled).toBe(false)
+  })
+
+  it('a verifikat dated before the history start, linked for part of its 1630 amount: the rest stays opening balance, not a listed row', async () => {
+    // Booked 01-21 with 5 000 on 1630; Skatteverket's first row we hold is
+    // 2 075 the day after. The other 2 925 belongs to rows before the history.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const A2 = head('A2', '2026-01-21')
+    enqueueBase(enqueue, {
+      saldo: 2075,
+      rows: [row('r-pay', '2026-01-22', 2075, { journal_entry_id: 'A2' })],
+      heads: [A2],
+    })
+    wholeLedger([ledgerLine(A2, 5000)])
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
+    if (!s) throw new Error('expected status')
+    expect(s.skattekonto?.history_start).toBe('2026-01-22')
+    // 5 000 before the history, of which the linked row explains 2 075.
+    expect(s.skattekonto?.ledger_balance_before_start).toBe(2925)
+    expect(s.skattekonto?.opening_difference).toBe(-2925)
+    expect(s.counts).toMatchObject({ matched: 1, unmatched_ledger: 0 })
+    expect(s.unexplained_difference).toBe(0)
+  })
+})
+
+describe('findLedgerCoverPoint: arithmetic only, exact to the öre', () => {
+  const ev = (id: string, date: string, amount: number) => ({ id, date, amount })
+
+  it('no unlinked verifikat on 1630, or no open row: never a cover', () => {
+    expect(
+      findLedgerCoverPoint({ openEvents: [ev('e1', '2026-05-12', -8000)], openEntries: [], ignoredEvents: [], openingDifference: 0 }),
+    ).toBeNull()
+    expect(
+      findLedgerCoverPoint({ openEvents: [], openEntries: [ev('v1', '2026-05-31', -8000)], ignoredEvents: [], openingDifference: 0 }),
+    ).toBeNull()
+  })
+
+  it('events_equal: the open verifikat sum exactly to the open rows up to a verifikat date', () => {
+    expect(
+      findLedgerCoverPoint({
+        openEvents: [ev('e1', '2026-05-12', -8000), ev('e2', '2026-05-12', -4500.5), ev('e3', '2026-05-20', 12000)],
+        openEntries: [ev('v1', '2026-05-31', -500.5)],
+        ignoredEvents: [],
+        openingDifference: 0,
+      }),
+    ).toEqual({ through_date: '2026-05-31', kind: 'events_equal' })
+  })
+
+  it('one öre off is not a cover', () => {
+    expect(
+      findLedgerCoverPoint({
+        openEvents: [ev('e1', '2026-05-12', -8000), ev('e2', '2026-05-12', -4500.5), ev('e3', '2026-05-20', 12000)],
+        openEntries: [ev('v1', '2026-05-31', -500.49)],
+        ignoredEvents: [],
+        openingDifference: 0,
+      }),
+    ).toBeNull()
+  })
+
+  it('ledger_agrees: open verifikat minus open rows equals the opening difference plus the ignored rows', () => {
+    expect(
+      findLedgerCoverPoint({
+        openEvents: [ev('e1', '2026-06-12', -8000)],
+        openEntries: [ev('v1', '2026-12-31', -30000)],
+        ignoredEvents: [{ date: '2026-07-01', amount: -100 }],
+        // -30 000 - (-8 000) = -22 000 = opening difference -21 900 + ignored -100
+        openingDifference: -21900,
+      }),
+    ).toEqual({ through_date: '2026-12-31', kind: 'ledger_agrees' })
+    // Without a known opening difference only events_equal can hold.
+    expect(
+      findLedgerCoverPoint({
+        openEvents: [ev('e1', '2026-06-12', -8000)],
+        openEntries: [ev('v1', '2026-12-31', -30000)],
+        ignoredEvents: [],
+        openingDifference: null,
+      }),
+    ).toBeNull()
+  })
+
+  it('a verifikat waiting for Skatteverket next to an unrelated unbooked row is no cover: normal booking is not disturbed', () => {
+    expect(
+      findLedgerCoverPoint({
+        openEvents: [ev('e-ranta', '2026-08-05', -12)],
+        openEntries: [ev('v-payment', '2026-08-18', 10000)],
+        ignoredEvents: [],
+        openingDifference: 0,
+      }),
+    ).toBeNull()
+  })
+
+  it('rows netting to zero are never a cover, and the latest date that holds wins', () => {
+    expect(
+      findLedgerCoverPoint({
+        openEvents: [ev('e1', '2026-08-10', 10000), ev('e2', '2026-08-12', -10000)],
+        openEntries: [ev('v1', '2026-08-31', 300), ev('v2', '2026-08-31', -300)],
+        ignoredEvents: [],
+        openingDifference: 0,
+      }),
+    ).toBeNull()
+    // Monthly summaries: each month closes; a July row is still unbooked and uncovered.
+    expect(
+      findLedgerCoverPoint({
+        openEvents: [ev('e-may', '2026-05-12', -8000), ev('e-jun', '2026-06-12', -9000), ev('e-jul', '2026-07-12', -9500)],
+        openEntries: [ev('v-may', '2026-05-31', -8000), ev('v-jun', '2026-06-30', -9000)],
+        ignoredEvents: [],
+        openingDifference: 0,
+      }),
+    ).toEqual({ through_date: '2026-06-30', kind: 'events_equal' })
   })
 })

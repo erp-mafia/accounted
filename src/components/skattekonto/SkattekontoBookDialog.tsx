@@ -14,9 +14,13 @@ import { roundOre } from '@/lib/money'
 import type {
   SkattekontoBatchResult,
   SkattekontoBatchRowResult,
+  SkattekontoLedgerCoverInfo,
   SkattekontoLedgerTwin,
   SkattekontoTransactionWithSuggestion,
 } from '@/types/skatteverket'
+
+/** Where rows are linked to a summarised verifikat: the Avstämning manual match view. */
+const MANUAL_MATCH_HREF = '/reconciliation?account=skattekonto&mode=match'
 
 /** The twin fields of a match-candidates candidate (it carries more). */
 function toLedgerTwin(c: SkattekontoLedgerTwin): SkattekontoLedgerTwin {
@@ -53,6 +57,14 @@ function toLedgerTwin(c: SkattekontoLedgerTwin): SkattekontoLedgerTwin {
  * Skatteverket has not settled yet cannot be linked, so there the primary
  * action is to wait. "Skapa manuellt" asks the same candidate search first
  * (match-candidates) and shows the same answer.
+ *
+ * LEDGER_COVER_EXISTS is the same answer for a row no single verifikat
+ * carries, but that unlinked verifikat on 1630 already hold in aggregate (a
+ * summarised year-end or month-end verifikat, crm#1043): the covering
+ * verifikat are listed, the primary action goes to "Matcha manuellt", where
+ * the rows are linked with the remainder in view, and "Bokför ändå" repeats
+ * the booking with the same per-row override. "Skapa manuellt" gets the same
+ * answer from the candidate search (ledger_cover).
  */
 export default function SkattekontoBookDialog({
   row,
@@ -60,6 +72,7 @@ export default function SkattekontoBookDialog({
   onOpenChange,
   onBooked,
   onMatch,
+  onLinkCovered,
 }: {
   row: SkattekontoTransactionWithSuggestion | null
   open: boolean
@@ -69,6 +82,9 @@ export default function SkattekontoBookDialog({
   // closes itself first. Optional: callers without a match flow fall back to
   // manual verifikat creation only.
   onMatch?: () => void
+  // Opens the manual match view for a row a summarised verifikat covers; the
+  // dialog closes itself first. Omitted: the dialog navigates there itself.
+  onLinkCovered?: () => void
 }) {
   const t = useTranslations('skv_book_dialog')
   const { toast } = useToast()
@@ -83,12 +99,24 @@ export default function SkattekontoBookDialog({
     mode: 'book' | 'draft' | 'manual'
   } | null>(null)
 
+  // The ledger-cover refusal for the row it was given for, and which action
+  // "Bokför ändå" repeats.
+  const [coverRefusal, setCoverRefusal] = useState<{
+    rowId: string
+    cover: SkattekontoLedgerCoverInfo | null
+    mode: 'book' | 'draft' | 'manual'
+  } | null>(null)
+
   if (!row) return null
   const twinState = twinRefusal?.rowId === row.id ? twinRefusal : null
+  const coverState = coverRefusal?.rowId === row.id ? coverRefusal : null
 
   // Closing forgets the refusal: a reopened dialog asks the server again.
   function handleOpenChange(next: boolean) {
-    if (!next) setTwinRefusal(null)
+    if (!next) {
+      setTwinRefusal(null)
+      setCoverRefusal(null)
+    }
     onOpenChange(next)
   }
 
@@ -135,6 +163,10 @@ export default function SkattekontoBookDialog({
       }
       if (result.error_code === 'LEDGER_TWIN_EXISTS') {
         setTwinRefusal({ rowId: row.id, twins: result.ledger_twins ?? [], mode: 'book' })
+        return
+      }
+      if (result.error_code === 'LEDGER_COVER_EXISTS') {
+        setCoverRefusal({ rowId: row.id, cover: result.ledger_cover ?? null, mode: 'book' })
         return
       }
       if (result.error_code === 'COMMIT_FAILED' && result.journal_entry_id) {
@@ -188,6 +220,14 @@ export default function SkattekontoBookDialog({
         })
         return
       }
+      if (!res.ok && json?.code === 'LEDGER_COVER_EXISTS') {
+        setCoverRefusal({
+          rowId: row.id,
+          cover: (json.ledger_cover as SkattekontoLedgerCoverInfo | undefined) ?? null,
+          mode: 'draft',
+        })
+        return
+      }
       if (!res.ok) {
         // Map the parsed body plus the status, never `new Error(json.error)`:
         // the mapper would discard the route's own Swedish reason.
@@ -222,6 +262,80 @@ export default function SkattekontoBookDialog({
     if (twinState.mode === 'book') void handleBook(true)
     else if (twinState.mode === 'draft') void handleOpenDraft(true)
     else void handleManualCreate(true)
+  }
+
+  if (coverState) {
+    const cover = coverState.cover
+    const submitting = isBooking || isOpeningDraft
+    const bookAnyway = () =>
+      coverState.mode === 'book'
+        ? void handleBook(true)
+        : coverState.mode === 'draft'
+          ? void handleOpenDraft(true)
+          : void handleManualCreate(true)
+    return (
+      <ConfirmationDialog
+        open={open}
+        onOpenChange={handleOpenChange}
+        title={t('cover_title')}
+        isSubmitting={submitting}
+        confirmLabel={t('cover_match_cta')}
+        // The override records the event a second time: say so.
+        warningText={t('cover_warning')}
+        onConfirm={() => {
+          handleOpenChange(false)
+          if (onLinkCovered) onLinkCovered()
+          else router.push(MANUAL_MATCH_HREF)
+        }}
+        extraActions={
+          <Button
+            variant="ghost"
+            onClick={bookAnyway}
+            disabled={submitting}
+            loading={submitting}
+            className="w-full sm:w-auto text-muted-foreground"
+          >
+            {coverState.mode === 'manual' ? t('twin_manual_anyway') : t('twin_book_anyway')}
+          </Button>
+        }
+      >
+        <div className="space-y-3 py-2 text-sm">
+          <p className="leading-6">
+            {cover
+              ? t(cover.kind === 'events_equal' ? 'cover_body_equal' : 'cover_body_agrees', {
+                  count: cover.event_count,
+                  total: formatCurrency(cover.event_total),
+                  date: formatDate(cover.through_date),
+                })
+              : t('cover_body_plain')}
+          </p>
+          {cover && cover.entries.length > 0 && (
+            <ul className="divide-y divide-border rounded-lg border border-border">
+              {cover.entries.map((entry) => (
+                <li
+                  key={entry.journal_entry_id}
+                  className="flex items-baseline justify-between gap-4 px-3 py-2"
+                >
+                  <span className="shrink-0 tabular-nums font-medium">
+                    {entry.voucher_number ? formatVoucher(entry) : t('twin_draft')}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-muted-foreground" data-ph-mask>
+                    {entry.description}
+                  </span>
+                  <span className="shrink-0 tabular-nums text-muted-foreground" data-ph-mask>
+                    {formatCurrency(entry.open_amount)}
+                  </span>
+                  <span className="shrink-0 tabular-nums text-muted-foreground">
+                    {formatDate(entry.entry_date)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="text-xs leading-5 text-muted-foreground">{t('cover_hint')}</p>
+        </div>
+      </ConfirmationDialog>
+    )
   }
 
   if (twinState) {
@@ -318,6 +432,13 @@ export default function SkattekontoBookDialog({
           : []
         if (candidates.length > 0) {
           setTwinRefusal({ rowId: row.id, twins: candidates.map(toLedgerTwin), mode: 'manual' })
+          return
+        }
+        // No verifikat carries the row exactly, but a summarised one may
+        // already hold it: the same answer as the booking guard gives.
+        const cover = json?.data?.ledger_cover as SkattekontoLedgerCoverInfo | undefined
+        if (cover) {
+          setCoverRefusal({ rowId: row.id, cover, mode: 'manual' })
           return
         }
       } catch {

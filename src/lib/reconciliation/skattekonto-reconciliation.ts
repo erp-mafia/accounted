@@ -40,6 +40,9 @@ const MAX_ITEMS_PER_BUCKET = 500
 
 const ENTRY_ID_CHUNK = 100
 
+/** Covering verifikat named on the public status block; the count is always complete. */
+const MAX_COVER_ENTRY_IDS = 10
+
 type EntryStatus = 'draft' | 'posted' | 'reversed'
 
 interface SkattekontoRow {
@@ -103,6 +106,105 @@ export interface SkattekontoReconciliationResult extends ReconciliationStatus {
   older_unmatched_count: number
   /** Ledger read failed: balances and the residual are null, buckets are still listed. */
   ledger_read_failed: boolean
+  /**
+   * The open rows the ledger already holds through unlinked verifikat on
+   * 1630 (see findLedgerCoverPoint), complete and unwindowed: what the
+   * booking guard reads. Null when nothing is covered.
+   */
+  cover: SkattekontoLedgerCover | null
+}
+
+/** One unlinked (or partly linked) verifikat on 1630 that covers open rows. */
+export interface SkattekontoCoveringEntry {
+  journal_entry_id: string
+  voucher_number: number | null
+  voucher_series: string | null
+  entry_date: string
+  description: string
+  status: EntryStatus
+  /** What no Skatteverket row is linked to: the 1630 net, or its remainder. */
+  open_amount: number
+}
+
+export interface SkattekontoLedgerCover {
+  /** Every open row dated on or before this date is covered. */
+  through_date: string
+  kind: 'events_equal' | 'ledger_agrees'
+  /** The covered open rows (not linked, not ignored), every one of them. */
+  event_ids: string[]
+  event_count: number
+  event_total: number
+  /** The open verifikat up to through_date, largest open amount first. */
+  entries: SkattekontoCoveringEntry[]
+  entry_total: number
+}
+
+interface DatedAmount {
+  date: string
+  amount: number
+}
+
+/**
+ * Are open Skatteverket rows already in the ledger through verifikat on 1630
+ * that no row is linked to? Arithmetic only, exact to the öre, never a guess
+ * about which verifikat "looks" summarised (crm#1043).
+ *
+ * Booking a row moves 1630 by its amount. At a date d that some open
+ * verifikat carries, take the open rows and the open verifikat dated on or
+ * before d. The rows are covered when either holds:
+ *
+ *   events_equal    the open verifikat sum exactly to the open rows: the
+ *                   rows are booked there, in another shape (one summarised
+ *                   voucher, several part vouchers).
+ *   ledger_agrees   open verifikat - open rows = opening difference +
+ *                   ignored rows, which is the bridge identity for "1630
+ *                   equals Skatteverket at d". The ledger already agrees
+ *                   although the rows are unbooked, so they are inside the
+ *                   open verifikat, and what those hold beyond the rows is
+ *                   the part from before the fetched history.
+ *
+ * Both are invariant under linking (a link takes the same amount off both
+ * sides) and under booking a row dated after d, so the answer does not move
+ * while the user works. The latest such date wins; a final point takes every
+ * open row and verifikat whatever their dates. Rows netting to zero are never
+ * a cover (booking all of them would not move 1630). No open verifikat, no
+ * cover: a company that books every row itself is never asked anything.
+ */
+export function findLedgerCoverPoint(input: {
+  openEvents: Array<DatedAmount & { id: string }>
+  openEntries: Array<DatedAmount & { id: string }>
+  ignoredEvents: DatedAmount[]
+  openingDifference: number | null
+}): { through_date: string; kind: SkattekontoLedgerCover['kind'] } | null {
+  const { openEvents, openEntries, ignoredEvents, openingDifference } = input
+  if (openEvents.length === 0 || openEntries.length === 0) return null
+  const ore = (n: number) => Math.round(n * 100)
+  const lastDate = [...openEvents, ...openEntries].reduce((max, r) => (r.date > max ? r.date : max), '')
+  const points = Array.from(new Set([...openEntries.map((e) => e.date), lastDate])).sort()
+  const sumTo = (rows: DatedAmount[], date: string) => {
+    let sum = 0
+    let count = 0
+    for (const r of rows) {
+      if (r.date > date) continue
+      sum += ore(r.amount)
+      count++
+    }
+    return { sum, count }
+  }
+  const openingOre = openingDifference === null ? null : ore(openingDifference)
+  let found: { through_date: string; kind: SkattekontoLedgerCover['kind'] } | null = null
+  for (const date of points) {
+    const events = sumTo(openEvents, date)
+    const entries = sumTo(openEntries, date)
+    if (events.count === 0 || entries.count === 0 || events.sum === 0) continue
+    const gap = entries.sum - events.sum
+    if (gap === 0) {
+      found = { through_date: date, kind: 'events_equal' }
+    } else if (openingOre !== null && gap - sumTo(ignoredEvents, date).sum - openingOre === 0) {
+      found = { through_date: date, kind: 'ledger_agrees' }
+    }
+  }
+  return found
 }
 
 function parseFetchedAt(value: unknown): Date | null {
@@ -206,16 +308,19 @@ async function fetchLedgerEntries(
 }
 
 /**
- * Net 1630 movement of the given entries. Used for entries a Skatteverket row
- * is linked to but that are dated before the comparable history (a payment is
- * booked on the bank date, Skatteverket dates it the day after).
+ * Which of the given entries move 1630 at all (posted or reversed, at least
+ * one line on the account). Used for entries a Skatteverket row is linked to
+ * but that are dated before the comparable history (a payment is booked on
+ * the bank date, Skatteverket dates it the day after): the linked rows'
+ * amount leaves the opening balance only for an entry that really carries a
+ * 1630 line, so a link to a verifikat without one stays an integrity finding.
  */
-async function sumLedgerAmountForEntries(
+async function fetchEntryIdsOnAccount(
   supabase: SupabaseClient,
   companyId: string,
   entryIds: string[],
-): Promise<number> {
-  let total = 0
+): Promise<Set<string>> {
+  const onAccount = new Set<string>()
   for (const part of chunk(entryIds, ENTRY_ID_CHUNK)) {
     const lines = await fetchEntryLines<LedgerLineRow>({
       supabase,
@@ -226,10 +331,10 @@ async function sumLedgerAmountForEntries(
       filterLines: (q: EntryLinesQuery) => q.eq('account_number', SKATTEKONTO_ACCOUNT),
     })
     for (const line of lines) {
-      total = roundOre(total + Number(line.debit_amount || 0) - Number(line.credit_amount || 0))
+      if (line.journal_entries?.id) onAccount.add(line.journal_entries.id)
     }
   }
-  return total
+  return onAccount
 }
 
 /**
@@ -310,12 +415,24 @@ function inWindow(date: string, from: string | null | undefined, to: string | nu
  *   difference         = saldo_skatteverket - ledger balance at the snapshot
  *   unexplained        = difference - opening_difference
  *                        - sum(unlinked SKV rows) - sum(ignored SKV rows)
- *                        + sum(unlinked 1630 entries)
+ *                        + sum(unlinked 1630 entries and remainders)
  *
- * Every link pairs equal amounts on the expected side, so `unexplained` is
- * 0,00 whenever the data is consistent. A non-zero value is an integrity
- * finding (a link to an entry whose 1630 line changed, a read that disagrees
- * with the trial balance), never a user task. The user's work is the bridge.
+ * One rule for every link: it explains exactly the linked rows' amount of
+ * its verifikat, no more. What the verifikat holds on 1630 beyond the rows
+ * linked to it is its remainder (1630 net - linked rows, either sign) and
+ * stays on the ledger side: listed in unmatched_ledger with the remaining
+ * amount when the verifikat is inside the comparable history, left in the
+ * opening balance when the verifikat is the IB or dated before the history
+ * (that part belongs to the time before the fetched rows). An exact link has
+ * remainder 0 and leaves nothing behind. A summarised verifikat linked with
+ * a remainder (crm#1043), and a verifikat matched on one of several 1630
+ * lines, keep the rest visible instead of vanishing with the link.
+ *
+ * So what a link takes off the Skatteverket side it takes off the ledger
+ * side, and `unexplained` is 0,00 whenever the data is consistent. A non-zero
+ * value is an integrity finding (a link to a posted verifikat without any
+ * 1630 line or dated after the snapshot, a read that disagrees with the
+ * trial balance), never a user task. The user's work is the bridge.
  *
  * Anchored at the snapshot instant; the ledger is summed with
  * entry_date <= the snapshot date so a verifikat booked later today cannot
@@ -436,7 +553,7 @@ export async function getSkattekontoReconciliationStatus(
   // With an IB, the ledger is the IB plus everything after it, and the
   // opening side is the IB plus what was booked between it and historyStart.
   const sinceFloor = floor ? { fromDate: floor.date } : {}
-  const [ledgerBalance, ledgerBeforeByDate, linkedBeforeStart] = await Promise.all([
+  const [ledgerBalance, ledgerBeforeByDate, beforeStartOnAccount] = await Promise.all([
     floorReadFailed
       ? null
       : sumAccountBalance(supabase, companyId, SKATTEKONTO_ACCOUNT, { ...sinceFloor, cutoffDate }),
@@ -448,15 +565,27 @@ export async function getSkattekontoReconciliationStatus(
           ? floor.amount
           : sumAccountBalance(supabase, companyId, SKATTEKONTO_ACCOUNT, { ...sinceFloor, beforeDate: historyStart }),
     linkedBeforeStartIds.length > 0
-      ? sumLedgerAmountForEntries(supabase, companyId, linkedBeforeStartIds).catch((err) => {
+      ? fetchEntryIdsOnAccount(supabase, companyId, linkedBeforeStartIds).catch((err) => {
           log.warn('linked entries before history start read failed', {
             companyId,
             error: err instanceof Error ? err.message : String(err),
           })
           return null
         })
-      : Promise.resolve<number | null>(0),
+      : Promise.resolve<Set<string> | null>(new Set()),
   ])
+  // The rows linked to those entries, not the entries' whole net: a link
+  // explains exactly its rows, and what the verifikat holds beyond them
+  // (rows from before the fetched history) stays opening balance.
+  const linkedBeforeStart =
+    beforeStartOnAccount === null
+      ? null
+      : booked.reduce((sum, r) => {
+          if (r.is_ignored || !r.journal_entry_id || !beforeStartOnAccount.has(r.journal_entry_id)) return sum
+          return heads.get(r.journal_entry_id)?.status === 'posted'
+            ? roundOre(sum + Number(r.belopp_skatteverket))
+            : sum
+        }, 0)
   const ledgerBefore =
     ledgerBeforeByDate === null || linkedBeforeStart === null
       ? null
@@ -464,6 +593,12 @@ export async function getSkattekontoReconciliationStatus(
   if (ledgerBalance === null || ledgerBefore === null) ledgerReadFailed = true
 
   const liveLinkedEntryIds = new Set<string>()
+  // What the live links explain of each verifikat: the rows' sum and count.
+  const linkedByEntry = new Map<string, { sum: number; count: number }>()
+  // Complete, unwindowed and uncapped, for the cover test below.
+  const openEvents: Array<{ id: string; date: string; amount: number }> = []
+  const ignoredEvents: DatedAmount[] = []
+  const openEntries: Array<{ head: EntryHead; amount: number }> = []
   const items: SkattekontoReconciliationItems = {
     proposed: [],
     unmatched_external: [],
@@ -507,6 +642,7 @@ export async function getSkattekontoReconciliationStatus(
 
     if (row.is_ignored) {
       ignoredTotal = roundOre(ignoredTotal + amount)
+      ignoredEvents.push({ date: row.transaktionsdatum, amount })
       counts.ignored++
       if (visible(row.transaktionsdatum)) {
         pushCapped('ignored', { ...base, bucket: 'ignored', actions: ['unignore'] })
@@ -527,6 +663,8 @@ export async function getSkattekontoReconciliationStatus(
 
     if (row.journal_entry_id && linkedHead && linkProblem === null) {
       liveLinkedEntryIds.add(row.journal_entry_id)
+      const linked = linkedByEntry.get(row.journal_entry_id) ?? { sum: 0, count: 0 }
+      linkedByEntry.set(row.journal_entry_id, { sum: roundOre(linked.sum + amount), count: linked.count + 1 })
       counts.matched++
       if (visible(row.transaktionsdatum)) {
         pushCapped('matched', {
@@ -544,6 +682,7 @@ export async function getSkattekontoReconciliationStatus(
 
     // Unlinked (or dead link): counts toward the bridge either way.
     unlinkedExternalTotal = roundOre(unlinkedExternalTotal + amount)
+    openEvents.push({ id: row.id, date: row.transaktionsdatum, amount })
     if (olderThanWindow(row.transaktionsdatum)) olderUnmatched++
 
     const suggestedHead = row.suggested_journal_entry_id
@@ -624,18 +763,23 @@ export async function getSkattekontoReconciliationStatus(
     ),
   )
 
-  // Ledger entries in the comparable history that no live link or storno
-  // settles. The IB is the opening balance (in ledgerBefore), not a row.
+  // Ledger entries in the comparable history that no storno settles and no
+  // live link explains in full: an unlinked verifikat with its 1630 net, a
+  // linked one with its remainder. The IB is the opening balance (in
+  // ledgerBefore), not a row.
   let unlinkedLedgerTotal = 0
   const awaitingFrom = addDaysIso(cutoffDate, -AWAITING_EXTERNAL_DAYS)
   const sortedLedger = Array.from(ledgerEntries.values()).sort((a, b) =>
     a.head.entry_date < b.head.entry_date ? -1 : a.head.entry_date > b.head.entry_date ? 1 : 0,
   )
-  for (const { head, amount } of sortedLedger) {
-    if (liveLinkedEntryIds.has(head.id) || settledStornoIds.has(head.id) || settledAnnulmentIds.has(head.id)) continue
+  for (const { head, amount: entryAmount } of sortedLedger) {
+    if (settledStornoIds.has(head.id) || settledAnnulmentIds.has(head.id)) continue
     if (floorIds.has(head.id)) continue
+    const linked = linkedByEntry.get(head.id)
+    const amount = linked ? roundOre(entryAmount - linked.sum) : entryAmount
     if (amount === 0) continue
     unlinkedLedgerTotal = roundOre(unlinkedLedgerTotal + amount)
+    openEntries.push({ head, amount })
     counts.unmatched_ledger++
     if (olderThanWindow(head.entry_date)) olderUnmatched++
     if (!visible(head.entry_date)) continue
@@ -652,6 +796,9 @@ export async function getSkattekontoReconciliationStatus(
       voucher_series: head.voucher_series,
       entry_status: head.status,
       awaiting_external: head.entry_date >= awaitingFrom,
+      ...(linked
+        ? { partially_linked: { entry_amount: entryAmount, linked_amount: linked.sum, linked_count: linked.count } }
+        : {}),
       actions: ['review', 'match'],
     })
   }
@@ -686,6 +833,46 @@ export async function getSkattekontoReconciliationStatus(
       : roundOre(
           difference - openingDifference - unlinkedExternalTotal - ignoredTotal + unlinkedLedgerTotal,
         )
+
+  // Open rows the ledger already holds through open verifikat (see
+  // findLedgerCoverPoint). Not computed on a failed ledger read: an
+  // empty ledger side would read as "nothing covers anything".
+  const coverPoint = ledgerReadFailed
+    ? null
+    : findLedgerCoverPoint({
+        openEvents,
+        openEntries: openEntries.map((e) => ({ id: e.head.id, date: e.head.entry_date, amount: e.amount })),
+        ignoredEvents,
+        openingDifference,
+      })
+  let cover: SkattekontoLedgerCover | null = null
+  if (coverPoint) {
+    const coveredEvents = openEvents.filter((e) => e.date <= coverPoint.through_date)
+    const coveringEntries = openEntries
+      .filter((e) => e.head.entry_date <= coverPoint.through_date)
+      .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))
+    cover = {
+      through_date: coverPoint.through_date,
+      kind: coverPoint.kind,
+      event_ids: coveredEvents.map((e) => e.id),
+      event_count: coveredEvents.length,
+      event_total: coveredEvents.reduce((sum, e) => roundOre(sum + e.amount), 0),
+      entries: coveringEntries.map(({ head, amount }) => ({
+        journal_entry_id: head.id,
+        voucher_number: head.voucher_number,
+        voucher_series: head.voucher_series,
+        entry_date: head.entry_date,
+        description: head.description ?? '',
+        status: head.status,
+        open_amount: amount,
+      })),
+      entry_total: coveringEntries.reduce((sum, e) => roundOre(sum + e.amount), 0),
+    }
+    const coveredIds = new Set(cover.event_ids)
+    for (const item of [...items.proposed, ...items.unmatched_external]) {
+      if (coveredIds.has(item.item_id)) item.covered_by_ledger = true
+    }
+  }
 
   const isReconciled =
     !!snapshot &&
@@ -778,11 +965,22 @@ export async function getSkattekontoReconciliationStatus(
       upcoming_count: upcoming.length,
       upcoming_total: upcomingTotal,
       ledger_balance_before_start: ledgerBefore,
+      covered: cover
+        ? {
+            through_date: cover.through_date,
+            kind: cover.kind,
+            event_count: cover.event_count,
+            event_total: cover.event_total,
+            journal_entry_ids: cover.entries.slice(0, MAX_COVER_ENTRY_IDS).map((e) => e.journal_entry_id),
+            entry_count: cover.entries.length,
+          }
+        : null,
     },
     bank: null,
     items,
     items_truncated: truncated,
     older_unmatched_count: olderUnmatched,
     ledger_read_failed: ledgerReadFailed,
+    cover,
   }
 }

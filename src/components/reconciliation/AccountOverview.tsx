@@ -160,7 +160,9 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
   const bookableIds = useMemo(
     () =>
       (byBucket.get('unmatched_external') ?? [])
-        .filter((i) => i.item_type === 'skattekonto_transaction' && i.actions.includes('book'))
+        // A row the ledger already holds (a summarised verifikat covers it)
+        // is linked, not booked: "Bokför N händelser" never counts it.
+        .filter((i) => i.item_type === 'skattekonto_transaction' && i.actions.includes('book') && !i.covered_by_ledger)
         .map((i) => i.item_id),
     [byBucket],
   )
@@ -269,9 +271,15 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         // Rows whose event the ledger already holds were skipped, not lost:
         // say so, and that they are linked rather than booked.
         const twins = results.filter((r) => r.error_code === 'LEDGER_TWIN_EXISTS').length
+        // The same for rows a summarised verifikat already covers.
+        const covered = results.filter((r) => r.error_code === 'LEDGER_COVER_EXISTS').length
         toast({
           title: failed > 0 ? t('toast_book_partial', { ok, failed }) : t('toast_booked', { count: ok }),
-          ...(twins > 0 ? { description: t('toast_book_twins', { count: twins }) } : {}),
+          ...(covered > 0
+            ? { description: t('toast_book_covered', { count: covered }) }
+            : twins > 0
+              ? { description: t('toast_book_twins', { count: twins }) }
+              : {}),
           variant: failed > 0 && ok === 0 ? 'destructive' : undefined,
         })
         await refresh()
@@ -680,7 +688,18 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         )}
       </div>
 
-      {status.stale ? <AttnLine>{t('stale_line', { source: sourceLabel })}</AttnLine> : null}
+      {/* One notice at a time: stale data first, else the rows a summarised
+          verifikat already covers, with the way to link them. */}
+      {status.stale ? (
+        <AttnLine>{t('stale_line', { source: sourceLabel })}</AttnLine>
+      ) : isSkv && status.skattekonto?.covered ? (
+        <AttnLine action={onMatchManually ? { label: t('mode_match'), onClick: onMatchManually } : undefined}>
+          {t('covered_line', {
+            count: status.skattekonto.covered.event_count,
+            date: formatDate(status.skattekonto.covered.through_date),
+          })}
+        </AttnLine>
+      ) : null}
 
       {status.signoff && (
         <p className="group flex items-center gap-2 text-[13px] text-muted-foreground">
@@ -821,6 +840,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
                           onIgnore={() => void setIgnored(item, true)}
                           onUnignore={() => void setIgnored(item, false)}
                           onBook={() => setBookRow(item)}
+                          onLinkInstead={isSkv ? onMatchManually : undefined}
                           onMarkIb={!isSkv && item.side === 'ledger' && item.bucket === 'unmatched_ledger' && item.ib_eligible ? () => void markOpeningBalance(item) : undefined}
                           moveTargets={!isSkv && item.item_type === 'transaction' && item.bucket === 'unmatched_external' ? otherBankAccounts : []}
                           onMove={(target) => void moveToAccount(item, target)}
@@ -876,6 +896,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
             if (bookRow) setMatchRow(toDialogRow(bookRow))
             setBookRow(null)
           }}
+          onLinkCovered={onMatchManually}
         />
       )}
 

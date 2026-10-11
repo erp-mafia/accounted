@@ -6478,6 +6478,24 @@ const SKATTEVERKET: Record<string, StructuredErrorEntry> = {
     },
     thrown_message_sv: true,
   },
+  // Skattekonto rows no single verifikat carries, but that unlinked verifikat
+  // on 1630 already hold in aggregate (one summarised year-end or month-end
+  // verifikat, crm#1043): booking them would record the events twice. The
+  // thrown Swedish text names the verifikat and the date they cover through.
+  SKATTEKONTO_BOOK_LEDGER_COVER_EXISTS: {
+    httpStatus: 409,
+    message_sv:
+      'Händelsen ser redan ut att vara bokförd: verifikat på konto 1630 som inte är kopplade till någon händelse täcker den redan. Koppla händelserna till verifikatet i stället för att bokföra dem en gång till.',
+    message_en:
+      'The event already appears to be booked: verifikat on account 1630 that no Skatteverket row is linked to already cover it. Link the rows to that verifikat instead of booking them a second time.',
+    retryable: false,
+    remediation: {
+      description:
+        'Link the covered rows (covered_by_ledger in gnubok_list_reconciliation_items, account_key "skattekonto") to the unlinked verifikat with gnubok_reconcile_match, at most 50 rows per pair, with allow_remainder: true when the rows do not sum to the verifikat: the rest stays on it as its remainder. Book anyway (allow_duplicate / allow_duplicate_ids) only when the user confirms the event is really missing from the ledger.',
+      tool: 'gnubok_reconcile_match',
+    },
+    thrown_message_sv: true,
+  },
   SKATTEVERKET_ACCESS_DENIED: {
     httpStatus: 403,
     message_sv:

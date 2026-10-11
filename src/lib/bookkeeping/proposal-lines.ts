@@ -44,7 +44,7 @@ import {
   type ReverseChargeKind,
   type ReverseChargePurchase,
 } from '@/lib/bookkeeping/vat-entries'
-import { getCategoryAccountMapping } from '@/lib/bookkeeping/category-mapping'
+import { booksReverseChargePurchase, getCategoryAccountMapping } from '@/lib/bookkeeping/category-mapping'
 import { buildCurrencyMetadata } from '@/lib/bookkeeping/currency-utils'
 import { roundOre } from '@/lib/money'
 import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
@@ -494,9 +494,14 @@ function computeRateLines(input: ProposalLinesInput): ProposalLine[] {
   // net as gross minus that leg (transaction-entries.ts).
   const vatAmt = vatRate > 0 ? roundOre(absAmount * vatRate / (1 + vatRate)) : 0
 
+  // The mapping has already put the business account and its moms account on
+  // the side this row books them (getCategoryAccountMapping): a row against
+  // its category's direction is a refund, the same accounts mirrored.
   if (amount < 0) {
-    // Expense: Debit expense + VAT, Credit bank. The net leg carries the full
-    // gross when no VAT line is emitted (matches the engine's no-VAT branch).
+    // Money out: debit the business account + its VAT, credit the bank (an
+    // expense, or a refund to a customer taking utgående moms back). The net
+    // leg carries the full gross when no VAT line is emitted (matches the
+    // engine's no-VAT branch).
     const hasVatLine = vatAmt > 0 && !!mapping.vatDebitAccount
     const netAmt = hasVatLine ? engineRound(absAmount - vatAmt) : absAmount
     result.push({ side: 'debet', account: debitAccount, amount: netAmt })
@@ -505,7 +510,8 @@ function computeRateLines(input: ProposalLinesInput): ProposalLine[] {
     }
     result.push({ side: 'kredit', account: creditAccount, amount: absAmount, settlement: true })
   } else {
-    // Income: Debit bank, Credit revenue + VAT
+    // Money in: debit the bank, credit the business account + its VAT (income,
+    // or a refund from a supplier taking ingående moms back)
     const hasVatLine = vatAmt > 0 && !!mapping.vatCreditAccount
     const netAmt = hasVatLine ? engineRound(absAmount - vatAmt) : absAmount
     result.push({ side: 'debet', account: debitAccount, amount: absAmount, settlement: true })
@@ -517,7 +523,9 @@ function computeRateLines(input: ProposalLinesInput): ProposalLine[] {
 
   // Reverse charge: the complete set (fiktiv moms + basbelopp pair), as
   // buildMappingResultFromCategory books it, settled on the final cost account.
-  if (treatment === 'reverse_charge' && amount < 0) {
+  // A purchase only (ENGINE PARITY: booksReverseChargePurchase): money out on
+  // an income category is a refund of a sale and self-assesses nothing.
+  if (treatment === 'reverse_charge' && booksReverseChargePurchase(category, amount)) {
     result.push(...reverseChargeOn(debitAccount, { rate: 0.25, kind: reverseChargeKind ?? DEFAULT_REVERSE_CHARGE_KIND }))
   }
 

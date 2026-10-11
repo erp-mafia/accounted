@@ -1,0 +1,211 @@
+/**
+ * Unit tests for lib/salary/employee-commands.ts: what the MCP executors
+ * (create_employee / update_employee) are allowed to write.
+ *
+ * The writable set is read off the request schemas (crm#1133). It used to be
+ * a second hand-written list beside them, and is_active, which the MCP tool
+ * advertised, was in neither: the schema stripped it on the PATCH routes and
+ * this layer dropped it at approval. The tests pin the set to the schemas,
+ * is_active to update only, and the defense the allowlist exists for (a
+ * tampered pending_operations row cannot reach another column).
+ */
+
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { createQueuedMockSupabase } from '@/tests/helpers'
+import { CreateEmployeeSchema, UpdateEmployeeSchema } from '@/lib/api/schemas'
+import { encryptPersonnummer } from '@/lib/salary/personnummer'
+
+vi.mock('@/lib/company/context', () => ({
+  getCompanyEntityType: vi.fn().mockResolvedValue('aktiebolag'),
+}))
+
+import {
+  EMPLOYEE_CREATE_COLUMNS,
+  EMPLOYEE_UPDATE_COLUMNS,
+  createEmployee,
+  updateEmployee,
+} from '@/lib/salary/employee-commands'
+
+const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+const EMPLOYEE_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+const USER_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+
+// Synthetic fixture personnummer (year 1900, zero suffix): only ever masked.
+const ENCRYPTED_PNR = encryptPersonnummer('190001010000')
+
+/** A stored row that passes every merged-state rule. */
+const STORED = {
+  id: EMPLOYEE_ID,
+  company_id: COMPANY_ID,
+  first_name: 'Anna',
+  last_name: 'Andersson',
+  personnummer: ENCRYPTED_PNR,
+  employment_type: 'employee',
+  employment_start: '2024-01-15',
+  salary_type: 'monthly',
+  monthly_salary: 35000,
+  tax_table_number: 33,
+  is_sidoinkomst: false,
+  f_skatt_status: 'a_skatt',
+  vaxa_stod_eligible: false,
+  jamkning_percentage: null,
+  jamkning_valid_from: null,
+  jamkning_valid_to: null,
+  is_active: true,
+}
+
+/** What the UPDATE and INSERT chains select back. */
+const summaryRow = (isActive: boolean) => ({
+  id: EMPLOYEE_ID,
+  first_name: 'Anna',
+  last_name: 'Andersson',
+  personnummer: ENCRYPTED_PNR,
+  is_active: isActive,
+})
+
+let mock: ReturnType<typeof createQueuedMockSupabase>
+let supabase: SupabaseClient
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  mock = createQueuedMockSupabase()
+  supabase = mock.supabase as unknown as SupabaseClient
+})
+
+describe('writable columns', () => {
+  it('are the keys of the request schemas, minus personnummer', () => {
+    const without = (shape: object) => Object.keys(shape).filter((key) => key !== 'personnummer').sort()
+
+    expect([...EMPLOYEE_CREATE_COLUMNS].sort()).toEqual(without(CreateEmployeeSchema.shape))
+    expect([...EMPLOYEE_UPDATE_COLUMNS].sort()).toEqual(without(UpdateEmployeeSchema.shape))
+  })
+
+  it('never include the identity or tenancy columns', () => {
+    for (const column of ['personnummer', 'personnummer_last4', 'id', 'company_id', 'user_id']) {
+      expect(EMPLOYEE_CREATE_COLUMNS.has(column), `create: ${column}`).toBe(false)
+      expect(EMPLOYEE_UPDATE_COLUMNS.has(column), `update: ${column}`).toBe(false)
+    }
+  })
+
+  it('carry is_active on update only: a new employee is always created active', () => {
+    expect(EMPLOYEE_UPDATE_COLUMNS.has('is_active')).toBe(true)
+    expect(EMPLOYEE_CREATE_COLUMNS.has('is_active')).toBe(false)
+    // The create schema itself drops the key, so no door can create an
+    // inactive employee.
+    expect(Object.keys(CreateEmployeeSchema.shape)).not.toContain('is_active')
+    // Apart from that one key the two verbs write the same columns.
+    expect([...EMPLOYEE_UPDATE_COLUMNS].filter((c) => c !== 'is_active').sort()).toEqual(
+      [...EMPLOYEE_CREATE_COLUMNS].sort(),
+    )
+  })
+})
+
+describe('updateEmployee', () => {
+  const args = (patch: Record<string, unknown>) => ({ companyId: COMPANY_ID, employeeId: EMPLOYEE_ID, patch })
+
+  it('writes is_active true for an inactive employee: the reactivation reaches the row', async () => {
+    mock.enqueue({ data: { ...STORED, is_active: false } }) // fetch existing
+    mock.enqueue({ data: summaryRow(true) }) // update
+
+    const result = await updateEmployee(supabase, args({ is_active: true }))
+
+    expect(result).toMatchObject({ ok: true, data: { employee_id: EMPLOYEE_ID, is_active: true } })
+    expect(mock.findCalls('employees', 'update')).toEqual([[{ is_active: true }]])
+  })
+
+  it('writes is_active false: the same single-column write the soft delete makes', async () => {
+    mock.enqueue({ data: STORED })
+    mock.enqueue({ data: summaryRow(false) })
+
+    const result = await updateEmployee(supabase, args({ is_active: false }))
+
+    expect(result).toMatchObject({ ok: true, data: { is_active: false } })
+    expect(mock.findCalls('employees', 'update')).toEqual([[{ is_active: false }]])
+  })
+
+  it('writes the flag beside another field instead of dropping it', async () => {
+    mock.enqueue({ data: { ...STORED, is_active: false } })
+    mock.enqueue({ data: summaryRow(true) })
+
+    await updateEmployee(supabase, args({ is_active: true, phone: '0700000000' }))
+
+    expect(mock.findCalls('employees', 'update')).toEqual([[{ is_active: true, phone: '0700000000' }]])
+  })
+
+  it('scopes the read and the write to the company and the employee', async () => {
+    mock.enqueue({ data: { ...STORED, is_active: false } })
+    mock.enqueue({ data: summaryRow(true) })
+
+    await updateEmployee(supabase, args({ is_active: true }))
+
+    expect(mock.findCalls('employees', 'eq')).toEqual([
+      ['id', EMPLOYEE_ID],
+      ['company_id', COMPANY_ID],
+      ['id', EMPLOYEE_ID],
+      ['company_id', COMPANY_ID],
+    ])
+  })
+
+  it('drops columns outside the schema from a tampered patch and writes the rest', async () => {
+    mock.enqueue({ data: STORED })
+    mock.enqueue({ data: summaryRow(true) })
+
+    await updateEmployee(
+      supabase,
+      args({ phone: '0700000000', company_id: 'other-company', user_id: 'other-user', personnummer_last4: '9999' }),
+    )
+
+    expect(mock.findCalls('employees', 'update')).toEqual([[{ phone: '0700000000' }]])
+  })
+
+  it('refuses a patch with nothing writable, before reading or writing', async () => {
+    const result = await updateEmployee(supabase, args({ company_id: 'other-company' }))
+
+    expect(result).toMatchObject({ ok: false, code: 'VALIDATION_ERROR' })
+    expect(mock.findCall('employees', 'select')).toBeUndefined()
+    expect(mock.findCall('employees', 'update')).toBeUndefined()
+  })
+
+  it('answers EMPLOYEE_NOT_FOUND for an id that is not in the company, without writing', async () => {
+    mock.enqueue({ data: null })
+
+    const result = await updateEmployee(supabase, args({ is_active: true }))
+
+    expect(result).toEqual({ ok: false, code: 'EMPLOYEE_NOT_FOUND' })
+    expect(mock.findCall('employees', 'update')).toBeUndefined()
+  })
+
+  it('still refuses personnummer: identity is immutable', async () => {
+    const result = await updateEmployee(supabase, args({ is_active: true, personnummer: '190001010008' }))
+
+    expect(result).toMatchObject({ ok: false, code: 'VALIDATION_ERROR', details: { field: 'personnummer' } })
+    expect(mock.findCall('employees', 'update')).toBeUndefined()
+  })
+})
+
+describe('createEmployee', () => {
+  it('ignores is_active: the row is inserted without the key, so the column default (active) applies', async () => {
+    mock.enqueue({ data: summaryRow(true) }) // insert
+
+    const result = await createEmployee(supabase, {
+      companyId: COMPANY_ID,
+      userId: USER_ID,
+      input: {
+        first_name: 'Anna',
+        last_name: 'Andersson',
+        employment_start: '2024-01-15',
+        salary_type: 'monthly',
+        monthly_salary: 35000,
+        is_active: false,
+        personnummer_encrypted: ENCRYPTED_PNR,
+        personnummer_last4: '0000',
+      },
+    })
+
+    expect(result).toMatchObject({ ok: true, data: { is_active: true } })
+    const [inserted] = mock.findCall('employees', 'insert') as [Record<string, unknown>]
+    expect(inserted).not.toHaveProperty('is_active')
+    expect(inserted).toMatchObject({ company_id: COMPANY_ID, first_name: 'Anna', monthly_salary: 35000 })
+  })
+})

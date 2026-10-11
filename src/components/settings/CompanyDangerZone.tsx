@@ -27,9 +27,22 @@ import { getBranding } from '@/lib/branding/service'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { CompanyMigrationResetDialog } from '@/components/settings/CompanyMigrationResetDialog'
 import { CompanyMigrationArchiveRow } from '@/components/settings/CompanyMigrationArchiveRow'
-import { ACCOUNT_DELETION_HREF } from '@/lib/company/no-company-routes'
+import {
+  afterCompanyDeleteHref,
+  type CompanyDeleteDoor,
+} from '@/components/settings/company-deletion'
 
 const branding = getBranding()
+
+interface CompanyDangerZoneProps {
+  /**
+   * Which door opened the delete dialog, null while it is closed. The section
+   * owns it because the dialog has a second door outside this zone: the locked
+   * org number row (company-deletion.ts).
+   */
+  deleteDoor: CompanyDeleteDoor | null
+  onDeleteDoorChange: (door: CompanyDeleteDoor | null) => void
+}
 
 /**
  * Danger zone for the currently-active company. Only visible to owners.
@@ -42,22 +55,26 @@ const branding = getBranding()
  * confirm step in a BankID signature gate. Guarded behind a
  * capabilities.bankIdLinked boolean fetched from the user profile.
  */
-export function CompanyDangerZone() {
+export function CompanyDangerZone({ deleteDoor, onDeleteDoorChange }: CompanyDangerZoneProps) {
   const t = useTranslations('settings_company')
   const tRetention = useTranslations('retention_notice')
   const router = useRouter()
   const { toast } = useToast()
   const { company, role } = useCompany()
 
-  const [showDialog, setShowDialog] = useState(false)
   const [showResetDialog, setShowResetDialog] = useState(false)
   const [confirmText, setConfirmText] = useState('')
   const [isDeleting, setIsDeleting] = useState(false)
 
   if (!company || role !== 'owner') return null
 
+  function closeDeleteDialog() {
+    onDeleteDoorChange(null)
+    setConfirmText('')
+  }
+
   async function handleDelete() {
-    if (!company) return
+    if (!company || !deleteDoor) return
     if (confirmText.trim() !== company.name.trim()) return
 
     setIsDeleting(true)
@@ -74,13 +91,9 @@ export function CompanyDangerZone() {
       }
 
       toast({ title: t('danger_deleted_title'), description: company.name })
-      // Stay inside settings. If the user had another company, the dashboard
-      // layout resolves it and /settings/account renders as normal. If this
-      // was their last company (nextCompanyId null), deleting it was most
-      // likely the step before deleting the account, which requires owning
-      // none: land on that action, which the no-company shell keeps
-      // reachable (crm#1042).
-      router.push(body?.data?.nextCompanyId === null ? ACCOUNT_DELETION_HREF : '/settings/account')
+      // The door decides what the delete was for: on to adding the right
+      // company, or settings and the delete-account action (crm#1042).
+      router.push(afterCompanyDeleteHref(deleteDoor, body?.data?.nextCompanyId))
       router.refresh()
     } catch (err) {
       toast({
@@ -130,7 +143,7 @@ export function CompanyDangerZone() {
           <SettingsRowEnd>
             <button
               type="button"
-              onClick={() => setShowDialog(true)}
+              onClick={() => onDeleteDoorChange('danger_zone')}
               className="text-sm font-medium text-destructive underline underline-offset-2 transition-colors duration-150 hover:text-destructive/80"
             >
               {t('danger_button')}
@@ -140,11 +153,10 @@ export function CompanyDangerZone() {
       </SettingsDangerZone>
 
       <Dialog
-        open={showDialog}
+        open={deleteDoor !== null}
         onOpenChange={(open) => {
-          if (isDeleting) return
-          setShowDialog(open)
-          if (!open) setConfirmText('')
+          if (isDeleting || open) return
+          closeDeleteDialog()
         }}
       >
         <DialogContent>
@@ -155,6 +167,13 @@ export function CompanyDangerZone() {
               {t('danger_dialog_description', { appName: branding.appName.toLowerCase() })}
             </DialogDescription>
           </DialogHeader>
+          {/* Wrong-company door: say what comes after the delete, and the one
+              thing to do before it. The delete leaves a bank connection
+              active, and a hidden company's connection is out of the owner's
+              reach: the consent can only be withdrawn beforehand. */}
+          {deleteDoor === 'wrong_company' && (
+            <p className="text-sm text-muted-foreground">{t('danger_dialog_wrong_company_note')}</p>
+          )}
           <div className="space-y-2">
             {/* data-ph-mask: the label interpolates the company name */}
             <Label data-ph-mask="" htmlFor="company-delete-confirm">
@@ -175,14 +194,7 @@ export function CompanyDangerZone() {
             />
           </div>
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setShowDialog(false)
-                setConfirmText('')
-              }}
-              disabled={isDeleting}
-            >
+            <Button variant="outline" onClick={closeDeleteDialog} disabled={isDeleting}>
               {t('danger_cancel')}
             </Button>
             <Button

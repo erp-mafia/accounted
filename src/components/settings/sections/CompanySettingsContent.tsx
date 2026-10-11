@@ -1,9 +1,11 @@
 'use client'
 
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
+import { useCompany } from '@/contexts/CompanyContext'
 import { CompanyDangerZone } from '@/components/settings/CompanyDangerZone'
+import type { CompanyDeleteDoor } from '@/components/settings/company-deletion'
 import { CompanyInfoForm } from '@/components/settings/CompanyInfoForm'
 import { CompanyProfileSection } from '@/components/settings/CompanyProfileSection'
 import { LogoUpload } from '@/components/settings/LogoUpload'
@@ -20,6 +22,15 @@ export function CompanySettingsContent() {
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
   const { settings, isLoading, updateSettings, refetch } = useSettings()
+  const { role, isSandbox } = useCompany()
+  // The delete-company dialog lives in the danger zone at the foot of the
+  // page and has two doors: its own row, and the locked org number row at the
+  // top, where an owner who set up the wrong company looks for a way out.
+  const [deleteDoor, setDeleteDoor] = useState<CompanyDeleteDoor | null>(null)
+  // "Delete this company and add the right one" needs both halves: deleting
+  // is the owner's alone (CompanyDangerZone renders nothing for anyone else),
+  // and a sandbox has no "Lägg till företag" to continue to.
+  const canReplaceCompany = role === 'owner' && !isSandbox
 
   // Members moved to their own section (2026-09-24): old links to
   // /settings/company#members land there instead.
@@ -83,7 +94,10 @@ export function CompanySettingsContent() {
       <SettingsSectionHeader title={tNav('company')} intro={tIntro('company')} />
 
       <SettingsFormWrapper onSave={handleSave}>
-        <CompanyInfoForm settings={settings} />
+        <CompanyInfoForm
+          settings={settings}
+          onWrongCompany={canReplaceCompany ? () => setDeleteDoor('wrong_company') : undefined}
+        />
         {settings.entity_type === 'aktiebolag' && (
           <ShareCapitalForm
             settings={{ aktiekapital: settings.aktiekapital, antal_aktier: settings.antal_aktier }}
@@ -99,7 +113,7 @@ export function CompanySettingsContent() {
       <CompanyProfileSection />
 
       <div id="archive-start-fresh" ref={scrollToArchive}>
-        <CompanyDangerZone />
+        <CompanyDangerZone deleteDoor={deleteDoor} onDeleteDoorChange={setDeleteDoor} />
       </div>
     </div>
   )

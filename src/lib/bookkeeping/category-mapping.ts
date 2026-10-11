@@ -114,10 +114,88 @@ function getIncomeAccount(category: string, vatTreatment?: VatTreatment): string
 }
 
 /**
+ * What a business category books on its own: an expense category takes money
+ * out (debit the cost account, credit the bank), an income category brings
+ * money in (debit the bank, credit the revenue account).
+ */
+type CategoryNature = 'expense' | 'income'
+
+function categoryNature(category: TransactionCategory): CategoryNature | null {
+  if (category.startsWith('expense_')) return 'expense'
+  if (category.startsWith('income_')) return 'income'
+  return null
+}
+
+/**
+ * True when a bank row runs against its category: money IN on an expense
+ * category (the supplier pays back) or money OUT on an income category (the
+ * customer is paid back). Such a row is the reversal of the category's own
+ * booking, never a booking of the opposite kind: the same accounts on the
+ * opposite sides, the moms taken back on the account it was booked on
+ * (swedish-daily-bookkeeping, payment-providers.md §10: a refund of a sale
+ * reverses the original entry, debit 30xx and 26xx; swedish-invoice-compliance,
+ * invoice-rules.md §5: mirror reversal of the original, both for the seller
+ * and for the buyer). A zero amount has no direction and books as the
+ * category itself.
+ */
+export function isCategoryReversal(category: TransactionCategory, amount: number): boolean {
+  const nature = categoryNature(category)
+  if (nature === 'expense') return amount > 0
+  if (nature === 'income') return amount < 0
+  return false
+}
+
+/**
+ * Whether a reverse-charge treatment on this row books the buyer's
+ * self-assessment (fiktiv moms and the basis pair): only a purchase, money
+ * out on an expense category. A sale under reverse charge carries no Swedish
+ * moms in either direction (the buyer accounts for it), and a refund from a
+ * supplier books no set here.
+ */
+export function booksReverseChargePurchase(category: TransactionCategory, amount: number): boolean {
+  return categoryNature(category) === 'expense' && amount < 0
+}
+
+/**
+ * The sides of a business category on a bank row: the one place the sign of
+ * the amount meets the category's nature. The business account sits on its
+ * own side (debit for an expense, credit for an income) and on the opposite
+ * side for a reversal; the bank takes the other side, and the moms account
+ * stands beside the business account, so a reversal takes the moms back on
+ * the account it was booked on:
+ *
+ *   expense, money out   D cost     D 2641    K bank   (a purchase)
+ *   expense, money in    D bank     K cost    K 2641   (the supplier refunds)
+ *   income, money in     D bank     K revenue K 26x1   (a sale)
+ *   income, money out    D revenue  D 26x1    K bank   (the customer is refunded)
+ *
+ * The momsdeklaration reads each box off the account's balance
+ * (lib/reports/vat-declaration.ts ACCOUNT_RUTA), so a debit on 2611 lowers
+ * ruta 10 and a debit on 3001 lowers ruta 05 without any tag on the line.
+ */
+function orientBusinessMapping(
+  nature: CategoryNature,
+  reversal: boolean,
+  businessAccount: string,
+  vatTreatment: string | null,
+  vatAccount: string | null,
+): CategoryAccountMapping {
+  const businessOnDebit = (nature === 'expense') !== reversal
+  return {
+    debitAccount: businessOnDebit ? businessAccount : BANK_ACCOUNT,
+    creditAccount: businessOnDebit ? BANK_ACCOUNT : businessAccount,
+    vatTreatment,
+    vatDebitAccount: businessOnDebit ? vatAccount : null,
+    vatCreditAccount: businessOnDebit ? null : vatAccount,
+  }
+}
+
+/**
  * Get account mapping for a transaction category
  *
  * For expenses: Debit expense account, Credit bank (or private for non-business)
  * For income: Debit bank, Credit revenue account
+ * A row against the category's direction is its reversal (isCategoryReversal).
  *
  * `vatRegistered` is company_settings.vat_registered: an explicit false
  * resolves every rate-bearing treatment to exempt (no 2641, no 26xx, income
@@ -160,25 +238,15 @@ export function getCategoryAccountMapping(
       vatRegistered,
     )
 
-    if (amount > 0) {
-      // Incoming refund: bank receives money, expense account is reduced (credited).
-      // Ingående moms is reversed: credit 2641 instead of debit.
-      return {
-        debitAccount: BANK_ACCOUNT,
-        creditAccount: expenseAccount,
-        vatTreatment: resolvedVat,
-        vatDebitAccount: null,
-        vatCreditAccount: resolvedVat ? '2641' : null,
-      }
-    }
-
-    return {
-      debitAccount: expenseAccount,
-      creditAccount: BANK_ACCOUNT,
-      vatTreatment: resolvedVat,
-      vatDebitAccount: resolvedVat ? '2641' : null, // Debiterad ingående moms
-      vatCreditAccount: null,
-    }
+    // Debiterad ingående moms (2641): debited on a purchase, credited back
+    // when the supplier refunds.
+    return orientBusinessMapping(
+      'expense',
+      isCategoryReversal(category, amount),
+      expenseAccount,
+      resolvedVat,
+      resolvedVat ? '2641' : null,
+    )
   }
 
   // Check if it's an income category
@@ -210,13 +278,16 @@ export function getCategoryAccountMapping(
         break
     }
 
-    return {
-      debitAccount: BANK_ACCOUNT,
-      creditAccount: incomeAccount,
-      vatTreatment: resolvedVat,
-      vatDebitAccount: null,
-      vatCreditAccount: outputVatAccount,
-    }
+    // Utgående moms: credited on a sale, debited back on the same account
+    // when the customer is refunded (crm#1136: this branch used to ignore the
+    // sign, so money out booked as a sale with no moms).
+    return orientBusinessMapping(
+      'income',
+      isCategoryReversal(category, amount),
+      incomeAccount,
+      resolvedVat,
+      outputVatAccount,
+    )
   }
 
   // Uncategorized - default to misc expense/income based on amount
@@ -342,13 +413,18 @@ export function buildMappingResultFromCategory(
     }
   }
 
+  // A row against the category's direction: the reversal of its own booking.
+  const reversal = isBusiness && isCategoryReversal(category, transaction.amount)
+
   if (isBusiness && treatment) {
     const vatRate = getVatRate(treatment)
-    if (treatment === 'reverse_charge' && transaction.amount < 0) {
+    if (treatment === 'reverse_charge' && booksReverseChargePurchase(category, transaction.amount)) {
       // Reverse charge: the complete set, fiktiv moms (2645/2614) AND the
       // basis pair (45xx/4598) for ruta 20-22, 25% of the SEK value: an EUR
       // invoice's fiktiv moms posted off the EUR figure would understate
-      // 2614/2645 by the exchange rate.
+      // 2614/2645 by the exchange rate. Only a purchase self-assesses: money
+      // out on an income category is a refund of a sale that carried no
+      // Swedish moms, so it books none either.
       const rcLines = generateReverseChargePurchaseLines({
         base: absSekAmount,
         kind: reverseChargeKind ?? DEFAULT_REVERSE_CHARGE_KIND,
@@ -371,25 +447,22 @@ export function buildMappingResultFromCategory(
         ? roundOre((vatAmountOverride as number) * (absSekAmount / absAmount))
         : roundOre(absSekAmount * vatRate / (1 + vatRate))
 
-      if (vatAmount > 0 && transaction.amount < 0 && mapping.vatDebitAccount) {
-        // Expense: Ingående moms (deductible VAT)
+      // One moms line, on the account and the side getCategoryAccountMapping
+      // gave it: beside the business line, so debited when money goes out
+      // (ingående moms on a purchase, utgående moms taken back on a refund of
+      // a sale) and credited when money comes in (utgående moms on a sale,
+      // ingående moms taken back when the supplier refunds).
+      const vatAccount = mapping.vatDebitAccount ?? mapping.vatCreditAccount
+      if (vatAmount > 0 && vatAccount) {
+        const isInputVat = vatAccount === '2641'
+        const label = reversal
+          ? (isInputVat ? 'Återföring ingående moms' : 'Återföring utgående moms')
+          : (isInputVat ? 'Ingående moms' : 'Utgående moms')
         vatLines.push({
-          account_number: mapping.vatDebitAccount,
-          debit_amount: vatAmount,
-          credit_amount: 0,
-          description: hasVatOverride ? 'Ingående moms (enligt underlag)' : `Ingående moms ${vatRate * 100}%`,
-        })
-      } else if (vatAmount > 0 && transaction.amount > 0 && mapping.vatCreditAccount) {
-        // Income output VAT, or expense refund reversing ingående moms (both credit vatCreditAccount).
-        // Distinguish by account: 2641 = reversed ingående moms, 2611/2621/2631 = utgående moms.
-        const isExpenseRefund = mapping.vatCreditAccount === '2641'
-        vatLines.push({
-          account_number: mapping.vatCreditAccount,
-          debit_amount: 0,
-          credit_amount: vatAmount,
-          description: isExpenseRefund
-            ? (hasVatOverride ? 'Återföring ingående moms (enligt underlag)' : `Återföring ingående moms ${vatRate * 100}%`)
-            : (hasVatOverride ? 'Utgående moms (enligt underlag)' : `Utgående moms ${vatRate * 100}%`),
+          account_number: vatAccount,
+          debit_amount: mapping.vatDebitAccount ? vatAmount : 0,
+          credit_amount: mapping.vatDebitAccount ? 0 : vatAmount,
+          description: hasVatOverride ? `${label} (enligt underlag)` : `${label} ${vatRate * 100}%`,
         })
       }
     }
@@ -432,6 +505,12 @@ export function buildMappingResultFromCategory(
     requires_review: false,
     default_private: !isBusiness,
     vat_lines: vatLines,
+    // A refund books the category's accounts on the opposite sides. Learned as
+    // a rule or a counterparty template, that pair would propose every later
+    // purchase or sale from the same counterparty backwards, so no learner
+    // takes it (the flag saveUserMappingRule's callers and
+    // upsertCounterpartyTemplate already read for a mirrored template match).
+    ...(reversal ? { direction_mismatch: true } : {}),
     description,
   }
 }

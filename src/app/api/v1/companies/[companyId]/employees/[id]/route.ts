@@ -5,7 +5,9 @@
  *          (deliberate drill-in; caller already knows the id, has read scope,
  *          and has membership in the company).
  * PATCH : update a subset of fields. Idempotent (Idempotency-Key recommended,
- *          not enforced). Dry-runnable.
+ *          not enforced). Dry-runnable. is_active: true reactivates a
+ *          soft-deleted employee; is_active: false is the same soft delete
+ *          as DELETE (crm#1133).
  * DELETE: soft-delete via is_active=false. The employees table has no
  *          archived_at column; the row is preserved because past salary
  *          runs reference it via salary_run_employees and those
@@ -223,12 +225,13 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/employees/:id',
   summary: 'Update an employee.',
   description:
-    'Partial update of an employee. Only the fields supplied in the body are changed: an omitted key is left unchanged, and an explicit null clears a nullable field (employment_end, salary amounts, tax table and municipality, bank details, contact details, Växa-stöd and jämkning dates). Supports ?dry_run=true to validate the merged record without committing. Personnummer changes are NOT permitted via this endpoint: the natural-person identity is immutable post-creation.',
+    'Partial update of an employee. Only the fields supplied in the body are changed: an omitted key is left unchanged, and an explicit null clears a nullable field (employment_end, salary amounts, tax table and municipality, bank details, contact details, Växa-stöd and jämkning dates). `is_active: true` reactivates a soft-deleted employee, and `is_active: false` deactivates one exactly as DELETE does. Supports ?dry_run=true to validate the merged record without committing. Personnummer changes are NOT permitted via this endpoint: the natural-person identity is immutable post-creation.',
   useWhen:
-    'You need to change tax configuration, bank details, salary amount, or contact info on an existing employee.',
+    'You need to change tax configuration, bank details, salary amount, or contact info on an existing employee, or to reactivate an employee that was soft-deleted.',
   doNotUseFor:
-    'Changing personnummer (not supported: create a new employee if the natural-person identity changes, which is a rare edge case). Soft-deleting (use DELETE).',
+    'Changing personnummer (not supported: create a new employee if the natural-person identity changes, which is a rare edge case).',
   pitfalls: [
+    'is_active only decides whether the employee is on active rosters and picked up by NEW salary runs. Reactivating does not add the employee to a salary run that already exists: add them to a draft run with POST /salary-runs/{id}/employees. A run also leaves out an employee whose employment_end is before the pay period, active or not.',
     'personnummer in the body is ignored by this endpoint. To change it you must DELETE and recreate.',
     'salary_type changes require the matching salary field in the same request: switching to monthly without monthly_salary returns 400.',
     'A cleared field is checked against the stored row: nulling monthly_salary on a monthly employee, tax_table_number on an A-skatt employee without sidoinkomst, vaxa_stod_start while Växa-stöd is on, or only one of clearing_number/bank_account_number returns 400. To end an ongoing employment set employment_end; to reopen it send employment_end: null.',

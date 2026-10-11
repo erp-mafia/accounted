@@ -8,6 +8,7 @@ import {
 } from '../category-mapping'
 import { BAS_REFERENCE } from '../bas-data'
 import { buildTransactionEntryLines } from '../transaction-entries'
+import { rutorFromTotals } from '@/lib/reports/vat-declaration'
 import { makeTransaction } from '@/tests/helpers'
 import type { TransactionCategory, VatTreatment } from '@/types'
 
@@ -730,5 +731,255 @@ describe('VAT registration', () => {
     expect(getDefaultVatTreatmentForCategory('expense_software')).toBe('standard_25')
     expect(getDefaultVatTreatmentForCategory('expense_bank_fees', false)).toBeNull()
     expect(getDefaultVatTreatmentForCategory('private', false)).toBeNull()
+  })
+})
+
+// crm#1136: money out on an income category is a refund to a customer. It
+// used to book as a sale (debit bank, credit revenue) with no moms, because
+// the income branch never looked at the sign. A refund reverses the original
+// entry (swedish-daily-bookkeeping, payment-providers.md §10: debit 30xx and
+// 26xx, credit the account the money left; swedish-invoice-compliance,
+// invoice-rules.md §5: mirror reversal of the original). The momsdeklaration
+// reads each box off the account balance (ACCOUNT_RUTA), so the debit on 26x1
+// lowers ruta 10/11/12 and the debit on the revenue account lowers its box.
+describe('refund to a customer (money out on an income category)', () => {
+  type Line = [account: string, debit: number, credit: number]
+  const INCOME_CATEGORIES: TransactionCategory[] = ['income_services', 'income_products', 'income_other']
+
+  const linesFor = (
+    category: TransactionCategory,
+    amount: number,
+    vat?: VatTreatment,
+    vatRegistered?: boolean | null,
+  ): Line[] => {
+    const tx = makeTransaction({ amount })
+    const mapping = buildMappingResultFromCategory(category, tx, true, 'enskild_firma', vat, null, vatRegistered)
+    return buildTransactionEntryLines(tx, mapping).map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+  }
+  const ore = (n: number) => Math.round(n * 100)
+  const balanced = (lines: Line[]) => {
+    const debit = lines.reduce((sum, [, d]) => sum + ore(d), 0)
+    const credit = lines.reduce((sum, [, , c]) => sum + ore(c), 0)
+    expect(debit).toBe(credit)
+    expect(debit).toBeGreaterThan(0)
+  }
+  /** The same lines with debit and credit swapped, in a comparable order. */
+  const mirrored = (lines: Line[]): Line[] =>
+    lines.map(([account, debit, credit]): Line => [account, credit, debit]).sort()
+
+  // A refund of 125,00 kr. The revenue account follows the treatment for the
+  // services and products categories (3001/3002/3003, 3004 momsfri, 3305
+  // export, 3308 EU services); income_other stays on 3999.
+  const refunds: Array<{ vat: VatTreatment; revenue: string; vatAccount: string | null; net: number; moms: number }> = [
+    { vat: 'standard_25', revenue: '3001', vatAccount: '2611', net: 100, moms: 25 },
+    { vat: 'reduced_12', revenue: '3002', vatAccount: '2621', net: 111.61, moms: 13.39 },
+    { vat: 'reduced_6', revenue: '3003', vatAccount: '2631', net: 117.92, moms: 7.08 },
+    { vat: 'exempt', revenue: '3004', vatAccount: null, net: 125, moms: 0 },
+    { vat: 'export', revenue: '3305', vatAccount: null, net: 125, moms: 0 },
+    { vat: 'reverse_charge', revenue: '3308', vatAccount: null, net: 125, moms: 0 },
+  ]
+
+  describe.each(INCOME_CATEGORIES)('%s', (category) => {
+    it.each(refunds)('$vat: debits revenue and the moms it carried, credits the bank', ({ vat, revenue, vatAccount, net, moms }) => {
+      const revenueAccount = category === 'income_other' ? '3999' : revenue
+      const lines = linesFor(category, -125, vat)
+
+      expect(lines).toEqual(
+        vatAccount
+          ? [[vatAccount, moms, 0], [revenueAccount, net, 0], ['1930', 0, 125]]
+          : [[revenueAccount, 125, 0], ['1930', 0, 125]],
+      )
+      balanced(lines)
+      // No reverse-charge self-assessment and no ingående moms on a refund of a sale.
+      expect(lines.some(([account]) => ['2641', '2645', '2614', '4535', '4598'].includes(account))).toBe(false)
+    })
+
+    it.each(refunds)('$vat: is the sale of the same amount with every side swapped', ({ vat }) => {
+      expect(linesFor(category, -125, vat).sort()).toEqual(mirrored(linesFor(category, 125, vat)))
+    })
+
+    it('without a stated treatment refunds at the category default (25 %)', () => {
+      expect(linesFor(category, -125)).toEqual(linesFor(category, -125, 'standard_25'))
+    })
+
+    it('a company that is not VAT-registered refunds gross on the momsfri account, as it sold', () => {
+      const lines = linesFor(category, -125, 'standard_25', false)
+      expect(lines).toEqual([[category === 'income_other' ? '3999' : '3004', 125, 0], ['1930', 0, 125]])
+      expect(lines.sort()).toEqual(mirrored(linesFor(category, 125, 'standard_25', false)))
+    })
+  })
+
+  it('getCategoryAccountMapping puts revenue and its moms account on the debit side', () => {
+    expect(getCategoryAccountMapping('income_services', -125, true, 'enskild_firma', 'standard_25')).toEqual({
+      debitAccount: '3001',
+      creditAccount: '1930',
+      vatTreatment: 'standard_25',
+      vatDebitAccount: '2611',
+      vatCreditAccount: null,
+    })
+  })
+
+  it('names the moms line as a reversal of utgående moms', () => {
+    const tx = makeTransaction({ amount: -125 })
+    const byRate = buildMappingResultFromCategory('income_services', tx, true, 'enskild_firma', 'reduced_12')
+    expect(byRate.vat_lines).toEqual([
+      { account_number: '2621', debit_amount: 13.39, credit_amount: 0, description: 'Återföring utgående moms 12%' },
+    ])
+    const byUnderlag = buildMappingResultFromCategory('income_services', tx, true, 'enskild_firma', 'standard_25', 20)
+    expect(byUnderlag.vat_lines).toEqual([
+      { account_number: '2611', debit_amount: 20, credit_amount: 0, description: 'Återföring utgående moms (enligt underlag)' },
+    ])
+    // The revenue line absorbs the difference, so the entry still balances on the gross.
+    expect(buildTransactionEntryLines(tx, byUnderlag).map((l) => [l.account_number, l.debit_amount, l.credit_amount]))
+      .toEqual([['2611', 20, 0], ['3001', 105, 0], ['1930', 0, 125]])
+  })
+
+  it('takes the moms in SEK for a refund in a foreign currency', () => {
+    const tx = makeTransaction({ amount: -79.34, currency: 'USD', amount_sek: -754.52, exchange_rate: 9.51 })
+    const mapping = buildMappingResultFromCategory('income_services', tx, true, 'enskild_firma', 'standard_25')
+    const lines = buildTransactionEntryLines(tx, mapping).map((l): Line => [l.account_number, l.debit_amount, l.credit_amount])
+    expect(lines).toEqual([['2611', 150.9, 0], ['3001', 603.62, 0], ['1930', 0, 754.52]])
+    balanced(lines)
+  })
+
+  it('a zero amount has no direction and keeps the category\'s own sides', () => {
+    expect(getCategoryAccountMapping('income_services', 0, true, 'enskild_firma')).toMatchObject({
+      debitAccount: '1930', creditAccount: '3001', vatDebitAccount: null, vatCreditAccount: '2611',
+    })
+    expect(getCategoryAccountMapping('expense_software', 0, true, 'enskild_firma')).toMatchObject({
+      debitAccount: '5420', creditAccount: '1930', vatDebitAccount: '2641', vatCreditAccount: null,
+    })
+  })
+})
+
+// The momsdeklaration is a projection of account balances (ACCOUNT_RUTA in
+// lib/reports/vat-declaration.ts: a credit-side account counts credit minus
+// debit), with no tag on the line. So the refund's debits must land on the
+// very accounts the sale credited, or the boxes would not come back down.
+describe('the momsdeklaration reads a refund back out of the boxes the sale filled', () => {
+  const totalsOf = (rows: Array<[category: TransactionCategory, amount: number, vat: VatTreatment]>) => {
+    const totals = new Map<string, { debit: number; credit: number }>()
+    for (const [category, amount, vat] of rows) {
+      const tx = makeTransaction({ amount })
+      const mapping = buildMappingResultFromCategory(category, tx, true, 'enskild_firma', vat)
+      for (const line of buildTransactionEntryLines(tx, mapping)) {
+        const t = totals.get(line.account_number) ?? { debit: 0, credit: 0 }
+        t.debit = Math.round((t.debit + line.debit_amount) * 100) / 100
+        t.credit = Math.round((t.credit + line.credit_amount) * 100) / 100
+        totals.set(line.account_number, t)
+      }
+    }
+    return totals
+  }
+
+  it.each([
+    // Each verifikat rounds its own moms: 1 250,00 carries 250,00 / 133,93 /
+    // 70,75 and the refund of 125,00 takes back 25,00 / 13,39 / 7,08.
+    ['standard_25', { ruta05: 900, ruta10: 225 }],
+    ['reduced_12', { ruta05: 1004.46, ruta11: 120.54 }],
+    ['reduced_6', { ruta05: 1061.33, ruta12: 63.67 }],
+    ['exempt', { ruta42: 1125 }],
+    ['export', { ruta40: 1125 }],
+    ['reverse_charge', { ruta39: 1125 }],
+  ] as Array<[VatTreatment, Record<string, number>]>)(
+    'a sale of 1 250,00 and a refund of 125,00 at %s leave only the difference',
+    (vat, expected) => {
+      const rutor = rutorFromTotals(totalsOf([['income_services', 1250, vat], ['income_services', -125, vat]]))
+      const filled = Object.fromEntries(Object.entries(rutor).filter(([box, value]) => value !== 0 && box !== 'ruta49'))
+      expect(filled).toEqual(expected)
+      // Moms att betala follows the output boxes: nothing is claimed in ruta 48.
+      expect(rutor.ruta48).toBe(0)
+      expect(rutor.ruta49).toBe((expected.ruta10 ?? 0) + (expected.ruta11 ?? 0) + (expected.ruta12 ?? 0))
+    },
+  )
+
+  it.each(['standard_25', 'reduced_12', 'reduced_6', 'exempt', 'export', 'reverse_charge'] as VatTreatment[])(
+    'a full refund at %s empties every box',
+    (vat) => {
+      const rutor = rutorFromTotals(totalsOf([['income_services', 125, vat], ['income_services', -125, vat]]))
+      expect(Object.values(rutor).every((value) => value === 0)).toBe(true)
+    },
+  )
+})
+
+// The other three quadrants of the same rule (orientBusinessMapping), pinned
+// line for line as they booked before crm#1136.
+describe('a category on its own direction, and a refund from a supplier, book as before', () => {
+  type Line = [account: string, debit: number, credit: number]
+  const linesFor = (category: TransactionCategory, amount: number, vat?: VatTreatment): Line[] => {
+    const tx = makeTransaction({ amount })
+    const mapping = buildMappingResultFromCategory(category, tx, true, 'enskild_firma', vat)
+    return buildTransactionEntryLines(tx, mapping).map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+  }
+
+  it.each([
+    ['standard_25', [['1930', 125, 0], ['3001', 0, 100], ['2611', 0, 25]]],
+    ['reduced_12', [['1930', 125, 0], ['3002', 0, 111.61], ['2621', 0, 13.39]]],
+    ['reduced_6', [['1930', 125, 0], ['3003', 0, 117.92], ['2631', 0, 7.08]]],
+    ['exempt', [['1930', 125, 0], ['3004', 0, 125]]],
+    ['export', [['1930', 125, 0], ['3305', 0, 125]]],
+    ['reverse_charge', [['1930', 125, 0], ['3308', 0, 125]]],
+  ] as Array<[VatTreatment, Line[]]>)('a sale (money in on income_services) at %s', (vat, expected) => {
+    expect(linesFor('income_services', 125, vat)).toEqual(expected)
+  })
+
+  it.each([
+    ['standard_25', [['2641', 25, 0], ['5420', 100, 0], ['1930', 0, 125]]],
+    ['reduced_12', [['2641', 13.39, 0], ['5420', 111.61, 0], ['1930', 0, 125]]],
+    ['reduced_6', [['2641', 7.08, 0], ['5420', 117.92, 0], ['1930', 0, 125]]],
+    ['exempt', [['5420', 125, 0], ['1930', 0, 125]]],
+    ['export', [['5420', 125, 0], ['1930', 0, 125]]],
+    ['reverse_charge', [
+      ['2645', 31.25, 0], ['2614', 0, 31.25], ['4535', 125, 0], ['4598', 0, 125], ['5420', 125, 0], ['1930', 0, 125],
+    ]],
+  ] as Array<[VatTreatment, Line[]]>)('a purchase (money out on expense_software) at %s', (vat, expected) => {
+    expect(linesFor('expense_software', -125, vat)).toEqual(expected)
+  })
+
+  it.each([
+    ['standard_25', [['1930', 125, 0], ['5420', 0, 100], ['2641', 0, 25]]],
+    ['reduced_12', [['1930', 125, 0], ['5420', 0, 111.61], ['2641', 0, 13.39]]],
+    ['reduced_6', [['1930', 125, 0], ['5420', 0, 117.92], ['2641', 0, 7.08]]],
+    ['exempt', [['1930', 125, 0], ['5420', 0, 125]]],
+    // Unchanged and pinned above ("never adds a basis pair for a refund"): a
+    // refund from a supplier under reverse charge books gross, with no set.
+    ['reverse_charge', [['1930', 125, 0], ['5420', 0, 125]]],
+  ] as Array<[VatTreatment, Line[]]>)('a refund from a supplier (money in on expense_software) at %s', (vat, expected) => {
+    expect(linesFor('expense_software', 125, vat)).toEqual(expected)
+  })
+})
+
+// A refund books a category's accounts on the opposite sides. Learned as a
+// "Learned: <merchant>" rule or a counterparty template, that pair would
+// propose the next purchase or sale from the same counterparty backwards.
+describe('a refund is never learned (direction_mismatch)', () => {
+  it.each([
+    ['income_services', -125],
+    ['income_products', -125],
+    ['income_other', -125],
+    ['expense_software', 125],
+    ['expense_bank_fees', 125],
+  ] as Array<[TransactionCategory, number]>)('%s at %s kr carries the flag', (category, amount) => {
+    const result = buildMappingResultFromCategory(category, makeTransaction({ amount }), true, 'enskild_firma')
+    expect(result.direction_mismatch).toBe(true)
+    // The person chose the category: mirrored, but not review-gated.
+    expect(result.requires_review).toBe(false)
+  })
+
+  it.each([
+    ['income_services', 125],
+    ['expense_software', -125],
+    ['uncategorized', -125],
+    ['uncategorized', 125],
+  ] as Array<[TransactionCategory, number]>)('%s at %s kr does not', (category, amount) => {
+    const result = buildMappingResultFromCategory(category, makeTransaction({ amount }), true, 'enskild_firma')
+    expect(result.direction_mismatch).toBeUndefined()
+  })
+
+  it('a private row has no category direction, in or out', () => {
+    for (const amount of [-125, 125]) {
+      const result = buildMappingResultFromCategory('private', makeTransaction({ amount }), false, 'enskild_firma')
+      expect(result.direction_mismatch).toBeUndefined()
+    }
   })
 })

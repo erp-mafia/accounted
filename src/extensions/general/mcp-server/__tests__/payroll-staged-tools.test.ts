@@ -781,6 +781,18 @@ describe('gnubok_create_employee', () => {
       ),
     ).rejects.toThrow()
   })
+
+  it('advertises only fields the create writes (door parity)', async () => {
+    // Same check as on gnubok_update_employee: a key advertised here and
+    // missing from the writable set would be dropped without a word.
+    const { EMPLOYEE_CREATE_COLUMNS } = await import('@/lib/salary/employee-commands')
+    const advertised = Object.keys((createEmployee.inputSchema as { properties: object }).properties)
+    // personnummer is encrypted at staging and stored as its own pair.
+    const dropped = advertised.filter((field) => field !== 'personnummer' && !EMPLOYEE_CREATE_COLUMNS.has(field))
+    expect(dropped).toEqual([])
+    // A new employee is active: the flag is an update-only key.
+    expect(advertised).not.toContain('is_active')
+  })
 })
 
 describe('gnubok_update_employee', () => {
@@ -982,18 +994,58 @@ describe('gnubok_update_employee', () => {
     ).rejects.toThrow(/monthly_salary: Månadslön krävs/)
   })
 
-  it('advertises null in the inputSchema exactly where UpdateEmployeeSchema accepts it (door parity)', async () => {
+  it('advertises only fields the update writes, and null exactly where UpdateEmployeeSchema accepts it (door parity)', async () => {
     const { UpdateEmployeeSchema } = await import('@/lib/api/schemas')
+    const { EMPLOYEE_UPDATE_COLUMNS } = await import('@/lib/salary/employee-commands')
     const properties = (updateEmployee.inputSchema as { properties: Record<string, { type?: unknown }> }).properties
     const mismatches: string[] = []
+    // Advertised here, written nowhere. The schema strips a key it does not
+    // know and the executor drops one outside its writable set, and neither
+    // says so: is_active was advertised for months while this loop skipped
+    // it as "not part of the update schema" (crm#1133).
+    const dropped: string[] = []
     for (const [field, prop] of Object.entries(properties)) {
+      // employee_id is the target of the update, not a column.
+      if (field === 'employee_id') continue
       const zodField = UpdateEmployeeSchema.shape[field as keyof typeof UpdateEmployeeSchema.shape]
-      // employee_id is the target, is_active is not part of the update schema.
-      if (!zodField) continue
+      if (!zodField || !EMPLOYEE_UPDATE_COLUMNS.has(field)) {
+        dropped.push(field)
+        continue
+      }
       const advertisesNull = Array.isArray(prop.type) && prop.type.includes('null')
       if (advertisesNull !== zodField.safeParse(null).success) mismatches.push(field)
     }
+    expect(dropped).toEqual([])
     expect(mismatches).toEqual([])
+  })
+
+  it('stages a reactivation: is_active reaches the staged patch and the changes preview', async () => {
+    const supabaseMock = makeCapturingSupabase({
+      employees: { data: { ...EXISTING, is_active: false } },
+      fiscal_periods: { data: null },
+      company_settings: { data: null },
+      pending_operations: { data: { id: 'op-reactivate' }, error: null },
+    })
+
+    const result = (await updateEmployee.execute(
+      { employee_id: 'emp-1', is_active: true },
+      'company-1', 'user-1', supabaseMock as never, { type: 'user' },
+    )) as { staged: boolean; preview: { changes: Array<{ field: string; from: unknown; to: unknown }> } }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.changes).toEqual([{ field: 'is_active', from: false, to: true }])
+    const inserted = supabaseMock.inserts.pending_operations?.[0] as { params: { patch: Record<string, unknown> } }
+    expect(inserted.params.patch).toEqual({ is_active: true })
+  })
+
+  it('rejects a non-boolean is_active at staging instead of at approval', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      updateEmployee.execute(
+        { employee_id: 'emp-1', is_active: null },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/Invalid employee update: is_active/)
   })
 })
 

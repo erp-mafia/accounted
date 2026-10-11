@@ -607,7 +607,10 @@ function buildFlerarsoversikt(
       if (p.id !== currentPeriodId) {
         const pair = tbPairs.get(p.id)
         if (!pair) throw new Error('trial balance unavailable')
-        mapping = mapTrialBalancesToK2(pair, null)
+        // A prior year that was never closed in these books has its result
+        // derived, as in the balance sheet's comparison column: soliditet
+        // would otherwise be computed on equity without that year's result.
+        mapping = mapTrialBalancesToK2(pair, null, { currentIsPriorYear: true })
       }
       const netRevenue = mapping.rr['Nettoomsattning']?.current ?? 0
       const resultAfterFinancial = mapping.totals.resultatEfterFinansiellaPoster.current

@@ -297,6 +297,8 @@ export async function correctEntry(
   }
 
   // ===== Step 1: Create storno (reversal) entry =====
+  // No note on the storno: the note describes the affärshändelse, which the
+  // correction now represents (correction-column-policy.ts).
   const reversalVoucherNumber = await getNextVoucherNumber(
     supabase,
     companyId,
@@ -384,6 +386,10 @@ export async function correctEntry(
 
     // Account IDs were resolved (and standard BAS accounts seeded) in Step 0,
     // before the storno existed: nothing to clean up if we got this far.
+    // The header is the columns written here plus the ones carried from the
+    // original (the note). Every journal_entries column is classified in
+    // correction-column-policy.ts, and storno-service.test.ts fails when this
+    // insert and that table disagree.
     const { data: newEntry, error: correctedError } = await supabase
       .from('journal_entries')
       .insert({
@@ -399,6 +405,9 @@ export async function correctEntry(
         source_type: 'correction',
         correction_of_id: originalEntryId,
         status: 'draft',
+        // Carried: what the user said about the affärshändelse follows it to
+        // the verifikat that now represents it (crm#1078).
+        notes: original.notes ?? null,
       })
       .select()
       .single()

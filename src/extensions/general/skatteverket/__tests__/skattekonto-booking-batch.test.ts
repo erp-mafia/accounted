@@ -34,8 +34,22 @@ vi.mock('@/lib/reconciliation/gl-balance', async (importOriginal) => {
   return { ...actual, sumAccountBalance: vi.fn(), findOpeningBalanceFloor: vi.fn() }
 })
 
+// The ledger cover (rows a summarised verifikat already holds, crm#1043) is
+// the reconciliation bridge's arithmetic, covered in
+// skattekonto-reconciliation.test.ts: stub the bridge here so these tests
+// keep exercising the booking flow. Default: nothing is covered.
+vi.mock('@/lib/reconciliation/skattekonto-reconciliation', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/reconciliation/skattekonto-reconciliation')>()
+  return { ...actual, getSkattekontoReconciliationStatus: vi.fn() }
+})
+
 import { findFiscalPeriod, createDraftEntry, commitEntry } from '@/lib/bookkeeping/engine'
 import { findOpeningBalanceFloor, sumAccountBalance } from '@/lib/reconciliation/gl-balance'
+import {
+  getSkattekontoReconciliationStatus,
+  type SkattekontoLedgerCover,
+  type SkattekontoReconciliationResult,
+} from '@/lib/reconciliation/skattekonto-reconciliation'
 import {
   findLedgerTwinCandidates,
   findLedgerTwinCandidatesForIds,
@@ -46,7 +60,9 @@ import {
   attachBookingSuggestions,
   bokforSkattekontoTransaction,
   bokforSkattekontoTransactionsBatch,
+  ledgerCoverMessage,
   SkattekontoBookingError,
+  toLedgerCoverInfo,
 } from '../lib/skattekonto-booking'
 
 /**
@@ -127,7 +143,16 @@ beforeEach(() => {
   )
   vi.mocked(sumAccountBalance).mockResolvedValue(0)
   vi.mocked(findOpeningBalanceFloor).mockResolvedValue(null)
+  bridgeCover(null)
 })
+
+/** What the reconciliation bridge answers for the company: the rows a summarised verifikat covers, or none. */
+function bridgeCover(cover: SkattekontoLedgerCover | null, ledgerReadFailed = false) {
+  vi.mocked(getSkattekontoReconciliationStatus).mockResolvedValue({
+    ledger_read_failed: ledgerReadFailed,
+    cover,
+  } as unknown as SkattekontoReconciliationResult)
+}
 
 describe('attachBookingSuggestions', () => {
   it('attaches account, BAS name and rule label on a rule match', async () => {
@@ -1107,5 +1132,269 @@ describe('VAT refund routing (1650 receivable)', () => {
     })
     const input = vi.mocked(createDraftEntry).mock.calls[0][3]
     expect(input.lines.map((l) => l.account_number)).toEqual(['1630', '2650'])
+  })
+})
+
+// crm#1043: no verifikat carries any one of the rows, but one summarised
+// year-end verifikat on 1630 already holds all of them. The bridge's
+// arithmetic says so (the cover); the booking refuses and points at linking.
+describe('ledger cover guard (a summarised verifikat already holds the rows)', () => {
+  function coverFor(ids: string[], kind: SkattekontoLedgerCover['kind'] = 'ledger_agrees'): SkattekontoLedgerCover {
+    return {
+      through_date: '2026-12-31',
+      kind,
+      event_ids: ids,
+      event_count: ids.length,
+      event_total: -12345.5,
+      entries: [
+        {
+          journal_entry_id: 'je-year-end',
+          voucher_number: 1,
+          voucher_series: 'B',
+          entry_date: '2026-12-31',
+          description: 'Skattekonto 2026',
+          status: 'posted',
+          open_amount: 37887.25,
+        },
+      ],
+      entry_total: 37887.25,
+    }
+  }
+
+  it('refuses a covered row with LEDGER_COVER_EXISTS before any rule, period or draft work, and says to link', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Debiterad preliminärskatt', belopp_skatteverket: -8000, transaktionsdatum: '2026-06-12' })
+    enqueue({ data: row }) // tx fetch
+    bridgeCover(coverFor([row.id, 'another-row']))
+
+    const err = await bokforSkattekontoTransaction(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      row.id,
+    ).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(SkattekontoBookingError)
+    const refusal = err as SkattekontoBookingError
+    expect(refusal.code).toBe('LEDGER_COVER_EXISTS')
+    expect(refusal.message).toContain('Händelsen ser redan ut att vara bokförd')
+    expect(refusal.message).toContain('Konto 1630 stämmer redan med Skatteverket per 2026-12-31')
+    expect(refusal.message).toContain('B1 (2026-12-31)')
+    expect(refusal.message).toContain('Koppla händelserna till verifikatet i stället för att bokföra dem en gång till')
+    expect(refusal.message).toContain('Matcha manuellt')
+    expect(refusal.ledgerTwins).toBeUndefined()
+    expect(refusal.ledgerCover).toEqual({
+      through_date: '2026-12-31',
+      kind: 'ledger_agrees',
+      event_count: 2,
+      event_total: -12345.5,
+      entries: [
+        {
+          journal_entry_id: 'je-year-end',
+          voucher_series: 'B',
+          voucher_number: 1,
+          entry_date: '2026-12-31',
+          description: 'Skattekonto 2026',
+          status: 'posted',
+          open_amount: 37887.25,
+        },
+      ],
+      entry_count: 1,
+    })
+    expect(vi.mocked(getSkattekontoReconciliationStatus)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(findFiscalPeriod)).not.toHaveBeenCalled()
+    expect(vi.mocked(createDraftEntry)).not.toHaveBeenCalled()
+    // Only the row itself was read: no rules fetch, no claim.
+    expect(fromCount(supabase, 'skattekonto_rules')).toBe(0)
+  })
+
+  it('names the proof it has: rows that sum exactly to the unlinked verifikat', () => {
+    const message = ledgerCoverMessage(toLedgerCoverInfo(coverFor(['a', 'b', 'c'], 'events_equal')))
+    expect(message).toContain('motsvarar exakt de 3 obokförda händelserna t.o.m. 2026-12-31')
+    expect(message).toContain('Bokför ändå bara om händelsen verkligen saknas i bokföringen.')
+    expect(ledgerCoverMessage(toLedgerCoverInfo(coverFor(['a'], 'events_equal')))).toContain('den obokförda händelsen')
+  })
+
+  it('does not touch a row the cover does not name: normal booking is exactly as before', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Intäktsränta', transaktionsdatum: '2027-01-12' })
+    enqueue({ data: row })
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: [{ id: row.id }] }) // claim
+    bridgeCover(coverFor(['some-other-row']))
+
+    const entry = await bokforSkattekontoTransaction(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      row.id,
+    )
+
+    expect(entry.id).toBe('je-draft-1')
+    expect(vi.mocked(createDraftEntry)).toHaveBeenCalledTimes(1)
+  })
+
+  it('a twin answers first: the cover is not even computed', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Intäktsränta' })
+    enqueue({ data: row })
+    vi.mocked(findLedgerTwinCandidates).mockResolvedValueOnce(new Map([[row.id, [twinCandidate()]]]))
+    bridgeCover(coverFor([row.id]))
+
+    await expect(
+      bokforSkattekontoTransaction(supabase as unknown as SupabaseClient, 'company-1', 'user-1', row.id),
+    ).rejects.toMatchObject({ code: 'LEDGER_TWIN_EXISTS' })
+    expect(vi.mocked(getSkattekontoReconciliationStatus)).not.toHaveBeenCalled()
+  })
+
+  it('never covers a kommande row: it is in no saldo yet (the single-row draft path)', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Intäktsränta', status: 'upcoming' })
+    enqueue({ data: row })
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: [{ id: row.id }] })
+    bridgeCover(coverFor([row.id]))
+
+    const entry = await bokforSkattekontoTransaction(supabase as unknown as SupabaseClient, 'company-1', 'user-1', row.id)
+    expect(entry.id).toBe('je-draft-1')
+    expect(vi.mocked(getSkattekontoReconciliationStatus)).not.toHaveBeenCalled()
+  })
+
+  it('books a covered row on the explicit override, without computing the cover', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Intäktsränta' })
+    enqueue({ data: row })
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: [{ id: row.id }] })
+    bridgeCover(coverFor([row.id]))
+
+    const entry = await bokforSkattekontoTransaction(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      row.id,
+      undefined,
+      { allowDuplicate: true },
+    )
+    expect(entry.id).toBe('je-draft-1')
+    expect(vi.mocked(getSkattekontoReconciliationStatus)).not.toHaveBeenCalled()
+  })
+
+  it('refuses to book when the ledger cannot be read: no answer is safe', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Intäktsränta' })
+    enqueue({ data: row })
+    bridgeCover(null, true)
+
+    await expect(
+      bokforSkattekontoTransaction(supabase as unknown as SupabaseClient, 'company-1', 'user-1', row.id),
+    ).rejects.toThrow(/Kunde inte kontrollera om händelsen redan finns i bokföringen/)
+    expect(vi.mocked(createDraftEntry)).not.toHaveBeenCalled()
+  })
+
+  it('"Bokför 45 händelser": one bridge computation, every covered row skipped with the way out, nothing drafted', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const rows = Array.from({ length: 45 }, (_, i) =>
+      makeSkvRow({
+        transaktionstext: 'Debiterad preliminärskatt',
+        belopp_skatteverket: -8000 - i,
+        transaktionsdatum: '2026-06-12',
+      }),
+    )
+    enqueue({ data: SEED_RULES }) // hoisted rules
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // hoisted entity_type
+    for (const r of rows) enqueue({ data: r }) // tx fetch per row
+    bridgeCover(coverFor(rows.map((r) => r.id)))
+
+    const result = await bokforSkattekontoTransactionsBatch(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      rows.map((r) => r.id),
+    )
+
+    expect(result.summary).toEqual({ total: 45, succeeded: 0, failed: 45 })
+    expect(result.results.every((r) => r.error_code === 'LEDGER_COVER_EXISTS')).toBe(true)
+    expect(result.results[0].error_message).toContain('Koppla händelserna till verifikatet')
+    expect(result.results[0].ledger_cover).toMatchObject({ through_date: '2026-12-31', event_count: 45, entry_count: 1 })
+    // Cheap: one bridge computation for the whole batch, not one per row.
+    expect(vi.mocked(getSkattekontoReconciliationStatus)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(createDraftEntry)).not.toHaveBeenCalled()
+    expect(vi.mocked(commitEntry)).not.toHaveBeenCalled()
+  })
+
+  it('a batch books the rows the cover does not name and the rows overridden one by one, and skips the rest', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const covered = makeSkvRow({ transaktionstext: 'Intäktsränta', transaktionsdatum: '2026-06-12' })
+    const overridden = makeSkvRow({ transaktionstext: 'Intäktsränta', transaktionsdatum: '2026-07-12' })
+    const fresh = makeSkvRow({ transaktionstext: 'Intäktsränta', transaktionsdatum: '2027-01-12' })
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: covered }) // refused by the cover: no claim
+    enqueue({ data: overridden })
+    enqueue({ data: [{ id: overridden.id }] }) // claim
+    enqueue({ data: fresh })
+    enqueue({ data: [{ id: fresh.id }] }) // claim
+    bridgeCover(coverFor([covered.id, overridden.id]))
+
+    const result = await bokforSkattekontoTransactionsBatch(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      [covered.id, overridden.id, fresh.id],
+      { allowDuplicateIds: [overridden.id] },
+    )
+
+    expect(result.results.map((r) => [r.id, r.ok, r.error_code])).toEqual([
+      [covered.id, false, 'LEDGER_COVER_EXISTS'],
+      [overridden.id, true, undefined],
+      [fresh.id, true, undefined],
+    ])
+    expect(vi.mocked(getSkattekontoReconciliationStatus)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(commitEntry)).toHaveBeenCalledTimes(2)
+  })
+
+  it('a batch where every row is overridden never asks the bridge', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Intäktsränta' })
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: row })
+    enqueue({ data: [{ id: row.id }] })
+    bridgeCover(coverFor([row.id]))
+
+    const result = await bokforSkattekontoTransactionsBatch(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      [row.id],
+      { allowDuplicateIds: [row.id] },
+    )
+    expect(result.summary.succeeded).toBe(1)
+    expect(vi.mocked(getSkattekontoReconciliationStatus)).not.toHaveBeenCalled()
+  })
+
+  it('a company with nothing covered (no unlinked verifikat on 1630) books a batch exactly as before, for one bridge read', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row1 = makeSkvRow({ transaktionstext: 'Intäktsränta' })
+    const row2 = makeSkvRow({ transaktionstext: 'Kostnadsränta', belopp_skatteverket: -100 })
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: row1 })
+    enqueue({ data: [{ id: row1.id }] })
+    enqueue({ data: row2 })
+    enqueue({ data: [{ id: row2.id }] })
+
+    const result = await bokforSkattekontoTransactionsBatch(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      [row1.id, row2.id],
+    )
+    expect(result.summary).toEqual({ total: 2, succeeded: 2, failed: 0 })
+    expect(vi.mocked(getSkattekontoReconciliationStatus)).toHaveBeenCalledTimes(1)
   })
 })

@@ -78,6 +78,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [deactivating, setDeactivating] = useState(false)
+  const [reactivating, setReactivating] = useState(false)
   const [isEditOpen, setIsEditOpen] = useState(false)
   const [employmentType, setEmploymentType] = useState('employee')
   const [salaryType, setSalaryType] = useState('monthly')
@@ -275,6 +276,36 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
     }
   }
 
+  // The way back from "Inaktivera": the same PATCH the edit form uses, with
+  // only the flag. Nothing else was changed by the deactivation, so nothing
+  // else needs restoring. Stays on the page: the employee is visible again.
+  async function handleReactivate() {
+    if (reactivating) return
+    setReactivating(true)
+    try {
+      const res = await fetch(`/api/salary/employees/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_active: true }),
+      })
+      if (res.ok) {
+        const { data } = await res.json()
+        setEmployee(data)
+        syncFormState(data)
+        toast({ title: t('detail_reactivated'), description: t('detail_reactivated_description') })
+      } else {
+        const result = await res.json().catch(() => null)
+        toast({
+          title: t('detail_reactivate_failed'),
+          description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+          variant: 'destructive',
+        })
+      }
+    } finally {
+      setReactivating(false)
+    }
+  }
+
   if (loading) {
     return (
       <div className="space-y-6">
@@ -336,6 +367,12 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
               <span className="tabular-nums">{employee.personnummer_masked}</span>
               {' · '}
               {t(EMPLOYMENT_LABEL_KEYS[employee.employment_type])}
+              {!employee.is_active && (
+                <>
+                  {' · '}
+                  <span className="text-foreground">{t('detail_inactive')}</span>
+                </>
+              )}
             </p>
           </div>
 
@@ -349,15 +386,27 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
               >
                 {t('detail_edit')}
               </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleDeactivate}
-                disabled={deactivating}
-                className="text-muted-foreground hover:text-destructive"
-              >
-                {t('detail_deactivate')}
-              </Button>
+              {employee.is_active ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleDeactivate}
+                  disabled={deactivating}
+                  className="text-muted-foreground hover:text-destructive"
+                >
+                  {t('detail_deactivate')}
+                </Button>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleReactivate}
+                  loading={reactivating}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  {t('detail_reactivate')}
+                </Button>
+              )}
             </div>
           )}
         </div>

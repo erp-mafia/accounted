@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -54,6 +55,9 @@ function candidateKey(c: MatchCandidate): string {
 
 const TRANSACTIONS_API = '/api/extensions/ext/skatteverket/skattekonto/transaktioner'
 
+/** Where rows are linked to a summarised verifikat: the Avstämning manual match view. */
+const MANUAL_MATCH_HREF = '/reconciliation?account=skattekonto&mode=match'
+
 /**
  * Shared dialog for linking a skattekonto_transactions row to an existing
  * journal entry. Used by both /skattekonto and /transactions so we don't
@@ -83,6 +87,10 @@ export function SkattekontoMatchDialog({
   const t = useTranslations('tx_skattekonto_match')
   const { toast } = useToast()
   const [candidates, setCandidates] = useState<MatchCandidate[] | null>(null)
+  // No verifikat settles the rows exactly, but unlinked verifikat on 1630
+  // already hold them (a summarised verifikat): the answer is to link them in
+  // Matcha manuellt, never the default "use Bokför" (crm#1043).
+  const [covered, setCovered] = useState(false)
   const [loading, setLoading] = useState(false)
   const [submittingId, setSubmittingId] = useState<string | null>(null)
   const group = rows && rows.length > 1 ? rows : null
@@ -105,6 +113,7 @@ export function SkattekontoMatchDialog({
         : null
     if (!open || !request) {
       setCandidates(null)
+      setCovered(false)
       return
     }
     let cancelled = false
@@ -127,6 +136,7 @@ export function SkattekontoMatchDialog({
           return
         }
         setCandidates(json.data.candidates as MatchCandidate[])
+        setCovered(Boolean(json.data.ledger_cover))
       } catch (err) {
         if (cancelled) return
         toast({
@@ -227,7 +237,19 @@ export function SkattekontoMatchDialog({
           </p>
         )}
 
-        {!loading && candidates && candidates.length === 0 && (
+        {!loading && candidates && candidates.length === 0 && covered && (
+          <div className="space-y-2 py-4 text-sm">
+            <p>{t('covered_title', { count: group ? group.length : 1 })}</p>
+            <p className="text-muted-foreground">{t('covered_help', { count: group ? group.length : 1 })}</p>
+            <p>
+              <Link href={MANUAL_MATCH_HREF} className="underline underline-offset-4" onClick={onClose}>
+                {t('covered_cta')}
+              </Link>
+            </p>
+          </div>
+        )}
+
+        {!loading && candidates && candidates.length === 0 && !covered && (
           <div className="space-y-2 py-4 text-sm">
             <p>{group ? t('group_no_candidates_title') : t('no_candidates_title')}</p>
             <p className="text-muted-foreground">

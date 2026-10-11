@@ -1226,6 +1226,176 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id clearing fields (#300
   })
 })
 
+/**
+ * is_active on PATCH (crm#1133). The DELETE docs and the MCP tool both named
+ * PATCH is_active=true as the way back from a soft delete, but the key was
+ * missing from UpdateEmployeeSchema: Zod stripped it and the PATCH answered
+ * 200 with the employee still inactive. true reactivates; false is the write
+ * DELETE makes.
+ */
+describe('PATCH /api/v1/companies/:companyId/employees/:id is_active (crm#1133)', () => {
+  const INACTIVE = { ...SAMPLE_EMPLOYEE, is_active: false }
+  const url = `https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`
+
+  function patch(body: Record<string, unknown>, query = '') {
+    return updateEmployee(
+      makeRequest(`${url}${query}`, { method: 'PATCH', body: JSON.stringify(body) }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+  }
+
+  function useRows(existing: Record<string, unknown> | null, updated: Record<string, unknown> | null = existing) {
+    const mock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      employees: [{ data: existing, error: null }, { data: updated, error: null }],
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock)
+    return mock.updates
+  }
+
+  it('reactivates an inactive employee: writes is_active true and nothing else', async () => {
+    const updates = useRows(INACTIVE, { ...INACTIVE, is_active: true })
+
+    const res = await patch({ is_active: true })
+
+    expect(res.status).toBe(200)
+    expect(updates.employees).toEqual([{ is_active: true }])
+    const body = await res.json()
+    expect(body.data.is_active).toBe(true)
+    // Write shape: the personnummer stays masked, as on every other PATCH.
+    expect(body.data.personnummer_masked).toBe('19000101XXXX')
+    expect(body.data.personnummer).toBeUndefined()
+  })
+
+  it('deactivates an active employee: the same single-column write DELETE makes', async () => {
+    const updates = useRows(SAMPLE_EMPLOYEE, INACTIVE)
+
+    const res = await patch({ is_active: false })
+
+    expect(res.status).toBe(200)
+    expect(updates.employees).toEqual([{ is_active: false }])
+    const body = await res.json()
+    expect(body.data.is_active).toBe(false)
+  })
+
+  it('writes the flag together with an unrelated field in the same PATCH', async () => {
+    const updates = useRows(INACTIVE, { ...INACTIVE, is_active: true, phone: '0700000000' })
+
+    const res = await patch({ is_active: true, phone: '0700000000' })
+
+    expect(res.status).toBe(200)
+    expect(updates.employees).toEqual([{ is_active: true, phone: '0700000000' }])
+  })
+
+  it('still saves an unrelated field on its own and leaves the flag out of the write', async () => {
+    const updates = useRows(INACTIVE, { ...INACTIVE, phone: '0700000000' })
+
+    const res = await patch({ phone: '0700000000' })
+
+    expect(res.status).toBe(200)
+    expect(updates.employees).toEqual([{ phone: '0700000000' }])
+    const body = await res.json()
+    expect(body.data.phone).toBe('0700000000')
+    expect(body.data.is_active).toBe(false)
+  })
+
+  it('previews the reactivation under ?dry_run=true and writes nothing', async () => {
+    const updates = useRows(INACTIVE)
+
+    const res = await patch({ is_active: true }, '?dry_run=true')
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.preview.is_active).toBe(true)
+    expect(updates.employees).toBeUndefined()
+  })
+
+  it('returns 400 VALIDATION_ERROR naming is_active for a value that is not a boolean, and writes nothing', async () => {
+    const updates = useRows(INACTIVE)
+
+    for (const value of [null, 'true', 1]) {
+      const res = await patch({ is_active: value })
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error.code).toBe('VALIDATION_ERROR')
+      expect(JSON.stringify(body.error.details)).toContain('is_active')
+    }
+    expect(updates.employees).toBeUndefined()
+  })
+
+  it('returns 404 EMPLOYEE_NOT_FOUND when the row is missing, and writes nothing', async () => {
+    const updates = useRows(null)
+
+    const res = await patch({ is_active: true })
+
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error.code).toBe('EMPLOYEE_NOT_FOUND')
+    expect(updates.employees).toBeUndefined()
+  })
+
+  it('returns 401 UNAUTHORIZED for a key that does not validate, and writes nothing', async () => {
+    const updates = useRows(INACTIVE)
+    mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
+
+    const res = await patch({ is_active: true })
+
+    expect(res.status).toBe(401)
+    const body = await res.json()
+    expect(body.error.code).toBe('UNAUTHORIZED')
+    expect(updates.employees).toBeUndefined()
+  })
+
+  it('returns 403 INSUFFICIENT_SCOPE without payroll:write, and writes nothing', async () => {
+    const updates = useRows(INACTIVE)
+    mockValidate.mockResolvedValue({
+      userId: USER_ID,
+      companyId: COMPANY_ID,
+      apiKeyId: 'ak_1',
+      apiKeyName: 'read only',
+      scopes: ['payroll:read'],
+      mode: 'live',
+    })
+
+    const res = await patch({ is_active: true })
+
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body.error.code).toBe('INSUFFICIENT_SCOPE')
+    expect(updates.employees).toBeUndefined()
+  })
+
+  it('answers the jämkning CHECK refusal of a legacy incomplete row as a 400, not a 500', async () => {
+    // employees_jamkning_dates_check is NOT VALID: it is checked on the row's
+    // next UPDATE whatever column it names, the reactivation included.
+    const legacy = { ...INACTIVE, jamkning_percentage: 15, jamkning_valid_from: '2026-01-01', jamkning_valid_to: null }
+    const mock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      employees: [
+        { data: legacy, error: null },
+        {
+          data: null,
+          error: {
+            code: '23514',
+            message: 'new row for relation "employees" violates check constraint "employees_jamkning_dates_check"',
+          },
+        },
+      ],
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock)
+
+    const res = await patch({ is_active: true })
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.field).toBe('jamkning_valid_to')
+    expect(body.error.details.message).toContain(JAMKNING_END_REQUIRED)
+  })
+})
+
 describe('DELETE /api/v1/companies/:companyId/employees/:id', () => {
   it('soft-deletes via is_active=false (no hard delete)', async () => {
     mockServiceClient.mockReturnValue(

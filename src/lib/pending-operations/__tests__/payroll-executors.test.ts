@@ -945,6 +945,48 @@ describe('commitPendingOperation: update_employee', () => {
     expect(findCall('employees', 'update')).toEqual([{ employment_end: null }])
   })
 
+  it('writes is_active so an approved reactivation reaches the row (crm#1133)', async () => {
+    // The tool advertised is_active and staged it, and the executor's own
+    // writable list dropped it: the approval reported success, or failed with
+    // "At least one updatable field is required" when it was the only key.
+    const { encryptPersonnummer } = await import('@/lib/salary/personnummer')
+    const encrypted = encryptPersonnummer('190001010000')
+
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        id: 'emp-1',
+        first_name: 'Anna',
+        last_name: 'Andersson',
+        personnummer: encrypted,
+        employment_start: '2024-01-15',
+        salary_type: 'monthly',
+        monthly_salary: 35000,
+        tax_table_number: 33,
+        is_sidoinkomst: false,
+        f_skatt_status: 'a_skatt',
+        vaxa_stod_eligible: false,
+        jamkning_percentage: null,
+        is_active: false,
+      },
+    }) // fetch existing
+    enqueue({
+      data: { id: 'emp-1', first_name: 'Anna', last_name: 'Andersson', personnummer: encrypted, is_active: true },
+    }) // update
+    enqueue({ data: null, error: null }) // finalize
+
+    const op = makePendingOp({
+      operation_type: 'update_employee',
+      params: { employee_id: 'emp-1', patch: { is_active: true } },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ employee_id: 'emp-1', is_active: true })
+    expect(findCall('employees', 'update')).toEqual([{ is_active: true }])
+  })
+
   it('refuses clearing only one bank field on the merged row, with the bank sentence', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim

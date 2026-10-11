@@ -29,6 +29,8 @@ import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { creditNoteNeedsJournalEntry } from '@/lib/invoices/issue-credit-note'
 import { getCreditNoteSendMode } from '@/lib/invoices/credit-note-send-mode'
 import { canCopyInvoice } from '@/lib/invoices/copy-invoice'
+import { isRegisteredFromBooks } from '@/lib/invoices/registered-from-books'
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import {
   classifyPaymentHistoryGap,
   fetchInvoicePaymentVouchers,
@@ -69,6 +71,7 @@ import {
   Copy,
   MoreHorizontal,
   ClipboardList,
+  ExternalLink,
 } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
@@ -83,6 +86,7 @@ import {
   type InvoiceDeliveryView,
 } from '@/components/invoices/InvoiceDeliveryHistory'
 import CorrectionAffordance from '@/components/bookkeeping/CorrectionAffordance'
+import { DocumentViewButton } from '@/components/bookkeeping/DocumentViewButton'
 import { DetailPager } from '@/components/common/DetailPager'
 import { listContextKey } from '@/lib/navigation/list-context'
 import {
@@ -247,6 +251,14 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [deductionPersonnummerMasked, setDeductionPersonnummerMasked] = useState<
     string | null | undefined
   >(undefined)
+  // crm#1131: the verifikat behind an invoice registered from the books, whose
+  // underlag is the original invoice. null until read, and for every other
+  // invoice. `documents` is null when the list could not be read, which must
+  // never be shown as "nothing attached".
+  const [registrationVoucher, setRegistrationVoucher] = useState<{
+    label: string | null
+    documents: Array<{ id: string; file_name: string }> | null
+  } | null>(null)
   const [creditNote, setCreditNote] = useState<Invoice | null>(null)
   const [originalInvoice, setOriginalInvoice] = useState<Invoice | null>(null)
   const [convertedFromInvoice, setConvertedFromInvoice] = useState<Invoice | null>(null)
@@ -427,6 +439,40 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     }
   }
 
+  /**
+   * The verifikat behind an invoice registered from the books (crm#1131): its
+   * label, and its attached documents through the read the verifikat page
+   * lists them with. Each half degrades on its own: without a label the link
+   * is unnamed, and an unreadable document list says nothing about underlag.
+   */
+  async function loadRegistrationVoucher(journalEntryId: string) {
+    const [entryRes, documents] = await Promise.all([
+      supabase
+        .from('journal_entries')
+        .select('voucher_series, voucher_number')
+        .eq('id', journalEntryId)
+        .maybeSingle(),
+      fetch(`/api/documents?journal_entry_id=${encodeURIComponent(journalEntryId)}&current_only=true`)
+        .then(async (response) => {
+          if (!response.ok) return null
+          const payload = (await response.json()) as {
+            data?: Array<{ id: string; file_name: string }>
+          }
+          if (!Array.isArray(payload.data)) return null
+          return payload.data.map((doc) => ({ id: doc.id, file_name: doc.file_name }))
+        })
+        .catch(() => null),
+    ])
+    const entry = entryRes.data as {
+      voucher_series: string | null
+      voucher_number: number | null
+    } | null
+    return {
+      label: entry?.voucher_number != null ? formatVoucher(entry) : null,
+      documents,
+    }
+  }
+
   async function retryLoadDeliveries() {
     const result = await loadDeliveries()
     setDeliveries(result.deliveries)
@@ -445,6 +491,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       setIsLoading(true)
       // A different invoice: never let the previous one's mask show on it.
       setDeductionPersonnummerMasked(undefined)
+      // Nor the previous one's original documents.
+      setRegistrationVoucher(null)
     }
 
     const deliveriesPromise = loadDeliveries()
@@ -629,7 +677,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               .order('created_at', { ascending: false })
               .limit(1)
           : Promise.resolve(null),
-      ]).then(([personnummerMasked, creditNoteRes, originalRes, convertedRes, invoicedRes, orderedRes]) => {
+        isRegisteredFromBooks(data, data.items)
+          ? loadRegistrationVoucher(data.journal_entry_id)
+          : Promise.resolve(null),
+      ]).then(([personnummerMasked, creditNoteRes, originalRes, convertedRes, invoicedRes, orderedRes, registration]) => {
         // Deferred writes need the same guard: they land after first paint
         // and would otherwise attach the previous invoice's related documents
         // to the one the pager has since navigated to.
@@ -646,6 +697,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         setQuoteOrder(
           (orderedRes?.data?.[0] as { id: string; order_number: string | null } | undefined) ?? null,
         )
+        setRegistrationVoucher(registration)
       })
   }
 
@@ -1621,6 +1673,21 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // Self-billing invoices we received: the document is the counterparty's, so
   // there is no own PDF to render and no send step: it arrives already booked.
   const isSelfBilled = !!invoice.is_self_billed
+  // crm#1131: registered from the books (issued in another system, linked to
+  // the verifikat that booked it, no lines here). The invoice is the original
+  // kept as underlag on that verifikat, not a render of this row.
+  const registeredFromBooks = isRegisteredFromBooks(invoice, invoice.items)
+  const registrationDocuments = registeredFromBooks ? registrationVoucher?.documents ?? null : null
+  // The link to that verifikat inside the sentence that replaces the lines.
+  const registrationVoucherLink = (chunks: React.ReactNode) => (
+    <Link href={`/bookkeeping/${invoice.journal_entry_id}`} className={cn(ROW_ACTION_CLASS, 'text-foreground')}>
+      {chunks}
+    </Link>
+  )
+  // Our own render is the invoice only for a document issued here. A
+  // self-billed invoice is the counterparty's document and a registration is
+  // the previous system's, so neither is offered as a generated PDF.
+  const offersOwnPdf = !isSelfBilled && !registeredFromBooks
   // A draft (no committed verifikat, not sent, not self-billed) can be edited
   // in place (header + lines) via /invoices/{id}/edit. Sent/paid invoices are
   // immutable (BFL); they are corrected with a credit note instead.
@@ -1795,7 +1862,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const canCreateOrder = (isProforma && invoice.status !== 'cancelled') || canConvertQuote
   const hasMenu =
     canCreateOrder ||
-    !isSelfBilled ||
+    offersOwnPdf ||
     (isCopyable && canWrite) ||
     showManualSendAlternative ||
     canCreateCreditNote ||
@@ -1816,6 +1883,16 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       .sort(([a], [b]) => b - a)
     if (entries.length > 0) {
       return entries.map(([rate, vat]) => ({ key: String(rate), label: t('vat_at_rate', { rate }), amount: vat }))
+    }
+    // crm#1131: a registration from the books has no lines to sum; its header
+    // holds the VAT its verifikat booked, at one rate. Summing nothing printed
+    // "Moms 0" under a total that includes it.
+    if (registeredFromBooks && invoice.vat_amount > 0) {
+      return [{
+        key: 'header',
+        label: invoice.vat_rate ? t('vat_at_rate', { rate: invoice.vat_rate }) : t('vat_label'),
+        amount: invoice.vat_amount,
+      }]
     }
     if (vatRegistered === false && invoice.vat_amount === 0) return []
     return [{ key: 'zero', label: t('vat_label'), amount: 0 }]
@@ -1885,11 +1962,20 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </Button>
           )}
           {/* Review in the browser (#1190); the download lives in the menu. */}
-          {!isSelfBilled && (
+          {offersOwnPdf && (
             <Button size="sm" variant="outline" onClick={() => previewPDF()}>
               <Eye className="mr-2 h-4 w-4" />
               {t('preview_pdf')}
             </Button>
+          )}
+          {/* crm#1131: a registration's invoice is the original on its
+              verifikat. With several documents the page cannot tell which one
+              that is; the lines section lists them all. */}
+          {registrationDocuments?.length === 1 && (
+            <DocumentViewButton
+              documentId={registrationDocuments[0].id}
+              label={t('registered_view_original')}
+            />
           )}
           {isProforma && invoice.status !== 'cancelled' && (
             <Button size="sm"
@@ -2029,7 +2115,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     <DropdownMenuSeparator />
                   </>
                 )}
-                {!isSelfBilled && (
+                {offersOwnPdf && (
                   <DropdownMenuItem onSelect={() => void downloadPDF()} disabled={isDownloading}>
                     <Download className="h-4 w-4" />
                     {t('download_pdf')}
@@ -2485,65 +2571,100 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       {/* Invoice lines: the list-page table idiom straight on the panel, with
           the totals as a right-aligned block and the amount due in the serif. */}
       <DetailSection kicker={t('items_card_title')}>
-        <table className="hidden w-full border-collapse text-[13px] sm:table">
-          <thead>
-            <tr>
-              <th className={cn(TH_CLASS, 'pl-0')}>{t('th_description')}</th>
-              <th className={cn(TH_CLASS, 'text-right')}>{t('th_quantity')}</th>
-              <th className={TH_CLASS}>{t('th_unit')}</th>
-              <th className={cn(TH_CLASS, 'text-right')}>{t('th_unit_price')}</th>
-              <th className={cn(TH_CLASS, 'pr-0 text-right')}>{t('th_amount')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {invoice.items.map((item) =>
-              isTextLikeLine(item) ? (
-                <tr key={item.id}>
-                  <td colSpan={5} className={cn(TD_CLASS, 'whitespace-pre-line pl-0 pr-0 text-muted-foreground')}>
-                    {item.description || ' '}
-                  </td>
-                </tr>
-              ) : (
-                <tr key={item.id}>
-                  <td className={cn(TD_CLASS, 'whitespace-pre-line pl-0')}>
-                    {item.description}
-                    {lineSubInfo(item)}
-                  </td>
-                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{item.quantity}</td>
-                  <td className={cn(TD_CLASS, 'text-muted-foreground')}>{item.unit}</td>
-                  <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
-                    {formatCurrency(item.unit_price, invoice.currency)}
-                  </td>
-                  <td className={cn(TD_CLASS, 'pr-0 text-right tabular-nums')}>
-                    {formatCurrency(item.line_total, invoice.currency)}
-                  </td>
-                </tr>
-              )
+        {registeredFromBooks ? (
+          // crm#1131: no lines to list. Say why, and lead to the original: the
+          // verifikat that booked the invoice and the documents attached to it.
+          <div className="space-y-1 py-2 text-sm text-muted-foreground">
+            <p>
+              {registrationVoucher?.label
+                ? t.rich('registered_note', {
+                    voucher: registrationVoucher.label,
+                    link: registrationVoucherLink,
+                  })
+                : t.rich('registered_note_unnamed', { link: registrationVoucherLink })}
+            </p>
+            {registrationDocuments && registrationDocuments.length > 0 && (
+              <p className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <span>{t('registered_original_label')}</span>
+                {registrationDocuments.map((doc) => (
+                  <a
+                    key={doc.id}
+                    href={`/api/documents/${doc.id}/inline`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={cn(ROW_ACTION_CLASS, 'inline-flex max-w-full items-center gap-1 text-foreground')}
+                  >
+                    <span className="truncate">{doc.file_name}</span>
+                    <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />
+                  </a>
+                ))}
+              </p>
             )}
-          </tbody>
-        </table>
+            {registrationDocuments?.length === 0 && <p>{t('registered_original_missing')}</p>}
+          </div>
+        ) : (
+          <>
+            <table className="hidden w-full border-collapse text-[13px] sm:table">
+              <thead>
+                <tr>
+                  <th className={cn(TH_CLASS, 'pl-0')}>{t('th_description')}</th>
+                  <th className={cn(TH_CLASS, 'text-right')}>{t('th_quantity')}</th>
+                  <th className={TH_CLASS}>{t('th_unit')}</th>
+                  <th className={cn(TH_CLASS, 'text-right')}>{t('th_unit_price')}</th>
+                  <th className={cn(TH_CLASS, 'pr-0 text-right')}>{t('th_amount')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {invoice.items.map((item) =>
+                  isTextLikeLine(item) ? (
+                    <tr key={item.id}>
+                      <td colSpan={5} className={cn(TD_CLASS, 'whitespace-pre-line pl-0 pr-0 text-muted-foreground')}>
+                        {item.description || ' '}
+                      </td>
+                    </tr>
+                  ) : (
+                    <tr key={item.id}>
+                      <td className={cn(TD_CLASS, 'whitespace-pre-line pl-0')}>
+                        {item.description}
+                        {lineSubInfo(item)}
+                      </td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{item.quantity}</td>
+                      <td className={cn(TD_CLASS, 'text-muted-foreground')}>{item.unit}</td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
+                        {formatCurrency(item.unit_price, invoice.currency)}
+                      </td>
+                      <td className={cn(TD_CLASS, 'pr-0 text-right tabular-nums')}>
+                        {formatCurrency(item.line_total, invoice.currency)}
+                      </td>
+                    </tr>
+                  )
+                )}
+              </tbody>
+            </table>
 
-        {/* Mobile: one flat row per line, no numeric columns to cram. */}
-        <div className="divide-y divide-border text-sm sm:hidden">
-          {invoice.items.map((item) =>
-            isTextLikeLine(item) ? (
-              <p key={item.id} className="whitespace-pre-line py-3 text-muted-foreground">{item.description || ' '}</p>
-            ) : (
-              <div key={item.id} className="flex items-start justify-between gap-4 py-3">
-                <div className="min-w-0">
-                  <p className="whitespace-pre-line">{item.description}</p>
-                  <p className="text-xs text-muted-foreground tabular-nums">
-                    {item.quantity} {item.unit} × {formatCurrency(item.unit_price, invoice.currency)}
-                  </p>
-                  {lineSubInfo(item)}
-                </div>
-                <span className="shrink-0 tabular-nums">
-                  {formatCurrency(item.line_total, invoice.currency)}
-                </span>
-              </div>
-            )
-          )}
-        </div>
+            {/* Mobile: one flat row per line, no numeric columns to cram. */}
+            <div className="divide-y divide-border text-sm sm:hidden">
+              {invoice.items.map((item) =>
+                isTextLikeLine(item) ? (
+                  <p key={item.id} className="whitespace-pre-line py-3 text-muted-foreground">{item.description || ' '}</p>
+                ) : (
+                  <div key={item.id} className="flex items-start justify-between gap-4 py-3">
+                    <div className="min-w-0">
+                      <p className="whitespace-pre-line">{item.description}</p>
+                      <p className="text-xs text-muted-foreground tabular-nums">
+                        {item.quantity} {item.unit} × {formatCurrency(item.unit_price, invoice.currency)}
+                      </p>
+                      {lineSubInfo(item)}
+                    </div>
+                    <span className="shrink-0 tabular-nums">
+                      {formatCurrency(item.line_total, invoice.currency)}
+                    </span>
+                  </div>
+                )
+              )}
+            </div>
+          </>
+        )}
 
         <div className="ml-auto mt-4 w-full max-w-xs space-y-1 text-sm tabular-nums">
           <div className="flex justify-between gap-4">

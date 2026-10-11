@@ -1,5 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+
+// The ledger cover (rows a summarised verifikat already holds, crm#1043) is
+// the reconciliation bridge's arithmetic, covered in its own tests: stubbed
+// here. Default: the bridge has nothing (no cover), as before.
+const bridgeMock = vi.fn()
+vi.mock('@/lib/reconciliation/skattekonto-reconciliation', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/reconciliation/skattekonto-reconciliation')>()
+  return { ...actual, getSkattekontoReconciliationStatus: (...args: unknown[]) => bridgeMock(...args) }
+})
+
 import { skatteverketExtension } from '../index'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
@@ -66,10 +76,37 @@ function skvRow(id: string, belopp: number, extra: Record<string, unknown> = {})
   }
 }
 
+/** The bridge's answer: these open rows are already inside an unlinked verifikat on 1630. */
+function coverFor(...ids: string[]) {
+  return {
+    ledger_read_failed: false,
+    cover: {
+      through_date: '2026-12-31',
+      kind: 'ledger_agrees',
+      event_ids: ids,
+      event_count: ids.length,
+      event_total: 600,
+      entries: [
+        {
+          journal_entry_id: 'je-year-end',
+          voucher_number: 1,
+          voucher_series: 'B',
+          entry_date: '2026-12-31',
+          description: 'Skattekonto 2026',
+          status: 'posted',
+          open_amount: 37887.25,
+        },
+      ],
+      entry_total: 37887.25,
+    },
+  }
+}
+
 describe('POST /skattekonto/transaktioner/group-match-candidates', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     reset()
+    bridgeMock.mockResolvedValue(null)
   })
 
   it('returns 500 without an extension context', async () => {
@@ -172,5 +209,76 @@ describe('POST /skattekonto/transaktioner/group-match-candidates', () => {
       matched_amount: 600,
       matched_side: 'debit',
     })
+  })
+
+  it('says when a summarised verifikat already holds every ticked row, so the dialog points at Matcha manuellt (crm#1043)', async () => {
+    enqueue({ data: [skvRow(ID_A, 1000), skvRow(ID_B, -400)] })
+    // No 1630 entry settles the two rows: the window read finds nothing.
+    bridgeMock.mockResolvedValue(coverFor(ID_A, ID_B, 'another-row'))
+
+    const res = await findRoute().handler(makeRequest({ transaction_ids: [ID_A, ID_B] }), makeContext())
+
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json.data.candidates).toEqual([])
+    expect(json.data.ledger_cover).toMatchObject({
+      through_date: '2026-12-31',
+      kind: 'ledger_agrees',
+      event_count: 3,
+      entry_count: 1,
+      entries: [{ journal_entry_id: 'je-year-end', open_amount: 37887.25 }],
+    })
+  })
+
+  it('says nothing when the cover does not hold ALL the ticked rows, or when the bridge cannot be read', async () => {
+    enqueue({ data: [skvRow(ID_A, 1000), skvRow(ID_B, -400)] })
+    bridgeMock.mockResolvedValue(coverFor(ID_A))
+    const partial = await findRoute().handler(makeRequest({ transaction_ids: [ID_A, ID_B] }), makeContext())
+    expect(partial.status).toBe(200)
+    expect((await partial.json()).data).toEqual({ candidates: [] })
+
+    reset()
+    enqueue({ data: [skvRow(ID_A, 1000), skvRow(ID_B, -400)] })
+    bridgeMock.mockRejectedValue(new Error('timeout'))
+    const failed = await findRoute().handler(makeRequest({ transaction_ids: [ID_A, ID_B] }), makeContext())
+    expect(failed.status).toBe(200)
+    expect((await failed.json()).data).toEqual({ candidates: [] })
+  })
+})
+
+describe('GET /skattekonto/transaktioner/:id/match-candidates', () => {
+  const route = () => {
+    const found = skatteverketExtension.apiRoutes?.find(
+      (r) => r.method === 'GET' && r.path === '/skattekonto/transaktioner/:id/match-candidates',
+    )
+    if (!found) throw new Error('match-candidates route not registered')
+    return found
+  }
+  const request = (id: string) =>
+    new Request(
+      `http://localhost/api/extensions/ext/skatteverket/skattekonto/transaktioner/${id}/match-candidates?_id=${id}`,
+    )
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    bridgeMock.mockResolvedValue(null)
+  })
+
+  it('a row with no candidate and no cover answers as before: an empty list', async () => {
+    enqueue({ data: skvRow(ID_A, -8000) }) // the row; every later read finds nothing
+    const res = await route().handler(request(ID_A), makeContext())
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toEqual({ candidates: [] })
+  })
+
+  it('a row a summarised verifikat already holds carries ledger_cover, the answer "Skapa manuellt" and Koppla show (crm#1043)', async () => {
+    enqueue({ data: skvRow(ID_A, -8000) })
+    bridgeMock.mockResolvedValue(coverFor(ID_A, ID_B))
+    const res = await route().handler(request(ID_A), makeContext())
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json.data.candidates).toEqual([])
+    expect(json.data.ledger_cover).toMatchObject({ through_date: '2026-12-31', event_count: 2, entry_count: 1 })
   })
 })

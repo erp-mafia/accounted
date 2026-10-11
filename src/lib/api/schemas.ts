@@ -2925,6 +2925,14 @@ export const RemoveCashAccountQuerySchema = z.object({
   dry_run: z.enum(['true', 'false']).optional(),
 }).strict()
 
+/**
+ * GET /api/cash-accounts/ledger-suggestions: every suggestion of the company,
+ * or those that involve one bank connection's accounts (the bank picker).
+ */
+export const LedgerSuggestionsQuerySchema = z.object({
+  connection_id: uuid.optional(),
+}).strict()
+
 /** PUT /api/cash-accounts/payee-defaults: which account invoices in a currency pay to. */
 export const SetInvoicePayeeDefaultSchema = z.object({
   currency: CurrencySchema,
@@ -4029,6 +4037,13 @@ const EmployeeSchemaPatchBase = EmployeeSchemaBase.extend({
   semestertillagg_rate: z.number().min(0).max(0.05),
   vacation_pay_rate: z.number().min(0.12).max(0.3).nullable(),
   vaxa_stod_eligible: z.boolean(),
+  // Update only, never on create (a new employee is active). false is the
+  // same soft delete as DELETE, which does nothing but set this flag; true
+  // reactivates. The key was advertised by the MCP tool and the DELETE docs
+  // while missing here, so Zod stripped it and the PATCH answered 200 with
+  // the employee unchanged (crm#1133). NOT NULL in the database: null is
+  // refused.
+  is_active: z.boolean(),
 })
 
 export const UpdateEmployeeSchema = EmployeeSchemaPatchBase.partial().superRefine((data, ctx) => {

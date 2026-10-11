@@ -43,6 +43,7 @@ registerEndpoint({
     'Judge health on unexplained_difference, never on difference. The difference is expected to be non-zero while rows are unmatched; unexplained_difference is what is left once every bridge line is accounted for, and for skattekonto it is 0,00 whenever the data is consistent (a non-zero value is an integrity finding, not a task).',
     'stale = true means the outside truth is older than 7 days (Skatteverket connection needing re-consent is the usual cause). is_reconciled can still be true on stale data; read both.',
     'skattekonto.opening_difference is the gap between the derived saldo at history_start and the ledger before it; it belongs to migrated ledgers and is accepted once at sign-off, not worked down.',
+    'skattekonto.covered (through_date, kind, event_count, event_total, journal_entry_ids, entry_count) is set when unbooked rows are already in the ledger through verifikat on 1630 that no row is linked to, typically one summarised year-end or month-end verifikat: up to through_date those verifikat sum exactly to the open rows (events_equal), or 1630 already equals Skatteverket although the rows are unbooked (ledger_agrees). Do not book such rows (skattekonto booking, in the app and through the MCP tools, refuses them with LEDGER_COVER_EXISTS; v1 has no skattekonto booking endpoint): link them with POST .../links and allow_remainder: true.',
     'Bank accounts carry the legacy field set in the bank block (bank_transaction_total, gl_1930_period_movement, …) unchanged from /reconciliation/bank/status.',
   ],
   example: {

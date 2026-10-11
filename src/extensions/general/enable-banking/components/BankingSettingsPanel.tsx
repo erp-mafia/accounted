@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
@@ -21,6 +21,7 @@ import { notifyBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
+import { useBankLedgerSuggestionNotice } from '@/components/transactions/BankLedgerSuggestionNotice'
 import {
   SettingsGroup,
   SettingsRow,
@@ -130,6 +131,17 @@ export default function BankingSettingsPanel() {
   const fetchConnectionsRef = useRef(fetchConnections)
   useEffect(() => {
     fetchConnectionsRef.current = fetchConnections
+  })
+
+  // A bank account that books on another ledger account than the books say
+  // (crm#1066), with the button that changes it; null when there is none.
+  // Rendered below only when no connection needs the page's one attention
+  // sentence more: a connection that does not sync comes first.
+  const refetchConnections = useCallback(() => void fetchConnectionsRef.current(), [])
+  const ledgerSuggestionNotice = useBankLedgerSuggestionNotice({
+    onApplied: refetchConnections,
+    onBankSettings: true,
+    className: 'px-1 pt-6 leading-relaxed',
   })
 
   // Safety net for completion signals that never reach this tab: a mobile
@@ -878,6 +890,8 @@ export default function BankingSettingsPanel() {
           {buildPageAttentionSentence(pageAttention, stateNow)}
         </p>
       )}
+
+      {!pageAttention && !pickerCompanyMismatch && ledgerSuggestionNotice}
 
       {/* All connections in one group, worst state first. Each row carries
           its own state badge and exactly one primary action. */}

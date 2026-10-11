@@ -273,6 +273,72 @@ describe('reconciliation MCP tools', () => {
     ])
   })
 
+  it('reconcile_match carries allow_remainder through staging and shows the reviewer what stays on the verifikat (crm#1043)', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    const row2 = '77777777-7777-4777-8777-777777777777'
+    const exactRow = '66666666-6666-4666-8666-666666666666'
+    const exactEntry = '44444444-4444-4444-8444-444444444444'
+    // Two rows against a summarised verifikat (linked with a remainder), and
+    // one exact pair next to it.
+    matchMock.mockResolvedValue({
+      dry_run: true,
+      considered: 2,
+      applied: [
+        { external_id: ROW, journal_entry_id: ENTRY, via: 'partial', remainder_amount: 17499.75 },
+        { external_id: row2, journal_entry_id: ENTRY, via: 'partial', remainder_amount: 17499.75 },
+        { external_id: exactRow, journal_entry_id: exactEntry, via: 'line' },
+      ],
+      skipped: [],
+    })
+    const pairs = [
+      { external_ids: [ROW, row2], journal_entry_ids: [ENTRY], allow_remainder: true },
+      { external_ids: [exactRow], journal_entry_ids: [exactEntry] },
+    ]
+    const out = (await tool('gnubok_reconcile_match').execute(
+      { account_key: 'skattekonto', pairs, dry_run: true },
+      COMPANY,
+      USER,
+      supabase as never,
+      { type: 'api_key', id: 'key-1' } as never,
+    )) as Record<string, unknown>
+    // The caller's flag reaches the dry run untouched.
+    expect(matchMock.mock.calls[0][4]).toMatchObject({ pairs })
+    const preview = out.preview as Record<string, unknown>
+    // The staged pair keeps the flag, or the commit would refuse what the
+    // reviewer approved; the exact pair never gains it.
+    expect(preview.pairs).toEqual([
+      { external_ids: [ROW, row2], journal_entry_ids: [ENTRY], allow_remainder: true },
+      { external_ids: [exactRow], journal_entry_ids: [exactEntry] },
+    ])
+    expect(preview.remainders).toEqual([{ journal_entry_id: ENTRY, remainder_amount: 17499.75 }])
+  })
+
+  it('reconcile_match exposes allow_remainder in its input schema, and an exact preview has no remainders', async () => {
+    const schema = tool('gnubok_reconcile_match').inputSchema as {
+      properties: { pairs: { items: { additionalProperties: boolean; properties: Record<string, { type?: string }> } } }
+    }
+    expect(schema.properties.pairs.items.additionalProperties).toBe(false)
+    expect(schema.properties.pairs.items.properties.allow_remainder).toMatchObject({ type: 'boolean' })
+
+    const { supabase } = createQueuedMockSupabase()
+    matchMock.mockResolvedValue({
+      dry_run: true,
+      considered: 1,
+      applied: [{ external_id: ROW, journal_entry_id: ENTRY, via: 'line' }],
+      skipped: [],
+    })
+    const out = (await tool('gnubok_reconcile_match').execute(
+      { account_key: 'skattekonto', pairs: [{ external_ids: [ROW], journal_entry_ids: [ENTRY] }], dry_run: true },
+      COMPANY,
+      USER,
+      supabase as never,
+      { type: 'api_key', id: 'key-1' } as never,
+    )) as Record<string, unknown>
+    const preview = out.preview as Record<string, unknown>
+    expect(preview.pairs).toEqual([{ external_ids: [ROW], journal_entry_ids: [ENTRY] }])
+    expect(preview.remainders).toBeUndefined()
+  })
+
   it('reconcile_match refuses an empty request and a request with nothing linkable, naming the skip reason', async () => {
     const { supabase } = createQueuedMockSupabase()
     await expect(

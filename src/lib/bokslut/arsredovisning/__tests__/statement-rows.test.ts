@@ -255,4 +255,24 @@ describe('buildBrRows', () => {
     const mapping = mapTrialBalancesToK2(currentPair(), previousPair())
     expect(mapping.warnings).toEqual([])
   })
+
+  it('prints the same jämförelseår column whether or not that year was closed in the books (crm#1080)', () => {
+    // The comparison year with its 150 000 kr result still on the result
+    // accounts and nothing on 2099. The rows are what the PDF and the preview
+    // print, so they must match the closed year row for row.
+    const neverClosed = { full: previousPair().preClosing, preClosing: previousPair().preClosing }
+    const derived = buildBrRows(mapTrialBalancesToK2(currentPair(), neverClosed))
+    const closed = buildBrRows(mapTrialBalancesToK2(currentPair(), previousPair()))
+    expect(derived).toEqual(closed)
+
+    const byKey = (key: string) =>
+      derived.equityLiabilities.find((r) => r.semantic_key === key)?.previous
+    expect(byKey('balance_sheet_current_year_result')).toBe(150_000)
+    expect(byKey('balance_sheet_equity_total')).toBe(300_000)
+    expect(derived.equityLiabilities.at(-1)).toMatchObject({
+      label: 'Summa eget kapital och skulder',
+      previous: 300_000,
+    })
+    expect(derived.assets.at(-1)).toMatchObject({ label: 'Summa tillgångar', previous: 300_000 })
+  })
 })

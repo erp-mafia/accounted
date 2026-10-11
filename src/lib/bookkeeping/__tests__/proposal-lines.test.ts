@@ -171,6 +171,60 @@ describe('computeProposalLines', () => {
     })
   })
 
+  // crm#1136: money out on an income category is a refund to a customer, and
+  // the preview has to show the entry the booking posts (ENGINE PARITY).
+  describe('category branch: a row against its category is a refund', () => {
+    const asSet = (rows: Array<[string, number, number]>) => rows.map((r) => r.join(':')).sort()
+    const previewSet = (lines: ProposalLine[]) =>
+      asSet(lines.map((l) => [l.account, l.side === 'debet' ? l.amount : 0, l.side === 'kredit' ? l.amount : 0]))
+
+    it('previews a refund to a customer: revenue and utgående moms debited, the bank credited', () => {
+      const lines = computeProposalLines({ amount: -125, category: 'income_services', vatTreatment: 'standard_25' })
+      expect(lines).toEqual([
+        { side: 'debet', account: '3001', amount: 100 },
+        { side: 'debet', account: '2611', amount: 25 },
+        { side: 'kredit', account: '1930', amount: 125, settlement: true },
+      ])
+      expect(sumSide(lines, 'debet')).toBe(sumSide(lines, 'kredit'))
+    })
+
+    it('puts an account override on the business side of a refund, never on the bank leg', () => {
+      const lines = computeProposalLines({
+        amount: -125, category: 'income_services', vatTreatment: 'standard_25', accountOverride: '3051',
+      })
+      expect(lines).toEqual([
+        { side: 'debet', account: '3051', amount: 100 },
+        { side: 'debet', account: '2611', amount: 25 },
+        { side: 'kredit', account: '1930', amount: 125, settlement: true },
+      ])
+    })
+
+    it('books no reverse-charge self-assessment on a refund of a sale to an EU business', () => {
+      const lines = computeProposalLines({ amount: -125, category: 'income_services', vatTreatment: 'reverse_charge' })
+      expect(lines).toEqual([
+        { side: 'debet', account: '3308', amount: 125 },
+        { side: 'kredit', account: '1930', amount: 125, settlement: true },
+      ])
+    })
+
+    const categories = ['income_services', 'income_products', 'income_other', 'expense_software', 'expense_bank_fees'] as const
+    const treatments = [undefined, 'standard_25', 'reduced_12', 'reduced_6', 'exempt', 'export', 'reverse_charge'] as const
+    const amounts = [-125, 125, -102.06, 102.06, -0.07, 0.07]
+
+    it('matches the engine line for line for every category, treatment and direction', () => {
+      for (const category of categories) for (const vatTreatment of treatments) for (const amount of amounts) {
+        const tx = makeTransaction({ amount })
+        const engine = buildTransactionEntryLines(
+          tx,
+          buildMappingResultFromCategory(category, tx, true, 'enskild_firma', vatTreatment),
+        )
+        const preview = computeProposalLines({ amount, category, vatTreatment })
+        expect(previewSet(preview), `${category} ${vatTreatment} ${amount}`)
+          .toEqual(asSet(engine.map((l) => [l.account_number, l.debit_amount, l.credit_amount])))
+      }
+    })
+  })
+
   describe('template branch (static review template)', () => {
     it('builds an expense from debit/credit pair with VAT rate', () => {
       const lines = computeProposalLines({

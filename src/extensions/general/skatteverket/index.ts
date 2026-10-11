@@ -96,7 +96,9 @@ import {
   attachBookingSuggestions,
   bokforSkattekontoTransaction,
   bokforSkattekontoTransactionsBatch,
+  findSkattekontoLedgerCover,
   SkattekontoBookingError,
+  toLedgerCoverInfo,
 } from './lib/skattekonto-booking'
 import {
   findGroupMatchCandidates,
@@ -108,6 +110,7 @@ import {
 import { splitTransactions } from './lib/skattekonto-buckets'
 import type { SkattekontoBalanceSnapshot } from './types'
 import type { VatPeriodType } from '@/types'
+import type { SkattekontoLedgerCoverInfo } from '@/types/skatteverket'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('skatteverket')
@@ -129,6 +132,27 @@ const SKV_STATE_REJECTED_MESSAGE =
 // to login BEFORE the flow is spent and resumes from there).
 const SKV_SESSION_MISSING_MESSAGE =
   'Sessionen har gått ut. Stäng fliken, logga in och försök ansluta igen.'
+
+/**
+ * For a candidates answer with nothing to offer: the unlinked verifikat on
+ * 1630 that already hold every given row in aggregate (a summarised
+ * verifikat, crm#1043), so the dialogs can point at "Matcha manuellt"
+ * instead of telling the user to book the rows. Null when not all rows are
+ * covered, and when the bridge cannot be read: this only informs, the
+ * booking guard itself fails closed.
+ */
+async function coverForRows(
+  supabase: SupabaseClient,
+  companyId: string,
+  ids: string[],
+): Promise<SkattekontoLedgerCoverInfo | null> {
+  try {
+    const cover = await findSkattekontoLedgerCover(supabase, companyId)
+    return cover && ids.every((id) => cover.event_ids.includes(id)) ? toLedgerCoverInfo(cover) : null
+  } catch {
+    return null
+  }
+}
 
 // Body for POST /skattekonto/transaktioner/bokfor-batch. Capped at 200 ids:
 // a full year of skattekonto events fits comfortably, and the sequential
@@ -2706,6 +2730,7 @@ export const skatteverketExtension: Extension = {
               : err.code === 'ALREADY_BOOKED' ? 409
               : err.code === 'ROW_IGNORED' ? 409
               : err.code === 'LEDGER_TWIN_EXISTS' ? 409
+              : err.code === 'LEDGER_COVER_EXISTS' ? 409
               : err.code === 'PERIOD_LOCKED' ? 423
               : err.code === 'NO_COUNTER_ACCOUNT' ? 422
               : 400
@@ -2714,6 +2739,7 @@ export const skatteverketExtension: Extension = {
                 error: err.message,
                 code: err.code,
                 ...(err.ledgerTwins ? { ledger_twins: err.ledgerTwins } : {}),
+                ...(err.ledgerCover ? { ledger_cover: err.ledgerCover } : {}),
               },
               { status },
             )
@@ -2742,7 +2768,8 @@ export const skatteverketExtension: Extension = {
         }
         try {
           const { candidates } = await findMatchCandidates(ctx.supabase, ctx.companyId, id)
-          return NextResponse.json({ data: { candidates } })
+          const ledgerCover = candidates.length === 0 ? await coverForRows(ctx.supabase, ctx.companyId, [id]) : null
+          return NextResponse.json({ data: { candidates, ...(ledgerCover ? { ledger_cover: ledgerCover } : {}) } })
         } catch (err) {
           if (err instanceof SkattekontoMatchError) {
             const status =
@@ -2787,7 +2814,11 @@ export const skatteverketExtension: Extension = {
             ctx.companyId,
             parsed.data.transaction_ids,
           )
-          return NextResponse.json({ data: { candidates } })
+          const ledgerCover =
+            candidates.length === 0
+              ? await coverForRows(ctx.supabase, ctx.companyId, parsed.data.transaction_ids)
+              : null
+          return NextResponse.json({ data: { candidates, ...(ledgerCover ? { ledger_cover: ledgerCover } : {}) } })
         } catch (err) {
           if (err instanceof SkattekontoMatchError) {
             const status =

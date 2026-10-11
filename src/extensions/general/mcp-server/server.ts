@@ -287,6 +287,8 @@ import { computeInitialRunDate, getStockholmDateHour } from '@/lib/invoices/recu
 import { runDateMatchesDayOfMonth } from '@/lib/invoices/recurring-run-date'
 import { UpdateInvoiceParamsSchema } from '@/lib/pending-operations/schemas/update-invoice'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
+import { isRegisteredFromBooks } from '@/lib/invoices/registered-from-books'
+import { registrationVoucherLabel } from '@/lib/invoices/register-booked-rules'
 import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
 import {
   ensureCompanyDimensions,
@@ -522,10 +524,13 @@ import { suggestToolNames } from './tool-suggest'
 // approval; staging never books.
 import {
   attachBookingSuggestions,
+  findSkattekontoLedgerCover,
   findSkattekontoLedgerTwins,
+  ledgerCoverMessage,
   ledgerTwinMessage,
+  toLedgerCoverInfo,
 } from '@/extensions/general/skatteverket/lib/skattekonto-booking'
-import type { SkattekontoLedgerTwin } from '@/types/skatteverket'
+import type { SkattekontoLedgerCoverInfo, SkattekontoLedgerTwin } from '@/types/skatteverket'
 import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
 import { agiReportingPeriod, formatAgiPeriodCompact, formatAgiPeriodDashed } from '@/lib/salary/agi/reporting-period'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
@@ -1847,6 +1852,47 @@ function skattekontoLedgerTwinRefusal(
       pairs: [{ external_ids: [rowId, ...companionIds], journal_entry_ids: ids.slice(0, 1) }],
     },
   })
+}
+
+/**
+ * The rows are already in the ledger inside unlinked verifikat on 1630 (a
+ * summarised year-end or month-end verifikat, crm#1043): no verifikat
+ * carries any one of them exactly, the reconciliation's arithmetic shows
+ * they are covered. Coded so an agent links instead of booking them twice;
+ * the args are the link to make, with allow_remainder for what the verifikat
+ * holds beyond these rows.
+ */
+function skattekontoLedgerCoverRefusal(
+  rowIds: string[],
+  cover: SkattekontoLedgerCoverInfo,
+  rowCount = rowIds.length,
+): Error {
+  const lead = rowCount > 1 ? `Alla ${rowCount} rader ser redan ut att vara bokförda. ` : ''
+  const target = cover.entries[0]?.journal_entry_id
+  return codedRefusal('SKATTEKONTO_BOOK_LEDGER_COVER_EXISTS', `${lead}${ledgerCoverMessage(cover)}`, {
+    description:
+      `Do not book. Link the open rows up to ${cover.through_date} to the unlinked verifikat on 1630 that already hold them (gnubok_list_reconciliation_items, account_key "skattekonto": rows with covered_by_ledger in unmatched_external, the verifikat in unmatched_ledger): gnubok_reconcile_match with pairs of at most 50 rows per verifikat, and allow_remainder: true on a pair whose rows do not sum to the verifikat (a summarised verifikat: the rest stays on it as its remainder). With several verifikat ask the user which rows belong to which. ${SKATTEKONTO_TWIN_TAIL}`,
+    tool: 'gnubok_reconcile_match',
+    args: {
+      account_key: 'skattekonto',
+      pairs: [
+        {
+          external_ids: rowIds.slice(0, 50),
+          journal_entry_ids: target ? [target] : [],
+          allow_remainder: true,
+        },
+      ],
+    },
+  })
+}
+
+/** Reviewer warning when a staged booking was told to book rows the ledger already covers. */
+function skattekontoCoverNote(cover: SkattekontoLedgerCoverInfo): string {
+  const refs = cover.entries
+    .slice(0, 5)
+    .map((t) => (t.voucher_number ? `${t.voucher_series ?? ''}${t.voucher_number}` : `no number ${t.entry_date}`))
+    .join(', ')
+  return `DUPLICATE_OVERRIDE: unlinked verifikat on 1630 (${refs}) already hold the open rows up to ${cover.through_date}. Approving books them a second time; approve only if the events really are missing from the ledger, otherwise reject and link the rows instead.`
 }
 
 /** Reviewer warning when a staged booking was told to ignore a ledger twin. */
@@ -8040,7 +8086,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_categorize_transaction',
     keywords: ['bokför', 'kontera', 'kategorisera', 'banktransaktion'],
     title: 'Categorize Bank Transaction',
-    description: 'Categorize a bank transaction. Stages the verifikat: cost line NET of moms, bank line gross (always the tx\'s cash account). account_override books the business side on any active account. Cashless events (privat utlägg): gnubok_create_voucher.',
+    description: 'Categorize a bank transaction. Stages the verifikat: cost line NET of moms, bank line gross (always the tx\'s cash account). Money out on income_* is a refund. account_override books the business side on any active account. Cashless events (privat utlägg): gnubok_create_voucher.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -9166,6 +9212,11 @@ export const tools: McpTool[] = [
         notes: { type: ['string', 'null'] },
         default_dimensions: { type: 'object', additionalProperties: { type: 'string' } },
         editable_draft: { type: 'boolean', description: 'true when gnubok_update_invoice can edit it' },
+        journal_entry_id: { type: ['string', 'null'], description: 'The verifikat that booked the invoice' },
+        registered_from_books: { type: 'boolean', description: 'true: issued in another system and registered against its verifikat. No lines by design: the original invoice is the document on that verifikat, never missing data' },
+        voucher_label: { type: 'string', description: 'registered_from_books only: that verifikat, e.g. A47' },
+        voucher_document_ids: { type: 'array', items: { type: 'string' }, description: 'registered_from_books only: documents attached to that verifikat (read with gnubok_get_document_content); empty when none is attached' },
+        note: { type: 'string', description: 'registered_from_books only: where the original invoice is' },
         items: {
           type: 'array',
           description: 'Lines in display order; pass them back to gnubok_update_invoice verbatim: article, ROT/RUT, accrual and account fields survive only if passed back.',
@@ -9200,7 +9251,7 @@ export const tools: McpTool[] = [
         },
         item_count: { type: 'number' },
       },
-      required: ['invoice_id', 'status', 'currency', 'editable_draft', 'items', 'item_count'],
+      required: ['invoice_id', 'status', 'currency', 'editable_draft', 'registered_from_books', 'items', 'item_count'],
     },
     annotations: ANNOTATIONS_READ_ONLY,
     // Round-trip read surface for gnubok_update_invoice (issue #1642). Kept
@@ -9283,6 +9334,49 @@ export const tools: McpTool[] = [
         dimensions: row.dimensions ?? {},
       }))
 
+      // crm#1131: an invoice registered from the books has no lines by
+      // design, and its original is the underlag on the verifikat that booked
+      // it. An agent that saw only the empty line list reported the original
+      // as never imported, so the read names that verifikat and its current
+      // documents (the ones its page lists). Two more reads, for such a row
+      // only; a failed one fails the call, never reads as "none attached".
+      let registration: { voucher_label: string; voucher_document_ids: string[]; note: string } | null = null
+      if (isRegisteredFromBooks(invoice, invoice.items)) {
+        const journalEntryId = invoice.journal_entry_id as string
+        const [voucherRes, documentsRes] = await Promise.all([
+          supabase
+            .from('journal_entries')
+            .select('id, voucher_series, voucher_number')
+            .eq('id', journalEntryId)
+            .eq('company_id', companyId)
+            .maybeSingle(),
+          supabase
+            .from('document_attachments')
+            .select('id')
+            .eq('company_id', companyId)
+            .eq('journal_entry_id', journalEntryId)
+            .eq('is_current_version', true)
+            .order('created_at', { ascending: false })
+            .limit(50),
+        ])
+        if (voucherRes.error) throw dbError(voucherRes.error)
+        if (documentsRes.error) throw dbError(documentsRes.error)
+        const voucherLabel = registrationVoucherLabel(
+          (voucherRes.data as { id: string; voucher_series: string | null; voucher_number: number | null } | null)
+            ?? { id: journalEntryId, voucher_series: null, voucher_number: null },
+        )
+        const documentIds = ((documentsRes.data ?? []) as { id: string }[]).map((doc) => doc.id)
+        registration = {
+          voucher_label: voucherLabel,
+          voucher_document_ids: documentIds,
+          note: `Registered from earlier bookkeeping: no lines by design, the amounts are the ones verifikat ${voucherLabel} booked. ` + (
+            documentIds.length > 0
+              ? 'The original invoice is the document attached to that verifikat (voucher_document_ids): read it with gnubok_get_document_content.'
+              : 'No document is attached to that verifikat yet: attach the original invoice there with gnubok_link_document_to_voucher.'
+          ),
+        }
+      }
+
       return {
         invoice_id: invoice.id,
         invoice_number: invoice.invoice_number ?? null,
@@ -9307,6 +9401,9 @@ export const tools: McpTool[] = [
         notes: invoice.notes ?? null,
         default_dimensions: (invoice.default_dimensions as Record<string, string> | null) ?? {},
         editable_draft: isEditableInvoiceDraft(invoice),
+        journal_entry_id: invoice.journal_entry_id ?? null,
+        registered_from_books: registration !== null,
+        ...(registration ?? {}),
         items,
         item_count: items.length,
       }
@@ -15148,6 +15245,7 @@ export const tools: McpTool[] = [
                   required: ['journal_entry_id', 'amount'],
                 },
               },
+              allow_remainder: { type: 'boolean', description: 'Skattekonto: summarised verifikat, the rest stays open' },
             },
             required: ['external_ids', 'journal_entry_ids'],
           },
@@ -15169,6 +15267,7 @@ export const tools: McpTool[] = [
               external_ids: string[]
               journal_entry_ids: string[]
               allocations?: Array<{ journal_entry_id: string; amount: number }>
+              allow_remainder?: boolean
             }>
           | undefined) ?? []
       const useProposals = args.use_proposals === true
@@ -15215,9 +15314,16 @@ export const tools: McpTool[] = [
         external_ids: string[]
         journal_entry_ids: string[]
         allocations?: Array<{ journal_entry_id: string; amount: number }>
+        allow_remainder?: boolean
       }> = []
       const rowsByEntry = new Map<string, string[]>()
       const splitByRow = new Map<string, Array<{ journal_entry_id: string; amount: number }>>()
+      // Skattekonto: verifikat linked with a remainder (the caller's
+      // allow_remainder), and what each verifikat keeps open after its links.
+      // The staged pair must carry the flag or the commit refuses it, and the
+      // reviewer must see the remainder before approving (crm#1043).
+      const partialEntries = new Set<string>()
+      const remainderByEntry = new Map<string, number>()
       for (const a of preview.applied) {
         if (typeof a.allocated_amount === 'number') {
           const slices = splitByRow.get(a.external_id) ?? []
@@ -15228,9 +15334,21 @@ export const tools: McpTool[] = [
         const rows = rowsByEntry.get(a.journal_entry_id) ?? []
         if (!rows.includes(a.external_id)) rows.push(a.external_id)
         rowsByEntry.set(a.journal_entry_id, rows)
+        if (a.via === 'partial') partialEntries.add(a.journal_entry_id)
+        // Pairs on one verifikat are applied in order: the last one states
+        // what is left after all of them (0 when the rows explain it all).
+        remainderByEntry.set(a.journal_entry_id, typeof a.remainder_amount === 'number' ? a.remainder_amount : 0)
       }
+      const remainders = Array.from(remainderByEntry, ([journal_entry_id, remainder_amount]) => ({
+        journal_entry_id,
+        remainder_amount,
+      })).filter((r) => r.remainder_amount !== 0)
       for (const [journalEntryId, externalIds] of rowsByEntry) {
-        resolvedPairs.push({ external_ids: externalIds, journal_entry_ids: [journalEntryId] })
+        resolvedPairs.push({
+          external_ids: externalIds,
+          journal_entry_ids: [journalEntryId],
+          ...(partialEntries.has(journalEntryId) ? { allow_remainder: true } : {}),
+        })
       }
       for (const [externalId, slices] of splitByRow) {
         resolvedPairs.push({
@@ -15277,6 +15395,9 @@ export const tools: McpTool[] = [
           account_key: accountKey,
           pair_count: resolvedPairs.length,
           pairs: resolvedPairs,
+          // What each verifikat keeps on 1630 beyond the rows linked to it:
+          // it stays in unmatched_ledger with this amount.
+          ...(remainders.length > 0 ? { remainders } : {}),
           skipped_at_stage: preview.skipped,
           source: useProposals ? 'proposals' : 'explicit',
         },
@@ -15509,7 +15630,7 @@ export const tools: McpTool[] = [
         allow_duplicate: {
           type: 'boolean',
           description:
-            'Book although a verifikat already carries this event on 1630 (the refusal names it). Only when the user confirms the event really happened twice; otherwise link the row to that verifikat with gnubok_reconcile_match.',
+            'Book although the ledger already holds this event on 1630: one verifikat carries it, or unlinked (summarised) verifikat cover it (the refusal names them). Only when the user confirms it is really missing from the ledger; otherwise link the row with gnubok_reconcile_match.',
         },
         dry_run: { type: 'boolean' },
         idempotency_key: { type: 'string' },
@@ -15550,6 +15671,13 @@ export const tools: McpTool[] = [
       if (twins.length > 0 && !allowDuplicate) {
         throw skattekontoLedgerTwinRefusal(tx.id, twins)
       }
+      // No exact twin: unlinked verifikat on 1630 may still hold the event in
+      // aggregate (a summarised verifikat). Same guard as the commit path.
+      const ledgerCover = twins.length === 0 ? await findSkattekontoLedgerCover(supabase, companyId) : null
+      const cover = ledgerCover?.event_ids.includes(tx.id) ? toLedgerCoverInfo(ledgerCover) : null
+      if (cover && !allowDuplicate) {
+        throw skattekontoLedgerCoverRefusal([tx.id], cover)
+      }
 
       const [enriched] = await attachBookingSuggestions(supabase, companyId, [tx])
       if (!enriched.booking_suggestion) {
@@ -15566,9 +15694,10 @@ export const tools: McpTool[] = [
         userId,
         'book_skattekonto_row',
         `Bokför skattekontohändelse: ${tx.transaktionstext}`,
-        // The override is stored only for the twins the reviewer is warned
-        // about below; with none found the commit keeps the guard on.
-        { transaction_id: tx.id, ...(allowDuplicate && twins.length > 0 ? { allow_duplicate: true } : {}) },
+        // The override is stored only for the twins or the cover the
+        // reviewer is warned about below; with none found the commit keeps
+        // the guard on.
+        { transaction_id: tx.id, ...(allowDuplicate && (twins.length > 0 || cover) ? { allow_duplicate: true } : {}) },
         {
           skattekonto_transaction_id: tx.id,
           transaction_date: tx.transaktionsdatum,
@@ -15587,6 +15716,7 @@ export const tools: McpTool[] = [
             ? { ore_rounding_account: '3740', ore_rounding_amount: enriched.booking_suggestion.ore_rounding }
             : {}),
           ...(twins.length > 0 ? { ledger_twins: twins } : {}),
+          ...(cover ? { ledger_cover: cover } : {}),
         },
         actor,
         {
@@ -15599,7 +15729,11 @@ export const tools: McpTool[] = [
           dryRun: args.dry_run === true,
           idempotencyKey: args.idempotency_key as string | undefined,
           dateForPeriodCheck: tx.transaktionsdatum,
-          ...(twins.length > 0 ? { complianceNote: skattekontoDuplicateNote(twins) } : {}),
+          ...(twins.length > 0
+            ? { complianceNote: skattekontoDuplicateNote(twins) }
+            : cover
+              ? { complianceNote: skattekontoCoverNote(cover) }
+              : {}),
         },
       )
     },
@@ -15628,7 +15762,7 @@ export const tools: McpTool[] = [
           items: { type: 'string' },
           maxItems: 200,
           description:
-            'Rows to book although a verifikat already carries the event on 1630 (skipped as LEDGER_TWIN_EXISTS otherwise). Only rows the user confirms really happened twice; link the others with gnubok_reconcile_match.',
+            'Rows to book although the ledger already holds the event on 1630 (skipped as LEDGER_TWIN_EXISTS or LEDGER_COVER_EXISTS otherwise). Only rows the user confirms are really missing from the ledger; link the others with gnubok_reconcile_match.',
         },
         dry_run: { type: 'boolean' },
         idempotency_key: { type: 'string' },
@@ -15667,6 +15801,12 @@ export const tools: McpTool[] = [
         reason: string
         ledger_twins?: SkattekontoLedgerTwin[]
       }> = []
+      // One bridge computation for the whole batch: the rows unlinked
+      // verifikat on 1630 already hold in aggregate (a summarised verifikat).
+      const ledgerCover = await findSkattekontoLedgerCover(supabase, companyId)
+      const coveredIds = new Set(ledgerCover?.event_ids ?? [])
+      const cover = ledgerCover ? toLedgerCoverInfo(ledgerCover) : null
+      let approvedCover = false
       for (const id of ids) {
         if (!foundIds.has(id)) {
           skipped.push({ skattekonto_transaction_id: id, reason: 'TRANSACTION_NOT_FOUND' })
@@ -15686,6 +15826,7 @@ export const tools: McpTool[] = [
       const approvedTwins: SkattekontoLedgerTwin[] = []
       for (const r of enriched) {
         const twins = twinsByRow.get(r.id) ?? []
+        const covered = twins.length === 0 && coveredIds.has(r.id)
         const reason = r.journal_entry_id
           ? 'ALREADY_BOOKED'
           : r.is_ignored
@@ -15694,9 +15835,11 @@ export const tools: McpTool[] = [
               ? 'NOT_SETTLED'
               : twins.length > 0 && !allowDuplicate.has(r.id)
                 ? 'LEDGER_TWIN_EXISTS'
-                : !r.booking_suggestion
-                  ? 'NO_COUNTER_ACCOUNT'
-                  : null
+                : covered && !allowDuplicate.has(r.id)
+                  ? 'LEDGER_COVER_EXISTS'
+                  : !r.booking_suggestion
+                    ? 'NO_COUNTER_ACCOUNT'
+                    : null
         if (reason) {
           skipped.push({
             skattekonto_transaction_id: r.id,
@@ -15706,8 +15849,10 @@ export const tools: McpTool[] = [
           continue
         }
         approvedTwins.push(...twins)
+        if (covered) approvedCover = true
         bookable.push(r)
       }
+      const coverSkips = skipped.filter((s) => s.reason === 'LEDGER_COVER_EXISTS')
       if (bookable.length === 0) {
         const twinSkips = skipped.filter((s) => s.reason === 'LEDGER_TWIN_EXISTS')
         if (twinSkips.length === skipped.length) {
@@ -15719,12 +15864,23 @@ export const tools: McpTool[] = [
             twinSkips.length,
           )
         }
+        if (cover && coverSkips.length > 0 && coverSkips.length + twinSkips.length === skipped.length) {
+          // Every row is already in the ledger, at least one inside a
+          // summarised verifikat: name the link to make instead.
+          throw skattekontoLedgerCoverRefusal(
+            coverSkips.map((s) => s.skattekonto_transaction_id),
+            cover,
+            skipped.length,
+          )
+        }
         const reasons = [...new Set(skipped.map((s) => s.reason))].join(', ')
         throw new Error(`Inga bokförbara rader: alla ${ids.length} hoppades över (${reasons}).`)
       }
 
       const bookableIds = bookable.map((r) => r.id)
-      const approvedDuplicateIds = bookableIds.filter((id) => allowDuplicate.has(id) && (twinsByRow.get(id)?.length ?? 0) > 0)
+      const approvedDuplicateIds = bookableIds.filter(
+        (id) => allowDuplicate.has(id) && ((twinsByRow.get(id)?.length ?? 0) > 0 || coveredIds.has(id)),
+      )
       // Oldest row first: lock conflicts live in the past, so the period
       // check should probe the earliest affärshändelse date in the batch.
       const earliestDate = bookable.map((r) => r.transaktionsdatum).sort()[0]
@@ -15763,6 +15919,9 @@ export const tools: McpTool[] = [
           }),
           ...(bookable.length > 50 ? { rows_truncated: true } : {}),
           ...(skipped.length > 0 ? { skipped } : {}),
+          // Stated once for the batch: the verifikat that already hold the
+          // LEDGER_COVER_EXISTS rows, to link them to.
+          ...(cover && (coverSkips.length > 0 || approvedCover) ? { ledger_cover: cover } : {}),
         },
         actor,
         {
@@ -15775,7 +15934,11 @@ export const tools: McpTool[] = [
           dryRun: args.dry_run === true,
           idempotencyKey: args.idempotency_key as string | undefined,
           dateForPeriodCheck: earliestDate,
-          ...(approvedTwins.length > 0 ? { complianceNote: skattekontoDuplicateNote(approvedTwins) } : {}),
+          ...(approvedTwins.length > 0
+            ? { complianceNote: skattekontoDuplicateNote(approvedTwins) }
+            : cover && approvedCover
+              ? { complianceNote: skattekontoCoverNote(cover) }
+              : {}),
         },
       )
     },
@@ -19853,7 +20016,7 @@ export const tools: McpTool[] = [
         address_line1: { type: ['string', 'null'] },
         postal_code: { type: ['string', 'null'] },
         city: { type: ['string', 'null'] },
-        is_active: { type: 'boolean', description: 'false soft-deactivates; row kept (BFL)' },
+        is_active: { type: 'boolean', description: 'false deactivates (row kept), true reactivates' },
         vaxa_stod_eligible: { type: 'boolean', description: 'Never lowers avgifter: from 2026 the AGI declares them in full and the company applies to Skatteverket for the refund; runs in the window note the expected amount' },
         vaxa_stod_start: { type: ['string', 'null'] },
         vaxa_stod_end: { type: ['string', 'null'] },

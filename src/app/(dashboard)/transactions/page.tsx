@@ -36,6 +36,7 @@ import { FyPicker } from '@/components/common/FyPicker'
 import { ALL_YEARS_VALUE } from '@/components/common/FiscalYearSelector'
 import { AttnLine } from '@/components/ui/attn-line'
 import BankSyncNowButton from '@/components/transactions/BankSyncNowButton'
+import { useBankLedgerSuggestionNotice } from '@/components/transactions/BankLedgerSuggestionNotice'
 import BankSyncSinceLastVisit from '@/components/transactions/BankSyncSinceLastVisit'
 import TransactionInboxCard from '@/components/transactions/TransactionInboxCard'
 import TransactionHistoryList from '@/components/transactions/TransactionHistoryList'
@@ -2920,6 +2921,11 @@ export default function TransactionsPage() {
     }
   }, [refreshTransactions, t, toast])
 
+  // A bank account that books on another 19xx ledger account than the books
+  // say (crm#1066): one sentence with the button that changes it, or null.
+  // Read after the first render; applying it relinks, so the list is refetched.
+  const ledgerSuggestionNotice = useBankLedgerSuggestionNotice({ onApplied: refreshTransactions })
+
   function handleSelectInvoiceFromPicker(invoice: Invoice & { customer?: Customer }) {
     if (!invoicePickerTransaction) return
     // Don't POST directly from the picker. Route through the confirm dialog
@@ -3468,7 +3474,9 @@ export default function TransactionsPage() {
                   ? t('skv_err_commit_failed')
                   : code === 'LEDGER_TWIN_EXISTS'
                     ? t('skv_err_ledger_twin')
-                    : t('skv_err_other')
+                    : code === 'LEDGER_COVER_EXISTS'
+                      ? t('skv_err_ledger_cover')
+                      : t('skv_err_other')
       const parts = [t('skv_bulk_partial_ok', { count: succeeded })]
       for (const [code, n] of codeCounts) parts.push(`${n} ${codeLabel(code)}`)
       toast({
@@ -4282,6 +4290,12 @@ export default function TransactionsPage() {
         <AttnLine action={{ label: t('skv_reconnect_cta'), href: '/settings/skatteverket' }}>
           {t('skv_reconnect_body')}
         </AttnLine>
+      ) : ledgerSuggestionNotice ? (
+        // The mapping is the cause of the backlog the lines below describe:
+        // until the bank account books on the ledger account the imported
+        // verifikat use, neither the review list nor the bulk match can find
+        // them. So this line wins over both.
+        ledgerSuggestionNotice
       ) : suggestionItems.length > 0 && mode !== 'review' ? (
         // Migrated-history review nudge. Max one attn line per page
         // (convention 6): the SKV reconnect line wins when both apply.
@@ -4604,7 +4618,7 @@ export default function TransactionsPage() {
                 sentence per page): when the sweep has already persisted
                 suggestions, "Granska förslagen" is the more precise
                 destination for the same backlog. */}
-            {selectableInboxIds.length >= 5 && suggestionItems.length === 0 && (
+            {selectableInboxIds.length >= 5 && suggestionItems.length === 0 && !ledgerSuggestionNotice && (
               <AttnLine
                 className="px-1 pt-3"
                 action={{

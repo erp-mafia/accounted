@@ -5,15 +5,22 @@ import {
   SettingsGroup,
   SettingsInput,
   SettingsRow,
+  SettingsRowNote,
 } from '@/components/settings/SettingsRows'
 import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import type { CompanySettings } from '@/types'
 
 interface CompanyInfoFormProps {
   settings: CompanySettings
+  /**
+   * Opens the delete-company dialog from the locked org number row. Passed
+   * only where that way out exists (the section decides: owner, not a
+   * sandbox); without it the row is the plain locked field.
+   */
+  onWrongCompany?: () => void
 }
 
-export function CompanyInfoForm({ settings }: CompanyInfoFormProps) {
+export function CompanyInfoForm({ settings, onWrongCompany }: CompanyInfoFormProps) {
   const t = useTranslations('settings_company')
   const orgLocked = settings.onboarding_complete === true
   // Säte belongs to a legal person; a form whose org number is the owner's
@@ -47,6 +54,22 @@ export function CompanyInfoForm({ settings }: CompanyInfoFormProps) {
           defaultValue={settings.org_number || ''}
           disabled={orgLocked}
         />
+        {/* A locked field alone is a dead end: an owner who set up the wrong
+            company comes here to change the number, and the reason behind the
+            "?" says only that it cannot be done. One muted sentence with the
+            way out, on its own line under the field. */}
+        {orgLocked && onWrongCompany && (
+          <SettingsRowNote className="basis-full">
+            {t('org_number_wrong_company')}{' '}
+            <button
+              type="button"
+              onClick={onWrongCompany}
+              className="underline underline-offset-2 transition-colors duration-150 hover:text-foreground"
+            >
+              {t('org_number_wrong_company_action')}
+            </button>
+          </SettingsRowNote>
+        )}
       </SettingsRow>
       <SettingsRow label={t('address_label')} htmlFor="address_line1" align="baseline">
         <SettingsInput

@@ -30,8 +30,9 @@ const LinksResponse = z.object({
     z.object({
       external_id: z.string(),
       journal_entry_id: z.string(),
-      via: z.enum(['line', 'entry_total', 'lines']).optional(),
+      via: z.enum(['line', 'entry_total', 'lines', 'partial']).optional(),
       allocated_amount: z.number().optional(),
+      remainder_amount: z.number().optional(),
     }),
   ),
   skipped: z.array(
@@ -49,7 +50,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/reconciliation/accounts/:accountKey/links',
   summary: 'Link outside rows to existing verifikat (pairs or proposals).',
   description:
-    'Body: { pairs: [{ external_ids: [id], journal_entry_ids: [id], allocations? }] } and/or { use_proposals: true, confidence_threshold? }. Each pair is validated as the single-link paths validate (row open and not ignored, entry posted and not reversed, the entry\'s account lines settle the amount, entry not already linked) and applied independently: the response lists applied[] and skipped[{pair, code, message}] so partial success is explicit. On a bank account a pair may also be ONE transaction against SEVERAL verifikat (1:N): allocations[{journal_entry_id, amount}] gives the signed slice per verifikat (omitted: each slice defaults to the voucher\'s line on the account); the slices must sum to the transaction amount, and each applied link then carries allocated_amount. Codes: UNSUPPORTED_PAIR_SHAPE, ALREADY_LINKED, ENTRY_NOT_FOUND, PAIR_NOT_CLOSED, ROW_IGNORED, NOT_FOUND, LINK_RACE, BANK_ANCHOR_REFUSED (the database refused the link: a verifikat does not book the row, or its 1:N slice, on the bank ledger in that direction; retrying unchanged will not help). ?dry_run=true returns the pairs that would be attempted without writing (a 1:N dry run resolves the slices).',
+    'Body: { pairs: [{ external_ids: [id], journal_entry_ids: [id], allocations? }] } and/or { use_proposals: true, confidence_threshold? }. Each pair is validated as the single-link paths validate (row open and not ignored, entry posted and not reversed, the entry\'s account lines settle the amount, entry not already linked) and applied independently: the response lists applied[] and skipped[{pair, code, message}] so partial success is explicit. On a bank account a pair may also be ONE transaction against SEVERAL verifikat (1:N): allocations[{journal_entry_id, amount}] gives the signed slice per verifikat (omitted: each slice defaults to the voucher\'s line on the account); the slices must sum to the transaction amount, and each applied link then carries allocated_amount. On the skattekonto a pair may carry allow_remainder: true to link rows to a summarised verifikat whose 1630 movement they do not settle (one year-end or month-end verifikat that books more events than these, some from before the fetched history): the link is then via "partial", and remainder_amount on each applied link is what the verifikat still holds on 1630 beyond the rows linked to it (ledger sign, either sign); it stays in unmatched_ledger with that amount. remainder_amount is also returned when a row settles one of several 1630 lines of a verifikat. Codes: UNSUPPORTED_PAIR_SHAPE, ALREADY_LINKED, ENTRY_NOT_FOUND, PAIR_NOT_CLOSED, ROW_IGNORED, NOT_FOUND, LINK_RACE, BANK_ANCHOR_REFUSED (the database refused the link: a verifikat does not book the row, or its 1:N slice, on the bank ledger in that direction; retrying unchanged will not help). ?dry_run=true returns the pairs that would be attempted without writing (a 1:N dry run resolves the slices).',
   useWhen:
     'An agent or integration has decided which rows explain each other, or wants to apply the proposals the sync already computed.',
   doNotUseFor:
@@ -57,6 +58,7 @@ registerEndpoint({
   pitfalls: [
     'A pair is one OR MANY outside rows against exactly one verifikat (bank: independent links per transaction; skattekonto: all-or-nothing, the rows must sum to what the verifikat settles), or, on a bank account only, ONE transaction against SEVERAL verifikat (all-or-nothing, the slices must sum to the transaction). Several rows against several verifikat, and a skattekonto row against several verifikat, are UNSUPPORTED_PAIR_SHAPE, never silently reduced.',
     'A pair must close to the row\'s amount on the expected side (a single matching line, or the entry\'s lines on the account netting to it); a fee or rounding difference is PAIR_NOT_CLOSED here and needs a residual booking first.',
+    'Skattekonto rows against a summarised verifikat never close: PAIR_NOT_CLOSED names both sums and the remainder. Repeat the pair with allow_remainder: true only when the verifikat really books those events; a dry run shows remainder_amount first. The link never changes unexplained_difference: the rows leave unmatched_external and the same amount leaves the verifikat.',
     'Links never touch the ledger, so they succeed in locked periods; unlink with DELETE .../links/{linkId} (linkId = the outside row id).',
     'Idempotency-Key is required; repeating the same key replays the first response.',
   ],

@@ -27,6 +27,12 @@
  *    a BGNR debtor. When the company has a bankgiro, bankgiro-payee payments
  *    are grouped into their own PmtInf debited from the company bankgiro
  *    (DbtrAcct Othr/BGNR); other payees are debited from the IBAN.
+ *  - That rule is Swedbank's, not a property of the payee: which debit
+ *    account a bankgiro payment takes is decided by the DEBTOR'S bank. Danske
+ *    Bank and Nordea take it from the account only, so there every payee is
+ *    debited from the IBAN (IBAN_DEBIT_FOR_BANKGIRO_PAYEES below, keyed on
+ *    the DbtrAgt BIC). No other bank's guide has been applied yet: every
+ *    other bank still gets the Swedbank form.
  *  - Creditor postal address ALWAYS (Validex round 3, rule PFH_237 fires on
  *    the BGNR path too, overriding what rule 020's phrasing suggested), and
  *    a present PstlAdr must carry TwnNm (rule PFH_222, enforced now): the
@@ -66,8 +72,13 @@ export interface SupplierPain001Debtor {
   name: string
   orgNumber: string
   iban: string
+  /** DbtrAgt BIC. Also names the bank whose debit account rule applies. */
   bic: string
-  /** Company bankgiro (digits); enables the BGNR-to-BGNR debit Swedbank wants. */
+  /**
+   * Company bankgiro (digits); enables the BGNR-to-BGNR debit Swedbank wants.
+   * Never debited at a bank in IBAN_DEBIT_FOR_BANKGIRO_PAYEES (Danske Bank,
+   * Nordea).
+   */
   bankgiro?: string | null
   /** Company town; emitted as Dbtr/PstlAdr/TwnNm when present. */
   city?: string | null
@@ -94,6 +105,38 @@ export interface SupplierPain001Options {
 /** The receiver-side giro message field is 25 positions; keep Ustrd within it. */
 const USTRD_MAX = 25
 
+/**
+ * Debtor banks, by 8-character BIC, that take a payment to a bankgiro number
+ * from the bank account (IBAN) only, never from the company bankgiro.
+ *
+ * DABASESX, Danske Bank: "Danske Bank Message Implementation Guide (CGI-MP),
+ * Supported payment types and examples" for pain.001.001.03, version 5.3
+ * (2026-08-18). A bankgiro as debtor account (Othr/BGNR) is offered for
+ * Swedish salary and Swedish account transfer only; all four "Swedish
+ * Bankgiro payment" samples and all four "Swedish account transfer with
+ * Bankgiro Alias" samples debit DbtrAcct/Id/IBAN with DbtrAgt BIC DABASESX.
+ * A bankgiro payment debited from the company bankgiro is refused there: the
+ * debit account is invalid (support ticket 137).
+ *
+ * NDEASESS, Nordea: "Corporate Access Payables, Appendix Sweden" (2026-10-08),
+ * section 2.3.4, Structure of BBAN account numbers at debit level in
+ * payments: "Bankgiro number is not to be used as a debtors account." Section
+ * 2.3.1 offers IBAN or BBAN as the debtor account for Sweden, nothing else.
+ *
+ * Every bank not listed keeps the bankgiro debit. List a bank only with its
+ * own implementation guide in hand.
+ */
+const IBAN_DEBIT_FOR_BANKGIRO_PAYEES: ReadonlySet<string> = new Set(['DABASESX', 'NDEASESS'])
+
+/**
+ * Whether the debtor's bank debits the IBAN for a bankgiro payee. The BIC is
+ * read as its bank part: whitespace removed, upper case, first 8 characters,
+ * so 'dabasesx', ' DABASESX ' and 'DABASESXXXX' all name the same bank.
+ */
+function debitsIbanForBankgiroPayees(bic: string): boolean {
+  return IBAN_DEBIT_FOR_BANKGIRO_PAYEES.has(bic.replace(/\s/g, '').toUpperCase().slice(0, 8))
+}
+
 export function generateSupplierPain001(
   debtor: SupplierPain001Debtor,
   payments: SupplierPain001Payment[],
@@ -111,7 +154,12 @@ export function generateSupplierPain001(
     // guarantees this; a missing org number here is a programming error.
     throw new Error('Organisationsnummer saknas för betalfilens avsändare')
   }
-  const debtorBankgiro = (debtor.bankgiro ?? '').replace(/\D/g, '')
+  // The company bankgiro is a debit account only where the debtor's bank takes
+  // one for a bankgiro payment; at Danske Bank and Nordea it is left out of
+  // the file.
+  const debtorBankgiro = debitsIbanForBankgiroPayees(debtor.bic)
+    ? ''
+    : (debtor.bankgiro ?? '').replace(/\D/g, '')
   const debtorName = sanitizeText(debtor.name)
   // Sum the per-transaction amounts exactly as they are rendered (rounded to
   // ore): CtrlSum must equal the sum of the InstdAmt values or banks reject

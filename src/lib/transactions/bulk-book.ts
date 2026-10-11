@@ -6,7 +6,11 @@
  * new verifikat. Three paths, exactly one per call:
  *
  *   1. existing_journal_entry_id: link the rows to an already-posted voucher
- *      (no new entry; the voucher's 19xx net must equal the row sum);
+ *      (no new entry; the voucher's bank net must equal the row sum, measured
+ *      on the ledgers the rows settle on: all of 19xx for a row on a 19xx
+ *      account, the ledger alone for a cash account kept elsewhere, such as
+ *      a Stripe balance on 1686. bankNetAccountTest in
+ *      lib/bookkeeping/bank-leg.ts states the rule the RPC applies);
  *   2. template_id + mode + entry_description: expand a booking template
  *      per row (one_line_per_tx) or on the sum (sum_per_account);
  *   3. manual_lines + entry_description: caller-built balanced lines.

@@ -189,6 +189,71 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     })
   })
 
+  // The payee is Skatteverket's bankgiro, so the file is a bankgiro payment
+  // and the debtor bank's rule for one applies. These two run the real
+  // generator behind the route.
+  async function pain001ThroughRealGenerator(): Promise<string> {
+    const actual = await vi.importActual<typeof import('@/lib/payments/pain001-supplier')>(
+      '@/lib/payments/pain001-supplier',
+    )
+    mockGeneratePain001.mockImplementation(
+      (...args: Parameters<typeof actual.generateSupplierPain001>) => actual.generateSupplierPain001(...args),
+    )
+    enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
+    enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
+    enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
+
+    const response = await GET(
+      createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file', {
+        searchParams: { format: 'pain001' },
+      }),
+      createMockRouteParams({ period: '2026-04' }),
+    )
+    expect(response.status).toBe(200)
+    return response.text()
+  }
+
+  it('debits the IBAN for the tax payment when the company banks with Danske Bank', async () => {
+    mockResolveBatchDebtor.mockResolvedValue({
+      ok: true,
+      debtor: {
+        name: 'Test AB',
+        org_number: '5566778899',
+        iban: 'SE7212000000012200111878',
+        bic: 'DABASESX',
+        bankgiro: '1234567',
+        city: 'Stockholm',
+      },
+    })
+
+    const xml = await pain001ThroughRealGenerator()
+
+    // The route hands the generator the BIC that decides the rule, and the bankgiro it then leaves out.
+    expect(mockGeneratePain001.mock.calls[0][0]).toMatchObject({ bic: 'DABASESX', bankgiro: '1234567' })
+    const debtorAccounts = xml.match(/<DbtrAcct>[\s\S]*?<\/DbtrAcct>/g) ?? []
+    expect(debtorAccounts).toHaveLength(1)
+    expect(debtorAccounts[0]).toContain('<IBAN>SE7212000000012200111878</IBAN>')
+    expect(debtorAccounts[0]).not.toContain('BGNR')
+    expect(xml).toContain('<BIC>DABASESX</BIC>')
+    // Still a payment to Skatteverket's bankgiro with the skattekonto OCR.
+    const creditorAccount = xml.match(/<CdtrAcct>[\s\S]*?<\/CdtrAcct>/)![0]
+    expect(creditorAccount).toContain('<Id>50501055</Id>')
+    expect(creditorAccount).toContain('<SchmeNm><Prtry>BGNR</Prtry></SchmeNm>')
+    expect(xml).toContain('<Ref>1655954700217</Ref>')
+    expect(xml).toContain('<InstdAmt Ccy="SEK">1500.00</InstdAmt>')
+  })
+
+  it('keeps debiting the company bankgiro for the tax payment at every other bank', async () => {
+    // The default debtor of this suite: SEB, with a company bankgiro.
+    const xml = await pain001ThroughRealGenerator()
+
+    const debtorAccounts = xml.match(/<DbtrAcct>[\s\S]*?<\/DbtrAcct>/g) ?? []
+    expect(debtorAccounts).toHaveLength(1)
+    expect(debtorAccounts[0]).toContain('<Id>1234567</Id>')
+    expect(debtorAccounts[0]).toContain('<SchmeNm><Prtry>BGNR</Prtry></SchmeNm>')
+    expect(xml).toContain('<BIC>ESSESESS</BIC>')
+  })
+
   it('returns 400 when the pain.001 debtor is missing an IBAN', async () => {
     mockResolveBatchDebtor.mockResolvedValue({ ok: false, missing: 'iban' })
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi

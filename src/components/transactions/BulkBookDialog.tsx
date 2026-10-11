@@ -6,6 +6,7 @@ import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
+import { bankNetAccountTest } from '@/lib/bookkeeping/bank-leg'
 import type { CashAccount } from '@/types'
 import {
   Dialog,
@@ -310,8 +311,22 @@ export default function BulkBookDialog({
   // Balance + bank-leg match are the two invariants the RPC will check; we
   // surface them here so the user knows whether confirm will succeed.
   const isBalanced = Math.abs(previewTotals.debit - previewTotals.credit) < 0.005
+  // The bank side is measured as the RPC measures it (bankNetAccountTest): on
+  // the ledgers the selected rows settle on, resolved the way the bank lines
+  // above are pre-filled. Counting 1900-1999 alone left a row on a cash
+  // account outside 19xx (a Stripe balance on 1686) impossible to confirm.
+  // Until the cash accounts have loaded every row resolves to the 1930
+  // default, which is the 1900-1999 rule.
+  const settlementLedgers = useMemo(
+    () =>
+      transactions.map(
+        (tx) => resolveAccount(cashAccounts ?? [], tx.cash_account_id ?? null, tx.currency ?? 'SEK').account,
+      ),
+    [transactions, cashAccounts],
+  )
+  const isBankLine = bankNetAccountTest(settlementLedgers)
   const bankLineNet = previewLines
-    .filter((l) => l.account_number >= '1900' && l.account_number <= '1999')
+    .filter((l) => isBankLine(l.account_number))
     .reduce((s, l) => s + l.debit_amount - l.credit_amount, 0)
   const expectedBankNet = direction === 'income' ? txSumAbs : -txSumAbs
   const bankMatches = Math.abs(bankLineNet - expectedBankNet) < 0.005
@@ -319,9 +334,8 @@ export default function BulkBookDialog({
   // The active tab gates which selector must be valid. Both paths still
   // need a non-empty description, ≥2 lines, balance, bank-leg match,
   // and (for manual mode) valid 4-digit account numbers: without this,
-  // a 1-3-digit entry escapes the lexicographic bank-account range
-  // check ('193' < '1900' is true), bank match could pass, and the
-  // server's Zod schema rejects with a 400 only after submit.
+  // the server's Zod schema rejects a 1-3-digit entry with a 400 only
+  // after submit.
   const tabReady = tab === 'template' ? selectedTemplate !== null : manualLines.length > 0
   const allAccountsValid = previewLines.every((l) => /^\d{4}$/.test(l.account_number))
   const canConfirm =

@@ -355,3 +355,149 @@ describe('gnubok_get_invoice: execute', () => {
     ).rejects.toThrow(/Database error/)
   })
 })
+
+/**
+ * crm#1131: an invoice registered from the books (gnubok_register_booked_invoice)
+ * has no lines by design, and its original is the underlag on the verifikat
+ * that booked it. An agent that saw only `items: []` reported the original as
+ * never imported, so the read says what the row is and where the original is.
+ */
+describe('gnubok_get_invoice: registered from the books', () => {
+  const JOURNAL_ENTRY_ID = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
+  const DOCUMENT_ID = '11111111-1111-4111-8111-111111111111'
+  const OTHER_DOCUMENT_ID = '22222222-2222-4222-8222-222222222222'
+
+  const registeredRow = (overrides: Record<string, unknown> = {}) =>
+    invoiceRow({
+      status: 'sent',
+      invoice_number: 'OLD-7',
+      journal_entry_id: JOURNAL_ENTRY_ID,
+      items: [],
+      ...overrides,
+    })
+  const voucherRow = { id: JOURNAL_ENTRY_ID, voucher_series: 'A', voucher_number: 47 }
+
+  const run = (supabase: unknown) =>
+    getInvoice.execute(
+      { invoice_id: INVOICE_ID },
+      COMPANY_ID,
+      USER_ID,
+      supabase as never,
+      { type: 'api_key' } as never,
+    ) as Promise<Record<string, unknown>>
+
+  it('declares the marker as always present and the verifikat fields as optional', () => {
+    const schema = getInvoice.outputSchema as {
+      properties: Record<string, { type: unknown }>
+      required: string[]
+    }
+    expect(schema.properties.registered_from_books.type).toBe('boolean')
+    expect(schema.required).toContain('registered_from_books')
+    // Emitted as null for an unbooked invoice: a bare string type would fail
+    // strict clients on a successful call.
+    expect(schema.properties.journal_entry_id.type).toContain('null')
+    for (const key of ['voucher_label', 'voucher_document_ids', 'note']) {
+      expect(schema.properties[key], key).toBeDefined()
+      expect(schema.required).not.toContain(key)
+    }
+  })
+
+  it('names the verifikat and its attached documents, and says the original is there', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: registeredRow() })
+    enqueue({ data: voucherRow })
+    enqueue({ data: [{ id: DOCUMENT_ID }, { id: OTHER_DOCUMENT_ID }] })
+
+    const result = await run(supabase)
+
+    expect(result).toMatchObject({
+      status: 'sent',
+      items: [],
+      item_count: 0,
+      editable_draft: false,
+      journal_entry_id: JOURNAL_ENTRY_ID,
+      registered_from_books: true,
+      voucher_label: 'A47',
+      voucher_document_ids: [DOCUMENT_ID, OTHER_DOCUMENT_ID],
+    })
+    const note = result.note as string
+    expect(note).toContain('no lines by design')
+    expect(note).toContain('verifikat A47')
+    expect(note).toContain('gnubok_get_document_content')
+    expect(note).not.toContain('gnubok_link_document_to_voucher')
+
+    // Service-role reads: both are scoped to the routed company, and the
+    // documents are the verifikat's current versions, as its page lists them.
+    expect(findCalls('journal_entries', 'eq')).toContainEqual(['company_id', COMPANY_ID])
+    expect(findCalls('journal_entries', 'eq')).toContainEqual(['id', JOURNAL_ENTRY_ID])
+    const documentFilters = findCalls('document_attachments', 'eq')
+    expect(documentFilters).toContainEqual(['company_id', COMPANY_ID])
+    expect(documentFilters).toContainEqual(['journal_entry_id', JOURNAL_ENTRY_ID])
+    expect(documentFilters).toContainEqual(['is_current_version', true])
+  })
+
+  it('says so when no document is attached to the verifikat yet', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: registeredRow({ status: 'partially_paid' }) })
+    enqueue({ data: voucherRow })
+    enqueue({ data: [] })
+
+    const result = await run(supabase)
+
+    expect(result.registered_from_books).toBe(true)
+    expect(result.voucher_document_ids).toEqual([])
+    const note = result.note as string
+    expect(note).toContain('No document is attached to that verifikat yet')
+    expect(note).toContain('gnubok_link_document_to_voucher')
+    expect(note).not.toContain('gnubok_get_document_content')
+  })
+
+  it('fails the call when the documents cannot be read, never reporting none attached', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: registeredRow() })
+    enqueue({ data: voucherRow })
+    enqueue({ data: null, error: { message: 'connection reset' } })
+
+    await expect(run(supabase)).rejects.toThrow(/Database error/)
+  })
+
+  it('reads nothing more for an invoice issued here, and returns its verifikat', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: invoiceRow({ status: 'sent', invoice_number: '2026-0042', journal_entry_id: JOURNAL_ENTRY_ID }) })
+
+    const result = await run(supabase)
+
+    expect(result.registered_from_books).toBe(false)
+    expect(result.journal_entry_id).toBe(JOURNAL_ENTRY_ID)
+    for (const key of ['voucher_label', 'voucher_document_ids', 'note']) {
+      expect(result, key).not.toHaveProperty(key)
+    }
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not mark a draft without lines: it has no verifikat', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: invoiceRow({ items: [] }) })
+
+    const result = await run(supabase)
+
+    expect(result.registered_from_books).toBe(false)
+    expect(result.journal_entry_id).toBeNull()
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not mark the kreditfaktura of a registration: it was issued here', async () => {
+    // It mirrors its original's lines, so it has none, and it is booked: the
+    // same state as a registration, told apart by credited_invoice_id.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: registeredRow({ invoice_number: 'KR-OLD-7', credited_invoice_id: INVOICE_ID }),
+    })
+
+    const result = await run(supabase)
+
+    expect(result.registered_from_books).toBe(false)
+    expect(result).not.toHaveProperty('note')
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+})

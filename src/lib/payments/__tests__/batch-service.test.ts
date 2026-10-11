@@ -780,7 +780,87 @@ describe('createSupplierPaymentBatch', () => {
     expect(result).toEqual({ ok: false, code: 'debtor_incomplete', missing: 'org_number' })
     expect(mock.supabase.rpc).not.toHaveBeenCalled()
   })
+
+  it('refuses when no BIC is saved and none can be derived: the debtor bank must be known', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: companyRow },
+      { data: { ...settingsRow, bic: null, clearing_number: null, bank_name: 'Testbanken' } },
+    ])
+
+    const result = await createSupplierPaymentBatch(
+      mock.supabase as unknown as SupabaseClient,
+      COMPANY_ID,
+      USER_ID,
+      { format: 'pain001', items: [{ supplier_invoice_id: 'inv-1' }] },
+    )
+
+    expect(result).toEqual({ ok: false, code: 'debtor_incomplete', missing: 'bic' })
+    expect(mock.supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('derives the Danske Bank BIC from the clearing number when none is saved, and the file then debits the IBAN', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: companyRow },
+      // No BIC in settings; 1234 is in Danske Bank's clearing series.
+      { data: { ...settingsRow, iban: 'SE72 1200 0000 0122 0011 1878', bic: null, clearing_number: '1234' } },
+      { data: [invoiceRow()] },
+      { data: [] },
+      { data: [] }, // open bank payment orders: none
+      { data: { ok: true, batch: batchRow() } },
+    ])
+
+    const result = await createSupplierPaymentBatch(
+      mock.supabase as unknown as SupabaseClient,
+      COMPANY_ID,
+      USER_ID,
+      { format: 'pain001', items: [{ supplier_invoice_id: 'inv-1' }] },
+    )
+
+    expect(result.ok).toBe(true)
+    const args = mock.supabase.rpc.mock.calls[0][1] as {
+      p_debtor_snapshot: SupplierPaymentBatch['debtor_snapshot']
+    }
+    // The company bankgiro still rides along in the snapshot: the bank rule lives in the generator.
+    expect(args.p_debtor_snapshot).toMatchObject({
+      iban: 'SE7212000000012200111878',
+      bic: 'DABASESX',
+      bankgiro: '9912346',
+    })
+
+    const file = renderSupplierPaymentBatchFile(
+      batchRow({ debtor_snapshot: args.p_debtor_snapshot }),
+      [storedBankgiroItem()],
+    )
+    const debtorAccount = file.content.match(/<DbtrAcct>[\s\S]*?<\/DbtrAcct>/)![0]
+    expect(debtorAccount).toContain('<IBAN>SE7212000000012200111878</IBAN>')
+    expect(debtorAccount).not.toContain('BGNR')
+    expect(file.content).toContain('<BIC>DABASESX</BIC>')
+  })
 })
+
+/** One stored batch line paying a bankgiro number by invoice number. */
+function storedBankgiroItem(): SupplierPaymentBatchItem {
+  return {
+    id: 'item-1',
+    batch_id: 'b0000000-0000-0000-0000-000000000001',
+    company_id: COMPANY_ID,
+    supplier_invoice_id: 'inv-1',
+    amount: 737.5,
+    payment_date: '2026-08-15',
+    payee_type: 'bankgiro',
+    payee_bankgiro: '50501055',
+    payee_plusgiro: null,
+    payee_clearing: null,
+    payee_account: null,
+    payee_name: 'Derome Bygg & Industri AB',
+    payee_city: 'Veddige',
+    reference_type: 'invoice_number',
+    reference: 'CD3014794407',
+    created_at: '2026-08-10T12:00:00Z',
+  }
+}
 
 describe('renderSupplierPaymentBatchFile', () => {
   it('renders a deterministic pain.001 file from stored rows alone', () => {
@@ -818,5 +898,50 @@ describe('renderSupplierPaymentBatchFile', () => {
 
   it('refuses a format the renderer does not support', () => {
     expect(() => renderSupplierPaymentBatchFile(batchRow({ format: 'bg_lb' }), [])).toThrow()
+  })
+
+  it('re-renders a stored Danske Bank batch with the IBAN debit, MsgId unchanged', () => {
+    // A batch created before the Danske rule: its snapshot carries the company
+    // bankgiro, and the file it rendered then debited that bankgiro.
+    const batch = batchRow({
+      debtor_snapshot: {
+        name: 'Testbolaget AB',
+        org_number: '556677-8899',
+        iban: 'SE7212000000012200111878',
+        bic: 'DABASESX',
+        bankgiro: '9912346',
+        city: 'Stockholm',
+      },
+    })
+
+    const file = renderSupplierPaymentBatchFile(batch, [storedBankgiroItem()])
+
+    const debtorAccounts = file.content.match(/<DbtrAcct>[\s\S]*?<\/DbtrAcct>/g) ?? []
+    expect(debtorAccounts).toHaveLength(1)
+    expect(debtorAccounts[0]).toContain('<IBAN>SE7212000000012200111878</IBAN>')
+    expect(debtorAccounts[0]).not.toContain('BGNR')
+    expect(file.content).not.toContain('9912346')
+    expect(file.content).toContain(`<MsgId>${batch.msg_id}</MsgId>`)
+  })
+
+  it('re-renders a stored batch of any other bank with the bankgiro debit it always had', () => {
+    const batch = batchRow({
+      debtor_snapshot: {
+        name: 'Testbolaget AB',
+        org_number: '556677-8899',
+        iban: 'SE3550000000054910000003',
+        bic: 'ESSESESSXXX',
+        bankgiro: '9912346',
+        city: 'Stockholm',
+      },
+    })
+
+    const file = renderSupplierPaymentBatchFile(batch, [storedBankgiroItem()])
+
+    const debtorAccount = file.content.match(/<DbtrAcct>[\s\S]*?<\/DbtrAcct>/)![0]
+    expect(debtorAccount).toContain('<Id>9912346</Id>')
+    expect(debtorAccount).toContain('<SchmeNm><Prtry>BGNR</Prtry></SchmeNm>')
+    // The BIC is written as stored.
+    expect(file.content).toContain('<BIC>ESSESESSXXX</BIC>')
   })
 })

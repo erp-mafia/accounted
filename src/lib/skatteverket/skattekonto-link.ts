@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
+import { formatCurrency } from '@/lib/utils'
 import { SKATTEKONTO_ACCOUNT } from './manual-verifikat-prefill'
 
 /**
@@ -10,6 +11,16 @@ import { SKATTEKONTO_ACCOUNT } from './manual-verifikat-prefill'
  * skattekonto = debit 1630). Several rows may share one verifikat (one
  * combined AGI line for avdragen skatt + arbetsgivaravgift, or a payment and
  * a debit booked in the same voucher); see groupSettlesEntry for the rule.
+ *
+ * A summarised verifikat (one year-end or month-end voucher that books many
+ * events, some of them from before the fetched history) is settled by no
+ * group of rows at all. Rows can still be linked to it on the caller's
+ * explicit `allowRemainder` (crm#1043): the link explains exactly the rows'
+ * amount, and what the verifikat holds on 1630 beyond the rows linked to it
+ * is its remainder, which the reconciliation keeps on the ledger side
+ * (lib/reconciliation/skattekonto-reconciliation.ts). See
+ * evaluateSkattekontoLink.
+ *
  * It writes nothing to the verifikat:
  * `skattekonto_transactions.journal_entry_id` is the only thing that changes,
  * so linking and unlinking are allowed in locked periods and need no storno.
@@ -85,7 +96,11 @@ export function entrySettlesAmount(
   return { ok: false, via: null }
 }
 
-export type SkattekontoSettleVia = 'line' | 'entry_total' | 'lines'
+/**
+ * How a link was accepted. 'partial': the rows do not settle the verifikat's
+ * 1630 movement, and the caller linked them anyway (allowRemainder).
+ */
+export type SkattekontoSettleVia = 'line' | 'entry_total' | 'lines' | 'partial'
 
 /** Upper bounds for the exact line assignment; beyond them it is not attempted. */
 const MAX_ASSIGN_EVENTS = 12
@@ -166,6 +181,107 @@ export function groupSettlesEntry(
   return { ok: false, via: null }
 }
 
+/**
+ * Net debit - credit of the entry's 1630 lines, and whether it moves 1630 at
+ * all (at least one line with an amount). Ledger sign: debit positive, the
+ * same sign as a Skatteverket amount.
+ */
+export function skattekontoEntryNet(lines: EntryForLink['lines']): { net: number; hasLine: boolean } {
+  const onAccount = (lines ?? []).filter((l) => l.account_number === SKATTEKONTO_ACCOUNT)
+  const ore = onAccount.reduce((s, l) => s + toOre(l.debit_amount) - toOre(l.credit_amount), 0)
+  const hasLine = onAccount.some((l) => toOre(l.debit_amount) !== 0 || toOre(l.credit_amount) !== 0)
+  return { net: ore / 100, hasLine }
+}
+
+export interface SkattekontoLinkEvaluation {
+  ok: boolean
+  via: SkattekontoSettleVia | null
+  /**
+   * What the verifikat holds on 1630 beyond every row linked to it once this
+   * link is made: its 1630 net minus the rows already linked and the new
+   * ones, ledger sign. It may have either sign and exceed the net (rows of
+   * the opposite sign outside the fetched history). 0 when the rows explain
+   * the whole verifikat. NaN when an amount is unreadable.
+   */
+  remainder: number
+  /** Why not, when ok is false. */
+  reason: 'no_account_line' | 'not_settled' | null
+}
+
+/**
+ * May `newBelopps` be linked to an entry that already carries `linkedBelopps`?
+ *
+ *   * the whole group settles the entry (groupSettlesEntry): yes, as before.
+ *     A single matching 1630 line of a verifikat with more lines on 1630
+ *     still counts, and the other lines then show as the remainder.
+ *   * otherwise only with `allowRemainder`, and only when the entry moves
+ *     1630 at all: `via: 'partial'`. Nothing is hidden by such a link: the
+ *     rows leave the Skatteverket side and the same amount leaves the ledger
+ *     side, so the reconciliation's unexplained figure cannot change.
+ *
+ * Pure, so the live link and the dry run share it.
+ */
+export function evaluateSkattekontoLink(
+  lines: EntryForLink['lines'],
+  linkedBelopps: number[],
+  newBelopps: number[],
+  options: { allowRemainder?: boolean } = {},
+): SkattekontoLinkEvaluation {
+  const all = [...linkedBelopps, ...newBelopps]
+  const { net, hasLine } = skattekontoEntryNet(lines)
+  const remainder = roundOre(net - all.reduce((s, b) => s + Number(b), 0))
+  const settles = newBelopps.length > 0 ? groupSettlesEntry(lines, all) : { ok: false, via: null }
+  if (settles.ok && settles.via) return { ok: true, via: settles.via, remainder, reason: null }
+  if (!hasLine) return { ok: false, via: null, remainder, reason: 'no_account_line' }
+  const readable = newBelopps.length > 0 && all.every((b) => Number.isFinite(Number(b)))
+  if (options.allowRemainder && readable) return { ok: true, via: 'partial', remainder, reason: null }
+  return { ok: false, via: null, remainder, reason: 'not_settled' }
+}
+
+function kr(amount: number): string {
+  return formatCurrency(amount, 'SEK', { minimumFractionDigits: 2 })
+}
+
+/**
+ * The refusal for rows that do not settle the verifikat. It names both sums
+ * and the way to link anyway, because a summarised verifikat can never be
+ * settled exactly by the rows we hold.
+ */
+export function skattekontoLinkRefusal(
+  evaluation: SkattekontoLinkEvaluation,
+  facts: { entryNet: number; rowsTotal: number; rowCount: number; alreadyLinked: number },
+): { message: string; code: SkattekontoLinkErrorCode } {
+  if (evaluation.reason === 'no_account_line') {
+    return {
+      message: 'Verifikatet har ingen rad på 1630 och kan inte kopplas till en händelse på skattekontot.',
+      code: 'INVALID_CANDIDATE',
+    }
+  }
+  const lead =
+    facts.alreadyLinked > 0
+      ? 'Verifikatet är redan kopplat till en annan skattekonto-transaktion.'
+      : facts.rowCount > 1
+        ? 'Verifikatets rader på 1630 motsvarar inte summan av de valda händelserna.'
+        : 'Verifikatet saknar en matchande rad på 1630.'
+  const sums = Number.isFinite(evaluation.remainder)
+    ? ` Verifikatet har ${kr(facts.entryNet)} på 1630 och ${facts.rowCount > 1 ? 'händelserna' : 'händelsen'} är ${kr(facts.rowsTotal)}.` +
+      ` Är det ett samlingsverifikat som täcker fler händelser kan du koppla ändå med allow_remainder: ${kr(evaluation.remainder)} står då kvar på verifikatet under "I bokföringen, saknas hos Skatteverket".`
+    : ''
+  return { message: `${lead}${sums}`, code: facts.alreadyLinked > 0 ? 'ENTRY_ALREADY_LINKED' : 'INVALID_CANDIDATE' }
+}
+
+/** A remainder link needs a verifikat that is in the ledger: a draft can still change. */
+const PARTIAL_NEEDS_POSTED = 'Bara ett bokfört verifikat kan kopplas med ett återstående belopp.'
+
+export interface SkattekontoLinkOptions {
+  /**
+   * Link although the rows do not settle the verifikat's 1630 movement (a
+   * summarised verifikat). Never a default: only the caller's explicit
+   * choice, made with the remainder in view.
+   */
+  allowRemainder?: boolean
+}
+
 /** Rows already linked to an entry, with the amounts the group check needs. */
 async function fetchLinkedRows(
   supabase: SupabaseClient,
@@ -185,6 +301,8 @@ export interface LinkSkattekontoRowResult {
   skattekonto_transaction_id: string
   journal_entry_id: string
   via: SkattekontoSettleVia
+  /** What the verifikat still holds on 1630 beyond the rows linked to it (ledger sign); 0 when fully explained. */
+  remainder: number
 }
 
 /**
@@ -197,6 +315,7 @@ export async function linkSkattekontoRow(
   companyId: string,
   transactionId: string,
   journalEntryId: string,
+  options: SkattekontoLinkOptions = {},
 ): Promise<LinkSkattekontoRowResult> {
   const { data: row, error: rowError } = await supabase
     .from('skattekonto_transactions')
@@ -231,20 +350,27 @@ export async function linkSkattekontoRow(
   }
   // Rows already on this verifikat join the check: a second event may share
   // it when the whole group still settles the 1630 movement (crm#104,
-  // crm#128). Otherwise the verifikat is taken.
+  // crm#128). Otherwise the verifikat is taken, unless the caller links with
+  // a remainder (a summarised verifikat, crm#1043).
   const linkedRows = await fetchLinkedRows(supabase, companyId, journalEntryId)
-  const settles = groupSettlesEntry(entry.lines, [
-    ...linkedRows.map((r) => Number(r.belopp_skatteverket)),
-    Number(row.belopp_skatteverket),
-  ])
+  const belopp = Number(row.belopp_skatteverket)
+  const settles = evaluateSkattekontoLink(
+    entry.lines,
+    linkedRows.map((r) => Number(r.belopp_skatteverket)),
+    [belopp],
+    options,
+  )
   if (!settles.ok || !settles.via) {
-    if (linkedRows.length > 0) {
-      throw new SkattekontoLinkError(
-        'Verifikatet är redan kopplat till en annan skattekonto-transaktion.',
-        'ENTRY_ALREADY_LINKED',
-      )
-    }
-    throw new SkattekontoLinkError('Verifikatet saknar en matchande rad på 1630.', 'INVALID_CANDIDATE')
+    const refusal = skattekontoLinkRefusal(settles, {
+      entryNet: skattekontoEntryNet(entry.lines).net,
+      rowsTotal: belopp,
+      rowCount: 1,
+      alreadyLinked: linkedRows.length,
+    })
+    throw new SkattekontoLinkError(refusal.message, refusal.code)
+  }
+  if (settles.via === 'partial' && entry.status !== 'posted') {
+    throw new SkattekontoLinkError(PARTIAL_NEEDS_POSTED, 'INVALID_CANDIDATE')
   }
 
   const { data: updated, error: updateError } = await supabase
@@ -261,7 +387,12 @@ export async function linkSkattekontoRow(
     throw new SkattekontoLinkError('Transaktionen kopplades av någon annan samtidigt.', 'LINK_RACE')
   }
 
-  return { skattekonto_transaction_id: transactionId, journal_entry_id: journalEntryId, via: settles.via }
+  return {
+    skattekonto_transaction_id: transactionId,
+    journal_entry_id: journalEntryId,
+    via: settles.via,
+    remainder: settles.remainder,
+  }
 }
 
 /**
@@ -342,6 +473,8 @@ export interface LinkSkattekontoRowsResult {
   journal_entry_id: string
   via: SkattekontoSettleVia
   skattekonto_transaction_ids: string[]
+  /** What the verifikat still holds on 1630 beyond the rows linked to it (ledger sign); 0 when fully explained. */
+  remainder: number
 }
 
 /**
@@ -349,7 +482,9 @@ export interface LinkSkattekontoRowsResult {
  * (one AGI verifikat settling the avdragen skatt + arbetsgivaravgift rows,
  * one payment verifikat covering a row pair, a payment and a debit booked in
  * one voucher). The rows, together with any rows already on the verifikat,
- * must settle its 1630 side (groupSettlesEntry); each row then gets the same guarded pointer as
+ * must settle its 1630 side (groupSettlesEntry), or the caller links them
+ * with a remainder (`allowRemainder`: a summarised verifikat whose other
+ * events we do not hold, crm#1043); each row then gets the same guarded pointer as
  * the single link. The write is ONE guarded UPDATE over the whole group: a
  * concurrent link shrinks the hit set, and a partial hit is rolled back and
  * reported as LINK_RACE, so a group is never left half-linked.
@@ -359,6 +494,7 @@ export async function linkSkattekontoRows(
   companyId: string,
   transactionIds: string[],
   journalEntryId: string,
+  options: SkattekontoLinkOptions = {},
 ): Promise<LinkSkattekontoRowsResult> {
   const ids = [...new Set(transactionIds)]
   if (ids.length === 0 || ids.length > 50) {
@@ -401,21 +537,24 @@ export async function linkSkattekontoRows(
   const outside = (await fetchLinkedRows(supabase, companyId, journalEntryId)).filter(
     (r) => !groupSet.has(r.id),
   )
-  const settles = groupSettlesEntry(entry.lines, [
-    ...outside.map((r) => Number(r.belopp_skatteverket)),
-    ...typed.map((r) => Number(r.belopp_skatteverket)),
-  ])
+  const belopps = typed.map((r) => Number(r.belopp_skatteverket))
+  const settles = evaluateSkattekontoLink(
+    entry.lines,
+    outside.map((r) => Number(r.belopp_skatteverket)),
+    belopps,
+    options,
+  )
   if (!settles.ok || !settles.via) {
-    if (outside.length > 0) {
-      throw new SkattekontoLinkError(
-        'Verifikatet är redan kopplat till en annan skattekonto-transaktion.',
-        'ENTRY_ALREADY_LINKED',
-      )
-    }
-    throw new SkattekontoLinkError(
-      'Verifikatets rader på 1630 motsvarar inte summan av de valda händelserna.',
-      'INVALID_CANDIDATE',
-    )
+    const refusal = skattekontoLinkRefusal(settles, {
+      entryNet: skattekontoEntryNet(entry.lines).net,
+      rowsTotal: roundOre(belopps.reduce((s, b) => s + b, 0)),
+      rowCount: belopps.length,
+      alreadyLinked: outside.length,
+    })
+    throw new SkattekontoLinkError(refusal.message, refusal.code)
+  }
+  if (settles.via === 'partial' && entry.status !== 'posted') {
+    throw new SkattekontoLinkError(PARTIAL_NEEDS_POSTED, 'INVALID_CANDIDATE')
   }
 
   const { data: updated, error: updateError } = await supabase
@@ -443,5 +582,10 @@ export async function linkSkattekontoRows(
     throw new SkattekontoLinkError('En av transaktionerna kopplades av någon annan samtidigt.', 'LINK_RACE')
   }
 
-  return { journal_entry_id: journalEntryId, via: settles.via, skattekonto_transaction_ids: ids }
+  return {
+    journal_entry_id: journalEntryId,
+    via: settles.via,
+    skattekonto_transaction_ids: ids,
+    remainder: settles.remainder,
+  }
 }

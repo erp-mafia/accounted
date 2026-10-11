@@ -1176,6 +1176,7 @@ Returns external_balance (Skatteverket saldo; null for bank accounts until a sta
 - Judge health on unexplained_difference, never on difference. The difference is expected to be non-zero while rows are unmatched; unexplained_difference is what is left once every bridge line is accounted for, and for skattekonto it is 0,00 whenever the data is consistent (a non-zero value is an integrity finding, not a task).
 - stale = true means the outside truth is older than 7 days (Skatteverket connection needing re-consent is the usual cause). is_reconciled can still be true on stale data; read both.
 - skattekonto.opening_difference is the gap between the derived saldo at history_start and the ledger before it; it belongs to migrated ledgers and is accepted once at sign-off, not worked down.
+- skattekonto.covered (through_date, kind, event_count, event_total, journal_entry_ids, entry_count) is set when unbooked rows are already in the ledger through verifikat on 1630 that no row is linked to, typically one summarised year-end or month-end verifikat: up to through_date those verifikat sum exactly to the open rows (events_equal), or 1630 already equals Skatteverket although the rows are unbooked (ledger_agrees). Do not book such rows (skattekonto booking, in the app and through the MCP tools, refuses them with LEDGER_COVER_EXISTS; v1 has no skattekonto booking endpoint): link them with POST .../links and allow_remainder: true.
 - Bank accounts carry the legacy field set in the bank block (bank_transaction_total, gl_1930_period_movement, …) unchanged from /reconciliation/bank/status.
 
 | Parameter | In | Type | Required | Notes |
@@ -1203,7 +1204,7 @@ Response `200`:
     is_reconciled: boolean,
     bridge: { key: string, label_sv: string, label_en: string, amount: number, count: number | null, items_bucket: string | null }[],
     counts: { proposed: number, unmatched_external: number, unmatched_ledger: number, matched: number, ignored: number },
-    skattekonto: { saldo_skatteverket: number | null, fetched_at: string | null, history_start: string | null, opening_difference: number | null, upcoming_count: number, upcoming_total: number, ledger_balance_before_start: number | null } | null,
+    skattekonto: { saldo_skatteverket: number | null, fetched_at: string | null, history_start: string | null, opening_difference: number | null, upcoming_count: number, upcoming_total: number, ledger_balance_before_start: number | null, covered?: { through_date: string, kind: "events_equal" | "ledger_agrees", event_count: number, event_total: number, journal_entry_ids: string[], entry_count: number } | null } | null,
     bank: Record<string, unknown> | null,
     manual?: { period_id: string, period_start: string, period_end: string, opening_balance: number, movement: number, closing_balance: number, specification: { provider: "ar" | "ap" | "vacation", label_sv: string, label_en: string, amount: number, unconverted_fx_count: number } | null } | null,
     signoff?: { id: string, account_key: string, through_date: string, external_balance: number | null, ledger_balance: number | null, unexplained_difference: number | null, note: string | null, signed_by: string, signed_at: string, reopened_at: string | null, reopened_by: string | null, reopen_reason: string | null } | null
@@ -1305,7 +1306,7 @@ Example response `200`:
 **List the rows behind one account's bridge, bucketed.**
 `scope:reconciliation:read · risk:low · idempotent`
 
-Returns reconciliation items for one account. ?bucket selects one of proposed | unmatched_external | unmatched_ledger | matched | ignored | upcoming (default: all open buckets first, then matched). Each item carries its side (external | ledger), a qualified item_id (skattekonto_transaction / transaction / journal_entry), date, description, signed amount, the proposal when one exists (journal_entry_id, voucher, confidence, reasons[]), link_problem when a link points at a reversed or draft entry, awaiting_external for fresh ledger lines, and the actions the row allows. ?date_from / ?date_to scope the lists; rows outside the window are never hidden from the counts (older_unmatched_count).
+Returns reconciliation items for one account. ?bucket selects one of proposed | unmatched_external | unmatched_ledger | matched | ignored | upcoming (default: all open buckets first, then matched). Each item carries its side (external | ledger), a qualified item_id (skattekonto_transaction / transaction / journal_entry), date, description, signed amount, the proposal when one exists (journal_entry_id, voucher, confidence, reasons[]), link_problem when a link points at a reversed or draft entry, awaiting_external for fresh ledger lines, and the actions the row allows. Skattekonto only: a ledger row carries partially_linked (entry_amount, linked_amount, linked_count) when rows are linked to the verifikat without explaining all of it, and its amount is then what remains (entry_amount - linked_amount, either sign); an outside row carries covered_by_ledger: true when unlinked verifikat on 1630 already hold its event (link it, never book it). ?date_from / ?date_to scope the lists; rows outside the window are never hidden from the counts (older_unmatched_count).
 
 **Use when:** You are about to link, book or ignore rows and need to see what is open and what is proposed.
 **Do not use for:** The totals: those are on GET /reconciliation/accounts/{accountKey}.
@@ -1330,7 +1331,7 @@ Response `200`:
 ```ts
 {
   data: {
-    items: { item_id: string, item_type: "skattekonto_transaction" | "transaction" | "journal_entry", side: "external" | "ledger", bucket: "proposed" | "unmatched_external" | "unmatched_ledger" | "matched" | "ignored" | "upcoming", date: string, description: string, amount: number, currency: string, voucher_number?: number | null, voucher_series?: string | null, entry_status?: "draft" | "posted" | "reversed", linked_journal_entry_id?: string | null, linked_entry?: { entry_date: string, voucher_series: string | null, voucher_number: number | null, description: string } | null, link_problem?: "entry_reversed" | "entry_draft" | "entry_missing" | null, proposal?: { journal_entry_id: string, voucher_number: number | null, voucher_series: string | null, entry_date: string, description: string, entry_status: "draft" | "posted" | "reversed", confidence: number, reasons: string[], vouchers?: { journal_entry_id: string, voucher_number: number | null, voucher_series: string | null, entry_date: string, description: string, amount: number }[], external_ids?: string[] } | null, awaiting_external?: boolean, ib_eligible?: boolean, actions: ("match" | "unmatch" | "book" | "ignore" | "unignore" | "review")[] }[],
+    items: { item_id: string, item_type: "skattekonto_transaction" | "transaction" | "journal_entry", side: "external" | "ledger", bucket: "proposed" | "unmatched_external" | "unmatched_ledger" | "matched" | "ignored" | "upcoming", date: string, description: string, amount: number, currency: string, voucher_number?: number | null, voucher_series?: string | null, entry_status?: "draft" | "posted" | "reversed", linked_journal_entry_id?: string | null, linked_entry?: { entry_date: string, voucher_series: string | null, voucher_number: number | null, description: string } | null, link_problem?: "entry_reversed" | "entry_draft" | "entry_missing" | null, proposal?: { journal_entry_id: string, voucher_number: number | null, voucher_series: string | null, entry_date: string, description: string, entry_status: "draft" | "posted" | "reversed", confidence: number, reasons: string[], vouchers?: { journal_entry_id: string, voucher_number: number | null, voucher_series: string | null, entry_date: string, description: string, amount: number }[], external_ids?: string[] } | null, awaiting_external?: boolean, ib_eligible?: boolean, partially_linked?: { entry_amount: number, linked_amount: number, linked_count: number }, covered_by_ledger?: boolean, actions: ("match" | "unmatch" | "book" | "ignore" | "unignore" | "review")[] }[],
     count: number,
     total_count: number,
     has_more: boolean,
@@ -1468,7 +1469,7 @@ Example response `200`:
 **Link outside rows to existing verifikat (pairs or proposals).**
 `scope:reconciliation:write · risk:medium · dry-run · reversible`
 
-Body: { pairs: [{ external_ids: [id], journal_entry_ids: [id], allocations? }] } and/or { use_proposals: true, confidence_threshold? }. Each pair is validated as the single-link paths validate (row open and not ignored, entry posted and not reversed, the entry's account lines settle the amount, entry not already linked) and applied independently: the response lists applied[] and skipped[{pair, code, message}] so partial success is explicit. On a bank account a pair may also be ONE transaction against SEVERAL verifikat (1:N): allocations[{journal_entry_id, amount}] gives the signed slice per verifikat (omitted: each slice defaults to the voucher's line on the account); the slices must sum to the transaction amount, and each applied link then carries allocated_amount. Codes: UNSUPPORTED_PAIR_SHAPE, ALREADY_LINKED, ENTRY_NOT_FOUND, PAIR_NOT_CLOSED, ROW_IGNORED, NOT_FOUND, LINK_RACE, BANK_ANCHOR_REFUSED (the database refused the link: a verifikat does not book the row, or its 1:N slice, on the bank ledger in that direction; retrying unchanged will not help). ?dry_run=true returns the pairs that would be attempted without writing (a 1:N dry run resolves the slices).
+Body: { pairs: [{ external_ids: [id], journal_entry_ids: [id], allocations? }] } and/or { use_proposals: true, confidence_threshold? }. Each pair is validated as the single-link paths validate (row open and not ignored, entry posted and not reversed, the entry's account lines settle the amount, entry not already linked) and applied independently: the response lists applied[] and skipped[{pair, code, message}] so partial success is explicit. On a bank account a pair may also be ONE transaction against SEVERAL verifikat (1:N): allocations[{journal_entry_id, amount}] gives the signed slice per verifikat (omitted: each slice defaults to the voucher's line on the account); the slices must sum to the transaction amount, and each applied link then carries allocated_amount. On the skattekonto a pair may carry allow_remainder: true to link rows to a summarised verifikat whose 1630 movement they do not settle (one year-end or month-end verifikat that books more events than these, some from before the fetched history): the link is then via "partial", and remainder_amount on each applied link is what the verifikat still holds on 1630 beyond the rows linked to it (ledger sign, either sign); it stays in unmatched_ledger with that amount. remainder_amount is also returned when a row settles one of several 1630 lines of a verifikat. Codes: UNSUPPORTED_PAIR_SHAPE, ALREADY_LINKED, ENTRY_NOT_FOUND, PAIR_NOT_CLOSED, ROW_IGNORED, NOT_FOUND, LINK_RACE, BANK_ANCHOR_REFUSED (the database refused the link: a verifikat does not book the row, or its 1:N slice, on the bank ledger in that direction; retrying unchanged will not help). ?dry_run=true returns the pairs that would be attempted without writing (a 1:N dry run resolves the slices).
 
 **Use when:** An agent or integration has decided which rows explain each other, or wants to apply the proposals the sync already computed.
 **Do not use for:** Booking new verifikat for rows that have no counterpart (use the transactions or skattekonto booking endpoints); reconciling across accounts.
@@ -1476,6 +1477,7 @@ Body: { pairs: [{ external_ids: [id], journal_entry_ids: [id], allocations? }] }
 **Pitfalls:**
 - A pair is one OR MANY outside rows against exactly one verifikat (bank: independent links per transaction; skattekonto: all-or-nothing, the rows must sum to what the verifikat settles), or, on a bank account only, ONE transaction against SEVERAL verifikat (all-or-nothing, the slices must sum to the transaction). Several rows against several verifikat, and a skattekonto row against several verifikat, are UNSUPPORTED_PAIR_SHAPE, never silently reduced.
 - A pair must close to the row's amount on the expected side (a single matching line, or the entry's lines on the account netting to it); a fee or rounding difference is PAIR_NOT_CLOSED here and needs a residual booking first.
+- Skattekonto rows against a summarised verifikat never close: PAIR_NOT_CLOSED names both sums and the remainder. Repeat the pair with allow_remainder: true only when the verifikat really books those events; a dry run shows remainder_amount first. The link never changes unexplained_difference: the rows leave unmatched_external and the same amount leaves the verifikat.
 - Links never touch the ledger, so they succeed in locked periods; unlink with DELETE .../links/{linkId} (linkId = the outside row id).
 - Idempotency-Key is required; repeating the same key replays the first response.
 
@@ -1488,7 +1490,7 @@ Body: { pairs: [{ external_ids: [id], journal_entry_ids: [id], allocations? }] }
 Request body:
 ```ts
 {
-  pairs?: { external_ids: string[], journal_entry_ids: string[], allocations?: { journal_entry_id: string, amount: number }[] }[],
+  pairs?: { external_ids: string[], journal_entry_ids: string[], allocations?: { journal_entry_id: string, amount: number }[], allow_remainder?: boolean }[],
   use_proposals?: boolean,
   confidence_threshold?: number
 }
@@ -1508,8 +1510,8 @@ Response `200`:
   data: {
     dry_run: boolean,
     considered: number,
-    applied: { external_id: string, journal_entry_id: string, via?: "line" | "entry_total" | "lines", allocated_amount?: number }[],
-    skipped: { pair: { external_ids: string[], journal_entry_ids: string[], allocations?: { journal_entry_id: string, amount: number }[] }, code: string, message: string }[]
+    applied: { external_id: string, journal_entry_id: string, via?: "line" | "entry_total" | "lines" | "partial", allocated_amount?: number, remainder_amount?: number }[],
+    skipped: { pair: { external_ids: string[], journal_entry_ids: string[], allocations?: { journal_entry_id: string, amount: number }[], allow_remainder?: boolean }, code: string, message: string }[]
   },
   meta: {
     request_id: string,

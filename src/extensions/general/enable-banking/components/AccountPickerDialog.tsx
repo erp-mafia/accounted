@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAccounts, useCompanySettings, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -38,6 +39,9 @@ import {
 } from '../lib/date-suggestions'
 import { describeClaimedElsewhere, describeMirrorCards, partitionAccounts } from '../lib/claimed-accounts'
 import { isMirrorCardAccount } from '@/lib/bank-sync/mirror-card-account'
+import { useBankLedgerSuggestions } from '@/lib/hooks/use-bank-ledger-suggestions'
+import { forgetLedgerSuggestions, relinkBankTransactions } from '@/lib/cash-accounts/ledger-suggestion-client'
+import { ledgerSuggestionPickerReason, pickerPreselection, pickerSuggestions } from '@/lib/cash-accounts/ledger-suggestion-view'
 import type { StoredAccount } from '../types'
 import {
   BankSyncProgressDialog,
@@ -157,6 +161,19 @@ export function AccountPickerDialog({
   // silently empty, which reads as "no bank accounts exist".
   const chartError = Boolean(chartLoadError)
   const [ledgerByUid, setLedgerByUid] = useState<Record<string, string>>({})
+  // The ledger account the books say an account belongs on, when that is
+  // another one than it books on now (crm#1066): preselected below, with the
+  // reason beside the account. Empty for an account without such evidence,
+  // whose default is unchanged. Read while the dialog is open only.
+  const tLedger = useTranslations('bank_ledger_suggestion')
+  const { suggestions: ledgerSuggestions } = useBankLedgerSuggestions({ enabled: open, connectionId })
+  const suggestedByUid = useMemo(
+    () => pickerPreselection(ledgerSuggestions, connectionId),
+    [ledgerSuggestions, connectionId],
+  )
+  // Accounts whose ledger account the user picked by hand in this dialog: a
+  // suggestion that arrives afterwards must not overwrite the pick.
+  const ledgerTouched = useRef<Set<string>>(new Set())
 
   // Default 'fast' (90 days): the known-good PSD2 window. The fiscal-year
   // default used to send 365+-day requests that some banks (Swedbank) answer
@@ -216,8 +233,39 @@ export function AccountPickerDialog({
         initialLedger[a.uid] = pick
       }
       setLedgerByUid(initialLedger)
+      ledgerTouched.current = new Set()
     }
   }, [open, accounts])
+
+  // Preselect the ledger account the books point at. A separate effect, after
+  // the reset above: the suggestions arrive after the dialog has opened, and
+  // re-running the reset for them would undo the user's ticks. `accounts` is
+  // a dep because the reset runs again when its identity changes (the panel's
+  // visibility refetch) and puts the stored ledger accounts back.
+  // A suggestion is preselected whole or not at all: the two accounts of a
+  // swap trade ledger accounts, and one half alone would put both on the same
+  // one, which the save refuses ("Flera bankkonton kan inte bokföras på samma
+  // konto"). So a swap is skipped as soon as the user has picked a ledger
+  // account for either of its accounts.
+  useEffect(() => {
+    if (!open) return
+    const preselectable = pickerSuggestions(ledgerSuggestions, connectionId)
+    if (preselectable.length === 0) return
+    setLedgerByUid((prev) => {
+      let next = prev
+      for (const suggestion of preselectable) {
+        const uids = suggestion.accounts.map((account) => account.uid as string)
+        if (uids.some((uid) => ledgerTouched.current.has(uid))) continue
+        for (const account of suggestion.accounts) {
+          const uid = account.uid as string
+          if (next[uid] === account.to_ledger) continue
+          if (next === prev) next = { ...prev }
+          next[uid] = account.to_ledger
+        }
+      }
+      return next
+    })
+  }, [open, ledgerSuggestions, connectionId, accounts])
 
   // fiscal_year_start_month + entity_type make "Sedan räkenskapsårets början"
   // resolve to the right date for non-calendar fiscal years, and the actual
@@ -485,6 +533,28 @@ export function AccountPickerDialog({
         return
       }
 
+      // The mapping may have changed: every suggestion is read again. And
+      // when the save moved an account onto the ledger account the books
+      // point at, its transactions can now be linked to the verifikat that
+      // already describe them. The save itself runs no matching for an active
+      // connection, so run the existing matcher for those ledger accounts
+      // here, as the notice's own button does. In the background: the save
+      // is done.
+      const movedOnto = [...suggestedByUid]
+        .filter(([uid, { account }]) => selected.has(uid) && ledgerByUid[uid] === account.to_ledger)
+        .map(([, { account }]) => account.to_ledger)
+      forgetLedgerSuggestions()
+      if (movedOnto.length > 0) {
+        void relinkBankTransactions(movedOnto).then((relinked) => {
+          toast({
+            title: tLedger('applied_title'),
+            description: relinked
+              ? tLedger('applied_description', { linked: relinked.linked, suggested: relinked.suggested })
+              : tLedger('applied_matching_failed'),
+          })
+        })
+      }
+
       if (isInitialSelection && data.initial_sync) {
         setProgressState({ kind: 'done', summary: data.initial_sync })
       } else if (isInitialSelection && data.initial_sync_error) {
@@ -594,6 +664,11 @@ export function AccountPickerDialog({
     const isChecked = selected.has(account.uid)
     const ledger = ledgerByUid[account.uid] || ''
     const ledgerExistsInChart = chartAccounts.some(c => c.account_number === ledger)
+    // Shown only while the preselected ledger account still stands: once the
+    // user picks another one, nothing here is "förvalt" any more.
+    const suggested = suggestedByUid.get(account.uid)
+    const preselectedReason =
+      suggested && isChecked && ledger === suggested.account.to_ledger ? ledgerSuggestionPickerReason(suggested) : null
     return (
       <div
         key={account.uid}
@@ -642,6 +717,14 @@ export function AccountPickerDialog({
                 Tidigare bortvald: markera för att synka i detta bolag
               </p>
             )}
+            {/* Why this account's ledger account is not the one it had: the
+                books already hold its transactions, or its balance, on the
+                preselected one (crm#1066). */}
+            {preselectedReason && (
+              <p className="text-xs text-muted-foreground" data-ph-mask="">
+                {tLedger(preselectedReason.key, preselectedReason.values)}
+              </p>
+            )}
           </div>
           {account.balance !== undefined && (
             <p className="text-sm font-medium tabular-nums shrink-0">
@@ -658,7 +741,10 @@ export function AccountPickerDialog({
           {isChecked && (
             <Select
               value={ledger}
-              onValueChange={(v) => setLedgerByUid(prev => ({ ...prev, [account.uid]: v }))}
+              onValueChange={(v) => {
+                ledgerTouched.current.add(account.uid)
+                setLedgerByUid(prev => ({ ...prev, [account.uid]: v }))
+              }}
               disabled={isSaving}
             >
               <SelectTrigger className="w-full">

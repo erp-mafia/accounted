@@ -614,3 +614,118 @@ describe('clearing optional fields on PATCH /api/salary/employees/[id] (#3008)',
     expect(captured.updates).toBeNull()
   })
 })
+
+/**
+ * is_active on the route the employee page calls (crm#1133). The key was
+ * missing from UpdateEmployeeSchema, so a PATCH carrying it answered 200 with
+ * the employee unchanged and "Inaktivera" had no way back. true reactivates;
+ * false is the same single-column write DELETE makes.
+ */
+describe('is_active on PATCH /api/salary/employees/[id] (crm#1133)', () => {
+  const INACTIVE_ROW = { ...EXISTING_ROW, is_active: false }
+  const ACTIVE_ROW = { ...EXISTING_ROW, is_active: true }
+
+  function useRow(existing: Record<string, unknown>, updateError: { code: string; message: string } | null = null) {
+    const mock = employeeSupabase(existing, updateError)
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: mock.supabase })
+    return mock.captured
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireWriteMock.mockResolvedValue({ ok: true })
+  })
+
+  it('200 and writes is_active true, and nothing else, on an inactive employee', async () => {
+    const captured = useRow({ ...INACTIVE_ROW })
+
+    const response = await PATCH(patchRequest({ is_active: true }), params)
+    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(response)
+
+    expect(status).toBe(200)
+    expect(captured.updates).toEqual({ is_active: true })
+    expect(body.data.is_active).toBe(true)
+    // The write response keeps the personnummer contract of every other PATCH.
+    expect(body.data.personnummer_masked).toBe('19020304-XXXX')
+    expect('personnummer' in body.data).toBe(false)
+  })
+
+  it('200 and writes is_active false: the write DELETE makes, through PATCH', async () => {
+    const captured = useRow({ ...ACTIVE_ROW })
+
+    const response = await PATCH(patchRequest({ is_active: false }), params)
+    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(response)
+
+    expect(status).toBe(200)
+    expect(captured.updates).toEqual({ is_active: false })
+    expect(body.data.is_active).toBe(false)
+  })
+
+  it('writes the flag together with another field in the same PATCH', async () => {
+    const captured = useRow({ ...INACTIVE_ROW })
+
+    const response = await PATCH(patchRequest({ is_active: true, phone: '0700000000' }), params)
+
+    expect(response.status).toBe(200)
+    expect(captured.updates).toEqual({ is_active: true, phone: '0700000000' })
+  })
+
+  it('leaves the flag out of the write when the PATCH does not name it', async () => {
+    const captured = useRow({ ...INACTIVE_ROW })
+
+    const response = await PATCH(patchRequest({ phone: '0700000000' }), params)
+
+    expect(response.status).toBe(200)
+    expect(captured.updates).toEqual({ phone: '0700000000' })
+  })
+
+  it('400 for a value that is not a boolean (null, a string), and nothing is written', async () => {
+    const captured = useRow({ ...INACTIVE_ROW })
+
+    expect((await PATCH(patchRequest({ is_active: null }), params)).status).toBe(400)
+    expect((await PATCH(patchRequest({ is_active: 'true' }), params)).status).toBe(400)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('403 for a viewer, and nothing is written', async () => {
+    const captured = useRow({ ...INACTIVE_ROW })
+    requireWriteMock.mockResolvedValue({
+      ok: false,
+      response: NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
+    })
+
+    const response = await PATCH(patchRequest({ is_active: true }), params)
+
+    expect(response.status).toBe(403)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('404 when no employee row matches, and nothing is written', async () => {
+    const captured = useRow(null as unknown as Record<string, unknown>)
+
+    const response = await PATCH(patchRequest({ is_active: true }), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(404)
+    expect(body.error).toBe('Anställd hittades inte')
+    expect(captured.updates).toBeNull()
+  })
+
+  it('400 with the jämkning sentence when the NOT VALID check refuses to reactivate a legacy incomplete row', async () => {
+    // employees_jamkning_dates_check is checked on the row's next UPDATE,
+    // whatever column it names, the reactivation included: the user is told
+    // what to complete, never "not found" and never a 500.
+    const captured = useRow(
+      { ...INACTIVE_ROW, jamkning_percentage: 15, jamkning_valid_from: '2026-01-01', jamkning_valid_to: null },
+      CHECK_CONSTRAINT_ERROR,
+    )
+
+    const response = await PATCH(patchRequest({ is_active: true }), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toBe(JAMKNING_END_REQUIRED)
+    expect(captured.updates).toEqual({ is_active: true })
+  })
+})

@@ -52,6 +52,7 @@ vi.mock('@/lib/bookkeeping/account-backfill', () => ({
 }))
 
 import { correctEntry } from '../storno-service'
+import { CORRECTION_COLUMN_POLICY } from '../correction-column-policy'
 import { validateBalance, getNextVoucherNumber, cancelOrphanedEntry } from '@/lib/bookkeeping/engine'
 
 beforeEach(() => {
@@ -762,6 +763,150 @@ describe('correctEntry: date/period override (recordate engine)', () => {
         newFiscalPeriodId: 'fp-2',
       })
     ).rejects.toMatchObject({ code: 'FISCAL_PERIOD_NOT_FOUND' })
+  })
+})
+
+/**
+ * A rättelse is the same affärshändelse booked right: what the user said
+ * about the event follows it onto the correcting verifikat. The note was
+ * dropped on every correction because the header listed the columns to copy
+ * and `notes` was never listed (crm#1078). The last two tests guard the
+ * class: the header is built from CORRECTION_COLUMN_POLICY, so a column is
+ * carried or left behind on purpose.
+ */
+describe('correctEntry: the correction keeps what the user said about the event (crm#1078)', () => {
+  const NOTE = 'Deltagare: två kunder. Syfte: genomgång av avtalet.'
+  const correctedLines = [
+    { account_number: '5420', debit_amount: 1200, credit_amount: 0 },
+    { account_number: '1930', debit_amount: 0, credit_amount: 1200 },
+  ]
+
+  function original(notes: string | null) {
+    return makeJournalEntry({
+      id: 'orig-1',
+      status: 'posted',
+      description: 'Lunch',
+      fiscal_period_id: 'fp-1',
+      voucher_series: 'A',
+      notes,
+      lines: [
+        makeJournalEntryLine({ account_number: '5410', debit_amount: 1000, credit_amount: 0 }),
+        makeJournalEntryLine({ account_number: '1930', debit_amount: 0, credit_amount: 1000 }),
+      ],
+    })
+  }
+
+  function fullRunResults(originalEntry: ReturnType<typeof makeJournalEntry>) {
+    const reversalEntry = makeJournalEntry({ id: 'reversal-1', reverses_id: 'orig-1' })
+    const correctedEntry = makeJournalEntry({ id: 'corrected-1', correction_of_id: 'orig-1' })
+    return [
+      { data: originalEntry, error: null }, // fetch original
+      { data: [{ id: 'acc-5420', account_number: '5420' }, { id: 'acc-1930', account_number: '1930' }], error: null },
+      { data: reversalEntry, error: null }, // insert reversal
+      { data: null, error: null }, // reversal lines
+      { data: null, error: null }, // post reversal
+      { data: correctedEntry, error: null }, // insert corrected
+      { data: null, error: null }, // corrected lines
+      { data: null, error: null }, // post corrected
+      { data: [{ id: 'orig-1' }], error: null }, // CAS original to reversed
+      { data: null, error: null }, // relink transactions
+      { data: null, error: null }, // relink voucher links
+      { data: null, error: null }, // relink documents
+      { data: { ...reversalEntry, lines: [] }, error: null },
+      { data: { ...correctedEntry, lines: [] }, error: null },
+    ]
+  }
+
+  /** [0] is the storno header, [1] the correction header. */
+  function headerInserts() {
+    return inserts
+      .filter((i) => i.table === 'journal_entries')
+      .map((i) => i.payload as Record<string, unknown>)
+  }
+
+  it('carries the note of the corrected verifikat onto the correction', async () => {
+    results = fullRunResults(original(NOTE))
+    await correctEntry(makeClient() as never, 'company-1', 'user-1', 'orig-1', correctedLines)
+
+    const [, correction] = headerInserts()
+    expect(correction.source_type).toBe('correction')
+    expect(correction.notes).toBe(NOTE)
+  })
+
+  it('keeps the note when the caller rewrites the verifikationstext', async () => {
+    results = fullRunResults(original(NOTE))
+    await correctEntry(makeClient() as never, 'company-1', 'user-1', 'orig-1', correctedLines, {
+      description: 'Rättelse: representation',
+    })
+
+    const [, correction] = headerInserts()
+    expect(correction.description).toBe('Rättelse: representation')
+    expect(correction.notes).toBe(NOTE)
+  })
+
+  it('writes no note on the storno: it cancels the event, it is not the event', async () => {
+    results = fullRunResults(original(NOTE))
+    await correctEntry(makeClient() as never, 'company-1', 'user-1', 'orig-1', correctedLines)
+
+    const [storno] = headerInserts()
+    expect(storno.source_type).toBe('storno')
+    expect(storno).not.toHaveProperty('notes')
+  })
+
+  it('leaves the correction without a note when the original has none', async () => {
+    results = fullRunResults(original(null))
+    await correctEntry(makeClient() as never, 'company-1', 'user-1', 'orig-1', correctedLines)
+
+    const [, correction] = headerInserts()
+    expect(correction.notes).toBeNull()
+  })
+
+  it('carries the note from an original the caller already loaded (the recordate path)', async () => {
+    const preloaded = original(NOTE)
+    // No fetch of the original: the sequence starts at the target period.
+    results = [
+      { data: { name: '2025', period_start: '2025-01-01', period_end: '2025-12-31' }, error: null },
+      ...fullRunResults(preloaded).slice(1),
+    ]
+    await correctEntry(makeClient() as never, 'company-1', 'user-1', 'orig-1', correctedLines, {
+      newEntryDate: '2025-06-15',
+      newFiscalPeriodId: 'fp-2',
+      preloadedOriginal: preloaded,
+    })
+
+    const [, correction] = headerInserts()
+    expect(correction).toMatchObject({ entry_date: '2025-06-15', fiscal_period_id: 'fp-2', notes: NOTE })
+  })
+
+  const columnsWithPolicy = (...policies: string[]) =>
+    Object.entries(CORRECTION_COLUMN_POLICY)
+      .filter(([, policy]) => policies.includes(policy))
+      .map(([column]) => column)
+      .sort()
+
+  it('builds the correction header from exactly the written and carried columns of the policy', async () => {
+    results = fullRunResults(original(NOTE))
+    await correctEntry(makeClient() as never, 'company-1', 'user-1', 'orig-1', correctedLines)
+
+    // A column added to the insert must be classified, and a column classified
+    // as written or carried must reach the insert: the table and the code
+    // cannot drift apart.
+    const [, correction] = headerInserts()
+    expect(Object.keys(correction).sort()).toEqual(columnsWithPolicy('written', 'carried'))
+  })
+
+  it('carries every column the policy marks as carried, whatever it holds', async () => {
+    const carried = columnsWithPolicy('carried')
+    expect(carried).toContain('notes')
+
+    const sentinel = Object.fromEntries(carried.map((column) => [column, `carried:${column}`]))
+    results = fullRunResults({ ...original(null), ...sentinel } as ReturnType<typeof makeJournalEntry>)
+    await correctEntry(makeClient() as never, 'company-1', 'user-1', 'orig-1', correctedLines)
+
+    const [, correction] = headerInserts()
+    for (const column of carried) {
+      expect(correction[column], column).toBe(`carried:${column}`)
+    }
   })
 })
 

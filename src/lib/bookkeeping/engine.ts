@@ -1818,7 +1818,10 @@ export async function reverseEntry(
     )
   }
 
-  // Create reversal entry with reverses_id link
+  // Create reversal entry with reverses_id link. No `notes`: the note
+  // describes the affärshändelse, and a storno cancels it instead of
+  // representing it. The reversed original keeps its own note, and this
+  // entry's text names the verifikat it reverses (crm#1078).
   const { data: reversalEntry, error: reversalError } = await supabase
     .from('journal_entries')
     .insert({

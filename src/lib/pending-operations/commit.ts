@@ -7194,7 +7194,9 @@ async function commitBulkBookInboxItems(
  * close); partial success is reported in data.applied / data.skipped rather
  * than failing the whole operation, because the pairs are independent. A
  * bank 1:N pair (one row, several verifikat, allocations) is staged as one
- * pair and re-validated as one all-or-nothing split.
+ * pair and re-validated as one all-or-nothing split. A skattekonto pair
+ * staged with allow_remainder (rows against a summarised verifikat) keeps the
+ * flag, so the reviewer's approval of the previewed remainder is what links it.
  */
 async function commitReconciliationMatch(
   supabase: SupabaseClient,
@@ -7208,6 +7210,7 @@ async function commitReconciliationMatch(
         external_ids: string[]
         journal_entry_ids: string[]
         allocations?: Array<{ journal_entry_id: string; amount: number }>
+        allow_remainder?: boolean
       }>
     | undefined
   if (!accountKey || !Array.isArray(pairs) || pairs.length === 0) {

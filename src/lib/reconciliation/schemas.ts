@@ -35,6 +35,10 @@ export const ReconciliationPairSchema = z.object({
     .min(2)
     .max(50)
     .optional(),
+  // Skattekonto only: link although the rows do not settle the verifikat's
+  // 1630 movement (a summarised verifikat that books more events than these).
+  // What the rows do not explain stays on the verifikat as its remainder.
+  allow_remainder: z.boolean().optional(),
 })
 
 /** Body fields shared by the dashboard and v1 POST .../links routes (spread into z.object). */
@@ -264,6 +268,27 @@ export const ReconciliationItemSchema = z.object({
    * in the year: a rättelse or payment is a movement, never an IB.
    */
   ib_eligible: z.boolean().optional(),
+  /**
+   * Skattekonto ledger rows only: Skatteverket rows are linked to this
+   * verifikat without explaining all of it (a summarised verifikat, or one
+   * matched line of several on 1630). `amount` is then what remains:
+   * entry_amount - linked_amount, in ledger sign, of either sign.
+   */
+  partially_linked: z
+    .object({
+      /** The verifikat's whole net on 1630. */
+      entry_amount: z.number(),
+      /** Sum of the Skatteverket rows linked to it. */
+      linked_amount: z.number(),
+      linked_count: z.number().int(),
+    })
+    .optional(),
+  /**
+   * Skattekonto outside rows only: the event is already in the ledger through
+   * verifikat on 1630 that no row is linked to (see skattekonto.covered).
+   * Link it; booking it would record it a second time.
+   */
+  covered_by_ledger: z.boolean().optional(),
   actions: z.array(ReconciliationItemActionSchema),
 })
 export type ReconciliationItem = z.infer<typeof ReconciliationItemSchema>
@@ -279,6 +304,27 @@ export const SkattekontoStatusBlockSchema = z.object({
   upcoming_count: z.number().int(),
   upcoming_total: z.number(),
   ledger_balance_before_start: z.number().nullable(),
+  /**
+   * Set when unbooked Skatteverket rows are already in the ledger through
+   * verifikat on 1630 that no row is linked to: every open row dated on or
+   * before through_date. 'events_equal': those verifikat sum exactly to the
+   * rows. 'ledger_agrees': 1630 already equals Skatteverket at that date, so
+   * what the verifikat hold beyond the rows is the opening difference (events
+   * before the fetched history). Booking such a row records it twice: link
+   * the rows to the verifikat instead (allow_remainder when the sums differ).
+   */
+  covered: z
+    .object({
+      through_date: z.string(),
+      kind: z.enum(['events_equal', 'ledger_agrees']),
+      event_count: z.number().int(),
+      event_total: z.number(),
+      /** The unlinked verifikat on 1630 up to through_date, largest first (at most 10). */
+      journal_entry_ids: z.array(z.string()),
+      entry_count: z.number().int(),
+    })
+    .nullable()
+    .optional(),
 })
 
 /** A specification the system keeps for a manual account, in ledger sign (debit positive). */

@@ -8,7 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { AttnLine } from '@/components/ui/attn-line'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { chunk, cn, formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { roundOre } from '@/lib/money'
@@ -29,6 +29,12 @@ import type { ResidualKind } from '@/lib/reconciliation/residual'
  * skattekonto) refuses a group whose sum the verifikat does not settle. A
  * non-zero difference is shown, not hidden: for the N:1 shape the residual
  * can be booked in the same gesture; a split must close exactly.
+ *
+ * Skattekonto, non-zero difference: a summarised verifikat (one year-end or
+ * month-end voucher that books more events than the ones picked) can never
+ * close. A second button links the rows anyway and says what stays on the
+ * verifikat: the engine keeps that remainder in this same right-hand list,
+ * so nothing is hidden and unexplained does not move (crm#1043).
  */
 
 interface ManualMatchModeProps {
@@ -38,6 +44,9 @@ interface ManualMatchModeProps {
 }
 
 const LIMIT = 200
+
+/** Most rows one pair may carry (ReconciliationPairSchema). */
+const MAX_ROWS_PER_PAIR = 50
 
 export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeProps) {
   const t = useTranslations('reconciliation')
@@ -109,6 +118,10 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
     !(pickedExternal.size > 1 && isSplit) &&
     Math.abs(difference) < 0.005 &&
     !busy
+  // What the verifikat would still hold beyond the picked rows (ledger sign).
+  const remainder = roundOre(ledgerSum - externalSum)
+  const canLinkWithRemainder =
+    isSkv && pickedExternal.size > 0 && entry !== null && Math.abs(difference) >= 0.005 && !busy
 
   function toggleExternal(id: string) {
     setPickedExternal((prev) => {
@@ -124,6 +137,16 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
     })
   }
 
+  // Skattekonto: a summarised verifikat takes every open row of the period,
+  // so the left pane can be ticked in one gesture (crm#1043).
+  const allExternalPicked = (external ?? []).length > 0 && pickedExternal.size === (external ?? []).length
+  function toggleAllExternal() {
+    const next = allExternalPicked ? new Set<string>() : new Set((external ?? []).map((i) => i.item_id))
+    setPickedExternal(next)
+    // Same rule as toggleExternal: several rows never keep several verifikat.
+    if (next.size !== 1) setPickedEntries((picked) => (picked.size > 1 ? new Set() : picked))
+  }
+
   function toggleEntry(id: string) {
     setPickedEntries((prev) => {
       if (!splitMode) return prev.has(id) ? new Set() : new Set([id])
@@ -134,7 +157,26 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
     })
   }
 
-  async function link() {
+  /**
+   * The pairs one click sends. A skattekonto selection against one verifikat
+   * with a remainder, or with more rows than one pair may carry, goes as
+   * pairs of at most 50 rows on that verifikat with allow_remainder: each
+   * pair joins the rows linked before it, so the verifikat ends with exactly
+   * what the footer showed (0 when the selection settles it).
+   */
+  function linkPairs(allowRemainder: boolean) {
+    const externalIds = [...pickedExternal]
+    if (isSkv && entry && (allowRemainder || externalIds.length > MAX_ROWS_PER_PAIR)) {
+      return chunk(externalIds, MAX_ROWS_PER_PAIR).map((part) => ({
+        external_ids: part,
+        journal_entry_ids: [entry.item_id],
+        allow_remainder: true,
+      }))
+    }
+    return [{ external_ids: externalIds, journal_entry_ids: entries.map((e) => e.item_id) }]
+  }
+
+  async function link(allowRemainder = false) {
     if (entries.length === 0 || pickedExternal.size === 0) return
     setBusy(true)
     try {
@@ -144,9 +186,7 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
       const res = await fetch(`${base}/links`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pairs: [{ external_ids: [...pickedExternal], journal_entry_ids: entries.map((e) => e.item_id) }],
-        }),
+        body: JSON.stringify({ pairs: linkPairs(allowRemainder) }),
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok) {
@@ -227,7 +267,15 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
             <table className="w-full text-[13px]">
               <thead>
                 <tr>
-                  <th className={cn(TH_CLASS, 'w-8 px-2')} />
+                  <th className={cn(TH_CLASS, 'w-8 px-2')}>
+                    {isSkv && (
+                      <Checkbox
+                        checked={allExternalPicked}
+                        onCheckedChange={toggleAllExternal}
+                        aria-label={t('match_select_all')}
+                      />
+                    )}
+                  </th>
                   <th className={cn(TH_CLASS, 'w-[96px]')}>{t('col_date')}</th>
                   <th className={TH_CLASS}>{t('col_event')}</th>
                   <th className={cn(TH_CLASS, 'w-[120px] text-right')}>{t('col_amount')}</th>
@@ -325,6 +373,14 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
                       </td>
                       <td className={cn(TD_CLASS, 'max-w-0')}>
                         <span className="block truncate" data-ph-mask title={item.description}>{item.description}</span>
+                        {item.partially_linked && (
+                          <span className="block truncate text-[11px] text-muted-foreground" data-ph-mask>
+                            {t('chip_remainder', {
+                              total: formatCurrency(item.partially_linked.entry_amount, currency),
+                              count: item.partially_linked.linked_count,
+                            })}
+                          </span>
+                        )}
                       </td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')} data-ph-mask>
                         {formatCurrency(item.amount, currency)}
@@ -365,7 +421,18 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
         )}
         {Math.abs(difference) >= 0.005 && pickedExternal.size > 0 && entry && (
           isSkv ? (
-            <span className="text-[12.5px] text-muted-foreground">{t('match_hint_residual_skv')}</span>
+            <span className="flex flex-wrap items-center gap-2 text-[12.5px]">
+              <span className="text-muted-foreground">{t('match_hint_remainder_skv')}</span>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void link(true)}
+                disabled={!canLinkWithRemainder}
+                aria-busy={busy}
+              >
+                {t('match_apply_remainder', { amount: formatCurrency(remainder, currency) })}
+              </Button>
+            </span>
           ) : (
             <span className="flex items-center gap-2 text-[12.5px]">
               <label htmlFor="residual-kind" className="text-muted-foreground">{t('match_residual_label')}</label>
