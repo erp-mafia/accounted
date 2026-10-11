@@ -16,6 +16,8 @@ export interface PayableAccount {
   name: string | null
   ledger_account: string
   iban: string | null
+  /** The bank behind the account, for its mark and the signing step. */
+  bank_name: string | null
   payable: boolean
   reason: 'account_disabled' | 'not_sek' | 'iban_missing' | 'bank_unknown' | null
 }

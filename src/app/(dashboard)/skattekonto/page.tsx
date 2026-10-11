@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { FLOATING_BULK_BAR_CLASS } from '@/components/ui/floating-bulk-bar'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { PageHeader } from '@/components/ui/page-header'
@@ -818,7 +819,7 @@ export default function SkattekontoPage() {
       {/* Bulkbar (transactions-page pattern): hidden until at least one
           ignorable row is selected via the hover checkboxes. */}
       {activeSelectedIds.size > 0 && (
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-1 py-2.5 text-[12.5px] animate-fade-in">
+        <div className={FLOATING_BULK_BAR_CLASS}>
           <span className="whitespace-nowrap">
             {t('bulk_selected', { count: activeSelectedIds.size })}
           </span>

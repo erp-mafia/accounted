@@ -8,6 +8,7 @@ import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { FLOATING_BULK_BAR_CLASS } from '@/components/ui/floating-bulk-bar'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogVeil, useDashShellInert } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
@@ -4431,14 +4432,7 @@ export default function TransactionsPage() {
                 count and the batch actions. */}
             {(selectedIds.size > 0 || skvSelectedIds.size > 0) && (
               <div
-                className={cn(
-                  'flex items-center gap-x-5 gap-y-2 text-[12.5px] animate-fade-in',
-                  // A floating bar centred over the panel (concept .floatbar),
-                  // so it stays in view however far down the selection
-                  // reaches and the list does not shift under it. Offset by
-                  // --bottom-nav-h so it clears the mobile bottom nav (#2738).
-                  'fixed bottom-[calc(var(--bottom-nav-h)+1rem)] left-1/2 z-30 max-w-[calc(100vw-2rem)] -translate-x-1/2 overflow-x-auto whitespace-nowrap rounded-full border border-border bg-background px-4 py-2 shadow-[var(--shadow-md)] md:left-[calc(50%+var(--nav-w)/2)]',
-                )}
+                className={FLOATING_BULK_BAR_CLASS}
               >
                 {batchProgress ? (
                   <span className="flex items-center gap-2 text-muted-foreground">

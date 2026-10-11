@@ -16,6 +16,8 @@ export interface PayableAccount {
   name: string | null
   ledger_account: string
   iban: string | null
+  /** The bank behind the account, as its connection reports it; the mark and the signing step name it. */
+  bank_name: string | null
   payable: boolean
   reason: Exclude<DebtorResolution, { ok: true }>['reason'] | null
 }
@@ -59,6 +61,7 @@ export async function getPaymentsAvailability(ctx: OperationContext): Promise<Pa
       name: a.name,
       ledger_account: a.ledger_account,
       iban: a.iban,
+      bank_name: a.bank_connection?.bank_name ?? null,
       payable: debtor.ok,
       reason: debtor.ok ? null : debtor.reason,
     }

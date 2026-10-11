@@ -14,6 +14,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { BankIdSigningFlow, type SigningFlowStage } from './BankIdSigningFlow'
+import { BankMark } from '@/components/banks/BankMark'
 import {
   approvePaymentOrders,
   fetchPaymentsAvailability,
@@ -260,6 +261,7 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
                 <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-[13px]">
                   <div className="flex items-center gap-2">
                     <span className="text-muted-foreground">{t('account_from')}</span>
+                    <BankMark bankName={account?.bank_name} />
                     {payableAccounts.length > 1 ? (
                       <select
                         aria-label={t('account_label')}
@@ -454,6 +456,7 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
           <BankIdSigningFlow
             orders={orders.map((o) => ({ id: o.id, payee_name: o.payee_name, amount: Number(o.amount), currency: o.currency }))}
             signerKnown={availability.signer_known}
+            bankName={account?.bank_name ?? null}
             closeButton={closeButton}
             onStageChange={setSigningStage}
             autoStart

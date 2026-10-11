@@ -894,7 +894,7 @@ Response `200`:
     available: boolean,
     reason: "no_provider" | "not_in_pilot" | "subscription" | "sandbox" | null,
     provider: string | null,
-    accounts: { cash_account_id: string, name: string | null, ledger_account: string, iban: string | null, payable: boolean, reason: "account_disabled" | "not_sek" | "iban_missing" | "bank_unknown" | null }[],
+    accounts: { cash_account_id: string, name: string | null, ledger_account: string, iban: string | null, bank_name: string | null, payable: boolean, reason: "account_disabled" | "not_sek" | "iban_missing" | "bank_unknown" | null }[],
     signer_known: boolean
   },
   meta: {
@@ -922,6 +922,7 @@ Example response `200`:
         "name": "Företagskonto",
         "ledger_account": "1930",
         "iban": "SE35 **** 0003",
+        "bank_name": "Swedbank",
         "payable": true,
         "reason": null
       }

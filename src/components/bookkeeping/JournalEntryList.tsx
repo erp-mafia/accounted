@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/data-list'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { FLOATING_BULK_BAR_CLASS } from '@/components/ui/floating-bulk-bar'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Label } from '@/components/ui/label'
@@ -1472,7 +1473,7 @@ export default function JournalEntryList({
             count and the batch actions. Select-all and the filter-scoped
             bulk mark live inside it as quiet actions. */}
         {selectedIds.size > 0 && (
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-1 py-2.5 text-[12.5px] animate-fade-in">
+          <div className={FLOATING_BULK_BAR_CLASS}>
             <span className="whitespace-nowrap">
               <strong className="font-semibold tabular-nums">{selectedIds.size}</strong>{' '}
               {t('bulkbar_selected', { count: selectedIds.size })}

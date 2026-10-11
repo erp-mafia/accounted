@@ -5,6 +5,7 @@ import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
+import { BankMark } from '@/components/banks/BankMark'
 import { useToast } from '@/components/ui/use-toast'
 import {
   SettingsBackLink,
@@ -163,6 +164,7 @@ export function BankPaymentsSettingsContent() {
                   key={account.id}
                   label={
                     <span className="flex min-w-0 items-center gap-2">
+                      <BankMark bankName={account.bank_name} size={18} />
                       <span className="shrink-0 tabular-nums text-muted-foreground">{account.ledger_account}</span>
                       <span className="truncate">{account.name ?? account.iban ?? account.ledger_account}</span>
                     </span>

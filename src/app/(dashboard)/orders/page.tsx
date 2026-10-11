@@ -8,6 +8,7 @@ import { MoreHorizontal, ShoppingCart } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { FLOATING_BULK_BAR_CLASS } from '@/components/ui/floating-bulk-bar'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
   DropdownMenu,
@@ -293,7 +294,7 @@ export default function OrdersPage() {
           {/* Bulkbar (transactions-page pattern): hidden until at least one
               bookable order is selected via the hover checkboxes. */}
           {selectedIds.size > 0 && (
-            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-1 py-2.5 text-[12.5px] animate-fade-in">
+            <div className={FLOATING_BULK_BAR_CLASS}>
               <span className="whitespace-nowrap">
                 <strong className="font-semibold tabular-nums">{selectedIds.size}</strong>{' '}
                 {t('bulk_selected', { count: selectedIds.size })}

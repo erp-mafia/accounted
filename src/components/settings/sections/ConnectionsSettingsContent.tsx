@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Landmark } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { bankLogoFile } from '@/components/banks/BankMark'
 import { GoogleMark } from '@/components/ui/provider-marks'
 import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
 import {
@@ -27,26 +28,6 @@ import { fetchPaymentsAvailability } from '@/components/payments/payments-client
 
 // Bank logos shipped in public/logos/banks, matched against the connected
 // bank's display name (lowercased, spaces removed).
-const BANK_LOGOS: Array<[match: string, file: string]> = [
-  ['seb', 'seb'],
-  ['swedbank', 'swedbank'],
-  ['handelsbanken', 'handelsbanken'],
-  ['nordea', 'nordea'],
-  ['danske', 'danske'],
-  ['länsförsäkringar', 'lansforsakringar'],
-  ['lansforsakringar', 'lansforsakringar'],
-  ['lunar', 'lunar'],
-  ['revolut', 'revolut'],
-  ['wise', 'wise'],
-  ['svea', 'svea'],
-]
-
-function bankLogo(bankName: string | null): string | null {
-  if (!bankName) return null
-  const key = bankName.toLowerCase().replace(/\s+/g, '')
-  return BANK_LOGOS.find(([match]) => key.includes(match))?.[1] ?? null
-}
-
 /** 28px tile holding a brand mark, so every connection row starts the same way. */
 function LogoTile({ children }: { children: React.ReactNode }) {
   return (
@@ -161,7 +142,7 @@ export function ConnectionsSettingsContent() {
     }
   }, [companyId])
 
-  const bankFile = bankLogo(status?.bankName ?? null)
+  const bankFile = bankLogoFile(status?.bankName ?? null)
 
   function row(opts: {
     logo: React.ReactNode

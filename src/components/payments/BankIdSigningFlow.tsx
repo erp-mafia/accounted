@@ -11,6 +11,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { formatCurrency } from '@/lib/utils'
 import { BankIdChallengeQr } from './BankIdChallengeQr'
+import { BankMark } from '@/components/banks/BankMark'
 import { PAYMENT_ORDER_STATUS_BADGE, PERMANENT_SIGNING_FAILURES } from './payment-order-status'
 import {
   bankIdAutostartHref,
@@ -50,6 +51,8 @@ interface BankIdSigningFlowProps {
   onStageChange?: (stage: SigningFlowStage) => void
   /** Start the QR signing at once when the person has a BankID login on file: no method step to click through. */
   autoStart?: boolean
+  /** The bank the payments leave from, named with its mark on the signing step. */
+  bankName?: string | null
 }
 
 /** The signing is over, one way or the other: show where each payment stands. */
@@ -71,7 +74,7 @@ export function signingFinished(view: SigningView): boolean {
  * The flow never approves anything: it only signs orders that are already
  * approved (Godkänn and Signera are never one button).
  */
-export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBank, onStageChange, autoStart = false }: BankIdSigningFlowProps) {
+export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBank, onStageChange, autoStart = false, bankName = null }: BankIdSigningFlowProps) {
   const t = useTranslations('bank_payments')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
@@ -205,11 +208,18 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
     const key = `status_${status}`
     return t.has(key) ? t(key) : status
   }
+  const bankLine = bankName ? (
+    <p className="flex items-center justify-center gap-2 text-[13px] text-muted-foreground">
+      <BankMark bankName={bankName} />
+      <span>{t('sign_at_bank', { bank: bankName })}</span>
+    </p>
+  ) : null
 
   if (stage === 'method') {
     const disabled = busy || orders.length === 0 || (needsPersonalNumber && !typedNumber)
     return (
       <div className="space-y-4">
+        {bankLine}
         <p className="text-[13px] text-muted-foreground">
           {t('sign_summary', { count: orders.length, total: formatCurrency(total, currency) })}
         </p>
@@ -249,6 +259,7 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
     const waiting = signing.status === 'awaiting_signature'
     return (
       <div className="space-y-4 text-center">
+        {waiting && bankLine}
         {waiting && signing.challenge?.qrData && (
           <>
             <BankIdChallengeQr data={signing.challenge.qrData} label={t('qr_label')} />

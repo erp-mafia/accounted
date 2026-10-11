@@ -7,6 +7,8 @@ import { Landmark } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Button } from '@/components/ui/button'
+import { BankMark } from '@/components/banks/BankMark'
+import { FLOATING_BULK_BAR_CLASS } from '@/components/ui/floating-bulk-bar'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -174,13 +176,6 @@ export function PaymentOrdersPage() {
     <PageHeader
       title={t('title')}
       help={<HelpPopover>{t('help_body')}</HelpPopover>}
-      action={
-        available && canWrite && selectedOrders.length > 0 ? (
-          <Button size="sm" onClick={() => setSigning(selectedOrders)}>
-            {t('sign_selected', { count: selectedOrders.length })}
-          </Button>
-        ) : undefined
-      }
     />
   )
 
@@ -216,6 +211,20 @@ export function PaymentOrdersPage() {
   return (
     <div className="space-y-8">
       {header}
+
+      {available && canWrite && selectedOrders.length > 0 && (
+        <div className={FLOATING_BULK_BAR_CLASS}>
+          <span className="whitespace-nowrap">
+            <strong className="font-semibold tabular-nums">{selectedOrders.length}</strong> {t('selected_count', { count: selectedOrders.length })}
+          </span>
+          <Button size="sm" onClick={() => setSigning(selectedOrders)}>
+            {t('sign_selected', { count: selectedOrders.length })}
+          </Button>
+          <button type="button" className={QUIET_LINK_CLASS} onClick={() => setSelected(new Set())}>
+            {t('clear_selection')}
+          </button>
+        </div>
+      )}
 
       {!available && !hasOrders && (
         <>
@@ -331,6 +340,15 @@ export function PaymentOrdersPage() {
                           </td>
                           <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask')}>
                             {formatCurrency(Number(order.amount), order.currency)}
+                            {(() => {
+                              const from = availability?.accounts.find((a) => a.id === order.cash_account_id)
+                              return from ? (
+                                <span className="flex items-center justify-end gap-1.5 text-[11px] text-muted-foreground">
+                                  <BankMark bankName={from.bank_name} size={14} />
+                                  {from.ledger_account}
+                                </span>
+                              ) : null
+                            })()}
                           </td>
                           <td className={cn(TD_CLASS, 'whitespace-nowrap text-right')}>
                             {canWrite && (

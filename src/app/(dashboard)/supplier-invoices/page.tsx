@@ -8,6 +8,7 @@ import { groupRows } from '@/lib/lists/group-rows'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { FLOATING_BULK_BAR_CLASS } from '@/components/ui/floating-bulk-bar'
 import { Checkbox } from '@/components/ui/checkbox'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { DataListEmpty } from '@/components/ui/data-list'
@@ -651,7 +652,7 @@ export default function SupplierInvoicesPage() {
 
       {/* Bulkbar: appears once anything is selected (transactions-page shape). */}
       {selectedIds.size > 0 && (
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-1 py-2.5 text-[12.5px] animate-fade-in">
+        <div className={FLOATING_BULK_BAR_CLASS}>
           <span className="whitespace-nowrap">
             <strong className="font-semibold tabular-nums">{selectedIds.size}</strong>{' '}
             {t('bulkbar_selected', { count: selectedIds.size })}

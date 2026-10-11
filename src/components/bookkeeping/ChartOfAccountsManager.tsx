@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { FLOATING_BULK_BAR_CLASS } from '@/components/ui/floating-bulk-bar'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Switch } from '@/components/ui/switch'
@@ -674,7 +675,7 @@ export default function ChartOfAccountsManager() {
             {/* Bulk bar: appears with the first selection, carries the count
                 and the one action the selection exists for. */}
             {selectedNumbers.size > 0 && (
-              <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-border px-1 py-2 text-[12.5px] animate-fade-in">
+              <div className={FLOATING_BULK_BAR_CLASS}>
                 <span className="whitespace-nowrap">
                   <strong className="font-semibold tabular-nums">{selectedNumbers.size}</strong>{' '}
                   {t('bulkbar_selected', { count: selectedNumbers.size })}

@@ -10,6 +10,7 @@ import { useLocale, useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { Button } from '@/components/ui/button'
+import { FLOATING_BULK_BAR_CLASS } from '@/components/ui/floating-bulk-bar'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
@@ -976,7 +977,7 @@ export default function InvoicesPage() {
 
       {/* Bulkbar: appears once anything is selected (supplier-invoices shape). */}
       {selectedIds.size > 0 && (
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-1 py-2 text-[12.5px] animate-fade-in">
+        <div className={FLOATING_BULK_BAR_CLASS}>
           <span className="whitespace-nowrap">
             <strong className="font-semibold tabular-nums">{selectedIds.size}</strong>{' '}
             {t('bulkbar_selected', { count: selectedIds.size })}

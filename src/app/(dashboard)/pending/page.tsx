@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { FLOATING_BULK_BAR_CLASS } from '@/components/ui/floating-bulk-bar'
 import { Checkbox } from '@/components/ui/checkbox'
 import { DataListEmpty, DataListLoading } from '@/components/ui/data-list'
 import { ContextPicker } from '@/components/common/ContextPicker'
@@ -885,7 +886,7 @@ export default function PendingOperationsPage() {
             via the hover checkboxes, then it pops in with the count, the batch
             actions, and the selection shortcuts as quiet links. */}
         {showBulkControls && selectedCount > 0 && (
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-1 py-2.5 text-[12.5px] animate-fade-in">
+          <div className={FLOATING_BULK_BAR_CLASS}>
             <span className="whitespace-nowrap">
               <strong className="font-semibold tabular-nums">{selectedCount}</strong>{' '}
               {t('bulkbar_selected', { count: selectedCount })}
