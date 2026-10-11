@@ -30,6 +30,7 @@ export function gateContext(overrides: Partial<NavGateContext> = {}): NavGateCon
     hasWebshop: true,
     hasMileage: true,
     hasExpenseClaims: true,
+    hasPosSales: true,
     arkivEnabled: true,
     agentsEnabled: true,
     capabilities: [CAPABILITY.ai],

@@ -19,6 +19,8 @@ export interface NavGateContext {
   hasWebshop: boolean
   hasMileage: boolean
   hasExpenseClaims: boolean
+  /** A POS connection exists, live or ended (lib/dashboard/nav-flags.ts). */
+  hasPosSales: boolean
   arkivEnabled: boolean
   agentsEnabled: boolean
   capabilities: readonly string[]
@@ -50,6 +52,8 @@ export function passesNavGates(item: NavGateFlags, ctx: NavGateContext): boolean
   if (item.requiresMileage && !ctx.hasMileage) return false
   // Utlägg is hidden until a claim exists (registered from Underlag).
   if (item.requiresExpenses && !ctx.hasExpenseClaims) return false
+  // Kassarapporter is hidden until a POS venue has been connected.
+  if (item.requiresPosSales && !ctx.hasPosSales) return false
   // Arkiv rolls out per company; outside the rollout the pages 404.
   if (item.requiresArkiv && !ctx.arkivEnabled) return false
   // The Agenter page is hidden in production while it is finished.

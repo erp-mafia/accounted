@@ -45,6 +45,7 @@ import {
   Workflow,
   FolderArchive,
   ShoppingCart,
+  Store,
   Car,
   ClipboardList,
   Truck,
@@ -112,6 +113,9 @@ interface DashboardNavProps {
   // start from the Underlag pane ("Vem betalade?"), so the page only earns a
   // nav row once there is a person to pay out. Computed by the layout.
   hasExpenseClaims?: boolean
+  // Whether the Kassarapporter row shows: a POS connection exists (live or
+  // ended, so fetched days stay reachable). Computed by the layout.
+  hasPosSales?: boolean
   // Whether the company is in the Arkiv rollout (ARKIV_COMPANY_IDS). Computed by the layout.
   arkivEnabled?: boolean
   agentsEnabled?: boolean
@@ -138,6 +142,7 @@ type NavLabelKey =
   | 'quotes'
   | 'sales_orders'
   | 'webshop_orders'
+  | 'pos_sales'
   | 'customers'
   | 'articles'
   | 'supplier_invoices'
@@ -204,6 +209,9 @@ interface NavItem {
   // WooCommerce/Shopify connection or already-imported order rows.
   // UI-visibility gate only; the page and APIs work regardless.
   requiresWebshop?: boolean
+  // Kassarapporter: visible only when the company has a POS connection, live
+  // or ended (the days stay reachable). UI-visibility gate only.
+  requiresPosSales?: boolean
   // Körjournal surfaces: visible only when the company has opted in via the
   // bookkeeping settings toggle (company_settings.mileage_enabled) or already
   // has trips. UI-visibility gate only; the page and APIs work regardless.
@@ -254,6 +262,8 @@ const navItems: NavItem[] = [
   // Deliberately NOT capability-gated: a company whose entitlement lapsed
   // must still reach its already-imported orders (accounting underlag).
   { href: '/orders', labelKey: 'webshop_orders', icon: ShoppingCart, group: 'arbeta', requiresWebshop: true, betaBadge: true },
+  // Kassarapporter: the POS days, visible once a venue is connected.
+  { href: '/kassa', labelKey: 'pos_sales', icon: Store, group: 'arbeta', requiresPosSales: true, betaBadge: true },
   { href: '/supplier-invoices', labelKey: 'supplier_invoices', icon: Wallet, group: 'arbeta' },
   // Utlägg: out-of-pocket purchases and their reimbursement batches. Hidden
   // until a claim exists: a receipt paid privately is registered from the
@@ -328,7 +338,7 @@ const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
   skatt: 'group_tax',
 }
 
-export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, arkivEnabled = false, agentsEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
+export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, hasPosSales = false, arkivEnabled = false, agentsEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
   const pathname = usePathname()
   const navRowClaim = useNavRowClaim(pathname)
   const router = useRouter()
@@ -568,6 +578,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     hasWebshop,
     hasMileage,
     hasExpenseClaims,
+    hasPosSales,
     arkivEnabled,
     agentsEnabled,
     capabilities,

@@ -45,6 +45,12 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   correct_opening_balances: 'high',
   // Inline rättelse of the IB verifikat (#3313): same tier as correct_entry_lines_inline.
   split_opening_balances_per_project: 'high',
+  // POS sales: connecting only starts fetching; the mapping decides future
+  // vouchers; booking posts the daily takings voucher.
+  connect_pos_venue: 'low',
+  disconnect_pos_connection: 'medium',
+  update_pos_sales_settings: 'medium',
+  book_pos_sales_day: 'high',
   delete_supplier_invoice: 'medium',
   uncredit_supplier_invoice: 'high',
   update_supplier_invoice_item_account: 'high',

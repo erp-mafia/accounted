@@ -51,6 +51,10 @@
       "schedule": "30 3 * * *"
     },
     {
+      "path": "/api/pos-sales/cron",
+      "schedule": "25 * * * *"
+    },
+    {
       "path": "/api/documents/verify/cron",
       "schedule": "0 3 * * *"
     },

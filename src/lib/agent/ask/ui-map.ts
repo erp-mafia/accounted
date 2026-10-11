@@ -104,6 +104,7 @@ export async function loadNavGateContext(
     hasWebshop: navFlags.hasWebshop,
     hasMileage: (settings?.mileage_enabled ?? false) || navFlags.hasMileageTrips,
     hasExpenseClaims: navFlags.hasExpenseClaims,
+    hasPosSales: navFlags.hasPosSales,
     arkivEnabled: isArkivSectionEnabled(companyId),
     agentsEnabled: isAgentsPageEnabled(companyId),
     capabilities: entitlements.capabilities,

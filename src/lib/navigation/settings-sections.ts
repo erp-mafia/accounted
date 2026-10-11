@@ -21,6 +21,7 @@ export const SETTINGS_SECTION_PARENT: Record<string, string> = {
   'bank-payments': 'connections',
   mail: 'connections',
   assistant: 'connections',
+  pos: 'connections',
 }
 
 export interface SettingsSection {

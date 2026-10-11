@@ -72,6 +72,7 @@ export const DIMENSION_RULE_POLICY: Readonly<Record<JournalEntrySourceType, Dime
   supplier_invoice_privately_paid: 'enforced',
   salary_payment: 'enforced',
   webshop_order: 'enforced',
+  pos_daily_sales: 'enforced',
   expense_claim: 'enforced',
   reminder_fee: 'enforced',
   opening_balance: 'exempt',

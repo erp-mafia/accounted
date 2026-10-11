@@ -146,7 +146,7 @@ function supabaseReturning(tables: Record<string, Row>): SupabaseClient {
 describe('loadNavGateContext', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    getDashboardNavFlags.mockResolvedValue({ hasWebshop: false, hasMileageTrips: true, hasExpenseClaims: false })
+    getDashboardNavFlags.mockResolvedValue({ hasWebshop: false, hasMileageTrips: true, hasExpenseClaims: false, hasPosSales: false })
     getCompanyEntitlements.mockResolvedValue({ capabilities: ['ai'] })
   })
 
@@ -175,6 +175,7 @@ describe('loadNavGateContext', () => {
       // Existing trips keep Körjournal visible even with the toggle off.
       hasMileage: true,
       hasExpenseClaims: false,
+      hasPosSales: false,
       capabilities: ['ai'],
     })
   })
@@ -203,7 +204,7 @@ describe('loadNavGateContext', () => {
 describe('buildUiGrounding', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    getDashboardNavFlags.mockResolvedValue({ hasWebshop: false, hasMileageTrips: false, hasExpenseClaims: false })
+    getDashboardNavFlags.mockResolvedValue({ hasWebshop: false, hasMileageTrips: false, hasExpenseClaims: false, hasPosSales: false })
     getCompanyEntitlements.mockResolvedValue({ capabilities: ['ai'] })
   })
 
