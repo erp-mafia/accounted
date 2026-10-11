@@ -17,6 +17,7 @@ import {
   bankIdAutostartHref,
   PaymentsClientError,
   pollSigning,
+  providerCodeText,
   restartSigning,
   startCompanyVerification,
   startSigning,
@@ -129,7 +130,13 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
       const code = error instanceof PaymentsClientError ? error.code : null
       if (code === 'PAYMENT_COMPANY_VERIFICATION_REQUIRED') setRefusal('verification')
       else if (code === 'PAYMENT_SIGNING_REDIRECT_UNSUPPORTED') setRefusal('redirect')
-      else fail(t('signing_start_failed_title'), error)
+      else {
+        // The bank's own refusal code, as a sentence when we know it.
+        const details = error instanceof PaymentsClientError ? (error.body as { error?: { details?: { provider_code?: string } } } | null)?.error?.details : null
+        const known = providerCodeText(t, details?.provider_code)
+        if (known) toast({ title: t('signing_start_failed_title'), description: known, variant: 'destructive' })
+        else fail(t('signing_start_failed_title'), error)
+      }
     } finally {
       setBusy(false)
     }
@@ -283,7 +290,7 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
               {failure === 'SCA_REDIRECT_UNSUPPORTED'
                 ? t('signing_redirect_unsupported')
                 : permanent
-                  ? t('signing_failed_permanent', { code: failure })
+                  ? (providerCodeText(t, failure) ?? t('signing_failed_permanent', { code: failure }))
                   : t('signing_failed')}
             </AttnLine>
             {!permanent && signing.status === 'created' && (
@@ -312,7 +319,7 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
     <div className="space-y-4">
       {doneFailure && (
         <AttnLine>
-          {doneFailure === 'SCA_REDIRECT_UNSUPPORTED' ? t('signing_redirect_unsupported') : t('signing_failed_permanent', { code: doneFailure })}
+          {doneFailure === 'SCA_REDIRECT_UNSUPPORTED' ? t('signing_redirect_unsupported') : (providerCodeText(t, doneFailure) ?? t('signing_failed_permanent', { code: doneFailure }))}
         </AttnLine>
       )}
       <ul className="space-y-2 text-[13px]">

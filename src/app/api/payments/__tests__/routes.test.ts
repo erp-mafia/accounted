@@ -294,7 +294,8 @@ describe('cancelling an order the bank may hold', () => {
     registerPaymentInitiationProvider({ id: 'open_payments', isAvailableFor: () => true, cancelPayment } as unknown as PaymentInitiationProvider)
     enqueue({ data: [atBank()] })
     enqueue({ data: { org_number: '5566778899' } })
-    enqueue({ data: null })
+    enqueue({ data: null }) // bankid_identities
+    enqueue({ data: null }) // payment_signers
     enqueue({ data: null }) // cancel_requested
     enqueue({ data: [{ id: ORDER }] })
 
@@ -367,7 +368,8 @@ describe('a person resolving what the bank cannot', () => {
     registerPaymentInitiationProvider({ id: 'open_payments', isAvailableFor: () => true, getPaymentState } as unknown as PaymentInitiationProvider)
     enqueue({ data: [stranded()] })
     enqueue({ data: { org_number: '5566778899' } })
-    enqueue({ data: null })
+    enqueue({ data: null }) // bankid_identities
+    enqueue({ data: null }) // payment_signers
     enqueue({ data: { ok: true, status: 'cancelled' } })
     expect((await resolve({ resolution: 'not_at_bank' })).status).toBe(200)
     expect(mockSupabase.rpc).toHaveBeenLastCalledWith('resolve_payment_order', expect.objectContaining({ p_bank_answer: 'not_found' }))

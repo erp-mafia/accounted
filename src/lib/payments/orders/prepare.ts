@@ -18,6 +18,7 @@ import { randomUUID } from 'node:crypto'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { evaluateInvoiceForBatch, type BatchExclusionReason } from '@/lib/payments/batch-eligibility'
 import { openPaymentsDoor } from './switched-on'
+import { nextBankDayIso } from '@/lib/payments/bank-days'
 import { formatPayeeLabel, type SupplierPayee } from '@/lib/payments/supplier-payee'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { createServiceClient } from '@/lib/supabase/server'
@@ -46,9 +47,12 @@ export type PrepareSkipReason = BatchExclusionReason | 'not_found' | 'in_payment
 
 export interface PreparedOrderWarning {
   supplier_invoice_id: string
-  code: 'unattested' | 'ocr_invalid' | 'payee_changed' | 'payee_new'
+  code: 'unattested' | 'ocr_invalid' | 'payee_changed' | 'payee_new' | 'date_moved'
   /** For payee warnings: the other account, so the person can compare. */
   alternative_payee?: string | null
+  /** For date_moved: the day asked for, which was no banking day, and the banking day it became. */
+  from?: string
+  to?: string
 }
 
 export interface PreparePaymentOrdersResult {
@@ -236,11 +240,16 @@ export async function preparePaymentOrders(
     alternatives.set(id, payee.alternative ? formatPayeeLabel(payee.alternative) : null)
 
     const reference = evaluation.reference
+    // The bank pays on banking days only: a weekend or a Swedish holiday is
+    // refused by the provider, so the date moves to the next banking day.
+    const wantedDate = input.executionDate ?? evaluation.defaults.payment_date
+    const executionDate = nextBankDayIso(wantedDate)
+    if (executionDate !== wantedDate) warnings.push({ supplier_invoice_id: id, code: 'date_moved', from: wantedDate, to: executionDate })
     payloads.push({
       supplier_invoice_id: id,
       amount: evaluation.defaults.amount,
       currency: invoice.currency,
-      requested_execution_date: input.executionDate ?? evaluation.defaults.payment_date,
+      requested_execution_date: executionDate,
       cash_account_id: input.cashAccountId,
       debtor_snapshot: debtor.debtor,
       ...payeeColumns(payee.payee),
@@ -259,7 +268,8 @@ export async function preparePaymentOrders(
       supplier_invoice_number: invoice.supplier_invoice_number,
       amount: evaluation.defaults.amount,
       currency: invoice.currency,
-      requested_execution_date: input.executionDate ?? evaluation.defaults.payment_date,
+      requested_execution_date: executionDate,
+      date_moved_from: executionDate !== wantedDate ? wantedDate : null,
       payee: { type: payee.payee.type, label: formatPayeeLabel(payee.payee), source: payee.source },
       reference: { type: reference.type === 'ocr' ? 'ocr' : 'message', value: reference.value },
       warnings: evaluation.warnings.filter((w) => w === 'unattested' || w === 'ocr_invalid'),

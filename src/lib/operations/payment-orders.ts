@@ -428,13 +428,15 @@ const SKIP_REASON = z
 const PrepareWarning = z.object({
   supplier_invoice_id: z.string().uuid(),
   code: z
-    .enum(['unattested', 'ocr_invalid', 'payee_changed', 'payee_new'])
+    .enum(['unattested', 'ocr_invalid', 'payee_changed', 'payee_new', 'date_moved'])
     .describe(
       'unattested: the invoice is not attested; ocr_invalid: the OCR fails its check digit, so the invoice number goes as a message; ' +
         'payee_changed: the account differs from the supplier card; payee_new: never confirmed for this supplier. The payee warnings ' +
-        'need a person\'s confirmation at approval.',
+        'need a person\'s confirmation at approval. date_moved: the day asked for was no banking day; from and to say which.',
     ),
   alternative_payee: z.string().nullable().optional().describe('For payee_changed: the other account, as a label, so the person can compare.'),
+  from: z.string().optional().describe('For date_moved: the day asked for (YYYY-MM-DD).'),
+  to: z.string().optional().describe('For date_moved: the banking day the payment got.'),
 })
 
 export const paymentOrdersPrepare = defineOperation({

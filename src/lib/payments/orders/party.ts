@@ -4,7 +4,7 @@
  * stored on the order or logged.
  */
 
-import { normalizeSignerPersonalNumber, signerPersonalNumberFromBankIdLogin } from '@/lib/auth/bankid-signer'
+import { normalizeSignerPersonalNumber, signerPersonalNumberOnFile } from '@/lib/auth/bankid-signer'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { PaymentPartyContext } from '@/lib/payments/initiation/provider'
 import type { DebtorSnapshot } from './debtor'
@@ -38,7 +38,7 @@ export async function buildPartyContext(
   if (signer.personalNumber && !typed) {
     return { ok: false, outcome: { ok: false, code: 'PAYMENT_SIGNER_PERSONAL_NUMBER_REQUIRED', details: { reason: 'invalid' } } }
   }
-  const personalNumber = typed ?? (await signerPersonalNumberFromBankIdLogin(ctx.userId))
+  const personalNumber = typed ?? (await signerPersonalNumberOnFile(ctx.userId))
   if (options.requireSigner && !personalNumber) {
     return { ok: false, outcome: { ok: false, code: 'PAYMENT_SIGNER_PERSONAL_NUMBER_REQUIRED' } }
   }

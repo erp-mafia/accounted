@@ -199,6 +199,20 @@ describe('preparePaymentOrders', () => {
     expect(db.findCall('rpc:create_payment_orders', 'rpc')).toBeUndefined()
   })
 
+  it('moves a weekend or holiday date to the next banking day and says so', async () => {
+    db.setTable('supplier_invoices', { data: [invoice('a', { due_date: '2026-10-10' })] }) // a Saturday, already passed on the 11th
+    db.setTable('rpc:create_payment_orders', { data: { ok: true, orders: [{ id: 'order-a', supplier_invoice_id: 'a', payee_check: 'known' }] } })
+    const result = await preparePaymentOrders(ctx, { supplierInvoiceIds: ['a'], cashAccountId: 'acct-1', today: '2026-10-11' })
+    if (!result.ok || result.dryRun) throw new Error('unexpected')
+    const [args] = db.findCall('rpc:create_payment_orders', 'rpc') as [{ p_orders: Array<Record<string, unknown>> }]
+    expect(args.p_orders[0]).toMatchObject({ requested_execution_date: '2026-10-12' })
+    expect(result.data.warnings).toContainEqual({ supplier_invoice_id: 'a', code: 'date_moved', from: '2026-10-11', to: '2026-10-12' })
+
+    const preview = await preparePaymentOrders(ctx, { supplierInvoiceIds: ['a'], cashAccountId: 'acct-1', executionDate: '2027-01-01', today: '2026-10-11', dryRun: true })
+    if (!preview.ok || !preview.dryRun) throw new Error('unexpected')
+    expect((preview.preview as { lines: Array<Record<string, unknown>> }).lines[0]).toMatchObject({ requested_execution_date: '2027-01-04', date_moved_from: '2027-01-01' })
+  })
+
   it('refuses an execution date in the past', async () => {
     expect(
       await preparePaymentOrders(ctx, { supplierInvoiceIds: ['a'], cashAccountId: 'acct-1', executionDate: '2026-09-01', today: '2026-09-30' }),

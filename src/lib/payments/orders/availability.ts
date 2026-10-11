@@ -4,7 +4,7 @@
  * customer): what the payment dialog needs before it offers anything.
  */
 
-import { hasBankIdLogin } from '@/lib/auth/bankid-signer'
+import { hasSignerOnFile } from '@/lib/auth/bankid-signer'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { getPaymentInitiationProvider, PaymentProviderError, type PaymentPartyContext } from '@/lib/payments/initiation/provider'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
@@ -66,7 +66,7 @@ export async function getPaymentsAvailability(ctx: OperationContext): Promise<Pa
       reason: debtor.ok ? null : debtor.reason,
     }
   })
-  return { available: true, reason: null, provider: provider.id, accounts, signer_known: await hasBankIdLogin(ctx.userId) }
+  return { available: true, reason: null, provider: provider.id, accounts, signer_known: await hasSignerOnFile(ctx.userId) }
 }
 
 async function companyParty(ctx: OperationContext): Promise<PaymentPartyContext | null> {

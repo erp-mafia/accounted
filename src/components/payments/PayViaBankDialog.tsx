@@ -286,6 +286,7 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
                         <Input
                           type="date"
                           aria-label={t('date_label')}
+                          min={new Date().toLocaleDateString('sv-SE')}
                           value={executionDate}
                           onChange={(e) => setExecutionDate(e.target.value)}
                           className="h-8 w-[160px] tabular-nums"
@@ -359,7 +360,12 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
                                   {line.reference.type === 'ocr' ? `OCR ${line.reference.value}` : line.reference.value}
                                 </span>
                               </td>
-                              <td className="whitespace-nowrap py-2 pr-3 tabular-nums">{formatDate(line.requested_execution_date)}</td>
+                              <td className="whitespace-nowrap py-2 pr-3 tabular-nums">
+                                {formatDate(line.requested_execution_date)}
+                                {line.date_moved_from && (
+                                  <span className="block text-[11px] text-muted-foreground">{t('date_moved', { from: formatDate(line.date_moved_from) })}</span>
+                                )}
+                              </td>
                               <td className="whitespace-nowrap py-2 text-right tabular-nums">{formatCurrency(Number(line.amount), line.currency)}</td>
                             </tr>
                           )

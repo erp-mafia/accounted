@@ -89,7 +89,13 @@ export interface PaymentOrder {
 export interface PreparedOrders {
   orders: PaymentOrder[]
   skipped: Array<{ supplier_invoice_id: string; reason: string }>
-  warnings: Array<{ supplier_invoice_id: string; code: 'unattested' | 'ocr_invalid' | 'payee_changed' | 'payee_new'; alternative_payee?: string | null }>
+  warnings: Array<{
+    supplier_invoice_id: string
+    code: 'unattested' | 'ocr_invalid' | 'payee_changed' | 'payee_new' | 'date_moved'
+    alternative_payee?: string | null
+    from?: string
+    to?: string
+  }>
   /** Drafts of the same invoices nobody had approved, cancelled so this prepare wins. */
   replaced_draft_ids?: string[]
 }
@@ -102,6 +108,8 @@ export interface PreparedPreviewLine {
   amount: number
   currency: string
   requested_execution_date: string
+  /** The day asked for when it was no banking day and the payment moved to the next one. */
+  date_moved_from: string | null
   payee: { type: string; label: string; source: string }
   reference: { type: 'ocr' | 'message'; value: string }
   warnings: Array<'unattested' | 'ocr_invalid'>
@@ -161,6 +169,13 @@ export interface SupplierInvoicePaymentRow {
  * answer with) so getErrorMessage() can turn it into the person's language,
  * and the envelope code when there is one.
  */
+/** The bank's or the provider's refusal code as a sentence, when we know one; else null. */
+export function providerCodeText(t: { has: (key: string) => boolean; (key: string): string }, code: string | null | undefined): string | null {
+  if (!code) return null
+  const key = `provider_${code}`
+  return t.has(key) ? t(key) : null
+}
+
 export class PaymentsClientError extends Error {
   constructor(
     readonly body: unknown,

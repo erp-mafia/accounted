@@ -49,6 +49,7 @@ import {
   type SigningTarget,
 } from '@/lib/payments/initiation/provider'
 import { openPaymentsDoor } from './switched-on'
+import { normalizeSignerPersonalNumber, rememberSignerPersonalNumber } from '@/lib/auth/bankid-signer'
 import { createServiceClient } from '@/lib/supabase/server'
 import { applyProviderState } from './apply-state'
 import { buildPartyContext, type SignerInput } from './party'
@@ -641,7 +642,24 @@ export async function startPaymentSigning(
     batch = withBasket.batch
   }
 
-  return beginSca(ctx, provider, party.ctx, batch, input.method)
+  const started = await beginSca(ctx, provider, party.ctx, batch, input.method)
+  if (started.ok) await rememberTypedSigner(ctx, input.signer)
+  return started
+}
+
+/**
+ * A number the person typed is remembered once the bank accepted a signing
+ * start with it, so the next payment asks for nothing. Best effort: a failed
+ * write costs one more typing, never the signing.
+ */
+async function rememberTypedSigner(ctx: OperationContext, signer: SignerInput): Promise<void> {
+  const typed = normalizeSignerPersonalNumber(signer.personalNumber)
+  if (!typed) return
+  try {
+    await rememberSignerPersonalNumber(ctx.userId, typed)
+  } catch (error) {
+    ctx.log.warn('could not remember the signer', { error: error instanceof Error ? error.message : String(error) })
+  }
 }
 
 /**

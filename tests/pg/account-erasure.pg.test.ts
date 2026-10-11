@@ -32,6 +32,7 @@ const ERASED = new Set([
   // Identity
   'bankid_enrichment.user_id',
   'bankid_identities.user_id',
+  'payment_signers.user_id',
   'profiles.id',
   'whatsapp_link_codes.user_id',
   'whatsapp_phone_links.user_id',

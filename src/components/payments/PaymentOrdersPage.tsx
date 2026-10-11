@@ -33,6 +33,7 @@ import {
   type PaymentOrderSection,
 } from './payment-order-status'
 import {
+  providerCodeText,
   cancelPaymentOrder,
   fetchPaymentsAvailability,
   listPaymentOrders,
@@ -335,7 +336,7 @@ export function PaymentOrdersPage() {
                               <span className="text-muted-foreground">{statusLabel(order.status)}</span>
                             )}
                             {order.provider_error_code && (order.status === 'failed' || order.status === 'rejected') && (
-                              <span className="ml-2 text-[11px] text-muted-foreground">{order.provider_error_code}</span>
+                              <span className="ml-2 text-[11px] text-muted-foreground">{providerCodeText(tStatus, order.provider_error_code) ?? order.provider_error_code}</span>
                             )}
                           </td>
                           <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask')}>
