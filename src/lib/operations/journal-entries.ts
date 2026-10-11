@@ -16,10 +16,8 @@
  * app/api/bookkeeping/journal-entries/[id]/ and
  * app/api/bookkeeping/no-doc-required/batch.
  *
- * MCP: the three corrections, the batch flag and the draft cancel stage
- * (gnubok_correct_entry stays the storno tool); the note keeps its
- * hand-written gnubok_set_voucher_note, so journal-entries.set-note has no MCP
- * binding.
+ * MCP: the three corrections, the batch flag, the draft cancel and the note
+ * (gnubok_set_voucher_note) stage; gnubok_correct_entry stays the storno tool.
  */
 import { z } from 'zod'
 import { CreateJournalEntrySchema, InlineRattelseLineSchema } from '@/lib/api/schemas'
@@ -49,7 +47,7 @@ const META_EXAMPLE = { request_id: 'req_…', api_version: '2026-05-12' }
 const JOURNAL_ENTRY_ID = z
   .string()
   .uuid()
-  .describe('The verifikat id (journal entry UUID), from GET /journal-entries or gnubok_query_journal.')
+  .describe('The verifikat id, from GET /journal-entries or gnubok_query_journal.')
 
 const INLINE_ENVELOPE_PITFALL =
   'Inline rättelse is only for an open, unlocked period after the company lock date: otherwise 409 JOURNAL_RATTELSE_PERIOD_LOCKED, and storno (POST /journal-entries/{id}/correct) is the only lawful path (BFL 5 kap 5 §).'
@@ -605,8 +603,13 @@ export const journalEntriesCancelDraft = defineOperation({
 })
 
 // ---------------------------------------------------------------------------
-// journal-entries.set-note (v1 only; MCP has gnubok_set_voucher_note)
+// journal-entries.set-note
 // ---------------------------------------------------------------------------
+
+/** "A142", or "utkast" for a draft that holds no voucher number yet. */
+function voucherLabel(preview: Record<string, unknown>): string {
+  return preview.voucher_number ? `${preview.voucher_series ?? ''}${preview.voucher_number}` : 'utkast'
+}
 
 export const journalEntriesSetNote = defineOperation({
   id: 'journal-entries.set-note',
@@ -644,6 +647,33 @@ export const journalEntriesSetNote = defineOperation({
     method: 'PATCH',
     path: '/api/v1/companies/:companyId/journal-entries/:id/notes',
     pathParams: { id: 'journal_entry_id' },
+  },
+  mcp: {
+    name: 'gnubok_set_voucher_note',
+    title: 'Set Voucher Note (Anteckning)',
+    description:
+      'Stage setting, replacing or clearing the internal note (anteckning) on a verifikat, posted ones too: only the note changes. Read notes via gnubok_query_journal (entry_notes).',
+    visibility: 'default',
+    keywords: ['verifikat', 'anteckning', 'notering'],
+    hints: { idempotent: true },
+    stage: {
+      pendingType: 'set_voucher_note',
+      title: (_input, preview = {}) =>
+        preview.new_notes === null
+          ? `Rensa anteckning på verifikat ${voucherLabel(preview)}`
+          : `Anteckning på verifikat ${voucherLabel(preview)}`,
+      preview: (_input, preview) => ({
+        journal_entry_id: preview.journal_entry_id,
+        voucher: voucherLabel(preview),
+        entry_description: preview.description,
+        entry_status: preview.status,
+        old_notes: preview.old_notes,
+        new_notes: preview.new_notes,
+      }),
+      extras: (_input, preview) => ({
+        periodDate: typeof preview.entry_date === 'string' ? preview.entry_date : undefined,
+      }),
+    },
   },
   run: (ctx, { journal_entry_id, notes: note }, { dryRun }) => setJournalEntryNote(ctx, journal_entry_id, note, { dryRun }),
 })

@@ -9,9 +9,8 @@
  *     a reversing entry and stays in the ledger
  *     (lib/import/sie-job-action-service.ts).
  *
- * The bank undo has a new staged MCP tool (gnubok_undo_bank_import). The SIE
- * actions are v1 only: gnubok_undo_sie_import already stages the undo with
- * its own commit executor.
+ * MCP: both undos stage (gnubok_undo_bank_import, gnubok_undo_sie_import).
+ * The SIE resume is v1 only.
  */
 import { after } from 'next/server'
 import { z } from 'zod'
@@ -142,19 +141,60 @@ export const importsSieUndo = defineOperation({
       'Undoing an already undone import answers its state unchanged.',
     ],
     example: {
+      request: { reason: 'Importerad till fel räkenskapsår' },
       response: {
         data: { import_id: '7ce9…', action: 'undo', state: 'undoing', phase: 'undo', accepted: true },
         meta: META,
       },
     },
   },
-  input: z.object({ import_id: SIE_IMPORT_ID }),
+  input: z.object({
+    import_id: SIE_IMPORT_ID,
+    reason: z
+      .string()
+      .max(500)
+      .optional()
+      .describe('Why: shown to the approver, not stored.'),
+  }),
   output: SieActionOut,
   errorCodes: ['NOT_FOUND', 'FORBIDDEN', 'SIE_IMPORT_LEGACY_REVIEW_REQUIRED', 'SIE_IMPORT_PERIOD_LOCKED', 'SIE_IMPORT_ACTION_CONFLICT'],
   http: {
     method: 'POST',
     path: '/api/v1/companies/:companyId/imports/sie/:id/undo',
     pathParams: { id: 'import_id' },
+  },
+  mcp: {
+    name: 'gnubok_undo_sie_import',
+    title: 'Undo SIE Import',
+    description:
+      'Stage batch undo of a completed or unfinished durable SIE import. Approval queues storno, retaining documents and history. Period must be open.',
+    visibility: 'default',
+    keywords: ['sie', 'ångra import'],
+    hints: { destructive: true },
+    stage: {
+      pendingType: 'undo_sie_import',
+      title: (_input, preview = {}) => `Ångra SIE-import: ${preview.filename ?? preview.import_id}`,
+      preview: (input, preview) => ({
+        import_id: preview.import_id,
+        filename: preview.filename,
+        fiscal_year:
+          preview.fiscal_year_start && preview.fiscal_year_end
+            ? `${preview.fiscal_year_start} till ${preview.fiscal_year_end}`
+            : null,
+        voucher_count: preview.posted_entries_to_reverse,
+        reason: input.reason ?? null,
+        will:
+          preview.would_change === false
+            ? `Nothing to undo: the import is already ${preview.current_state}.`
+            : 'Reverse exactly this batch with storno, retain documents and history, and release the period hold only when every undo checkpoint completes.',
+      }),
+      extras: () => ({
+        next: {
+          description: 'Poll until undone before submitting a new execution with corrected mappings.',
+          tool: 'gnubok_sie_import_status',
+        },
+      }),
+    },
   },
   run: (ctx, { import_id }, { dryRun }) => runSIEAction(requestSIEImportAction(ctx, import_id, 'undo', { dryRun })),
 })

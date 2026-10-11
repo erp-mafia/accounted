@@ -63,6 +63,9 @@ describe('gnubok_year_end_readiness: registration', () => {
     'period_already_closed',
     'period_locked',
     'closing_entry_exists',
+    // Same reasoning as period_locked: the message says what releases the
+    // year (finish or undo the SIE import), and tools/list has no room.
+    'sie_import_unfinished',
   ])
 
   it('maps the PERIOD_LOCKED readiness code to the period_locked kind', () => {

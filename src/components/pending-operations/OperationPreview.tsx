@@ -26,6 +26,7 @@ import { LinkDocumentsPreview } from './LinkDocumentsPreview'
 import { DocumentViewButton } from '@/components/bookkeeping/DocumentViewButton'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import { complianceWarningOf, type ComplianceWarning } from './vocabulary'
+import { formatPreviewNumber } from './preview-facts'
 
 // The subset of a PendingOperation the preview actually reads. operation_type
 // is widened to string: the chat surface derives it from an MCP tool name and
@@ -645,10 +646,20 @@ function VoucherPreview({ data, showSeries = true }: { data: Record<string, unkn
   return (
     <div className="space-y-3 text-sm">
       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-        <span className="text-muted-foreground">Datum</span>
-        <span className="font-mono">{String(data.entry_date ?? '')}</span>
-        <span className="text-muted-foreground">Beskrivning</span>
-        <span className="truncate">{String(data.description ?? '')}</span>
+        {/* A lines-only payload (mark_invoice_paid's journal_entry_preview)
+            has no date or text of its own: no empty rows for them. */}
+        {data.entry_date ? (
+          <>
+            <span className="text-muted-foreground">Datum</span>
+            <span className="font-mono">{String(data.entry_date)}</span>
+          </>
+        ) : null}
+        {data.description ? (
+          <>
+            <span className="text-muted-foreground">Beskrivning</span>
+            <span className="truncate">{String(data.description)}</span>
+          </>
+        ) : null}
         {showSeries && (
           <>
             <span className="text-muted-foreground">Serie</span>
@@ -778,10 +789,10 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 // Render a primitive (string/number/bool), a short summary of an array, or a
-// nested object pretty-printed. Used by GenericPreview (an operation_type with
-// no dedicated preview component) and UpdateInvoicePreview's header fields. A
-// one-line JSON.stringify has almost no break opportunities, so it ran out of
-// the dialog instead of wrapping.
+// nested object pretty-printed. Used by UpdateInvoicePreview's header fields
+// (GenericPreview states only labelled plain values). A one-line
+// JSON.stringify has almost no break opportunities, so it ran out of the
+// dialog instead of wrapping.
 function renderValue(value: unknown): ReactNode {
   if (value == null) return ''
   if (Array.isArray(value)) return `${value.length} rader`
@@ -880,7 +891,24 @@ function PreviewKonteringTable({ lines, label = 'Föreslagen kontering' }: { lin
 // agent's structured copy of a registration's compliance_warning (crm#1094).
 const GENERIC_PREVIEW_SKIPPED_KEYS = new Set(['period_status', 'compliance_warning', 'registration_warnings'])
 
-function GenericPreview({ data }: { data: Record<string, unknown> }) {
+// One verifikat per row (journal_entries): each a toEntryPreview payload.
+function isEntryPreviewList(value: unknown): value is Record<string, unknown>[] {
+  return Array.isArray(value) && value.length > 0 && value.every(isEntryPreview)
+}
+
+// A plain value the card can state on one line: text, a number, yes/no, or a
+// list of texts. Objects and lists of objects are structure for the agent.
+function isFactValue(value: unknown): value is string | number | boolean | string[] {
+  if (typeof value === 'number') return Number.isFinite(value)
+  if (typeof value === 'string' || typeof value === 'boolean') return true
+  return Array.isArray(value) && value.length > 0 && value.every((v) => typeof v === 'string')
+}
+
+// Outside the detail panel (the chat card, the confirm dialog) a long list of
+// verifikat stops after a few; the Granskning panel shows them all.
+const ENTRY_LIST_COMPACT = 3
+
+function GenericPreview({ data, detail = false }: { data: Record<string, unknown>; detail?: boolean }) {
   const t = useTranslations('pending')
   // A uuid is a database handle, not something the approver can check
   // against anything: the title already names the objects involved.
@@ -888,29 +916,76 @@ function GenericPreview({ data }: { data: Record<string, unknown> }) {
     ([k, v]) => v != null && v !== '' && !GENERIC_PREVIEW_SKIPPED_KEYS.has(k) && !isUuid(v),
   )
   const entryPreviews = entries.filter(([, v]) => isEntryPreview(v))
+  const entryLists = entries.filter(([, v]) => isEntryPreviewList(v))
   const konteringEntries = entries.filter(([, v]) => isKonteringLines(v))
-  const rest = entries.filter(([, v]) => !isKonteringLines(v) && !isEntryPreview(v))
-  // preview_data keys are the staging tools' field names. The approver reads
-  // them through the preview_field labels (sv and en); a key without a label
-  // yet still shows, spelled out, rather than hiding what the approval does.
-  const label = (key: string) =>
-    t.has(`preview_field.${key}`) ? t(`preview_field.${key}`) : key.replace(/_/g, ' ')
+  // preview_data keys are the staging tools' field names: a field shows only
+  // under a preview_field label (sv and en), never as its raw key, and a
+  // number shows as money when it is one (crm#1104). What the approval posts
+  // is the verifikat above, from the executor's own builders.
+  const labelled = (obj: Record<string, unknown>) =>
+    Object.entries(obj).filter(
+      ([k, v]) => v != null && v !== '' && !isUuid(v) && isFactValue(v) && t.has(`preview_field.${k}`),
+    ) as Array<[string, string | number | boolean | string[]]>
+  const facts = labelled(Object.fromEntries(entries))
+  // A labelled group (changes: the fields an update sets) shows its own
+  // labelled fields, one level down, instead of a JSON dump of raw keys.
+  const groups = entries
+    .filter(([k, v]) => isPlainObject(v) && !isEntryPreview(v) && t.has(`preview_field.${k}`))
+    .map(([k, v]) => [k, v as Record<string, unknown>, labelled(v as Record<string, unknown>)] as const)
+    .filter(([, , rows]) => rows.length > 0)
+  const fact = (key: string, value: string | number | boolean | string[], scope: Record<string, unknown>): ReactNode => {
+    if (typeof value === 'boolean') return value ? t('preview_yes') : t('preview_no')
+    if (typeof value === 'number') return formatPreviewNumber(key, value, scope)
+    return Array.isArray(value) ? value.join(', ') : value
+  }
+  const factRow = (key: string, value: string | number | boolean | string[], scope: Record<string, unknown>, nested = false) => (
+    <Fragment key={key}>
+      <span className={cn('min-w-0 break-words text-muted-foreground', nested && 'pl-3')}>{t(`preview_field.${key}`)}</span>
+      <span className={cn('min-w-0 break-words', typeof value === 'number' && 'font-mono tabular-nums')}>
+        {fact(key, value, scope)}
+      </span>
+    </Fragment>
+  )
+  if (entryPreviews.length + entryLists.length + konteringEntries.length + facts.length + groups.length === 0) {
+    // An empty box under the title reads as "nothing to review". Say so.
+    return <p className="text-sm text-muted-foreground">{t('preview_generic_none')}</p>
+  }
   return (
     <div className="space-y-3">
       {entryPreviews.map(([key, value]) => (
         <VoucherPreview key={key} data={value as Record<string, unknown>} showSeries={false} />
       ))}
+      {entryLists.map(([key, value]) => {
+        const list = value as Record<string, unknown>[]
+        const shown = detail ? list : list.slice(0, ENTRY_LIST_COMPACT)
+        return (
+          <div key={key} className="space-y-3">
+            <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
+              {t('preview_entries_heading', { count: list.length })}
+            </p>
+            {shown.map((entry, i) => (
+              <div key={i} className={cn(i > 0 && 'border-t pt-3')}>
+                <VoucherPreview data={entry} showSeries={false} />
+              </div>
+            ))}
+            {shown.length < list.length && (
+              <p className="text-xs text-muted-foreground">
+                {t('preview_entries_more', { count: list.length - shown.length })}
+              </p>
+            )}
+          </div>
+        )
+      })}
       {konteringEntries.map(([key, value]) => (
         <PreviewKonteringTable key={key} lines={value as PreviewKonteringLine[]} />
       ))}
-      {rest.length > 0 && (
+      {facts.length + groups.length > 0 && (
         <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-x-4 gap-y-1 text-sm">
-          {rest.map(([key, value]) => (
+          {facts.map(([key, value]) => factRow(key, value, data))}
+          {groups.map(([key, obj, rows]) => (
             <Fragment key={key}>
-              <span className="min-w-0 break-words text-muted-foreground">{label(key)}</span>
-              <span className={cn('min-w-0 break-words', typeof value === 'number' && 'font-mono tabular-nums')}>
-                {typeof value === 'boolean' ? (value ? t('preview_yes') : t('preview_no')) : renderValue(value)}
-              </span>
+              <span className="col-span-2 pt-1 text-muted-foreground">{t(`preview_field.${key}`)}</span>
+              {rows.map(([k, v]) => factRow(k, v, { ...data, ...obj }, true))}
             </Fragment>
           ))}
         </div>
@@ -1191,7 +1266,7 @@ export function OperationPreview({ op, detail = false }: { op: OperationPreviewI
       case 'link_document_to_voucher':
         return <LinkDocumentToVoucherPreview data={op.preview_data} params={op.params ?? {}} detail={detail} />
       default:
-        return <GenericPreview data={op.preview_data} />
+        return <GenericPreview data={op.preview_data} detail={detail} />
     }
   })()
   // One line above every preview type, from the same reading the Granskning

@@ -25,13 +25,12 @@
     ]
   },
   "dialogOverflowRisk": {
-    "count": 7,
+    "count": 6,
     "files": [
       "app/(dashboard)/supplier-invoices/[id]/page.tsx",
       "components/bookkeeping/JournalEntryForm.tsx",
       "components/invoices/PaymentBookingDialog.tsx",
       "components/invoices/SendInvoiceDialog.tsx",
-      "components/reports/views/index.tsx",
       "components/salary/NewEmployeeDialog.tsx",
       "components/transactions/InvoiceMatchDialog.tsx"
     ]

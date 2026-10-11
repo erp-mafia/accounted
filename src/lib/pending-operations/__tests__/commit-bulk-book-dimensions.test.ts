@@ -11,6 +11,14 @@ import type { PendingOperation } from '@/types'
 
 import { commitPendingOperation } from '../commit'
 
+// suggestion_log is recorded around every booking; its own reads and writes
+// are covered in lib/suggestion-log, not by this file's queued client.
+vi.mock('@/lib/suggestion-log/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/suggestion-log/record')>()),
+  snapshotSuggestions: vi.fn(async (_supabase: unknown, companyId: string) => ({ companyId, byTransaction: new Map() })),
+  recordDecisions: vi.fn(async () => undefined),
+}))
+
 function makeBulkBookOp(lines: Array<Record<string, unknown>>): PendingOperation {
   const params: Record<string, unknown> = {
     tx_ids: ['tx-1'],

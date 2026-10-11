@@ -6,8 +6,9 @@
  * the same run() the v1 endpoints use, so rows staged before the move still
  * commit. Refusals carry the structured codes (result.code) and the registry
  * message; the assertions below pin the codes instead of the old executor
- * strings. set_voucher_note keeps its executor. Staging-side coverage (the
- * MCP tools' pre-flight gates) lives in extensions/general/mcp-server/__tests__/.
+ * strings. set_voucher_note likewise runs journal-entries.set-note. Staging-side
+ * coverage (the MCP tools' pre-flight gates) lives in
+ * extensions/general/mcp-server/__tests__/.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
@@ -304,7 +305,7 @@ describe('commitPendingOperation: set_voucher_note', () => {
   const JE_ID = '3f1a2b3c-4d5e-4f60-8a9b-0c1d2e3f4a5b'
 
   it('happy path: notes-only update returns the voucher reference', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' } }) // CAS claim
     enqueue({ data: { id: JE_ID, voucher_series: 'A', voucher_number: 42 } }) // update
     enqueue({ data: null }) // finalize update
@@ -316,6 +317,9 @@ describe('commitPendingOperation: set_voucher_note', () => {
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
 
     expect(result.status).toBe('committed')
+    // The same notes-only write the hand-written executor made: the
+    // immutability trigger allows exactly this on a posted entry.
+    expect(findCalls('journal_entries', 'update')).toEqual([[{ notes: 'Avser Q1-hyran' }]])
     expect(result.data).toMatchObject({
       journal_entry_id: JE_ID,
       voucher_series: 'A',
@@ -355,7 +359,7 @@ describe('commitPendingOperation: set_voucher_note', () => {
     expect(result.status).toBe('rejected')
     expect(result.auto_rejected).toBe(true)
     expect(result.http_status).toBe(404)
-    expect(result.error).toMatch(/hittades inte/)
+    expect(result.code).toBe('JOURNAL_ENTRY_NOT_FOUND')
   })
 
   it('re-validates staged params at the commit boundary (oversized note rejected)', async () => {

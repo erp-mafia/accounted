@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   MIGRATION_RESOURCES, isTransientIssueCode, migrationIssueHref, migrationIssueKind, migrationIssueReason,
-  migrationRefusalMessageKey, migrationRefusals,
+  migrationJobErrorMessageKey, migrationRefusalMessageKey, migrationRefusals,
 } from '../migration-contract'
 import sv from '@/messages/sv.json'
 import en from '@/messages/en.json'
@@ -30,9 +30,24 @@ describe('migrationIssueKind', () => {
   })
 
   it('never calls a refused register a record to retry', () => {
-    // A job parked on PROVIDER_RESOURCE_FORBIDDEN before the worker learned to
-    // skip the register: resuming it now skips that register.
+    // A job stopped on PROVIDER_RESOURCE_FORBIDDEN: the connection works and
+    // lacks a permission, so a retry alone gets the same answer.
     expect(migrationIssueKind('PROVIDER_RESOURCE_FORBIDDEN')).toBe('refused')
+  })
+})
+
+describe('migrationJobErrorMessageKey', () => {
+  it('points a refusal on a working Bokio connection at the integration token, elsewhere at the user (crm#1081)', () => {
+    expect(migrationJobErrorMessageKey({ error_code: 'PROVIDER_RESOURCE_FORBIDDEN', provider: 'bokio' })).toBe('ext_arcim_job_error_refused_token')
+    for (const provider of ['fortnox', 'visma', 'briox', 'bjornlunden', 'wint']) {
+      expect(migrationJobErrorMessageKey({ error_code: 'PROVIDER_RESOURCE_FORBIDDEN', provider })).toBe('ext_arcim_job_error_refused')
+    }
+  })
+
+  it('keeps the kind of every other code, the provider aside', () => {
+    expect(migrationJobErrorMessageKey({ error_code: 'PROVIDER_AUTH_EXPIRED', provider: 'bokio' })).toBe('ext_arcim_job_error_connection')
+    expect(migrationJobErrorMessageKey({ error_code: 'PROVIDER_LICENSE_MISSING', provider: 'fortnox' })).toBe('ext_arcim_job_error_access')
+    expect(migrationJobErrorMessageKey({ error_code: 'MIGRATION_RETRY' })).toBe('ext_arcim_job_error_retry')
   })
 })
 
@@ -44,6 +59,9 @@ describe('refused registers', () => {
     expect(migrationRefusalMessageKey('supplierInvoices', 'license')).toBe('ext_arcim_job_refused_license_purchase')
     for (const resource of ['customers', 'suppliers', 'salesInvoices', 'supplierInvoices'] as const) {
       expect(migrationRefusalMessageKey(resource, 'permission')).toBe('ext_arcim_job_refused_permission')
+      expect(migrationRefusalMessageKey(resource, 'permission', 'fortnox')).toBe('ext_arcim_job_refused_permission')
+      // A Bokio integration token carries its own read permissions.
+      expect(migrationRefusalMessageKey(resource, 'permission', 'bokio')).toBe('ext_arcim_job_refused_token')
     }
   })
 
@@ -54,6 +72,12 @@ describe('refused registers', () => {
     ])
   })
 
+  it('names the Bokio token for a register its integration may not read', () => {
+    expect(migrationRefusals({ provider: 'bokio', refused_resources: { supplierInvoices: 'permission' } })).toEqual([
+      { messageKey: 'ext_arcim_job_refused_token', resources: ['supplierInvoices'] },
+    ])
+  })
+
   it('reads a job with none, or one stored before the column existed, as none', () => {
     expect(migrationRefusals({ refused_resources: {} })).toEqual([])
     expect(migrationRefusals({})).toEqual([])
@@ -61,8 +85,11 @@ describe('refused registers', () => {
   })
 
   it('has every message it can point at in both languages', () => {
-    const keys = ['ext_arcim_job_refused', 'ext_arcim_job_error_refused', ...(['license', 'permission'] as const)
-      .flatMap(reason => (['customers', 'suppliers'] as const).map(resource => migrationRefusalMessageKey(resource, reason)))]
+    const keys = ['ext_arcim_job_refused', ...(['bokio', 'fortnox'] as const).flatMap(provider => [
+      migrationJobErrorMessageKey({ error_code: 'PROVIDER_RESOURCE_FORBIDDEN', provider }),
+      ...(['license', 'permission'] as const)
+        .flatMap(reason => (['customers', 'suppliers'] as const).map(resource => migrationRefusalMessageKey(resource, reason, provider))),
+    ])]
     for (const messages of [sv, en]) {
       const extensions = messages.extensions as Record<string, string>
       for (const key of keys) expect(extensions[key], key).toEqual(expect.any(String))

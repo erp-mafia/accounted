@@ -46,9 +46,37 @@ export function runDateMatchesDayOfMonth(iso: string, dayOfMonth: number): boole
 }
 
 /**
+ * The first date on or after `fromIso` that sits on the schedule grid for
+ * day_of_month: this month's occurrence if it has not passed, otherwise next
+ * month's (31 -> 28/29/30 in shorter months). The one definition of "the
+ * first run date for a day of the month": computeInitialRunDate (create
+ * route, MCP staging and commit) and the create dialog both derive from it,
+ * passing Stockholm's today, or the start of a later month the user picked.
+ */
+export function firstRunDateOnOrAfter(fromIso: string, dayOfMonth: number): string {
+  const from = parseIsoDate(fromIso)
+  if (!from) throw new Error(`invalid date: ${fromIso}`)
+  if (!Number.isInteger(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31) {
+    throw new Error(`invalid day_of_month: ${dayOfMonth}`)
+  }
+  const { year, month0, day } = from
+  const thisMonthDay = Math.min(dayOfMonth, lastDayOfMonth(year, month0))
+  if (day <= thisMonthDay) return isoFromParts(year, month0, thisMonthDay)
+  const nextYear = month0 === 11 ? year + 1 : year
+  const nextMonth0 = (month0 + 1) % 12
+  return isoFromParts(
+    nextYear,
+    nextMonth0,
+    Math.min(dayOfMonth, lastDayOfMonth(nextYear, nextMonth0)),
+  )
+}
+
+/**
  * Same year-month as `iso`, day moved onto the schedule grid for
- * day_of_month. Used by the dialog to keep the date field in step when the
- * user edits the day. Returns `iso` unchanged when it is not parseable.
+ * day_of_month. Used by the edit dialog to keep the date field in step when
+ * the user edits the day (the stored month is the schedule's phase; the
+ * server recomputes a day-only edit). Returns `iso` unchanged when it is not
+ * parseable.
  */
 export function alignRunDateToDay(iso: string, dayOfMonth: number): string {
   const parsed = parseIsoDate(iso)

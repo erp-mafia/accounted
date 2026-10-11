@@ -3,7 +3,7 @@ import { tools, deriveToolMeta, isDefaultCatalogTool } from '../server'
 import { isMultiCompanyOnlyTool, projectToolInputSchema } from '../company-routing'
 
 // Ceiling for the catalog a single-company key is served (see the second case).
-const SIMPLE_CATALOG_CEILING = 60_500
+const SIMPLE_CATALOG_CEILING = 60_600
 import { projectToolReferences } from '../tool-namespace'
 
 // Mirror the real tools/list serializer, including the derived staging _meta
@@ -641,7 +641,20 @@ describe('tools/list payload size guard', () => {
     //     response and are declared in no outputSchema, so they cost the
     //     catalog nothing. Measured 64 937 on 2026-10-01 on top of main;
     //     #3105 changes no tool schema or description. Ceiling unchanged.
-    expect(approxTokens).toBeLessThan(65_500)
+    //   * Note, unlock, SIE undo and attach generated from their operations
+    //     (2026-10-11): the generated schemas carry uuid formats, the shared
+    //     id notes and dry_run/idempotency_key on unlock too, ~200 over the
+    //     hand-written ones. Paid for by shorter shared staging-arg notes, a
+    //     nullable scalar folded into one node, and trimmed descriptions.
+    //     Measured 65 492. Ceiling unchanged.
+    //   * 65 500 to 65 600 on 2026-10-11 (merge batches landing together):
+    //     the party drill-ins gnubok_get_customer, gnubok_get_supplier and
+    //     gnubok_get_employee (crm#1061), gnubok_update_supplier (crm#1060),
+    //     the share on gnubok_link_supplier_invoice_to_voucher and the four
+    //     tools generated from their operations each fitted alone. Together
+    //     they measured 65 596, after the share's description had already
+    //     been shortened to its minimum.
+    expect(approxTokens).toBeLessThan(65_600)
   })
 
   it('serves a single-company key a smaller catalog than the multi-company one', () => {
@@ -683,6 +696,10 @@ describe('tools/list payload size guard', () => {
     // refund (crm#1136) and gnubok_update_employee's is_active says it works
     // both ways (crm#1133). Each fitted alone; together they measured exactly
     // 60 400. Measured 60 400 with all three, ~100 headroom.
+    // 2026-10-11, the four tools generated from their operations (see the
+    // case above): measured 60 483. Ceiling unchanged.
+    // 60 500 to 60 600 on 2026-10-11, for the same tools as the 65 600 note
+    // in the case above: together they measured 60 587.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

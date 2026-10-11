@@ -149,7 +149,7 @@ export default function CommandPalette({ initialOpen = false }: { initialOpen?: 
 
   // The hand-off-to-assistant entries use the agent name the user chose in
   // /onboarding/agent, and hide entirely until that onboarding is done: the
-  // same gate as the nav entry and the FAB.
+  // same gate as the FAB.
   const assistantName = identity.displayName?.trim() || 'assistenten'
   const assistantFallback: Entry | null = !identity.isVerified || !q
     ? null

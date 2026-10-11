@@ -22,6 +22,12 @@ import { HemChecklistSection, HemNoticesSection, HemPanesSection } from './hem-s
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { getTranslations } from 'next-intl/server'
+import { ensureInitialized } from '@/lib/init'
+
+// Hem reads the skatteverket extension's ombud services through the
+// extension registry (lib/skatteverket/ombud-access.ts), which only
+// ensureInitialized() fills. The root layout no longer loads extensions.
+ensureInitialized()
 
 export const dynamic = 'force-dynamic'
 

@@ -38,6 +38,7 @@ Every extension has a `manifest.json` in `extensions/<sector>/<name>/`.
 | `exportName` | string | camelCase export name: `toCamelCase(id) + "Extension"` |
 | `entryPoint` | string | Path alias: `"@/extensions/{sector}/{id}"` |
 | `workspace` | string \| null | Workspace component path, or `null` |
+| `branding` | boolean (optional) | `true` only when the extension calls `registerBrandingService()` at module load; `setup:extensions` lists it in `_generated/branding-list.ts`, which the root layout imports |
 | `requiredEnvVars` | string[] | Required env vars (empty `[]` if none) |
 | `optionalEnvVars` | string[] | Optional env vars (empty `[]` if none) |
 | `npmDependencies` | string[] | Package deps for documentation (empty `[]` if none) |

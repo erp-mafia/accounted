@@ -1,0 +1,131 @@
+import { agentBookingFor, businessAccount, type BookingProposal, type ProposalBooking, type ProposalSource } from '@/lib/bookkeeping/proposal'
+import type { AssistantRead } from '@/lib/agent/categorize/read-shape'
+import type { EntityType, LinePatternEntry, VatTreatment } from '@/types'
+
+/**
+ * How one decision on a bank line is written to suggestion_log: the
+ * suggestions that were on offer, which one was acted on, what was booked
+ * and the outcome. Pure, so every booking door classifies the same way.
+ *
+ * Outcome:
+ *   - dismissed: the bank line was ignored (no final).
+ *   - accepted:  the caller named a suggestion on offer and booked it as offered.
+ *   - changed:   the caller named a suggestion on offer and booked something else.
+ *   - manual:    no suggestion was named, or the named one was not on offer
+ *                when the decision was made. matches_final still says which
+ *                suggestions agreed with the booking.
+ */
+
+export type DecisionOutcome = 'accepted' | 'changed' | 'manual' | 'dismissed'
+
+export type SuggestionLogSource = 'assistant' | 'rule' | 'catalog' | 'counterparty_template' | 'recent'
+
+export interface LoggedSuggestion {
+  source: SuggestionLogSource
+  /** The proposal's stable id (catalog id, 'cp:<uuid>', 'assistant:<txid>'). */
+  source_id: string
+  rank: number
+  proposal: {
+    booking: ProposalBooking
+    debit_account: string
+    credit_account: string
+    vat_treatment: VatTreatment | null
+    line_pattern?: LinePatternEntry[]
+  }
+  confidence: number
+  model: string | null
+  prompt_sha256: string | null
+  matches_final: boolean
+}
+
+export interface BankLineFinal {
+  journal_entry_id: string | null
+  /** The booking shape the caller named, when it named one (categorize doors). */
+  booking: ProposalBooking | null
+  /** The business account booked: the leg that is neither bank nor VAT. Null when ambiguous. */
+  account: string | null
+  vat_treatment: VatTreatment | null
+  lines: Array<{ account: string; debit: number; credit: number }>
+}
+
+export interface ClassifiedDecision {
+  suggestions: LoggedSuggestion[]
+  acted_on: number | null
+  outcome: DecisionOutcome
+}
+
+const SOURCE: Record<ProposalSource, SuggestionLogSource | null> = {
+  rule: 'rule',
+  recent: 'recent',
+  catalog: 'catalog',
+  counterparty: 'counterparty_template',
+  assistant: 'assistant',
+  manual: null,
+}
+
+function sameBooking(a: ProposalBooking, b: ProposalBooking): boolean {
+  if (a.kind === 'template' && b.kind === 'template') return a.template_id === b.template_id
+  if (a.kind === 'counterparty' && b.kind === 'counterparty') return a.counterparty_template_id === b.counterparty_template_id
+  if (a.kind === 'account' && b.kind === 'account') return a.account === b.account && a.vat_treatment === b.vat_treatment
+  return false
+}
+
+/** The account and VAT a suggestion books, in the shape the categorize API takes. */
+function accountOf(p: BookingProposal, entityType?: EntityType): { account: string; vat: VatTreatment | null } {
+  const booking = agentBookingFor(p, entityType)
+  if (booking) return { account: booking.account_override, vat: booking.vat_treatment }
+  return { account: businessAccount(p), vat: p.vat_treatment ?? null }
+}
+
+export function matchesFinal(p: BookingProposal, final: BankLineFinal, entityType?: EntityType): boolean {
+  if (final.booking && sameBooking(p.booking, final.booking)) return true
+  if (!final.account) return false
+  const offered = accountOf(p, entityType)
+  if (offered.account !== final.account) return false
+  return final.vat_treatment == null || offered.vat == null || offered.vat === final.vat_treatment
+}
+
+/**
+ * The business account of posted lines: the one account that is neither a
+ * cash ledger (19xx) nor VAT (26xx). Null when the lines carry none or several.
+ */
+export function businessAccountOfLines(lines: BankLineFinal['lines']): string | null {
+  const accounts = new Set(
+    lines.map((l) => l.account).filter((a) => !a.startsWith('19') && !a.startsWith('26')),
+  )
+  return accounts.size === 1 ? [...accounts][0] : null
+}
+
+export function classifyBankLineDecision(input: {
+  proposals: BookingProposal[]
+  read?: Pick<AssistantRead, 'model' | 'prompt_sha256'> | null
+  /** The stable id of the suggestion the caller acted on, when it said. */
+  actedOn?: string | null
+  /** Null when the bank line was dismissed. */
+  final: BankLineFinal | null
+  entityType?: EntityType
+}): ClassifiedDecision {
+  const { final, entityType } = input
+  const offered = input.proposals.filter((p) => SOURCE[p.source] !== null)
+  const suggestions: LoggedSuggestion[] = offered.map((p, rank) => ({
+    source: SOURCE[p.source]!,
+    source_id: p.template_id,
+    rank,
+    proposal: {
+      booking: p.booking,
+      debit_account: p.debit_account,
+      credit_account: p.credit_account,
+      vat_treatment: p.vat_treatment ?? null,
+      ...(p.line_pattern && p.line_pattern.length > 0 ? { line_pattern: p.line_pattern } : {}),
+    },
+    confidence: p.confidence,
+    model: p.source === 'assistant' ? (input.read?.model ?? null) : null,
+    prompt_sha256: p.source === 'assistant' ? (input.read?.prompt_sha256 ?? null) : null,
+    matches_final: final ? matchesFinal(p, final, entityType) : false,
+  }))
+
+  if (!final) return { suggestions, acted_on: null, outcome: 'dismissed' }
+  const index = input.actedOn ? suggestions.findIndex((s) => s.source_id === input.actedOn) : -1
+  if (index === -1) return { suggestions, acted_on: null, outcome: 'manual' }
+  return { suggestions, acted_on: index, outcome: suggestions[index].matches_final ? 'accepted' : 'changed' }
+}

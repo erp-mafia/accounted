@@ -12,6 +12,15 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { setTransactionIgnored } from '../ignore'
+import { recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
+
+// suggestion_log is recorded around every booking; its own reads and writes
+// are covered in lib/suggestion-log, not by this file's queued client.
+vi.mock('@/lib/suggestion-log/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/suggestion-log/record')>()),
+  snapshotSuggestions: vi.fn(async (_supabase: unknown, companyId: string) => ({ companyId, byTransaction: new Map() })),
+  recordDecisions: vi.fn(async () => undefined),
+}))
 
 const TX_ID = '00000000-0000-4000-8000-0000000000aa'
 
@@ -174,5 +183,43 @@ describe('setTransactionIgnored: writes', () => {
     await expect(
       setTransactionIgnored(supabase as never, 'company-1', TX_ID, true),
     ).rejects.toMatchObject({ code: '57P01' })
+  })
+})
+
+describe('setTransactionIgnored: suggestion_log', () => {
+  it('records an ignore as a dismissal, with the suggestions taken before the flag flips', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: unbookedRow })
+    enqueueNoAnchors(enqueue)
+    enqueue({ data: null })
+
+    await setTransactionIgnored(supabase as never, 'company-1', TX_ID, true, { userId: 'user-1' })
+
+    expect(vi.mocked(snapshotSuggestions)).toHaveBeenCalledWith(supabase, 'company-1', [TX_ID])
+    expect(vi.mocked(recordDecisions)).toHaveBeenCalledWith(
+      supabase,
+      expect.objectContaining({ companyId: 'company-1' }),
+      [{ transactionId: TX_ID, final: null }],
+      'user-1',
+    )
+  })
+
+  it('records nothing for a restore, a dry run or a row already ignored', async () => {
+    const restore = createQueuedMockSupabase()
+    restore.enqueue({ data: { ...unbookedRow, is_ignored: true } })
+    restore.enqueue({ data: null })
+    await setTransactionIgnored(restore.supabase as never, 'company-1', TX_ID, false, { userId: 'user-1' })
+
+    const dry = createQueuedMockSupabase()
+    dry.enqueue({ data: unbookedRow })
+    enqueueNoAnchors(dry.enqueue)
+    await setTransactionIgnored(dry.supabase as never, 'company-1', TX_ID, true, { dryRun: true, userId: 'user-1' })
+
+    const already = createQueuedMockSupabase()
+    already.enqueue({ data: { ...unbookedRow, is_ignored: true } })
+    enqueueNoAnchors(already.enqueue)
+    await setTransactionIgnored(already.supabase as never, 'company-1', TX_ID, true, { userId: 'user-1' })
+
+    expect(vi.mocked(recordDecisions)).not.toHaveBeenCalled()
   })
 })

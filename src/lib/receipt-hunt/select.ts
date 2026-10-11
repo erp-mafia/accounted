@@ -2,7 +2,7 @@
  * Which receipt gets proposed for which unbooked card purchase.
  *
  * The hunt attaches an underlag to a transaction *before* it is booked, so the
- * gap never forms: `commitAttachDocumentToTransaction` sets
+ * gap never forms: approving the attach (`attachDocumentToTransaction`) sets
  * `invoice_inbox_items.matched_transaction_id`, and when the user later books
  * the transaction `categorize-core.ts` propagates that document onto the new
  * verifikat. Chasing already-posted verifikat is deliberately NOT this job:

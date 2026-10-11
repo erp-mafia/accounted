@@ -1,3 +1,1539 @@
 'use client'
 
-export { VatDeclarationView as default } from '../views'
+import React, { useState, useEffect } from 'react'
+import dynamic from 'next/dynamic'
+import Link from 'next/link'
+import { useTranslations } from 'next-intl'
+import { AlertCircle, Check, ExternalLink, FileCode, FileDown, Percent } from 'lucide-react'
+import { useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { Card, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
+import { EmptyState } from '@/components/ui/empty-state'
+import { PageHeader } from '@/components/ui/page-header'
+import { Table, TableBody } from '@/components/ui/table'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { FyPicker } from '@/components/common/FyPicker'
+import { ContextPicker } from '@/components/common/ContextPicker'
+import { ReportBodyLoading } from '@/components/reports/ReportLoading'
+import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
+import { useReportRowExpansion } from '@/components/reports/ReportRowExpansion'
+import { VatFilingStatusCard } from '@/components/reports/VatFilingStatusCard'
+import { VatChecksCard } from '@/components/reports/VatChecksCard'
+import { SkatteverketPanel } from '@/components/reports/SkatteverketPanel'
+import { VatAlreadyBookedBanner } from '@/components/reports/VatAlreadyBookedBanner'
+import { useVatSettlementProposal } from '@/components/reports/use-vat-settlement-proposal'
+import { useCompanySettings } from '@/components/settings/useSettings'
+import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { mostRecentEndedVatPeriod } from '@/lib/vat/period-defaults'
+import { fiscalPeriodForVatYear, resolveInitialVatPeriodSelection } from '@/lib/vat/period-selection'
+import {
+  indexVatFilings,
+  vatFilingFiscalYearEndMonth,
+  vatFilingKey,
+  vatFilingTaxPeriod,
+  type VatFilingRecord,
+} from '@/lib/vat/filing-record'
+import { cn, formatAmount, formatDate } from '@/lib/utils'
+import { formatDateISO } from '@/lib/calendar/utils'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+import { runVatDeclarationChecks } from '@/lib/reports/vat-declaration-checks'
+import { rcInputTotalsFromDeclaration } from '@/lib/reports/vat-declaration'
+import {
+  isFilingBlocked,
+  withRcBasisGapFindings,
+  type RcBasisGapScan,
+} from '@/lib/reports/vat-filing-gate'
+import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
+import type {
+  VatSettlementExistingEntry,
+  VatSettlementProposal,
+} from '@/lib/reports/vat-settlement'
+import type { ReportSourceLine, ReportSourceFetcher } from '@/lib/reports/source-lines'
+import type { VatDeclaration, VatPeriodType } from '@/types'
+
+// The full journal entry editor is heavy (BAS catalogue, comboboxes, review
+// dialogs): defer it until the user opens the momsverifikat dialog.
+const JournalEntryForm = dynamic(() => import('@/components/bookkeeping/JournalEntryForm'), {
+  ssr: false,
+  loading: () => <Skeleton className="h-64 w-full" />,
+})
+
+// Carries the selected fiscal period into the ruta drill-down rows so their
+// source-verifikat query matches the report's period. Only set for yearly
+// (räkenskapsår); undefined for monthly/quarterly (calendar periods).
+const VatDrillContext = React.createContext<{ fiscalPeriodId?: string }>({})
+
+// Skatteverket's e-service entry point for manually filing the momsdeklaration.
+// Manual filing needs no connection, so this link is the default path for
+// anyone who hasn't set up (or doesn't want) the direct-submission integration.
+const SKATTEVERKET_MOMS_URL =
+  'https://www.skatteverket.se/foretag/etjansterochblanketter/etjanster/momsocharbetsgivardeklarationer'
+
+/**
+ * Manual-filing affordance shown directly under the calculated momsdeklaration.
+ * The report is generated purely from the bookkeeping and never depends on the
+ * Skatteverket connection, so every user (including core builds with the
+ * skatteverket extension disabled) can file manually. Two paths are offered:
+ * an eSKD XML file to upload directly under "Deklarera via fil" (the fast path),
+ * and a PDF (in hela kronor) to read off if the user would rather type the
+ * boxes into the form. A PDF cannot be uploaded to Skatteverket, only the XML.
+ */
+function VatManualFilingCard({ xmlHref, pdfHref }: { xmlHref: string; pdfHref: string }) {
+  return (
+    <section>
+      <div className="mb-3 flex items-center gap-3 px-1">
+        <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          Lämna in själv, med fil
+        </h3>
+        <div className="h-px flex-1 bg-border/60" />
+      </div>
+      <div className="space-y-4">
+        <p className="text-[13px] leading-6 text-muted-foreground">
+          Du behöver inte vara ansluten till Skatteverket för att lämna in.
+        </p>
+        <ol className="list-decimal pl-6 space-y-1 text-sm text-muted-foreground">
+          <li>Ladda ner XML-filen nedan.</li>
+          <li>Logga in på skatteverket.se med BankID.</li>
+          <li>Öppna Moms- och arbetsgivardeklarationer och välj Deklarera via fil.</li>
+          <li>Ladda upp filen, granska och signera.</li>
+        </ol>
+        <p className="text-xs text-muted-foreground">
+          Vill du hellre fylla i rutorna för hand laddar du ner PDF:en och skriver av
+          beloppen (i hela kronor).
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" asChild className="gap-2">
+            <a href={xmlHref} target="_blank" rel="noopener noreferrer">
+              <FileCode className="h-4 w-4" />
+              Ladda ner fil för uppladdning (XML)
+            </a>
+          </Button>
+          <Button variant="outline" asChild className="gap-2">
+            <a href={pdfHref} target="_blank" rel="noopener noreferrer">
+              <FileDown className="h-4 w-4" />
+              Ladda ner momsdeklaration (PDF)
+            </a>
+          </Button>
+          <Button variant="outline" asChild className="gap-2">
+            <a href={SKATTEVERKET_MOMS_URL} target="_blank" rel="noopener noreferrer">
+              <ExternalLink className="h-4 w-4" />
+              Öppna skatteverket.se
+            </a>
+          </Button>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+/**
+ * "Bokför momsrapport" (issue #980): builds an editable verifikat proposal
+ * from the momsrapport (clearing the period's 26xx accounts to 2650/1650,
+ * öre gap on 3740) and books it through the ordinary journal entry form, so
+ * every line can be adjusted before committing. The proposal comes from
+ * /api/reports/vat-declaration/settlement-proposal; booking goes through
+ * POST /api/bookkeeping/journal-entries with source_type 'vat_settlement',
+ * which the declaration projection excludes, so the report above keeps
+ * showing the declared figures after booking.
+ */
+function VatBookingCard({
+  checksBlocked,
+  proposal,
+  failed,
+  upToDate,
+  booked,
+  draft,
+  onRetry,
+}: {
+  /**
+   * True when the local pre-flight checks found ERRORs. Booking stays
+   * possible (the RC-basis fixes only touch 44xx/45xx pairs, never the 26xx
+   * accounts the settlement clears), but the user should know before filing.
+   */
+  checksBlocked?: boolean
+  /** Settlement proposal loaded by the parent so Granska can reuse it. */
+  proposal: VatSettlementProposal | null
+  failed: boolean
+  upToDate: boolean
+  booked?: VatSettlementExistingEntry
+  draft?: VatSettlementExistingEntry
+  onRetry: () => void
+}) {
+  const { canWrite } = useCanWrite()
+  const [dialogOpen, setDialogOpen] = useState(false)
+
+  // FormLine amounts are input strings; the proposal's numbers are already
+  // öre-rounded server-side, so this is display formatting, not money math.
+  const initialLines: FormLine[] = (proposal?.lines ?? []).map((l) => ({
+    account_number: l.account_number,
+    debit_amount: l.debit_amount > 0 ? l.debit_amount.toFixed(2) : '',
+    credit_amount: l.credit_amount > 0 ? l.credit_amount.toFixed(2) : '',
+    line_description: l.line_description ?? '',
+  }))
+
+  return (
+    <div className="space-y-4">
+        <p className="text-[13px] leading-6 text-muted-foreground">
+          Skapa ett verifikat som nollställer periodens momskonton och bokför
+          momsen att betala eller få tillbaka på redovisningskontot. Du granskar
+          förslaget och kan ändra raderna innan verifikatet bokförs.
+        </p>
+
+        {booked && (
+          <div className="flex items-start gap-2 text-[13px] leading-6 text-muted-foreground">
+            <AlertCircle className="mt-1 h-4 w-4 shrink-0" aria-hidden="true" />
+            <p>
+              Momsen för perioden är redan bokförd:{' '}
+              <Link
+                href={`/bookkeeping/${booked.id}`}
+                className="underline underline-offset-2 hover:text-foreground"
+              >
+                verifikat {formatVoucher(booked)} ({formatDate(booked.entry_date)})
+              </Link>
+              . Annullera det verifikatet först om perioden behöver bokföras om.
+            </p>
+          </div>
+        )}
+        {draft && (
+          <div className="flex items-start gap-2 text-[13px] leading-6 text-muted-foreground">
+            <AlertCircle className="mt-1 h-4 w-4 shrink-0" aria-hidden="true" />
+            <p>
+              Det finns redan ett{' '}
+              <Link
+                href={`/bookkeeping/${draft.id}`}
+                className="underline underline-offset-2 hover:text-foreground"
+              >
+                utkast för momsen i perioden
+              </Link>
+              .
+            </p>
+          </div>
+        )}
+
+        {checksBlocked && (
+          <p className="text-[12.5px] leading-5 text-attn">
+            Det finns fel under steg 1, Kontrollera. Du kan bokföra momsen ändå, men
+            åtgärda felen innan du lämnar in.
+          </p>
+        )}
+
+        {failed ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <p className="text-sm text-destructive">Kunde inte hämta verifikatförslaget.</p>
+            <Button variant="outline" onClick={onRetry}>
+              Försök igen
+            </Button>
+          </div>
+        ) : !upToDate ? (
+          <Skeleton className="h-10 w-40" />
+        ) : proposal?.is_empty ? (
+          <p className="text-sm text-muted-foreground">Ingen moms att bokföra för perioden.</p>
+        ) : (
+          <div className="space-y-2">
+            <Button
+              // A posted settlement blocks re-booking: the proposal re-clears the
+              // FULL period (it is not delta-aware), so booking twice would
+              // corrupt the 26xx balances. Annulling the verifikat restores them
+              // and re-enables the button.
+              disabled={!proposal || !canWrite || !!booked}
+              onClick={() => setDialogOpen(true)}
+            >
+              Skapa verifikat
+            </Button>
+            {!canWrite && (
+              <p className="text-xs text-muted-foreground">
+                Du har läsbehörighet och kan inte bokföra.
+              </p>
+            )}
+          </div>
+        )}
+
+      {proposal && (
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogContent
+            className="sm:max-w-3xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto"
+            // A reviewed-but-unbooked proposal must survive an accidental
+            // backdrop click or stray Escape (same rationale as
+            // NewJournalEntryDialog): closing is explicit via the header X.
+            onEscapeKeyDown={(e) => e.preventDefault()}
+            onPointerDownOutside={(e) => e.preventDefault()}
+            onInteractOutside={(e) => e.preventDefault()}
+          >
+            <DialogHeader>
+              <DialogTitle>Bokför momsrapport</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground">
+              Förslaget bygger på momsrapporten för {proposal.period_label}. Justera
+              datum, konton eller belopp vid behov och bokför sedan verifikatet.
+            </p>
+            {dialogOpen && (
+              <JournalEntryForm
+                bare
+                sourceType="vat_settlement"
+                initialDate={proposal.entry_date}
+                initialDescription={proposal.description}
+                initialLines={initialLines}
+                onCreated={() => {
+                  setDialogOpen(false)
+                  onRetry()
+                }}
+              />
+            )}
+          </DialogContent>
+        </Dialog>
+      )}
+    </div>
+  )
+}
+
+/** The Stegen header (concept Moms C): the filing pipeline as a clickable
+ *  horizontal stepper with honest per-step status subs. Statutory surface,
+ *  Swedish in both locales like the rest of the declaration. */
+function VatStepper({
+  active,
+  onSelect,
+  errorCount,
+  warningCount,
+  ruta49,
+  bookingStatus,
+  filed,
+}: {
+  active: number
+  onSelect: (step: number) => void
+  errorCount: number
+  warningCount: number
+  ruta49: number
+  bookingStatus: 'booked' | 'draft' | 'none' | null
+  /** The period has a filing record (Skatteverket kvittens or marked by hand). */
+  filed: boolean
+}) {
+  const steps = [
+    {
+      n: 1,
+      label: 'Kontrollera',
+      sub:
+        errorCount > 0
+          ? `${errorCount} fel`
+          : warningCount > 0
+            ? `${warningCount} ${warningCount === 1 ? 'varning' : 'varningar'}`
+            : 'klart',
+      done: errorCount === 0,
+      warn: errorCount > 0,
+    },
+    {
+      n: 2,
+      label: 'Granska',
+      sub:
+        ruta49 > 0
+          ? `${formatAmount(ruta49)} kr att betala`
+          : ruta49 < 0
+            ? `${formatAmount(Math.abs(ruta49))} kr att återfå`
+            : 'ingen moms',
+      done: false,
+      warn: false,
+    },
+    {
+      n: 3,
+      label: 'Bokför',
+      sub:
+        bookingStatus === 'booked'
+          ? 'bokförd'
+          : bookingStatus === 'draft'
+            ? 'utkast finns'
+            : 'mot 2650',
+      done: bookingStatus === 'booked',
+      warn: false,
+    },
+    {
+      n: 4,
+      label: 'Lämna in',
+      sub: filed ? 'inlämnad' : 'till Skatteverket',
+      done: filed,
+      warn: false,
+    },
+  ]
+
+  return (
+    <div
+      className="flex w-full items-center gap-3 overflow-x-auto px-1"
+      role="tablist"
+      aria-label="Momsdeklarationens steg"
+    >
+      {steps.map((step, i) => (
+        <React.Fragment key={step.n}>
+          {i > 0 && <span className="h-px min-w-4 flex-1 bg-border" aria-hidden="true" />}
+          <button
+            type="button"
+            role="tab"
+            aria-selected={active === step.n}
+            onClick={() => onSelect(step.n)}
+            className="group flex shrink-0 items-center gap-2 text-left"
+          >
+            <span
+              className={cn(
+                'flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs tabular-nums transition-colors duration-150',
+                step.done
+                  ? 'border-success/40 text-success'
+                  : active === step.n
+                    ? 'border-foreground bg-foreground text-background'
+                    : 'border-border text-muted-foreground group-hover:border-foreground/30',
+              )}
+            >
+              {step.done ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : step.n}
+            </span>
+            <span className="leading-tight">
+              <span
+                className={cn(
+                  'block text-[12.5px] transition-colors duration-150',
+                  active === step.n
+                    ? 'font-medium'
+                    : 'text-muted-foreground group-hover:text-foreground',
+                )}
+              >
+                {step.label}
+              </span>
+              {step.sub && (
+                <span
+                  className={cn(
+                    'block text-[11px] tabular-nums',
+                    step.warn ? 'text-attn' : 'text-muted-foreground',
+                  )}
+                >
+                  {step.sub}
+                </span>
+              )}
+            </span>
+          </button>
+        </React.Fragment>
+      ))}
+    </div>
+  )
+}
+
+const MONTH_NAMES = [
+  'Januari', 'Februari', 'Mars', 'April', 'Maj', 'Juni',
+  'Juli', 'Augusti', 'September', 'Oktober', 'November', 'December',
+]
+const QUARTER_SPANS = ['jan-mar', 'apr-jun', 'jul-sep', 'okt-dec']
+
+// Inline momsperiod setup for the "registered but no period picked" state.
+// Writes through the same PUT /api/settings validation as the tax settings
+// form (SFL 26 kap coherence rules included), so this is a shortcut, not a
+// second write path. Until a period exists the deadline engine generates NO
+// VAT deadlines at all, silently, which is why this state answers inline
+// instead of bouncing to settings.
+function MomsPeriodInlineSetup({
+  onSaved,
+}: {
+  onSaved: (value: 'monthly' | 'quarterly' | 'yearly') => Promise<void> | void
+}) {
+  const [saving, setSaving] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const choose = async (value: 'monthly' | 'quarterly' | 'yearly') => {
+    if (saving) return
+    setSaving(value)
+    setError(null)
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ moms_period: value }),
+      })
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}))
+        setError(getErrorMessage(json, { statusCode: res.status }))
+        return
+      }
+      await onSaved(value)
+    } catch (err) {
+      setError(getErrorMessage(err))
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  const options: { value: 'monthly' | 'quarterly' | 'yearly'; label: string }[] = [
+    { value: 'quarterly', label: 'Varje kvartal' },
+    { value: 'monthly', label: 'Varje månad' },
+    { value: 'yearly', label: 'Helår' },
+  ]
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap justify-center gap-2">
+        {options.map((opt) => (
+          <Button
+            key={opt.value}
+            variant="outline"
+            size="sm"
+            // The clicked button stays enabled (aria-busy) so keyboard focus
+            // survives the save; the `if (saving) return` guard in choose()
+            // prevents a double submit.
+            disabled={saving !== null && saving !== opt.value}
+            aria-busy={saving === opt.value}
+            onClick={() => choose(opt.value)}
+          >
+            {saving === opt.value ? 'Sparar …' : opt.label}
+          </Button>
+        ))}
+      </div>
+      {error && (
+        <p role="status" className="text-sm text-destructive">
+          {error}
+        </p>
+      )}
+    </div>
+  )
+}
+
+export default function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
+  const currentYear = new Date().getFullYear()
+  const currentMonth = new Date().getMonth() + 1
+  const currentQuarter = Math.ceil(currentMonth / 3)
+
+  // periodType stays null until the company's VAT settings have settled, so
+  // the first (automatic) fetch runs against the configured momsperiod instead
+  // of a guessed default.
+  const [periodType, setPeriodType] = useState<VatPeriodType | null>(null)
+  const [year, setYear] = useState(currentYear)
+  const [period, setPeriod] = useState(currentQuarter)
+  // Annual VAT (helårsmoms) is reported per räkenskapsår, not per calendar
+  // year. In yearly mode `year` is the year the räkenskapsår ends (the same
+  // key every cadence uses, lib/vat/filing-record.ts) and the fiscal period
+  // below is derived from it; a pick in the räkenskapsår picker is kept as an
+  // explicit override (and moves `year` along). Monthly/quarterly are
+  // calendar periods and need no fiscal year.
+  const [pickedFiscalPeriodId, setPickedFiscalPeriodId] = useState('')
+  const { periods: fiscalPeriods } = useFiscalPeriods()
+  const tReports = useTranslations('reports')
+  // Latest fetch outcome, tagged with the fetch key it was requested under.
+  // loading / error / data are all derived by comparing that tag with the
+  // current key, so the fetch effect never sets state synchronously.
+  const [result, setResult] = useState<{
+    key: string
+    declaration?: VatDeclaration
+    error?: string
+  } | null>(null)
+  const [retryKey, setRetryKey] = useState(0)
+  // Stegen: which of the four pipeline steps is open. null = automatic
+  // (errors land on Kontrollera, otherwise Granska). A period switch resets
+  // to automatic so stale step choices never survive a context change.
+  const [chosenStep, setChosenStep] = useState<number | null>(null)
+  const [settlementRefreshKey, setSettlementRefreshKey] = useState(0)
+  // Filing records (issue #2746): which calendar periods are on record as
+  // filed, through the Skatteverket connection or marked by hand. Tagged with
+  // the company they were fetched for, because the initial period seed below
+  // must read them: a filed period is skipped in favour of the next one.
+  const [filings, setFilings] = useState<{
+    key: string
+    byPeriod: Map<string, VatFilingRecord>
+  } | null>(null)
+  const [filingsRefreshKey, setFilingsRefreshKey] = useState(0)
+  // Per-verifikat RC-basis scan, fetched here (not only inside VatChecksCard)
+  // because the filing gate lives here and the worklist unmounts as soon as
+  // the user leaves steg 1. Tagged with the PERIOD it was requested for (see
+  // gapScanPeriodKey), so a korrigering refetches without the gate falling
+  // open in between; count === null means "not known" (scan failed), which is
+  // deliberately NOT the same as zero.
+  const [gapScan, setGapScan] = useState<{ key: string; count: number | null } | null>(null)
+
+  // Company settings drive both the momsregistrerad gate and the default
+  // periodicity (moms_period in Inställningar). Applied once per company the
+  // first time its settings settle, as a render-phase adjustment, not an
+  // effect. A later manual change to the picker is preserved for the session,
+  // and a company switch re-applies the new company's setting. The cadence is
+  // deliberately NOT persisted across visits: the redovisningsperiod is fixed
+  // by the company's Skatteverket registration, so this mount-time re-seed is
+  // the control that self-heals an in-session detour to the wrong period
+  // type (see lib/vat/period-selection.ts). `useCompanySettings` only
+  // refetches when the active company changes, so this never clobbers a
+  // manual selection mid-session.
+  const { settings, isLoading: settingsLoading, refetch: refetchSettings } = useCompanySettings()
+  const [appliedCompany, setAppliedCompany] = useState<string | null>(null)
+  const companyKey = settingsLoading ? null : (settings?.company_id ?? 'none')
+
+  // The filing records load per company and again after a mark/undo. A
+  // failed fetch settles as an empty set rather than blocking the seed: the
+  // page must still open on a missing list, it just cannot skip ahead.
+  useEffect(() => {
+    if (companyKey === null) return
+    let cancelled = false
+    fetch('/api/reports/vat-declaration/filings')
+      .then(async (res) => {
+        const json = await res.json().catch(() => null)
+        if (cancelled) return
+        const rows: VatFilingRecord[] = res.ok && Array.isArray(json?.data) ? json.data : []
+        setFilings({ key: companyKey, byPeriod: indexVatFilings(rows) })
+      })
+      .catch(() => {
+        if (!cancelled) setFilings({ key: companyKey, byPeriod: new Map() })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [companyKey, filingsRefreshKey])
+  const filingsReady = filings !== null && filings.key === companyKey
+  const filedByPeriod = filingsReady ? filings.byPeriod : null
+
+  // Where the räkenskapsår ends: places a yearly period, as on the server.
+  const fiscalYearEndMonth = vatFilingFiscalYearEndMonth(settings)
+
+  // Seeded once settings AND the filing records for the company have
+  // settled, so the seed can step past an already-filed period (#2746,
+  // helårsmoms included since #2786) instead of reopening it on every visit
+  // until the next period ends.
+  if (companyKey !== null && filingsReady && appliedCompany !== companyKey) {
+    setAppliedCompany(companyKey)
+    const initial = resolveInitialVatPeriodSelection({
+      momsPeriod: settings?.moms_period ?? null,
+      over40m: settings?.vat_taxable_base_over_40m === true,
+      fiscalYearEndMonth,
+      isFiled: (cadence, y, p) => filings.byPeriod.has(vatFilingKey(cadence, y, p)),
+    })
+    setPeriodType(initial.periodType)
+    setYear(initial.year)
+    setPeriod(initial.period)
+    setPickedFiscalPeriodId('')
+  }
+
+  // Settings row present and the company answered "not VAT-registered":
+  // the declaration is meaningless, so the whole view is gated below.
+  const notVatRegistered = !settingsLoading && settings !== null && !settings.vat_registered
+  // No company_settings row at all (company created outside onboarding):
+  // VAT registration AND periodicity are both unknown. This used to fall
+  // through every gate and render a silently guessed quarterly declaration;
+  // the wrong period type for an årsmoms company is a compliance hazard, so
+  // it now gates like the other unknowns.
+  const settingsRowMissing = !settingsLoading && settings === null
+  // Registered but never picked a redovisningsperiod (rare: onboarding
+  // requires it, but companies created outside that flow can miss it).
+  const momsPeriodMissing = settings?.vat_registered === true && !settings.moms_period
+
+  // Switching periodicity resets the period to the most recently ended one in
+  // the new unit (same default as first load: the current period can never be
+  // filed). Done in the change handler (not an effect) so the auto-fetch below
+  // never sees an inconsistent periodType/period pair.
+  const handlePeriodTypeChange = (value: VatPeriodType) => {
+    setPeriodType(value)
+    const ended = mostRecentEndedVatPeriod(value, new Date(), {
+      over40m: settings?.vat_taxable_base_over_40m === true,
+      fiscalYearEndMonth,
+    })
+    setYear(ended.year)
+    setPeriod(ended.period)
+    setPickedFiscalPeriodId('')
+  }
+
+  // Annual VAT (helårsmoms) is reported per räkenskapsår, not per calendar year.
+  // For yearly we pass the selected fiscal period so the API uses its actual
+  // bounds (handles extended/shortened years); monthly/quarterly stay calendar.
+  // The fiscal period is the explicit pick, else the one the yearly key names
+  // (the räkenskapsår ending in `year`). Its end date lets the Skatteverket
+  // panel target the FY-end month (broken fiscal years do not end in December).
+  const isYearly = periodType === 'yearly'
+  const yearlyFiscalPeriod = isYearly
+    ? (fiscalPeriods.find((p) => p.id === pickedFiscalPeriodId) ??
+      fiscalPeriodForVatYear(fiscalPeriods, year, formatDateISO(new Date())))
+    : null
+  const fiscalPeriodId = yearlyFiscalPeriod?.id ?? ''
+  const fiscalPeriodEnd = yearlyFiscalPeriod?.period_end ?? null
+  const awaitingFiscalPeriod = isYearly && !fiscalPeriodId
+  const vatQueryString = () => {
+    const params = new URLSearchParams({
+      periodType: periodType ?? 'quarterly',
+      year: String(year),
+      period: String(period),
+    })
+    if (isYearly && fiscalPeriodId) params.set('fiscal_period_id', fiscalPeriodId)
+    return params.toString()
+  }
+
+  // The declaration loads as soon as the period is known: no manual "Hämta"
+  // step. fetchKey is null while a prerequisite is missing (settings pending,
+  // gated, or no redovisningsperiod configured); any change to it triggers a
+  // refetch and stale responses are discarded.
+  // seedPending: the seed above now waits for the filing records, so on a
+  // company switch the previous company's cadence is still selected for one
+  // round trip. Nothing is fetched at that stale cadence.
+  const seedPending = appliedCompany !== companyKey
+  const fetchKey =
+    periodType === null ||
+    seedPending ||
+    notVatRegistered ||
+    settingsRowMissing ||
+    momsPeriodMissing ||
+    awaitingFiscalPeriod
+      ? null
+      : `${periodType}:${year}:${period}:${isYearly ? fiscalPeriodId : ''}:${retryKey}`
+
+  // Period identity WITHOUT the retry counter, used to decide whether the gap
+  // scan below still speaks for what is on screen. The scan re-runs on every
+  // retryKey bump (each korrigering), but the last settled count stays in
+  // force until the new one lands: falling back to `pending` mid-korrigering
+  // would drop the gap finding out of `checks` for one round trip, and with
+  // the aggregate check silent (the tolerance case this gate exists for) the
+  // green "Inga fel hittades i underlaget för perioden" would render right
+  // above the vouchers still left in the worklist, with Skicka enabled. That
+  // is the exact regression being fixed, and steg 1 stays mounted across a
+  // korrigering, so the user would be looking straight at it. Stale-but-closed
+  // is the safe direction, and it matches the declaration itself, which stays
+  // on screen (dimmed) while the next one loads.
+  const gapScanPeriodKey =
+    periodType === null
+      ? null
+      : `${periodType}:${year}:${period}:${isYearly ? fiscalPeriodId : ''}`
+
+  const settlement = useVatSettlementProposal({
+    periodType,
+    year,
+    period,
+    fiscalPeriodId: isYearly ? fiscalPeriodId : undefined,
+    enabled: fetchKey != null,
+    refreshKey: settlementRefreshKey,
+  })
+  const bookingStatus = settlement.upToDate ? settlement.bookingStatus : null
+  const { canWrite } = useCanWrite()
+  // The selected period's filing record, if any: one key for every cadence
+  // (helårsmoms: the year the räkenskapsår ends, period 1).
+  const filingRecord =
+    filedByPeriod && periodType
+      ? (filedByPeriod.get(vatFilingKey(periodType, year, period)) ?? null)
+      : null
+  const deadlineCompleted = !!settlement.booked && filingRecord !== null
+
+  useEffect(() => {
+    setChosenStep(null)
+  }, [periodType, year, period, fiscalPeriodId])
+
+  useEffect(() => {
+    if (!fetchKey || periodType === null) return
+    const params = new URLSearchParams({
+      periodType,
+      year: String(year),
+      period: String(period),
+    })
+    if (periodType === 'yearly') params.set('fiscal_period_id', fiscalPeriodId)
+    let cancelled = false
+    fetch(`/api/reports/vat-declaration?${params.toString()}`)
+      .then(async (res) => {
+        const json = await res.json().catch(() => null)
+        if (cancelled) return
+        if (!res.ok || json?.error) {
+          setResult({
+            key: fetchKey,
+            error:
+              typeof json?.error === 'string' ? json.error : 'Kunde inte hämta momsdeklaration',
+          })
+        } else {
+          setResult({ key: fetchKey, declaration: json.data })
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setResult({ key: fetchKey, error: 'Kunde inte hämta momsdeklaration' })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [fetchKey, periodType, year, period, fiscalPeriodId])
+
+  // The per-verifikat gap scan runs on the same key as the declaration, so a
+  // korrigering (which bumps retryKey via onCorrected) re-verifies the gate
+  // instead of leaving it stuck on the pre-correction count.
+  useEffect(() => {
+    if (!fetchKey || periodType === null || !gapScanPeriodKey) return
+    const params = new URLSearchParams({
+      periodType,
+      year: String(year),
+      period: String(period),
+    })
+    if (periodType === 'yearly') params.set('fiscal_period_id', fiscalPeriodId)
+    let cancelled = false
+    fetch(`/api/reports/vat-declaration/rc-basis-gaps?${params.toString()}`)
+      .then(async (res) => {
+        const json = await res.json().catch(() => null)
+        if (cancelled) return
+        // count === null is a settled FAILURE, and unknown is not "inga
+        // brister": it becomes a visible warning row (so the banner cannot
+        // claim all-clear on a check that never ran) but does not block, or a
+        // network hiccup would lock the user out of a statutory deadline.
+        if (!res.ok || json?.error) setGapScan({ key: gapScanPeriodKey, count: null })
+        else setGapScan({ key: gapScanPeriodKey, count: (json?.data?.gaps ?? []).length })
+      })
+      .catch(() => {
+        if (!cancelled) setGapScan({ key: gapScanPeriodKey, count: null })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [fetchKey, gapScanPeriodKey, periodType, year, period, fiscalPeriodId])
+
+  // Derived fetch state: the previous declaration stays visible (dimmed)
+  // while the next period loads.
+  const upToDate = result !== null && result.key === fetchKey
+  const data = result?.declaration ?? null
+  const error = upToDate ? (result.error ?? null) : null
+  const loading = fetchKey !== null && !upToDate
+
+  // Local pre-flight checks on the calculated declaration. Computed here (not
+  // in SkatteverketPanel) so every user sees them: they gate direct submission
+  // but concern manual filers just as much.
+  //
+  // The per-verifikat gap scan is folded in BEFORE anything derives from the
+  // list. The aggregate checks compare period totals with a tolerance that
+  // scales with period size, so they can stay silent while individual
+  // verifikat still miss their basbelopp: reading them alone let the green
+  // "Inga fel hittades i underlaget för perioden" render directly above the
+  // worklist of those verifikat, with Skicka enabled. Banner, stegen and the
+  // send gate now all read this ONE array. The three scan states are kept
+  // apart: only a settled count of zero is allowed to mean "inga brister".
+  const gapScanSettled = gapScan !== null && gapScan.key === gapScanPeriodKey
+  const rcBasisScan: RcBasisGapScan = !gapScanSettled
+    ? { status: 'pending' }
+    : gapScan.count === null
+      ? { status: 'unavailable' }
+      : { status: 'scanned', gapCount: gapScan.count }
+  // The declaration carries the 2645/2647 totals (rcInputAccountTotals), so
+  // RC_INPUT_VAT_MISMATCH compares rutor 30-32 against the reverse-charge INPUT
+  // accounts instead of the ruta 48 aggregate. Without them, 50 000 kr of
+  // fiktiv utgående moms with nothing on 2645 sits silently behind 60 000 kr of
+  // ordinary 2641 and the user pays in moms they were entitled to deduct.
+  // rcInputTotalsFromDeclaration returns undefined (not an empty map) when a
+  // response predates the field, which keeps the fallback honest.
+  // The gap-downgrade evidence (per-momssats 44xx/45xx balances) travels on
+  // the declaration payload. Absent on responses from an older deploy: then
+  // the gaps keep their blocking ERROR tier rather than guessing.
+  // The class 3 accounts that reach no ruta travel on the payload too
+  // (REVENUE_ACCOUNT_WITHOUT_RUTA, #3387); absent on an older response, which
+  // keeps that warning silent.
+  const checks = data
+    ? withRcBasisGapFindings(
+        runVatDeclarationChecks(data.rutor, rcInputTotalsFromDeclaration(data), {
+          revenueAccountsWithoutRuta: data.revenueAccountsWithoutRuta,
+        }),
+        rcBasisScan,
+        data.rcBasisByRate
+          ? { rutor: data.rutor, rcBasisByRate: data.rcBasisByRate }
+          : undefined,
+      )
+    : []
+  const checksBlocked = isFilingBlocked(checks)
+  const errorCount = checks.filter((c) => c.status === 'ERROR').length
+  const warningCount = checks.filter((c) => c.status === 'WARNING').length
+  // Latch the automatic landing step once per period, as a render-phase
+  // adjustment when the period's declaration first settles. Deriving it live
+  // from checksBlocked navigated the user away mid-work: the refetch after a
+  // korrigering can clear the aggregate error while the Kontrollera worklist
+  // still holds broken vouchers, and the view would jump to Granska under
+  // their feet. The period-change effect below resets chosenStep to null,
+  // which re-arms this latch for the next period. It also waits for the gap
+  // scan: latching on the aggregate alone landed the user on Granska while
+  // steg 1 still held a blocking worklist.
+  if (chosenStep === null && upToDate && data && !error && gapScanSettled) {
+    setChosenStep(checksBlocked ? 1 : 2)
+  }
+  const activeStep = chosenStep ?? (checksBlocked ? 1 : 2)
+
+  // Settings not settled yet: the picker defaults and the gate both depend
+  // on them, so hold the whole view in a skeleton.
+  // The standalone page renders its own PageHeader (FocusedReport passes the
+  // title and skips its own), so the H1 must survive the gated/loading
+  // states too: each early return carries the action-less header.
+  const bareHeader = pageTitle ? <PageHeader title={pageTitle} /> : null
+
+  if (settingsLoading || periodType === null) {
+    return (
+      <div className="space-y-8">
+        {bareHeader}
+        <ReportBodyLoading />
+      </div>
+    )
+  }
+
+  if (settingsRowMissing) {
+    return (
+      <div className="space-y-8">
+        {bareHeader}
+        <EmptyState
+          icon={Percent}
+          title="Skatteinställningar saknas"
+          description="Momsdeklarationen bygger på företagets skatteinställningar, men inga är angivna ännu. Ange momsregistrering och redovisningsperiod (månad, kvartal eller helår) i inställningarna, så visas deklarationen för rätt period."
+          actionLabel="Öppna skatteinställningar"
+          actionHref="/settings/tax"
+        />
+      </div>
+    )
+  }
+
+  if (notVatRegistered) {
+    return (
+      <div className="space-y-8">
+        {bareHeader}
+        <EmptyState
+          icon={Percent}
+          title="Företaget är inte momsregistrerat"
+          description="Momsdeklarationen bygger på företagets skatteinställningar. Om företaget är momsregistrerat anger du momsregistrering och redovisningsperiod i inställningarna, så visas deklarationen här."
+          actionLabel="Öppna skatteinställningar"
+          actionHref="/settings/tax"
+        />
+      </div>
+    )
+  }
+
+  // Registered but no redovisningsperiod picked: block instead of guessing.
+  // A declaration rendered (and submittable via panelen) for the wrong
+  // period type is a compliance hazard, not a convenience. But the answer is
+  // collected HERE, inline: until it exists the deadline engine generates no
+  // VAT deadlines at all (silently), so bouncing the user to settings left a
+  // compliance hole open longer than it needed to be. When vat_number is ALSO
+  // missing, the inline save would 400 on the vat_number coherence rule in
+  // PUT /api/settings (momsregistrerad requires a registreringsnummer), so
+  // that (rarer) state keeps the settings bounce, which has both fields.
+  if (momsPeriodMissing) {
+    if (!settings?.vat_number) {
+      return (
+        <div className="space-y-8">
+          {bareHeader}
+          <EmptyState
+            icon={Percent}
+            title="Redovisningsperiod för moms saknas"
+            description="Företaget är momsregistrerat men momsregistreringsnummer och redovisningsperiod (månad, kvartal eller helår) saknas. Ange dem i skatteinställningarna så visas deklarationen för rätt period."
+            actionLabel="Öppna skatteinställningar"
+            actionHref="/settings/tax"
+          />
+        </div>
+      )
+    }
+    return (
+      <div className="space-y-8">
+        {bareHeader}
+        <EmptyState
+          icon={Percent}
+          title="Välj redovisningsperiod för moms"
+          description="Företaget är momsregistrerat men ingen redovisningsperiod är vald, så deklarationen och momsdeadlines kan inte visas. Perioden står i registreringsbeslutet från Skatteverket."
+        >
+          <div className="space-y-3">
+            <MomsPeriodInlineSetup
+              onSaved={async (value) => {
+                await refetchSettings()
+                // The first-settle seeding above only runs once per company,
+                // so re-apply the fresh periodicity (and its most-recent-
+                // ended default period) by hand.
+                handlePeriodTypeChange(value)
+              }}
+            />
+            <p className="text-xs text-muted-foreground">
+              Du kan alltid ändra den i{' '}
+              <Link href="/settings/tax" className="underline underline-offset-2 hover:text-foreground">
+                skatteinställningarna
+              </Link>
+              .
+            </p>
+          </div>
+        </EmptyState>
+      </div>
+    )
+  }
+
+  // Year and concrete period fused into ONE chip: reverse-chronological
+  // "Kvartal 2 2026", "Kvartal 1 2026", ... across the last five years, so
+  // switching period never needs two pickers. Yearly keeps the FyPicker,
+  // which is already a fused räkenskapsår chip.
+  const fusedPeriodItems: { id: string; label: string; annotation?: string }[] = []
+  if (!isYearly) {
+    for (let y = currentYear; y > currentYear - 5; y--) {
+      // Filed periods carry an "inlämnad" note so the picker shows at a
+      // glance which declarations are done (#2746).
+      if (periodType === 'quarterly') {
+        for (let q = 4; q >= 1; q--) {
+          const filed = filedByPeriod?.has(vatFilingKey('quarterly', y, q)) === true
+          fusedPeriodItems.push({
+            id: `${y}:${q}`,
+            label: `Kvartal ${q} ${y}`,
+            annotation: filed ? `${QUARTER_SPANS[q - 1]} · inlämnad` : QUARTER_SPANS[q - 1],
+          })
+        }
+      } else {
+        for (let m = 12; m >= 1; m--) {
+          const filed = filedByPeriod?.has(vatFilingKey('monthly', y, m)) === true
+          fusedPeriodItems.push({
+            id: `${y}:${m}`,
+            label: `${MONTH_NAMES[m - 1]} ${y}`,
+            annotation: filed ? 'inlämnad' : undefined,
+          })
+        }
+      }
+    }
+  }
+  const fusedLabel =
+    periodType === 'quarterly' ? `Kvartal ${period} ${year}` : `${MONTH_NAMES[period - 1]} ${year}`
+  // The selected period as the filing card names it. A räkenskapsår carries
+  // the deadline's own label (2026, or 2025/2026 for a broken year).
+  const filingPeriodLabel = isYearly
+    ? tReports('vat_filing_period_yearly', {
+        label: vatFilingTaxPeriod('yearly', year, period, fiscalYearEndMonth),
+      })
+    : fusedLabel
+
+  return (
+    <VatDrillContext.Provider value={{ fiscalPeriodId: isYearly ? fiscalPeriodId : undefined }}>
+    <div className="space-y-8">
+      {/* Standalone page: Exportera sits beside the H1 as a secondary
+          control. The primary action belongs to the step in front of the
+          person (Korrigera alla, Bokför momsen, Lämna in), not to the
+          spreadsheet (Jakob, 2026-09-09). XML and PDF live in "Lämna in":
+          they are filing artifacts, not report exports. */}
+      {pageTitle && (
+        <PageHeader
+          title={pageTitle}
+          action={
+            <div className="flex items-center gap-2">
+            <ReportExportMenu
+              variant="outline"
+              items={[
+                { format: 'xlsx', href: `/api/reports/vat-declaration/xlsx?${vatQueryString()}` },
+              ]}
+            />
+            </div>
+          }
+        />
+      )}
+      <div className="flex flex-wrap items-center justify-end gap-2">
+              {/* Cadence lives behind a settings-style "Period" chip: the
+                  concrete period chip next to it already shows the cadence
+                  ("Kvartal 2" implies quarterly, "Räkenskapsår ..." yearly). */}
+              <ContextPicker
+                items={[
+                  { id: 'monthly', label: 'Månadsvis' },
+                  { id: 'quarterly', label: 'Kvartalsvis' },
+                  { id: 'yearly', label: 'Årsvis' },
+                ]}
+                value={periodType}
+                onChange={(value) => handlePeriodTypeChange(value as VatPeriodType)}
+                triggerLabel="Period"
+                ariaLabel="Periodicitet"
+              />
+            {isYearly ? (
+              // Annual VAT covers a räkenskapsår: picked here, not a
+              // calendar year.
+              <FyPicker
+                value={fiscalPeriodId || null}
+                onChange={(id, fp) => {
+                  setPickedFiscalPeriodId(id || '')
+                  // The yearly key follows the pick: the year it ends in.
+                  if (fp) {
+                    setYear(Number(fp.period_end.slice(0, 4)))
+                    setPeriod(1)
+                  }
+                }}
+                includeAllOption={false}
+                hideFuturePeriods
+                preferLatestEnded
+              />
+            ) : (
+              <ContextPicker
+                items={fusedPeriodItems}
+                value={`${year}:${period}`}
+                onChange={(id) => {
+                  const [y, p] = id.split(':').map(Number)
+                  setYear(y)
+                  setPeriod(p)
+                }}
+                triggerLabel={fusedLabel}
+                ariaLabel="Redovisningsperiod"
+              />
+            )}
+            {!pageTitle && (
+              <ReportExportMenu
+                variant="outline"
+                items={[
+                  { format: 'xlsx', href: `/api/reports/vat-declaration/xlsx?${vatQueryString()}` },
+                ]}
+              />
+            )}
+      </div>
+
+      {error && (
+        <Card>
+          <CardContent className="flex flex-col items-center p-8 text-center">
+            <AlertCircle className="mb-2 h-6 w-6 text-destructive" />
+            <p className="mb-4 text-sm text-destructive">{error}</p>
+            <Button variant="outline" size="sm" onClick={() => setRetryKey((k) => k + 1)}>
+              Försök igen
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {!error && (awaitingFiscalPeriod || (loading && !data)) && <ReportBodyLoading />}
+
+      {data && !awaitingFiscalPeriod && (
+        <div
+          className={`space-y-8 transition-opacity duration-150 ${loading ? 'opacity-60' : ''}`}
+        >
+          {settlement.booked && (
+            <VatAlreadyBookedBanner
+              entry={settlement.booked}
+              deadlineCompleted={deadlineCompleted}
+            />
+          )}
+
+          {/* Stegen (concept): the filing pipeline as a horizontal stepper
+              (kontrollera, granska, bokför, lämna in), showing one step's
+              content at a time. Errors land on step 1, otherwise Granska. */}
+          <VatStepper
+            active={activeStep}
+            onSelect={setChosenStep}
+            errorCount={errorCount}
+            warningCount={warningCount}
+            ruta49={data.rutor.ruta49}
+            bookingStatus={bookingStatus}
+            filed={filingRecord !== null}
+          />
+
+          {activeStep === 1 && (
+            <section className="space-y-3">
+              <VatChecksCard
+              checks={checks}
+              periodType={periodType}
+              year={year}
+              period={period}
+              fiscalPeriodId={isYearly ? fiscalPeriodId : undefined}
+              onCorrected={() => setRetryKey((k) => k + 1)}
+            />
+              <div className="flex justify-end">
+                <Button variant="outline" size="sm" onClick={() => setChosenStep(2)}>
+                  Nästa: Granska deklarationen →
+                </Button>
+              </div>
+            </section>
+          )}
+
+          {activeStep === 2 && (
+            <section className="space-y-3">
+              <div>
+            <div className="flex flex-wrap items-baseline justify-between gap-3 px-1">
+              <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                Momsdeklaration · {data.period.start} till {data.period.end}
+              </h3>
+              <span className="text-[11px] tabular-nums text-muted-foreground">
+                {data.invoiceCount} fakturor · {data.transactionCount} transaktioner
+              </span>
+            </div>
+            <div className="mt-4 space-y-8">
+              <div>
+                {/* Utgående moms */}
+                <div>
+                  <h3 className="mb-3 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                    Utgående moms (försäljning)
+                  </h3>
+                  <Table>
+                    <TableBody>
+                      {data.rutor.ruta05 !== 0 && (
+                        <VatRutaRow
+                          ruta="05"
+                          label="Momspliktig försäljning"
+                          amount={data.rutor.ruta05}
+                          baseAmount={0}
+                          periodType={periodType}
+                          year={year}
+                          period={period}
+                        />
+                      )}
+                      {/* The other three bases in section A of SKV 4700. Shown
+                          only when used, like ruta 05: most companies have
+                          none, and an always-visible row of zeroes is noise.
+                          Rutor 07 and 08 have no entry in ACCOUNT_RUTA at all,
+                          so they can only arrive through the vmb and
+                          rental_voluntary treatments. */}
+                      {data.rutor.ruta06 !== 0 && (
+                        <VatRutaRow
+                          ruta="06"
+                          label="Momspliktiga uttag"
+                          amount={data.rutor.ruta06}
+                          baseAmount={0}
+                          periodType={periodType}
+                          year={year}
+                          period={period}
+                        />
+                      )}
+                      {data.rutor.ruta07 !== 0 && (
+                        <VatRutaRow
+                          ruta="07"
+                          label="Vinstmarginalbeskattning"
+                          amount={data.rutor.ruta07}
+                          baseAmount={0}
+                          periodType={periodType}
+                          year={year}
+                          period={period}
+                        />
+                      )}
+                      {data.rutor.ruta08 !== 0 && (
+                        <VatRutaRow
+                          ruta="08"
+                          label="Hyresinkomster (frivillig skattskyldighet)"
+                          amount={data.rutor.ruta08}
+                          baseAmount={0}
+                          periodType={periodType}
+                          year={year}
+                          period={period}
+                        />
+                      )}
+                      <VatRutaRow
+                        ruta="10"
+                        label="Utgående moms 25%"
+                        amount={data.rutor.ruta10}
+                        baseAmount={data.breakdown.invoices.base25}
+                        periodType={periodType}
+                        year={year}
+                        period={period}
+                      />
+                      <VatRutaRow
+                        ruta="11"
+                        label="Utgående moms 12%"
+                        amount={data.rutor.ruta11}
+                        baseAmount={data.breakdown.invoices.base12}
+                        periodType={periodType}
+                        year={year}
+                        period={period}
+                      />
+                      <VatRutaRow
+                        ruta="12"
+                        label="Utgående moms 6%"
+                        amount={data.rutor.ruta12}
+                        baseAmount={data.breakdown.invoices.base6}
+                        periodType={periodType}
+                        year={year}
+                        period={period}
+                      />
+                    </TableBody>
+                    <tfoot>
+                      <tr className="border-t font-medium">
+                        <td className="py-2">Summa utgående moms</td>
+                        <td className="py-2 text-right tabular-nums">
+                          {formatAmount(
+                            data.rutor.ruta10 + data.rutor.ruta11 + data.rutor.ruta12 +
+                            data.rutor.ruta30 + data.rutor.ruta31 + data.rutor.ruta32 +
+                            data.rutor.ruta60 + data.rutor.ruta61 + data.rutor.ruta62
+                          )} kr
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </Table>
+
+                  {/* Omvänd skattskyldighet (inköp) */}
+                  {/* Non-zero, not positive, and the same test in all three
+                      sections below: VatRutaRow hides itself only at exactly
+                      zero, and a box legitimately goes negative in a period
+                      dominated by credit notes. A section testing > 0 would
+                      swallow the row the box most needs to show. */}
+                  {(data.rutor.ruta20 !== 0 || data.rutor.ruta21 !== 0 || data.rutor.ruta22 !== 0 || data.rutor.ruta23 !== 0 || data.rutor.ruta24 !== 0 ||
+                    data.rutor.ruta30 !== 0 || data.rutor.ruta31 !== 0 || data.rutor.ruta32 !== 0) && (
+                    <>
+                      <h3 className="mb-3 mt-6 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                        Omvänd skattskyldighet (inköp)
+                      </h3>
+                      <Table>
+                        <TableBody>
+                          <VatRutaRow ruta="20" label="Inköp av varor från annat EU-land" amount={0} baseAmount={data.rutor.ruta20} noVat periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="21" label="Inköp av tjänster från annat EU-land" amount={0} baseAmount={data.rutor.ruta21} noVat periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="22" label="Inköp av tjänster utanför EU" amount={0} baseAmount={data.rutor.ruta22} noVat periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="23" label="Inköp av varor i Sverige" amount={0} baseAmount={data.rutor.ruta23} noVat periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="24" label="Övriga inköp av tjänster i Sverige" amount={0} baseAmount={data.rutor.ruta24} noVat periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="30" label="Utgående moms 25% (omvänd)" amount={data.rutor.ruta30} baseAmount={0} periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="31" label="Utgående moms 12% (omvänd)" amount={data.rutor.ruta31} baseAmount={0} periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="32" label="Utgående moms 6% (omvänd)" amount={data.rutor.ruta32} baseAmount={0} periodType={periodType} year={year} period={period} />
+                        </TableBody>
+                      </Table>
+                    </>
+                  )}
+
+                  {/* Försäljning undantagen från moms: section E of SKV 4700.
+                      Eight boxes that carry a base and no VAT, and until now
+                      the report drew two of them. Ruta 35 was the expensive
+                      omission: EU goods sales are ordinary business, they were
+                      computed correctly and filed correctly in the PDF and the
+                      eSKD file, and the screen simply did not say so. Rutor 37
+                      and 38 became reachable with triangulation_eu_goods and
+                      would have landed in the same silence. */}
+                  {(data.rutor.ruta35 !== 0 || data.rutor.ruta36 !== 0 || data.rutor.ruta37 !== 0 ||
+                    data.rutor.ruta38 !== 0 || data.rutor.ruta39 !== 0 || data.rutor.ruta40 !== 0 ||
+                    data.rutor.ruta41 !== 0 || data.rutor.ruta42 !== 0) && (
+                    <>
+                      <h3 className="mb-3 mt-6 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                        Försäljning undantagen från moms
+                      </h3>
+                      <Table>
+                        <TableBody>
+                          <VatRutaRow ruta="35" label="Varuförsäljning till annat EU-land" amount={0} baseAmount={data.rutor.ruta35} noVat periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="36" label="Varuförsäljning utanför EU (export)" amount={0} baseAmount={data.rutor.ruta36} noVat periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="37" label="Mellanmans inköp vid trepartshandel" amount={0} baseAmount={data.rutor.ruta37} noVat periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="38" label="Mellanmans försäljning vid trepartshandel" amount={0} baseAmount={data.rutor.ruta38} noVat periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="39" label="Tjänster EU (omvänd skattskyldighet)" amount={0} baseAmount={data.rutor.ruta39} noVat periodType={periodType} year={year} period={period} />
+                          {/* Not "Export utanför EU": that is ruta 36 one row
+                              up, and this box is services, not goods. */}
+                          <VatRutaRow ruta="40" label="Övrig försäljning av tjänster utomlands" amount={0} baseAmount={data.rutor.ruta40} noVat periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="41" label="Försäljning med omvänd skattskyldighet i Sverige" amount={0} baseAmount={data.rutor.ruta41} noVat periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="42" label="Övrig momsfri försäljning m.m." amount={0} baseAmount={data.rutor.ruta42} noVat periodType={periodType} year={year} period={period} />
+                        </TableBody>
+                      </Table>
+                    </>
+                  )}
+
+                  {/* Moms vid import */}
+                  {(data.rutor.ruta50 !== 0 || data.rutor.ruta60 !== 0 || data.rutor.ruta61 !== 0 || data.rutor.ruta62 !== 0) && (
+                    <>
+                      <h3 className="mb-3 mt-6 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                        Moms vid import
+                      </h3>
+                      <Table>
+                        <TableBody>
+                          <VatRutaRow ruta="50" label="Beskattningsunderlag vid import" amount={0} baseAmount={data.rutor.ruta50} noVat periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="60" label="Utgående moms 25% import" amount={data.rutor.ruta60} baseAmount={0} periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="61" label="Utgående moms 12% import" amount={data.rutor.ruta61} baseAmount={0} periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="62" label="Utgående moms 6% import" amount={data.rutor.ruta62} baseAmount={0} periodType={periodType} year={year} period={period} />
+                        </TableBody>
+                      </Table>
+                    </>
+                  )}
+                </div>
+              </div>
+              <div>
+                {/* Ingående moms */}
+                <div>
+                  <h3 className="mb-3 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                    Ingående moms (avdragsgill)
+                  </h3>
+                  <Table>
+                    <TableBody>
+                      <VatRutaRow
+                        ruta="48"
+                        label="Ingående moms att dra av"
+                        amount={data.rutor.ruta48}
+                        baseAmount={0}
+                        periodType={periodType}
+                        year={year}
+                        period={period}
+                      />
+                      {data.breakdown.transactions.ruta48 > 0 && (
+                        <tr className="text-muted-foreground">
+                          <td className="py-1 pl-6 text-xs">- från transaktioner</td>
+                          <td className="py-1 text-right text-xs">
+                            {formatAmount(data.breakdown.transactions.ruta48)} kr
+                          </td>
+                        </tr>
+                      )}
+                      {data.breakdown.receipts.ruta48 > 0 && (
+                        <tr className="text-muted-foreground">
+                          <td className="py-1 pl-6 text-xs">- från kvitton</td>
+                          <td className="py-1 text-right text-xs">
+                            {formatAmount(data.breakdown.receipts.ruta48)} kr
+                          </td>
+                        </tr>
+                      )}
+                    </TableBody>
+                    <tfoot>
+                      <tr className="border-t font-medium">
+                        <td className="py-2">Summa ingående moms</td>
+                        <td className="py-2 text-right tabular-nums">{formatAmount(data.rutor.ruta48)} kr</td>
+                      </tr>
+                    </tfoot>
+                  </Table>
+                </div>
+              </div>
+            </div>
+
+            {/* Ruta 49 as the emphasized document foot (concept skv-foot). */}
+            <div className="mt-8 flex items-baseline gap-3 border-t-2 border-foreground/80 pt-3">
+              <span className="font-mono text-xs text-muted-foreground">49</span>
+              <span className="flex-1 text-sm font-medium">
+                {data.rutor.ruta49 >= 0 ? 'Moms att betala' : 'Moms att återfå'}
+              </span>
+              <span className="text-sm font-semibold tabular-nums">
+                {formatAmount(Math.abs(data.rutor.ruta49))} kr
+              </span>
+            </div>
+          </div>
+              <div className="flex justify-end">
+                <Button variant="outline" size="sm" onClick={() => setChosenStep(3)}>
+                  Nästa: Bokför momsen →
+                </Button>
+              </div>
+            </section>
+          )}
+
+          {activeStep === 3 && (
+            <section className="space-y-3">
+              <VatBookingCard
+              checksBlocked={checksBlocked}
+              proposal={settlement.proposal}
+              failed={settlement.failed}
+              upToDate={settlement.upToDate}
+              booked={settlement.booked}
+              draft={settlement.draft}
+              onRetry={() => setSettlementRefreshKey((k) => k + 1)}
+            />
+              <div className="flex justify-end">
+                <Button variant="outline" size="sm" onClick={() => setChosenStep(4)}>
+                  Nästa: Lämna in →
+                </Button>
+              </div>
+            </section>
+          )}
+
+          {activeStep === 4 && (
+            <section className="mx-auto max-w-3xl space-y-8">
+              <SkatteverketPanel
+                periodType={periodType}
+                year={year}
+                period={period}
+                fiscalPeriodId={isYearly ? fiscalPeriodId : undefined}
+                fiscalYearEnd={
+                  isYearly && fiscalPeriodEnd
+                    ? {
+                        year: Number(fiscalPeriodEnd.slice(0, 4)),
+                        month: Number(fiscalPeriodEnd.slice(5, 7)),
+                      }
+                    : undefined
+                }
+                hasData={data !== null}
+                localBlocked={checksBlocked}
+              />
+              <VatManualFilingCard
+              xmlHref={`/api/reports/vat-declaration/eskd?${vatQueryString()}`}
+              pdfHref={`/api/reports/vat-declaration/pdf?${vatQueryString()}`}
+            />
+              {/* Filing record (#2746, #2786): what makes the page open the
+                  next period once this one is done, for every cadence. */}
+              {periodType && (
+                <VatFilingStatusCard
+                  periodType={periodType}
+                  year={year}
+                  period={period}
+                  fiscalYearEndMonth={fiscalYearEndMonth}
+                  periodLabel={filingPeriodLabel}
+                  record={filingRecord}
+                  canWrite={canWrite}
+                  onChanged={() => setFilingsRefreshKey((k) => k + 1)}
+                />
+              )}
+            </section>
+          )}
+        </div>
+      )}
+
+      {/* Skatteverket integration panel for the no-data states (fetch error,
+          empty period): with data it lives inside steg 4. Hidden while the
+          räkenskapsår for helårsmoms is unresolved, so its actions can never
+          target an unconfirmed period. */}
+      {!awaitingFiscalPeriod && !data && (
+        <SkatteverketPanel
+          periodType={periodType}
+          year={year}
+          period={period}
+          fiscalPeriodId={isYearly ? fiscalPeriodId : undefined}
+          fiscalYearEnd={
+            isYearly && fiscalPeriodEnd
+              ? {
+                  year: Number(fiscalPeriodEnd.slice(0, 4)),
+                  month: Number(fiscalPeriodEnd.slice(5, 7)),
+                }
+              : undefined
+          }
+          hasData={data !== null}
+          localBlocked={checksBlocked}
+        />
+      )}
+    </div>
+    </VatDrillContext.Provider>
+  )
+}
+
+function makeVatFetcher(
+  ruta: string,
+  periodType: VatPeriodType,
+  year: number,
+  period: number,
+  fiscalPeriodId?: string,
+): ReportSourceFetcher {
+  return async () => {
+    const params = new URLSearchParams({
+      periodType,
+      year: String(year),
+      period: String(period),
+    })
+    // Yearly drill-down resolves against the räkenskapsår, matching the report.
+    if (periodType === 'yearly' && fiscalPeriodId) {
+      params.set('fiscal_period_id', fiscalPeriodId)
+    }
+    const res = await fetch(
+      `/api/reports/vat-declaration/ruta/${encodeURIComponent(ruta)}/sources?${params.toString()}`
+    )
+    const json = await res.json()
+    if (!res.ok) throw new Error(json.error || 'Kunde inte hämta verifikat')
+    const lines: ReportSourceLine[] = json.data?.lines || []
+    return { lines, next_cursor: json.data?.next_cursor ?? null }
+  }
+}
+
+function VatRutaRow({
+  ruta,
+  label,
+  amount,
+  baseAmount,
+  noVat,
+  periodType,
+  year,
+  period,
+}: {
+  ruta: string
+  label: string
+  amount: number
+  baseAmount: number
+  noVat?: boolean
+  periodType?: VatPeriodType
+  year?: number
+  period?: number
+}) {
+  const { fiscalPeriodId } = React.useContext(VatDrillContext)
+  const canDrill = periodType !== undefined && year !== undefined && period !== undefined
+  const fetcher = React.useMemo(
+    () => (canDrill ? makeVatFetcher(ruta, periodType!, year!, period!, fiscalPeriodId) : null),
+    [canDrill, ruta, periodType, year, period, fiscalPeriodId]
+  )
+  // Hooks must be called unconditionally: provide a noop fetcher when drill
+  // is disabled. The early-return for zero rows lives below the hooks.
+  const expansion = useReportRowExpansion(
+    fetcher ?? (async () => ({ lines: [], next_cursor: null })),
+    `vat-${ruta}`
+  )
+
+  // Don't show rows with zero values
+  if (baseAmount === 0 && amount === 0) return null
+
+  return (
+    <>
+      <tr className="border-b">
+        <td className="py-2">
+          {canDrill && (
+            <span className="inline-block align-middle mr-1">
+              {expansion.toggle}
+            </span>
+          )}
+          <span className="font-mono text-xs bg-muted px-1 rounded-sm mr-2">{ruta}</span>
+          {label}
+        </td>
+        <td className="py-2 text-right tabular-nums">{noVat ? `${formatAmount(baseAmount)} kr` : `${formatAmount(amount)} kr`}</td>
+      </tr>
+      {!noVat && baseAmount > 0 && (
+        <tr className="text-muted-foreground">
+          <td className="py-1 pl-6 text-xs">Underlag</td>
+          <td className="py-1 text-right text-xs tabular-nums">{formatAmount(baseAmount)} kr</td>
+        </tr>
+      )}
+      {canDrill && expansion.panel(2)}
+    </>
+  )
+}

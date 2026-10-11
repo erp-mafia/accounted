@@ -30,12 +30,13 @@ Answer each of these with a tool, not with an assumption:
 | Payment details on the invoice | \`gnubok_get_company_settings\` | Bankgiro, plusgiro, Swish or bank account for SEK, IBAN for other currencies. Missing means no PDF and no send. |
 | Is the invoice date's period open? | \`gnubok_list_fiscal_periods\` | active = open, locked = no new entries, closed = year-end done. Under faktureringsmetoden, sending books a verifikat on the invoice date. |
 | Existing drafts or quotes for this customer | \`gnubok_list_invoices\` (\`status\`, \`document_type\`) | Avoid a duplicate; an open offert may be the thing to convert. |
+| The customer's own requirements | \`gnubok_get_customer({ customer_id })\` (search-only read: call it through \`gnubok_call_tool\` if it is not in your tool list) | \`notes\` holds what the customer asked for (e-invoice only, fakturamärkning, reverse charge on construction work, no fees); also \`customer_number\`, \`language\`, \`vat_number_validated\`, the address. Follow the notes on every invoice. |
 
 ## Questions to ask before creating an invoice
 
 Ask them together, in one short message, with what you already found filled in. Only ask what the tools could not tell you.
 
-1. **Customer**: who exactly (legal name, org number or VAT number)? Look them up first with \`gnubok_list_customers\`.
+1. **Customer**: who exactly (legal name, org number or VAT number)? Look them up first with \`gnubok_list_customers\`, then read the full record with \`gnubok_get_customer\`.
 2. **What was delivered**: goods or services, quantity, unit (st, tim, dag, mån), price excl. moms. If the company has an artikelregister, try \`gnubok_list_articles({ query })\` first.
 3. **Dates**: invoice date (default today), and the delivery date when it differs from the invoice date (a mandatory field then). Payment terms if the customer's default does not apply.
 4. **VAT treatment**: only when it is not obvious from the customer type (see the table below). Never ask "which VAT code"; ask the fact: "Was the work done in Sweden or at the customer's site abroad?", "Is this food, hotel, transport or books?".
@@ -188,6 +189,7 @@ End with short groups, in the user's language:
 
 - \`gnubok_list_companies\`, \`gnubok_get_agent_briefing\`, \`gnubok_list_skills\`, \`gnubok_get_company_settings\`, \`gnubok_list_fiscal_periods\`: orientation (read)
 - \`gnubok_list_customers\`, \`gnubok_lookup_company\`: find the customer (read)
+- \`gnubok_get_customer\` (via \`gnubok_call_tool\`): one customer's full record, notes included; read it before invoicing
 - \`gnubok_create_customer\` / \`gnubok_update_customer\`: customer setup and missing fields (staged)
 - \`gnubok_list_articles\` (read) / \`gnubok_create_article\` (staged): artikelregister
 - \`gnubok_create_invoice\`: stage new invoice, or a quote with \`document_type: 'quote'\` + \`valid_until\`

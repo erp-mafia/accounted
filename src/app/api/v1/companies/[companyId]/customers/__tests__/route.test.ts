@@ -42,6 +42,7 @@ vi.mock('@/lib/vat/vies-client', () => ({
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
 import { GET as listCustomers, POST as createCustomer } from '../route'
+import { CUSTOMER_RECORD_COLUMNS } from '@/lib/customers/customer-record'
 import {
   GET as getCustomer,
   PATCH as updateCustomer,
@@ -293,12 +294,11 @@ describe('GET /api/v1/companies/:companyId/customers', () => {
 
 describe('GET /api/v1/companies/:companyId/customers/:id', () => {
   it('returns the customer record', async () => {
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
-        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-        customers: { data: SAMPLE_CUSTOMER, error: null },
-      }),
-    )
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      customers: { data: SAMPLE_CUSTOMER, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
 
     const res = await getCustomer(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers/${CUSTOMER_ID}`),
@@ -311,6 +311,11 @@ describe('GET /api/v1/companies/:companyId/customers/:id', () => {
     expect(body.data.name).toBe('Acme AB')
     // Default response MUST NOT include the invoices expansion.
     expect(body.data.invoices).toBeUndefined()
+    // The projection is the shared record, the one MCP's
+    // gnubok_get_customer reads (crm#1061): language and notes included.
+    expect(supabaseMock.captured.selects.customers).toEqual([CUSTOMER_RECORD_COLUMNS])
+    expect(CUSTOMER_RECORD_COLUMNS).toContain('language')
+    expect(CUSTOMER_RECORD_COLUMNS).toContain('notes')
   })
 
   it('soft-degrades and signals partial_expansions when the invoices subquery fails', async () => {

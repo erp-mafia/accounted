@@ -25,6 +25,7 @@ import { UpdateCustomerSchema } from '@/lib/api/schemas'
 import { validateVatNumber, vatValidationColumns } from '@/lib/vat/vies-client'
 import { syncDraftVatHeadersForCustomer } from '@/lib/invoices/sync-draft-vat-headers'
 import { COUNTRY_CONSISTENCY_MESSAGES, checkCountryConsistency } from '@/lib/vat/country-codes'
+import { CUSTOMER_RECORD_COLUMNS, CustomerRecordSchema, readCustomerRecord } from '@/lib/customers/customer-record'
 
 /** The stored fields the country-vs-type rule and the personnummer guards read. */
 interface ExistingCountryRow {
@@ -53,44 +54,18 @@ const V1PatchCustomerSchema = UpdateCustomerSchema.extend({
   archived_at: z.null().optional(),
 })
 
-const CustomerDetail = z.object({
-  id: z.string().uuid(),
-  name: z.string(),
-  customer_type: z.string(),
-  customer_number: z.string().nullable(),
-  contact_person: z.string().nullable(),
-  email: z.string().nullable(),
-  phone: z.string().nullable(),
-  invoice_email_cc_addresses: z.array(z.string()).nullable(),
-  invoice_email_bcc_addresses: z.array(z.string()).nullable(),
-  address_line1: z.string().nullable(),
-  address_line2: z.string().nullable(),
-  postal_code: z.string().nullable(),
-  city: z.string().nullable(),
-  country: z.string(),
-  org_number: z.string().nullable(),
-  vat_number: z.string().nullable(),
-  vat_number_validated: z.boolean(),
-  // Always the masked display form ('********-1234'), never the stored value.
-  personal_number: z.string().nullable(),
-  default_payment_terms: z.number(),
-  notes: z.string().nullable(),
-  /** The party (motpart) behind the customer: one per counterpart, shared with the supplier side and the ledger. Null for private individuals. */
-  party_id: z.string().uuid().nullable(),
+// The record itself (and its select) is defined once in
+// lib/customers/customer-record.ts, shared with the MCP drill-in
+// gnubok_get_customer; only the expansions are v1's own.
+const CustomerDetail = CustomerRecordSchema.extend({
   /** Present with ?expand=party: identity, the SCB register summary and what the ledger has seen. */
   party: PartyForApiSchema.nullable().optional(),
-  archived_at: z.string().nullable(),
-  created_at: z.string(),
-  updated_at: z.string(),
 })
 
 const ALLOWED_EXPAND = ['invoices', 'party'] as const
 const OPEN_INVOICE_STATUSES = ['sent', 'partially_paid', 'overdue']
 
-// Explicit projection. Excludes user_id, company_id (internal scoping),
-// and vat_number_validated_at (internal timestamp not in the public schema).
-const CUSTOMER_DETAIL_COLUMNS =
-  'id, name, customer_type, customer_number, contact_person, email, phone, invoice_email_cc_addresses, invoice_email_bcc_addresses, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, personal_number, default_payment_terms, notes, party_id, archived_at, created_at, updated_at'
+const CUSTOMER_DETAIL_COLUMNS = CUSTOMER_RECORD_COLUMNS
 
 const OPEN_INVOICE_COLUMNS =
   'id, invoice_number, invoice_date, due_date, status, currency, total, remaining_amount'
@@ -170,12 +145,8 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
     }
     const expand = expandResult.expand
 
-    const { data: customer, error } = await ctx.supabase
-      .from('customers')
-      .select(CUSTOMER_DETAIL_COLUMNS)
-      .eq('company_id', ctx.companyId!)
-      .eq('id', customerId)
-      .maybeSingle()
+    // Masked on read: personal_number is the display form, never the ciphertext.
+    const { data: customer, error } = await readCustomerRecord(ctx.supabase, ctx.companyId!, customerId)
 
     if (error) {
       return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
@@ -235,12 +206,10 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
       }
     }
 
-    const party = expand.has('party') ? await expandParty(ctx.supabase, ctx.companyId!, (customer as { party_id?: string | null }).party_id ?? null) : undefined
+    const party = expand.has('party') ? await expandParty(ctx.supabase, ctx.companyId!, customer.party_id) : undefined
 
     return ok(
-      // The selected row carries personal_number ciphertext; mask before it
-      // leaves the server.
-      { ...(party !== undefined ? { party } : {}), ...maskCustomerRow(customer as { personal_number?: string | null }), ...(invoices !== undefined ? { invoices } : {}) },
+      { ...(party !== undefined ? { party } : {}), ...customer, ...(invoices !== undefined ? { invoices } : {}) },
       {
         requestId: ctx.requestId,
         partialExpansions: partialExpansions.length > 0 ? partialExpansions : undefined,

@@ -21,7 +21,7 @@ import {
 import type { ByraKpiClientRow } from '@/lib/byra/kpi-overview'
 
 // Recharts is heavy: defer the chart so the tiles and table render first
-// (same pattern as components/reports/views/index.tsx).
+// (same pattern as components/reports/lazy-views/IncomeStatementView.tsx).
 const IncomeExpenseChart = dynamic(
   () => import('@/components/reports/IncomeExpenseChart').then((m) => m.IncomeExpenseChart),
   { ssr: false, loading: () => <Skeleton className="h-64 w-full" /> },

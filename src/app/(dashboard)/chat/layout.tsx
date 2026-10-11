@@ -20,12 +20,11 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
   if (!user) redirect('/login')
   if (!companyId) redirect('/onboarding')
 
-  // Block the chat surface until the agent is built. Without this a user
-  // who deep-links to /chat (bookmark, ⌘K, "+ Ny" elsewhere) lands on an
-  // empty conversations list with no Anna to talk to. The home route at /
-  // renders NewUserChecklist for the same state, so we forward there
-  // instead of duplicating the welcome screen here.
-  if (!agent?.verified_at) redirect('/')
+  // Until the agent is built, the Assistent entry leads to building it
+  // (crm#1135): the build ends in /chat/intake, and the build page itself
+  // sends a company without the ai capability to billing. Forwarding to Hem
+  // instead left a new account with no visible way to the assistant at all.
+  if (!agent?.verified_at) redirect('/onboarding/agent')
 
   const { data: conversations } = await supabase
     .from('agent_conversations')

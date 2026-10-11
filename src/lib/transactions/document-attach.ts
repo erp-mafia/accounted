@@ -2,9 +2,9 @@
  * Pin a document (underlag) to a bank transaction, and take it off again.
  * One implementation behind the dashboard route
  * (/api/transactions/[id]/attach-document, POST and DELETE), the v1
- * operations (lib/operations/documents.ts) and the MCP approval of
- * attach_document_to_transaction (lib/pending-operations/commit.ts), so every
- * door applies the same rules:
+ * operations (lib/operations/documents.ts), whose attach is also the staged
+ * MCP tool gnubok_attach_document_to_transaction, so every door applies the
+ * same rules:
  *
  * Attach:
  *   - both rows must belong to the company (service-role doors skip RLS);
@@ -27,11 +27,14 @@
  *     compare-and-set, so a concurrent attach wins and a stale back-link can
  *     never re-anchor the detached document on the next booking.
  *
- * A dry run reads and checks; it writes nothing.
+ * A dry run reads and checks; it writes nothing. Its preview also carries
+ * both sides of the pairing (date, amount, counterparty; file, vendor,
+ * amount) and any other claim on the document, for whoever approves it.
  */
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { errorCauseTag } from '@/lib/errors/db-error'
+import { loadDocumentClaims, sharedDocumentWarning } from '@/lib/receipt-hunt/document-claims'
 import {
   completeInboxItemsForBookedTransaction,
   resolveVoucherLinkedEntryIds,
@@ -80,20 +83,21 @@ export async function attachDocumentToTransaction(
   // error in Postgres): the same answer the dashboard route always gave.
   const { data: tx, error: txError } = await supabase
     .from('transactions')
-    .select('id, document_id, journal_entry_id')
+    .select('id, document_id, journal_entry_id, description, merchant_name, amount, currency, date')
     .eq('id', transactionId)
     .eq('company_id', companyId)
     .maybeSingle()
   if (txError || !tx) return TX_NOT_FOUND
 
   const previousDocumentId = (tx.document_id as string | null) ?? null
+  let previousFileName: string | null = null
 
   // The pinned document is räkenskapsinformation: say so before the DB
   // trigger raises a raw check violation. Same refusal the trigger enforces.
   if (previousDocumentId && previousDocumentId !== documentId) {
     const { data: existing, error: existingError } = await supabase
       .from('document_attachments')
-      .select('journal_entry_id')
+      .select('journal_entry_id, file_name')
       .eq('id', previousDocumentId)
       .eq('company_id', companyId)
       .maybeSingle()
@@ -101,11 +105,12 @@ export async function attachDocumentToTransaction(
     if (existing?.journal_entry_id) {
       return { ok: false, code: 'DOC_ATTACH_REPLACES_POSTED', details: { previous_document_id: previousDocumentId } }
     }
+    previousFileName = (existing?.file_name as string | null) ?? null
   }
 
   const { data: document, error: docError } = await supabase
     .from('document_attachments')
-    .select('id, file_name, journal_entry_id')
+    .select('id, file_name, mime_type, journal_entry_id')
     .eq('id', documentId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -125,17 +130,46 @@ export async function attachDocumentToTransaction(
   }
 
   if (options.dryRun) {
+    // What the document says (the hints the pairing was chosen on), and who
+    // else already holds it: one document normally backs one purchase.
+    const [{ data: inbox }, claims] = await Promise.all([
+      supabase
+        .from('invoice_inbox_items')
+        .select('extracted_data')
+        .eq('document_id', documentId)
+        .eq('company_id', companyId)
+        .limit(1)
+        .maybeSingle(),
+      loadDocumentClaims(supabase, companyId, [documentId]).catch((error: unknown) => error as Error),
+    ])
+    if (claims instanceof Error) return failed(claims)
+    const extracted = (inbox?.extracted_data ?? {}) as {
+      supplier?: { name?: string }
+      invoice?: { currency?: string; invoiceDate?: string }
+      totals?: { total?: number }
+    }
     return {
       ok: true,
       dryRun: true,
       preview: {
         transaction_id: transactionId,
+        transaction_description: (tx.merchant_name as string | null) || (tx.description as string | null) || null,
+        transaction_amount: (tx.amount as number | null) ?? null,
+        transaction_currency: (tx.currency as string | null) ?? null,
+        transaction_date: (tx.date as string | null) ?? null,
         document_id: documentId,
         document_file_name: (document.file_name as string | null) ?? null,
+        document_mime_type: (document.mime_type as string | null) ?? null,
+        document_vendor_name: extracted.supplier?.name || null,
+        document_amount: extracted.totals?.total || null,
+        document_currency: extracted.invoice?.currency || null,
+        document_invoice_date: extracted.invoice?.invoiceDate || null,
         previous_document_id: previousDocumentId,
+        previous_document_file_name: previousFileName,
         replaces_document: previousDocumentId != null && previousDocumentId !== documentId,
         transaction_booked: tx.journal_entry_id != null,
         journal_entry_id: (tx.journal_entry_id as string | null) ?? null,
+        shared_document_warning: sharedDocumentWarning(claims.get(documentId) ?? [], { transaction_id: transactionId }),
       },
     }
   }

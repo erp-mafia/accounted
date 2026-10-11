@@ -33,6 +33,7 @@ import {
   RC_BASIS_MISSING_HINT,
   REVENUE_ACCOUNT_WITHOUT_RUTA_HINT,
 } from '../server'
+import { vatTotalsRpcResult } from './vat-totals-rpc-double'
 
 interface MockLine {
   entry?: string
@@ -124,10 +125,18 @@ function mockSupabase(
     // which answers with an envelope rather than a row set. This fixture has no
     // opinion about underlag, so it answers "none missing"; the predicate itself
     // is covered by vat-close-check-missing-underlag.test.ts.
-    rpc: (fn: string) =>
-      fn === 'verifikat_without_documents'
-        ? Promise.resolve({ data: { ok: true, total_count: 0, verifikat: [] }, error: null })
-        : makeChain([]),
+    //
+    // The declaration totals come from get_vat_declaration_totals, the same
+    // aggregate the web filing reads; its double sums the fixture lines.
+    rpc: (fn: string, params?: { p_accounts?: string[] }) => {
+      if (fn === 'verifikat_without_documents') {
+        return Promise.resolve({ data: { ok: true, total_count: 0, verifikat: [] }, error: null })
+      }
+      if (fn === 'get_vat_declaration_totals') {
+        return Promise.resolve(vatTotalsRpcResult({ lines: bareLines }, params))
+      }
+      return makeChain([])
+    },
   } as never
 }
 

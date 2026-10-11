@@ -377,6 +377,35 @@ describe('validateYearEndReadiness', () => {
     expect(result.errors).toContain(locked!.message)
   })
 
+  // crm#1029: the closing entry and the lock are refused while an SIE import
+  // holds the year, but only after the currency revaluation has posted.
+  it('blocks a year an SIE import still holds with SIE_IMPORT_UNFINISHED', async () => {
+    const period = makeFiscalPeriod({
+      id: 'fp-1',
+      name: 'Räkenskapsår 2024',
+      is_closed: false,
+      closing_entry_id: null,
+      import_hold: 'imp-1',
+    })
+    results = noGapResults(period)
+
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [],
+      isBalanced: true,
+      totalDebit: 0,
+      totalCredit: 0,
+    } as never)
+
+    const supabase = makeClient()
+    const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
+    expect(result.ready).toBe(false)
+    const held = result.blockers.find((b) => b.code === 'SIE_IMPORT_UNFINISHED')
+    expect(held).toBeDefined()
+    expect(held!.message).toContain('Räkenskapsår 2024 kan inte stängas med bokslut')
+    expect(held!.message).toContain('Ångra import')
+    expect(result.errors).toContain(held!.message)
+  })
+
   it('does not add PERIOD_LOCKED on a closed period (closed periods are locked too, but cannot be unlocked)', async () => {
     const period = makeFiscalPeriod({
       id: 'fp-1',

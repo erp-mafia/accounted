@@ -13,9 +13,10 @@ import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { closePeriod } from '@/lib/core/bookkeeping/period-service'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { userFacingCode } from '@/lib/errors/user-facing'
 
 const PeriodClosedResponse = z.object({
   id: z.string().uuid(),
@@ -107,6 +108,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'unknown'
       ctx.log.warn('fiscal-periods.close refused', { fiscalPeriodId: idParse.data, reason: msg })
+      if (userFacingCode(err)) {
+        return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
+      }
       if (msg.includes('not found')) {
         return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
           requestId: ctx.requestId, details: { resource: 'fiscal_period' },

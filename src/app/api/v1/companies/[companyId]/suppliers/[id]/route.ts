@@ -23,8 +23,12 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { v1OperationHandler } from '@/lib/operations/v1'
 import { suppliersUpdate } from '@/lib/operations/suppliers'
-import { SUPPLIER_COLUMNS, SupplierRecordSchema } from '@/lib/suppliers/update-supplier'
+import { SUPPLIER_RECORD_COLUMNS, SupplierRecordSchema, readSupplierRecord } from '@/lib/suppliers/supplier-record'
 
+// The record read here (and its select) is defined in
+// lib/suppliers/supplier-record.ts, shared with the MCP drill-in
+// gnubok_get_supplier; only the expansions are v1's own. PATCH is the
+// suppliers.update operation (lib/suppliers/update-supplier.ts).
 const SupplierDetail = SupplierRecordSchema.extend({
   /** Present with ?expand=party: identity, the SCB register summary and what the ledger has seen. */
   party: PartyForApiSchema.nullable().optional(),
@@ -117,12 +121,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
     }
     const expand = expandResult.expand
 
-    const { data: supplier, error } = await ctx.supabase
-      .from('suppliers')
-      .select(SUPPLIER_COLUMNS)
-      .eq('company_id', ctx.companyId!)
-      .eq('id', supplierId)
-      .maybeSingle()
+    const { data: supplier, error } = await readSupplierRecord(ctx.supabase, ctx.companyId!, supplierId)
 
     if (error) {
       return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
@@ -167,7 +166,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
       }
     }
 
-    const party = expand.has('party') ? await expandParty(ctx.supabase, ctx.companyId!, (supplier as { party_id?: string | null }).party_id ?? null) : undefined
+    const party = expand.has('party') ? await expandParty(ctx.supabase, ctx.companyId!, supplier.party_id) : undefined
 
     return ok(
       { ...supplier, ...(supplier_invoices !== undefined ? { supplier_invoices } : {}), ...(party !== undefined ? { party } : {}) },
@@ -250,7 +249,7 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
     if (ctx.dryRun) {
       const { data: current, error: fetchErr } = await ctx.supabase
         .from('suppliers')
-        .select(SUPPLIER_COLUMNS)
+        .select(SUPPLIER_RECORD_COLUMNS)
         .eq('company_id', ctx.companyId!)
         .eq('id', supplierId)
         .maybeSingle()

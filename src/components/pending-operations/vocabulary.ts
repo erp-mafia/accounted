@@ -287,6 +287,7 @@ export const singleActionWarnings: Record<string, string> = {
   // irreversibility or compliance consequence, not the generic risk-level.
   lock_period: 'Genom att klicka godkänn så låses perioden: inga nya verifikationer kan bokföras tills den låses upp.',
   unlock_period: 'Genom att klicka godkänn så låses perioden upp. Använd endast för rättelser; lås igen efter.',
+  undo_sie_import: 'Genom att klicka godkänn så ångras importen: varje importerat verifikat får en storno, inget raderas.',
   close_period: 'Genom att klicka godkänn så stängs perioden permanent (BFL). Stängningen kan inte ångras.',
   run_year_end: 'Genom att klicka godkänn så körs bokslut: resultatkonton nollställs, perioden låses, nästa period skapas.',
   set_opening_balances: 'Genom att klicka godkänn så bokförs ingående balans i nästa period.',

@@ -4,9 +4,7 @@
  * undo that). Rules live in lib/core/bookkeeping/fiscal-year-service.ts;
  * lock, close and year-end keep their hand-written v1 routes.
  *
- * fiscal-periods.unlock has no MCP binding on purpose: gnubok_unlock_period
- * (staged as unlock_period) already serves that door, and a second tool for
- * the same verb would only split agents between two names.
+ * MCP: fiscal-periods.unlock is gnubok_unlock_period, staged as unlock_period.
  */
 import { z } from 'zod'
 import {
@@ -60,7 +58,7 @@ function publicOutcome(outcome: OperationOutcome<FiscalPeriodRow>): OperationOut
 const FISCAL_PERIOD_ID = z
   .string()
   .uuid()
-  .describe('The fiscal period (räkenskapsår) id, from GET /fiscal-periods.')
+  .describe('The räkenskapsår id, from GET /fiscal-periods.')
 
 const PERIOD_EXAMPLE = {
   id: 'a8f1…',
@@ -236,6 +234,34 @@ export const fiscalPeriodsUnlock = defineOperation({
     path: '/api/v1/companies/:companyId/fiscal-periods/:id/unlock',
     pathParams: { id: 'fiscal_period_id' },
   },
+  mcp: {
+    name: 'gnubok_unlock_period',
+    title: 'Unlock Fiscal Period',
+    description:
+      'Stage period unlock: clears locked_at so entries can be posted again. Cannot unlock a closed period.',
+    visibility: 'default',
+    keywords: ['lås upp period', 'öppna period'],
+    stage: {
+      pendingType: 'unlock_period',
+      title: (_input, preview = {}) =>
+        `Lås upp period: ${preview.name} (${preview.period_start} till ${preview.period_end})`,
+      preview: (_input, preview) => ({
+        period_name: preview.name,
+        period_start: preview.period_start,
+        period_end: preview.period_end,
+        locked_at: preview.locked_at,
+        will: 'clear locked_at: new entries can be posted into the period again',
+      }),
+      extras: (input) => ({
+        next: {
+          description:
+            'After approval, post the rättelse via gnubok_correct_entry or new entries via gnubok_create_voucher, then re-lock with gnubok_lock_period.',
+          tool: 'gnubok_lock_period',
+          args: { fiscal_period_id: input.fiscal_period_id },
+        },
+      }),
+    },
+  },
   run: async (ctx, { fiscal_period_id }, { dryRun }) =>
     publicOutcome(await unlockFiscalPeriod(ctx, fiscal_period_id, { dryRun })),
 })
@@ -257,6 +283,7 @@ export const fiscalPeriodsCloseExternal = defineOperation({
       'A year bookkept here with result accounts answers 409 FISCAL_PERIOD_CLOSE_EXTERNAL_NATIVE_BOOKKEEPING: run the year-end instead.',
       'A running year answers 409 FISCAL_PERIOD_CLOSE_EXTERNAL_NOT_ENDED.',
       'Unbooked bank transactions answer 400 PERIOD_HAS_UNBOOKED_TRANSACTIONS with the count in details.reason.',
+      'A year that an SIE import, or its undo, still holds answers 409 PERIOD_HAS_UNFINISHED_SIE_IMPORT: resume or undo the import first.',
     ],
     example: {
       response: {
@@ -284,6 +311,7 @@ export const fiscalPeriodsCloseExternal = defineOperation({
     'FISCAL_PERIOD_CLOSE_EXTERNAL_NATIVE_BOOKKEEPING',
     'FISCAL_PERIOD_CLOSE_EXTERNAL_CHECK_FAILED',
     'PERIOD_HAS_UNBOOKED_TRANSACTIONS',
+    'PERIOD_HAS_UNFINISHED_SIE_IMPORT',
   ],
   http: {
     method: 'POST',

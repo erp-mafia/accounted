@@ -686,6 +686,13 @@ export interface HydratedInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto
    */
   unhydratedIds: Set<string>;
   /**
+   * The provider's own error when the pass stopped on it (`abortedBy: 'auth'`),
+   * so a caller can still tell a dead token (401) from one resource the token
+   * may not read (403). Kept off the report, which is serialized into the
+   * migration summary.
+   */
+  authError?: unknown;
+  /**
    * Listed invoices the caller's `select` predicate declined BEFORE the
    * detail pass, so no budget was spent on them. Absent when no predicate
    * was given (every listed invoice is in `invoices`).
@@ -941,7 +948,7 @@ async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
   label: string,
   budgetMs: number,
   enrichment?: InvoiceEnrichment<T>,
-): Promise<{ items: T[]; report: HydrationReport; unhydratedIds: Set<string> }> {
+): Promise<{ items: T[]; report: HydrationReport; unhydratedIds: Set<string>; authError?: unknown }> {
   if (!fetchDetail || !mapper) {
     return { items, report: { ...EMPTY_HYDRATION_REPORT }, unhydratedIds: new Set() };
   }
@@ -964,6 +971,7 @@ async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
   const unhydratedIds = new Set<string>(pending.map(({ dto }) => dto.id));
   const deadline = Math.min(Date.now() + budgetMs, currentExecutionBudget()?.deadline ?? Infinity);
   let aborted: 'auth' | 'budget' | null = null;
+  let authError: unknown;
 
   await mapWithConcurrency(pending, HYDRATION_CONCURRENCY, async ({ dto, index }) => {
     if (aborted) {
@@ -1008,6 +1016,7 @@ async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
       // and bury the real cause under a wall of identical warnings.
       if (isAuthFailure(err)) {
         aborted = 'auth';
+        authError = err;
         console.warn(
           `[provider-data-fetcher] ${label} hydration stopped: provider rejected the token or scope`,
           err instanceof Error ? err.message : String(err),
@@ -1032,7 +1041,7 @@ async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
     + (aborted ? ` (stopped early: ${aborted})` : ''),
   );
 
-  return { items: hydrated, report, unhydratedIds };
+  return { items: hydrated, report, unhydratedIds, authError };
 }
 
 /**
@@ -1089,7 +1098,7 @@ export async function hydrateSalesInvoices(
   invoices: SalesInvoiceDto[],
   budgetMs: number = DEFAULT_HYDRATION_BUDGET_MS,
 ): Promise<HydratedInvoices<SalesInvoiceDto>> {
-  const { items, report, unhydratedIds } = await hydrateInvoices<SalesInvoiceDto>(
+  const { items, report, unhydratedIds, authError } = await hydrateInvoices<SalesInvoiceDto>(
     invoices,
     salesInvoiceNeedsDetail,
     detailFetcher(provider, ResourceType.SalesInvoices, accessToken, providerCompanyId),
@@ -1099,7 +1108,7 @@ export async function hydrateSalesInvoices(
     bokioVoucherEnrichment(provider, accessToken, providerCompanyId),
   );
 
-  return { invoices: items, hydration: report, unhydratedIds };
+  return { invoices: items, hydration: report, unhydratedIds, authError };
 }
 
 /** Supplier invoices with their detail payloads merged in where needed. */
@@ -1128,7 +1137,7 @@ export async function hydrateSupplierInvoices(
   invoices: SupplierInvoiceDto[],
   budgetMs: number = DEFAULT_HYDRATION_BUDGET_MS,
 ): Promise<HydratedInvoices<SupplierInvoiceDto>> {
-  const { items, report, unhydratedIds } = await hydrateInvoices<SupplierInvoiceDto>(
+  const { items, report, unhydratedIds, authError } = await hydrateInvoices<SupplierInvoiceDto>(
     invoices,
     provider === 'bokio' ? () => false : supplierInvoiceNeedsDetail,
     detailFetcher(provider, ResourceType.SupplierInvoices, accessToken, providerCompanyId),
@@ -1138,5 +1147,5 @@ export async function hydrateSupplierInvoices(
     bokioVoucherEnrichment(provider, accessToken, providerCompanyId, true),
   );
 
-  return { invoices: provider === 'bokio' ? items.map(dto => dto.supplierEvidence ? dto : enrichBokioSupplierInvoice(dto)) : items, hydration: report, unhydratedIds };
+  return { invoices: provider === 'bokio' ? items.map(dto => dto.supplierEvidence ? dto : enrichBokioSupplierInvoice(dto)) : items, hydration: report, unhydratedIds, authError };
 }

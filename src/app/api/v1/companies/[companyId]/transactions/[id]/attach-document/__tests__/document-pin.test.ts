@@ -185,8 +185,12 @@ describe('POST /transactions/:id/attach-document', () => {
   it('a dry run previews the pin and writes nothing', async () => {
     const client = makeClient({
       company_members: MEMBER,
-      transactions: { data: { id: TX_ID, document_id: null, journal_entry_id: JE_ID }, error: null },
+      transactions: [
+        { data: { id: TX_ID, document_id: null, journal_entry_id: JE_ID, merchant_name: 'Clas Ohlson', amount: -499, currency: 'SEK', date: '2026-04-12' }, error: null },
+        { data: [], error: null }, // no other transaction holds the document
+      ],
       document_attachments: { data: { id: DOC_ID, file_name: 'k.pdf', journal_entry_id: null }, error: null },
+      pending_operations: { data: [], error: null }, // no waiting link proposal
     })
     mockServiceClient.mockReturnValue(client)
     const res = await post({ document_id: DOC_ID }, '?dry_run=true')
@@ -198,6 +202,12 @@ describe('POST /transactions/:id/attach-document', () => {
       document_id: DOC_ID,
       replaces_document: false,
       transaction_booked: true,
+      // Both sides of the pairing, for whoever approves a staged attach.
+      transaction_description: 'Clas Ohlson',
+      transaction_amount: -499,
+      transaction_date: '2026-04-12',
+      document_file_name: 'k.pdf',
+      shared_document_warning: null,
     })
     expect(wrote(client)).toBe(false)
   })

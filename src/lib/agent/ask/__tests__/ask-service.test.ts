@@ -34,7 +34,7 @@ function supabaseWith(company: { name?: string; entity_type?: string } | null): 
 beforeEach(() => {
   vi.clearAllMocks()
   generateText.mockResolvedValue({ text: 'Svar', model: 'qwen3.8', usage: {} })
-  buildLedgerTools.mockReturnValue([])
+  buildLedgerTools.mockResolvedValue([])
   buildAssistantSnapshot.mockResolvedValue('')
   buildUiGrounding.mockResolvedValue('')
 })
@@ -99,7 +99,7 @@ describe('answerAssistantQuestion', () => {
     const tools = [
       { name: 'gnubok_get_income_statement', description: 'd', jsonSchema: {}, execute: vi.fn() },
     ]
-    buildLedgerTools.mockReturnValue(tools)
+    buildLedgerTools.mockResolvedValue(tools)
     buildAssistantSnapshot.mockResolvedValue('Status: momsregistrerad (momsperiod: quarterly).')
 
     await answerAssistantQuestion({
@@ -206,7 +206,7 @@ describe('answerAssistantQuestion', () => {
   })
 
   it('honours a custom maxSteps', async () => {
-    buildLedgerTools.mockReturnValue([
+    buildLedgerTools.mockResolvedValue([
       { name: 'gnubok_get_vat_report', description: 'd', jsonSchema: {}, execute: vi.fn() },
     ])
     await answerAssistantQuestion({

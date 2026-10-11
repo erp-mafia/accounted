@@ -736,6 +736,84 @@ function isSystemSourceLiveUniqueError(err: unknown): boolean {
   return err instanceof Error && err.message.includes(SYSTEM_SOURCE_LIVE_UNIQUE_INDEX)
 }
 
+/** The skattekonto row fields the verifikat is built from. */
+export interface SkattekontoEntrySource {
+  id: string
+  transaktionsdatum: string
+  transaktionstext: string
+  belopp_skatteverket: number | string
+  transaktionsidentitet?: string | null
+}
+
+/**
+ * The verifikat one skattekonto row books, everything but its fiscal period:
+ * the builder bokforSkattekontoTransaction posts with and the MCP staging
+ * preview shows (toEntryPreview), so the approver reads the executor's own
+ * lines, not a description of them. Sign convention at the top of the file.
+ */
+export function buildSkattekontoEntry(
+  tx: SkattekontoEntrySource,
+  guess: CounterAccountMatch,
+): Omit<CreateJournalEntryInput, 'fiscal_period_id'> {
+  const amount = Math.abs(Number(tx.belopp_skatteverket))
+  const isCreditToSkattekonto = Number(tx.belopp_skatteverket) > 0
+  // A VAT refund that clears 1650 within 1 kr: the counter line takes the
+  // receivable and the gap is a third line on 3740 (credit when the refund is
+  // larger, debit when smaller). Only ever set on a credit to the skattekonto.
+  const oreRounding = isCreditToSkattekonto ? (guess.oreRounding ?? 0) : 0
+  const roundingLines: CreateJournalEntryLineInput[] =
+    oreRounding === 0
+      ? []
+      : [
+          {
+            account_number: VAT_ROUNDING_ACCOUNT,
+            debit_amount: oreRounding < 0 ? roundOre(-oreRounding) : 0,
+            credit_amount: oreRounding > 0 ? roundOre(oreRounding) : 0,
+            line_description: 'Öres- och kronutjämning',
+          },
+        ]
+
+  const lines: CreateJournalEntryLineInput[] = isCreditToSkattekonto
+    ? [
+        {
+          account_number: SKATTEKONTO_ACCOUNT,
+          debit_amount: amount,
+          credit_amount: 0,
+          line_description: tx.transaktionstext,
+        },
+        {
+          account_number: guess.account,
+          debit_amount: 0,
+          credit_amount: roundOre(amount - oreRounding),
+          line_description: guess.label,
+        },
+        ...roundingLines,
+      ]
+    : [
+        {
+          account_number: guess.account,
+          debit_amount: amount,
+          credit_amount: 0,
+          line_description: guess.label,
+        },
+        {
+          account_number: SKATTEKONTO_ACCOUNT,
+          debit_amount: 0,
+          credit_amount: amount,
+          line_description: tx.transaktionstext,
+        },
+      ]
+
+  return {
+    entry_date: tx.transaktionsdatum,
+    description: `Skattekonto: ${tx.transaktionstext}`,
+    source_type: 'system',
+    source_id: tx.id,
+    notes: `Genererad från skattekonto-synk. Skatteverket-id: ${tx.transaktionsidentitet ?? '-'}`,
+    lines,
+  }
+}
+
 /**
  * Create a draft journal entry for one skattekonto_transactions row.
  *
@@ -940,64 +1018,10 @@ export async function bokforSkattekontoTransaction(
     )
   }
 
-  // 5. Build lines based on sign convention
-  const amount = Math.abs(Number(tx.belopp_skatteverket))
-  const isCreditToSkattekonto = Number(tx.belopp_skatteverket) > 0
-  // A VAT refund that clears 1650 within 1 kr: the counter line takes the
-  // receivable and the gap is a third line on 3740 (credit when the refund is
-  // larger, debit when smaller). Only ever set on a credit to the skattekonto.
-  const oreRounding = isCreditToSkattekonto ? (guess.oreRounding ?? 0) : 0
-  const roundingLines: CreateJournalEntryLineInput[] =
-    oreRounding === 0
-      ? []
-      : [
-          {
-            account_number: VAT_ROUNDING_ACCOUNT,
-            debit_amount: oreRounding < 0 ? roundOre(-oreRounding) : 0,
-            credit_amount: oreRounding > 0 ? roundOre(oreRounding) : 0,
-            line_description: 'Öres- och kronutjämning',
-          },
-        ]
-
-  const lines: CreateJournalEntryLineInput[] = isCreditToSkattekonto
-    ? [
-        {
-          account_number: SKATTEKONTO_ACCOUNT,
-          debit_amount: amount,
-          credit_amount: 0,
-          line_description: tx.transaktionstext,
-        },
-        {
-          account_number: guess.account,
-          debit_amount: 0,
-          credit_amount: roundOre(amount - oreRounding),
-          line_description: guess.label,
-        },
-        ...roundingLines,
-      ]
-    : [
-        {
-          account_number: guess.account,
-          debit_amount: amount,
-          credit_amount: 0,
-          line_description: guess.label,
-        },
-        {
-          account_number: SKATTEKONTO_ACCOUNT,
-          debit_amount: 0,
-          credit_amount: amount,
-          line_description: tx.transaktionstext,
-        },
-      ]
-
+  // 5. The verifikat, from the builder the staging preview shows too.
   const input: CreateJournalEntryInput = {
+    ...buildSkattekontoEntry(tx, guess),
     fiscal_period_id: fiscalPeriodId,
-    entry_date: tx.transaktionsdatum,
-    description: `Skattekonto: ${tx.transaktionstext}`,
-    source_type: 'system',
-    source_id: tx.id,
-    notes: `Genererad från skattekonto-synk. Skatteverket-id: ${tx.transaktionsidentitet ?? '-'}`,
-    lines,
   }
 
   // The database is the arbiter of "one live verifikat per skattekonto row";

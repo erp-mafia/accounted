@@ -85,6 +85,10 @@ describe('buildCounterpartySuggestion', () => {
       templateCreditAccount: '1930',
       counterpartyLegacy: true,
     })
-    expect(categorizeBodyFor(s)).toEqual({ is_business: true, counterparty_template_id: '11111111-1111-1111-1111-111111111111' })
+    expect(categorizeBodyFor(s)).toEqual({
+      is_business: true,
+      counterparty_template_id: '11111111-1111-1111-1111-111111111111',
+      proposal_id: s.template_id,
+    })
   })
 })

@@ -280,10 +280,13 @@ describe('the server\'s own parse is not the caller\'s fault', () => {
 })
 
 describe('registry codes the refusal already had', () => {
+  // gnubok_unlock_period is generated from fiscal-periods.unlock, whose input takes a uuid.
+  const FP = 'a8f1c2d3-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
+
   it('unlock_period: a closed period is PERIOD_UNLOCK_CLOSED', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: 'p1', name: '2025', period_start: '2025-01-01', period_end: '2025-12-31', is_closed: true, locked_at: '2026-02-01T00:00:00Z' } })
-    expect(await refusal('gnubok_unlock_period', { fiscal_period_id: 'p1' }, supabase)).toMatchObject({
+    enqueue({ data: { id: FP, name: '2025', period_start: '2025-01-01', period_end: '2025-12-31', is_closed: true, locked_at: '2026-02-01T00:00:00Z' } })
+    expect(await refusal('gnubok_unlock_period', { fiscal_period_id: FP }, supabase)).toMatchObject({
       code: 'PERIOD_UNLOCK_CLOSED',
       retryable: false,
       message_sv: getErrorEntry('PERIOD_UNLOCK_CLOSED')!.message_sv,
@@ -292,8 +295,8 @@ describe('registry codes the refusal already had', () => {
 
   it('unlock_period: a period that is not locked is PERIOD_UNLOCK_NOT_LOCKED', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: 'p1', name: '2026', period_start: '2026-01-01', period_end: '2026-12-31', is_closed: false, locked_at: null } })
-    expect((await refusal('gnubok_unlock_period', { fiscal_period_id: 'p1' }, supabase)).code).toBe('PERIOD_UNLOCK_NOT_LOCKED')
+    enqueue({ data: { id: FP, name: '2026', period_start: '2026-01-01', period_end: '2026-12-31', is_closed: false, locked_at: null } })
+    expect((await refusal('gnubok_unlock_period', { fiscal_period_id: FP }, supabase)).code).toBe('PERIOD_UNLOCK_NOT_LOCKED')
   })
 
   it('bulk_book_transactions: unbalanced new_entry lines are JOURNAL_ENTRY_NOT_BALANCED with both totals', async () => {

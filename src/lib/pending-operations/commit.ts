@@ -100,7 +100,7 @@ import {
   OPENING_BALANCE_EXISTS_CODE,
   type ExistingOpeningBalance,
 } from '@/lib/import/opening-balance/existing'
-import { closePeriod, lockPeriod, unlockPeriod, resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
+import { closePeriod, lockPeriod, resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import {
   executeYearEndClosing,
   generateOpeningBalances,
@@ -174,7 +174,6 @@ import { linkTransactionToJournalEntry } from '@/lib/transactions/link-journal-e
 import { emitBatchAllocationEvents } from '@/lib/transactions/batch-allocation-events'
 import { matchTransactionToRotRutPayout } from '@/lib/invoices/rot-rut-match-transaction'
 import { linkRotRutPayoutVoucher } from '@/lib/invoices/rot-rut-link-voucher'
-import { attachDocumentToTransaction } from '@/lib/transactions/document-attach'
 import {
   DocumentAlreadyLinkedError,
   documentHeldElsewhereReasonSv,
@@ -182,9 +181,10 @@ import {
   type DocumentLinkHolder,
 } from '@/lib/documents/link-holder'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { userFacingCode } from '@/lib/errors/user-facing'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { createDimensionValue } from '@/lib/dimensions/registry-service'
-import { submitSIEJob, requestSIEJobAction } from '@/lib/import/sie-jobs'
+import { submitSIEJob } from '@/lib/import/sie-jobs'
 import type { AccountMapping } from '@/lib/import/types'
 import { AccountsNotInChartError, isBookkeepingError, ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
 import { extensionRegistry } from '@/lib/extensions/registry'
@@ -238,9 +238,9 @@ import { CreateArticleParamsSchema, UpdateArticleParamsSchema } from '@/lib/pend
 import { CreateDimensionValueParamsSchema } from '@/lib/pending-operations/schemas/dimension-value'
 import { RetagLineDimensionsParamsSchema } from '@/lib/pending-operations/schemas/retag-line-dimensions'
 import { everyRetagRefused, retagLines } from '@/lib/dimensions/retag-service'
-import { SetVoucherNoteParamsSchema } from '@/lib/pending-operations/schemas/voucher-note'
 import { IgnoreTransactionParamsSchema } from '@/lib/pending-operations/schemas/ignore-transaction'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
+import { finalFromLines, recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
 import {
   CreateInvoiceFromSalesOrderParamsSchema,
   CreateSalesOrderParamsSchema,
@@ -699,6 +699,8 @@ async function commitCategorizeTransaction(
     dimensions: coerceDimensionsBag(params.dimensions),
     // Validated against the chart both at staging and inside the core at commit.
     accountOverride: (rawAccountOverride as string | null | undefined) ?? undefined,
+    // The suggestion the agent booked from, for suggestion_log only.
+    proposalId: typeof params.proposal_id === 'string' && params.proposal_id.length > 0 ? params.proposal_id : undefined,
   })
 }
 
@@ -1418,53 +1420,11 @@ async function commitUpdateArticle(
   return { data: { article_id: data.id } }
 }
 
-async function commitSetVoucherNote(
-  supabase: SupabaseClient,
-  companyId: string,
-  params: Record<string, unknown>
-): Promise<ExecutorResult> {
-  let validated
-  try {
-    validated = SetVoucherNoteParamsSchema.parse(params)
-  } catch (err) {
-    if (err instanceof z.ZodError) {
-      const issue = err.issues[0]
-      return { error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`, status: 400 }
-    }
-    throw err
-  }
-
-  // Notes-only UPDATE: the journal_entries immutability trigger (migration
-  // 20260608120000) allows exactly this on committed entries and raises on
-  // anything else, so no status pre-check is needed here. Period-lock and
-  // company-lock-date triggers still apply and surface as errors.
-  const { data, error } = await supabase
-    .from('journal_entries')
-    .update({ notes: validated.notes })
-    .eq('id', validated.journal_entry_id)
-    .eq('company_id', companyId)
-    .select('id, voucher_series, voucher_number')
-    .maybeSingle()
-
-  if (error) return { error: error.message, status: 400 }
-  // Zero rows = the entry doesn't exist in this company: report it instead
-  // of a phantom success (same contract as the dashboard notes route).
-  if (!data) return { error: 'Verifikationen hittades inte.', status: 404 }
-
-  return {
-    data: {
-      journal_entry_id: data.id,
-      voucher_series: data.voucher_series,
-      voucher_number: data.voucher_number,
-      notes: validated.notes,
-    },
-  }
-}
-
 async function commitIgnoreTransaction(
   supabase: SupabaseClient,
   companyId: string,
-  params: Record<string, unknown>
+  params: Record<string, unknown>,
+  userId: string,
 ): Promise<ExecutorResult> {
   let validated
   try {
@@ -1486,6 +1446,7 @@ async function commitIgnoreTransaction(
     companyId,
     validated.transaction_id,
     validated.ignored,
+    { userId },
   )
   if (!outcome.ok) {
     const entry = getErrorEntry(outcome.code)
@@ -3898,7 +3859,14 @@ async function runPeriodTransition(
     const period = await transition(supabase, companyId, userId, id)
     return { data: { period_id: period.id, [timestampKey]: period[timestampKey] } }
   } catch (err) {
-    return { error: err instanceof Error ? err.message : fallback, status: 400 }
+    // A refusal written for the reader (an SIE import still holding the year)
+    // keeps its code, so the approval answers it instead of UNKNOWN_ERROR.
+    const code = userFacingCode(err)
+    return {
+      error: err instanceof Error ? err.message : fallback,
+      status: code ? (getErrorEntry(code)?.httpStatus ?? 400) : 400,
+      ...(code ? { errorCode: code } : {}),
+    }
   }
 }
 
@@ -3918,15 +3886,6 @@ async function commitLockPeriod(
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
   return runPeriodTransition(supabase, userId, companyId, params, lockPeriod, 'locked_at', 'Lock failed')
-}
-
-async function commitUnlockPeriod(
-  supabase: SupabaseClient,
-  userId: string,
-  companyId: string,
-  params: Record<string, unknown>
-): Promise<ExecutorResult> {
-  return runPeriodTransition(supabase, userId, companyId, params, unlockPeriod, 'locked_at', 'Unlock failed')
 }
 
 async function commitUncategorizeTransaction(
@@ -3954,44 +3913,6 @@ async function commitUncategorizeTransaction(
   if (updateError) return { error: 'Failed to reset transaction', status: 500 }
 
   return { data: { transaction_id: txId, reversed_journal_entry_id: journalEntryId } }
-}
-
-/**
- * attach_document_to_transaction (gnubok_attach_document_to_transaction): the
- * same rules as the dashboard route and the v1 operation
- * transactions.attach-document, in lib/transactions/document-attach.ts.
- */
-async function commitAttachDocumentToTransaction(
-  supabase: SupabaseClient,
-  userId: string,
-  companyId: string,
-  params: Record<string, unknown>
-): Promise<ExecutorResult> {
-  const txId = params.transaction_id as string
-  const documentId = params.document_id as string
-  if (!txId || !documentId) {
-    return { error: 'transaction_id and document_id are required', status: 400 }
-  }
-
-  const outcome = await attachDocumentToTransaction(
-    { supabase, companyId, userId, log: log.child({ operation: 'attach_document_to_transaction' }) },
-    txId,
-    documentId,
-  )
-  if (!outcome.ok) {
-    if (outcome.error) {
-      if (isBookkeepingError(outcome.error)) throw outcome.error
-      return { error: 'Failed to attach document', status: 500 }
-    }
-    const entry = getErrorEntry(outcome.code)
-    return {
-      error: outcome.messageSv || entry?.message_sv || outcome.code,
-      errorCode: outcome.code,
-      status: entry?.httpStatus ?? 400,
-    }
-  }
-  if (outcome.dryRun) return { data: outcome.preview }
-  return { data: { ...outcome.data } }
 }
 
 /**
@@ -5629,23 +5550,6 @@ async function commitImportSie(
 
 }
 
-async function commitUndoSieImport(
-  supabase: SupabaseClient,
-  userId: string,
-  companyId: string,
-  params: Record<string, unknown>,
-): Promise<ExecutorResult> {
-  const importId = params.import_id as string
-
-  if (!importId) {
-    return { error: 'import_id is required', status: 400 }
-  }
-
-  const job = await requestSIEJobAction(supabase,companyId,userId,importId,'undo')
-  return {data:{import_id:job.id,state:job.job_state,accepted:true,status_tool:'gnubok_sie_import_status'}}
-
-}
-
 // ── Phase 4: arbitrary-line bookkeeping primitives ───────────────
 
 /**
@@ -7203,6 +7107,7 @@ async function commitBulkBookTransactions(
   // new samlingsverifikat. This path runs on the cookieless service client
   // where auth.uid() is NULL; the RPC honors p_user_id only for service_role
   // callers (migration 20260824170000), so the approving human is the actor.
+  const suggestionSnapshot = await snapshotSuggestions(supabase, companyId, txIds as string[])
   const { data, error } = await commitBulkBooking(supabase, companyId, userId, {
     txIds: txIds as string[],
     existingJournalEntryId: existingJeId,
@@ -7229,6 +7134,23 @@ async function commitBulkBookTransactions(
       ...(code ? { errorCode: code } : {}),
       data: result?.details as Record<string, unknown> | undefined,
     }
+  }
+  // One decision row per bank line, all pointing at the one verifikat.
+  if (result.journal_entry_id) {
+    const entryLines = Array.isArray(newEntry?.lines)
+      ? (newEntry.lines as Array<{ account_number: string; debit_amount?: number; credit_amount?: number }>)
+      : []
+    const postedLines = entryLines.map((l) => ({
+      account: l.account_number,
+      debit: Number(l.debit_amount ?? 0),
+      credit: Number(l.credit_amount ?? 0),
+    }))
+    await recordDecisions(
+      supabase,
+      suggestionSnapshot,
+      (txIds as string[]).map((txId) => ({ transactionId: txId, final: finalFromLines(result.journal_entry_id!, postedLines) })),
+      userId,
+    )
   }
   // Structured audit-trail entry on success (compliance-swarm V16).
   log.info('bulk_book_transactions committed', {
@@ -7693,14 +7615,11 @@ async function commitPendingOperationInner(
       case 'create_supplier':
         result = await commitCreateSupplier(supabase, userId, companyId, pendingOp.params)
         break
-      case 'set_voucher_note':
-        result = await commitSetVoucherNote(supabase, companyId, pendingOp.params)
-        break
       case 'arkiv_propose_fact':
         result = await commitArkivProposeFact(supabase, userId, companyId, pendingOp.params)
         break
       case 'ignore_transaction':
-        result = await commitIgnoreTransaction(supabase, companyId, pendingOp.params)
+        result = await commitIgnoreTransaction(supabase, companyId, pendingOp.params, userId)
         break
       case 'create_sales_order':
         result = await commitCreateSalesOrder(supabase, userId, companyId, pendingOp.params)
@@ -7758,14 +7677,8 @@ async function commitPendingOperationInner(
       case 'lock_period':
         result = await commitLockPeriod(supabase, userId, companyId, pendingOp.params)
         break
-      case 'unlock_period':
-        result = await commitUnlockPeriod(supabase, userId, companyId, pendingOp.params)
-        break
       case 'uncategorize_transaction':
         result = await commitUncategorizeTransaction(supabase, userId, companyId, pendingOp.params)
-        break
-      case 'attach_document_to_transaction':
-        result = await commitAttachDocumentToTransaction(supabase, userId, companyId, pendingOp.params)
         break
       case 'link_document_to_voucher':
         result = await commitLinkDocumentToVoucher(supabase, userId, companyId, pendingOp.params)
@@ -7815,9 +7728,6 @@ async function commitPendingOperationInner(
         break
       case 'import_sie':
         result = await commitImportSie(supabase, userId, companyId, pendingOp.params)
-        break
-      case 'undo_sie_import':
-        result = await commitUndoSieImport(supabase, userId, companyId, pendingOp.params)
         break
       case 'create_voucher':
         result = await commitCreateVoucher(supabase, userId, companyId, pendingOp.params, opts)

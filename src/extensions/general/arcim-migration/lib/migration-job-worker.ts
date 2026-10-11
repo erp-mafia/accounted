@@ -4,9 +4,9 @@ import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
 import { ExecutionBudgetExceeded, withExecutionDeadline } from '@/lib/http/execution-budget'
 import { resolveConsent, type ResolvedConsent } from '@/lib/providers/resolve-consent'
-import { classifyProviderError, providerRefusalReason } from '@/lib/providers/with-provider-call'
+import { classifyProviderError, providerRefusalReason, ProviderCallError } from '@/lib/providers/with-provider-call'
 import { fortnoxApiErrorCode } from '@/lib/providers/fortnox/client'
-import { fetchMigrationPage, hydrateSalesInvoices, hydrateSupplierInvoices, type MigrationDto } from '@/lib/providers/provider-data-fetcher'
+import { fetchCompanyInfoDirect, fetchMigrationPage, hydrateSalesInvoices, hydrateSupplierInvoices, type MigrationDto } from '@/lib/providers/provider-data-fetcher'
 import { migrationRetrySeconds, type ProviderMigrationJob, type MigrationResource } from '@/lib/providers/migration-contract'
 import { sealMigrationPayload, openMigrationPayload } from '@/lib/providers/migration-payload'
 import type { ProviderName } from '@/lib/providers/types'
@@ -124,9 +124,14 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
     // A shortened detail budget means this invocation ran out of time,
     // not that the invoice exhausted a full attempt. Leave it pending.
     if (hydrated.hydration.abortedBy === 'budget' && budget < MAX_DETAIL_BUDGET_MS) throw new Error('MIGRATION_DEADLINE')
+    // The provider refused the token or this detail: say which, so the job
+    // stops with a code the user can act on (see readProviderRefusal).
+    if (hydrated.hydration.abortedBy === 'auth') {
+      throw await readProviderRefusal(hydrated.authError ?? new Error('PROVIDER_AUTH_EXPIRED'), job, connection, deadline)
+    }
     // The provider client already retries transient errors. Isolate exhausted
     // detail failures so healthy records continue; the user can retry them.
-    throw new Error(hydrated.hydration.abortedBy === 'auth' ? 'PROVIDER_AUTH_EXPIRED' : 'MIGRATION_DETAIL_RETRY')
+    throw new Error('MIGRATION_DETAIL_RETRY')
   }
   const invoice = hydrated.invoices[0]
   if (invoice.id !== listed.id) throw new Error('MIGRATION_SOURCE_ID_CHANGED')
@@ -488,6 +493,36 @@ function failureDetails(error: unknown): { errorName: string; dbCode?: string; h
 }
 
 /**
+ * A provider 403 read against the token that drew it. classifyProviderError
+ * calls an opaque 403 a dead grant unless the run proves the grant works
+ * (grantProven): the two answer alike, and only Fortnox names a refused
+ * register. A job spans invocations and reconnects, so instead of a run's
+ * history the worker asks the token itself, with one company-information
+ * call. A token that still answers is alive, and the 403 is a register or a
+ * detail it may not read. A Bokio integration token without one read
+ * permission parked the job as an expired connection (crm#1081), and the
+ * reconnect that asked for brought the same token back. Returns the error to
+ * report: the original, or PROVIDER_RESOURCE_FORBIDDEN when the token answered.
+ */
+async function readProviderRefusal(error: unknown, job: ProviderMigrationJob, connection: ResolvedConsent,
+  deadline: number): Promise<unknown> {
+  const { statusCode, status } = (error instanceof Error ? error : {}) as { statusCode?: unknown; status?: unknown }
+  if ((statusCode ?? status) !== 403 || failureCode(error) !== 'PROVIDER_AUTH_EXPIRED') return error
+  try {
+    const company = await withinMigrationDeadline(withExecutionDeadline(deadline, 'migration-grant-probe',
+      () => fetchCompanyInfoDirect(job.provider as ProviderName, connection.accessToken, connection.providerCompanyId)), deadline)
+    if (!company) return error
+  } catch (probeError) {
+    // Running out of time defers the step; any other failure keeps the
+    // dead-grant reading.
+    if (failureCode(probeError) === 'MIGRATION_DEADLINE') throw probeError
+    return error
+  }
+  return new ProviderCallError('PROVIDER_RESOURCE_FORBIDDEN', job.provider,
+    'Provider refused a resource on a grant that still answers', { status: 403 })
+}
+
+/**
  * One page of a register, or null when the provider refused the register.
  *
  * A refusal is the provider's verdict on the register, not a fault: Fortnox
@@ -510,7 +545,7 @@ async function fetchRegisterPage(supabase: SupabaseClient, job: ProviderMigratio
         connection.providerCompanyId, resource, job.next_page,
         { allSupplierInvoices: job.fiscal_year_scope?.allSupplierInvoices === true })), deadline)
   } catch (error) {
-    if (failureCode(error) !== 'PROVIDER_RESOURCE_FORBIDDEN') throw error
+    if (failureCode(await readProviderRefusal(error, job, connection, deadline)) !== 'PROVIDER_RESOURCE_FORBIDDEN') throw error
     const reason = providerRefusalReason(error)
     await migrationRpc(supabase, job, 'skip_provider_migration_resource',
       { p_resource: resource, p_page: job.next_page, p_reason: reason }, deadline)
@@ -604,7 +639,7 @@ export async function runProviderMigrationWorker(options: {
       const failedAt = Date.now()
       const code = failureCode(error)
       const deferred = code === 'MIGRATION_DEADLINE'
-      const attention = !deferred && (['PROVIDER_AUTH_EXPIRED','PROVIDER_LICENSE_MISSING','PROVIDER_API_MODULE_INACTIVE',
+      const attention = !deferred && (['PROVIDER_AUTH_EXPIRED','PROVIDER_RESOURCE_FORBIDDEN','PROVIDER_LICENSE_MISSING','PROVIDER_API_MODULE_INACTIVE',
         'MIGRATION_WRITE_FORBIDDEN','MIGRATION_SOURCE_IDENTITY_CHANGED','PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED'].includes(code) || job.failures >= 4)
       await migrationRpc(supabase, job, 'release_provider_migration_job', {
         p_error_code: deferred ? null : code,

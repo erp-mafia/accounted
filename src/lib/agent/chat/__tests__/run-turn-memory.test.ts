@@ -111,7 +111,7 @@ describe('runChatTurn: memory_captured emission', () => {
         created_at: '2026-05-18T10:00:00Z',
       }),
     }
-    getMock.mockReturnValue(rememberTool)
+    getMock.mockResolvedValue(rememberTool)
     getManyMock.mockResolvedValue([rememberTool])
 
     const events: StreamEvent[] = []
@@ -167,7 +167,7 @@ describe('runChatTurn: memory_captured emission', () => {
       inputSchema: { type: 'object', additionalProperties: false, properties: {} },
       execute: vi.fn().mockResolvedValue({ id: 'mem-old', is_active: false }),
     }
-    getMock.mockReturnValue(forgetTool)
+    getMock.mockResolvedValue(forgetTool)
     getManyMock.mockResolvedValue([forgetTool])
 
     const events: StreamEvent[] = []
@@ -303,7 +303,7 @@ describe('runChatTurn: memory_captured emission', () => {
       inputSchema: { type: 'object', additionalProperties: false, properties: {} },
       execute: vi.fn().mockResolvedValue({ data: [] }),
     }
-    getMock.mockReturnValue(listTool)
+    getMock.mockResolvedValue(listTool)
     getManyMock.mockResolvedValue([listTool])
 
     const events: StreamEvent[] = []

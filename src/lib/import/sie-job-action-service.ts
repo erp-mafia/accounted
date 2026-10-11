@@ -1,10 +1,10 @@
 /**
  * Undo or resume a durable SIE import, as an operation outcome: the service
  * behind the v1 operations imports.sie.undo and imports.sie.resume
- * (lib/operations/imports.ts). The dashboard routes
- * (/api/import/sie/[id]/undo, /action, /replace) and the MCP tool
- * gnubok_undo_sie_import call requestSIEJobAction directly, which this
- * wraps, so every door runs the same RPCs.
+ * (lib/operations/imports.ts), whose undo is also the staged MCP tool
+ * gnubok_undo_sie_import. The dashboard routes (/api/import/sie/[id]/undo,
+ * /action, /replace) call requestSIEJobAction directly, which this wraps, so
+ * every door runs the same RPCs.
  *
  * Undo NEVER deletes a posted verifikat: request_sie_import_undo (migration
  * 20260911150200) queues a BATCH STORNO that the SIE worker carries out: every
@@ -53,6 +53,9 @@ interface JobRow {
   user_id: string
   execution_actor_id: string | null
   fiscal_period_id: string | null
+  filename: string | null
+  fiscal_year_start: string | null
+  fiscal_year_end: string | null
 }
 
 export async function requestSIEImportAction(
@@ -65,7 +68,7 @@ export async function requestSIEImportAction(
 
   const { data: found, error: lookupError } = await supabase
     .from('sie_imports')
-    .select('id, job_state, job_kind, job_phase, user_id, execution_actor_id, fiscal_period_id')
+    .select('id, job_state, job_kind, job_phase, user_id, execution_actor_id, fiscal_period_id, filename, fiscal_year_start, fiscal_year_end')
     .eq('company_id', companyId)
     .eq('id', importId)
     .maybeSingle()
@@ -171,8 +174,10 @@ async function previewAction(
   if (job.job_kind && job.job_kind !== 'import') {
     return { ok: false, code: 'SIE_IMPORT_ACTION_CONFLICT', details: { reason: 'A reviewed repair run is stopped through its own review action.' } }
   }
+  // Which file and year, for the approver of a staged undo.
+  const subject = { filename: job.filename, fiscal_year_start: job.fiscal_year_start, fiscal_year_end: job.fiscal_year_end }
   if (state === 'undone' || state === 'failed') {
-    return { ok: true, dryRun: true, preview: { import_id: job.id, action, current_state: state, would_change: false } }
+    return { ok: true, dryRun: true, preview: { import_id: job.id, ...subject, action, current_state: state, would_change: false } }
   }
 
   const { data: others, error: othersError } = await supabase
@@ -219,6 +224,7 @@ async function previewAction(
     dryRun: true,
     preview: {
       import_id: job.id,
+      ...subject,
       action,
       current_state: state,
       would_change: true,

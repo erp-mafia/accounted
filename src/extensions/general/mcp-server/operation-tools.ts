@@ -22,6 +22,7 @@ import { throwOutcomeFailure } from '@/lib/operations/errors'
 import type { AnyOperation } from '@/lib/operations/types'
 import { createLogger } from '@/lib/logger'
 import type { ActorContext, McpTool, McpToolAnnotations } from './server'
+import type { NextActionHint } from './tool-result'
 
 const log = createLogger('mcp-operation-tools')
 
@@ -39,8 +40,8 @@ interface Deps {
     params: Record<string, unknown>,
     previewData: Record<string, unknown>,
     actor?: ActorContext,
-    next?: undefined,
-    options?: { dryRun?: boolean; idempotencyKey?: string },
+    next?: NextActionHint,
+    options?: { dryRun?: boolean; idempotencyKey?: string; dateForPeriodCheck?: string; complianceNote?: string },
   ) => Promise<unknown>
 }
 
@@ -49,8 +50,8 @@ type JsonSchema = Record<string, unknown>
 /**
  * Zod's JSON Schema, trimmed for a tool definition: no $schema header, no
  * regex spelled out next to a `format` that already says it (uuid), no
- * MAX_SAFE_INTEGER bounds, and closed objects so an agent's stray key is
- * refused rather than ignored.
+ * MAX_SAFE_INTEGER bounds, a nullable scalar as one node, and closed objects
+ * so an agent's stray key is refused rather than ignored.
  */
 export function toolInputSchema(input: z.ZodTypeAny): JsonSchema {
   const raw = z.toJSONSchema(input, { io: 'input', unrepresentable: 'any' }) as JsonSchema
@@ -58,10 +59,29 @@ export function toolInputSchema(input: z.ZodTypeAny): JsonSchema {
   return compact(raw) as JsonSchema
 }
 
+const COMPOSITE_KEYWORDS = ['enum', 'const', 'anyOf', 'oneOf', 'allOf'] as const
+
+/**
+ * `.nullable()` on a plain scalar comes out as anyOf [X, {type: 'null'}];
+ * the same schema is X with type [X.type, 'null'], a node shorter in every
+ * tools/list. Left alone when X lists values (an enum's values would then
+ * refuse the null) or composes further.
+ */
+function foldNullable(obj: Record<string, unknown>): Record<string, unknown> {
+  const options = obj.anyOf
+  if (!Array.isArray(options) || options.length !== 2) return obj
+  const isNull = (o: unknown) =>
+    typeof o === 'object' && o !== null && (o as Record<string, unknown>).type === 'null' && Object.keys(o).length === 1
+  const other = (isNull(options[0]) ? options[1] : isNull(options[1]) ? options[0] : null) as Record<string, unknown> | null
+  if (!other || typeof other.type !== 'string' || COMPOSITE_KEYWORDS.some((k) => k in other)) return obj
+  const { anyOf: _anyOf, ...rest } = obj
+  return { ...other, ...rest, type: [other.type, 'null'] }
+}
+
 function compact(node: unknown): unknown {
   if (Array.isArray(node)) return node.map(compact)
   if (typeof node !== 'object' || node === null) return node
-  const obj = { ...(node as Record<string, unknown>) }
+  const obj = foldNullable({ ...(node as Record<string, unknown>) })
   if (typeof obj.format === 'string' && typeof obj.pattern === 'string') delete obj.pattern
   if (obj.maximum === Number.MAX_SAFE_INTEGER) delete obj.maximum
   if (obj.minimum === Number.MIN_SAFE_INTEGER) delete obj.minimum
@@ -137,7 +157,11 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
       description,
       inputSchema: { ...inputSchema, type: 'object', additionalProperties: false, properties },
       outputSchema: deps.stagedSchema,
-      annotations: deps.stagedWrite,
+      annotations: {
+        ...deps.stagedWrite,
+        ...(binding.hints?.destructive ? { destructiveHint: true } : {}),
+        ...(binding.hints?.idempotent ? { idempotentHint: true } : {}),
+      },
       catalogVisibility: binding.visibility ?? 'search',
       keywords: binding.keywords,
       async execute(args, companyId, userId, supabase, actor) {
@@ -157,6 +181,7 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
         const params = stage.pinParams
           ? stage.pinParams(input as Record<string, unknown>, previewData)
           : (input as Record<string, unknown>)
+        const extras = stage.extras?.(input as Record<string, unknown>, previewData) ?? {}
         return deps.stagePendingOperation(
           supabase,
           companyId,
@@ -164,12 +189,14 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
           stage.pendingType,
           stage.title(input as Record<string, unknown>, previewData),
           params,
-          previewData,
+          stage.preview ? stage.preview(input as Record<string, unknown>, previewData) : previewData,
           actor,
-          undefined,
+          extras.next,
           {
             dryRun: Boolean(dry_run),
             idempotencyKey: typeof idempotency_key === 'string' ? idempotency_key : undefined,
+            ...(extras.periodDate ? { dateForPeriodCheck: extras.periodDate } : {}),
+            ...(extras.complianceNote ? { complianceNote: extras.complianceNote } : {}),
           },
         )
       },

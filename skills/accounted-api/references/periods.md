@@ -2599,6 +2599,7 @@ Closes and locks an imported historical räkenskapsår whose bokslut was done in
 - A year bookkept here with result accounts answers 409 FISCAL_PERIOD_CLOSE_EXTERNAL_NATIVE_BOOKKEEPING: run the year-end instead.
 - A running year answers 409 FISCAL_PERIOD_CLOSE_EXTERNAL_NOT_ENDED.
 - Unbooked bank transactions answer 400 PERIOD_HAS_UNBOOKED_TRANSACTIONS with the count in details.reason.
+- A year that an SIE import, or its undo, still holds answers 409 PERIOD_HAS_UNFINISHED_SIE_IMPORT: resume or undo the import first.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -2743,6 +2744,7 @@ Sets locked_at on the period. Refuses if uncategorised business transactions rem
 **Pitfalls:**
 - Idempotency-Key is mandatory.
 - A period with uncategorised business transactions cannot be locked; the response surfaces the count.
+- A year that an SIE import, or its undo, still holds returns 409 PERIOD_HAS_UNFINISHED_SIE_IMPORT: resume it (POST /imports/sie/{id}/resume) or undo it (POST /imports/sie/{id}/undo) first, then lock.
 - Locking is reversible until /close: POST /fiscal-periods/{id}/unlock lifts it.
 
 | Parameter | In | Type | Required | Notes |

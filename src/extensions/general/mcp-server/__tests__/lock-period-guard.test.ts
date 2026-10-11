@@ -19,6 +19,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { tools } from '../server'
+import { getStructuredError } from '@/lib/errors/get-structured-error'
 
 const lockPeriod = tools.find((t) => t.name === 'gnubok_lock_period')!
 
@@ -36,6 +37,22 @@ beforeEach(() => {
 })
 
 describe('gnubok_lock_period staging guard', () => {
+  // crm#1029: refuse at staging, not at approval, with the commit path's code.
+  it('refuses to stage a lock of a year an SIE import still holds', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...PERIOD, import_hold: 'imp-1' } }) // fiscal_periods
+
+    const err = await lockPeriod
+      .execute({ fiscal_period_id: 'fp-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
+      .then(() => null, (e: Error) => e)
+
+    expect(getStructuredError(err).code).toBe('PERIOD_HAS_UNFINISHED_SIE_IMPORT')
+    expect(getStructuredError(err).remediation?.args).toEqual({ import_id: 'imp-1' })
+    expect(err!.message).toContain('FY 2026 kan inte låsas')
+    // Nothing else ran: no unbooked count, nothing staged.
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
   it('refuses to stage while untriaged transactions exist (the predicate the old check never matched)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: PERIOD }) // fiscal_periods

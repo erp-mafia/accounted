@@ -23,6 +23,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { dbError } from '@/lib/errors/db-error'
 import { isTransactionBooked } from '@/lib/transactions/is-booked'
+import { recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
 
 export type TransactionIgnoreRefusalCode = 'TX_CATEGORIZE_TX_NOT_FOUND' | 'TX_IGNORE_ALREADY_BOOKED'
 
@@ -65,7 +66,8 @@ export async function setTransactionIgnored(
   companyId: string,
   transactionId: string,
   ignored: boolean,
-  options: { dryRun?: boolean } = {},
+  /** userId: who decided, recorded with the dismissal in suggestion_log. */
+  options: { dryRun?: boolean; userId?: string } = {},
 ): Promise<SetTransactionIgnoredOutcome> {
   const { data: tx, error: fetchError } = await supabase
     .from('transactions')
@@ -116,12 +118,20 @@ export async function setTransactionIgnored(
     }
   }
 
+  // Ignoring is a decision on the bank line: what was on offer is recorded
+  // as dismissed. Restoring the row is not a decision on any suggestion.
+  const suggestionSnapshot = ignored ? await snapshotSuggestions(supabase, companyId, [tx.id]) : null
+
   const { error: updateError } = await supabase
     .from('transactions')
     .update({ is_ignored: ignored })
     .eq('id', transactionId)
     .eq('company_id', companyId)
   if (updateError) throw dbError(updateError, null)
+
+  if (suggestionSnapshot) {
+    await recordDecisions(supabase, suggestionSnapshot, [{ transactionId: tx.id, final: null }], options.userId ?? null)
+  }
 
   return { ok: true, transaction_id: tx.id, is_ignored: ignored, changed: true, dry_run: false }
 }

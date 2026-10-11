@@ -23,7 +23,7 @@ import { PaletteProvider } from "@/components/providers/PaletteProvider";
 import { NonceProvider } from "@/components/providers/NonceProvider";
 import { SWRProvider } from "@/components/providers/SWRProvider";
 import { ScrollbarReveal } from "@/components/ScrollbarReveal";
-import { ensureInitialized } from "@/lib/init";
+import { ensureObservability } from "@/lib/analytics/ensure-observability";
 import { isSelfHosted } from "@/lib/env/public-flags";
 import { getBranding } from "@/lib/branding/service";
 import { resolveRequestBrand } from "@/lib/branding/request-brand";
@@ -32,6 +32,14 @@ import { BrandProvider } from "@/lib/branding/brand-context";
 import { toPublicBrand } from "@/lib/branding/public-brand";
 import { APP_TIME_ZONE } from "@/i18n/config";
 import { CSP_NONCE_HEADER } from "@/lib/security/csp";
+// A fork's branding extension calls registerBrandingService() at module load,
+// so it must run before metadata, viewport or the layout read getBranding().
+// The generated list imports only the enabled extensions whose manifest
+// declares "branding": true (none on hosted), never every extension: the
+// layout used to call ensureInitialized() for this, which made every page
+// render, public ones included, load every extension. Pages that need
+// extensions call ensureInitialized() themselves (npm run check:guards).
+import "@/lib/extensions/_generated/branding-list";
 import "./globals.css";
 
 // Brand resolution (WL-12: the lookup runs in the root layout, not
@@ -40,10 +48,9 @@ import "./globals.css";
 // uniformly. The layout used to carry a private copy of the function, which
 // silently skipped that override.
 
-// Load extensions before metadata/viewport functions read the branding service.
-// Without this, an extension that calls registerBrandingService() at its module
-// load time would not have run yet when the first request hits this layout.
-ensureInitialized();
+// Server-render errors logged through createLogger() reach PostHog Error
+// Tracking (gated on the token; a no-op on self-hosted and in CI).
+ensureObservability();
 
 const geistSans = Geist({
   variable: "--font-geist-sans",

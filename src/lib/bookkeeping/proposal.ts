@@ -164,15 +164,19 @@ export function categorizeBodyFor(
   vat_amount?: number
   dimensions?: Record<string, string>
   inbox_item_id?: string
+  proposal_id?: string
 } {
   const dims = extras.dimensions && Object.keys(extras.dimensions).length > 0 ? { dimensions: extras.dimensions } : {}
   const vatAmount = extras.vatAmount != null ? { vat_amount: extras.vatAmount } : {}
   const inbox = extras.inboxItemId ? { inbox_item_id: extras.inboxItemId } : {}
+  // Which suggestion the booking started from, for suggestion_log. A
+  // proposal the person built themselves names none.
+  const from = p.source === 'manual' ? {} : { proposal_id: p.template_id }
   switch (p.booking.kind) {
     case 'template':
-      return { is_business: true, category: p.booking.category, template_id: p.booking.template_id, ...dims, ...vatAmount, ...inbox }
+      return { is_business: true, category: p.booking.category, template_id: p.booking.template_id, ...dims, ...vatAmount, ...inbox, ...from }
     case 'counterparty':
-      return { is_business: true, counterparty_template_id: p.booking.counterparty_template_id, ...dims, ...inbox }
+      return { is_business: true, counterparty_template_id: p.booking.counterparty_template_id, ...dims, ...inbox, ...from }
     case 'account':
       return {
         is_business: true,
@@ -182,6 +186,7 @@ export function categorizeBodyFor(
         ...dims,
         ...vatAmount,
         ...inbox,
+        ...from,
       }
   }
 }
@@ -303,6 +308,19 @@ export function agentBookingFor(
   if (businessLines.length > 1) return null
   const account = businessLines[0]?.account ?? businessAccount(p)
   return { category: categoryForAccount(account, entityType), account_override: account, vat_treatment: p.vat_treatment ?? 'exempt' }
+}
+
+/**
+ * agentBookingFor plus the proposal's stable id: the arguments the MCP
+ * suggestion tool hands an agent, so a booking made from them says which
+ * suggestion it started from (recorded in suggestion_log, never booked).
+ */
+export function categorizeArgsFor(
+  p: BookingProposal,
+  entityType?: EntityType,
+): (NonNullable<ReturnType<typeof agentBookingFor>> & { proposal_id: string }) | null {
+  const booking = agentBookingFor(p, entityType)
+  return booking ? { ...booking, proposal_id: p.template_id } : null
 }
 
 /** The why in Swedish, for surfaces without the UI's message catalog (the MCP tool). */

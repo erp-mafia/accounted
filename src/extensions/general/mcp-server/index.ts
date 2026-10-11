@@ -1,17 +1,30 @@
 import { NextResponse } from 'next/server'
 import type { Extension } from '@/lib/extensions/types'
 import { buildProtectedResourceMetadata } from '@/lib/auth/protected-resource-metadata'
-import { handleMcpRequest, tools as mcpTools } from './server'
 import { isForbiddenOrigin, forbiddenOriginResponse } from './origin-guard'
-import { registerAgentTools } from '@/lib/agent/tools/registry'
+import { registerAgentToolLoader } from '@/lib/agent/tools/registry'
 import type { AgentTool } from '@/lib/agent/tools/types'
 import { currentAppVersion } from '@/lib/reports/app-version'
+
+// lib/init registers every extension on every route, so a static import of
+// ./server would load the whole MCP server (every tool and its services) on
+// routes that never touch it. Load it on the first MCP request or agent tool
+// lookup instead; concurrent callers share one import, a failed one is retried.
+type ServerModule = typeof import('./server')
+let serverModule: Promise<ServerModule> | null = null
+function loadServer(): Promise<ServerModule> {
+  serverModule ??= import('./server').catch((err: unknown) => {
+    serverModule = null
+    throw err
+  })
+  return serverModule
+}
 
 // Make the same tool set available to the in-app chat agent. The chat loop
 // (lib/agent/chat/*) dispatches against the core agentToolRegistry so it can
 // stay decoupled from this extension's module path. Tools satisfy the
 // AgentTool contract structurally: see lib/agent/tools/types.ts.
-registerAgentTools(mcpTools as unknown as AgentTool[])
+registerAgentToolLoader(async () => (await loadServer()).tools as unknown as AgentTool[])
 
 export const mcpServerExtension: Extension = {
   id: 'mcp-server',
@@ -33,6 +46,7 @@ export const mcpServerExtension: Extension = {
       handler: async (request: Request) => {
         // MCP spec MUST: validate Origin (DNS-rebinding defense). See origin-guard.ts.
         if (isForbiddenOrigin(request)) return forbiddenOriginResponse()
+        const { handleMcpRequest } = await loadServer()
         return handleMcpRequest(request)
       },
     },

@@ -10,9 +10,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
+import { recordDecisions } from '@/lib/suggestion-log/record'
 
 const mockCreateJE = vi.fn()
 const mockReverseOrphanedJE = vi.fn()
+// suggestion_log is recorded around every booking; its own reads and writes
+// are covered in lib/suggestion-log, not by this file's queued client.
+vi.mock('@/lib/suggestion-log/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/suggestion-log/record')>()),
+  snapshotSuggestions: vi.fn(async (_supabase: unknown, companyId: string) => ({ companyId, byTransaction: new Map() })),
+  recordDecisions: vi.fn(async () => undefined),
+}))
+
 vi.mock('@/lib/bookkeeping/transaction-entries', () => ({
   createTransactionJournalEntry: (...args: unknown[]) => mockCreateJE(...args),
 }))
@@ -163,6 +172,36 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
     }
     expect(mappingArg.debit_account).toBe('4020')
     expect(mappingArg.credit_account).toBe('1930')
+  })
+
+  it('records the decision with the proposal the agent booked from', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: txRow() })
+    enqueue({ data: settingsRow })
+    enqueue({ data: [] })
+    enqueue({ data: { account_number: '4020', account_class: 4, is_active: true } })
+    enqueue({ data: [{ id: 'fp-1' }] })
+    enqueue({ data: [{ id: TX_ID }] })
+
+    await categorizeMatchedTransaction(
+      supabase as never, 'user-1', 'company-1', TX_ID,
+      { category: 'expense_other', vatTreatment: 'exempt', accountOverride: '4020', proposalId: 'assistant:x' },
+    )
+
+    expect(vi.mocked(recordDecisions)).toHaveBeenCalledWith(
+      supabase,
+      expect.objectContaining({ companyId: 'company-1' }),
+      [{
+        transactionId: TX_ID,
+        actedOn: 'assistant:x',
+        final: expect.objectContaining({
+          journal_entry_id: 'je-override-1',
+          account: '4020',
+          booking: { kind: 'account', account: '4020', vat_treatment: 'exempt', category: 'expense_other' },
+        }),
+      }],
+      'user-1',
+    )
   })
 
   it('books GROSS with no auto-VAT line when the override has no explicit VAT intent', async () => {

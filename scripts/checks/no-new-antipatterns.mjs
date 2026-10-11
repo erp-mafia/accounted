@@ -138,14 +138,16 @@
  *      migrations written before that relied on the old default and are
  *      grandfathered as a file set that never grows. Implementation and
  *      rationale in table-without-grant.mjs.
- *   15. uninitialized-event-route: an app/api route whose runtime import
- *      closure reaches `eventBus.emit` but that never calls
- *      ensureInitialized() at module scope (in the route file or a module it
- *      imports), so every event it emits is dropped by the bus (no handler
- *      registered). withRouteContext does not wire the bus, by design: it
- *      keeps lib/init out of the cold start of routes that never emit.
- *      Implementation and rationale in event-route-init.mjs. Allowlisted
- *      file-set, may only shrink.
+ *   15. uninitialized-event-route: a server entry point (app/api route,
+ *      page, layout, other App Router entry, or 'use server' module) whose
+ *      runtime import closure reaches `eventBus.emit` or a read of what the
+ *      extensions register, but that never calls ensureInitialized() at
+ *      module scope (in the entry file or a module it imports), so its
+ *      events are dropped by the bus and its registry reads come back empty.
+ *      Neither withRouteContext nor the root layout wires the bus, by
+ *      design: lib/init stays out of the cold start of everything that does
+ *      not need it. Implementation and rationale in event-route-init.mjs.
+ *      Allowlisted file-set, may only shrink.
  *   16. limit-above-page: a PostgREST `.limit(N)` with N above 1000. max-rows
  *      answers it with 1000 rows and no error, so the written cap is a silent
  *      1000 (the Arkiv graph, facts and lint, the counterparty resolver and the
@@ -1527,13 +1529,13 @@ const initializedSinceBaseline = [...UNINITIALIZED_EMITTING_ROUTES].filter(
 if (newUninitializedRoutes.length) {
   failed = true
   console.error(
-    `\n✗ uninitialized-event-route: ${newUninitializedRoutes.length} route(s) can emit events but never ` +
-      'wire the event bus, so those events are silently dropped:',
+    `\n✗ uninitialized-event-route: ${newUninitializedRoutes.length} entry point(s) can emit events or read ` +
+      'extension registries but never run ensureInitialized(), so events are silently dropped and reads come back empty:',
   )
   newUninitializedRoutes.forEach((f) => console.error(`    ${f}`))
   console.error(
     "  → import { ensureInitialized } from '@/lib/init' and call ensureInitialized() at module\n" +
-      '    scope in the route file (withRouteContext does not wire the bus).',
+      '    scope in the entry file (neither withRouteContext nor the root layout wires the bus).',
   )
 }
 

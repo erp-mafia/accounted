@@ -2294,6 +2294,10 @@ export const CategorizeTransactionSchema = z
     dimensions: DimensionsBagSchema.optional(),
     user_description: z.string().max(500).optional(),
     inbox_item_id: z.string().uuid().optional(),
+    // The stable id of the suggestion the booking started from
+    // (BookingProposal.template_id), recorded in suggestion_log. Omitted when
+    // the person picked the account themselves.
+    proposal_id: z.string().min(1).max(200).optional(),
     confirm_no_match: z.boolean().optional(),
     // Booking-time duplicate guard (TRANSACTION_BOOK_POSSIBLE_DUPLICATE). force
     // bypasses it after the user reviews the candidate; the bypass is bound to

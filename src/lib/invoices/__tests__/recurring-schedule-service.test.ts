@@ -283,6 +283,21 @@ describe('computeInitialRunDate', () => {
     const today = new Date(Date.UTC(2027, 1, 10)) // 2027-02-10, Feb has 28 days
     expect(computeInitialRunDate(today, 31)).toBe('2027-02-28')
   })
+
+  it("reads today on Stockholm's calendar, not UTC's", () => {
+    // 2026-05-14 22:30 UTC is already 2026-05-15 00:30 in Stockholm (CEST):
+    // day 14 has passed there, so the first run is next month, not a date
+    // the start_date validation would call past.
+    const now = new Date('2026-05-14T22:30:00Z')
+    expect(computeInitialRunDate(now, 14)).toBe('2026-06-14')
+    expect(computeInitialRunDate(now, 15)).toBe('2026-05-15')
+  })
+
+  it('rejects an invalid day_of_month', () => {
+    const today = new Date(Date.UTC(2026, 4, 5))
+    expect(() => computeInitialRunDate(today, 0)).toThrow()
+    expect(() => computeInitialRunDate(today, 32)).toThrow()
+  })
 })
 
 describe('getStockholmDateHour', () => {

@@ -34,7 +34,6 @@ export function gateContext(overrides: Partial<NavGateContext> = {}): NavGateCon
     agentsEnabled: true,
     capabilities: [CAPABILITY.ai],
     hiddenNavHrefs: new Set(),
-    agentVerified: true,
     ...overrides,
   }
 }

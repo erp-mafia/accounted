@@ -8,11 +8,10 @@
  * routes (POST /documents, GET /documents/{id}/download,
  * POST /documents/{id}/link).
  *
- * MCP: the reads and the attach have hand-written tools already
- * (gnubok_list_records, gnubok_get_record, gnubok_list_unmatched_documents,
- * gnubok_get_document_content, gnubok_attach_document_to_transaction, whose
- * approval runs the same attach service), so those operations are v1 only.
- * Delete and detach get generated staged tools.
+ * MCP: the reads have hand-written tools already (gnubok_list_records,
+ * gnubok_get_record, gnubok_list_unmatched_documents,
+ * gnubok_get_document_content), so those operations are v1 only. Attach,
+ * delete and detach get generated staged tools.
  */
 import { z } from 'zod'
 import { AttachDocumentSchema } from '@/lib/api/schemas'
@@ -58,7 +57,7 @@ const EXAMPLE_DOCUMENT = {
 }
 
 const DOCUMENT_ID = z.string().uuid().describe('The document id (document_id from the list or an upload).')
-const TRANSACTION_ID = z.string().uuid().describe('The bank transaction id (transaction_id).')
+const TRANSACTION_ID = z.string().uuid().describe('The bank transaction id.')
 
 export const documentsList = defineOperation({
   id: 'documents.list',
@@ -255,6 +254,53 @@ export const transactionsAttachDocument = defineOperation({
     method: 'POST',
     path: '/api/v1/companies/:companyId/transactions/:id/attach-document',
     pathParams: { id: 'transaction_id' },
+  },
+  mcp: {
+    name: 'gnubok_attach_document_to_transaction',
+    title: 'Attach Document to Transaction',
+    description:
+      'Stage attaching a document to a bank transaction. Check that date, amount and counterparty match the document first: the approver sees both sides.',
+    visibility: 'default',
+    keywords: ['bifoga underlag', 'kvitto', 'koppla underlag'],
+    hints: { idempotent: true },
+    stage: {
+      pendingType: 'attach_document_to_transaction',
+      title: (input, preview = {}) =>
+        `Koppla bilaga: ${preview.document_file_name} → ${preview.transaction_description || input.transaction_id}`,
+      // AttachDocumentPreview's shape: both sides of the pairing, and what
+      // it replaces. A pinned document that is räkenskapsinformation is
+      // refused by the dry run, so a replaced one never is.
+      preview: (_input, preview) => ({
+        transaction_description: preview.transaction_description,
+        transaction_amount: preview.transaction_amount,
+        transaction_currency: preview.transaction_currency,
+        transaction_date: preview.transaction_date,
+        document_file_name: preview.document_file_name,
+        document_mime_type: preview.document_mime_type,
+        document_vendor_name: preview.document_vendor_name,
+        document_amount: preview.document_amount,
+        document_currency: preview.document_currency,
+        document_invoice_date: preview.document_invoice_date,
+        will_overwrite_existing: preview.replaces_document === true,
+        existing_document_id: preview.replaces_document === true ? preview.previous_document_id : null,
+        existing_document_file_name: preview.replaces_document === true ? preview.previous_document_file_name : null,
+        existing_document_is_rakenskapsinformation: false,
+      }),
+      extras: (input, preview) => ({
+        // The approver sees a locked or closed period on the same row
+        // categorize_transaction surfaces it: once the transaction is booked
+        // the document becomes part of the verifikat's underlag.
+        periodDate: typeof preview.transaction_date === 'string' ? preview.transaction_date : undefined,
+        complianceNote:
+          typeof preview.shared_document_warning === 'string' ? preview.shared_document_warning : undefined,
+        next: {
+          description:
+            'Once approved, the receipt is linked to the transaction. If the transaction is still uncategorized, follow up with gnubok_categorize_transaction.',
+          tool: 'gnubok_categorize_transaction',
+          args: { transaction_id: input.transaction_id },
+        },
+      }),
+    },
   },
   run: (ctx, { transaction_id, document_id }, { dryRun }) =>
     attachDocumentToTransaction(ctx, transaction_id, document_id, { dryRun }),

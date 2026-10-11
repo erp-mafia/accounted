@@ -5,9 +5,16 @@
  * mocks Supabase to feed synthetic journal entry lines and asserts the rutor
  * shape, ruta48 inclusion of 2647, ruta49 formula, and the one-sided
  * reverse-charge warning.
+ *
+ * The per-account totals come from the get_vat_declaration_totals RPC, the
+ * same aggregate the web momsdeklaration and the Skatteverket submission read.
+ * Its double (vat-totals-rpc-double.ts) sums the fixture; which entries the
+ * RPC leaves out is covered against real Postgres in tests/pg.
  */
 import { describe, it, expect } from 'vitest'
 import { computeVatReport, tools } from '../server'
+import { calculateVatDeclaration } from '@/lib/reports/vat-declaration'
+import { vatTotalsRpcResult } from './vat-totals-rpc-double'
 
 interface MockLine {
   account_number: string
@@ -20,16 +27,11 @@ interface MockLine {
 function mockSupabaseWithLines(
   lines: MockLine[],
   fiscalPeriod?: { period_start: string; period_end: string },
+  rpcExcludedEntryIds: string[] = [],
 ) {
-  // computeVatReport uses the two-step entry-lines fetch
-  // (lib/bookkeeping/entry-lines.ts): journal_entries is queried first, then
-  // journal_entry_lines by parent id, and the parent is reattached under
-  // `journal_entries`. Both steps page with `.order('id').range(from, to)`,
-  // so `.range()` is the terminal; one short page (always < the 1000-row
-  // PAGE_SIZE for these fixtures) ends the paging loop.
-  //
-  // Fixtures stay line-shaped for readability; the parent rows are derived
-  // from them here.
+  // journal_entries / journal_entry_lines still serve the whole fixture, every
+  // entry included, so a report that went back to scanning the journal itself
+  // instead of reading the RPC would count what the RPC leaves out.
   const entries = [
     ...new Map(
       lines.map((l, i) => {
@@ -47,9 +49,11 @@ function mockSupabaseWithLines(
   }))
 
   const makeChain = (rows: unknown[]) => {
-    const chain: Record<string, () => unknown> = {}
-    chain.range = () => ({ data: rows, error: null })
+    const chain: Record<string, unknown> = {}
+    const settled = { data: rows, error: null }
+    chain.range = () => settled
     chain.maybeSingle = async () => ({ data: rows[0] ?? null, error: null })
+    chain.then = (resolve: (v: unknown) => void) => resolve(settled)
     for (const m of ['order', 'lte', 'gte', 'neq', 'in', 'not', 'eq', 'select', 'limit', 'contains', 'filter']) {
       chain[m] = () => chain
     }
@@ -57,15 +61,25 @@ function mockSupabaseWithLines(
   }
 
   return {
-    // chart_of_accounts feeds fetchDynamicRuta05Accounts (the company's own
+    // chart_of_accounts feeds fetchDynamicVatAccounts (the company's own
     // ruta 05 konton). Empty here: these fixtures are plain BAS charts, and the
     // dynamic path has its own coverage in lib/reports/__tests__.
     from: (table: string) => {
-      if (table === 'journal_entries') return makeChain(entries)
+      // The report reads journal_entries only for the tagged vat_settlement
+      // list; filters are no-ops here, so the tag is applied by hand.
+      if (table === 'journal_entries') {
+        return makeChain(entries.filter((e) => e.source_type === 'vat_settlement'))
+      }
       if (table === 'chart_of_accounts') return makeChain([])
       if (table === 'fiscal_periods') return makeChain(fiscalPeriod ? [fiscalPeriod] : [])
       return makeChain(bareLines)
     },
+    rpc: (fn: string, params?: { p_accounts?: string[] }) =>
+      Promise.resolve(
+        fn === 'get_vat_declaration_totals'
+          ? vatTotalsRpcResult({ lines: bareLines, excludedEntryIds: rpcExcludedEntryIds }, params)
+          : { data: null, error: null },
+      ),
   } as never
 }
 
@@ -333,47 +347,62 @@ describe('computeVatReport', () => {
     expect(result.rutor.ruta40).toBe(0)
   })
 
-  it('excludes a manual settlement-shaped entry from the rutor (#984)', async () => {
-    const lines: MockLine[] = [
-      // Business activity on e1.
-      { journal_entry_id: 'e1', account_number: '3001', debit_amount: 0, credit_amount: 1000, journal_entries: { source_type: 'invoice_created' } },
-      { journal_entry_id: 'e1', account_number: '2611', debit_amount: 0, credit_amount: 250, journal_entries: { source_type: 'invoice_created' } },
-      // Manual momsomföring on e2 (no vat_settlement tag): would zero ruta10.
-      { journal_entry_id: 'e2', account_number: '2611', debit_amount: 250, credit_amount: 0, journal_entries: { source_type: 'manual' } },
-      { journal_entry_id: 'e2', account_number: '2650', debit_amount: 0, credit_amount: 250, journal_entries: { source_type: 'manual' } },
-    ]
+  // crm#1139: an annual period (broken fiscal year) read before and after
+  // year-end closing. The bokslutsverifikat zeroes class 3-8 against 2099:
+  // it debits the sales accounts and credits the EU purchase basis accounts.
+  // The report summed it straight into the rutor, so ruta 05 and rutor 20-24
+  // read 0 once the year was closed while 26xx (untouched by the closing)
+  // stayed. get_vat_declaration_totals leaves the posted closing entry out.
+  const CLOSED_YEAR: MockLine[] = [
+    // Sale 25 %
+    { journal_entry_id: 'sale', account_number: '1510', debit_amount: 5769.31, credit_amount: 0 },
+    { journal_entry_id: 'sale', account_number: '3001', debit_amount: 0, credit_amount: 4615.45 },
+    { journal_entry_id: 'sale', account_number: '2611', debit_amount: 0, credit_amount: 1153.86 },
+    // EU service purchase with the basis pair and both fiktiv moms legs
+    { journal_entry_id: 'eu', account_number: '6540', debit_amount: 448.41, credit_amount: 0 },
+    { journal_entry_id: 'eu', account_number: '1930', debit_amount: 0, credit_amount: 448.41 },
+    { journal_entry_id: 'eu', account_number: '4535', debit_amount: 448.41, credit_amount: 0 },
+    { journal_entry_id: 'eu', account_number: '4598', debit_amount: 0, credit_amount: 448.41 },
+    { journal_entry_id: 'eu', account_number: '2614', debit_amount: 0, credit_amount: 112.1 },
+    { journal_entry_id: 'eu', account_number: '2645', debit_amount: 112.1, credit_amount: 0 },
+    // Bokslutsverifikat (source_type year_end): every result account to 2099
+    { journal_entry_id: 'closing', account_number: '3001', debit_amount: 4615.45, credit_amount: 0, journal_entries: { source_type: 'year_end' } },
+    { journal_entry_id: 'closing', account_number: '4535', debit_amount: 0, credit_amount: 448.41, journal_entries: { source_type: 'year_end' } },
+    { journal_entry_id: 'closing', account_number: '4598', debit_amount: 448.41, credit_amount: 0, journal_entries: { source_type: 'year_end' } },
+    { journal_entry_id: 'closing', account_number: '6540', debit_amount: 0, credit_amount: 448.41, journal_entries: { source_type: 'year_end' } },
+    { journal_entry_id: 'closing', account_number: '2099', debit_amount: 0, credit_amount: 4167.04, journal_entries: { source_type: 'year_end' } },
+  ]
+  const FISCAL_YEAR = { period_start: '2025-10-01', period_end: '2026-09-30' }
+  const YEARLY = { period_type: 'yearly', year: 2026, period: 1 }
 
+  it('keeps ruta 05 and rutor 20-24 after year-end closing (crm#1139)', async () => {
     const result = await computeVatReport(
-      { period_type: 'monthly', year: 2026, period: 1 },
+      YEARLY,
       'company-1',
-      mockSupabaseWithLines(lines)
+      mockSupabaseWithLines(CLOSED_YEAR, FISCAL_YEAR, ['closing']),
     )
 
-    expect(result.rutor.ruta05).toBe(1000)
-    expect(result.rutor.ruta10).toBe(250)
-    expect(result.rutor.ruta49).toBe(250)
+    expect(result.period.start).toBe('2025-10-01')
+    expect(result.period.end).toBe('2026-09-30')
+    expect(result.rutor.ruta05).toBe(4615.45)
+    expect(result.rutor.ruta21).toBe(448.41)
+    expect(result.rutor.ruta10).toBe(1153.86)
+    expect(result.rutor.ruta30).toBe(112.1)
+    expect(result.rutor.ruta48).toBe(112.1)
+    expect(result.rutor.ruta49).toBe(1153.86)
   })
 
-  it('settlement-shape exclusion covers stornos and exempts opening balances', async () => {
-    const lines: MockLine[] = [
-      // Storno of a settlement: must be excluded from ruta10.
-      { journal_entry_id: 'e3', account_number: '2611', debit_amount: 0, credit_amount: 100, journal_entries: { source_type: 'storno' } },
-      { journal_entry_id: 'e3', account_number: '2650', debit_amount: 100, credit_amount: 0, journal_entries: { source_type: 'storno' } },
-      // Opening balance carrying undeclared input VAT and a prior VAT debt:
-      // stays IN the projection.
-      { journal_entry_id: 'ib', account_number: '2641', debit_amount: 500, credit_amount: 0, journal_entries: { source_type: 'opening_balance' } },
-      { journal_entry_id: 'ib', account_number: '2650', debit_amount: 0, credit_amount: 300, journal_entries: { source_type: 'opening_balance' } },
-    ]
+  it('agrees box for box with the momsdeklaration the web files and Skatteverket receives', async () => {
+    const supabase = mockSupabaseWithLines(CLOSED_YEAR, FISCAL_YEAR, ['closing'])
+    const [report, declaration] = await Promise.all([
+      computeVatReport(YEARLY, 'company-1', supabase),
+      calculateVatDeclaration(supabase, 'company-1', 'yearly', 2026, 1),
+    ])
 
-    const result = await computeVatReport(
-      { period_type: 'monthly', year: 2026, period: 1 },
-      'company-1',
-      mockSupabaseWithLines(lines)
-    )
-
-    expect(result.rutor.ruta10).toBe(0)
-    expect(result.rutor.ruta48).toBe(500)
-    expect(result.rutor.ruta49).toBe(-500)
+    for (const [box, filed] of Object.entries(declaration.rutor)) {
+      const expected = box === 'ruta49' ? filed : Math.abs(filed)
+      expect(report.rutor[box as keyof typeof report.rutor], box).toBe(expected)
+    }
   })
 
   it('refund summary string when ruta49 is negative', async () => {

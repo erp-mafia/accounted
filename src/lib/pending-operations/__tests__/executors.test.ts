@@ -138,7 +138,7 @@ vi.mock('@/lib/invoices/invoice-deliveries', () => ({
 import { commitPendingOperation } from '../commit'
 import { unlockPeriod } from '@/lib/core/bookkeeping/period-service'
 import { parseSIEFile } from '@/lib/import/sie-parser'
-import { submitSIEJob } from '@/lib/import/sie-jobs'
+import { requestSIEJobAction, submitSIEJob } from '@/lib/import/sie-jobs'
 import { commitAnnualPostings } from '@/lib/bokslut/assets/depreciation-engine'
 import { createCreditNoteJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { createSupplierCreditNoteEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
@@ -173,10 +173,15 @@ beforeEach(() => {
 })
 
 // ─── unlock_period ──────────────────────────────────────────────────
+// No executor of its own: the registry's default branch runs the operation
+// fiscal-periods.unlock (unlockFiscalPeriod over period-service unlockPeriod),
+// the same run() the v1 endpoint and the dashboard use.
 
 describe('commitPendingOperation: unlock_period', () => {
-  it('happy path: clears locked_at and returns committed', async () => {
-    const period = makeFiscalPeriod({ id: 'fp-1', locked_at: null })
+  const FP_ID = 'a8f1c2d3-4e5f-4a6b-8c7d-9e0f1a2b3c4d'
+
+  it('happy path: clears locked_at and returns the period', async () => {
+    const period = makeFiscalPeriod({ id: FP_ID, locked_at: null })
     vi.mocked(unlockPeriod).mockResolvedValueOnce(period)
 
     const { supabase, enqueue } = createQueuedMockSupabase()
@@ -185,14 +190,14 @@ describe('commitPendingOperation: unlock_period', () => {
 
     const op = makePendingOp({
       operation_type: 'unlock_period',
-      params: { fiscal_period_id: 'fp-1' },
+      params: { fiscal_period_id: FP_ID },
     })
 
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
 
     expect(result.status).toBe('committed')
-    expect(result.data).toMatchObject({ period_id: 'fp-1', locked_at: null })
-    expect(unlockPeriod).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'fp-1')
+    expect(result.data).toMatchObject({ id: FP_ID, locked_at: null })
+    expect(unlockPeriod).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', FP_ID)
   })
 
   it('rejects when fiscal_period_id is missing', async () => {
@@ -205,24 +210,101 @@ describe('commitPendingOperation: unlock_period', () => {
 
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(400)
+    expect(result.code).toBe('VALIDATION_ERROR')
     expect(unlockPeriod).not.toHaveBeenCalled()
   })
 
-  it('surfaces underlying service errors', async () => {
+  it('answers the service refusal with its code', async () => {
     vi.mocked(unlockPeriod).mockRejectedValueOnce(new Error('Period is not locked'))
 
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({ data: null, error: null }) // dispatcher's reject update on throw
+    enqueue({ data: null, error: null }) // dispatcher's reject update
     const op = makePendingOp({
       operation_type: 'unlock_period',
-      params: { fiscal_period_id: 'fp-1' },
+      params: { fiscal_period_id: FP_ID },
     })
 
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
 
-    expect(result.status).toBe('failed')
-    expect(result.error).toMatch(/not locked/)
+    expect(result.status).not.toBe('committed')
+    expect(result.code).toBe('PERIOD_UNLOCK_NOT_LOCKED')
+  })
+})
+
+// ─── undo_sie_import ────────────────────────────────────────────────
+// No executor of its own: the operation imports.sie.undo runs
+// (requestSIEImportAction), which queues the batch storno through the same
+// requestSIEJobAction the hand-written executor called, after the owner/admin
+// gate checks the approving user.
+
+describe('commitPendingOperation: undo_sie_import', () => {
+  const IMPORT_ID = '7ce91a2b-3c4d-4e5f-8a6b-7c8d9e0f1a2b'
+  const job = { id: IMPORT_ID, job_state: 'completed', job_kind: 'import', job_phase: null, user_id: 'user-1', execution_actor_id: null, fiscal_period_id: null }
+
+  it('queues the undo through requestSIEJobAction, as the old executor did', async () => {
+    vi.mocked(requestSIEJobAction).mockResolvedValueOnce({ id: IMPORT_ID, job_state: 'undoing', job_phase: 'undo' } as never)
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: { id: 'op-1' } }, // CAS claim
+      { data: job }, // sie_imports lookup
+      { data: { role: 'owner' } }, // company_members: owner/admin gate
+      { data: null }, // dispatcher commit update
+    ])
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ operation_type: 'undo_sie_import', params: { import_id: IMPORT_ID } }),
+    )
+
+    expect(result.status).toBe('committed')
+    expect(requestSIEJobAction).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', IMPORT_ID, 'undo')
+    expect(result.data).toMatchObject({ import_id: IMPORT_ID, action: 'undo', state: 'undoing', accepted: true })
+  })
+
+  it('refuses an approver who is not owner or admin before queueing anything', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: { id: 'op-1' } }, // CAS claim
+      { data: job }, // sie_imports lookup
+      { data: { role: 'member' } }, // company_members
+      { data: null }, // dispatcher reject update
+    ])
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ operation_type: 'undo_sie_import', params: { import_id: IMPORT_ID } }),
+    )
+
+    expect(result.status).not.toBe('committed')
+    expect(result.code).toBe('FORBIDDEN')
+    expect(requestSIEJobAction).not.toHaveBeenCalled()
+  })
+})
+
+// ─── lock_period: a year an SIE import still holds (crm#1029) ────────
+
+describe('commitPendingOperation: lock_period on a year an SIE import holds', () => {
+  it('answers with the stable code and the Swedish sentence, not UNKNOWN_ERROR', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: makeFiscalPeriod({ id: 'fp-1', name: 'Räkenskapsår 2024', import_hold: 'imp-1' }),
+      error: null,
+    }) // lockPeriod's period fetch
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+    const op = makePendingOp({ operation_type: 'lock_period', params: { fiscal_period_id: 'fp-1' } })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(result.code).toBe('PERIOD_HAS_UNFINISHED_SIE_IMPORT')
+    expect(result.error).toContain('Räkenskapsår 2024 kan inte låsas')
   })
 })
 
@@ -1345,9 +1427,13 @@ describe('commitPendingOperation: credit_supplier_invoice', () => {
 // ─── attach_document_to_transaction ─────────────────────────────────
 
 describe('commitPendingOperation: attach_document_to_transaction', () => {
+  // No executor of its own: the operation transactions.attach-document runs
+  // (lib/transactions/document-attach.ts), whose input takes uuids.
+  const TX = '1f2e3d4c-5b6a-4978-8a6b-5c4d3e2f1a0b'
+  const DOC = '4f1c2b3a-4d5e-4f60-8a9b-0c1d2e3f4a5b'
   const baseOp: Partial<PendingOperation> = {
     operation_type: 'attach_document_to_transaction',
-    params: { transaction_id: 'tx-1', document_id: 'doc-1' },
+    params: { transaction_id: TX, document_id: DOC },
   }
 
   it('auto-rejects 404 when transaction is not in the company', async () => {
@@ -1369,7 +1455,7 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
   it('auto-rejects 409 when existing pinned doc is räkenskapsinformation', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({ data: { id: 'tx-1', document_id: 'doc-old', journal_entry_id: null }, error: null })
+    enqueue({ data: { id: TX, document_id: 'doc-old', journal_entry_id: null }, error: null })
     enqueue({ data: { journal_entry_id: 'je-99' }, error: null }) // existing doc fetch: locked
     enqueue({ data: null, error: null }) // dispatcher reject update
 
@@ -1386,8 +1472,8 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
   it('translates BFL_DOCUMENT_IMMUTABILITY trigger error into auto-reject 409', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({ data: { id: 'tx-1', document_id: null, journal_entry_id: null }, error: null })
-    enqueue({ data: { id: 'doc-1' }, error: null }) // doc fetch
+    enqueue({ data: { id: TX, document_id: null, journal_entry_id: null }, error: null })
+    enqueue({ data: { id: DOC }, error: null }) // doc fetch
     enqueue({
       data: null,
       error: {
@@ -1410,8 +1496,8 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
   it('happy path uncategorized: attaches without propagation', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({ data: { id: 'tx-1', document_id: null, journal_entry_id: null }, error: null })
-    enqueue({ data: { id: 'doc-1' }, error: null }) // doc fetch
+    enqueue({ data: { id: TX, document_id: null, journal_entry_id: null }, error: null })
+    enqueue({ data: { id: DOC }, error: null }) // doc fetch
     enqueue({ data: { journal_entry_id: null }, error: null }) // UPDATE returning
     enqueue({ data: null, error: null }) // invoice_inbox_items best-effort link
     enqueue({ data: [], error: null }) // voucher-link resolution: not bulk-booked either
@@ -1429,8 +1515,8 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
   it('propagates to journal entry when tx was categorized between staging and commit', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({ data: { id: 'tx-1', document_id: null, journal_entry_id: null }, error: null })
-    enqueue({ data: { id: 'doc-1' }, error: null }) // doc fetch
+    enqueue({ data: { id: TX, document_id: null, journal_entry_id: null }, error: null })
+    enqueue({ data: { id: DOC }, error: null }) // doc fetch
     enqueue({ data: { journal_entry_id: 'je-7' }, error: null }) // UPDATE returning post-state
     enqueue({ data: null, error: null }) // invoice_inbox_items best-effort link
     enqueue({ data: null, error: null }) // doc propagation update
@@ -1454,11 +1540,11 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     // forever (the 2026-08-12 report).
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({ data: { id: 'tx-1', document_id: null, journal_entry_id: null }, error: null })
-    enqueue({ data: { id: 'doc-1' }, error: null }) // doc fetch
+    enqueue({ data: { id: TX, document_id: null, journal_entry_id: null }, error: null })
+    enqueue({ data: { id: DOC }, error: null }) // doc fetch
     enqueue({ data: { journal_entry_id: null }, error: null }) // UPDATE returning (still null)
     enqueue({ data: null, error: null }) // invoice_inbox_items best-effort link
-    enqueue({ data: [{ transaction_id: 'tx-1', journal_entry_id: 'je-9' }], error: null }) // voucher links
+    enqueue({ data: [{ transaction_id: TX, journal_entry_id: 'je-9' }], error: null }) // voucher links
     enqueue({ data: { document_id: null }, error: null }) // propagation: tx pin lookup
     enqueue({ data: [{ id: 'inbox-9', document_id: null }], error: null }) // matched inbox items
     enqueue({ data: null, error: null }) // created_journal_entry_id stamp
@@ -1484,8 +1570,8 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     // that the error was actually inspected and logged (not silently dropped).
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({ data: { id: 'tx-1', document_id: null, journal_entry_id: null }, error: null })
-    enqueue({ data: { id: 'doc-1' }, error: null }) // doc fetch
+    enqueue({ data: { id: TX, document_id: null, journal_entry_id: null }, error: null })
+    enqueue({ data: { id: DOC }, error: null }) // doc fetch
     enqueue({ data: { journal_entry_id: null }, error: null }) // tx UPDATE returning
     enqueue({ data: null, error: { message: 'inbox row missing or RLS-blocked' } }) // inbox link: errors
     enqueue({ data: [], error: null }) // voucher-link resolution: not bulk-booked either
@@ -1509,8 +1595,8 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     // path. Otherwise the inbox row stays in "Behöver åtgärd" forever.
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({ data: { id: 'tx-1', document_id: null, journal_entry_id: null }, error: null })
-    enqueue({ data: { id: 'doc-1' }, error: null }) // doc fetch
+    enqueue({ data: { id: TX, document_id: null, journal_entry_id: null }, error: null })
+    enqueue({ data: { id: DOC }, error: null }) // doc fetch
     enqueue({ data: { journal_entry_id: null }, error: null }) // tx UPDATE returning
     enqueue({ data: null, error: null }) // invoice_inbox_items link
     enqueue({ data: null, error: null }) // dispatcher commit update
@@ -1532,8 +1618,8 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     // Mirrors the REST route's guard.
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({ data: { id: 'tx-1', document_id: null, journal_entry_id: 'je-1' }, error: null })
-    enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-OTHER' }, error: null }) // doc fetch
+    enqueue({ data: { id: TX, document_id: null, journal_entry_id: 'je-1' }, error: null })
+    enqueue({ data: { id: DOC, journal_entry_id: 'je-OTHER' }, error: null }) // doc fetch
     enqueue({ data: null, error: null }) // dispatcher reject update
 
     const result = await commitPendingOperation(
@@ -1552,8 +1638,8 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     // idempotent re-attach once the period locks.
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({ data: { id: 'tx-1', document_id: 'doc-1', journal_entry_id: 'je-1' }, error: null })
-    enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-1' }, error: null }) // doc fetch: same JE
+    enqueue({ data: { id: TX, document_id: DOC, journal_entry_id: 'je-1' }, error: null })
+    enqueue({ data: { id: DOC, journal_entry_id: 'je-1' }, error: null }) // doc fetch: same JE
     enqueue({ data: { journal_entry_id: 'je-1' }, error: null }) // tx UPDATE returning
     enqueue({ data: null, error: null }) // invoice_inbox_items link
     enqueue({ data: null, error: null }) // dispatcher commit update
@@ -1576,8 +1662,8 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     // route's mapping.
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({ data: { id: 'tx-1', document_id: null, journal_entry_id: null }, error: null })
-    enqueue({ data: { id: 'doc-1', journal_entry_id: null }, error: null }) // doc fetch
+    enqueue({ data: { id: TX, document_id: null, journal_entry_id: null }, error: null })
+    enqueue({ data: { id: DOC, journal_entry_id: null }, error: null }) // doc fetch
     enqueue({ data: { journal_entry_id: 'je-7' }, error: null }) // tx UPDATE returning: booked meanwhile
     enqueue({ data: null, error: null }) // invoice_inbox_items link
     enqueue({

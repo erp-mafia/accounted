@@ -127,6 +127,8 @@ export const RECOMMENDED_WORKFLOW_LOADOUTS: readonly WorkflowLoadout[] = [
     skill: 'invoicing-rules',
     tools: [
       'gnubok_list_customers',
+      // The customer's full record: notes carry its invoicing requirements.
+      'gnubok_get_customer',
       'gnubok_create_customer',
       'gnubok_list_articles',
       // Tagging: invoices carry default_dimensions + per-item bags; check the

@@ -1,7 +1,8 @@
 /**
- * Proof that the uninitialized-event-route guard flags a route that can emit
- * without wiring the bus at module scope, and accepts the sanctioned ways of
- * wiring it. The fixture tree lives in an OS temp directory created and
+ * Proof that the uninitialized-event-route guard flags an entry point (API
+ * route, page, other App Router entry, server action module) that can emit or
+ * read an extension registry without wiring init at module scope, and accepts
+ * the sanctioned ways of wiring it. The fixture tree lives in an OS temp directory created and
  * deleted here; the last block pins the real tree's lead case.
  */
 import { describe, it, expect, afterAll } from 'vitest'
@@ -122,6 +123,58 @@ export const warm = ensureInitialized
     'app/api/raw/__tests__/route.ts': `import { lockPeriod } from '@/lib/core/lock'
 export async function POST() { await lockPeriod(); return new Response() }
 `,
+    // Registries the extensions fill: reading one before init answers empty.
+    'lib/extensions/registry.ts': 'export const extensionRegistry = { get: (_id: string) => undefined }\n',
+    'lib/core/ombud.ts': `import { extensionRegistry } from '@/lib/extensions/registry'
+export function ombudEnabled() { return Boolean(extensionRegistry.get('skatteverket')) }
+`,
+    // Defines a getter without calling it: importing it for its register
+    // function or types is not a read.
+    'lib/email/service.ts': `export function getEmailService() { return null }
+export function registerEmailService(_svc: unknown) {}
+`,
+    'app/api/email-register/route.ts': `import { registerEmailService } from '@/lib/email/service'
+export async function POST() { registerEmailService(null); return new Response() }
+`,
+    'app/api/ombud/route.ts': `import { ombudEnabled } from '@/lib/core/ombud'
+export async function GET() { return Response.json(ombudEnabled()) }
+`,
+    // Pages, layouts and server actions are entry points too: the root
+    // layout no longer initialises on their behalf.
+    'app/layout.tsx': `import '@/lib/extensions/_generated/branding-list'
+export default function RootLayout({ children }: { children: unknown }) { return children }
+`,
+    'lib/extensions/_generated/branding-list.ts': 'export {}\n',
+    'app/(dashboard)/page.tsx': `import { ombudEnabled } from '@/lib/core/ombud'
+export default async function Hem() { return ombudEnabled() }
+`,
+    'app/(dashboard)/init/page.tsx': `import { ombudEnabled } from '@/lib/core/ombud'
+import { ensureInitialized } from '@/lib/init'
+ensureInitialized()
+export default async function Page() { return ombudEnabled() }
+`,
+    'app/(public)/privacy/page.tsx': `import { add } from '@/lib/core/quiet'
+export default function Privacy() { return add(1, 2) }
+`,
+    'app/.well-known/thing/route.ts': `import { lockPeriod } from '@/lib/core/lock'
+export async function POST() { await lockPeriod(); return new Response() }
+`,
+    'lib/company/actions.ts': `'use server'
+import { lockPeriod } from '@/lib/core/lock'
+export async function lockAction() { await lockPeriod() }
+`,
+    'lib/company/init-actions.ts': `// Server actions.
+'use server'
+import { lockPeriod } from '@/lib/core/lock'
+import { ensureInitialized } from '@/lib/init'
+ensureInitialized()
+export async function lockAction() { await lockPeriod() }
+`,
+    // Mentions 'use server' but is not a server action module.
+    'lib/company/not-actions.ts': `import { lockPeriod } from '@/lib/core/lock'
+export const directive = 'use server'
+export const run = lockPeriod
+`,
   }
   for (const [rel, text] of Object.entries(files)) {
     const abs = path.join(root, rel)
@@ -132,21 +185,31 @@ export async function POST() { await lockPeriod(); return new Response() }
 }
 
 const EMITTING = [
+  'app/(dashboard)/init/page.tsx',
+  'app/(dashboard)/page.tsx',
+  'app/.well-known/thing/route.ts',
   'app/api/bound/route.ts',
   'app/api/dynamic/route.ts',
   'app/api/handler-init/route.ts',
   'app/api/module-init/route.ts',
+  'app/api/ombud/route.ts',
   'app/api/raw/route.ts',
   'app/api/v1/route.ts',
   'app/api/wrapped-init/route.ts',
   'app/api/wrapped/route.ts',
+  'lib/company/actions.ts',
+  'lib/company/init-actions.ts',
 ]
 const UNINITIALIZED = [
+  'app/(dashboard)/page.tsx',
+  'app/.well-known/thing/route.ts',
   'app/api/bound/route.ts',
   'app/api/dynamic/route.ts',
   'app/api/handler-init/route.ts',
+  'app/api/ombud/route.ts',
   'app/api/raw/route.ts',
   'app/api/wrapped/route.ts',
+  'lib/company/actions.ts',
 ]
 
 describe('uninitialized-event-route', () => {
@@ -162,6 +225,15 @@ describe('uninitialized-event-route', () => {
 
     expect(result.uninitialized).toEqual(UNINITIALIZED)
   })
+
+  it('reports which entry points load every extension, and a branded root layout is not one', () => {
+    const result = findUninitializedEmittingRoutes(fixture(WRAPPER))
+
+    expect(result.initializing).toContain('app/(dashboard)/init/page.tsx')
+    expect(result.initializing).toContain('lib/company/init-actions.ts')
+    expect(result.initializing).not.toContain('app/layout.tsx')
+    expect(result.initializing).not.toContain('app/(public)/privacy/page.tsx')
+  })
 })
 
 describe('uninitialized-event-route on the real tree', () => {
@@ -173,6 +245,25 @@ describe('uninitialized-event-route on the real tree', () => {
 
     expect(result.emittingRoutes).toContain(LOCK_ROUTE)
     expect(result.uninitialized).not.toContain(LOCK_ROUTE)
+  }, 60_000)
+
+  it('keeps public and auth pages, the root layout and the web manifest from loading every extension', () => {
+    const result = findUninitializedEmittingRoutes(SOURCE_ROOT)
+
+    for (const entry of [
+      'app/layout.tsx',
+      'app/manifest.ts',
+      'app/(auth)/login/page.tsx',
+      'app/(auth)/register/page.tsx',
+      'app/(auth)/reset-password/page.tsx',
+      'app/(public)/privacy/page.tsx',
+      'app/(public)/dpa/page.tsx',
+      'app/invite/[token]/page.tsx',
+    ]) {
+      expect(result.initializing).not.toContain(entry)
+    }
+    // Hem reads the skatteverket extension's services, so it wires itself.
+    expect(result.initializing).toContain('app/(dashboard)/page.tsx')
   }, 60_000)
 
   it('keeps lib/init out of withRouteContext, so non-emitting routes stay light on a cold start', () => {

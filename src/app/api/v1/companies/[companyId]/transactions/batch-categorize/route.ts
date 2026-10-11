@@ -36,6 +36,7 @@ import {
   validateTemplateForEntity,
 } from '@/lib/bookkeeping/booking-templates'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
+import { finalFromCategorize, recordDecisions, snapshotSuggestions, type SuggestionSnapshot } from '@/lib/suggestion-log/record'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { collectMappingResultAccounts, findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
@@ -184,6 +185,8 @@ async function categorizeOne(
   exclude: BookingDuplicateExclusions,
   /** The company's momskoder, shared by the whole batch so they are read once at most. */
   loadChart: ChartVatTreatmentsLoader,
+  /** What was on offer for the batch's rows before any of them was booked; null on a dry run. */
+  suggestionSnapshot: SuggestionSnapshot | null,
 ): Promise<Item> {
   const { data: transaction, error: fetchErr } = await supabase
     .from('transactions')
@@ -479,6 +482,7 @@ async function categorizeOne(
   }
 
   let journalEntryId: string | null = null
+  let bookedEntry: Awaited<ReturnType<typeof createTransactionJournalEntry>> = null
   try {
     const je = await createTransactionJournalEntry(
       supabase,
@@ -487,7 +491,10 @@ async function categorizeOne(
       transaction as Transaction,
       mappingResult,
     )
-    if (je) journalEntryId = je.id
+    if (je) {
+      journalEntryId = je.id
+      bookedEntry = je
+    }
   } catch (err) {
     log.error('batch-categorize: journal entry creation failed', err as Error, {
       request_index: index,
@@ -542,6 +549,22 @@ async function categorizeOne(
         details: { transaction_date: transaction.date },
       },
     }
+  }
+
+  if (suggestionSnapshot && bookedEntry) {
+    await recordDecisions(supabase, suggestionSnapshot, [{
+      transactionId,
+      actedOn: input.proposal_id ?? null,
+      final: finalFromCategorize({
+        journalEntry: bookedEntry,
+        mappingResult,
+        amount: transaction.amount,
+        templateId: input.template_id ?? null,
+        counterpartyTemplateId: input.counterparty_template_id ?? null,
+        category: finalCategory,
+        vatTreatment: input.vat_treatment ?? null,
+      }),
+    }], userId)
   }
 
   const { data: updated, error: updateErr } = await supabase
@@ -670,6 +693,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const bookedTransactionIds: string[] = []
     const bookedJournalEntryIds: string[] = []
     const loadChart = chartVatTreatmentsLoader(ctx.supabase, ctx.companyId!)
+    // One snapshot for the whole batch, before any row is booked: the
+    // learning after one booking must not reach the next row's suggestions.
+    const suggestionSnapshot = ctx.dryRun
+      ? null
+      : await snapshotSuggestions(ctx.supabase, ctx.companyId!, body.items.map((item) => item.transaction_id))
     for (let i = 0; i < body.items.length; i++) {
       const item = body.items[i]
       const r = await categorizeOne(
@@ -688,6 +716,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           excludeJournalEntryIds: [...bookedJournalEntryIds],
         },
         loadChart,
+        suggestionSnapshot,
       )
       results.push(r)
       const booked = r.data as { journal_entry_created?: boolean; journal_entry_id?: string | null } | undefined

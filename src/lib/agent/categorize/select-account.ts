@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { getAiService } from '@/lib/ai'
 import { roundOre } from '@/lib/money'
 import type { AskTier } from '@/lib/agent/ask/ask-service'
@@ -142,6 +143,8 @@ export interface AccountSelection {
   reasoning: string
   choice: SelectionChoice
   model: string
+  /** SHA-256 of the system prompt and the prompt the model was given: which prompt produced the read. */
+  promptSha256: string
   /** True when the resolved choice was one of the retrieved candidates. */
   fromCandidate: boolean
 }
@@ -308,6 +311,7 @@ export async function selectAccount(input: SelectAccountInput): Promise<AccountS
   )
   const picks: RawPick[] = results.map((r) => parsePick(r.value, validIds))
   const model = results[results.length - 1]?.model ?? ''
+  const promptSha256 = createHash('sha256').update(SYSTEM_PROMPT).update('\n\n').update(prompt).digest('hex')
 
   // Majority vote across samples (self-consistency).
   const tally = new Map<string, number>()
@@ -388,6 +392,7 @@ export async function selectAccount(input: SelectAccountInput): Promise<AccountS
     reasoning: winningSample.reasoning,
     choice,
     model,
+    promptSha256,
     fromCandidate,
   }
 }

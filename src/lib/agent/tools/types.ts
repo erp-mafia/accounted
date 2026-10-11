@@ -12,7 +12,7 @@ export interface AgentActorContext {
 }
 
 // Slim, core-defined tool contract. Extensions register tools that satisfy
-// this shape via registerAgentTools(); the chat agent dispatches against it
+// this shape via registerAgentToolLoader(); the chat agent dispatches against it
 // without importing @/extensions/* directly (CI rule).
 //
 // The shape intentionally mirrors the MCP McpTool definition so the

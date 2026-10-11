@@ -23,7 +23,6 @@ export interface NavGateContext {
   agentsEnabled: boolean
   capabilities: readonly string[]
   hiddenNavHrefs: ReadonlySet<string>
-  agentVerified: boolean
 }
 
 /** `entityOnly` accepts one form or a list of forms. */
@@ -66,10 +65,8 @@ export function passesNavGates(item: NavGateFlags, ctx: NavGateContext): boolean
   // (cockpitNavItems); in company mode the pinned back-to-clients link
   // replaces it, and non-byrå users never see it (WL-14).
   if (item.byraOnly) return false
-  // Hide the Assistent (/chat) tab until the agent is built: mirrors the
-  // floating AgentTrigger and avoids a nav entry that only bounces to the
-  // home checklist (chat/layout redirects unverified users to /).
-  if (item.href === '/chat' && !ctx.agentVerified) return false
+  // The Assistent (/chat) entry has no gate: before the agent is built it
+  // leads to building it (chat/layout), so a new account always sees it.
   return true
 }
 

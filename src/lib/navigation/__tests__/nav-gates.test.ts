@@ -19,7 +19,6 @@ function ctx(overrides: Partial<NavGateContext> = {}): NavGateContext {
     agentsEnabled: true,
     capabilities: ['ai'],
     hiddenNavHrefs: new Set(),
-    agentVerified: true,
     ...overrides,
   }
 }
@@ -41,7 +40,6 @@ describe('passesNavGates', () => {
     ['entityOnly', item({ entityOnly: 'aktiebolag' }), { entityType: 'enskild_firma' }],
     ['entityOnly list', item({ entityOnly: ['aktiebolag', 'ekonomisk_forening'] }), { entityType: 'enskild_firma' }],
     ['branding hidden href', item({ href: '/kpi' }), { hiddenNavHrefs: new Set(['/kpi']) }],
-    ['/chat before the agent is built', item({ href: '/chat' }), { agentVerified: false }],
   ]
 
   it.each(cases)('%s: shown when the company has it, hidden when not', (_name, flags, off) => {
@@ -52,6 +50,10 @@ describe('passesNavGates', () => {
   it('a list of forms shows for every form in it', () => {
     const flags = item({ entityOnly: ['aktiebolag', 'ekonomisk_forening'] })
     expect(passesNavGates(flags, ctx({ entityType: 'ekonomisk_forening' }))).toBe(true)
+  })
+
+  it('always shows the Assistent entry: before the agent is built it leads to building it (crm#1135)', () => {
+    expect(passesNavGates(item({ href: '/chat' }), ctx())).toBe(true)
   })
 
   it('never shows hidden or byrå-only entries in the company nav', () => {

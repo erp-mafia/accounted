@@ -41,6 +41,8 @@ import {
   reopenExternallyClosedPeriod,
   unlockPeriod,
 } from '@/lib/core/bookkeeping/period-service'
+import { PERIOD_HAS_UNFINISHED_SIE_IMPORT } from '@/lib/core/bookkeeping/sie-import-hold'
+import { userFacingCode } from '@/lib/errors/user-facing'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
 import type { FiscalPeriod } from '@/types'
 
@@ -619,7 +621,14 @@ export async function unlockFiscalPeriod(
     return {
       ok: true,
       dryRun: true,
-      preview: { fiscal_period_id: period.id, name: period.name, locked_at: period.locked_at, will_set_locked_at: null },
+      preview: {
+        fiscal_period_id: period.id,
+        name: period.name,
+        period_start: period.period_start,
+        period_end: period.period_end,
+        locked_at: period.locked_at,
+        will_set_locked_at: null,
+      },
     }
   }
   try {
@@ -635,6 +644,9 @@ export async function unlockFiscalPeriod(
 /** markPeriodClosedExternally's refusals as codes. */
 function closeExternalFailure(err: unknown): Failure {
   const message = messageOf(err)
+  if (userFacingCode(err) === PERIOD_HAS_UNFINISHED_SIE_IMPORT) {
+    return { ok: false, code: PERIOD_HAS_UNFINISHED_SIE_IMPORT, messageSv: message }
+  }
   if (/not found/i.test(message)) return { ok: false, code: 'PERIOD_NOT_FOUND' }
   if (/already closed/i.test(message)) return { ok: false, code: 'FISCAL_PERIOD_CLOSE_EXTERNAL_ALREADY_CLOSED' }
   if (/closing entry in Accounted/i.test(message)) {

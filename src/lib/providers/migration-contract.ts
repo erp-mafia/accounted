@@ -174,9 +174,11 @@ export function migrationRetrySeconds(failures: number): number {
 /** Group internal failure codes into actionable, translated messages. */
 export function migrationIssueKind(code: string | null): 'connection' | 'access' | 'refused' | 'review' | 'lines' | 'size' | 'exists' | 'retry' {
   if (code === 'PROVIDER_AUTH_EXPIRED') return 'connection'
-  // A job parked on a refused register before the worker learned to skip one
-  // (migration 20261005193815). Resuming now skips that register, so say so
-  // instead of promising that a retry fixes the record.
+  // The provider refused part of the data on a connection that still works:
+  // an invoice's detail or verifikat the token may not read stops the job
+  // (crm#1081), as did a refused register before the worker learned to skip
+  // one (migration 20261005193815). A retry gets the same answer; the
+  // remedy is a connection with the missing permission.
   if (code === 'PROVIDER_RESOURCE_FORBIDDEN') return 'refused'
   // A record with the same number already exists and differs. Resuming
   // repeats the same outcome, so never suggest a retry (23505 = unique_violation).
@@ -313,16 +315,38 @@ export function migrationIssueReason(issue: Pick<ProviderMigrationIssue, 'error_
 }
 
 /**
+ * Providers whose token carries its own read permissions, chosen when it is
+ * created: a Bokio integration token. Elsewhere the permission belongs to
+ * the user who connected, so the remedies differ.
+ */
+const TOKEN_PERMISSION_PROVIDERS = new Set(['bokio'])
+
+/**
  * Translation key (extensions namespace) for what to do about a refused
  * register. A missing licence names the module: Fortnox requires Kundfaktura
  * or Order for customers and customer invoices, Bokföring for suppliers and
- * supplier invoices. A missing permission takes `{provider}`.
+ * supplier invoices. A missing permission takes `{provider}`, and names the
+ * token or the user who connected depending on the provider.
  */
-export function migrationRefusalMessageKey(resource: MigrationResource, reason: ProviderRefusalReason): string {
-  if (reason === 'permission') return 'ext_arcim_job_refused_permission'
+export function migrationRefusalMessageKey(resource: MigrationResource, reason: ProviderRefusalReason, provider?: string | null): string {
+  if (reason === 'permission') {
+    return TOKEN_PERMISSION_PROVIDERS.has(provider ?? '') ? 'ext_arcim_job_refused_token' : 'ext_arcim_job_refused_permission'
+  }
   return resource === 'customers' || resource === 'salesInvoices'
     ? 'ext_arcim_job_refused_license_sales'
     : 'ext_arcim_job_refused_license_purchase'
+}
+
+/**
+ * Translation key (extensions namespace) for the code a job stopped on
+ * (job.error_code), with `{provider}`. A refusal on a working connection
+ * names the token or the user who connected, as migrationRefusalMessageKey.
+ */
+export function migrationJobErrorMessageKey(job: Pick<ProviderMigrationJob, 'error_code'> & { provider?: string | null }): string {
+  const kind = migrationIssueKind(job.error_code)
+  return kind === 'refused' && TOKEN_PERMISSION_PROVIDERS.has(job.provider ?? '')
+    ? 'ext_arcim_job_error_refused_token'
+    : `ext_arcim_job_error_${kind}`
 }
 
 /**
@@ -331,12 +355,12 @@ export function migrationRefusalMessageKey(resource: MigrationResource, reason: 
  * as one line. Empty for a job with none, and for one stored before
  * refused_resources existed.
  */
-export function migrationRefusals(job: Pick<ProviderMigrationJob, 'refused_resources'>): { messageKey: string; resources: MigrationResource[] }[] {
+export function migrationRefusals(job: Pick<ProviderMigrationJob, 'refused_resources'> & { provider?: string | null }): { messageKey: string; resources: MigrationResource[] }[] {
   const groups = new Map<string, MigrationResource[]>()
   for (const resource of MIGRATION_RESOURCES) {
     const reason = job.refused_resources?.[resource]
     if (reason !== 'license' && reason !== 'permission') continue
-    const key = migrationRefusalMessageKey(resource, reason)
+    const key = migrationRefusalMessageKey(resource, reason, job.provider)
     groups.set(key, [...(groups.get(key) ?? []), resource])
   }
   return [...groups].map(([messageKey, resources]) => ({ messageKey, resources }))

@@ -572,7 +572,6 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     agentsEnabled,
     capabilities,
     hiddenNavHrefs,
-    agentVerified: agentIdentity.isVerified,
   }
   const passesGates = (item: NavGateFlags) => passesNavGates(item, gateContext)
   const filteredItems = (cockpitMode ? cockpitNavItems : navItems).filter(passesGates)
@@ -612,7 +611,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     return badgeFor(href)
   }
 
-  const allMobileNavItems: { href: string; labelKey: NavLabelKey; icon: typeof LayoutDashboard }[] = cockpitMode
+  const mobileNavItems: { href: string; labelKey: NavLabelKey; icon: typeof LayoutDashboard }[] = cockpitMode
     ? cockpitNavItems.map(({ href, labelKey, icon }) => ({ href, labelKey, icon }))
     : [
         // The phone bar names the page the way the sidebar does: Att göra.
@@ -620,10 +619,6 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
         { href: '/chat', labelKey: 'assistant', icon: Sparkles },
         { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight },
       ]
-  // Same gate as the sidebar: no Assistent tab until the agent is built.
-  const mobileNavItems = allMobileNavItems.filter(
-    (item) => item.href !== '/chat' || agentIdentity.isVerified,
-  )
 
   const renderBadge = (item: { comingSoon?: boolean; devBadge?: boolean; betaBadge?: boolean; newBadge?: boolean }) => {
     const baseClass =

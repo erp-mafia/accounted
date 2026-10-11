@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { useForm, useFieldArray, Controller } from 'react-hook-form'
@@ -36,9 +36,8 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 import { ISO_DATE_RE } from '@/lib/invariants'
 import {
   alignRunDateToDay,
+  firstRunDateOnOrAfter,
   getStockholmDateHour,
-  isoFromParts,
-  lastDayOfMonth,
   parseIsoDate,
   projectRunDates,
   runDateMatchesDayOfMonth,
@@ -73,20 +72,16 @@ function stockholmTodayIso(): string {
 }
 
 /**
- * Client-side twin of computeInitialRunDate on Stockholm's calendar: this
- * month's occurrence of day_of_month if it has not passed, otherwise next
- * month's. Prefills the date field so the default is "no offset", exactly
- * what the server would pick when start_date is omitted.
+ * The create dialog's first run date for a day of the month: the shared rule
+ * (firstRunDateOnOrAfter, what the server picks when start_date is omitted)
+ * from Stockholm's today, or from the start of a later month the user picked
+ * in the date field, so a yearly schedule billed in February keeps February
+ * when the day changes. Never in the past.
  */
-function defaultRunDate(dayOfMonth: number): string {
-  const today = parseIsoDate(stockholmTodayIso())
-  if (!today) return ''
-  const { year: y, month0: m, day: todayDay } = today
-  const thisMonthDay = Math.min(dayOfMonth, lastDayOfMonth(y, m))
-  if (todayDay <= thisMonthDay) return isoFromParts(y, m, thisMonthDay)
-  const ny = m === 11 ? y + 1 : y
-  const nm = (m + 1) % 12
-  return isoFromParts(ny, nm, Math.min(dayOfMonth, lastDayOfMonth(ny, nm)))
+function createRunDate(dayOfMonth: number, pickedMonth: string | null): string {
+  const today = stockholmTodayIso()
+  const monthStart = pickedMonth ? `${pickedMonth}-01` : ''
+  return firstRunDateOnOrAfter(monthStart > today ? monthStart : today, dayOfMonth)
 }
 
 interface Props {
@@ -318,7 +313,7 @@ function NewRecurringScheduleForm({
           name: '',
           day_of_month: 15,
           interval_months: 1,
-          run_date: defaultRunDate(15),
+          run_date: createRunDate(15, null),
           send_hour: 8,
           payment_terms_days: 30,
           currency: 'SEK',
@@ -408,13 +403,31 @@ function NewRecurringScheduleForm({
   const watchDay = watch('day_of_month')
   const watchInterval = watch('interval_months')
   const watchRunDate = watch('run_date')
-  // Keep the date on the schedule grid when the day field changes: same
-  // month, day moved to the new day_of_month (clamped). The reverse sync
-  // (date -> day) lives in the date field's onChange.
+  // The month (yyyy-mm) last picked in the date field. Create mode derives
+  // the date from it rather than from the current date value, so typing
+  // "25" one digit at a time cannot ratchet the month forward via day 2.
+  const pickedMonthRef = useRef<string | null>(null)
+  // Keep the date on the schedule grid when the day field changes. Edit:
+  // same month, day moved to the new day_of_month (clamped); the stored month
+  // is the schedule's phase and the server recomputes a day-only edit.
+  // Create: the first occurrence of the new day on or after today (or the
+  // picked later month), so a day that already passed this month moves to
+  // next month instead of leaving a past date the validation refuses. A date
+  // the user just picked (the date field synced the day from it) is kept.
+  // The reverse sync (date -> day) lives in the date field's onChange.
   useEffect(() => {
     if (!Number.isInteger(watchDay) || watchDay < 1 || watchDay > 31) return
-    const aligned = alignRunDateToDay(watchRunDate, watchDay)
-    if (aligned !== watchRunDate) setValue('run_date', aligned, { shouldValidate: true })
+    if (
+      !schedule &&
+      watchRunDate.slice(0, 7) === pickedMonthRef.current &&
+      runDateMatchesDayOfMonth(watchRunDate, watchDay)
+    ) {
+      return
+    }
+    const next = schedule
+      ? alignRunDateToDay(watchRunDate, watchDay)
+      : createRunDate(watchDay, pickedMonthRef.current)
+    if (next !== watchRunDate) setValue('run_date', next, { shouldValidate: true })
     // watchRunDate is deliberately not a dependency: the effect exists to
     // react to the day, not to re-run on every date keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -608,6 +621,7 @@ function NewRecurringScheduleForm({
                       // that month means the user changed the day too, so
                       // follow it. Feb 28 with day 31 stays 31 (clamped hit).
                       const parsed = parseIsoDate(next)
+                      pickedMonthRef.current = parsed ? next.slice(0, 7) : null
                       if (parsed && !runDateMatchesDayOfMonth(next, watchDay)) {
                         setValue('day_of_month', parsed.day, { shouldValidate: true })
                       }

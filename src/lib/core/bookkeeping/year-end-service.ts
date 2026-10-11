@@ -21,6 +21,7 @@ import {
   createNextPeriod,
   findNextPeriod,
 } from './period-service'
+import { unfinishedSieImportMessage } from './sie-import-hold'
 import { generateResultAppropriation, previewResultAppropriation } from './result-appropriation-service'
 import {
   previewCurrencyRevaluation,
@@ -123,6 +124,17 @@ export async function validateYearEndReadiness(
       code: 'PERIOD_LOCKED',
       message:
         'Perioden är låst: lås upp den först. Bokslutet bokför bokslutsverifikationen i perioden och låser den sedan självt',
+    })
+  }
+
+  // Check: no SIE import or undo still holds the year. The closing entry is
+  // refused while it does (guard_sie_held_entry), but only after step 2 has
+  // already posted the currency revaluation, and the lock in step 7 is
+  // refused too (assertNoUnfinishedSieImport). Say so before anything runs.
+  if (period.import_hold) {
+    blockers.push({
+      code: 'SIE_IMPORT_UNFINISHED',
+      message: unfinishedSieImportMessage(period.name, 'year_end'),
     })
   }
 

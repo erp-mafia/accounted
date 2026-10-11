@@ -128,6 +128,12 @@ export interface OperationMcpBinding {
   /** Lowercase matcher synonyms (Swedish domain terms). Never serialized. */
   keywords?: string[]
   /**
+   * MCP annotation hints for a write: `destructive` asks the client to
+   * confirm before calling, `idempotent` tells it a retry with the same
+   * input is safe. Both default to false.
+   */
+  hints?: { destructive?: boolean; idempotent?: boolean }
+  /**
    * Present on writes: the tool stages a pending operation of this type and
    * the approval path runs `run()` with the staged input. The type must be in
    * PendingOperationType, OPERATION_RISK_TIERS, the approval vocabulary and
@@ -156,7 +162,27 @@ export interface OperationMcpBinding {
      * the commit when the pinned values no longer hold. Pure: no I/O.
      */
     pinParams?: (input: Record<string, unknown>, preview: Record<string, unknown>) => Record<string, unknown>
+    /**
+     * What the staging answer carries beside the preview, from the input and
+     * the dry run's preview: the obvious follow-up call (`next`), the date
+     * whose period status the answer reports (`periodDate`), and an advisory
+     * warning the approver sees (`complianceNote`). Pure: no I/O.
+     */
+    extras?: (input: Record<string, unknown>, preview: Record<string, unknown>) => OperationStageExtras
+    /**
+     * The preview the approver and the agent see, when the dry run's preview
+     * (the v1 contract) does not read well on the approval card: renames to
+     * the keys pending.preview_field labels. Defaults to the dry run's
+     * preview. Pure: no I/O, and nothing the dry run did not answer.
+     */
+    preview?: (input: Record<string, unknown>, preview: Record<string, unknown>) => Record<string, unknown>
   }
+}
+
+export interface OperationStageExtras {
+  next?: { description: string; tool?: string; args?: Record<string, unknown> }
+  periodDate?: string
+  complianceNote?: string
 }
 
 export interface Operation<I = Record<string, unknown>, O = unknown> {

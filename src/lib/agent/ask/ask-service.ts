@@ -144,10 +144,10 @@ export async function answerAssistantQuestion(req: AskRequest): Promise<AskResul
 
   // Tools + snapshot only when we have a user to run the tools as. The tool
   // list is empty in a core-only build (registry unpopulated) → snapshot-only.
-  const tools: AiToolDef[] = req.userId
-    ? buildLedgerTools(req.supabase, req.companyId, req.userId, req.conversationId)
-    : []
-  const [profile, snapshot, uiGrounding] = await Promise.all([
+  const [tools, profile, snapshot, uiGrounding] = await Promise.all([
+    req.userId
+      ? buildLedgerTools(req.supabase, req.companyId, req.userId, req.conversationId)
+      : Promise.resolve<AiToolDef[]>([]),
     companyProfileLine(req.supabase, req.companyId),
     req.userId ? buildAssistantSnapshot(req.supabase, req.companyId) : Promise.resolve(''),
     buildUiGrounding(req.supabase, req.companyId, { route: req.route, locale: req.locale }),

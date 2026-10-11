@@ -301,7 +301,7 @@ export interface JournalEntryNoteResult {
   notes: string | null
 }
 
-/** Whitespace-only clears the note, as the MCP set_voucher_note commit does. */
+/** Whitespace-only clears the note: the column never stores a visually empty annotation. */
 export function normalizeNote(notes: string | null): string | null {
   return typeof notes === 'string' && notes.trim() !== '' ? notes : null
 }
@@ -316,7 +316,7 @@ export async function setJournalEntryNote(
   if (options.dryRun) {
     const { data: entry, error } = await ctx.supabase
       .from('journal_entries')
-      .select('id, voucher_series, voucher_number, status, notes')
+      .select('id, voucher_series, voucher_number, entry_date, description, status, notes')
       .eq('id', entryId)
       .eq('company_id', ctx.companyId)
       .maybeSingle()
@@ -329,6 +329,8 @@ export async function setJournalEntryNote(
         journal_entry_id: entry.id,
         voucher_series: entry.voucher_series ?? null,
         voucher_number: entry.voucher_number ?? null,
+        entry_date: entry.entry_date ?? null,
+        description: entry.description ?? null,
         status: entry.status,
         old_notes: entry.notes ?? null,
         new_notes: notes,

@@ -62,7 +62,12 @@ import {
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
 import { createLogger } from '@/lib/logger'
-import { lastDayOfMonth, isoFromParts } from '@/lib/invoices/recurring-run-date'
+import {
+  firstRunDateOnOrAfter,
+  getStockholmDateHour,
+  isoFromParts,
+  lastDayOfMonth,
+} from '@/lib/invoices/recurring-run-date'
 
 // Lives in the client-safe module now (the dialog needs Stockholm's calendar
 // day too); re-exported so the cron, routes and executors keep importing it
@@ -186,32 +191,20 @@ export function rollNextRunDateForward(
 }
 
 /**
- * Compute the initial next_run_date when a schedule is created.
- * - If start_date is given, use it.
- * - Else, if today's day-of-month <= schedule day_of_month (clamped to this
- *   month's last day), pick this month's occurrence.
- * - Otherwise pick next month's occurrence.
+ * Compute the initial next_run_date when a schedule is created: start_date
+ * when given, otherwise the first occurrence of day_of_month on or after
+ * today (firstRunDateOnOrAfter, the rule the dialog prefills with). "Today"
+ * is Stockholm's calendar day for the instant `now`, the same day the
+ * start_date validation uses; reading the UTC day instead would pick
+ * yesterday's occurrence between midnight and 02:00 Swedish time.
  */
 export function computeInitialRunDate(
-  today: Date,
+  now: Date,
   dayOfMonth: number,
   startDate?: string,
 ): string {
   if (startDate) return startDate
-  if (dayOfMonth < 1 || dayOfMonth > 31) {
-    throw new Error(`invalid day_of_month: ${dayOfMonth}`)
-  }
-  const y = today.getUTCFullYear()
-  const m = today.getUTCMonth()
-  const todayDay = today.getUTCDate()
-  const thisMonthDay = Math.min(dayOfMonth, lastDayOfMonth(y, m))
-  if (todayDay <= thisMonthDay) {
-    const yyyy = y.toString().padStart(4, '0')
-    const mm = (m + 1).toString().padStart(2, '0')
-    const dd = thisMonthDay.toString().padStart(2, '0')
-    return `${yyyy}-${mm}-${dd}`
-  }
-  return computeNextRunDate(today, dayOfMonth)
+  return firstRunDateOnOrAfter(getStockholmDateHour(now).date, dayOfMonth)
 }
 
 export interface ExecuteScheduleOptions {

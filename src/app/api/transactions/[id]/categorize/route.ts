@@ -9,6 +9,7 @@ import { chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments
 import { getTemplateById, buildMappingResultFromTemplate, validateTemplateForEntity } from '@/lib/bookkeeping/booking-templates'
 import { applyVatAmountOverride } from '@/lib/bookkeeping/vat-amount-override'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
+import { finalFromCategorize, recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
@@ -31,7 +32,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { Logger } from '@/lib/logger'
 import { validateBody } from '@/lib/api/validate'
 import { CategorizeTransactionSchema } from '@/lib/api/schemas'
-import type { Transaction, TransactionCategory, EntityType } from '@/types'
+import type { JournalEntry, Transaction, TransactionCategory, EntityType } from '@/types'
 
 ensureInitialized()
 
@@ -478,6 +479,11 @@ export const POST = withRouteContext(
     let journalEntryId: string | null = null
     let documentLinkWarning: string | null = null
 
+    // What was on offer, taken before the booking (and the learning after
+    // it) changes the suggestions.
+    const suggestionSnapshot = await snapshotSuggestions(supabase, companyId, [id])
+    let bookedEntry: JournalEntry | null = null
+
     try {
       const journalEntry = await createTransactionJournalEntry(
         supabase,
@@ -490,6 +496,7 @@ export const POST = withRouteContext(
       if (journalEntry) {
         journalEntryCreated = true
         journalEntryId = journalEntry.id
+        bookedEntry = journalEntry
       }
     } catch (err) {
       txLog.error('failed to create transaction journal entry', err as Error)
@@ -550,6 +557,22 @@ export const POST = withRouteContext(
         requestId,
         details: { transaction_date: transaction.date, reason: 'no_fiscal_period' },
       })
+    }
+
+    if (bookedEntry) {
+      await recordDecisions(supabase, suggestionSnapshot, [{
+        transactionId: id,
+        actedOn: body.proposal_id ?? null,
+        final: finalFromCategorize({
+          journalEntry: bookedEntry,
+          mappingResult,
+          amount: transaction.amount,
+          templateId: body.template_id ?? null,
+          counterpartyTemplateId: body.counterparty_template_id ?? null,
+          category: is_business ? (category ?? null) : 'private',
+          vatTreatment: body.vat_treatment ?? null,
+        }),
+      }], user.id)
     }
 
     // Learning writes (mapping rule, counterparty template) run only after a

@@ -35,6 +35,7 @@ import { PATCH as updatePeriod } from '../[id]/route'
 import { POST as unlockPeriod } from '../[id]/unlock/route'
 import { POST as closeExternal } from '../[id]/close-external/route'
 import { POST as reopenExternal } from '../[id]/reopen-external/route'
+import { POST as lockPeriodRoute } from '../[id]/lock/route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -554,6 +555,44 @@ describe('POST /api/v1/companies/:companyId/fiscal-periods/:id/reopen-external',
     )
     expect(res.status).toBe(200)
     expect((await res.json()).data.preview).toMatchObject({ fiscal_period_id: PERIOD_ID, will_reopen: true })
+    expect(writesTo(client, ['fiscal_periods', 'audit_log'])).toHaveLength(0)
+  })
+})
+
+// crm#1029: a year an SIE import, or its undo, still holds is not locked or
+// klarmarkerat. Before, the database guard's English refusal reached v1 as a
+// 500 INTERNAL_ERROR.
+describe('a year an SIE import still holds', () => {
+  const HELD = { period_start: '2024-01-01', period_end: '2024-12-31', name: 'Räkenskapsår 2024', import_hold: 'imp-1' }
+
+  it('POST /lock answers 409 PERIOD_HAS_UNFINISHED_SIE_IMPORT and writes nothing', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      fiscal_periods: { data: periodRow(HELD), error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await lockPeriodRoute(request(`${BASE}/${PERIOD_ID}/lock`, { method: 'POST' }), periodParams)
+    expect(res.status).toBe(409)
+    const json = await res.json()
+    expect(json.error.code).toBe('PERIOD_HAS_UNFINISHED_SIE_IMPORT')
+    expect(json.error.message).toContain('Räkenskapsår 2024 kan inte låsas')
+    expect(json.error.recovery_hint).toMatch(/gnubok_sie_import_status/)
+    expect(writesTo(client, ['fiscal_periods', 'audit_log'])).toHaveLength(0)
+  })
+
+  it('a close-external dry run answers the same code', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      fiscal_periods: { data: periodRow(HELD), error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await closeExternal(
+      request(`${BASE}/${PERIOD_ID}/close-external?dry_run=true`, { method: 'POST' }),
+      periodParams,
+    )
+    expect(res.status).toBe(409)
+    const json = await res.json()
+    expect(json.error.code).toBe('PERIOD_HAS_UNFINISHED_SIE_IMPORT')
     expect(writesTo(client, ['fiscal_periods', 'audit_log'])).toHaveLength(0)
   })
 })

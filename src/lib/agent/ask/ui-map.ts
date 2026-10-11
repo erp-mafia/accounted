@@ -70,14 +70,13 @@ export async function loadNavGateContext(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<NavGateContext | null> {
-  const [settingsRes, companyRes, agentProfileRes, navFlags, entitlements] = await Promise.all([
+  const [settingsRes, companyRes, navFlags, entitlements] = await Promise.all([
     supabase
       .from('company_settings')
       .select('entity_type, pays_salaries, dimensions_enabled, sales_orders_enabled, quotes_enabled, mileage_enabled')
       .eq('company_id', companyId)
       .maybeSingle(),
     supabase.from('companies').select('entity_type').eq('id', companyId).maybeSingle(),
-    supabase.from('agent_profiles').select('verified_at').eq('company_id', companyId).maybeSingle(),
     getDashboardNavFlags(supabase, companyId),
     getCompanyEntitlements(supabase, companyId),
   ])
@@ -109,9 +108,6 @@ export async function loadNavGateContext(
     agentsEnabled: isAgentsPageEnabled(companyId),
     capabilities: entitlements.capabilities,
     hiddenNavHrefs: new Set(getBranding().hiddenNavHrefs),
-    // The layout's rule: the Assistent entry shows once the agent is built
-    // (agent_profiles.verified_at), whichever surface the question came from.
-    agentVerified: Boolean((agentProfileRes.data as { verified_at?: string | null } | null)?.verified_at),
   }
 }
 

@@ -8,10 +8,19 @@ import {
 } from '@/tests/helpers'
 import { generateOcrReference } from '@/lib/bankgiro/luhn'
 import { eventBus } from '@/lib/events'
+import { recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
 import { BookkeepingDatabaseError, JournalEntryNotBalancedError } from '@/lib/bookkeeping/errors'
 import { defaultCommitMethod, getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
 
 const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
+// suggestion_log is recorded around every booking; its own reads and writes
+// are covered in lib/suggestion-log, not by this file's queued client.
+vi.mock('@/lib/suggestion-log/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/suggestion-log/record')>()),
+  snapshotSuggestions: vi.fn(async (_supabase: unknown, companyId: string) => ({ companyId, byTransaction: new Map() })),
+  recordDecisions: vi.fn(async () => undefined),
+}))
+
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -423,6 +432,54 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect(emitSpy).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'transaction.categorized' })
     )
+  })
+
+  it('records the decision with the suggestion it started from, the snapshot taken before booking', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: -500, merchant_name: 'GitHub', journal_entry_id: null })
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: [{ id: 'period-1' }], error: null })
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    mockSaveUserMappingRule.mockResolvedValue(undefined)
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'expense_software', proposal_id: 'assistant:tx-1' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+
+    expect(response.status).toBe(200)
+    const snapshotOrder = vi.mocked(snapshotSuggestions).mock.invocationCallOrder[0]
+    expect(snapshotOrder).toBeLessThan(mockCreateTransactionJournalEntry.mock.invocationCallOrder[0])
+    expect(vi.mocked(recordDecisions)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ companyId: 'company-1' }),
+      [{
+        transactionId: 'tx-1',
+        actedOn: 'assistant:tx-1',
+        final: expect.objectContaining({ journal_entry_id: 'je-1', account: '6200' }),
+      }],
+      'user-1',
+    )
+  })
+
+  it('records nothing when the verifikat could not be created', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: -500, merchant_name: 'GitHub', journal_entry_id: null })
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: [{ id: 'period-1' }], error: null })
+    mockCreateTransactionJournalEntry.mockRejectedValue(new Error('boom'))
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, category: 'expense_software', proposal_id: 'assistant:tx-1' },
+    })
+    await POST(request, createMockRouteParams({ id: 'tx-1' }))
+
+    expect(vi.mocked(recordDecisions)).not.toHaveBeenCalled()
   })
 
   // crm#1136: a refund (a category booked against its direction) is a mirrored

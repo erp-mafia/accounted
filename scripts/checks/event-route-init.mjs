@@ -1,5 +1,6 @@
 /**
- * Guard: an API route that can emit a core event must have the event bus wired.
+ * Guard: a server entry point that can emit a core event, or read what
+ * extensions register, must have run ensureInitialized().
  *
  * lib/events/bus.ts is an in-process singleton that returns early when an
  * event type has no handler. Every handler (event_log persistence, public
@@ -29,6 +30,20 @@
  * over-approximates: a route that imports a service for a function that never
  * emits still counts. Wiring the bus on such a route costs only its cold
  * start, so the guard errs that way.
+ *
+ * The same holds for the registries ensureInitialized() fills by loading the
+ * extensions: the extension registry (services such as the skatteverket ombud
+ * check), the agent tool registry, the email and mail-search services, the
+ * Peppol transports and the payment initiation provider. Read before
+ * initialisation they answer "not available", again silently. A module that
+ * reads one of them counts like an emitter.
+ *
+ * Entry points: every app/api route, plus (since the root layout stopped
+ * calling ensureInitialized(), 2026-10-11) every other server entry Next.js
+ * runs: pages, layouts, templates, non-API route handlers and metadata
+ * routes under app/, and every 'use server' module. Before that change the
+ * root layout's module-scope call happened to cover most of them in a warm
+ * process; now each one wires itself, so public pages load no extensions.
  *
  * Pre-existing offenders are allowlisted in UNINITIALIZED_EMITTING_ROUTES and
  * the set may only shrink.
@@ -69,11 +84,30 @@ export const UNINITIALIZED_EMITTING_ROUTES = new Set([
   // detectFileMagic from document-service): the over-approximation above.
   'app/api/byra/brand/logo/route.ts',
   'app/api/events/route.ts',
+  // Pages that import a pure helper from a module that also emits: the
+  // over-approximation above. None of them emits while rendering.
+  'app/(dashboard)/chat/new/page.tsx',
+  'app/(dashboard)/invoices/[id]/page.tsx',
+  'app/(dashboard)/invoices/rot-rut/page.tsx',
 ])
 
 // `emit` as a whole word, called or not: `eventBus.emit.bind(eventBus)` hands
 // the emitter to a callback (enable-banking does this) and must still count.
 const EMIT_RE = /\beventBus\s*\.\s*emit\b/
+// Reads of what the extensions register, as calls. The lookbehind skips the
+// getters' own definitions, so importing a service module for its types or
+// its register function does not count.
+const REGISTRY_READ_RE = new RegExp(
+  [
+    String.raw`\bextensionRegistry\s*\.\s*(?:getAll|getByCapability|get)\b`,
+    String.raw`\bagentToolRegistry\s*\.\s*(?:getAll|getMany|get|has)\b`,
+    String.raw`(?<!\bfunction\s+)\b(?:getEmailService|getMailSearchService|getPeppolTransport|getPeppolTransportAvailability|getPaymentInitiationProvider|getPaymentInitiationProviderById|hasPaymentInitiationProviders)\s*\(`,
+  ].join('|'),
+)
+// The App Router file conventions Next.js runs on the server, outside app/api.
+const APP_ENTRY_RE =
+  /^(?:page|layout|template|default|loading|error|global-error|not-found|global-not-found|forbidden|unauthorized|route|sitemap|robots|manifest|icon|apple-icon|opengraph-image|twitter-image)\.(?:tsx?|jsx?)$/
+const USE_SERVER_RE = /^(?:\s*(?:\/\/[^\n]*\n|\/\*[\s\S]*?\*\/))*\s*['"]use server['"]/
 const DYNAMIC_IMPORT_RE = /\bimport\s*\(/
 const INIT_FILE = 'lib/init.ts'
 const RESOLVE_SUFFIXES = ['', '.ts', '.tsx', '.mjs', '.js', '/index.ts', '/index.tsx']
@@ -82,7 +116,7 @@ function isTestPath(rel) {
   return rel.includes('/__tests__/') || /\.test\.tsx?$/.test(rel)
 }
 
-function walkRouteFiles(dir, out = []) {
+function walkFiles(dir, accept, out = []) {
   let entries
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true })
@@ -93,12 +127,31 @@ function walkRouteFiles(dir, out = []) {
     const full = path.join(dir, e.name)
     if (e.isDirectory()) {
       if (e.name === '__tests__' || e.name === 'node_modules') continue
-      walkRouteFiles(full, out)
-    } else if (e.name === 'route.ts') {
+      walkFiles(full, accept, out)
+    } else if (accept(full, e.name)) {
       out.push(full)
     }
   }
   return out
+}
+
+/** Every server entry point: API routes, other App Router entries, 'use server' modules. */
+function findEntryPoints(SOURCE_ROOT) {
+  const apiDir = path.join(SOURCE_ROOT, 'app', 'api')
+  const apiRoutes = walkFiles(apiDir, (_full, name) => name === 'route.ts')
+  const appEntries = walkFiles(
+    path.join(SOURCE_ROOT, 'app'),
+    (full, name) => APP_ENTRY_RE.test(name) && !full.startsWith(apiDir + path.sep),
+  )
+  const serverActions = walkFiles(SOURCE_ROOT, (full, name) => {
+    if (!/\.tsx?$/.test(name) || /\.test\.tsx?$/.test(name)) return false
+    try {
+      return USE_SERVER_RE.test(fs.readFileSync(full, 'utf8'))
+    } catch {
+      return false
+    }
+  })
+  return [...new Set([...apiRoutes, ...appEntries, ...serverActions])].sort()
 }
 
 /** True for `import type`, `export type`, and `import { type A, type B }`. */
@@ -159,16 +212,17 @@ function analyseSource(fileName, text) {
   // and skipping them halves the scan.
   if (DYNAMIC_IMPORT_RE.test(text)) visit(source)
 
-  return { specifiers, emits: EMIT_RE.test(text), topLevelInit }
+  return { specifiers, needsInit: EMIT_RE.test(text) || REGISTRY_READ_RE.test(text), topLevelInit }
 }
 
 /**
- * Scan every app/api route under SOURCE_ROOT.
+ * Scan every server entry point under SOURCE_ROOT (see findEntryPoints).
  *
- * Returns { emittingRoutes, uninitialized }: SOURCE_ROOT-relative,
- * forward-slash paths of the routes that can reach an emitter, and of those
- * that can do so with no module-scope ensureInitialized() in the route or its
- * runtime import closure.
+ * Returns { emittingRoutes, uninitialized, initializing }: SOURCE_ROOT-relative,
+ * forward-slash paths of the entry points that can reach an emitter or a
+ * registry read, of those that can do so with no module-scope
+ * ensureInitialized() in the entry file or its runtime import closure, and of
+ * every entry point whose closure does run it (and so loads every extension).
  */
 export function findUninitializedEmittingRoutes(SOURCE_ROOT) {
   const rel = (p) => path.relative(SOURCE_ROOT, p).split(path.sep).join('/')
@@ -214,7 +268,7 @@ export function findUninitializedEmittingRoutes(SOURCE_ROOT) {
     return info
   }
 
-  const routes = walkRouteFiles(path.join(SOURCE_ROOT, 'app', 'api')).sort()
+  const routes = findEntryPoints(SOURCE_ROOT)
   const stack = [...routes]
   while (stack.length > 0) {
     const info = load(stack.pop())
@@ -251,17 +305,20 @@ export function findUninitializedEmittingRoutes(SOURCE_ROOT) {
     }
     return out
   }
-  const reachesEmitter = reaching((info) => info.emits)
+  const reachesEmitter = reaching((info) => info.needsInit)
   // Includes the route itself when the route file makes the top-level call.
   const reachesInit = reaching((info) => info.topLevelInit)
 
   const emittingRoutes = []
   const uninitialized = []
+  const initializing = []
   for (const routeAbs of routes) {
-    if (!modules.get(routeAbs) || !reachesEmitter.has(routeAbs)) continue
+    if (!modules.get(routeAbs)) continue
+    if (reachesInit.has(routeAbs)) initializing.push(rel(routeAbs))
+    if (!reachesEmitter.has(routeAbs)) continue
     emittingRoutes.push(rel(routeAbs))
     if (!reachesInit.has(routeAbs)) uninitialized.push(rel(routeAbs))
   }
 
-  return { emittingRoutes, uninitialized }
+  return { emittingRoutes, uninitialized, initializing }
 }

@@ -67,9 +67,9 @@ export function useSourceLines(fetcher: ReportSourceFetcher): UseSourceLinesResu
  * the aggregated row and `<ReportRowExpansion.Panel>` immediately below.
  *
  * Usage:
- *   const expansion = useReportRowExpansion(fetcher)
- *   <tr><td><expansion.Toggle /></td>...</tr>
- *   {expansion.expanded && <expansion.Panel colSpan={6} />}
+ *   const expansion = useReportRowExpansion(fetcher, rowId)
+ *   <tr><td>{expansion.toggle}</td>...</tr>
+ *   {expansion.panel(6)}
  *
  * Or use the all-in-one component below where the caller owns the
  * surrounding `<tr>` and just plugs the expansion in.
@@ -121,24 +121,54 @@ export function ReportRowExpansion({
 
 /**
  * Variant where the toggle and the expansion are placed by the caller. The
- * caller renders `<Toggle />` inside the aggregated `<tr>`, then below
- * conditionally renders `<Panel />` as a sibling `<tr>` so its `<td
- * colSpan={n}>` lines up with the rest of the table.
+ * caller renders `toggle` inside the aggregated `<tr>`, then below renders
+ * `panel(n)` as a sibling `<tr>` so its `<td colSpan={n}>` lines up with the
+ * rest of the table.
+ *
+ * Both are elements of module-level components, not components defined in
+ * the hook: a component defined during render is a new type on every render,
+ * so React remounted the button on each toggle and keyboard focus dropped to
+ * the page after Enter or Space.
  */
 export function useReportRowExpansion(fetcher: ReportSourceFetcher, rowId: string) {
   const [expanded, setExpanded] = useState(false)
   const { lines, loading, error, load } = useSourceLines(fetcher)
 
-  const toggle = useCallback(() => {
+  const onToggle = useCallback(() => {
     const next = !expanded
     setExpanded(next)
     if (next) load()
   }, [expanded, load])
 
-  const Toggle = () => (
+  const toggle = <RowExpansionToggle expanded={expanded} onToggle={onToggle} rowId={rowId} />
+
+  const panel = (colSpan: number) =>
+    expanded ? (
+      <ExpansionPanelRow
+        colSpan={colSpan}
+        loading={loading}
+        error={error}
+        lines={lines}
+        rowId={rowId}
+      />
+    ) : null
+
+  return { expanded, toggle, panel }
+}
+
+function RowExpansionToggle({
+  expanded,
+  onToggle,
+  rowId,
+}: {
+  expanded: boolean
+  onToggle: () => void
+  rowId: string
+}) {
+  return (
     <button
       type="button"
-      onClick={toggle}
+      onClick={onToggle}
       aria-expanded={expanded}
       aria-controls={`expansion-${rowId}`}
       aria-label={expanded ? 'Dölj verifikat' : 'Visa verifikat'}
@@ -151,19 +181,6 @@ export function useReportRowExpansion(fetcher: ReportSourceFetcher, rowId: strin
       )}
     </button>
   )
-
-  const Panel = ({ colSpan }: { colSpan: number }) =>
-    expanded ? (
-      <ExpansionPanelRow
-        colSpan={colSpan}
-        loading={loading}
-        error={error}
-        lines={lines}
-        rowId={rowId}
-      />
-    ) : null
-
-  return { expanded, Toggle, Panel }
 }
 
 /**

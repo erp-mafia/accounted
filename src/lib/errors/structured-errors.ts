@@ -2697,6 +2697,24 @@ const PERIOD: Record<string, StructuredErrorEntry> = {
       tool: 'gnubok_unlock_period',
     },
   },
+  // Lock, close or klarmarkera of a year an SIE import or its undo still holds
+  // (assertNoUnfinishedSieImport in lib/core/bookkeeping/period-service.ts;
+  // the database refuses it too, guard_sie_period_hold). The thrower names
+  // the year; the remediation carries the import id when it is known.
+  PERIOD_HAS_UNFINISHED_SIE_IMPORT: {
+    httpStatus: 409,
+    message_sv:
+      'Räkenskapsåret har en SIE-import som inte är klar. Slutför eller ångra importen först och försök sedan igen.',
+    message_en:
+      'An SIE import, or the undo of one, still holds this fiscal year. Finish or undo it first, then retry.',
+    retryable: false,
+    remediation: {
+      description:
+        'Read the import\'s state with gnubok_sie_import_status; resuming or undoing it is the user\'s decision. Retry once it is completed or undone. Never lock first: a lock stops the import\'s own writes.',
+      tool: 'gnubok_sie_import_status',
+    },
+    thrown_message_sv: true,
+  },
   PERIOD_ALREADY_CLOSED: {
     httpStatus: 409,
     message_sv: 'Perioden är redan stängd: bokslutet är genomfört och perioden kan inte öppnas igen.',

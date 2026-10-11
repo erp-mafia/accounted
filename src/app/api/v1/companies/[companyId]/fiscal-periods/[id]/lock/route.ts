@@ -10,9 +10,10 @@ import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { lockPeriod } from '@/lib/core/bookkeeping/period-service'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { userFacingCode } from '@/lib/errors/user-facing'
 
 const PeriodLockedResponse = z.object({
   id: z.string().uuid(),
@@ -34,6 +35,7 @@ registerEndpoint({
   pitfalls: [
     'Idempotency-Key is mandatory.',
     'A period with uncategorised business transactions cannot be locked; the response surfaces the count.',
+    'A year that an SIE import, or its undo, still holds returns 409 PERIOD_HAS_UNFINISHED_SIE_IMPORT: resume it (POST /imports/sie/{id}/resume) or undo it (POST /imports/sie/{id}/undo) first, then lock.',
     'Locking is reversible until /close: POST /fiscal-periods/{id}/unlock lifts it.',
   ],
   example: {
@@ -74,6 +76,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'unknown'
       ctx.log.warn('fiscal-periods.lock refused', { fiscalPeriodId: idParse.data, reason: msg })
+      // A refusal written for the reader carries its own code and sentence
+      // (an SIE import still holding the year: PERIOD_HAS_UNFINISHED_SIE_IMPORT).
+      if (userFacingCode(err)) {
+        return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
+      }
       // Map known throw messages to structured codes
       if (msg.includes('not found')) {
         return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {

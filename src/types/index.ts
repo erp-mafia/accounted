@@ -2052,6 +2052,10 @@ export interface FiscalPeriod {
   // Optional: rows predate the column on some cached readers.
   closed_externally?: boolean
   locked_at: string | null
+  // The SIE import (sie_imports.id) whose run, or undo, holds this year until
+  // it is completed, undone or failed. The year cannot be locked or closed
+  // meanwhile (guard_sie_period_hold). Optional: not every reader selects it.
+  import_hold?: string | null
   retention_expires_at: string | null
   opening_balances_set: boolean
   closing_entry_id: string | null
@@ -3862,6 +3866,7 @@ export type YearEndBlockerCode =
   | 'UNBOOKED_CHECK_FAILED'
   | 'PRIOR_RESULT_NOT_DISPOSED'
   | 'PRIOR_RESULT_OVER_DISPOSED'
+  | 'SIE_IMPORT_UNFINISHED'
 
 export interface YearEndBlocker {
   code: YearEndBlockerCode

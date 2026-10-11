@@ -8,9 +8,7 @@ import { registerAgentFeedbackRelayHandler } from '@/lib/events/handlers/agent-f
 import { registerWebhookHandler } from '@/lib/webhooks/handler'
 import { registerConfiguredPeppolTransports } from '@/lib/invoices/transports'
 import { registerConnectPaymentsProvider } from '@/lib/payments/initiation/connect'
-import { registerObservabilitySink } from '@/lib/observability'
-import { postHogSink } from '@/lib/analytics/posthog-observability'
-import { isAnalyticsEnabled } from '@/lib/analytics/enabled'
+import { ensureObservability } from '@/lib/analytics/ensure-observability'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('init')
@@ -82,7 +80,10 @@ function validateEnvironment(): void {
 /**
  * Ensure the system is initialized (extensions loaded, context factory wired,
  * core event handlers registered).
- * Called from API routes that emit events.
+ * Called at module scope by every entry point that can emit events or read
+ * what extensions register (API routes, and the few pages that need it); the
+ * root layout deliberately does not, so public pages never load extensions.
+ * `npm run check:guards` (uninitialized-event-route) enforces this.
  * Idempotent: safe to call multiple times.
  */
 export function ensureInitialized(): void {
@@ -90,13 +91,9 @@ export function ensureInitialized(): void {
 
   validateEnvironment()
   setContextFactory(createExtensionContext)
-  // Turns lib/observability from a no-op into PostHog Error Tracking. Gated,
-  // so with no token (core, CI, self-hosted) the sink stays the no-op and
-  // PostHog is never constructed and never contacted. Note the SDK is still
-  // BUNDLED in those builds: the imports are static, so the bytes ship even
-  // though nothing initialises. Making that a true zero would mean dynamic
-  // imports at every posthog call site, which is a deliberate non-goal here.
-  if (isAnalyticsEnabled()) registerObservabilitySink(postHogSink)
+  // PostHog Error Tracking, gated on the token; the root layout calls the
+  // same function so page renders get it without this whole init.
+  ensureObservability()
   registerSupplierInvoiceHandler()
   registerEventLogHandler()
   registerDocumentReadHandler()

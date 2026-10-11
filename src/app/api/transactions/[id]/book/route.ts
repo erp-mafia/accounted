@@ -14,6 +14,7 @@ import { BookTransactionSchema } from '@/lib/api/schemas'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { assertTransactionBookable } from '@/lib/transactions/is-booked'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
+import { finalFromLines, linesOf, recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
@@ -210,6 +211,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       })
     }
 
+    // What was on offer, taken before the booking.
+    const suggestionSnapshot = await snapshotSuggestions(supabase, companyId, [id])
+
     // Create journal entry via the engine
     let journalEntry
     try {
@@ -284,6 +288,11 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // A hunt- or hand-matched inbox item is consumed by this booking even
     // though the dialog never saw it: link its underlag to the verifikat and
     // stamp it so it leaves the active inbox (best-effort, logged inside).
+    await recordDecisions(supabase, suggestionSnapshot, [{
+      transactionId: id,
+      final: finalFromLines(journalEntry.id, linesOf(journalEntry)),
+    }], user.id)
+
     await propagateUnderlagForBookedTransaction(supabase, companyId, id, journalEntry.id)
 
     // Emit event (non-blocking)

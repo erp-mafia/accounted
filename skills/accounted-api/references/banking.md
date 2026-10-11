@@ -864,6 +864,18 @@ Queues a batch storno of the import: each verifikat the import posted gets a rev
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
+Request body:
+```ts
+{ reason?: string }
+```
+
+Example request:
+```json
+{
+  "reason": "Importerad till fel räkenskapsår"
+}
+```
+
 Response `200`:
 ```ts
 {
@@ -2487,6 +2499,7 @@ Request body:
   dimensions?: Record<string, string>,
   user_description?: string,
   inbox_item_id?: string,
+  proposal_id?: string,
   confirm_no_match?: boolean,
   force?: boolean,
   expected_duplicate_transaction_id?: string,
@@ -3262,7 +3275,7 @@ Per-item categorization mirroring the single :categorize endpoint. Same `{ resul
 Request body:
 ```ts
 {
-  items: { transaction_id: string, categorization: { is_business: boolean, category?: "income_services" | "income_products" | "income_other" | "expense_equipment" | "expense_software" | "expense_travel" | "expense_office" | "expense_marketing" | "expense_professional_services" | "expense_education" | "expense_representation" | "expense_consumables" | "expense_vehicle" | "expense_telecom" | "expense_bank_fees" | "expense_card_fees" | "expense_currency_exchange" | "expense_other" | "private" | "uncategorized", template_id?: string, vat_treatment?: "standard_25" | "reduced_12" | "reduced_6" | "reverse_charge" | "export" | "exempt", vat_amount?: number, account_override?: string, counterparty_template_id?: string, dimensions?: Record<string, string>, user_description?: string, inbox_item_id?: string, confirm_no_match?: boolean, force?: boolean, expected_duplicate_transaction_id?: string, expected_duplicate_journal_entry_id?: string } }[],
+  items: { transaction_id: string, categorization: { is_business: boolean, category?: "income_services" | "income_products" | "income_other" | "expense_equipment" | "expense_software" | "expense_travel" | "expense_office" | "expense_marketing" | "expense_professional_services" | "expense_education" | "expense_representation" | "expense_consumables" | "expense_vehicle" | "expense_telecom" | "expense_bank_fees" | "expense_card_fees" | "expense_currency_exchange" | "expense_other" | "private" | "uncategorized", template_id?: string, vat_treatment?: "standard_25" | "reduced_12" | "reduced_6" | "reverse_charge" | "export" | "exempt", vat_amount?: number, account_override?: string, counterparty_template_id?: string, dimensions?: Record<string, string>, user_description?: string, inbox_item_id?: string, proposal_id?: string, confirm_no_match?: boolean, force?: boolean, expected_duplicate_transaction_id?: string, expected_duplicate_journal_entry_id?: string } }[],
   all_or_nothing?: boolean
 }
 ```

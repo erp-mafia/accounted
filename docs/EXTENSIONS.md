@@ -40,7 +40,7 @@ src/lib/extensions/_generated/                         written by npm run setup:
 2. Run `npm run setup:extensions`. `npm run dev` and `npm run build` also run it first, through `predev` and `prebuild`.
 3. Set the env vars listed in each enabled `manifest.json` under `requiredEnvVars`.
 
-`scripts/generate-extension-registry.ts` finds every `manifest.json` under `src/extensions/`. It exits with an error if two manifests share an id, or if the config lists an id that has no manifest. It then writes four files to `src/lib/extensions/_generated/`:
+`scripts/generate-extension-registry.ts` finds every `manifest.json` under `src/extensions/`. It exits with an error if two manifests share an id, or if the config lists an id that has no manifest. It then writes five files to `src/lib/extensions/_generated/`:
 
 | File | Export | Content |
 |------|--------|---------|
@@ -48,6 +48,7 @@ src/lib/extensions/_generated/                         written by npm run setup:
 | `workspace-map.tsx` | `WORKSPACES` | A `next/dynamic` import for each manifest with a `workspace`, keyed `<sector>/<id>`. |
 | `sector-definitions.ts` | `EXTENSION_DEFINITIONS` | Marketplace metadata from each manifest's `definition`, grouped by sector. |
 | `enabled-extensions.ts` | `ENABLED_EXTENSION_IDS` | The set of enabled ids, for conditional UI such as `ENABLED_EXTENSION_IDS.has('skatteverket')`. |
+| `branding-list.ts` | nothing | Side-effect imports of the enabled manifests with `"branding": true`. The root layout and `src/app/manifest.ts` import it so a fork's `registerBrandingService()` runs before `getBranding()` is read, without loading every extension. Empty when no such extension is enabled. |
 
 Validation is limited to what the generator itself checks:
 
@@ -110,6 +111,7 @@ Abridged from `src/extensions/general/enable-banking/manifest.json`:
 | `sector` | `"general"` |
 | `exportName`, `entryPoint` | Named export and import path of the Extension object. If either is `null`, nothing is registered at runtime; the manifest still feeds the marketplace and workspace map. |
 | `workspace` | Import path of a default-exported React component, or `null` |
+| `branding` | Optional. `true` only for an extension that calls `registerBrandingService()` at module load: it is then listed in `_generated/branding-list.ts`. |
 | `requiredEnvVars`, `optionalEnvVars`, `npmDependencies` | See [Enabling extensions](#enabling-extensions) |
 | `definition` | Marketplace metadata. Required: `name`, `category`, `icon` (a Lucide name), `dataPattern` (`core`, `manual` or `both`), `description`, `longDescription`. Optional: `readsCoreTables`, `hasOwnData`, `quickAction` (`{ label, description, icon, href?, event?, order? }`), `subscriptionNotice`. |
 
@@ -175,7 +177,7 @@ interface ExtensionContext {
 - **Delivery:** the bus (`src/lib/events/bus.ts`) runs all handlers for an event concurrently with `Promise.allSettled`. A rejected handler is logged and never fails the emitter.
 - **Payload types:** event names and payloads live in `src/lib/events/types.ts`. Type payloads with `EventPayload<'<event>'>`.
 - **ctx may be missing:** the registry builds `ctx` when the event fires, from `createClient()` and the payload's `userId` and `companyId`. When that fails (no `userId`, or no request scope), the handler receives `ctx === undefined`, so always handle that case. An event emitted from a cron job or webhook may also carry a client without a signed-in user.
-- **Initialization:** handlers are subscribed only after `ensureInitialized()` (`src/lib/init.ts`) has run in the process, since that function calls `loadExtensions()`. Any route that emits events, or that looks up extensions in the registry, must call `ensureInitialized()` at module level; `withRouteContext` does not do it for you. Otherwise events go nowhere and `extensionRegistry.get()` returns `undefined`. `npm run check:guards` (uninitialized-event-route) fails a new route that can reach `eventBus.emit` without the call.
+- **Initialization:** handlers are subscribed only after `ensureInitialized()` (`src/lib/init.ts`) has run in the process, since that function calls `loadExtensions()`. Any route, page or server action that emits events, or that looks up extensions in the registry, must call `ensureInitialized()` at module level; neither `withRouteContext` nor the root layout does it for you. Otherwise events go nowhere and `extensionRegistry.get()` returns `undefined`. `npm run check:guards` (uninitialized-event-route) fails a new entry point that can reach `eventBus.emit` or a registry read without the call.
 
 ## API routes
 
@@ -276,7 +278,7 @@ An extension without a workspace shows a placeholder instead.
 `src/extensions/general/_example-branding/` is a starter for forks:
 
 1. Copy it to a new directory.
-2. Set the id, `exportName` and `entryPoint` in its manifest, and the brand values in `index.ts`.
+2. Set the id, `exportName` and `entryPoint` in its manifest (keep `"branding": true`), and the brand values in `index.ts`.
 3. Add the new id string to the `extensions` array in `extensions.config.json`.
 
 See [WHITELABEL.md](WHITELABEL.md) for the full checklist.
@@ -297,7 +299,7 @@ Tests live in `src/extensions/general/<id>/__tests__/`. Run them with `npx vites
 3. **Importing `@/extensions/` from core.** This includes `src/lib/`, `src/app/api/` outside `src/app/api/extensions/`, `src/components/` outside `src/components/extensions/`, and `src/types/index.ts`.
 4. **Assuming `ctx` exists.** It can be undefined in event handlers, and it is always undefined for `skipAuth` and `skipCompanyContext` routes.
 5. **Calling `settings.set(key, null)`.** Use `settings.clear(key)`.
-6. **Forgetting `ensureInitialized()`.** Routes that emit events or read the registry need it at module level.
+6. **Forgetting `ensureInitialized()`.** Routes, pages and server actions that emit events or read the registry need it at module level; the root layout does not load extensions.
 7. **Scaffolding with a sector other than `general`**, or following steps 4 and 5 of the `create-extension` output.
 8. **Adding a file under `src/app/api/extensions/<id>/` without the registry gate**, or importing another extension from it.
 9. **Writing journal entries directly** instead of through `src/lib/bookkeeping/engine.ts`.

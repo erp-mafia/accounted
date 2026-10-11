@@ -101,10 +101,10 @@ describe('forbiddenOriginResponse', () => {
 })
 
 describe('mcp-server apiRoutes origin enforcement', () => {
-  // The dynamic import pulls in the full 9k-line server module; that parse can
-  // take several seconds under full-suite parallel load. It is import-bound,
-  // not logic-bound, so warm it once in beforeAll (with generous headroom)
-  // instead of letting an individual test's clock absorb the import cost.
+  // The extension entry no longer loads ./server (a POST loads it lazily, after
+  // the origin check), so these foreign-Origin requests never parse it. The
+  // import still runs once in beforeAll with headroom so a slow cold import
+  // under full-suite parallel load cannot eat an individual test's clock.
   let mcpServerExtension: typeof McpServerExtension
   beforeAll(async () => {
     ;({ mcpServerExtension } = await import('../index'))

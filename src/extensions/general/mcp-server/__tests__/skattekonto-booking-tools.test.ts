@@ -30,6 +30,8 @@ vi.mock('@/extensions/general/skatteverket/lib/skattekonto-booking', async (impo
     ledgerTwinMessage: actual.ledgerTwinMessage,
     ledgerCoverMessage: actual.ledgerCoverMessage,
     toLedgerCoverInfo: actual.toLedgerCoverInfo,
+    // Real: the staged verifikat must be the executor's own lines.
+    buildSkattekontoEntry: actual.buildSkattekontoEntry,
     attachBookingSuggestions: (...a: unknown[]) => mockAttach(...a),
     findSkattekontoLedgerTwins: (...a: unknown[]) => mockTwins(...a),
     findSkattekontoLedgerCover: (...a: unknown[]) => mockCover(...a),
@@ -222,6 +224,20 @@ describe('gnubok_book_skattekonto_row: staging behaviour', () => {
       suggested_counter_account: '2518',
       rule_label: 'Debiterad preliminärskatt',
     })
+    // The verifikat the approval posts, as the executor builds it (crm#1104):
+    // a charge on the skattekonto debits the counter account, credits 1630.
+    expect(result.preview.journal_entry).toEqual({
+      entry_date: '2026-03-12',
+      description: 'Skattekonto: Debiterad preliminärskatt',
+      lines: [
+        { account_number: '2518', debit_amount: 5000, credit_amount: 0, line_description: 'Debiterad preliminärskatt' },
+        { account_number: '1630', debit_amount: 0, credit_amount: 5000, line_description: 'Debiterad preliminärskatt' },
+      ],
+      total_debit: 5000,
+      total_credit: 5000,
+      balanced: true,
+      note: expect.any(String),
+    })
     expect(findCall('pending_operations', 'insert')).toBeUndefined()
     expect(mockBokforSingle).not.toHaveBeenCalled()
     expect(mockBokforBatch).not.toHaveBeenCalled()
@@ -305,6 +321,11 @@ describe('gnubok_book_skattekonto_rows: batch staging', () => {
     expect(inserted.operation_type).toBe('book_skattekonto_rows')
     expect(inserted.params.ids).toEqual(['skv-ok'])
     expect(result.preview.row_count).toBe(1)
+    // One verifikat per bookable row, none for a skipped one (crm#1104).
+    const entries = result.preview.journal_entries as Array<{ description: string; lines: Array<{ account_number: string }> }>
+    expect(entries).toHaveLength(1)
+    expect(entries[0].description).toBe('Skattekonto: Debiterad preliminärskatt')
+    expect(entries[0].lines.map((l) => l.account_number)).toEqual(['2518', '1630'])
     expect(result.preview.skipped).toEqual([
       { skattekonto_transaction_id: 'skv-foreign', reason: 'TRANSACTION_NOT_FOUND' },
       { skattekonto_transaction_id: 'skv-booked', reason: 'ALREADY_BOOKED' },

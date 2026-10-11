@@ -14,7 +14,7 @@ export function registerEmailService(svc: EmailService): void
 registerEmailService(createEmailService())
 ```
 
-Branding works the same way: `registerBrandingService(partial)` in `lib/branding/service.ts`, read through `getBranding()` (see `extensions/general/_example-branding/index.ts`).
+Branding works the same way: `registerBrandingService(partial)` in `lib/branding/service.ts`, read through `getBranding()` (see `extensions/general/_example-branding/index.ts`). A branding extension sets `"branding": true` in its manifest, so the root layout's generated branding list imports it; the layout loads no other extension.
 
 ## Pattern B: Services record (extension to core)
 

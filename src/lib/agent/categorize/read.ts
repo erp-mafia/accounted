@@ -81,6 +81,7 @@ export async function readTransaction(
     reasoning: selection.reasoning,
     candidates,
     model: selection.model,
+    prompt_sha256: selection.promptSha256,
   }
   return { selection, candidates, read }
 }
@@ -103,6 +104,7 @@ export async function storeRead(supabase: SupabaseClient, companyId: string, rea
       reasoning: read.reasoning,
       candidates: read.candidates,
       model: read.model,
+      prompt_sha256: read.prompt_sha256 ?? null,
     },
     { onConflict: 'transaction_id' },
   )
@@ -120,7 +122,7 @@ export async function loadReads(
   const { data } = await supabase
     .from('transaction_assistant_reads')
     .select(
-      'transaction_id, underlag_key, has_underlag, account, category, vat_treatment, reverse_charge, confidence, model_confidence, agreement, from_candidate, reasoning, candidates, model, updated_at',
+      'transaction_id, underlag_key, has_underlag, account, category, vat_treatment, reverse_charge, confidence, model_confidence, agreement, from_candidate, reasoning, candidates, model, prompt_sha256, updated_at',
     )
     .eq('company_id', companyId)
     .in('transaction_id', transactionIds)

@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { AttnLine } from '@/components/ui/attn-line'
-import { migrationProgress, migrationIssueKind, migrationRefusals, type ProviderMigrationStatus } from '@/lib/providers/migration-contract'
+import { migrationProgress, migrationIssueKind, migrationJobErrorMessageKey, migrationRefusals, type ProviderMigrationStatus } from '@/lib/providers/migration-contract'
 import ProviderMigrationIssues, { migrationProviderName } from './ProviderMigrationIssues'
 
 const ROOT = '/api/extensions/ext/arcim-migration/migration-jobs'
@@ -72,6 +72,8 @@ export default function ProviderMigrationProgress({ jobId, onResult, onReconnect
   // Every record has an outcome: the import is done, only the review remains.
   const review = needsAttention && status?.review.acceptable ? status.review : null
   const provider = migrationProviderName(status?.job.provider)
+  // A dead token and a refused permission are both fixed by a new connection.
+  const reconnect = status?.job.error_code === 'PROVIDER_AUTH_EXPIRED' || migrationIssueKind(status?.job.error_code ?? null) === 'refused'
   return (
     <div className="space-y-6" aria-live="polite">
       <div className="space-y-2">
@@ -129,11 +131,11 @@ export default function ProviderMigrationProgress({ jobId, onResult, onReconnect
       </div>}
       {needsAttention && !review && <div className="space-y-3">
         <p className="text-sm text-muted-foreground">{t('ext_arcim_job_attention_detail')}</p>
-        {status?.job.error_code && <p className="text-sm">{t(`ext_arcim_job_error_${migrationIssueKind(status.job.error_code)}`)}</p>}
+        {status?.job.error_code && <p className="text-sm">{t(migrationJobErrorMessageKey(status.job), { provider })}</p>}
         {status?.issues.length ? <ProviderMigrationIssues issues={status.issues} provider={status.job.provider}
           total={status.review.total} truncated={status.review.truncated} /> : null}
         {actionFailed === 'retry' && <p className="text-sm text-destructive">{t('ext_arcim_review_retry_failed')}</p>}
-        {status?.job.error_code === 'PROVIDER_AUTH_EXPIRED' && <Button variant="outline" onClick={() => onReconnect(status)}>{t('ext_arcim_job_reconnect')}</Button>}
+        {reconnect && status && <Button variant="outline" onClick={() => onReconnect(status)}>{t('ext_arcim_job_reconnect')}</Button>}
         <Button onClick={() => void act('retry')} loading={busy === 'retry'} disabled={busy !== null}>{t('ext_arcim_job_retry')}</Button>
       </div>}
     </div>

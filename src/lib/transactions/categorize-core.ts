@@ -35,6 +35,7 @@ import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { guardCounterLegs } from '@/lib/cash-accounts/service'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
+import { finalFromCategorize, recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
 import { upsertCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
@@ -111,6 +112,12 @@ export interface CategorizeMatchedTransactionOpts {
    * batch so they are read once at most; omitted, they are read on demand.
    */
   loadChart?: ChartVatTreatmentsLoader
+  /**
+   * The stable id of the suggestion the booking started from
+   * (BookingProposal.template_id), recorded in suggestion_log. MCP
+   * categorize_transaction's proposal_id.
+   */
+  proposalId?: string
 }
 
 // ── Helper: duplicate-guard claim text ───────────────────────────────
@@ -265,7 +272,7 @@ export async function categorizeMatchedTransaction(
    */
   exclude?: BookingDuplicateExclusions,
 ): Promise<CategorizeCoreResult> {
-  const { category, vatTreatment, reverseChargeKind, vatAmount, notes, allowDuplicate, dimensions, accountOverride, loadChart } = opts
+  const { category, vatTreatment, reverseChargeKind, vatAmount, notes, allowDuplicate, dimensions, accountOverride, loadChart, proposalId } = opts
 
   // The junction rows ride along on the same read: a row bulk-booked into a
   // samlingsverifikat or split over several verifikat (1:N, #1553) carries
@@ -498,12 +505,18 @@ export async function categorizeMatchedTransaction(
     }
   }
 
+  // What was on offer, taken before the booking and its learning.
+  const suggestionSnapshot = await snapshotSuggestions(supabase, companyId, [txId])
   let journalEntryId: string | null = null
+  let bookedEntry: Awaited<ReturnType<typeof createTransactionJournalEntry>> = null
   try {
     const journalEntry = await createTransactionJournalEntry(
       supabase, companyId, userId, transaction as Transaction, mappingResult, notes,
     )
-    if (journalEntry) journalEntryId = journalEntry.id
+    if (journalEntry) {
+      journalEntryId = journalEntry.id
+      bookedEntry = journalEntry
+    }
   } catch (err) {
     // A foreign row with no SEK value is refused before anything is written
     // (buildTransactionEntryLines). Answered as a coded result rather than
@@ -556,6 +569,20 @@ export async function categorizeMatchedTransaction(
       errorCode: code,
       status: 400,
     }
+  }
+
+  if (bookedEntry) {
+    await recordDecisions(supabase, suggestionSnapshot, [{
+      transactionId: txId,
+      actedOn: proposalId ?? null,
+      final: finalFromCategorize({
+        journalEntry: bookedEntry,
+        mappingResult,
+        amount: transaction.amount,
+        category,
+        vatTreatment: vatTreatment ?? null,
+      }),
+    }], userId)
   }
 
   const updateQuery = supabase

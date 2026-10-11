@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   accountProposal,
   businessAccount,
+  categorizeArgsFor,
   categorizeBodyFor,
   previewInputFor,
   proposalFromTemplate,
@@ -49,6 +50,7 @@ describe('categorizeBodyFor', () => {
   it('sends a template by id', () => {
     expect(categorizeBodyFor(proposalFromTemplate(mobile, 'catalog'), { dimensions: { '1': 'KS01' } })).toEqual({
       is_business: true, category: mobile.fallback_category, template_id: 'telecom_mobile', dimensions: { '1': 'KS01' },
+      proposal_id: 'telecom_mobile',
     })
   })
   it('sends a counterpart by its rule id and nothing else the server would ignore', () => {
@@ -57,12 +59,26 @@ describe('categorizeBodyFor', () => {
       name_sv: 'Telia', name_en: 'Telia', group: 'counterparty', debit_account: '6211', credit_account: '1930', confidence: 0.9,
       description_sv: '', risk_level: 'NONE', requires_review: false,
     }
-    expect(categorizeBodyFor(p, { vatAmount: 5 })).toEqual({ is_business: true, counterparty_template_id: 'abc' })
+    expect(categorizeBodyFor(p, { vatAmount: 5 })).toEqual({ is_business: true, counterparty_template_id: 'abc', proposal_id: 'cp:abc' })
   })
   it('sends an account with its explicit VAT, never leaving the server to guess', () => {
     const p = accountProposal({ id: 'a', source: 'assistant', account: '6570', label: 'x', category: 'expense_bank_fees', vat_treatment: 'reverse_charge', amount: -5 })
     expect(categorizeBodyFor(p, { vatAmount: 1 })).toEqual({
       is_business: true, category: 'expense_bank_fees', account_override: '6570', vat_treatment: 'reverse_charge', vat_amount: 1,
+      proposal_id: 'a',
+    })
+  })
+  it('names no suggestion for an account the person picked', () => {
+    const p = accountProposal({ id: 'account:6570', source: 'manual', account: '6570', label: 'x', category: 'expense_bank_fees', vat_treatment: 'exempt', amount: -5 })
+    expect(categorizeBodyFor(p)).not.toHaveProperty('proposal_id')
+  })
+})
+
+describe('categorizeArgsFor', () => {
+  it('hands an agent the booking arguments plus the proposal id to name it by', () => {
+    const p = accountProposal({ id: 'assistant:tx-1', source: 'assistant', account: '6570', label: 'x', category: 'expense_bank_fees', vat_treatment: 'exempt', amount: -5 })
+    expect(categorizeArgsFor(p)).toEqual({
+      category: 'expense_bank_fees', account_override: '6570', vat_treatment: 'exempt', proposal_id: 'assistant:tx-1',
     })
   })
 })

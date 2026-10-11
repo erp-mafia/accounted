@@ -19,6 +19,12 @@ src/lib/bokslut/ixbrl/taxonomy/generated/*.json text eol=lf linguist-generated=t
 src/lib/extensions/_generated/** text eol=lf linguist-generated=true
 *.snap text eol=lf linguist-generated=true
 
+# Skill seed migrations are written by `npm run skills:generate`; never edit them
+# by hand. Marked generated only (GitLab collapses gitlab-generated files in merge
+# request diffs): no text/eol attribute, so the bytes Supabase already recorded for
+# every existing seed check out exactly as before.
+supabase/migrations/*_seed_agent_atom_bodies.sql linguist-generated=true gitlab-generated
+
 # CP437 SIE4 fixture. The bytes ARE the test: it is #FORMAT PC8, deliberately
 # not valid UTF-8, so the import test exercises detectEncoding/decodeBuffer and
 # the account-label matching together. Git must not convert its line endings

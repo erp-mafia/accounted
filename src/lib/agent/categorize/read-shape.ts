@@ -20,6 +20,8 @@ export interface AssistantRead {
   reasoning: string
   candidates: AccountCandidate[]
   model: string | null
+  /** Which prompt produced the read (select-account's promptSha256); null on reads stored before it was kept. */
+  prompt_sha256?: string | null
   updated_at?: string
 }
 

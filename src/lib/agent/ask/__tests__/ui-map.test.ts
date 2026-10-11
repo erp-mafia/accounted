@@ -162,7 +162,6 @@ describe('loadNavGateContext', () => {
           mileage_enabled: false,
         },
         companies: { entity_type: 'aktiebolag' },
-        agent_profiles: { verified_at: '2026-09-01T00:00:00Z' },
       }),
       'company-1',
     )
@@ -177,7 +176,6 @@ describe('loadNavGateContext', () => {
       hasMileage: true,
       hasExpenseClaims: false,
       capabilities: ['ai'],
-      agentVerified: true,
     })
   })
 
@@ -193,13 +191,12 @@ describe('loadNavGateContext', () => {
     expect(unknown).toBeNull()
   })
 
-  it('hides the Assistent entry until the agent is built, as the sidebar does', async () => {
+  it('lists the Assistent entry before the agent is built, as the sidebar does (crm#1135)', async () => {
     const ctx = await loadNavGateContext(
-      supabaseReturning({ company_settings: { entity_type: 'aktiebolag' }, companies: null, agent_profiles: { verified_at: null } }),
+      supabaseReturning({ company_settings: { entity_type: 'aktiebolag' }, companies: null }),
       'company-1',
     )
-    expect(ctx?.agentVerified).toBe(false)
-    expect(renderUiGrounding({ ctx: ctx!, labels: SV_LABELS })).not.toContain('(/chat)')
+    expect(renderUiGrounding({ ctx: ctx!, labels: SV_LABELS })).toContain('(/chat)')
   })
 })
 

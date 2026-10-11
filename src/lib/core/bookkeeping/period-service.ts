@@ -5,6 +5,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { validatePeriodDuration } from '@/lib/bookkeeping/validate-period-duration'
 import { addDaysIso } from '@/lib/dates/iso'
 import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
+import { assertNoUnfinishedSieImport, sieHoldRefusal } from './sie-import-hold'
 import type { FiscalPeriod } from '@/types'
 
 const log = createLogger('period-service')
@@ -119,6 +120,8 @@ export async function lockPeriod(
     throw new Error('Period is already locked')
   }
 
+  assertNoUnfinishedSieImport(period, 'lock')
+
   // Refuse to lock while the period still holds bank transactions that would be
   // stranded. BFL 5 kap 2 § requires every affärshändelse to be bokförd in the
   // period it belongs to; once locked_at is set the enforce_period_lock trigger
@@ -193,7 +196,10 @@ export async function lockPeriod(
     .single()
 
   if (updateError || !updated) {
-    throw new Error(`Failed to lock period: ${updateError?.message}`)
+    throw (
+      sieHoldRefusal(updateError, period.name, 'lock') ??
+      new Error(`Failed to lock period: ${updateError?.message}`)
+    )
   }
 
   const result = updated as FiscalPeriod
@@ -308,6 +314,8 @@ export async function closePeriod(
     throw new Error('Year-end closing must be executed before closing the period')
   }
 
+  assertNoUnfinishedSieImport(period, 'close')
+
   const { data: updated, error: updateError } = await supabase
     .from('fiscal_periods')
     .update({
@@ -320,7 +328,10 @@ export async function closePeriod(
     .single()
 
   if (updateError || !updated) {
-    throw new Error(`Failed to close period: ${updateError?.message}`)
+    throw (
+      sieHoldRefusal(updateError, period.name, 'close') ??
+      new Error(`Failed to close period: ${updateError?.message}`)
+    )
   }
 
   return updated as FiscalPeriod
@@ -403,6 +414,8 @@ export async function assertPeriodExternallyClosable(
       'Period has a closing entry in Accounted: use the normal year-end close instead'
     )
   }
+
+  assertNoUnfinishedSieImport(period, 'mark_closed')
 
   const today = new Date().toISOString().slice(0, 10)
   if (period.period_end > today) {
@@ -562,7 +575,10 @@ export async function markPeriodClosedExternally(
     .single()
 
   if (updateError || !updated) {
-    throw new Error(`Failed to mark period as externally closed: ${updateError?.message}`)
+    throw (
+      sieHoldRefusal(updateError, period.name, 'mark_closed') ??
+      new Error(`Failed to mark period as externally closed: ${updateError?.message}`)
+    )
   }
 
   const result = updated as FiscalPeriod

@@ -252,6 +252,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // Reached through a supplier, or a bare party_id, it also needs
   // suppliers:read: see argumentScopeFor below.
   gnubok_get_party:                       'customers:read',
+  gnubok_get_customer:                    'customers:read',
   gnubok_create_customer:                 'customers:write',
   gnubok_update_customer:                 'customers:write',
   // Articles (artikelregister)
@@ -284,6 +285,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_update_recurring_schedule:       'invoices:write',
   // Suppliers
   gnubok_list_suppliers:                  'suppliers:read',
+  gnubok_get_supplier:                    'suppliers:read',
   gnubok_list_supplier_invoices:          'suppliers:read',
   // Reports
   gnubok_get_trial_balance:               'reports:read',

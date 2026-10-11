@@ -19,8 +19,8 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 //
 // Desktop-only for a FRESH open (founder call 2026-08-06). On mobile the pill
 // landed on top of the bottom nav and covered page content, and the bottom nav
-// already carries an "Assistent" tab to /chat behind the very same
-// identity.isVerified gate used here, so the pill was pure redundancy. A
+// already carries an "Assistent" tab to /chat, so the pill was pure
+// redundancy. A
 // COLLAPSED session keeps its handle on every viewport and on every page except
 // /chat: see the page-suppression block and the visibility class below.
 //
@@ -218,7 +218,8 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
   }
   // Pre-onboarding: no agent_profile.verified_at yet. The FAB would lead
   // into a generic chat with no specialization. Better to hide it until
-  // the user has finished /onboarding/agent. (A collapsed session implies the
+  // the user has finished /onboarding/agent, which the always-visible
+  // Assistent nav entry leads to meanwhile. (A collapsed session implies the
   // agent is already in use, so this only gates fresh opens in practice.)
   if (!identity.isVerified) return null
 

@@ -16,6 +16,7 @@ vi.mock('@/lib/core/bookkeeping/period-service', () => ({
 
 import { requireAuth } from '@/lib/auth/require-auth'
 import { lockPeriod } from '@/lib/core/bookkeeping/period-service'
+import { assertNoUnfinishedSieImport } from '@/lib/core/bookkeeping/sie-import-hold'
 import { POST } from '../route'
 
 function lockRequest(): Request {
@@ -65,6 +66,26 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/lock', () => {
     expect(res.status).toBe(409)
     const body = await res.json()
     expect(body.error.code).toBe('PERIOD_LOCK_ALREADY_LOCKED')
+  })
+
+  // crm#1029: a year an SIE import still holds. The refusal is written for the
+  // reader; the route must keep its sentence and code instead of the 500
+  // "Något gick fel" the database guard's English message used to become.
+  it('answers a year an SIE import holds with 409 and the Swedish refusal', async () => {
+    mockAuth()
+    let refusal: unknown
+    try {
+      assertNoUnfinishedSieImport({ name: 'Räkenskapsår 2024', import_hold: 'imp-1' }, 'lock')
+    } catch (e) {
+      refusal = e
+    }
+    ;(lockPeriod as ReturnType<typeof vi.fn>).mockRejectedValue(refusal)
+    const res = await POST(lockRequest(), createMockRouteParams({ id: 'p1' }))
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('PERIOD_HAS_UNFINISHED_SIE_IMPORT')
+    expect(body.error.message).toContain('Räkenskapsår 2024 kan inte låsas')
+    expect(body.error.message).toContain('Ångra import')
   })
 
   it('maps a missing period to a 404', async () => {

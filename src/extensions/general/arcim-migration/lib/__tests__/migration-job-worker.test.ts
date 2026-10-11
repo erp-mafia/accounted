@@ -4,14 +4,16 @@ import type { ProviderMigrationJob } from '@/lib/providers/migration-contract'
 import { sealMigrationPayload } from '@/lib/providers/migration-payload'
 import { ExecutionBudgetExceeded } from '@/lib/http/execution-budget'
 import { FortnoxApiError } from '@/lib/providers/fortnox/client'
+import { BokioApiError } from '@/lib/providers/bokio/client'
 import { mapBokioToSalesInvoice, mapBokioToSupplierInvoice } from '@/lib/providers/bokio/mapper'
 import { mapFortnoxToSupplierInvoice } from '@/lib/providers/fortnox/mapper'
 import { enrichBokioSupplierInvoice } from '@/lib/providers/bokio/supplier-evidence'
-const mocks = vi.hoisted(() => ({ resolve: vi.fn(), page: vi.fn(), hydrate: vi.fn(), link: vi.fn(), reconcile: vi.fn(), warn: vi.fn() }))
+const mocks = vi.hoisted(() => ({ resolve: vi.fn(), page: vi.fn(), hydrate: vi.fn(), probe: vi.fn(), link: vi.fn(), reconcile: vi.fn(), warn: vi.fn() }))
 vi.mock('@/lib/logger', () => ({ createLogger: () => ({ info: vi.fn(), warn: mocks.warn, error: vi.fn() }) }))
 vi.mock('@/lib/auth/api-keys', () => ({ createServiceClientNoCookies: vi.fn() }))
 vi.mock('@/lib/providers/resolve-consent', () => ({ resolveConsent: mocks.resolve }))
-vi.mock('@/lib/providers/provider-data-fetcher', () => ({ fetchMigrationPage: mocks.page, hydrateSalesInvoices: mocks.hydrate, hydrateSupplierInvoices: mocks.hydrate }))
+vi.mock('@/lib/providers/provider-data-fetcher', () => ({ fetchMigrationPage: mocks.page, hydrateSalesInvoices: mocks.hydrate, hydrateSupplierInvoices: mocks.hydrate,
+  fetchCompanyInfoDirect: mocks.probe }))
 vi.mock('@/lib/invoices/link-migrated-registration-vouchers', () => ({ linkMigratedRegistrationVouchers: mocks.link }))
 vi.mock('@/lib/invoices/bulk-reconcile-supplier-vouchers', () => ({ reconcileSupplierInvoiceVouchers: mocks.reconcile }))
 vi.mock('../entity-mapper', () => ({
@@ -484,6 +486,90 @@ describe('a register the provider refuses', () => {
 
     expect(db.rpc.mock.calls.some(([name]) => name === 'skip_provider_migration_resource')).toBe(false)
     expect(db.job).toMatchObject({ state: 'retry_wait', error_code: 'PROVIDER_UPSTREAM_ERROR', failures: 1, resource_index: 1 })
+  })
+})
+
+/**
+ * A token that works but may not read everything (crm#1081). A Bokio
+ * integration token carries the read permissions it was created with, and
+ * answers 403 for anything outside them, the same status a dead grant can
+ * give. The job used to park every such 403 as an expired connection, and
+ * the reconnect that asked for brought the same token back. The worker now
+ * asks the token itself (company information) before it calls a 403 a dead
+ * grant.
+ */
+describe('a 403 on a token that still works', () => {
+  const forbidden = () => new BokioApiError('Bokio API error: 403 Forbidden', 403, '{"code":"forbidden"}')
+  const invoice = (id: string) => ({ id, issueDate: '2026-01-01', currencyCode: 'SEK', _raw: {},
+    customer: { name: 'Customer', identifications: [] }, lines: [{}] })
+  beforeEach(() => {
+    mocks.resolve.mockResolvedValue({ accessToken: 'token', providerCompanyId: 'bokio-company',
+      consent: { provider: 'bokio', org_number: '556000-0000' } })
+  })
+
+  it('stops the import on the refused detail as a missing permission, not an expired connection', async () => {
+    const db = database({ provider: 'bokio', phase: 'import', resources: ['salesInvoices'] })
+    for (const id of ['a', 'b']) db.rows.push({ id, source_id: id, resource: 'salesInvoices', state: 'pending', ...sealMigrationPayload(invoice(id)) })
+    mocks.hydrate.mockResolvedValueOnce({ invoices: [invoice('a')], unhydratedIds: new Set(), hydration: {} })
+      .mockResolvedValueOnce({ invoices: [invoice('b')], unhydratedIds: new Set(['b']), hydration: { abortedBy: 'auth' }, authError: forbidden() })
+    mocks.probe.mockResolvedValueOnce({ name: 'Company' })
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(mocks.probe).toHaveBeenCalledExactlyOnceWith('bokio', 'token', 'bokio-company')
+    expect(db.rows.map(r => r.state)).toEqual(['done', 'pending'])
+    expect(db.job).toMatchObject({ state: 'needs_attention', error_code: 'PROVIDER_RESOURCE_FORBIDDEN' })
+    expect(mocks.warn).toHaveBeenCalledWith('migration yielded', expect.objectContaining({
+      code: 'PROVIDER_RESOURCE_FORBIDDEN', needsAttention: true, httpStatus: 403,
+    }))
+  })
+
+  it('keeps an expired connection when the token no longer answers either', async () => {
+    const db = database({ provider: 'bokio', phase: 'import', resources: ['salesInvoices'] })
+    db.rows.push({ id: 'a', source_id: 'a', resource: 'salesInvoices', state: 'pending', ...sealMigrationPayload(invoice('a')) })
+    mocks.hydrate.mockResolvedValueOnce({ invoices: [invoice('a')], unhydratedIds: new Set(['a']), hydration: { abortedBy: 'auth' }, authError: forbidden() })
+    mocks.probe.mockRejectedValueOnce(new BokioApiError('Bokio API error: 401 Unauthorized', 401))
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(db.job).toMatchObject({ state: 'needs_attention', error_code: 'PROVIDER_AUTH_EXPIRED' })
+  })
+
+  it('never probes a 401: that is the dead token itself', async () => {
+    const db = database({ provider: 'bokio', phase: 'import', resources: ['salesInvoices'] })
+    db.rows.push({ id: 'a', source_id: 'a', resource: 'salesInvoices', state: 'pending', ...sealMigrationPayload(invoice('a')) })
+    mocks.hydrate.mockResolvedValueOnce({ invoices: [invoice('a')], unhydratedIds: new Set(['a']), hydration: { abortedBy: 'auth' },
+      authError: new BokioApiError('Bokio API error: 401 Unauthorized', 401) })
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(mocks.probe).not.toHaveBeenCalled()
+    expect(db.job).toMatchObject({ state: 'needs_attention', error_code: 'PROVIDER_AUTH_EXPIRED' })
+    expect(mocks.warn).toHaveBeenCalledWith('migration yielded', expect.objectContaining({ httpStatus: 401 }))
+  })
+
+  it('skips a register the token may not list and imports the rest, for any provider', async () => {
+    const db = database({ provider: 'bokio', resources: ['customers', 'supplierInvoices'] })
+    mocks.page.mockResolvedValueOnce({ items: [customer(1)], nextPage: null, total: 1 }).mockRejectedValueOnce(forbidden())
+    mocks.probe.mockResolvedValueOnce({ name: 'Company' })
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(mocks.page).toHaveBeenCalledTimes(2)
+    expect(db.job).toMatchObject({ state: 'completed', refused_resources: { supplierInvoices: 'permission' } })
+    expect(db.rows.map(row => [row.resource, row.state])).toEqual([['customers', 'done']])
+  })
+
+  it('parks the job as an expired connection when the probe cannot vouch for the token', async () => {
+    const db = database({ provider: 'bokio', resources: ['customers', 'suppliers'] })
+    mocks.page.mockRejectedValueOnce(forbidden())
+    // No provider company id to ask with: no proof either way.
+    mocks.probe.mockResolvedValueOnce(null)
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(db.rpc.mock.calls.some(([name]) => name === 'skip_provider_migration_resource')).toBe(false)
+    expect(db.job).toMatchObject({ state: 'needs_attention', error_code: 'PROVIDER_AUTH_EXPIRED', resource_index: 1 })
   })
 })
 

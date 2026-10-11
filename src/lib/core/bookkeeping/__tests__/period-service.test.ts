@@ -1260,3 +1260,109 @@ describe('createNextPeriod chain healing', () => {
     expect((relink!.in as ReturnType<typeof vi.fn>).mock.calls[0]).toEqual(['id', ['fp-2026-27']])
   })
 })
+
+// ============================================================
+// SIE import hold (crm#1029): a year an SIE import, or its undo, still holds
+// is not locked or closed. The database refuses it too (guard_sie_period_hold)
+// but in English and without a code: the user saw "Något gick fel" and an
+// agent's approval failed as UNKNOWN_ERROR. These refusals carry a stable
+// code and a Swedish sentence naming the year and the way out.
+// ============================================================
+
+describe('SIE import hold refusals', () => {
+  const HELD = { name: 'Räkenskapsår 2024', import_hold: 'imp-1' }
+
+  function caught(fn: () => unknown): Promise<Error> {
+    return Promise.resolve()
+      .then(fn)
+      .then(
+        () => {
+          throw new Error('expected a refusal')
+        },
+        (e: Error) => e,
+      )
+  }
+
+  it('lockPeriod refuses a held year before any guard query or write', async () => {
+    results = [{ data: makeFiscalPeriod({ id: 'fp-1', ...HELD }), error: null }]
+    const supabase = makeClient()
+
+    const err = await caught(() => lockPeriod(supabase as never, 'company-1', 'user-1', 'fp-1'))
+
+    expect(err.message).toContain('Räkenskapsår 2024 kan inte låsas')
+    expect(err.message).toContain('Fortsätt')
+    expect(err.message).toContain('Ångra import')
+    // Only the period fetch ran: no unbooked count, no update.
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+
+    const structured = getStructuredError(err)
+    expect(structured.code).toBe('PERIOD_HAS_UNFINISHED_SIE_IMPORT')
+    expect(structured.message_sv).toBe(err.message)
+    expect(structured.retryable).toBe(false)
+    expect(structured.remediation?.tool).toBe('gnubok_sie_import_status')
+    expect(structured.remediation?.args).toEqual({ import_id: 'imp-1' })
+  })
+
+  it('answers the database guard the same way when the hold lands after the read', async () => {
+    results = [
+      { data: makeFiscalPeriod({ id: 'fp-1', name: 'Räkenskapsår 2024' }), error: null },
+      { count: 0, data: null, error: null }, // untriaged count
+      { data: [], error: null }, // business-unbooked candidates
+      {
+        data: null,
+        error: { code: '55000', message: 'SIE import is unfinished: resume or undo it before closing' },
+      },
+    ]
+    const err = await caught(() => lockPeriod(makeClient() as never, 'company-1', 'user-1', 'fp-1'))
+
+    expect(err.message).toContain('Räkenskapsår 2024 kan inte låsas')
+    expect(getStructuredError(err).code).toBe('PERIOD_HAS_UNFINISHED_SIE_IMPORT')
+  })
+
+  it('keeps any other update failure as before', async () => {
+    results = [
+      { data: makeFiscalPeriod({ id: 'fp-1' }), error: null },
+      { count: 0, data: null, error: null },
+      { data: [], error: null },
+      { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } },
+    ]
+    const err = await caught(() => lockPeriod(makeClient() as never, 'company-1', 'user-1', 'fp-1'))
+
+    expect(err.message).toMatch(/^Failed to lock period/)
+    expect(getStructuredError(err).code).not.toBe('PERIOD_HAS_UNFINISHED_SIE_IMPORT')
+  })
+
+  it('closePeriod refuses a held year', async () => {
+    results = [{
+      data: makeFiscalPeriod({
+        id: 'fp-1', locked_at: '2025-01-10T00:00:00Z', closing_entry_id: 'ce-1', ...HELD,
+      }),
+      error: null,
+    }]
+    const err = await caught(() => closePeriod(makeClient() as never, 'company-1', 'user-1', 'fp-1'))
+
+    expect(err.message).toContain('Räkenskapsår 2024 kan inte stängas')
+    expect(getStructuredError(err).code).toBe('PERIOD_HAS_UNFINISHED_SIE_IMPORT')
+  })
+
+  it('markPeriodClosedExternally (klarmarkera) refuses a held year before it reads the ledger', async () => {
+    results = [{ data: makeFiscalPeriod({ id: 'fp-1', period_end: '2024-12-31', ...HELD }), error: null }]
+    const supabase = makeClient()
+    const err = await caught(() => markPeriodClosedExternally(supabase as never, 'company-1', 'user-1', 'fp-1'))
+
+    expect(err.message).toContain('Räkenskapsår 2024 kan inte markeras som avslutat')
+    expect(getStructuredError(err).code).toBe('PERIOD_HAS_UNFINISHED_SIE_IMPORT')
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('unlocking a held year stays allowed: it is the way out when a lock stopped the run', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', locked_at: '2025-01-10T00:00:00Z', ...HELD })
+    results = [
+      { data: period, error: null },
+      { data: { ...period, locked_at: null }, error: null },
+      { data: null, error: null }, // audit_log
+    ]
+    const result = await unlockPeriod(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+    expect(result.locked_at).toBeNull()
+  })
+})

@@ -56,6 +56,7 @@ import {
   loadCounterpartyTemplateMatch,
 } from '@/lib/bookkeeping/counterparty-templates'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
+import { finalFromCategorize, recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { saveUserMappingRule, applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
@@ -512,6 +513,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // the dashboard route calls, so v1 and the dashboard diverge on neither
     // booking outcomes nor compliance.
     let journalEntryId: string | null = null
+    // What was on offer, taken before the booking and its learning.
+    const suggestionSnapshot = await snapshotSuggestions(ctx.supabase, ctx.companyId!, [txId])
+    let bookedEntry: Awaited<ReturnType<typeof createTransactionJournalEntry>> = null
     try {
       const journalEntry = await createTransactionJournalEntry(
         ctx.supabase,
@@ -520,7 +524,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         transaction as Transaction,
         mappingResult,
       )
-      if (journalEntry) journalEntryId = journalEntry.id
+      if (journalEntry) {
+        journalEntryId = journalEntry.id
+        bookedEntry = journalEntry
+      }
     } catch (err) {
       txLog.error('transactions.categorize: journal entry creation failed', err as Error)
       // AccountsNotInChartError means an account was deactivated between our
@@ -553,6 +560,22 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         requestId: ctx.requestId,
         details: { transaction_date: transaction.date },
       })
+    }
+
+    if (bookedEntry) {
+      await recordDecisions(ctx.supabase, suggestionSnapshot, [{
+        transactionId: txId,
+        actedOn: body.proposal_id ?? null,
+        final: finalFromCategorize({
+          journalEntry: bookedEntry,
+          mappingResult,
+          amount: transaction.amount,
+          templateId: body.template_id ?? null,
+          counterpartyTemplateId: body.counterparty_template_id ?? null,
+          category: finalCategory,
+          vatTreatment: body.vat_treatment ?? null,
+        }),
+      }], ctx.userId)
     }
 
     // Best-effort: save mapping rule + upsert counterparty template. These

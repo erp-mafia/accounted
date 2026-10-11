@@ -61,6 +61,7 @@ import {
   type BookedDuplicateCandidate,
 } from '@/lib/transactions/booking-duplicate-detection'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
+import { finalFromLines, recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
 import { eventBus } from '@/lib/events/bus'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { roundOre } from '@/lib/money'
@@ -315,6 +316,9 @@ export async function bulkBookTransactions(
     }
   }
 
+  // What was on offer for each row, taken before the booking.
+  const suggestionSnapshot = await snapshotSuggestions(supabase, companyId, body.tx_ids)
+
   // The engine door: it also emits journal_entry.committed for a new
   // samlingsverifikat, which the RPC alone never announces.
   const { data, error } = await commitBulkBooking(supabase, companyId, userId, {
@@ -333,6 +337,20 @@ export async function bulkBookTransactions(
     const code = (result as RpcErr | null)?.code ?? 'BULK_BOOK_RPC_FAILED'
     return { ok: false, code, details: (result as RpcErr | null)?.details }
   }
+
+  // One decision row per bank line, all pointing at the one verifikat.
+  // Linking to an existing voucher posts no lines of its own.
+  const postedLines = (newEntryPayload?.lines ?? []).map((l) => ({
+    account: l.account_number,
+    debit: l.debit_amount,
+    credit: l.credit_amount,
+  }))
+  await recordDecisions(
+    supabase,
+    suggestionSnapshot,
+    body.tx_ids.map((txId) => ({ transactionId: txId, final: finalFromLines(result.journal_entry_id, postedLines) })),
+    userId,
+  )
 
   // Complete matched inbox items against the samlingsverifikat. Best-effort.
   for (const txId of body.tx_ids) {
