@@ -471,10 +471,11 @@ export interface ImportResult {
   // closed, or no existing IB), the human-readable reason.
   nextPeriodIBResyncSkipped?: { reason: string; nextPeriodName: string } | null
   // Durable imports leave adjacent-year balances unchanged and request review.
+  // openingBalanceEntryId is null when an undo took away a derived IB.
   nextPeriodOpeningBalanceReview?: {
     nextPeriodId: string
     nextPeriodName: string
-    openingBalanceEntryId: string
+    openingBalanceEntryId: string | null
     importId: string
     reviewToken: string
     reason: 'import' | 'undo'

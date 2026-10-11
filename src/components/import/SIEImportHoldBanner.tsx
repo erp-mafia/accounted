@@ -11,6 +11,7 @@ type HeldPeriod = {
   name: string
   import_hold: string | null
   opening_balance_review_token?: string | null
+  opening_balance_entry_id?: string | null
 }
 
 export function SIEImportHoldBanner({ companyId }: { companyId: string | null }) {
@@ -66,8 +67,11 @@ export function SIEImportHoldBanner({ companyId }: { companyId: string | null })
   const holds = periods.filter(period => period.import_hold)
   const reviews = periods.filter(period => period.opening_balance_review_token)
   if (!holds.length && !reviews.length) return null
+  // A year without an IB verifikat had its IB derived from the undone year:
+  // "not changed automatically" would be untrue for it.
+  const derived = reviews.every(period => !period.opening_balance_entry_id)
   if (!holds.length) return <aside className="mb-6" role="status"><AttnLine>
-    {reviewText('next_year_review', { name: reviews.map(period => period.name).join(', ') })}{' '}
+    {reviewText(derived ? 'next_year_review_derived' : 'next_year_review', { name: reviews.map(period => period.name).join(', ') })}{' '}
     <Link className="underline underline-offset-2" href="/settings/bookkeeping">{reviewText('next_year_review_action')}</Link>
   </AttnLine></aside>
   return <aside className="mb-6" role="status">

@@ -3796,6 +3796,19 @@ const OPENING_BALANCE_IMPORT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Ingående balanser får bara bokas på balanskonton (klass 1 och 2).',
     message_en: 'Opening balances may only use balance sheet accounts (class 1 and 2).',
   },
+  // Booking a year's IB from its SIE file in the opening balance review (crm#1099).
+  OB_SIE_FILE_MISSING: {
+    httpStatus: 404,
+    message_sv:
+      'Det finns inga sparade ingående balanser från en SIE-fil för räkenskapsåret. Lägg in dem under Importera/Exportera > CSV eller Excel > Ingående balanser.',
+    message_en:
+      'No opening balances from a SIE file are stored for this fiscal year. Enter them under Import/Export > CSV or Excel > Opening balances.',
+  },
+  OB_REVIEW_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Granskningen har ändrats sedan du öppnade den. Ladda om sidan och försök igen.',
+    message_en: 'The review changed after you opened it. Reload the page and try again.',
+  },
   // "Dela upp IB per projekt" (#3313): lib/import/opening-balance/split-per-project.ts.
   // The split runs as an inline rättelse of the IB verifikat, which BFL 5 kap
   // 5 § only allows in an open, unlocked year: these say what to open first.

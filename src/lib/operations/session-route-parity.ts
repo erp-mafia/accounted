@@ -210,6 +210,10 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/bookkeeping/fiscal-periods/:id/reopen-external': covered([`POST ${V}/fiscal-periods/:id/reopen-external`, 'gnubok_reopen_fiscal_period_external']),
   'POST /api/bookkeeping/fiscal-periods/:id/reset': uiOnly('destructive owner-only fiscal year reset'),
   'POST /api/bookkeeping/fiscal-periods/:id/opening-balance-review': gap('P3', 'sign off the opening balance review'),
+  'POST /api/bookkeeping/fiscal-periods/:id/opening-balance-review/sie-file': covered(
+    [`POST ${V}/fiscal-periods/:id/opening-balances/manual`, 'gnubok_set_opening_balances_manual'],
+    'the API takes lines; reading them from the SIE import manifest stays UI-only',
+  ),
   'POST /api/bookkeeping/fiscal-periods/:id/depreciation': covered(['gnubok_post_annual_depreciation']),
   'PUT /api/bookkeeping/fiscal-periods/:id/depreciation': gap('P3', 'save skattemässig (tax) depreciation choice'),
   'POST /api/bookkeeping/fiscal-periods/:id/bokslutsdispositioner': covered(

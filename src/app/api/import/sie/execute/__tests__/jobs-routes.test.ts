@@ -298,4 +298,10 @@ describe('durable SIE HTTP boundaries',()=>{
     const response=await routes.holds(new Request('https://example.test/api/import/sie/holds'))
     expect((await response.json()).data[0]).toMatchObject({import_hold:null,opening_balance_review_token:'review'})
   })
+  it('says whether a flagged year has its own IB verifikat, so the banner can tell a derived IB apart (crm#1099)',async()=>{
+    queued.enqueue({data:[{id:'period',name:'2019',import_hold:null,opening_balance_review_token:'review',opening_balance_entry_id:null}]})
+    const response=await routes.holds(new Request('https://example.test/api/import/sie/holds'))
+    expect((await response.json()).data[0]).toMatchObject({opening_balance_entry_id:null})
+    expect(String(queued.findCall('fiscal_periods','select')?.[0])).toContain('opening_balance_entry_id')
+  })
 })

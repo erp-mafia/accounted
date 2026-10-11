@@ -167,6 +167,60 @@ describe('SIE database execution protocol', () => {
     await undoOne()
     expect((await client.query('SELECT opening_balance_review_token FROM fiscal_periods WHERE id=$1',[next])).rows[0].opening_balance_review_token).toBeNull()
   })
+  // The next year has no IB verifikat: its IB is derived from this year's
+  // lines, as for every year after the first in a multi-year migration.
+  async function nextDerived() {
+    const next=randomUUID()
+    await client.query('RESET ROLE')
+    await client.query("INSERT INTO fiscal_periods(id,company_id,user_id,name,period_start,period_end) VALUES($1,$2,$3,'Next year','2027-01-01','2027-12-31')",[next,company,actor])
+    await client.query('SET LOCAL ROLE service_role')
+    return next
+  }
+  it('reviews a derived next-year IB when the source year is undone, never on completion (crm#1099)',async()=>{
+    const next=await nextDerived()
+    await finishOne()
+    expect((await client.query('SELECT job_result FROM sie_imports WHERE id=$1',[job])).rows[0].job_result.nextPeriodOpeningBalanceReview).toBeUndefined()
+    expect((await client.query('SELECT opening_balance_review_token FROM fiscal_periods WHERE id=$1',[next])).rows[0].opening_balance_review_token).toBeNull()
+    await undoOne()
+    const flagged=(await client.query('SELECT * FROM fiscal_periods WHERE id=$1',[next])).rows[0]
+    expect(flagged).toMatchObject({opening_balance_review_reason:'undo',opening_balance_review_import_id:job,
+      opening_balance_review_entry_id:null,opening_balance_entry_id:null})
+    expect(flagged.opening_balance_review_token).not.toBeNull()
+    const undone=(await client.query('SELECT job_result FROM sie_imports WHERE id=$1',[job])).rows[0].job_result
+    expect(undone.nextPeriodOpeningBalanceReview).toMatchObject({nextPeriodId:next,openingBalanceEntryId:null,importId:job,
+      reason:'undo',reviewToken:flagged.opening_balance_review_token})
+    expect(undone.warnings.at(-1)).toContain('räknades fram från föregående räkenskapsår')
+    await client.query('SELECT acknowledge_sie_opening_balance_review($1,$2,$3,$4,$5)',[company,next,actor,flagged.opening_balance_review_token,null])
+    expect((await client.query('SELECT opening_balance_review_token FROM fiscal_periods WHERE id=$1',[next])).rows[0].opening_balance_review_token).toBeNull()
+  })
+  it('does not flag a derived next year after a preparation-only undo',async()=>{
+    const next=await nextDerived()
+    await undoOne()
+    expect((await client.query('SELECT opening_balance_review_token FROM fiscal_periods WHERE id=$1',[next])).rows[0].opening_balance_review_token).toBeNull()
+  })
+  it('carries an IB booked after the undo into later years, without the undone year (crm#1099)',async()=>{
+    const next=await nextDerived()
+    await finishOne()
+    const equity=randomUUID()
+    async function post(date:string,source:string,lines:[string,string,number,number][]) {
+      const entry=randomUUID()
+      await client.query("INSERT INTO journal_entries(id,company_id,user_id,fiscal_period_id,voucher_number,voucher_series,entry_date,description,source_type,status) VALUES($1,$2,$3,$4,0,'A',$5,'Synthetic',$6,'draft')",[entry,company,actor,next,date,source])
+      for (const [account,number,debit,credit] of lines) {
+        await client.query('INSERT INTO journal_entry_lines(journal_entry_id,account_id,account_number,debit_amount,credit_amount) VALUES($1,$2,$3,$4,$5)',[entry,account,number,debit,credit])
+      }
+      await client.query('SELECT commit_journal_entry($1,$2)',[company,entry])
+    }
+    await client.query('RESET ROLE')
+    await client.query("INSERT INTO chart_of_accounts(id,company_id,user_id,account_number,account_name,account_type,account_class,normal_balance) VALUES($1,$2,$3,'2091','Equity','equity',2,'credit')",[equity,company,actor])
+    await post('2027-03-01','manual',[[accounts[0],'1930',10,0],[accounts[1],'3001',0,10]])
+    await client.query('SET LOCAL ROLE service_role')
+    await undoOne()
+    await client.query('RESET ROLE')
+    await post('2027-01-01','opening_balance',[[accounts[0],'1930',500,0],[equity,'2091',0,500]])
+    await client.query('SET LOCAL ROLE service_role')
+    const rows=(await client.query("SELECT account_number,debit::float8 AS debit,credit::float8 AS credit FROM compute_prior_opening_balances($1,'2028-01-01') ORDER BY account_number",[company])).rows
+    expect(rows).toEqual([{account_number:'1930',debit:510,credit:0},{account_number:'2091',debit:0,credit:500}])
+  })
   it('keeps reset preview and execution fail-closed for retained import history, including after storno',async()=>{
     await finishOne()
     for(const undone of [false,true]) {
