@@ -6,6 +6,8 @@
  * We detect encoding by checking for valid Swedish characters.
  */
 
+import { hasMojibakeSignature, reverseMojibake } from '@/lib/bookkeeping/charset-repair'
+
 /**
  * Decode file content, handling BOMs plus UTF-8 and Windows-1252 encodings.
  *
@@ -51,31 +53,20 @@ export function decodeFileContent(buffer: ArrayBuffer): string {
 }
 
 /**
- * Re-decode a string that suffered the canonical "UTF-8 bytes read as Latin-1"
- * mojibake (e.g. "MalmÃ¶" → "Malmö", "GÃ–TEBORG" → "GÖTEBORG").
+ * Re-decode a string that suffered the canonical "UTF-8 bytes read as
+ * Windows-1252" mojibake (e.g. "MalmÃ¶" → "Malmö", "GÃ–TEBORG" → "GÖTEBORG").
  *
- * Mechanism: each char in the input is a codepoint that was originally a UTF-8
- * byte misinterpreted as a Latin-1/Windows-1252 character. We pack those chars
- * back into a byte sequence and decode the bytes as UTF-8 to recover the
- * original text.
- *
- * No-op when the string is already clean (no garbled patterns).
+ * The reversal is reverseMojibake (lib/bookkeeping/charset-repair), the one
+ * definition: it maps each Windows-1252 character back to the byte it was
+ * read from, which matters for uppercase Å/Ä/Ö, whose second UTF-8 byte
+ * (0x85/0x84/0x96) reads as U+2026/U+201E/U+2013, far above 0xFF. Truncating those
+ * code points to a byte destroyed the letter. The decode is strict, so a
+ * string that is not a clean double encoding (already-correct text, a mix of
+ * both) is returned unchanged rather than half-repaired.
  */
 export function decodeStringContent(content: string): string {
-  if (!hasEncodingIssues(content)) {
-    return content
-  }
-
-  try {
-    const bytes = new Uint8Array(content.length)
-    for (let i = 0; i < content.length; i++) {
-      bytes[i] = content.charCodeAt(i) & 0xff
-    }
-    const decoder = new TextDecoder('utf-8', { fatal: false })
-    return decoder.decode(bytes)
-  } catch {
-    return content
-  }
+  if (!hasMojibakeSignature(content)) return content
+  return reverseMojibake(content) ?? content
 }
 
 /**

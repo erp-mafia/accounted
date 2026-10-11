@@ -1,4 +1,5 @@
 import type { QuoteStatus } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /** What the UI and API report for a quote: the stored decision, or expired. */
 export type EffectiveQuoteStatus = QuoteStatus | 'expired'
@@ -10,7 +11,7 @@ export type EffectiveQuoteStatus = QuoteStatus | 'expired'
  */
 export function isQuoteExpired(
   quote: { quote_status?: string | null; valid_until?: string | null },
-  today: string = new Date().toISOString().split('T')[0],
+  today: string = todayIsoStockholm(),
 ): boolean {
   return quote.quote_status === 'open' && !!quote.valid_until && quote.valid_until < today
 }

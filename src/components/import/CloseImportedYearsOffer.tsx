@@ -10,6 +10,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { closableImportedYears, closeYearsInOrder } from '@/lib/onboarding/closable-imported-years'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * "Klarmarkera åren": the explicit, user-initiated close of imported
@@ -36,7 +37,7 @@ export function CloseImportedYearsOffer({
   const { periods, refresh } = useFiscalPeriods()
   const [running, setRunning] = useState(false)
 
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayIsoStockholm()
   const targets = useMemo(() => closableImportedYears(periods, today), [periods, today])
 
   if (role === 'member' || targets.length === 0) return null

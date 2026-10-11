@@ -15,6 +15,7 @@
 
 import type { IxbrlArsredovisningInput } from '../types'
 import { isOrgNumberShaped, hasInvalidOrgNumberCheckDigit } from '@/lib/invariants/org-number'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 export interface PreflightIssue {
   /** Bolagsverket kontrollera code where one exists, else our own ACC-xxx. */
@@ -246,7 +247,7 @@ export function runPreflightChecks(
   input: IxbrlArsredovisningInput,
   todayIso?: string,
 ): PreflightResult {
-  const today = todayIso ?? new Date().toISOString().slice(0, 10)
+  const today = todayIso ?? todayIsoStockholm()
   const issues: PreflightIssue[] = []
   for (const rule of RULES) {
     const result = rule(input, today)

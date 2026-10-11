@@ -6,6 +6,7 @@ import { validateQuery } from '@/lib/api/validate'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { firstOfMonth } from '@/lib/bookkeeping/accruals/compute'
 import type { AccrualSchedule, AccrualScheduleInstallment } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 ensureInitialized()
 
@@ -48,7 +49,7 @@ export const GET = withRouteContext(
       return errorResponse(error, log, { requestId })
     }
 
-    const todayMonth = firstOfMonth(new Date().toISOString().slice(0, 10))
+    const todayMonth = firstOfMonth(todayIsoStockholm())
     let dueCount = 0
     const schedules = ((data ?? []) as Array<
       AccrualSchedule & { installments: AccrualScheduleInstallment[] }

@@ -43,6 +43,7 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import type { Invoice, InvoiceItem } from '@/types'
 import type { InvoiceWithRelations } from '@/components/invoices/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 // Why email is not possible, as keys of the invoice_editor_shell namespace.
 const EMAIL_BLOCK_KEYS: Record<EmailBlockReason, string> = {
@@ -309,7 +310,7 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
 
   const items = invoice.items ?? []
   const productCount = items.filter((item) => item.line_type !== 'text').length
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayIsoStockholm()
   const vatByRate = new Map<number, { base: number; vat: number }>()
   for (const item of items) {
     if (item.line_type === 'text') continue

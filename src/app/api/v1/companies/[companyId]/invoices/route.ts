@@ -45,6 +45,7 @@ import {
   NO_INVOICE_REGISTER_COVERAGE,
 } from '@/lib/invoices/invoice-register-coverage'
 import type { Invoice, InvoiceDocumentType } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 // Map a self-billed-sale service failure onto the v1 invoice error envelope.
 function selfBilledFailureResponse(failure: SelfBilledSaleFailure, ctx: ApiV1Context) {
@@ -312,7 +313,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     if (filters.quote_status) {
       query = query.eq('document_type', 'quote')
       if (filters.quote_status === 'expired') {
-        query = query.eq('quote_status', 'open').lt('valid_until', new Date().toISOString().split('T')[0])
+        query = query.eq('quote_status', 'open').lt('valid_until', todayIsoStockholm())
       } else {
         query = query.eq('quote_status', filters.quote_status)
       }

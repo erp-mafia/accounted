@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useLocale } from 'next-intl'
 import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -38,7 +39,7 @@ import type {
   PsPeriodType,
   PsWarning,
 } from '@/lib/reports/periodisk-sammanstallning'
-import { parseApiError } from './api-error'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 function typeBadge(row: { services: number; goods: number; triangulation: number }) {
   const types: string[] = []
@@ -60,6 +61,7 @@ function deadlineLabel(end: string): string {
 }
 
 export function PeriodiskSammanstallningView() {
+  const errorLocale = useLocale() as ErrorLocale
   const currentYear = new Date().getFullYear()
   const currentMonth = new Date().getMonth() + 1
   const currentQuarter = Math.ceil(currentMonth / 3)
@@ -115,7 +117,7 @@ export function PeriodiskSammanstallningView() {
         if (!res.ok || json?.error) {
           setResult({
             key: fetchKey,
-            error: parseApiError(json?.error, 'Kunde inte hämta periodisk sammanställning.'),
+            error: getErrorMessage(json, { locale: errorLocale, fallback: 'Kunde inte hämta periodisk sammanställning.' }),
           })
         } else {
           setResult({ key: fetchKey, data: json.data })
@@ -129,7 +131,7 @@ export function PeriodiskSammanstallningView() {
     return () => {
       cancelled = true
     }
-  }, [fetchKey, periodType, year, period])
+  }, [fetchKey, periodType, year, period, errorLocale])
 
   const upToDate = result !== null && result.key === fetchKey
   const data = result?.data ?? null

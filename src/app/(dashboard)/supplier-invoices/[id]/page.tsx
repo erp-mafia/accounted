@@ -58,6 +58,7 @@ import type { SupplierInvoice, SupplierInvoiceItem, SupplierInvoicePayment } fro
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 import { withLineDimensions, type LineDimensions } from '@/components/bookkeeping/payment-line-dimensions'
 import type { BASAccount, EntityType } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 interface EditableLine {
   account_number: string
@@ -217,7 +218,7 @@ export default function SupplierInvoiceDetailPage() {
   // Foreign-currency invoice: the SEK that left the account. Empty means the
   // SEK the preview shows (paid_sek), i.e. no kursdifferens.
   const [paySek, setPaySek] = useState('')
-  const [paymentDate, setPaymentDate] = useState(() => new Date().toISOString().split('T')[0])
+  const [paymentDate, setPaymentDate] = useState(() => todayIsoStockholm())
   const [paymentAccount, setPaymentAccount] = useState('1930')
   // Chart of accounts for the payment dialog, from the session cache
   // (lib/reference-data): one request per session at most, shared with
@@ -315,7 +316,7 @@ export default function SupplierInvoiceDetailPage() {
       } else {
         setInvoice(body.data)
         setPayAmount(String(body.data.remaining_amount))
-        setPaymentDate(new Date().toISOString().split('T')[0])
+        setPaymentDate(todayIsoStockholm())
       }
     } catch (err) {
       if (seq !== fetchSeqRef.current) return
@@ -1326,7 +1327,7 @@ export default function SupplierInvoiceDetailPage() {
                     id="payment-date"
                     type="date"
                     value={paymentDate}
-                    max={new Date().toISOString().split('T')[0]}
+                    max={todayIsoStockholm()}
                     onChange={(e) => setPaymentDate(e.target.value)}
                     className="w-full sm:w-48"
                   />

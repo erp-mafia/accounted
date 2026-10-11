@@ -49,6 +49,7 @@ import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { emitSupplierInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const SI_PAID_RESPONSE_COLUMNS =
   'id, supplier_id, arrival_number, supplier_invoice_number, status, currency, total, paid_amount, remaining_amount, paid_at, payment_journal_entry_id'
@@ -160,7 +161,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       force = parsed.data.force === true
     }
 
-    const today = new Date().toISOString().split('T')[0]
+    const today = todayIsoStockholm()
     const paymentDate = bodyPaymentDate || today
     const paidAt = paidAtFromDate(paymentDate)
 

@@ -33,6 +33,7 @@ import {
 } from '@/lib/providers/with-provider-call'
 import { detectEncoding, decodeBuffer } from '@/lib/import/sie-parser'
 import { createLogger } from '@/lib/logger'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const log = createLogger('extensions/arcim-migration/sie-fetcher')
 
@@ -364,7 +365,7 @@ function getSieFetcher(
         // (that would attach the anchor balances to the wrong year). When the
         // anchor lies outside the window, its vouchers are still fetched below
         // so the derivation chain stays complete; only allowed years render.
-        const today = new Date().toISOString().slice(0, 10)
+        const today = todayIsoStockholm()
         const anchor =
           allYears.find((fy) => fy.start <= today && today <= fy.end) ?? allYears[allYears.length - 1]
 
@@ -457,7 +458,7 @@ function getSieFetcher(
           companyName: context.companyName,
           orgNumber: context.orgNumber,
           programVersion: '1.0',
-          generatedDate: new Date().toISOString().slice(0, 10),
+          generatedDate: todayIsoStockholm(),
           year: yearRef,
           previousYear,
           accounts: context.accounts,

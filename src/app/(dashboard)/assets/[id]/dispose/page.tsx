@@ -26,6 +26,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import type { Asset, AssetDisposalType, VatTreatment } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 interface PeriodOption {
   id: string
@@ -81,7 +82,7 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
   const [submitting, setSubmitting] = useState(false)
   const [disposalType, setDisposalType] = useState<AssetDisposalType>('sale')
   const [disposalDate, setDisposalDate] = useState(
-    () => new Date().toISOString().slice(0, 10),
+    () => todayIsoStockholm(),
   )
   const [proceeds, setProceeds] = useState('')
   const [vatTreatment, setVatTreatment] = useState<VatTreatment>('standard_25')

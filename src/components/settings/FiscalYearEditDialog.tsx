@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -14,7 +14,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { fiscalYearName, isDerivedFiscalYearName } from '@/lib/bookkeeping/suggest-fiscal-period'
 import type { FiscalPeriod } from '@/types'
 
@@ -24,20 +24,6 @@ interface FiscalYearEditDialogProps {
   onOpenChange: (open: boolean) => void
   /** Called after a successful save so the parent can refetch. */
   onSaved: () => void
-}
-
-/** Read a user-facing message from the canonical `{ error: { message } }`
- *  envelope (what the fiscal-periods PATCH route returns) or a legacy
- *  `{ error: string }` body. */
-function readApiError(body: unknown, fallback: string): string {
-  if (!body || typeof body !== 'object') return fallback
-  const error = (body as { error?: unknown }).error
-  if (typeof error === 'string') return error
-  if (error && typeof error === 'object') {
-    const message = (error as { message?: unknown }).message
-    if (typeof message === 'string') return message
-  }
-  return fallback
 }
 
 /**
@@ -60,6 +46,7 @@ export function FiscalYearEditDialog({
   onSaved,
 }: FiscalYearEditDialogProps) {
   const t = useTranslations('settings_bookkeeping')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
 
   const [name, setName] = useState(period.name)
@@ -142,17 +129,17 @@ export function FiscalYearEditDialog({
       if (!response.ok) {
         // The route's refusals (BFL 3 kap. shapes, overlap, and every blocker
         // redate_fiscal_period names) are Swedish domain copy and stay
-        // verbatim in both locales.
-        setSubmitError(readApiError(body, t('fy_edit_failed_default')))
+        // verbatim in both locales, so the envelope is read without the UI
+        // locale: the registry's English for FISCAL_PERIOD_DATES_BLOCKED is
+        // written for agents and would replace the named blockers.
+        setSubmitError(getUserErrorMessage(body, { fallback: t('fy_edit_failed_default') }))
         return
       }
       toast({ title: t('fy_edit_success') })
       onOpenChange(false)
       onSaved()
     } catch (error) {
-      setSubmitError(
-        error instanceof Error ? getUserErrorMessage(error) : t('fy_edit_failed_default'),
-      )
+      setSubmitError(getUserErrorMessage(error, { locale: errorLocale, fallback: t('fy_edit_failed_default') }))
     } finally {
       setIsSaving(false)
     }

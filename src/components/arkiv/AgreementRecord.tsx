@@ -12,6 +12,7 @@ import type { AgreementFactView, AgreementRecordView } from '@/app/api/arkiv/agr
 import { formatCurrency } from '@/lib/utils'
 import { AgreementLinksGraph, type LinkNode } from './AgreementLinksGraph'
 import { DefList, DefRow, Section, SourceLink, inlineHref, shortFileName } from './DefList'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * The agreement page (canvas artboard Avtal): facts with their source page,
@@ -44,7 +45,7 @@ export function AgreementRecord({ agreementId }: { agreementId: string }) {
   if (failed) return <p className="text-[13px] text-muted-foreground">{t('load_failed')}</p>
   if (!view) return <Skeleton className="h-40 w-full" />
 
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayIsoStockholm()
   const validity =
     view.starts_on && view.ends_on
       ? t('agreement_valid_between', { from: view.starts_on, to: view.ends_on })

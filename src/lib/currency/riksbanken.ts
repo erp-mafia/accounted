@@ -3,6 +3,7 @@ import { ISO_DATE_RE } from '@/lib/invariants'
 import { createLogger } from '@/lib/logger'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import type { Currency, ExchangeRate } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const log = createLogger('riksbanken')
 
@@ -358,7 +359,7 @@ export async function fetchExchangeRate(
     return {
       currency: 'SEK',
       rate: 1,
-      date: new Date().toISOString().split('T')[0],
+      date: todayIsoStockholm(),
     }
   }
 

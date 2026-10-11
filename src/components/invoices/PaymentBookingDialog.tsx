@@ -31,6 +31,7 @@ import { withLineDimensions } from '@/components/bookkeeping/payment-line-dimens
 import type { EntityType } from '@/types'
 import type { InvoiceWithRelations } from '@/components/invoices/types'
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 type DuplicateMatchReason =
   | 'ocr_exact'
@@ -99,7 +100,7 @@ export default function PaymentBookingDialog({
     for (const account of accounts) names.set(account.account_number, account.account_name)
     return names
   }, [accounts, catalog])
-  const [paymentDate, setPaymentDate] = useState(() => new Date().toISOString().split('T')[0])
+  const [paymentDate, setPaymentDate] = useState(() => todayIsoStockholm())
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isInitialized, setIsInitialized] = useState(false)
   const [duplicateCandidates, setDuplicateCandidates] = useState<DuplicateCandidate[] | null>(null)
@@ -205,7 +206,7 @@ export default function PaymentBookingDialog({
         })
 
         setLines(proposed)
-        setPaymentDate(new Date().toISOString().split('T')[0])
+        setPaymentDate(todayIsoStockholm())
         setIsInitialized(true)
       } catch (err) {
         if (cancelled) return

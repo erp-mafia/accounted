@@ -2,6 +2,7 @@ import type { McpResource } from './types'
 import { sumUsage, usageSince, USAGE_WINDOW_DAYS } from '@/lib/arkiv/usage'
 import { createLogger } from '@/lib/logger'
 import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const log = createLogger('mcp-company-current')
 
@@ -20,7 +21,7 @@ export const companyCurrentResource: McpResource = {
   description: 'Working memory for the API key default company: identity, active fiscal period, lock dates, entity counts, voucher series state, recent activity, and filing deadlines. For another company, call gnubok_get_agent_briefing with company_id.',
   mimeType: 'application/json',
   read: async ({ supabase, companyId }) => {
-    const today = new Date().toISOString().slice(0, 10)
+    const today = todayIsoStockholm()
 
     const [
       companyRes,

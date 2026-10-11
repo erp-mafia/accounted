@@ -3,7 +3,7 @@ import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { validatePeriodDuration } from '@/lib/bookkeeping/validate-period-duration'
-import { addDaysIso } from '@/lib/dates/iso'
+import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
 import { assertNoUnfinishedSieImport, sieHoldRefusal } from './sie-import-hold'
 import type { FiscalPeriod } from '@/types'
@@ -417,7 +417,7 @@ export async function assertPeriodExternallyClosable(
 
   assertNoUnfinishedSieImport(period, 'mark_closed')
 
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayIsoStockholm()
   if (period.period_end > today) {
     throw new Error('Cannot mark a period that has not ended yet as closed')
   }

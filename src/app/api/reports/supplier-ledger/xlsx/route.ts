@@ -8,6 +8,7 @@ import {
   xlsxFilename,
 } from '@/lib/reports/xlsx-export'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 interface AgingRow {
   supplier_name: string
@@ -70,7 +71,7 @@ export const GET = withRouteContext('report.supplier_ledger.xlsx', async (reques
     const filename = xlsxFilename(
       'leverantorsreskontra',
       companyRow?.company_name ?? '',
-      asOfDate ?? new Date().toISOString().slice(0, 10),
+      asOfDate ?? todayIsoStockholm(),
     )
     return new NextResponse(new Uint8Array(buffer), {
       headers: {

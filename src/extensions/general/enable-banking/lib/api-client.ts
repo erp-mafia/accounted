@@ -18,6 +18,7 @@ import { FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
 import { bankConnectorMode, CONNECTOR_COMPANY_HEADER } from '@/lib/connect/instance/upstreams'
 import { normalizeBankTransactionCode } from '@accounted/connect-contract'
 import { dateFromDaysBefore, historyWindowDays } from './history-window'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 // Prefer _PRODUCTION variant; sandbox uses api.tilisy.com, production uses api.enablebanking.com
 const ENABLE_BANKING_API_URL =
@@ -968,7 +969,7 @@ export async function getAccountBalance(
 
   return {
     amount: parseFloat(balance.balance_amount.amount),
-    date: balance.reference_date || new Date().toISOString().split('T')[0],
+    date: balance.reference_date || todayIsoStockholm(),
     available: available != null && Number.isFinite(available) ? available : null,
   }
 }
@@ -1345,8 +1346,8 @@ export function convertTransaction(tx: Transaction, accountCurrency: string): Ba
 
   return {
     id: tx.entry_reference || tx.transaction_id || `${tx.booking_date}_${rawAmount}`,
-    date: tx.value_date || tx.booking_date || new Date().toISOString().split('T')[0],
-    booking_date: tx.booking_date || tx.value_date || new Date().toISOString().split('T')[0],
+    date: tx.value_date || tx.booking_date || todayIsoStockholm(),
+    booking_date: tx.booking_date || tx.value_date || todayIsoStockholm(),
     amount,
     currency: tx.transaction_amount.currency || accountCurrency,
     // Fallback chain: bank's payment message → counterparty name → a Swedish

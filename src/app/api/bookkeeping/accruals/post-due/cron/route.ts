@@ -6,6 +6,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { postDueInstallments } from '@/lib/bookkeeping/accruals/service'
 import { firstOfMonth } from '@/lib/bookkeeping/accruals/compute'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 ensureInitialized()
 
@@ -24,7 +25,7 @@ ensureInitialized()
  */
 export const GET = withCronContext('cron.accrual_postings', async (_request, ctx) => {
   const supabase = createServiceClient()
-  const todayIso = new Date().toISOString().slice(0, 10)
+  const todayIso = todayIsoStockholm()
 
   // fetchAllRows pages past PostgREST's 1000-row cap: a single unpaginated
   // select would silently drop companies once total due installments exceed

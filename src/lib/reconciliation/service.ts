@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
-import { daysBetweenIso, toIsoDate } from '@/lib/dates/iso'
+import { daysBetweenIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { getReconciliationStatus as getBankReconciliationStatus } from './bank-reconciliation'
 import { getSkattekontoReconciliationStatus } from './skattekonto-reconciliation'
 import {
@@ -269,7 +269,7 @@ export async function listReconciliationAccounts(
   companyId: string,
   options: ListAccountsOptions = {},
 ): Promise<ReconciliationAccount[]> {
-  const today = options.today ?? toIsoDate(new Date())
+  const today = options.today ?? todayIsoStockholm()
   const withStatus = options.withStatus ?? true
   const window = {
     from: options.windowFrom ?? defaultWindow(today).from,
@@ -444,7 +444,7 @@ export async function getAccountStatus(
 ): Promise<ReconciliationStatus | null> {
   const parsed = parseAccountKey(accountKey)
   if (!parsed) return null
-  const today = options.today ?? toIsoDate(new Date())
+  const today = options.today ?? todayIsoStockholm()
 
   let status: ReconciliationStatus | null = null
   if (parsed.kind === 'skattekonto') {

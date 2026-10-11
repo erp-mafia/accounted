@@ -76,7 +76,7 @@ import {
 import { isEagerAuthRequested } from './auth-mode'
 import { createLogger } from '@/lib/logger'
 import { ORE_ROUNDING_SETTLEMENT_MAX, roundOre, sumOre } from '@/lib/money'
-import { addDaysIso } from '@/lib/dates/iso'
+import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { currentAppVersion } from '@/lib/reports/app-version'
 import {
   assertNoDeviationOverlap,
@@ -9126,7 +9126,7 @@ export const tools: McpTool[] = [
         // valid_until has passed. Never stored, so it is a predicate here.
         query = query.eq('document_type', 'quote')
         if (quoteStatus === 'expired') {
-          query = query.eq('quote_status', 'open').lt('valid_until', new Date().toISOString().split('T')[0])
+          query = query.eq('quote_status', 'open').lt('valid_until', todayIsoStockholm())
         } else {
           query = query.eq('quote_status', quoteStatus)
         }
@@ -9505,7 +9505,7 @@ export const tools: McpTool[] = [
         )
       }
 
-      const today = new Date().toISOString().split('T')[0]
+      const today = todayIsoStockholm()
       const currency = ((args.currency as string) || 'SEK') as Currency
       const invoiceDate = (args.invoice_date as string) || today
 
@@ -9929,7 +9929,7 @@ export const tools: McpTool[] = [
       if (!customer) throw new Error('Customer not found. Use gnubok_list_customers to find valid IDs.')
 
       const currency = ((args.currency as string) || 'SEK') as Currency
-      const today = new Date().toISOString().split('T')[0]
+      const today = todayIsoStockholm()
 
       // Article prefill with the same rules as gnubok_create_invoice: the
       // line's own values win, the article fills the rest, and its VAT rate
@@ -10210,7 +10210,7 @@ export const tools: McpTool[] = [
       }
       if (previewLines.length === 0) throw new Error('No product lines to deliver: every referenced line is a text row.')
 
-      const deliveryDate = input.delivery_date ?? new Date().toISOString().split('T')[0]
+      const deliveryDate = input.delivery_date ?? todayIsoStockholm()
       const label = order.order_number ?? order.id
       const customerName = (order.customer as { name?: string } | null | undefined)?.name ?? null
       return stagePendingOperation(supabase, companyId, userId, 'register_sales_order_delivery',
@@ -10331,7 +10331,7 @@ export const tools: McpTool[] = [
       const total = roundOre(subtotal + vatAmount)
 
       const customer = order.customer as (Customer | null | undefined)
-      const invoiceDate = input.invoice_date ?? new Date().toISOString().split('T')[0]
+      const invoiceDate = input.invoice_date ?? todayIsoStockholm()
       let dueDate = input.due_date
       if (!dueDate) {
         const due = new Date(invoiceDate)
@@ -10768,7 +10768,7 @@ export const tools: McpTool[] = [
         throw new Error('Invoice can only be marked as paid when status is "sent" or "overdue"')
       }
 
-      const paymentDate = (args.payment_date as string) || new Date().toISOString().split('T')[0]
+      const paymentDate = (args.payment_date as string) || todayIsoStockholm()
 
       // Duplicate-payment guard: surface a likely existing bank payment to the
       // agent before staging, so it matches the transaction to the invoice
@@ -20493,7 +20493,7 @@ export const tools: McpTool[] = [
       let yearStart = args.vacation_year_start as string | undefined
       if (!yearStart) {
         const basis = await getVacationYearBasis(supabase, companyId)
-        yearStart = getClosableYearStart(new Date().toISOString().slice(0, 10), basis)
+        yearStart = getClosableYearStart(todayIsoStockholm(), basis)
       }
       const bookAdjustment = args.book_adjustment !== false
 

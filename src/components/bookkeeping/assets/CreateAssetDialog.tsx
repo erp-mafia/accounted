@@ -27,6 +27,7 @@ import type { AssetCategory, K3Component } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { roundOre } from '@/lib/money'
 import { validateOpeningDepreciation } from '@/lib/bokslut/assets/opening-depreciation'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 interface CreateAssetDialogProps {
   open: boolean
@@ -88,7 +89,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
   const [name, setName] = useState('')
   const [category, setCategory] = useState<AssetCategory>('equipment')
   const [acquisitionDate, setAcquisitionDate] = useState(
-    new Date().toISOString().split('T')[0],
+    todayIsoStockholm(),
   )
   const [acquisitionCost, setAcquisitionCost] = useState('')
   const [usefulLifeYears, setUsefulLifeYears] = useState('5')

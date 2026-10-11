@@ -33,6 +33,7 @@ import type {
   SkattekontoLedgerCoverInfo,
   SkattekontoLedgerTwin,
 } from '@/types/skatteverket'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * Per-row "Bokför" helper.
@@ -142,7 +143,7 @@ type VatReceivableBalanceReader = (eventDate: string | undefined) => Promise<num
  */
 function readVatReceivableBalance(supabase: SupabaseClient, companyId: string): VatReceivableBalanceReader {
   return async (eventDate) => {
-    const cutoffDate = eventDate ?? new Date().toISOString().slice(0, 10)
+    const cutoffDate = eventDate ?? todayIsoStockholm()
     let floorDate: string | null = null
     try {
       floorDate = (await findOpeningBalanceFloor(supabase, companyId, VAT_REFUND_ACCOUNT, cutoffDate))?.date ?? null

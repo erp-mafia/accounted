@@ -26,6 +26,7 @@ import type { BookingTemplateLibrary } from '@/types'
 import { useAccounts, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { chartVatTreatmentsOf } from '@/lib/bookkeeping/vat-entries'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 interface Props {
   open: boolean
@@ -59,7 +60,7 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
   const [selected, setSelected] = useState<
     { kind: 'library'; raw: BookingTemplateLibrary } | { kind: 'static'; template: BookingTemplate } | null
   >(null)
-  const [entryDate, setEntryDate] = useState(() => new Date().toISOString().split('T')[0])
+  const [entryDate, setEntryDate] = useState(() => todayIsoStockholm())
   const [amountInput, setAmountInput] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
@@ -68,7 +69,7 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
     if (open) return
     setSelected(null)
     setAmountInput('')
-    setEntryDate(new Date().toISOString().split('T')[0])
+    setEntryDate(todayIsoStockholm())
   }, [open])
 
   const amount = useMemo(() => {

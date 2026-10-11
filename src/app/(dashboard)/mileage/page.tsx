@@ -32,6 +32,7 @@ import type { RoutePrefill } from '@/lib/mileage/route-memory'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { Car, Copy, Download, Plus, Trash2, Pencil, ChevronDown, ChevronUp } from 'lucide-react'
 import type { MileageTrip, MileageVehicleType } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 interface TripFormState {
   trip_date: string
@@ -48,10 +49,6 @@ interface TripFormState {
   notes: string
 }
 
-function today(): string {
-  return new Date().toISOString().slice(0, 10)
-}
-
 function monthBounds(month: string): { from: string; to: string } {
   const [y, m] = month.split('-').map(Number)
   const last = new Date(Date.UTC(y, m, 0)).getUTCDate()
@@ -60,7 +57,7 @@ function monthBounds(month: string): { from: string; to: string } {
 
 function emptyForm(): TripFormState {
   return {
-    trip_date: today(),
+    trip_date: todayIsoStockholm(),
     vehicle_type: 'own_car',
     vehicle_registration: '',
     odometer_start: '',
@@ -84,7 +81,7 @@ function formFromTrip(trip: MileageTrip, keepDate: boolean): TripFormState {
   const displayKm =
     !keepDate && trip.is_round_trip ? Number(trip.distance_km) / 2 : Number(trip.distance_km)
   return {
-    trip_date: keepDate ? trip.trip_date : today(),
+    trip_date: keepDate ? trip.trip_date : todayIsoStockholm(),
     vehicle_type: trip.vehicle_type,
     vehicle_registration: trip.vehicle_registration ?? '',
     odometer_start: keepDate && trip.odometer_start != null ? String(trip.odometer_start) : '',
@@ -124,7 +121,7 @@ export default function MileagePage() {
   const [bookOpen, setBookOpen] = useState(false)
   const [bookFrom, setBookFrom] = useState('')
   const [bookTo, setBookTo] = useState('')
-  const [bookEntryDate, setBookEntryDate] = useState(today())
+  const [bookEntryDate, setBookEntryDate] = useState(todayIsoStockholm())
   const [counterAccount, setCounterAccount] = useState<'2820' | '2893' | '1930'>('2820')
   const [booking, setBooking] = useState(false)
 
@@ -150,7 +147,7 @@ export default function MileagePage() {
 
   const months = useMemo(() => {
     const set = new Set(trips.map((trip) => trip.trip_date.slice(0, 7)))
-    set.add(today().slice(0, 7))
+    set.add(todayIsoStockholm().slice(0, 7))
     return [...set].sort().reverse()
   }, [trips])
 
@@ -330,11 +327,11 @@ export default function MileagePage() {
   }
 
   const openBook = () => {
-    const base = month === 'all' ? today().slice(0, 7) : month
+    const base = month === 'all' ? todayIsoStockholm().slice(0, 7) : month
     const bounds = monthBounds(base)
     setBookFrom(bounds.from)
     setBookTo(bounds.to)
-    setBookEntryDate(bounds.to <= today() ? bounds.to : today())
+    setBookEntryDate(bounds.to <= todayIsoStockholm() ? bounds.to : todayIsoStockholm())
     setBookOpen(true)
   }
 

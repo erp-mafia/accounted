@@ -65,6 +65,7 @@ import type {
 } from '@/extensions/general/skatteverket/types'
 import type { SkattekontoBatchRowResult } from '@/types/skatteverket'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const SkattekontoMatchDialog = dynamic(
   () =>
@@ -533,7 +534,7 @@ export default function SkattekontoPage() {
   const nextCharge = useMemo(() => {
     const dueOf = (r: StoredSkattekontoTransaction) =>
       r.forfallodatum ?? r.transaktionsdatum
-    const today = new Date().toISOString().slice(0, 10)
+    const today = todayIsoStockholm()
     const ignoredUpcoming = (tx?.ignored ?? []).filter(
       (r) => r.status !== 'booked' && dueOf(r) >= today,
     )

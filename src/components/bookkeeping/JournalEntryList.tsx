@@ -71,6 +71,7 @@ import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
 import { NEEDS_DOC_SOURCE_TYPES } from '@/lib/worklist/types'
 import { collectPages } from '@/lib/lists/collect-pages'
 import type { JournalEntry, JournalEntryLine } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 // Shared source of truth (lib/worklist/types.ts) so the per-row chip and
 // waiver UI can never drift from the worklist count and the SQL predicate
@@ -532,7 +533,7 @@ export default function JournalEntryList({
       const wanted = deepLinkPeriodRef.current
       deepLinkPeriodRef.current = null
       periodScopeResolvedForRef.current = company.id
-      const today = new Date().toISOString().split('T')[0]
+      const today = todayIsoStockholm()
       setPeriodId(
         fiscalPeriods.some((p) => p.id === wanted)
           ? wanted
@@ -566,7 +567,7 @@ export default function JournalEntryList({
     if (stored && fiscalPeriods.some((p) => p.id === stored)) return
 
     // No (valid) saved scope → default to the current räkenskapsår.
-    const today = new Date().toISOString().split('T')[0]
+    const today = todayIsoStockholm()
     setPeriodId(resolveCurrentPeriodId(fiscalPeriods, today))
     setPeriodHydrated(true)
   }, [company?.id, fiscalPeriods, fiscalPeriodsLoading])
@@ -1401,7 +1402,7 @@ export default function JournalEntryList({
         <VoucherGapNotice
           periodId={
             periodId ??
-            resolveCurrentPeriodId(fiscalPeriods, new Date().toISOString().split('T')[0])
+            resolveCurrentPeriodId(fiscalPeriods, todayIsoStockholm())
           }
           series={seriesFilter !== 'all' ? seriesFilter : null}
           refreshToken={refreshToken}

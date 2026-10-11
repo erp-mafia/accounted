@@ -6,7 +6,7 @@ import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill
 import { loadImportedStornoPairs } from '@/lib/skatteverket/skattekonto-cancelled-entries'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
-import { addDaysIso, daysBetweenIso, toIsoDate } from '@/lib/dates/iso'
+import { addDaysIso, daysBetweenIso, toIsoDate, todayIsoStockholm } from '@/lib/dates/iso'
 import {
   LEDGER_BALANCE_STATUSES,
   findOpeningBalanceFloor,
@@ -462,7 +462,7 @@ export async function getSkattekontoReconciliationStatus(
   companyId: string,
   options: SkattekontoReconciliationOptions = {},
 ): Promise<SkattekontoReconciliationResult | null> {
-  const today = options.today ?? toIsoDate(new Date())
+  const today = options.today ?? todayIsoStockholm()
   const [snapshot, rows] = await Promise.all([
     readSnapshot(supabase, companyId),
     fetchRows(supabase, companyId),

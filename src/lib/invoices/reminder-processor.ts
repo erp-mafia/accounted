@@ -19,6 +19,7 @@ import {
 import { createReminderFeeEntry } from '@/lib/bookkeeping/reminder-fee-entries'
 import { createLogger } from '@/lib/logger'
 import type { Invoice, Customer, CompanySettings } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const log = createLogger('reminder-processor')
 
@@ -357,7 +358,7 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
 
     // Compute statutory late-payment interest (Räntelagen §6) using the
     // company override if set, else Riksbankens referensränta + 8 pp.
-    const asOfDate = new Date().toISOString().split('T')[0]
+    const asOfDate = todayIsoStockholm()
     // Interest accrues on what the customer actually owes: the invoice's
     // "Att betala" (öre-rounded total minus any ROT/RUT-avdrag), never on the
     // Skatteverket share sitting on 1513.

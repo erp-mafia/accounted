@@ -12,6 +12,7 @@ import {
   parseCellDate,
 } from '@/lib/reports/xlsx-export'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 interface AgingRow {
   customer_name: string
@@ -136,7 +137,7 @@ export const GET = withRouteContext('report.ar_ledger.xlsx', async (request, { s
     const filename = xlsxFilename(
       'kundreskontra',
       companyRow?.company_name ?? '',
-      asOfDate ?? new Date().toISOString().slice(0, 10),
+      asOfDate ?? todayIsoStockholm(),
     )
     return new NextResponse(new Uint8Array(buffer), {
       headers: {

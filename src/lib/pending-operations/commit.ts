@@ -308,6 +308,7 @@ import type {
   JournalEntrySourceType,
   FiscalPeriod,
 } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const log = createLogger('pending-operations/commit')
 
@@ -2531,7 +2532,7 @@ async function commitMarkInvoicePaid(
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
   const invoiceId = params.invoice_id as string
-  const paymentDate = (params.payment_date as string) || new Date().toISOString().split('T')[0]
+  const paymentDate = (params.payment_date as string) || todayIsoStockholm()
 
   const { data: invoice, error: invoiceError } = await supabase
     .from('invoices')
@@ -5234,7 +5235,7 @@ async function commitCreditInvoice(
     }
   }
 
-  const today = new Date().toISOString().split('T')[0]
+  const today = todayIsoStockholm()
   const creditNoteNumber = `KR-${original.invoice_number}`
 
   const { data: creditNote, error: creditNoteError } = await supabase

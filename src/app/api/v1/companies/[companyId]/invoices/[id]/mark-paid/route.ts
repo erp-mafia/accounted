@@ -54,6 +54,7 @@ import { recordInvoicePaymentRow, removeInvoicePaymentRow } from '@/lib/invoices
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { roundOre } from '@/lib/money'
 import type { CreateJournalEntryInput, EntityType, Invoice } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 // default_dimensions must stay in this projection: the fetched row feeds the
 // payment/cash JE generators, which re-propagate the bag onto every leg —
@@ -244,7 +245,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       }
     }
 
-    const today = new Date().toISOString().split('T')[0]
+    const today = todayIsoStockholm()
     const paymentDate = bodyPaymentDate || today
     const paidAt = paidAtFromDate(paymentDate)
 

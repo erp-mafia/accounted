@@ -63,6 +63,7 @@ import { ExpenseClaimantFields } from '@/components/expenses/ExpenseClaimantFiel
 import { isPersonPayer } from '@/lib/expenses/payer'
 import { ArrowLeft, Plus, Trash2, ChevronDown, Loader2, Lock, AlertCircle, AlertTriangle, MessageCircle, CalendarClock, Tags, FileText } from 'lucide-react'
 import type { Supplier, InvoiceExtractionResult } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 // The form's line/field shapes live in lib/supplier-invoices/form-payload.ts
 // next to the payload builder they feed, pinned there by parity tests.
@@ -270,7 +271,7 @@ export default function NewSupplierInvoiceForm({
     defaultValues: {
       supplier_id: '',
       supplier_invoice_number: '',
-      invoice_date: new Date().toISOString().split('T')[0],
+      invoice_date: todayIsoStockholm(),
       due_date: '',
       delivery_date: '',
       currency: 'SEK',

@@ -47,6 +47,12 @@ interface GetErrorMessageOptions {
   context?: ErrorContext
   statusCode?: number
   locale?: ErrorLocale
+  /**
+   * The caller's own sentence for this failure ("Kunde inte nollställa
+   * året"), already in the user's language. Used when nothing in the error
+   * is readable, in place of the generic fallback.
+   */
+  fallback?: string
 }
 
 type Bilingual = { sv: string; en: string }
@@ -289,9 +295,10 @@ function databaseErrorMessage(
 }
 
 /** Steps 4 to 6 of the priority chain: HTTP status, context, generic. */
-function fallbackMessage({ context, statusCode, locale = 'sv' }: GetErrorMessageOptions): string {
+function fallbackMessage({ context, statusCode, locale = 'sv', fallback }: GetErrorMessageOptions): string {
   if (statusCode && HTTP_STATUS_MAP[statusCode]) return pick(HTTP_STATUS_MAP[statusCode], locale)
   if (context && CONTEXT_FALLBACKS[context]) return pick(CONTEXT_FALLBACKS[context], locale)
+  if (fallback?.trim()) return fallback
   return pick(GENERIC_FALLBACK, locale)
 }
 

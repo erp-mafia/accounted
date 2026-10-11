@@ -42,4 +42,4 @@ export async function buildRegisterExport(
 }
 
 /** Today's date as `YYYY-MM-DD` for export filenames. */
-export { todayIsoUtc as todayIso } from '@/lib/dates/iso'
+export { todayIsoStockholm as todayIso } from '@/lib/dates/iso'

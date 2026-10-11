@@ -46,7 +46,7 @@ import {
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { roundOre, sumOre } from '@/lib/money'
 import { createLogger } from '@/lib/logger'
-import { todayIsoUtc } from '@/lib/dates/iso'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const log = createLogger('bookkeeping.accruals')
 
@@ -283,7 +283,7 @@ export async function postDueInstallments(
     today?: string
   } = {},
 ): Promise<PostDueResult> {
-  const today = options.today ?? todayIsoUtc()
+  const today = options.today ?? todayIsoStockholm()
   const result: PostDueResult = { posted: 0, failed: 0, skipped: 0, errors: [] }
 
   let query = supabase
@@ -474,7 +474,7 @@ export async function dissolveScheduleNow(
   scheduleId: string,
   options: { today?: string } = {},
 ): Promise<{ journalEntryId: string; amount: number }> {
-  const today = options.today ?? todayIsoUtc()
+  const today = options.today ?? todayIsoStockholm()
 
   const { data: scheduleData, error: scheduleError } = await supabase
     .from('accrual_schedules')

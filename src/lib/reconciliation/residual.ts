@@ -5,6 +5,7 @@ import { ISO_DATE_RE } from '@/lib/invariants'
 import { createLogger } from '@/lib/logger'
 import { matchPairs, unmatchLink, type AppliedLink, type SkippedPair } from './actions'
 import { parseAccountKey } from './schemas'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const log = createLogger('reconciliation/residual')
 
@@ -222,7 +223,7 @@ export async function bookResidualAndLink(
           { account_number: spec.account, debit_amount: 0, credit_amount: amount },
         ]
 
-  const latestTxDate = txs.map((t) => t.date).sort().at(-1) ?? new Date().toISOString().slice(0, 10)
+  const latestTxDate = txs.map((t) => t.date).sort().at(-1) ?? todayIsoStockholm()
   const entryDate = input.entry_date ?? latestTxDate
   const description =
     input.description?.trim() ||

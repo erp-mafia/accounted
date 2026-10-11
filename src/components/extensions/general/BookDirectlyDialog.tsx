@@ -51,6 +51,7 @@ import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes
 import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { AttnLine } from '@/components/ui/attn-line'
 import { FOREIGN_CURRENCIES, type BookingTemplateLibrary, type CashAccount, type InboxChannelContext, type InvoiceExtractionResult } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 interface InboxItem {
   id: string
@@ -156,7 +157,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
   // chart, which reads as "the account doesn't exist".
   const [catalog, setCatalog] = useState<CatalogAccount[]>([])
   const [entryDate, setEntryDate] = useState<string>(
-    item.extracted_data?.invoice?.invoiceDate || new Date().toISOString().slice(0, 10)
+    item.extracted_data?.invoice?.invoiceDate || todayIsoStockholm()
   )
   const [periodId, setPeriodId] = useState<string>('')
   const [description, setDescription] = useState<string>(() => {
@@ -207,7 +208,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
   useEffect(() => {
     if (!open) return
     suppressedRolesRef.current.clear()
-    setEntryDate(item.extracted_data?.invoice?.invoiceDate || new Date().toISOString().slice(0, 10))
+    setEntryDate(item.extracted_data?.invoice?.invoiceDate || todayIsoStockholm())
     setLines(buildBookDirectPrefillLines(item.extracted_data, null, '1930', { vatRegistered }))
     setSelectedTransactionId(item.matched_transaction_id)
     const supplier = item.extracted_data?.supplier?.name?.trim() || ''

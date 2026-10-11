@@ -43,6 +43,7 @@ import { getVacationYearBasis, syncVacationLedgerForEmployees, type VacationBala
 import { remainingSavedDays } from './vacation-category'
 import { calculateAgeAtYearStart, decryptPersonnummer } from './personnummer'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const STANDARD_AVGIFTER_RATE = 0.3142
 /** Ålderspensionsavgift only, for fyllt 67 vid årets ingång (SAL 2 kap). */
@@ -276,7 +277,7 @@ export async function previewVacationYearClose(
   const newYearBounds = getVacationYearBounds(newYearStart)
 
   // A year can only be closed once it has ended.
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayIsoStockholm()
   if (today < bounds.end) {
     return {
       ok: false,

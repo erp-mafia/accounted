@@ -27,6 +27,7 @@ import { MatcherPreview, type MatcherMatch } from './MatcherPreview'
 import { ReconciliationSummary } from './ReconciliationSummary'
 import { PairRow, PairsHead } from './ReconciliationPairs'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const SkattekontoBookDialog = dynamic(
   () => import('@/components/skattekonto/SkattekontoBookDialog'),
@@ -638,7 +639,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
 
   // Default sign-off date: the window end, never past today nor past the
   // skattekonto snapshot. The button hides when that date is already signed.
-  const todayIso = new Date().toISOString().slice(0, 10)
+  const todayIso = todayIsoStockholm()
   const signoffMaxDate = isSkv ? (asOfDate < todayIso ? asOfDate : todayIso) : todayIso
   const signoffDefaultDate = window.to < signoffMaxDate ? window.to : signoffMaxDate
   const signoffEnabled = !status.signoff || status.signoff.through_date < signoffDefaultDate

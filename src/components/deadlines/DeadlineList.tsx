@@ -8,6 +8,7 @@ import { DeadlineGroupCard, isSkattekontoDeadline } from './DeadlineGroupCard'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { isDeadlineOverdue, parseDate, startOfDay } from '@/lib/calendar/utils'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 type TypeSegment = 'all' | 'tax' | 'invoicing' | 'own'
 
@@ -44,7 +45,7 @@ export function DeadlineList({
   }, [deadlines, segment])
 
   const groupedDeadlines = useMemo(() => {
-    const today = new Date().toISOString().split('T')[0]
+    const today = todayIsoStockholm()
     const overdue: Deadline[] = []
     const todayDeadlines: Deadline[] = []
     const upcoming: Deadline[] = []

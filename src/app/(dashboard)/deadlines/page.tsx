@@ -21,6 +21,7 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency } from '@/lib/utils'
 import type { Deadline } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const supabase = createClient()
 
@@ -63,7 +64,7 @@ export default function DeadlinesPage() {
     setIsLoading(true)
 
     try {
-      const today = new Date().toISOString().split('T')[0]
+      const today = todayIsoStockholm()
 
       // fetchAllRows: PostgREST silently caps plain selects at 1000 rows,
       // which would truncate the deadline list and undercount overdue

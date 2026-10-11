@@ -31,6 +31,7 @@ import {
   getVacationYearStart,
   type VacationYearBasis,
 } from './vacation-year'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 export interface VacationBalanceRow {
   id: string
@@ -108,7 +109,7 @@ export async function syncVacationLedgerForEmployees(
   asOf?: string,
 ): Promise<{ ok: true } | { ok: false; message: string }> {
   if (employeeIds.length === 0) return { ok: true }
-  const asOfDate = asOf ?? new Date().toISOString().slice(0, 10)
+  const asOfDate = asOf ?? todayIsoStockholm()
 
   try {
     const basis = await getVacationYearBasis(supabase, companyId)

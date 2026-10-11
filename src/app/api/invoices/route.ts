@@ -22,6 +22,7 @@ import {
   fetchInvoiceRegisterCoverage,
   NO_INVOICE_REGISTER_COVERAGE,
 } from '@/lib/invoices/invoice-register-coverage'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 ensureInitialized()
 
@@ -402,7 +403,7 @@ async function createCreditNote(
   }
   if (existingCreditNote) {
     if (existingCreditNote.status === 'cancelled' && !existingCreditNote.journal_entry_id) {
-      const today = new Date().toISOString().split('T')[0]
+      const today = todayIsoStockholm()
       const { error: reopenError } = await supabase
         .from('invoices')
         .update({
@@ -447,7 +448,7 @@ async function createCreditNote(
       ...buildCreditNoteFields(originalInvoice, {
         originalReference: originalRef,
         reason: input.reason,
-        today: new Date().toISOString().split('T')[0],
+        today: todayIsoStockholm(),
       }),
       status: 'draft',
       creation_complete: false,

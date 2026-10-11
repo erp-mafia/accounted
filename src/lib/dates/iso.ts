@@ -1,11 +1,13 @@
 /**
  * Pure UTC arithmetic on `YYYY-MM-DD` strings.
  *
- * Every helper here is deliberately UTC: accounting dates are calendar dates
- * with no wall-clock component, and doing the arithmetic at `T00:00:00Z`
- * means no DST edge can shift a day. None of these is a substitute for
- * `getSwedishLocalDate()` / `swedishToday()` (Europe/Stockholm), which differ
- * from `todayIsoUtc()` around midnight Swedish time.
+ * Every arithmetic helper here is deliberately UTC: accounting dates are
+ * calendar dates with no wall-clock component, and doing the arithmetic at
+ * `T00:00:00Z` means no DST edge can shift a day. "Today" is the exception:
+ * it is the Swedish calendar day, todayIsoStockholm(). The UTC date lags it
+ * by one between midnight and 01:00/02:00 Stockholm time, so there is no
+ * UTC "today" here, and check:guards (utc-today) refuses the inline
+ * toISOString-and-slice form of one.
  */
 
 /** Add `days` to a `YYYY-MM-DD` string in pure UTC and return `YYYY-MM-DD`. */
@@ -24,11 +26,6 @@ export function daysBetweenIso(from: string, to: string): number {
 /** The UTC calendar date of `d` as `YYYY-MM-DD`. */
 export function toIsoDate(d: Date): string {
   return d.toISOString().slice(0, 10)
-}
-
-/** Today's UTC calendar date as `YYYY-MM-DD`. */
-export function todayIsoUtc(): string {
-  return new Date().toISOString().slice(0, 10)
 }
 
 /**

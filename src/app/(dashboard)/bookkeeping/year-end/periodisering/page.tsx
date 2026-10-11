@@ -30,6 +30,7 @@ import type {
   PeriodiseringConfidence,
 } from '@/lib/bokslut/accruals/auto-detect'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 type Step = 'vacation' | 'audit' | 'auto' | 'manual' | 'review'
 
@@ -151,7 +152,7 @@ export default function PeriodiseringWizardPage() {
       setPeriodsError('Kunde inte hämta perioder')
       return
     }
-    const today = new Date().toISOString().split('T')[0]
+    const today = todayIsoStockholm()
     const eligible = allPeriods.filter(
       (p) => !p.is_closed && !p.closing_entry_id && p.period_end <= today,
     )

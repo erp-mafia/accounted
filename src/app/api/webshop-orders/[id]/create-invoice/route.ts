@@ -10,6 +10,7 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 import { EU_COUNTRIES } from '@/lib/vat/eu-countries'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
 import type { Currency, Customer, CustomerType, Invoice, WebshopOrder } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const EU_COUNTRY_CODES = new Set(EU_COUNTRIES.map((c) => c.code))
 
@@ -235,7 +236,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
             },
           ]
 
-    const invoiceDate = new Date().toISOString().split('T')[0]
+    const invoiceDate = todayIsoStockholm()
     const paymentTermsDays = customer.default_payment_terms ?? 30
     const due = new Date()
     due.setDate(due.getDate() + paymentTermsDays)

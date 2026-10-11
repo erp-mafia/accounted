@@ -24,6 +24,7 @@ import { OptRow, OptRows, Sentence } from '../ui/Sentence'
 import { VerdictList, Wait, type Verdict } from '../ui/Verdicts'
 import type { BooksCtx } from '../context'
 import { Button } from '@/components/ui/button'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const EB = '/api/extensions/ext/enable-banking'
 const POPULAR = ['Swedbank', 'SEB', 'Nordea', 'Handelsbanken', 'Danske Bank', 'Länsförsäkringar', 'Skandiabanken', 'ICA Banken']
@@ -42,10 +43,6 @@ interface SyncSummary {
   requested_from: string
   returned_min_date: string | null
   returned_max_date: string | null
-}
-
-function isoToday(): string {
-  return new Date().toISOString().slice(0, 10)
 }
 
 /**
@@ -276,7 +273,7 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
   }, [tickedList, claims, picks, chartNumbers])
   const chartNames = useMemo(() => Object.fromEntries(chart.map((a) => [a.account_number, a.account_name])), [chart])
 
-  const today = isoToday()
+  const today = todayIsoStockholm()
   const fiscalYearStart = useMemo(() => {
     const cur = periods.find((p) => p.period_start <= today && p.period_end >= today)
     return cur?.period_start ?? periods[periods.length - 1]?.period_start ?? null

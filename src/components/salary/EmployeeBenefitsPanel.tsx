@@ -20,6 +20,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 type BenefitType = 'bike' | 'car' | 'meals' | 'housing' | 'wellness' | 'other'
 
@@ -63,7 +64,7 @@ export function EmployeeBenefitsPanel({ employeeId, canWrite }: { employeeId: st
   const [description, setDescription] = useState('')
   const [monthlyValue, setMonthlyValue] = useState('')
   const [annualMarketValue, setAnnualMarketValue] = useState('')
-  const [validFrom, setValidFrom] = useState(() => new Date().toISOString().slice(0, 10))
+  const [validFrom, setValidFrom] = useState(() => todayIsoStockholm())
   const [validTo, setValidTo] = useState('')
 
   async function load() {
@@ -86,7 +87,7 @@ export function EmployeeBenefitsPanel({ employeeId, canWrite }: { employeeId: st
     setDescription('')
     setMonthlyValue('')
     setAnnualMarketValue('')
-    setValidFrom(new Date().toISOString().slice(0, 10))
+    setValidFrom(todayIsoStockholm())
     setValidTo('')
     setAdding(false)
   }

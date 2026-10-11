@@ -24,6 +24,7 @@ import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
 import { CorrectionChainTooDeepError, isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const ReverseRequest = z
   .object({
@@ -112,7 +113,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       bodyAllowDeepChain = parsed.data.allow_deep_chain === true
     }
 
-    const today = new Date().toISOString().split('T')[0]
+    const today = todayIsoStockholm()
     const reversalDate = bodyReversalDate || today
 
     // Period-lock on the reversal date. Engine + DB trigger are still

@@ -155,6 +155,11 @@
  *      Page with fetchAllRows (its maxRows keeps a deliberate cap) or read an
  *      aggregate. Implementation and rationale in limit-above-page.mjs.
  *      Allowlisted file-set, may only shrink.
+ *   17. utc-today: "today" computed as the UTC calendar date
+ *      (`new Date().toISOString().slice(0, 10)` and its twins), which is
+ *      yesterday in Sweden between midnight and 01:00/02:00. Use
+ *      todayIsoStockholm() from lib/dates/iso. Implementation and rationale
+ *      in utc-today.mjs. Allowlisted file-set, may only shrink.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -175,6 +180,7 @@ import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { findSekLabelledFxAmounts } from './format-currency-sek-label.mjs'
 import { findRawReferenceFetches } from './raw-reference-fetch.mjs'
+import { findUtcTodaySites, UTC_TODAY_ALLOWED } from './utc-today.mjs'
 import { findLiteralLegalForms } from './literal-legal-form.mjs'
 import { findClientNodeBuiltins } from './client-node-builtin.mjs'
 import { findAmbiguousEmbeds } from './ambiguous-embed.mjs'
@@ -1167,6 +1173,7 @@ const current = {
   tableWithoutGrant: findTablesWithoutGrant(ROOT),
   limitsAbovePage: findLimitsAbovePage(SOURCE_ROOT),
   localTestMocks: findLocalTestMocks(ROOT),
+  utcToday: findUtcTodaySites(SOURCE_ROOT),
 }
 
 const dialogOverflowFiles = [...new Set(current.dialogOverflowRisk.map((f) => f.file))].sort()
@@ -1440,6 +1447,23 @@ if (newDirectAi.length) {
     '  → use getAiService() from @/lib/ai (generateText / generateStructured / extractFromDocument).\n' +
       '    Hosted and self-host resolve the backend from the environment there; a direct SDK call\n' +
       '    hard-wires one provider and breaks the sovereign self-host path.',
+  )
+}
+
+// 1e1d. utc-today: allowlist in utc-today.mjs, may only shrink. A UTC
+// "today" outside it is a NEW violation; allowlisted files that no longer
+// compute one are reported as progress.
+const newUtcToday = current.utcToday.filter((f) => !UTC_TODAY_ALLOWED.has(f.file))
+const utcTodayFilesNow = new Set(current.utcToday.map((f) => f.file))
+const migratedUtcToday = [...UTC_TODAY_ALLOWED].filter((f) => !utcTodayFilesNow.has(f))
+if (newUtcToday.length) {
+  failed = true
+  console.error(`\n✗ utc-today: ${newUtcToday.length} site(s) compute "today" as the UTC date:`)
+  newUtcToday.forEach((f) => console.error(`    ${f.file}:${f.line}`))
+  console.error(
+    '  → use todayIsoStockholm() from @/lib/dates/iso. The UTC date is yesterday in Sweden\n' +
+      '    between midnight and 01:00/02:00, so a default date, a cutoff or an as-of date\n' +
+      '    computed from it books, filters or labels against the wrong day.',
   )
 }
 
@@ -1763,6 +1787,13 @@ if (migratedDirectAi.length) {
   )
   migratedDirectAi.forEach((f) => console.log(`    ${f}`))
 }
+if (migratedUtcToday.length) {
+  console.log(
+    `\n✓ utc-today progress: ${migratedUtcToday.length} allowlisted file(s) no longer compute a UTC "today".` +
+      ' Remove them from UTC_TODAY_ALLOWED in scripts/checks/utc-today.mjs to lock it in:',
+  )
+  migratedUtcToday.forEach((f) => console.log(`    ${f}`))
+}
 if (gatedSinceBaseline.length) {
   console.log(
     `\n✓ ungated-extension-route progress: ${gatedSinceBaseline.length} allowlisted route(s) now gated or gone.` +
@@ -1800,5 +1831,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, uninitialized-event-route: ${current.eventRouteInit.uninitialized.length}/${UNINITIALIZED_EMITTING_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s)).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, uninitialized-event-route: ${current.eventRouteInit.uninitialized.length}/${UNINITIALIZED_EMITTING_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s)).`,
 )

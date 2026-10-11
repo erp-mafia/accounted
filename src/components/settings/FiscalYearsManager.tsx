@@ -23,6 +23,7 @@ import { FiscalYearEditDialog } from '@/components/settings/FiscalYearEditDialog
 import { SIEOpeningBalanceReview } from '@/components/settings/SIEOpeningBalanceReview'
 import { suggestSeedDate } from '@/lib/bookkeeping/suggest-fiscal-period'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /** Status of a fiscal period, in legal precedence: closed > locked > open. */
 function periodStatus(p: FiscalPeriod): 'closed' | 'locked' | 'open' {
@@ -255,7 +256,7 @@ export function FiscalYearsManager() {
       <CreatePeriodDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
-        entryDate={suggestSeedDate(periods, new Date().toISOString().split('T')[0])}
+        entryDate={suggestSeedDate(periods, todayIsoStockholm())}
         periods={periods}
         onCreated={refreshPeriods}
       />

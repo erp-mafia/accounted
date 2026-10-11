@@ -65,6 +65,7 @@ import { useCompany } from '@/contexts/CompanyContext'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
 import { CURRENCIES, type CreateJournalEntryLineInput, type FiscalPeriod, type JournalEntrySourceType, type Currency, type BookingTemplateLibrary, type BookingTemplateCategory } from '@/types'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const CURRENCY_OPTIONS: { value: Currency; label: string }[] = CURRENCIES.map((c) => ({ value: c, label: c }))
 
@@ -180,7 +181,7 @@ export default function JournalEntryForm({
   const { periods } = useFiscalPeriods()
   const { settings: companySettings } = useCompanySettings()
   const [selectedPeriod, setSelectedPeriod] = useState('')
-  const [entryDate, setEntryDate] = useState(initialDate ?? new Date().toISOString().split('T')[0])
+  const [entryDate, setEntryDate] = useState(initialDate ?? todayIsoStockholm())
   const [description, setDescription] = useState(initialDescription ?? '')
   const [notes, setNotes] = useState(initialNotes ?? '')
   const [showNotes, setShowNotes] = useState(false)

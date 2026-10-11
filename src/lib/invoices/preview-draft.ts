@@ -32,6 +32,7 @@ import { roundOre } from '@/lib/money'
 import { expandPersonnummerTo12, maskPersonnummer, validatePersonnummer } from '@/lib/salary/personnummer'
 import { revealStoredCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
 import { createLogger } from '@/lib/logger'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * The invoice editor's draft as the customer would receive it, built from
@@ -219,7 +220,7 @@ export async function buildInvoicePreviewDraft(params: {
   today?: string
 }): Promise<BuildInvoicePreviewResult> {
   const { supabase, companyId } = params
-  const today = params.today ?? new Date().toISOString().split('T')[0]
+  const today = params.today ?? todayIsoStockholm()
 
   const { data: companyRow, error: companyError } = await supabase
     .from('company_settings')

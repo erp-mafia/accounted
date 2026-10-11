@@ -13,6 +13,7 @@ import {
   type ReconciliationSignoff,
   type ReconciliationStatus,
 } from './schemas'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const log = createLogger('reconciliation/manual')
 
@@ -309,7 +310,7 @@ export async function getManualReconciliationStatus(
   accountNumber: string,
   options: ManualStatusOptions = {},
 ): Promise<ReconciliationStatus | null> {
-  const today = options.today ?? new Date().toISOString().slice(0, 10)
+  const today = options.today ?? todayIsoStockholm()
   const asOf = options.asOf ?? today
   const snapshot = await loadBalanceSheetSnapshot(supabase, companyId, asOf)
   if (!snapshot) return null

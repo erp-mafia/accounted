@@ -20,6 +20,24 @@ describe('decodeStringContent', () => {
     expect(decodeStringContent('Ã\u0085NGE')).toBe('ÅNGE')
   })
 
+  it('recovers UTF-8-as-Windows-1252 mojibake for uppercase Swedish chars', () => {
+    // A Windows-1252 read turns the second byte of Ö/Ä/Å (0x96/0x84/0x85)
+    // into U+2013/U+201E/U+2026, code points far above one byte.
+    expect(decodeStringContent('G\u00c3\u2013TEBORG')).toBe('GÖTEBORG')
+    expect(decodeStringContent('HISINGS K\u00c3\u201eRRA')).toBe('HISINGS KÄRRA')
+    expect(decodeStringContent('\u00c3\u2026NGE')).toBe('ÅNGE')
+    expect(decodeStringContent('\u00c3\u2026rets resultat f\u00c3\u00b6r \u00c3\u2013vriga')).toBe(
+      'Årets resultat för Övriga',
+    )
+  })
+
+  it('never half-repairs a string that is not one clean double encoding', () => {
+    // A correct "ö" next to a mojibake one: the strict reversal refuses,
+    // instead of turning the correct letter into U+FFFD.
+    expect(decodeStringContent('Malmö Malm\u00c3\u00b6')).toBe('Malmö Malm\u00c3\u00b6')
+    expect(decodeStringContent('Foo\ufffdbar')).toBe('Foo\ufffdbar')
+  })
+
   it('is a no-op on already-correct Swedish strings', () => {
     expect(decodeStringContent('GÖTEBORG')).toBe('GÖTEBORG')
     expect(decodeStringContent('Malmö')).toBe('Malmö')

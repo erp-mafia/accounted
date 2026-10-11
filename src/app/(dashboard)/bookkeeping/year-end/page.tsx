@@ -22,6 +22,7 @@ import { AccrualsStep } from '@/components/bookkeeping/year-end/AccrualsStep'
 import { PreviewStep } from '@/components/bookkeeping/year-end/PreviewStep'
 import { ExecuteStep } from '@/components/bookkeeping/year-end/ExecuteStep'
 import { ResultStep } from '@/components/bookkeeping/year-end/ResultStep'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 type Step = 'preflight' | 'accruals' | 'dispositions' | 'preview' | 'execute' | 'result'
 
@@ -87,7 +88,7 @@ export default function YearEndPage() {
       return
     }
     const all: FiscalPeriod[] = allPeriods
-    const today = new Date().toISOString().split('T')[0]
+    const today = todayIsoStockholm()
     const eligible: PeriodOption[] = all
       .filter((p) => !p.is_closed && !p.closing_entry_id && p.period_end <= today)
       .map((p) => ({ ...p, eligible: true }))

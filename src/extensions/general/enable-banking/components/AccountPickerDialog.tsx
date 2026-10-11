@@ -47,6 +47,7 @@ import {
   BankSyncProgressDialog,
   type SyncProgressState,
 } from './BankSyncProgressDialog'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 interface AccountPickerDialogProps {
   open: boolean
@@ -141,7 +142,7 @@ export function AccountPickerDialog({
   const { accounts: allAccounts, error: chartLoadError } = useAccounts(false)
   const settingsLoaded = !settingsLoading && !periodsLoading && !settingsError && !periodsError
   const currentPeriodStart = useMemo(() => {
-    const today = new Date().toISOString().split('T')[0]
+    const today = todayIsoStockholm()
     const containing = periods
       .filter((p) => p.period_start <= today && today <= p.period_end)
       .sort((a, b) => b.period_start.localeCompare(a.period_start))
@@ -1012,7 +1013,7 @@ export function AccountPickerDialog({
                           type="date"
                           value={customDate}
                           onChange={(e) => setCustomDate(e.target.value)}
-                          max={new Date().toISOString().split('T')[0]}
+                          max={todayIsoStockholm()}
                           min={new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}
                           disabled={isSaving}
                           className="tabular-nums"

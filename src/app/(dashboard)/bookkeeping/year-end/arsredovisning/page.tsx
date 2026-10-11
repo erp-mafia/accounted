@@ -30,6 +30,7 @@ import type { ArsredovisningData } from '@/lib/bokslut/arsredovisning/types'
 import type { SignatureRequest } from '@/lib/bokslut/arsredovisning/signature-service'
 import type { AnnualReportVersionSummary } from '@/lib/bokslut/arsredovisning/compliance-types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const SIGNATURE_EVIDENCE_REFERENCE_PATTERN =
   /^(archive|document|receipt):[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/
@@ -138,7 +139,7 @@ export default function ArsredovisningPage() {
     'paper_original' | 'advanced_e_signature' | 'bankid'
   >('paper_original')
   const [signatureEvidence, setSignatureEvidence] = useState('')
-  const [signatureDate, setSignatureDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const [signatureDate, setSignatureDate] = useState(() => todayIsoStockholm())
 
   const handleVersionsChanged = useCallback((nextVersions: AnnualReportVersionSummary[]) => {
     setVersions(nextVersions)

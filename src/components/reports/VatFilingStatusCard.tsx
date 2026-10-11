@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { CheckCircle2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -16,7 +16,7 @@ import {
 } from '@/components/ui/dialog'
 import { formatDate } from '@/lib/utils'
 import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import {
   vatFilingPeriodEnd,
   type VatFilingPeriodType,
@@ -61,6 +61,7 @@ export function VatFilingStatusCard({
 }: VatFilingStatusCardProps) {
   const t = useTranslations('reports')
   const tCommon = useTranslations('common')
+  const errorLocale = useLocale() as ErrorLocale
   const [open, setOpen] = useState(false)
   const [filedOn, setFiledOn] = useState(() => todayIsoStockholm())
   const [reference, setReference] = useState('')
@@ -76,8 +77,7 @@ export function VatFilingStatusCard({
 
   async function readError(res: Response, fallback: string): Promise<string> {
     const json = await res.json().catch(() => null)
-    const message = json?.error?.message ?? (typeof json?.error === 'string' ? json.error : null)
-    return typeof message === 'string' && message.length > 0 ? message : fallback
+    return getErrorMessage(json, { locale: errorLocale, fallback })
   }
 
   async function mark() {
@@ -103,7 +103,7 @@ export function VatFilingStatusCard({
       setReference('')
       onChanged()
     } catch (err) {
-      setError(getErrorMessage(err) || t('vat_filing_failed'))
+      setError(getErrorMessage(err, { locale: errorLocale, fallback: t('vat_filing_failed') }))
     } finally {
       setBusy(false)
     }
@@ -127,7 +127,7 @@ export function VatFilingStatusCard({
       }
       onChanged()
     } catch (err) {
-      setError(getErrorMessage(err) || t('vat_filing_unmark_failed'))
+      setError(getErrorMessage(err, { locale: errorLocale, fallback: t('vat_filing_unmark_failed') }))
     } finally {
       setBusy(false)
     }

@@ -763,3 +763,35 @@ describe('getErrorMessage: PT409 database refusals', () => {
     expect(message).toBe('En konflikt uppstod. Ladda om sidan och försök igen.')
   })
 })
+
+describe('getErrorMessage: the caller fallback', () => {
+  it('answers the caller sentence when nothing in the error is readable', () => {
+    const fallback = 'Kunde inte nollställa året.'
+    expect(getErrorMessage(null, { fallback })).toBe(fallback)
+    expect(getErrorMessage({}, { fallback })).toBe(fallback)
+    // Raw English never reaches the user; the caller sentence does.
+    expect(getErrorMessage({ error: 'Internal server error' }, { fallback })).toBe(fallback)
+    expect(getErrorMessage(new TypeError('x is undefined'), { locale: 'en', fallback: 'Could not reset' })).toBe(
+      'Could not reset',
+    )
+  })
+
+  it('still prefers a readable envelope in the user language over the fallback', () => {
+    const body = {
+      error: {
+        code: 'FISCAL_YEAR_RESET_CONFIRMATION_MISMATCH',
+        message: 'Räkenskapsårets namn stämmer inte överens.',
+        message_en: 'The fiscal year name does not match.',
+      },
+    }
+    expect(getErrorMessage(body, { locale: 'sv', fallback: 'FB' })).toBe('Räkenskapsårets namn stämmer inte överens.')
+    expect(getErrorMessage(body, { locale: 'en', fallback: 'FB' })).toBe('The fiscal year name does not match.')
+  })
+
+  it('ranks a known HTTP status above the fallback, and ignores a blank fallback', () => {
+    expect(getErrorMessage(null, { statusCode: 403, fallback: 'FB' })).toBe(
+      'Du har inte behörighet att utföra denna åtgärd.',
+    )
+    expect(getErrorMessage(null, { fallback: '  ' })).toBe(getErrorMessage(null))
+  })
+})

@@ -24,6 +24,7 @@ import type {
   Resultatdisposition,
 } from './types'
 import type { ArsredovisningData } from '@/lib/bokslut/arsredovisning/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /** TA §4.3.4-4.3.5: "<leverantör> - <produkt>", version "<huvud>.<revision>". */
 export const PROGRAMVARA_NAMN = 'Accounted - Accounted'
@@ -271,7 +272,7 @@ export async function buildIxbrlInput(
     (request) => request.status !== 'declined',
   )
   const signedRequests = activeSignatureRequests.filter((request) => request.status === 'signed')
-  const today = options.todayIso ?? new Date().toISOString().slice(0, 10)
+  const today = options.todayIso ?? todayIsoStockholm()
   const signers: IxbrlSigner[] = activeSignatureRequests.map((request) => {
     const { firstName, lastName } = splitName(request.signer_name)
     return {

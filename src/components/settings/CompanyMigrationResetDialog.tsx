@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { AlertTriangle, Archive, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -19,7 +19,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
 import { getBranding } from '@/lib/branding/service'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useFormat } from '@/lib/hooks/use-format'
 import {
   COMPANY_MIGRATION_RESET_COUNT_KEYS,
@@ -36,17 +36,6 @@ interface CompanyMigrationResetDialogProps {
 
 const branding = getBranding()
 
-function readApiError(body: unknown, fallback: string): string {
-  if (!body || typeof body !== 'object') return fallback
-  const error = (body as { error?: unknown }).error
-  if (typeof error === 'string') return error
-  if (error && typeof error === 'object') {
-    const message = (error as { message?: unknown }).message
-    if (typeof message === 'string') return message
-  }
-  return fallback
-}
-
 export function CompanyMigrationResetDialog({
   companyId,
   companyName,
@@ -54,6 +43,7 @@ export function CompanyMigrationResetDialog({
   onOpenChange,
 }: CompanyMigrationResetDialogProps) {
   const t = useTranslations('settings_company')
+  const errorLocale = useLocale() as ErrorLocale
   const router = useRouter()
   const { toast } = useToast()
   const { formatDateLong } = useFormat()
@@ -81,14 +71,15 @@ export function CompanyMigrationResetDialog({
         })
         const body = await response.json().catch(() => ({}))
         if (!response.ok) {
-          throw new Error(readApiError(body, loadFailedMessage))
+          if (!cancelled) {
+            setLoadError(getUserErrorMessage(body, { locale: errorLocale, fallback: loadFailedMessage }))
+          }
+          return
         }
         if (!cancelled) setEligibility(body.data as CompanyMigrationResetEligibility)
       } catch (error) {
         if (!cancelled) {
-          setLoadError(
-            error instanceof Error ? getUserErrorMessage(error) : loadFailedMessage,
-          )
+          setLoadError(getUserErrorMessage(error, { locale: errorLocale, fallback: loadFailedMessage }))
         }
       } finally {
         if (!cancelled) setIsLoading(false)
@@ -99,7 +90,7 @@ export function CompanyMigrationResetDialog({
     return () => {
       cancelled = true
     }
-  }, [companyId, loadFailedMessage, open])
+  }, [companyId, errorLocale, loadFailedMessage, open])
 
   function resetForm() {
     setEligibility(null)
@@ -185,7 +176,13 @@ export function CompanyMigrationResetDialog({
       })
       const body = await response.json().catch(() => ({}))
       if (!response.ok) {
-        throw new Error(readApiError(body, t('reset_failed_default')))
+        toast({
+          title: t('reset_failed_title'),
+          description: getUserErrorMessage(body, { locale: errorLocale, fallback: t('reset_failed_default') }),
+          variant: 'destructive',
+        })
+        setIsResetting(false)
+        return
       }
 
       toast({
@@ -200,9 +197,7 @@ export function CompanyMigrationResetDialog({
     } catch (error) {
       toast({
         title: t('reset_failed_title'),
-        description: error instanceof Error
-          ? getUserErrorMessage(error)
-          : t('reset_failed_default'),
+        description: getUserErrorMessage(error, { locale: errorLocale, fallback: t('reset_failed_default') }),
         variant: 'destructive',
       })
       setIsResetting(false)

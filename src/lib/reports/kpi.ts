@@ -3,6 +3,7 @@ import type { IncomeStatementReport, TrialBalanceRow } from '@/types'
 import { VAT_INPUT_ACCOUNTS, VAT_OUTPUT_ACCOUNTS } from '@/lib/reports/vat-declaration'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * Calculate gross margin from income statement.
@@ -268,7 +269,7 @@ export async function fetchKpiAccountOverrides(
  * lies in the past, otherwise undefined (live open-invoice state). Without
  * it a report for last year showed today's receivables.
  */
-export function kpiReceivablesAsOf(rangeEnd: string, today: string = new Date().toISOString().slice(0, 10)): string | undefined {
+export function kpiReceivablesAsOf(rangeEnd: string, today: string = todayIsoStockholm()): string | undefined {
   return rangeEnd < today ? rangeEnd : undefined
 }
 

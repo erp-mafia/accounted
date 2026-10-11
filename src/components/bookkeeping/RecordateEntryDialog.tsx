@@ -20,6 +20,7 @@ import { AlertTriangle, Lock, ArrowRight } from 'lucide-react'
 import { formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { JournalEntry } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 interface Props {
   entry: JournalEntry
@@ -101,7 +102,7 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
   const noCoveringPeriod = preview?.status === 'open' && !preview?.period_id
   // Soft, non-blocking advisory when moving into a past date: the moms for
   // that period may already have been filed.
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayIsoStockholm()
   const movingIntoPast = dateChanged && newDate < today
 
   const canSubmit = dateChanged && targetOpen && !isSubmitting

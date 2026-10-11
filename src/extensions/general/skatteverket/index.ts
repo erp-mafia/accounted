@@ -103,6 +103,7 @@ import type { SkattekontoBalanceSnapshot } from './types'
 import type { VatPeriodType } from '@/types'
 import type { SkattekontoLedgerCoverInfo } from '@/types/skatteverket'
 import { createLogger } from '@/lib/logger'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const log = createLogger('skatteverket')
 
@@ -2146,7 +2147,7 @@ export const skatteverketExtension: Extension = {
           return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 })
         }
 
-        const today = new Date().toISOString().slice(0, 10)
+        const today = todayIsoStockholm()
         const { booked, overdue, upcoming, ignored } = splitTransactions(rows, today)
 
         // Enrich obokförda rader with a single-best-candidate suggestion.

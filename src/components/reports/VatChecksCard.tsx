@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { ContextPicker } from '@/components/common/ContextPicker'
@@ -31,7 +31,7 @@ import { formatAmount, formatDate } from '@/lib/utils'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { cn } from '@/lib/utils'
-import { apiErrorMessage } from './api-error'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 type SupplierType = 'eu_business' | 'non_eu_business' | 'swedish_business'
 type SupplyType = 'service' | 'goods'
@@ -106,6 +106,7 @@ export function VatChecksCard({
 }) {
   const router = useRouter()
   const t = useTranslations('reports')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const { dialogProps, confirm } = useDestructiveConfirm()
@@ -228,7 +229,7 @@ export function VatChecksCard({
         return {
           ok: false,
           resolved: json?.error?.code === 'VAT_RC_BASIS_NOTHING_MISSING',
-          message: apiErrorMessage(json, 'Kunde inte korrigera verifikationen'),
+          message: getErrorMessage(json, { locale: errorLocale, fallback: 'Kunde inte korrigera verifikationen' }),
         }
       }
       return { ok: true, correctedId: json?.data?.correctedId }

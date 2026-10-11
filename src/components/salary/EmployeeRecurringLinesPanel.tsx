@@ -20,6 +20,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 type RecurringLineType =
   | 'gross_deduction_pension'
@@ -68,7 +69,7 @@ export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employee
   const [type, setType] = useState<RecurringLineType>('gross_deduction_other')
   const [description, setDescription] = useState('')
   const [amount, setAmount] = useState('')
-  const [validFrom, setValidFrom] = useState(() => new Date().toISOString().slice(0, 10))
+  const [validFrom, setValidFrom] = useState(() => todayIsoStockholm())
   const [validTo, setValidTo] = useState('')
 
 
@@ -98,7 +99,7 @@ export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employee
     setType('gross_deduction_other')
     setDescription('')
     setAmount('')
-    setValidFrom(new Date().toISOString().slice(0, 10))
+    setValidFrom(todayIsoStockholm())
     setValidTo('')
     setAdding(false)
   }

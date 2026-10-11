@@ -5,6 +5,7 @@ import { uploadDocument } from '@/lib/core/documents/document-service'
 import { fallbackVatBreakdown } from '@/lib/webshop-orders/booking-lines'
 import type { Logger } from '@/lib/logger'
 import type { WebshopOrder } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * Orderunderlag for a booked webshop order (issue #1881).
@@ -501,7 +502,7 @@ export async function archiveWebshopOrderUnderlag(args: {
       WebshopOrderUnderlagPDF({
         model,
         company,
-        generatedAt: new Date().toISOString().split('T')[0],
+        generatedAt: todayIsoStockholm(),
       }),
     )
     const pdfArrayBuffer = new Uint8Array(pdfBuffer).buffer as ArrayBuffer

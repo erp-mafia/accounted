@@ -3,7 +3,7 @@ import { ISO_DATE_RE } from '@/lib/invariants'
 import { eventBus } from '@/lib/events/bus'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
-import { todayIsoUtc } from '@/lib/dates/iso'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { parseAccountKey, type ReconciliationSignoff, type ReconciliationStatus } from './schemas'
 import { getAccountStatus } from './service'
 import { getLatestSignoff, getSignoffById, insertSignoff, stampReopen } from './signoff-store'
@@ -138,7 +138,7 @@ export async function signOffAccount(
 ): Promise<SignoffResult | null> {
   const parsed = parseAccountKey(accountKey)
   if (!parsed) return null
-  const today = options.today ?? todayIsoUtc()
+  const today = options.today ?? todayIsoStockholm()
   const throughDate = input.through_date
   if (!ISO_DATE_RE.test(throughDate) || Number.isNaN(Date.parse(throughDate))) {
     throw new ReconciliationSignoffError('Ogiltigt datum. Ange ÅÅÅÅ-MM-DD.', 'INVALID_DATE')

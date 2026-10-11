@@ -4,6 +4,7 @@ import { withRetry } from '../retry';
 import { BRIOX_BASE_URL, BRIOX_RATE_LIMIT } from './config';
 import { isTimeoutError } from '@/lib/http/fetch-with-timeout';
 import { cleanProviderPayload } from '../provider-text';
+import { todayIsoStockholm } from '@/lib/dates/iso';
 
 const FETCH_TIMEOUT_MS = 15_000;
 
@@ -212,7 +213,7 @@ export class BrioxClient {
     if (years.length === 0) {
       throw new BrioxApiError('No financial years found in Briox', 404);
     }
-    const now = new Date().toISOString().slice(0, 10);
+    const now = todayIsoStockholm();
     const completed = years.filter((y) => y.todate < now);
     return completed.length > 0 ? completed[completed.length - 1]!.id : years[0]!.id;
   }

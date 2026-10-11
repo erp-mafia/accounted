@@ -98,6 +98,7 @@ import {
 import { shrinkImageForUpload } from '@/lib/documents/shrink-image'
 import { uploadViaSignedUrl } from '@/lib/documents/direct-upload'
 import { INBOX_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * A failure whose message is already the sentence to show the user, resolved
@@ -3540,7 +3541,7 @@ function FieldsRail({
         entryDate={
           proposal?.entry_date ??
           data?.invoice?.invoiceDate ??
-          new Date().toISOString().slice(0, 10)
+          todayIsoStockholm()
         }
         description={data?.supplier?.name ?? item.email_subject ?? 'Underlag'}
         // No proposal is not the same as no amount: the matched bank row still

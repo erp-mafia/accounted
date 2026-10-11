@@ -50,6 +50,7 @@ import type {
   VoucherGap,
   SequenceMismatch,
 } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * Validate whether a fiscal period is ready for year-end closing.
@@ -99,7 +100,7 @@ export async function validateYearEndReadiness(
   }
 
   // Check: period must have ended (BFNAR 2017:3 / ÅRL 2:1)
-  const today = new Date().toISOString().split('T')[0]
+  const today = todayIsoStockholm()
   if (period.period_end > today) {
     blockers.push({
       code: 'PERIOD_NOT_ENDED',

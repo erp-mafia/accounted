@@ -1,5 +1,6 @@
 import { htmlToText } from './extract-invoice-fields'
 import { sanitiseFilename } from './upload-and-extract'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * A receipt that IS the mail body (#2751).
@@ -263,7 +264,7 @@ export async function renderEmailBodyUnderlag(
   const model = buildEmailBodyUnderlagModel(input, opts)
   if (!model) return null
 
-  const generatedAt = opts.generatedAt ?? new Date().toISOString().split('T')[0]
+  const generatedAt = opts.generatedAt ?? todayIsoStockholm()
   // react-pdf and pdf-lib load here, for a mail that becomes a body underlag,
   // not with every route that loads the extension registry.
   const { renderEmailBodyUnderlagPdf } = await import('./email-body-underlag-pdf')

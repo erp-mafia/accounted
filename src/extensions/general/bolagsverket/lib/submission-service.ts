@@ -28,6 +28,7 @@ import type {
   KontrolleraUtfall,
   SubmissionStatus,
 } from '../types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * Domain error carrying a structured-error registry code
@@ -330,7 +331,7 @@ export async function submitArsredovisning(
       { annual_report_version_id: params.annualReportVersionId },
     )
   }
-  input.faststallelseintyg.genereratDatum = new Date().toISOString().slice(0, 10)
+  input.faststallelseintyg.genereratDatum = todayIsoStockholm()
   const preflight = runPreflightChecks(input)
   if (!preflight.ok) {
     return { outcome: 'preflight_failed', issues: preflight.issues }

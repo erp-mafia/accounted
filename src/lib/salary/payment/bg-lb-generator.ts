@@ -35,6 +35,7 @@
 
 import { luhnCheckDigit } from '@/lib/bankgiro/luhn'
 import { payeeAccountParts } from './bank-account'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 export interface BgLbCompanyData {
   name: string
@@ -238,7 +239,7 @@ export function generateBankgiroPaymentBgLb(
  *   Pos 63-80: Blank (18)
  */
 function openingRecord(senderBg: string, paymentDateYyMmDd: string): string {
-  const todayYyMmDd = toYyMmDd(new Date().toISOString().slice(0, 10))
+  const todayYyMmDd = toYyMmDd(todayIsoStockholm())
   return (
     '11' +
     padNumber(senderBg, 10) +

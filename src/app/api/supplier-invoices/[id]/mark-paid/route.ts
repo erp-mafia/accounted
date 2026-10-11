@@ -25,6 +25,7 @@ import { findDuplicatePaymentCandidatesForSupplierInvoice } from '@/lib/invoices
 import { recordSupplierInvoiceDuplicateGuardBypass } from '@/lib/invoices/duplicate-guard-history'
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 ensureInitialized()
 
@@ -70,7 +71,7 @@ export const POST = withRouteContext(
       return errorResponseFromCode('VALIDATION_ERROR', opLog, { requestId, details: sekInputIssue })
     }
 
-    const paymentDate = body.payment_date || new Date().toISOString().split('T')[0]
+    const paymentDate = body.payment_date || todayIsoStockholm()
     // In the invoice's currency, like remaining_amount and the payment row.
     const paymentAmount = body.amount || invoice.remaining_amount
 

@@ -76,6 +76,7 @@ const log = createLogger('whatsapp-inbox/process-inbound')
 
 export { CHAT_ALLOWED_MIME_TYPES } from './chat-mime'
 import { CHAT_ALLOWED_MIME_TYPES, normalizeChatMime } from './chat-mime'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /** M17 is sent at most once per this window per sender, not once per file. */
 const RATE_LIMIT_NOTICE_WINDOW_MS = 10 * 60 * 1000
@@ -103,7 +104,7 @@ const sleepFn = (ms: number): Promise<void> => new Promise((resolve) => setTimeo
 
 function fallbackFilename(mime: string): string {
   const ext = EXTENSION_FOR_MIME[mime] ?? 'bin'
-  return `whatsapp-${new Date().toISOString().slice(0, 10)}.${ext}`
+  return `whatsapp-${todayIsoStockholm()}.${ext}`
 }
 
 /**

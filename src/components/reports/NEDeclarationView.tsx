@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useLocale } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -10,10 +11,11 @@ import {
   formatWholeKronor,
 } from '@/components/reports/DeclarationRutaRow'
 import type { NEDeclaration } from '@/lib/reports/ne-bilaga/types'
-import { parseApiError } from './api-error'
 import { downloadFile, RENDERED_DOWNLOAD_TIMEOUT_MS } from '@/lib/browser/download-file'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 export function NEDeclarationView({ periodId }: { periodId: string }) {
+  const errorLocale = useLocale() as ErrorLocale
   // Fetch outcome tagged with the key it was requested under: switching
   // fiscal year discards stale responses instead of leaving last year's
   // declaration on screen (same pattern as the momsdeklaration view).
@@ -38,7 +40,7 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
         if (!res.ok || json?.error) {
           setResult({
             key: fetchKey,
-            error: parseApiError(json?.error, 'Kunde inte hämta NE-bilaga'),
+            error: getErrorMessage(json, { locale: errorLocale, fallback: 'Kunde inte hämta NE-bilaga' }),
           })
         } else {
           setResult({ key: fetchKey, data: json.data })
@@ -50,7 +52,7 @@ export function NEDeclarationView({ periodId }: { periodId: string }) {
     return () => {
       cancelled = true
     }
-  }, [fetchKey, periodId])
+  }, [fetchKey, periodId, errorLocale])
 
   const upToDate = result !== null && result.key === fetchKey
   const data = result?.data ?? null
