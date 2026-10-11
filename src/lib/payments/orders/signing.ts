@@ -50,6 +50,9 @@ import {
 } from '@/lib/payments/initiation/provider'
 import { openPaymentsDoor } from './switched-on'
 import { normalizeSignerPersonalNumber, rememberSignerPersonalNumber } from '@/lib/auth/bankid-signer'
+import { bankDayFor } from './lifecycle'
+import type { PaymentOrderEvent } from './types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { createServiceClient } from '@/lib/supabase/server'
 import { applyProviderState } from './apply-state'
 import { buildPartyContext, type SignerInput } from './party'
@@ -519,9 +522,55 @@ async function createBasket(
   return { ok: true, batch: withBasket as PaymentOrderBatchRow }
 }
 
+/**
+ * An approved order whose day the bank cannot pay on (prepared before a
+ * weekend, or long ago) is re-attested by the signer with the next banking
+ * day: back to draft, the date, approved again, each step on the record. The
+ * instruction is immutable past draft, so this is the one honest way to move
+ * it; the person signing is the one attesting.
+ */
+async function reattestWithBankDay(ctx: OperationContext, orders: PaymentOrderRow[], today: string): Promise<OperationOutcome<null>> {
+  const writer = createServiceClient()
+  for (const order of orders) {
+    const to = bankDayFor(order.requested_execution_date, today)
+    if (!to || to === order.requested_execution_date) continue
+    const from = order.requested_execution_date
+    const now = new Date().toISOString()
+    const { data: back, error: backError } = await writer
+      .from('payment_orders')
+      .update({ status: 'draft', approved_by: null, approved_at: null })
+      .eq('company_id', ctx.companyId)
+      .eq('id', order.id)
+      .eq('status', 'approved')
+      .select('id')
+    if (backError) throw backError
+    if ((back ?? []).length !== 1) return { ok: false, code: 'PAYMENT_ORDERS_WRONG_STATUS', details: { payment_order_id: order.id } }
+    const { error: dateError } = await writer.from('payment_orders').update({ requested_execution_date: to }).eq('company_id', ctx.companyId).eq('id', order.id).eq('status', 'draft')
+    if (dateError) throw dateError
+    const { data: again, error: againError } = await writer
+      .from('payment_orders')
+      .update({ status: 'approved', approved_by: ctx.userId, approved_at: now })
+      .eq('company_id', ctx.companyId)
+      .eq('id', order.id)
+      .eq('status', 'draft')
+      .select('id')
+    if (againError) throw againError
+    const trail: PaymentOrderEvent[] = [
+      { company_id: ctx.companyId, payment_order_id: order.id, event_type: 'unapproved', from_status: 'approved', to_status: 'draft', actor_user_id: ctx.userId, detail: { reason: 'date_moved', from, to } },
+    ]
+    if ((again ?? []).length === 1) {
+      trail.push({ company_id: ctx.companyId, payment_order_id: order.id, event_type: 'approved', from_status: 'draft', to_status: 'approved', actor_user_id: ctx.userId, detail: { date_moved_from: from, date_moved_to: to } })
+    }
+    await logPaymentOrderEvents(writer, trail, ctx.log)
+    if ((again ?? []).length !== 1) return { ok: false, code: 'PAYMENT_ORDERS_WRONG_STATUS', details: { payment_order_id: order.id, date_moved_to: to } }
+    order.requested_execution_date = to
+  }
+  return { ok: true, data: null }
+}
+
 export async function startPaymentSigning(
   ctx: OperationContext,
-  input: { orderIds: string[]; method: SigningMethod; signer: SignerInput },
+  input: { orderIds: string[]; method: SigningMethod; signer: SignerInput; today?: string },
 ): Promise<OperationOutcome<SigningView>> {
   const ids = [...new Set(input.orderIds)]
   if (ids.length === 0) return { ok: false, code: 'PAYMENT_ORDERS_EMPTY_SELECTION' }
@@ -540,6 +589,8 @@ export async function startPaymentSigning(
   if (previewOrders.some((o) => o.status !== 'approved')) return { ok: false, code: 'PAYMENT_ORDERS_WRONG_STATUS' }
   if (new Set(previewOrders.map((o) => o.cash_account_id)).size > 1) return { ok: false, code: 'PAYMENT_ORDERS_MIXED_ACCOUNTS' }
   if (new Set(previewOrders.map((o) => o.currency)).size > 1) return { ok: false, code: 'PAYMENT_ORDERS_MIXED_CURRENCY' }
+  const reattested = await reattestWithBankDay(ctx, previewOrders, input.today ?? todayIsoStockholm())
+  if (!reattested.ok) return reattested
 
   const party = await buildPartyContext(ctx, previewOrders[0]!, input.signer, { requireSigner: true })
   if (!party.ok) return party.outcome

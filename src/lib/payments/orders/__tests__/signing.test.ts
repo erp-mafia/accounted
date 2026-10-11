@@ -98,6 +98,46 @@ describe('startPaymentSigning', () => {
     expect(db.supabase.rpc).toHaveBeenCalledWith('claim_payment_orders_for_signing', expect.objectContaining({ p_company_id: COMPANY, p_user_id: USER }))
   })
 
+  it('re-attests an approved order whose day is no banking day before the bank is asked', async () => {
+    const provider = fakeProvider({
+      createPayment: vi.fn().mockResolvedValue({ providerPaymentId: 'pay-1', product: 'swedish-giro', providerStatus: 'RCVD', status: 'submitted', messages: [] }),
+    })
+    registerPaymentInitiationProvider(provider)
+    db.setTable('payment_orders', [
+      { data: [order('o1', { requested_execution_date: '2026-10-11' }), order('o2')] }, // preview: o1 on a Saturday
+      { data: [{ id: 'o1' }] }, // o1 back to draft
+      { data: [{ id: 'o1' }] }, // o1 date
+      { data: [{ id: 'o1' }] }, // o1 approved again
+      { data: [{ id: 'o1' }] }, // o1: create started
+      { data: [{ id: 'o1' }] }, // o1: id stored
+      { data: [{ id: 'o2' }] },
+      { data: [{ id: 'o2' }] },
+      { data: [waitingOrder('o1', 1), waitingOrder('o2', 2)] },
+      { data: null },
+      { data: [waitingOrder('o1', 1, { status: 'awaiting_signature' }), waitingOrder('o2', 2, { status: 'awaiting_signature' })] },
+    ])
+    db.setTable('rpc:claim_payment_orders_for_signing', {
+      data: { ok: true, batch: batch(), orders: [claimedOrder('o1', { requested_execution_date: '2026-10-12' }), claimedOrder('o2')] },
+    })
+    db.setTable('payment_order_batches', [
+      { data: batch({ provider_batch_id: 'basket-at-bank' }) },
+      { data: batch({ provider_batch_id: 'basket-at-bank' }) },
+      { data: batch({ provider_batch_id: 'basket-at-bank', status: 'awaiting_signature', provider_authorisation_id: 'auth-1' }) },
+      { data: batch({ status: 'awaiting_signature' }) },
+    ])
+
+    const result = await startPaymentSigning(ctx, { orderIds: ['o1', 'o2'], method: 'qr', signer: SIGNER, today: '2026-10-11' })
+
+    expect(result.ok).toBe(true)
+    const patches = orderPatches()
+    expect(patches[0]).toMatchObject({ status: 'draft', approved_by: null })
+    expect(patches[1]).toEqual({ requested_execution_date: '2026-10-12' })
+    expect(patches[2]).toMatchObject({ status: 'approved', approved_by: USER })
+    expect(events().filter((e) => e.payment_order_id === 'o1').map((e) => e.event_type)).toEqual(expect.arrayContaining(['unapproved', 'approved']))
+    const instruction = (provider.createPayment as ReturnType<typeof vi.fn>).mock.calls[0]![1] as { requestedExecutionDate: string }
+    expect(instruction.requestedExecutionDate).toBe('2026-10-12')
+  })
+
   it('sends nothing for an order that moved before its create could be marked', async () => {
     const provider = fakeProvider()
     registerPaymentInitiationProvider(provider)

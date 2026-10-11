@@ -12998,6 +12998,7 @@
     "th_status": "Status",
     "th_amount": "Amount",
     "sign_selected": "{count, plural, one {Sign the payment} other {Sign # payments}}",
+    "sign_one": "Sign",
     "selected_count": "{count, plural, one {payment selected} other {payments selected}}",
     "select_all": "Select all ({count})",
     "clear_selection": "Clear",

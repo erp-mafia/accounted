@@ -20,6 +20,8 @@ import {
 import { createServiceClient } from '@/lib/supabase/server'
 import { buildPartyContext } from './party'
 import { logPaymentOrderEvents, type PaymentOrderRow } from './types'
+import { nextBankDayIso } from '@/lib/payments/bank-days'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /** What a person is told when the bank answered a cancel with anything but a confirmation. */
 const CANCEL_ANSWER_CODES: Record<Exclude<PaymentCancelOutcome, 'cancelled'>, string> = {
@@ -63,9 +65,15 @@ async function loadOrders(ctx: OperationContext, orderIds: string[]): Promise<Pa
  * that invoice named in confirmedPayeeInvoiceIds: one confirmation per
  * invoice, never one flag for a whole selection.
  */
+/** The banking day an order gets when its date is none, or has passed: never earlier than today. */
+export function bankDayFor(requested: string | null | undefined, today: string): string | null {
+  if (!requested) return null
+  return nextBankDayIso(requested < today ? today : requested)
+}
+
 export async function approvePaymentOrders(
   ctx: OperationContext,
-  input: { orderIds: string[]; confirmedPayeeInvoiceIds?: string[] },
+  input: { orderIds: string[]; confirmedPayeeInvoiceIds?: string[]; today?: string },
 ): Promise<OperationOutcome<{ approved: string[] }>> {
   const ids = [...new Set(input.orderIds)]
   if (ids.length === 0) return { ok: false, code: 'PAYMENT_ORDERS_EMPTY_SELECTION' }
@@ -88,6 +96,23 @@ export async function approvePaymentOrders(
 
   const writer = createServiceClient()
   const now = new Date().toISOString()
+  // A draft may still carry a day the bank cannot pay on (a weekend, a holiday,
+  // a day that has passed since it was prepared): it moves to the next banking
+  // day here, while the instruction can still change, and the event says so.
+  const today = input.today ?? todayIsoStockholm()
+  const movedDates = new Map<string, { from: string; to: string }>()
+  for (const o of orders) {
+    const to = bankDayFor(o.requested_execution_date, today)
+    if (!to || to === o.requested_execution_date) continue
+    const { error: moveError } = await writer
+      .from('payment_orders')
+      .update({ requested_execution_date: to })
+      .eq('company_id', ctx.companyId)
+      .eq('id', o.id)
+      .eq('status', 'draft')
+    if (moveError) throw moveError
+    movedDates.set(o.id, { from: o.requested_execution_date, to })
+  }
   const { data, error } = await writer
     .from('payment_orders')
     .update({ status: 'approved', approved_by: ctx.userId, approved_at: now })
@@ -106,9 +131,10 @@ export async function approvePaymentOrders(
       from_status: 'draft',
       to_status: 'approved',
       actor_user_id: ctx.userId,
-      detail: needsConfirmation.some((o) => o.id === id)
-        ? { confirmed_payee: needsConfirmation.find((o) => o.id === id)?.payee_check }
-        : {},
+      detail: {
+        ...(needsConfirmation.some((o) => o.id === id) ? { confirmed_payee: needsConfirmation.find((o) => o.id === id)?.payee_check } : {}),
+        ...(movedDates.has(id) ? { date_moved_from: movedDates.get(id)!.from, date_moved_to: movedDates.get(id)!.to } : {}),
+      },
     })),
     ctx.log,
   )

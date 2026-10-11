@@ -12998,6 +12998,7 @@
     "th_status": "Status",
     "th_amount": "Belopp",
     "sign_selected": "{count, plural, one {Signera betalningen} other {Signera # betalningar}}",
+    "sign_one": "Signera",
     "selected_count": "{count, plural, one {betalning vald} other {betalningar valda}}",
     "select_all": "Välj alla ({count})",
     "clear_selection": "Rensa",

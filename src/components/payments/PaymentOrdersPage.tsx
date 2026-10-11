@@ -296,7 +296,19 @@ export function PaymentOrdersPage() {
                       const checked = selected.has(order.id)
                       const canPick = isToSign && canWrite && available && selectable(order)
                       return (
-                        <tr key={order.id} className={cn('group transition-colors duration-150 hover:bg-secondary/35', checked && 'bg-secondary/40')}>
+                        <tr
+                          key={order.id}
+                          className={cn('group transition-colors duration-150 hover:bg-secondary/35', checked && 'bg-secondary/40', canPick && 'cursor-pointer')}
+                          onClick={
+                            canPick
+                              ? (e) => {
+                                  // The row is the target; its own controls keep their clicks.
+                                  if ((e.target as HTMLElement).closest('button, a, input, label, [role="checkbox"]')) return
+                                  toggle(order.id, !checked)
+                                }
+                              : undefined
+                          }
+                        >
                           {isToSign && (
                             <td className={cn(TD_CLASS, 'w-10 pr-0')}>
                               <span className={cn(CHECKBOX_REVEAL_CLASS, checked && 'opacity-100')}>
@@ -357,6 +369,11 @@ export function PaymentOrdersPage() {
                                 {order.status === 'draft' && available && (
                                   <button type="button" className={QUIET_LINK_CLASS} onClick={() => setApproving([order])} disabled={busyId !== null}>
                                     {t('approve_one')}
+                                  </button>
+                                )}
+                                {order.status === 'approved' && available && (
+                                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => setSigning([order])} disabled={busyId !== null}>
+                                    {t('sign_one')}
                                   </button>
                                 )}
                                 {order.status === 'approved' && (
