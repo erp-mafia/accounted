@@ -2365,6 +2365,8 @@ describe('ingestTransactions', () => {
     expect(result).toEqual({
       imported: 0,
       duplicates: 0,
+      duplicates_by_reason: { external_id_match: 0, content_match_booked: 0, content_match_unbooked: 0 },
+      skipped: [],
       reconciled: 0,
       auto_categorized: 0,
       auto_matched_invoices: 0,
@@ -2542,6 +2544,15 @@ describe('ingestTransactions', () => {
         viaBankRoute ? { rawInsertOnly: true, settlementAccount: '1930', bankRoute } : { rawInsertOnly: true })
       expect(result).toMatchObject({ imported: 0, duplicates: 1, errors: 0, transaction_ids: [] })
       expect(result.first_error).toBeUndefined()
+      // Named per row like every other skip; the stored row's id is not known
+      // here (the index refused, nothing was read).
+      expect(result.skipped).toEqual([{
+        external_id: raw.external_id,
+        reason: 'external_id_match',
+        matched_external_id: raw.external_id,
+        matched_transaction_id: null,
+      }])
+      expect(result.duplicates_by_reason).toEqual({ external_id_match: 1, content_match_booked: 0, content_match_unbooked: 0 })
     },
   )
 

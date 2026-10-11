@@ -37,7 +37,11 @@ candidates in different batches cannot each consume the same voucher.
   the records keep their state and code, so the result keeps listing them.
   Retry re-queues only the failed records and notes each one's code in
   `receipt.previous_error_code`; once every record fails again the same way the
-  wizard stops offering it. A job paused mid-run is resumed, never accepted.
+  wizard stops offering it. A review lists at most 500 records and says so;
+  with more, the codes of all of them are read once the listed ones repeated,
+  so a long review stops offering the retry too. A listed record that reached
+  Accounted opens its own page (`target_id`), where its payment is linked to a
+  verifikat or marked by hand. A job paused mid-run is resumed, never accepted.
 - The authenticated worker cron runs every minute in the hosted and generated
   self-hosted schedules. Each invocation stops at a 210-second budget. Its
   five-minute lease is reclaimed after a crash. Each record write is fenced by

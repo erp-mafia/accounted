@@ -121,6 +121,11 @@ export interface ProviderMigrationIssue {
   error_phase: MigrationIssuePhase | null
   /** The record is in Accounted: only its voucher link or payment check stopped. */
   imported: boolean
+  /**
+   * The record's own row in Accounted when it is there (an invoice, a
+   * supplier invoice, a customer or a supplier): what the review opens.
+   */
+  target_id: string | null
   /** The last retry ended with this same code: retrying again alone changes nothing. */
   repeated: boolean
   label: MigrationIssueLabel | null
@@ -197,6 +202,23 @@ const TRANSIENT_ISSUE_CODES = new Set([
 
 export function isTransientIssueCode(code: string | null | undefined): boolean {
   return !!code && TRANSIENT_ISSUE_CODES.has(code)
+}
+
+/** The page of each register's records in Accounted. */
+const ISSUE_PAGES: Record<MigrationResource, string> = {
+  customers: '/customers',
+  suppliers: '/suppliers',
+  salesInvoices: '/invoices',
+  supplierInvoices: '/supplier-invoices',
+}
+
+/**
+ * Where a record that needs attention opens in Accounted, or null for one
+ * that never reached it. The invoice's own page is where a payment is linked
+ * to its verifikat or marked by hand; the review only names what stopped.
+ */
+export function migrationIssueHref(issue: Pick<ProviderMigrationIssue, 'resource' | 'target_id'>): string | null {
+  return issue.target_id ? `${ISSUE_PAGES[issue.resource]}/${encodeURIComponent(issue.target_id)}` : null
 }
 
 /** Why one record needs attention, in the terms the review explains it in. */

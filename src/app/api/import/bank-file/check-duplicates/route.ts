@@ -20,9 +20,10 @@ ensureInitialized()
  *
  * A dedicated endpoint rather than part of /parse because the generic_csv
  * path re-parses client-side after column mapping and never re-hits the parse
- * route. The result is ADVISORY: execute's own ingest result stays
- * authoritative (see lib/transactions/dedup-preview.ts for the deliberate
- * preview/execute differences), and nothing is written here.
+ * route. The preview runs the decision function execute runs; it is ADVISORY
+ * only because the settlement account is not picked yet (see
+ * lib/transactions/dedup-preview.ts), so execute's own ingest result stays
+ * authoritative. Nothing is written here.
  */
 export const POST = withRouteContext(
   'bank_file.check_duplicates',
@@ -55,6 +56,9 @@ export const POST = withRouteContext(
         format,
         index,
       ),
+      // The same channel tag execute stamps: the cross-channel and
+      // hand-entered mirrors are gated on it.
+      import_source: format === 'camt053' ? 'camt053' : `csv_${format}`,
     }))
 
     const preview = await previewDuplicates(supabase, companyId, raws)

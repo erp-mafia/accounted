@@ -12526,8 +12526,8 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase) {
       const sieDimNo = String(args.sie_dim_no ?? '').trim()
-      // Positive-integer guard: the value is interpolated into a PostgREST
-      // jsonb path expression downstream, so free-form strings are rejected.
+      // Positive-integer guard: the value is a key into each line's
+      // dimensions bag downstream, so free-form strings are rejected.
       if (!/^[1-9]\d{0,3}$/.test(sieDimNo)) {
         throw new Error("sie_dim_no must be a positive SIE dimension number, e.g. '1' (kostnadsställe) or '6' (projekt).")
       }

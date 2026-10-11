@@ -28,7 +28,7 @@ import {
   defaultCountryForParty,
   normalizeCountryCode,
 } from '@/lib/vat/country-codes'
-import { fetchExchangeRate } from '@/lib/currency/riksbanken'
+import { fetchExchangeRate, isExchangeRateTemporarilyUnavailable } from '@/lib/currency/riksbanken'
 import {
   resolveSupplierInvoiceExchangeRate,
   supplierInvoiceSekAmounts,
@@ -417,6 +417,26 @@ type ExecutorResult = {
   // the approval can be given again once the other call is done instead of
   // the op being consumed as 'rejected'.
   returnToPending?: boolean
+}
+
+/**
+ * Refusal for a staged foreign-currency operation whose rate lookup hit a
+ * temporary Riksbanken refusal (rate limit, outage). Nothing is wrong with the
+ * operation and nothing has been written, so it goes back to 'pending' and the
+ * same approval works a minute later. As 'rejected' it was consumed, and the
+ * user had to stage the row again for a failure that was not about the row.
+ * Only for a refusal made before any write.
+ */
+function exchangeRateRetryLater(): ExecutorResult {
+  const entry = getErrorEntry('FX_RATE_TEMPORARILY_UNAVAILABLE')
+  return {
+    error:
+      entry?.message_sv ??
+      'Riksbanken svarar inte just nu, så växelkursen kunde inte hämtas. Inget har bokförts och åtgärden ligger kvar: godkänn den igen om en stund.',
+    errorCode: 'FX_RATE_TEMPORARILY_UNAVAILABLE',
+    status: entry?.httpStatus ?? 503,
+    returnToPending: true,
+  }
 }
 
 /** A draft without a customer (crm#263): refused before anything changes. */
@@ -1999,6 +2019,10 @@ async function commitCreateTransaction(
       }
     }
     if (!rateInfo || !Number.isFinite(rateInfo.rate) || rateInfo.rate <= 0) {
+      // Riksbanken rate-limits per IP, and an outage looks the same from
+      // here: the rate exists, it just could not be fetched right now. The
+      // refusal below is for a rate that does not exist.
+      if (isExchangeRateTemporarilyUnavailable(currency)) return exchangeRateRetryLater()
       // Refuse rather than insert with NULL. ingest.ts may store NULL because
       // it is a bulk bank feed where one unreachable rate must not abort the
       // batch, and its rows stay repairable via
@@ -2116,6 +2140,9 @@ async function commitCreateInvoice(
     invoiceFields.currency !== 'SEK' &&
     !(typeof invoiceFields.exchange_rate === 'number' && Number.isFinite(invoiceFields.exchange_rate) && invoiceFields.exchange_rate > 0)
   ) {
+    // Nothing has been inserted yet (buildStagedInvoice only reads), so a
+    // temporary Riksbanken refusal leaves the operation approvable.
+    if (isExchangeRateTemporarilyUnavailable(invoiceFields.currency)) return exchangeRateRetryLater()
     return {
       error:
         getErrorEntry('INVOICE_FX_RATE_MISSING')?.message_sv ??
@@ -4795,6 +4822,9 @@ async function commitCreateSupplierInvoiceFromInbox(
     suppliedRate: exchangeRate,
   })
   if (!fx.ok) {
+    // Resolved before the ankomstnummer is drawn (see above), so a temporary
+    // Riksbanken refusal leaves the operation approvable.
+    if (fx.temporary) return exchangeRateRetryLater()
     return {
       error:
         getErrorEntry('SI_FX_RATE_MISSING')?.message_sv ??

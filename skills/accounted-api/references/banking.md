@@ -3435,10 +3435,12 @@ Runs the same ingest pipeline as the dashboard CSV importer and the PSD2 bank sy
 
 **Pitfalls:**
 - external_id is the primary dedup key: make it stable for the same physical transaction across reruns.
-- Content-based dedup runs in addition: a row matching an already-booked transaction by date, amount AND description (prefix-containment, to survive PSD2 title enrichment) is skipped even if external_id differs.
+- Content-based dedup runs in addition: a row matching a stored transaction (booked, or unbooked from an import feed) by date, amount, currency, account AND description (prefix-containment, to survive PSD2 title enrichment) is skipped even if external_id differs. Each stored row absorbs at most one incoming row per call.
+- Identical real movements (a bank that books several identical fees on one day) each need their own external_id. Sent in one call they are all imported; sent in a later call, alone, a new one is absorbed by a stored twin unless you set stable_external_ids=true. Set it only when the id is the bank's own per-booking reference (never for line numbers or content hashes) and keep one import_source per id scheme: if the scheme changes, change the label.
+- A skipped row is never only counted: the response lists it in `skipped` with its reason (external_id_match, content_match_booked, content_match_unbooked) and the stored transaction it matched. Treat a content_match on a row you know is new as a missing transaction and alert on it.
 - raw_insert_only=true skips ALL post-insert pipeline steps (matching, categorization). Use for viewer-only imports.
 - Max 500 items per call. For larger imports, split into pages of 500.
-- Dry-run previews external_id + content dedup against BOOKED rows only; the live pipeline also dedups against unbooked bank-synced rows, so preview skips are a lower bound on the live skip count.
+- Dry-run runs the same dedup decision as the commit, row by row, with the same reasons. It differs only if the stored transactions change in between.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -3451,7 +3453,8 @@ Request body:
   transactions: { date: string, description: string, amount: number, currency: string, external_id: string, mcc_code?: number | null, merchant_name?: string | null, reference?: string | null, import_source?: string }[],
   skip_auto_categorization?: boolean,
   settlement_account?: string,
-  raw_insert_only?: boolean
+  raw_insert_only?: boolean,
+  stable_external_ids?: boolean
 }
 ```
 
@@ -3477,6 +3480,8 @@ Response `200`:
   data: {
     imported: number,
     duplicates: number,
+    duplicates_by_reason: { external_id_match: number, content_match_booked: number, content_match_unbooked: number },
+    skipped: { external_id: string, reason: "external_id_match" | "content_match_booked" | "content_match_unbooked", matched_external_id: string | null, matched_transaction_id: string | null }[],
     reconciled: number,
     auto_categorized: number,
     auto_matched_invoices: number,
@@ -3500,7 +3505,20 @@ Example response `200`:
 {
   "data": {
     "imported": 1,
-    "skipped_duplicates": 0
+    "duplicates": 0,
+    "duplicates_by_reason": {
+      "external_id_match": 0,
+      "content_match_booked": 0,
+      "content_match_unbooked": 0
+    },
+    "skipped": [],
+    "reconciled": 0,
+    "auto_categorized": 0,
+    "auto_matched_invoices": 0,
+    "errors": 0,
+    "transaction_ids": [
+      "5b1f6c1e-8a3d-4f0e-9a51-2f6d0c9b7e10"
+    ]
   },
   "meta": {
     "request_id": "req_…",

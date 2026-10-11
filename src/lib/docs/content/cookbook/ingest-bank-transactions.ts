@@ -59,6 +59,7 @@ On \`succeeded\`:
       "file_hash": "e3b0c44298fc...",
       "transactions_imported": 165,
       "transactions_duplicates": 22,
+      "transactions_duplicates_by_reason": { "external_id_match": 20, "content_match_booked": 0, "content_match_unbooked": 2 },
       "transactions_reconciled": 0,
       "transactions_auto_categorized": 0,
       "transactions_errors": 0,
@@ -71,7 +72,7 @@ On \`succeeded\`:
 }
 \`\`\`
 
-Note the dedup: each row gets a stable \`external_id\` (composed from date + amount + counterparty) as the primary dedup key, and a secondary content match on \`(date, amount, description)\` against already-booked rows also skips duplicates. Re-uploading the same file is safe.
+Note the dedup: each row gets a stable \`external_id\` (composed from date + amount + counterparty) as the primary dedup key, and a secondary content match on \`(date, amount, description)\` against stored rows (booked, or unbooked from an import feed) also skips duplicates. Re-uploading the same file is safe. \`transactions_duplicates_by_reason\` splits the count: an \`external_id_match\` is an exact key, a \`content_match_*\` is a judgement that the row is already stored.
 
 ## 3. List uncategorised transactions
 

@@ -457,9 +457,12 @@ describe('syncStripeBalanceTransactions', () => {
     expect(companyId).toBe('company-1')
     expect(userId).toBe('user-1')
     expect((rows as unknown[]).length).toBe(2)
+    // stableExternalIds: a Stripe id names one booking for good, so a second
+    // identical refund in a later ingest call is never a copy of the first.
     expect(options).toEqual({
       settlementAccount: STRIPE_LEDGER_ACCOUNT,
       skipAutoCategorization: true,
+      stableExternalIds: true,
     })
   })
 

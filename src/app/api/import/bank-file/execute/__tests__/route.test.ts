@@ -164,6 +164,38 @@ describe('POST /api/import/bank-file/execute (SIE overlap)', () => {
     expect(sweepMock).not.toHaveBeenCalled()
   })
 
+  // The response says WHY rows were skipped (the split by reason). The per-row
+  // list stays server-side: a re-exported statement skips every row on
+  // content, and the wizard's preview already marked those rows one by one.
+  it('returns the duplicate count split by reason, without the per-row list', async () => {
+    const duplicatesByReason = { external_id_match: 1, content_match_booked: 0, content_match_unbooked: 1 }
+    ingestMock.mockResolvedValue(emptyIngestResult({
+      imported: 0,
+      duplicates: 2,
+      duplicates_by_reason: duplicatesByReason,
+      skipped: [
+        { external_id: 'seb_a', reason: 'external_id_match', matched_external_id: 'seb_a', matched_transaction_id: 't-9' },
+        { external_id: 'seb_b', reason: 'content_match_unbooked', matched_external_id: 'eb_x', matched_transaction_id: 't-8' },
+      ],
+      transaction_ids: [],
+    }))
+    enqueue({ data: { id: 'import-1' } }) // upsert
+    enqueue({ data: null }) // sie_imports overlap: none
+    enqueue({ data: null }) // status update
+
+    const request = createMockRequest('/api/import/bank-file/execute', {
+      method: 'POST',
+      body: makeBody(),
+    })
+    const response = await POST(request, emptyParams)
+    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.duplicates).toBe(2)
+    expect(body.data.duplicates_by_reason).toEqual(duplicatesByReason)
+    expect(body.data).not.toHaveProperty('skipped')
+  })
+
   it('never sweeps for a viewer (raw insert only)', async () => {
     getCompanyRoleMock.mockResolvedValue({ ok: true, role: 'viewer', companyId: 'company-1' })
     enqueue({ data: { id: 'import-1' } }) // upsert

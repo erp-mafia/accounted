@@ -158,9 +158,13 @@ function readVatReceivableBalance(supabase: SupabaseClient, companyId: string): 
 
 /**
  * The largest gap between the refund and the 1650 receivable that is booked
- * as rounding. The declaration rounds each ruta to whole kronor while the
- * momsavräkning rounds the net, so Skatteverket's refund can differ from the
- * receivable by a krona; the settlement itself puts its rounding on 3740.
+ * as rounding. A declaration filed from here now carries the settlement's own
+ * whole-krona net (rutorToMomsuppgift takes it from buildFiledAmounts), so
+ * the two agree. The gap remains for the periods filed before that: the
+ * integration then rounded each ruta to the nearest krona while the
+ * momsavräkning dropped the öre, so Skatteverket's refund can differ from the
+ * receivable by a krona. It also covers a declaration typed in by hand with
+ * other whole-krona amounts. The settlement itself puts its rounding on 3740.
  * A larger gap is no rounding: such a refund keeps the rule's account.
  */
 const VAT_REFUND_ROUNDING_LIMIT = 1

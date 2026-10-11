@@ -24,7 +24,10 @@ import type { VatPeriodType } from '@/types'
  *   - the net goes to 2650 (Redovisningskonto för moms, credit = att betala)
  *     or 1650 (Momsfordran, debit = att återfå) at the WHOLE-KRONA amount the
  *     declaration is filed with (buildFiledAmounts: öretal faller bort per
- *     SFL 22 kap 1 §), so 2650/1650 always matches the skattekonto movement;
+ *     SFF 2011:1261 22 kap. 1 §), so 2650/1650 always matches the skattekonto
+ *     movement, whether the period is filed by file, by hand or through the
+ *     Skatteverket integration (all three take their amounts from
+ *     buildFiledAmounts);
  *   - the öre gap between the exact clearing lines and the filed net is
  *     balanced on 3740 (Öres- och kronutjämning).
  *

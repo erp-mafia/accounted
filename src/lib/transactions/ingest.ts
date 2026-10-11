@@ -20,7 +20,7 @@ import { classifyTransactionMethod } from '@/lib/transactions/transaction-method
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { createLogger } from '@/lib/logger'
 import { physicalAccountKey, reenableIfUnused, sameCashAccount } from '@/lib/cash-accounts/service'
-import type { Transaction, RawTransaction, IngestResult, IngestOptions, SupplierInvoice, Currency, ExchangeRate } from '@/types'
+import type { Transaction, RawTransaction, IngestResult, IngestOptions, IngestSkipReason, IngestSkippedRow, SupplierInvoice, Currency, ExchangeRate } from '@/types'
 
 /**
  * Sentinel for a (date, öre) bucket whose incoming rows carry more than one
@@ -61,6 +61,12 @@ export type BucketEntry = {
    * Layer-1 already reconciles. Null for rows predating the column.
    */
   externalId: string | null
+  /**
+   * The bank connection the stored row belongs to (null for file imports, API
+   * feeds, hand-entered rows, and rows whose connection was deleted). Part of
+   * "the same feed" in isOtherBookingOfSameFeed.
+   */
+  bankConnectionId: string | null
 }
 
 /**
@@ -115,6 +121,7 @@ function addToBucket(
   isImportFeed: boolean,
   currency: string | null,
   externalId: string | null,
+  bankConnectionId: string | null,
 ): string {
   const key = contentBucketKey(date, amount)
   const entry: BucketEntry = {
@@ -125,6 +132,7 @@ function addToBucket(
     isImportFeed,
     currency,
     externalId,
+    bankConnectionId,
   }
   const entries = bucket.get(key)
   if (entries) entries.push(entry)
@@ -226,6 +234,7 @@ export async function buildExistingTransactionMaps(
         isImportedTransaction({ import_source: tx.import_source, bank_connection_id: tx.bank_connection_id }),
         tx.currency ?? null,
         tx.external_id ?? null,
+        tx.bank_connection_id ?? null,
       )
       if (tx.external_id) bucketKeyByExternalId.set(tx.external_id, key)
     }
@@ -268,6 +277,7 @@ export async function buildExistingTransactionMaps(
         isImportedTransaction({ import_source: tx.import_source, bank_connection_id: tx.bank_connection_id }),
         tx.currency ?? null,
         tx.external_id ?? null,
+        tx.bank_connection_id ?? null,
       )
       if (tx.external_id) bucketKeyByExternalId.set(tx.external_id, key)
     }
@@ -276,6 +286,514 @@ export async function buildExistingTransactionMaps(
   }
 
   return { booked, unbookedImported, bucketKeyByExternalId }
+}
+
+// ---------------------------------------------------------------------------
+// The dedup decision
+//
+// ONE definition of "is this incoming row already stored?", used by the commit
+// loop in ingestTransactions AND by the read-only previews
+// (lib/transactions/dedup-preview.ts: the v1 dry-run and the bank-file
+// wizard). They used to be separate implementations and drifted: the v1
+// dry-run knew only booked rows and had no account guard, currency guard,
+// mirrors or id re-keying, so it could promise an import the commit skipped.
+//
+// Preparation is three reads (the stored content maps, the stored ids, the
+// batch's cash account) around two pure steps (rekeyIncomingExternalIds,
+// buildIngestDedupState). The per-row decision (decideIngestRow) is pure and
+// consumes stored twins as it goes, so walking the same rows in the same order
+// over the same stored state gives the same answers, whoever asks.
+// ---------------------------------------------------------------------------
+
+/** What the dedup layers read from an incoming row. */
+export type DedupRow = {
+  date: string
+  amount: number
+  description: string
+  external_id: string
+  currency?: string | null
+  import_source?: string | null
+  bank_connection_id?: string | null
+}
+
+/**
+ * Stable (date, öre, index) ids name a transaction only while its bucket's set
+ * of rows never changes; a late-booked sibling would otherwise take a stored
+ * row's index and be skipped as a duplicate. Re-key them against the stored
+ * rows before any dedup layer runs (see reconcileStableExternalIds). Returns
+ * the rows in input order; a row whose id did not move is returned as is.
+ *
+ * @param stableExternalIds IngestOptions.stableExternalIds
+ */
+export function rekeyIncomingExternalIds<T extends DedupRow>(
+  rows: T[],
+  existingMaps: ExistingTransactionMaps,
+  stableExternalIds = false,
+): T[] {
+  // An id that IS the booking's identity is never re-keyed: pairing it with a
+  // stored row by description would turn a new booking into a Layer-1 hit.
+  if (stableExternalIds) return rows
+  const reconciledIds = reconcileStableExternalIds(
+    rows.map((raw) => ({ external_id: raw.external_id, description: normalizeImportedDescription(raw.description) })),
+    [...existingMaps.booked.values(), ...existingMaps.unbookedImported.values()].flat(),
+  )
+  return rows.map((raw, i) =>
+    reconciledIds[i] === raw.external_id ? raw : { ...raw, external_id: reconciledIds[i] })
+}
+
+/**
+ * Which of these external_ids are already stored for the company (Layer 1),
+ * mapped to the stored row's id. Chunked to stay clear of URL length limits.
+ */
+export async function fetchStoredExternalIds(
+  supabase: SupabaseClient,
+  companyId: string,
+  externalIds: string[],
+): Promise<Map<string, string | null>> {
+  const stored = new Map<string, string | null>()
+  for (let i = 0; i < externalIds.length; i += 500) {
+    const chunk = externalIds.slice(i, i + 500)
+    const { data } = await supabase
+      .from('transactions')
+      .select('id, external_id')
+      .eq('company_id', companyId)
+      .in('external_id', chunk)
+    data?.forEach((r) => stored.set(r.external_id, r.id ?? null))
+  }
+  return stored
+}
+
+type BoundCashAccountRow = {
+  id: string
+  ledger_account: string
+  iban: string | null
+  currency: string
+  enabled?: boolean | null
+  bank_connection_id?: string | null
+  invoice_payee?: boolean | null
+}
+
+/** The cash account a batch settles on, plus every row's physical key. */
+export interface BatchCashAccount {
+  cashAccountId: string | null
+  boundRow: BoundCashAccountRow | null
+  /** row id -> physicalAccountKey (IBAN + currency); rows without a key omitted. */
+  physicalKeyById: Map<string, string>
+  error: { message: string } | null
+}
+
+/**
+ * Resolve the cash account a batch settles on. READ-ONLY: the commit path
+ * re-enables a disabled account afterwards, a preview never does.
+ *
+ * Every row in one ingest call shares a settlement account: enable-banking
+ * calls ingest per account (settlementAccount = account.ledger_account), CSV
+ * import passes the single account the user picked. cash_accounts.ledger_account
+ * is unique per company, so at most one row matches. A miss is tolerated: the
+ * row stays unbound (cash_account_id NULL) and reconciliation falls back to
+ * currency. Nothing is auto-created here: a caller that lets the user pick a
+ * ledger (the bank-file execute route) runs ensureManualCashAccount first.
+ *
+ * The same read yields every row's physical key (IBAN + currency) for the
+ * account guard: a broken reconnect leaves two rows for one bank account, and
+ * comparing row ids alone made the content check treat them as two accounts
+ * (see sameCashAccount). Without a settlement account the guard never rejects,
+ * so the read is skipped.
+ */
+export async function readBatchCashAccount(
+  supabase: SupabaseClient,
+  companyId: string,
+  settlementAccount: string | undefined,
+): Promise<BatchCashAccount> {
+  const account: BatchCashAccount = {
+    cashAccountId: null,
+    boundRow: null,
+    physicalKeyById: new Map<string, string>(),
+    error: null,
+  }
+  if (!settlementAccount) return account
+  const { data: cashAccountRows, error: cashAccountError } = await supabase
+    .from('cash_accounts')
+    .select('id, ledger_account, iban, currency, enabled, bank_connection_id, invoice_payee')
+    .eq('company_id', companyId)
+  account.error = cashAccountError ?? null
+  for (const row of (cashAccountRows ?? []) as BoundCashAccountRow[]) {
+    if (row.ledger_account === settlementAccount) {
+      account.cashAccountId = row.id
+      account.boundRow = row
+    }
+    const key = physicalAccountKey(row)
+    if (key) account.physicalKeyById.set(row.id, key)
+  }
+  return account
+}
+
+/** Everything decideIngestRow needs, fixed before the first row is decided. */
+export interface IngestDedupState {
+  existingMaps: ExistingTransactionMaps
+  /** Stored external_id -> stored row id, for the ids this batch carries. */
+  storedExternalIds: ReadonlyMap<string, string | null>
+  cashAccountId: string | null
+  physicalKeyById: ReadonlyMap<string, string>
+  /** The first row's import_source: every row in one call shares a channel. */
+  batchSource: string | null
+  batchIsImportFeed: boolean
+  /** IngestOptions.stableExternalIds: the batch's ids identify bookings. */
+  stableExternalIds: boolean
+  /** Incoming rows per (date, öre) bucket (import-feed batches only). */
+  incomingByBucket: Map<string, number>
+  /** Stored rows from a DIFFERENT feed per bucket (import-feed batches only). */
+  crossSourceStoredByBucket: Map<string, number>
+  /** Incoming rows Layer 1 will not reconcile, per bucket (import-feed batches only). */
+  unmatchedIncomingByBucket: Map<string, number>
+  /** Guarded booked hand-entered candidates per bucket (import-feed batches only). */
+  bookedHandEnteredByBucket: Map<string, number>
+}
+
+/**
+ * Fix the per-batch facts the row decisions depend on. Pure; it mutates
+ * `existingMaps` once, to reserve the stored rows Layer 1 accounts for.
+ *
+ * Every row in one ingest call shares an import_source (EB sync passes
+ * 'enable_banking', bank-file import passes 'csv_<format>'/'camt053'), so the
+ * first row's source identifies this batch's channel. We use it to find
+ * "cross-channel mirror" buckets: a (date, öre) bucket where the number of
+ * incoming rows EQUALS the number of stored rows from a DIFFERENT feed. That
+ * equality is the signal that the same set of real transactions is arriving
+ * once per channel (e.g. Nordea's CSV export and its PSD2 feed), where the
+ * per-row description is known-unreliable: CSV shows the payee, PSD2 the
+ * OCR/message, or vice versa. Only in those buckets do we dedup on
+ * (date, öre, account) without a description match (see decideIngestRow).
+ * An asymmetric bucket keeps the description requirement, so a genuinely-new
+ * row is never collapsed into a different one.
+ *
+ * The same count-symmetry signal also runs against BOOKED hand-entered rows
+ * (import_source manual/mcp/null): a user who bookkeeps by chat/MCP first and
+ * connects the bank afterwards has already put the movement in the ledger,
+ * and the feed's copy of it must not re-appear as a duplicate. This mirror is
+ * gated harder than feed-vs-feed: the stored row must be BOOKED (staged/
+ * unbooked hand-entered rows never consume an import), its currency must not
+ * contradict the incoming row's, its cash account must be compatible, and the
+ * bucket counts must match exactly. Tracked in a SEPARATE count map so the
+ * feed-vs-feed mirror semantics are untouched: a hand-entered twin never
+ * breaks feed count symmetry.
+ */
+export function buildIngestDedupState(input: {
+  /** Incoming rows, already re-keyed (rekeyIncomingExternalIds). */
+  rows: DedupRow[]
+  existingMaps: ExistingTransactionMaps
+  storedExternalIds: ReadonlyMap<string, string | null>
+  cashAccountId: string | null
+  physicalKeyById: ReadonlyMap<string, string>
+  /** IngestOptions.stableExternalIds */
+  stableExternalIds?: boolean
+}): IngestDedupState {
+  const { rows, existingMaps, storedExternalIds, cashAccountId, physicalKeyById } = input
+  const batchSource = rows[0]?.import_source ?? null
+  const batchIsImportFeed = isImportedTransaction({ import_source: batchSource })
+  const incomingByBucket = new Map<string, number>()
+  const crossSourceStoredByBucket = new Map<string, number>()
+  const incomingCurrencyByBucket = new Map<string, string | null | typeof MIXED_CURRENCIES>()
+  if (batchIsImportFeed) {
+    for (const raw of rows) {
+      const k = contentBucketKey(raw.date, raw.amount)
+      incomingByBucket.set(k, (incomingByBucket.get(k) ?? 0) + 1)
+      const cur = raw.currency ?? null
+      if (!incomingCurrencyByBucket.has(k)) incomingCurrencyByBucket.set(k, cur)
+      else if (incomingCurrencyByBucket.get(k) !== cur) incomingCurrencyByBucket.set(k, MIXED_CURRENCIES)
+    }
+    for (const bucket of [existingMaps.booked, existingMaps.unbookedImported]) {
+      for (const [k, entries] of bucket) {
+        for (const entry of entries) {
+          if (entry.isImportFeed && entry.source !== batchSource) {
+            crossSourceStoredByBucket.set(k, (crossSourceStoredByBucket.get(k) ?? 0) + 1)
+          }
+        }
+      }
+    }
+  }
+
+  // A stored row an incoming id names is accounted for by Layer 1: take it out
+  // of the content buckets BEFORE any row is decided, so no other incoming row
+  // (earlier in the batch or later) can also be deduped against it. Counting
+  // semantics then hold across both layers, independent of batch order.
+  for (const raw of rows) {
+    if (storedExternalIds.has(raw.external_id)) consumeByExternalId(existingMaps, raw.external_id)
+  }
+
+  // Incoming rows Layer-1 will NOT reconcile (their external_id is not already
+  // stored): the honest per-bucket count of rows that will actually reach the
+  // content-dedup layer. Shared by the hand-entered mirror (enforcing) and the
+  // scope-drift shadow (measure-only): the coarse incomingByBucket would let a
+  // Layer-1 duplicate inflate the symmetry check.
+  const unmatchedIncomingByBucket = new Map<string, number>()
+  if (batchIsImportFeed) {
+    for (const raw of rows) {
+      if (!storedExternalIds.has(raw.external_id)) {
+        const k = contentBucketKey(raw.date, raw.amount)
+        unmatchedIncomingByBucket.set(k, (unmatchedIncomingByBucket.get(k) ?? 0) + 1)
+      }
+    }
+  }
+
+  // ── Booked-hand-entered mirror candidates ────────────────────────────────
+  // Counted with the SAME guards the consume step applies (account
+  // compatibility + currency). Counting entries the consume step would reject
+  // makes "symmetry" lie: an unconsumable twin could switch the mirror on and
+  // collapse a genuinely-new row. Hand-entered candidates exist ONLY in the
+  // booked map: the unbooked map's query excludes manual/mcp/null sources at
+  // the DB level.
+  const bookedHandEnteredByBucket = new Map<string, number>()
+  if (batchIsImportFeed) {
+    for (const [k, entries] of existingMaps.booked) {
+      const bucketCurrency = incomingCurrencyByBucket.get(k)
+      // No incoming rows in this bucket, or the incoming rows disagree on
+      // currency: the currency gate cannot be evaluated per-bucket, so the
+      // hand-entered mirror stays off there (conservative: row inserts).
+      if (bucketCurrency === undefined || bucketCurrency === MIXED_CURRENCIES) continue
+      for (const entry of entries) {
+        if (entry.isImportFeed) continue
+        const accountCompatible = sameCashAccount(cashAccountId, entry.cashAccountId, physicalKeyById)
+        if (!accountCompatible) continue
+        if (entry.currency !== null && bucketCurrency !== null && entry.currency !== bucketCurrency) continue
+        bookedHandEnteredByBucket.set(k, (bookedHandEnteredByBucket.get(k) ?? 0) + 1)
+      }
+    }
+  }
+
+  return {
+    existingMaps,
+    storedExternalIds,
+    cashAccountId,
+    physicalKeyById,
+    batchSource,
+    batchIsImportFeed,
+    stableExternalIds: input.stableExternalIds === true,
+    incomingByBucket,
+    crossSourceStoredByBucket,
+    unmatchedIncomingByBucket,
+    bookedHandEnteredByBucket,
+  }
+}
+
+/**
+ * Identity beats content. True when the ids alone prove that a stored row is
+ * a DIFFERENT booking than the incoming one, however alike the two look.
+ *
+ * That takes two facts. The feed has stated that its external_ids are the
+ * source's own per-booking references (IngestOptions.stableExternalIds), and
+ * the stored row was named by the same feed under another id. The feed would
+ * have re-sent that stored booking under the id it is stored with, and Layer 1
+ * would have caught it; an id never seen before is therefore a booking never
+ * seen before. A bank that books several identical fees on one day, each with
+ * its own reference, is the case: the third fee arriving a day later is not a
+ * copy of the first two.
+ *
+ * "The same feed" is the same import-feed import_source and the same bank
+ * connection (both null for file imports and API feeds). The connection is
+ * part of it because a provider's ids are often minted per consent: after a
+ * reconnect, or once the old connection is gone, the old rows are another
+ * namespace and dedup on content again.
+ *
+ * Where the ids cannot speak, this is false and content plus count decide as
+ * before: a stored row from another channel (a bank file, another provider, a
+ * booked hand-entered row), a stored row without an id, and every feed that
+ * has not made the statement (ids derived from content or position can change
+ * for the same booking, which is exactly what the bridge is for).
+ */
+export function isOtherBookingOfSameFeed(
+  state: Pick<IngestDedupState, 'stableExternalIds'>,
+  raw: Pick<DedupRow, 'external_id' | 'import_source' | 'bank_connection_id'>,
+  entry: Pick<BucketEntry, 'source' | 'externalId' | 'bankConnectionId'>,
+): boolean {
+  if (!state.stableExternalIds) return false
+  const feed = raw.import_source ?? null
+  // No feed label, no namespace: a source-less or hand-entered batch shares
+  // its (absent) label with rows typed in by hand.
+  if (!isImportedTransaction({ import_source: feed })) return false
+  return (
+    entry.source === feed &&
+    (entry.bankConnectionId ?? null) === (raw.bank_connection_id ?? null) &&
+    entry.externalId !== null &&
+    entry.externalId !== raw.external_id
+  )
+}
+
+/** What the pipeline will do with one incoming row. */
+export type IngestRowDecision =
+  | { skip: false }
+  | {
+      skip: true
+      reason: IngestSkipReason
+      /** The stored row that stands for the incoming one. */
+      matchedExternalId: string | null
+      matchedTransactionId: string | null
+      /** The consumed content twin; null for an external_id match. */
+      twin: BucketEntry | null
+    }
+
+/**
+ * Decide one incoming row: insert it, or skip it as already stored. Rows must
+ * be decided in input order, each exactly once: a content match CONSUMES its
+ * stored twin.
+ *
+ * 1. Layer 1: the row's external_id is already stored.
+ *
+ * 1b/1c. Content-dedup bridge: skip if an existing booked row (any source)
+ * OR an unbooked import-feed row shares this (date, öre) bucket and EITHER
+ * (a) a *bridging* description (prefix-containment, see descriptionsBridge),
+ * OR (b) the bucket is a cross-channel mirror (crossSourceMirror below),
+ * OR (c) the bucket is a booked-hand-entered mirror (handEnteredMirror).
+ * (a) catches re-imports the external_id check misses: old-format ids
+ * re-synced after the id scheme changed, and PSD2 description enrichment
+ * between syncs ("TIC" → "TIC  BG … via internet"). (b) catches the same
+ * bank account imported via two channels whose descriptions don't bridge at
+ * all (Nordea CSV payee "TELENOR"/"Nordea" vs PSD2 OCR/message), which (a)
+ * alone cannot. (c) catches the feed delivering a movement the user already
+ * booked by hand (MCP/manual) under a free-form title that shares no text
+ * with the bank's ("Egen insättning …" vs "TRANSFER-123 Topped up").
+ * Booked first, then unbooked.
+ *
+ * Consumed with COUNTING semantics: each match splices one stored entry out
+ * of its bucket, so N stored twins dedup exactly N incoming and two
+ * genuinely-distinct same-(date,amount) transactions are kept apart. The
+ * text bridge is tried first (LONGEST bridging description wins, so a
+ * more-specific twin is matched before a generic one); the cross-channel
+ * mirror is the text-independent fallback.
+ *
+ * Account guard: when BOTH the incoming batch and a stored entry have a known
+ * cash_account_id, they must be the same bank account (same row, or two rows
+ * sharing IBAN + currency: sameCashAccount), so a transaction on one bank account
+ * never deduplicates a genuinely-different one on another account of the same
+ * company (the content bucket is company-wide; only external_id embeds the
+ * account). A null on either side falls back to bridge-allowed, leaving
+ * single-account and legacy (un-backfilled) rows exactly as before. The guard
+ * applies to BOTH the text and the cross-channel-mirror path.
+ *
+ * Currency guard: same shape, same null-tolerance, applied to all three
+ * match paths. The bucket key carries no currency, so 250,00 EUR and
+ * 250,00 SEK on one date share a bucket; without this an incoming row in
+ * one currency consumes a stored row in another and the survivor is never
+ * bokförd. A null on either side stays compatible (legacy rows).
+ *
+ * crossSourceMirror: this (date, öre) bucket holds the same number of
+ * incoming rows as stored rows from a different feed → the same real
+ * transactions arriving once per channel. Only then is the description
+ * requirement dropped; an asymmetric bucket keeps it, so when the channels
+ * disagree on how many transactions a bucket holds we keep a visible
+ * (deletable) duplicate rather than risk collapsing a genuinely-new row.
+ *
+ * handEnteredMirror: the analogous signal against BOOKED hand-entered rows
+ * (manual/mcp/null source). A booked hand-entered row means the user
+ * already put this movement in the ledger before the feed delivered the
+ * bank's copy (bookkeep-by-chat first, connect the bank later). Symmetry
+ * compares the bucket's Layer-1-UNMATCHED incoming count (a row Layer-1
+ * reconciles never reaches this layer, so it must not inflate the count)
+ * against the guarded hand-entered candidate count, plus a per-entry
+ * currency gate (the bucket key is only date+öre, and hand-entered rows
+ * often lack a cash_account_id for the account guard to bite on).
+ *
+ * Identity guard: a stored row the ids prove to be another booking of the
+ * same feed is never a twin (isOtherBookingOfSameFeed). It only ever removes
+ * same-feed entries, so it narrows the text bridge and leaves both mirrors,
+ * which match other channels, as they were.
+ *
+ * @param description the row's normalized description (normalizeImportedDescription)
+ */
+export function decideIngestRow(
+  state: IngestDedupState,
+  raw: DedupRow,
+  description: string,
+): IngestRowDecision {
+  const {
+    existingMaps, storedExternalIds, cashAccountId, physicalKeyById, batchSource, batchIsImportFeed,
+    incomingByBucket, crossSourceStoredByBucket, unmatchedIncomingByBucket, bookedHandEnteredByBucket,
+  } = state
+
+  // 1. Check for duplicates via external_id (batch pre-fetched)
+  if (storedExternalIds.has(raw.external_id)) {
+    return {
+      skip: true,
+      reason: 'external_id_match',
+      matchedExternalId: raw.external_id,
+      matchedTransactionId: storedExternalIds.get(raw.external_id) ?? null,
+      twin: null,
+    }
+  }
+
+  const bucketKey = contentBucketKey(raw.date, raw.amount)
+  const rawCurrency = raw.currency ?? null
+  const crossSourceMirror =
+    batchIsImportFeed &&
+    (crossSourceStoredByBucket.get(bucketKey) ?? 0) > 0 &&
+    incomingByBucket.get(bucketKey) === crossSourceStoredByBucket.get(bucketKey)
+  const handEnteredMirror =
+    batchIsImportFeed &&
+    (bookedHandEnteredByBucket.get(bucketKey) ?? 0) > 0 &&
+    unmatchedIncomingByBucket.get(bucketKey) === bookedHandEnteredByBucket.get(bucketKey)
+  const consumeBridgingTwin = (bucket: DescBucket): BucketEntry | null => {
+    const entries = bucket.get(bucketKey)
+    if (!entries || entries.length === 0) return null
+    let bestIdx = -1
+    let bestLen = -1
+    let crossIdx = -1
+    let handIdx = -1
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i]
+      const sameAccount = sameCashAccount(cashAccountId, entry.cashAccountId, physicalKeyById)
+      if (!sameAccount) continue
+      // Currency guard, applies to ALL THREE match paths below. The bucket key
+      // is (date, öre) with no currency, so a stored 250,00 SEK row and an
+      // incoming 250,00 EUR row on the same date land in the SAME bucket; the
+      // text bridge (identical bank titles) or the cross-channel mirror would
+      // then consume one for the other and the survivor is silently never
+      // bokförd (BFL 5 kap: a real affärshändelse dropped without a trace).
+      // Two channels reporting the SAME movement always agree on the booked
+      // amount's currency, so a mismatch here means two different movements
+      // whose öre happen to coincide. Null on either side is compatible:
+      // rows predating the currency column, and feeds that send none, must
+      // dedup exactly as they did before this guard existed.
+      const sameCurrency =
+        entry.currency === null || rawCurrency === null || entry.currency === rawCurrency
+      if (!sameCurrency) continue
+      // Identity guard: the feed's own ids say this stored row is another
+      // booking. Dropping the incoming row against it would lose a real
+      // movement, so it is not a candidate on any path.
+      if (isOtherBookingOfSameFeed(state, raw, entry)) continue
+      if (descriptionsBridge(description, entry.desc) && entry.desc.length > bestLen) {
+        bestIdx = i
+        bestLen = entry.desc.length
+      }
+      // Text-independent fallback: in a cross-channel mirror bucket a stored
+      // entry from a different feed is the same transaction even when the
+      // descriptions don't bridge. Remember the first eligible one.
+      if (crossIdx === -1 && crossSourceMirror && entry.isImportFeed && entry.source !== batchSource) {
+        crossIdx = i
+      }
+      // Booked-hand-entered fallback: hand-entered entries only exist in the
+      // booked map (the unbooked query excludes manual/mcp at the DB level),
+      // so !isImportFeed here already implies booked. The currency
+      // requirement this path used to carry on its own is now the loop-level
+      // `sameCurrency` guard above, which every match path shares.
+      if (handIdx === -1 && handEnteredMirror && !entry.isImportFeed) {
+        handIdx = i
+      }
+    }
+    const idx = bestIdx !== -1 ? bestIdx : crossIdx !== -1 ? crossIdx : handIdx
+    if (idx === -1) return null
+    const [consumed] = entries.splice(idx, 1)
+    return consumed
+  }
+  const bookedTwin = consumeBridgingTwin(existingMaps.booked)
+  const twin = bookedTwin ?? consumeBridgingTwin(existingMaps.unbookedImported)
+  if (!twin) return { skip: false }
+  return {
+    skip: true,
+    reason: bookedTwin ? 'content_match_booked' : 'content_match_unbooked',
+    matchedExternalId: twin.externalId,
+    matchedTransactionId: twin.id,
+    twin,
+  }
 }
 
 /**
@@ -299,6 +817,9 @@ function isExternalIdConflict(error: { code?: string | null; message?: string | 
  * 1c. Content-based dedup against unbooked enable_banking rows: catches PSD2
  *     reconnect duplicates AND CSV imports overlapping an active PSD2 sync (the
  *     description-prefix component makes this safe to apply across sources).
+ *     Steps 1 to 1c are one decision (decideIngestRow), shared with the
+ *     read-only previews, and every skipped row is named in the result
+ *     (`skipped`, `duplicates_by_reason`): never only counted.
  * 2. Insert into transactions table
  * 3. OCR/reference-based invoice matching (highest confidence)
  * 4. Amount+customer fallback invoice matching
@@ -321,9 +842,17 @@ export async function ingestTransactions(
       throw new Error('Bank ingest context does not match the fetched batch')
     }
   }
+  const duplicatesByReason: Record<IngestSkipReason, number> = {
+    external_id_match: 0,
+    content_match_booked: 0,
+    content_match_unbooked: 0,
+  }
+  const skipped: IngestSkippedRow[] = []
   const result: IngestResult = {
     imported: 0,
     duplicates: 0,
+    duplicates_by_reason: duplicatesByReason,
+    skipped,
     reconciled: 0,
     auto_categorized: 0,
     auto_matched_invoices: 0,
@@ -331,6 +860,24 @@ export async function ingestTransactions(
     transaction_ids: [],
     shadow_scope_drift_candidates: 0,
     shadow_date_drift_candidates: 0,
+  }
+  // Every row that is not inserted because it is judged already stored goes
+  // through here, so the count, the per-reason split and the per-row list can
+  // never disagree. `externalId` is the id the caller sent (before re-keying).
+  const recordSkip = (
+    externalId: string,
+    reason: IngestSkipReason,
+    matchedExternalId: string | null,
+    matchedTransactionId: string | null,
+  ) => {
+    result.duplicates++
+    duplicatesByReason[reason]++
+    skipped.push({
+      external_id: externalId,
+      reason,
+      matched_external_id: matchedExternalId,
+      matched_transaction_id: matchedTransactionId,
+    })
   }
 
   const log = createLogger('transactions.ingest', { companyId })
@@ -342,7 +889,12 @@ export async function ingestTransactions(
   // count them, but never change what gets inserted. Default on; set
   // DEDUP_SCOPE_DRIFT_MODE=off to silence. There is deliberately NO 'enforce'
   // branch yet: we validate on real fleet data first (see the plan).
-  const scopeDriftShadow = process.env.DEDUP_SCOPE_DRIFT_MODE !== 'off'
+  //
+  // Off for a feed whose ids identify bookings (stableExternalIds): there a
+  // stored same-feed row under an id the batch does not carry is another
+  // booking, not a drifted id, and counting it would measure real movements as
+  // re-imports.
+  const scopeDriftShadow = process.env.DEDUP_SCOPE_DRIFT_MODE !== 'off' && !options?.stableExternalIds
   // SHADOW-ONLY instrumentation for the date-drift bridge: the content bridge
   // buckets on EXACT (date, öre), so a booking date that drifts a day between
   // syncs lands its twin in an ADJACENT bucket and every dedup layer misses it
@@ -361,64 +913,10 @@ export async function ingestTransactions(
   // predates the first PSD2 sync of the same account.
   const existingMaps = await buildExistingTransactionMaps(supabase, companyId, rawTransactions)
 
-  // Stable (date, öre, index) ids name a transaction only while its bucket's
-  // set of rows never changes; a late-booked sibling would otherwise take a
-  // stored row's index and be skipped as a duplicate. Re-key them against the
-  // stored rows before any dedup layer runs (see reconcileStableExternalIds).
-  const reconciledIds = reconcileStableExternalIds(
-    rawTransactions.map((raw) => ({ external_id: raw.external_id, description: normalizeImportedDescription(raw.description) })),
-    [...existingMaps.booked.values(), ...existingMaps.unbookedImported.values()].flat(),
-  )
-  rawTransactions = rawTransactions.map((raw, i) =>
-    reconciledIds[i] === raw.external_id ? raw : { ...raw, external_id: reconciledIds[i] })
-
-  // Every row in one ingest call shares an import_source (EB sync passes
-  // 'enable_banking', bank-file import passes 'csv_<format>'/'camt053'), so the
-  // first row's source identifies this batch's channel. We use it to find
-  // "cross-channel mirror" buckets: a (date, öre) bucket where the number of
-  // incoming rows EQUALS the number of stored rows from a DIFFERENT feed. That
-  // equality is the signal that the same set of real transactions is arriving
-  // once per channel (e.g. Nordea's CSV export and its PSD2 feed), where the
-  // per-row description is known-unreliable: CSV shows the payee, PSD2 the
-  // OCR/message, or vice versa. Only in those buckets do we dedup on
-  // (date, öre, account) without a description match (see consumeBridgingTwin).
-  // An asymmetric bucket keeps the description requirement, so a genuinely-new
-  // row is never collapsed into a different one.
-  //
-  // The same count-symmetry signal also runs against BOOKED hand-entered rows
-  // (import_source manual/mcp/null): a user who bookkeeps by chat/MCP first and
-  // connects the bank afterwards has already put the movement in the ledger,
-  // and the feed's copy of it must not re-appear as a duplicate. This mirror is
-  // gated harder than feed-vs-feed: the stored row must be BOOKED (staged/
-  // unbooked hand-entered rows never consume an import), its currency must not
-  // contradict the incoming row's, its cash account must be compatible, and the
-  // bucket counts must match exactly. Tracked in a SEPARATE count map (built
-  // further down, once the batch settlement account and the stored external_id
-  // set are known) so the feed-vs-feed mirror semantics are untouched: a
-  // hand-entered twin never breaks feed count symmetry.
-  const batchSource = rawTransactions[0]?.import_source ?? null
-  const batchIsImportFeed = isImportedTransaction({ import_source: batchSource })
-  const incomingByBucket = new Map<string, number>()
-  const crossSourceStoredByBucket = new Map<string, number>()
-  const incomingCurrencyByBucket = new Map<string, string | null | typeof MIXED_CURRENCIES>()
-  if (batchIsImportFeed) {
-    for (const raw of rawTransactions) {
-      const k = contentBucketKey(raw.date, raw.amount)
-      incomingByBucket.set(k, (incomingByBucket.get(k) ?? 0) + 1)
-      const cur = raw.currency ?? null
-      if (!incomingCurrencyByBucket.has(k)) incomingCurrencyByBucket.set(k, cur)
-      else if (incomingCurrencyByBucket.get(k) !== cur) incomingCurrencyByBucket.set(k, MIXED_CURRENCIES)
-    }
-    for (const bucket of [existingMaps.booked, existingMaps.unbookedImported]) {
-      for (const [k, entries] of bucket) {
-        for (const entry of entries) {
-          if (entry.isImportFeed && entry.source !== batchSource) {
-            crossSourceStoredByBucket.set(k, (crossSourceStoredByBucket.get(k) ?? 0) + 1)
-          }
-        }
-      }
-    }
-  }
+  // Re-key stable (date, öre, index) ids against the stored rows before any
+  // dedup layer runs. The ids the caller sent are kept for the per-row report.
+  const submittedExternalIds = rawTransactions.map((raw) => raw.external_id)
+  rawTransactions = rekeyIncomingExternalIds(rawTransactions, existingMaps, options?.stableExternalIds)
 
   // When rawInsertOnly is set (viewer imports), skip pre-fetching supplier
   // invoices and exchange rates: they are not used.
@@ -499,68 +997,16 @@ export async function ingestTransactions(
   }
 
   // Pre-fetch existing external_ids in batches for dedup (avoids N+1 queries)
-  const existingExternalIds = new Set<string>()
   const externalIds = rawTransactions.map(t => t.external_id)
-  for (let i = 0; i < externalIds.length; i += 500) {
-    const chunk = externalIds.slice(i, i + 500)
-    const { data } = await supabase
-      .from('transactions')
-      .select('external_id')
-      .eq('company_id', companyId)
-      .in('external_id', chunk)
-    data?.forEach(r => existingExternalIds.add(r.external_id))
-  }
-  // A stored row an incoming id names is accounted for by Layer 1: take it out
-  // of the content buckets BEFORE the loop, so no other incoming row (earlier
-  // in the batch or later) can also be deduped against it. Counting semantics
-  // then hold across both layers, independent of batch order.
-  for (const raw of rawTransactions) {
-    if (existingExternalIds.has(raw.external_id)) consumeByExternalId(existingMaps, raw.external_id)
-  }
+  const storedExternalIds = await fetchStoredExternalIds(supabase, companyId, externalIds)
 
-  // Resolve the cash account this batch settled on, once. Every row in one
-  // ingest call shares a settlement account: enable-banking calls this per
-  // account (settlementAccount = account.ledger_account), CSV import passes the
-  // single account the user picked. cash_accounts.ledger_account is unique per
-  // company, so at most one row matches. Tolerate a miss: the row stays
-  // unbound (cash_account_id NULL) and reconciliation falls back to currency.
-  // Nothing is auto-created here: a caller that lets the user pick a ledger
-  // (the bank-file execute route) runs ensureManualCashAccount first, so the
-  // lookup below finds the row.
-  //
-  // The same read yields every row's physical key (IBAN + currency) for the
-  // account guard: a broken reconnect leaves two rows for one bank account, and
-  // comparing row ids alone made the content check treat them as two accounts
-  // (see sameCashAccount). Without a settlement account the guard never
-  // rejects, so the read is skipped.
-  let cashAccountId: string | null = null
-  const physicalKeyById = new Map<string, string>()
+  // Resolve the cash account this batch settled on, once (readBatchCashAccount).
+  const batchAccount = await readBatchCashAccount(supabase, companyId, options?.settlementAccount)
+  if (batchAccount.error && options?.bankRoute) {
+    throw new Error(`Bank ingest account read failed: ${batchAccount.error.message}`)
+  }
+  const { cashAccountId, physicalKeyById } = batchAccount
   if (options?.settlementAccount) {
-    const { data: cashAccountRows, error: cashAccountError } = await supabase
-      .from('cash_accounts')
-      .select('id, ledger_account, iban, currency, enabled, bank_connection_id, invoice_payee')
-      .eq('company_id', companyId)
-    if (cashAccountError && options.bankRoute) {
-      throw new Error(`Bank ingest account read failed: ${cashAccountError.message}`)
-    }
-    type BoundRow = {
-      id: string
-      ledger_account: string
-      iban: string | null
-      currency: string
-      enabled?: boolean | null
-      bank_connection_id?: string | null
-      invoice_payee?: boolean | null
-    }
-    let boundRow: BoundRow | null = null
-    for (const row of (cashAccountRows ?? []) as BoundRow[]) {
-      if (row.ledger_account === options.settlementAccount) {
-        cashAccountId = row.id
-        boundRow = row
-      }
-      const key = physicalAccountKey(row)
-      if (key) physicalKeyById.set(row.id, key)
-    }
     // Every ingest caller binds here, including the ones that never run
     // ensureManualCashAccount (the v1 ingest endpoint). An account the company
     // turned off as unused comes back on before rows land on it, so a hidden
@@ -569,10 +1015,22 @@ export async function ingestTransactions(
     // nothing, for a disabled invoice payee (owner/admin turns that on).
     if (options.bankRoute) {
       if (cashAccountId !== options.bankRoute.cashAccountId) throw new Error('Bank ingest account changed; reload the route')
-    } else if (boundRow) {
-      await reenableIfUnused(supabase, companyId, boundRow)
+    } else if (batchAccount.boundRow) {
+      await reenableIfUnused(supabase, companyId, batchAccount.boundRow)
     }
   }
+
+  // The per-batch facts every row decision depends on (reserves the stored
+  // rows Layer 1 accounts for, counts the mirror buckets).
+  const dedup = buildIngestDedupState({
+    rows: rawTransactions,
+    existingMaps,
+    storedExternalIds,
+    cashAccountId,
+    physicalKeyById,
+    stableExternalIds: options?.stableExternalIds,
+  })
+  const { batchSource, batchIsImportFeed, incomingByBucket, unmatchedIncomingByBucket } = dedup
 
   // ── Shadow-mode same-feed scope-drift precompute (measure only) ──────────
   // Two per-(date, öre) bucket counts that, when EQUAL and non-zero, mark a
@@ -592,46 +1050,6 @@ export async function ingestTransactions(
   // bucket is left alone. Counts are pre-loop snapshots; the gate is evaluated
   // per incoming row inside the loop.
   const incomingIdSet = new Set(externalIds)
-  // Incoming rows Layer-1 will NOT reconcile (their external_id is not already
-  // stored): the honest per-bucket count of rows that will actually reach the
-  // content-dedup layer. Shared by the hand-entered mirror (enforcing) and the
-  // scope-drift shadow (measure-only): the coarse incomingByBucket would let a
-  // Layer-1 duplicate inflate the symmetry check.
-  const unmatchedIncomingByBucket = new Map<string, number>()
-  if (batchIsImportFeed) {
-    for (const raw of rawTransactions) {
-      if (!existingExternalIds.has(raw.external_id)) {
-        const k = contentBucketKey(raw.date, raw.amount)
-        unmatchedIncomingByBucket.set(k, (unmatchedIncomingByBucket.get(k) ?? 0) + 1)
-      }
-    }
-  }
-
-  // ── Booked-hand-entered mirror candidates ────────────────────────────────
-  // Built HERE, after the batch settlement account (cashAccountId) and the
-  // stored external_id set are known, so the counts apply the SAME guards the
-  // consume step applies (account compatibility + currency). Counting entries
-  // the consume step would reject makes "symmetry" lie: an unconsumable twin
-  // could switch the mirror on and collapse a genuinely-new row. Hand-entered
-  // candidates exist ONLY in the booked map: the unbooked map's query excludes
-  // manual/mcp/null sources at the DB level.
-  const bookedHandEnteredByBucket = new Map<string, number>()
-  if (batchIsImportFeed) {
-    for (const [k, entries] of existingMaps.booked) {
-      const bucketCurrency = incomingCurrencyByBucket.get(k)
-      // No incoming rows in this bucket, or the incoming rows disagree on
-      // currency: the currency gate cannot be evaluated per-bucket, so the
-      // hand-entered mirror stays off there (conservative: row inserts).
-      if (bucketCurrency === undefined || bucketCurrency === MIXED_CURRENCIES) continue
-      for (const entry of entries) {
-        if (entry.isImportFeed) continue
-        const accountCompatible = sameCashAccount(cashAccountId, entry.cashAccountId, physicalKeyById)
-        if (!accountCompatible) continue
-        if (entry.currency !== null && bucketCurrency !== null && entry.currency !== bucketCurrency) continue
-        bookedHandEnteredByBucket.set(k, (bookedHandEnteredByBucket.get(k) ?? 0) + 1)
-      }
-    }
-  }
 
   const driftCandidateStoredByBucket = new Map<string, number>()
   if (batchIsImportFeed && scopeDriftShadow) {
@@ -697,7 +1115,8 @@ export async function ingestTransactions(
   // once for the whole ingestion, and only if such a row is booked.
   const loadChart = chartVatTreatmentsLoader(supabase, companyId)
 
-  for (const raw of rawTransactions) {
+  for (let index = 0; index < rawTransactions.length; index++) {
+    const raw = rawTransactions[index]
     // Normalize the source title once. Guarantees a non-empty, Swedish-first
     // label for every import path (PSD2 sync + all bank-file CSV/CAMT parsers
     // funnel into raw.description): catching both empty/whitespace titles and
@@ -730,144 +1149,29 @@ export async function ingestTransactions(
           explicitMethod: raw.transaction_method ?? null,
         })
 
-    // 1. Check for duplicates via external_id (batch pre-fetched)
-    if (existingExternalIds.has(raw.external_id)) {
-      result.duplicates++
-      continue
-    }
-
-    // 1b/1c. Content-dedup bridge: skip if an existing booked row (any source)
-    // OR an unbooked import-feed row shares this (date, öre) bucket and EITHER
-    // (a) a *bridging* description (prefix-containment, see descriptionsBridge),
-    // OR (b) the bucket is a cross-channel mirror (crossSourceMirror below),
-    // OR (c) the bucket is a booked-hand-entered mirror (handEnteredMirror).
-    // (a) catches re-imports the external_id check misses: old-format ids
-    // re-synced after the id scheme changed, and PSD2 description enrichment
-    // between syncs ("TIC" → "TIC  BG … via internet"). (b) catches the same
-    // bank account imported via two channels whose descriptions don't bridge at
-    // all (Nordea CSV payee "TELENOR"/"Nordea" vs PSD2 OCR/message), which (a)
-    // alone cannot. (c) catches the feed delivering a movement the user already
-    // booked by hand (MCP/manual) under a free-form title that shares no text
-    // with the bank's ("Egen insättning …" vs "TRANSFER-123 Topped up").
-    // Booked first, then unbooked.
-    //
-    // Consumed with COUNTING semantics: each match splices one stored entry out
-    // of its bucket, so N stored twins dedup exactly N incoming and two
-    // genuinely-distinct same-(date,amount) transactions are kept apart. The
-    // text bridge is tried first (LONGEST bridging description wins, so a
-    // more-specific twin is matched before a generic one); the cross-channel
-    // mirror is the text-independent fallback.
-    //
-    // Account guard: when BOTH the incoming batch and a stored entry have a known
-    // cash_account_id, they must be the same bank account (same row, or two rows
-    // sharing IBAN + currency: sameCashAccount), so a transaction on one bank account
-    // never deduplicates a genuinely-different one on another account of the same
-    // company (the content bucket is company-wide; only external_id embeds the
-    // account). A null on either side falls back to bridge-allowed, leaving
-    // single-account and legacy (un-backfilled) rows exactly as before. The guard
-    // applies to BOTH the text and the cross-channel-mirror path.
-    //
-    // Currency guard: same shape, same null-tolerance, applied to all three
-    // match paths. The bucket key carries no currency, so 250,00 EUR and
-    // 250,00 SEK on one date share a bucket; without this an incoming row in
-    // one currency consumes a stored row in another and the survivor is never
-    // bokförd. A null on either side stays compatible (legacy rows).
-    //
-    // crossSourceMirror: this (date, öre) bucket holds the same number of
-    // incoming rows as stored rows from a different feed → the same real
-    // transactions arriving once per channel. Only then is the description
-    // requirement dropped; an asymmetric bucket keeps it, so when the channels
-    // disagree on how many transactions a bucket holds we keep a visible
-    // (deletable) duplicate rather than risk collapsing a genuinely-new row.
-    //
-    // handEnteredMirror: the analogous signal against BOOKED hand-entered rows
-    // (manual/mcp/null source). A booked hand-entered row means the user
-    // already put this movement in the ledger before the feed delivered the
-    // bank's copy (bookkeep-by-chat first, connect the bank later). Symmetry
-    // compares the bucket's Layer-1-UNMATCHED incoming count (a row Layer-1
-    // reconciles never reaches this layer, so it must not inflate the count)
-    // against the guarded hand-entered candidate count, plus a per-entry
-    // currency gate in consumeBridgingTwin (the bucket key is only date+öre,
-    // and hand-entered rows often lack a cash_account_id for the account guard
-    // to bite on).
+    // 1 + 1b/1c. Already stored? Layer 1 (external_id) and the content-dedup
+    // bridge, decided by the function the previews share (decideIngestRow).
+    const decision = decideIngestRow(dedup, raw, description)
     const bucketKey = contentBucketKey(raw.date, raw.amount)
     const rawCurrency = raw.currency ?? null
-    const crossSourceMirror =
-      batchIsImportFeed &&
-      (crossSourceStoredByBucket.get(bucketKey) ?? 0) > 0 &&
-      incomingByBucket.get(bucketKey) === crossSourceStoredByBucket.get(bucketKey)
-    const handEnteredMirror =
-      batchIsImportFeed &&
-      (bookedHandEnteredByBucket.get(bucketKey) ?? 0) > 0 &&
-      unmatchedIncomingByBucket.get(bucketKey) === bookedHandEnteredByBucket.get(bucketKey)
-    const consumeBridgingTwin = (bucket: DescBucket): BucketEntry | null => {
-      const entries = bucket.get(bucketKey)
-      if (!entries || entries.length === 0) return null
-      let bestIdx = -1
-      let bestLen = -1
-      let crossIdx = -1
-      let handIdx = -1
-      for (let i = 0; i < entries.length; i++) {
-        const entry = entries[i]
-        const sameAccount = sameCashAccount(cashAccountId, entry.cashAccountId, physicalKeyById)
-        if (!sameAccount) continue
-        // Currency guard, applies to ALL THREE match paths below. The bucket key
-        // is (date, öre) with no currency, so a stored 250,00 SEK row and an
-        // incoming 250,00 EUR row on the same date land in the SAME bucket; the
-        // text bridge (identical bank titles) or the cross-channel mirror would
-        // then consume one for the other and the survivor is silently never
-        // bokförd (BFL 5 kap: a real affärshändelse dropped without a trace).
-        // Two channels reporting the SAME movement always agree on the booked
-        // amount's currency, so a mismatch here means two different movements
-        // whose öre happen to coincide. Null on either side is compatible:
-        // rows predating the currency column, and feeds that send none, must
-        // dedup exactly as they did before this guard existed.
-        const sameCurrency =
-          entry.currency === null || rawCurrency === null || entry.currency === rawCurrency
-        if (!sameCurrency) continue
-        if (descriptionsBridge(description, entry.desc) && entry.desc.length > bestLen) {
-          bestIdx = i
-          bestLen = entry.desc.length
-        }
-        // Text-independent fallback: in a cross-channel mirror bucket a stored
-        // entry from a different feed is the same transaction even when the
-        // descriptions don't bridge. Remember the first eligible one.
-        if (crossIdx === -1 && crossSourceMirror && entry.isImportFeed && entry.source !== batchSource) {
-          crossIdx = i
-        }
-        // Booked-hand-entered fallback: hand-entered entries only exist in the
-        // booked map (the unbooked query excludes manual/mcp at the DB level),
-        // so !isImportFeed here already implies booked. The currency
-        // requirement this path used to carry on its own is now the loop-level
-        // `sameCurrency` guard above, which every match path shares.
-        if (handIdx === -1 && handEnteredMirror && !entry.isImportFeed) {
-          handIdx = i
-        }
-      }
-      const idx = bestIdx !== -1 ? bestIdx : crossIdx !== -1 ? crossIdx : handIdx
-      if (idx === -1) return null
-      const [consumed] = entries.splice(idx, 1)
-      return consumed
-    }
-    const consumedTwin =
-      consumeBridgingTwin(existingMaps.booked) ?? consumeBridgingTwin(existingMaps.unbookedImported)
-    if (consumedTwin) {
-      result.duplicates++
-      // Leave a trace of the drop. Layer-1 (external_id) duplicates are exact
-      // key collisions and need none, but this layer drops a row on a
-      // judgement call (text bridge / cross-channel mirror / hand mirror), and
-      // an incoming row dropped here is never inserted and therefore never
-      // bokförd. result.duplicates does count it, and that count reaches the
-      // API response plus bank_file_imports.duplicate_count, but no import UI
-      // currently RENDERS it (BankFileResultStep and the EB sync toast show
-      // `imported` only), and the count cannot distinguish this judgement call
-      // from an exact Layer-1 id collision anyway. So this log is the only
-      // per-row record of WHICH affärshändelse was dropped and against what;
-      // keep it until a UI surfaces skipped rows. Same field shape as the two
-      // shadow blocks below.
+    if (decision.skip) {
+      recordSkip(submittedExternalIds[index], decision.reason, decision.matchedExternalId, decision.matchedTransactionId)
+      const consumedTwin = decision.twin
+      // Layer-1 (external_id) duplicates are exact key collisions: nothing
+      // more to do.
+      if (!consumedTwin) continue
+      // Leave a trace of the drop. This layer drops a row on a judgement call
+      // (text bridge / cross-channel mirror / hand mirror), and an incoming
+      // row dropped here is never inserted and therefore never bokförd. The
+      // result carries the same fact per row (result.skipped, with the reason
+      // and the stored row it matched), which the v1 ingest response returns;
+      // the dashboard and the bank sync show counts only, so this log stays
+      // the operator's per-row record of WHICH affärshändelse was dropped and
+      // against what. Same field shape as the two shadow blocks below.
       log.info('import dedup: content-bridge duplicate skipped', {
         decision: 'content-bridge',
         mode: 'enforced',
+        reason: decision.reason,
         bucket: bucketKey,
         incomingExternalId: raw.external_id,
         incomingDescription: description,
@@ -877,6 +1181,10 @@ export async function ingestTransactions(
         cashAccountId,
         matchedStoredId: consumedTwin.id,
         matchedStoredExternalId: consumedTwin.externalId,
+        // With incomingSource this tells a same-feed absorption (the kind
+        // that loses a movement when the feed's ids are identities) from a
+        // cross-channel one (a re-import through another door).
+        matchedStoredSource: consumedTwin.source,
         matchedStoredDescription: consumedTwin.desc,
         matchedStoredCurrency: consumedTwin.currency,
         matchedStoredCashAccountId: consumedTwin.cashAccountId,
@@ -1016,6 +1324,9 @@ export async function ingestTransactions(
           for (const entry of entries) {
             const sameAccount = sameCashAccount(cashAccountId, entry.cashAccountId, physicalKeyById)
             if (!sameAccount) continue
+            // Another booking of the same feed by its own ids (a daily fee):
+            // not a drifted copy, so not a candidate.
+            if (isOtherBookingOfSameFeed(dedup, raw, entry)) continue
             if (descriptionsBridge(description, entry.desc)) {
               driftMatch = { entry, gap: sign * delta, signal: 'desc' }
               break
@@ -1108,7 +1419,7 @@ export async function ingestTransactions(
       // (which would also skip the caller's balance refresh). Traced: with the
       // shared sync lease, two writers of one feed should be rare.
       if (isExternalIdConflict(insertError)) {
-        result.duplicates++
+        recordSkip(submittedExternalIds[index], 'external_id_match', raw.external_id, null)
         log.warn('import dedup: external_id stored concurrently, skipped as duplicate', {
           decision: 'external-id-conflict',
           mode: 'enforced',

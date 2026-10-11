@@ -570,12 +570,18 @@ export async function syncStripeBalanceTransactions(
     // deterministic settle/payout flows own booking; everything else is a
     // human decision in the inbox. Invoice matching still runs (suggestions
     // only), and FX enrichment covers non-SEK rows.
+    //
+    // stableExternalIds: the ids embed Stripe's balance-transaction id, which
+    // names one booking for good. Two refunds of the same amount on the same
+    // day share a title ("Stripe-återbetalning"); when they land in different
+    // ingest calls (a chunk boundary, a later run), the second must not be
+    // dropped as a copy of the first.
     const result = await ingestTransactions(
       supabase,
       connection.company_id,
       connection.user_id,
       rows,
-      { settlementAccount: STRIPE_LEDGER_ACCOUNT, skipAutoCategorization: true },
+      { settlementAccount: STRIPE_LEDGER_ACCOUNT, skipAutoCategorization: true, stableExternalIds: true },
     )
     summary.imported += result.imported
     summary.duplicates += result.duplicates

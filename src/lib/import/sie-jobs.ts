@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { userFacing } from '@/lib/errors/user-facing'
+import { isSelfHosted } from '@/lib/env/public-flags'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { AccountMapping, ImportResult, ParsedSIEFile, SIEVoucher } from './types'
 import { calculateFileHash, getEffectiveOpeningBalances, hasOpeningBalanceVoucherCandidate, isBalanceSheetAccount, parseSIEFile } from './sie-parser'
@@ -130,7 +131,38 @@ export function jobDatabaseError(error:{code?:string;message:string}):SIEJobData
   return new SIEJobDatabaseError(error.message,refusal ?? codes[error.code ?? ''] ?? error.code,error.code)
 }
 
-export function acceptsSIEJobs(): boolean { return process.env.SIE_IMPORT_JOBS === 'true' }
+/**
+ * Whether new SIE imports are admitted (SIE_IMPORT_JOBS).
+ *
+ * Hosted: off unless the flag is 'true'. It was the last step of the
+ * production cutover to the job backbone and stays the hosted kill switch
+ * (docs/operations/sie-import-backbone.md).
+ *
+ * Self-hosted: on unless the operator sets the flag to 'false'. An install has
+ * no cutover to stage: the migrations, the after() fast path and the worker
+ * cron (docker/crontab.self-hosted) ship together, and the import RPCs from
+ * before the backbone are retired, so with admission off there is no SIE
+ * import at all. Off by default only meant that it never worked until
+ * someone found a variable no file mentioned.
+ */
+export function acceptsSIEJobs(): boolean {
+  const flag = process.env.SIE_IMPORT_JOBS
+  return isSelfHosted() ? flag !== 'false' : flag === 'true'
+}
+
+/**
+ * The admission refusal, worded for the reader who can act on it. On a
+ * self-hosted install that is the operator, and the only way to get here is
+ * the flag set to 'false', so the sentence names it. A hosted user cannot
+ * change anything and is told only that the pause is temporary.
+ */
+function sieAdmissionRefusal(): string {
+  return isSelfHosted()
+    ? 'SIE-importen är avstängd på den här installationen: SIE_IMPORT_JOBS=false i appens miljö (.env). ' +
+      'Ta bort raden eller sätt SIE_IMPORT_JOBS=true och starta om appen. Pågående importer fortsätter.'
+    : 'Nya SIE-importer är tillfälligt pausade. Pågående importer fortsätter.'
+}
+
 export function runsSIEJobs(): boolean { return process.env.SIE_IMPORT_WORKER_PAUSED !== 'true' }
 
 /** Warnings remain useful in previews; selected accounting records must be complete. */
@@ -245,7 +277,7 @@ export async function submitSIEJob(supabase: SupabaseClient, companyId: string, 
   content: string, mappings: AccountMapping[], options: SIEJobOptions,
   originalFile?: File,
 ): Promise<SIEJob> {
-  if (!acceptsSIEJobs()) throw new SIEJobValidationError('Nya SIE-importer är tillfälligt pausade. Pågående importer fortsätter.')
+  if (!acceptsSIEJobs()) throw new SIEJobValidationError(sieAdmissionRefusal())
   const checkedOptions = SIEJobOptionsSchema.safeParse(options)
   const checkedMappings = SIEJobMappingsSchema.safeParse(mappings)
   if (!checkedOptions.success || !checkedMappings.success) throw new SIEJobValidationError('Importinställningarna eller kontomappningen är ogiltiga.')

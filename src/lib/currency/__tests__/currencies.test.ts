@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { CURRENCIES, FOREIGN_CURRENCIES } from '@/types'
 import { CurrencySchema } from '@/lib/api/schemas'
-import { fetchMultipleRates, formatCurrencyAmount } from '@/lib/currency/riksbanken'
+import { fetchMultipleRates, formatCurrencyAmount, RIKSBANKEN_CURRENCIES } from '@/lib/currency/riksbanken'
 
 /**
  * The currency set lives in two places that cannot share code: the TS tuple
@@ -40,6 +40,15 @@ describe('CURRENCIES', () => {
     expect(CURRENCIES).toContain('CAD')
     expect(FOREIGN_CURRENCIES).toContain('CAD')
     expect(CurrencySchema.safeParse('CAD').success).toBe(true)
+  })
+
+  it('every bookable foreign currency has a Riksbanken rate series', () => {
+    // The rate set (RIKSBANKEN_CURRENCIES) is wider than the bookable set: a
+    // bank row can be in PLN although no invoice can. The other direction
+    // must hold, or a currency offered in a dropdown could never reach SEK.
+    for (const c of FOREIGN_CURRENCIES) {
+      expect(RIKSBANKEN_CURRENCIES, c).toContain(c)
+    }
   })
 
   it('every foreign currency has a fallback rate and a symbol', async () => {

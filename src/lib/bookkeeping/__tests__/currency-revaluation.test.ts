@@ -57,8 +57,8 @@ const {
  * cache is empty: no rate at all, never a fabricated one.
  */
 function mockRates(rates: Partial<Record<Currency, number>>) {
-  mockedFetchRate.mockImplementation(async (currency: Currency) => {
-    const rate = rates[currency]
+  mockedFetchRate.mockImplementation(async (currency) => {
+    const rate = rates[currency as Currency]
     return rate === undefined ? null : { currency, rate, date: '2024-12-31' }
   })
 }

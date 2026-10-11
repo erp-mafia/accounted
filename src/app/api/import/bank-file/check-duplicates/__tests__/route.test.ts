@@ -101,6 +101,29 @@ describe('POST /api/import/bank-file/check-duplicates', () => {
     expect(body.data.by_reason).toEqual({ external_id: 1, content_bridge: 0 })
   })
 
+  // The route passes the channel execute will stamp ('csv_<format>'), so the
+  // preview sees what execute sees: a bank-feed twin worded differently is
+  // the same payment when the bucket counts match.
+  it('flags a cross-channel mirror twin, as execute will skip it', async () => {
+    enqueue({ data: [] }) // booked map
+    enqueue({
+      data: [{
+        id: 'tx-feed', date: TX.date, amount: TX.amount,
+        original_description: 'Bg 5050-1055 OCR 12345', description: 'Bg 5050-1055 OCR 12345',
+        import_source: 'enable_banking', bank_connection_id: 'conn-1', currency: 'SEK',
+        external_id: 'eb_scope_2024-06-15_-25000_0',
+      }],
+    }) // unbooked map: the feed's copy, no shared text
+    enqueue({ data: [] }) // external_id chunk
+
+    const res = await POST(makeRequest({ transactions: [TX], format: 'lunar' }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ data: DuplicatePreviewResult }>(res)
+
+    expect(status).toBe(200)
+    expect(body.data.duplicate_row_indexes).toEqual([0])
+    expect(body.data.by_reason).toEqual({ external_id: 0, content_bridge: 1 })
+  })
+
   it('flags content-bridge duplicates against stored rows (happy path)', async () => {
     enqueue({ data: [] }) // booked map
     enqueue({

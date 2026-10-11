@@ -693,5 +693,8 @@ Ensure `https://your-domain.com/auth/callback` is in the Supabase **Redirect URL
 **`pg_cron` migration fails:**
 `pg_cron` requires a paid Supabase plan. On the free tier, you can safely comment out migration 048 or let it fail: the overdue supplier invoice check is non-critical and can be triggered manually.
 
+**SIE import answers that it is switched off or paused:**
+SIE import needs no configuration on a self-hosted install: the app runs the import and the cron sidecar's every-minute job (`/api/import/sie/worker/cron`) picks up one that was interrupted. It is refused only when `.env` holds `SIE_IMPORT_JOBS=false`; remove the line (or set it to `true`) and restart the app. An image from before this default existed refuses with "Nya SIE-importer är tillfälligt pausade" until `SIE_IMPORT_JOBS=true` is set, as does an install running with `NEXT_PUBLIC_SELF_HOSTED=false`.
+
 **Container restarts in a loop:**
 Check logs with `docker compose logs app`. The app requires all five core env vars (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_APP_URL`, `CRON_SECRET`) and will crash on startup if any are missing.

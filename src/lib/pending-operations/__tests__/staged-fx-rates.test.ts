@@ -32,7 +32,13 @@ vi.mock('@/lib/currency/riksbanken', async () => {
   const actual = await vi.importActual<typeof import('@/lib/currency/riksbanken')>(
     '@/lib/currency/riksbanken',
   )
-  return { ...actual, fetchExchangeRate: vi.fn() }
+  return {
+    ...actual,
+    fetchExchangeRate: vi.fn(),
+    // "Riksbanken has just rate-limited or failed a request": false unless a
+    // test says otherwise, so a null rate reads as a rate that does not exist.
+    isExchangeRateTemporarilyUnavailable: vi.fn(() => false),
+  }
 })
 
 vi.mock('@/lib/bookkeeping/supplier-invoice-entries', async () => {
@@ -50,7 +56,7 @@ vi.mock('@/lib/core/documents/document-service', async () => {
 })
 
 import { commitPendingOperation } from '../commit'
-import { fetchExchangeRate } from '@/lib/currency/riksbanken'
+import { fetchExchangeRate, isExchangeRateTemporarilyUnavailable } from '@/lib/currency/riksbanken'
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
 
 /**
@@ -122,8 +128,24 @@ function makePendingOp(overrides: Partial<PendingOperation>): PendingOperation {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(isExchangeRateTemporarilyUnavailable).mockReturnValue(false)
   eventBus.clear()
 })
+
+/**
+ * A lookup that failed because Riksbanken rate-limited or failed the request
+ * is not a missing rate: the operation is handed back to 'pending' with a
+ * retryable code, instead of being consumed as 'rejected' so the user has to
+ * stage it again.
+ */
+function expectHandedBack(result: Awaited<ReturnType<typeof commitPendingOperation>>) {
+  expect(result.status).toBe('failed')
+  expect(result.code).toBe('FX_RATE_TEMPORARILY_UNAVAILABLE')
+  expect(result.http_status).toBe(503)
+  expect(result.operation_status).toBe('pending')
+  expect(result.error).toMatch(/Riksbanken/)
+  expect(result.error).toMatch(/ligger kvar/)
+}
 
 // ─── create_transaction ─────────────────────────────────────────────
 
@@ -259,6 +281,34 @@ describe('commitPendingOperation: create_transaction FX', () => {
     expect(inserts['transactions']).toBeUndefined()
   })
 
+  it('hands the row back, with no kassakonto created, when Riksbanken is temporarily unavailable', async () => {
+    vi.mocked(fetchExchangeRate).mockResolvedValueOnce(null)
+    vi.mocked(isExchangeRateTemporarilyUnavailable).mockReturnValue(true)
+    const { supabase, inserts } = createCapturingSupabase([
+      { data: { id: 'op-1' } }, // CAS claim
+      { data: null }, // dispatcher release back to pending
+    ])
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({
+        params: {
+          date: '2026-05-01',
+          amount: -50,
+          description: 'Wise card',
+          currency: 'USD',
+          ledger_account: '1935',
+        },
+      }),
+    )
+
+    expectHandedBack(result)
+    expect(inserts['cash_accounts']).toBeUndefined()
+    expect(inserts['transactions']).toBeUndefined()
+  })
+
   it('a SEK transaction is unaffected: no rate lookup, no SEK columns', async () => {
     const { supabase, inserts } = createCapturingSupabase(txQueue())
 
@@ -381,6 +431,36 @@ describe('commitPendingOperation: create_invoice FX', () => {
     expect(result.http_status).toBe(400)
     expect(result.error).toMatch(/växelkurs/i)
     // No invoice row, so no F-series number and no 1:1 posting downstream.
+    expect(inserts['invoices']).toBeUndefined()
+  })
+
+  it('hands the invoice back, unwritten, when Riksbanken is temporarily unavailable', async () => {
+    vi.mocked(fetchExchangeRate).mockResolvedValueOnce(null)
+    vi.mocked(isExchangeRateTemporarilyUnavailable).mockReturnValue(true)
+    const { supabase, inserts } = createCapturingSupabase([
+      { data: { id: 'op-1' } },
+      { data: customer },
+      { data: { vat_registered: true } },
+      { data: null }, // dispatcher release back to pending
+    ])
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({
+        operation_type: 'create_invoice',
+        params: {
+          customer_id: 'cust-1',
+          currency: 'EUR',
+          invoice_date: '2026-02-01',
+          due_date: '2026-03-03',
+          items: [{ description: 'Konsult', quantity: 1, unit: 'tim', unit_price: 1000, vat_rate: 25 }],
+        },
+      }),
+    )
+
+    expectHandedBack(result)
     expect(inserts['invoices']).toBeUndefined()
   })
 
@@ -536,6 +616,58 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox FX', () => 
     expect(inserts['supplier_invoices']).toBeUndefined()
     // The sequence is only touched after the rate is settled.
     expect(rpcCalls).not.toContain('get_next_arrival_number')
+  })
+
+  it('hands the invoice back without burning an ankomstnummer when Riksbanken is temporarily unavailable', async () => {
+    vi.mocked(fetchExchangeRate).mockResolvedValueOnce(null)
+    vi.mocked(isExchangeRateTemporarilyUnavailable).mockReturnValue(true)
+    const { supabase, inserts, rpcCalls } = createCapturingSupabase([
+      { data: { id: 'op-1' } },
+      { data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' } },
+      { data: { id: 'supplier-1', name: 'EU Vendor SA', supplier_type: 'eu_business' } },
+      { data: null }, // dispatcher release back to pending
+    ])
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({
+        operation_type: 'create_supplier_invoice_from_inbox',
+        params: inboxParams({ currency: 'EUR', exchange_rate: null }),
+      }),
+    )
+
+    expectHandedBack(result)
+    expect(inserts['supplier_invoices']).toBeUndefined()
+    expect(rpcCalls).not.toContain('get_next_arrival_number')
+  })
+
+  it('a stated rate that is refused stays a refusal even while Riksbanken is unavailable', async () => {
+    // Waiting cannot fix a rate the caller stated: this must not loop back to
+    // pending.
+    vi.mocked(isExchangeRateTemporarilyUnavailable).mockReturnValue(true)
+    const { supabase, inserts } = createCapturingSupabase([
+      { data: { id: 'op-1' } },
+      { data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' } },
+      { data: { id: 'supplier-1', name: 'EU Vendor SA', supplier_type: 'eu_business' } },
+      { data: null }, // dispatcher fail update
+    ])
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({
+        operation_type: 'create_supplier_invoice_from_inbox',
+        params: inboxParams({ currency: 'EUR', exchange_rate: 100000 }),
+      }),
+    )
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(result.operation_status).toBe('rejected')
+    expect(inserts['supplier_invoices']).toBeUndefined()
   })
 
   it('trusts a staged rate verbatim, so the approved preview number is the number written', async () => {

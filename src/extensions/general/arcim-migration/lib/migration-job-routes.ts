@@ -15,6 +15,7 @@ import { runProviderMigrationWorker, failureCode } from './migration-job-worker'
 import { fiscalYearScopeFromImports } from './invoice-scope'
 import { ensureConsentSourceIdentity, ProviderCompanyMismatchError } from './provider-client'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 const CreateSchema = z.object({
   consentId: z.uuid(), resources: z.array(z.enum(MIGRATION_RESOURCES)).min(1).max(4),
@@ -125,6 +126,27 @@ function labelFromReceipt(row: IssueRow): MigrationIssueLabel | null {
 
 const ISSUE_PHASES: readonly string[] = ['import', 'link', 'reconcile', 'settle'] satisfies MigrationIssuePhase[]
 
+/** The last retry ended with the code the record already had. */
+function repeatedCode(row: Pick<IssueRow, 'error_code' | 'receipt'>): boolean {
+  const previous = row.receipt?.previous_error_code
+  return !!previous && previous === (row.error_code ?? 'MIGRATION_RETRY')
+}
+
+/**
+ * Whether every record that needs attention, listed or not, failed again the
+ * same way and none for a passing reason. Read only for a review with more
+ * records than it lists: the listed ones alone cannot say that a further
+ * retry would repeat the whole outcome, and leaving the retry on offer there
+ * is the loop the review exists to end.
+ */
+async function everyRecordRepeated(ctx: ExtensionContext, jobId: string): Promise<boolean> {
+  const rows = await fetchAllRows<Pick<IssueRow, 'id' | 'error_code' | 'receipt'>>(({ from, to }) =>
+    ctx.supabase.from('migration_job_chunks').select('id,error_code,receipt')
+      .eq('company_id', ctx.companyId).eq('job_id', jobId).eq('state', 'needs_attention')
+      .order('id').range(from, to))
+  return rows.length > 0 && rows.every(row => repeatedCode(row) && !isTransientIssueCode(row.error_code))
+}
+
 function toIssue(row: IssueRow, label: MigrationIssueLabel | null): ProviderMigrationIssue {
   const code = row.error_code ?? 'MIGRATION_RETRY'
   const voucher = row.receipt?.link?.sourceVoucher
@@ -134,7 +156,8 @@ function toIssue(row: IssueRow, label: MigrationIssueLabel | null): ProviderMigr
     error_phase: row.error_phase && ISSUE_PHASES.includes(row.error_phase) ? row.error_phase as MigrationIssuePhase : null,
     // A record that failed after its import phase is in Accounted already.
     imported: row.target_id !== null,
-    repeated: !!row.receipt?.previous_error_code && row.receipt.previous_error_code === code,
+    target_id: row.target_id,
+    repeated: repeatedCode(row),
     label: label ?? labelFromReceipt(row),
     voucher: voucher && typeof voucher.number === 'number' ? { series: voucher.series ?? null, number: voucher.number } : null,
     review: review && typeof review === 'object' ? review : null,
@@ -179,16 +202,13 @@ export async function readMigrationStatus(ctx: ExtensionContext, jobId?: string)
   const total = resourceCounts.reduce((n, c) => n + Number(c.needs_attention ?? 0), 0)
   const acceptable = job.phase === 'completed' && job.state === 'needs_attention'
   const truncated = reviewable && issues.length < total
-  return {
-    job, counts: resourceCounts, issues,
-    review: {
-      total, acceptable, truncated,
-      // Nothing changed: every record failed again the same way, and none for
-      // a passing reason. Another retry would only repeat this outcome.
-      unchanged: acceptable && total > 0 && !truncated
-        && issues.every(issue => issue.repeated && !isTransientIssueCode(issue.error_code)),
-    },
-  }
+  // Nothing changed: every record failed again the same way, and none for a
+  // passing reason. Another retry would only repeat this outcome. The listed
+  // records decide first; the rest are read only when those all repeated.
+  const unchanged = acceptable && total > 0
+    && issues.every(issue => issue.repeated && !isTransientIssueCode(issue.error_code))
+    && (!truncated || await everyRecordRepeated(ctx, job.id))
+  return { job, counts: resourceCounts, issues, review: { total, acceptable, truncated, unchanged } }
 }
 
 export const migrationJobRoutes: ApiRouteDefinition[] = [

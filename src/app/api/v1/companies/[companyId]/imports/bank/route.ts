@@ -367,6 +367,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
             file_hash: fileHash,
             transactions_imported: ingestResult.imported,
             transactions_duplicates: ingestResult.duplicates,
+            // Split by reason, so rows skipped on content (a judgement call)
+            // are told apart from exact external_id matches.
+            transactions_duplicates_by_reason: ingestResult.duplicates_by_reason ?? null,
             transactions_reconciled: ingestResult.reconciled,
             transactions_auto_categorized: ingestResult.auto_categorized,
             transactions_errors: ingestResult.errors,

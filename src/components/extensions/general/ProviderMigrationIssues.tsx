@@ -1,10 +1,12 @@
 'use client'
 
 import { useState } from 'react'
+import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import {
+  migrationIssueHref,
   migrationIssueReason,
   type MigrationIssueReason,
   type ProviderMigrationIssue,
@@ -102,7 +104,14 @@ function IssueLine({ issue }: { issue: ProviderMigrationIssue }) {
   const t = useTranslations('extensions')
   const label = issue.label
   const kind = t(`ext_arcim_review_record_${issue.resource}`)
-  const name = label?.number ? `${kind} ${label.number}` : `${kind} ${t('ext_arcim_review_record_source_id', { id: issue.source_id })}`
+  // Only a record whose snapshot was read is known to lack a number: one past
+  // the snapshots a read opens is named by its id, without that claim.
+  const name = label?.number
+    ? `${kind} ${label.number}`
+    : `${kind} ${t(label ? 'ext_arcim_review_record_source_id' : 'ext_arcim_review_record_unnamed', { id: issue.source_id })}`
+  // A record that reached Accounted opens on its own page, in a new tab so
+  // the list stays: that page is where its payment is linked or marked.
+  const href = migrationIssueHref(issue)
   const facts = [
     label?.party,
     label?.date ? formatDate(label.date) : null,
@@ -120,7 +129,10 @@ function IssueLine({ issue }: { issue: ProviderMigrationIssue }) {
   return (
     <li className="py-2 text-sm">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <span>{name}</span>
+        {href
+          ? <Link href={href} target="_blank" rel="noopener" title={t('ext_arcim_review_open_record')}
+              className="underline decoration-border underline-offset-2 hover:decoration-foreground">{name}</Link>
+          : <span>{name}</span>}
         {facts && <span className="tabular-nums text-muted-foreground">{facts}</span>}
       </div>
       {detail && <p className="mt-1 text-xs tabular-nums text-muted-foreground">{detail}</p>}

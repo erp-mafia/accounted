@@ -1,10 +1,11 @@
 /**
  * Tests for the read-only bank-import duplicate preview.
  *
- * previewDuplicates must behave like the corresponding subset of
- * ingestTransactions' dedup (Layer-1 external_id + the Layer-2 text bridge
- * with counting semantics and the currency guard), because the wizard shows
- * its answer as "these rows will be skipped". The queue order per call is:
+ * previewDuplicates runs the decision function ingestTransactions runs
+ * (Layer-1 external_id, the content bridge with counting semantics, the
+ * currency guard and both mirrors), because the wizard shows its answer as
+ * "these rows will be skipped". Row-by-row agreement with the commit is
+ * pinned in ingest-identical-rows.test.ts. The queue order per call is:
  * booked map page(s), unbooked map page(s), then one external_id chunk query
  * per 500 rows.
  */
@@ -166,6 +167,52 @@ describe('previewDuplicates', () => {
 
     expect(result.duplicate_row_indexes).toEqual([0])
     expect(result.by_reason.content_bridge).toBe(1)
+  })
+
+  // (g) The cross-channel mirror. Execute skips a row whose only stored twin
+  // is worded differently by another channel when the bucket counts match
+  // (CSV shows the payee, the bank feed the OCR line). The preview runs the
+  // same decision, so given the channel execute will stamp it flags the row
+  // too; it used to under-count here.
+  it('flags a cross-channel mirror twin whose description does not bridge', async () => {
+    const raw = makePreviewRow({ description: 'TELENOR', import_source: 'csv_lunar' })
+
+    enqueue({ data: [] }) // booked map
+    enqueue({
+      data: [{
+        id: 'tx-feed', date: '2024-06-15', amount: -250.0,
+        original_description: 'Bg 5050-1055 OCR 12345', description: 'Bg 5050-1055 OCR 12345',
+        import_source: 'enable_banking', bank_connection_id: 'conn-1', currency: 'SEK',
+        external_id: 'eb_scope_2024-06-15_-25000_0',
+      }],
+    }) // unbooked map: the feed's copy of the same payment
+    enqueue({ data: [] }) // external_id chunk
+
+    const result = await previewDuplicates(supabase as never, COMPANY_ID, [raw])
+
+    expect(result.duplicate_row_indexes).toEqual([0])
+    expect(result.by_reason).toEqual({ external_id: 0, content_bridge: 1 })
+  })
+
+  // The mirror is gated on the batch being an import feed, exactly as in
+  // execute: without a channel the description requirement stays.
+  it('does not mirror when the rows carry no import_source', async () => {
+    const raw = makePreviewRow({ description: 'TELENOR' })
+
+    enqueue({ data: [] }) // booked map
+    enqueue({
+      data: [{
+        id: 'tx-feed', date: '2024-06-15', amount: -250.0,
+        original_description: 'Bg 5050-1055 OCR 12345', description: 'Bg 5050-1055 OCR 12345',
+        import_source: 'enable_banking', bank_connection_id: 'conn-1', currency: 'SEK',
+        external_id: 'eb_scope_2024-06-15_-25000_0',
+      }],
+    }) // unbooked map
+    enqueue({ data: [] }) // external_id chunk
+
+    const result = await previewDuplicates(supabase as never, COMPANY_ID, [raw])
+
+    expect(result.duplicate_row_indexes).toEqual([])
   })
 
   it('returns an empty result for an empty batch without querying', async () => {

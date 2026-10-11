@@ -49,10 +49,9 @@ export async function generateDimensionPnl(
   // parseReportRangeArgs in the MCP tool), exactly as for resultatrapport.
   options?: { fromDate?: string; toDate?: string }
 ): Promise<DimensionPnlReport> {
-  // The dim number is interpolated into a PostgREST jsonb path expression
-  // below (`dimensions->>N`). Both entry points (route, MCP tool) validate,
-  // but the generator is exported: guard here too so no future caller can
-  // smuggle filter syntax through.
+  // Both entry points (route, MCP tool) validate, but the generator is
+  // exported: guard here too. The number is the key read from each line's
+  // bag below and the registry lookup; it is never part of a filter string.
   if (!/^[1-9]\d{0,3}$/.test(sieDimNo)) {
     throw new Error('sieDimNo must be a positive SIE dimension number')
   }
@@ -141,9 +140,15 @@ export async function generateDimensionPnl(
 
       return excludeYearEndChain(query, reversedYearEndIds)
     },
-    // Key-existence via the extracted text field: dims 1/6 ride the partial
-    // expression indexes (idx_jel_dimensions_dim1/dim6).
-    filterLines: (q: EntryLinesQuery) => q.not(`dimensions->>${sieDimNo}`, 'is', null),
+    // Lines that carry any tag at all; which value a line has on THIS
+    // dimension is read from its bag in the loop below, the way the general
+    // ledger shows it. Deliberately not a `dimensions->>N` path: a SIE
+    // dimension number is all digits, and PostgREST reads a digits-only JSON
+    // path operand as an array index (`dimensions ->> 6`, an integer), which
+    // is NULL on every object. That filter matched no line, so every amount
+    // fell into "(Utan dimension)" (tests/tool-pg/dimension-pnl.tool.test.ts
+    // runs this against a real PostgREST).
+    filterLines: (q: EntryLinesQuery) => q.neq('dimensions', '{}'),
   })
 
   // Bucket raw amounts per (account, code). Only accounts present in the P&L

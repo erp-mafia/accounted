@@ -159,14 +159,60 @@ describe('the review a finished import stops for', () => {
     const status = await readMigrationStatus(ctx, jobId)
     expect(status?.review.unchanged).toBe(false)
   })
-  it('does not call an unlisted remainder unchanged', async () => {
+  it('hands the review the row a record that reached Accounted opens on', async () => {
     const { ctx, enqueue } = context()
     enqueue({ data: job() })
-    enqueue(counts(600))
-    enqueue({ data: [{ id: 'a', resource: 'supplierInvoices', source_id: 'a', error_code: '23502',
-      error_phase: 'import', target_id: null, receipt: { previous_error_code: '23502' } }] })
+    enqueue(counts(2))
+    enqueue({ data: [
+      { id: 'a', resource: 'supplierInvoices', source_id: 'si-1', error_code: 'MIGRATION_INVOICE_NUMBER_TAKEN',
+        error_phase: 'import', target_id: null, receipt: {} },
+      { id: 'b', resource: 'supplierInvoices', source_id: 'si-2', error_code: 'MIGRATION_PAYMENT_REVIEW',
+        error_phase: 'reconcile', target_id: 'supplier-invoice-2', receipt: { review: { kind: 'payment', reason: 'ambiguous' } } },
+    ] })
     enqueue({ data: [] })
     const status = await readMigrationStatus(ctx, jobId)
+    expect(status?.issues.map(issue => [issue.id, issue.imported, issue.target_id])).toEqual([
+      ['a', false, null], ['b', true, 'supplier-invoice-2'],
+    ])
+  })
+
+  // A review with more records than it lists (600 against the 500 it reads).
+  // The listed record stands in for the listed page; `rest` is what the read
+  // of every record returns.
+  const repeated = (id: string, code = 'MIGRATION_INVOICE_NUMBER_TAKEN', previous: string | null = code) => ({
+    id, resource: 'supplierInvoices', source_id: id, error_code: code, error_phase: 'import', target_id: null,
+    receipt: previous ? { previous_error_code: previous } : {} })
+  async function longReview(listed: ReturnType<typeof repeated>, rest: ReturnType<typeof repeated>[]) {
+    const mock = context()
+    mock.enqueue({ data: job() })
+    mock.enqueue(counts(600))
+    mock.enqueue({ data: [listed] })
+    mock.enqueue({ data: [] })
+    mock.enqueue({ data: rest })
+    const status = await readMigrationStatus(mock.ctx, jobId)
+    const reads = mock.calls.filter(c => c.table === 'migration_job_chunks' && c.method === 'select').map(c => c.args[0])
+    return { status, reads, mock }
+  }
+
+  it('stops offering the retry for a long review too, once every record failed again the same way', async () => {
+    const { status, reads, mock } = await longReview(repeated('a'), [repeated('a'), repeated('b'), repeated('c', '23502')])
+    expect(status?.review).toEqual({ total: 600, acceptable: true, unchanged: true, truncated: true })
+    // The unlisted records are read for their codes only, in this company's job.
+    expect(reads).toEqual(['id,resource,source_id,error_code,error_phase,target_id,receipt', 'id,payload', 'id,error_code,receipt'])
+    expect(mock.findCalls('migration_job_chunks', 'eq').filter(args => args[0] === 'company_id')).toHaveLength(3)
+    expect(mock.findCalls('migration_job_chunks', 'eq').filter(args => args[0] === 'job_id' && args[1] === jobId)).toHaveLength(3)
+  })
+  it.each([
+    ['was never retried', repeated('z', 'MIGRATION_INVOICE_NUMBER_TAKEN', null)],
+    ['failed differently this time', repeated('z', 'MIGRATION_INVOICE_NUMBER_TAKEN', 'MIGRATION_INVOICE_AMBIGUOUS')],
+    ['failed for a passing reason', repeated('z', 'MIGRATION_DETAIL_RETRY')],
+  ])('keeps the retry for a long review when an unlisted record %s', async (_label, unlisted) => {
+    const { status } = await longReview(repeated('a'), [repeated('a'), unlisted])
     expect(status?.review).toEqual({ total: 600, acceptable: true, unchanged: false, truncated: true })
+  })
+  it('does not read the unlisted records when a listed one already keeps the retry', async () => {
+    const { status, reads } = await longReview(repeated('a', '23502', null), [])
+    expect(status?.review).toEqual({ total: 600, acceptable: true, unchanged: false, truncated: true })
+    expect(reads).toHaveLength(2)
   })
 })

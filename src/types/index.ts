@@ -314,9 +314,10 @@ export type BankConnectionStatus = 'pending' | 'pending_selection' | 'active' | 
 // Currency types
 /**
  * Currencies the app can book. Single source for every TS list: the Zod
- * schema, the form dropdowns, the MCP tool schemas and the Riksbanken series
- * map all derive from this tuple. Must match the seed of public.currencies
- * (supabase/migrations) and the SERIES_IDS map in lib/currency/riksbanken.ts;
+ * schema, the form dropdowns and the MCP tool schemas all derive from this
+ * tuple. Must match the seed of public.currencies (supabase/migrations), and
+ * every foreign member needs a rate source in RIKSBANKEN_CURRENCIES
+ * (lib/currency/riksbanken.ts), which is the wider set a rate exists for;
  * lib/currency/__tests__/currencies.test.ts pins both.
  */
 export const CURRENCIES = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK', 'CHF', 'CAD'] as const
@@ -1931,9 +1932,11 @@ export interface VatValidationResult {
   unavailable?: boolean
 }
 
-// Exchange rate response
+// Exchange rate response. `currency` is any code Riksbanken has a series for
+// (RIKSBANKEN_CURRENCIES), which is wider than the bookable Currency set: a
+// bank row can arrive in a currency the app cannot invoice in.
 export interface ExchangeRate {
-  currency: Currency
+  currency: string
   rate: number
   date: string
 }
@@ -4234,12 +4237,63 @@ export interface IngestOptions {
    * so "undo this import" can scope its bulk delete to exactly this batch.
    * Omitted by every other caller (PSD2 sync, MCP): those rows stay NULL. */
   bankFileImportId?: string
+  /**
+   * The feed states that every external_id in this batch is the source's own
+   * per-booking reference: the same booking always arrives under the same id
+   * (across re-fetches and sessions), and a different id is a different
+   * booking.
+   *
+   * With that statement the content bridge never lets a stored row of the
+   * SAME feed (same import_source, same bank connection) absorb an incoming
+   * row that carries another id: two identical fees on one day with two bank
+   * references are two movements. Everything the ids cannot speak to still
+   * dedups on content and count: a bank file followed by the feed, a switch
+   * to another provider, a booked hand-entered row, a stored row without an
+   * id.
+   *
+   * Never set it for ids derived from content or position (CSV row hashes,
+   * the buildStableExternalIds occurrence index): those can change for the
+   * same booking, and the bridge is what catches that. The rows must carry an
+   * import-feed import_source: it is the id namespace, so a new provider or a
+   * new id scheme takes a new label.
+   */
+  stableExternalIds?: boolean
+}
+
+/**
+ * Why the ingest pipeline did not insert a row.
+ * - `external_id_match`: the row's external_id is already stored (exact key).
+ * - `content_match_booked`: a stored BOOKED row stands for the same movement
+ *   by content (same date, amount, currency and account, and a bridging
+ *   description or a count-symmetric mirror).
+ * - `content_match_unbooked`: the same, against a stored UNBOOKED row from an
+ *   import feed.
+ */
+export type IngestSkipReason = 'external_id_match' | 'content_match_booked' | 'content_match_unbooked'
+
+/** One incoming row the pipeline skipped as already stored, and what it matched. */
+export interface IngestSkippedRow {
+  /** The external_id the caller sent for the row. */
+  external_id: string
+  reason: IngestSkipReason
+  /** external_id of the stored row that stands for it; null when that row has none. */
+  matched_external_id: string | null
+  /** id of the stored row; null when it is not known (an id stored by a concurrent writer). */
+  matched_transaction_id: string | null
 }
 
 /** Result of the transaction ingestion pipeline */
 export interface IngestResult {
   imported: number
+  /** Rows skipped as already stored: the length of `skipped`, the sum of `duplicates_by_reason`. */
   duplicates: number
+  /**
+   * `duplicates` split by reason, so a content match (a judgement call) is
+   * never mistaken for an exact external_id match.
+   */
+  duplicates_by_reason?: Record<IngestSkipReason, number>
+  /** Every skipped row, in input order, with the stored row it matched. */
+  skipped?: IngestSkippedRow[]
   reconciled: number
   auto_categorized: number
   auto_matched_invoices: number

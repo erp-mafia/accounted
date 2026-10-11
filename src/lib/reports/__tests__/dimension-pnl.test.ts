@@ -314,7 +314,64 @@ describe('generateDimensionPnl', () => {
     expect(report.net_total).toBe(750)
   })
 
-  it('rejects a non-numeric dimension number (PostgREST path guard)', async () => {
+  it('reads the value from each line\'s own bag: a line tagged on another dimension stays untagged', async () => {
+    mockResults = {
+      fiscal_periods: [{ data: PERIOD, error: null }],
+      journal_entry_lines: [
+        {
+          // What the non-empty-bag filter returns: every tagged line, also
+          // the ones that carry only a kostnadsställe.
+          data: [
+            { id: 'l1', account_number: '3001', debit_amount: 0, credit_amount: 600, dimensions: { '6': 'P1' } },
+            { id: 'l2', account_number: '3001', debit_amount: 0, credit_amount: 300, dimensions: { '1': 'KS01' } },
+            { id: 'l3', account_number: '5010', debit_amount: 200, credit_amount: 0, dimensions: { '1': 'KS01', '6': 'P1' } },
+          ],
+          error: null,
+        },
+      ],
+    }
+    mockTrialBalance.mockResolvedValue(
+      tb([
+        tbRow({ account_number: '3001', account_class: 3, closing_credit: 900 }),
+        tbRow({ account_number: '5010', account_name: 'Lokalhyra', account_class: 5, closing_debit: 200 }),
+      ]),
+    )
+
+    const report = await generateDimensionPnl(supabase, 'company-1', 'period-1', '6')
+
+    expect(report.columns.map((c) => c.code)).toEqual(['P1', null])
+    expect(report.groups.flatMap((g) => g.rows)).toEqual([
+      { account_number: '3001', account_name: 'Försäljning', values: [600, 300], total: 900 },
+      { account_number: '5010', account_name: 'Lokalhyra', values: [-200, 0], total: -200 },
+    ])
+    expect(report.net_per_column).toEqual([400, 300])
+  })
+
+  it('never asks PostgREST for a dimensions->>N path (it reads a digits-only operand as an array index)', async () => {
+    mockResults = { fiscal_periods: [{ data: PERIOD, error: null }] }
+    mockTrialBalance.mockResolvedValue(tb([tbRow({ account_number: '3001', account_class: 3, closing_credit: 100 })]))
+
+    await generateDimensionPnl(supabase, 'company-1', 'period-1', '6')
+
+    const lineQueries = supabase.from.mock.calls
+      .map(([table]: [string], i: number) => ({ table, builder: supabase.from.mock.results[i].value }))
+      .filter((q: { table: string }) => q.table === 'journal_entry_lines')
+    expect(lineQueries.length).toBeGreaterThan(0)
+    for (const { builder } of lineQueries) {
+      // The tagged pass narrows to lines with a non-empty bag.
+      expect(builder.neq).toHaveBeenCalledWith('dimensions', '{}')
+      // No filter names a JSON path: `dimensions->>6` is `dimensions ->> 6`
+      // (integer) to PostgREST, NULL on every object, so it matched no line
+      // and the whole result read as untagged.
+      for (const method of ['not', 'eq', 'neq', 'in', 'or', 'gte', 'lte', 'lt', 'contains']) {
+        for (const [column] of builder[method].mock.calls) {
+          expect(String(column), `${method}(${String(column)})`).not.toMatch(/->/)
+        }
+      }
+    }
+  })
+
+  it('rejects a non-numeric dimension number', async () => {
     await expect(
       generateDimensionPnl(supabase, 'company-1', 'period-1', '6,is.null'),
     ).rejects.toThrow('positive SIE dimension number')
@@ -384,7 +441,17 @@ function ledgerClient(ledger: { period: Row; entries: LedgerEntry[]; lines: Ledg
       return b
     }
     b.eq = (col: string, val: unknown) => add((r) => !has(r, col) || r[col] === val)
-    b.neq = (col: string, val: unknown) => add((r) => !has(r, col) || r[col] !== val)
+    // The tagged pass narrows to lines with a non-empty bag: neq('dimensions',
+    // '{}'). Which value a line has on the requested dimension is the
+    // generator's own read of the bag, so this fake never interprets a
+    // dimension number. (It used to answer `dimensions->>N` as a key lookup,
+    // which real PostgREST reads as an array index: the fake agreed with the
+    // author instead of the server. tests/tool-pg/dimension-pnl.tool.test.ts
+    // runs the generator against a real one.)
+    b.neq = (col: string, val: unknown) =>
+      col === 'dimensions' && val === '{}'
+        ? add((r) => Object.keys((r.dimensions as Record<string, string> | undefined) ?? {}).length > 0)
+        : add((r) => !has(r, col) || r[col] !== val)
     b.in = (col: string, vals: unknown[]) => add((r) => !has(r, col) || vals.includes(r[col]))
     b.gte = (col: string, val: string) => add((r) => !has(r, col) || String(r[col]) >= val)
     b.lte = (col: string, val: string) => add((r) => !has(r, col) || String(r[col]) <= val)
@@ -394,12 +461,6 @@ function ledgerClient(ledger: { period: Row; entries: LedgerEntry[]; lines: Ledg
       if (!m) throw new Error(`unsupported or(): ${expr}`)
       const ids = m[2].split(',')
       return add((r) => r[m[1]] == null || !ids.includes(String(r[m[1]])))
-    }
-    // The tagged pass's key-existence filter: not('dimensions->>N', 'is', null).
-    b.not = (path: string, op: string, val: unknown) => {
-      const m = /^dimensions->>(\d+)$/.exec(path)
-      if (!m || op !== 'is' || val !== null) throw new Error(`unsupported not(): ${path}`)
-      return add((r) => (r.dimensions as Record<string, string> | undefined)?.[m[1]] != null)
     }
     b.single = async () => ({ data: table === 'fiscal_periods' ? ledger.period : null, error: null })
     b.maybeSingle = async () => ({ data: null, error: null }) // no registry row: default names

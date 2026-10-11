@@ -2950,6 +2950,23 @@ const YEAR_END: Record<string, StructuredErrorEntry> = {
 }
 
 const FX: Record<string, StructuredErrorEntry> = {
+  // A staged foreign-currency operation (bank row, invoice, supplier invoice)
+  // whose rate lookup was rate-limited or failed at Riksbanken. The rate
+  // exists; it could not be fetched right now. The operation is handed back
+  // to 'pending' (never consumed, never written at 1:1), so the remedy is to
+  // approve the SAME operation again, not to stage it again.
+  FX_RATE_TEMPORARILY_UNAVAILABLE: {
+    httpStatus: 503,
+    message_sv:
+      'Riksbanken svarar inte just nu, så växelkursen kunde inte hämtas. Inget har bokförts och åtgärden ligger kvar: godkänn den igen om en stund.',
+    message_en:
+      'Riksbanken rate-limited or failed the exchange rate request. Nothing was written and the operation is still pending.',
+    retryable: true,
+    remediation: {
+      description:
+        'Wait about a minute and approve the same pending operation again. Do not stage it again, and do not replace the rate with an estimate.',
+    },
+  },
   FX_CLOSING_RATE_UNAVAILABLE: {
     httpStatus: 502,
     message_sv:

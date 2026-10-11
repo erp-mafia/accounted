@@ -46,9 +46,14 @@ once a minute while idle, and refreshes on navigation/focus. Hidden tabs do not 
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
-| `SIE_IMPORT_JOBS` | false | Admit new executions. Turning it off still allows existing work to drain. |
+| `SIE_IMPORT_JOBS` | false on hosted, true when `NEXT_PUBLIC_SELF_HOSTED=true` | Admit new executions. Turning it off still allows existing work to drain. |
 | `SIE_IMPORT_WORKER_PAUSED` | false | Stop worker claims and continuation for an emergency investigation. |
 | `SIE_IMPORT_CHUNK_AUDIT` | false | Opt new jobs into compact audit only after separate compliance approval. Existing jobs retain their pinned mode. |
+
+A self-hosted install has no cutover to stage (migrations, application and
+the worker cron ship together), so there admission is on unless the operator
+sets `SIE_IMPORT_JOBS=false`; the refusal then names the setting. Hosted stays
+off unless the flag is `true`.
 
 Hosted recovery: `/api/import/sie/worker/cron` every minute, authenticated with
 the cron-secret guard. Recovery takes lease expiry plus actual cron delivery;

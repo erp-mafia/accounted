@@ -303,10 +303,15 @@ export const POST = withRouteContext(
         }
       }
 
+      // The per-row skip list stays server-side: a statement re-exported with
+      // shifted row positions skips every row on content, and the wizard's
+      // preview step already marked those rows one by one. The response keeps
+      // the count and its split by reason (duplicates_by_reason).
+      const { skipped: _skipped, ...ingestSummary } = ingestResult
       return NextResponse.json({
         data: {
           import_id: importRecord.id,
-          ...ingestResult,
+          ...ingestSummary,
         },
       })
     } catch (err) {

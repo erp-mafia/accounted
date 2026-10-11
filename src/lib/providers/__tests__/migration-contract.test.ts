@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  isTransientIssueCode, migrationIssueKind, migrationIssueReason, migrationRefusalMessageKey, migrationRefusals,
+  MIGRATION_RESOURCES, isTransientIssueCode, migrationIssueHref, migrationIssueKind, migrationIssueReason,
+  migrationRefusalMessageKey, migrationRefusals,
 } from '../migration-contract'
 import sv from '@/messages/sv.json'
 import en from '@/messages/en.json'
@@ -127,5 +128,28 @@ describe('isTransientIssueCode', () => {
     expect(isTransientIssueCode('MIGRATION_INVOICE_NUMBER_TAKEN')).toBe(false)
     expect(isTransientIssueCode('23502')).toBe(false)
     expect(isTransientIssueCode(null)).toBe(false)
+  })
+})
+
+describe('migrationIssueHref', () => {
+  const id = '0b7f4f43-3a0a-4d0e-9d57-1f6c6a1f0e11'
+
+  it('opens a record that reached Accounted on its own page', () => {
+    expect(migrationIssueHref({ resource: 'salesInvoices', target_id: id })).toBe(`/invoices/${id}`)
+    expect(migrationIssueHref({ resource: 'supplierInvoices', target_id: id })).toBe(`/supplier-invoices/${id}`)
+    expect(migrationIssueHref({ resource: 'customers', target_id: id })).toBe(`/customers/${id}`)
+    expect(migrationIssueHref({ resource: 'suppliers', target_id: id })).toBe(`/suppliers/${id}`)
+  })
+
+  it('has nothing to open for a record that was never imported', () => {
+    for (const resource of MIGRATION_RESOURCES) expect(migrationIssueHref({ resource, target_id: null })).toBeNull()
+  })
+
+  it('has the texts the review names such a record with, in both languages', () => {
+    for (const messages of [sv, en]) {
+      for (const key of ['ext_arcim_review_open_record', 'ext_arcim_review_record_unnamed', 'ext_arcim_review_record_source_id'] as const) {
+        expect(messages.extensions[key], key).toEqual(expect.any(String))
+      }
+    }
   })
 })
