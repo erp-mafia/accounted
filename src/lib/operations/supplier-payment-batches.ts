@@ -158,7 +158,7 @@ export const supplierPaymentBatchesPreview = defineOperation({
       'Creating the batch (POST /supplier-payment-batches) or listing unpaid supplier invoices (GET /supplier-invoices).',
     pitfalls: [
       'Excluded reasons: not_payable (draft, paid, credited...), nothing_remaining, credit_note, foreign_currency (only SEK), payee_missing / payee_invalid (fix the supplier\'s bankgiro, plusgiro or clearing + account number), reference_missing (no valid OCR and no supplier invoice number: add one of them to the invoice), not_found.',
-      'debtor_ok false means create will refuse with SI_BATCH_DEBTOR_INCOMPLETE: debtor_missing names the company setting to fill in (iban, bic or org_number).',
+      'debtor_ok false means create will refuse with SI_BATCH_DEBTOR_INCOMPLETE: debtor_missing names the company setting to fill in (iban, bic, org_number, or swedbank_ids: a Swedbank company\'s swedbank_signer_id and swedbank_corporate_pay_id, which Swedbank assigns and refuses a file without).',
       'already_batched is a warning here but a refusal at create unless confirm_already_batched is true: paying the same invoice twice is the risk.',
       'Only SEK invoices; at most 100 per call.',
     ],
@@ -231,7 +231,7 @@ export const supplierPaymentBatchesPreview = defineOperation({
     total_amount: z.number(),
     currency: z.literal('SEK'),
     debtor_ok: z.boolean(),
-    debtor_missing: z.enum(['iban', 'bic', 'org_number']).nullable(),
+    debtor_missing: z.enum(['iban', 'bic', 'org_number', 'swedbank_ids']).nullable(),
   }),
   http: { method: 'POST', path: '/api/v1/companies/:companyId/supplier-payment-batches/preview' },
   mcp: {
@@ -288,7 +288,7 @@ export const supplierPaymentBatchesCreate = defineOperation({
     pitfalls: [
       'Money leaves the company\'s account once the file is uploaded and signed in the bank: preview first (POST /supplier-payment-batches/preview) and check amounts and payees.',
       'An invoice already in an active batch answers 409 SI_BATCH_DUPLICATE_INVOICE with details.invoices; resend with confirm_already_batched true only when paying it twice is intended, otherwise cancel the old batch.',
-      'Incomplete company bank details answer 400 SI_BATCH_DEBTOR_INCOMPLETE; details.missing is iban, bic or org_number (company settings).',
+      'Incomplete company bank details answer 400 SI_BATCH_DEBTOR_INCOMPLETE; details.missing is iban, bic, org_number or swedbank_ids (company settings; swedbank_ids means a Swedbank company lacks swedbank_signer_id or swedbank_corporate_pay_id).',
       'An ineligible invoice fails the whole request with 400 SI_BATCH_INELIGIBLE_INVOICE and a reason per invoice; amount above the remaining amount answers 400 SI_BATCH_AMOUNT_EXCEEDS_REMAINING.',
       'A payment_date in the past is moved to today (banks reject passed execution dates). Only SEK invoices; at most 100 per batch.',
       'Between two requests (dry run, then create) a supplier\'s bank details can change: pass expected_payees from the dry run\'s items (payee.fingerprint, amount) and create answers 409 SI_BATCH_PAYEE_CHANGED instead of paying a changed account. A staged MCP create is pinned this way automatically.',

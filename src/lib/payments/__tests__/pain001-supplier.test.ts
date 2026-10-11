@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
   generateSupplierPain001,
@@ -516,5 +517,210 @@ describe('Danske Bank bankgiro payment: structure against the bank sample', () =
     expect(findAll(cdtrRefInf, 'Ref')[0].text).toBe('12345678')
     // The generator also states RfrdDocAmt (Swedbank rule 217); the schema puts it before CdtrRefInf.
     expect(childNames(strd)).toEqual(['RfrdDocAmt', 'CdtrRefInf'])
+  })
+})
+
+/**
+ * Swedbank MIG 2.0 pain.001.001.03 (version 2.0.0, 2026-03-09) with Appendix
+ * v2.1.0 and the ISO 2.0 example files: the form a Swedbank debtor with both
+ * Swedbank ids gets (crm#1117). The ids are Swedbank's own example values.
+ */
+describe('Swedbank ISO 2.0: a Swedbank debtor with its SignerID and Corporate Pay id', () => {
+  const ids = { signerId: '260637712ORI0003', corporatePayId: '260637712CPO0001' }
+  const swedbank = {
+    name: 'Testbolaget AB',
+    orgNumber: '556677-8899',
+    iban: 'SE3550000000054910000003',
+    bic: 'SWEDSESS',
+    bankgiro: '9912346',
+    city: 'Uppsala',
+    swedbank: ids,
+  }
+
+  const BANK_ID = 'Id(OrgId(Othr(Id,SchmeNm(Cd))))'
+
+  function block(xml: string, name: string): string {
+    return xml.match(new RegExp(`<${name}>[\\s\\S]*?</${name}>`))![0]
+  }
+
+  it('states the SignerID as the initiating party and the Corporate Pay id as the debtor, both SchmeNm BANK', () => {
+    const xml = generateSupplierPain001(swedbank, [bgPayment()], options)
+    const initgPty = block(xml, 'InitgPty')
+    expect(initgPty).toContain('<Id>260637712ORI0003</Id>')
+    expect(initgPty).toContain('<SchmeNm><Cd>BANK</Cd></SchmeNm>')
+    const dbtr = block(xml, 'Dbtr')
+    expect(dbtr).toContain('<Id>260637712CPO0001</Id>')
+    expect(dbtr).toContain('<SchmeNm><Cd>BANK</Cd></SchmeNm>')
+    // The org number Swedbank refused appears nowhere.
+    expect(xml).not.toContain('5566778899</Id>')
+    expect(xml).not.toContain('<Othr><Id>5566778899</Id></Othr>')
+  })
+
+  it('marks every PmtInf as a supplier payment, SvcLvl NURG and CtgyPurp SUPP between CtrlSum and ReqdExctnDt', () => {
+    const doc = parseXml(generateSupplierPain001(swedbank, mixedBatch(), options))
+    const groups = findAll(doc, 'PmtInf')
+    expect(groups).toHaveLength(2)
+    for (const group of groups) {
+      const names = childNames(group)
+      expect(names.slice(0, 10)).toEqual([
+        'PmtInfId', 'PmtMtd', 'BtchBookg', 'NbOfTxs', 'CtrlSum', 'PmtTpInf', 'ReqdExctnDt',
+        'Dbtr', 'DbtrAcct', 'DbtrAgt',
+      ])
+      expect(new Set(names.slice(10))).toEqual(new Set(['CdtTrfTxInf']))
+      const pmtTpInf = group.children.find((c) => c.name === 'PmtTpInf')!
+      expect(shape(pmtTpInf)).toBe('PmtTpInf(SvcLvl(Cd),CtgyPurp(Cd))')
+      expect(findAll(pmtTpInf, 'Cd').map((n) => n.text)).toEqual(['NURG', 'SUPP'])
+    }
+  })
+
+  it('debits the IBAN for every payee, the company bankgiro included in no debtor account', () => {
+    const xml = generateSupplierPain001(swedbank, mixedBatch(), options)
+    const doc = parseXml(xml)
+    const groups = findAll(doc, 'PmtInf')
+    // One PmtInf per date only: MIG 2.0 has no BGNR debtor account form.
+    expect(groups.map((g) => findAll(g, 'ReqdExctnDt')[0].text)).toEqual(['2026-08-15', '2026-08-20'])
+    expect(groups.map((g) => shape(findAll(g, 'DbtrAcct')[0]))).toEqual([IBAN_DEBIT, IBAN_DEBIT])
+    for (const account of debtorAccounts(xml)) expect(account).not.toContain('BGNR')
+    expect(xml).not.toContain(swedbank.bankgiro)
+    // Bankgiro payees are still addressed as bankgiro numbers; the 83279
+    // account payee keeps its five clearing digits in the Swedbank form.
+    expect(groups.map((g) => findAll(g, 'MmbId').map((n) => n.text))).toEqual([
+      ['9900', '9960', '83279'],
+      ['9900'],
+    ])
+  })
+
+  it('always states the debtor address with country SE, and the town when known', () => {
+    const withTown = parseXml(generateSupplierPain001(swedbank, [bgPayment()], options))
+    const dbtr = findAll(withTown, 'Dbtr')[0]
+    expect(shape(dbtr)).toBe(`Dbtr(Nm,PstlAdr(TwnNm,Ctry),${BANK_ID})`)
+    expect(findAll(dbtr, 'TwnNm')[0].text).toBe('Uppsala')
+
+    const withoutTown = parseXml(generateSupplierPain001({ ...swedbank, city: null }, [bgPayment()], options))
+    const dbtrNoTown = findAll(withoutTown, 'Dbtr')[0]
+    expect(shape(dbtrNoTown)).toBe(`Dbtr(Nm,PstlAdr(Ctry),${BANK_ID})`)
+    expect(findAll(dbtrNoTown, 'Ctry')[0].text).toBe('SE')
+  })
+
+  it.each(['SWEDSESS', 'swedsessxxx', ' SWEDSESSXXX '])(
+    'names the debtor agent SWEDSESS with country SE, the stored BIC written as %j',
+    (bic) => {
+      const doc = parseXml(generateSupplierPain001({ ...swedbank, bic }, [bgPayment()], options))
+      const dbtrAgt = findAll(doc, 'DbtrAgt')[0]
+      expect(shape(dbtrAgt)).toBe('DbtrAgt(FinInstnId(BIC,PstlAdr(Ctry)))')
+      expect(findAll(dbtrAgt, 'BIC')[0].text).toBe('SWEDSESS')
+      expect(findAll(dbtrAgt, 'Ctry')[0].text).toBe('SE')
+    },
+  )
+
+  it('addresses a plusgiro payee with the PGNR proprietary code', () => {
+    const xml = generateSupplierPain001(swedbank, [bgPayment({ payee: plusgiroPayee })], options)
+    const cdtrAcct = block(xml, 'CdtrAcct')
+    expect(cdtrAcct).toContain('<Id>1234567</Id>')
+    expect(cdtrAcct).toContain('<SchmeNm><Prtry>PGNR</Prtry></SchmeNm>')
+    expect(cdtrAcct).not.toContain('BBAN')
+    expect(xml).toContain('<MmbId>9960</MmbId>')
+  })
+
+  it('keeps a 4-digit clearing in the separate form: MmbId CCCC, account without clearing', () => {
+    const xml = generateSupplierPain001(
+      swedbank,
+      [bgPayment({ payee: { type: 'bank_account', clearing: '6000', account: '123456789' }, reference: { type: 'invoice_number', value: 'F1' } })],
+      options,
+    )
+    expect(xml).toContain('<MmbId>6000</MmbId>')
+    const cdtrAcct = block(xml, 'CdtrAcct')
+    expect(cdtrAcct).toContain('<Id>123456789</Id>')
+    expect(cdtrAcct).toContain('<SchmeNm><Cd>BBAN</Cd></SchmeNm>')
+  })
+
+  it.each([
+    // Validex's own account example, 8901-1 914 616 842-3.
+    ['a 5-digit clearing', '8901-1', '914 616 842-3', '89011', '890119146168423'],
+    // Stored without its fifth digit: the mod 10 check digit of 8901 is 1.
+    ['a 4-digit clearing (check digit derived)', '8901', '914 616 842-3', '89011', '890119146168423'],
+    // Swedbank's ISO 2.0 salary example: zero fill up to 15 digits.
+    ['a short account (zero filled)', '8911-2', '4245210', '89112', '891120004245210'],
+  ])('states an 8xxxx clearing as MmbId 8CCCC and a 15-digit BBAN: %s', (_case, clearing, account, memberId, bban) => {
+    const xml = generateSupplierPain001(
+      swedbank,
+      [bgPayment({ payee: { type: 'bank_account', clearing, account }, reference: { type: 'invoice_number', value: 'F1' } })],
+      options,
+    )
+    expect(xml).toContain(`<MmbId>${memberId}</MmbId>`)
+    expect(block(xml, 'CdtrAcct')).toContain(`<Id>${bban}</Id>`)
+    expect(bban).toHaveLength(15)
+  })
+
+  it('sends an OCR to a bank account as the message, never as a structured reference', () => {
+    const xml = generateSupplierPain001(swedbank, [bgPayment({ payee: bankAccountPayee })], options)
+    const rmtInf = block(xml, 'RmtInf')
+    expect(rmtInf).toContain('<Ustrd>12345678</Ustrd>')
+    expect(rmtInf).not.toContain('<Strd>')
+  })
+
+  it.each([
+    ['bankgiro', undefined],
+    ['plusgiro', plusgiroPayee],
+  ] as const)('states an OCR to a %s payee as SCOR, without RfrdDocAmt', (_type, payee) => {
+    const doc = parseXml(
+      generateSupplierPain001(swedbank, [bgPayment(payee ? { payee } : {})], options),
+    )
+    const strd = findAll(doc, 'Strd')[0]
+    expect(childNames(strd)).toEqual(['CdtrRefInf'])
+    expect(shape(strd)).toBe('Strd(CdtrRefInf(Tp(CdOrPrtry(Cd)),Ref))')
+    expect(findAll(strd, 'Ref')[0].text).toBe('12345678')
+    expect(findAll(doc, 'RfrdDocAmt')).toHaveLength(0)
+  })
+
+  it('drops the apostrophe, which MIG 2.0 lacks, and only in the Swedbank form', () => {
+    const payment = bgPayment({ payeeName: "Kalle's Bygg & Co", reference: { type: 'invoice_number', value: "Faktura 1'2" } })
+    const xml = generateSupplierPain001(swedbank, [payment], options)
+    expect(xml).toContain('<Nm>Kalles Bygg + Co</Nm>')
+    expect(xml).toContain('<Ustrd>Faktura 12</Ustrd>')
+    expect(xml).not.toContain('&apos;')
+    // Every other form keeps it (MIG 1.0 allows the apostrophe).
+    expect(generateSupplierPain001(debtor, [payment], options)).toContain('<Nm>Kalle&apos;s Bygg + Co</Nm>')
+  })
+
+  it('writes the whole file in pain.001.001.03 schema order', () => {
+    const doc = parseXml(
+      generateSupplierPain001(swedbank, [bgPayment({ payeeCity: 'Veddige' })], options),
+    )
+    const grpHdr = findAll(doc, 'GrpHdr')[0]
+    expect(shape(grpHdr)).toBe(`GrpHdr(MsgId,CreDtTm,NbOfTxs,CtrlSum,InitgPty(Nm,${BANK_ID}))`)
+    const pmtInf = findAll(doc, 'PmtInf')[0]
+    expect(childNames(pmtInf)).toEqual([
+      'PmtInfId', 'PmtMtd', 'BtchBookg', 'NbOfTxs', 'CtrlSum', 'PmtTpInf', 'ReqdExctnDt',
+      'Dbtr', 'DbtrAcct', 'DbtrAgt', 'CdtTrfTxInf',
+    ])
+    const tx = findAll(doc, 'CdtTrfTxInf')[0]
+    expect(shape(tx)).toBe(
+      'CdtTrfTxInf(PmtId(InstrId,EndToEndId),Amt(InstdAmt),' +
+        'CdtrAgt(FinInstnId(ClrSysMmbId(ClrSysId(Cd),MmbId))),' +
+        'Cdtr(Nm,PstlAdr(TwnNm,Ctry)),' +
+        'CdtrAcct(Id(Othr(Id,SchmeNm(Prtry)))),' +
+        'RmtInf(Strd(CdtrRefInf(Tp(CdOrPrtry(Cd)),Ref))))',
+    )
+  })
+
+  it('renders a batch created before 2026-10-11 (Swedbank debtor, no ids) byte for byte as before', () => {
+    const { swedbank: _ids, ...preFix } = swedbank
+    const payments = [
+      bgPayment({ payeeName: "Derome Bygg & Industri's AB", payeeCity: 'Veddige' }),
+      bgPayment({
+        payee: plusgiroPayee,
+        payeeName: 'Plus AB',
+        amount: 200,
+        reference: { type: 'invoice_number', value: 'F-1001' },
+      }),
+    ]
+    const xml = generateSupplierPain001(preFix, payments, options)
+    // SHA-256 of the file main generated before the Swedbank ISO 2.0 form
+    // existed (org number ids, BGNR debit, RfrdDocAmt, apostrophe kept).
+    expect(createHash('sha256').update(xml).digest('hex')).toBe(
+      'c2907cf39de5da51aea63d5e3c8b7c92826be8d99aebafda62f8de21b38ed533',
+    )
+    expect(generateSupplierPain001({ ...preFix, swedbank: null }, payments, options)).toBe(xml)
   })
 })

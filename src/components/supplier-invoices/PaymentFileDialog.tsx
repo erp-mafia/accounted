@@ -39,8 +39,16 @@ interface Preview {
   excluded: Array<{ id: string; reason: string }>
   total: number
   debtor_ok: boolean
-  debtor_missing?: 'iban' | 'bic' | 'org_number'
+  debtor_missing?: 'iban' | 'bic' | 'org_number' | 'swedbank_ids'
 }
+
+/** The sentence for each company setting the file cannot be made without. */
+const DEBTOR_MISSING_MESSAGE = {
+  iban: 'debtor_missing_iban',
+  bic: 'debtor_missing_bic',
+  org_number: 'debtor_missing_org',
+  swedbank_ids: 'debtor_missing_swedbank',
+} as const
 
 interface PaymentFileDialogProps {
   open: boolean
@@ -229,11 +237,7 @@ export default function PaymentFileDialog({
                     : { label: t('debtor_missing_link'), href: '/settings/invoicing' }
                 }
               >
-                {preview.debtor_missing === 'bic'
-                  ? t('debtor_missing_bic')
-                  : preview.debtor_missing === 'org_number'
-                    ? t('debtor_missing_org')
-                    : t('debtor_missing_iban')}
+                {t(DEBTOR_MISSING_MESSAGE[preview.debtor_missing ?? 'iban'])}
               </AttnLine>
             )}
 

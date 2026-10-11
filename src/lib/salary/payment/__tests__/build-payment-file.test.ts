@@ -8,7 +8,12 @@
 import { createHash } from 'crypto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { buildSalaryPaymentFile, SALARY_PAYMENT_FILE_ALLOWED_STATUSES } from '../build-payment-file'
+import {
+  buildSalaryPaymentFile,
+  SALARY_PAYMENT_FILE_ALLOWED_STATUSES,
+  SWEDBANK_IDS_MISSING_SV,
+  salaryPaymentFileRefusal,
+} from '../build-payment-file'
 
 const COMPANY_ID = 'company-1'
 const RUN_ID = 'run-1'
@@ -451,5 +456,106 @@ describe('buildSalaryPaymentFile', () => {
     if (!result.ok) return
     expect(result.stamped).toBe(false)
     expect(result.content).toContain('<Document')
+  })
+})
+
+// Swedbank refuses a pain.001 without its own SignerID and Corporate Pay id
+// (crm#1117): the builder asks for them before anything is generated, and
+// passes them, the company town and each employee's town to the generator.
+describe('buildSalaryPaymentFile for a Swedbank debtor', () => {
+  const swedbankSettings = {
+    ...settings,
+    bic: 'SWEDSESS',
+    city: 'Uppsala',
+    swedbank_signer_id: '260637712ORI0003',
+    swedbank_corporate_pay_id: '260637712CPO0001',
+  }
+  const annaInArboga = { ...anna, employee: { ...anna.employee, city: 'Arboga' } }
+
+  it('refuses SWEDBANK_IDS_MISSING with a Swedish message, before loading employees', async () => {
+    const { supabase, enqueueMany, calls } = client()
+    enqueueMany([
+      { data: run },
+      { data: company },
+      { data: { ...swedbankSettings, swedbank_signer_id: null, swedbank_corporate_pay_id: '  ' } },
+    ])
+    const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'SWEDBANK_IDS_MISSING',
+      format: 'pain001',
+      details: { fields: ['swedbank_signer_id', 'swedbank_corporate_pay_id'], message: SWEDBANK_IDS_MISSING_SV },
+    })
+    expect(calls.map((c) => c.table)).not.toContain('salary_run_employees')
+    expect(calls.filter((c) => c.method === 'insert' || c.method === 'update')).toHaveLength(0)
+  })
+
+  it('also asks a company whose Swedbank BIC is derived from the clearing, naming only the missing id', async () => {
+    const { supabase, enqueueMany } = client()
+    enqueueMany([
+      { data: run },
+      { data: company },
+      { data: { ...swedbankSettings, bic: null, clearing_number: '8327-9', swedbank_corporate_pay_id: null } },
+    ])
+    const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
+    expect(result).toMatchObject({ ok: false, code: 'SWEDBANK_IDS_MISSING', details: { fields: ['swedbank_corporate_pay_id'] } })
+  })
+
+  it('maps the refusal to the missing-bank-details code for v1, MCP and the bank list', () => {
+    const refusal = salaryPaymentFileRefusal({
+      ok: false,
+      code: 'SWEDBANK_IDS_MISSING',
+      format: 'pain001',
+      details: { fields: ['swedbank_signer_id'], message: SWEDBANK_IDS_MISSING_SV },
+    })
+    expect(refusal).toMatchObject({
+      code: 'SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS',
+      reason: 'SWEDBANK_IDS_MISSING',
+      details: { format: 'pain001', problem: 'swedbank_ids_missing', fields: ['swedbank_signer_id'] },
+    })
+  })
+
+  it("writes Swedbank's form: its ids, the day before payday, and both towns", async () => {
+    const { supabase, enqueueMany, calls, findCall } = client()
+    enqueueMany([{ data: run }, { data: company }, { data: swedbankSettings }, { data: [annaInArboga] }, { data: null }, { data: null }])
+    const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.content).toContain('<Othr><Id>260637712ORI0003</Id><SchmeNm><Cd>BANK</Cd></SchmeNm></Othr>')
+    expect(result.content).toContain('<Othr><Id>260637712CPO0001</Id><SchmeNm><Cd>BANK</Cd></SchmeNm></Othr>')
+    expect(result.content).toContain('<TwnNm>Uppsala</TwnNm>')
+    expect(result.content).toContain('<TwnNm>Arboga</TwnNm>')
+    // Payday Friday 24 April: Swedbank debits Thursday.
+    expect(result.content).toContain('<ReqdExctnDt>2026-04-23</ReqdExctnDt>')
+    // The run, the result and the archive keep payday.
+    expect(result.paymentDate).toBe('2026-04-24')
+    const archived = findCall('salary_payment_files', 'insert')?.[0] as Record<string, unknown>
+    expect(archived.payment_date).toBe('2026-04-24')
+    // The ids, the town and the employee town are read in the queries the
+    // dashboard route tests already order.
+    const tables = calls.filter((c) => c.method === 'select' || c.method === 'update').map((c) => c.table)
+    expect(tables).toEqual(['salary_runs', 'companies', 'company_settings', 'salary_run_employees', 'salary_runs'])
+  })
+
+  it('leaves every other bank as before: Swedbank ids on file change nothing there', async () => {
+    const { supabase, enqueueMany } = client()
+    enqueueMany([
+      { data: run },
+      { data: company },
+      { data: { ...swedbankSettings, bic: 'HANDSESS' } },
+      { data: [annaInArboga] },
+      { data: null },
+      { data: null },
+    ])
+    const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.content).toContain('<ReqdExctnDt>2026-04-24</ReqdExctnDt>')
+    expect(result.content).not.toContain('ORI0003')
+    expect(result.content).not.toContain('<PstlAdr>')
+    expect(result.content).toContain('<Othr><Id>5560000000</Id></Othr>')
   })
 })

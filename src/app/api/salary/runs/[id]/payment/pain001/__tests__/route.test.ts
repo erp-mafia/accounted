@@ -115,6 +115,26 @@ describe('GET /api/salary/runs/[id]/payment/pain001', () => {
     expect(generatePain001).not.toHaveBeenCalled()
   })
 
+  it('returns 400 asking for the Swedbank ids when a Swedbank company has not entered them', async () => {
+    const { enqueueMany } = authed()
+    enqueueMany([
+      { data: { id: 'run-1', status: 'approved', period_year: 2026, period_month: 9, payment_date: '2026-09-25' } },
+      { data: { name: 'Bolaget AB', org_number: '5560000000' } }, // companies
+      { data: { company_name: 'Bolaget AB', iban: 'SE4580000832790000012345', bic: 'SWEDSESS' } }, // settings
+    ])
+
+    const response = await GET(
+      createMockRequest('/api/salary/runs/run-1/payment/pain001'),
+      createMockRouteParams({ id: 'run-1' }),
+    )
+
+    expect(response.status).toBe(400)
+    const body = await response.json()
+    expect(body.error).toContain('SignerID')
+    expect(body.error).toContain('Inställningar → Fakturering')
+    expect(generatePain001).not.toHaveBeenCalled()
+  })
+
   it('carries a 5-digit clearing with a 10-digit account (no fixed-width field in pain.001)', async () => {
     const { enqueueMany } = authed()
     enqueueMany([

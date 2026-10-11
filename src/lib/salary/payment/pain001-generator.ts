@@ -5,8 +5,9 @@
  * Interpretation of ISO 20022 payment messages (Svenska Bankföreningen,
  * "Common Payment Types in Sweden", Appendix 1, Example 4: Salaries),
  * cross-checked against Nordea Corporate Access Payables pain.001 examples
- * v2.6 (2026-06-22). Target banks: Swedbank, SEB, Handelsbanken, Nordea
- * (pain.001.001.03 uploaded in the bank's corporate portal).
+ * v2.6 (2026-06-22). Target banks: SEB, Handelsbanken, Nordea and every bank
+ * without its own guide here (pain.001.001.03 uploaded in the bank's
+ * corporate portal). Swedbank gets its own form, described further down.
  *
  * Wire-format constraints this file encodes (do not "improve" without a
  * bank implementation guide in hand):
@@ -26,11 +27,34 @@
  *  - MsgId, PmtInfId, InstrId and EndToEndId are Max35Text: bases are
  *    truncated so suffixes always fit.
  *
+ * Swedbank (debtor BIC SWEDSESS, the savings banks included) validates an
+ * uploaded file against its own guide, "Message Implementation Guide
+ * pain.001.001.03, Version 2.0.0" (MIG 2.0) with its Appendix and salary
+ * example file, and refuses the form above (crm#1117). When the company has
+ * entered Swedbank's ids (`company.swedbank`, lib/payments/swedbank.ts) the
+ * file follows MIG 2.0 instead:
+ *
+ *  - InitgPty carries the SignerID and Dbtr the Corporate Pay agreement id,
+ *    both with SchmeNm BANK: the org number identifies nothing there.
+ *  - PmtTpInf carries SvcLvl NURG before CtgyPurp SALA ("Mandatory according
+ *    to market practice guidelines").
+ *  - ReqdExctnDt is Swedbank's debit day, the banking day before payday: the
+ *    salary reaches the employee the banking day after the requested date
+ *    (Appendix, Salary Payments). The run keeps payday as its payment date.
+ *  - Dbtr and Cdtr carry PstlAdr (town when known, country SE) and DbtrAgt
+ *    carries BIC SWEDSESS with country SE, as the MIG marks them required.
+ *  - A clearing starting with 8 is written MmbId 8CCCC with a 15-digit BBAN
+ *    (swedbankCreditorAccount); 4-digit clearings keep the separate form.
+ *  - Names use the MIG 2.0 character set, which has no apostrophe.
+ *
  * Per BFL: the generated file is räkenskapsinformation (underlag) linked to
  * the salary journal entry. Subject to 7-year retention.
  */
 
 import { escapeXml } from '@/lib/xml/escape'
+import { previousBankDayIso } from '@/lib/payments/bank-days'
+import { sanitizeMigText } from '@/lib/payments/mig-text'
+import { SWEDBANK_BIC, swedbankCreditorAccount, type SwedbankFileIds } from '@/lib/payments/swedbank'
 import { payeeAccountParts } from './bank-account'
 
 export interface Pain001CompanyData {
@@ -38,6 +62,13 @@ export interface Pain001CompanyData {
   orgNumber: string       // NNNNNN-NNNN
   iban: string            // SE + 22 digits (the company's own account)
   bic: string             // debtor bank SWIFT/BIC
+  /** Company town: Dbtr/PstlAdr/TwnNm in Swedbank's form. */
+  city?: string | null
+  /**
+   * Swedbank's SignerID and Corporate Pay agreement id: set only for a
+   * Swedbank debtor, and then the file takes Swedbank's MIG 2.0 form.
+   */
+  swedbank?: SwedbankFileIds | null
 }
 
 export interface Pain001Employee {
@@ -45,6 +76,8 @@ export interface Pain001Employee {
   clearingNumber: string
   bankAccountNumber: string
   netSalary: number       // Amount to pay
+  /** Employee town: Cdtr/PstlAdr/TwnNm in Swedbank's form. */
+  city?: string | null
 }
 
 export interface Pain001Options {
@@ -72,6 +105,10 @@ export function generatePain001(
   const formattedTotal = formatDecimal(totalAmount)
   const msgId = max35(options.messageId)
   const orgDigits = company.orgNumber.replace(/\D/g, '')
+  const swedbank = company.swedbank ?? null
+  // Free text: as given for the other banks, the MIG 2.0 character set for Swedbank.
+  const text = (value: string) =>
+    escapeXml(swedbank ? sanitizeMigText(value, { apostrophe: false }) : value)
 
   const lines: string[] = []
   lines.push('<?xml version="1.0" encoding="UTF-8"?>')
@@ -86,8 +123,11 @@ export function generatePain001(
   lines.push(`      <NbOfTxs>${employees.length}</NbOfTxs>`)
   lines.push(`      <CtrlSum>${formattedTotal}</CtrlSum>`)
   lines.push('      <InitgPty>')
-  lines.push(`        <Nm>${escapeXml(company.name)}</Nm>`)
-  if (orgDigits) {
+  lines.push(`        <Nm>${text(company.name)}</Nm>`)
+  if (swedbank) {
+    // MIG 2.0: "SignerID as assigned by Swedbank", SchmeNm BANK.
+    pushBankAssignedId(lines, '        ', swedbank.signerId)
+  } else if (orgDigits) {
     lines.push('        <Id>')
     lines.push('          <OrgId>')
     lines.push(`            <Othr><Id>${escapeXml(orgDigits)}</Id></Othr>`)
@@ -105,14 +145,22 @@ export function generatePain001(
   lines.push(`      <NbOfTxs>${employees.length}</NbOfTxs>`)
   lines.push(`      <CtrlSum>${formattedTotal}</CtrlSum>`)
   lines.push('      <PmtTpInf>')
+  // XSD order: SvcLvl before CtgyPurp. Swedbank requires NURG; the others default to it.
+  if (swedbank) lines.push('        <SvcLvl><Cd>NURG</Cd></SvcLvl>')
   lines.push('        <CtgyPurp><Cd>SALA</Cd></CtgyPurp>')  // Salary payment
   lines.push('      </PmtTpInf>')
-  lines.push(`      <ReqdExctnDt>${options.paymentDate}</ReqdExctnDt>`)
+  // Swedbank's requested date is its debit day: the banking day before payday.
+  const executionDate = swedbank ? previousBankDayIso(options.paymentDate) : options.paymentDate
+  lines.push(`      <ReqdExctnDt>${executionDate}</ReqdExctnDt>`)
 
   // Debtor (company)
   lines.push('      <Dbtr>')
-  lines.push(`        <Nm>${escapeXml(company.name)}</Nm>`)
-  if (orgDigits) {
+  lines.push(`        <Nm>${text(company.name)}</Nm>`)
+  if (swedbank) {
+    // XSD order: PstlAdr before Id. MIG 2.0: Corporate Pay agreement id, SchmeNm BANK.
+    pushPostalAddress(lines, '        ', company.city, text)
+    pushBankAssignedId(lines, '        ', swedbank.corporatePayId)
+  } else if (orgDigits) {
     lines.push('        <Id>')
     lines.push('          <OrgId>')
     lines.push(`            <Othr><Id>${escapeXml(orgDigits)}</Id></Othr>`)
@@ -131,7 +179,13 @@ export function generatePain001(
   lines.push('      </DbtrAcct>')
   lines.push('      <DbtrAgt>')
   lines.push('        <FinInstnId>')
-  lines.push(`          <BIC>${escapeXml(company.bic)}</BIC>`)
+  if (swedbank) {
+    // MIG 2.0 allows SWEDSESS (or NOTPROVIDED) only, never a BIC11 variant.
+    lines.push(`          <BIC>${SWEDBANK_BIC}</BIC>`)
+    lines.push('          <PstlAdr><Ctry>SE</Ctry></PstlAdr>')
+  } else {
+    lines.push(`          <BIC>${escapeXml(company.bic)}</BIC>`)
+  }
   lines.push('        </FinInstnId>')
   lines.push('      </DbtrAgt>')
 
@@ -139,11 +193,9 @@ export function generatePain001(
   for (let i = 0; i < employees.length; i++) {
     const emp = employees[i]
     const txId = pain001TransactionId(msgId, i)
-    const { clearing4, accountDigits } = payeeAccountParts(
-      emp.name,
-      emp.clearingNumber,
-      emp.bankAccountNumber
-    )
+    const { memberId, accountId } = swedbank
+      ? swedbankCreditorAccount(emp.name, emp.clearingNumber, emp.bankAccountNumber)
+      : domesticRouting(emp)
 
     lines.push('      <CdtTrfTxInf>')
     lines.push('        <PmtId>')
@@ -159,17 +211,18 @@ export function generatePain001(
     lines.push('          <FinInstnId>')
     lines.push('            <ClrSysMmbId>')
     lines.push('              <ClrSysId><Cd>SESBA</Cd></ClrSysId>')
-    lines.push(`              <MmbId>${clearing4}</MmbId>`)
+    lines.push(`              <MmbId>${memberId}</MmbId>`)
     lines.push('            </ClrSysMmbId>')
     lines.push('          </FinInstnId>')
     lines.push('        </CdtrAgt>')
     lines.push('        <Cdtr>')
-    lines.push(`          <Nm>${escapeXml(emp.name)}</Nm>`)
+    lines.push(`          <Nm>${text(emp.name)}</Nm>`)
+    if (swedbank) pushPostalAddress(lines, '          ', emp.city, text)
     lines.push('        </Cdtr>')
     lines.push('        <CdtrAcct>')
     lines.push('          <Id>')
     lines.push('            <Othr>')
-    lines.push(`              <Id>${accountDigits}</Id>`)
+    lines.push(`              <Id>${accountId}</Id>`)
     lines.push('              <SchmeNm><Cd>BBAN</Cd></SchmeNm>')
     lines.push('            </Othr>')
     lines.push('          </Id>')
@@ -197,6 +250,34 @@ export function pain001TransactionId(messageId: string, index: number): string {
 // ============================================================
 // Helpers
 // ============================================================
+
+/** The routing every bank but Swedbank takes: 4-digit clearing, account without it. */
+function domesticRouting(emp: Pain001Employee): { memberId: string; accountId: string } {
+  const { clearing4, accountDigits } = payeeAccountParts(emp.name, emp.clearingNumber, emp.bankAccountNumber)
+  return { memberId: clearing4, accountId: accountDigits }
+}
+
+/** Party Id/OrgId/Othr carrying an id the bank assigned (SchmeNm BANK). */
+function pushBankAssignedId(lines: string[], indent: string, id: string): void {
+  lines.push(`${indent}<Id>`)
+  lines.push(`${indent}  <OrgId>`)
+  lines.push(`${indent}    <Othr><Id>${escapeXml(id)}</Id><SchmeNm><Cd>BANK</Cd></SchmeNm></Othr>`)
+  lines.push(`${indent}  </OrgId>`)
+  lines.push(`${indent}</Id>`)
+}
+
+/** PstlAdr with the town when known and country SE (XSD order: TwnNm before Ctry). */
+function pushPostalAddress(
+  lines: string[],
+  indent: string,
+  town: string | null | undefined,
+  text: (value: string) => string,
+): void {
+  lines.push(`${indent}<PstlAdr>`)
+  if (town?.trim()) lines.push(`${indent}  <TwnNm>${text(town.trim())}</TwnNm>`)
+  lines.push(`${indent}  <Ctry>SE</Ctry>`)
+  lines.push(`${indent}</PstlAdr>`)
+}
 
 /** Format number as decimal with 2 decimal places (ISO 20022 requires dot separator) */
 function formatDecimal(amount: number): string {

@@ -2,6 +2,11 @@ import { z } from 'zod'
 
 import { ENTITY_TYPES } from '@/lib/company/entity-type'
 import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
+import {
+  normalizeSwedbankId,
+  SWEDBANK_CORPORATE_PAY_ID_PATTERN,
+  SWEDBANK_SIGNER_ID_PATTERN,
+} from '@/lib/payments/swedbank'
 import { normalizeVatNumber } from '@/lib/vat/vat-number'
 import {
   defaultVatRateForTreatment,
@@ -2960,6 +2965,21 @@ const InvoicePaymentAccountsSchema = z
     }
   })
 
+/**
+ * A Swedbank file id as typed in Settings (lib/payments/swedbank.ts): spaces
+ * and hyphens dropped and upper case, then Swedbank's documented format. An
+ * emptied field clears the id.
+ */
+function swedbankFileIdSchema(pattern: RegExp, message: string) {
+  return z
+    .string()
+    .transform(normalizeSwedbankId)
+    .pipe(z.union([z.literal(''), z.string().regex(pattern, message)]))
+    .transform((id) => id || null)
+    .nullable()
+    .optional()
+}
+
 export const UpdateSettingsSchema = z.object({
   entity_type: EntityTypeSchema.optional(),
   company_name: z.string().optional(),
@@ -3022,6 +3042,16 @@ export const UpdateSettingsSchema = z.object({
   // IBAN validation because a SEK-denominated account need not be Swedish.
   iban: InvoiceIbanSchema,
   bic: z.string().regex(/^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/, 'Ogiltig BIC/SWIFT (8 eller 11 tecken)').nullable().optional().or(z.literal('')),
+  // Swedbank's own ids for pain.001 files: the SignerID goes in InitgPty, the
+  // Corporate Pay agreement id in Dbtr/Id (lib/payments/swedbank.ts).
+  swedbank_signer_id: swedbankFileIdSchema(
+    SWEDBANK_SIGNER_ID_PATTERN,
+    'SignerID ska ha formatet 123456789ORI0001 (9 siffror, ORI, 4 siffror)',
+  ),
+  swedbank_corporate_pay_id: swedbankFileIdSchema(
+    SWEDBANK_CORPORATE_PAY_ID_PATTERN,
+    'Avtals-id ska ha formatet 123456789CPO0001 (9 siffror, CPO, 4 siffror)',
+  ),
   invoice_payment_accounts: InvoicePaymentAccountsSchema.optional(),
   accounting_method: AccountingMethodSchema.optional(),
   // #967: register/send invoices without booking; booking is a separate step.

@@ -2429,6 +2429,55 @@ describe('UpdateSettingsSchema', () => {
       expect(result.success).toBe(false)
     })
   })
+
+  // Swedbank's own ids for payment files (crm#1117, lib/payments/swedbank.ts).
+  describe('Swedbank payment-file ids', () => {
+    it('accepts both ids in Swedbank format', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        swedbank_signer_id: '123456789ORI0001',
+        swedbank_corporate_pay_id: '123456789CPO0001',
+      })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.swedbank_signer_id).toBe('123456789ORI0001')
+        expect(result.data.swedbank_corporate_pay_id).toBe('123456789CPO0001')
+      }
+    })
+
+    it('normalises what was typed: spaces, hyphens, lower case', () => {
+      const result = UpdateSettingsSchema.safeParse({
+        swedbank_signer_id: '123456789-ori-0001',
+        swedbank_corporate_pay_id: ' 123456789 cpo 0001 ',
+      })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.swedbank_signer_id).toBe('123456789ORI0001')
+        expect(result.data.swedbank_corporate_pay_id).toBe('123456789CPO0001')
+      }
+    })
+
+    it('clears an id with an empty string or null', () => {
+      const result = UpdateSettingsSchema.safeParse({ swedbank_signer_id: '', swedbank_corporate_pay_id: null })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.swedbank_signer_id).toBeNull()
+        expect(result.data.swedbank_corporate_pay_id).toBeNull()
+      }
+    })
+
+    it('refuses an org number, a swapped id or a short id, naming the format', () => {
+      for (const [field, value, format] of [
+        ['swedbank_signer_id', '5566778899', '123456789ORI0001'],
+        ['swedbank_signer_id', '123456789CPO0001', '123456789ORI0001'],
+        ['swedbank_corporate_pay_id', '123456789ORI0001', '123456789CPO0001'],
+        ['swedbank_corporate_pay_id', '12345678CPO0001', '123456789CPO0001'],
+      ] as const) {
+        const result = UpdateSettingsSchema.safeParse({ [field]: value })
+        expect(result.success, `${field}=${value}`).toBe(false)
+        if (!result.success) expect(result.error.issues[0].message).toContain(format)
+      }
+    })
+  })
 })
 
 // ============================================================

@@ -40,6 +40,7 @@ import {
 import { formatPayeeLabel, type SupplierPayee, type SupplierPayeeSource } from './supplier-payee'
 import { isOpenPaymentOrder, OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES } from './orders/status'
 import { generateSupplierPain001, type SupplierPain001Payment } from './pain001-supplier'
+import { resolveSwedbankFileIds } from './swedbank'
 import type { SupplierPaymentBatch, SupplierPaymentBatchItem } from '@/types'
 
 const log = createLogger('payments/batch-service')
@@ -58,15 +59,29 @@ export interface BatchDebtor {
   org_number: string
   iban: string
   bic: string
-  /** Company bankgiro digits; enables the BGNR-to-BGNR debit Swedbank wants. */
+  /** Company bankgiro digits; a debit account only where the debtor's bank takes one. */
   bankgiro: string | null
   /** Company town; Dbtr/PstlAdr/TwnNm (mandatory from Nov 2026 when present). */
   city: string | null
+  /**
+   * Swedbank's SignerID and Corporate Pay agreement id: set for a Swedbank
+   * debtor only, and then always both (lib/payments/swedbank.ts). Absent for
+   * every other bank, so their snapshots keep their shape.
+   */
+  swedbank_signer_id?: string
+  swedbank_corporate_pay_id?: string
 }
+
+/**
+ * The company setting a payment file cannot be made without. swedbank_ids:
+ * the debtor's bank is Swedbank and its SignerID or Corporate Pay agreement
+ * id is missing; Swedbank refuses a file without them at upload.
+ */
+export type DebtorMissing = 'iban' | 'bic' | 'org_number' | 'swedbank_ids'
 
 export type DebtorResolution =
   | { ok: true; debtor: BatchDebtor }
-  | { ok: false; missing: 'iban' | 'bic' | 'org_number' }
+  | { ok: false; missing: DebtorMissing }
 
 /**
  * Resolve the paying company (pain.001 debtor) from settings, mirroring the
@@ -74,7 +89,9 @@ export type DebtorResolution =
  * number or bank name the company already entered, so most users only ever
  * fill in the IBAN. The org number is required: InitgPty must carry an OrgId
  * (Swedbank Validex PFH_002). The bankgiro rides along when valid so
- * bankgiro payees can be debited BGNR-to-BGNR.
+ * bankgiro payees can be debited BGNR-to-BGNR where the debtor's bank takes
+ * that. A Swedbank debtor also needs the two ids Swedbank assigns; without
+ * them no file is made, because Swedbank would refuse it.
  */
 export async function resolveBatchDebtor(
   supabase: SupabaseClient,
@@ -84,7 +101,9 @@ export async function resolveBatchDebtor(
     supabase.from('companies').select('name, org_number').eq('id', companyId).single(),
     supabase
       .from('company_settings')
-      .select('company_name, org_number, city, iban, bic, bankgiro, clearing_number, bank_name')
+      .select(
+        'company_name, org_number, city, iban, bic, bankgiro, clearing_number, bank_name, swedbank_signer_id, swedbank_corporate_pay_id',
+      )
       .eq('company_id', companyId)
       .single(),
   ])
@@ -103,6 +122,9 @@ export async function resolveBatchDebtor(
   const orgNumber = settings?.org_number?.trim() || company?.org_number?.trim() || ''
   if (!orgNumber.replace(/\D/g, '')) return { ok: false, missing: 'org_number' }
 
+  const swedbank = resolveSwedbankFileIds(bic, settings)
+  if (!swedbank.ok) return { ok: false, missing: 'swedbank_ids' }
+
   const bankgiroRaw = settings?.bankgiro ?? ''
   const bankgiro = validateBankgiroNumber(bankgiroRaw) ? bankgiroRaw.replace(/\D/g, '') : null
 
@@ -115,6 +137,12 @@ export async function resolveBatchDebtor(
       bic,
       bankgiro,
       city: settings?.city?.trim() || null,
+      ...(swedbank.ids
+        ? {
+            swedbank_signer_id: swedbank.ids.signerId,
+            swedbank_corporate_pay_id: swedbank.ids.corporatePayId,
+          }
+        : {}),
     },
   }
 }
@@ -191,7 +219,7 @@ export interface BatchPreview {
   excluded: Array<{ id: string; reason: BatchExclusionReason | 'not_found' | 'in_bank_payment' }>
   total: number
   debtor_ok: boolean
-  debtor_missing?: 'iban' | 'bic' | 'org_number'
+  debtor_missing?: DebtorMissing
 }
 
 export async function previewSupplierPaymentBatch(
@@ -311,7 +339,7 @@ export function payeeFingerprint(payee: SupplierPayee): string {
 
 export type CreateBatchResult =
   | { ok: true; batch: SupplierPaymentBatch }
-  | { ok: false; code: 'debtor_incomplete'; missing: 'iban' | 'bic' | 'org_number' }
+  | { ok: false; code: 'debtor_incomplete'; missing: DebtorMissing }
   | { ok: false; code: 'ineligible'; details: Array<{ id: string; reason: string }> }
   | { ok: false; code: 'amount_exceeds_remaining'; details: Array<{ id: string }> }
   | { ok: false; code: 'invalid_amount'; details: Array<{ id: string }> }
@@ -619,6 +647,12 @@ export function renderSupplierPaymentBatchFile(
       bic: debtor.bic,
       bankgiro: debtor.bankgiro ?? null,
       city: debtor.city ?? null,
+      // Only a Swedbank batch made since 2026-10-11 has both; an older
+      // snapshot regenerates exactly as it was first downloaded.
+      swedbank:
+        debtor.swedbank_signer_id && debtor.swedbank_corporate_pay_id
+          ? { signerId: debtor.swedbank_signer_id, corporatePayId: debtor.swedbank_corporate_pay_id }
+          : null,
     },
     payments,
     { messageId: batch.msg_id, createdAt: batch.created_at },

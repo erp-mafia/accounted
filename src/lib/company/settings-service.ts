@@ -10,8 +10,8 @@
  *     ({ requireAdmin }) and passes `adminVerified`, the API-key and MCP doors
  *     run as the service role (auth.uid() is null there, so the predicate
  *     cannot be asked) and this service reads the caller's company_members
- *     role instead. The invoice-recipient and payment-instruction fields are
- *     re-checked the same way on every door;
+ *     role instead. The invoice-recipient and payment-instruction fields and
+ *     Swedbank's payment-file ids are re-checked the same way on every door;
  *   - reminder thresholds strictly increasing;
  *   - org_number is fixed once onboarding is complete (legal identifier);
  *   - enskild firma keeps a calendar fiscal year (BFL 3 kap.);
@@ -125,6 +125,8 @@ function toUpdatePayload(c: CompanySettingsChanges) {
     swish: c.swish,
     iban: c.iban,
     bic: c.bic,
+    swedbank_signer_id: c.swedbank_signer_id,
+    swedbank_corporate_pay_id: c.swedbank_corporate_pay_id,
     invoice_payment_accounts: c.invoice_payment_accounts,
     accounting_method: c.accounting_method,
     defer_invoice_booking: c.defer_invoice_booking,
@@ -270,7 +272,16 @@ export async function updateCompanySettings(
     || body.swish !== undefined
     || body.iban !== undefined
     || body.bic !== undefined
-  if (!options.adminVerified || changesInvoiceEmailRecipients || changesInvoicePaymentInstructions) {
+  // Who the bank sees as sender and under which agreement it pays out.
+  const changesPaymentFileIds =
+    body.swedbank_signer_id !== undefined
+    || body.swedbank_corporate_pay_id !== undefined
+  if (
+    !options.adminVerified
+    || changesInvoiceEmailRecipients
+    || changesInvoicePaymentInstructions
+    || changesPaymentFileIds
+  ) {
     const denied = await requireCompanyAdmin(
       ctx,
       'Bara företagets ägare eller en administratör kan ändra företagsinställningarna.',
@@ -590,7 +601,7 @@ export async function getCompanySettings(ctx: OperationContext): Promise<Operati
   const { data, error } = await ctx.supabase
     .from('company_settings')
     .select(
-      'entity_type, company_name, org_number, address_line1, address_line2, postal_code, city, registered_office, country, phone, email, website, default_our_reference, tax_contact_name, tax_contact_phone, tax_contact_email, bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, invoice_payment_accounts, invoice_prefix, next_invoice_number, next_arrival_number, invoice_default_days, invoice_default_notes, ore_rounding, invoice_show_ocr, invoice_show_bankgiro, invoice_show_plusgiro, invoice_show_swish, invoice_show_payment_qr, invoice_qr_mode, invoice_show_logo, invoice_show_company_name, invoice_company_name_position, invoice_late_fee_text, invoice_credit_terms_text, invoice_payment_links_enabled, invoice_email_texts, invoice_email_cc_addresses, invoice_email_bcc_addresses, invoice_email_reply_to, invoice_primary_color, invoice_accent_color, invoice_font_family, invoice_header_text, invoice_footer_text, send_invoice_reminders, reminder_days_level_1, reminder_days_level_2, reminder_days_level_3, reminder_text_overrides, reminder_fee_enabled, reminder_fee_amount, reminder_interest_rate_override, default_voucher_series, default_voucher_series_per_source_type, voucher_series_labels, sector_slug, dimensions_enabled, mileage_enabled, sales_orders_enabled, quotes_enabled, proforma_enabled, recurring_invoices_enabled, self_billing_enabled, salary_vacation_year_basis, f_skatt, vat_registered, vat_number, moms_period, vat_taxable_base_over_40m, vat_has_eu_trade, vat_filing_method, periodisk_sammanstallning_enabled, periodisk_sammanstallning_period, periodisk_sammanstallning_filing_method, kontrolluppgifter_enabled, rot_rut_enabled, oss_enabled, ioss_enabled, intrastat_enabled, punktskatt_enabled, fyllnadsinbetalning_enabled, fiscal_year_start_month, preliminary_tax_monthly, pays_salaries, employer_registered, employer_seasonal, accounting_method, defer_invoice_booking, aktiekapital, antal_aktier, bookkeeping_locked_through, auto_lock_period_days, onboarding_complete',
+      'entity_type, company_name, org_number, address_line1, address_line2, postal_code, city, registered_office, country, phone, email, website, default_our_reference, tax_contact_name, tax_contact_phone, tax_contact_email, bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, swedbank_signer_id, swedbank_corporate_pay_id, invoice_payment_accounts, invoice_prefix, next_invoice_number, next_arrival_number, invoice_default_days, invoice_default_notes, ore_rounding, invoice_show_ocr, invoice_show_bankgiro, invoice_show_plusgiro, invoice_show_swish, invoice_show_payment_qr, invoice_qr_mode, invoice_show_logo, invoice_show_company_name, invoice_company_name_position, invoice_late_fee_text, invoice_credit_terms_text, invoice_payment_links_enabled, invoice_email_texts, invoice_email_cc_addresses, invoice_email_bcc_addresses, invoice_email_reply_to, invoice_primary_color, invoice_accent_color, invoice_font_family, invoice_header_text, invoice_footer_text, send_invoice_reminders, reminder_days_level_1, reminder_days_level_2, reminder_days_level_3, reminder_text_overrides, reminder_fee_enabled, reminder_fee_amount, reminder_interest_rate_override, default_voucher_series, default_voucher_series_per_source_type, voucher_series_labels, sector_slug, dimensions_enabled, mileage_enabled, sales_orders_enabled, quotes_enabled, proforma_enabled, recurring_invoices_enabled, self_billing_enabled, salary_vacation_year_basis, f_skatt, vat_registered, vat_number, moms_period, vat_taxable_base_over_40m, vat_has_eu_trade, vat_filing_method, periodisk_sammanstallning_enabled, periodisk_sammanstallning_period, periodisk_sammanstallning_filing_method, kontrolluppgifter_enabled, rot_rut_enabled, oss_enabled, ioss_enabled, intrastat_enabled, punktskatt_enabled, fyllnadsinbetalning_enabled, fiscal_year_start_month, preliminary_tax_monthly, pays_salaries, employer_registered, employer_seasonal, accounting_method, defer_invoice_booking, aktiekapital, antal_aktier, bookkeeping_locked_through, auto_lock_period_days, onboarding_complete',
     )
     .eq('company_id', ctx.companyId)
     .maybeSingle()

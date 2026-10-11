@@ -523,6 +523,8 @@ Response `200`:
     swish: string | null,
     iban: string | null,
     bic: string | null,
+    swedbank_signer_id: string | null,
+    swedbank_corporate_pay_id: string | null,
     invoice_prefix: string | null,
     invoice_default_notes: string | null,
     invoice_company_name_position: string | null,
@@ -639,7 +641,7 @@ Example response `200`:
 **Partially update company settings (contact, invoicing, reminders, voucher series, toggles).**
 `scope:companies:write · risk:medium · idempotent · dry-run · reversible`
 
-Patches any subset of the non-legal company settings: contact and address, invoice payment details (bank account, Bankgiro, Plusgiro, Swish, IBAN/BIC, per-currency payment accounts), invoice numbering, layout and branding, invoice email texts and fixed copy recipients, reminders, voucher series, feature toggles and the vacation-year basis. Same rules as the settings page. Owner or admin only. Idempotent (mandatory Idempotency-Key). Dry-runnable.
+Patches any subset of the non-legal company settings: contact and address, invoice payment details (bank account, Bankgiro, Plusgiro, Swish, IBAN/BIC, per-currency payment accounts), the Swedbank SignerID and Corporate Pay id for payment files, invoice numbering, layout and branding, invoice email texts and fixed copy recipients, reminders, voucher series, feature toggles and the vacation-year basis. Same rules as the settings page. Owner or admin only. Idempotent (mandatory Idempotency-Key). Dry-runnable.
 
 **Use when:** The payment or contact details on invoices change, invoice texts or reminders should be adjusted, or a feature should be switched on or off.
 **Do not use for:** VAT, F-skatt, fiscal year, accounting method or share capital (PATCH /settings/tax-profile), the bookkeeping lock (PATCH /settings/bookkeeping-lock), payroll settings (PATCH /salary/settings). entity_type and org_number are fixed.
@@ -683,6 +685,8 @@ Request body:
   swish?: string | null,
   iban?: string | null | "",
   bic?: string | null | "",
+  swedbank_signer_id?: string | null,
+  swedbank_corporate_pay_id?: string | null,
   invoice_payment_accounts?: Record<string, { bank_name?: string | null, clearing_number?: string | null | "", account_number?: string | null | "", bankgiro?: string | null | "", plusgiro?: string | null | "", swish?: string | null, iban?: string | null | "", bic?: string | null | "", bank_code?: string | null | "", foreign_account_number?: string | null | "" }>,
   invoice_prefix?: string | null,
   next_invoice_number?: number,
@@ -781,6 +785,8 @@ Response `200`:
     swish: string | null,
     iban: string | null,
     bic: string | null,
+    swedbank_signer_id: string | null,
+    swedbank_corporate_pay_id: string | null,
     invoice_prefix: string | null,
     invoice_default_notes: string | null,
     invoice_company_name_position: string | null,
@@ -954,6 +960,8 @@ Response `200`:
     swish: string | null,
     iban: string | null,
     bic: string | null,
+    swedbank_signer_id: string | null,
+    swedbank_corporate_pay_id: string | null,
     invoice_prefix: string | null,
     invoice_default_notes: string | null,
     invoice_company_name_position: string | null,
@@ -1158,6 +1166,8 @@ Response `200`:
     swish: string | null,
     iban: string | null,
     bic: string | null,
+    swedbank_signer_id: string | null,
+    swedbank_corporate_pay_id: string | null,
     invoice_prefix: string | null,
     invoice_default_notes: string | null,
     invoice_company_name_position: string | null,

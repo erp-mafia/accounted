@@ -7,7 +7,6 @@ import { generateSupplierPain001 } from '@/lib/payments/pain001-supplier'
 import { resolveBatchDebtor } from '@/lib/payments/batch-service'
 import { resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
-import { getBranding } from '@/lib/branding/service'
 import { roundOre } from '@/lib/money'
 
 ensureInitialized()
@@ -139,6 +138,7 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
         iban: 'Företagets IBAN saknas i företagsinställningar. Fyll i det under Inställningar → Fakturering för att skapa betalfil (ISO 20022).',
         bic: 'Företagsbankens BIC saknas och kunde inte härledas. Fyll i BIC under Inställningar → Fakturering för att skapa betalfilen.',
         org_number: 'Organisationsnummer saknas för företaget.',
+        swedbank_ids: 'Swedbank kräver ditt SignerID och avtals-id (Corporate Pay) i betalfilen. Fyll i dem under Inställningar → Fakturering.',
       }[debtorResolution.missing]
       return NextResponse.json({ error: message }, { status: 400 })
     }
@@ -146,9 +146,13 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
 
     // Deterministic per period, like the salary pain.001 MsgId: re-downloads
     // reuse the id, so bank-side duplicate detection (keyed on MsgId) still
-    // catches the same period being uploaded twice.
+    // catches the same period being uploaded twice. Short enough (24) that
+    // the generator's -P1 / -TX0001 suffixes never cut the period away: a
+    // brand-prefixed id was 34 characters, so every month's EndToEndId came
+    // out the same, and Swedbank refuses an EndToEndId repeated within 90
+    // days (MIG 2.0 PmtId/EndToEndId).
     const orgDigits = company.org_number.replace(/\D/g, '')
-    const messageId = `${getBranding().appName.toUpperCase()}-SKATT-${orgDigits}-${period}`
+    const messageId = `SKATT-${period}-${orgDigits}`
 
     let xml: string
     try {
@@ -160,6 +164,10 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
           bic: debtor.bic,
           bankgiro: debtor.bankgiro,
           city: debtor.city,
+          swedbank:
+            debtor.swedbank_signer_id && debtor.swedbank_corporate_pay_id
+              ? { signerId: debtor.swedbank_signer_id, corporatePayId: debtor.swedbank_corporate_pay_id }
+              : null,
         },
         [
           {

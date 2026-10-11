@@ -254,6 +254,85 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     expect(xml).toContain('<BIC>ESSESESS</BIC>')
   })
 
+  it('writes a Swedbank tax payment in Swedbank\'s ISO 2.0 form, naming sender and agreement by its ids', async () => {
+    mockResolveBatchDebtor.mockResolvedValue({
+      ok: true,
+      debtor: {
+        name: 'Test AB',
+        org_number: '5566778899',
+        iban: 'SE3580000832790000012345',
+        bic: 'SWEDSESS',
+        bankgiro: '1234567',
+        city: 'Stockholm',
+        swedbank_signer_id: '123456789ORI0001',
+        swedbank_corporate_pay_id: '123456789CPO0001',
+      },
+    })
+
+    const flat = (await pain001ThroughRealGenerator()).replace(/\s+/g, '')
+
+    expect(mockGeneratePain001.mock.calls[0][0]).toMatchObject({
+      swedbank: { signerId: '123456789ORI0001', corporatePayId: '123456789CPO0001' },
+    })
+    expect(flat.match(/<InitgPty>.*?<\/InitgPty>/)![0]).toContain(
+      '<Othr><Id>123456789ORI0001</Id><SchmeNm><Cd>BANK</Cd></SchmeNm></Othr>',
+    )
+    expect(flat.match(/<Dbtr>.*?<\/Dbtr>/)![0]).toContain(
+      '<Othr><Id>123456789CPO0001</Id><SchmeNm><Cd>BANK</Cd></SchmeNm></Othr>',
+    )
+    // MIG 2.0 has no bankgiro debit: Skatteverket's bankgiro is paid from the IBAN.
+    const debtorAccounts = flat.match(/<DbtrAcct>.*?<\/DbtrAcct>/g) ?? []
+    expect(debtorAccounts).toEqual(['<DbtrAcct><Id><IBAN>SE3580000832790000012345</IBAN></Id><Ccy>SEK</Ccy></DbtrAcct>'])
+    expect(flat).toContain('<CtgyPurp><Cd>SUPP</Cd></CtgyPurp>')
+    expect(flat).toContain('<Ref>1655954700217</Ref>')
+  })
+
+  it('returns 400 asking a Swedbank company for the ids Swedbank assigns', async () => {
+    mockResolveBatchDebtor.mockResolvedValue({ ok: false, missing: 'swedbank_ids' })
+    enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
+    enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
+
+    const response = await GET(
+      createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file', {
+        searchParams: { format: 'pain001' },
+      }),
+      createMockRouteParams({ period: '2026-04' }),
+    )
+
+    expect(response.status).toBe(400)
+    const body = await response.json()
+    expect(JSON.stringify(body)).toContain('SignerID')
+    expect(JSON.stringify(body)).toContain('Corporate Pay')
+    expect(mockGeneratePain001).not.toHaveBeenCalled()
+  })
+
+  it('keeps the period in every id, so two months never share an EndToEndId', async () => {
+    const actual = await vi.importActual<typeof import('@/lib/payments/pain001-supplier')>(
+      '@/lib/payments/pain001-supplier',
+    )
+    mockGeneratePain001.mockImplementation(
+      (...args: Parameters<typeof actual.generateSupplierPain001>) => actual.generateSupplierPain001(...args),
+    )
+    const endToEndIds: string[] = []
+    for (const period of ['2026-04', '2026-05']) {
+      enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
+      enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
+      enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
+      const response = await GET(
+        createMockRequest(`/api/skatteverket/tax-payments/${period}/payment-file`, {
+          searchParams: { format: 'pain001' },
+        }),
+        createMockRouteParams({ period }),
+      )
+      const xml = await response.text()
+      expect(xml).toContain(`<MsgId>SKATT-${period}-5566778899</MsgId>`)
+      endToEndIds.push(xml.match(/<EndToEndId>(.*?)<\/EndToEndId>/)![1])
+    }
+    expect(endToEndIds[0]).toContain('2026-04')
+    expect(endToEndIds[1]).toContain('2026-05')
+    expect(endToEndIds[0]).not.toBe(endToEndIds[1])
+  })
+
   it('returns 400 when the pain.001 debtor is missing an IBAN', async () => {
     mockResolveBatchDebtor.mockResolvedValue({ ok: false, missing: 'iban' })
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi

@@ -55,8 +55,8 @@ export function salaryBankListFileName(list: Pick<SalaryBankList, 'periodLabel' 
 /**
  * The structured error for a refused bank list. The catalogue codes are the
  * ones the v1 payment-file endpoint answers (salaryPaymentFileRefusal); where
- * the builder wrote a sentence naming the affected employees, that sentence
- * is the message, since it says who to fix.
+ * the builder wrote a sentence naming the affected employees or the missing
+ * Swedbank ids, that sentence is the message, since it says what to fix.
  */
 export function salaryBankListErrorResponse(
   result: SalaryPaymentFileError,
@@ -66,7 +66,9 @@ export function salaryBankListErrorResponse(
   const refusal = salaryPaymentFileRefusal(result)
   if (!refusal) return errorResponse(result.cause, log, { requestId })
   const named =
-    (result.code === 'EMPLOYEE_BANK_INVALID' || result.code === 'GENERATOR_FAILED') &&
+    (result.code === 'EMPLOYEE_BANK_INVALID' ||
+      result.code === 'GENERATOR_FAILED' ||
+      result.code === 'SWEDBANK_IDS_MISSING') &&
     typeof result.details.message === 'string' &&
     result.details.message
       ? result.details.message

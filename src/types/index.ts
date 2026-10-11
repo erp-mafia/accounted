@@ -484,6 +484,11 @@ export interface CompanySettings {
   swish: string | null
   iban: string | null
   bic: string | null
+  // Swedbank's own ids for pain.001 files (MIG 2.0): the SignerID goes in
+  // InitgPty, the Corporate Pay agreement id in Dbtr/Id. Read only when the
+  // company's bank resolves to Swedbank (lib/payments/swedbank.ts).
+  swedbank_signer_id?: string | null
+  swedbank_corporate_pay_id?: string | null
   // Foreign non-IBAN routing, only ever populated on the render-time copy
   // produced by companyWithInvoicePaymentAccount (never a DB column).
   bank_code?: string | null
@@ -1046,6 +1051,13 @@ export interface SupplierPaymentBatchDebtor {
   bankgiro?: string | null
   /** Company town for Dbtr/PstlAdr; absent on pre-TownName-fix batches. */
   city?: string | null
+  /**
+   * Swedbank SignerID and Corporate Pay agreement id, present only on a
+   * Swedbank debtor's batch. Absent on batches created before 2026-10-11,
+   * which therefore regenerate in their original form.
+   */
+  swedbank_signer_id?: string | null
+  swedbank_corporate_pay_id?: string | null
 }
 
 export interface SupplierPaymentBatch {

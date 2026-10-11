@@ -515,7 +515,7 @@
     "keywords_tax": "VAT, VAT period, VAT number, VAT registered, EU trade, EC sales list, F-tax, Preliminary tax, Top-up payment, Income statements, ROT, RUT, Green technology, Tax decisions, Contact person, OSS, Intrastat, Excise duty",
     "keywords_salary": "Pays salaries, Employer, Pay day, Payment file, Deviations, Net pay, Tax table, Vacation",
     "keywords_templates": "Booking templates, Learned patterns, Counterparties",
-    "keywords_invoicing": "Invoice number, Prefix, Payment terms, Our reference, Invoice types, Quote, Pro forma, Recurring, Self-billing, Bank accounts, Bankgiro, Swish, IBAN, Payment link, PDF, Print",
+    "keywords_invoicing": "Invoice number, Prefix, Payment terms, Our reference, Invoice types, Quote, Pro forma, Recurring, Self-billing, Bank accounts, Bankgiro, Swish, IBAN, Payment link, PDF, Print, Swedbank, SignerID, Payment file",
     "keywords_sending": "Sender, Own domain, Reply-to, Copy, Email texts, Reminders, Reminder texts",
     "keywords_connections": "Bank, PSD2, Skatteverket, Agent, Peppol, E-invoice, WhatsApp, Gmail, Receipts in email, Stripe, Shopify, WooCommerce, Zettle",
     "keywords_api": "MCP, Claude, ChatGPT, Grok, API keys, OAuth",
@@ -1358,6 +1358,7 @@
     "debtor_missing_iban": "The company IBAN is missing and is needed as the sender account in the payment file.",
     "debtor_missing_bic": "The company bank's BIC is missing and could not be derived.",
     "debtor_missing_org": "The company organisation number is missing and must be stated as the sender identity in the payment file.",
+    "debtor_missing_swedbank": "Swedbank requires your SignerID and Corporate Pay agreement ID in the payment file. Swedbank gives you both.",
     "debtor_missing_link": "Open Settings → Invoicing",
     "debtor_missing_org_link": "Open Settings → Company",
     "history_title": "Payment files",
@@ -2570,7 +2571,7 @@
     "steps_bg_lb_seb": "Betalningar → Filöverföring → choose Bankgiro LB → upload and approve.",
     "steps_bg_lb_handelsbanken": "Betala → Filimport → choose LB → verify totals → sign. Note: Handelsbanken no longer accepts salary files via Bankgirot.",
     "steps_bg_lb_nordea": "Filimport → Bankgiro LB → upload → approve the payment.",
-    "steps_pain001_swedbank": "Betala och överföra → Filtjänster → Upload file (ISO 20022 pain.001) → sign with BankID.",
+    "steps_pain001_swedbank": "Betala och överföra → Filtjänster → Upload file (ISO 20022 pain.001) → sign with BankID. The file needs your SignerID and agreement ID (Corporate Pay) from Swedbank, entered under Settings → Invoicing.",
     "steps_pain001_seb": "SEB Business Arena does not accept pain.001 through file upload, only CSV, and SEB's SEPA CSV covers EUR payments only. pain.001 to SEB requires a file transfer agreement. Without one, choose the Bankgirot LB file instead for domestic salaries in SEK.",
     "steps_pain001_handelsbanken": "Betala → Filimport → ISO 20022 → choose pain.001 → sign.",
     "steps_pain001_nordea": "Filimport in Nordea Business → Format pain.001 → upload → approve.",
@@ -2769,6 +2770,14 @@
     "reminder_days_level_1": "First reminder (days)",
     "reminder_days_level_2": "Second reminder (days)",
     "reminder_days_level_3": "Final reminder (days)"
+  },
+  "settings_swedbank_file_ids": {
+    "heading": "Payment files to Swedbank",
+    "help": "Swedbank requires two ids in every payment file that the bank assigns itself: your SignerID and the agreement id for file payments (Corporate Pay). Without them Swedbank refuses the file. If you don't have them, ask Swedbank.",
+    "signer_id_label": "SignerID",
+    "signer_id_help": "Format 123456789ORI0001. Assigned by Swedbank and written into the payment file as the sender.",
+    "corporate_pay_id_label": "Agreement id (Corporate Pay)",
+    "corporate_pay_id_help": "Format 123456789CPO0001. Assigned by Swedbank and names the agreement the payments are made under."
   },
   "settings_payment_links": {
     "heading": "Payment link",

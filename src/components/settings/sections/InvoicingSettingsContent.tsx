@@ -11,6 +11,7 @@ import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
 import { SettingsLoadError } from '@/components/settings/SettingsLoadError'
 import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSkeleton'
 import { SettingsSectionHeader } from '@/components/settings/SettingsRows'
+import { SwedbankFileIdsSettings, swedbankFileIdUpdates } from '@/components/settings/SwedbankFileIdsSettings'
 import { useSettings } from '@/components/settings/useSettings'
 import type { CompanySettings } from '@/types'
 
@@ -30,6 +31,7 @@ export function InvoicingSettingsContent() {
       invoice_default_days: parseInt(formData.get('invoice_default_days') as string) || 30,
       invoice_default_notes: (formData.get('invoice_default_notes') as string) || null,
       default_our_reference: (formData.get('default_our_reference') as string) || null,
+      ...(settings ? swedbankFileIdUpdates(formData, settings) : {}),
     }
     return {
       updates,
@@ -51,6 +53,9 @@ export function InvoicingSettingsContent() {
       <InvoicePaymentAccountsSettings settings={settings} onUpdate={updateSettings} />
 
       <SettingsFormWrapper onSave={handleSave}>
+        {/* Swedbank's ids for payment files, next to the bank details above:
+            owner/admin of a Swedbank company only, saved with this form. */}
+        <SwedbankFileIdsSettings settings={settings} />
         <InvoiceSettingsForm
           settings={settings}
           // Invoice kinds on/off, right after Fakturainställningar: each

@@ -42,6 +42,8 @@ function legacyError(result: SalaryPaymentFileError): NextResponse {
         { error: 'Företagsbankens BIC saknas och kunde inte härledas. Fyll i BIC under Inställningar → Fakturering för att skapa betalfil.' },
         { status: 400 },
       )
+    case 'SWEDBANK_IDS_MISSING':
+      return NextResponse.json({ error: result.details.message as string }, { status: 400 })
     case 'NO_EMPLOYEES':
       return NextResponse.json({ error: 'Inga anställda i lönekörningen' }, { status: 400 })
     case 'EMPLOYEE_BANK_MISSING':

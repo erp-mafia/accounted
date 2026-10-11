@@ -524,6 +524,74 @@ describe('PUT /api/settings', () => {
     ])
   })
 
+  // Swedbank's own ids for payment files (crm#1117): who the bank sees as the
+  // sender and under which agreement it pays, so owner/admin only.
+  it('saves the Swedbank payment-file ids normalised, for an admin', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true } },
+      { data: { role: 'admin' } },
+      { data: { id: 's1', swedbank_signer_id: '123456789ORI0001', swedbank_corporate_pay_id: '123456789CPO0001' } },
+      { data: null, count: 5 },
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { swedbank_signer_id: '123456789-ori-0001', swedbank_corporate_pay_id: ' 123456789 CPO 0001 ' },
+    }), { params: Promise.resolve({}) })
+
+    expect((await parseJsonResponse(response)).status).toBe(200)
+    expect(findCall('company_settings', 'update')?.[0]).toEqual({
+      swedbank_signer_id: '123456789ORI0001',
+      swedbank_corporate_pay_id: '123456789CPO0001',
+    })
+  })
+
+  it('clears a Swedbank payment-file id sent empty', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true } },
+      { data: { role: 'owner' } },
+      { data: { id: 's1', swedbank_signer_id: null } },
+      { data: null, count: 5 },
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { swedbank_signer_id: '' },
+    }), { params: Promise.resolve({}) })
+
+    expect((await parseJsonResponse(response)).status).toBe(200)
+    expect(findCall('company_settings', 'update')?.[0]).toEqual({ swedbank_signer_id: null })
+  })
+
+  it('rejects a Swedbank id that is not in Swedbank format, naming the format', async () => {
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { swedbank_signer_id: '5566778899' },
+    }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse(response)
+
+    expect(status).toBe(400)
+    expect(JSON.stringify(body)).toContain('123456789ORI0001')
+    expect(findCall('company_settings', 'update')).toBeUndefined()
+  })
+
+  it('rejects Swedbank payment-file id changes from a regular member', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true } },
+      { data: { role: 'member' }, error: null },
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { swedbank_corporate_pay_id: '123456789CPO0001' },
+    }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(findCall('company_settings', 'update')).toBeUndefined()
+  })
+
   it('rejects invalid invoice recipients with otherwise valid payment accounts', async () => {
     enqueue({ data: { entity_type: 'aktiebolag', onboarding_complete: true } })
 

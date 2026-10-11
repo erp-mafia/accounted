@@ -515,7 +515,7 @@
     "keywords_tax": "Moms, Momsperiod, Momsnummer, Momsregistrerad, EU-handel, Periodisk sammanställning, F-skatt, Preliminärskatt, Fyllnadsinbetalning, Kontrolluppgifter, ROT, RUT, Grön teknik, Skattebesked, Kontaktperson, OSS, Intrastat, Punktskatt",
     "keywords_salary": "Betalar löner, Arbetsgivare, Löneutbetalningsdag, Betalfil, Avvikelser, Nettolön, Skattetabell, Semester",
     "keywords_templates": "Bokföringsmallar, Inlärda mönster, Motparter",
-    "keywords_invoicing": "Fakturanummer, Prefix, Betalningsvillkor, Vår referens, Fakturatyper, Offert, Proforma, Återkommande, Självfaktura, Bankkonton, Bankgiro, Swish, IBAN, Betallänk, PDF, Utskrift",
+    "keywords_invoicing": "Fakturanummer, Prefix, Betalningsvillkor, Vår referens, Fakturatyper, Offert, Proforma, Återkommande, Självfaktura, Bankkonton, Bankgiro, Swish, IBAN, Betallänk, PDF, Utskrift, Swedbank, SignerID, Betalfil",
     "keywords_sending": "Avsändare, Egen domän, Svarsadress, Kopia, E-posttexter, Påminnelser, Påminnelsetexter",
     "keywords_connections": "Bank, PSD2, Skatteverket, Ombud, Peppol, E-faktura, WhatsApp, Gmail, Kvitton i mejlen, Stripe, Shopify, WooCommerce, Zettle",
     "keywords_api": "MCP, Claude, ChatGPT, Grok, API-nycklar, OAuth",
@@ -1358,6 +1358,7 @@
     "debtor_missing_iban": "Företagets IBAN saknas och behövs som avsändarkonto i betalfilen.",
     "debtor_missing_bic": "Företagsbankens BIC saknas och kunde inte härledas.",
     "debtor_missing_org": "Företagets organisationsnummer saknas och måste anges som avsändaridentitet i betalfilen.",
+    "debtor_missing_swedbank": "Swedbank kräver ditt SignerID och avtals-id (Corporate Pay) i betalfilen. Båda får du av Swedbank.",
     "debtor_missing_link": "Öppna Inställningar → Fakturering",
     "debtor_missing_org_link": "Öppna Inställningar → Företag",
     "history_title": "Betalfiler",
@@ -2570,7 +2571,7 @@
     "steps_bg_lb_seb": "Betalningar → Filöverföring → välj Bankgiro LB → ladda upp och attestera.",
     "steps_bg_lb_handelsbanken": "Betala → Filimport → välj LB → kontrollera summor → signera. OBS: Handelsbanken tar inte längre emot lönefiler via Bankgirot.",
     "steps_bg_lb_nordea": "Filimport → Bankgiro LB → ladda upp → attestera betalningen.",
-    "steps_pain001_swedbank": "Betala och överföra → Filtjänster → Ladda upp fil (ISO 20022 pain.001) → signera med BankID.",
+    "steps_pain001_swedbank": "Betala och överföra → Filtjänster → Ladda upp fil (ISO 20022 pain.001) → signera med BankID. Filen behöver ditt SignerID och avtals-id (Corporate Pay) från Swedbank, ifyllda under Inställningar → Fakturering.",
     "steps_pain001_seb": "SEB Business Arena tar inte emot pain.001 via filuppladdning, där godkänns bara CSV, och SEB:s SEPA-CSV gäller enbart betalningar i EUR. pain.001 till SEB kräver filkommunikationsavtal. Utan ett sådant avtal: välj Bankgirot LB-filen i stället för inrikes löner i SEK.",
     "steps_pain001_handelsbanken": "Betala → Filimport → ISO 20022 → välj pain.001 → signera.",
     "steps_pain001_nordea": "Filimport i Nordea Business → Format pain.001 → ladda upp → attestera.",
@@ -2769,6 +2770,14 @@
     "reminder_days_level_1": "Första påminnelsen (dagar)",
     "reminder_days_level_2": "Andra påminnelsen (dagar)",
     "reminder_days_level_3": "Slutlig påminnelse (dagar)"
+  },
+  "settings_swedbank_file_ids": {
+    "heading": "Betalfiler till Swedbank",
+    "help": "Swedbank kräver två id i varje betalfil som banken själv tilldelar: ditt SignerID och avtals-id:t för filbetalningar (Corporate Pay). Utan dem nekar Swedbank filen. Har du dem inte, fråga Swedbank.",
+    "signer_id_label": "SignerID",
+    "signer_id_help": "Format 123456789ORI0001. Tilldelas av Swedbank och skrivs in som avsändare i betalfilen.",
+    "corporate_pay_id_label": "Avtals-id (Corporate Pay)",
+    "corporate_pay_id_help": "Format 123456789CPO0001. Tilldelas av Swedbank och anger avtalet som betalningarna görs under."
   },
   "settings_payment_links": {
     "heading": "Betalningslänk",

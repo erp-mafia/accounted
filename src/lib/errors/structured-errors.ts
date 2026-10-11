@@ -4894,9 +4894,9 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
   SI_BATCH_DEBTOR_INCOMPLETE: {
     httpStatus: 400,
     message_sv:
-      'Företagets bankuppgifter är ofullständiga. Fyll i IBAN (och BIC om det inte kan härledas) under Inställningar → Fakturering.',
+      'Företagets bankuppgifter är ofullständiga. Fyll i IBAN (och BIC om det inte kan härledas) under Inställningar → Fakturering. Har företaget Swedbank behövs även SignerID och avtals-id (Corporate Pay) från Swedbank.',
     message_en:
-      'The company bank details are incomplete. Enter the IBAN (and BIC if it cannot be derived) under Settings → Invoicing.',
+      'The company bank details are incomplete. Enter the IBAN (and BIC if it cannot be derived) under Settings → Invoicing. A Swedbank company also needs the SignerID and Corporate Pay agreement id Swedbank assigned.',
   },
   SI_BATCH_CANCELLED: {
     httpStatus: 409,
@@ -5533,9 +5533,9 @@ const SALARY: Record<string, StructuredErrorEntry> = {
   SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS: {
     httpStatus: 422,
     message_sv:
-      'Företagets bankuppgifter för betalfilen saknas eller är ogiltiga: IBAN och BIC för ISO 20022 (pain.001), bankgironummer för Bankgirot LB. Fyll i dem under Inställningar → Fakturering.',
+      'Företagets bankuppgifter för betalfilen saknas eller är ogiltiga: IBAN och BIC för ISO 20022 (pain.001), och för Swedbank även SignerID och avtals-id (Corporate Pay), bankgironummer för Bankgirot LB. Fyll i dem under Inställningar → Fakturering.',
     message_en:
-      'The company bank details the payment file needs are missing or invalid: IBAN and BIC for ISO 20022 (pain.001), bankgiro number for Bankgirot LB. Fill them in under Settings → Invoicing.',
+      'The company bank details the payment file needs are missing or invalid: IBAN and BIC for ISO 20022 (pain.001), and for Swedbank also the SignerID and Corporate Pay agreement id, bankgiro number for Bankgirot LB. Fill them in under Settings → Invoicing.',
   },
   SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_MISSING: {
     httpStatus: 422,

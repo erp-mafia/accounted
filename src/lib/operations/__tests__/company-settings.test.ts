@@ -75,6 +75,22 @@ describe('settings operations: field split', () => {
     expect(field.safeParse('all').success).toBe(false)
   })
 
+  it('lets the API and MCP read and write the Swedbank payment-file ids, in Swedbank format only (crm#1117)', () => {
+    const shape = (settingsUpdate.input as unknown as z.ZodObject<z.ZodRawShape>).shape
+    for (const [field, valid, invalid] of [
+      ['swedbank_signer_id', '123456789ORI0001', '5566778899'],
+      ['swedbank_corporate_pay_id', '123456789CPO0001', '123456789ORI0001'],
+    ] as const) {
+      expect(keys(settingsUpdate.input), field).toContain(field)
+      const schema = shape[field] as z.ZodType
+      expect(schema.safeParse(valid).success, field).toBe(true)
+      expect(schema.safeParse(invalid).success, field).toBe(false)
+      expect(schema.description, field).toMatch(/assigned by Swedbank/)
+      expect(toSettingsResource('c1', { [field]: valid } as never)[field]).toBe(valid)
+      expect(toSettingsResource('c1', {} as never)[field]).toBeNull()
+    }
+  })
+
   it('puts every tax-relevant field the API writes in the tax profile, never in settings.update', () => {
     const general = keys(settingsUpdate.input)
     for (const field of TAX_RELEVANT_FIELDS) {

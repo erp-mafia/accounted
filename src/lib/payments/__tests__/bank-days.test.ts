@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { nextBankDayIso } from '../bank-days'
+import { nextBankDayIso, previousBankDayIso } from '../bank-days'
 
 describe('nextBankDayIso', () => {
   it('keeps a banking day and moves a weekend to Monday', () => {
@@ -11,5 +11,26 @@ describe('nextBankDayIso', () => {
   it('skips a Swedish holiday', () => {
     expect(nextBankDayIso('2027-01-01')).toBe('2027-01-04') // Nyårsdagen is a Friday
     expect(nextBankDayIso('2026-12-25')).toBe('2026-12-28') // Juldagen, then annandag jul and a weekend
+  })
+})
+
+describe('previousBankDayIso', () => {
+  it('is the banking day strictly before, across a weekend', () => {
+    expect(previousBankDayIso('2026-10-14')).toBe('2026-10-13') // Wednesday: Tuesday
+    expect(previousBankDayIso('2026-10-12')).toBe('2026-10-09') // Monday: Friday
+    expect(previousBankDayIso('2026-10-11')).toBe('2026-10-09') // Sunday: Friday
+  })
+
+  it('skips Swedish holidays', () => {
+    // Tuesday after Easter 2026: annandag påsk, the weekend and långfredagen.
+    expect(previousBankDayIso('2026-04-07')).toBe('2026-04-02')
+    // Monday 28 December 2026: the weekend, annandag jul, juldagen and julafton.
+    expect(previousBankDayIso('2026-12-28')).toBe('2026-12-23')
+    // Across the year boundary: nyårsdagen is not a banking day, nyårsafton neither.
+    expect(previousBankDayIso('2027-01-04')).toBe('2026-12-30')
+  })
+
+  it('refuses a date it cannot read instead of searching forever', () => {
+    expect(() => previousBankDayIso('24/4 2026')).toThrow('Ogiltigt datum')
   })
 })

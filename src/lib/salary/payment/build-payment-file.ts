@@ -18,7 +18,8 @@
  *   2. run status is approved, paid or booked
  *   3. company row exists
  *   4. company_settings row (pain.001) / bankgiro (LB) present and valid
- *   5. company IBAN present and BIC present or derivable (pain.001)
+ *   5. company IBAN present and BIC present or derivable (pain.001), and
+ *      for a Swedbank debtor Swedbank's SignerID and Corporate Pay id
  *   6. the run has employees
  *   7. every employee with a positive payout has clearing + account
  *   8. every one of those accounts names a payable account
@@ -48,6 +49,7 @@ import type { Pain001CompanyData, Pain001Employee } from './pain001-generator'
 import { generateBgLb, utbetalningsnummer } from './bg-lb-generator'
 import type { BgLbCompanyData, BgLbEmployee } from './bg-lb-generator'
 import { effectiveNetPayout } from './effective-net'
+import { resolveSwedbankFileIds } from '@/lib/payments/swedbank'
 import {
   checkEmployeeAccountChecksum,
   describePayeeAccountProblems,
@@ -87,6 +89,7 @@ export type SalaryPaymentFileErrorCode =
   | 'SETTINGS_MISSING'
   | 'IBAN_MISSING'
   | 'BIC_MISSING'
+  | 'SWEDBANK_IDS_MISSING'
   | 'BANKGIRO_MISSING'
   | 'BANKGIRO_INVALID'
   | 'NO_EMPLOYEES'
@@ -190,6 +193,9 @@ interface SettingsRow {
   bank_name: string | null
   bankgiro: string | null
   preferred_payment_format: string | null
+  city: string | null
+  swedbank_signer_id: string | null
+  swedbank_corporate_pay_id: string | null
 }
 
 interface RunEmployeeRow {
@@ -204,6 +210,8 @@ interface RunEmployeeRow {
     bank_account_number: string | null
     /** AGI specification number: the base of the LB utbetalningsnummer. */
     specification_number: number | null
+    /** Town for Cdtr/PstlAdr in Swedbank's pain.001 form. */
+    city: string | null
   } | null
 }
 
@@ -215,6 +223,14 @@ function fail(
 ): SalaryPaymentFileError {
   return { ok: false, code, format, details, ...extra }
 }
+
+/**
+ * Why a Swedbank debtor's pain.001 cannot be made, in Swedish: Swedbank
+ * identifies the sender and the agreement by ids it assigns, and refuses a
+ * file without them at upload ("Aktivt id för fullmaktshavare saknas").
+ */
+export const SWEDBANK_IDS_MISSING_SV =
+  'Swedbank kräver företagets SignerID och avtals-id (Corporate Pay) i betalfilen. Du får dem av Swedbank. Fyll i dem under Inställningar → Fakturering.'
 
 /** A builder refusal in the structured-errors catalogue (lib/errors/structured-errors.ts). */
 export interface SalaryPaymentFileRefusal {
@@ -243,6 +259,7 @@ export function salaryPaymentFileRefusal(result: SalaryPaymentFileError): Salary
     case 'SETTINGS_MISSING':
     case 'IBAN_MISSING':
     case 'BIC_MISSING':
+    case 'SWEDBANK_IDS_MISSING':
     case 'BANKGIRO_MISSING':
     case 'BANKGIRO_INVALID':
       return {
@@ -334,7 +351,7 @@ export async function buildSalaryPaymentFile(
   // 4. Settings: the sender's bank details live here, not on companies.
   const { data: settingsData, error: settingsErr } = await supabase
     .from('company_settings')
-    .select('company_name, iban, bic, clearing_number, bank_name, bankgiro, preferred_payment_format')
+    .select('company_name, iban, bic, clearing_number, bank_name, bankgiro, preferred_payment_format, city, swedbank_signer_id, swedbank_corporate_pay_id')
     .eq('company_id', companyId)
     .maybeSingle()
   if (settingsErr) return fail('DB_ERROR', requestedFormat, {}, { stage: 'settings', cause: settingsErr })
@@ -372,6 +389,19 @@ export async function buildSalaryPaymentFile(
       )
     }
 
+    // Swedbank (savings banks included) identifies the sender and the
+    // agreement by its own SignerID and Corporate Pay id, never the org
+    // number, and refuses a file without them (lib/payments/swedbank.ts).
+    const swedbank = resolveSwedbankFileIds(senderBic, settings)
+    if (!swedbank.ok) {
+      return fail('SWEDBANK_IDS_MISSING', format, {
+        fields: (['swedbank_signer_id', 'swedbank_corporate_pay_id'] as const).filter(
+          (field) => !settings[field]?.trim(),
+        ),
+        message: SWEDBANK_IDS_MISSING_SV,
+      })
+    }
+
     pain001Company = {
       // Sender name follows the current company name (company_settings.company_name),
       // not the frozen onboarding companies.name.
@@ -379,6 +409,8 @@ export async function buildSalaryPaymentFile(
       orgNumber: companyRow.org_number || '',
       iban: senderIban,
       bic: senderBic,
+      city: settings.city,
+      swedbank: swedbank.ids,
     }
   } else {
     // The settings overview shows a bankgiro from the Bolagsverket snapshot,
@@ -399,7 +431,7 @@ export async function buildSalaryPaymentFile(
   // 6. Employees on the run.
   const { data: runEmployeesData, error: employeesErr } = await supabase
     .from('salary_run_employees')
-    .select('*, employee:employees(first_name, last_name, clearing_number, bank_account_number, specification_number)')
+    .select('*, employee:employees(first_name, last_name, clearing_number, bank_account_number, specification_number, city)')
     .eq('salary_run_id', runId)
   if (employeesErr) return fail('DB_ERROR', format, {}, { stage: 'employees', cause: employeesErr })
 
@@ -474,6 +506,7 @@ export async function buildSalaryPaymentFile(
       bankAccountNumber,
       payeeNumber: emp.specification_number ?? 0,
       netSalary: effectiveNet,
+      city: emp.city ?? null,
     }
   })
 
