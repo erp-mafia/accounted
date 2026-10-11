@@ -177,23 +177,23 @@ const nextConfig: NextConfig = {
         destination: '/chart-of-accounts',
         permanent: false,
       },
-      // Docs canonicalised to docs.gnubok.se. Every `docs_url` field on the
+      // Docs canonicalised to docs.accounted.se. Every `docs_url` field on the
       // v1 error envelope still points at this host; the 308 forwards both
       // humans and agents to the docs subdomain without us needing to
       // mass-update structured-errors.
       {
         source: '/docs/api',
-        destination: 'https://docs.gnubok.se/',
+        destination: 'https://docs.accounted.se/',
         permanent: true,
       },
       {
         source: '/docs/api/:path*',
-        destination: 'https://docs.gnubok.se/:path*',
+        destination: 'https://docs.accounted.se/:path*',
         permanent: true,
       },
       {
         source: '/llms-full.txt',
-        destination: 'https://docs.gnubok.se/llms-full.txt',
+        destination: 'https://docs.accounted.se/llms-full.txt',
         permanent: true,
       },
       // Dual-domain cutover (2026-07): the user-facing app moves to

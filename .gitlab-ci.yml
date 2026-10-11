@@ -1,9 +1,9 @@
-# GitLab CI for the ledger: the same gates as .github/workflows/core-build.yml
-# and .github/workflows/test-pg-real.yml, run on the group's own runner
-# (ci-runner-1, Hetzner, two jobs at a time). The GitHub workflows stay in the
-# repository unchanged; GitHub ignores this file and GitLab ignores theirs.
+# GitLab CI for the ledger, run on the group's own runner (ci-runner-1,
+# Hetzner, two jobs at a time). It took over the gates of the GitHub workflows
+# core-build.yml and test-pg-real.yml when the repository moved to GitLab
+# (2026-10-05); those workflows are gone.
 #
-# Jobs run without stage ordering (needs: []), like the parallel GitHub jobs.
+# Jobs run without stage ordering (needs: []), so they run in parallel.
 # A merge request can only merge when every job here is green (project
 # setting "Pipelines must succeed").
 
@@ -31,15 +31,15 @@ stages:
   - test
   - pg
 
-# Checks run on merge requests only, like the GitHub workflows (pull_request
-# only): with squash merges onto a straight history, main receives exactly the
-# tree its merge request already tested. main runs the production jobs only.
+# Checks run on merge requests only: with squash merges onto a straight
+# history, main receives exactly the tree its merge request already tested.
+# main runs the production jobs only.
 .mr-only:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
 
 # npm's download cache, kept on the runner between pipelines and keyed on the
-# lockfile, like the restore-only cache in .github/actions/setup-core.
+# lockfile.
 .npm:
   cache:
     key:
@@ -47,7 +47,7 @@ stages:
       files: [package-lock.json]
     paths: [.npm/]
 
-# The prologue every core job needs (.github/actions/setup-core): dependencies
+# The prologue every core job needs: dependencies
 # and a zero-extension registry, because CI builds core with no extensions.
 .setup-core:
   extends: .npm
@@ -56,7 +56,7 @@ stages:
     - echo '{"extensions":[]}' > extensions.config.json
     - npm run setup:extensions
 
-# Postgres with the Supabase auth schema, as in the GitHub pg jobs.
+# Postgres with the Supabase auth schema.
 .pg:
   extends: .npm
   services:
@@ -110,8 +110,8 @@ build:
   extends: [.setup-core, .mr-only]
   needs: []
   variables:
-    # The Next.js build worker needs more than the default heap (see
-    # core-build.yml); the runner has 16 GB plus swap.
+    # The Next.js build worker OOMs on Node's default heap since 2026-08-19
+    # (bundle growth); the runner has 16 GB plus swap.
     NODE_OPTIONS: --max-old-space-size=8192
   script:
     - npm run build
@@ -153,7 +153,7 @@ pg-real:
     - npm run test:pg
 
 # Schema at the merge base, real rows seeded, then ONLY the new migrations on
-# top: proves existing data survives them (see test-pg-real.yml).
+# top: proves existing data survives them.
 pg-upgrade:
   stage: pg
   extends: .pg

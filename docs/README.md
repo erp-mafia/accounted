@@ -1,6 +1,6 @@
 # Documentation
 
-Start with the [user and API documentation](https://docs.gnubok.se) for using Accounted. This directory explains how to understand, develop, operate, and extend the project.
+Start with the [user and API documentation](https://docs.accounted.se) for using Accounted. This directory explains how to understand, develop, operate, and extend the project.
 
 ## Find your starting point
 
@@ -10,7 +10,7 @@ Start with the [user and API documentation](https://docs.gnubok.se) for using Ac
 | Understand the system | [Architecture](architecture.md) |
 | Contribute a change | [Contributing](../.github/CONTRIBUTING.md) |
 | Connect Claude Code | [Accounted plugin](../packages/claude-plugin/README.md) |
-| Build an integration | [Public API](https://docs.gnubok.se), [API skill](../skills/accounted-api/SKILL.md) |
+| Build an integration | [Public API](https://docs.accounted.se), [API skill](../skills/accounted-api/SKILL.md) |
 | Build an extension | [Extension development](EXTENSIONS.md) |
 | Report a vulnerability | [Security policy](../.github/SECURITY.md) |
 

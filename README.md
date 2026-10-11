@@ -6,7 +6,7 @@
 
 Open-source Swedish accounting software for sole traders (enskild firma) and limited companies (aktiebolag). Double-entry bookkeeping that complies with Swedish accounting law, built to be operated by you or by your AI agent.
 
-[![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL--3.0--or--later-blue.svg)](LICENSE) [![Core Build](https://github.com/erp-mafia/accounted/actions/workflows/core-build.yml/badge.svg)](https://github.com/erp-mafia/accounted/actions/workflows/core-build.yml) [![pg-real tests](https://github.com/erp-mafia/accounted/actions/workflows/test-pg-real.yml/badge.svg)](https://github.com/erp-mafia/accounted/actions/workflows/test-pg-real.yml) [![Docker](https://github.com/erp-mafia/accounted/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/erp-mafia/accounted/actions/workflows/docker-publish.yml)
+[![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL--3.0--or--later-blue.svg)](LICENSE) [![Docker](https://github.com/erp-mafia/accounted/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/erp-mafia/accounted/actions/workflows/docker-publish.yml)
 
 [Use Accounted](https://app.accounted.se) · [Self-host](docs/SELF-HOSTING.md) · [Documentation](docs/README.md) · [Contribute](.github/CONTRIBUTING.md)
 
@@ -85,7 +85,7 @@ See [contributing guide](.github/CONTRIBUTING.md) for the full development workf
 
 The [documentation index](docs/README.md) groups the repository guides by task.
 
-- [User and API documentation](https://docs.gnubok.se)
+- [User and API documentation](https://docs.accounted.se)
 - [Architecture](docs/architecture.md)
 - [Self-hosting](docs/SELF-HOSTING.md) and [Docker reference](docs/DOCKER.md)
 - [Extension development](docs/EXTENSIONS.md)

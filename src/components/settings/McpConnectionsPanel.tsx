@@ -246,7 +246,7 @@ export function McpConnectionsPanel({
                 </button>
                 {/* The step-by-step guide is canonical on the docs site, in one
                     language per URL. Root-relative so the /docs/api/* 308 in
-                    next.config.ts forwards to docs.gnubok.se (issue #2133). */}
+                    next.config.ts forwards to docs.accounted.se (issue #2133). */}
                 <a
                   href={locale === 'sv' ? '/docs/api/anslut-claude' : '/docs/api/connect-claude'}
                   target="_blank"

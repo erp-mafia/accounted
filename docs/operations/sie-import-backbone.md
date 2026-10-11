@@ -1,9 +1,9 @@
 # SIE import operations
 
-This is a coordinated database, application and flag cutover. Merging the PR
-alone does not enable imports. `SIE_IMPORT_JOBS` defaults off, and the migrations
-retire the old import, undo and replacement RPCs. An application-only rollback
-cannot restore the old writer.
+SIE files import as resumable jobs: a worker posts each file in chunks and the
+database owns the job state. The jobs replaced the one-shot import writer on
+2026-09-14; the migrations retired the old import, undo and replacement RPCs,
+so an application-only rollback cannot restore the old writer.
 
 ## Runtime contract
 
@@ -72,59 +72,6 @@ For suspected bad worker code, disable admission and pause workers. Deploy a
 compatible fix, reconcile the recorded attempt/receipts, resume workers, then
 restore admission. Do not restore the one-shot writer, drop uniqueness, delete
 receipts or bypass retention. Keep status and diagnostic downloads available.
-
-## Production cutover
-
-All development migrations and mutation tests use only the designated staging
-branch `metjnjrhvujscngnpzdv`. Production is `pwxtzglxptnnvjrpixpg`.
-Production DDL, configuration activation and any synthetic production import
-must receive Emil's specific approval before execution. Do not use `.env.local`
-for acceptance tests. Do not start a local database or Docker.
-
-Before scheduling:
-
-1. Verify the current PR commit's full CI, staging regression tests and provider
-   acceptance. Reconcile every production migration version with repository
-   files immediately before cutover; preserve the exact applied SQL bytes.
-2. Confirm a production operator can edit Vercel environment variables, deploy
-   compatible application code, apply approved DDL and inspect cron/log delivery.
-   Obtain a maintenance window and an explicit database lock/time budget.
-3. Rehearse the initial DDL against production-sized staging data. The initial
-   migration adds validated CHECK/FK constraints and two regular partial unique
-   indexes on `journal_entries`. These are blocking operations, even when the
-   new indexed columns are null. Later migrations cannot remove locks already
-   taken by that first migration. Do not edit previously applied migrations.
-4. Run `scripts/sie-import/cutover-preflight.sql` read-only. Review relation sizes,
-   old transactions and lock waiters without exposing SQL text/customer data.
-   On 2026-09-13 production had about 483,000 journal entries, a 107 MiB heap
-   and 327 MiB including indexes. This is sizing evidence, not a DDL-duration
-   measurement. The production-sized DDL rehearsal is still outstanding.
-
-During the approved window:
-
-1. Pause legacy import intake and confirm no import/undo/replace RPC remains in
-   flight. Arrange a quiet write window for the initial blocking DDL. Confirm
-   migration-session lock and statement timeouts are set to the approved budget;
-   stop on budget exhaustion instead of leaving a lock request queued.
-2. Apply the exact reviewed migrations and deploy the compatible application
-   within the same window. Keep `SIE_IMPORT_JOBS=false` and
-   `SIE_IMPORT_WORKER_PAUSED=true` until both are verified. Keep compact audit off.
-3. Verify new RPC availability, retired RPC denial and financial report leases.
-   Set `SIE_IMPORT_WORKER_PAUSED=false`, activate that configuration and observe
-   an authenticated cron invocation. Then set `SIE_IMPORT_JOBS=true` and activate
-   the deployment using it. Verify the effective behavior, not only saved flags.
-4. On an explicitly approved synthetic company, complete a small import, check
-   status, balances, numbering, source archive and audit history, then verify
-   bounded undo. Check a normal report and the paused-import conflict path.
-5. Observe queue age, paused jobs, report latency/error rate, worker recovery,
-   WAL and disk metrics. Keep concurrency at two until sustained load evidence
-   supports a change. Verify `alert: true` failures reach the configured pager;
-   a log line alone does not establish alert delivery.
-
-The initial migration requires a maintenance decision. PostgreSQL documents
-regular index builds as blocking writes and constraint validation as scanning
-existing rows: [CREATE INDEX](https://www.postgresql.org/docs/17/sql-createindex.html),
-[ALTER TABLE](https://www.postgresql.org/docs/17/sql-altertable.html).
 
 ## Repeatable verification
 

@@ -35,7 +35,7 @@ import {
  * and asserts a contract against checked-in code.
  *
  * GROUND TRUTH: the migration files. Not a live database (a pg-real test would
- * be authoritative but only runs in the `test-pg-real` CI job, so a developer's
+ * be authoritative but only runs in the `pg-real` CI job, so a developer's
  * `npm test` would never see it), and not a checked-in snapshot (which rots).
  * Replaying the migrations costs ~250ms, runs everywhere, and has no artifact to
  * go stale: the migrations are already the repo's contract with prod. No test in

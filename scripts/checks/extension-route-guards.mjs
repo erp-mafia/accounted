@@ -4,7 +4,7 @@
  * Physical routes under `app/api/extensions/<extensionId>/` are the ONE
  * sanctioned place where app code may import from `@/extensions/` (see the
  * "Check no core imports from extensions" step in
- * .github/workflows/core-build.yml, which exempts exactly this directory).
+ * `checks` job in .gitlab-ci.yml, which exempts exactly this directory).
  * They exist because Vercel crons and OAuth callbacks need concrete file
  * routes; the `ext/[...path]` dispatcher covers everything else.
  *

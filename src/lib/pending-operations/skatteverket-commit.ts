@@ -1,7 +1,7 @@
 /**
  * Core ↔ Skatteverket-extension commit boundary.
  *
- * `lib/` cannot import from `@/extensions/` (CI guard, core-build.yml), so the
+ * `lib/` cannot import from `@/extensions/` (CI guard, .gitlab-ci.yml checks), so the
  * commit-side executors reach the Skatteverket extension only through the
  * registry-resolved `services` channel. This module defines the SHARED shape
  * the extension's commit services return and the recoverable-error class the

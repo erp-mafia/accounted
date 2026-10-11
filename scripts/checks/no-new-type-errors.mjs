@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Ratchet guard for TypeScript errors (sibling of no-new-lint-errors.mjs).
+ * Ratchet guard for TypeScript errors.
  *
  * ## Why this exists
  *
@@ -18,8 +18,8 @@
  *
  * ## Why the baseline is keyed by FILE, not by error code
  *
- * The lint ratchet counts per rule, and accepts the tradeoff that fixing one
- * legacy error of a rule lets a new one in. For types that tradeoff is worse:
+ * A per-code budget accepts the tradeoff that fixing one legacy error of a
+ * code lets a new one in. For types that tradeoff is too costly:
  * the pre-existing errors are concentrated in a handful of old test files, and
  * TS2322 ("not assignable") is common enough that a per-code budget would
  * silently absorb a real regression somewhere else entirely. Keyed by file, a

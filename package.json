@@ -24,7 +24,7 @@
     "check:guards": "node scripts/checks/no-new-antipatterns.mjs",
     "validate:packs": "tsx scripts/validate-packs.ts",
     "validate:registry": "tsx scripts/validate-registry.ts",
-    "check:lint": "node scripts/checks/no-new-lint-errors.mjs",
+    "check:lint": "eslint --quiet",
     "check:types": "node scripts/checks/no-new-type-errors.mjs",
     "test": "vitest run --project unit",
     "test:pg": "vitest run --project pg-real",
