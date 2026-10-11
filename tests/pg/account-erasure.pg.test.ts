@@ -66,6 +66,8 @@ const RETAINED = new Set([
   // Bookkeeping, documents and their processing history
   'account_reconciliation_attachments.removed_by',
   'account_reconciliation_attachments.uploaded_by',
+  'account_reconciliation_settlements.settled_by',
+  'account_reconciliation_settlements.undone_by',
   'account_reconciliations.reopened_by',
   'account_reconciliations.signed_by',
   'accrual_schedule_installments.user_id',

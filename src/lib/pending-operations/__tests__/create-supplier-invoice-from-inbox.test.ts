@@ -132,7 +132,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
       journal_entry_id: 'je-100',
     } as never)
 
-    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // dispatcher CAS claim
     enqueue({
       data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' },
@@ -151,6 +151,7 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
     enqueue({ data: null, error: null }) // supplier_invoice_items insert
     enqueue({ data: null, error: null }) // supplier_invoices update with JE id
     enqueue({ data: null, error: null }) // invoice_inbox_items update
+    enqueue({ data: [{ id: 'op-twin' }], error: null }) // still-pending twins of the same item, rejected
     enqueue({ data: null, error: null }) // dispatcher's commit update
 
     const result = await commitPendingOperation(
@@ -161,6 +162,10 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
     )
 
     expect(result.status).toBe('committed')
+    // An operation staged twice for the item must not wait for a second
+    // approval (crm#1074); this one is 'committing', so only 'pending' rows go.
+    expect(findCall('pending_operations', 'contains')).toEqual(['params', { inbox_item_id: 'inbox-1' }])
+    expect(findCalls('pending_operations', 'eq')).toContainEqual(['status', 'pending'])
     expect(result.data).toMatchObject({
       supplier_invoice_id: 'inv-1',
       inbox_item_id: 'inbox-1',

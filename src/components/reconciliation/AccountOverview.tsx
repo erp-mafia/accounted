@@ -234,7 +234,10 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
   async function unmatchOne(item: ReconciliationItem) {
     setBusy(item.item_id)
     try {
-      const data = await postJson(`${base}/links/${item.item_id}`, undefined, 'DELETE')
+      // A verifikat linked to other verifikat is undone by its settlement id;
+      // a bank or skattekonto row by its own id.
+      const linkId = item.settlement?.settlement_id ?? item.item_id
+      const data = await postJson(`${base}/links/${linkId}`, undefined, 'DELETE')
       if (data) {
         toast({ title: t('toast_unmatched') })
         await refresh()
@@ -820,6 +823,19 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
                               className="normal-case tracking-normal text-[12.5px] font-normal text-muted-foreground underline decoration-border underline-offset-4 hover:text-foreground"
                             >
                               {folded ? t('show_all', { count: rows.length }) : t('hide')}
+                            </button>
+                          )}
+                          {/* A wrong verifikat and its hand-made rättelse can be
+                              linked to each other in the worksheet: offered where
+                              the engine can judge it (bank accounts in SEK). */}
+                          {bucket === 'unmatched_ledger' && account.kind === 'bank' && currency === 'SEK' && onMatchManually && (
+                            <button
+                              type="button"
+                              onClick={onMatchManually}
+                              disabled={busy !== null}
+                              className="normal-case tracking-normal text-[12.5px] font-normal text-muted-foreground underline decoration-border underline-offset-4 hover:text-foreground"
+                            >
+                              {t('action_settle_ledger')}
                             </button>
                           )}
                         </span>

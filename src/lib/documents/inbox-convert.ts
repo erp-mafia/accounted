@@ -56,6 +56,7 @@ import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { resolveInboxKind } from '@/lib/documents/inbox-kind'
 import { resolveInboxCreditTarget } from '@/lib/supplier-invoices/credit-target'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
+import { rejectSupersededInboxConversions } from '@/lib/pending-operations/supersede'
 import type { ComputedSupplierInvoiceItem } from '@/lib/supplier-invoices/create'
 import type { InboxChannelContext, InvoiceInboxItem, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
@@ -464,6 +465,8 @@ export async function convertInboxItemToSupplierInvoice(
     .update({ created_supplier_invoice_id: invoice.id })
     .eq('id', inboxItemId)
     .eq('company_id', companyId)
+  // An agent's staged registration of the same item is now moot (crm#1074).
+  await rejectSupersededInboxConversions(supabase, companyId, inboxItemId, invoice.id as string)
 
   try {
     await emit({

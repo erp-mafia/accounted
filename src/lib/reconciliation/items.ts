@@ -10,6 +10,11 @@ import {
 import { getSkattekontoReconciliationStatus } from './skattekonto-reconciliation'
 import { proposeCoveringSets } from './covering-set-candidate'
 import {
+  fetchLiveLedgerSettlements,
+  resolveLedgerSettlements,
+  type LedgerSettlementMember,
+} from './ledger-settlement-store'
+import {
   parseAccountKey,
   type ReconciliationItem,
   type ReconciliationItemBucket,
@@ -159,6 +164,135 @@ async function fetchFiscalYearStarts(supabase: SupabaseClient, companyId: string
     .eq('company_id', companyId)
   if (error) return new Set()
   return new Set(((data ?? []) as Array<{ period_start: string }>).map((p) => p.period_start))
+}
+
+/**
+ * Move the verifikat that are settled against each other (a wrong verifikat
+ * and the rättelse booked by hand, crm#1074) out of the ledger-only list and
+ * into `matched`, each naming the verifikat it is settled against. A verifikat
+ * whose settlement no longer holds stays where it is, flagged `broken`, with
+ * the undo among its actions. Called after every other read of the listing.
+ */
+async function applyLedgerSettlements(
+  supabase: SupabaseClient,
+  companyId: string,
+  ledgerAccount: string,
+  currency: string,
+  window: { from: string | null; to: string | null },
+  buckets: ReconciliationItemBucket[],
+  byBucket: Map<ReconciliationItemBucket, ReconciliationItem[]>,
+  ledgerItems: Map<string, ReconciliationItem> | null,
+): Promise<void> {
+  const fetchOpen = async (from?: string, to?: string) => {
+    const lines = await fetchUnlinkedGLLines(supabase, companyId, ledgerAccount, from, to)
+    return { lines, open: openAmountByEntry(lines, 'SEK') }
+  }
+  // The ledger bucket already built its rows; a request for `matched` alone
+  // reads the list only when the account has a settlement to show.
+  let live: LedgerSettlementMember[] | undefined
+  let items = ledgerItems
+  if (!items) {
+    try {
+      live = await fetchLiveLedgerSettlements(supabase, companyId, ledgerAccount)
+    } catch {
+      return
+    }
+    if (live.length === 0) return
+    const { lines, open } = await fetchOpen(window.from ?? undefined, window.to ?? undefined)
+    items = new Map()
+    for (const l of lines) {
+      if (items.has(l.journal_entry_id)) continue
+      items.set(l.journal_entry_id, {
+        item_id: l.journal_entry_id,
+        item_type: 'journal_entry',
+        side: 'ledger',
+        bucket: 'unmatched_ledger',
+        date: l.entry_date,
+        description: l.entry_description || l.line_description || '',
+        amount: open.get(l.journal_entry_id) ?? 0,
+        currency,
+        voucher_number: l.voucher_number,
+        voucher_series: l.voucher_series,
+        entry_status: 'posted',
+        actions: ['match', 'review'],
+      })
+    }
+  }
+  if (items.size === 0) return
+
+  const windowOpen = new Map<string, number | null>()
+  for (const [id, item] of items) windowOpen.set(id, item.amount)
+  const resolved = await resolveLedgerSettlements(
+    supabase,
+    companyId,
+    ledgerAccount,
+    windowOpen,
+    async (from, to) => (await fetchOpen(from, to)).open,
+    live,
+  )
+  if (resolved.settled.size === 0 && resolved.broken.size === 0) return
+
+  // A settled verifikat names the others of its settlement: label and date
+  // for those the window does not hold come from one batched read.
+  const labels = new Map<string, { voucher_series: string | null; voucher_number: number | null; entry_date: string | null }>()
+  for (const [id, item] of items) {
+    labels.set(id, { voucher_series: item.voucher_series ?? null, voucher_number: item.voucher_number ?? null, entry_date: item.date })
+  }
+  const unlabelled = [...new Set([...resolved.groups.values()].flat().map((m) => m.journal_entry_id))].filter((id) => !labels.has(id))
+  for (let i = 0; i < unlabelled.length; i += 200) {
+    const { data } = await supabase
+      .from('journal_entries')
+      .select('id, entry_date, voucher_series, voucher_number')
+      .eq('company_id', companyId)
+      .in('id', unlabelled.slice(i, i + 200))
+    for (const r of (data ?? []) as Array<{ id: string; entry_date: string; voucher_series: string | null; voucher_number: number | null }>) {
+      labels.set(r.id, { voucher_series: r.voucher_series, voucher_number: r.voucher_number, entry_date: r.entry_date })
+    }
+  }
+  const settlementOf = (member: LedgerSettlementMember, state: 'settled' | 'broken'): NonNullable<ReconciliationItem['settlement']> => ({
+    settlement_id: member.settlement_id,
+    state,
+    settled_at: member.settled_at,
+    settled_by: member.settled_by,
+    counterparts: (resolved.groups.get(member.settlement_id) ?? [])
+      .filter((m) => m.journal_entry_id !== member.journal_entry_id)
+      .map((m) => ({
+        journal_entry_id: m.journal_entry_id,
+        voucher_series: labels.get(m.journal_entry_id)?.voucher_series ?? null,
+        voucher_number: labels.get(m.journal_entry_id)?.voucher_number ?? null,
+        entry_date: labels.get(m.journal_entry_id)?.entry_date ?? null,
+        amount: m.amount,
+      })),
+  })
+
+  const ledgerBucket = byBucket.get('unmatched_ledger')
+  if (ledgerBucket) {
+    byBucket.set(
+      'unmatched_ledger',
+      ledgerBucket.filter((item) => !resolved.settled.has(item.item_id)),
+    )
+    for (const item of byBucket.get('unmatched_ledger') ?? []) {
+      const member = resolved.broken.get(item.item_id)
+      if (!member) continue
+      item.settlement = settlementOf(member, 'broken')
+      item.actions = [...item.actions, 'unmatch']
+    }
+  }
+  if (buckets.includes('matched')) {
+    const settledItems: ReconciliationItem[] = []
+    for (const [id, entry] of resolved.settled) {
+      const item = items.get(id)
+      if (!item) continue
+      settledItems.push({
+        ...item,
+        bucket: 'matched',
+        ib_eligible: undefined,
+        settlement: settlementOf(entry.member, 'settled'),
+        actions: ['unmatch'],
+      })
+    }
+    byBucket.set('matched', [...(byBucket.get('matched') ?? []), ...settledItems])
+  }
 }
 
 export async function listAccountItems(
@@ -329,6 +463,7 @@ export async function listAccountItems(
       }
     }
 
+    let ledgerItems: Map<string, ReconciliationItem> | null = null
     if (buckets.includes('unmatched_ledger')) {
       const lines = await fetchUnlinkedGLLines(
         supabase,
@@ -370,10 +505,23 @@ export async function listAccountItems(
         })
       }
       for (const it of byEntry.values()) push(it)
+      ledgerItems = byEntry
     }
 
+    await attachEntries(supabase, companyId, buckets.flatMap((b) => byBucket.get(b) ?? []), persistedProposals)
+    if (buckets.includes('unmatched_ledger') || buckets.includes('matched')) {
+      await applyLedgerSettlements(
+        supabase,
+        companyId,
+        account.ledger_account,
+        currency,
+        { from: options.windowFrom ?? null, to: options.windowTo ?? null },
+        buckets,
+        byBucket,
+        ledgerItems,
+      )
+    }
     const all = buckets.flatMap((b) => byBucket.get(b) ?? [])
-    await attachEntries(supabase, companyId, all, persistedProposals)
     return page(all, limit, offset)
   }
 

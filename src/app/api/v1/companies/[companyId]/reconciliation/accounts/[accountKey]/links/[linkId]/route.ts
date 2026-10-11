@@ -3,7 +3,9 @@
  *
  * Remove one link. linkId is the outside row's id (transaction id on a bank
  * account, skattekonto_transaction id on the skattekonto): one row holds at
- * most one link, so the row id is the link id. The verifikat is untouched.
+ * most one link, so the row id is the link id. On a bank account it may also
+ * be the settlement_id of verifikat settled against each other. The verifikat
+ * are untouched.
  */
 import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
@@ -17,6 +19,9 @@ import { unmatchLink } from '@/lib/reconciliation/actions'
 const UnlinkResponse = z.object({
   external_id: z.string(),
   previous_journal_entry_id: z.string().nullable(),
+  /** Present when linkId was a ledger-only settlement: the verifikat that are back in unmatched_ledger. */
+  settlement_id: z.string().optional(),
+  journal_entry_ids: z.array(z.string()).optional(),
 })
 
 registerEndpoint({
@@ -31,7 +36,7 @@ registerEndpoint({
   doNotUseFor:
     'Undoing a booking: a residual or categorization booking is reversed through the journal-entry reverse endpoint, not by unlinking.',
   pitfalls: [
-    'linkId is the outside row id, not a separate link entity.',
+    'linkId is the outside row id, not a separate link entity. The one exception: verifikat settled against each other on a bank account (a pair without external_ids) are undone with their settlement_id, which the items endpoint reports as settlement.settlement_id; the response then carries settlement_id and journal_entry_ids, and previous_journal_entry_id is null.',
     'Unlinking a row whose verifikat was stornoed is the expected fix for a link_problem = entry_reversed item; the row then shows under unmatched_external again.',
   ],
   example: {

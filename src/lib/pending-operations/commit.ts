@@ -279,6 +279,7 @@ import { ensureArticleNumber } from '@/lib/articles/ensure-article-number'
 import { isValidRevenueAccount } from '@/lib/articles/validate-revenue-account'
 import { z } from 'zod'
 import { operationForPendingType } from '@/lib/operations/registry'
+import { rejectSupersededInboxConversions } from './supersede'
 import type { AnyOperation } from '@/lib/operations/types'
 import type {
   Transaction,
@@ -5153,6 +5154,9 @@ async function commitCreateSupplierInvoiceFromInbox(
       error: linkInboxErr.message,
     })
   }
+  // The same item staged twice: this operation is 'committing', so only its
+  // still-pending twins are rejected (crm#1074).
+  await rejectSupersededInboxConversions(supabase, companyId, inboxItemId, invoice.id as string)
 
   try {
     await eventBus.emit({
@@ -7197,6 +7201,8 @@ async function commitBulkBookInboxItems(
  * pair and re-validated as one all-or-nothing split. A skattekonto pair
  * staged with allow_remainder (rows against a summarised verifikat) keeps the
  * flag, so the reviewer's approval of the previewed remainder is what links it.
+ * A pair without an outside row (verifikat settled against each other,
+ * crm#1074) is staged with empty external_ids and comes back in data.settled.
  */
 async function commitReconciliationMatch(
   supabase: SupabaseClient,
@@ -7220,7 +7226,8 @@ async function commitReconciliationMatch(
   if (!result) {
     return { error: `Unknown account_key ${accountKey}`, status: 404 }
   }
-  if (result.applied.length === 0) {
+  const settled = result.settled ?? []
+  if (result.applied.length + settled.length === 0) {
     return {
       error: `Ingen koppling kunde göras: ${result.skipped.map((s) => s.code).join(', ')}`,
       errorCode: result.skipped[0]?.code,
@@ -7235,6 +7242,8 @@ async function commitReconciliationMatch(
       skipped: result.skipped,
       applied_count: result.applied.length,
       skipped_count: result.skipped.length,
+      // Only when the operation settled verifikat against each other.
+      ...(settled.length > 0 ? { settled, settled_count: settled.length } : {}),
     },
   }
 }

@@ -61,6 +61,7 @@ import {
   supplierCreditNoteNumber,
 } from './credit-note'
 import { compareCreditToInvoice, creditAmount, creditNoteFromReading } from './credit-target'
+import { rejectSupersededInboxConversions } from '@/lib/pending-operations/supersede'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -636,6 +637,7 @@ export async function creditSupplierInvoice(
     if (itemError) {
       log.warn('credit: marking the inbox item handled failed', { inboxItemId: item.id, error: itemError.message })
     }
+    await rejectSupersededInboxConversions(supabase, companyId, item.id, creditNote.id)
   }
 
   try {

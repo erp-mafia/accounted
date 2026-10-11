@@ -22,7 +22,7 @@ vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
 }))
 
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
-import { BANK_ROWS_MISSING_HINT, computeVatCloseCheck, tools } from '../server'
+import { BANK_ROWS_MISSING_HINT, SETTLED_ELSEWHERE_HINT, computeVatCloseCheck, tools } from '../server'
 import { toToolError } from '../tool-result'
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -317,6 +317,51 @@ describe('gnubok_vat_close_check: verifikat without bank rows', () => {
       message: '12 verifikat på 1930 saknar banktransaktion: banken har inga rader för de datumen',
       hint: BANK_ROWS_MISSING_HINT,
     })
+  })
+
+  it('names verifikat settled against a rättelse outside the period instead of "0 omatchade" with a difference (crm#1074)', async () => {
+    // Nothing is left to match: the one verifikat without a bank row is a
+    // wrong booking whose hand-made correction is dated in the next period.
+    const blocker = await bankBlockerFor({
+      difference: 1250,
+      unmatched_transaction_count: 0,
+      unmatched_gl_line_count: 0,
+      settled_gl_entry_count: 1,
+      settled_gl_line_total: -1250,
+      unexplained_difference: 0,
+    })
+
+    // The gate and its severity rule are unchanged; only the wording is.
+    expect(blocker).toMatchObject({
+      kind: 'bank_unreconciled',
+      severity: 'high',
+      count: 1,
+      message:
+        '1 verifikat på 1930 är kopplade mot verifikat daterade utanför perioden: periodens differens 1250.00 kr är rättad i en annan period',
+      hint: SETTLED_ELSEWHERE_HINT,
+    })
+  })
+
+  it('does not use that wording while anything is still unmatched or unexplained', async () => {
+    const stillOpen = await bankBlockerFor({
+      difference: 1250,
+      unmatched_transaction_count: 0,
+      unmatched_gl_line_count: 1,
+      settled_gl_entry_count: 1,
+      settled_gl_line_total: -1250,
+      unexplained_difference: 0,
+    })
+    expect(stillOpen.hint).toBe(BANK_ROWS_MISSING_HINT)
+
+    const unexplained = await bankBlockerFor({
+      difference: 1260,
+      unmatched_transaction_count: 0,
+      unmatched_gl_line_count: 0,
+      settled_gl_entry_count: 1,
+      settled_gl_line_total: -1250,
+      unexplained_difference: 10,
+    })
+    expect(unexplained.hint).toBe(GENERIC_HINT)
   })
 
   it('keeps the severity rule: a small difference stays medium', async () => {

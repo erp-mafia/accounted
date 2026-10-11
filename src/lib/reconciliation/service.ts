@@ -133,6 +133,19 @@ function bankBridge(status: Awaited<ReturnType<typeof getBankReconciliationStatu
       items_bucket: 'unmatched_ledger',
     })
   }
+  // Verifikat settled against a verifikat dated outside the window (a wrong
+  // booking corrected the month after): explained, so not in the line above,
+  // but their amounts are still part of this period's difference.
+  if (status.settled_gl_entry_count > 0) {
+    lines.push({
+      key: 'settled_ledger',
+      label_sv: `Verifikationer på ${accountNumber} kopplade mot verifikat utanför perioden`,
+      label_en: `Vouchers on ${accountNumber} settled against vouchers outside the period`,
+      amount: status.settled_gl_line_total,
+      count: status.settled_gl_entry_count,
+      items_bucket: 'matched',
+    })
+  }
   if (status.ignored_transaction_count > 0) {
     lines.push({
       key: 'ignored',

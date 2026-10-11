@@ -11,6 +11,8 @@ const junctionLinkedMock = vi.fn()
 const unlinkReconciliationMock = vi.fn()
 const skvStatusMock = vi.fn()
 const emitMock = vi.fn()
+const settleMock = vi.fn()
+const undoSettlementMock = vi.fn()
 
 vi.mock('@/lib/skatteverket/skattekonto-link', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/skatteverket/skattekonto-link')>()
@@ -32,6 +34,12 @@ vi.mock('../skattekonto-reconciliation', () => ({
   getSkattekontoReconciliationStatus: (...args: unknown[]) => skvStatusMock(...args),
 }))
 vi.mock('@/lib/events/bus', () => ({ eventBus: { emit: (...args: unknown[]) => emitMock(...args) } }))
+// The settlement policy has its own suite (ledger-settlement.test.ts); here
+// only that a pair without outside rows reaches it, and what comes back.
+vi.mock('../ledger-settlement', () => ({
+  settleLedgerEntries: (...args: unknown[]) => settleMock(...args),
+  undoLedgerSettlement: (...args: unknown[]) => undoSettlementMock(...args),
+}))
 
 import { SkattekontoLinkError } from '@/lib/skatteverket/skattekonto-link'
 import { matchPairs, setItemIgnored, unmatchLink } from '../actions'
@@ -442,6 +450,110 @@ describe('matchPairs', () => {
     expect(result?.applied).toEqual([])
     expect(result?.skipped.map((s) => s.code)).toEqual(['ENTRY_NOT_FOUND', 'ALREADY_LINKED'])
     expect(result?.skipped[0].message).toContain(E2)
+  })
+})
+
+describe('matchPairs: verifikat with no outside row, settled against each other (crm#1074)', () => {
+  const SETTLEMENT = {
+    settlement_id: '66666666-6666-4666-8666-666666666666',
+    account_number: '1930',
+    entries: [
+      { journal_entry_id: E1, voucher_series: 'A', voucher_number: 12, entry_date: '2026-03-18', amount: -1250 },
+      { journal_entry_id: E2, voucher_series: 'A', voucher_number: 31, entry_date: '2026-04-21', amount: 1250 },
+    ],
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    manualLinkMock.mockReset()
+    linkToVouchersMock.mockReset()
+    settleMock.mockReset()
+    emitMock.mockResolvedValue(undefined)
+  })
+
+  it('hands a pair without outside rows to the settlement policy and reports it in settled, not applied', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    settleMock.mockResolvedValue({ ok: true, settlement: SETTLEMENT })
+
+    const result = await matchPairs(supabase as never, COMPANY, USER, `bank:${CASH}`, {
+      pairs: [{ external_ids: [], journal_entry_ids: [E1, E2] }],
+    })
+
+    expect(settleMock).toHaveBeenCalledWith(supabase, COMPANY, USER, `bank:${CASH}`, [E1, E2], { dryRun: false })
+    expect(result).toEqual({ dry_run: false, considered: 1, applied: [], settled: [SETTLEMENT], skipped: [] })
+    // No bank link was attempted and no link event went out: nothing was linked to a bank row.
+    expect(manualLinkMock).not.toHaveBeenCalled()
+    expect(linkToVouchersMock).not.toHaveBeenCalled()
+    expect(emitMock).not.toHaveBeenCalled()
+  })
+
+  it('previews through the same policy on a dry run, without the pair-fact reads of a bank link', async () => {
+    const { supabase, calls } = createQueuedMockSupabase()
+    settleMock.mockResolvedValue({ ok: true, settlement: { ...SETTLEMENT, settlement_id: null } })
+
+    const result = await matchPairs(
+      supabase as never,
+      COMPANY,
+      USER,
+      `bank:${CASH}`,
+      { pairs: [{ external_ids: [], journal_entry_ids: [E1, E2] }] },
+      { dryRun: true },
+    )
+
+    expect(settleMock).toHaveBeenCalledWith(supabase, COMPANY, USER, `bank:${CASH}`, [E1, E2], { dryRun: true })
+    expect(result?.settled).toEqual([{ ...SETTLEMENT, settlement_id: null }])
+    expect(calls).toEqual([])
+  })
+
+  it('reports a refusal as a skipped pair with the policy code and sentence, and keeps linking the other pairs', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ledger_account: '1930' } }) // cash_accounts lookup for the bank link
+    settleMock.mockResolvedValue({ ok: false, code: 'PAIR_NOT_CLOSED', message: 'Verifikaten tar inte ut varandra.' })
+    manualLinkMock.mockResolvedValue({ success: true })
+    const ledgerOnly = { external_ids: [], journal_entry_ids: [E1, E2] }
+
+    const result = await matchPairs(supabase as never, COMPANY, USER, `bank:${CASH}`, {
+      pairs: [ledgerOnly, { external_ids: [R1], journal_entry_ids: [E1] }],
+    })
+
+    expect(result?.settled).toEqual([])
+    expect(result?.skipped).toEqual([{ pair: ledgerOnly, code: 'PAIR_NOT_CLOSED', message: 'Verifikaten tar inte ut varandra.' }])
+    expect(result?.applied).toEqual([{ external_id: R1, journal_entry_id: E1 }])
+  })
+
+  it('refuses allocations on a pair without an outside row before the policy runs', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    const pair = {
+      external_ids: [],
+      journal_entry_ids: [E1, E2],
+      allocations: [
+        { journal_entry_id: E1, amount: -1250 },
+        { journal_entry_id: E2, amount: 1250 },
+      ],
+    }
+    const result = await matchPairs(supabase as never, COMPANY, USER, `bank:${CASH}`, { pairs: [pair] })
+    expect(result?.skipped.map((s) => s.code)).toEqual(['UNSUPPORTED_PAIR_SHAPE'])
+    expect(settleMock).not.toHaveBeenCalled()
+  })
+
+  it('forwards the skattekonto key too: the policy, not the door, decides which accounts can settle', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    settleMock.mockResolvedValue({ ok: false, code: 'UNSUPPORTED_PAIR_SHAPE', message: 'Bara på ett bankkonto.' })
+    const result = await matchPairs(supabase as never, COMPANY, USER, 'skattekonto', {
+      pairs: [{ external_ids: [], journal_entry_ids: [E1, E2] }],
+    })
+    expect(settleMock).toHaveBeenCalledWith(supabase, COMPANY, USER, 'skattekonto', [E1, E2], { dryRun: false })
+    expect(result?.skipped.map((s) => s.code)).toEqual(['UNSUPPORTED_PAIR_SHAPE'])
+    expect(linkMock).not.toHaveBeenCalled()
+  })
+
+  it('a thrown read error is a skip, not a 500 for the whole request', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    settleMock.mockRejectedValue(new Error('Kunde inte läsa verifikaten: timeout'))
+    const result = await matchPairs(supabase as never, COMPANY, USER, `bank:${CASH}`, {
+      pairs: [{ external_ids: [], journal_entry_ids: [E1, E2] }],
+    })
+    expect(result?.skipped).toMatchObject([{ code: 'UNKNOWN', message: 'Kunde inte läsa verifikaten: timeout' }])
   })
 })
 
@@ -857,6 +969,7 @@ describe('unmatchLink / setItemIgnored', () => {
     setIgnoredMock.mockReset()
     junctionLinkedMock.mockReset()
     junctionLinkedMock.mockResolvedValue(new Set<string>())
+    undoSettlementMock.mockReset()
     emitMock.mockResolvedValue(undefined)
   })
 
@@ -887,6 +1000,44 @@ describe('unmatchLink / setItemIgnored', () => {
       type: 'reconciliation.unmatched',
       payload: { externalId: R1, previousJournalEntryId: E1 },
     })
+  })
+
+  it('undoes a ledger-only settlement when the id is no bank transaction of the company (crm#1074)', async () => {
+    const SETTLEMENT_ID = '66666666-6666-4666-8666-666666666666'
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null }) // transactions: no such row
+    undoSettlementMock.mockResolvedValue({ settlement_id: SETTLEMENT_ID, journal_entry_ids: [E1, E2] })
+
+    const result = await unmatchLink(supabase as never, COMPANY, USER, `bank:${CASH}`, SETTLEMENT_ID)
+
+    expect(undoSettlementMock).toHaveBeenCalledWith(supabase, COMPANY, USER, `bank:${CASH}`, SETTLEMENT_ID)
+    expect(result).toEqual({
+      external_id: SETTLEMENT_ID,
+      previous_journal_entry_id: null,
+      settlement_id: SETTLEMENT_ID,
+      journal_entry_ids: [E1, E2],
+    })
+    // No bank row was unlinked, so the bank engine and its event stay out of it.
+    expect(unlinkReconciliationMock).not.toHaveBeenCalled()
+    expect(emitMock).not.toHaveBeenCalled()
+  })
+
+  it('falls through to the bank engine when the id is neither a transaction nor a settlement, and never tries a settlement for a real bank row', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null }) // transactions: no such row
+    undoSettlementMock.mockResolvedValue(null)
+    unlinkReconciliationMock.mockResolvedValue({ success: false, error: 'Transaktionen kunde inte hittas.' })
+    await expect(unmatchLink(supabase as never, COMPANY, USER, `bank:${CASH}`, R1)).rejects.toThrow(
+      'Transaktionen kunde inte hittas.',
+    )
+    expect(unlinkReconciliationMock).toHaveBeenCalledWith(supabase, COMPANY, R1, USER)
+
+    undoSettlementMock.mockClear()
+    const linked = createQueuedMockSupabase()
+    linked.enqueue({ data: { journal_entry_id: E1 } })
+    unlinkReconciliationMock.mockResolvedValue({ success: true })
+    await unmatchLink(linked.supabase as never, COMPANY, USER, `bank:${CASH}`, R1)
+    expect(undoSettlementMock).not.toHaveBeenCalled()
   })
 
   it('refuses to ignore a bank transaction anchored only through transaction_voucher_links (1:N split, bulk-book)', async () => {

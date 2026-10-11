@@ -10357,7 +10357,15 @@
     "signoff_external_balance_help": "Samma tecken som i bokföringen, skulder anges med minus. Bokfört: {amount}.",
     "signoff_external_balance_optional": "Lämna tomt om du bara vill signera med en notering.",
     "proposal_set_title": "{count} verifikat som tillsammans ger beloppet",
-    "proposal_set_same_day": "samma dag"
+    "proposal_set_same_day": "samma dag",
+    "match_pick_settle": "Ingen händelse vald: bocka i verifikat som tar ut varandra, till exempel ett fel och dess rättelse. Ligger rättelsen i en annan månad väljer du en längre period.",
+    "match_hint_settle": "Verifikaten måste summera till 0 för att kopplas ihop.",
+    "match_apply_settle": "Koppla ihop {count} verifikat",
+    "toast_settled": "{count} verifikat kopplade mot varandra",
+    "action_settle_ledger": "Koppla ihop verifikat",
+    "chip_settled_with": "kopplat mot {vouchers}",
+    "chip_settlement_broken": "kopplingen mot {vouchers} stämmer inte längre",
+    "settled_title": "Kopplade mot varandra {date}"
   },
   "skattekonto": {
     "help_text": "Saldot och händelserna hämtas från Skatteverket och synkas automatiskt varje natt. Genomförda händelser bokförs mot 1630 Skattekonto, oftast automatiskt; det som inte kan matchas flaggas i listan. Betala in via bankgiro 5050-1055 med ditt OCR-nummer.",

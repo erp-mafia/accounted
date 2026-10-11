@@ -108,6 +108,12 @@ export function PairRow({
   if (!external) {
     ledgerDate = item.date
     ledgerAmount = item.amount
+    // Verifikat linked to each other (a wrong verifikat and its rättelse):
+    // the chip names the others, so the row reads as explained, by what.
+    const settlement = item.settlement ?? null
+    const settledWith = settlement
+      ? settlement.counterparts.map((c) => voucherOf(c) ?? c.journal_entry_id.slice(0, 8)).join(', ')
+      : ''
     ledgerText = (
       <span className="flex min-w-0 items-center gap-2">
         <span className="truncate" data-ph-mask title={item.description}>
@@ -126,6 +132,15 @@ export function PairRow({
               count: item.partially_linked.linked_count,
             })}
           </Chip>
+        )}
+        {settlement && (
+          <span className="shrink-0" data-ph-mask title={t('settled_title', { date: formatDate(settlement.settled_at) })}>
+            <Chip>
+              {settlement.state === 'broken'
+                ? t('chip_settlement_broken', { vouchers: settledWith })
+                : t('chip_settled_with', { vouchers: settledWith })}
+            </Chip>
+          </span>
         )}
       </span>
     )

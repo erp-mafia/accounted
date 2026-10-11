@@ -10357,7 +10357,15 @@
     "signoff_external_balance_help": "Same sign as in the books, liabilities with a minus. Booked: {amount}.",
     "signoff_external_balance_optional": "Leave empty to sign with a note only.",
     "proposal_set_title": "{count} vouchers that together make up the amount",
-    "proposal_set_same_day": "same day"
+    "proposal_set_same_day": "same day",
+    "match_pick_settle": "No event selected: tick vouchers that cancel each other out, such as an error and its correction. If the correction is in another month, choose a longer period.",
+    "match_hint_settle": "The vouchers must sum to 0 to be linked to each other.",
+    "match_apply_settle": "Link {count} vouchers to each other",
+    "toast_settled": "{count} vouchers linked to each other",
+    "action_settle_ledger": "Link vouchers to each other",
+    "chip_settled_with": "linked to {vouchers}",
+    "chip_settlement_broken": "the link to {vouchers} no longer holds",
+    "settled_title": "Linked to each other {date}"
   },
   "skattekonto": {
     "help_text": "The balance and events are fetched from Skatteverket and synced automatically every night. Completed events are booked against 1630 Skattekonto, usually automatically; anything that cannot be matched is flagged in the list. Pay in via bankgiro 5050-1055 with your OCR number.",

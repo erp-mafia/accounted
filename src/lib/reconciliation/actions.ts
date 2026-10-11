@@ -25,6 +25,7 @@ import {
   type BankLinkRefusalCode,
 } from './bank-reconciliation'
 import { getSkattekontoReconciliationStatus } from './skattekonto-reconciliation'
+import { settleLedgerEntries, undoLedgerSettlement, type LedgerSettlement } from './ledger-settlement'
 import { parseAccountKey } from './schemas'
 
 const log = createLogger('reconciliation/actions')
@@ -39,7 +40,11 @@ const log = createLogger('reconciliation/actions')
  */
 
 export interface ReconciliationPair {
-  /** Outside rows: transaction ids (bank) or skattekonto_transaction ids. */
+  /**
+   * Outside rows: transaction ids (bank) or skattekonto_transaction ids.
+   * Empty on a bank account for the ledger-only shape: two or more verifikat
+   * that take each other out on the account (ledger-settlement.ts).
+   */
   external_ids: string[]
   journal_entry_ids: string[]
   /**
@@ -68,6 +73,10 @@ export type PairSkipCode =
   | 'NOT_FOUND'
   | 'LINK_RACE'
   | 'BANK_ANCHOR_REFUSED'
+  /** Ledger-only pair: a verifikat is not in the account's list of verifikat without a bank row. */
+  | 'ENTRY_NOT_OPEN'
+  /** Ledger-only pair: a verifikat is already settled against another verifikat. */
+  | 'ALREADY_SETTLED'
   | 'UNKNOWN'
 
 export interface AppliedLink {
@@ -102,6 +111,8 @@ export interface MatchPairsInput {
 export interface MatchPairsResult {
   dry_run: boolean
   applied: AppliedLink[]
+  /** Ledger-only pairs: verifikat settled against each other. settlement_id is null on a dry run. */
+  settled: LedgerSettlement[]
   skipped: SkippedPair[]
   considered: number
 }
@@ -424,13 +435,16 @@ async function proposalsAsPairs(
  * allow_remainder, against a summarised verifikat that keeps the rest as its
  * remainder), or, on a bank account,
  * ONE transaction against SEVERAL verifikat (1:N, issue #1553): all-or-nothing
- * with the slices summing to the transaction. Any other shape is reported as
+ * with the slices summing to the transaction, or, on a bank account, NO
+ * outside row and two or more verifikat that take each other out (a wrong
+ * verifikat and its hand-made rättelse: all-or-nothing, reported in
+ * `settled`). Any other shape is reported as
  * UNSUPPORTED_PAIR_SHAPE, never silently reduced. Dry run validates shapes,
  * resolves proposals and checks every verifikat and outside row against the
  * ledger (readPairFacts) without writing; a 1:N dry run also resolves the
  * slices so a reviewer sees exactly what would be linked.
- * Partial success is first-class: `applied` and `skipped` together cover
- * every considered pair.
+ * Partial success is first-class: `applied`, `settled` and `skipped`
+ * together cover every considered pair.
  */
 export async function matchPairs(
   supabase: SupabaseClient,
@@ -457,6 +471,7 @@ export async function matchPairs(
   }
 
   const applied: AppliedLink[] = []
+  const settled: LedgerSettlement[] = []
   const skipped: SkippedPair[] = []
   // A dry run checks every pair of one verifikat against the ledger up front
   // (the 1:N split validates itself below); a live run leaves that to the
@@ -493,6 +508,27 @@ export async function matchPairs(
   }
 
   for (const pair of pairs) {
+    // No outside row at all: verifikat that take each other out on the
+    // account. The whole policy, dry run included, is ledger-settlement.ts.
+    if ((pair.external_ids ?? []).length === 0) {
+      if (pair.allocations) {
+        skipped.push({
+          pair,
+          code: 'UNSUPPORTED_PAIR_SHAPE',
+          message: 'allocations hör till en händelse som delas på flera verifikat, inte till verifikat som kopplas mot varandra.',
+        })
+        continue
+      }
+      try {
+        const r = await settleLedgerEntries(supabase, companyId, userId, accountKey, pair.journal_entry_ids, { dryRun })
+        if (r.ok) settled.push(r.settlement)
+        else skipped.push({ pair, code: r.code, message: r.message })
+      } catch (err) {
+        const { code, message } = skipCodeFor(err)
+        skipped.push({ pair, code, message })
+      }
+      continue
+    }
     // N outside rows may settle ONE verifikat (the worksheet selection). ONE
     // bank transaction may settle SEVERAL verifikat (the split, #1553). A
     // skattekonto row never splits (Skatteverket posts each event as its own
@@ -684,21 +720,33 @@ export async function matchPairs(
     }
   }
 
-  if (!dryRun && applied.length > 0) {
-    log.info('reconciliation pairs linked', { companyId, accountKey, applied: applied.length, skipped: skipped.length })
+  if (!dryRun && applied.length + settled.length > 0) {
+    log.info('reconciliation pairs linked', {
+      companyId,
+      accountKey,
+      applied: applied.length,
+      settled: settled.length,
+      skipped: skipped.length,
+    })
   }
 
-  return { dry_run: dryRun, applied, skipped, considered: pairs.length }
+  return { dry_run: dryRun, applied, settled, skipped, considered: pairs.length }
 }
 
 export interface UnmatchResult {
   external_id: string
   previous_journal_entry_id: string | null
+  /** Set when the id was a ledger-only settlement: its verifikat are back in the ledger-only list. */
+  settlement_id?: string
+  journal_entry_ids?: string[]
 }
 
 /**
  * Remove one link. link id = the outside row's id (transaction or
- * skattekonto row), which is the one-link-per-row identity both kinds share.
+ * skattekonto row), which is the one-link-per-row identity both kinds share,
+ * or, on a bank account, the settlement_id of verifikat settled against each
+ * other (ledger-settlement.ts): an id that is no transaction of the company
+ * is tried as one before the bank engine reports it missing.
  */
 export async function unmatchLink(
   supabase: SupabaseClient,
@@ -721,6 +769,17 @@ export async function unmatchLink(
       .eq('company_id', companyId)
       .eq('id', linkId)
       .maybeSingle<{ journal_entry_id: string | null }>()
+    if (!tx) {
+      const undone = await undoLedgerSettlement(supabase, companyId, userId, accountKey, linkId)
+      if (undone) {
+        return {
+          external_id: linkId,
+          previous_journal_entry_id: null,
+          settlement_id: undone.settlement_id,
+          journal_entry_ids: undone.journal_entry_ids,
+        }
+      }
+    }
     const r = await unlinkReconciliation(supabase, companyId, linkId, userId)
     if (!r.success) throw new Error(r.error ?? 'Kunde inte koppla bort')
     // A split row (1:N) has no pointer: the engine collected its junction

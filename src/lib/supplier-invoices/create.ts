@@ -55,6 +55,7 @@ import {
   type SupplierPaymentDetails,
 } from '@/lib/supplier-invoices/payment-details-backfill'
 import type { Logger } from '@/lib/logger'
+import { rejectSupersededInboxConversions } from '@/lib/pending-operations/supersede'
 import type { Currency, EntityType, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
 export type CreateSupplierInvoiceInput = z.infer<typeof CreateSupplierInvoiceSchema>
@@ -735,6 +736,7 @@ export async function createSupplierInvoice(
         .update({ created_supplier_invoice_id: invoiceId })
         .eq('id', inboxItem.id)
         .eq('company_id', companyId)
+      await rejectSupersededInboxConversions(supabase, companyId, inboxItem.id, invoiceId)
     }
   } else if (booksOnRegistration) {
     // Faktureringsmetoden: the registration verifikat (debit expense +

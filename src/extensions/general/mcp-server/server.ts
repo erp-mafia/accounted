@@ -3506,6 +3506,19 @@ export const BANK_ROWS_MISSING_HINT =
   'eller en signerad avstämning ersätter inte bankraderna.'
 
 /**
+ * Hint for bank_unreconciled when nothing is left to match and the period's
+ * whole difference is verifikat settled against a rättelse dated outside the
+ * period (crm#1074). There is no bank row to import and nothing to link, so
+ * neither of the other hints applies. Reconciliation facts only: whether the
+ * check is accepted with the difference is the user's decision. Exported so
+ * the test can pin the contract.
+ */
+export const SETTLED_ELSEWHERE_HINT =
+  'Inget att matcha och ingen bankrad att importera: verifikaten är rättade med verifikat daterade i en annan period ' +
+  '(gnubok_list_reconciliation_items med bucket "matched" visar vilka). Visa användaren verifikaten och differensen; ' +
+  'om kontrollen godtas trots differensen är användarens beslut.'
+
+/**
  * Hint for the REVENUE_ACCOUNT_WITHOUT_RUTA finding (#3387): the fix is on the
  * account, not in the ledger, and it is the user's call which ruta the sales
  * belong in. Exported so the test can pin the contract.
@@ -4177,18 +4190,36 @@ export async function computeVatCloseCheck(
       reconRes.unmatched_gl_line_count > 0 &&
       typeof reconRes.unexplained_difference === 'number' &&
       Math.abs(reconRes.unexplained_difference) < 0.005
+    // Nothing is left to match, and the whole difference is verifikat that
+    // are settled against a rättelse dated outside the period (crm#1074).
+    // The gate itself is unchanged (the period's bank and ledger movements do
+    // differ); only the message names what it is, so it does not read as
+    // "0 omatchade" with a difference and send the agent off to match.
+    const settledElsewhere =
+      reconRes.unmatched_transaction_count === 0 &&
+      reconRes.unmatched_gl_line_count === 0 &&
+      (reconRes.settled_gl_entry_count ?? 0) > 0 &&
+      typeof reconRes.unexplained_difference === 'number' &&
+      Math.abs(reconRes.unexplained_difference) < 0.005
     blockers.push({
       kind: 'bank_unreconciled',
       severity: Math.abs(reconRes.difference) > 100 ? 'high' : 'medium',
-      count: reconRes.unmatched_transaction_count + reconRes.unmatched_gl_line_count,
+      count:
+        reconRes.unmatched_transaction_count +
+        reconRes.unmatched_gl_line_count +
+        (settledElsewhere ? reconRes.settled_gl_entry_count : 0),
       // The account is named from the RESOLVED scope, not hard-coded: for a
       // company with no 1930 row this check now reconciles its primary cash
       // account, and a message pointing at 1930 would send the user to an
       // account with no lines on it.
-      message: bankRowsMissing
+      message: settledElsewhere
+        ? `${reconRes.settled_gl_entry_count} verifikat på ${recon.scope.accountNumber} är kopplade mot verifikat daterade utanför perioden: periodens differens ${AGENT_AMOUNT_FORMAT.format(reconRes.difference)} kr är rättad i en annan period`
+        : bankRowsMissing
         ? `${reconRes.unmatched_gl_line_count} verifikat på ${recon.scope.accountNumber} saknar banktransaktion: banken har inga rader för de datumen`
         : `Bankavstämning visar differens ${reconRes.difference.toFixed(2)} kr (${reconRes.unmatched_transaction_count} omatchade banktransaktioner, ${reconRes.unmatched_gl_line_count} omatchade huvudbokslinjer på ${recon.scope.accountNumber})`,
-      hint: bankRowsMissing
+      hint: settledElsewhere
+        ? SETTLED_ELSEWHERE_HINT
+        : bankRowsMissing
         ? BANK_ROWS_MISSING_HINT
         : 'Granska via gnubok_get_reconciliation_status och matcha: moms beräknas från huvudboken så differenser döljer fel.',
     })
@@ -15193,6 +15224,7 @@ export const tools: McpTool[] = [
         bucket: { type: 'string' },
         amount: { type: 'number' },
         proposal: { type: ['object', 'null'] },
+        settlement: { type: ['object', 'null'] },
         actions: { type: 'array', items: { type: 'string' } },
       },
     }),
@@ -15215,7 +15247,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_reconcile_match',
     keywords: ['avstämning', 'skattekonto', 'matcha'],
     title: 'Reconcile: Link Pairs',
-    description: 'Link outside rows (bank or skattekonto) to existing verifikat on one account; no new bokföring. Pass pairs, or use_proposals. Stages. dry_run previews.',
+    description: 'Link outside rows (bank or skattekonto) to existing verifikat on one account, or (bank) verifikat that take each other out; no new bokföring. Pass pairs, or use_proposals. Stages. dry_run previews.',
     // Default catalog since E2E #12: the onboarding efterkontroll instructs
     // matching SIE-covered bank rows against existing verifikat, and
     // Claude.ai cannot call search-only tools: the agent misread the
@@ -15228,7 +15260,7 @@ export const tools: McpTool[] = [
         account_key: { type: 'string', description: '"skattekonto" or "bank:<cash_account_id>"' },
         pairs: {
           type: 'array',
-          description: 'Rows against one verifikat, or (bank) one row against several',
+          description: 'Rows against one verifikat; (bank) one row against several, or no rows: 2+ verifikat netting to 0',
           items: {
             type: 'object',
             additionalProperties: false,
@@ -15247,7 +15279,7 @@ export const tools: McpTool[] = [
               },
               allow_remainder: { type: 'boolean', description: 'Skattekonto: summarised verifikat, the rest stays open' },
             },
-            required: ['external_ids', 'journal_entry_ids'],
+            required: ['journal_entry_ids'],
           },
         },
         use_proposals: { type: 'boolean' },
@@ -15261,17 +15293,9 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const accountKey = args.account_key as string
-      const pairs =
-        (args.pairs as
-          | Array<{
-              external_ids: string[]
-              journal_entry_ids: string[]
-              allocations?: Array<{ journal_entry_id: string; amount: number }>
-              allow_remainder?: boolean
-            }>
-          | undefined) ?? []
+      const rawPairs = (args.pairs as unknown[] | undefined) ?? []
       const useProposals = args.use_proposals === true
-      if (pairs.length === 0 && !useProposals) {
+      if (rawPairs.length === 0 && !useProposals) {
         throw codedError('VALIDATION_ERROR', 'Pass pairs, or use_proposals: true')
       }
       // No host enforces inputSchema: a pair without both id arrays used to
@@ -15279,13 +15303,16 @@ export const tools: McpTool[] = [
       // schema as the dashboard and v1 links routes, so the limits are one
       // definition too: at most 200 pairs of at most 50 ids each, which also
       // bounds the ledger reads a stage-time dry run makes.
-      const pairsCheck = reconciliationLinksBodyFields.pairs.safeParse(pairs)
+      const pairsCheck = reconciliationLinksBodyFields.pairs.safeParse(rawPairs)
       if (!pairsCheck.success) {
-        throw fieldValidationError('Invalid pairs', zodFieldIssues(pairsCheck.error, pairs).map((issue) => ({
+        throw fieldValidationError('Invalid pairs', zodFieldIssues(pairsCheck.error, rawPairs).map((issue) => ({
           ...issue,
           field: issue.field === 'arguments' ? 'pairs' : `pairs.${issue.field}`,
         })))
       }
+      // The parsed pairs: a pair of verifikat with no outside row may omit
+      // external_ids, and the schema makes that an empty list.
+      const pairs = pairsCheck.data ?? []
       const confidenceThreshold =
         typeof args.confidence_threshold === 'number' ? (args.confidence_threshold as number) : 0.9
 
@@ -15357,6 +15384,12 @@ export const tools: McpTool[] = [
           allocations: slices,
         })
       }
+      // Verifikat settled against each other (no outside row): one staged pair
+      // per settlement, re-validated as a whole when approved.
+      const settledPreview = preview.settled ?? []
+      for (const settlement of settledPreview) {
+        resolvedPairs.push({ external_ids: [], journal_entry_ids: settlement.entries.map((e) => e.journal_entry_id) })
+      }
       if (resolvedPairs.length === 0) {
         // The dry run's skipped list holds the actual reason; without it the
         // agent saw only "No linkable pairs" (feedback seq 292682). Coded:
@@ -15389,7 +15422,9 @@ export const tools: McpTool[] = [
         companyId,
         userId,
         'reconciliation_match',
-        `Koppla ${resolvedPairs.length} rad(er) på ${accountKey}`,
+        settledPreview.length === resolvedPairs.length
+          ? `Koppla ${settledPreview.reduce((n, s) => n + s.entries.length, 0)} verifikat mot varandra på ${accountKey}`
+          : `Koppla ${resolvedPairs.length} rad(er) på ${accountKey}`,
         { account_key: accountKey, pairs: resolvedPairs },
         {
           account_key: accountKey,
@@ -15398,6 +15433,9 @@ export const tools: McpTool[] = [
           // What each verifikat keeps on 1630 beyond the rows linked to it:
           // it stays in unmatched_ledger with this amount.
           ...(remainders.length > 0 ? { remainders } : {}),
+          // What the reviewer approves for a pair without an outside row: the
+          // verifikat, their amounts on the account, and that they sum to zero.
+          ...(settledPreview.length > 0 ? { settled: settledPreview } : {}),
           skipped_at_stage: preview.skipped,
           source: useProposals ? 'proposals' : 'explicit',
         },
@@ -15406,7 +15444,7 @@ export const tools: McpTool[] = [
           // Names the undo: agents asked for an unlink tool that exists but is
           // search-only (agent feedback seq 854089).
           description:
-            'After approval, re-read the bridge to confirm the residual. A wrong link is undone with gnubok_reconcile_unmatch (account_key, external_id; through gnubok_stage_tool when it is not in tools/list).',
+            'After approval, re-read the bridge to confirm the residual. A wrong link is undone with gnubok_reconcile_unmatch (account_key and external_id, or settlement_id for verifikat settled against each other; through gnubok_stage_tool when it is not in tools/list).',
           tool: 'gnubok_get_reconciliation_status',
           args: { account_key: accountKey },
         },
@@ -15422,7 +15460,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_reconcile_unmatch',
     keywords: ['avstämning', 'ta bort koppling', 'skattekonto'],
     title: 'Reconcile: Unlink',
-    description: 'Remove the link between one outside row (bank transaction or skattekonto row) and its verifikat on an account. The verifikat is untouched. Stages (low risk).',
+    description: 'Remove one link on an account: an outside row (bank transaction or skattekonto row) from its verifikat, or (bank) verifikat settled against each other by settlement_id. The verifikat are untouched. Stages (low risk).',
     catalogVisibility: 'search',
     inputSchema: {
       type: 'object',
@@ -15430,30 +15468,47 @@ export const tools: McpTool[] = [
       properties: {
         account_key: { type: 'string', description: '"skattekonto" or "bank:<cash_account_id>".' },
         external_id: { type: 'string', description: 'The linked outside row id (transaction_id or skattekonto_transaction_id).' },
+        settlement_id: {
+          type: 'string',
+          description: 'Instead of external_id: settlement.settlement_id of a ledger item from gnubok_list_reconciliation_items (verifikat settled against each other).',
+        },
         dry_run: { type: 'boolean' },
         idempotency_key: { type: 'string' },
       },
-      required: ['account_key', 'external_id'],
+      required: ['account_key'],
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const accountKey = args.account_key as string
-      const externalId = args.external_id as string
+      const rowId = args.external_id as string | undefined
+      const settlementId = args.settlement_id as string | undefined
       if (!parseAccountKey(accountKey)) throw new Error(`Invalid account_key "${accountKey}"`)
+      if (Boolean(rowId) === Boolean(settlementId)) {
+        throw codedError('VALIDATION_ERROR', 'Pass exactly one of external_id (an outside row) or settlement_id (verifikat settled against each other)')
+      }
+      // One id either way: the service resolves a settlement id when the id
+      // is no outside row of the company (lib/reconciliation/actions.ts).
+      const externalId = (rowId ?? settlementId) as string
       return stagePendingOperation(
         supabase,
         companyId,
         userId,
         'reconciliation_unmatch',
-        `Koppla bort rad ${externalId} på ${accountKey}`,
+        settlementId
+          ? `Koppla bort verifikat som kopplats mot varandra på ${accountKey}`
+          : `Koppla bort rad ${externalId} på ${accountKey}`,
         { account_key: accountKey, external_id: externalId },
-        { account_key: accountKey, external_id: externalId },
+        settlementId
+          ? { account_key: accountKey, settlement_id: settlementId }
+          : { account_key: accountKey, external_id: externalId },
         actor,
         {
-          description: 'After approval, the row is back in the open buckets.',
+          description: settlementId
+            ? 'After approval, the verifikat are back in unmatched_ledger.'
+            : 'After approval, the row is back in the open buckets.',
           tool: 'gnubok_list_reconciliation_items',
-          args: { account_key: accountKey, bucket: 'unmatched_external' },
+          args: { account_key: accountKey, bucket: settlementId ? 'unmatched_ledger' : 'unmatched_external' },
         },
         {
           dryRun: args.dry_run === true,

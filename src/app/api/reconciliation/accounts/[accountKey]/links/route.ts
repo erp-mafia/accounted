@@ -23,8 +23,9 @@ const ReconciliationLinksBodySchema = z
  * POST /api/reconciliation/accounts/{accountKey}/links
  *
  * The page's "Koppla" and "Koppla N föreslagna": link outside rows to existing
- * verifikat (N:1), or one bank transaction to several verifikat (1:N, with
- * optional allocations). A human clicked, so this applies directly (dry_run:
+ * verifikat (N:1), one bank transaction to several verifikat (1:N, with
+ * optional allocations), or, with no outside row, verifikat on a bank account
+ * that take each other out. A human clicked, so this applies directly (dry_run:
  * true for the preview). Same service function as v1 and the MCP commit
  * executor.
  */

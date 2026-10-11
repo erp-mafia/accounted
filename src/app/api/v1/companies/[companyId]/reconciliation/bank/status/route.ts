@@ -42,8 +42,15 @@ const StatusResponse = z.object({
   /** Sum of the unmatched ledger lines, signed like a bank movement. null on a
    *  foreign account, whose candidate lines carry no amount in that currency. */
   unmatched_gl_line_total: z.number().nullable(),
-  /** difference - unmatched_transaction_total + unmatched_gl_line_total: what is
-   *  left once both work lists are accounted for. null when the GL total is. */
+  /** Verifikat in the window settled against verifikat dated outside it (a wrong
+   *  verifikat whose hand-made correction was booked in another period): explained,
+   *  so not in unmatched_gl_line_count. */
+  settled_gl_entry_count: z.number().int(),
+  /** Their sum on the account; zero when no settlement crosses the window edge. */
+  settled_gl_line_total: z.number(),
+  /** difference - unmatched_transaction_total + unmatched_gl_line_total +
+   *  settled_gl_line_total: what is left once the work lists and the settled
+   *  verifikat are accounted for. null when the GL total is. */
   unexplained_difference: z.number().nullable(),
 })
 
@@ -81,7 +88,7 @@ registerEndpoint({
     'A non-zero difference is normal between sync runs (uncleared cheques, in-flight transfers). Investigate only if it persists across reconciliations.',
     'difference compares against gl_1930_period_movement (movement excl. opening balance), NOT gl_1930_balance. Do not display gl_1930_balance next to difference.',
     'is_reconciled means |difference| < 0.01 for the window, an aggregate check, not a per-transaction guarantee.',
-    'Judge health on unexplained_difference, NOT on difference. difference is just the gap between the two sides and is expected to be large mid-year; it is fully explained while every krona of it sits in unmatched_transaction_total or unmatched_gl_line_total. A non-zero unexplained_difference is the real finding: a matched pair disagreeing in amount, a voucher with several lines on the account, or a storno/correction line the candidate list hides.',
+    'Judge health on unexplained_difference, NOT on difference. difference is just the gap between the two sides and is expected to be large mid-year; it is fully explained while every krona of it sits in unmatched_transaction_total, unmatched_gl_line_total or settled_gl_line_total. A non-zero unexplained_difference is the real finding: a matched pair disagreeing in amount, a voucher with several lines on the account, or a storno/correction line the candidate list hides.',
     'Ignored transactions are excluded from bank_transaction_total and difference (they never get a ledger counterpart); their count and sum are reported separately.',
   ],
   example: {
@@ -101,6 +108,8 @@ registerEndpoint({
         unmatched_transaction_total: 1250,
         unmatched_gl_line_count: 2,
         unmatched_gl_line_total: 1250,
+        settled_gl_entry_count: 0,
+        settled_gl_line_total: 0,
         unexplained_difference: 0,
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },

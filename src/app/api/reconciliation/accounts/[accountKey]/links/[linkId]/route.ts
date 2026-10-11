@@ -13,7 +13,8 @@ ensureInitialized()
  * DELETE /api/reconciliation/accounts/{accountKey}/links/{linkId}
  *
  * The page's "Koppla bort": clears the link on one outside row (linkId = the
- * row id). The verifikat is untouched.
+ * row id), or undoes verifikat settled against each other on a bank account
+ * (linkId = the settlement_id). The verifikat are untouched.
  */
 export const DELETE = withRouteContext<{ params: Promise<{ accountKey: string; linkId: string }> }>(
   'reconciliation.accounts.links.delete',

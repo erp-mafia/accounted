@@ -255,6 +255,96 @@ describe('v1 reconciliation accounts', () => {
     expect(body.data.applied.map((a) => a.allocated_amount)).toEqual([-500, -300])
   })
 
+  describe('links without an outside row: verifikat settled against each other (crm#1074)', () => {
+    const cash = '55555555-5555-4555-8555-555555555555'
+    const entry2 = '44444444-4444-4444-8444-444444444444'
+    const settlementId = '66666666-6666-4666-8666-666666666666'
+    const settlement = {
+      settlement_id: settlementId,
+      account_number: '1930',
+      entries: [
+        { journal_entry_id: ENTRY, voucher_series: 'A', voucher_number: 12, entry_date: '2026-03-18', amount: -1250 },
+        { journal_entry_id: entry2, voucher_series: 'A', voucher_number: 31, entry_date: '2026-04-21', amount: 1250 },
+      ],
+    }
+    const post = (body: unknown, init: { accountKey?: string; dryRun?: boolean } = {}) => {
+      const accountKey = init.accountKey ?? `bank:${cash}`
+      return linksPOST(req(`${BASE}/${accountKey}/links`, { method: 'POST', body, dryRun: init.dryRun }), params({ accountKey }))
+    }
+
+    it('401 without a valid key, 403 without reconciliation:write', async () => {
+      mockValidate.mockResolvedValue({ valid: false, error: 'invalid' })
+      expect((await post({ pairs: [{ journal_entry_ids: [ENTRY, entry2] }] })).status).toBe(401)
+      authOk(['reconciliation:read'])
+      expect((await post({ pairs: [{ journal_entry_ids: [ENTRY, entry2] }] })).status).toBe(403)
+      expect(matchMock).not.toHaveBeenCalled()
+    })
+
+    it('400 for one verifikat with no outside row', async () => {
+      authOk(['reconciliation:write'])
+      expect((await post({ pairs: [{ journal_entry_ids: [ENTRY] }] })).status).toBe(400)
+      expect((await post({ pairs: [{ external_ids: [], journal_entry_ids: [ENTRY] }] })).status).toBe(400)
+      expect(matchMock).not.toHaveBeenCalled()
+    })
+
+    it('404 for a malformed account key and for an account the company does not have', async () => {
+      authOk(['reconciliation:write'])
+      expect((await post({ pairs: [{ journal_entry_ids: [ENTRY, entry2] }] }, { accountKey: 'bank:nope' })).status).toBe(404)
+      matchMock.mockResolvedValueOnce(null)
+      expect((await post({ pairs: [{ journal_entry_ids: [ENTRY, entry2] }] })).status).toBe(404)
+    })
+
+    it('settles two verifikat, external_ids defaulting to empty, and previews the same pair on a dry run', async () => {
+      authOk(['reconciliation:write'])
+      matchMock.mockResolvedValueOnce({ dry_run: false, considered: 1, applied: [], settled: [settlement], skipped: [] })
+      const res = await post({ pairs: [{ journal_entry_ids: [ENTRY, entry2] }] })
+      expect(res.status).toBe(200)
+      expect(matchMock).toHaveBeenLastCalledWith(
+        expect.anything(),
+        COMPANY_ID,
+        'user-1',
+        `bank:${cash}`,
+        expect.objectContaining({ pairs: [{ external_ids: [], journal_entry_ids: [ENTRY, entry2] }] }),
+        { dryRun: false },
+      )
+      const body = (await res.json()) as { data: { settled: unknown[]; applied: unknown[] } }
+      expect(body.data.settled).toEqual([settlement])
+      expect(body.data.applied).toEqual([])
+
+      matchMock.mockResolvedValueOnce({
+        dry_run: true,
+        considered: 1,
+        applied: [],
+        settled: [{ ...settlement, settlement_id: null }],
+        skipped: [],
+      })
+      const preview = await post({ pairs: [{ external_ids: [], journal_entry_ids: [ENTRY, entry2] }] }, { dryRun: true })
+      expect(preview.status).toBe(200)
+      expect(preview.headers.get('X-Dry-Run')).toBe('true')
+      expect(matchMock).toHaveBeenLastCalledWith(expect.anything(), COMPANY_ID, 'user-1', `bank:${cash}`, expect.anything(), { dryRun: true })
+    })
+
+    it('DELETE with the settlement id undoes it, and 404s an account the company does not have', async () => {
+      authOk(['reconciliation:write'])
+      unmatchMock.mockResolvedValueOnce({
+        external_id: settlementId,
+        previous_journal_entry_id: null,
+        settlement_id: settlementId,
+        journal_entry_ids: [ENTRY, entry2],
+      })
+      const del = () =>
+        linkDELETE(req(`${BASE}/bank:${cash}/links/${settlementId}`, { method: 'DELETE' }), params({ accountKey: `bank:${cash}`, linkId: settlementId }))
+      const res = await del()
+      expect(res.status).toBe(200)
+      expect(unmatchMock).toHaveBeenLastCalledWith(expect.anything(), COMPANY_ID, 'user-1', `bank:${cash}`, settlementId)
+      const body = (await res.json()) as { data: { settlement_id: string; journal_entry_ids: string[] } }
+      expect(body.data).toMatchObject({ settlement_id: settlementId, journal_entry_ids: [ENTRY, entry2] })
+
+      unmatchMock.mockResolvedValueOnce(null)
+      expect((await del()).status).toBe(404)
+    })
+  })
+
   it('DELETE link unmatches and 404s a non-uuid link id', async () => {
     authOk(['reconciliation:write'])
     const ok = await linkDELETE(req(`${BASE}/skattekonto/links/${ROW}`, { method: 'DELETE' }), params({ accountKey: 'skattekonto', linkId: ROW }))

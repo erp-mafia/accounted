@@ -481,6 +481,11 @@ const PEPPOL_ROWS: Record<string, Record<string, unknown>> = {
 }
 
 const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
+  // Exactly one id: the outside row's (external_id), or, for verifikat
+  // settled against each other, the settlement's (crm#1074). Neither is
+  // required by the schema any more, so the synthesized arguments carry
+  // neither; this drives the row id, the common case.
+  gnubok_reconcile_unmatch: { args: { external_id: SOME_UUID } },
   // Bank file undo: a completed import the owner undoes; the preview counts
   // the batch rows it would delete and skip (reads only).
   gnubok_undo_bank_import: {

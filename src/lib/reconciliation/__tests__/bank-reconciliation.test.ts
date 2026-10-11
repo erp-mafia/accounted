@@ -525,7 +525,7 @@ describe('runReconciliation', () => {
     eventBus.clear()
   })
 
-  function createQueueMockSupabase() {
+  function createQueueMockSupabase(settlements: unknown[] = []) {
     const resultQueue: { data: unknown; error: unknown }[] = []
 
     const enqueue = (...results: { data?: unknown; error?: unknown }[]) => {
@@ -534,21 +534,27 @@ describe('runReconciliation', () => {
       }
     }
 
-    const buildChain = (): unknown => {
+    const buildChain = (fixed?: { data: unknown; error: unknown }): unknown => {
       const handler: ProxyHandler<object> = {
         get(_target, prop) {
           if (prop === 'then') {
-            const next = resultQueue.shift() ?? { data: null, error: null }
+            const next = fixed ?? resultQueue.shift() ?? { data: null, error: null }
             return (resolve: (v: unknown) => void) => resolve(next)
           }
-          return (..._args: unknown[]) => buildChain()
+          return (..._args: unknown[]) => buildChain(fixed)
         },
       }
       return new Proxy({}, handler)
     }
 
     const supabase = {
-      from: vi.fn().mockImplementation(() => buildChain()),
+      // The matcher reads the account's live ledger settlements before it
+      // matches (crm#1074). Answered outside the queue, with `settlements`
+      // (none unless a test sets them), so the queue keeps describing the
+      // matcher's own reads and writes.
+      from: vi.fn().mockImplementation((table: string) =>
+        table === 'account_reconciliation_settlements' ? buildChain({ data: settlements, error: null }) : buildChain(),
+      ),
       rpc: vi.fn().mockImplementation(() => buildChain()),
     }
 

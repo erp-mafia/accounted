@@ -18,6 +18,7 @@ import {
   type CashAccountSiblings,
 } from '@/lib/cash-accounts/service'
 import { createLogger } from '@/lib/logger'
+import { resolveLedgerSettlements } from './ledger-settlement-store'
 
 const log = createLogger('reconciliation.bank')
 
@@ -197,8 +198,22 @@ export interface ReconciliationStatus {
    */
   unmatched_gl_line_total: number | null
   /**
+   * Verifikat in the window that are settled against verifikat dated OUTSIDE
+   * it (a wrong verifikat whose hand-made rättelse was booked the month
+   * after, lib/reconciliation/ledger-settlement.ts). They are explained, so
+   * they are not in `unmatched_gl_line_count`, but their amounts do not net to
+   * zero inside the window. A settlement that lies wholly inside the window
+   * counts nowhere: its verifikat take each other out.
+   */
+  settled_gl_entry_count: number
+  /** Sum of those verifikat on the account, signed like a bank movement. Zero
+   *  when no settlement crosses the window's edge. */
+  settled_gl_line_total: number
+  /**
    * What is left of `difference` once both work lists are accounted for:
-   * `difference - unmatched_transaction_total + unmatched_gl_line_total`.
+   * `difference - unmatched_transaction_total + unmatched_gl_line_total +
+   * settled_gl_line_total`. Settling verifikat never moves this figure: it
+   * only moves their amounts from the second term to the third.
    *
    * `difference` is merely how far apart the two sides currently stand; mid-year
    * it is expected to be large and it is fully explained as long as every krona
@@ -571,8 +586,21 @@ export async function runReconciliation(
     }
   }
 
+  // A verifikat settled against another verifikat (a wrong booking and its
+  // hand-made rättelse, crm#1074) is explained already: the matcher must not
+  // hand it to a bank row that happens to carry the same amount.
+  const settlements = await resolveLedgerSettlements(
+    supabase,
+    companyId,
+    accountNumber,
+    openAmountByEntry(glLines, currency),
+    async (from, to) =>
+      openAmountByEntry(await fetchUnlinkedGLLines(supabase, companyId, accountNumber, from, to), currency),
+  )
+  const candidateLines = glLines.filter((line) => !settlements.settled.has(line.journal_entry_id))
+
   // Run greedy matching, highest confidence first
-  let matches = greedyMatch(transactions, glLines, currency)
+  let matches = greedyMatch(transactions, candidateLines, currency)
 
   if (dryRun) {
     return {
@@ -962,6 +990,22 @@ export async function getReconciliationStatus(
   const countedTx = aligned.rows
   junctionLinks = aligned.junctionLinks
 
+  // Verifikat settled against each other (a wrong verifikat and the rättelse
+  // booked by hand, crm#1074) are explained, not open work. Read last, after
+  // every other query of this function. A settlement is honoured only while
+  // it still holds (see ledger-settlement-store.ts), and its verifikat move
+  // from one explained term of the bridge to another, never out of it.
+  const openByEntry = openAmountByEntry(unlinkedLines, currency)
+  const settlements = await resolveLedgerSettlements(
+    supabase,
+    companyId,
+    bankAccount,
+    openByEntry,
+    async (from, to) =>
+      openAmountByEntry(await fetchGLLinesForMatching(supabase, companyId, bankAccount, from, to), currency),
+  )
+  const openLines = unlinkedLines.filter((line) => !settlements.settled.has(line.journal_entry_id))
+
   // Bank side: every NON-IGNORED feed transaction in the (floored) window. We
   // deliberately do NOT special-case rows linked to a reversed entry any more.
   // Because the GL side now counts the reversed original, its storno AND the
@@ -1046,18 +1090,26 @@ export async function getReconciliationStatus(
   // side it is meant to explain. On SEK, ledgerLineAmountIn never returns null,
   // so this is always a number for the 95% case. Per verifikat: a partially
   // allocated one counts only the remainder its 1:N slices leave open.
-  const unmatchedGlAmounts = [...openAmountByEntry(unlinkedLines, currency).values()]
-  const unmatchedGlLineTotal = unmatchedGlAmounts.some((a) => a === null)
+  // Summed over EVERY ledger-only verifikat, settled or not, exactly as before
+  // settlements existed: this is the figure the unexplained difference is
+  // built from, so settling verifikat cannot move it.
+  const ledgerOnlyAmounts = [...openByEntry.values()]
+  const ledgerOnlyTotal = ledgerOnlyAmounts.some((a) => a === null)
     ? null
-    : roundOre(unmatchedGlAmounts.reduce((sum: number, a) => sum + (a ?? 0), 0))
+    : roundOre(ledgerOnlyAmounts.reduce((sum: number, a) => sum + (a ?? 0), 0))
+  // The settled verifikat whose counterpart lies outside the window: their
+  // amounts stay in the period's difference and are carried on their own line.
+  const settledOutside = [...settlements.settled.values()].filter((entry) => entry.outside_window)
+  const settledGlLineTotal = roundOre(settledOutside.reduce((sum, entry) => sum + entry.amount, 0))
+  const unmatchedGlLineTotal = ledgerOnlyTotal === null ? null : roundOre(ledgerOnlyTotal - settledGlLineTotal)
 
-  // difference - unmatched transactions + unmatched vouchers. See the field doc:
-  // zero means every krona of the difference is identified and sitting in a list
-  // the user can open.
+  // difference - unmatched transactions + ledger-only vouchers (unmatched plus
+  // settled). See the field doc: zero means every krona of the difference is
+  // identified and sitting in a list the user can open.
   const unexplainedDifference =
-    unmatchedGlLineTotal === null
+    ledgerOnlyTotal === null
       ? null
-      : roundOre(difference - roundOre(unmatchedTransactionTotal) + unmatchedGlLineTotal)
+      : roundOre(difference - roundOre(unmatchedTransactionTotal) + ledgerOnlyTotal)
 
   const notReconcilableReason =
     unconvertibleLines.length > 0 ? 'gl_lines_missing_currency_amount' : null
@@ -1091,8 +1143,10 @@ export async function getReconciliationStatus(
     matched_count: matchedCount,
     unmatched_transaction_count: unmatchedTransactionCount,
     unmatched_transaction_total: roundOre(unmatchedTransactionTotal),
-    unmatched_gl_line_count: unlinkedLines.length,
+    unmatched_gl_line_count: openLines.length,
     unmatched_gl_line_total: unmatchedGlLineTotal,
+    settled_gl_entry_count: settledOutside.length,
+    settled_gl_line_total: settledGlLineTotal,
     unexplained_difference: unexplainedDifference,
     unconvertible_gl_line_count: unconvertibleLines.length,
     not_reconcilable_reason: notReconcilableReason,

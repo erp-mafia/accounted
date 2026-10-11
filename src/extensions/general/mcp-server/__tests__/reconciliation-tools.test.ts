@@ -471,6 +471,137 @@ describe('reconciliation MCP tools', () => {
     expect(matchMock).not.toHaveBeenCalled()
   })
 
+  describe('verifikat with no outside row, settled against each other (crm#1074)', () => {
+    const ENTRY_2 = '44444444-4444-4444-8444-444444444444'
+    const CASH_KEY = 'bank:55555555-5555-4555-8555-555555555555'
+    const SETTLEMENT_ID = '66666666-6666-4666-8666-666666666666'
+    const previewSettlement = {
+      settlement_id: null,
+      account_number: '1930',
+      entries: [
+        { journal_entry_id: ENTRY, voucher_series: 'A', voucher_number: 12, entry_date: '2026-03-18', amount: -1250 },
+        { journal_entry_id: ENTRY_2, voucher_series: 'A', voucher_number: 31, entry_date: '2026-04-21', amount: 1250 },
+      ],
+    }
+
+    it('reconcile_match lets a pair omit external_ids, and says so in its schema', () => {
+      const schema = tool('gnubok_reconcile_match').inputSchema as {
+        properties: { pairs: { description: string; items: { required: string[] } } }
+      }
+      expect(schema.properties.pairs.items.required).toEqual(['journal_entry_ids'])
+      expect(schema.properties.pairs.description).toMatch(/no rows/)
+    })
+
+    it('reconcile_match previews the pair through the same dry run and stages it as ONE pair with empty external_ids', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      matchMock.mockResolvedValue({ dry_run: true, considered: 1, applied: [], settled: [previewSettlement], skipped: [] })
+
+      const out = (await tool('gnubok_reconcile_match').execute(
+        { account_key: CASH_KEY, pairs: [{ journal_entry_ids: [ENTRY, ENTRY_2] }], dry_run: true },
+        COMPANY,
+        USER,
+        supabase as never,
+        { type: 'api_key', id: 'key-1' } as never,
+      )) as Record<string, unknown>
+
+      // The engine sees the parsed pair: external_ids is an empty list, never undefined.
+      expect(matchMock).toHaveBeenCalledWith(
+        supabase,
+        COMPANY,
+        USER,
+        CASH_KEY,
+        { pairs: [{ external_ids: [], journal_entry_ids: [ENTRY, ENTRY_2] }], use_proposals: false, confidence_threshold: 0.9 },
+        { dryRun: true },
+      )
+      expect(out).toMatchObject({ staged: false, dry_run: true, risk_level: 'medium' })
+      const preview = out.preview as Record<string, unknown>
+      expect(preview).toMatchObject({ account_key: CASH_KEY, pair_count: 1, source: 'explicit' })
+      expect(preview.pairs).toEqual([{ external_ids: [], journal_entry_ids: [ENTRY, ENTRY_2] }])
+      // The reviewer sees the verifikat and the amounts that sum to zero.
+      expect(preview.settled).toEqual([previewSettlement])
+    })
+
+    it('reconcile_match stages a settlement next to an ordinary link in one operation', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      matchMock.mockResolvedValue({
+        dry_run: true,
+        considered: 2,
+        applied: [{ external_id: ROW, journal_entry_id: ENTRY }],
+        settled: [previewSettlement],
+        skipped: [],
+      })
+      const out = (await tool('gnubok_reconcile_match').execute(
+        {
+          account_key: CASH_KEY,
+          pairs: [
+            { external_ids: [ROW], journal_entry_ids: [ENTRY] },
+            { external_ids: [], journal_entry_ids: [ENTRY, ENTRY_2] },
+          ],
+          dry_run: true,
+        },
+        COMPANY,
+        USER,
+        supabase as never,
+      )) as Record<string, unknown>
+      expect((out.preview as { pairs: unknown[] }).pairs).toEqual([
+        { external_ids: [ROW], journal_entry_ids: [ENTRY] },
+        { external_ids: [], journal_entry_ids: [ENTRY, ENTRY_2] },
+      ])
+    })
+
+    it('reconcile_match refuses one verifikat with no outside row before the engine runs', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      const err = await tool('gnubok_reconcile_match')
+        .execute({ account_key: CASH_KEY, pairs: [{ journal_entry_ids: [ENTRY] }] }, COMPANY, USER, supabase as never)
+        .then(() => null, (e: unknown) => e)
+      const error = toToolError(err, { toolName: 'gnubok_reconcile_match' }).error
+      expect(error.code).toBe('VALIDATION_ERROR')
+      expect(error.message_en).toMatch(/^Invalid pairs: pairs\.0\.external_ids: /)
+      expect(matchMock).not.toHaveBeenCalled()
+    })
+
+    it('reconcile_match with a refused settlement stages nothing and answers the policy code', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      const pair = { external_ids: [], journal_entry_ids: [ENTRY, ENTRY_2] }
+      matchMock.mockResolvedValue({
+        dry_run: true,
+        considered: 1,
+        applied: [],
+        settled: [],
+        skipped: [{ pair, code: 'PAIR_NOT_CLOSED', message: 'Verifikaten tar inte ut varandra på konto 1930.' }],
+      })
+      const err = await tool('gnubok_reconcile_match')
+        .execute({ account_key: CASH_KEY, pairs: [pair] }, COMPANY, USER, supabase as never)
+        .then(() => null, (e: unknown) => e)
+      const error = toToolError(err, { toolName: 'gnubok_reconcile_match' }).error
+      expect(error.code).toBe('PAIR_NOT_CLOSED')
+      expect(error.retryable).toBe(false)
+    })
+
+    it('reconcile_unmatch takes a settlement_id instead of external_id, and exactly one of them', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      const out = (await tool('gnubok_reconcile_unmatch').execute(
+        { account_key: CASH_KEY, settlement_id: SETTLEMENT_ID, dry_run: true },
+        COMPANY,
+        USER,
+        supabase as never,
+      )) as Record<string, unknown>
+      expect(out).toMatchObject({ staged: false, dry_run: true, risk_level: 'low' })
+      expect(out.preview).toEqual({ account_key: CASH_KEY, settlement_id: SETTLEMENT_ID })
+      expect(out.next).toMatchObject({ args: { account_key: CASH_KEY, bucket: 'unmatched_ledger' } })
+
+      for (const args of [
+        { account_key: CASH_KEY, dry_run: true },
+        { account_key: CASH_KEY, external_id: ROW, settlement_id: SETTLEMENT_ID, dry_run: true },
+      ]) {
+        const err = await tool('gnubok_reconcile_unmatch')
+          .execute(args, COMPANY, USER, supabase as never)
+          .then(() => null, (e: unknown) => e)
+        expect(toToolError(err, { toolName: 'gnubok_reconcile_unmatch' }).error.code).toBe('VALIDATION_ERROR')
+      }
+    })
+  })
+
   it('reconcile_unmatch dry-run returns the low-risk staging preview', async () => {
     const { supabase } = createQueuedMockSupabase()
     const out = (await tool('gnubok_reconcile_unmatch').execute(

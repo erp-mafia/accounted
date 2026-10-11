@@ -24,22 +24,35 @@ export const AccountKeySchema = z.string().regex(ACCOUNT_KEY_REGEX, 'Ogiltig acc
 
 export const ReconciliationKindSchema = z.enum(['bank', 'skattekonto', 'manual'])
 
-/** One link request: outside rows against verifikat (N:1), or a bank 1:N with allocations. */
-export const ReconciliationPairSchema = z.object({
-  external_ids: z.array(z.string().uuid()).min(1).max(50),
-  journal_entry_ids: z.array(z.string().uuid()).min(1).max(50),
-  // Bank 1:N only: the signed slice per verifikat (transaction sign
-  // convention). Omitted: each slice defaults to the voucher's bank line.
-  allocations: z
-    .array(z.object({ journal_entry_id: z.string().uuid(), amount: z.number() }))
-    .min(2)
-    .max(50)
-    .optional(),
-  // Skattekonto only: link although the rows do not settle the verifikat's
-  // 1630 movement (a summarised verifikat that books more events than these).
-  // What the rows do not explain stays on the verifikat as its remainder.
-  allow_remainder: z.boolean().optional(),
-})
+/**
+ * One link request: outside rows against verifikat (N:1, on the skattekonto
+ * optionally with a remainder), a bank 1:N with allocations, or, on a bank
+ * account, NO outside rows and two or more
+ * verifikat that take each other out on the account (a wrong verifikat and
+ * the rättelse booked by hand: lib/reconciliation/ledger-settlement.ts).
+ */
+export const ReconciliationPairSchema = z
+  .object({
+    // Empty or omitted only for the ledger-only shape.
+    external_ids: z.array(z.string().uuid()).max(50).default([]),
+    journal_entry_ids: z.array(z.string().uuid()).min(1).max(50),
+    // Bank 1:N only: the signed slice per verifikat (transaction sign
+    // convention). Omitted: each slice defaults to the voucher's bank line.
+    allocations: z
+      .array(z.object({ journal_entry_id: z.string().uuid(), amount: z.number() }))
+      .min(2)
+      .max(50)
+      .optional(),
+    // Skattekonto only: link although the rows do not settle the verifikat's
+    // 1630 movement (a summarised verifikat that books more events than these).
+    // What the rows do not explain stays on the verifikat as its remainder.
+    allow_remainder: z.boolean().optional(),
+  })
+  .refine((pair) => pair.external_ids.length > 0 || pair.journal_entry_ids.length >= 2, {
+    path: ['external_ids'],
+    message:
+      'Ange minst en händelse i external_ids, eller minst två verifikat i journal_entry_ids som tar ut varandra på kontot.',
+  })
 
 /** Body fields shared by the dashboard and v1 POST .../links routes (spread into z.object). */
 export const reconciliationLinksBodyFields = {
@@ -230,6 +243,34 @@ export const ReconciliationProposalSchema = z.object({
 })
 export type ReconciliationProposal = z.infer<typeof ReconciliationProposalSchema>
 
+/**
+ * A ledger-only settlement a verifikat belongs to: verifikat on the account
+ * that take each other out (a wrong verifikat and its hand-made rättelse).
+ */
+export const ReconciliationSettlementSchema = z.object({
+  /** Undo with DELETE .../links/{settlement_id}, or reconcile_unmatch with settlement_id. */
+  settlement_id: z.string(),
+  /**
+   * settled: the settlement holds and the verifikat is listed under matched.
+   * broken: another verifikat of it has since been linked to a bank row,
+   * makulerat or changed, so this one is unmatched again until the settlement
+   * is undone.
+   */
+  state: z.enum(['settled', 'broken']),
+  settled_at: z.string(),
+  settled_by: z.string(),
+  /** The other verifikat of the settlement, each with the amount it was settled at (debit positive). */
+  counterparts: z.array(
+    z.object({
+      journal_entry_id: z.string(),
+      voucher_series: z.string().nullable(),
+      voucher_number: z.number().int().nullable(),
+      entry_date: z.string().nullable(),
+      amount: z.number(),
+    }),
+  ),
+})
+
 export const ReconciliationItemSchema = z.object({
   /** Qualified id of the row on its side: skattekonto_transaction_id, transaction_id or journal_entry_id. */
   item_id: z.string(),
@@ -289,6 +330,8 @@ export const ReconciliationItemSchema = z.object({
    * Link it; booking it would record it a second time.
    */
   covered_by_ledger: z.boolean().optional(),
+  /** Bank ledger rows only: the settlement the verifikat is part of, when any. */
+  settlement: ReconciliationSettlementSchema.nullable().optional(),
   actions: z.array(ReconciliationItemActionSchema),
 })
 export type ReconciliationItem = z.infer<typeof ReconciliationItemSchema>
