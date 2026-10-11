@@ -88,7 +88,12 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
     (p) => p.period_start <= entryDate && entryDate <= p.period_end,
   )
 
-  const handleBook = async () => {
+  // `asDraft` posts with ?as_draft=true, which the route already understands
+  // (createDraftEntry vs createJournalEntry). A draft gets no voucher number
+  // and stays editable, matching the "Spara som utkast" affordance the manual
+  // JournalEntryForm has always had. Booking from a template previously
+  // committed straight away, with no way to review first.
+  const handleBook = async (asDraft = false) => {
     if (!selected || !balanced) return
     if (!periodForDate) {
       toast({ title: t('tpl_no_period'), variant: 'destructive' })
@@ -96,7 +101,9 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
     }
     setSubmitting(true)
     try {
-      const res = await fetch('/api/bookkeeping/journal-entries', {
+      const res = await fetch(
+        `/api/bookkeeping/journal-entries${asDraft ? '?as_draft=true' : ''}`,
+        {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -110,11 +117,12 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
             line_description: l.line_description || undefined,
           })),
         }),
-      })
+        },
+      )
       const result = await res.json()
       if (!res.ok) {
         toast({
-          title: t('toast_post_failed'),
+          title: asDraft ? t('tpl_toast_draft_failed') : t('toast_post_failed'),
           description: getErrorMessage(result, { context: 'journal_entry' }),
           variant: 'destructive',
         })
@@ -127,10 +135,12 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
         }).catch(() => {})
       }
       toast({
-        title: t('toast_posted_title'),
-        description: t('toast_posted_description', {
-          voucher: formatVoucher(result.data ?? {}),
-        }),
+        title: asDraft ? t('tpl_toast_draft_saved_title') : t('toast_posted_title'),
+        description: asDraft
+          ? t('tpl_toast_draft_saved_description')
+          : t('toast_posted_description', {
+              voucher: formatVoucher(result.data ?? {}),
+            }),
       })
       onOpenChange(false)
       onCreated()
@@ -243,6 +253,15 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
             <div className="flex justify-end gap-2">
               <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting}>
                 {t('tpl_cancel')}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => void handleBook(true)}
+                disabled={!balanced}
+                loading={submitting}
+                title={t('tpl_save_draft_tooltip')}
+              >
+                {t('tpl_save_draft')}
               </Button>
               <Button onClick={() => void handleBook()} disabled={!balanced} loading={submitting}>
                 {t('tpl_book')}
