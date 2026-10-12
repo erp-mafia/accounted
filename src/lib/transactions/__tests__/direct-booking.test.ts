@@ -16,6 +16,10 @@ describe('booksWithoutReview', () => {
     expect(booksWithoutReview({ source: 'counterparty', seen_count: 3, confidence: 0.9, rule_mode: 'propose' })).toBe(true)
     expect(booksWithoutReview({ source: 'counterparty', seen_count: 9, confidence: 0.9, rule_mode: 'proposed' })).toBe(false)
   })
+  it('never books a counterpart match the assistant\'s read took off the row', () => {
+    expect(booksWithoutReview({ source: 'counterparty', seen_count: 9, confidence: 0.9, rule_mode: 'auto', contested: true })).toBe(false)
+    expect(booksWithoutReview({ source: 'counterparty', seen_count: 9, confidence: 0.9, rule_mode: 'propose', contested: true })).toBe(false)
+  })
   it('books the assistant only when sure and a receipt was read', () => {
     expect(booksWithoutReview({ source: 'assistant', confidence: 0.9, has_underlag: false })).toBe(false)
     expect(booksWithoutReview({ source: 'assistant', confidence: 0.7, has_underlag: true })).toBe(false)

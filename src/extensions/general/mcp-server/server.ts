@@ -11534,8 +11534,10 @@ export const tools: McpTool[] = [
       const { proposals: proposed } = await proposeForTransactions(supabase, companyId, transactions as Transaction[])
       const proposals: Record<string, unknown[]> = {}
       for (const tx of transactions as Transaction[]) {
-        proposals[tx.id] = (proposed[tx.id] ?? [])
-          .filter((p) => p.source !== 'recent')
+        const offered = (proposed[tx.id] ?? []).filter((p) => p.source !== 'recent')
+        // "Best first" holds for an agent too: a match the app takes off the
+        // row is never the first proposal it reads.
+        proposals[tx.id] = [...offered.filter((p) => !p.contested), ...offered.filter((p) => p.contested)]
           .map((p) => ({
             id: p.template_id,
             source: p.source,
@@ -11543,6 +11545,7 @@ export const tools: McpTool[] = [
             why: whyTextSv(p),
             confidence: p.confidence,
             books_without_review: booksWithoutReview(p),
+            ...(p.contested ? { contested: true } : {}),
             account: businessAccount(p),
             vat_treatment: p.booking.kind === 'account' ? p.booking.vat_treatment : (p.vat_treatment ?? null),
             categorize_args: categorizeArgsFor(p, entityType),

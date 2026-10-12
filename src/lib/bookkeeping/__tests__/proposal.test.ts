@@ -6,7 +6,9 @@ import {
   categorizeBodyFor,
   previewInputFor,
   proposalFromTemplate,
+  slateAccount,
   whyKeyFor,
+  whyTextSv,
   withAccount,
   type BookingProposal,
 } from '../proposal'
@@ -44,6 +46,14 @@ describe('withAccount', () => {
     expect(p.booking).toEqual({ kind: 'account', account: '6230', vat_treatment: 'standard_25', category: mobile.fallback_category })
     expect(p.debit_account).toBe('6230')
   })
+  it('keeps the basis box of a reverse charge across an account change, and drops it when the person picks the VAT anew', () => {
+    const nonEu = accountProposal({ id: 'a', source: 'assistant', account: '5420', label: 'x', category: 'expense_software', vat_treatment: 'reverse_charge', reverse_charge_kind: 'non_eu_services', amount: -200 })
+    const moved = withAccount(nonEu, '6540', 'reverse_charge', -200)
+    expect(moved.booking).toEqual({ kind: 'account', account: '6540', vat_treatment: 'reverse_charge', category: 'expense_software', reverse_charge_kind: 'non_eu_services' })
+    const swedish = withAccount(moved, '6540', 'standard_25', -200)
+    expect(swedish.booking).not.toHaveProperty('reverse_charge_kind')
+    expect(withAccount(swedish, '6540', 'reverse_charge', -200).booking).not.toHaveProperty('reverse_charge_kind')
+  })
 })
 
 describe('categorizeBodyFor', () => {
@@ -68,6 +78,13 @@ describe('categorizeBodyFor', () => {
       proposal_id: 'a',
     })
   })
+  it('sends the basis box of a reverse charge that names one', () => {
+    const p = accountProposal({ id: 'a', source: 'assistant', account: '5420', label: 'x', category: 'expense_software', vat_treatment: 'reverse_charge', reverse_charge_kind: 'non_eu_services', amount: -200 })
+    expect(categorizeBodyFor(p)).toEqual({
+      is_business: true, category: 'expense_software', account_override: '5420', vat_treatment: 'reverse_charge',
+      reverse_charge_kind: 'non_eu_services', proposal_id: 'a',
+    })
+  })
   it('names no suggestion for an account the person picked', () => {
     const p = accountProposal({ id: 'account:6570', source: 'manual', account: '6570', label: 'x', category: 'expense_bank_fees', vat_treatment: 'exempt', amount: -5 })
     expect(categorizeBodyFor(p)).not.toHaveProperty('proposal_id')
@@ -80,6 +97,12 @@ describe('categorizeArgsFor', () => {
     expect(categorizeArgsFor(p)).toEqual({
       category: 'expense_bank_fees', account_override: '6570', vat_treatment: 'exempt', proposal_id: 'assistant:tx-1',
     })
+  })
+  it('spells a reverse charge with a basis box the way categorize_transaction takes it', () => {
+    const base = { id: 'assistant:tx-1', source: 'assistant' as const, account: '5420', label: 'x', category: 'expense_software' as const, vat_treatment: 'reverse_charge' as const, amount: -200 }
+    expect(categorizeArgsFor(accountProposal({ ...base, reverse_charge_kind: 'non_eu_services' }))?.vat_treatment).toBe('reverse_charge_non_eu_services')
+    expect(categorizeArgsFor(accountProposal({ ...base, reverse_charge_kind: 'eu_services' }))?.vat_treatment).toBe('reverse_charge_eu_services')
+    expect(categorizeArgsFor(accountProposal(base))?.vat_treatment).toBe('reverse_charge')
   })
 })
 
@@ -115,5 +138,31 @@ describe('whyKeyFor', () => {
     expect(whyKeyFor({ source: 'counterparty', seen_count: 4 } as BookingProposal)).toEqual({ key: 'rec_why_counterparty', values: { count: 4 } })
     expect(whyKeyFor({ source: 'assistant', has_underlag: true } as BookingProposal)).toEqual({ key: 'rec_why_assistant_doc' })
     expect(whyKeyFor({ source: 'manual' } as BookingProposal)).toEqual({ key: 'rec_why_manual' })
+  })
+})
+
+describe('whyTextSv', () => {
+  it('tells an agent when a counterpart match is contested', () => {
+    const seen = { source: 'counterparty', seen_count: 1 } as BookingProposal
+    expect(whyTextSv(seen)).toBe('Bokförd så 1 gång tidigare')
+    expect(whyTextSv({ ...seen, contested: true })).toBe(
+      'Bokförd så 1 gång tidigare, men matchningen är svag och assistentens läsning av raden bokför annorlunda',
+    )
+  })
+})
+
+describe('slateAccount', () => {
+  it('is the first business line of a learned pattern, otherwise the leg that is not the bank', () => {
+    expect(slateAccount({ debit_account: '5420', credit_account: '1930' })).toBe('5420')
+    expect(
+      slateAccount({
+        debit_account: '1930',
+        credit_account: '1930',
+        line_pattern: [
+          { account: '2641', type: 'vat', side: 'debit', ratio: 0.2 },
+          { account: '6211', type: 'business', side: 'debit', ratio: 0.8 },
+        ] as BookingProposal['line_pattern'],
+      }),
+    ).toBe('6211')
   })
 })

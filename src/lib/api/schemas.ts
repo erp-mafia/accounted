@@ -2307,6 +2307,10 @@ export const CategorizeTransactionSchema = z
     category: TransactionCategorySchema.optional(),
     template_id: z.string().optional(),
     vat_treatment: VatTreatmentSchema.optional(),
+    // Basis box of a reverse-charge purchase booked by category or account:
+    // eu_goods ruta 20, eu_services ruta 21, non_eu_services ruta 22. Only
+    // with vat_treatment 'reverse_charge'; omitted books an EU service.
+    reverse_charge_kind: z.enum(['eu_goods', 'eu_services', 'non_eu_services']).optional(),
     // The underlag's actual moms, in the transaction's currency. Replaces the
     // rate-based VAT line of a category or template booking (see
     // buildMappingResultFromCategory / applyVatAmountOverride).
@@ -2338,6 +2342,10 @@ export const CategorizeTransactionSchema = z
   .refine((v) => !v.force || !!v.expected_duplicate_transaction_id || !!v.expected_duplicate_journal_entry_id, {
     message: 'expected_duplicate_transaction_id or expected_duplicate_journal_entry_id is required when force=true',
     path: ['expected_duplicate_journal_entry_id'],
+  })
+  .refine((v) => !v.reverse_charge_kind || v.vat_treatment === 'reverse_charge', {
+    message: "reverse_charge_kind is only valid with vat_treatment 'reverse_charge'",
+    path: ['reverse_charge_kind'],
   })
 
 export const BookTransactionSchema = z

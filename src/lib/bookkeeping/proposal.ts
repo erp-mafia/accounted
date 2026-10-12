@@ -3,6 +3,7 @@ import { isLibraryTemplateId } from './template-library'
 import { resolveTemplateAccountsForEntity, type ProposalLinesInput } from './proposal-lines'
 import { accountHue, templateGroupHue, type TemplateHue } from './template-group-colors'
 import { getDefaultAccountForCategory, getDefaultVatTreatmentForCategory } from './category-mapping'
+import { REVERSE_CHARGE_TREATMENT_KINDS, type ReverseChargeKind } from './vat-entries'
 import type {
   CategorizationTemplate,
   EntityType,
@@ -32,8 +33,18 @@ export type ProposalBooking =
   | { kind: 'template'; template_id: string; category: TransactionCategory }
   /** A learned counterpart rule: the server books the stored template's lines. */
   | { kind: 'counterparty'; counterparty_template_id: string }
-  /** One business account and an explicit VAT treatment against the bank. */
-  | { kind: 'account'; account: string; vat_treatment: VatTreatment; category: TransactionCategory }
+  /**
+   * One business account and an explicit VAT treatment against the bank.
+   * `reverse_charge_kind` names the basis box of a reverse-charge purchase
+   * (ruta 20/21/22); without it the engine books an EU service.
+   */
+  | {
+      kind: 'account'
+      account: string
+      vat_treatment: VatTreatment
+      category: TransactionCategory
+      reverse_charge_kind?: ReverseChargeKind
+    }
 
 export interface BookingProposal {
   /** Stable id: the catalog template id, 'cp:<uuid>' for a counterpart, 'assistant:<txid>', 'account:<n>'. */
@@ -59,11 +70,27 @@ export interface BookingProposal {
   rule_own?: boolean
   rule_requires_review?: boolean
   has_underlag?: boolean
+  /**
+   * A weak learned-counterpart match that the assistant's stored read had on
+   * its slate and booked on another account (lib/transactions/propose.ts).
+   * Still offered in the picker and to an agent, never the row's
+   * recommendation and never booked without a review.
+   */
+  contested?: boolean
 }
 
 /** The leg that is not the bank: what the chip, the assistant and Claude call "the account". */
 export function businessAccount(p: Pick<BookingProposal, 'debit_account' | 'credit_account'>): string {
   return p.debit_account.startsWith('19') ? p.credit_account : p.debit_account
+}
+
+/**
+ * The account a proposal stands for on the assistant's candidate slate: the
+ * first business line of a learned pattern, otherwise the leg that is not the
+ * bank.
+ */
+export function slateAccount(p: Pick<BookingProposal, 'debit_account' | 'credit_account' | 'line_pattern'>): string {
+  return p.line_pattern?.find((l) => l.type === 'business')?.account ?? businessAccount(p)
 }
 
 export function proposalHue(p: BookingProposal): TemplateHue {
@@ -109,6 +136,7 @@ export function accountProposal(input: {
   label: string
   category: TransactionCategory
   vat_treatment: VatTreatment | null
+  reverse_charge_kind?: ReverseChargeKind | null
   amount: number
   confidence?: number
   description?: string
@@ -118,7 +146,13 @@ export function accountProposal(input: {
   return {
     template_id: input.id,
     source: input.source,
-    booking: { kind: 'account', account: input.account, vat_treatment: vat, category: input.category },
+    booking: {
+      kind: 'account',
+      account: input.account,
+      vat_treatment: vat,
+      category: input.category,
+      ...kindFor(vat, input.reverse_charge_kind),
+    },
     name_sv: input.label,
     name_en: input.label,
     group: 'account',
@@ -133,12 +167,27 @@ export function accountProposal(input: {
   }
 }
 
-/** The same proposal with the account or VAT the person changed in the review. */
+/** The basis box travels only with the treatment it belongs to. */
+function kindFor(
+  vat: VatTreatment,
+  kind: ReverseChargeKind | null | undefined,
+): { reverse_charge_kind?: ReverseChargeKind } {
+  return vat === 'reverse_charge' && kind ? { reverse_charge_kind: kind } : {}
+}
+
+/**
+ * The same proposal with the account or VAT the person changed in the review.
+ * A reverse charge that stays one keeps its basis box across an account
+ * change; a treatment the person picks anew is the plain one the VAT list
+ * offers.
+ */
 export function withAccount(p: BookingProposal, account: string, vat_treatment: VatTreatment, amount: number): BookingProposal {
   const category = p.booking.kind === 'counterparty' ? categoryFallback(amount) : p.booking.category
+  const kept =
+    p.booking.kind === 'account' && p.booking.vat_treatment === 'reverse_charge' ? p.booking.reverse_charge_kind : undefined
   return {
     ...p,
-    booking: { kind: 'account', account, vat_treatment, category },
+    booking: { kind: 'account', account, vat_treatment, category, ...kindFor(vat_treatment, kept) },
     debit_account: amount < 0 ? account : '1930',
     credit_account: amount < 0 ? '1930' : account,
     vat_treatment,
@@ -161,6 +210,7 @@ export function categorizeBodyFor(
   counterparty_template_id?: string
   account_override?: string
   vat_treatment?: VatTreatment
+  reverse_charge_kind?: ReverseChargeKind
   vat_amount?: number
   dimensions?: Record<string, string>
   inbox_item_id?: string
@@ -183,6 +233,7 @@ export function categorizeBodyFor(
         category: p.booking.category,
         account_override: p.booking.account,
         vat_treatment: p.booking.vat_treatment,
+        ...kindFor(p.booking.vat_treatment, p.booking.reverse_charge_kind),
         ...dims,
         ...vatAmount,
         ...inbox,
@@ -236,7 +287,8 @@ export function previewInputFor(
   const account = p.booking.kind === 'account' ? p.booking.account : businessAccount(p)
   const category = p.booking.kind === 'account' ? p.booking.category : categoryFallback(ctx.amount)
   const vat = p.booking.kind === 'account' ? p.booking.vat_treatment : (p.vat_treatment ?? 'exempt')
-  return { ...base, category, accountOverride: account, vatTreatment: vat }
+  const kind = p.booking.kind === 'account' ? kindFor(vat, p.booking.reverse_charge_kind).reverse_charge_kind : undefined
+  return { ...base, category, accountOverride: account, vatTreatment: vat, ...(kind ? { reverseChargeKind: kind } : {}) }
 }
 
 /** The catalog template behind a proposal, when it has one (rules text, AB accounts). */
@@ -310,17 +362,33 @@ export function agentBookingFor(
   return { category: categoryForAccount(account, entityType), account_override: account, vat_treatment: p.vat_treatment ?? 'exempt' }
 }
 
+/** categorize_transaction's spelling of a reverse-charge basis box (vat_treatment 'reverse_charge_non_eu_services'). */
+type CategorizeToolVatTreatment = VatTreatment | keyof typeof REVERSE_CHARGE_TREATMENT_KINDS
+
+function toolVatTreatment(p: BookingProposal, vat: VatTreatment): CategorizeToolVatTreatment {
+  const kind = p.booking.kind === 'account' ? kindFor(vat, p.booking.reverse_charge_kind).reverse_charge_kind : undefined
+  const spelled = (Object.keys(REVERSE_CHARGE_TREATMENT_KINDS) as Array<keyof typeof REVERSE_CHARGE_TREATMENT_KINDS>).find(
+    (k) => REVERSE_CHARGE_TREATMENT_KINDS[k] === kind,
+  )
+  return spelled ?? vat
+}
+
 /**
  * agentBookingFor plus the proposal's stable id: the arguments the MCP
  * suggestion tool hands an agent, so a booking made from them says which
  * suggestion it started from (recorded in suggestion_log, never booked).
+ * A reverse charge that names its basis box is spelled the way
+ * categorize_transaction takes it, so the agent's booking lands in the box
+ * the proposal shows.
  */
 export function categorizeArgsFor(
   p: BookingProposal,
   entityType?: EntityType,
-): (NonNullable<ReturnType<typeof agentBookingFor>> & { proposal_id: string }) | null {
+): { category: TransactionCategory; account_override: string; vat_treatment: CategorizeToolVatTreatment; proposal_id: string } | null {
   const booking = agentBookingFor(p, entityType)
-  return booking ? { ...booking, proposal_id: p.template_id } : null
+  return booking
+    ? { ...booking, vat_treatment: toolVatTreatment(p, booking.vat_treatment), proposal_id: p.template_id }
+    : null
 }
 
 /** The why in Swedish, for surfaces without the UI's message catalog (the MCP tool). */
@@ -328,8 +396,10 @@ export function whyTextSv(p: BookingProposal): string {
   switch (p.source) {
     case 'rule':
       return 'Enligt företagets regel'
-    case 'counterparty':
-      return `Bokförd så ${p.seen_count ?? 1} ${(p.seen_count ?? 1) === 1 ? 'gång' : 'gånger'} tidigare`
+    case 'counterparty': {
+      const seen = `Bokförd så ${p.seen_count ?? 1} ${(p.seen_count ?? 1) === 1 ? 'gång' : 'gånger'} tidigare`
+      return p.contested ? `${seen}, men matchningen är svag och assistentens läsning av raden bokför annorlunda` : seen
+    }
     case 'catalog':
       return 'Känt mönster i bankens text'
     case 'recent':

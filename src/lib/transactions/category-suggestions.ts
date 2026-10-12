@@ -383,10 +383,14 @@ export async function getSuggestedTemplates(
 /**
  * The suggestion a row wears as its chip and books from its Bokför: the
  * first one that matched the row itself. A template merely used lately is
- * a picker convenience, not a recommendation.
+ * a picker convenience, not a recommendation. Neither is a weak counterpart
+ * match the assistant's read booked differently: the row then recommends
+ * nothing, and what follows the match is not moved up in its place, so the
+ * read can take a suggestion down but never put itself on the row.
  */
 export function rowProposal(list: SuggestedTemplate[] | undefined): SuggestedTemplate | undefined {
-  return list?.find((s) => s.source !== 'recent')
+  const first = list?.find((s) => s.source !== 'recent')
+  return first?.contested ? undefined : first
 }
 
 /** The catalog template that books to this account in this direction, if one does. */

@@ -12,14 +12,14 @@ import { selectAccount } from '../select-account'
 
 function pick(
   choice: string,
-  opts: { confidence?: 'high' | 'medium' | 'low'; reverse_charge?: boolean; reasoning?: string } = {},
+  opts: { confidence?: 'high' | 'medium' | 'low'; moms?: string; reasoning?: string } = {},
 ) {
   return {
     value: {
       reasoning: opts.reasoning ?? 'resonemang',
       choice,
       confidence: opts.confidence ?? 'high',
-      reverse_charge: opts.reverse_charge ?? false,
+      ...(opts.moms ? { moms: opts.moms } : {}),
     },
     model: 'qwen3.8',
     usage: {},
@@ -87,20 +87,101 @@ describe('selectAccount', () => {
   })
 
   it('applies reverse charge only for a VAT-registered company', async () => {
-    generateStructured.mockResolvedValue(pick('cat:expense_professional_services', { reverse_charge: true }))
+    generateStructured.mockResolvedValue(pick('cat:expense_professional_services', { moms: 'omvand_eu' }))
     const yes = await selectAccount(input({ candidates: [], vatRegistered: true }))
+    expect(yes.vatCase).toBe('reverse_charge_eu')
     expect(yes.reverseCharge).toBe(true)
     expect(yes.vatTreatment).toBe('reverse_charge')
+    expect(yes.reverseChargeKind).toBe('eu_services')
 
-    generateStructured.mockResolvedValue(pick('cat:expense_professional_services', { reverse_charge: true }))
+    generateStructured.mockResolvedValue(pick('cat:expense_professional_services', { moms: 'omvand_eu' }))
     const no = await selectAccount(input({ candidates: [], vatRegistered: false }))
     expect(no.vatTreatment).not.toBe('reverse_charge')
+    expect(no.reverseChargeKind).toBeNull()
+  })
+
+  it('tells a service from outside the EU from one inside it, so the booking can report ruta 22', async () => {
+    generateStructured.mockResolvedValue(pick('cat:expense_software', { moms: 'omvand_utanfor_eu' }))
+    const res = await selectAccount(input({ candidates: [], vatRegistered: true }))
+    expect(res.vatCase).toBe('reverse_charge_non_eu')
+    expect(res.reverseCharge).toBe(true)
+    expect(res.vatTreatment).toBe('reverse_charge')
+    expect(res.reverseChargeKind).toBe('non_eu_services')
+
+    const unregistered = await selectAccount(input({ candidates: [], vatRegistered: false }))
+    expect(unregistered.vatTreatment).not.toBe('reverse_charge')
+    expect(unregistered.reverseChargeKind).toBeNull()
+  })
+
+  it('names no box for a reverse charge it only took over from a candidate', async () => {
+    generateStructured.mockResolvedValue(pick('cand:0', { moms: 'sverige' }))
+    const res = await selectAccount(input({ candidates: [{ ...CAND, vatTreatment: 'reverse_charge' }] }))
+    expect(res.vatTreatment).toBe('reverse_charge')
+    expect(res.reverseChargeKind).toBeNull()
   })
 
   it('never applies reverse charge to a needs_review outcome', async () => {
-    generateStructured.mockResolvedValue(pick('needs_review', { reverse_charge: true }))
+    generateStructured.mockResolvedValue(pick('needs_review', { moms: 'omvand_eu' }))
     const res = await selectAccount(input())
     expect(res.reverseCharge).toBe(false)
+    expect(res.vatCase).toBe('domestic')
+  })
+
+  describe('where the purchase is taxed', () => {
+    const MEAL_ABROAD = { merchantName: null, description: 'BUN MEE SAN FRANCISCO', amount: -473.63, currency: 'SEK' }
+
+    it('books a purchase used on the spot abroad without Swedish moms, whatever the category defaults to', async () => {
+      expect(getDefaultVatTreatmentForCategory('expense_travel')).toBe('standard_25')
+      generateStructured.mockResolvedValue(pick('cat:expense_travel', { moms: 'utomlands' }))
+      const res = await selectAccount(input({ candidates: [], transaction: MEAL_ABROAD }))
+      expect(res.account).toBe(getDefaultAccountForCategory('expense_travel', 'aktiebolag'))
+      expect(res.vatCase).toBe('abroad')
+      expect(res.vatTreatment).toBe('exempt')
+      expect(res.reverseCharge).toBe(false)
+      expect(res.reverseChargeKind).toBeNull()
+    })
+
+    it('lets it override a candidate learned with Swedish moms too: it is this row that was bought abroad', async () => {
+      generateStructured.mockResolvedValue(pick('cand:0', { moms: 'utomlands' }))
+      const res = await selectAccount(input({ transaction: MEAL_ABROAD }))
+      expect(res.account).toBe('5410')
+      expect(res.vatTreatment).toBe('exempt')
+    })
+
+    it('keeps the default for a purchase in Sweden, said or unsaid', async () => {
+      generateStructured.mockResolvedValue(pick('cat:expense_travel', { moms: 'sverige' }))
+      expect((await selectAccount(input({ candidates: [] }))).vatTreatment).toBe('standard_25')
+
+      generateStructured.mockResolvedValue(pick('cat:expense_travel'))
+      const unsaid = await selectAccount(input({ candidates: [] }))
+      expect(unsaid.vatCase).toBe('domestic')
+      expect(unsaid.vatTreatment).toBe('standard_25')
+    })
+
+    it('reads an answer outside the closed set as the default', async () => {
+      for (const moms of ['usa', 'constructor', 'reverse_charge_non_eu', 'omvand_eu_vara']) {
+        generateStructured.mockResolvedValue(pick('cat:expense_travel', { moms }))
+        const res = await selectAccount(input({ candidates: [] }))
+        expect(res.vatCase).toBe('domestic')
+        expect(res.vatTreatment).toBe('standard_25')
+      }
+    })
+
+    it('never touches money coming in: abroad is about a purchase', async () => {
+      generateStructured.mockResolvedValue(pick('cat:income_services', { moms: 'utomlands' }))
+      const res = await selectAccount(
+        input({ candidates: [], transaction: { description: 'Inbetalning', amount: 1000, currency: 'SEK' } }),
+      )
+      expect(res.vatTreatment).toBe(getDefaultVatTreatmentForCategory('income_services'))
+    })
+
+    it('offers the model exactly the four answers the booking can carry', async () => {
+      await selectAccount(input())
+      const { schema, system } = generateStructured.mock.calls[0][0]
+      expect(schema.jsonSchema.properties.moms.enum).toEqual(['sverige', 'utomlands', 'omvand_eu', 'omvand_utanfor_eu'])
+      expect(schema.jsonSchema.properties).not.toHaveProperty('reverse_charge')
+      for (const id of schema.jsonSchema.properties.moms.enum) expect(system).toContain(`"${id}"`)
+    })
   })
 
   describe('self-consistency', () => {

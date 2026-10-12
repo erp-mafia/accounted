@@ -53,6 +53,11 @@ describe('classifyBankLineDecision', () => {
     expect(out.suggestions.map((s) => s.matches_final)).toEqual([false, true])
   })
 
+  it('logs that a counterpart match was contested, so the veto can be judged against what was booked', () => {
+    const out = classifyBankLineDecision({ proposals: [{ ...counterparty, contested: true }, assistant], read, actedOn: null, final: final() })
+    expect(out.suggestions.map((s) => s.contested)).toEqual([true, undefined])
+  })
+
   it('changed: the named suggestion was edited to another account', () => {
     const out = classifyBankLineDecision({ proposals: [assistant], read, actedOn: 'assistant:tx-1', final: final({ account: '5410' }) })
     expect(out).toMatchObject({ outcome: 'changed', acted_on: 0 })

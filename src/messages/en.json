@@ -3719,6 +3719,7 @@
     "ai_more": "More",
     "ai_less": "Less",
     "ai_reverse_charge": "with reverse charge",
+    "ai_reverse_charge_non_eu": "with reverse charge, service from outside the EU",
     "rec_kicker": "Our recommendation",
     "rec_kicker_manual": "Your booking",
     "rec_change": "Change",

@@ -2366,4 +2366,57 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect(mapping.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614'])
     expect(findCalls('chart_of_accounts', 'not')).toEqual([['default_vat_treatment', 'is', null]])
   })
+
+  // crm#1028: the proposal names the basis box of a reverse charge (a service
+  // from outside the EU is ruta 22), and the route hands it to the mapping
+  // instead of letting every such purchase book as an EU service.
+  it('hands the reverse-charge kind of the body to the category mapping', async () => {
+    const tx = makeTransaction({ id: 'tx-1', amount: -250, merchant_name: 'Vercel', journal_entry_id: null })
+    mockBuildMappingResultFromCategory.mockReturnValue({
+      ...defaultMappingResult,
+      debit_account: '5420',
+      credit_account: '1930',
+      vat_lines: [
+        { account_number: '2645', debit_amount: 62.5, credit_amount: 0, description: '' },
+        { account_number: '2614', debit_amount: 0, credit_amount: 62.5, description: '' },
+        { account_number: '4531', debit_amount: 250, credit_amount: 0, description: '' },
+        { account_number: '4598', debit_amount: 0, credit_amount: 250, description: '' },
+      ],
+    })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [], error: null }) // reconcileRcBasisWithChart: no momskoder
+    enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    mockSaveUserMappingRule.mockResolvedValue(undefined)
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // CAS update
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: true, category: 'expense_software', vat_treatment: 'reverse_charge', reverse_charge_kind: 'non_eu_services' },
+      }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+    const { status, body } = await parseJsonResponse<unknown>(response)
+    expect(status, JSON.stringify(body)).toBe(200)
+    expect(mockBuildMappingResultFromCategory.mock.calls[0][4]).toBe('reverse_charge')
+    expect(mockBuildMappingResultFromCategory.mock.calls[0][7]).toBe('non_eu_services')
+    const mapping = mockCreateTransactionJournalEntry.mock.calls[0][4] as { vat_lines: Array<{ account_number: string }> }
+    expect(mapping.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614', '4531', '4598'])
+  })
+
+  it('rejects a reverse-charge kind on a treatment that is not reverse charge with 400', async () => {
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: true, category: 'expense_software', vat_treatment: 'standard_25', reverse_charge_kind: 'non_eu_services' },
+      }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+    expect((await parseJsonResponse(response)).status).toBe(400)
+    expect(mockBuildMappingResultFromCategory).not.toHaveBeenCalled()
+  })
 })

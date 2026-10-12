@@ -1,10 +1,15 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getSuggestedTemplates, buildCounterpartySuggestion, rowProposal } from './category-suggestions'
-import { bindTemplateToSettlementAccount, findCounterpartyTemplatesBatch } from '@/lib/bookkeeping/counterparty-templates'
+import {
+  bindTemplateToSettlementAccount,
+  findCounterpartyTemplatesBatch,
+  type CounterpartyTemplateMatch,
+} from '@/lib/bookkeeping/counterparty-templates'
 import { loadCounterLegTopology, type CounterLegTopology } from '@/lib/cash-accounts/service'
 import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
 import { loadReads, readIsFresh, assistantSuggestionFromRead, mergeAssistantSuggestion, type AssistantRead } from '@/lib/agent/categorize/read'
-import type { BookingProposal } from '@/lib/bookkeeping/proposal'
+import { slateAccount, type BookingProposal } from '@/lib/bookkeeping/proposal'
+import { COUNTERPART_SEEN_FOR_DIRECT } from './direct-booking'
 import type { Transaction, EntityType, CategorizationTemplate, MappingRule } from '@/types'
 
 /**
@@ -16,7 +21,9 @@ import type { Transaction, EntityType, CategorizationTemplate, MappingRule } fro
  * Order per row: the company's learned counterpart first, then a mapping
  * rule that matched, the assistant's stored read when at least likely, the
  * catalog's keyword and MCC matches, an unsure assistant read, and last
- * templates a rule merely points at (picker only).
+ * templates a rule merely points at (picker only). A weak counterpart match
+ * the stored read booked differently keeps its place but is marked
+ * contested, which takes it off the row (contestCounterpart below).
  */
 export interface Proposed {
   proposals: Record<string, BookingProposal[]>
@@ -161,10 +168,49 @@ export async function proposeForTransactions(
       assistant_reads[tx.id] = read
       const s = assistantSuggestionFromRead(read, tx, entityType)
       if (s) proposals[tx.id] = mergeAssistantSuggestion(proposals[tx.id] ?? [], s)
+      const cpMatch = counterpartyMatches.get(tx.id)
+      if (cpMatch) proposals[tx.id] = contestCounterpart(proposals[tx.id] ?? [], cpMatch, read)
     }
   }
 
   return { proposals, assistant_reads }
+}
+
+/**
+ * A learned-counterpart match is weak when the row does not carry the
+ * counterpart's own name (the token and fuzzy tiers), or when the company
+ * has booked that counterpart fewer times than it takes to call it a habit.
+ * A rule the person set to book on its own, matched by name, is an
+ * instruction and never weak.
+ */
+function isWeakCounterpartMatch(match: Pick<CounterpartyTemplateMatch, 'matchMethod' | 'template'>): boolean {
+  if (match.matchMethod === 'token_subset' || match.matchMethod === 'fuzzy') return true
+  if (match.template.mode === 'auto') return false
+  return match.template.occurrence_count < COUNTERPART_SEEN_FOR_DIRECT
+}
+
+/**
+ * The stored read as a check on the counterpart match, never a replacement
+ * for it. When the match is weak and the read had that very counterpart on
+ * its slate (so it saw the company's history for it) and still booked the
+ * row on another account, the two disagree and neither is the row's
+ * recommendation: the match is marked contested, which rowProposal and
+ * booksWithoutReview honour, and stays in the list for the picker, the
+ * review and an agent. A read that found nothing, or never saw the
+ * counterpart, contests nothing.
+ */
+export function contestCounterpart(
+  list: BookingProposal[],
+  match: Pick<CounterpartyTemplateMatch, 'matchMethod' | 'template'>,
+  read: Pick<AssistantRead, 'account' | 'candidates'>,
+): BookingProposal[] {
+  if (!read.account || !isWeakCounterpartMatch(match)) return list
+  return list.map((p) => {
+    if (p.source !== 'counterparty') return p
+    const account = slateAccount(p)
+    const sawIt = read.candidates.some((c) => c.source === 'counterparty_template' && c.account === account)
+    return sawIt && read.account !== account ? { ...p, contested: true } : p
+  })
 }
 
 /** The proposal a row wears and books from: the first that matched the row itself. */

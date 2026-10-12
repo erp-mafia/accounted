@@ -983,6 +983,44 @@ describe('POST batch-categorize reverse-charge basis pair', () => {
     }
     expect(supabase.from.mock.calls.filter(([table]) => table === 'chart_of_accounts')).toHaveLength(1)
   })
+
+  it('books the basis box an item names: a service from outside the EU is ruta 22 (crm#1028)', async () => {
+    const { supabase } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: [
+        {
+          data: {
+            id: TX_A, company_id: COMPANY_ID, date: '2026-05-12', amount: -1000, currency: 'SEK',
+            merchant_name: 'SAAS', cash_account_id: null, journal_entry_id: null,
+          },
+          error: null,
+        },
+        { data: [{ id: TX_A }], error: null },
+      ],
+      company_settings: { data: { entity_type: 'aktiebolag' }, error: null },
+      fiscal_periods: [
+        // ensureFiscalPeriod, then checkPeriodLock.
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      ],
+      chart_of_accounts: { data: [], error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+    const categorization = {
+      is_business: true, category: 'expense_software', vat_treatment: 'reverse_charge', reverse_charge_kind: 'non_eu_services',
+    }
+
+    const res = await POST(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`,
+        { items: [{ transaction_id: TX_A, categorization }] },
+      ),
+      batchParams(),
+    )
+
+    expect(res.status).toBe(200)
+    const mapping = createTxJE.mock.calls[0][4] as { vat_lines: Array<{ account_number: string }> }
+    expect(mapping.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614', '4531', '4598'])
+  })
 })
 
 describe('POST batch-categorize double-booking guards (parity with :categorize and the dashboard route)', () => {

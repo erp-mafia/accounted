@@ -265,6 +265,7 @@ export default function QuickReviewDialog({
         label: pick.label,
         category: pick.category ?? (p.booking.kind === 'counterparty' ? (amountForLegs < 0 ? 'expense_other' : 'income_other') : p.booking.category),
         vat_treatment: pick.account.startsWith('2') || pick.vat === 'none' ? 'exempt' : pick.vat,
+        reverse_charge_kind: pick.reverseChargeKind,
         amount: amountForLegs,
         has_underlag: opts.fromDocument || !!transaction?.document_id,
       })

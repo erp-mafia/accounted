@@ -614,6 +614,14 @@ describe('reverse-charge basis pair (#2919)', () => {
   it.each([
     { account_override: undefined, chartRow: undefined, momskoder: [], expected: ['2645', '2614', '4535', '4598'] },
     {
+      // crm#1028: a service from outside the EU reports its basis in ruta 22.
+      account_override: undefined,
+      reverse_charge_kind: 'non_eu_services',
+      chartRow: undefined,
+      momskoder: [],
+      expected: ['2645', '2614', '4531', '4598'],
+    },
+    {
       account_override: '4531',
       chartRow: { account_number: '4531', account_class: 4, is_active: true },
       momskoder: [],
@@ -632,7 +640,7 @@ describe('reverse-charge basis pair (#2919)', () => {
       momskoder: [{ account_number: '5420', default_vat_treatment: 'reverse_charge_eu_services' }],
       expected: ['2645', '2614'],
     },
-  ])('posts $expected with account_override $account_override', async ({ account_override, chartRow, momskoder, expected }) => {
+  ])('posts $expected with account_override $account_override', async ({ account_override, reverse_charge_kind, chartRow, momskoder, expected }) => {
     const { supabase } = rcSupabase(chartRow, momskoder)
     mockServiceClient.mockReturnValue(supabase)
 
@@ -642,6 +650,7 @@ describe('reverse-charge basis pair (#2919)', () => {
         category: 'expense_software',
         vat_treatment: 'reverse_charge',
         ...(account_override ? { account_override } : {}),
+        ...(reverse_charge_kind ? { reverse_charge_kind } : {}),
       }),
       routeParams(),
     )

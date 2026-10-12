@@ -386,6 +386,83 @@ describe('counterparty-templates', () => {
       expect(result).toBeNull()
     })
 
+    describe('what surrounds a merchant is not the merchant', () => {
+      // SEB and Swedbank end every card row with "Kortköp/uttag", which the
+      // key normalizer folds to one word, put the card's own token before it,
+      // and the card network pads the city on after the name. In production
+      // a template learned from one purchase was offered for every other
+      // purchase on that card, and a restaurant in San Francisco was offered
+      // the account of a software vendor there.
+      const cardRow = (name: string) =>
+        makeTransaction({ merchant_name: null, description: name, original_description: `${name} Kortköp/uttag` })
+      const learnedFrom = (bankLine: string, occurrence_count: number) =>
+        makeCategorizationTemplate({
+          counterparty_name: normalizeCounterpartyName(bankLine),
+          confidence: 0.8,
+          occurrence_count,
+          counterparty_aliases: [],
+        })
+      const match = async (template: ReturnType<typeof learnedFrom>, tx: ReturnType<typeof makeTransaction>) => {
+        const { supabase, enqueue } = createQueuedMockSupabase()
+        enqueue({ data: [template] })
+        return findCounterpartyTemplate(supabase as never, 'user-1', tx)
+      }
+
+      it('does not offer another merchant in the same city, however often that one was booked', async () => {
+        const resend = 'RESEND                SAN FRANCISCO Kortköp/uttag'
+        expect(normalizeCounterpartyName(resend)).toBe('resend san francisco kortköputtag')
+        const row = cardRow('BUN MEE               SAN FRANCISCO')
+
+        expect(await match(learnedFrom(resend, 1), row)).toBeNull()
+        expect(await match(learnedFrom(resend, 12), row)).toBeNull()
+      })
+
+      it('does not offer the short-named merchant to the next one in that city either', async () => {
+        const bunMee = learnedFrom('BUN MEE               SAN FRANCISCO Kortköp/uttag', 12)
+
+        expect(await match(bunMee, cardRow('CHEZ PANISSE          SAN FRANCISCO'))).toBeNull()
+      })
+
+      it('holds for a city of several words, where the shared words alone would have been evidence enough', async () => {
+        const figma = learnedFrom('FIGMA                 MOUNTAIN VIEW Kortköp/uttag', 12)
+
+        expect(await match(figma, cardRow('BUN MEE               MOUNTAIN VIEW'))).toBeNull()
+      })
+
+      it('never offers the first merchant a card was used at for the other purchases on that card', async () => {
+        const sl = learnedFrom('SL              K1631 Kortköp/uttag', 2)
+        expect(sl.counterparty_name).toBe('sl k1631 kortköputtag')
+
+        expect(await match(sl, cardRow('Burger King 6008 Burge K1631'))).toBeNull()
+        // Nor by spelling: next to the shared tail, two short names are a few edits apart.
+        expect(await match(sl, cardRow('APO AB          K1631'))).toBeNull()
+        expect(await match(learnedFrom('Ryde Sweden AB  K8781 Kortköp/uttag', 12), cardRow('OK Q8 K8781'))).toBeNull()
+      })
+
+      it('never counts a bare KORT in front of the merchant as a shared name', async () => {
+        const power = makeCategorizationTemplate({ counterparty_name: 'kort power linkoping 97', occurrence_count: 1, counterparty_aliases: [] })
+        const row = makeTransaction({ merchant_name: null, description: 'KORT             EKO LINKOPING   97', original_description: 'KORT             EKO LINKOPING   97' })
+
+        expect(await match(power, row)).toBeNull()
+      })
+
+      it('finds the same merchant on another card, with or without booking history behind it', async () => {
+        const thomann = learnedFrom('THOMANN DE SE   K7739 Kortköp/uttag', 1)
+
+        const result = await match(thomann, cardRow('THOMANN DE SE   K2110'))
+        expect(result?.matchMethod).toBe('token_subset')
+      })
+
+      it('still finds the same merchant when the rest of the line differs', async () => {
+        const spotify = await match(learnedFrom('SPOTIFY STOCKHOLM Kortköp/uttag', 3), cardRow('SPOTIFY P0A1B2 GÖTEBORG'))
+        expect(spotify?.matchMethod).toBe('token_subset')
+
+        const hetzner = makeCategorizationTemplate({ counterparty_name: 'hetzner com', occurrence_count: 11, counterparty_aliases: [] })
+        const row = makeTransaction({ merchant_name: null, description: 'HETZNER ONLINE GMBH', original_description: 'HETZNER ONLINE GMBH' })
+        expect((await match(hetzner, row))?.matchMethod).toBe('token_subset')
+      })
+    })
+
     it('prefers exact normalized over token subset', async () => {
       const exact = makeCategorizationTemplate({
         id: 'tmpl-exact',

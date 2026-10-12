@@ -74,6 +74,7 @@ export async function readTransaction(
     category: selection.category,
     vat_treatment: selection.vatTreatment,
     reverse_charge: selection.reverseCharge,
+    reverse_charge_kind: selection.reverseChargeKind,
     confidence: selection.confidence,
     model_confidence: selection.modelConfidence,
     agreement: selection.agreement,
@@ -87,27 +88,32 @@ export async function readTransaction(
 }
 
 export async function storeRead(supabase: SupabaseClient, companyId: string, read: AssistantRead): Promise<void> {
-  const { error } = await supabase.from('transaction_assistant_reads').upsert(
-    {
-      company_id: companyId,
-      transaction_id: read.transaction_id,
-      underlag_key: read.underlag_key,
-      has_underlag: read.has_underlag,
-      account: read.account,
-      category: read.category,
-      vat_treatment: read.vat_treatment,
-      reverse_charge: read.reverse_charge,
-      confidence: read.confidence,
-      model_confidence: read.model_confidence,
-      agreement: read.agreement,
-      from_candidate: read.from_candidate,
-      reasoning: read.reasoning,
-      candidates: read.candidates,
-      model: read.model,
-      prompt_sha256: read.prompt_sha256 ?? null,
-    },
-    { onConflict: 'transaction_id' },
-  )
+  const row = {
+    company_id: companyId,
+    transaction_id: read.transaction_id,
+    underlag_key: read.underlag_key,
+    has_underlag: read.has_underlag,
+    account: read.account,
+    category: read.category,
+    vat_treatment: read.vat_treatment,
+    reverse_charge: read.reverse_charge,
+    confidence: read.confidence,
+    model_confidence: read.model_confidence,
+    agreement: read.agreement,
+    from_candidate: read.from_candidate,
+    reasoning: read.reasoning,
+    candidates: read.candidates,
+    model: read.model,
+    prompt_sha256: read.prompt_sha256 ?? null,
+  }
+  const store = (values: Record<string, unknown>) =>
+    supabase.from('transaction_assistant_reads').upsert(values, { onConflict: 'transaction_id' })
+  let { error } = await store({ ...row, reverse_charge_kind: read.reverse_charge_kind ?? null })
+  // The code can reach production before the reverse_charge_kind column
+  // does (the migration job queues behind other pipelines). PostgREST then
+  // refuses the whole row (PGRST204): the read is kept without its box,
+  // which books as an EU service, rather than lost.
+  if (error?.code === 'PGRST204') ({ error } = await store(row))
   if (error) throw new Error(error.message)
 }
 
@@ -119,11 +125,12 @@ export async function loadReads(
 ): Promise<Map<string, AssistantRead>> {
   const out = new Map<string, AssistantRead>()
   if (transactionIds.length === 0) return out
+  // Every column: naming reverse_charge_kind would fail the whole read, and
+  // empty every row of its suggestion, while the code is live ahead of the
+  // column (see storeRead).
   const { data } = await supabase
     .from('transaction_assistant_reads')
-    .select(
-      'transaction_id, underlag_key, has_underlag, account, category, vat_treatment, reverse_charge, confidence, model_confidence, agreement, from_candidate, reasoning, candidates, model, prompt_sha256, updated_at',
-    )
+    .select('*')
     .eq('company_id', companyId)
     .in('transaction_id', transactionIds)
   for (const row of (data ?? []) as unknown as AssistantRead[]) {
@@ -153,6 +160,7 @@ export function assistantSuggestionFromRead(
     label,
     category,
     vat_treatment: read.vat_treatment,
+    reverse_charge_kind: read.reverse_charge_kind,
     amount: tx.amount,
     confidence: read.confidence,
     description: firstSentence(read.reasoning),

@@ -17,8 +17,11 @@ export const ASSISTANT_SURE = 0.8
 export const ASSISTANT_LIKELY = 0.5
 
 export function booksWithoutReview(
-  s: Pick<SuggestedTemplate, 'source' | 'seen_count' | 'confidence' | 'has_underlag' | 'rule_mode' | 'rule_own' | 'rule_requires_review'>,
+  s: Pick<SuggestedTemplate, 'source' | 'seen_count' | 'confidence' | 'has_underlag' | 'rule_mode' | 'rule_own' | 'rule_requires_review' | 'contested'>,
 ): boolean {
+  // A match the assistant's read took down from the row is the opposite of a
+  // settled decision, however often its counterpart was booked.
+  if (s.contested) return false
   // A matched mapping rule of the company's own that does not ask for a
   // review. System defaults (company_id null) are the catalog in disguise.
   if (s.source === 'rule') return !!s.rule_own && !s.rule_requires_review

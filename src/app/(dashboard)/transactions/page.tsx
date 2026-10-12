@@ -106,6 +106,7 @@ import { resolveDetachErrorMessage } from '@/components/transactions/detach-unde
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, BookingTemplateLibrary, DeductionType } from '@/types'
+import type { ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 import { mutate as globalMutate } from 'swr'
 import { rowProposal, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { readIsFresh, type AssistantRead } from '@/lib/agent/categorize/read-shape'
@@ -1971,6 +1972,8 @@ export default function TransactionsPage() {
     isBusiness: boolean
     category?: TransactionCategory
     vatTreatment?: VatTreatment
+    /** The basis box of a reverse charge the proposal names (ruta 21 or 22): sent as reverse_charge_kind. */
+    reverseChargeKind?: ReverseChargeKind
     accountOverride?: string
     templateId?: string
     /** A learned counterpart rule: the server books its stored lines. */
@@ -2004,7 +2007,7 @@ export default function TransactionsPage() {
     // state: a silent row the duplicate guard flagged, parked for the batch's
     // single confirmation and therefore neither booked nor failed.
   }): Promise<BatchCategorizeOutcome> {
-    const { id, isBusiness, category, vatTreatment, accountOverride, templateId, counterpartyTemplateId, proposalId, inboxItemId, dimensions, vatAmount, confirmNoMatch, force, expectedDuplicateJournalEntryId, silent, narration } = args
+    const { id, isBusiness, category, vatTreatment, reverseChargeKind, accountOverride, templateId, counterpartyTemplateId, proposalId, inboxItemId, dimensions, vatAmount, confirmNoMatch, force, expectedDuplicateJournalEntryId, silent, narration } = args
     try {
       setProcessingId(id)
       const response = await fetch(`/api/transactions/${id}/categorize`, {
@@ -2014,6 +2017,7 @@ export default function TransactionsPage() {
           is_business: isBusiness,
           category,
           vat_treatment: vatTreatment,
+          ...(reverseChargeKind ? { reverse_charge_kind: reverseChargeKind } : {}),
           account_override: accountOverride,
           template_id: templateId,
           ...(counterpartyTemplateId ? { counterparty_template_id: counterpartyTemplateId } : {}),
@@ -4123,6 +4127,7 @@ export default function TransactionsPage() {
       isBusiness: true,
       category: body.category,
       vatTreatment: body.vat_treatment,
+      reverseChargeKind: body.reverse_charge_kind,
       accountOverride: body.account_override,
       templateId: body.template_id,
       counterpartyTemplateId: body.counterparty_template_id,

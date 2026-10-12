@@ -60,7 +60,7 @@ For every row decide which case it is. The case decides the tool:
 
 \`gnubok_suggest_categories({ transaction_ids: [...] })\`, at most 20 ids per call (extra ids are dropped silently, so batch them yourself). Per transaction you get \`proposals\`, best first, each with \`label\`, \`why\`, \`confidence\`, \`account\`, \`vat_treatment\`, \`books_without_review\` and \`categorize_args\`, the exact arguments to book it with. Rows in \`no_signal_transaction_ids\` have no signal at all: do not copy a category from a neighbouring row. Look up the counterparty's history with \`gnubok_query_journal({ text: "<merchant>" })\`, look for an underlag, or ask.
 
-A suggestion is evidence, not permission. History shows what was booked before, not that it was right. \`books_without_review: true\` means the company's own rule books it this way; still check that the underlag agrees.
+A suggestion is evidence, not permission. History shows what was booked before, not that it was right. \`books_without_review: true\` means the company's own rule books it this way; still check that the underlag agrees. A proposal with \`contested: true\` is a weak match to an earlier counterpart that Accounted's own read of the row booked on another account: it comes last, and neither it nor the read is a recommendation, so decide from the underlag or ask.
 
 ### 4. Stage the booking
 

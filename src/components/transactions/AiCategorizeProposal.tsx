@@ -9,6 +9,7 @@ import AgentAvatar from '@/components/agent/AgentAvatar'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { getAccountName } from '@/lib/bookkeeping/client-account-names'
 import { firstSentence, type AssistantRead } from '@/lib/agent/categorize/read-shape'
+import type { ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 import type { TransactionCategory, VatTreatment } from '@/types'
 
 /**
@@ -31,6 +32,8 @@ export interface AiProposalMeta {
 export interface AssistantPick {
   account: string
   vat: VatTreatment | 'none'
+  /** The basis box of a reverse charge the read named (ruta 21 or 22); absent books an EU service. */
+  reverseChargeKind?: ReverseChargeKind | null
   category: TransactionCategory | null
   label: string
 }
@@ -63,7 +66,13 @@ interface Props {
 export function pickFromRead(read: AssistantRead): AssistantPick | null {
   if (!read.account) return null
   const label = read.candidates.find((c) => c.account === read.account)?.label ?? getAccountName(read.account)
-  return { account: read.account, vat: read.vat_treatment ?? 'none', category: read.category, label }
+  return {
+    account: read.account,
+    vat: read.vat_treatment ?? 'none',
+    reverseChargeKind: read.reverse_charge_kind ?? null,
+    category: read.category,
+    label,
+  }
 }
 
 /** Where the read came from, for the calibration sample logged on book. */
@@ -198,7 +207,12 @@ export default function AiCategorizeProposal({
         <span>
           {t('ai_instead')} <span className="font-mono text-foreground">{pick.account}</span>
           <span className="text-foreground"> {pick.label}</span>
-          {pick.vat === 'reverse_charge' ? <span className="text-foreground"> {t('ai_reverse_charge')}</span> : null}
+          {pick.vat === 'reverse_charge' ? (
+            <span className="text-foreground">
+              {' '}
+              {t(pick.reverseChargeKind === 'non_eu_services' ? 'ai_reverse_charge_non_eu' : 'ai_reverse_charge')}
+            </span>
+          ) : null}
           {why ? <span className="ml-1">· {why}</span> : null}
         </span>
       )}

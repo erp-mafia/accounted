@@ -3719,6 +3719,7 @@
     "ai_more": "Mer",
     "ai_less": "Mindre",
     "ai_reverse_charge": "med omvänd moms",
+    "ai_reverse_charge_non_eu": "med omvänd moms, tjänst från land utanför EU",
     "rec_kicker": "Vår rekommendation",
     "rec_kicker_manual": "Din kontering",
     "rec_change": "Byt",

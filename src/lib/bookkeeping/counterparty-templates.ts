@@ -186,11 +186,36 @@ const GENERIC_TOKENS = new Set([
   'sweden', 'sverige', 'stockholm', 'göteborg', 'goteborg', 'malmö', 'malmo',
 ])
 
-/** Distinctive = long and specific enough to identify a merchant. */
-function distinctiveTokens(tokens: string[]): string[] {
-  return tokens.filter(
-    (t) => t.length >= 4 && !GENERIC_TOKENS.has(t) && !/^\d+$/.test(t)
-  )
+/**
+ * What the card rails staple onto every purchase, as the key normalizer
+ * leaves it: "Kortköp/uttag" loses its slash and becomes one word, some banks
+ * lead with a bare "KORT", and the card's own token ("K8066") rides along.
+ * They say HOW the row was paid, and every card row of the company carries
+ * them, so they are never evidence of WHO was paid: a template learned from
+ * one purchase on a card was offered for every other purchase on that card.
+ * The receipt matcher folds the same noise before its own comparison
+ * (CARD_VERB and CARD_TOKEN in lib/documents/core-receipt-matcher.ts). A bare
+ * "uttag" stays: it can be what the row is ("Eget uttag").
+ */
+const CARD_RAIL_TOKENS = new Set(['kortköputtag', 'kortkoputtag', 'kortköp', 'kortkop', 'kort'])
+const CARD_TOKEN = /^k\d{4}$/
+
+/** A key's words without the card rails' wording: what is left says who was paid. */
+function withoutRails(tokens: string[]): string[] {
+  return tokens.filter((t) => !CARD_RAIL_TOKENS.has(t) && !CARD_TOKEN.test(t))
+}
+
+/**
+ * The words that can name a merchant, in the order the line has them: no
+ * rails' wording, no generic commerce or place words, no bare numbers.
+ */
+function nameTokens(tokens: string[]): string[] {
+  return withoutRails(tokens).filter((t) => !GENERIC_TOKENS.has(t) && !/^\d+$/.test(t))
+}
+
+/** Distinctive = a name word long enough to identify a merchant. */
+function distinctiveTokens(name: string[]): string[] {
+  return name.filter((t) => t.length >= 4)
 }
 
 /**
@@ -378,6 +403,13 @@ export async function findCounterpartyTemplatesBatch(
     }
   }
 
+  // Each key split once for the token and fuzzy tiers below.
+  const keyed = templates.map((tmpl) => {
+    const tokens = tmpl.counterparty_name.split(' ')
+    const name = nameTokens(tokens)
+    return { tmpl, tokens, bare: withoutRails(tokens).join(' '), name, distinct: distinctiveTokens(name) }
+  })
+
   for (const tx of transactions) {
     // Identity anchors on the immutable bank original, not the working title:
     // the ingest boundary strips the trailing channel phrase off description
@@ -419,23 +451,38 @@ export async function findCounterpartyTemplatesBatch(
     // FRANCISCO"), and a card-core descriptor ("anthropic") contained in a
     // template learned from the full splintered string before card-core
     // normalization existed. These differ by whole words, not typos.
+    //
+    // One of the two has to find its own first name word in the other. A
+    // line and a learned key both lead with who was paid, and what follows
+    // (a product, a city) is shared by strangers: "BUN MEE SAN FRANCISCO"
+    // matched a software vendor on the city alone, its own name being all
+    // short words. And a key that is the same name once the rails' wording
+    // is gone is the same counterpart on another card, with or without
+    // booking history behind it.
     const txTokens = counterpartyTokenSet(rawName)
-    const coreDistinct = distinctiveTokens(normalized.split(' '))
+    const coreTokens = normalized.split(' ')
+    const coreBare = withoutRails(coreTokens).join(' ')
+    const coreName = nameTokens(coreTokens)
+    const coreDistinct = distinctiveTokens(coreName)
     let tokenBest: CategorizationTemplate | null = null
     let tokenBestShared = 0
-    for (const tmpl of templates) {
-      const tmplTokens = tmpl.counterparty_name.split(' ')
-      const tmplDistinct = distinctiveTokens(tmplTokens)
+    for (const { tmpl, tokens: tmplTokens, bare: tmplBare, name: tmplName, distinct: tmplDistinct } of keyed) {
+      const sameName = coreName.length > 0 && coreBare === tmplBare
+      const leadShared =
+        (coreName.length > 0 && tmplTokens.includes(coreName[0])) ||
+        (tmplName.length > 0 && txTokens.has(tmplName[0]))
       const templateInTx =
+        leadShared &&
         tmplDistinct.length > 0 &&
         tmplDistinct.every((t) => txTokens.has(t)) &&
         (tmplDistinct.length >= 2 || tmpl.occurrence_count >= MIN_SINGLE_TOKEN_OCCURRENCES)
       const coreInTemplate =
+        leadShared &&
         coreDistinct.length > 0 &&
         coreDistinct.every((t) => tmplTokens.includes(t)) &&
         (coreDistinct.length >= 2 || tmpl.occurrence_count >= MIN_SINGLE_TOKEN_OCCURRENCES)
-      if (!templateInTx && !coreInTemplate) continue
-      const shared = templateInTx ? tmplDistinct.length : coreDistinct.length
+      if (!sameName && !templateInTx && !coreInTemplate) continue
+      const shared = sameName ? Infinity : templateInTx ? tmplDistinct.length : coreDistinct.length
       if (
         shared > tokenBestShared ||
         (shared === tokenBestShared &&
@@ -455,19 +502,24 @@ export async function findCounterpartyTemplatesBatch(
       continue
     }
 
-    // 4. Fuzzy Levenshtein match
+    // 4. Fuzzy Levenshtein match, on the names without the rails' wording:
+    // a shared tail ("k1631 kortköputtag") is longer than most names and put
+    // any two short ones within three edits of each other.
     let bestMatch: CategorizationTemplate | null = null
     let bestDistance = Infinity
-    for (const tmpl of templates) {
-      const dist = levenshteinDistance(normalized, tmpl.counterparty_name)
-      const maxAllowed = normalized.length <= 10 ? 2 : 3
+    let bestLength = 0
+    for (const { tmpl, bare: tmplBare } of keyed) {
+      if (!coreBare || !tmplBare) continue
+      const dist = levenshteinDistance(coreBare, tmplBare)
+      const maxAllowed = coreBare.length <= 10 ? 2 : 3
       if (dist <= maxAllowed && dist < bestDistance) {
         bestDistance = dist
         bestMatch = tmpl
+        bestLength = tmplBare.length
       }
     }
     if (bestMatch) {
-      const similarity = 1 - bestDistance / Math.max(normalized.length, bestMatch.counterparty_name.length)
+      const similarity = 1 - bestDistance / Math.max(coreBare.length, bestLength)
       result.set(tx.id, {
         template: bestMatch,
         matchMethod: 'fuzzy',

@@ -36,6 +36,8 @@ export interface LoggedSuggestion {
   model: string | null
   prompt_sha256: string | null
   matches_final: boolean
+  /** Set on a counterpart match the stored read took off the row (BookingProposal.contested). */
+  contested?: true
 }
 
 export interface BankLineFinal {
@@ -122,6 +124,7 @@ export function classifyBankLineDecision(input: {
     model: p.source === 'assistant' ? (input.read?.model ?? null) : null,
     prompt_sha256: p.source === 'assistant' ? (input.read?.prompt_sha256 ?? null) : null,
     matches_final: final ? matchesFinal(p, final, entityType) : false,
+    ...(p.contested ? { contested: true as const } : {}),
   }))
 
   if (!final) return { suggestions, acted_on: null, outcome: 'dismissed' }

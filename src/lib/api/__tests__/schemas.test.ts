@@ -1732,6 +1732,16 @@ describe('CategorizeTransactionSchema', () => {
     expect(result.success).toBe(true)
   })
 
+  it('accepts the basis box of a reverse charge, and only on a reverse charge', () => {
+    const base = { is_business: true, category: 'expense_software' }
+    for (const reverse_charge_kind of ['eu_goods', 'eu_services', 'non_eu_services']) {
+      expect(CategorizeTransactionSchema.safeParse({ ...base, vat_treatment: 'reverse_charge', reverse_charge_kind }).success).toBe(true)
+    }
+    expect(CategorizeTransactionSchema.safeParse({ ...base, vat_treatment: 'standard_25', reverse_charge_kind: 'non_eu_services' }).success).toBe(false)
+    expect(CategorizeTransactionSchema.safeParse({ ...base, reverse_charge_kind: 'non_eu_services' }).success).toBe(false)
+    expect(CategorizeTransactionSchema.safeParse({ ...base, vat_treatment: 'reverse_charge', reverse_charge_kind: 'usa' }).success).toBe(false)
+  })
+
   it('rejects missing is_business', () => {
     const result = CategorizeTransactionSchema.safeParse({ category: 'private' })
     expect(result.success).toBe(false)
