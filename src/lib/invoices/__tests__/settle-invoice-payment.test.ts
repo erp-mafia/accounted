@@ -505,8 +505,24 @@ describe('settleInvoicePayment', () => {
         journal_entry_id: 'je-1',
         transaction_id: null,
         notes: null,
+        source: null,
+        external_ref: null,
       })
       expect(findCalls('invoice_payments', 'delete')).toHaveLength(0)
+    })
+
+    it('carries the payment source and outside reference to the row', async () => {
+      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'ip-1' } }) // invoice_payments insert
+      enqueue({ data: [{ id: 'inv-1' }] }) // CAS update matched
+      const invoice = payableInvoice({ journal_entry_id: 'je-orig', exchange_rate: 1 } as Partial<Invoice>)
+      await settleInvoicePayment(supabase as unknown as SupabaseClient, 'company-1', 'user-1', {
+        ...BASE_PARAMS,
+        invoice,
+        paymentSource: 'stripe',
+        externalRef: 'evt_123',
+      })
+      expect(findCalls('invoice_payments', 'insert')[0][0]).toMatchObject({ source: 'stripe', external_ref: 'evt_123' })
     })
 
     it('stores a partial in invoice currency, not the SEK line total', async () => {

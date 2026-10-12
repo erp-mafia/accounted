@@ -381,6 +381,8 @@ async function processCheckoutSessionEvent(
     // Money is in the Stripe balance, not the bank: settle against 1686
     // (Fordringar för kontokort); the payout later clears 1686 into 1930.
     settlementAccountNumber: '1686',
+    paymentSource: 'stripe',
+    externalRef: event.id,
   })
 
   if (!result.ok) {

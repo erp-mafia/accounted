@@ -199,6 +199,28 @@ const RETAINED = new Set([
   'projects.user_id',
   'team_invitations.invited_by',
   'teams.created_by',
+  // Collections connection: who consented to the provider's terms, accepted
+  // them, chose the reminder batch, ended it or last changed its rules. The
+  // company's record of its agreement with the provider and of its posting
+  // rules (behandlingshistorik).
+  'collection_connection_events.actor_user_id',
+  'collection_connections.consented_by',
+  'collection_connections.ended_by',
+  'collection_connections.ladder_enabled_by',
+  'collection_connections.terms_accepted_by',
+  'collection_connections.user_id',
+  // Collection cases: who handed the invoice over and who decided each step
+  // (pause, withdraw, approve). The company's record of what it demanded of
+  // its customer and on whose word.
+  'collection_case_events.actor_user_id',
+  'collection_cases.opened_by',
+  // Payment forwards: who marked a failed or partly ignored report to the
+  // provider as handled. The company's record of who closed that question.
+  'collection_payment_forwards.attention_resolved_by',
+  // Bank sweep: who said a bank row that may have paid an invoice under
+  // collection pays something else. The company's record of why the case
+  // went on.
+  'collection_sweep_hits.resolved_by',
   // Company integrations: the company's accounts, not the person's
   'pos_connections.created_by',
   'pos_connections.ended_by',

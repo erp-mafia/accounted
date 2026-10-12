@@ -16,6 +16,7 @@ import type { MissingUnderlagSample } from '@/lib/worklist/missing-underlag'
 import { NO_AI_CONNECTION, type AiConnection } from '@/lib/onboarding/ai-clients'
 import { AiTaskAction } from './AiTaskAction'
 import { KopplingarChips } from './KopplingarChips'
+import { BATCH_REVIEW_HREF } from '@/lib/collections/batch-dialog'
 import {
   ArrowLeftRight,
   ArrowRight,
@@ -34,6 +35,7 @@ import {
   ShieldCheck,
   Stamp,
   FileQuestion,
+  Gavel,
 } from 'lucide-react'
 import type {
   ExpensePayoutDue,
@@ -314,7 +316,10 @@ export default function AttGoraSection({
     counts.document_unclassified > 0 ||
     counts.document_field_review > 0 ||
     counts.arkiv_finding > 0 ||
-    counts.peppol_delivery_failed > 0
+    counts.peppol_delivery_failed > 0 ||
+    counts.collection_decision > 0 ||
+    counts.collection_attention > 0 ||
+    counts.collection_batch_ready > 0
   const bevakaRows =
     counts.overdue_invoice > 0 ||
     counts.deadline_action > 0 ||
@@ -610,6 +615,33 @@ export default function AttGoraSection({
                         label={t('row_peppol_delivery_failed')}
                         hint={t('row_peppol_delivery_failed_detail')}
                         count={counts.peppol_delivery_failed}
+                      />
+                    )}
+                    {counts.collection_decision > 0 && (
+                      <WorklistRow
+                        href="/invoices?status=collections"
+                        icon={Gavel}
+                        label={t('row_collection_decision')}
+                        hint={t('row_collection_decision_detail')}
+                        count={counts.collection_decision}
+                      />
+                    )}
+                    {counts.collection_attention > 0 && (
+                      <WorklistRow
+                        href="/invoices?status=collections"
+                        icon={Gavel}
+                        label={t('row_collection_attention')}
+                        hint={t('row_collection_attention_detail')}
+                        count={counts.collection_attention}
+                      />
+                    )}
+                    {counts.collection_batch_ready > 0 && (
+                      <WorklistRow
+                        href={BATCH_REVIEW_HREF}
+                        icon={Gavel}
+                        label={t('row_collection_batch')}
+                        hint={t('row_collection_batch_cta')}
+                        count={counts.collection_batch_ready}
                       />
                     )}
                   </div>

@@ -20,6 +20,9 @@ vi.mock('../categories', () => ({
   countExpensePayoutsDue: vi.fn().mockResolvedValue(2),
   countSkattekontoPaymentDue: vi.fn().mockResolvedValue(1),
   countFailedPeppolDeliveries: vi.fn().mockResolvedValue(2),
+  countCollectionDecisions: vi.fn().mockResolvedValue(0),
+  countCollectionAttention: vi.fn().mockResolvedValue(0),
+  countCollectionBatchItems: vi.fn().mockResolvedValue(0),
 }))
 
 import { getWorklistCounts } from '../aggregate'
@@ -63,7 +66,30 @@ describe('getWorklistCounts', () => {
       agreement_payment_missed: 0,
       arkiv_finding: 0,
       peppol_delivery_failed: 2,
+      collection_decision: 0,
+      collection_attention: 0,
+      collection_batch_ready: 0,
     })
+  })
+
+  it('counts collection decisions and collections attention into the total', async () => {
+    const { countCollectionDecisions, countCollectionAttention } = await import('../categories')
+    vi.mocked(countCollectionDecisions).mockResolvedValueOnce(2)
+    vi.mocked(countCollectionAttention).mockResolvedValueOnce(1)
+    const { counts, total } = await getWorklistCounts(supabase, 'company-1')
+    expect(counts.collection_decision).toBe(2)
+    expect(counts.collection_attention).toBe(1)
+    expect(total).toBe(38)
+    expect(countCollectionDecisions).toHaveBeenCalledWith(supabase, 'company-1')
+  })
+
+  it('counts the pending collections batch items into the total, on the session client', async () => {
+    const { countCollectionBatchItems } = await import('../categories')
+    vi.mocked(countCollectionBatchItems).mockResolvedValueOnce(4)
+    const { counts, total } = await getWorklistCounts(supabase, 'company-1')
+    expect(counts.collection_batch_ready).toBe(4)
+    expect(total).toBe(39)
+    expect(countCollectionBatchItems).toHaveBeenCalledWith(supabase, 'company-1')
   })
 
   it('counts failed Peppol deliveries on the caller session client, like every other category', async () => {

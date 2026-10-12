@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
+import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
 
 const log = createLogger('invoice-payment-row')
 
@@ -55,7 +56,19 @@ export interface RecordInvoicePaymentRowParams {
   exchangeRate?: number | null
   /** Free text on the row (rate provenance, link note). Default null. */
   notes?: string | null
+  /**
+   * Where the payment came from (invoice_payments.source). Payments on an
+   * invoice under collection are reported to the collections provider unless
+   * the source is 'collections' (the provider collected it itself). Omitted:
+   * null, read as "not from the provider".
+   */
+  source?: InvoicePaymentSource | null
+  /** The payment's reference in the system it came from (the provider's payment reference for 'collections'). */
+  externalRef?: string | null
 }
+
+/** invoice_payments.source (migration 20261012030300_invoice_payment_provenance.sql). */
+export type InvoicePaymentSource = 'manual' | 'bank' | 'stripe' | 'collections' | 'link' | 'import'
 
 export type RecordInvoicePaymentRowResult =
   | { ok: true; id: string }
@@ -88,6 +101,8 @@ export async function recordInvoicePaymentRow(
     transactionId,
     exchangeRate,
     notes,
+    source,
+    externalRef,
   } = params
   const amount = appliedPaymentAmount(invoice, newPaidAmount)
 
@@ -104,6 +119,8 @@ export async function recordInvoicePaymentRow(
       journal_entry_id: journalEntryId,
       transaction_id: transactionId ?? null,
       notes: notes ?? null,
+      source: source ?? null,
+      external_ref: externalRef ?? null,
     })
     .select('id')
     .single()
@@ -115,6 +132,9 @@ export async function recordInvoicePaymentRow(
       ...(error?.code ? { code: error.code } : {}),
     }
   }
+  // A payment on an invoice under collection waits in the forwarding outbox
+  // (a database trigger put it there); report it as soon as this request answers.
+  scheduleCollectionForwardDrain(companyId)
   return { ok: true, id: (data as { id: string }).id }
 }
 

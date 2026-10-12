@@ -158,3 +158,17 @@ describe('quotes', () => {
     expect(parseQuoteListTab(null)).toBeNull()
   })
 })
+
+describe('the collections tab', () => {
+  it('shows exactly the invoices the context marks as with the collections provider', () => {
+    const invoice = { id: 'inv-1', status: 'sent', invoice_number: '1', credited_invoice_id: null, document_type: 'invoice' } as const
+    expect(matchesInvoiceListTab(invoice, 'collections', { inCollection: new Set(['inv-1']) })).toBe(true)
+    expect(matchesInvoiceListTab(invoice, 'collections', { inCollection: new Set(['inv-2']) })).toBe(false)
+    expect(matchesInvoiceListTab(invoice, 'collections')).toBe(false)
+    // A case that needs a person (the Att göra row lands on this view).
+    expect(matchesInvoiceListTab(invoice, 'collections', { collectionAttention: new Set(['inv-1']) })).toBe(true)
+    expect(parseInvoiceListTab('collections')).toBe('collections')
+    expect(INVOICE_LIST_TABS).toContain('collections')
+  })
+})
+

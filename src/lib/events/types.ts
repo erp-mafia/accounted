@@ -346,6 +346,37 @@ export type CoreEvent =
       userId: string
       companyId: string
     }}
+  // Collections: an invoice handed over to the company's collections
+  // provider, its stage moving, and the case closing. Ids and stages only:
+  // nothing about the debtor travels on the bus. userId is the person who
+  // acted, or, for a change the sync read from the provider, the person who
+  // handed the invoice over.
+  | { type: 'collection.case_opened'; payload: {
+      caseId: string
+      invoiceId: string
+      stage: string
+      origin: 'handover' | 'batch' | 'distribution'
+      companyId: string
+      userId: string
+    }}
+  | { type: 'collection.case_updated'; payload: {
+      caseId: string
+      invoiceId: string
+      stage: string
+      previousStage: string
+      closeReason: string | null
+      companyId: string
+      userId: string
+    }}
+  | { type: 'collection.case_closed'; payload: {
+      caseId: string
+      invoiceId: string
+      stage: string
+      previousStage: string
+      closeReason: string | null
+      companyId: string
+      userId: string
+    }}
   // Agent self-reported feedback (gnubok_feedback tool). The product team
   // queries event_log for `agent.feedback` and routes to a backlog.
   | { type: 'agent.feedback'; payload: {

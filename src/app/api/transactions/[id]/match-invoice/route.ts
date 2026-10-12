@@ -778,6 +778,7 @@ export const POST = withRouteContext(
       transactionId,
       exchangeRate: fx.required ? fx.rate : invoice.exchange_rate,
       notes: paymentNotes,
+      source: 'bank',
     })
 
     if (!recorded.ok) {

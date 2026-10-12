@@ -23,6 +23,7 @@ const RENDER_SITES = [
   'src/lib/pending-operations/commit.ts',
   'src/lib/invoices/issue-and-book-invoice.ts',
   'src/lib/invoices/recurring-schedule-service.ts',
+  'src/lib/collections/case-document.ts',
 ]
 
 function sourceFiles(dir: string, out: string[] = []): string[] {

@@ -323,6 +323,11 @@ describe('getErrorMessage: existing patterns still work', () => {
     expect(msg).toBe('Bokföringen är låst t.o.m. 2024-12-31.')
   })
 
+  it('explains the refusal to cancel an invoice with an open collection case', () => {
+    const dbError = Object.assign(new Error('COLLECTION_CASE_OPEN: withdraw the open collection case before cancelling the invoice'), { code: '23514' })
+    expect(getErrorMessage(dbError)).toBe('Fakturan har ett öppet inkassoärende. Återkalla ärendet på fakturan innan du makulerar den.')
+  })
+
   it('falls through to context fallback when no pattern matches', () => {
     const msg = getErrorMessage('Random English error', { context: 'transaction' })
     expect(msg).toBe('Kunde inte hantera transaktionen. Försök igen.')

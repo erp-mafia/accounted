@@ -13,6 +13,9 @@ import {
   countDocumentFieldReviews,
   countMissedAgreementPayments,
   countArkivFindings,
+  countCollectionAttention,
+  countCollectionBatchItems,
+  countCollectionDecisions,
   countOverdueInvoices,
   countPendingOperations,
   countReconciliationDue,
@@ -91,6 +94,9 @@ export async function getWorklistCounts(
     agreementPaymentMissed,
     arkivFinding,
     peppolDeliveryFailed,
+    collectionDecision,
+    collectionAttention,
+    collectionBatchReady,
   ] = await Promise.all([
     countUnbookedTransactions(supabase, companyId),
     countUnbookedSkattekontoRows(supabase, companyId),
@@ -118,6 +124,9 @@ export async function getWorklistCounts(
     brain ? countMissedAgreementPayments(supabase, companyId) : 0,
     brain ? countArkivFindings(supabase, companyId) : 0,
     countFailedPeppolDeliveries(supabase, companyId),
+    countCollectionDecisions(supabase, companyId),
+    countCollectionAttention(supabase, companyId),
+    countCollectionBatchItems(supabase, companyId),
   ])
 
   return {
@@ -140,6 +149,9 @@ export async function getWorklistCounts(
       agreement_payment_missed: agreementPaymentMissed,
       arkiv_finding: arkivFinding,
       peppol_delivery_failed: peppolDeliveryFailed,
+      collection_decision: collectionDecision,
+      collection_attention: collectionAttention,
+      collection_batch_ready: collectionBatchReady,
     },
     total:
       bookTransaction +
@@ -158,6 +170,9 @@ export async function getWorklistCounts(
       documentFieldReview +
       agreementPaymentMissed +
       arkivFinding +
-      peppolDeliveryFailed,
+      peppolDeliveryFailed +
+      collectionDecision +
+      collectionAttention +
+      collectionBatchReady,
   }
 }

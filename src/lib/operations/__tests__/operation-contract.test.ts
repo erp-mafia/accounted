@@ -16,7 +16,7 @@ import { OPERATION_RISK_TIERS } from '@/lib/pending-operations/risk-tiers'
 import { OPERATION_LABEL_KEYS, singleActionWarnings } from '@/components/pending-operations/vocabulary'
 import { listEndpoints } from '@/lib/api/v1/registry'
 import '@/lib/api/v1/load-routes'
-import { OPERATIONS } from '../registry'
+import { ALL_OPERATIONS as OPERATIONS } from '../registry'
 
 const messages = (lang: 'sv' | 'en') =>
   JSON.parse(readFileSync(fileURLToPath(new URL(`../../../messages/${lang}.json`, import.meta.url)), 'utf8')) as {

@@ -46,6 +46,7 @@ import { commitMatchBatchAllocation } from '@/lib/bookkeeping/engine'
 import { roundOre } from '@/lib/money'
 import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
 import { chunk } from '@/lib/utils'
+import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
 
 export type MatchBatchAllocation =
   | { kind: 'customer_invoice'; invoice_id: string; amount: number }
@@ -192,6 +193,10 @@ export async function matchTransactionBatch(
     const code = (result as RpcErr | null)?.code ?? 'BATCH_RPC_FAILED'
     return { ok: false, code, details: (result as RpcErr | null)?.details }
   }
+
+  // Payment rows the RPC wrote on an invoice under collection wait in the
+  // forwarding outbox (a database trigger); report them once this request answers.
+  scheduleCollectionForwardDrain(companyId)
 
   // One set of events per allocation (match_confirmed always, *.paid when the
   // allocation settled the invoice in full), shared with the MCP executor so

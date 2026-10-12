@@ -33,6 +33,7 @@ export type BehandlingshistorikSource =
   | 'migration_reset'
   | 'sie_import'
   | 'bank_file_import'
+  | 'collection_case'
 
 export interface BehandlingshistorikActor {
   type: BehandlingshistorikActorType

@@ -24,6 +24,7 @@ import type {
   EntityType,
   Invoice,
 } from '@/types'
+import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
 
 ensureInitialized()
 
@@ -232,6 +233,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     accountingMethod,
     log,
   })
+  // Issued: when the credited invoice is under collection, a database trigger
+  // queued the credit note for the provider.
+  scheduleCollectionForwardDrain(companyId)
   const journalEntryId = issueResult.journalEntryId
   partialFailures.push(...issueResult.failures)
 

@@ -25,7 +25,7 @@ import { invoiceDisplayNumber, isTextLikeLine } from '@/lib/invoices/display'
 import { getDisplayTotal, getAmountToPay } from '@/lib/invoices/rounding'
 import { workTypeLabel } from '@/lib/invoices/rot-rut-rules'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
-import { creditNoteNeedsJournalEntry } from '@/lib/invoices/issue-credit-note'
+import { creditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { getCreditNoteSendMode } from '@/lib/invoices/credit-note-send-mode'
 import { canCopyInvoice } from '@/lib/invoices/copy-invoice'
 import { isRegisteredFromBooks } from '@/lib/invoices/registered-from-books'
@@ -72,6 +72,7 @@ import {
   MoreHorizontal,
   ClipboardList,
   ExternalLink,
+  Gavel,
 } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
@@ -105,6 +106,12 @@ import { useBranding } from '@/lib/branding/brand-context'
 import { getCountryName } from '@/lib/vat/country-codes'
 import { remindersActiveFor } from '@/lib/invoices/reminders-enabled'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
+import { CollectionCaseCard } from '@/components/collections/CollectionCaseCard'
+import { CollectionChip } from '@/components/collections/CollectionChip'
+import { SendToCollectionDialog } from '@/components/collections/SendToCollectionDialog'
+import { useCaseWords, useInvoiceCollection } from '@/components/collections/case-client'
+import { remindersAside, showSendToCollection } from '@/lib/collections/invoice-entry'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { newEditorHref } from '@/lib/invoices/editor/new-editor-params'
 
 /** Minimized Peppol delivery projection from GET /api/invoices/[id]/peppol/deliveries. */
@@ -350,6 +357,14 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [peppolReadAt, setPeppolReadAt] = useState<number | null>(null)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  // Collections: the invoice's case and the handover dialog. Only a customer
+  // invoice of our own can have one; the read is an obligation path and
+  // renders an open case whatever the start gates say.
+  const collectionEligible =
+    !!invoice && (invoice.document_type ?? 'invoice') === 'invoice' && !invoice.credited_invoice_id && !invoice.is_self_billed
+  const collection = useInvoiceCollection(id, collectionEligible)
+  const { tp: tCollections } = useCaseWords(collection.data?.availability.displayName ?? null)
+  const [showCollectionDialog, setShowCollectionDialog] = useState(false)
   const [showFinalizeDialog, setShowFinalizeDialog] = useState(false)
   const [isFinalizing, setIsFinalizing] = useState(false)
   const [nextNumberPreview, setNextNumberPreview] = useState<string | null>(null)
@@ -1844,7 +1859,29 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // faktura / Konvertera), so it lives in the menu with the other
   // alternatives instead of adding a fourth header button.
   const canCreateOrder = (isProforma && invoice.status !== 'cancelled') || canConvertQuote
+  // "Skicka till inkasso": an overdue, unpaid invoice with no open case (or
+  // a delivered claim the provider offers to start), while the start entry
+  // points are not hidden (lib/collections/invoice-entry.ts).
+  const collectionCase = collection.data?.case ?? null
+  const collectionCaseOpen = collectionCase?.isOpen === true
+  const showCollectionItem =
+    collectionEligible &&
+    !!collection.data &&
+    showSendToCollection({
+      invoice,
+      start: collection.data.availability.start,
+      openCase: collectionCase,
+      today: todayIsoStockholm(),
+    })
+  // What the Påminnelser card says about reminders when collections is in play.
+  const collectionAside = collection.data
+    ? remindersAside({ invoice, connection: collection.data.availability.connection, openCase: collectionCase })
+    : null
+  const collectionRemindersAside: string | null = collectionAside
+    ? tCollections(collectionAside.key, collectionAside.key === 'reminders_batch' ? { days: collectionAside.days } : {})
+    : null
   const hasMenu =
+    showCollectionItem ||
     canCreateOrder ||
     offersOwnPdf ||
     (isCopyable && canWrite) ||
@@ -1925,6 +1962,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 <CalendarClock className="h-3 w-3" />
                 {t('badge_accrued')}
               </Badge>
+            )}
+            {collectionCaseOpen && collectionCase?.submissionStatus === 'registered' && invoice.status !== 'paid' && (
+              <CollectionChip stage={collectionCase.stage} displayName={collection.data?.availability.displayName ?? null} />
             )}
           </div>
           <p className="page-header-desc mt-1 text-sm text-muted-foreground">{metaParts.join(' · ')}</p>
@@ -2136,6 +2176,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                       <ReceiptText className="h-4 w-4" />
                       {t('create_credit_note')}
                     </Link>
+                  </DropdownMenuItem>
+                )}
+                {showCollectionItem && (
+                  <DropdownMenuItem onSelect={() => setShowCollectionDialog(true)} disabled={!canWrite}>
+                    <Gavel className="h-4 w-4" />
+                    {tCollections('menu_send')}
                   </DropdownMenuItem>
                 )}
                 {showPeppolActions && (
@@ -2836,11 +2882,28 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         </DetailSection>
       )}
 
+      {collectionCase && collection.data && (
+        <CollectionCaseCard
+          invoiceId={invoice.id}
+          view={collectionCase}
+          availability={collection.data.availability}
+          withdrawFee={collection.data.withdrawFee}
+          invoiceStatus={invoice.status}
+          canWrite={canWrite}
+          onChanged={collection.setCase}
+          onRefresh={collection.reload}
+          onOpenHandover={() => setShowCollectionDialog(true)}
+          onRegisterPayment={() => setShowPaymentDialog(true)}
+        />
+      )}
+
       {(invoice.status === 'sent' || invoice.status === 'overdue' || reminders.length > 0) && (
         <DetailSection
           kicker={t('reminders_card_title')}
           aside={
-            autoRemindersEnabled !== null ? (
+            collectionRemindersAside ? (
+              <span className="text-[11px] text-muted-foreground">{collectionRemindersAside}</span>
+            ) : autoRemindersEnabled !== null ? (
               <span className="text-[11px] tabular-nums text-muted-foreground">
                 {autoRemindersEnabled
                   ? t('reminders_schedule_aside', {
@@ -2931,6 +2994,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       {/* Remove/cancel confirmation. An unissued credit-note draft and an
           unnumbered invoice draft are hard deleted; other numbered drafts are
           retained as cancelled to preserve their number series. */}
+      {collection.data && (
+        <SendToCollectionDialog
+          invoiceId={invoice.id}
+          invoiceNumber={invoice.invoice_number}
+          open={showCollectionDialog}
+          onOpenChange={setShowCollectionDialog}
+          availability={collection.data.availability}
+          onDone={collection.setCase}
+        />
+      )}
+
       {/* Peppol send confirmation (convention 10: confirm up front). */}
       <Dialog open={showPeppolSendDialog} onOpenChange={setShowPeppolSendDialog}>
         <DialogContent>
@@ -3134,6 +3208,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         invoice={invoice}
         onSuccess={() => {
           fetchInvoice()
+          // The collection case card shows the provider's amounts: read them again once the payment is reported.
+          void collection.reloadAfterPayment()
           toast({
             title: t('paid_toast_title'),
             description: t('paid_toast_description', { number: invoice.invoice_number ?? '' }),

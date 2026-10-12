@@ -7,6 +7,7 @@ import {
   countInboxDocuments,
   countOverdueInvoices,
   countPendingOperations,
+  countCollectionBatchItems,
   countReconciliationDue,
   countSuggestedMatches,
   countUnclassifiedDocuments,
@@ -159,6 +160,30 @@ describe('simple head counts', () => {
     enqueue({ count: 3 })
     await expect(fn(supabase, COMPANY)).resolves.toBe(3)
     expect(mockSupabase.from).toHaveBeenCalledWith(table)
+  })
+})
+
+describe('countPendingOperations and the collections batch', () => {
+  it('leaves the daily collections batch to its own row', async () => {
+    enqueue({ count: 2 })
+    await expect(countPendingOperations(supabase, COMPANY)).resolves.toBe(2)
+    expect(findCall('pending_operations', 'neq')).toEqual(['operation_type', 'collections_daily_batch'])
+  })
+
+  it('counts the items of the pending batch less the removed ones', async () => {
+    enqueue({ data: [{ id: 'op-1', params: { items: [{}, {}, {}] } }], error: null })
+    enqueue({ count: 1, error: null })
+    await expect(countCollectionBatchItems(supabase, COMPANY)).resolves.toBe(2)
+    expect(findCalls('collection_batch_removals', 'eq')).toContainEqual(['pending_operation_id', 'op-1'])
+    expect(mockSupabase.from).toHaveBeenCalledWith('pending_operations')
+    expect(findCalls('pending_operations', 'eq')).toContainEqual(['operation_type', 'collections_daily_batch'])
+  })
+
+  it('counts nothing without a pending batch, and soft-fails to 0', async () => {
+    enqueue({ data: [], error: null })
+    await expect(countCollectionBatchItems(supabase, COMPANY)).resolves.toBe(0)
+    enqueue({ data: null, error: { message: 'boom' } })
+    await expect(countCollectionBatchItems(supabase, COMPANY)).resolves.toBe(0)
   })
 })
 

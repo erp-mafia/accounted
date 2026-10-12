@@ -340,6 +340,11 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_list_pos_sales_days: 'transactions:read',
   gnubok_get_pos_sales_day: 'transactions:read',
   gnubok_book_pos_sales_day: 'bookkeeping:write',
+  // Collections (served while COLLECTIONS_ENABLED is set).
+  gnubok_list_collection_candidates: 'invoices:read',
+  gnubok_get_collection_case: 'invoices:read',
+  gnubok_send_invoice_to_collection: 'invoices:write',
+  gnubok_collection_case_action: 'invoices:write',
   gnubok_delete_supplier_invoice: 'suppliers:write',
   gnubok_uncredit_supplier_invoice: 'suppliers:write',
   gnubok_update_supplier_invoice_item_account: 'suppliers:write',

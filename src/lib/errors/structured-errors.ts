@@ -7484,6 +7484,340 @@ export function conflictCode(dbMessage: unknown): keyof typeof DB_CONFLICTS | 'C
 }
 
 // ─────────────────────────────────────────────────────────────────
+// Collections and delivery (lib/collections, lib/invoices/distribution).
+// The thrower composes the message with the provider's name from the Connect
+// catalogue (lib/collections/errors.ts collectionsErrorMessage), so these are
+// thrown_message_sv and message_sv is the neutral fallback ("inkassobolaget").
+// lib/collections/__tests__/errors.test.ts keeps each fallback equal to its
+// template there. Connector codes that already carry Peppol wording above
+// (CONNECTOR_UNREACHABLE and friends) are answered under COLLECTIONS_* aliases.
+// ─────────────────────────────────────────────────────────────────
+
+const COLLECTIONS: Record<string, StructuredErrorEntry> = {
+  COLLECTIONS_DISABLED: {
+    httpStatus: 503,
+    message_sv: 'Inkasso är inte tillgängligt just nu.',
+    message_en: 'Debt collection is not available right now.',
+  },
+  COLLECTIONS_CAPABILITY_BLOCKED: {
+    httpStatus: 403,
+    message_sv: 'Påminnelser och inkasso ingår i betalplanen. Uppgradera för att fortsätta.',
+    message_en: 'Reminders and debt collection are part of the paid plan. Upgrade to continue.',
+  },
+  COLLECTIONS_NOT_ACTIVE: {
+    httpStatus: 409,
+    message_sv: 'Aktivera inkasso och utskick först.',
+    message_en: 'Activate debt collection and delivery first.',
+  },
+  COLLECTIONS_UNAVAILABLE: {
+    httpStatus: 503,
+    message_sv: 'Kopplingen till inkassobolaget är inte konfigurerad i den här miljön.',
+    message_en: 'The connection to the collection agency is not configured in this environment.',
+    thrown_message_sv: true,
+  },
+  COLLECTIONS_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Ärendet finns inte hos inkassobolaget.',
+    message_en: 'The collection agency has no such case.',
+    thrown_message_sv: true,
+  },
+  COLLECTIONS_CONNECTOR_UNREACHABLE: {
+    httpStatus: 502,
+    message_sv: 'Kunde inte nå inkassobolaget just nu. Försök igen om en stund.',
+    message_en: 'Could not reach the collection agency right now. Try again shortly.',
+    retryable: true,
+    thrown_message_sv: true,
+  },
+  COLLECTIONS_CONNECTOR_PROTOCOL_ERROR: {
+    httpStatus: 502,
+    message_sv: 'Svaret från inkassobolaget kunde inte tolkas. Kontakta support om felet kvarstår.',
+    message_en: 'The answer from the collection agency could not be read. Contact support if the problem persists.',
+    thrown_message_sv: true,
+  },
+  COLLECTIONS_CONNECTOR_SCOPE_MISSING: {
+    httpStatus: 403,
+    message_sv: 'Kopplingsnyckeln saknar behörighet för inkasso och utskick. Kontakta support.',
+    message_en: 'The connector key lacks permission for debt collection and delivery. Contact support.',
+  },
+  COLLECTIONS_CONNECTOR_RATE_LIMITED: {
+    httpStatus: 429,
+    message_sv: 'För många anrop till inkassobolaget på kort tid. Vänta en stund och försök igen.',
+    message_en: 'Too many calls to the collection agency in a short time. Wait a moment and try again.',
+    retryable: true,
+    thrown_message_sv: true,
+  },
+  COLLECTIONS_CONNECTOR_ERROR: {
+    httpStatus: 502,
+    message_sv: 'Inkassobolaget svarade med ett fel. Försök igen om en stund.',
+    message_en: 'The collection agency answered with an error. Try again shortly.',
+    thrown_message_sv: true,
+  },
+  COLLECTIONS_CONNECTION_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Företaget har ingen koppling för påminnelser och inkasso.',
+    message_en: 'The company has no connection for reminders and debt collection.',
+  },
+  COLLECTIONS_CONNECTION_EXISTS: {
+    httpStatus: 409,
+    message_sv: 'Företaget har redan en koppling för påminnelser och inkasso.',
+    message_en: 'The company already has a connection for reminders and debt collection.',
+  },
+  COLLECTIONS_CONNECTION_STEP: {
+    httpStatus: 409,
+    message_sv: 'Aktiveringen är inte i det steget längre. Ladda om sidan.',
+    message_en: 'The activation is no longer at that step. Reload the page.',
+  },
+  COLLECTIONS_DISCONNECT_BLOCKED: {
+    httpStatus: 409,
+    message_sv: 'Kopplingen kan inte avslutas medan det finns öppna ärenden eller obokförda inbetalningar och avräkningar.',
+    message_en: 'The connection cannot be ended while there are open cases or unbooked payments and settlements.',
+  },
+  COLLECTIONS_PROVIDER_UNAVAILABLE: {
+    httpStatus: 503,
+    message_sv: 'Villkoren för inkasso kunde inte hämtas just nu. Försök igen om en stund.',
+    message_en: 'The terms for debt collection could not be fetched right now. Try again shortly.',
+    retryable: true,
+  },
+  COLLECTIONS_TERMS_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Inkassobolaget har en nyare version av villkoren. Läs och godkänn den för att fortsätta.',
+    message_en: 'The collection agency has a newer version of its terms. Read and accept it to continue.',
+    thrown_message_sv: true,
+  },
+  COLLECTIONS_PAYOUT_ACCOUNT_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Välj ett bankkonto med bankgiro, plusgiro eller kontonummer för utbetalningarna.',
+    message_en: 'Choose a bank account with a bankgiro, plusgiro or account number for the payouts.',
+  },
+  COLLECTIONS_ORG_NUMBER_MISSING: {
+    httpStatus: 400,
+    message_sv: 'Lägg till företagets organisationsnummer under Företag först.',
+    message_en: 'Add the company\'s organisation number under Company first.',
+  },
+  COLLECTIONS_OWNER_NUMBER_MISMATCH: {
+    httpStatus: 400,
+    message_sv: 'Ägarens personnummer ska vara det som den enskilda firman är registrerad på.',
+    message_en: 'The owner\'s personal identity number must be the one the sole trader is registered under.',
+  },
+  COLLECTION_NOT_ELIGIBLE: {
+    httpStatus: 409,
+    message_sv: 'Fakturan uppfyller inte kraven för att skickas till inkasso.',
+    message_en: 'The invoice does not meet the requirements for debt collection.',
+  },
+  COLLECTION_REMAINING_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Fakturans kvarvarande belopp har ändrats. Öppna dialogen igen.',
+    message_en: 'The invoice\'s remaining amount has changed. Open the dialog again.',
+  },
+  COLLECTION_BANK_CANDIDATES: {
+    httpStatus: 409,
+    message_sv: 'Det finns inbetalningar som kan vara betalning av fakturan.',
+    message_en: 'There are incoming payments that may be payment of the invoice.',
+  },
+  COLLECTION_BANK_STALE: {
+    httpStatus: 409,
+    message_sv: 'Banken har inte synkats det senaste dygnet.',
+    message_en: 'The bank has not been synced in the last 24 hours.',
+  },
+  COLLECTION_ATTESTATION_REQUIRED: {
+    httpStatus: 409,
+    message_sv: 'Bekräfta kontrollerna i dialogen innan fakturan skickas.',
+    message_en: 'Confirm the checks in the dialog before the invoice is sent.',
+  },
+  COLLECTION_ATTESTATION_WEB_ONLY: {
+    httpStatus: 403,
+    message_sv: 'Det här måste godkännas av en person i Accounted.',
+    message_en: 'This must be approved by a person in Accounted.',
+  },
+  COLLECTION_CASE_EXISTS: {
+    httpStatus: 409,
+    message_sv: 'Fakturan har redan ett ärende.',
+    message_en: 'The invoice already has a case.',
+  },
+  COLLECTION_FORWARD_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Rapporteringen till inkassobolaget hittades inte för den här fakturan.',
+    message_en: 'The report to the collection agency was not found for this invoice.',
+  },
+  COLLECTION_FORWARD_NOT_ACTIONABLE: {
+    httpStatus: 409,
+    message_sv: 'Rapporteringen behöver inte åtgärdas längre. Ladda om sidan.',
+    message_en: 'The report no longer needs any action. Reload the page.',
+  },
+  COLLECTION_BATCH_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Inkassoomgången hittades inte.',
+    message_en: 'The collections batch was not found.',
+  },
+  COLLECTION_BATCH_NOT_PENDING: {
+    httpStatus: 409,
+    message_sv: 'Omgången är redan avgjord. Ladda om sidan.',
+    message_en: 'The batch has already been decided. Reload the page.',
+  },
+  COLLECTION_BATCH_EMPTY: {
+    httpStatus: 400,
+    message_sv: 'Minst en faktura måste vara kvar. Avvisa omgången om inget ska skickas.',
+    message_en: 'At least one invoice must remain. Reject the batch if nothing should be sent.',
+  },
+  COLLECTION_BATCH_ADMIN_ONLY: {
+    httpStatus: 403,
+    message_sv: 'Bara företagets ägare eller en administratör kan godkänna omgången.',
+    message_en: 'Only the company owner or an administrator can approve the batch.',
+  },
+  COLLECTION_POSSIBLE_PAYMENT_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Den möjliga betalningen hittades inte för den här fakturan.',
+    message_en: 'The possible payment was not found for this invoice.',
+  },
+  COLLECTION_POSSIBLE_PAYMENT_NOT_ACTIONABLE: {
+    httpStatus: 409,
+    message_sv: 'Den möjliga betalningen är redan hanterad. Ladda om sidan.',
+    message_en: 'The possible payment has already been handled. Reload the page.',
+  },
+  COLLECTION_CASE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Fakturan har inget öppet ärende hos inkassobolaget.',
+    message_en: 'The invoice has no open case at the collection agency.',
+    thrown_message_sv: true,
+  },
+  COLLECTION_ACTION_MESSAGE_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Skriv kort vad det gäller, minst tio tecken.',
+    message_en: 'Describe it briefly, at least ten characters.',
+  },
+  COLLECTION_START_STEP_UNAVAILABLE: {
+    httpStatus: 409,
+    message_sv: 'Inkassobolaget kan inte börja med det steget.',
+    message_en: 'The collection agency cannot start with that step.',
+    thrown_message_sv: true,
+  },
+  COLLECTION_PAYMENT_HISTORY_UNSUPPORTED: {
+    httpStatus: 409,
+    message_sv: 'Fakturans betalningar kan inte rapporteras till inkassobolaget. Kontrollera betalningarna på fakturan.',
+    message_en: 'The invoice\'s payments cannot be reported to the collection agency. Check the payments on the invoice.',
+    thrown_message_sv: true,
+  },
+  COLLECTION_DOCUMENT_UNAVAILABLE: {
+    httpStatus: 409,
+    message_sv: 'Fakturans PDF kunde inte tas fram. Försök igen om en stund.',
+    message_en: 'The invoice PDF could not be produced. Try again shortly.',
+  },
+  COLLECTION_DOCUMENT_TOO_LARGE: {
+    httpStatus: 413,
+    message_sv: 'Fakturans PDF är för stor för att skickas till inkassobolaget.',
+    message_en: 'The invoice PDF is too large to send to the collection agency.',
+    thrown_message_sv: true,
+  },
+  COLLECTION_REGISTER_PAYMENT: {
+    httpStatus: 409,
+    message_sv: 'Bokför betalningen på fakturan. Den rapporteras till inkassobolaget och ärendet avslutas när hela beloppet är betalt.',
+    message_en: 'Record the payment on the invoice. It is reported to the collection agency and the case closes when the whole amount is paid.',
+    thrown_message_sv: true,
+  },
+  COLLECTION_WITHDRAW_FEE_UNACKNOWLEDGED: {
+    httpStatus: 409,
+    message_sv: 'Inkassobolaget kan ta ut en avgift för återkallelsen enligt sina villkor. Bekräfta det innan ärendet återkallas.',
+    message_en: 'The collection agency may charge a fee for the withdrawal under its terms. Confirm this before the case is withdrawn.',
+    thrown_message_sv: true,
+  },
+  COLLECTION_PAUSE_UNTIL_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Välj ett datum efter i dag och högst ett år fram.',
+    message_en: 'Choose a date after today and at most a year ahead.',
+  },
+  COLLECTION_PAYMENT_NOT_REPORTED: {
+    httpStatus: 409,
+    message_sv: 'En betalning på fakturan är inte rapporterad till inkassobolaget än. Försök igen när den är rapporterad.',
+    message_en: 'A payment on the invoice has not been reported to the collection agency yet. Try again once it is reported.',
+    thrown_message_sv: true,
+  },
+  COLLECTION_DOCUMENT_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Den arkiverade PDF:en stämmer inte med den som skickades. Kontakta support.',
+    message_en: 'The archived PDF does not match the one that was sent. Contact support.',
+  },
+  CONNECTOR_UPSTREAM_DISABLED: {
+    httpStatus: 503,
+    message_sv: 'Tjänsten är tillfälligt avstängd.',
+    message_en: 'The service is temporarily switched off.',
+  },
+  CONNECTOR_IDEMPOTENCY_IN_FLIGHT: {
+    httpStatus: 409,
+    message_sv: 'Förfrågan behandlas redan. Försök igen om en stund.',
+    message_en: 'The request is already being processed. Try again shortly.',
+    retryable: true,
+  },
+  CONNECTOR_IDEMPOTENCY_MISMATCH: {
+    httpStatus: 409,
+    message_sv: 'En tidigare förfrågan med samma nyckel innehöll andra uppgifter, så inget skickades. Kontakta support.',
+    message_en: 'An earlier request with the same key carried different data, so nothing was sent. Contact support.',
+  },
+  CONNECTOR_CONTRACT_VERSION_UNSUPPORTED: {
+    httpStatus: 502,
+    message_sv: 'Den här versionen av Accounted är för gammal för kopplingstjänsten. Uppdatera installationen.',
+    message_en: 'This version of Accounted is too old for the connector service. Update the installation.',
+  },
+  CONNECTOR_CONNECTION_NOT_OWNED: {
+    httpStatus: 403,
+    message_sv: 'Kopplingen till inkassobolaget hör inte till det här företaget. Kontakta support.',
+    message_en: 'The connection to the collection agency does not belong to this company. Contact support.',
+    thrown_message_sv: true,
+  },
+  CONNECTOR_COLLECTIONS_NOT_ONBOARDED: {
+    httpStatus: 409,
+    message_sv: 'Företaget är inte anslutet till inkassobolaget ännu.',
+    message_en: 'The company is not connected to the collection agency yet.',
+    thrown_message_sv: true,
+  },
+  CONNECTOR_COLLECTIONS_NOT_APPROVED: {
+    httpStatus: 409,
+    message_sv: 'Inkassobolaget har inte godkänt företaget ännu.',
+    message_en: 'The collection agency has not approved the company yet.',
+    thrown_message_sv: true,
+  },
+  CONNECTOR_COLLECTIONS_CASE_NOT_OWNED: {
+    httpStatus: 404,
+    message_sv: 'Ärendet hör inte till det här företaget hos inkassobolaget.',
+    message_en: 'The case does not belong to this company at the collection agency.',
+    thrown_message_sv: true,
+  },
+  CONNECTOR_COLLECTIONS_ACTION_UNAVAILABLE: {
+    httpStatus: 409,
+    message_sv: 'Det går inte att göra det i ärendets nuvarande läge.',
+    message_en: 'That is not possible in the case\'s current state.',
+  },
+  CONNECTOR_COLLECTIONS_DEBTOR_INVALID: {
+    httpStatus: 422,
+    message_sv: 'Inkassobolaget godtog inte kunduppgifterna. Kontrollera adress och person- eller organisationsnummer.',
+    message_en: 'The collection agency did not accept the customer details. Check the address and the personal identity or organisation number.',
+    thrown_message_sv: true,
+  },
+  CONNECTOR_COLLECTIONS_DUPLICATE_CASE: {
+    httpStatus: 409,
+    message_sv: 'Inkassobolaget har redan ett öppet ärende för fakturan.',
+    message_en: 'The collection agency already has an open case for the invoice.',
+    thrown_message_sv: true,
+  },
+  CONNECTOR_COLLECTIONS_AMOUNT_INVALID: {
+    httpStatus: 422,
+    message_sv: 'Inkassobolaget godtog inte beloppet.',
+    message_en: 'The collection agency did not accept the amount.',
+    thrown_message_sv: true,
+  },
+  CONNECTOR_DELIVERY_METHOD_UNAVAILABLE: {
+    httpStatus: 422,
+    message_sv: 'Utskickssättet är inte tillgängligt för den här kunden.',
+    message_en: 'The delivery method is not available for this customer.',
+  },
+  CONNECTOR_DELIVERY_DOCUMENT_REJECTED: {
+    httpStatus: 422,
+    message_sv: 'Inkassobolaget godtog inte fakturans PDF.',
+    message_en: 'The collection agency did not accept the invoice PDF.',
+    thrown_message_sv: true,
+  },
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Combined registry
 // ─────────────────────────────────────────────────────────────────
 
@@ -7719,6 +8053,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...RECONCILIATION_LINK,
   ...NODE_SYSTEM,
   ...PAYMENT_ORDERS,
+  ...COLLECTIONS,
 }
 
 export function getErrorEntry(code: string): StructuredErrorEntry | undefined {

@@ -3,9 +3,10 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { Landmark, Store } from 'lucide-react'
+import { HandCoins, Landmark, Store } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { bankLogoUrl } from '@/lib/reconciliation/bank-logos'
+import { collectionsEntryShown, useCollectionsAvailability } from '@/components/collections/collections-client'
 import { GoogleMark } from '@/components/ui/provider-marks'
 import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
 import {
@@ -69,6 +70,11 @@ export function ConnectionsSettingsContent() {
   const { company, isSandbox } = useCompany()
   const companyId = company?.id ?? null
   const [status, setStatus] = useState<Status | null>(null)
+  // Påminnelser och inkasso shows only where the installation offers it to
+  // this company, or where a connection already exists.
+  const collections = useCollectionsAvailability()
+  const showCollections = collectionsEntryShown(collections)
+  const collectionsState = collections?.connection?.state ?? null
 
   const hasBanking = ENABLED_EXTENSION_IDS.has('enable-banking') && !isSandbox
   const hasSkatteverket = ENABLED_EXTENSION_IDS.has('skatteverket') && !isSandbox
@@ -281,7 +287,7 @@ export function ConnectionsSettingsContent() {
           })}
       </SettingsGroup>
 
-      {!isSandbox || hasStripe || hasShopify || hasWooCommerce || hasZettle ? (
+      {!isSandbox || hasStripe || hasShopify || hasWooCommerce || hasZettle || showCollections ? (
         <SettingsGroup label={t('group_payments_shop')}>
           {/* Kassasystem: core, not an extension (provider code lives in Accounted Connect). */}
           {!isSandbox &&
@@ -293,6 +299,24 @@ export function ConnectionsSettingsContent() {
               href: '/settings/pos',
               connected: status ? status.pos !== null : null,
               attention: status?.pos?.attention ?? false,
+            })}
+          {showCollections &&
+            row({
+              logo: <HandCoins className="h-4 w-4 text-foreground" aria-hidden="true" />,
+              name: t('collections'),
+              help: t('collections_help'),
+              state:
+                collectionsState === 'active'
+                  ? t('collections_active')
+                  : collectionsState === 'connecting' || collectionsState === 'needs_setup'
+                    ? t('collections_connecting')
+                    : t('not_connected'),
+              href: '/settings/collections',
+              connected: collectionsState === 'active',
+              attention:
+                collectionsState === 'needs_setup' ||
+                collections?.connection?.health === 'degraded' ||
+                collections?.connection?.health === 'action_required',
             })}
           {hasStripe &&
             row({

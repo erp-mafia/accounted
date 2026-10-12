@@ -262,7 +262,7 @@ import {
   toPublicToolName,
   type McpToolNamespace,
 } from './tool-namespace'
-import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
+import { getRiskLevel, requiresWebApproval } from '@/lib/pending-operations/risk-tiers'
 import {
   normalizeVatRateToDecimal,
   normalizeVatRateToFraction,
@@ -25373,6 +25373,16 @@ export const tools: McpTool[] = [
       // standard pending_operations:approve scope. Mirrors the web-UI gate
       // (BFL 5 kap 5§: irreversible postings require positive acknowledgment).
       const operation = op as PendingOperation
+      // Handing an invoice over to collection and escalating a case rest on
+      // a person's own word: only a person approves them, in Accounted.
+      if (requiresWebApproval(operation.operation_type, operation.params)) {
+        throw Object.assign(
+          new Error(
+            `Operation "${operation.operation_type}" can only be approved by a person in the Accounted web UI (Granskning). Ask the user to approve it there.`,
+          ),
+          { code: 'COLLECTION_ATTESTATION_WEB_ONLY' },
+        )
+      }
       if (operation.risk_level === 'high' && args.confirmed !== true) {
         throw new Error(
           `Operation "${operation.operation_type}" is risk_level=high: pass confirmed=true to approve. The web UI requires the same positive acknowledgment per BFL 5 kap 5§ (irreversible postings).`

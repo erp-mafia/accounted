@@ -61,6 +61,7 @@ import type {
   Invoice,
   InvoiceItem,
 } from '@/types'
+import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
 
 ensureInitialized()
 
@@ -446,6 +447,9 @@ export const POST = withRouteContext(
         accountingMethod: ((company as Record<string, unknown>).accounting_method || 'accrual') as AccountingMethod,
         log: opLog,
       })
+      // Issued: when the credited invoice is under collection, a database trigger
+      // queued the credit note for the provider.
+      scheduleCollectionForwardDrain(companyId)
       issuedJournalEntryId = issueResult.journalEntryId
 
       if (!issueResult.complete) {

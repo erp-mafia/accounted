@@ -180,6 +180,43 @@ export const WORKLIST_CATEGORIES = [
    *           and overdue (paid, partly paid, credited, cancelled).
    */
   'peppol_delivery_failed',
+  /**
+   * Invoices handed over to the collections provider whose case waits for
+   * the company's decision ("N inkassoärenden väntar på ditt beslut"): the
+   * next step to approve, a dispute, the customer's "already paid", legal
+   * action.
+   * Pending:  collection_cases open with stage 'awaiting_decision'.
+   * Done:     the stage leaves 'awaiting_decision' (the company decided, or
+   *           the provider moved on), read by the sync or the invoice page.
+   */
+  'collection_decision',
+  /**
+   * Collections cases a person must look at ("N saker kring inkasso behöver
+   * åtgärdas"): the SQL function collection_attention_case_ids. In this
+   * version: a handover the provider refused (until a new handover of the
+   * invoice, or the invoice is paid or credited), an open case whose last
+   * read or retry failed (until the next good read), a payment or credit
+   * note report the drain gave up on (until a person retries it or marks it
+   * handled), and a reported amount above what the provider still claims
+   * (until a person marks it handled), a bank row the payment-candidate
+   * sweep found for an open case (until it is booked or a person says it
+   * pays something else, and a case the sweep paused until it is resumed or
+   * closes), and a provider principal that differs from what the books
+   * expect (until the daily reconcile finds them equal, and a case it paused
+   * until it is resumed or closes). Settlements join it with their tables.
+   * Done:     each source row leaves its state.
+   */
+  'collection_attention',
+  /**
+   * The day's collections batch waiting for an administrator ("N förfallna
+   * fakturor att skicka vidare via {provider}"): the items of the one pending
+   * collections_daily_batch operation the ladder cron staged. Counted here,
+   * not under pending_operations.
+   * Pending:  a collections_daily_batch operation with status 'pending'.
+   * Done:     an administrator approved or rejected it, or the cron rejected
+   *           it after 72 hours.
+   */
+  'collection_batch_ready',
 ] as const
 
 export type WorklistCategory = (typeof WORKLIST_CATEGORIES)[number]

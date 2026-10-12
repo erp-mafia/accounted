@@ -48,6 +48,9 @@ import {
   type QuoteListTab,
 } from '@/lib/invoices/invoice-list-tabs'
 import { isInvoiceTypeEnabled, visibleInvoiceListTabs } from '@/lib/invoices/invoice-type-toggles'
+import type { CollectionsStage } from '@accounted/connect-contract'
+import { CHIP_LABEL_KEYS, CHIP_VARIANTS, collectionChipKind } from '@/lib/collections/stages'
+import { capitalizeFirst, providerWords } from '@/components/collections/collections-client'
 import { useInvoiceListVariant } from '@/lib/invoices/list-variant'
 import {
   fetchInvoiceRegisterCoverage,
@@ -164,6 +167,7 @@ const TAB_LABEL_KEYS: Record<ListTab, string> = {
   delivery_note: 'tab_delivery_note',
   credit: 'tab_credit',
   cancelled: 'tab_cancelled',
+  collections: 'tab_collections',
   // Quote views (/quotes): the decision states share the row chip labels.
   open: 'quote_status_open',
   accepted: 'quote_status_accepted',
@@ -199,6 +203,13 @@ const ROT_RUT_EXCEPTION_VARIANT: Partial<
 > = {
   partially_paid: 'warning',
   rejected: 'destructive',
+}
+
+/** An open collection case on an invoice, as the list shows it (collection_open_invoice_ids). */
+interface ListCollectionCase {
+  stage: CollectionsStage
+  inCollection: boolean
+  displayName: string | null
 }
 
 /** Ids behind the "Peppol misslyckades" chip (GET /api/invoices/peppol-failed). */
@@ -274,10 +285,26 @@ export default function InvoicesPage() {
   const isQuotesList = variant === 'quotes'
   const listPath = isQuotesList ? '/quotes' : '/invoices'
   const listTabs: readonly ListTab[] = isQuotesList ? QUOTE_LIST_TABS : INVOICE_LIST_TABS
+  // Open collection cases per invoice: the chips and the "Hos inkasso" view.
+  const [collectionCases, setCollectionCases] = useState<ReadonlyMap<string, ListCollectionCase>>(() => new Map())
+  const inCollectionIds = useMemo(
+    () => new Set([...collectionCases].filter(([, c]) => c.inCollection).map(([id]) => id)),
+    [collectionCases],
+  )
+  // Collection cases a person must look at (collection_attention_case_ids):
+  // the Att göra row lands on "Hos inkasso", so they are listed there too.
+  // `failed` holds the refused handovers, which have no open case to chip.
+  const [collectionAttention, setCollectionAttention] = useState<{ all: ReadonlySet<string>; failed: ReadonlySet<string> }>(() => ({
+    all: new Set(),
+    failed: new Set(),
+  }))
   const matchesTab = (invoice: Invoice, tab: ListTab): boolean =>
     isQuotesList
       ? matchesQuoteListTab(invoice, tab as QuoteListTab)
-      : matchesInvoiceListTab(invoice, tab as InvoiceListTab)
+      : matchesInvoiceListTab(invoice, tab as InvoiceListTab, {
+          inCollection: inCollectionIds,
+          collectionAttention: collectionAttention.all,
+        })
   const { company } = useCompany()
   const { canWrite } = useCanWrite()
   const router = useRouter()
@@ -330,6 +357,7 @@ export default function InvoicesPage() {
   const { toast } = useToast()
   const supabase = createClient()
   const t = useTranslations('invoices')
+  const tCollections = useTranslations('collections')
   const locale = useLocale()
   const tCommon = useTranslations('common')
   const tStart = useTranslations('start_cards')
@@ -408,7 +436,7 @@ export default function InvoicesPage() {
     // hundreds of rows to 3 skeleton stubs and replaying the stagger-enter
     // entrance for a row-scoped action was the "booking feels glitchy" jump.
     if (invoices.length === 0) setIsLoading(true)
-    const [invoicesResult, peppolFailedResult] = await Promise.allSettled([
+    const [invoicesResult, peppolFailedResult, collectionsResult, collectionAttentionResult] = await Promise.allSettled([
       fetchAllRows<Invoice>(
         ({ from, to }) =>
           supabase
@@ -431,11 +459,37 @@ export default function InvoicesPage() {
       // The chip's ids: the same definition as the Att göra row
       // (peppol_failed_invoice_ids). Quotes are never sent via Peppol.
       isQuotesList ? Promise.resolve<string[]>([]) : fetchPeppolFailedInvoiceIds(),
+      // Open collection cases (an obligation read: shown whatever the start
+      // gates say). Quotes never have one.
+      isQuotesList
+        ? Promise.resolve(null)
+        : Promise.resolve(supabase.rpc('collection_open_invoice_ids', { p_company_id: company.id })),
+      isQuotesList
+        ? Promise.resolve(null)
+        : Promise.resolve(supabase.rpc('collection_attention_case_ids', { p_company_id: company.id })),
     ])
 
     // A failed read leaves the chips as they were: they mark an exception,
     // and the Att göra row carries the same count.
     if (peppolFailedResult.status === 'fulfilled') setPeppolFailedIds(new Set(peppolFailedResult.value))
+    if (collectionsResult.status === 'fulfilled' && collectionsResult.value && !collectionsResult.value.error) {
+      const rows = (collectionsResult.value.data ?? []) as Array<{
+        invoice_id: string
+        stage: CollectionsStage
+        in_collection: boolean
+        display_name: string | null
+      }>
+      setCollectionCases(
+        new Map(rows.map((r) => [r.invoice_id, { stage: r.stage, inCollection: r.in_collection, displayName: r.display_name }])),
+      )
+    }
+    if (collectionAttentionResult.status === 'fulfilled' && collectionAttentionResult.value && !collectionAttentionResult.value.error) {
+      const rows = (collectionAttentionResult.value.data ?? []) as Array<{ invoice_id: string; reason: string }>
+      setCollectionAttention({
+        all: new Set(rows.map((r) => r.invoice_id)),
+        failed: new Set(rows.filter((r) => r.reason === 'submission_failed').map((r) => r.invoice_id)),
+      })
+    }
     if (invoicesResult.status === 'rejected') {
       toast({
         title: t('load_failed_title'),
@@ -484,8 +538,8 @@ export default function InvoicesPage() {
   )
   const filteredInvoices = useMemo(
     () => scopedInvoices.filter((invoice) => matchesTab(invoice, activeTab)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- matchesTab only varies with isQuotesList
-    [activeTab, isQuotesList, scopedInvoices],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- matchesTab only varies with isQuotesList and the collection ids
+    [activeTab, isQuotesList, scopedInvoices, inCollectionIds, collectionAttention],
   )
   const sortedInvoices = useMemo(
     () => (sort ? sortInvoiceList(filteredInvoices, sort, oreRounding) : filteredInvoices),
@@ -566,8 +620,8 @@ export default function InvoicesPage() {
       }
     }
     return counts
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- listTabs/matchesTab only vary with isQuotesList
-  }, [isQuotesList, scopedInvoices])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- listTabs/matchesTab only vary with isQuotesList and the collection ids
+  }, [isQuotesList, scopedInvoices, inCollectionIds, collectionAttention])
 
   const rotRutCounts = useMemo(() => {
     const counts = Object.fromEntries(ROT_RUT_LIST_FILTERS.map((f) => [f, 0])) as Record<
@@ -808,6 +862,22 @@ export default function InvoicesPage() {
         ? { label: t('status_unsent'), exception: true, variant: 'outline' }
         : { label: t('status_draft'), exception: true, variant: 'secondary' }
     }
+    // An open collection case: where the provider has the invoice outranks
+    // the overdue count (chips mark exceptions; an invoice with a case is one).
+    const collectionCase = collectionCases.get(invoice.id)
+    const collectionKind = collectionCase && invoice.status !== 'paid' ? collectionChipKind(collectionCase.stage) : null
+    if (collectionCase && collectionKind) {
+      const words = providerWords(collectionCase.displayName, locale === 'en' ? 'en' : 'sv')
+      return {
+        label: capitalizeFirst(tCollections(CHIP_LABEL_KEYS[collectionKind], words)),
+        exception: true,
+        variant: CHIP_VARIANTS[collectionKind],
+      }
+    }
+    // A refused handover on an invoice still owed: the Att göra row's item.
+    if (collectionAttention.failed.has(invoice.id) && invoice.status !== 'paid') {
+      return { label: tCollections('chip_failed'), exception: true, variant: 'destructive' }
+    }
     if (invoice.status === 'paid') {
       return {
         label: invoice.paid_at
@@ -896,7 +966,10 @@ export default function InvoicesPage() {
           }
           items={(isQuotesList
             ? listTabs
-            : visibleInvoiceListTabs(INVOICE_LIST_TABS, companySettings, activeTab as InvoiceListTab)
+            : visibleInvoiceListTabs(INVOICE_LIST_TABS, companySettings, activeTab as InvoiceListTab).filter(
+                // "Hos inkasso" only once something is there (or it is the view in use).
+                (tab) => tab !== 'collections' || inCollectionIds.size > 0 || collectionAttention.all.size > 0 || activeTab === 'collections',
+              )
           ).map((tab) => ({
             id: tab,
             label: t(TAB_LABEL_KEYS[tab]),

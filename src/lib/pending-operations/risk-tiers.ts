@@ -15,6 +15,8 @@
  *     approval, and the approval card asks for a typed confirmation.
  */
 
+import { WEB_ONLY_CASE_ACTIONS } from '@/lib/collections/stages'
+
 export type RiskLevel = 'low' | 'medium' | 'high'
 
 export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
@@ -51,6 +53,16 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   disconnect_pos_connection: 'medium',
   update_pos_sales_settings: 'medium',
   book_pos_sales_day: 'high',
+  // Collections: a customer's claim goes to, or a decision is sent to, the
+  // company's collections provider, which writes to the customer. External
+  // and not undone by a later call. Handing over and escalating are also
+  // approvable only in the web UI (requiresWebApproval below).
+  open_collection_case: 'high',
+  collection_case_action: 'high',
+  // Cron-staged (the daily collections batch): hands invoices over and
+  // approves next steps against customers; an administrator approves it in
+  // the web UI only.
+  collections_daily_batch: 'high',
   delete_supplier_invoice: 'medium',
   uncredit_supplier_invoice: 'high',
   update_supplier_invoice_item_account: 'high',
@@ -433,6 +445,28 @@ function paramEscalatedRisk(
     return 'high'
   }
   return null
+}
+
+/**
+ * Staged operations that only a person in the web UI may approve: the
+ * approver attests something an agent cannot (that the invoice was
+ * delivered, that the bank shows no payment, that a customer's answer was
+ * handled), or the operation escalates against a customer. The MCP approve
+ * tool refuses them and commitPendingOperation refuses every commit that is
+ * not a web user's own approval. Depends on the params for case actions:
+ * pausing or withdrawing a case is agent-approvable, approving the next step
+ * is not.
+ */
+export const WEB_ONLY_APPROVAL_TYPES: ReadonlySet<string> = new Set(['open_collection_case', 'collections_daily_batch'])
+
+export function requiresWebApproval(operationType: string, params?: Record<string, unknown> | null): boolean {
+  if (WEB_ONLY_APPROVAL_TYPES.has(operationType)) return true
+  if (operationType === 'collection_case_action') {
+    const action = params?.action
+    // Unknown or missing action: fail safe, a person approves.
+    return typeof action !== 'string' || (WEB_ONLY_CASE_ACTIONS as ReadonlySet<string>).has(action)
+  }
+  return false
 }
 
 export function getRiskLevel(

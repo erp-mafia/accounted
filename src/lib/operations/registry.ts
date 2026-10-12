@@ -224,9 +224,11 @@ import {
   posSalesUpdateSettings,
   posSalesVenuesList,
 } from './pos-sales'
+import { COLLECTIONS_OPERATION_LIST } from './collections'
+import { readCollectionsEnv } from '@/lib/collections/flags'
 import type { AnyOperation } from './types'
 
-export const OPERATIONS: readonly AnyOperation[] = [
+const CORE_OPERATIONS: readonly AnyOperation[] = [
   // dimensions
   dimensionsList,
   dimensionsCreate,
@@ -423,8 +425,23 @@ export const OPERATIONS: readonly AnyOperation[] = [
   posSalesFetch,
 ]
 
+/**
+ * Every operation defined, discoverable or not: the contract test checks
+ * them all, and the staged-operation commit path finds each by its pending
+ * type, so an operation staged while its feature was on still commits.
+ */
+export const ALL_OPERATIONS: readonly AnyOperation[] = [...CORE_OPERATIONS, ...COLLECTIONS_OPERATION_LIST]
+
+/**
+ * The operations the machine doors serve (MCP tools, the search index):
+ * the collections operations only while COLLECTIONS_ENABLED is set at
+ * module load, so nothing about them is discoverable while the feature is
+ * dark. Each run() still checks the start gates per company (flags.ts).
+ */
+export const OPERATIONS: readonly AnyOperation[] = readCollectionsEnv().enabled ? ALL_OPERATIONS : CORE_OPERATIONS
+
 const byPendingType = new Map<string, AnyOperation>()
-for (const op of OPERATIONS) {
+for (const op of ALL_OPERATIONS) {
   const pendingType = op.mcp?.stage?.pendingType
   if (pendingType) byPendingType.set(pendingType, op)
 }

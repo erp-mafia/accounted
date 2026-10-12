@@ -28,7 +28,8 @@ import {
  * This module is a read model over the stores that already record both limbs
  * (`journal_entries.committed_at` + the trigger-written immutable `audit_log`,
  * `journal_entry_rattelse_log`, `company_migration_resets`, `sie_imports`,
- * `bank_file_imports`) and turns them into one chronological list of
+ * `bank_file_imports`, `collection_cases` and the company's decisions in
+ * `collection_case_events`) and turns them into one chronological list of
  * human-readable events. It never writes.
  *
  * Event labels are Swedish in both locales: the report is räkenskapsinformation
@@ -184,6 +185,30 @@ interface BankFileImportRow {
   created_at: string
 }
 
+/** A collection case (collection_cases): an invoice the company handed over to its collections provider. */
+export interface CollectionCaseRow {
+  id: string
+  invoice_id: string
+  submission_status: string
+  opened_by: string | null
+  opened_at: string
+  closed_at: string | null
+  close_reason: string | null
+  provider_case_number: string | null
+  /** The embedded invoice: one row at runtime (many-to-one), typed as either shape. */
+  invoice: { invoice_number: string | null } | Array<{ invoice_number: string | null }> | null
+}
+
+/** A decision the company took on a collection case (collection_case_events, kind user_action). */
+export interface CollectionCaseDecisionRow {
+  id: string
+  case_id: string
+  occurred_at: string
+  label: string
+  actor_user_id: string | null
+  raw: Record<string, unknown> | null
+}
+
 /** Event before user labels are resolved. */
 interface RawActor {
   type: BehandlingshistorikActorType
@@ -228,6 +253,10 @@ export const AUDITED_TABLES = [
   // Which mailboxes the receipt hunt reads underlag from: connected and
   // disconnected, written by hand without tokens (extensions/general/mail).
   'mail_connections',
+  // Reminders and debt collection through a provider (migration
+  // 20261012030100): consent, activation, ending, and the rules applied when
+  // invoices are handed over and collected payments and payouts are booked.
+  'collection_connections',
 ] as const
 
 /**
@@ -255,7 +284,7 @@ export const GLOBAL_ACTIONS = [
  * names statically; a unit test pins it to AUDITED_TABLES / GLOBAL_ACTIONS.
  */
 export const AUDIT_ROW_FILTER =
-  'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)'
+  'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections,collection_connections),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)'
 
 const COMMIT_METHOD_LABELS: Record<string, string> = {
   user_accept: 'Godkänd av användare',
@@ -1082,6 +1111,97 @@ function mailConnectionAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEve
   }
 }
 
+/**
+ * collection_connections columns that are behandlingsregler: what is handed
+ * over and how, and the accounts and automation used when collected
+ * payments and payouts are booked. The status poll's columns (provider
+ * status, health, run record) are not audited at all.
+ */
+const COLLECTION_CONNECTION_FIELDS: Record<string, string> = {
+  minimum_amount: 'Lägsta belopp att skicka till inkasso',
+  default_start_step: 'Första steget',
+  reminder_fee_terms_since: 'Påminnelseavgift avtalad sedan',
+  late_interest_percent: 'Avtalad dröjsmålsränta (procent)',
+  late_interest_agreed_since: 'Dröjsmålsränta avtalad sedan',
+  distribution_enabled: 'Utskick via inkassobolaget',
+  ladder_mode: 'Förslag på påminnelser i Att göra',
+  ladder_days_after_due: 'Dagar efter förfallodagen',
+  clearing_account: 'Konto för inbetalningar via inkassobolaget',
+  payout_account: 'Konto för utbetalningar från inkassobolaget',
+  auto_book_collected_payments: 'Bokför inbetalningar via inkassobolaget automatiskt',
+  auto_book_settlements: 'Bokför avräkningar automatiskt',
+}
+
+const COLLECTION_CONNECTION_VALUE_LABELS: Record<string, Record<string, string>> = {
+  default_start_step: { reminder: 'Påminnelse', collection: 'Inkassokrav direkt' },
+  ladder_mode: { off: 'Av', staged: 'Varje morgon, godkänns av en administratör' },
+}
+
+const COLLECTION_CONNECTION_STATE_EVENTS: Record<string, { code: string; event: string }> = {
+  active: { code: 'collection_connection.activated', event: 'Påminnelser och inkasso aktiverat' },
+  needs_setup: { code: 'collection_connection.needs_setup', event: 'Påminnelser och inkasso: inkassobolaget godkände inte eller stängde av kopplingen' },
+  disconnected: { code: 'collection_connection.ended', event: 'Påminnelser och inkasso avslutat' },
+  connecting: { code: 'collection_connection.connecting', event: 'Påminnelser och inkasso: aktivering pågår' },
+}
+
+function labelCollectionValues(state: Record<string, unknown> | null): Record<string, unknown> | null {
+  if (!state) return state
+  const labelled: Record<string, unknown> = { ...state }
+  for (const [key, labels] of Object.entries(COLLECTION_CONNECTION_VALUE_LABELS)) {
+    const value = state[key]
+    if (typeof value === 'string' && labels[value]) labelled[key] = labels[value]
+  }
+  return labelled
+}
+
+/**
+ * The collections connection: the consent that started it, the provider's
+ * terms accepted, activation and ending, and every change to its rules. A
+ * change the status poll stored carries no person and shows as the system.
+ */
+function collectionConnectionAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
+  const state = row.new_state ?? row.old_state
+  const object = str(state?.display_name)
+  switch (row.action) {
+    case 'INSERT': {
+      const details = [`Villkor lästa och godkända i appen: version ${fmtValue(state?.catalogue_terms_version)}`]
+      if (str(state?.dpa_version)) details.push(`Personuppgiftsvillkor: version ${fmtValue(state?.dpa_version)}`)
+      return auditEvent(row, { category: 'atkomst', code: 'collection_connection.consented', event: 'Påminnelser och inkasso: aktivering påbörjad', object, details })
+    }
+    case 'DELETE':
+      return auditEvent(row, { category: 'atkomst', code: 'collection_connection.deleted', event: 'Koppling för påminnelser och inkasso borttagen', object })
+    case 'UPDATE': {
+      const { lines } = diffFields(labelCollectionValues(row.old_state), labelCollectionValues(row.new_state), COLLECTION_CONNECTION_FIELDS)
+      const before = str(row.old_state?.state)
+      const after = str(row.new_state?.state)
+      if (after && before !== after) {
+        const meta = COLLECTION_CONNECTION_STATE_EVENTS[after]
+        if (meta) return auditEvent(row, { category: 'atkomst', code: meta.code, event: meta.event, object, details: lines })
+      }
+      const terms = str(row.new_state?.terms_version)
+      if (terms && terms !== str(row.old_state?.terms_version)) {
+        return auditEvent(row, {
+          category: 'atkomst',
+          code: 'collection_connection.terms_accepted',
+          event: 'Inkassobolagets villkor godkända',
+          object,
+          details: [`Version: ${terms}`, ...lines],
+        })
+      }
+      if (lines.length === 0) return null
+      return auditEvent(row, {
+        category: 'installningar',
+        code: 'collection_connection.updated',
+        event: 'Regler för påminnelser och inkasso ändrade',
+        object,
+        details: lines,
+      })
+    }
+    default:
+      return null
+  }
+}
+
 const MAIL_REVOCATION_LABELS: Record<string, string> = {
   revoked: 'ja',
   already_invalid: 'redan ogiltig',
@@ -1354,6 +1474,8 @@ export function auditRowToEvent(
       return payrollConfigAuditEvent(row)
     case 'mail_connections':
       return mailConnectionAuditEvent(row)
+    case 'collection_connections':
+      return collectionConnectionAuditEvent(row)
     // The import tables emit their own events from the rows themselves; the
     // audit trail only adds what the rows can no longer show: a deletion.
     case 'sie_imports':
@@ -1541,6 +1663,125 @@ function bankFileImportEvent(row: BankFileImportRow): RawBehandlingshistorikEven
   }
 }
 
+// ============================================================
+// Collection cases (handover of a kundfordran to the company's provider)
+// ============================================================
+//
+// Handing an invoice over changes how its kundfordran is processed from
+// then on: Accounted's own reminders and reminder fees stop for it, and the
+// provider pursues the customer until the case closes. Neither the handover
+// nor a decision on the case is a bokföringspost, so they are listed under
+// Övrigt with who decided and when; the provider's own steps stay on the
+// invoice's case card.
+
+const COLLECTION_ACTION_LABELS: Record<string, string> = {
+  start: 'påminnelser startade',
+  approve_step: 'nästa steg godkänt',
+  pause: 'ärendet pausat',
+  resume: 'ärendet återupptaget',
+  withdraw: 'ärendet återkallat',
+  dispute: 'markerat som bestritt',
+  contest_dispute: 'drivs vidare trots bestridandet',
+  already_paid: 'bekräftat som betalt',
+  confirm_not_paid: 'besvarat: fakturan är inte betald',
+  approve_legal_action: 'godkänt att ärendet går till Kronofogden',
+  decline_legal_action: 'avstod från Kronofogden',
+}
+
+const COLLECTION_CLOSE_REASON_LABELS: Record<string, string> = {
+  paid: 'betald',
+  withdrawn: 'återkallad',
+  credited: 'krediterad',
+  insolvent: 'kunden saknar betalningsförmåga',
+  bankrupt: 'kunden har gått i konkurs',
+  deceased: 'kunden har avlidit',
+  moved_abroad: 'kunden har flyttat utomlands',
+  error: 'ett fel',
+  other: 'annan orsak',
+}
+
+/** Cases that reached the provider: a refused or never-sent handover changed nothing. */
+function caseWasHandedOver(row: CollectionCaseRow): boolean {
+  return row.submission_status === 'submitted' || row.submission_status === 'registered'
+}
+
+function collectionCaseObject(row: CollectionCaseRow | undefined): string | null {
+  const invoice = Array.isArray(row?.invoice) ? row.invoice[0] : row?.invoice
+  const number = invoice?.invoice_number
+  return number ? `Faktura ${number}` : 'Faktura'
+}
+
+/** The handover and, once the provider closed it, the close of one case. */
+export function collectionCaseEvents(row: CollectionCaseRow): RawBehandlingshistorikEvent[] {
+  if (!caseWasHandedOver(row)) return []
+  const object = collectionCaseObject(row)
+  const events: RawBehandlingshistorikEvent[] = [
+    {
+      id: `collection:${row.id}:opened`,
+      occurred_at: toIso(row.opened_at)!,
+      category: 'ovrigt',
+      code: 'collection_case.handed_over',
+      event: 'Faktura lämnad till inkasso',
+      object,
+      actor: { type: 'user', user_id: row.opened_by, actor_label: null },
+      details: [
+        ...(row.provider_case_number ? [`Ärendenummer: ${row.provider_case_number}`] : []),
+        'Accounted skickar inga egna påminnelser för fakturan medan ärendet är öppet',
+      ],
+      source: 'collection_case',
+      count: 1,
+    },
+  ]
+  if (row.closed_at) {
+    const reason = row.close_reason ? COLLECTION_CLOSE_REASON_LABELS[row.close_reason] ?? row.close_reason : null
+    events.push({
+      id: `collection:${row.id}:closed`,
+      occurred_at: toIso(row.closed_at)!,
+      category: 'ovrigt',
+      code: 'collection_case.closed',
+      event: 'Inkassoärende avslutat',
+      object,
+      actor: { type: 'system', user_id: null, actor_label: 'inkassobolaget' },
+      details: reason ? [`Orsak: ${reason}`] : [],
+      source: 'collection_case',
+      count: 1,
+    })
+  }
+  return events
+}
+
+/** A decision the company took on a case: who decided, and through which door. */
+export function collectionDecisionEvent(
+  row: CollectionCaseDecisionRow,
+  caseRow: CollectionCaseRow | undefined,
+): RawBehandlingshistorikEvent {
+  const raw = row.raw ?? {}
+  const action = str(raw.action) ?? row.label
+  const details: string[] = []
+  const until = str(raw.until)
+  if (until) details.push(`Till och med ${until}`)
+  if (str(raw.bank_checked_at)) {
+    details.push(raw.bank_attested === true ? 'Banken kontrollerad; användaren intygade att fakturan inte är betald' : 'Banken kontrollerad: ingen obokförd inbetalning')
+  }
+  if (Array.isArray(raw.dismissed_transaction_ids) && raw.dismissed_transaction_ids.length > 0) {
+    details.push(`${raw.dismissed_transaction_ids.length} banktransaktioner bedömda som inte betalning av fakturan`)
+  }
+  if (raw.withdraw_fee_acknowledged === true) details.push('Användaren godkände att återkallelsen kan kosta en avgift')
+  if (raw.channel === 'agent') details.push('Föreslaget av en agent eller API-nyckel')
+  return {
+    id: `collection-decision:${row.id}`,
+    occurred_at: toIso(row.occurred_at)!,
+    category: 'ovrigt',
+    code: 'collection_case.decision',
+    event: `Inkassoärende: ${COLLECTION_ACTION_LABELS[action] ?? action}`,
+    object: collectionCaseObject(caseRow),
+    actor: { type: 'user', user_id: row.actor_user_id, actor_label: null },
+    details,
+    source: 'collection_case',
+    count: 1,
+  }
+}
+
 /** A program version first seen in production (app_releases): p. 9.16 "nya programversioner". */
 export function appReleaseEvent(row: AppReleaseRow): RawBehandlingshistorikEvent {
   return {
@@ -1648,6 +1889,7 @@ const SOURCE_ORDER: Record<BehandlingshistorikSource, number> = {
   migration_reset: 3,
   sie_import: 4,
   bank_file_import: 5,
+  collection_case: 6,
 }
 
 export function sortEvents<T extends { occurred_at: string; source: BehandlingshistorikSource; id: string }>(
@@ -1822,7 +2064,7 @@ async function fetchAuditRows(
       // Literal on purpose (not AUDIT_ROW_FILTER): the schema guard only
       // resolves string literals here. A test pins the two to each other.
       .or(
-        'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)',
+        'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections,collection_connections),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)',
       )
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
@@ -1953,6 +2195,35 @@ async function fetchBankFileImports(supabase: SupabaseClient, companyId: string)
         'id, user_id, filename, file_format, transaction_count, imported_count, duplicate_count, status, error_message, date_from, date_to, created_at',
       )
       .eq('company_id', companyId)
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
+}
+
+async function fetchCollectionCases(supabase: SupabaseClient, companyId: string): Promise<CollectionCaseRow[]> {
+  return fetchAllRows<CollectionCaseRow>(({ from, to }) =>
+    supabase
+      .from('collection_cases')
+      .select('id, invoice_id, submission_status, opened_by, opened_at, closed_at, close_reason, provider_case_number, invoice:invoices(invoice_number)')
+      .eq('company_id', companyId)
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
+}
+
+async function fetchCollectionDecisions(
+  supabase: SupabaseClient,
+  companyId: string,
+  window: { fromTs: string; toTs: string },
+): Promise<CollectionCaseDecisionRow[]> {
+  return fetchAllRows<CollectionCaseDecisionRow>(({ from, to }) =>
+    supabase
+      .from('collection_case_events')
+      .select('id, case_id, occurred_at, label, actor_user_id, raw')
+      .eq('company_id', companyId)
+      .eq('kind', 'user_action')
+      .gte('occurred_at', window.fromTs)
+      .lte('occurred_at', window.toTs)
       .order('id', { ascending: true })
       .range(from, to),
   )
@@ -2140,7 +2411,7 @@ export async function generateBehandlingshistorik(
   const entryIds = entries.map((e) => e.id)
   const unionIds = mode === 'fiscal_year' ? entryIds : []
 
-  const [auditRows, rattelseRows, resets, sieImports, bankImports, releases, globalAuditRows, companyFacts, arkivActivities] = await Promise.all([
+  const [auditRows, rattelseRows, resets, sieImports, bankImports, releases, globalAuditRows, companyFacts, arkivActivities, collectionCases, collectionDecisions] = await Promise.all([
     fetchAuditRows(supabase, companyId, window, unionIds, mode === 'fiscal_year'
       ? [...new Set(entries.map(entry => entry.import_batch_id).filter((id): id is string => !!id))] : []),
     fetchRattelseRows(supabase, companyId, window, unionIds),
@@ -2151,6 +2422,8 @@ export async function generateBehandlingshistorik(
     options.globalClient ? fetchGlobalAuditRows(options.globalClient, window) : Promise.resolve([] as AuditLogEntry[]),
     fetchCompanyFacts(supabase, companyId, window),
     fetchArkivActivities(supabase, companyId),
+    fetchCollectionCases(supabase, companyId),
+    fetchCollectionDecisions(supabase, companyId, window),
   ])
 
   const raw: RawBehandlingshistorikEvent[] = []
@@ -2203,6 +2476,16 @@ export async function generateBehandlingshistorik(
   }
   for (const row of bankImports) {
     if (isWithin(row.created_at, fromMs, toMsBound)) raw.push(bankFileImportEvent(row))
+  }
+  // Invoices handed over to collection, the provider closing a case, and the company's decisions on it.
+  const caseById = new Map(collectionCases.map((c) => [c.id, c]))
+  for (const row of collectionCases) {
+    for (const ev of collectionCaseEvents(row)) {
+      if (isWithin(ev.occurred_at, fromMs, toMsBound)) raw.push(ev)
+    }
+  }
+  for (const row of collectionDecisions) {
+    if (isWithin(row.occurred_at, fromMs, toMsBound)) raw.push(collectionDecisionEvent(row, caseById.get(row.case_id)))
   }
 
   let events = collapseBursts(sortEvents(raw))

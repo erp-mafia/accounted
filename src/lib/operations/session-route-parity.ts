@@ -73,6 +73,7 @@ const CONNECTOR = 'machine endpoint: self-hosted connector proxy, authenticated 
 const PAYMENT_SIGNING = 'BankID signing of a bank payment: the account holder signs money out in person, no machine door signs'
 const PREVIEW = 'preview/parse helper for an unsaved form or import wizard; the API takes structured input'
 const EXT_SYNC = 'webshop/payment integration sync is cron-driven; manual trigger has no API'
+const COLLECTIONS_AGREEMENT = "entering or ending the company's agreement with a collection provider: a person consents, accepts and signs"
 
 export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   // ── Auth, account, user preferences ────────────────────────────────
@@ -159,6 +160,17 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/settings/peppol': covered([`POST ${V}/peppol/registration`, 'gnubok_register_peppol_participant']),
   'DELETE /api/settings/peppol': gap('P3', 'Peppol deregistration'),
   'POST /api/settings/peppol/access': covered([`POST ${V}/peppol/access-request`, 'gnubok_request_peppol_access']),
+  // Påminnelser och inkasso: the company's agreement with a third-party
+  // provider is entered and ended by a person, never by an agent (build spec
+  // rule 4: approvals that carry a human attestation are web-only).
+  'POST /api/settings/collections/consent': uiOnly(COLLECTIONS_AGREEMENT),
+  'POST /api/settings/collections/onboarding': uiOnly(COLLECTIONS_AGREEMENT),
+  'POST /api/settings/collections/terms': uiOnly(COLLECTIONS_AGREEMENT),
+  'POST /api/settings/collections/signature': uiOnly(COLLECTIONS_AGREEMENT),
+  'POST /api/settings/collections/cancel': uiOnly(COLLECTIONS_AGREEMENT),
+  'POST /api/settings/collections/disconnect': uiOnly(COLLECTIONS_AGREEMENT),
+  'POST /api/settings/collections/refresh': uiOnly('status refresh button; the sync cron polls the same status every ten minutes'),
+  'PATCH /api/settings/collections': gap('P3', 'the rules for handing invoices over to collection'),
   'POST /api/extensions/:sector/:slug/data': uiOnly('internal extension key-value state'),
   'DELETE /api/extensions/:sector/:slug/data': uiOnly('internal extension key-value state'),
   'PATCH /api/rules/:id': gap('P3', 'edit a counterparty booking rule'),
@@ -334,6 +346,10 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/customers': covered([`POST ${V}/customers`, 'gnubok_create_customer']),
   'PATCH /api/customers/:id': covered([`PATCH ${V}/customers/:id`, 'gnubok_update_customer']),
   'DELETE /api/customers/:id': covered([`DELETE ${V}/customers/:id`]),
+  'PATCH /api/customers/:id/collections-exclusion': gap(
+    'P3',
+    '"Skicka aldrig till inkasso" on a customer; served only while collections is offered, joins PATCH /api/v1/customers/:id when collections leaves the dark launch',
+  ),
   'POST /api/articles': covered(['gnubok_create_article']),
   'PATCH /api/articles/:id': covered(['gnubok_update_article']),
   'DELETE /api/articles/:id': gap('P3'),
@@ -361,6 +377,22 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/invoices/:id/convert-to-order': covered(['gnubok_convert_invoice'], 'target order'),
   'POST /api/invoices/:id/peppol': covered([`POST ${V}/invoices/:id/send-peppol`, 'gnubok_send_invoice_peppol'], 'staging alone has no door; send stages first'),
   'POST /api/invoices/:id/peppol/send': covered([`POST ${V}/invoices/:id/send-peppol`, 'gnubok_send_invoice_peppol']),
+  'POST /api/invoices/:id/collection': covered(
+    ['gnubok_send_invoice_to_collection'],
+    'served while collections is switched on; attestations (no delivery record, an import, a customer answer, an unsynced bank) are a person\'s in the browser, and only a person approves the staged handover',
+  ),
+  'POST /api/invoices/:id/collection/actions': covered(
+    ['gnubok_collection_case_action'],
+    'served while collections is switched on; escalations are approved by a person in the browser',
+  ),
+  'POST /api/invoices/:id/collection/forwards': gap(
+    'P3',
+    'retry a payment report the collections provider did not take, or mark a partly ignored one as handled',
+  ),
+  'POST /api/invoices/:id/collection/possible-payments': gap(
+    'P3',
+    'say that a bank row the collections sweep found pays something else (booking the row answers it too)',
+  ),
   'POST /api/invoices/:id/refresh-exchange-rate': gap('P3'),
   'POST /api/invoices/:id/send-payment-confirmation': gap('P3', 'email a betalningsbekräftelse'),
   'POST /api/invoices/self-billed': gap('P3', 'register a received självfaktura'),
@@ -502,6 +534,9 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/pending-operations/bulk-commit': covered(['gnubok_approve_pending_operation'], 'one at a time'),
   'POST /api/pending-operations/bulk-reject': covered(['gnubok_reject_pending_operation'], 'one at a time'),
   'PATCH /api/pending-operations/:id': gap('P3', 'edit a staged categorization before approval (reject and restage works)'),
+  'PATCH /api/pending-operations/:id/items': uiOnly(
+    'taking invoices out of the daily collections batch in the review dialog; only a person approves that batch, in the browser',
+  ),
 
   // ── Counterparts (parties) ─────────────────────────────────────────
   'POST /api/parties/:id/enrich': gap('P3', 'SCB registry enrichment'),
@@ -703,4 +738,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 128
+export const GAP_CEILING = 132

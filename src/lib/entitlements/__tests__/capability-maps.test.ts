@@ -94,12 +94,29 @@ describe('CONNECTOR_CAPABILITIES', () => {
     const { CAPABILITY, CONNECTOR_CAPABILITIES, PAID_CAPABILITIES, isConnectorCapability } = await import('../keys')
     const all = new Set(Object.values(CAPABILITY))
     for (const key of CONNECTOR_CAPABILITIES) expect(all.has(key), key).toBe(true)
-    expect(CONNECTOR_CAPABILITIES).toEqual(['bank_sync', 'skatteverket', 'org_lookup', 'migration', 'peppol'])
+    expect(CONNECTOR_CAPABILITIES).toEqual(['bank_sync', 'skatteverket', 'org_lookup', 'migration', 'peppol', 'collections'])
     // org_lookup and migration stay free on hosted (not PAID) but still need
     // Accounted's services, hence connector-gated on a self-host.
     expect(PAID_CAPABILITIES).not.toContain('org_lookup')
     expect(PAID_CAPABILITIES).not.toContain('migration')
     expect(isConnectorCapability('ai')).toBe(false)
     expect(isConnectorCapability('bank_sync')).toBe(true)
+  })
+})
+
+describe('PAID_PLAN_ONLY_CAPABILITIES and TRIAL_CAPABILITIES', () => {
+  it('keeps collections paid but out of every trial', async () => {
+    const { PAID_CAPABILITIES, PAID_PLAN_ONLY_CAPABILITIES, TRIAL_CAPABILITIES } = await import('../keys')
+    expect(PAID_PLAN_ONLY_CAPABILITIES).toEqual(['collections'])
+    for (const key of PAID_PLAN_ONLY_CAPABILITIES) {
+      expect(PAID_CAPABILITIES, key).toContain(key)
+      expect(TRIAL_CAPABILITIES, key).not.toContain(key)
+    }
+  })
+
+  it('makes the trial set exactly the paid set minus the paid-plan-only keys, in order', async () => {
+    const { PAID_CAPABILITIES, PAID_PLAN_ONLY_CAPABILITIES, TRIAL_CAPABILITIES } = await import('../keys')
+    expect(TRIAL_CAPABILITIES).toEqual(PAID_CAPABILITIES.filter((k) => !PAID_PLAN_ONLY_CAPABILITIES.includes(k)))
+    expect(TRIAL_CAPABILITIES.length + PAID_PLAN_ONLY_CAPABILITIES.length).toBe(PAID_CAPABILITIES.length)
   })
 })

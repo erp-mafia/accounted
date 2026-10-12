@@ -48,6 +48,7 @@ import {
   type VoucherRow,
 } from './voucher-matching-shared'
 import { formatAmount as formatNumber } from '@/lib/utils'
+import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
 
 const log = createLogger('voucher-matching')
 
@@ -790,6 +791,9 @@ export async function linkInvoiceToVoucher(
   if (!rpc.ok) {
     return { ok: false, code: rpc.code, details: rpc.details }
   }
+  // The payment row the RPC wrote waits in the collections forwarding outbox
+  // when the invoice is under collection; report it once this request answers.
+  scheduleCollectionForwardDrain(companyId)
 
   // Fetch the now-updated invoice (with customer) for event emission: the RPC
   // committed before this read, so the row reflects post-link state. Mirrors

@@ -53,8 +53,25 @@ export const CAPABILITY = {
    * mail keeps leaving from the platform sender.
    */
   custom_sender_domain: 'custom_sender_domain',
-  /** Peppol e-invoicing (send/receive via a Peppol Access Point). Free on hosted (Arcim's own AP); on self-host brokered through the connector: Arcim's Qvalia AP with a per-key one-address + volume quota. */
+  /**
+   * Peppol e-invoicing (send/receive via a Peppol Access Point). Never free:
+   * on hosted it needs a paid account plus the operator-granted Peppol access
+   * on top of the plan; on a self-host it is brokered through the connector
+   * (Arcim's contracted access point, with a per-key one-address and volume
+   * quota).
+   */
   peppol: 'peppol',
+  /**
+   * Reminders, debt collection and invoice delivery through a provider the
+   * company activates itself (lib/collections; the provider is described at
+   * runtime by the Connect catalogue, never named here). PAID-PLAN ONLY: in
+   * PAID_CAPABILITIES, so the Stripe subscription sync and operator grants
+   * write it, but listed in PAID_PLAN_ONLY_CAPABILITIES, so a trial never
+   * includes it. The grant gates START paths only (activation, handover,
+   * delivery, the daily batch): a lapsed plan never stops the duties toward a
+   * case already open at the provider (lib/collections/flags.ts).
+   */
+  collections: 'collections',
 } as const
 
 export type CapabilityKey = (typeof CAPABILITY)[keyof typeof CAPABILITY]
@@ -88,14 +105,36 @@ export const PAID_CAPABILITIES: readonly CapabilityKey[] = [
   // 2026-09-10 (issue #2494): the key is kept and granted so the gate can
   // be re-armed by env, but nothing withholds extra users today.
   CAPABILITY.multi_user,
+  // Paid plan only: Stripe-synced and operator-granted, never trial-seeded
+  // (PAID_PLAN_ONLY_CAPABILITIES below).
+  CAPABILITY.collections,
 ] as const
+
+/**
+ * Paid capabilities a trial never includes: only a paying subscription (the
+ * Stripe sync) or an operator grant (manual, comp, a byrå team agreement)
+ * unlocks them. Founder decision 2026-10-04 for collections: handing a
+ * customer's claim to a debt collector is not something to try out.
+ */
+export const PAID_PLAN_ONLY_CAPABILITIES: readonly CapabilityKey[] = [CAPABILITY.collections] as const
+
+/**
+ * What the company-creation trial seeds: PAID_CAPABILITIES minus the paid-plan
+ * only keys. The VALUES list in seed_trial_capability_grants() (latest body in
+ * supabase/migrations/20260909100300_seed_trial_capability_grants_zettle.sql)
+ * must match this list; tests/pg/trial-suppression-byra.pg.test.ts pins it.
+ */
+export const TRIAL_CAPABILITIES: readonly CapabilityKey[] = PAID_CAPABILITIES.filter(
+  (key) => !PAID_PLAN_ONLY_CAPABILITIES.includes(key),
+)
 
 /**
  * Capabilities that a SELF-HOSTED instance cannot provide on its own because
  * they run on services Accounted operates (the PSD2/AISP bank connection,
  * the Skatteverket API client, the TIC lookup contract, the migration
- * gateway). On hosted these follow the normal paywall (bank_sync and
- * skatteverket are in PAID_CAPABILITIES; org_lookup and migration are free).
+ * gateway, the collections providers). On hosted these follow the normal
+ * paywall (bank_sync, skatteverket and collections are in PAID_CAPABILITIES;
+ * org_lookup and migration are free).
  * On a self-host every other capability is always on, and exactly these fall
  * through to the grant lookup: the hourly connector sync writes
  * `source = 'connector'` grants for them from the instance's connector key
@@ -112,6 +151,9 @@ export const CONNECTOR_CAPABILITIES: readonly CapabilityKey[] = [
   CAPABILITY.org_lookup,
   CAPABILITY.migration,
   CAPABILITY.peppol,
+  // The provider runs behind Accounted Connect only (no own-credentials form):
+  // a self-host needs the `collections` scope on its connector key.
+  CAPABILITY.collections,
 ] as const
 
 export function isConnectorCapability(key: CapabilityKey): boolean {

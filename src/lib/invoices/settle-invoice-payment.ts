@@ -10,7 +10,11 @@ import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { planInvoicePaymentForLines } from '@/lib/invoices/apply-invoice-payment'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
-import { recordInvoicePaymentRow, removeInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
+import {
+  recordInvoicePaymentRow,
+  removeInvoicePaymentRow,
+  type InvoicePaymentSource,
+} from '@/lib/invoices/invoice-payment-row'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import type { CreateJournalEntryInput, Customer, EntityType, Invoice } from '@/types'
@@ -74,6 +78,14 @@ export interface SettleInvoicePaymentParams {
   customLines?: SettleCustomLine[]
   /** Debit-side account; default '1930'. Stripe settlements pass '1686'. */
   settlementAccountNumber?: string
+  /**
+   * Where the payment came from (invoice_payments.source): 'manual' for
+   * "Markera som betald", 'stripe' for the Stripe sync, 'collections' for a
+   * payment the collections provider collected (never reported back to it).
+   */
+  paymentSource?: InvoicePaymentSource
+  /** The payment's reference in the system it came from (invoice_payments.external_ref). */
+  externalRef?: string | null
 }
 
 export type SettleInvoicePaymentResult =
@@ -110,6 +122,8 @@ export async function settleInvoicePayment(
     exchangeRateDifference,
     customLines,
     settlementAccountNumber,
+    paymentSource,
+    externalRef,
   } = params
 
   if (invoice.credited_invoice_id) {
@@ -290,6 +304,8 @@ export async function settleInvoicePayment(
       paymentDate,
       newPaidAmount,
       journalEntryId,
+      source: paymentSource ?? null,
+      externalRef: externalRef ?? null,
     })
     if (!recorded.ok) {
       if (journalEntryId) {

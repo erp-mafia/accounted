@@ -561,6 +561,9 @@ describe('registerBookedInvoice', () => {
       journal_entry_id: null,
       transaction_id: null,
       notes: 'Betalt före registreringen enligt kundreskontran per 2026-03-31',
+      // Payment provenance (20261012030300): not from the collections provider.
+      source: null,
+      external_ref: null,
     })
     const writes = calls.filter((call) => ['insert', 'update', 'upsert', 'delete'].includes(call.method))
     expect(writes.map((call) => `${call.method} ${call.table}`)).toEqual(['insert invoices', 'insert invoice_payments'])

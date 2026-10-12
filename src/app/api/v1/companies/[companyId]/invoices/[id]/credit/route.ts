@@ -45,6 +45,7 @@ import { createCreditNoteJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { creditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { eventBus } from '@/lib/events'
 import type { AccountingMethod, CreditNote, EntityType, Invoice } from '@/types'
+import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
 
 const CreditNoteRequest = z.object({
   reason: z.string().max(2000).optional(),
@@ -390,6 +391,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         details: { pg_code: itemsErr.code },
       })
     }
+
+    // The credit note was inserted as issued: when the original is under
+    // collection, a database trigger queued it for the provider.
+    scheduleCollectionForwardDrain(ctx.companyId)
 
     // Step 3: flip original invoice to credited.
     const warnings: { code: string; message: string }[] = []

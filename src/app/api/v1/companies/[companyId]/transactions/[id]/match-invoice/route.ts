@@ -733,6 +733,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       transactionId: txId,
       exchangeRate: fx.required ? fx.rate : invoice.exchange_rate,
       notes: paymentNotes,
+      source: 'bank',
     })
     if (!recorded.ok) {
       if (recorded.code === '23505') {

@@ -256,6 +256,7 @@ export const POST = withRouteContext(
       exchangeRateDifference,
       customLines,
       settlementAccountNumber,
+      paymentSource: 'manual',
     })
 
     if (!result.ok) {

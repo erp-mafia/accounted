@@ -15,6 +15,9 @@ export const SETTINGS_GROUP_ORDER: SettingsGroupKey[] = ['account', 'company', '
  */
 export const SETTINGS_SECTION_PARENT: Record<string, string> = {
   banking: 'connections',
+  // Påminnelser och inkasso: also linked from Fakturering, but it is a
+  // connection to a provider, so Kopplingar is its hub.
+  collections: 'connections',
   whatsapp: 'connections',
   skatteverket: 'connections',
   peppol: 'connections',

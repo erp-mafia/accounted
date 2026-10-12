@@ -26,7 +26,7 @@ import {
   getResponseErrorMessage,
   type ErrorLocale,
 } from '@/lib/errors/get-error-message'
-import { computeRefusedShares } from '@/lib/invoices/rot-rut-reclaim'
+import { computeRefusedShares } from '@/lib/invoices/rot-rut-refused-shares'
 import { expectedRotRutPayoutAmount } from '@/lib/invoices/rot-rut-payout-matching'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { todayIsoStockholm } from '@/lib/dates/iso'

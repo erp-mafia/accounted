@@ -72,6 +72,9 @@ import {
 } from '@/components/pending-operations/vocabulary'
 import { describeRetrievedSkills } from '@/lib/agent-skills/retrieved-skills'
 import { registerBookedLedgerOf } from '@/lib/invoices/register-booked-invoice-mode'
+import { HandoverBatchDialog } from '@/components/collections/HandoverBatchDialog'
+import { COLLECTIONS_BATCH_TYPE } from '@/lib/collections/batch'
+import { BATCH_REVIEW_QUERY, wantsBatchReview } from '@/lib/collections/batch-dialog'
 
 // Terse per-type labels used in the bulk confirmation dialog list. Phrased so
 // they read naturally under the heading "Genom att bekräfta utförs följande:".
@@ -329,6 +332,11 @@ export default function PendingOperationsPage() {
   // can ask for a category + free-text reason that feeds back to the agent.
   // 'bulk' targets the current checkbox selection instead of a single op.
   const [rejectTarget, setRejectTarget] = useState<PendingOperation | 'bulk' | null>(null)
+  // The daily collections batch is reviewed in its own dialog (items to
+  // untick, the ones left out, a typed confirmation), never through the
+  // generic approval card. Att göra links here with ?review= to open it.
+  const [batchOpId, setBatchOpId] = useState<string | null>(null)
+  const batchReviewRequested = useRef(false)
   const [rejectCategory, setRejectCategory] = useState<PendingOperationRejectionCategory | ''>('')
   const [rejectReason, setRejectReason] = useState('')
   const [isRejecting, setIsRejecting] = useState(false)
@@ -351,6 +359,12 @@ export default function PendingOperationsPage() {
     const url = new URL(window.location.href)
     const conv = url.searchParams.get('conversation')
     if (conv) setConversationFilter(conv)
+    if (wantsBatchReview(url.search)) {
+      batchReviewRequested.current = true
+      // Once: a reload or the back button should not reopen the dialog.
+      url.searchParams.delete(BATCH_REVIEW_QUERY)
+      window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}`)
+    }
   }, [])
 
   // Which tab the rows in `operations` belong to, and whether anything is on
@@ -460,6 +474,21 @@ export default function PendingOperationsPage() {
   useEffect(() => {
     fetchOperations()
   }, [fetchOperations])
+
+  // The Att göra row's deep link: open the pending batch once the pending
+  // list has loaded (or drop the request when there is none any more).
+  useEffect(() => {
+    if (!batchReviewRequested.current || loadedTabRef.current !== 'pending') return
+    batchReviewRequested.current = false
+    const batch = operations.find((op) => op.operation_type === COLLECTIONS_BATCH_TYPE && op.status === 'pending')
+    if (batch) setBatchOpId(batch.id)
+  }, [operations])
+
+  /** A row's review surface: the batch dialog for the daily collections batch, else the detail slide-over. */
+  function openReview(op: PendingOperation) {
+    if (op.operation_type === COLLECTIONS_BATCH_TYPE && op.status === 'pending') setBatchOpId(op.id)
+    else setDetailOpId(op.id)
+  }
 
   // Realtime subscription: refetch when ANY pending_operations row changes for
   // the active company. The filter is required: realtime applies the SELECT
@@ -1008,6 +1037,7 @@ export default function PendingOperationsPage() {
               const canBulkSelect =
                 showBulkControls && op.status === 'pending' && op.risk_level !== 'high' && !periodLocked
               const isSelected = selectedIds.has(op.id)
+              const isCollectionsBatch = op.operation_type === COLLECTIONS_BATCH_TYPE
               const isAgent = op.actor_type && op.actor_type !== 'user'
               // High risk, and a registration of an already-booked invoice:
               // it cannot be undone but is approved without a dialog.
@@ -1107,11 +1137,11 @@ export default function PendingOperationsPage() {
                   role="button"
                   tabIndex={0}
                   aria-label={op.title}
-                  onClick={() => setDetailOpId(op.id)}
+                  onClick={() => openReview(op)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault()
-                      setDetailOpId(op.id)
+                      openReview(op)
                     }
                   }}
                   className={cn(
@@ -1183,7 +1213,9 @@ export default function PendingOperationsPage() {
                         onClick={(e) => {
                           e.stopPropagation()
                           if (periodLocked) return
-                          if (op.risk_level === 'high') {
+                          if (isCollectionsBatch) {
+                            setBatchOpId(op.id)
+                          } else if (op.risk_level === 'high') {
                             // High risk keeps the confirmation dialog: its
                             // warning sentence carries real information.
                             setSelectedOp(op)
@@ -1197,7 +1229,7 @@ export default function PendingOperationsPage() {
                         }}
                       >
                         <Check className="h-3.5 w-3.5" />
-                        {t('approve')}
+                        {isCollectionsBatch ? t('review_collections_batch') : t('approve')}
                       </button>
                       <button
                         type="button"
@@ -1335,7 +1367,11 @@ export default function PendingOperationsPage() {
                         // Same risk gate as the review-row pill: the detail
                         // panel already shows the full preview, so low/medium
                         // commit directly; only high risk keeps the dialog.
-                        if (detailOp.risk_level === 'high') {
+                        // The collections batch has its own review dialog.
+                        if (detailOp.operation_type === COLLECTIONS_BATCH_TYPE) {
+                          setDetailOpId(null)
+                          setBatchOpId(detailOp.id)
+                        } else if (detailOp.risk_level === 'high') {
                           setSelectedOp(detailOp)
                           setShowCommitDialog(true)
                         } else {
@@ -1352,6 +1388,20 @@ export default function PendingOperationsPage() {
           )}
         </SlideOverContent>
       </SlideOver>
+
+      {batchOpId && (
+        <HandoverBatchDialog
+          key={batchOpId}
+          operationId={batchOpId}
+          open
+          onOpenChange={(open) => {
+            if (!open) setBatchOpId(null)
+          }}
+          onCommitted={() => {
+            void fetchOperations()
+          }}
+        />
+      )}
 
       {/* Commit confirmation dialog */}
       <ConfirmationDialog

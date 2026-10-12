@@ -182,6 +182,7 @@ import {
 } from '@/lib/documents/link-holder'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { userFacingCode } from '@/lib/errors/user-facing'
+import { requiresWebApproval } from '@/lib/pending-operations/risk-tiers'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { createDimensionValue } from '@/lib/dimensions/registry-service'
 import { submitSIEJob } from '@/lib/import/sie-jobs'
@@ -223,6 +224,7 @@ import {
   resolveInvoiceEmailRecipients,
   resolveInvoiceReplyTo,
 } from '@/lib/invoices/email-recipients'
+import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { convertToInvoice } from '@/lib/invoices/convert-to-invoice'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
@@ -285,6 +287,8 @@ import { z } from 'zod'
 import { operationForPendingType } from '@/lib/operations/registry'
 import { rejectSupersededInboxConversions } from './supersede'
 import { backfillSupplierPaymentDetails, type SupplierPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
+import { COLLECTIONS_BATCH_TYPE } from '@/lib/collections/batch'
+import { batchApprovalRefusal, commitCollectionsDailyBatch } from '@/lib/collections/batch-commit'
 import type { AnyOperation } from '@/lib/operations/types'
 import type {
   Transaction,
@@ -2759,6 +2763,7 @@ async function commitMarkInvoicePaid(
       paymentDate,
       newPaidAmount,
       journalEntryId,
+      source: 'manual',
     })
     if (!recorded.ok) {
       // Raw driver text stays server-side; the user gets the outcome only.
@@ -3645,6 +3650,7 @@ async function commitMatchTransactionInvoice(
     journalEntryId,
     transactionId,
     exchangeRate: fx.required ? fx.rate : invoice.exchange_rate,
+    source: 'bank',
   })
   if (!recorded.ok) {
     log.error('match_transaction_invoice: invoice_payments insert failed', undefined, {
@@ -5323,6 +5329,9 @@ async function commitCreditInvoice(
     await supabase.from('invoices').delete().eq('id', creditNote.id)
     return { error: itemsError.message, status: 500 }
   }
+  // Issued on insert: when the original is under collection, a database
+  // trigger queued the credit note for the provider.
+  scheduleCollectionForwardDrain(companyId)
 
   await supabase.from('invoices').update({ status: 'credited' }).eq('id', id)
 
@@ -6977,6 +6986,8 @@ async function commitMatchBatchAllocate(
   // them on the source tx. Same helper as the HTTP twin
   // (app/api/transactions/[id]/match-batch/route.ts) so the two cannot drift.
   await clearSettledBatchAllocationSuggestions(supabase, companyId, result.allocations ?? [], txId)
+  // Payment rows on an invoice under collection wait in the forwarding outbox.
+  scheduleCollectionForwardDrain(companyId)
 
   // Same events as the HTTP twin (match_confirmed per allocation, invoice.paid
   // / supplier_invoice.paid per allocation settled in full), through the same
@@ -7504,6 +7515,40 @@ async function commitPendingOperationInner(
     }
   }
 
+  // ── Web-only approvals (collections). Handing an invoice over and
+  //    escalating a case rest on a person's own word (attestations, the
+  //    bank check they saw); an agent may stage them but only a person
+  //    approving in the web UI commits them. Refused before the claim, so
+  //    the op stays 'pending' for that person.
+  if (
+    requiresWebApproval(pendingOp.operation_type, pendingOp.params) &&
+    !(opts.commitMethod === 'user_accept' && opts.actor?.type === 'user')
+  ) {
+    return {
+      status: 'failed',
+      error: getErrorEntry('COLLECTION_ATTESTATION_WEB_ONLY')?.message_sv ?? 'Det här måste godkännas av en person i Accounted.',
+      http_status: 403,
+      code: 'COLLECTION_ATTESTATION_WEB_ONLY',
+      operation_status: 'pending',
+    }
+  }
+
+  // ── The daily collections batch: an administrator approves it, and the
+  //    batch's start gates must still say yes. Refused before the claim, so
+  //    the batch stays 'pending' (the ladder cron rejects it after 72 hours).
+  if (pendingOp.operation_type === COLLECTIONS_BATCH_TYPE) {
+    const refused = await batchApprovalRefusal(supabase, companyId)
+    if (refused) {
+      return {
+        status: 'failed',
+        error: refused.messageSv,
+        http_status: refused.status,
+        code: refused.code,
+        operation_status: 'pending',
+      }
+    }
+  }
+
   // ── Capability gate (commit-time twin of the MCP dispatch gate). The actual
   //    external-service call (email / Skatteverket submit) happens below, so
   //    this is the true paid chokepoint: it also catches an op STAGED during
@@ -7827,6 +7872,19 @@ async function commitPendingOperationInner(
       case 'submit_agi':
         result = await commitSubmitAgi(supabase, userId, companyId, pendingOp.params)
         break
+      case 'collections_daily_batch': {
+        const batch = await commitCollectionsDailyBatch({
+          supabase,
+          userId,
+          userLabel: opts.userEmail ?? opts.actor?.label ?? null,
+          companyId,
+          operation: { id: pendingOp.id, params: pendingOp.params },
+        })
+        result = batch.ok
+          ? { data: batch.data as unknown as Record<string, unknown> }
+          : { error: batch.message, errorCode: batch.code, status: batch.status }
+        break
+      }
       default: {
         // Operations defined once in lib/operations run through the same
         // run() the v1 and MCP doors use; everything else is unknown.

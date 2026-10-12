@@ -27,6 +27,7 @@ import { getCountryName } from '@/lib/vat/country-codes'
 import type { Customer, CustomerType, CreateCustomerInput, InvoiceStatus } from '@/types'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 import { PartyFactsSection } from '@/components/parties/PartyFactsSection'
+import { CustomerCollectionsExclusion } from '@/components/collections/CustomerCollectionsExclusion'
 import { usePartyDossier } from '@/components/parties/use-party-dossier'
 import { fromRegistry, addressRowsFromRegistry, listSv } from '@/lib/parties/registry-summary'
 
@@ -389,6 +390,13 @@ export default function CustomerDetailPage({
           {t('payment_terms_value', { days: customer.default_payment_terms || 30 })}
         </DefRow>
       </DetailSection>
+
+      <CustomerCollectionsExclusion
+        customerId={customer.id}
+        excluded={customer.collections_excluded === true}
+        canWrite={canWrite}
+        onSaved={(excluded) => setCustomer((current) => (current ? { ...current, collections_excluded: excluded } : current))}
+      />
 
       {customer.notes && (
         <DetailSection kicker={t('section_notes')}>

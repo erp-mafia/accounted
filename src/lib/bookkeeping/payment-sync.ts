@@ -3,6 +3,7 @@ import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { invoiceCustomerOutstanding } from '@/lib/invoices/customer-share'
 import type { JournalEntry } from '@/types'
+import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
 
 const log = createLogger('payment-sync')
 
@@ -314,6 +315,8 @@ export async function syncInvoiceStatusFromPaymentEntry(
     // invoice_id) / (journal_entry_id, invoice_id) unique indexes on
     // invoice_payments. By id, for the same reason as the supplier branch.
     await deletePaymentRows(supabase, companyId, 'invoice_payments', paymentRowIds, entryId)
+    // A removed payment on an invoice under collection must be dropped at the provider too.
+    if (paymentRowIds.length > 0) scheduleCollectionForwardDrain(companyId)
 
     await releaseLinkedTransactions(supabase, companyId, entryId, releaseTransactionIds, 'invoice_id')
   }

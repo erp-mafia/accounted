@@ -438,6 +438,7 @@ export async function linkTransactionToJournalEntry(
       transactionId,
       exchangeRate: paymentExchangeRate,
       notes: 'Kopplad till befintlig verifikation (ingen ny bokföring skapad)',
+      source: 'link',
     })
 
     if (!recorded.ok && recorded.code !== '23505') {

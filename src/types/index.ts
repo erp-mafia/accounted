@@ -1001,6 +1001,13 @@ export interface Customer {
   // Notes
   notes: string | null
 
+  /**
+   * "Skicka aldrig till inkasso": the daily collections batch never proposes
+   * this customer's invoices. Written only by PATCH
+   * /api/customers/[id]/collections-exclusion while collections is offered.
+   */
+  collections_excluded?: boolean
+
   created_at: string
   updated_at: string
 }
@@ -2784,6 +2791,10 @@ export type PendingOperationType =
   | 'set_opening_balances_manual'
   | 'correct_opening_balances'
   | 'split_opening_balances_per_project'
+  // Collections: hand an invoice over, act on its open case, the daily batch.
+  | 'open_collection_case'
+  | 'collection_case_action'
+  | 'collections_daily_batch'
   // Cancel an uncommitted draft verifikat (lib/operations/journal-entries.ts)
   | 'cancel_draft_entry'
   // POS sales (kassasystem): lib/operations/pos-sales.ts.

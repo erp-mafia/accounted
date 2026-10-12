@@ -1,3 +1,4 @@
+import { isReminderExcluded, loadReminderExclusions, type ReminderExclusions } from '@/lib/collections/reminder-guard'
 import { createServerClient } from '@supabase/ssr'
 import { getEmailService } from '@/lib/email/service'
 import { getSenderForCompany, getBaseUrlForBrand } from '@/lib/email/brand-sender'
@@ -223,8 +224,23 @@ export async function processOverdueReminders(): Promise<ProcessRemindersResult>
 
   log.info(`Found ${overdueInvoices.length} overdue invoices to process`)
 
+  // The collections provider runs the whole ladder for its invoices: never
+  // remind beside it (lib/collections/reminder-guard.ts). Fails closed: a
+  // lookup error stops this run instead of reminding blind.
+  let collectionExclusions: ReminderExclusions
+  try {
+    collectionExclusions = await loadReminderExclusions(supabase, overdueInvoices as { id: string; company_id: string }[])
+  } catch (err) {
+    log.error('Collections reminder guard failed; no reminders this run', err as Error)
+    return { processed: 0, sent: 0, failed: 0, results: [] }
+  }
+
   // Process each invoice
   for (const invoice of overdueInvoices) {
+    if (isReminderExcluded(collectionExclusions, invoice as { id: string; company_id: string })) {
+      log.info(`Skipping invoice ${invoice.invoice_number}: handled by the company's collections provider`)
+      continue
+    }
     const activeCreditNotes = ((invoice as { credit_notes?: Array<{
       status: string
       creation_complete?: boolean

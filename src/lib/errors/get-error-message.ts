@@ -137,6 +137,20 @@ const ERROR_PATTERN_MAP: [RegExp, string | null][] = [
     null, // null = extract the Swedish message directly from the raw error text
   ],
   [
+    // block_cancel_invoice_with_open_collection_case (migration
+    // 20261012030200): an invoice the collections provider is pursuing is
+    // never cancelled under it.
+    /COLLECTION_CASE_OPEN/,
+    'Fakturan har ett öppet inkassoärende. Återkalla ärendet på fakturan innan du makulerar den.',
+  ],
+  [
+    // block_delete_collected_payment and guard_collected_payment_source
+    // (migration 20261012030300): a payment the collections provider
+    // collected is part of its payout and is rebooked, never removed.
+    /COLLECTED_PAYMENT_(DELETE_BLOCKED|SOURCE_LOCKED)/,
+    'Betalningen togs emot av inkassobolaget och ingår i dess utbetalning. Den kan inte tas bort här; bokför om den via avräkningen.',
+  ],
+  [
     /Period is already closed/i,
     'Perioden är redan stängd: bokslutet är genomfört och perioden kan inte öppnas igen.',
   ],

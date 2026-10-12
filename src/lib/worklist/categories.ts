@@ -28,6 +28,7 @@ import {
   MATCHABLE_SUPPLIER_INVOICE_STATUSES,
 } from '@/lib/invoices/matchable-statuses'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { COLLECTIONS_BATCH_TYPE } from '@/lib/collections/batch'
 import { resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
 import { listPeppolFailedInvoiceIds } from '@/lib/invoices/peppol-failed-invoices'
 import type { ExpensePayoutDue, SkattekontoPaymentDue, SuggestedMatch } from './types'
@@ -347,6 +348,25 @@ export async function countFailedPeppolDeliveries(
   }
 }
 
+/** Open collection cases waiting for the company's decision. */
+export async function countCollectionDecisions(supabase: SupabaseClient, companyId: string): Promise<number> {
+  const { count, error } = await supabase
+    .from('collection_cases')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .eq('is_open', true)
+    .eq('stage', 'awaiting_decision')
+  if (error) return logAndZero('collection_decision', companyId, error)
+  return count ?? 0
+}
+
+/** Collections cases a person must look at: collection_attention_case_ids, on the session client. */
+export async function countCollectionAttention(supabase: SupabaseClient, companyId: string): Promise<number> {
+  const { data, error } = await supabase.rpc('collection_attention_case_ids', { p_company_id: companyId })
+  if (error) return logAndZero('collection_attention', companyId, error)
+  return Array.isArray(data) ? data.length : 0
+}
+
 /** Overdue customer invoices (not credited). */
 export async function countOverdueInvoices(
   supabase: SupabaseClient,
@@ -392,8 +412,35 @@ export async function countPendingOperations(
     .select('id', { count: 'exact', head: true })
     .eq('company_id', companyId)
     .eq('status', 'pending')
+    // The daily collections batch has its own row (collection_batch_ready).
+    .neq('operation_type', COLLECTIONS_BATCH_TYPE)
   if (error) return logAndZero('pending_operations', companyId, error)
   return count ?? 0
+}
+
+/**
+ * The items of the company's pending daily collections batch (at most one is
+ * pending), less those an administrator already took out of it.
+ */
+export async function countCollectionBatchItems(supabase: SupabaseClient, companyId: string): Promise<number> {
+  const { data, error } = await supabase
+    .from('pending_operations')
+    .select('id, params')
+    .eq('company_id', companyId)
+    .eq('operation_type', COLLECTIONS_BATCH_TYPE)
+    .eq('status', 'pending')
+    .limit(1)
+  if (error) return logAndZero('collection_batch_ready', companyId, error)
+  const batch = (data ?? [])[0] as { id: string; params?: { items?: unknown } } | undefined
+  const items = batch?.params?.items
+  if (!batch || !Array.isArray(items) || items.length === 0) return 0
+  const { count, error: removedError } = await supabase
+    .from('collection_batch_removals')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .eq('pending_operation_id', batch.id)
+  if (removedError) return logAndZero('collection_batch_ready', companyId, removedError)
+  return Math.max(0, items.length - (count ?? 0))
 }
 
 interface SuggestedMatchTxRow {

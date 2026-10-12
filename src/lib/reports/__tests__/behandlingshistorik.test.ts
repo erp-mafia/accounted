@@ -11,6 +11,8 @@ import {
   auditRowToEvent,
   buildBehandlingshistorikExport,
   collapseBursts,
+  collectionCaseEvents,
+  collectionDecisionEvent,
   commitEventFromEntry,
   diffFields,
   formatActorLabel,
@@ -892,6 +894,65 @@ describe('auditRowToEvent: mailboxes the receipt hunt reads', () => {
   })
 })
 
+describe('auditRowToEvent: the collections connection', () => {
+  const base = { display_name: 'Acme Inkasso', state: 'connecting', minimum_amount: 100, default_start_step: 'reminder', clearing_account: '1689', terms_version: null }
+
+  it('shows the consent that started an activation, with the terms version read', () => {
+    const event = auditRowToEvent(
+      auditRow({ table_name: 'collection_connections', action: 'INSERT', new_state: { ...base, catalogue_terms_version: 'v3', dpa_version: 'p1' } }),
+    )
+    expect(event).toMatchObject({
+      category: 'atkomst',
+      code: 'collection_connection.consented',
+      object: 'Acme Inkasso',
+      details: ['Villkor lästa och godkända i appen: version v3', 'Personuppgiftsvillkor: version p1'],
+      actor: { type: 'user', user_id: 'user-1' },
+    })
+  })
+
+  it('shows activation by the status poll as the system, and the end with the person', () => {
+    const activated = auditRowToEvent(
+      auditRow({
+        table_name: 'collection_connections',
+        action: 'UPDATE',
+        user_id: null,
+        actor_id: null,
+        actor_type: 'system',
+        old_state: base,
+        new_state: { ...base, state: 'active' },
+      }),
+    )
+    expect(activated).toMatchObject({ code: 'collection_connection.activated', actor: { type: 'system', user_id: null } })
+    const ended = auditRowToEvent(
+      auditRow({ table_name: 'collection_connections', action: 'UPDATE', old_state: { ...base, state: 'active' }, new_state: { ...base, state: 'disconnected' } }),
+    )
+    expect(ended).toMatchObject({ code: 'collection_connection.ended', event: 'Påminnelser och inkasso avslutat' })
+  })
+
+  it('shows accepted terms and diffs the rules with readable values', () => {
+    const terms = auditRowToEvent(
+      auditRow({ table_name: 'collection_connections', action: 'UPDATE', old_state: base, new_state: { ...base, terms_version: 'v4' } }),
+    )
+    expect(terms).toMatchObject({ code: 'collection_connection.terms_accepted', details: ['Version: v4'] })
+    const rules = auditRowToEvent(
+      auditRow({
+        table_name: 'collection_connections',
+        action: 'UPDATE',
+        old_state: base,
+        new_state: { ...base, default_start_step: 'collection', clearing_account: '1688' },
+      }),
+    )
+    expect(rules).toMatchObject({
+      category: 'installningar',
+      code: 'collection_connection.updated',
+      details: ['Första steget: Påminnelse → Inkassokrav direkt', 'Konto för inbetalningar via inkassobolaget: 1689 → 1688'],
+    })
+    expect(
+      auditRowToEvent(auditRow({ table_name: 'collection_connections', action: 'UPDATE', old_state: base, new_state: { ...base, health: 'degraded' } })),
+    ).toBeNull()
+  })
+})
+
 describe('auditRowToEvent: behandlingsregler', () => {
   it('mapping_rules: a rule change names the rule and diffs the accounts', () => {
     const ins = auditRowToEvent(
@@ -1113,5 +1174,91 @@ describe('appReleaseEvents: per-day roll-up', () => {
     ])
     expect(out).toHaveLength(2)
     expect(out.map((e) => e.object)).toEqual(['beforemidnight', 'aftermidnight'])
+  })
+})
+
+describe('collection cases', () => {
+  const caseRow = {
+    id: 'case-1',
+    invoice_id: 'inv-1',
+    submission_status: 'registered',
+    opened_by: 'user-1',
+    opened_at: '2026-03-01T09:00:00.000Z',
+    closed_at: '2026-04-02T07:00:00.000Z',
+    close_reason: 'paid',
+    provider_case_number: '205506',
+    invoice: { invoice_number: '1042' },
+  }
+
+  it('lists a handover by the person who made it and the provider closing the case', () => {
+    const [opened, closed] = collectionCaseEvents(caseRow)
+    expect(opened).toMatchObject({
+      code: 'collection_case.handed_over',
+      category: 'ovrigt',
+      event: 'Faktura lämnad till inkasso',
+      object: 'Faktura 1042',
+      actor: { type: 'user', user_id: 'user-1' },
+      source: 'collection_case',
+    })
+    expect(opened.details).toEqual(['Ärendenummer: 205506', 'Accounted skickar inga egna påminnelser för fakturan medan ärendet är öppet'])
+    expect(closed).toMatchObject({ code: 'collection_case.closed', occurred_at: '2026-04-02T07:00:00.000Z', details: ['Orsak: betald'], actor: { type: 'system' } })
+  })
+
+  it('leaves out a handover that never reached the provider', () => {
+    expect(collectionCaseEvents({ ...caseRow, submission_status: 'failed' })).toEqual([])
+    expect(collectionCaseEvents({ ...caseRow, submission_status: 'preparing', closed_at: null })).toEqual([])
+    expect(collectionCaseEvents({ ...caseRow, submission_status: 'submitted', closed_at: null })).toHaveLength(1)
+  })
+
+  it('reads the invoice number from either embed shape', () => {
+    expect(collectionCaseEvents({ ...caseRow, invoice: [{ invoice_number: '7' }] })[0].object).toBe('Faktura 7')
+    expect(collectionCaseEvents({ ...caseRow, invoice: null })[0].object).toBe('Faktura')
+  })
+
+  it('names a decision, who took it and what was checked first', () => {
+    const ev = collectionDecisionEvent(
+      {
+        id: 'ev-1',
+        case_id: 'case-1',
+        occurred_at: '2026-03-20T10:00:00.000Z',
+        label: 'approve_step',
+        actor_user_id: 'user-2',
+        raw: { action: 'approve_step', channel: 'agent', bank_checked_at: '2026-03-20T09:59:00.000Z', bank_attested: false },
+      },
+      caseRow,
+    )
+    expect(ev).toMatchObject({ code: 'collection_case.decision', event: 'Inkassoärende: nästa steg godkänt', object: 'Faktura 1042', actor: { user_id: 'user-2' } })
+    expect(ev.details).toEqual(['Banken kontrollerad: ingen obokförd inbetalning', 'Föreslaget av en agent eller API-nyckel'])
+    const pause = collectionDecisionEvent(
+      { id: 'ev-2', case_id: 'case-x', occurred_at: '2026-03-21T10:00:00.000Z', label: 'withdraw', actor_user_id: 'user-2', raw: { action: 'withdraw', withdraw_fee_acknowledged: true } },
+      undefined,
+    )
+    expect(pause.event).toBe('Inkassoärende: ärendet återkallat')
+    expect(pause.object).toBe('Faktura')
+    expect(pause.details).toEqual(['Användaren godkände att återkallelsen kan kosta en avgift'])
+  })
+
+  it('reads cases and decisions into the report inside the window', async () => {
+    mockResults = {
+      fiscal_periods: [{ data: period }],
+      company_settings: [{ data: { company_name: 'T', org_number: null } }],
+      journal_entries: [{ data: [] }],
+      audit_log: [{ data: [] }],
+      journal_entry_rattelse_log: [{ data: [] }],
+      company_migration_resets: [{ data: [] }],
+      app_releases: [{ data: [] }],
+      sie_imports: [{ data: [] }],
+      bank_file_imports: [{ data: [] }],
+      collection_cases: [{ data: [caseRow, { ...caseRow, id: 'case-0', opened_at: '2025-11-01T09:00:00.000Z', closed_at: null }] }],
+      collection_case_events: [
+        { data: [{ id: 'ev-1', case_id: 'case-1', occurred_at: '2026-03-02T10:00:00.000Z', label: 'pause', actor_user_id: 'user-1', raw: { action: 'pause', until: '2026-03-31' } }] },
+      ],
+    }
+    const client = makeClient()
+    const report = await generateBehandlingshistorik(client, 'company-1', { periodId: 'period-1' })
+    expect(report!.events.map((e) => e.code)).toEqual(['collection_case.handed_over', 'collection_case.decision', 'collection_case.closed'])
+    expect(report!.events[1].details).toEqual(['Till och med 2026-03-31'])
+    expect(report!.by_category.ovrigt).toBe(3)
+    expect(client.from).toHaveBeenCalledWith('collection_case_events')
   })
 })

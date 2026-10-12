@@ -19,6 +19,7 @@ import { contentBucketKey, descriptionsBridge, normalizeImportedDescription, rec
 import { classifyTransactionMethod } from '@/lib/transactions/transaction-method'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { createLogger } from '@/lib/logger'
+import { scheduleCollectionSweep } from '@/lib/collections/sweep-hook'
 import { physicalAccountKey, reenableIfUnused, sameCashAccount } from '@/lib/cash-accounts/service'
 import type { Transaction, RawTransaction, IngestResult, IngestOptions, IngestSkipReason, IngestSkippedRow, SupplierInvoice, Currency, ExchangeRate } from '@/types'
 
@@ -1109,6 +1110,8 @@ export async function ingestTransactions(
   // Track already-matched invoice IDs within this ingestion batch
   // to prevent suggesting the same invoice for multiple transactions
   const matchedInvoiceIds = new Set<string>()
+  /** Inserted inbound rows, for the collections payment-candidate sweep. */
+  const inboundIds: string[] = []
   const matchedSupplierInvoiceIds = new Set<string>()
   const matchedRotRutRequestIds = new Set<string>()
   // The company's momskoder for auto-categorized reverse-charge rows: read
@@ -1448,6 +1451,7 @@ export async function ingestTransactions(
 
     result.imported++
     result.transaction_ids.push(newTransaction.id)
+    if (newTransaction.amount > 0) inboundIds.push(newTransaction.id)
 
     // rawInsertOnly: skip invoice matching, and auto-categorization
     if (options?.rawInsertOnly) continue
@@ -1654,6 +1658,10 @@ export async function ingestTransactions(
       }
     }
   }
+
+  // Inbound rows may pay an invoice the collections provider is pursuing:
+  // check them right after this request answers (pauses the case if so).
+  scheduleCollectionSweep(companyId, inboundIds)
 
   return result
 }

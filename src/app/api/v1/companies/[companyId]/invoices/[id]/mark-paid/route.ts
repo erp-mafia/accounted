@@ -568,6 +568,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         paymentDate,
         newPaidAmount,
         journalEntryId,
+        source: 'manual',
       })
       if (!recorded.ok) {
         ctx.log.error('mark-paid: invoice_payments insert failed: cancelling the payment voucher', undefined, {

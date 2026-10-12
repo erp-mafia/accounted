@@ -12,6 +12,12 @@ import { effectiveQuoteStatus } from './quote-status'
 export const INVOICE_LIST_MAIN_TABS = ['all', 'unpaid', 'overdue', 'unsent', 'draft'] as const
 export const INVOICE_LIST_MORE_TABS = [
   'paid',
+  // "Hos inkasso": open collection cases past delivery (a registered claim
+  // included), plus the cases a person must look at (the Att göra row lands
+  // here). The ids come from collection_open_invoice_ids (in_collection) and
+  // collection_attention_case_ids, passed in as the context; without it the
+  // view is empty.
+  'collections',
   'proforma',
   'delivery_note',
   'credit',
@@ -53,6 +59,7 @@ export function parseQuoteListTab(param: string | null): QuoteListTab | null {
 }
 
 type ListInvoice = Pick<Invoice, 'status' | 'invoice_number' | 'credited_invoice_id'> & {
+  id?: string
   document_type?: string | null
   is_self_billed?: boolean | null
   quote_status?: string | null
@@ -83,7 +90,15 @@ export function isUnsentNumberedInvoice(invoice: ListInvoice): boolean {
   )
 }
 
-export function matchesInvoiceListTab(invoice: ListInvoice, tab: InvoiceListTab): boolean {
+/** Facts a view needs beyond the invoice row itself. */
+export interface InvoiceListTabContext {
+  /** Invoices with an open collection case past the delivery stages ("Hos inkasso"). */
+  inCollection?: ReadonlySet<string>
+  /** Invoices whose collection case needs a person (a refused handover, a failed read). */
+  collectionAttention?: ReadonlySet<string>
+}
+
+export function matchesInvoiceListTab(invoice: ListInvoice, tab: InvoiceListTab, context: InvoiceListTabContext = {}): boolean {
   if (isQuoteRow(invoice)) return false
   const isCreditNote = !!invoice.credited_invoice_id
   const docType = documentTypeOf(invoice)
@@ -105,6 +120,8 @@ export function matchesInvoiceListTab(invoice: ListInvoice, tab: InvoiceListTab)
       )
     case 'paid':
       return invoice.status === 'paid'
+    case 'collections':
+      return !!invoice.id && (!!context.inCollection?.has(invoice.id) || !!context.collectionAttention?.has(invoice.id))
     case 'credit':
       return isCreditNote && invoice.status !== 'cancelled'
     case 'proforma':

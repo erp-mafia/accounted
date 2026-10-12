@@ -261,6 +261,32 @@ describe('gnubok_approve_pending_operation', () => {
     expect(result.status).toBe('committed')
   })
 
+  it('refuses a collections handover or escalation even with confirmed=true: only a person approves it, in Accounted', async () => {
+    for (const [operation_type, params] of [
+      ['open_collection_case', { invoice_id: 'inv-1', expected_remaining: 100 }],
+      ['collection_case_action', { invoice_id: 'inv-1', action: 'approve_step' }],
+      ['collections_daily_batch', { batch_date: '2026-10-07', items: [], excluded: [] }],
+    ] as const) {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-1', operation_type, company_id: 'company-1', status: 'pending', risk_level: 'high', params }, error: null })
+      await expect(
+        approveTool.execute({ operation_id: 'op-1', confirmed: true }, 'company-1', 'user-1', supabase as never, { type: 'api_key' }),
+      ).rejects.toMatchObject({ code: 'COLLECTION_ATTESTATION_WEB_ONLY' })
+    }
+    expect(commitSpy).not.toHaveBeenCalled()
+  })
+
+  it('approves a collections action that only serves the case', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: { id: 'op-1', operation_type: 'collection_case_action', company_id: 'company-1', status: 'pending', risk_level: 'high', params: { invoice_id: 'inv-1', action: 'pause' } },
+      error: null,
+    })
+    commitSpy.mockResolvedValue({ status: 'committed' })
+    await approveTool.execute({ operation_id: 'op-1', confirmed: true }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
+    expect(commitSpy).toHaveBeenCalledTimes(1)
+  })
+
   it('throws when the operation is not found', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: null, error: { message: 'not found' } })

@@ -181,6 +181,14 @@
     {
       "path": "/api/community/sync/cron",
       "schedule": "23 * * * *"
+    },
+    {
+      "path": "/api/collections/sync/cron",
+      "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/collections/ladder/cron",
+      "schedule": "15 6 * * *"
     }
   ]
 }
