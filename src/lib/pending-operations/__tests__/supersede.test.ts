@@ -36,6 +36,8 @@ describe('rejectSupersededInboxConversions', () => {
     expect(await rejectSupersededInboxConversions(mock.supabase as never, 'company-1', 'item-1', 'invoice-1')).toBe(2)
     expect(mock.findCall('pending_operations', 'update')?.[0]).toMatchObject({
       status: 'rejected',
+      // Handled another way: a system rejection, not a person's verdict.
+      rejection_category: 'superseded',
       result_data: {
         auto_rejected: true,
         reason: 'Posten är redan kopplad till en leverantörsfaktura.',

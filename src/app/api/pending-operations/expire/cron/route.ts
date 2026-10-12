@@ -25,8 +25,9 @@ import { recoverStuckCommittingOperations } from '@/lib/pending-operations/recov
  * trail) with the same result_data shape the commit dispatcher uses for its
  * own auto-rejects (lib/pending-operations/commit.ts). The strict
  * reason: 'expired' marker is what the /pending UI keys its
- * "Utgick automatiskt" badge on. rejection_category/rejection_reason stay
- * NULL: those carry user feedback semantics, and an expiry is not feedback.
+ * "Utgick automatiskt" badge on. rejection_category is 'expired', a system
+ * category: an expiry is no person's verdict on the proposal, and the
+ * category says so without reading result_data.
  *
  * If you change EXPIRY_DAYS, update the user-facing copy that states the
  * window: pending.auto_expiry_note + pending.auto_expired_detail in
@@ -49,6 +50,7 @@ export const GET = withCronContext('cron.pending_operations_expire', async (_req
     .update({
       status: 'rejected',
       resolved_at: new Date().toISOString(),
+      rejection_category: 'expired',
       result_data: { auto_rejected: true, reason: 'expired' },
     })
     .eq('status', 'pending')

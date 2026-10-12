@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { Check, X, AlertTriangle, Lock, ShieldCheck, ArrowRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -98,14 +99,15 @@ export default function ApprovalCard({
   // What's paid is feeding a rejection back so the agent generates a *new*
   // proposal (an LLM call): that's suppressed when the company lacks `ai`.
   const hasAi = useCapability(CAPABILITY.ai)
+  const t = useTranslations('pending')
   // Chart names for the preview lines (same source as /pending).
   const accountNames = useAccountNamesSource()
   const [state, setState] = useState<State>('pending')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [confirmText, setConfirmText] = useState('')
   // Reject-with-reason form (mirrors the granskning dialog). Clicking "Avslå"
-  // opens it; both fields are optional. When a reason is given, the rejection
-  // is fed back so the agent re-proposes.
+  // opens it; the category is required, the note optional. The rejection is
+  // fed back so the agent re-proposes.
   const [showRejectForm, setShowRejectForm] = useState(false)
   const [rejectCategory, setRejectCategory] = useState<PendingOperationRejectionCategory | ''>('')
   const [rejectReason, setRejectReason] = useState('')
@@ -197,25 +199,22 @@ export default function ApprovalCard({
   }
 
   async function handleReject() {
+    // A person's rejection always says what was wrong (parity with the
+    // granskning dialog): the button stays disabled until a category is picked.
+    if (!rejectCategory) return
     setState('rejecting')
     setErrorMessage(null)
-    const categoryLabel = rejectCategory ? REJECTION_CATEGORY_LABELS[rejectCategory] : null
+    const categoryLabel = REJECTION_CATEGORY_LABELS[rejectCategory]
     const reason = rejectReason.trim()
-    // Both fields optional: a bare "Avvisa" still rejects (parity with the
-    // granskning dialog and older bodyless clients).
-    const body =
-      rejectCategory || reason
-        ? {
-            ...(rejectCategory ? { rejection_category: rejectCategory } : {}),
-            ...(reason ? { rejection_reason: reason } : {}),
-          }
-        : undefined
+    const body = {
+      rejection_category: rejectCategory,
+      ...(reason ? { rejection_reason: reason } : {}),
+    }
     try {
       const res = await fetch(`/api/pending-operations/${operationId}/reject`, {
         method: 'POST',
-        ...(body
-          ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
-          : {}),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
       })
       if (!res.ok) {
         const body = await res.json().catch(() => null)
@@ -225,10 +224,9 @@ export default function ApprovalCard({
       }
       setShowRejectForm(false)
       setState('rejected')
-      // Feed the correction back so the agent re-proposes: only when the user
-      // actually said what was wrong. A bare reject just stops here.
+      // Feed the correction back so the agent re-proposes.
       const parts = [categoryLabel, reason].filter(Boolean) as string[]
-      if (hasAi && parts.length > 0) {
+      if (hasAi) {
         onRequestCorrection?.(
           `Jag avvisade förslaget. Det som var fel: ${parts.join(', ')}. Föreslå en korrigerad bokning.`,
         )
@@ -396,7 +394,7 @@ export default function ApprovalCard({
             onValueChange={(v) => setRejectCategory(v as PendingOperationRejectionCategory)}
           >
             <SelectTrigger className="h-8 text-xs" aria-label="Anledning">
-              <SelectValue placeholder="Anledning (valfritt)" />
+              <SelectValue placeholder={t('reject_category_label')} />
             </SelectTrigger>
             {/* The agent sheet panel is z-[60]; SelectContent defaults to z-50
                 and portals to <body>, so without this it opens BEHIND the
@@ -436,7 +434,7 @@ export default function ApprovalCard({
               variant="destructive"
               size="sm"
               onClick={handleReject}
-              disabled={isBusy}
+              disabled={isBusy || !rejectCategory}
               loading={state === 'rejecting'}
               className="flex-1"
             >

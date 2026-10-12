@@ -101,13 +101,13 @@ describe('GET /api/pending-operations/expire/cron', () => {
 
     // The update payload: terminal rejected status + the exact result_data
     // shape the commit dispatcher uses for its own auto-rejects, with the
-    // strict 'expired' reason the UI badge keys on. rejection_category and
-    // rejection_reason must NOT be set: those carry user-feedback semantics.
+    // strict 'expired' reason the UI badge keys on. The category is the
+    // system's 'expired', never a person's; no free-text reason is invented.
     expect(call.payload).toBeTruthy()
     expect(call.payload!.status).toBe('rejected')
     expect(Number.isNaN(new Date(call.payload!.resolved_at as string).getTime())).toBe(false)
     expect(call.payload!.result_data).toEqual({ auto_rejected: true, reason: 'expired' })
-    expect(call.payload).not.toHaveProperty('rejection_category')
+    expect(call.payload!.rejection_category).toBe('expired')
     expect(call.payload).not.toHaveProperty('rejection_reason')
 
     // CAS on status='pending' (skips concurrently-claimed 'committing' rows)

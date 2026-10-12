@@ -22,10 +22,9 @@ const STATUS_LABELS_SV: Record<string, string> = {
 /**
  * POST /api/pending-operations/bulk-reject
  *
- * Reject up to 100 pending operations in one call. Optionally accepts
- * `rejection_category` and `rejection_reason`, applied to every rejected row
- * so agents can learn from "no" via gnubok_get_recent_rejections, same as the
- * single reject route. Unlike bulk-commit there is no high-risk skip here:
+ * Reject up to 100 pending operations in one call. Requires
+ * `rejection_category` and optionally takes `rejection_reason`, applied to
+ * every rejected row, same as the single reject route. Unlike bulk-commit there is no high-risk skip here:
  * rejecting posts nothing to the ledger, so it is safe at any risk tier.
  */
 export const POST = withRouteContext(
@@ -66,7 +65,7 @@ export const POST = withRouteContext(
         .update({
           status: 'rejected',
           resolved_at: new Date().toISOString(),
-          ...(rejection_category ? { rejection_category } : {}),
+          rejection_category,
           ...(rejectionReason ? { rejection_reason: rejectionReason } : {}),
         })
         .in('id', pendingIds)

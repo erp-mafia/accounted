@@ -779,6 +779,7 @@
     "approve_bulk_title": "Godkänn {count} operationer?",
     "reject": "Avvisa",
     "reject_count": "Avvisa {count}",
+    "reject_category_label": "Anledning",
     "reject_bulk_title": "Avvisa {count} operationer?",
     "reject_bulk_description": "Anledning och notering nedan gäller alla valda operationer.",
     "select_all_aria": "Markera alla",

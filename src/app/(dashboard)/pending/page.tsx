@@ -69,6 +69,7 @@ import {
   rowConsentSentence,
   singleActionWarning,
   REJECTION_CATEGORY_LABELS,
+  rejectionCategoryLabel,
 } from '@/components/pending-operations/vocabulary'
 import { describeRetrievedSkills } from '@/lib/agent-skills/retrieved-skills'
 import { registerBookedLedgerOf } from '@/lib/invoices/register-booked-invoice-mode'
@@ -663,11 +664,11 @@ export default function PendingOperationsPage() {
   }
 
   async function handleReject() {
-    if (!rejectTarget) return
+    if (!rejectTarget || !rejectCategory) return
     setIsRejecting(true)
     try {
       const feedback = {
-        ...(rejectCategory ? { rejection_category: rejectCategory } : {}),
+        rejection_category: rejectCategory,
         ...(rejectReason.trim() ? { rejection_reason: rejectReason.trim() } : {}),
       }
 
@@ -698,12 +699,10 @@ export default function PendingOperationsPage() {
         }
         setSelectedIds(new Set())
       } else {
-        const hasFeedback = Object.keys(feedback).length > 0
         const res = await fetch(`/api/pending-operations/${rejectTarget.id}/reject`, {
           method: 'POST',
-          ...(hasFeedback
-            ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(feedback) }
-            : {}),
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(feedback),
         })
         if (!res.ok) {
           const json = await res.json().catch(() => ({}))
@@ -1316,10 +1315,10 @@ export default function PendingOperationsPage() {
                     </p>
                   </div>
                 )}
-                {detailOp.status === 'rejected' && detailOp.rejection_category && (
+                {detailOp.status === 'rejected' && detailOp.rejection_category && detailOp.rejection_category !== 'expired' && (
                   <div className="rounded-lg border border-border bg-secondary/25 px-3 py-2">
                     <p className="text-xs leading-snug text-muted-foreground">
-                      Avvisad: {REJECTION_CATEGORY_LABELS[detailOp.rejection_category]}
+                      Avvisad: {rejectionCategoryLabel(detailOp.rejection_category)}
                       {detailOp.rejection_reason ? `, "${detailOp.rejection_reason}"` : ''}
                     </p>
                   </div>
@@ -1442,8 +1441,8 @@ export default function PendingOperationsPage() {
         </div>
       </ConfirmationDialog>
 
-      {/* Reject dialog: category + free-text reason. Both optional so the user
-          can still reject quickly without filling anything in. Doubles as the
+      {/* Reject dialog: a required category plus an optional free-text reason,
+          so every rejection a person makes says what was wrong. Doubles as the
           bulk-reject confirmation; the feedback then applies to every selected op. */}
       <Dialog open={rejectTarget != null} onOpenChange={(open) => { if (!open) setRejectTarget(null) }}>
         <DialogContent className="sm:max-w-md">
@@ -1463,7 +1462,7 @@ export default function PendingOperationsPage() {
           <div className="space-y-3">
             <div className="space-y-1">
               <label className="text-sm font-medium" htmlFor="reject-category">
-                Anledning (valfritt)
+                {t('reject_category_label')}
               </label>
               <Select
                 value={rejectCategory}
@@ -1500,7 +1499,7 @@ export default function PendingOperationsPage() {
             <Button variant="outline" onClick={() => setRejectTarget(null)} disabled={isRejecting}>
               Avbryt
             </Button>
-            <Button variant="destructive" onClick={handleReject} loading={isRejecting}>
+            <Button variant="destructive" onClick={handleReject} loading={isRejecting} disabled={!rejectCategory}>
               {rejectTarget === 'bulk' ? (
                 t('reject_count', { count: selectedCount })
               ) : (

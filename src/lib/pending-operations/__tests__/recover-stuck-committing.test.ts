@@ -125,6 +125,8 @@ describe('buildRecoveryUpdate', () => {
 
     expect(update.status).toBe('rejected')
     expect(update.result_data.auto_rejected).toBe(true)
+    // The approval never completed: a system rejection, not a person's verdict.
+    expect(update.rejection_category).toBe('failed')
     // Distinct from 'expired' so the UI's "Utgick automatiskt" badge (strict
     // on reason === 'expired') never claims recovery rows.
     expect(update.result_data.reason).toBe('stuck_committing')

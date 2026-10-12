@@ -779,6 +779,7 @@
     "approve_bulk_title": "Approve {count} operations?",
     "reject": "Reject",
     "reject_count": "Reject {count}",
+    "reject_category_label": "Reason",
     "reject_bulk_title": "Reject {count} operations?",
     "reject_bulk_description": "The reason and note below apply to all selected operations.",
     "select_all_aria": "Select all",

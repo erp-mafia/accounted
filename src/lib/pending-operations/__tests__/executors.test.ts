@@ -854,7 +854,7 @@ describe('commitPendingOperation: create_transaction', () => {
   })
 
   it('returns 409 when external_id collides with an existing row', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: null, error: { code: '23505', message: 'duplicate key' } as never }) // executor insert
     enqueue({ data: null, error: null }) // dispatcher's reject update
@@ -876,6 +876,10 @@ describe('commitPendingOperation: create_transaction', () => {
     expect(result.auto_rejected).toBe(true)
     expect(result.http_status).toBe(409)
     expect(result.error).toMatch(/already exists/)
+    // The system's rejection, told apart from a person's by its category.
+    const rejectUpdate = findCalls('pending_operations', 'update').map((c) => c[0] as Record<string, unknown>)
+      .find((payload) => payload.status === 'rejected')
+    expect(rejectUpdate).toMatchObject({ rejection_category: 'failed', result_data: { auto_rejected: true } })
   })
 
   it('binds cash_account_id when ledger_account is given, creating the manual account', async () => {

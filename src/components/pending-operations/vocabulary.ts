@@ -3,7 +3,7 @@
 // (/pending, the chat approval card, future flow-run views). Moved here from
 // app/(dashboard)/pending/page.tsx so the vocabulary has exactly one owner.
 
-import type { PendingOperationRejectionCategory } from '@/types'
+import type { PendingOperationRejectionCategory, PendingOperationSystemRejectionCategory } from '@/types'
 import {
   isRegisterBookedInvoiceParams,
   registerBookedLedgerOf,
@@ -392,6 +392,21 @@ export const REJECTION_CATEGORY_LABELS: Record<PendingOperationRejectionCategory
   duplicate: 'Dubblett',
   wrong_period: 'Fel period',
   other: 'Annat',
+}
+
+// Rejections nobody made: shown on a resolved operation, never offered in a picker.
+const SYSTEM_REJECTION_LABELS: Record<PendingOperationSystemRejectionCategory, string> = {
+  expired: 'Utgick automatiskt',
+  superseded: 'Ersatt',
+  failed: 'Misslyckades vid godkännandet',
+}
+
+export function rejectionCategoryLabel(
+  category: PendingOperationRejectionCategory | PendingOperationSystemRejectionCategory,
+): string {
+  return category in REJECTION_CATEGORY_LABELS
+    ? REJECTION_CATEGORY_LABELS[category as PendingOperationRejectionCategory]
+    : SYSTEM_REJECTION_LABELS[category as PendingOperationSystemRejectionCategory]
 }
 
 /**

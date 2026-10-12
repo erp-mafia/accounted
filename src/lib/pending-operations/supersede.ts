@@ -13,7 +13,8 @@ const log = createLogger('pending-operations/supersede')
  *
  * Writes the row the commit dispatcher writes for a 409 auto-reject
  * (commit.ts): 'rejected' with result_data { auto_rejected, reason,
- * error_code, details }, so no reader needs a new status. CAS on 'pending':
+ * error_code, details }, so no reader needs a new status. The
+ * rejection_category is 'superseded': handled another way, not judged. CAS on 'pending':
  * an operation being approved right now ('committing') is its executor's.
  * Never throws: the conversion it follows has already happened.
  */
@@ -29,6 +30,7 @@ export async function rejectSupersededInboxConversions(
       .update({
         status: 'rejected',
         resolved_at: new Date().toISOString(),
+        rejection_category: 'superseded',
         result_data: {
           auto_rejected: true,
           reason:

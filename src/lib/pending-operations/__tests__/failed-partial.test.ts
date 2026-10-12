@@ -235,6 +235,8 @@ describe('match_transaction_invoice: partial commit after the storno', () => {
     const opUpdates = pendingOpUpdates(updates)
     expect(opUpdates[1]?.payload).toMatchObject({
       status: 'rejected',
+      // A person approved and the executor failed: no verdict on the proposal.
+      rejection_category: 'failed',
       result_data: { threw: true },
     })
   })

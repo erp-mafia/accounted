@@ -188,7 +188,9 @@ export async function findPostedEvidence(
  * The rejected shape reuses the { auto_rejected, reason } marker family the
  * dispatcher and expire cron already write; reason='stuck_committing' is
  * distinct from 'expired' so the /pending UI's "Utgick automatiskt" badge
- * (strict on reason === 'expired') never claims these rows.
+ * (strict on reason === 'expired') never claims these rows. Its
+ * rejection_category is 'failed': the approval did not complete, and no
+ * person rejected the proposal.
  */
 export function buildRecoveryUpdate(
   row: StuckCommittingRow,
@@ -197,6 +199,7 @@ export function buildRecoveryUpdate(
 ): {
   status: 'committed' | 'rejected'
   resolved_at: string
+  rejection_category?: 'failed'
   result_data: Record<string, unknown>
 } {
   const recovery = {
@@ -215,6 +218,7 @@ export function buildRecoveryUpdate(
   return {
     status: 'rejected',
     resolved_at: sweptAtIso,
+    rejection_category: 'failed',
     result_data: {
       auto_rejected: true,
       reason: 'stuck_committing',

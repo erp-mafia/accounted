@@ -2946,12 +2946,16 @@ export interface PendingOperationAgentMetadata {
   approved_by_user_id?: string
 }
 
+/** What a person said was wrong (lib/pending-operations/rejection-categories.ts). */
 export type PendingOperationRejectionCategory =
   | 'wrong_category'
   | 'wrong_amount'
   | 'duplicate'
   | 'wrong_period'
   | 'other'
+
+/** A rejection nobody made: expired unanswered, replaced or handled another way, or failed at approval. */
+export type PendingOperationSystemRejectionCategory = 'expired' | 'superseded' | 'failed'
 
 export interface PendingOperation {
   id: string
@@ -2971,7 +2975,7 @@ export interface PendingOperation {
   // Stream 2 Phase 3: agent provenance (populated by chat loop, NULL for user-staged)
   agent_metadata: PendingOperationAgentMetadata | null
   // Stream 2 Phase 4: structured rejection so the agent can learn from "no"
-  rejection_category: PendingOperationRejectionCategory | null
+  rejection_category: PendingOperationRejectionCategory | PendingOperationSystemRejectionCategory | null
   rejection_reason: string | null
   // Set by accounted_stage_across_companies: every operation staged in one
   // cross-company call shares the id. NULL for every other staging path.

@@ -332,6 +332,39 @@ describe('gnubok_reject_pending_operation', () => {
     expect(commitSpy).not.toHaveBeenCalled()
   })
 
+  it('stores the category and reason in the rejection columns, where the dashboard keeps them', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1', status: 'pending' }, error: null })
+    enqueue({ data: [{ id: 'op-1' }], error: null })
+
+    await rejectTool.execute(
+      { operation_id: 'op-1', category: 'wrong_category', reason: ' Ska vara 5410 ' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )
+
+    expect(findCalls('pending_operations', 'update')[0]?.[0]).toMatchObject({
+      status: 'rejected',
+      rejection_category: 'wrong_category',
+      rejection_reason: 'Ska vara 5410',
+    })
+  })
+
+  it('leaves the category empty when the user gave none, and refuses one outside the list', async () => {
+    const plain = createQueuedMockSupabase()
+    plain.enqueue({ data: { id: 'op-1', status: 'pending' }, error: null })
+    plain.enqueue({ data: [{ id: 'op-1' }], error: null })
+    await rejectTool.execute({ operation_id: 'op-1' }, 'company-1', 'user-1', plain.supabase as never)
+    expect(plain.findCalls('pending_operations', 'update')[0]?.[0]).not.toHaveProperty('rejection_category')
+
+    const bad = createQueuedMockSupabase()
+    await expect(
+      rejectTool.execute({ operation_id: 'op-1', category: 'expired' }, 'company-1', 'user-1', bad.supabase as never),
+    ).rejects.toThrow(/category must be one of/)
+    expect(bad.findCalls('pending_operations', 'update')).toEqual([])
+  })
+
   it('throws when the CAS update affects 0 rows (concurrent claim)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1', status: 'pending' }, error: null }) // fetch

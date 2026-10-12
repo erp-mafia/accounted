@@ -1,52 +1,34 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { validateBody } from '@/lib/api/validate'
+import { PERSON_REJECTION_CATEGORIES } from '@/lib/pending-operations/rejection-categories'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 const RejectBodySchema = z.object({
-  rejection_category: z
-    .enum(['wrong_category', 'wrong_amount', 'duplicate', 'wrong_period', 'other'])
-    .optional(),
+  // A person's verdict, or 'superseded' when the assistant withdraws a
+  // proposal because the person asked for a new answer (AgentChat). The other
+  // system categories are written by the system itself, never by a client.
+  rejection_category: z.enum([...PERSON_REJECTION_CATEGORIES, 'superseded']),
   rejection_reason: z.string().max(2000).optional(),
 })
 
 /**
  * POST /api/pending-operations/:id/reject
  *
- * Reject a pending operation. Optionally accepts a JSON body with
- * `rejection_category` (fixed enum) and `rejection_reason` (free text). Both
- * are stored on the row so agents can fetch them via gnubok_get_recent_rejections
- * and learn from "no". The body is optional: bodyless POSTs from older
- * clients still mark the op rejected with NULL category/reason.
+ * Reject a pending operation. The JSON body names why: `rejection_category`
+ * (required, fixed enum) and `rejection_reason` (optional free text), both
+ * stored on the row so a person's "no" is never an unexplained one.
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'pending_operation.reject',
   async (request, { supabase, companyId }, { params }) => {
     const { id } = await params
 
-    // Body is optional: accept empty/missing body without rejecting the request.
-    // Old clients posted no body; the UI dialog will now post a body, but we
-    // keep accepting both shapes to avoid coupling the API to the UI version.
-    let rejectionCategory: string | undefined
-    let rejectionReason: string | undefined
-    const contentLength = request.headers.get('content-length')
-    if (contentLength && contentLength !== '0') {
-      try {
-        const raw = await request.json()
-        const parsed = RejectBodySchema.safeParse(raw)
-        if (!parsed.success) {
-          return NextResponse.json(
-            { error: parsed.error.issues.map((i) => i.message).join('; ') },
-            { status: 400 },
-          )
-        }
-        rejectionCategory = parsed.data.rejection_category
-        rejectionReason = parsed.data.rejection_reason?.trim() || undefined
-      } catch {
-        // Body present but unparseable: fail closed.
-        return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
-      }
-    }
+    const validated = await validateBody(request, RejectBodySchema)
+    if (!validated.success) return validated.response
+    const rejectionCategory = validated.data.rejection_category
+    const rejectionReason = validated.data.rejection_reason?.trim() || undefined
 
     const { data: op, error: fetchError } = await supabase
       .from('pending_operations')
@@ -94,7 +76,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       .update({
         status: 'rejected',
         resolved_at: new Date().toISOString(),
-        ...(rejectionCategory ? { rejection_category: rejectionCategory } : {}),
+        rejection_category: rejectionCategory,
         ...(rejectionReason ? { rejection_reason: rejectionReason } : {}),
       })
       .eq('id', id)

@@ -7993,12 +7993,14 @@ async function commitPendingOperationInner(
     const message = err instanceof Error ? err.message : (isBkErr ? 'Bookkeeping error' : 'Executor failed')
     // Release the claim by transitioning to 'rejected' so the row never gets
     // stuck in 'committing'. The error text is persisted in result_data for
-    // audit/debug.
+    // audit/debug. 'failed': the approval did not go through, which is no
+    // person's verdict on the proposal.
     await supabase
       .from('pending_operations')
       .update({
         status: 'rejected',
         resolved_at: new Date().toISOString(),
+        rejection_category: 'failed',
         result_data: { error: message, threw: true },
       })
       .eq('id', pendingOp.id)
@@ -8074,6 +8076,8 @@ async function commitPendingOperationInner(
       .update({
         status: 'rejected',
         resolved_at: new Date().toISOString(),
+        // A person approved; the executor refused. No verdict on the proposal.
+        rejection_category: 'failed',
         result_data: isAutoReject
           ? {
               auto_rejected: true,

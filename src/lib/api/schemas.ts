@@ -14,6 +14,7 @@ import {
 } from '@/lib/vat/supplier-invoice-line-checks'
 import { ACCOUNT_VAT_TREATMENTS } from '@/lib/vat/account-vat-treatment'
 import { ACCOUNT_VAT_BOXES } from '@/lib/vat/account-vat-box'
+import { PERSON_REJECTION_CATEGORIES } from '@/lib/pending-operations/rejection-categories'
 import {
   accountNumberSchema,
   isoDateSchema,
@@ -3580,13 +3581,11 @@ export const PendingOperationsBulkSchema = z.object({
   ids: z.array(z.string().uuid()).min(1).max(100),
 })
 
-// Bulk reject: same id list plus the optional category/reason pair from the
-// single reject route. When provided they are applied to every rejected row.
+// Bulk reject: same id list plus the person's category (required) and an
+// optional reason, applied to every rejected row.
 export const PendingOperationsBulkRejectSchema = z.object({
   ids: z.array(z.string().uuid()).min(1).max(100),
-  rejection_category: z
-    .enum(['wrong_category', 'wrong_amount', 'duplicate', 'wrong_period', 'other'])
-    .optional(),
+  rejection_category: z.enum(PERSON_REJECTION_CATEGORIES),
   rejection_reason: z.string().max(2000).optional(),
 })
 

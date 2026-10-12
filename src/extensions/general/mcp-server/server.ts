@@ -138,6 +138,7 @@ import { findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bo
 import { formatVoucherLabel, hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
 import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
+import { PERSON_REJECTION_CATEGORIES } from '@/lib/pending-operations/rejection-categories'
 import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
 import { planSupplierPaymentBackfill, type SupplierPaymentColumns, type SupplierPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
 import { eventBus } from '@/lib/events/bus'
@@ -25461,15 +25462,19 @@ export const tools: McpTool[] = [
     name: 'gnubok_reject_pending_operation',
     keywords: ['avvisa', 'neka'],
     title: 'Reject Pending Operation',
-    description: 'Reject a staged pending_operation without executing it. Status flips to rejected; no journal entries, invoices, or other side-effects created. Idempotent on already-resolved ops (returns 409).',
+    description: 'Reject a staged pending_operation without executing it. Status flips to rejected; nothing is booked or created. Already-resolved ops return 409.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         operation_id: { type: 'string', description: 'UUID of the pending_operations row to reject' },
+        category: {
+          type: 'string',
+          enum: [...PERSON_REJECTION_CATEGORIES],
+        },
         reason: {
           type: 'string',
-          description: 'Optional human-readable reason recorded in result_data for the audit trail',
+          description: 'Optional reason',
           maxLength: 500,
         },
       },
@@ -25488,7 +25493,13 @@ export const tools: McpTool[] = [
       const operationId = args.operation_id as string
       if (!operationId) throw new Error('operation_id is required')
 
-      const reason = typeof args.reason === 'string' ? args.reason.slice(0, 500) : undefined
+      const reason = typeof args.reason === 'string' && args.reason.trim() ? args.reason.trim().slice(0, 500) : undefined
+      // Hosts don't always enforce the enum: an unknown category is refused,
+      // never stored as something the user did not say.
+      const category = args.category === undefined ? undefined : args.category
+      if (category !== undefined && !(PERSON_REJECTION_CATEGORIES as readonly unknown[]).includes(category)) {
+        throw new Error(`category must be one of: ${PERSON_REJECTION_CATEGORIES.join(', ')}`)
+      }
 
       const { data: op, error: fetchError } = await supabase
         .from('pending_operations')
@@ -25527,6 +25538,8 @@ export const tools: McpTool[] = [
         .update({
           status: 'rejected',
           resolved_at: new Date().toISOString(),
+          ...(category ? { rejection_category: category } : {}),
+          ...(reason ? { rejection_reason: reason } : {}),
           result_data: {
             rejected_by: userId,
             rejected_via: actor?.type ?? 'user',

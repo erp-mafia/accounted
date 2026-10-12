@@ -584,8 +584,10 @@ export default function AgentChat({
             const res = await fetch(`/api/pending-operations/${operationId}/reject`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
+              // 'superseded': a system rejection, not the person's verdict
+              // on the proposal (they asked for a new answer, not a new booking).
               body: JSON.stringify({
-                rejection_category: 'other',
+                rejection_category: 'superseded',
                 rejection_reason: 'Ersatt: användaren begärde ett nytt svar.',
               }),
             })
