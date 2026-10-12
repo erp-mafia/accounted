@@ -26,6 +26,7 @@ import type { BooksCtx } from '../context'
 import { Button } from '@/components/ui/button'
 import { BankConnectDialog } from '@/components/bank-feed/BankConnectDialog'
 import { useBankConnectFlow } from '@/components/bank-feed/use-bank-connect-flow'
+import { useBankConnectResume } from '@/components/bank-feed/use-bank-connect-resume'
 import { useOpenPaymentsAvailability } from '@/components/bank-feed/use-open-payments-availability'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
@@ -71,7 +72,9 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
   // replaces the Enable Banking popup: the Koppla banken dialog runs here
   // and the step reads its verdict from the findings once the bank is live.
   const openPayments = useOpenPaymentsAvailability()
-  const bankFlow = useBankConnectFlow()
+  const bankFlow = useBankConnectFlow('onboarding')
+  // Back from a bank that signs on its own page (?station=bank&bank_connect=<id>): reopen the flow, once.
+  useBankConnectResume(bankFlow, openPayments.status === 'available')
   const [banks, setBanks] = useState<Bank[] | null>(null)
   const [psuType, setPsuType] = useState<'personal' | 'business' | undefined>(undefined)
   const [more, setMore] = useState(false)

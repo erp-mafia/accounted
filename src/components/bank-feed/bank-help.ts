@@ -17,8 +17,8 @@ export type BankHelpKey = 'handelsbanken' | 'nordea' | 'swedbank' | 'svea'
 const HELP_PATTERNS: ReadonlyArray<readonly [RegExp, BankHelpKey]> = [
   [/handelsbanken/i, 'handelsbanken'],
   [/nordea/i, 'nordea'],
-  // Swedbank and the sparbanker share one login and one "välj företag" prompt.
-  [/swedbank|sparbank/i, 'swedbank'],
+  // Swedbank, the sparbanker and Ölands Bank share one login and one "välj företag" prompt.
+  [/swedbank|sparbank|ölands bank/i, 'swedbank'],
   [/\bsvea\b/i, 'svea'],
 ]
 
@@ -44,9 +44,43 @@ export function isTwoStepBank(bank: Pick<OpenPaymentsBank, 'name' | 'bic'>): boo
   return bankHelpKey(bank) === 'svea'
 }
 
-/** A bank that only signs on its own page cannot be connected from this flow yet. */
-export function bankSelectable(bank: Pick<OpenPaymentsBank, 'decoupled'>): boolean {
-  return bank.decoupled !== false
+/**
+ * How a person signs at a bank: in our screen (decoupled: an animated QR or
+ * the BankID app on this device), on the bank's own page (redirect: the
+ * browser goes there and comes back), both, or neither we can do. The list
+ * answers with nulls for a bank it does not know about; null counts as our
+ * screen until the bank's details say otherwise.
+ */
+export type SigningApproach = 'decoupled' | 'redirect' | 'both' | 'none'
+
+export function bankSigningApproach(bank: Pick<OpenPaymentsBank, 'decoupled' | 'redirect'>): SigningApproach {
+  const decoupled = bank.decoupled !== false
+  const redirect = bank.redirect === true
+  if (decoupled && redirect) return 'both'
+  if (decoupled) return 'decoupled'
+  return redirect ? 'redirect' : 'none'
+}
+
+/** A bank we can sign at one way or the other can be chosen. */
+export function bankSelectable(bank: Pick<OpenPaymentsBank, 'decoupled' | 'redirect'>): boolean {
+  return bankSigningApproach(bank) !== 'none'
+}
+
+/**
+ * The list entry for a connection row's bank, which names the bank but not
+ * its BIC: the same name, a name containing the other, and for a sparbank or
+ * Ölands Bank the Swedbank entry they are reached through. Null when the list
+ * knows no such bank.
+ */
+export function resolveBankByName<T extends { name: string }>(banks: readonly T[], name: string): T | null {
+  const wanted = name.trim().toLowerCase()
+  if (!wanted) return null
+  const exact = banks.find((b) => b.name.trim().toLowerCase() === wanted)
+  if (exact) return exact
+  const partial = banks.find((b) => b.name.toLowerCase().includes(wanted) || wanted.includes(b.name.toLowerCase()))
+  if (partial) return partial
+  if (/sparbank|ölands bank/i.test(wanted)) return banks.find((b) => /swedbank/i.test(b.name)) ?? null
+  return null
 }
 
 /**

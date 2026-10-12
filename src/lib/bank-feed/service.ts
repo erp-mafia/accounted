@@ -9,7 +9,11 @@
  *              open_payments, provider 'open_payments', bic, the consent id in
  *              session_id, the authorisation in authorization_id, everything
  *              else about the attempt in consent_attempt), so poll and
- *              restart take no body and a person can resume from Kopplingar;
+ *              restart take no body and a person can resume from Kopplingar.
+ *              A bank that signs on its own page (redirect) gets the entry
+ *              point's return URL (lib/bank-feed/return-url.ts) and answers
+ *              the bank's page in the challenge; the browser comes back with
+ *              the connection named and polls as for decoupled;
  *   poll       fresh BankID data while pending; a valid consent's accounts
  *              are read and finalize_open_payments_consent makes the row
  *              await account selection (superseding older Open Payments rows
@@ -48,9 +52,11 @@ import { openBankFeedDoor } from './door'
 import { consentFailureText } from './failure-text'
 import { runOpenPaymentsSync } from './feed'
 import { accountContextOf, buildBankFeedParty, psuTypeOf, UNATTENDED_SIGNER, type BankFeedSignerInput } from './party'
+import { bankConnectReturnUrl, type BankConnectReturnSurface } from './return-url'
 import { normalizeIban, type BankFeedAccount } from './sync'
 
-export type ConsentMethod = 'same_device' | 'qr'
+/** BankID in our screen (same_device, qr) or on the bank's own page (redirect). */
+export type ConsentMethod = 'same_device' | 'qr' | 'redirect'
 export type ConsentStep = 'identify' | 'consent' | null
 
 /** The BankID attempt in flight, as the browser renders it. */
@@ -157,6 +163,8 @@ export interface ConsentAttempt {
   listing_only?: boolean
   replace_connection_id?: string | null
   extended_history_days?: number | null
+  /** Redirect: the entry point the browser comes back to, so a restart needs no body. */
+  return_to?: BankConnectReturnSurface | null
   /** Kept through finalize for the selection step (listing_only, replace_connection_id, extended_history_days, and Svea's chosen accounts). */
   selection?: {
     listing_only?: boolean
@@ -373,6 +381,40 @@ export async function listBankFeedBanks(ctx: OperationContext): Promise<Operatio
   }
 }
 
+/** One bank's details as the flow needs them: how a person signs there, and the sparbanker behind a shared BIC. */
+export interface BankDetailsView {
+  bic: string
+  name: string
+  decoupled: boolean | null
+  redirect: boolean | null
+  affiliates: Array<{ id: string; name: string }>
+  transaction_history_max_days: number | null
+  extended_transaction_history_max_days: number | null
+}
+
+function bankDetailsView(bank: AisBankDetails): BankDetailsView {
+  return {
+    bic: bank.bic,
+    name: bank.name,
+    decoupled: bank.decoupled,
+    redirect: bank.redirect,
+    affiliates: bank.affiliates.map((a) => ({ id: a.id, name: a.name })),
+    transaction_history_max_days: bank.transactionHistoryMaxDays,
+    extended_transaction_history_max_days: bank.extendedTransactionHistoryMaxDays,
+  }
+}
+
+export async function getBankFeedBankDetails(ctx: OperationContext, bic: string): Promise<OperationOutcome<BankDetailsView>> {
+  const door = await openBankFeedDoor(ctx)
+  if (!door.ok) return { ok: false, code: 'OPEN_BANKING_NOT_AVAILABLE', details: { reason: door.reason } }
+  try {
+    return { ok: true, data: bankDetailsView(await door.connect.getBankDetails(ctx.companyId, bic)) }
+  } catch (error) {
+    if (error instanceof BankFeedRefusedError && error.code === BANK_FEED_NOT_FOUND) return { ok: false, code: 'BANK_CONSENT_UNKNOWN_BANK' }
+    return providerFailure(error)
+  }
+}
+
 export async function getBankFeedOverview(ctx: OperationContext): Promise<OperationOutcome<OverviewView>> {
   const door = await openBankFeedDoor(ctx)
   const { data, error } = await ctx.supabase
@@ -406,8 +448,23 @@ export interface StartInput {
   signer: BankFeedSignerInput
   /** Switch mode: the Enable Banking connection this one replaces at account selection. */
   replaceConnectionId?: string | null
+  /** Redirect: the entry point to come back to, and the app origin the request came to (the route resolves it). */
+  returnTo?: BankConnectReturnSurface | null
+  returnOrigin?: string | null
   now?: number
 }
+
+/** Where a redirect signing sends the browser back: the entry point, on the resolved app origin. */
+interface SigningReturn {
+  surface: BankConnectReturnSurface
+  origin: string
+}
+
+function signingReturn(surface: BankConnectReturnSurface | null | undefined, origin: string | null | undefined): SigningReturn | null {
+  return surface && origin ? { surface, origin } : null
+}
+
+const RETURN_REQUIRED: Failure = { ok: false, code: 'VALIDATION_ERROR', details: { field: 'return_to', reason: 'required_for_redirect' } }
 
 async function startSigning(
   ctx: OperationContext,
@@ -415,30 +472,44 @@ async function startSigning(
   row: Row,
   party: AisParty,
   method: ConsentMethod,
+  ret: SigningReturn | null,
 ): Promise<OperationOutcome<StartView>> {
+  if (method === 'redirect' && !ret) return RETURN_REQUIRED
   let started: AisConsentSigningStarted
   try {
-    started = await connect.startConsentSigning(ctx.companyId, { party, consentId: row.session_id!, method })
+    started = await connect.startConsentSigning(ctx.companyId, {
+      party,
+      consentId: row.session_id!,
+      method,
+      ...(method === 'redirect' && ret ? { returnUrl: bankConnectReturnUrl(ret.origin, ret.surface, row.id), returnState: row.id } : {}),
+    })
   } catch (error) {
     return providerFailure(error)
   }
-  if (started.method === 'redirect') {
+  // The bank imposed its own page on a start made for our screen: without a
+  // return URL there is no way back, so the attempt is over.
+  if (started.method === 'redirect' && method !== 'redirect') {
     await writeAttempt(ctx, row, {
       authorization_id: started.providerAuthorisationId,
       consent_attempt: { ...(row.consent_attempt ?? {}), method, state: 'failed', sca_status: started.scaStatus, failure_code: 'SCA_REDIRECT_UNSUPPORTED', started_at: new Date().toISOString() },
     })
     return { ok: false, code: 'BANK_CONSENT_REDIRECT_UNSUPPORTED' }
   }
-  const attempt = attemptView(method, started.providerAuthorisationId, { ...started, state: started.state })
+  // The other way round, a bank that signs in our screen anyway answers a
+  // redirect start with a decoupled challenge: the attempt goes on with the
+  // bank's method, and the browser shows the QR or the same-device button.
+  const effective: ConsentMethod = method === 'redirect' && started.method !== 'redirect' ? started.method : method
+  const attempt = attemptView(effective, started.providerAuthorisationId, { ...started, state: started.state })
   await writeAttempt(ctx, row, {
     authorization_id: started.providerAuthorisationId,
     consent_attempt: {
       ...(row.consent_attempt ?? {}),
-      method,
+      method: effective,
       state: attempt.state,
       sca_status: started.scaStatus,
       failure_code: attempt.failure_code,
       started_at: new Date().toISOString(),
+      ...(ret ? { return_to: ret.surface } : {}),
     },
   })
   return { ok: true, data: { connection_id: row.id, attempt } }
@@ -452,14 +523,24 @@ export async function startBankFeedConsent(ctx: OperationContext, input: StartIn
 
   let bank: AisBankDetails
   try {
-    bank = await connect.bank(ctx.companyId, input.bic)
+    bank = await connect.getBankDetails(ctx.companyId, input.bic)
   } catch (error) {
     if (error instanceof BankFeedRefusedError && error.code === BANK_FEED_NOT_FOUND) return { ok: false, code: 'BANK_CONSENT_UNKNOWN_BANK' }
     return providerFailure(error)
   }
-  if (input.affiliatedAspspId && bank.affiliates.length > 0 && !bank.affiliates.some((a) => a.id === input.affiliatedAspspId)) {
+  // The sparbank behind a shared BIC: the connection is named after it, not
+  // after Swedbank, so the rows and the title say which bank it is.
+  const affiliate = input.affiliatedAspspId ? (bank.affiliates.find((a) => a.id === input.affiliatedAspspId) ?? null) : null
+  if (input.affiliatedAspspId && bank.affiliates.length > 0 && !affiliate) {
     return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'affiliated_aspsp_id', reason: 'unknown_affiliate' } }
   }
+  // A bank that only signs on its own page is started that way when the
+  // caller said where to come back to; a bank that also signs in our screen
+  // keeps the method the person chose. Decided before anything is created,
+  // so a redirect without a return leaves no consent behind.
+  const ret = signingReturn(input.returnTo, input.returnOrigin)
+  const method: ConsentMethod = bank.decoupled === false && bank.redirect === true && ret ? 'redirect' : input.method
+  if (method === 'redirect' && !ret) return RETURN_REQUIRED
 
   // The bank agreement of a legal form that trades under the owner's
   // personnummer is the owner's private one; every other form has a
@@ -521,12 +602,13 @@ export async function startBankFeedConsent(ctx: OperationContext, input: StartIn
   }
 
   const attempt: ConsentAttempt = {
-    method: input.method,
+    method,
     state: 'pending',
     started_at: new Date(now).toISOString(),
     listing_only: listingOnly,
     replace_connection_id: input.replaceConnectionId ?? null,
     extended_history_days: bank.extendedTransactionHistoryMaxDays ?? bank.transactionHistoryMaxDays ?? null,
+    return_to: ret?.surface ?? null,
   }
   const { data: inserted, error: insertError } = await ctx.supabase
     .from('bank_connections')
@@ -535,7 +617,7 @@ export async function startBankFeedConsent(ctx: OperationContext, input: StartIn
       user_id: ctx.userId,
       aggregator: OPEN_PAYMENTS_AGGREGATOR,
       provider: OPEN_PAYMENTS_PROVIDER_SLUG,
-      bank_name: bank.name,
+      bank_name: affiliate?.name ?? bank.name,
       bic: bank.bic,
       affiliated_aspsp_id: input.affiliatedAspspId ?? null,
       session_id: created.consentId,
@@ -551,12 +633,20 @@ export async function startBankFeedConsent(ctx: OperationContext, input: StartIn
     await connect.revokeConsent(ctx.companyId, { party: party.party, consentId: created.consentId }).catch(() => {})
     return { ok: false, code: 'INTERNAL_ERROR', error: insertError ?? new Error('Bank connection attempt not stored') }
   }
-  return startSigning(ctx, connect, inserted as Row, party.party, input.method)
+  return startSigning(ctx, connect, inserted as Row, party.party, method, ret)
 }
 
 export async function restartBankFeedConsent(
   ctx: OperationContext,
-  input: { connectionId: string; method?: ConsentMethod | null; signer?: BankFeedSignerInput; now?: number },
+  input: {
+    connectionId: string
+    method?: ConsentMethod | null
+    signer?: BankFeedSignerInput
+    /** Redirect: the entry point to come back to (the row's own when absent) and the app origin the request came to. */
+    returnTo?: BankConnectReturnSurface | null
+    returnOrigin?: string | null
+    now?: number
+  },
 ): Promise<OperationOutcome<StartView>> {
   const connect = getBankFeedConnect()
   if (!connect) return { ok: false, code: 'OPEN_BANKING_NOT_AVAILABLE', details: { reason: 'no_connector' } }
@@ -564,11 +654,12 @@ export async function restartBankFeedConsent(
   if (!row) return { ok: false, code: 'NOT_FOUND' }
   if (row.status !== 'pending' || !row.session_id || !row.bic) return { ok: false, code: 'BANK_CONSENT_CHANGED' }
   const method = input.method ?? row.consent_attempt?.method ?? 'qr'
+  const ret = signingReturn(input.returnTo ?? row.consent_attempt?.return_to, input.returnOrigin)
   const party = await partyFor(ctx, row, input.signer ?? UNATTENDED_SIGNER, false)
   if (!party.ok) return party.outcome
   // A consent whose signing window closed is created anew; the attempt record
-  // (listing-only, the row a switch replaces) carries over.
-  const started = await startSigning(ctx, connect, row, party.party, method)
+  // (listing-only, the row a switch replaces, the return) carries over.
+  const started = await startSigning(ctx, connect, row, party.party, method, ret)
   if (!started.ok && started.code === 'BANK_CONSENT_OVER') {
     const now = input.now ?? Date.now()
     let created
@@ -584,7 +675,7 @@ export async function restartBankFeedConsent(
       return providerFailure(error)
     }
     await writeAttempt(ctx, row, { session_id: created.consentId, consent_expires: consentExpiresAt(created.validUntil), authorization_id: null })
-    return startSigning(ctx, connect, { ...row, session_id: created.consentId }, party.party, method)
+    return startSigning(ctx, connect, { ...row, session_id: created.consentId }, party.party, method, ret)
   }
   return started
 }
@@ -950,7 +1041,7 @@ export async function selectBankFeedAccounts(
       accounts_data: existing.map((a) => ({ ...a, enabled: chosen.some((c) => c.uid === a.uid) })),
       consent_attempt: attempt,
     })
-    const started = await startSigning(ctx, connect, { ...row, session_id: created.consentId, status: 'pending', consent_attempt: attempt }, party.party, method)
+    const started = await startSigning(ctx, connect, { ...row, session_id: created.consentId, status: 'pending', consent_attempt: attempt }, party.party, method, null)
     if (!started.ok) return started
     return {
       ok: true,

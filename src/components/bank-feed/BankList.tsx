@@ -8,7 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { bankLogoUrl } from '@/lib/reconciliation/bank-logos'
 import { bankMatchesQuery, searchAliasHint } from '@/lib/bank-sync/bank-search'
 import { cn } from '@/lib/utils'
-import { bankSelectable, orderBanks } from './bank-help'
+import { bankSigningApproach, orderBanks } from './bank-help'
 import type { OpenPaymentsBank } from './open-payments-client'
 
 /**
@@ -41,8 +41,9 @@ interface BankListProps {
 
 /**
  * The searchable bank list of the Koppla banken flow: popular banks first,
- * hairline rows of 48px with the bank's mark, a bank that only signs on its
- * own page listed but not choosable (one muted line says why).
+ * hairline rows of 48px with the bank's mark. A bank that signs only on its
+ * own page is choosable with one muted line saying the person comes back
+ * here; a bank we cannot sign at either way is listed but not choosable.
  */
 export function BankList({ banks, selectedBic, onPick }: BankListProps) {
   const t = useTranslations('bank_connect')
@@ -85,7 +86,8 @@ export function BankList({ banks, selectedBic, onPick }: BankListProps) {
         // max-h-96 is exactly eight 48px rows: a scroll box with a reason.
         <div role="listbox" aria-label={t('bank_search')} className="max-h-96 divide-y divide-border overflow-y-auto overscroll-contain border-y border-border">
           {shown.map((bank) => {
-            const selectable = bankSelectable(bank)
+            const approach = bankSigningApproach(bank)
+            const selectable = approach !== 'none'
             const selected = bank.bic === selectedBic
             return (
               <button
@@ -107,7 +109,8 @@ export function BankList({ banks, selectedBic, onPick }: BankListProps) {
                 <OpenPaymentsBankMark bank={bank} />
                 <span className="min-w-0 flex-1">
                   <span className={cn('block truncate text-[13px]', selectable ? 'text-foreground' : 'text-muted-foreground')}>{bank.name}</span>
-                  {!selectable && <span className="block truncate text-[12.5px] text-muted-foreground">{t('bank_redirect_only')}</span>}
+                  {approach === 'redirect' && <span className="block truncate text-[12.5px] text-muted-foreground">{t('bank_redirect_only')}</span>}
+                  {!selectable && <span className="block truncate text-[12.5px] text-muted-foreground">{t('bank_not_connectable')}</span>}
                 </span>
                 {selectable && <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
               </button>

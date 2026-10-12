@@ -1,17 +1,16 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import { useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { HandCoins, Landmark, Store } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { BankConnectDialog } from '@/components/bank-feed/BankConnectDialog'
 import { OpenPaymentsConnectionRow } from '@/components/bank-feed/OpenPaymentsConnectionRows'
 import { useBankConnectFlow } from '@/components/bank-feed/use-bank-connect-flow'
+import { useBankConnectResume } from '@/components/bank-feed/use-bank-connect-resume'
 import { useOpenPaymentsAvailability } from '@/components/bank-feed/use-open-payments-availability'
 import { useOpenPaymentsConnections } from '@/components/bank-feed/use-open-payments-connections'
-import { RESUME_PARAM } from '@/components/bank-feed/verification-mail'
 import { bankLogoUrl } from '@/lib/reconciliation/bank-logos'
 import { collectionsEntryShown, useCollectionsAvailability } from '@/components/collections/collections-client'
 import { GoogleMark } from '@/components/ui/provider-marks'
@@ -89,26 +88,13 @@ export function ConnectionsSettingsContent() {
   // Open Payments rows their renewal) and Koppla bank opens the flow here.
   const openPayments = useOpenPaymentsAvailability()
   const opAvailable = openPayments.status === 'available' && !isSandbox
-  const bankFlow = useBankConnectFlow()
+  const bankFlow = useBankConnectFlow('connections')
   const bankConnections = useOpenPaymentsConnections(opAvailable ? companyId : null)
   const [bankGeneration, setBankGeneration] = useState(0)
-  // A second signatory arrives with ?bank_connect=<id> (the reminder link):
-  // open the flow at its BankID step, once, and drop the param.
-  const searchParams = useSearchParams()
-  const resumeHandled = useRef(false)
-  const resumeId = searchParams.get(RESUME_PARAM)
-  const openBankFlow = bankFlow.open
-  useEffect(() => {
-    if (!opAvailable || !resumeId || resumeHandled.current) return
-    resumeHandled.current = true
-    const timer = setTimeout(() => {
-      openBankFlow('resume', { connectionId: resumeId })
-      const url = new URL(window.location.href)
-      url.searchParams.delete(RESUME_PARAM)
-      window.history.replaceState(window.history.state, '', url.pathname + url.search)
-    }, 0)
-    return () => clearTimeout(timer)
-  }, [opAvailable, resumeId, openBankFlow])
+  // A second signatory arrives with ?bank_connect=<id> (the reminder link),
+  // and a bank that signs on its own page sends the person back the same way:
+  // open the flow at its BankID step, once, and drop the params.
+  useBankConnectResume(bankFlow, opAvailable)
   const hasSkatteverket = ENABLED_EXTENSION_IDS.has('skatteverket') && !isSandbox
   const hasWhatsApp = ENABLED_EXTENSION_IDS.has('whatsapp-inbox') && !isSandbox
   const hasMail = ENABLED_EXTENSION_IDS.has('mail') && !isSandbox

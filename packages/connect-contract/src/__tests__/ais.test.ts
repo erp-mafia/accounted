@@ -5,6 +5,7 @@ import {
   AIS_ERROR_CODES,
   AIS_OPERATIONS,
   AIS_SCOPE,
+  CONNECTIONS_CALLBACK_URL,
   CONNECTOR_ERROR_CODES,
   CONTRACT_VERSION,
   aisAccountSchema,
@@ -13,6 +14,7 @@ import {
   aisPartySchema,
   bankSyncResponseSchema,
   normalizedBankTransactionSchema,
+  signingReturnQuerySchema,
 } from '../index'
 
 const party = {
@@ -25,8 +27,8 @@ const party = {
 }
 
 describe('AIS family', () => {
-  it('is the 2026-10-12 contract under /api/connect/ais with the bank_sync scope', () => {
-    expect(CONTRACT_VERSION).toBe('2026-10-12')
+  it('is the 2026-10-13 contract under /api/connect/ais with the bank_sync scope', () => {
+    expect(CONTRACT_VERSION).toBe('2026-10-13')
     expect(AIS_BASE_PATH).toBe('/api/connect/ais')
     expect(AIS_SCOPE).toBe('bank_sync')
   })
@@ -61,6 +63,30 @@ describe('AIS family', () => {
     expect(aisPartySchema.safeParse({ ...party, orgNumber: '559538-6219' }).success).toBe(false)
     expect(aisPartySchema.safeParse({ ...party, personalNumber: '9001011239' }).success).toBe(false)
     expect(aisCreateConsentRequestSchema.safeParse({ party, accounts: [{ iban: 'SE8050000000052131234567' }] }).success).toBe(true)
+  })
+
+  it('starts a signing in our screen without a return, and on the bank\'s page only with an https returnUrl and a returnState', () => {
+    const start = AIS_OPERATIONS.startConsentSigning.request
+    expect(start.safeParse({ party, consentId: 'c-1', method: 'qr' }).success).toBe(true)
+    expect(start.safeParse({ party, consentId: 'c-1', method: 'same_device' }).success).toBe(true)
+    expect(start.safeParse({ party, consentId: 'c-1', method: 'redirect' }).success).toBe(false)
+    expect(start.safeParse({ party, consentId: 'c-1', method: 'redirect', returnUrl: 'https://app.accounted.se/settings/connections?bank_connect=c-1' }).success).toBe(false)
+    expect(start.safeParse({ party, consentId: 'c-1', method: 'redirect', returnUrl: 'https://app.accounted.se/settings/connections?bank_connect=c-1', returnState: 'c-1' }).success).toBe(true)
+    expect(start.safeParse({ party, consentId: 'c-1', method: 'redirect', returnUrl: 'http://app.accounted.se/x', returnState: 'c-1' }).success).toBe(false)
+    expect(start.safeParse({ party, consentId: 'c-1', method: 'redirect', returnUrl: 'https://app.accounted.se/x', returnState: 'x'.repeat(129) }).success).toBe(false)
+    // The query the browser carries back: state and result, a code only as a bare token.
+    expect(signingReturnQuerySchema.safeParse({ state: 'c-1', result: 'ok' }).success).toBe(true)
+    expect(signingReturnQuerySchema.safeParse({ state: 'c-1', result: 'error', code: 'access_denied' }).success).toBe(true)
+    expect(signingReturnQuerySchema.safeParse({ state: 'c-1', result: 'error', code: 'not a code' }).success).toBe(false)
+    expect(signingReturnQuerySchema.safeParse({ state: 'c-1', result: 'maybe' }).success).toBe(false)
+    expect(CONNECTIONS_CALLBACK_URL).toBe('https://connect.accounted.se/api/connections/callback')
+    expect(
+      AIS_OPERATIONS.startConsentSigning.response.safeParse({
+        providerAuthorisationId: 'a-1', method: 'redirect', state: 'pending',
+        challenge: { approach: 'redirect', autostartToken: null, qrData: null, qrImage: null, redirectUrl: 'https://bank.example/sign' },
+        failureCode: null, scaStatus: null,
+      }).success,
+    ).toBe(true)
   })
 
   it('round-trips a signing poll, an account and a transactions page with the AIS extras', () => {

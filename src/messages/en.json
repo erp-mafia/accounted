@@ -12657,7 +12657,7 @@
     "bank_alias_hint": "{product} is held at {bank}.",
     "bank_locked_switch": "The connection to {bank} is redone with the new provider. The accounts and the history are kept.",
     "bank_locked_renew": "The connection to {bank} is renewed with a new BankID signing. The accounts and the history are kept.",
-    "bank_redirect_only": "This bank signs on its own page; support is coming soon.",
+    "bank_redirect_only": "You sign on the bank's own page and come back here",
     "sync_background": "The history is being fetched in the background; it can take a minute or so.",
     "context_label": "Account type",
     "context_corporate": "Business account",
@@ -12732,7 +12732,16 @@
     "title_bankid": "Signing with BankID at {bank}",
     "help_accounts": "The history is fetched and new transactions arrive automatically. An account already in the books keeps its ledger account. Private accounts start unticked and are fetched only if you choose them.",
     "help_payments_mechanics": "Verify now opens the payment provider's form in a new tab; the link is valid for 24 hours and the status updates here once it is done. Send to a signatory puts the link in an email.",
-    "guide_link": "How it works at {bank}, 1 min video"
+    "guide_link": "How it works at {bank}, 1 min video",
+    "bank_not_connectable": "This bank cannot be connected here yet.",
+    "redirect_intro": "You will be sent to {bank}. Sign there and come back here.",
+    "redirect_continue": "Continue to {bank}",
+    "redirect_waiting": "Waiting for {bank}'s answer.",
+    "method_redirect": "Sign at {bank}",
+    "help_redirect": "{bank} signs on its own page: you are sent there, sign with BankID and come back here, where the connection continues.",
+    "affiliate_label": "Which savings bank?",
+    "affiliate_search": "Search savings bank",
+    "affiliate_no_matches": "No savings banks match the search."
   },
   "bank_payments": {
     "title": "Pay through the bank",

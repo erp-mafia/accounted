@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { flowReducer, openFlow, pollingActive, stepAfterActivation, type FlowState } from '../connect-flow-reducer'
-import type { BankIdChallenge, ConnectionAttempt, ConnectionPoll, ConnectionView, PolledAccount } from '../open-payments-client'
+import { displayBankName, flowReducer, openFlow, pollingActive, redirectInFlight, signingApproach, stepAfterActivation, type FlowState } from '../connect-flow-reducer'
+import type { BankIdChallenge, ConnectionAttempt, ConnectionPoll, ConnectionView, OpenPaymentsBankDetails, PolledAccount } from '../open-payments-client'
 
 const SWEDBANK = { bic: 'SWEDSESS', name: 'Swedbank' }
+const SPARBANK = { id: '08999', name: 'Sparbanken Nord' }
+const DETAILS: OpenPaymentsBankDetails = { bic: 'SWEDSESS', name: 'Swedbank', decoupled: true, redirect: false, affiliates: [SPARBANK], transaction_history_max_days: 88, extended_transaction_history_max_days: 760 }
+const REDIRECT_BANK = { bic: 'REDIRSES', name: 'Redirect Bank', decoupled: false, redirect: true }
+const REDIRECT_CHALLENGE: BankIdChallenge = { approach: 'redirect', autostartToken: null, qrData: null, qrImage: null, redirectUrl: 'https://bank.example/sign' }
 
 const QR: BankIdChallenge = { approach: 'decoupled', autostartToken: 'tok', qrData: 'bankid.frame-1', qrImage: null, redirectUrl: null }
 
@@ -88,16 +92,104 @@ describe('the bank step', () => {
   it('picks a bank, an affiliate and a context, and moves on only with a bank', () => {
     const noBank = flowReducer(openFlow('new'), { type: 'to_bankid' })
     expect(noBank.step).toBe('bank')
-    const picked = run(openFlow('new'), { type: 'bank_picked', bank: SWEDBANK }, { type: 'affiliate_picked', id: 'sparbanken-skane' }, { type: 'context_set', context: 'private' })
+    const picked = run(openFlow('new'), { type: 'bank_picked', bank: SWEDBANK }, { type: 'affiliate_picked', affiliate: SPARBANK }, { type: 'context_set', context: 'private' })
     expect(picked.bank).toEqual(SWEDBANK)
-    expect(picked.affiliateId).toBe('sparbanken-skane')
+    expect(picked.affiliate).toEqual(SPARBANK)
     expect(picked.context).toBe('private')
     expect(flowReducer(picked, { type: 'to_bankid' }).step).toBe('bankid')
   })
 
   it('picking another bank drops the affiliate chosen for the first', () => {
-    const state = run(openFlow('new'), { type: 'bank_picked', bank: SWEDBANK }, { type: 'affiliate_picked', id: 'x' }, { type: 'bank_picked', bank: { bic: 'ESSESESS', name: 'SEB' } })
-    expect(state.affiliateId).toBeNull()
+    const state = run(openFlow('new'), { type: 'bank_picked', bank: SWEDBANK }, { type: 'affiliate_picked', affiliate: SPARBANK }, { type: 'bank_picked', bank: { bic: 'ESSESESS', name: 'SEB' } })
+    expect(state.affiliate).toBeNull()
+  })
+})
+
+describe('the sparbank picker', () => {
+  it('names the connection after the chosen sparbank, and the bank itself when none is chosen', () => {
+    const picked = run(openFlow('new'), { type: 'bank_picked', bank: SWEDBANK }, { type: 'bank_details_loaded', details: DETAILS })
+    expect(picked.bankDetails).toEqual(DETAILS)
+    expect(picked.affiliate).toBeNull()
+    expect(displayBankName(picked)).toBe('Swedbank')
+    const sparbank = flowReducer(picked, { type: 'affiliate_picked', affiliate: SPARBANK })
+    expect(displayBankName(sparbank)).toBe('Sparbanken Nord')
+    expect(flowReducer(sparbank, { type: 'affiliate_picked', affiliate: null }).affiliate).toBeNull()
+    // Picking the same bank again keeps its details; another bank's details are ignored.
+    expect(flowReducer(sparbank, { type: 'bank_picked', bank: SWEDBANK }).bankDetails).toEqual(DETAILS)
+    expect(flowReducer(openFlow('new'), { type: 'bank_details_loaded', details: DETAILS }).bankDetails).toBeNull()
+  })
+
+  it('a renewal of a sparbank connection resolves to Swedbank and finds its sparbank among the affiliates', () => {
+    const renewing = run(
+      openFlow('renew', { bank: { bic: '', name: 'Sparbanken Nord' }, replaceConnectionId: 'old' }),
+      { type: 'bank_resolved', bic: 'SWEDSESS' },
+      { type: 'bank_details_loaded', details: DETAILS },
+    )
+    expect(renewing.affiliate).toEqual(SPARBANK)
+    expect(displayBankName(renewing)).toBe('Sparbanken Nord')
+  })
+})
+
+describe('a bank that signs on its own page', () => {
+  it('is known from the list, refined by the details, and starts with the bank\'s page', () => {
+    const picked = run(openFlow('new'), { type: 'bank_picked', bank: REDIRECT_BANK }, { type: 'to_bankid' })
+    expect(signingApproach(picked)).toBe('redirect')
+    expect(signingApproach(run(openFlow('new'), { type: 'bank_picked', bank: SWEDBANK }))).toBe('decoupled')
+    const both = flowReducer(picked, { type: 'bank_details_loaded', details: { ...DETAILS, bic: 'REDIRSES', name: 'Redirect Bank', decoupled: true, redirect: true, affiliates: [] } })
+    expect(signingApproach(both)).toBe('both')
+    const started = run(picked, { type: 'method_set', method: 'redirect' }, { type: 'start' }, {
+      type: 'started',
+      result: { connection_id: 'c-1', attempt: attempt({ method: 'redirect', challenge: REDIRECT_CHALLENGE, step: null, sca_status: null }) },
+    })
+    expect(redirectInFlight(started)).toBe(true)
+    expect(started.attempt?.challenge?.redirectUrl).toBe('https://bank.example/sign')
+    expect(pollingActive(started)).toBe(true)
+    expect(redirectInFlight(run(openFlow('new'), { type: 'bank_picked', bank: SWEDBANK }))).toBe(false)
+  })
+
+  it('an ok return resumes at the BankID step, waiting for the bank, and polls at once', () => {
+    const back = openFlow('resume', { connectionId: 'c-1', returned: { result: 'ok', code: null } })
+    expect(back.step).toBe('bankid')
+    expect(back.method).toBe('redirect')
+    expect(back.returned).toEqual({ result: 'ok', code: null })
+    expect(back.failure).toBeNull()
+    expect(pollingActive(back)).toBe(true)
+    const known = flowReducer(back, { type: 'connection_known', bank: { bic: 'REDIRSES', name: 'Redirect Bank' } })
+    expect(displayBankName(known)).toBe('Redirect Bank')
+    // The row's bank never overrides one already known.
+    expect(flowReducer(known, { type: 'connection_known', bank: SWEDBANK }).bank?.name).toBe('Redirect Bank')
+    const pending = flowReducer(known, { type: 'polled', poll: poll({ state: 'pending', method: 'redirect', challenge: REDIRECT_CHALLENGE }) })
+    expect(redirectInFlight(pending)).toBe(true)
+    expect(pollingActive(pending)).toBe(true)
+    const valid = flowReducer(pending, { type: 'polled', poll: poll({ state: 'valid', method: 'redirect', accounts: [account()] }) })
+    expect(valid.step).toBe('accounts')
+  })
+
+  it('an error return shows the bank\'s code with a restart that leaves for the bank again', () => {
+    const back = openFlow('resume', { connectionId: 'c-1', returned: { result: 'error', code: 'SIGNING_SESSION_PSU_CANCELLED' } })
+    expect(back.pollState).toBe('failed')
+    expect(back.failure).toEqual({ code: 'SIGNING_SESSION_PSU_CANCELLED', text: null })
+    expect(pollingActive(back)).toBe(false)
+    const restarted = run(back, { type: 'start' }, { type: 'started', result: { connection_id: 'c-1', attempt: attempt({ method: 'redirect', challenge: REDIRECT_CHALLENGE }) } })
+    expect(restarted.failure).toBeNull()
+    expect(restarted.returned).toBeNull()
+    expect(restarted.method).toBe('redirect')
+    expect(pollingActive(restarted)).toBe(true)
+  })
+
+  it('a redirect start the bank answers with a QR falls into the ordinary BankID step', () => {
+    const picked = run(openFlow('new'), { type: 'bank_picked', bank: REDIRECT_BANK }, { type: 'to_bankid' }, { type: 'method_set', method: 'redirect' }, { type: 'start' })
+    const started = flowReducer(picked, { type: 'started', result: { connection_id: 'c-1', attempt: attempt({ method: 'qr' }) } })
+    expect(started.method).toBe('qr')
+    expect(redirectInFlight(started)).toBe(false)
+    expect(started.attempt?.challenge).toEqual(QR)
+    expect(pollingActive(started)).toBe(true)
+  })
+
+  it('a return is only read in resume mode', () => {
+    const fresh = openFlow('new', { returned: { result: 'ok', code: null } })
+    expect(fresh.returned).toBeNull()
+    expect(fresh.method).toBe('qr')
   })
 })
 

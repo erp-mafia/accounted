@@ -116,7 +116,7 @@ describe('runOpenPaymentsSync', () => {
     expect(result).toEqual({ ok: true, connection_id: 'conn-1', bank: 'Swedbank', imported: 2, duplicates: 1, from_date: '2026-10-05', to_date: '2026-10-12', last_synced_at: expect.any(String) })
     expect(calls).toContainEqual({ table: 'bank_connections', method: 'eq', args: ['aggregator', 'open_payments'] })
     expect(mocks.claimLease).toHaveBeenCalledWith(supabase, 'conn-1', NOW)
-    expect(mocks.party).toHaveBeenCalledWith(supabase, expect.objectContaining({ bic: 'SWEDSESS', psuType: 'business', signer: { personalNumber: null, ipAddress: '203.0.113.1', userAgent: 'UA' } }))
+    expect(mocks.party).toHaveBeenCalledWith(supabase, expect.objectContaining({ bic: 'SWEDSESS', affiliatedAspspId: null, psuType: 'business', signer: { personalNumber: null, ipAddress: '203.0.113.1', userAgent: 'UA' } }))
     expect(mocks.syncAccount).toHaveBeenCalledWith(supabase, expect.objectContaining({ connectionId: 'conn-1', fromDate: '2026-10-05', toDate: '2026-10-12', options: {} }))
     expect(mocks.persistResult).toHaveBeenCalledWith(supabase, expect.objectContaining({ connectionId: 'conn-1', sessionId: 'consent-1', initialSync: undefined }))
     expect(mocks.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'transaction.synced' }))

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BANK_GUIDE_URLS, bankGuideUrl, bankHelpKey, bankPrerequisiteKey, bankSelectable, isTwoStepBank, orderBanks } from '../bank-help'
+import { BANK_GUIDE_URLS, bankGuideUrl, bankHelpKey, bankPrerequisiteKey, bankSelectable, bankSigningApproach, isTwoStepBank, orderBanks, resolveBankByName } from '../bank-help'
 
 describe('bankPrerequisiteKey', () => {
   it('keeps the prerequisites that prevent a failed BankID visible and leaves Svea’s process note to the help', () => {
@@ -34,14 +34,32 @@ describe('bankHelpKey', () => {
   })
 })
 
-describe('isTwoStepBank and bankSelectable', () => {
-  it('Svea confirms the accounts with a second BankID; a redirect-only bank cannot be chosen yet', () => {
+describe('isTwoStepBank, bankSigningApproach and bankSelectable', () => {
+  it('Svea confirms the accounts with a second BankID; a bank is chosen when we can sign at it one way or the other', () => {
     expect(isTwoStepBank({ name: 'Svea Bank', bic: 'SVEASESS' })).toBe(true)
     expect(isTwoStepBank({ name: 'SEB', bic: 'ESSESESS' })).toBe(false)
-    expect(bankSelectable({ decoupled: false })).toBe(false)
-    expect(bankSelectable({ decoupled: true })).toBe(true)
-    // Svea comes with nulls and is still selectable.
-    expect(bankSelectable({ decoupled: null })).toBe(true)
+    expect(bankSigningApproach({ decoupled: true, redirect: false })).toBe('decoupled')
+    expect(bankSigningApproach({ decoupled: true, redirect: true })).toBe('both')
+    expect(bankSigningApproach({ decoupled: false, redirect: true })).toBe('redirect')
+    expect(bankSigningApproach({ decoupled: false, redirect: false })).toBe('none')
+    expect(bankSigningApproach({ decoupled: false, redirect: null })).toBe('none')
+    // Svea comes with nulls and counts as our screen until its details say otherwise.
+    expect(bankSigningApproach({ decoupled: null, redirect: null })).toBe('decoupled')
+    expect(bankSelectable({ decoupled: false, redirect: true })).toBe(true)
+    expect(bankSelectable({ decoupled: false, redirect: false })).toBe(false)
+    expect(bankSelectable({ decoupled: null, redirect: null })).toBe(true)
+  })
+})
+
+describe('resolveBankByName', () => {
+  it('finds a row\'s bank in the list by name, and a sparbank through Swedbank', () => {
+    const banks = [{ bic: 'SWEDSESS', name: 'Swedbank' }, { bic: 'ESSESESS', name: 'SEB' }, { bic: 'NDEASESS', name: 'Nordea Bank Abp, filial i Sverige' }]
+    expect(resolveBankByName(banks, 'swedbank ')?.bic).toBe('SWEDSESS')
+    expect(resolveBankByName(banks, 'Nordea')?.bic).toBe('NDEASESS')
+    expect(resolveBankByName(banks, 'Sparbanken Nord')?.bic).toBe('SWEDSESS')
+    expect(resolveBankByName(banks, 'Ölands Bank')?.bic).toBe('SWEDSESS')
+    expect(resolveBankByName(banks, 'Lunar')).toBeNull()
+    expect(resolveBankByName(banks, '')).toBeNull()
   })
 })
 

@@ -13,10 +13,11 @@ import { fetchCompanyVerification, fetchPaymentsAvailability, PaymentsClientErro
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { useMediaQuery } from '@/lib/hooks/use-media-query'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { notifyBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
-import { bankHelpKey, isTwoStepBank } from './bank-help'
-import { flowReducer, openFlow, pollingActive } from './connect-flow-reducer'
+import { bankHelpKey, isTwoStepBank, resolveBankByName } from './bank-help'
+import { displayBankName, flowReducer, openFlow, pollingActive, redirectInFlight, signingApproach } from './connect-flow-reducer'
 import { dismissPolicy, stepPosition } from './flow-steps'
 import {
   createOpenPaymentsConnection,
@@ -32,12 +33,14 @@ import {
   syncOpenPaymentsConnection,
   type ConnectMethod,
   type ConnectionView,
+  type CreateConnectionResult,
   type SignerInput,
 } from './open-payments-client'
 import { normalizePersonalNumber } from './personal-number'
 import { startPollLoop } from './poll-loop'
 import { selectionPayload } from './account-selection'
 import { resumeFlowUrl, verificationMailto } from './verification-mail'
+import { useOpenPaymentsBankDetails } from './use-bank-details'
 import { useOpenPaymentsAvailability } from './use-open-payments-availability'
 import type { BankConnectFlow, BankConnectSession } from './use-bank-connect-flow'
 import { AccountsStep } from './steps/AccountsStep'
@@ -51,6 +54,8 @@ const CONSENT_POLL_MS = 1000
 const SECOND_SIGNER_POLL_MS = 5000
 /** The provider's verification form is filled in by hand: a quarter minute between looks. */
 const VERIFICATION_POLL_MS = 15_000
+/** A phone: where BankID on this device is the natural way, and the bank's own page is offered beside it. */
+const MOBILE_QUERY = '(max-width: 639px)'
 
 interface BankConnectDialogProps {
   flow: BankConnectFlow
@@ -62,6 +67,9 @@ interface BankConnectDialogProps {
  * Koppla banken: the one dialog for a new Open Payments connection, a switch
  * from Enable Banking and a renewal. Rendered once per surface next to the
  * `useBankConnectFlow()` that opens it; a new session key gives a clean state.
+ * A bank that signs on its own page takes the top window there and comes
+ * back to the surface's page, which reopens the dialog in resume mode
+ * (use-bank-connect-resume.ts).
  */
 export function BankConnectDialog({ flow, onConnected }: BankConnectDialogProps) {
   if (!flow.session) return null
@@ -80,9 +88,11 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
   const [confirmClose, setConfirmClose] = useState(false)
   const [paymentsBusy, setPaymentsBusy] = useState<'verify' | 'mail' | null>(null)
   const connectedReported = useRef(false)
+  const mobile = useMediaQuery(MOBILE_QUERY)
 
   const soleTrader = company ? usesPersonnummerAsOrgNumber(company.entity_type) : false
   const connectionId = state.connectionId
+  const returnTo = session.returnTo
 
   function describe(error: unknown, fallback: string): string {
     const body = error instanceof OpenPaymentsClientError || error instanceof PaymentsClientError ? error.body : null
@@ -131,16 +141,42 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
   }, [])
 
   // A switch or a renewal knows the bank from its row by name only: the BIC
-  // comes from the bank list. A name the list does not know unlocks the list.
+  // comes from the bank list (a sparbank resolves to Swedbank's). A name the
+  // list does not know unlocks the list.
   const bankToResolve = state.bank && !state.bank.bic ? state.bank.name : null
   const banks = availability.banks
   const banksFailed = availability.status === 'unavailable'
   useEffect(() => {
     if (!bankToResolve || (!banks && !banksFailed)) return
-    const wanted = bankToResolve.trim().toLowerCase()
-    const match = banks?.find((b) => b.name.trim().toLowerCase() === wanted) ?? banks?.find((b) => b.name.toLowerCase().includes(wanted) || wanted.includes(b.name.toLowerCase()))
+    const match = banks ? resolveBankByName(banks, bankToResolve) : null
     dispatch({ type: 'bank_resolved', bic: match?.bic ?? null })
   }, [bankToResolve, banks, banksFailed])
+
+  // The chosen bank's details: how it signs and which sparbanker it reaches.
+  const chosenBic = state.bank?.bic || null
+  const bankDetails = useOpenPaymentsBankDetails(chosenBic)
+  const knownDetails = state.bankDetails
+  useEffect(() => {
+    if (bankDetails && bankDetails !== knownDetails) dispatch({ type: 'bank_details_loaded', details: bankDetails })
+  }, [bankDetails, knownDetails])
+
+  // A resumed connection names its bank on the row: read it once, so the
+  // title and the bank's-page texts can say where the person signs.
+  const needsBank = state.mode === 'resume' && state.bank === null
+  useEffect(() => {
+    if (!needsBank || !connectionId) return
+    let cancelled = false
+    fetchOpenPaymentsConnection(connectionId)
+      .then((connection) => {
+        if (!cancelled && connection.bank_name) dispatch({ type: 'connection_known', bank: { bic: connection.bic ?? '', name: connection.bank_name } })
+      })
+      .catch(() => {
+        // The title falls back to the generic one.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [needsBank, connectionId])
 
   // Poll while the bank works on the consent. One request at a time; a
   // consent waiting for a second signatory is asked about less often.
@@ -231,6 +267,20 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
   const stepKey = state.attempt ? `${state.attempt.authorisation_id}:${state.consentStep ?? '-'}:${state.secondConsent ? 2 : 1}` : null
   const secondsLeft = useQrCountdown(stepKey, qrOnScreen)
 
+  // The bank's own page replaces this one: the top window goes there (a
+  // popup would lose the person on a phone and be blocked on a desktop), and
+  // the bank sends it back to this surface's page with the connection named.
+  function continueToBank(url: string) {
+    window.location.assign(url)
+  }
+
+  // A bank that signs in our screen anyway answers a redirect start with a
+  // QR: the attempt's own method decides, not the one asked for.
+  function leaveForBank(result: CreateConnectionResult) {
+    const url = result.attempt.challenge?.redirectUrl
+    if (result.attempt.method === 'redirect' && result.attempt.state === 'pending' && url) continueToBank(url)
+  }
+
   async function start(method: ConnectMethod) {
     if (!state.bank) return
     let personalNumber: string | undefined
@@ -248,13 +298,15 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
     try {
       const result = await createOpenPaymentsConnection({
         bic: state.bank.bic,
-        affiliated_aspsp_id: state.affiliateId ?? undefined,
+        affiliated_aspsp_id: state.affiliate?.id,
         account_context: state.context ?? 'corporate',
         method,
         personal_number: personalNumber,
         replace_connection_id: state.replaceConnectionId ?? undefined,
+        return_to: method === 'redirect' && returnTo ? returnTo : undefined,
       })
       dispatch({ type: 'started', result })
+      leaveForBank(result)
     } catch (error) {
       dispatch({ type: 'start_failed', message: describe(error, t('start_failed_title')) })
     }
@@ -262,16 +314,23 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
 
   // A restart or a select may start a BankID: the method and, when nothing
   // is on file, the typed personnummer again (the server never stores it).
+  // A redirect names the page to come back to as well.
   function signerInput(): SignerInput {
     const typed = signerKnown ? null : normalizePersonalNumber(state.personalNumber)
-    return typed ? { method: state.method, personal_number: typed } : { method: state.method }
+    return {
+      method: state.method,
+      ...(typed ? { personal_number: typed } : {}),
+      ...(state.method === 'redirect' && returnTo ? { return_to: returnTo } : {}),
+    }
   }
 
   async function restart() {
     if (!connectionId) return
     dispatch({ type: 'start' })
     try {
-      dispatch({ type: 'started', result: await restartOpenPaymentsConnection(connectionId, signerInput()) })
+      const result = await restartOpenPaymentsConnection(connectionId, signerInput())
+      dispatch({ type: 'started', result })
+      leaveForBank(result)
     } catch (error) {
       dispatch({ type: 'start_failed', message: describe(error, t('restart_failed_title')) })
     }
@@ -338,10 +397,11 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
   }
 
   // Closing over a running BankID or an unsaved selection: the half-made
-  // connection is removed so no row lingers. A resumed connection belongs to
-  // the first signatory and stays.
+  // connection is removed so no row lingers. A connection resumed for the
+  // second signatory belongs to the first and stays; one the person came
+  // back to from the bank's page is their own and goes.
   async function abandon() {
-    if (connectionId && !state.connection && state.mode !== 'resume') {
+    if (connectionId && !state.connection && (state.mode !== 'resume' || state.returned !== null)) {
       try {
         await deleteOpenPaymentsConnection(connectionId)
       } catch {
@@ -352,7 +412,9 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
   }
 
   const position = stepPosition(state.step, state.mode, state.paymentsOffered)
-  const titleBank = state.bank?.name ?? state.connection?.bank_name ?? null
+  const titleBank = displayBankName(state)
+  const approach = signingApproach(state)
+  const redirectHelp = approach === 'redirect' || redirectInFlight(state)
   // From the BankID step on, the title row carries the bank's mark: the
   // person sees whose BankID they are about to answer.
   const titleMark = titleBank !== null && (state.step === 'bankid' || state.step === 'accounts' || state.step === 'payments' || state.step === 'done')
@@ -379,6 +441,7 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
             {state.bank && <p>{t('help_generic', { bank: state.bank.name })}</p>}
             {state.bank && bankHelp && !twoStep && <p>{t(`help_${bankHelp}`)}</p>}
             {twoStep && <p>{t('help_svea')}</p>}
+            {state.bank && approach === 'redirect' && <p>{t('help_redirect', { bank: titleBank ?? state.bank.name })}</p>}
             {state.bankLocked && state.bank && <p>{t(state.mode === 'renew' ? 'bank_locked_renew' : 'bank_locked_switch', { bank: state.bank.name })}</p>}
             <p>{t('bankid_intro')}</p>
             <p>{t('provider_line')}</p>
@@ -387,6 +450,7 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
       case 'bankid':
         return (
           <div className="space-y-2">
+            {redirectHelp && titleBank && <p>{t('help_redirect', { bank: titleBank })}</p>}
             <p>{t('bankid_intro')}</p>
             {twoStep && <p>{t('help_svea')}</p>}
           </div>
@@ -447,8 +511,12 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
               signerKnown={signerKnown}
               personalNumberInvalid={personalNumberInvalid}
               secondsLeft={secondsLeft}
+              approach={approach}
+              mobile={mobile}
+              bankName={titleBank ?? ''}
               onStart={start}
               onRestart={restart}
+              onContinueToBank={continueToBank}
               onCopyReminder={copyReminder}
               closeButton={cancelButton}
             />

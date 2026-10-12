@@ -4,12 +4,14 @@ import { ConnectorCallError, CONNECTOR_UNREACHABLE_CODE } from '@/lib/connect/in
 import {
   AIS_CONNECT_TIMEOUT_MS,
   AIS_SYNC_TIMEOUT_MS,
+  BANK_DETAILS_TTL_MS,
   BANK_FEED_NOT_FOUND,
   BankFeedError,
   BankFeedRefusedError,
   ConsentOverError,
   ProviderUnavailableError,
   RateLimitedError,
+  clearBankDetailsCache,
   createBankFeedConnect,
   getBankFeedConnect,
   setBankFeedConnectForTests,
@@ -51,7 +53,10 @@ async function failure(promise: Promise<unknown>): Promise<BankFeedError> {
   throw new Error('expected a BankFeedError')
 }
 
-afterEach(() => setBankFeedConnectForTests(undefined))
+afterEach(() => {
+  setBankFeedConnectForTests(undefined)
+  clearBankDetailsCache()
+})
 
 describe('createBankFeedConnect', () => {
   it('sends every operation to its contract path with the connector headers and the company', async () => {
@@ -93,6 +98,40 @@ describe('createBankFeedConnect', () => {
     expect(sent(pollFetch).url).toBe(`${UPSTREAM.baseUrl}/consents/signings/poll`)
   })
 
+  it('starts a signing on the bank\'s own page with the return URL and state, in the contract shape', async () => {
+    const challenge = { approach: 'redirect', autostartToken: null, qrData: null, qrImage: null, redirectUrl: 'https://bank.example/sign' }
+    const startFetch = fetchAnswering(200, { providerAuthorisationId: 'a-r', method: 'redirect', state: 'pending', challenge, failureCode: null, scaStatus: null })
+    const started = await adapter(startFetch).startConsentSigning('co-1', {
+      party: PARTY, consentId: 'c-1', method: 'redirect', returnUrl: 'https://app.accounted.se/settings/connections?bank_connect=c-1', returnState: 'c-1',
+    })
+    expect(started).toMatchObject({ method: 'redirect', state: 'pending', challenge })
+    expect(sent(startFetch).body).toMatchObject({ method: 'redirect', returnUrl: 'https://app.accounted.se/settings/connections?bank_connect=c-1', returnState: 'c-1' })
+    // A redirect without its return fails the contract before anything is sent.
+    const idle = vi.fn()
+    const refused = await failure(adapter(idle).startConsentSigning('co-1', { party: PARTY, consentId: 'c-1', method: 'redirect' }))
+    expect(refused).toBeInstanceOf(BankFeedRefusedError)
+    expect(idle).not.toHaveBeenCalled()
+  })
+
+  it('keeps a bank\'s details for a day, per BIC, and asks again after that', async () => {
+    const details = { bic: 'SWEDSESS', name: 'Swedbank', decoupled: true, redirect: true, transactionHistoryMaxDays: 88, extendedTransactionHistoryMaxDays: 760, extendedTransactionHistoryAvailableWindowMinutes: 60, affiliates: [{ id: '08999', name: 'Sparbanken Nord' }] }
+    // A fresh Response per call: a body can be read once.
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(200, details)))
+    let clock = Date.parse('2026-10-12T10:00:00Z')
+    const connect = createBankFeedConnect(UPSTREAM, { fetch: fetchMock as unknown as typeof fetch, now: () => clock })
+    expect(await connect.getBankDetails('co-1', 'SWEDSESS')).toEqual(details)
+    // The same bank for another company, spelled in lower case: one read serves both.
+    expect(await connect.getBankDetails('co-2', 'swedsess')).toEqual(details)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    // Another bank is its own read; the plain `bank` never reads the cache.
+    await connect.getBankDetails('co-1', 'ESSESESS')
+    await connect.bank('co-1', 'SWEDSESS')
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    clock += BANK_DETAILS_TTL_MS + 1
+    await connect.getBankDetails('co-1', 'SWEDSESS')
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+  })
+
   it('lists accounts, reads balances and transactions, and revokes a consent', async () => {
     const account = { uid: 'ACC003', currency: 'SEK', iban: 'SE8050000000052131234567', bban: '80000052131234567', name: 'Företagskonto', usage: 'ORGA', ownerName: 'Bolaget AB', bankgiro: null, plusgiro: null, balance: 1200.5, availableBalance: 1100 }
     const accountsFetch = fetchAnswering(200, { accounts: [account] })
@@ -122,6 +161,16 @@ describe('createBankFeedConnect', () => {
     expect(error).toBeInstanceOf(BankFeedRefusedError)
     expect(error.code).toBe('CONNECTOR_REQUEST_INVALID')
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('treats the service failing to record a redirect return as the provider being unavailable, and a return URL off our origin as a refusal', async () => {
+    const start = { party: PARTY, consentId: 'c-1', method: 'redirect' as const, returnUrl: 'https://app.accounted.se/settings/connections?bank_connect=c-1', returnState: 'c-1' }
+    const ledger = await failure(adapter(fetchAnswering(503, { error: 'ledger', code: 'CONNECTOR_LEDGER_FAILED', retryable: true })).startConsentSigning('co-1', start))
+    expect(ledger).toBeInstanceOf(ProviderUnavailableError)
+    expect(ledger.code).toBe('CONNECTOR_LEDGER_FAILED')
+    const offOrigin = await failure(adapter(fetchAnswering(400, { error: 'origin', code: 'CONNECTOR_REDIRECT_INVALID' })).startConsentSigning('co-1', start))
+    expect(offOrigin).toBeInstanceOf(BankFeedRefusedError)
+    expect(offOrigin.code).toBe('CONNECTOR_REDIRECT_INVALID')
   })
 
   it('maps the service envelope onto the typed errors', async () => {

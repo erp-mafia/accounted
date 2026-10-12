@@ -9,6 +9,7 @@ import { BankList, OpenPaymentsBankMark } from '../BankList'
 import { bankGuideUrl, bankPrerequisiteKey } from '../bank-help'
 import type { FlowAction, FlowState } from '../connect-flow-reducer'
 import type { AccountContext, OpenPaymentsBank } from '../open-payments-client'
+import { AffiliatePicker } from './AffiliatePicker'
 
 interface BankPickStepProps {
   state: FlowState
@@ -28,9 +29,9 @@ interface BankPickStepProps {
  * provider) sit behind the title's "?"; the one thing left in the flow is the
  * prerequisite that prevents a failed BankID at the chosen bank, as the
  * step's attention line, plus the bank's one-minute film when we have one.
- * The banks route lists no affiliates, so the sparbank picker waits for a
- * bank-details read; a Swedbank consent reaches the sparbanker through the
- * bank's own prompt.
+ * When the chosen bank's details carry sparbanker (SWEDSESS), the picker
+ * "Vilken sparbank?" follows the list; the choice travels as the party's
+ * affiliated_aspsp_id and names the connection.
  */
 export function BankPickStep({ state, dispatch, banks, banksFailed, soleTrader, onContinue, closeButton }: BankPickStepProps) {
   const t = useTranslations('bank_connect')
@@ -39,6 +40,7 @@ export function BankPickStep({ state, dispatch, banks, banksFailed, soleTrader, 
   const prerequisite = state.bank ? bankPrerequisiteKey({ name: bankName, bic: state.bank.bic }) : null
   const guideUrl = state.bank ? bankGuideUrl(state.bank) : null
   const canContinue = state.bank !== null && state.bank.bic !== ''
+  const affiliates = state.bankDetails?.affiliates ?? []
 
   return (
     <div className="space-y-4">
@@ -52,7 +54,20 @@ export function BankPickStep({ state, dispatch, banks, banksFailed, soleTrader, 
           {t('bank_load_failed')}
         </p>
       ) : (
-        <BankList banks={banks} selectedBic={state.bank?.bic ?? null} onPick={(bank) => dispatch({ type: 'bank_picked', bank: { bic: bank.bic, name: bank.name } })} />
+        <BankList
+          banks={banks}
+          selectedBic={state.bank?.bic ?? null}
+          onPick={(bank) => dispatch({ type: 'bank_picked', bank: { bic: bank.bic, name: bank.name, decoupled: bank.decoupled, redirect: bank.redirect } })}
+        />
+      )}
+
+      {affiliates.length > 0 && state.bankDetails && (
+        <AffiliatePicker
+          parentName={state.bankDetails.name}
+          affiliates={affiliates}
+          value={state.affiliate}
+          onChange={(affiliate) => dispatch({ type: 'affiliate_picked', affiliate })}
+        />
       )}
 
       {soleTrader && state.bank && (

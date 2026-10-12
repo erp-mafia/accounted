@@ -14,6 +14,7 @@ import { SettingsBackLink, SettingsSectionHeader } from '@/components/settings/S
 import { BankConnectDialog } from '@/components/bank-feed/BankConnectDialog'
 import { OpenPaymentsBankSection } from '@/components/bank-feed/OpenPaymentsBankSection'
 import { useBankConnectFlow } from '@/components/bank-feed/use-bank-connect-flow'
+import { useBankConnectResume } from '@/components/bank-feed/use-bank-connect-resume'
 import { useOpenPaymentsAvailability } from '@/components/bank-feed/use-open-payments-availability'
 import { useOpenPaymentsConnections } from '@/components/bank-feed/use-open-payments-connections'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
@@ -40,8 +41,11 @@ export function BankingSettingsContent() {
   const companyId = useCompanyOptional()?.company?.id ?? null
   const openPayments = useOpenPaymentsAvailability()
   const opAvailable = openPayments.status === 'available'
-  const bankFlow = useBankConnectFlow()
+  const bankFlow = useBankConnectFlow('banking')
   const opConnections = useOpenPaymentsConnections(opAvailable ? companyId : null)
+  // A bank that signs on its own page sends the person back here with
+  // ?bank_connect=<id>: reopen the flow at its BankID step, once.
+  useBankConnectResume(bankFlow, opAvailable)
 
   // Surface a bank connection/authorization failure that the OAuth callback
   // bounced back as `?bank_error=...`. The success path is handled by the

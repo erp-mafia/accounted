@@ -12657,7 +12657,7 @@
     "bank_alias_hint": "{product} ligger hos {bank}.",
     "bank_locked_switch": "Kopplingen till {bank} görs om hos den nya leverantören. Kontona och historiken behålls.",
     "bank_locked_renew": "Kopplingen till {bank} förnyas med en ny BankID-signering. Kontona och historiken behålls.",
-    "bank_redirect_only": "Den här banken signerar på sin egen sida, stöd kommer snart.",
+    "bank_redirect_only": "Du signerar på bankens sida och kommer tillbaka hit",
     "sync_background": "Historiken hämtas i bakgrunden, det kan ta någon minut.",
     "context_label": "Kontotyp",
     "context_corporate": "Företagskonto",
@@ -12732,7 +12732,16 @@
     "title_bankid": "Signering med BankID hos {bank}",
     "help_accounts": "Historiken hämtas och nya transaktioner kommer automatiskt. Ett konto som redan bokförs behåller sitt bokföringskonto. Privata konton är avmarkerade och hämtas bara om du väljer dem.",
     "help_payments_mechanics": "Verifiera nu öppnar betalningsleverantörens formulär i en ny flik; länken gäller 24 timmar och statusen uppdateras här när den är klar. Skicka till firmatecknare lägger länken i ett mejl.",
-    "guide_link": "Så går det till hos {bank}, 1 min film"
+    "guide_link": "Så går det till hos {bank}, 1 min film",
+    "bank_not_connectable": "Banken kan inte kopplas här ännu.",
+    "redirect_intro": "Du skickas till {bank}. Signera där och kom tillbaka hit.",
+    "redirect_continue": "Fortsätt till {bank}",
+    "redirect_waiting": "Vi väntar på svar från {bank}.",
+    "method_redirect": "Signera hos {bank}",
+    "help_redirect": "{bank} signerar på sin egen sida: du skickas dit, signerar med BankID och kommer tillbaka hit, där kopplingen fortsätter.",
+    "affiliate_label": "Vilken sparbank?",
+    "affiliate_search": "Sök sparbank",
+    "affiliate_no_matches": "Inga sparbanker matchar sökningen."
   },
   "bank_payments": {
     "title": "Betala via banken",

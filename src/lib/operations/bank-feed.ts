@@ -13,6 +13,7 @@
 import { z } from 'zod'
 import {
   disconnectBankFeedConnection,
+  getBankFeedBankDetails,
   getBankFeedOverview,
   listBankFeedBanks,
   pollBankFeedConsent,
@@ -22,11 +23,14 @@ import {
   syncBankFeedConnection,
 } from '@/lib/bank-feed/service'
 import type { BankFeedSignerInput } from '@/lib/bank-feed/party'
+import { BANK_CONNECT_RETURN_SURFACES } from '@/lib/bank-feed/return-url'
 import { defineOperation } from './types'
 
 const CONNECTION_ID = z.string().uuid().describe('The bank connection (bank_connections.id).')
 const BIC = z.string().regex(/^[A-Z0-9]{8}([A-Z0-9]{3})?$/).describe('The bank, as its BIC (8 or 11 characters).')
-const METHOD = z.enum(['same_device', 'qr']).describe('BankID on this device, or an animated QR scanned with the app.')
+const METHOD = z.enum(['same_device', 'qr', 'redirect']).describe('BankID on this device, an animated QR scanned with the app, or signing on the bank\'s own page (redirect, which needs return_to).')
+const RETURN_TO = z.enum(BANK_CONNECT_RETURN_SURFACES).nullish().describe('Redirect: the Accounted page the browser comes back to after signing at the bank.')
+const RETURN_ORIGIN = z.url().max(200).nullish().describe('Redirect: the app origin the return lands on (a session route resolves it from the request).')
 const PERSONAL_NUMBER = z.string().max(20).nullish().describe('The signer\'s personnummer when they have none on file. Sent to the bank, never stored.')
 
 const Challenge = z.object({
@@ -128,6 +132,34 @@ export const bankFeedBanks = defineOperation({
   run: async (ctx) => listBankFeedBanks(ctx),
 })
 
+export const bankFeedBank = defineOperation({
+  id: 'bank-feed.bank',
+  kind: 'read',
+  scope: 'transactions:read',
+  risk: 'low',
+  reversible: false,
+  docs: {
+    summary: 'One bank\'s details: how a person signs there, and the sparbanker behind a shared BIC.',
+    description: 'Whether the bank signs BankID in our screen (decoupled) or on its own page (redirect), how many days of history it serves, and the savings banks reached through it (Swedbank: the sparbanker and Ölands Bank). Answered from a 24 h cache.',
+    useWhen: 'After a bank is picked and before BankID starts: to show the sparbank picker and choose the signing method.',
+    doNotUseFor: 'Listing banks (bank-feed.banks).',
+    pitfalls: ['A sparbank is connected through SWEDSESS with its affiliate id from this answer.'],
+    example: { response: { data: { bic: 'SWEDSESS', name: 'Swedbank', decoupled: true, redirect: true, affiliates: [{ id: '08999', name: 'Sparbanken Nord' }], transaction_history_max_days: 88, extended_transaction_history_max_days: 760 } } },
+  },
+  input: z.object({ bic: BIC }),
+  output: z.object({
+    bic: z.string(),
+    name: z.string(),
+    decoupled: z.boolean().nullable(),
+    redirect: z.boolean().nullable(),
+    affiliates: z.array(z.object({ id: z.string(), name: z.string() })),
+    transaction_history_max_days: z.number().int().nullable(),
+    extended_transaction_history_max_days: z.number().int().nullable(),
+  }),
+  errorCodes: ['OPEN_BANKING_NOT_AVAILABLE', 'BANK_CONSENT_UNKNOWN_BANK', 'BANK_PROVIDER_UNAVAILABLE', 'BANK_PROVIDER_REFUSED'],
+  run: async (ctx, input) => getBankFeedBankDetails(ctx, input.bic),
+})
+
 export const bankFeedOverview = defineOperation({
   id: 'bank-feed.overview',
   kind: 'read',
@@ -160,10 +192,10 @@ export const bankFeedStart = defineOperation({
   reversible: true,
   docs: {
     summary: 'Create a bank consent at the bank and start BankID for it.',
-    description: 'Creates the consent (today plus 180 days, the bank may clamp it), stores the attempt as a pending bank connection and starts BankID. Answers the challenge the person signs with; poll follows.',
+    description: 'Creates the consent (today plus 180 days, the bank may clamp it), stores the attempt as a pending bank connection and starts BankID. Answers the challenge the person signs with; poll follows. A bank that only signs on its own page is started with redirect when return_to is given: the challenge then carries the bank\'s page in redirectUrl and the browser comes back to the return_to page with the connection named.',
     useWhen: 'A person connects a bank with BankID through Open Payments.',
     doNotUseFor: 'Agents: the account holder gives the consent in person.',
-    pitfalls: ['replace_connection_id names the Enable Banking connection this one replaces at account selection (a switch).'],
+    pitfalls: ['replace_connection_id names the Enable Banking connection this one replaces at account selection (a switch).', 'method redirect needs return_to and return_origin; without them a redirect-only bank is refused by the bank (SCA_REDIRECT_UNSUPPORTED).'],
     example: { response: { data: { connection_id: EXAMPLE_CONNECTION, attempt: { authorisation_id: 'a-1', method: 'qr', state: 'pending', challenge: null, sca_status: 'started', step: 'identify', failure_code: null, failure_text: null } } } },
   },
   input: z.object({
@@ -173,11 +205,13 @@ export const bankFeedStart = defineOperation({
     method: METHOD,
     personal_number: PERSONAL_NUMBER,
     replace_connection_id: z.string().uuid().nullish(),
+    return_to: RETURN_TO,
+    return_origin: RETURN_ORIGIN,
     ip_address: z.string().max(64).nullish(),
     user_agent: z.string().max(300).nullish(),
   }),
   output: z.object({ connection_id: z.string().uuid(), attempt: Attempt }),
-  errorCodes: ['OPEN_BANKING_NOT_AVAILABLE', 'BANK_CONSENT_UNKNOWN_BANK', 'BANK_CONSENT_PERSONAL_NUMBER_REQUIRED', 'BANK_CONSENT_REDIRECT_UNSUPPORTED', 'BANK_PROVIDER_UNAVAILABLE', 'BANK_PROVIDER_REFUSED'],
+  errorCodes: ['OPEN_BANKING_NOT_AVAILABLE', 'BANK_CONSENT_UNKNOWN_BANK', 'BANK_CONSENT_PERSONAL_NUMBER_REQUIRED', 'BANK_CONSENT_REDIRECT_UNSUPPORTED', 'VALIDATION_ERROR', 'BANK_PROVIDER_UNAVAILABLE', 'BANK_PROVIDER_REFUSED'],
   run: async (ctx, input) =>
     startBankFeedConsent(ctx, {
       bic: input.bic,
@@ -185,6 +219,8 @@ export const bankFeedStart = defineOperation({
       accountContext: input.account_context ?? null,
       method: input.method,
       replaceConnectionId: input.replace_connection_id ?? null,
+      returnTo: input.return_to ?? null,
+      returnOrigin: input.return_origin ?? null,
       signer: signerOf(input),
     }),
 })
@@ -230,16 +266,31 @@ export const bankFeedRestart = defineOperation({
   reversible: true,
   docs: {
     summary: 'Start BankID again for a pending bank consent.',
-    description: 'A new authorisation for the same consent (a new consent when the bank says the first is over). Same answer shape as start.',
+    description: 'A new authorisation for the same consent (a new consent when the bank says the first is over). Same answer shape as start. A redirect attempt keeps its return_to from the row; return_origin names the app origin to come back to.',
     useWhen: 'A BankID attempt failed or timed out and the person tries again.',
     doNotUseFor: 'A connection that is already active.',
     pitfalls: [],
     example: { response: { data: { connection_id: EXAMPLE_CONNECTION, attempt: { authorisation_id: 'a-2', method: 'qr', state: 'pending', challenge: null, sca_status: null, step: null, failure_code: null, failure_text: null } } } },
   },
-  input: z.object({ connection_id: CONNECTION_ID, method: METHOD.nullish(), personal_number: PERSONAL_NUMBER, ip_address: z.string().max(64).nullish(), user_agent: z.string().max(300).nullish() }),
+  input: z.object({
+    connection_id: CONNECTION_ID,
+    method: METHOD.nullish(),
+    personal_number: PERSONAL_NUMBER,
+    return_to: RETURN_TO,
+    return_origin: RETURN_ORIGIN,
+    ip_address: z.string().max(64).nullish(),
+    user_agent: z.string().max(300).nullish(),
+  }),
   output: z.object({ connection_id: z.string().uuid(), attempt: Attempt }),
-  errorCodes: ['OPEN_BANKING_NOT_AVAILABLE', 'NOT_FOUND', 'BANK_CONSENT_CHANGED', 'BANK_PROVIDER_UNAVAILABLE', 'BANK_PROVIDER_REFUSED'],
-  run: async (ctx, input) => restartBankFeedConsent(ctx, { connectionId: input.connection_id, method: input.method ?? null, signer: signerOf(input) }),
+  errorCodes: ['OPEN_BANKING_NOT_AVAILABLE', 'NOT_FOUND', 'BANK_CONSENT_CHANGED', 'VALIDATION_ERROR', 'BANK_PROVIDER_UNAVAILABLE', 'BANK_PROVIDER_REFUSED'],
+  run: async (ctx, input) =>
+    restartBankFeedConsent(ctx, {
+      connectionId: input.connection_id,
+      method: input.method ?? null,
+      returnTo: input.return_to ?? null,
+      returnOrigin: input.return_origin ?? null,
+      signer: signerOf(input),
+    }),
 })
 
 export const bankFeedSelect = defineOperation({
@@ -322,6 +373,7 @@ export const bankFeedDisconnect = defineOperation({
 
 export const BANK_FEED_OPERATIONS = [
   bankFeedBanks,
+  bankFeedBank,
   bankFeedOverview,
   bankFeedStart,
   bankFeedPoll,

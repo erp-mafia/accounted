@@ -7,7 +7,10 @@
  *
  *   - One function per operation, typed by the contract's schemas: banks,
  *     bank, createConsent, startConsentSigning, pollConsentSigning,
- *     consentStatus, accounts, balances, syncTransactions, revokeConsent.
+ *     consentStatus, accounts, balances, syncTransactions, revokeConsent;
+ *     plus getBankDetails, the bank operation behind a 24 h in-memory cache
+ *     (which signing a bank offers, its history window and its sparbanker
+ *     change about never, and the flow asks on every pick).
  *   - Availability: a connector key (aisConnectorMode()) gives the whole
  *     installation an adapter. Which company may read its bank this way is
  *     the door's question (./door.ts), never the adapter's.
@@ -33,6 +36,8 @@ import {
   type AisConsentStatus,
   type AisOperation,
   type AisParty,
+  type AisPollConsentSigningRequest,
+  type AisStartConsentSigningRequest,
   type BankSyncResponse,
 } from '@accounted/connect-contract'
 import { CONNECTOR_UNREACHABLE_CODE, ConnectorCallError, callConnectorOperation } from '@/lib/connect/instance/connector-fetch'
@@ -42,6 +47,8 @@ import { aisConnectorMode, type ConnectorUpstream } from '@/lib/connect/instance
 export const AIS_CONNECT_TIMEOUT_MS = 30_000
 /** A transactions read pages through the bank's history; the Enable Banking connector sync allows the same. */
 export const AIS_SYNC_TIMEOUT_MS = 120_000
+/** How long a bank's details are kept before the service is asked again. */
+export const BANK_DETAILS_TTL_MS = 24 * 60 * 60 * 1000
 
 /** The consent is over (expired, revoked, rejected, unknown): only a new consent helps. */
 export const BANK_FEED_CONSENT_OVER = 'BANK_FEED_CONSENT_OVER'
@@ -121,6 +128,8 @@ export function toBankFeedError(error: unknown, operation: AisOperation): BankFe
     case 'CONNECTOR_AIS_OUTCOME_UNKNOWN':
     case 'CONNECTOR_AIS_PROVIDER_UNAVAILABLE':
     case 'CONNECTOR_AIS_PROVIDER_FAILED':
+    // The service could not record the redirect's return state; the start may be tried again.
+    case 'CONNECTOR_LEDGER_FAILED':
     case 'CONNECTOR_RATE_LIMITED':
     case CONNECTOR_UNREACHABLE_CODE:
       return new ProviderUnavailableError(error.message, { code: error.code, status, providerCode: error.providerCode, cause: error })
@@ -138,18 +147,19 @@ export interface BankFeedConnectDeps {
   fetch?: typeof fetch
   timeoutMs?: number
   syncTimeoutMs?: number
+  /** The clock the bank-details cache reads; tests pass their own. */
+  now?: () => number
 }
 
 /** The AIS family as typed functions; every call carries the company and, where the contract wants one, the party. */
 export interface BankFeedConnect {
   banks(companyId: string): Promise<AisBank[]>
   bank(companyId: string, bic: string): Promise<AisBankDetails>
+  /** `bank`, answered from the in-memory cache for BANK_DETAILS_TTL_MS. */
+  getBankDetails(companyId: string, bic: string): Promise<AisBankDetails>
   createConsent(companyId: string, input: { party: AisParty; validUntil?: string; accounts?: Array<{ iban: string }> }): Promise<AisConsentCreated>
-  startConsentSigning(companyId: string, input: { party: AisParty; consentId: string; method: 'same_device' | 'qr' }): Promise<AisConsentSigningStarted>
-  pollConsentSigning(
-    companyId: string,
-    input: { party: AisParty; consentId: string; providerAuthorisationId: string; method: 'same_device' | 'qr' | 'redirect' },
-  ): Promise<AisConsentSigningProgress>
+  startConsentSigning(companyId: string, input: AisStartConsentSigningRequest): Promise<AisConsentSigningStarted>
+  pollConsentSigning(companyId: string, input: AisPollConsentSigningRequest): Promise<AisConsentSigningProgress>
   consentStatus(companyId: string, input: { party: AisParty; consentId: string }): Promise<AisConsentStatus>
   accounts(companyId: string, input: { party: AisParty; consentId: string; withBalance?: boolean }): Promise<AisAccount[]>
   balances(companyId: string, input: { party: AisParty; consentId: string; accountUid: string }): Promise<AisBalances>
@@ -160,9 +170,20 @@ export interface BankFeedConnect {
   revokeConsent(companyId: string, input: { party: AisParty; consentId: string }): Promise<AisConsentRevoked>
 }
 
+// One cache for the process: getBankFeedConnect() makes a fresh adapter on
+// every call, so the memory has to live outside it. Keyed by BIC; a bank's
+// details are the same for every company.
+const bankDetailsCache = new Map<string, { details: AisBankDetails; expiresAt: number }>()
+
+/** Forget every cached bank: tests, and an operator who knows a bank changed. */
+export function clearBankDetailsCache(): void {
+  bankDetailsCache.clear()
+}
+
 export function createBankFeedConnect(upstream: ConnectorUpstream, deps: BankFeedConnectDeps = {}): BankFeedConnect {
   const timeoutMs = deps.timeoutMs ?? AIS_CONNECT_TIMEOUT_MS
   const syncTimeoutMs = deps.syncTimeoutMs ?? AIS_SYNC_TIMEOUT_MS
+  const now = deps.now ?? Date.now
 
   async function call<O extends AisOperation>(operation: O, companyId: string, body: unknown, timeout = timeoutMs) {
     try {
@@ -186,6 +207,14 @@ export function createBankFeedConnect(upstream: ConnectorUpstream, deps: BankFee
     },
     bank(companyId, bic) {
       return call('bank', companyId, { bic })
+    },
+    async getBankDetails(companyId, bic) {
+      const key = bic.toUpperCase()
+      const cached = bankDetailsCache.get(key)
+      if (cached && cached.expiresAt > now()) return cached.details
+      const details = await call('bank', companyId, { bic })
+      bankDetailsCache.set(key, { details, expiresAt: now() + BANK_DETAILS_TTL_MS })
+      return details
     },
     createConsent(companyId, input) {
       return call('createConsent', companyId, input)

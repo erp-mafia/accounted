@@ -28,7 +28,7 @@ import { z } from 'zod'
  * copy of `src/` pinned to a commit, so it must stay self-contained.
  */
 
-export const CONTRACT_VERSION = '2026-10-12'
+export const CONTRACT_VERSION = '2026-10-13'
 
 // ---------------------------------------------------------------------------
 // Keys, headers and paths
@@ -900,6 +900,74 @@ export type PaymentsSigningTarget = z.infer<typeof paymentsSigningTargetSchema>
 export const paymentsSigningMethodSchema = z.enum(['same_device', 'qr', 'redirect'])
 export type PaymentsSigningMethod = z.infer<typeof paymentsSigningMethodSchema>
 
+// Redirect signing (the bank's own page)
+//
+// Some banks sign only on their own page (Lunar, Danske, Revolut, Northmill,
+// Skandia, and others that prefer it). A signing start (AIS
+// `startConsentSigning`, payments `startSigning`) with method 'redirect'
+// carries `returnUrl` (https, on the installation's own origin as the
+// connector key pins it) and `returnState` (1 to 128 characters, opaque to
+// the service, echoed back verbatim), and answers the usual started shape:
+// state 'pending' and a challenge with approach 'redirect' and `redirectUrl`
+// filled (the provider's sign-in page; autostartToken, qrData and qrImage
+// null). The installation sends the person's browser there. The flow then
+// runs without the installation:
+//
+//   1. the person signs at the bank;
+//   2. the bank sends the browser to the service's callback,
+//      CONNECTIONS_CALLBACK_PATH on the connect origin (the redirect URI
+//      whitelisted at the provider; never the installation's);
+//   3. the service exchanges the single-use code where the client secret
+//      lives, then answers 302 to `returnUrl` with the query of
+//      signingReturnQuerySchema: `state` (the returnState), `result` ('ok'
+//      or 'error') and, with 'error', `code` (the OAuth error, for example
+//      access_denied when the person cancelled, or the provider's code of
+//      the refused exchange; never prose);
+//   4. the installation polls the signing (pollConsentSigning, pollSigning)
+//      exactly as for decoupled BankID. `result=ok` means the exchange went
+//      through OR its answer was lost after it may have reached the
+//      provider: the poll tells the truth either way, so the installation
+//      never trusts the return alone.
+//
+// A return whose state the service does not know, or knows as used (the
+// state is single use and lives 15 minutes), is answered with a plain page
+// in Swedish asking the person to go back to Accounted and try again; the
+// installation sees nothing, and its poll ends by timing out.
+
+export const CONNECTIONS_CALLBACK_PATH = '/api/connections/callback'
+export const CONNECTIONS_CALLBACK_URL = `${DEFAULT_CONNECT_BASE_URL}${CONNECTIONS_CALLBACK_PATH}`
+
+/** Where the person's browser is sent after signing on the bank's page: https, on the installation's origin. */
+export const signingReturnUrlSchema = z.url({ protocol: /^https$/ }).max(2048)
+/** The installation's own handle of the signing, echoed back verbatim as `state`. Opaque to the service. */
+export const signingReturnStateSchema = z.string().min(1).max(128)
+export const signingReturnResultSchema = z.enum(['ok', 'error'])
+export type SigningReturnResult = z.infer<typeof signingReturnResultSchema>
+
+/** The query the browser carries to `returnUrl` after the callback. */
+export const signingReturnQuerySchema = z.object({
+  state: signingReturnStateSchema,
+  result: signingReturnResultSchema,
+  /** With result 'error': the OAuth error (access_denied, code_missing) or the provider's code for a refused exchange. */
+  code: z
+    .string()
+    .regex(/^[A-Za-z0-9_.-]{1,64}$/)
+    .optional(),
+})
+export type SigningReturnQuery = z.infer<typeof signingReturnQuerySchema>
+
+/** The return fields of a signing start: required with method 'redirect', absent otherwise. */
+const signingReturnFields = {
+  returnUrl: signingReturnUrlSchema.optional(),
+  returnState: signingReturnStateSchema.optional(),
+}
+
+function requireReturnForRedirect(value: { method: string; returnUrl?: string; returnState?: string }, ctx: z.RefinementCtx): void {
+  if (value.method !== 'redirect') return
+  if (!value.returnUrl) ctx.addIssue({ code: 'custom', path: ['returnUrl'], message: 'required with method redirect' })
+  if (!value.returnState) ctx.addIssue({ code: 'custom', path: ['returnState'], message: 'required with method redirect' })
+}
+
 /** What a person needs to sign with BankID right now. */
 export const paymentsSigningChallengeSchema = z.object({
   /** Signing in the BankID app from our screen (decoupled) or on the bank's own page (redirect). */
@@ -1027,13 +1095,16 @@ export const paymentsBasketStatusRequestSchema = z.object({
 })
 export type PaymentsBasketStatusRequest = z.infer<typeof paymentsBasketStatusRequestSchema>
 
-export const paymentsSigningStartRequestSchema = z.object({
-  idempotencyKey: paymentsIdempotencyKeySchema,
-  party: paymentsPartySchema,
-  target: paymentsSigningTargetSchema,
-  /** Decoupled BankID only: redirect (the bank's own page) needs the connection callback, which comes later. */
-  method: z.enum(['same_device', 'qr']),
-})
+export const paymentsSigningStartRequestSchema = z
+  .object({
+    idempotencyKey: paymentsIdempotencyKeySchema,
+    party: paymentsPartySchema,
+    target: paymentsSigningTargetSchema,
+    /** Decoupled BankID (same_device, qr) or the bank's own page (redirect, with returnUrl and returnState; see "Redirect signing"). */
+    method: paymentsSigningMethodSchema,
+    ...signingReturnFields,
+  })
+  .superRefine(requireReturnForRedirect)
 export type PaymentsSigningStartRequest = z.infer<typeof paymentsSigningStartRequestSchema>
 
 export const paymentsSigningPollRequestSchema = z.object({
@@ -1086,9 +1157,10 @@ export const PAYMENTS_WRITE_OPERATIONS = ['createPayment', 'cancelPayment', 'cre
  *   at which bank, who signs. The service forwards it as the provider's PSU
  *   headers and never keeps it.
  * - A consent is created, then signed with BankID (decoupled: QR or this
- *   device), then read. Repeating a create or a signing start only makes
- *   another consent or authorisation, which is harmless, so AIS writes carry
- *   no idempotency key.
+ *   device; or on the bank's own page: method 'redirect', see "Redirect
+ *   signing" above), then read. Repeating a create or a signing start only
+ *   makes another consent or authorisation, which is harmless, so AIS
+ *   writes carry no idempotency key.
  * - Banks allow four unattended reads per consent and day. The service
  *   counts `accounts`, `balances` and `syncTransactions` calls without a
  *   person present (psuIpAddress null) and answers the fifth with
@@ -1189,17 +1261,20 @@ export const aisConsentCreatedSchema = z.object({
 })
 export type AisConsentCreated = z.infer<typeof aisConsentCreatedSchema>
 
-export const aisStartConsentSigningRequestSchema = z.object({
-  party: aisPartySchema,
-  consentId: aisConsentIdSchema,
-  /** Decoupled BankID only: redirect (the bank's own page) needs the connection callback, which comes later. */
-  method: z.enum(['same_device', 'qr']),
-})
+export const aisStartConsentSigningRequestSchema = z
+  .object({
+    party: aisPartySchema,
+    consentId: aisConsentIdSchema,
+    /** Decoupled BankID (same_device, qr) or the bank's own page (redirect, with returnUrl and returnState; see "Redirect signing"). */
+    method: paymentsSigningMethodSchema,
+    ...signingReturnFields,
+  })
+  .superRefine(requireReturnForRedirect)
 export type AisStartConsentSigningRequest = z.infer<typeof aisStartConsentSigningRequestSchema>
 
 export const aisConsentSigningStartedSchema = z.object({
   providerAuthorisationId: z.string().min(1),
-  /** The method the bank actually offered (it may impose redirect, which fails the signing: SCA_REDIRECT_UNSUPPORTED). */
+  /** The method the bank actually offered. A bank that imposes redirect when a decoupled method was asked fails the signing: SCA_REDIRECT_UNSUPPORTED. */
   method: paymentsSigningMethodSchema,
   state: z.enum(['pending', 'failed']),
   challenge: paymentsSigningChallengeSchema.nullable(),

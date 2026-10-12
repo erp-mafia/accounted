@@ -1,14 +1,17 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { returnOriginFor } from '@/lib/bank-feed/request-return'
+import { BANK_CONNECT_RETURN_SURFACES } from '@/lib/bank-feed/return-url'
 import { restartBankFeedConsent } from '@/lib/bank-feed/service'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { signerFromRequest } from '@/lib/payments/orders/request-signer'
 
-/** The body is optional: the row carries the method; a typed personnummer may come along. */
+/** The body is optional: the row carries the method and the return page; a typed personnummer may come along. */
 const RestartSchema = z.object({
-  method: z.enum(['same_device', 'qr']).nullish(),
+  method: z.enum(['same_device', 'qr', 'redirect']).nullish(),
   personal_number: z.string().max(20).nullish(),
+  return_to: z.enum(BANK_CONNECT_RETURN_SURFACES).nullish(),
 })
 
 async function readOptionalBody(request: Request): Promise<z.infer<typeof RestartSchema>> {
@@ -25,7 +28,9 @@ async function readOptionalBody(request: Request): Promise<z.infer<typeof Restar
 /**
  * POST /api/bank/open-payments/connections/:id/restart: a new BankID
  * authorisation for the pending consent (a new consent when the bank says
- * the first is over). Same answer shape as creating the connection.
+ * the first is over). Same answer shape as creating the connection. A
+ * redirect attempt comes back to the page it was started from (kept on the
+ * row), on the origin this request came to.
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'bank_feed.restart',
@@ -34,7 +39,13 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     const body = await readOptionalBody(request)
     const outcome = await restartBankFeedConsent(
       { supabase, companyId, userId: user.id, log },
-      { connectionId: id, method: body.method ?? null, signer: signerFromRequest(request, body.personal_number) },
+      {
+        connectionId: id,
+        method: body.method ?? null,
+        returnTo: body.return_to ?? null,
+        returnOrigin: await returnOriginFor(request),
+        signer: signerFromRequest(request, body.personal_number),
+      },
     )
     if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
     if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })

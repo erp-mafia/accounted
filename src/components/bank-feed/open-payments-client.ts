@@ -10,14 +10,29 @@
  * person at the bank and is rendered, never printed.
  */
 
+import type { BankConnectReturnSurface } from '@/lib/bank-feed/return-url'
+
 /** One bank as GET /api/bank/open-payments/banks lists it. Svea Bank comes with nulls. */
 export interface OpenPaymentsBank {
   bic: string
   name: string
   logo_url: string | null
-  /** The bank signs in the BankID app (QR or same device); false means it only signs on its own page, which the flow cannot do yet. */
+  /** The bank signs in the BankID app (QR or same device); false means it signs only on its own page (redirect). Null: the list does not know; the details do. */
+  decoupled: boolean | null
+  /** The bank signs on its own page: the browser goes there and comes back. */
+  redirect: boolean | null
+}
+
+/** One bank's details as GET /api/bank/open-payments/banks/:bic answers (service BankDetailsView). */
+export interface OpenPaymentsBankDetails {
+  bic: string
+  name: string
   decoupled: boolean | null
   redirect: boolean | null
+  /** The sparbanker behind a shared BIC (SWEDSESS); the chosen one goes in affiliated_aspsp_id. */
+  affiliates: Array<{ id: string; name: string }>
+  transaction_history_max_days: number | null
+  extended_transaction_history_max_days: number | null
 }
 
 export interface BankIdChallenge {
@@ -32,7 +47,11 @@ export interface BankIdChallenge {
 /** The bank's two consent steps: identify the person, then approve access to the accounts. */
 export type ConsentStep = 'identify' | 'consent'
 
-export type ConnectMethod = 'qr' | 'same_device'
+/** BankID in our screen (qr, same_device) or on the bank's own page (redirect). */
+export type ConnectMethod = 'qr' | 'same_device' | 'redirect'
+
+/** The entry point a redirect signing comes back to (lib/bank-feed/return-url.ts). */
+export type ReturnSurface = BankConnectReturnSurface
 
 export type AccountContext = 'corporate' | 'private'
 
@@ -59,6 +78,8 @@ export interface CreateConnectionInput {
   personal_number?: string
   /** The connection this one takes over from (a switch from Enable Banking, or a renewal). */
   replace_connection_id?: string
+  /** Redirect: the page to come back to after signing at the bank. */
+  return_to?: ReturnSurface
 }
 
 export interface CreateConnectionResult {
@@ -70,6 +91,8 @@ export interface CreateConnectionResult {
 export interface SignerInput {
   method?: ConnectMethod
   personal_number?: string
+  /** Redirect: the page to come back to after signing at the bank. */
+  return_to?: ReturnSurface
 }
 
 export type ConnectionPollState = 'pending' | 'valid' | 'partially_authorised' | 'failed'
@@ -247,6 +270,10 @@ export async function fetchOpenPaymentsAvailability(signal?: AbortSignal): Promi
     if (error instanceof OpenPaymentsClientError) return { available: false, banks: null }
     throw error
   }
+}
+
+export function fetchOpenPaymentsBankDetails(bic: string, signal?: AbortSignal): Promise<OpenPaymentsBankDetails> {
+  return send<OpenPaymentsBankDetails>(`${BASE}/banks/${encodeURIComponent(bic)}`, { signal })
 }
 
 export function fetchOpenPaymentsOverview(signal?: AbortSignal): Promise<OpenPaymentsOverview> {

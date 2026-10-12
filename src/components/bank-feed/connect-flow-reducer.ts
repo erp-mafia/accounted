@@ -8,10 +8,12 @@
  * connection (bank prefilled and locked; the server supersedes the old row
  * when the accounts are chosen) and a RENEWAL of an Open Payments connection
  * (same, without the intro). A RESUME opens an existing connection at the
- * BankID step for the second signatory.
+ * BankID step: for the second signatory, or for the person coming back from
+ * a bank that signs on its own page (`returned` says how that went).
  */
 
 import { initialSelection, setLedger, toggleAccount, type SelectionMap } from './account-selection'
+import { bankSigningApproach, type SigningApproach } from './bank-help'
 import { firstStep, nextStep, type FlowMode, type FlowStep } from './flow-steps'
 import type {
   AccountContext,
@@ -22,12 +24,29 @@ import type {
   ConnectionView,
   ConsentStep,
   CreateConnectionResult,
+  OpenPaymentsBankDetails,
   PolledAccount,
 } from './open-payments-client'
 
 export interface FlowBank {
   bic: string
   name: string
+  /** What the list says about signing there; the bank's details refine it. */
+  decoupled?: boolean | null
+  redirect?: boolean | null
+}
+
+/** The sparbank behind a shared BIC, chosen in the bank step. */
+export interface FlowAffiliate {
+  id: string
+  name: string
+}
+
+/** How the person came back from the bank's own page: the URL's flag, never the outcome (polling decides). */
+export interface FlowReturn {
+  result: 'ok' | 'error'
+  /** The bank's failure code on an error return. */
+  code: string | null
 }
 
 export type VerificationStatus = 'valid' | 'invalid' | 'unknown'
@@ -38,7 +57,9 @@ export interface FlowState {
   bank: FlowBank | null
   /** Prefilled from the connection being replaced: the person cannot pick another bank. */
   bankLocked: boolean
-  affiliateId: string | null
+  /** The bank's details, once read for the chosen BIC: signing approach and sparbanker. */
+  bankDetails: OpenPaymentsBankDetails | null
+  affiliate: FlowAffiliate | null
   context: AccountContext | null
   method: ConnectMethod
   personalNumber: string
@@ -51,6 +72,8 @@ export interface FlowState {
   /** The bank's steps this consent has been through: a second one means a new QR replaced a scanned one. */
   stepsSeen: ConsentStep[]
   failure: { code: string | null; text: string | null } | null
+  /** Set while the flow was reopened by a return from the bank's own page; cleared by the next start. */
+  returned: FlowReturn | null
   starting: boolean
   startError: string | null
   accounts: PolledAccount[]
@@ -80,28 +103,34 @@ export interface OpenFlowOptions {
   bank?: FlowBank | null
   /** The connection the new one takes over from (switch, renewal). */
   replaceConnectionId?: string | null
-  /** The connection to resume at its BankID (second signatory). */
+  /** The connection to resume at its BankID (second signatory, or a return from the bank's page). */
   connectionId?: string | null
+  /** A return from the bank's own page: ok polls at once, error shows the bank's code with Försök igen. */
+  returned?: FlowReturn | null
 }
 
 export function openFlow(mode: FlowMode, options: OpenFlowOptions = {}): FlowState {
   const bank = options.bank ?? null
+  const returned = mode === 'resume' ? (options.returned ?? null) : null
   return {
     mode,
     step: firstStep(mode),
     bank,
     bankLocked: bank !== null && (mode === 'switch' || mode === 'renew'),
-    affiliateId: null,
+    bankDetails: null,
+    affiliate: null,
     context: null,
-    method: 'qr',
+    method: returned ? 'redirect' : 'qr',
     personalNumber: '',
     replaceConnectionId: options.replaceConnectionId ?? null,
     connectionId: options.connectionId ?? null,
     attempt: null,
-    pollState: null,
+    // An error return is a failed attempt: nothing to poll, Försök igen starts anew.
+    pollState: returned?.result === 'error' ? 'failed' : null,
     consentStep: null,
     stepsSeen: [],
-    failure: null,
+    failure: returned?.result === 'error' ? { code: returned.code, text: null } : null,
+    returned,
     starting: false,
     startError: null,
     accounts: [],
@@ -126,7 +155,11 @@ export type FlowAction =
   | { type: 'bank_picked'; bank: FlowBank }
   /** A locked bank came from a connection row, which names the bank but not its BIC: the list resolves it. Null unlocks the list. */
   | { type: 'bank_resolved'; bic: string | null }
-  | { type: 'affiliate_picked'; id: string | null }
+  /** The bank's details arrived for the chosen BIC (ignored for another bank). */
+  | { type: 'bank_details_loaded'; details: OpenPaymentsBankDetails }
+  | { type: 'affiliate_picked'; affiliate: FlowAffiliate | null }
+  /** A resumed connection told us its bank (the row names it). */
+  | { type: 'connection_known'; bank: FlowBank }
   | { type: 'context_set'; context: AccountContext }
   | { type: 'to_bankid' }
   | { type: 'method_set'; method: ConnectMethod }
@@ -157,6 +190,22 @@ export function pollingActive(state: FlowState): boolean {
 /** The screen after the accounts are live: the payments offer when it stands, else the finished screen. */
 export function stepAfterActivation(state: Pick<FlowState, 'paymentsOffered' | 'verification'>): FlowStep {
   return state.paymentsOffered === true && state.verification !== 'valid' ? 'payments' : 'done'
+}
+
+/** The bank as the person knows it: the sparbank when one is chosen, else the bank, else the connection's name. */
+export function displayBankName(state: Pick<FlowState, 'affiliate' | 'bank' | 'connection'>): string | null {
+  return state.affiliate?.name ?? state.bank?.name ?? state.connection?.bank_name ?? null
+}
+
+/** How the chosen bank signs: from its details once read, else from what the list said. */
+export function signingApproach(state: Pick<FlowState, 'bank' | 'bankDetails'>): SigningApproach {
+  if (state.bankDetails) return bankSigningApproach(state.bankDetails)
+  return bankSigningApproach({ decoupled: state.bank?.decoupled ?? null, redirect: state.bank?.redirect ?? null })
+}
+
+/** The attempt in flight signs on the bank's own page. */
+export function redirectInFlight(state: Pick<FlowState, 'method' | 'attempt'>): boolean {
+  return state.method === 'redirect' || state.attempt?.method === 'redirect' || state.attempt?.challenge?.approach === 'redirect'
 }
 
 /**
@@ -196,6 +245,10 @@ function withStepSeen(seen: ConsentStep[], step: ConsentStep | null): ConsentSte
   return [...seen, step]
 }
 
+function sameName(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase()
+}
+
 export function flowReducer(state: FlowState, action: FlowAction): FlowState {
   switch (action.type) {
     case 'continue':
@@ -203,15 +256,31 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
 
     case 'bank_picked':
       if (state.bankLocked) return state
-      return { ...state, bank: action.bank, affiliateId: null }
+      return {
+        ...state,
+        bank: action.bank,
+        affiliate: null,
+        bankDetails: state.bankDetails?.bic === action.bank.bic ? state.bankDetails : null,
+      }
 
     case 'bank_resolved':
       if (!state.bank || state.bank.bic) return state
       if (action.bic === null) return { ...state, bank: null, bankLocked: false }
       return { ...state, bank: { ...state.bank, bic: action.bic } }
 
+    case 'bank_details_loaded': {
+      if (!state.bank || action.details.bic !== state.bank.bic) return state
+      // A locked bank named after its sparbank (a renewal) finds itself among the affiliates.
+      const bankName = state.bank.name
+      const affiliate = state.affiliate ?? action.details.affiliates.find((a) => sameName(a.name, bankName)) ?? null
+      return { ...state, bankDetails: action.details, affiliate }
+    }
+
     case 'affiliate_picked':
-      return { ...state, affiliateId: action.id }
+      return { ...state, affiliate: action.affiliate }
+
+    case 'connection_known':
+      return state.bank ? state : { ...state, bank: action.bank }
 
     case 'context_set':
       return { ...state, context: action.context }
@@ -237,6 +306,7 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
         starting: false,
         startError: null,
         failure: attempt.state === 'failed' ? { code: attempt.failure_code, text: attempt.failure_text } : null,
+        returned: null,
         connectionId: action.result.connection_id,
         attempt,
         method: attempt.method,

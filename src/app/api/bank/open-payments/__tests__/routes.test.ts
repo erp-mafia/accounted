@@ -19,9 +19,15 @@ vi.mock('@/lib/company/context', () => ({
 vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
 }))
+// The origin a redirect comes back to is resolved against the brands registry; here the request host is trusted as is.
+vi.mock('@/lib/domains/trusted-app-origin', () => ({
+  requestHost: (request: Request) => request.headers.get('host'),
+  resolveTrustedAppOrigin: vi.fn(async (host: string | null) => `https://${host ?? 'app.accounted.se'}`),
+}))
 
 const service = vi.hoisted(() => ({
   listBankFeedBanks: vi.fn(),
+  getBankFeedBankDetails: vi.fn(),
   getBankFeedOverview: vi.fn(),
   getBankFeedConnection: vi.fn(),
   startBankFeedConsent: vi.fn(),
@@ -37,6 +43,7 @@ vi.mock('@/lib/bank-feed/cron', () => ({ runOpenPaymentsCron: (...a: unknown[]) 
 vi.mock('@/lib/supabase/service-client', () => ({ createServiceRoleClient: () => ({}) }))
 
 import { GET as banks } from '../banks/route'
+import { GET as bank } from '../banks/[bic]/route'
 import { GET as overview, POST as start } from '../connections/route'
 import { POST as poll } from '../connections/[id]/poll/route'
 import { POST as restart } from '../connections/[id]/restart/route'
@@ -49,7 +56,7 @@ const ID = '11111111-1111-4111-8111-111111111111'
 const params = (id: string) => ({ params: Promise.resolve({ id }) })
 const none = { params: Promise.resolve({}) }
 const post = (url: string, body?: unknown, headers: Record<string, string> = {}) =>
-  createMockRequest(url, { method: 'POST', ...(body === undefined ? {} : { body }), headers: { 'x-forwarded-for': '203.0.113.9', 'user-agent': 'Browser/1.0', ...headers } })
+  createMockRequest(url, { method: 'POST', ...(body === undefined ? {} : { body }), headers: { 'x-forwarded-for': '203.0.113.9', 'user-agent': 'Browser/1.0', host: 'app.accounted.se', ...headers } })
 
 type ErrorBody = { error: { code: string; message: string; message_en?: string } }
 
@@ -64,6 +71,7 @@ afterEach(() => vi.unstubAllEnvs())
 describe('open payments routes without a session', () => {
   it.each([
     ['GET banks', () => banks(createMockRequest('/api/bank/open-payments/banks'), none)],
+    ['GET bank', () => bank(createMockRequest('/api/bank/open-payments/banks/SWEDSESS'), { params: Promise.resolve({ bic: 'SWEDSESS' }) })],
     ['GET connections', () => overview(createMockRequest('/api/bank/open-payments/connections'), none)],
     ['POST connections', () => start(post('/api/bank/open-payments/connections', { bic: 'SWEDSESS', method: 'qr' }), none)],
     ['POST poll', () => poll(post(`/api/bank/open-payments/connections/${ID}/poll`), params(ID))],
@@ -80,11 +88,19 @@ describe('open payments routes without a session', () => {
 })
 
 describe('open payments routes validate their bodies', () => {
-  it('POST connections needs a BIC and a decoupled method', async () => {
+  it('POST connections needs a BIC, a known method and a known return page', async () => {
     expect((await start(post('/api/bank/open-payments/connections', { bic: 'swed', method: 'qr' }), none)).status).toBe(400)
-    expect((await start(post('/api/bank/open-payments/connections', { bic: 'SWEDSESS', method: 'redirect' }), none)).status).toBe(400)
+    expect((await start(post('/api/bank/open-payments/connections', { bic: 'SWEDSESS', method: 'popup' }), none)).status).toBe(400)
+    expect((await start(post('/api/bank/open-payments/connections', { bic: 'SWEDSESS', method: 'redirect', return_to: '/evil' }), none)).status).toBe(400)
     expect((await start(post('/api/bank/open-payments/connections', { bic: 'SWEDSESS', method: 'qr', replace_connection_id: 'nope' }), none)).status).toBe(400)
     expect(service.startBankFeedConsent).not.toHaveBeenCalled()
+  })
+
+  it('GET bank refuses a malformed BIC without asking the service', async () => {
+    const { status, body } = await parseJsonResponse<ErrorBody>(await bank(createMockRequest('/api/bank/open-payments/banks/swed!'), { params: Promise.resolve({ bic: 'swed!' }) }))
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(service.getBankFeedBankDetails).not.toHaveBeenCalled()
   })
 
   it('POST select needs accounts with a uid and a 19xx ledger, null allowed', async () => {
@@ -111,6 +127,31 @@ describe('open payments routes map the service answers', () => {
     expect(body.data.banks).toHaveLength(1)
   })
 
+  it('GET bank answers the details for the upper-cased BIC and names an unknown bank', async () => {
+    service.getBankFeedBankDetails.mockResolvedValue({ ok: true, data: { bic: 'SWEDSESS', name: 'Swedbank', decoupled: true, redirect: true, affiliates: [{ id: '08999', name: 'Sparbanken Nord' }], transaction_history_max_days: 88, extended_transaction_history_max_days: 760 } })
+    const ok = await parseJsonResponse<{ data: { affiliates: unknown[] } }>(await bank(createMockRequest('/api/bank/open-payments/banks/swedsess'), { params: Promise.resolve({ bic: 'swedsess' }) }))
+    expect(ok.status).toBe(200)
+    expect(ok.body.data.affiliates).toHaveLength(1)
+    expect(service.getBankFeedBankDetails).toHaveBeenCalledWith(expect.objectContaining({ companyId: 'company-1' }), 'SWEDSESS')
+    service.getBankFeedBankDetails.mockResolvedValue({ ok: false, code: 'BANK_CONSENT_UNKNOWN_BANK' })
+    const { status, body } = await parseJsonResponse<ErrorBody>(await bank(createMockRequest('/api/bank/open-payments/banks/XXXXSESS'), { params: Promise.resolve({ bic: 'XXXXSESS' }) }))
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('BANK_CONSENT_UNKNOWN_BANK')
+  })
+
+  it('POST connections with the redirect method passes the return page and the origin the request came to', async () => {
+    service.startBankFeedConsent.mockResolvedValue({ ok: true, data: { connection_id: ID, attempt: { authorisation_id: 'a', method: 'redirect', state: 'pending', challenge: { approach: 'redirect', autostartToken: null, qrData: null, qrImage: null, redirectUrl: 'https://bank.example/sign' }, sca_status: null, step: null, failure_code: null, failure_text: null } } })
+    const { status, body } = await parseJsonResponse<{ data: { attempt: { challenge: { redirectUrl: string } } } }>(
+      await start(post('/api/bank/open-payments/connections', { bic: 'SWEDSESS', method: 'redirect', return_to: 'connections' }, { host: 'brand.example.se' }), none),
+    )
+    expect(status).toBe(200)
+    expect(body.data.attempt.challenge.redirectUrl).toBe('https://bank.example/sign')
+    expect(service.startBankFeedConsent).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ method: 'redirect', returnTo: 'connections', returnOrigin: 'https://brand.example.se' }))
+    // Without a return page nothing is resolved.
+    await start(post('/api/bank/open-payments/connections', { bic: 'SWEDSESS', method: 'qr' }), none)
+    expect(service.startBankFeedConsent).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ method: 'qr', returnTo: null, returnOrigin: null }))
+  })
+
   it('POST connections passes the body, the signer\'s IP and user agent, and the typed personnummer', async () => {
     service.startBankFeedConsent.mockResolvedValue({ ok: true, data: { connection_id: ID, attempt: { authorisation_id: 'a', method: 'qr', state: 'pending', challenge: null, sca_status: null, step: null, failure_code: null, failure_text: null } } })
     const { status, body } = await parseJsonResponse<{ data: { connection_id: string } }>(
@@ -119,7 +160,7 @@ describe('open payments routes map the service answers', () => {
     expect(status).toBe(200)
     expect(body.data.connection_id).toBe(ID)
     expect(service.startBankFeedConsent).toHaveBeenCalledWith(expect.objectContaining({ companyId: 'company-1', userId: 'user-1' }), {
-      bic: 'SWEDSESS', method: 'qr', affiliatedAspspId: '08999', accountContext: 'private', replaceConnectionId: ID,
+      bic: 'SWEDSESS', method: 'qr', affiliatedAspspId: '08999', accountContext: 'private', replaceConnectionId: ID, returnTo: null, returnOrigin: null,
       signer: { personalNumber: '19900101-1239', ipAddress: '203.0.113.9', userAgent: 'Browser/1.0' },
     })
   })
@@ -132,11 +173,16 @@ describe('open payments routes map the service answers', () => {
     expect(service.pollBankFeedConsent).toHaveBeenCalledWith(expect.anything(), { connectionId: ID, signer: { personalNumber: null, ipAddress: '203.0.113.9', userAgent: 'Browser/1.0' } })
   })
 
-  it('POST restart works without a body and reads an optional one', async () => {
+  it('POST restart works without a body, reads an optional one, and always knows the origin to come back to', async () => {
     await restart(post(`/api/bank/open-payments/connections/${ID}/restart`), params(ID))
-    expect(service.restartBankFeedConsent).toHaveBeenLastCalledWith(expect.anything(), { connectionId: ID, method: null, signer: expect.objectContaining({ personalNumber: null }) })
+    expect(service.restartBankFeedConsent).toHaveBeenLastCalledWith(expect.anything(), { connectionId: ID, method: null, returnTo: null, returnOrigin: 'https://app.accounted.se', signer: expect.objectContaining({ personalNumber: null }) })
     await restart(post(`/api/bank/open-payments/connections/${ID}/restart`, { method: 'same_device', personal_number: '199001011239' }), params(ID))
-    expect(service.restartBankFeedConsent).toHaveBeenLastCalledWith(expect.anything(), { connectionId: ID, method: 'same_device', signer: expect.objectContaining({ personalNumber: '199001011239' }) })
+    expect(service.restartBankFeedConsent).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ connectionId: ID, method: 'same_device', returnTo: null, signer: expect.objectContaining({ personalNumber: '199001011239' }) }))
+    await restart(post(`/api/bank/open-payments/connections/${ID}/restart`, { method: 'redirect', return_to: 'banking' }), params(ID))
+    expect(service.restartBankFeedConsent).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ method: 'redirect', returnTo: 'banking', returnOrigin: 'https://app.accounted.se' }))
+    // An unknown return page is read as none, like any other malformed optional body.
+    await restart(post(`/api/bank/open-payments/connections/${ID}/restart`, { method: 'redirect', return_to: '/evil' }), params(ID))
+    expect(service.restartBankFeedConsent).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ method: null, returnTo: null }))
   })
 
   it('POST select forwards the selection with null ledgers and the keep-alive, and maps a conflict', async () => {

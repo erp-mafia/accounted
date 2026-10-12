@@ -41,6 +41,7 @@ import { BankFeedRefusedError, ConsentOverError, ProviderUnavailableError, type 
 import {
   consentStep,
   disconnectBankFeedConnection,
+  getBankFeedBankDetails,
   listBankFeedBanks,
   pollBankFeedConsent,
   restartBankFeedConsent,
@@ -67,8 +68,9 @@ function stub(answers: Record<string, unknown[]>) {
   return { supabase: mock.supabase as never, calls: mock.calls, rpc: mock.supabase.rpc, payload: mock.payloads }
 }
 
+/** The adapter as the service sees it; getBankDetails reads through the `bank` mock unless a test gives its own. */
 function fakeConnect(overrides: Partial<BankFeedConnect> = {}): BankFeedConnect {
-  return {
+  const base = {
     banks: vi.fn().mockResolvedValue([{ bic: 'SWEDSESS', name: 'Swedbank', logoUrl: null, decoupled: true, redirect: null }]),
     bank: vi.fn().mockResolvedValue(BANK),
     createConsent: vi.fn().mockResolvedValue({ consentId: 'consent-1', consentStatus: 'received', validUntil: '2027-04-10' }),
@@ -80,8 +82,14 @@ function fakeConnect(overrides: Partial<BankFeedConnect> = {}): BankFeedConnect 
     syncTransactions: vi.fn(),
     revokeConsent: vi.fn().mockResolvedValue({ revoked: true }),
     ...overrides,
-  } as unknown as BankFeedConnect
+  }
+  return { getBankDetails: (companyId: string, bic: string) => (base.bank as (c: string, b: string) => unknown)(companyId, bic), ...base } as unknown as BankFeedConnect
 }
+
+const REDIRECT_STARTED = (url: string, id = 'auth-r') => ({
+  providerAuthorisationId: id, method: 'redirect', state: 'pending', challenge: { ...CHALLENGE, approach: 'redirect', qrData: null, redirectUrl: url }, failureCode: null, scaStatus: null,
+})
+const ORIGIN = 'https://app.accounted.se'
 
 function row(overrides: Record<string, unknown> = {}) {
   return {
@@ -216,6 +224,79 @@ describe('startBankFeedConsent', () => {
   })
 })
 
+describe('startBankFeedConsent on the bank\'s own page', () => {
+  const company = () => ({ companies: [{ data: { entity_type: 'aktiebolag' }, error: null }] })
+
+  it('starts a redirect-only bank on its page with the entry point\'s return URL, names the sparbank and sends it with the party', async () => {
+    const connect = fakeConnect({ bank: vi.fn().mockResolvedValue({ ...BANK, decoupled: false, redirect: true }), startConsentSigning: vi.fn().mockResolvedValue(REDIRECT_STARTED('https://bank.example/sign')) })
+    mocks.door.mockResolvedValue({ ok: true, connect })
+    const { supabase, payload } = stub({
+      ...orgAnswers(), ...company(),
+      bank_connections: [{ data: [], error: null }, { data: row({ authorization_id: null, affiliated_aspsp_id: '08999', bank_name: 'Sparbanken Nord' }), error: null }, { data: null, error: null }],
+    })
+    // The browser asked for a QR: the bank cannot do that, so its page is used, since the caller said where to come back.
+    const result = await startBankFeedConsent({ ...ctx, supabase }, { bic: 'SWEDSESS', affiliatedAspspId: '08999', method: 'qr', signer, returnTo: 'connections', returnOrigin: ORIGIN, now: NOW })
+    expect(result).toMatchObject({
+      ok: true,
+      data: { connection_id: CONNECTION, attempt: { method: 'redirect', state: 'pending', challenge: expect.objectContaining({ approach: 'redirect', redirectUrl: 'https://bank.example/sign' }) } },
+    })
+    const party = expect.objectContaining({ bic: 'SWEDSESS', affiliatedAspspId: '08999' })
+    expect(connect.createConsent).toHaveBeenCalledWith('co-1', expect.objectContaining({ party }))
+    expect(connect.startConsentSigning).toHaveBeenCalledWith('co-1', {
+      party, consentId: 'consent-1', method: 'redirect', returnUrl: `${ORIGIN}/settings/connections?bank_connect=${CONNECTION}`, returnState: CONNECTION,
+    })
+    expect(payload('bank_connections', 'insert')[0]).toMatchObject({ bank_name: 'Sparbanken Nord', affiliated_aspsp_id: '08999', consent_attempt: expect.objectContaining({ method: 'redirect', return_to: 'connections' }) })
+    expect(payload('bank_connections', 'update')[0]).toMatchObject({ authorization_id: 'auth-r', consent_attempt: expect.objectContaining({ method: 'redirect', state: 'pending', return_to: 'connections' }) })
+  })
+
+  it('keeps the person\'s method at a bank that signs both ways, and refuses a redirect without a return page before anything is created', async () => {
+    const both = fakeConnect({ bank: vi.fn().mockResolvedValue({ ...BANK, redirect: true }) })
+    mocks.door.mockResolvedValue({ ok: true, connect: both })
+    const one = stub({ ...orgAnswers(), ...company(), bank_connections: [{ data: [], error: null }, { data: row({ authorization_id: null }), error: null }, { data: null, error: null }] })
+    expect(await startBankFeedConsent({ ...ctx, supabase: one.supabase }, { bic: 'SWEDSESS', method: 'qr', signer, returnTo: 'banking', returnOrigin: ORIGIN, now: NOW })).toMatchObject({ ok: true, data: { attempt: { method: 'qr' } } })
+    expect(both.startConsentSigning).toHaveBeenCalledWith('co-1', { party: expect.anything(), consentId: 'consent-1', method: 'qr' })
+    expect(one.payload('bank_connections', 'insert')[0]).toMatchObject({ bank_name: 'Swedbank', consent_attempt: expect.objectContaining({ method: 'qr', return_to: 'banking' }) })
+
+    const connect = fakeConnect()
+    mocks.door.mockResolvedValue({ ok: true, connect })
+    const two = stub({ ...orgAnswers(), ...company() })
+    expect(await startBankFeedConsent({ ...ctx, supabase: two.supabase }, { bic: 'SWEDSESS', method: 'redirect', signer })).toMatchObject({ ok: false, code: 'VALIDATION_ERROR', details: { field: 'return_to' } })
+    expect(connect.createConsent).not.toHaveBeenCalled()
+  })
+
+  it('a bank that signs in our screen anyway answers a redirect start with a QR: the attempt goes on with the bank\'s method', async () => {
+    const connect = fakeConnect({ bank: vi.fn().mockResolvedValue({ ...BANK, redirect: true }) })
+    mocks.door.mockResolvedValue({ ok: true, connect })
+    const { supabase, payload } = stub({ ...orgAnswers(), ...company(), bank_connections: [{ data: [], error: null }, { data: row({ authorization_id: null }), error: null }, { data: null, error: null }] })
+    const result = await startBankFeedConsent({ ...ctx, supabase }, { bic: 'SWEDSESS', method: 'redirect', signer, returnTo: 'connections', returnOrigin: ORIGIN, now: NOW })
+    expect(result).toMatchObject({ ok: true, data: { attempt: { method: 'qr', state: 'pending', challenge: CHALLENGE, step: 'identify' } } })
+    expect(connect.startConsentSigning).toHaveBeenCalledWith('co-1', expect.objectContaining({ method: 'redirect', returnState: CONNECTION }))
+    expect(payload('bank_connections', 'update')[0]).toMatchObject({ consent_attempt: expect.objectContaining({ method: 'qr', state: 'pending' }) })
+  })
+
+  it('an unknown sparbank is refused before the consent exists', async () => {
+    const connect = fakeConnect()
+    mocks.door.mockResolvedValue({ ok: true, connect })
+    const { supabase } = stub({ ...orgAnswers(), ...company() })
+    expect(await startBankFeedConsent({ ...ctx, supabase }, { bic: 'SWEDSESS', affiliatedAspspId: 'nope', method: 'qr', signer })).toMatchObject({ ok: false, code: 'VALIDATION_ERROR', details: { field: 'affiliated_aspsp_id' } })
+    expect(connect.createConsent).not.toHaveBeenCalled()
+  })
+})
+
+describe('getBankFeedBankDetails', () => {
+  it('answers the bank\'s signing ways and its sparbanker through the door, and names an unknown bank', async () => {
+    mocks.door.mockResolvedValue({ ok: true, connect: fakeConnect({ bank: vi.fn().mockResolvedValue({ ...BANK, redirect: true }) }) })
+    expect(await getBankFeedBankDetails(ctx, 'SWEDSESS')).toEqual({
+      ok: true,
+      data: { bic: 'SWEDSESS', name: 'Swedbank', decoupled: true, redirect: true, affiliates: [{ id: '08999', name: 'Sparbanken Nord' }], transaction_history_max_days: 88, extended_transaction_history_max_days: 760 },
+    })
+    mocks.door.mockResolvedValue({ ok: true, connect: fakeConnect({ bank: vi.fn().mockRejectedValue(new BankFeedRefusedError('x', { code: 'BANK_FEED_NOT_FOUND', status: 404 })) }) })
+    expect(await getBankFeedBankDetails(ctx, 'XXXXSESS')).toEqual({ ok: false, code: 'BANK_CONSENT_UNKNOWN_BANK' })
+    mocks.door.mockResolvedValueOnce({ ok: false, reason: 'not_in_pilot' })
+    expect(await getBankFeedBankDetails(ctx, 'SWEDSESS')).toMatchObject({ ok: false, code: 'OPEN_BANKING_NOT_AVAILABLE', details: { reason: 'not_in_pilot' } })
+  })
+})
+
 describe('pollBankFeedConsent', () => {
   it('answers fresh BankID data while pending, with the step, and records the state change once', async () => {
     const connect = fakeConnect({ pollConsentSigning: vi.fn().mockResolvedValue({ state: 'pending', challenge: { ...CHALLENGE, qrData: 'bankid.qr.2' }, failureCode: null, scaStatus: 'started', consentStatus: null, validUntil: null }) })
@@ -309,7 +390,46 @@ describe('pollBankFeedConsent', () => {
   })
 })
 
+describe('the sparbank behind a connection', () => {
+  it('rides with the party on every call: poll, accounts and revoke', async () => {
+    const connect = fakeConnect({ pollConsentSigning: vi.fn().mockResolvedValue({ state: 'valid', challenge: null, failureCode: null, scaStatus: 'finalised', consentStatus: 'valid', validUntil: '2027-04-10' }) })
+    mocks.connect.mockReturnValue(connect)
+    mocks.serviceRpc.mockResolvedValue({ data: { already_finalized: false, accounts: [], superseded: [] }, error: null })
+    const party = expect.objectContaining({ bic: 'SWEDSESS', affiliatedAspspId: '08999' })
+    const polled = stub({ bank_connections: [{ data: row({ affiliated_aspsp_id: '08999', bank_name: 'Sparbanken Nord' }), error: null }], ...orgAnswers() })
+    expect(await pollBankFeedConsent({ ...ctx, supabase: polled.supabase }, { connectionId: CONNECTION, signer })).toMatchObject({ ok: true, data: { state: 'valid' } })
+    expect(connect.pollConsentSigning).toHaveBeenCalledWith('co-1', expect.objectContaining({ party, method: 'qr' }))
+    expect(connect.accounts).toHaveBeenCalledWith('co-1', expect.objectContaining({ party, consentId: 'consent-1' }))
+
+    mocks.readConfig.mockResolvedValue({ token: 'tok', connection: { id: CONNECTION, aggregator: 'open_payments' } })
+    mocks.disconnect.mockResolvedValue({ connection_id: CONNECTION, session_id: 'consent-1', bank_name: 'Sparbanken Nord', released_cash_accounts: 1 })
+    mocks.serviceRpc.mockImplementation(async (name: string) => (name === 'claim_bank_session_revocation' ? { data: { claimed: true, token: 'claim-1' }, error: null } : { data: true, error: null }))
+    const gone = stub({ bank_connections: [{ data: row({ status: 'active', affiliated_aspsp_id: '08999' }), error: null }], ...orgAnswers() })
+    expect(await disconnectBankFeedConnection({ ...ctx, supabase: gone.supabase }, CONNECTION)).toEqual({ ok: true, data: { connection_id: CONNECTION } })
+    expect(connect.revokeConsent).toHaveBeenCalledWith('co-1', { party, consentId: 'consent-1' })
+  })
+})
+
 describe('restartBankFeedConsent', () => {
+  it('restarts a redirect attempt on the bank\'s page with the row\'s return page, and refuses one that cannot come back', async () => {
+    const connect = fakeConnect({ startConsentSigning: vi.fn().mockResolvedValue(REDIRECT_STARTED('https://bank.example/sign-2', 'auth-r2')) })
+    mocks.connect.mockReturnValue(connect)
+    const failedRow = row({ consent_attempt: { method: 'redirect', state: 'failed', failure_code: 'SIGNING_SESSION_PSU_CANCELLED', return_to: 'banking' } })
+    const { supabase, payload } = stub({ bank_connections: [{ data: failedRow, error: null }, { data: null, error: null }], ...orgAnswers() })
+    const result = await restartBankFeedConsent({ ...ctx, supabase }, { connectionId: CONNECTION, returnOrigin: ORIGIN, now: NOW })
+    expect(result).toMatchObject({ ok: true, data: { connection_id: CONNECTION, attempt: { authorisation_id: 'auth-r2', method: 'redirect', state: 'pending', challenge: expect.objectContaining({ redirectUrl: 'https://bank.example/sign-2' }) } } })
+    expect(connect.startConsentSigning).toHaveBeenCalledWith('co-1', expect.objectContaining({ method: 'redirect', returnUrl: `${ORIGIN}/settings/banking?bank_connect=${CONNECTION}`, returnState: CONNECTION }))
+    expect(payload('bank_connections', 'update')[0]).toMatchObject({ authorization_id: 'auth-r2', consent_attempt: expect.objectContaining({ method: 'redirect', state: 'pending', return_to: 'banking' }) })
+
+    // The restart may name another page; the body's wins over the row's.
+    const elsewhere = stub({ bank_connections: [{ data: failedRow, error: null }, { data: null, error: null }], ...orgAnswers() })
+    await restartBankFeedConsent({ ...ctx, supabase: elsewhere.supabase }, { connectionId: CONNECTION, returnTo: 'onboarding', returnOrigin: ORIGIN, now: NOW })
+    expect(connect.startConsentSigning).toHaveBeenLastCalledWith('co-1', expect.objectContaining({ returnUrl: `${ORIGIN}/onboarding/books?station=bank&bank_connect=${CONNECTION}` }))
+
+    const bare = stub({ bank_connections: [{ data: failedRow, error: null }], ...orgAnswers() })
+    expect(await restartBankFeedConsent({ ...ctx, supabase: bare.supabase }, { connectionId: CONNECTION })).toMatchObject({ ok: false, code: 'VALIDATION_ERROR', details: { field: 'return_to' } })
+  })
+
   it('starts a new authorisation for the same consent with the row\'s method, and a new consent when the first is over', async () => {
     const connect = fakeConnect({ startConsentSigning: vi.fn().mockRejectedValueOnce(new ConsentOverError('over')).mockResolvedValue({ providerAuthorisationId: 'auth-2', method: 'qr', state: 'pending', challenge: CHALLENGE, failureCode: null, scaStatus: null }) })
     mocks.connect.mockReturnValue(connect)
