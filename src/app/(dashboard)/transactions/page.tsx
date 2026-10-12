@@ -1976,6 +1976,8 @@ export default function TransactionsPage() {
     templateId?: string
     /** A learned counterpart rule: the server books its stored lines. */
     counterpartyTemplateId?: string
+    /** The suggestion the booking started from, recorded in suggestion_log. */
+    proposalId?: string
     inboxItemId?: string
     dimensions?: Record<string, string>
     /** The underlag's moms (transaction currency): sent as vat_amount. */
@@ -2003,7 +2005,7 @@ export default function TransactionsPage() {
     // state: a silent row the duplicate guard flagged, parked for the batch's
     // single confirmation and therefore neither booked nor failed.
   }): Promise<BatchCategorizeOutcome> {
-    const { id, isBusiness, category, vatTreatment, accountOverride, templateId, counterpartyTemplateId, inboxItemId, dimensions, vatAmount, confirmNoMatch, force, expectedDuplicateJournalEntryId, silent, narration } = args
+    const { id, isBusiness, category, vatTreatment, accountOverride, templateId, counterpartyTemplateId, proposalId, inboxItemId, dimensions, vatAmount, confirmNoMatch, force, expectedDuplicateJournalEntryId, silent, narration } = args
     try {
       setProcessingId(id)
       const response = await fetch(`/api/transactions/${id}/categorize`, {
@@ -2016,6 +2018,7 @@ export default function TransactionsPage() {
           account_override: accountOverride,
           template_id: templateId,
           ...(counterpartyTemplateId ? { counterparty_template_id: counterpartyTemplateId } : {}),
+          ...(proposalId ? { proposal_id: proposalId } : {}),
           inbox_item_id: inboxItemId,
           ...(dimensions && Object.keys(dimensions).length > 0 ? { dimensions } : {}),
           ...(vatAmount != null ? { vat_amount: vatAmount } : {}),
@@ -4124,6 +4127,7 @@ export default function TransactionsPage() {
       accountOverride: body.account_override,
       templateId: body.template_id,
       counterpartyTemplateId: body.counterparty_template_id,
+      proposalId: body.proposal_id,
       dimensions: body.dimensions,
       vatAmount: body.vat_amount,
       confirmNoMatch: false,
