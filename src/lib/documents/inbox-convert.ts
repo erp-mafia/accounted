@@ -58,6 +58,8 @@ import { resolveInboxCreditTarget } from '@/lib/supplier-invoices/credit-target'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { rejectSupersededInboxConversions } from '@/lib/pending-operations/supersede'
 import type { ComputedSupplierInvoiceItem } from '@/lib/supplier-invoices/create'
+import { loadEntryLines, recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
+import { resultAccounts } from '@/lib/suggestion-log/inbox-classify'
 import type { InboxChannelContext, InvoiceInboxItem, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
 export type ConvertInboxItemInput = z.infer<typeof CreateSupplierInvoiceSchema>
@@ -274,6 +276,9 @@ export async function convertInboxItemToSupplierInvoice(
     }
   }
 
+  // The model's original reading of the underlag, taken before anything is written.
+  const extractionSnapshot = await snapshotInboxExtraction(supabase, companyId, item)
+
   const { data: arrivalNum, error: arrivalError } = await supabase.rpc('get_next_arrival_number', {
     p_company_id: companyId,
   })
@@ -467,6 +472,24 @@ export async function convertInboxItemToSupplierInvoice(
     .eq('company_id', companyId)
   // An agent's staged registration of the same item is now moot (crm#1074).
   await rejectSupersededInboxConversions(supabase, companyId, inboxItemId, invoice.id as string)
+
+  await recordInboxDecision(supabase, extractionSnapshot, {
+    supplier_invoice_id: invoice.id as string,
+    journal_entry_id: registrationJournalEntryId,
+    fields: {
+      supplier_name: supplier.name ?? null,
+      supplier_org_number: supplier.org_number ?? null,
+      invoice_number: body.supplier_invoice_number,
+      invoice_date: body.invoice_date,
+      due_date: body.due_date,
+      payment_reference: body.payment_reference ?? null,
+      currency: fx.rate.currency,
+      total,
+      vat_amount: roundOre(totalVat),
+      accounts: resultAccounts(items.map((line) => line.account_number)),
+    },
+    lines: await loadEntryLines(supabase, companyId, registrationJournalEntryId),
+  }, userId)
 
   try {
     await emit({

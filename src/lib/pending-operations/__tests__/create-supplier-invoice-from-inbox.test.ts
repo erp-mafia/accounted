@@ -12,6 +12,21 @@ import { eventBus } from '@/lib/events/bus'
 import { createQueuedMockSupabase, makeJournalEntry, makeSupplierInvoice } from '@/tests/helpers'
 import type { PendingOperation, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
+// suggestion_log records each inbox decision; its reads and writes are
+// covered in lib/suggestion-log, not by this file's queued client.
+vi.mock('@/lib/suggestion-log/inbox', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/suggestion-log/inbox')>()),
+  snapshotInboxExtraction: vi.fn(async (_supabase: unknown, companyId: string, item: { id: string; document_id?: string | null }) => ({
+    companyId,
+    inboxItemId: item.id,
+    documentId: item.document_id ?? null,
+    extraction: null,
+    model: null,
+  })),
+  loadEntryLines: vi.fn(async () => []),
+  recordInboxDecision: vi.fn(async () => undefined),
+}))
+
 vi.mock('@/lib/bookkeeping/supplier-invoice-entries', async () => {
   const actual = await vi.importActual<typeof import('@/lib/bookkeeping/supplier-invoice-entries')>(
     '@/lib/bookkeeping/supplier-invoice-entries'
@@ -33,6 +48,7 @@ vi.mock('@/lib/core/documents/document-service', async () => {
 })
 
 import { commitPendingOperation } from '../commit'
+import { recordInboxDecision } from '@/lib/suggestion-log/inbox'
 import {
   buildSupplierInvoiceRegistrationEntryInput,
   createSupplierInvoiceRegistrationEntry,
@@ -178,6 +194,13 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
       'company-1',
       'doc-1',
       'je-100',
+    )
+    // The registration is recorded against the model's reading of the underlag.
+    expect(vi.mocked(recordInboxDecision)).toHaveBeenCalledWith(
+      supabase,
+      expect.objectContaining({ inboxItemId: 'inbox-1' }),
+      expect.objectContaining({ supplier_invoice_id: 'inv-1', journal_entry_id: 'je-100' }),
+      expect.any(String),
     )
   })
 

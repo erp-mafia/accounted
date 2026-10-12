@@ -66,6 +66,21 @@ vi.mock('@/lib/core/documents/document-service', () => ({
 // lookup. Spread the real module so anything else importing from it (e.g.
 // convertToSEK) keeps working.
 const mockFetchExchangeRate = vi.fn()
+// suggestion_log records a privately paid inbox document; its own reads and
+// writes are covered in lib/suggestion-log.
+vi.mock('@/lib/suggestion-log/inbox', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/suggestion-log/inbox')>()),
+  snapshotInboxExtraction: vi.fn(async (_supabase: unknown, companyId: string, item: { id: string; document_id?: string | null }) => ({
+    companyId,
+    inboxItemId: item.id,
+    documentId: item.document_id ?? null,
+    extraction: null,
+    model: null,
+  })),
+  loadEntryLines: vi.fn(async () => []),
+  recordInboxDecision: vi.fn(async () => undefined),
+}))
+
 vi.mock('@/lib/currency/riksbanken', async () => {
   const actual =
     await vi.importActual<typeof import('@/lib/currency/riksbanken')>('@/lib/currency/riksbanken')
@@ -73,6 +88,7 @@ vi.mock('@/lib/currency/riksbanken', async () => {
 })
 
 import { eventBus } from '@/lib/events'
+import { recordInboxDecision } from '@/lib/suggestion-log/inbox'
 
 import { GET as routeGET, POST as routePOST } from '../route'
 
@@ -894,6 +910,12 @@ describe('POST /api/supplier-invoices', () => {
     expect(insert.document_id).toBe(DOCUMENT_UUID)
     expect(findCall('invoice_inbox_items', 'update')?.[0]).toEqual({ created_supplier_invoice_id: 'si-priv-4' })
     expect(mockLinkToJournalEntry).not.toHaveBeenCalled()
+    expect(vi.mocked(recordInboxDecision)).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ inboxItemId: INBOX_UUID, documentId: DOCUMENT_UUID }),
+      expect.objectContaining({ supplier_invoice_id: 'si-priv-4' }),
+      expect.any(String),
+    )
   })
 
   it('refuses inbox_item_id unless a person paid: the convert endpoint owns the other answers', async () => {

@@ -36,6 +36,8 @@ import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { guardCounterLegs } from '@/lib/cash-accounts/service'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { finalFromCategorize, recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
+import { loadEntryLines, recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
+import { bookedTotals } from '@/lib/suggestion-log/inbox-classify'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
 import { upsertCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
@@ -719,7 +721,7 @@ export async function bulkBookMatchedInboxItems(
   for (const itemId of item_ids) {
     const { data: item, error: itemError } = await supabase
       .from('invoice_inbox_items')
-      .select('id, status, matched_transaction_id, created_journal_entry_id, created_supplier_invoice_id, channel_context')
+      .select('id, status, matched_transaction_id, created_journal_entry_id, created_supplier_invoice_id, channel_context, document_id, extracted_data')
       .eq('id', itemId)
       .eq('company_id', companyId)
       .maybeSingle()
@@ -766,6 +768,9 @@ export async function bulkBookMatchedInboxItems(
     )
     const itemNotes =
       [notes?.trim(), channelNotes].filter(Boolean).join(' · ') || undefined
+
+    // The model's reading of the underlag, taken before the booking.
+    const extractionSnapshot = await snapshotInboxExtraction(supabase, companyId, item)
 
     let result: CategorizeCoreResult
     try {
@@ -817,6 +822,15 @@ export async function bulkBookMatchedInboxItems(
       transaction_id: bookedTxId,
       journal_entry_id: bookedJeId,
     })
+
+    // The bank line's own row came from categorizeMatchedTransaction; this
+    // one records the underlag: booked as read, or with a total that differs.
+    const postedLines = await loadEntryLines(supabase, companyId, bookedJeId)
+    await recordInboxDecision(supabase, extractionSnapshot, {
+      journal_entry_id: bookedJeId,
+      fields: postedLines.length > 0 ? bookedTotals(postedLines) : {},
+      lines: postedLines,
+    }, userId)
   }
 
   return { booked, skipped }

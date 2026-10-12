@@ -110,6 +110,9 @@ import { lookupPortal } from '@/lib/receipt-hunt/portal-directory'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
 import type { InboxChannelContext, InvoiceExtractionResult } from '@/types'
+import { recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
+import { bookedTotals } from '@/lib/suggestion-log/inbox-classify'
+import { finalFromLines, linesOf, recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
 
 const MAX_ATTACHMENTS_PER_EMAIL = 20
 // Received-mail panel window (#2181): 30 days covers "the mail I sent last
@@ -2213,7 +2216,7 @@ export const invoiceInboxExtension: Extension = {
 
         const { data: item, error: fetchError } = await ctx.supabase
           .from('invoice_inbox_items')
-          .select('id, document_id, status, created_supplier_invoice_id, created_journal_entry_id, matched_transaction_id, correlation_id, channel_context')
+          .select('id, document_id, status, created_supplier_invoice_id, created_journal_entry_id, matched_transaction_id, correlation_id, channel_context, extracted_data')
           .eq('id', id)
           .eq('company_id', ctx.companyId)
           .maybeSingle()
@@ -2288,6 +2291,14 @@ export const invoiceInboxExtension: Extension = {
                 (item as { channel_context?: InboxChannelContext | null }).channel_context,
               ) ?? undefined
             : body.notes.trim() || undefined
+
+        // What was on offer, taken before booking: the model's reading of
+        // the underlag, and the bank line's suggestions when one is booked.
+        const extractionSnapshot = await snapshotInboxExtraction(ctx.supabase, ctx.companyId, item)
+        const settledTransactionId = transaction?.id ?? item.matched_transaction_id ?? null
+        const bankSnapshot = settledTransactionId
+          ? await snapshotSuggestions(ctx.supabase, ctx.companyId, [settledTransactionId])
+          : null
 
         // Create the journal entry via the engine. Source-tracks back to
         // the inbox item so the audit trail is preserved even when no
@@ -2389,6 +2400,19 @@ export const invoiceInboxExtension: Extension = {
           .eq('company_id', ctx.companyId)
         if (updateError) {
           return NextResponse.json({ error: updateError.message }, { status: 500 })
+        }
+
+        const postedLines = linesOf(journalEntry)
+        await recordInboxDecision(ctx.supabase, extractionSnapshot, {
+          journal_entry_id: journalEntry.id,
+          fields: bookedTotals(postedLines),
+          lines: postedLines,
+        }, ctx.userId)
+        if (bankSnapshot && bookedTransactionId) {
+          await recordDecisions(ctx.supabase, bankSnapshot, [{
+            transactionId: bookedTransactionId,
+            final: finalFromLines(journalEntry.id, postedLines),
+          }], ctx.userId)
         }
 
         // The engine already emits journal_entry.committed: no need to

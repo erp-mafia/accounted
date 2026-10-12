@@ -24,6 +24,21 @@ const mockLinkToJE = vi.fn()
 
 // suggestion_log is recorded around every booking; its own reads and writes
 // are covered in lib/suggestion-log, not by this file's queued client.
+// suggestion_log records each inbox decision; its reads and writes are
+// covered in lib/suggestion-log, not by this file's queued client.
+vi.mock('@/lib/suggestion-log/inbox', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/suggestion-log/inbox')>()),
+  snapshotInboxExtraction: vi.fn(async (_supabase: unknown, companyId: string, item: { id: string; document_id?: string | null }) => ({
+    companyId,
+    inboxItemId: item.id,
+    documentId: item.document_id ?? null,
+    extraction: null,
+    model: null,
+  })),
+  loadEntryLines: vi.fn(async () => []),
+  recordInboxDecision: vi.fn(async () => undefined),
+}))
+
 vi.mock('@/lib/suggestion-log/record', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/suggestion-log/record')>()),
   snapshotSuggestions: vi.fn(async (_supabase: unknown, companyId: string) => ({ companyId, byTransaction: new Map() })),
@@ -47,6 +62,7 @@ vi.mock('@/lib/core/documents/document-service', () => ({
 }))
 
 import { bulkBookMatchedInboxItems } from '../categorize-core'
+import { recordInboxDecision } from '@/lib/suggestion-log/inbox'
 import { TransactionMissingSekValueError } from '@/lib/bookkeeping/errors'
 import { BulkBookInboxSchema } from '@/lib/api/schemas'
 import { eventBus } from '@/lib/events/bus'
@@ -629,6 +645,11 @@ describe('bulkBookMatchedInboxItems: intra-batch duplicate handling', () => {
     const secondCall = mockDetectDup.mock.calls.find((c) => (c[2] as { id: string }).id === 'tx-2')
     expect(firstCall?.[3]).toEqual({ excludeTransactionIds: [], excludeJournalEntryIds: [] })
     expect(secondCall?.[3]).toEqual({ excludeTransactionIds: ['tx-1'], excludeJournalEntryIds: ['je-1'] })
+
+    // Each booked underlag gets its own decision row, beside its bank line's.
+    expect(vi.mocked(recordInboxDecision)).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(recordInboxDecision).mock.calls.map((c) => (c[1] as { inboxItemId: string }).inboxItemId)).toEqual(['i1', 'i2'])
+    expect(vi.mocked(recordInboxDecision).mock.calls[0][2]).toMatchObject({ journal_entry_id: 'je-1' })
   })
 
   it('STILL skips a pre-existing already-booked duplicate (cross-batch detection preserved)', async () => {

@@ -57,6 +57,8 @@ import {
 import type { Logger } from '@/lib/logger'
 import { rejectSupersededInboxConversions } from '@/lib/pending-operations/supersede'
 import type { Currency, EntityType, SupplierInvoice, SupplierInvoiceItem } from '@/types'
+import { loadEntryLines, recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
+import { resultAccounts } from '@/lib/suggestion-log/inbox-classify'
 
 export type CreateSupplierInvoiceInput = z.infer<typeof CreateSupplierInvoiceSchema>
 
@@ -213,6 +215,8 @@ export async function createSupplierInvoice(
     }
   }
   const documentId = inboxItem ? inboxItem.document_id : body.document_id ?? null
+  // The model's original reading of the inbox underlag, before anything is written.
+  const extractionSnapshot = inboxItem && !dryRun ? await snapshotInboxExtraction(supabase, companyId, inboxItem) : null
 
   if (documentId) {
     const { data: document, error: documentError } = await supabase
@@ -859,6 +863,26 @@ export async function createSupplierInvoice(
     }
   } catch (err) {
     log.warn('supplier_invoice.registered event emission failed', err as Error)
+  }
+
+  if (extractionSnapshot) {
+    await recordInboxDecision(supabase, extractionSnapshot, {
+      supplier_invoice_id: invoiceId,
+      journal_entry_id: primaryJournalEntryId,
+      fields: {
+        supplier_name: (supplier.name as string | null) ?? null,
+        supplier_org_number: (supplier.org_number as string | null) ?? null,
+        invoice_number: body.supplier_invoice_number,
+        invoice_date: body.invoice_date,
+        due_date: body.due_date,
+        payment_reference: body.payment_reference ?? null,
+        currency: (invoice.currency as string | null) ?? null,
+        total,
+        vat_amount: vatAmount,
+        accounts: resultAccounts(items.map((line) => line.account_number)),
+      },
+      lines: await loadEntryLines(supabase, companyId, primaryJournalEntryId),
+    }, userId)
   }
 
   return {

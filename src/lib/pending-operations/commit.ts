@@ -243,6 +243,8 @@ import { everyRetagRefused, retagLines } from '@/lib/dimensions/retag-service'
 import { IgnoreTransactionParamsSchema } from '@/lib/pending-operations/schemas/ignore-transaction'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
 import { finalFromLines, recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
+import { loadEntryLines, recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
+import { resultAccounts } from '@/lib/suggestion-log/inbox-classify'
 import {
   CreateInvoiceFromSalesOrderParamsSchema,
   CreateSalesOrderParamsSchema,
@@ -4697,7 +4699,7 @@ async function commitCreateSupplierInvoiceFromInbox(
   // is the source of truth.
   const { data: inbox, error: inboxErr } = await supabase
     .from('invoice_inbox_items')
-    .select('id, created_supplier_invoice_id, status, kind_hint, extracted_data')
+    .select('id, document_id, created_supplier_invoice_id, status, kind_hint, extracted_data')
     .eq('id', inboxItemId)
     .eq('company_id', companyId)
     .single()
@@ -4730,7 +4732,7 @@ async function commitCreateSupplierInvoiceFromInbox(
   // but a 404 here is a cleaner error than an RLS denial later.
   const { data: supplier, error: supplierErr } = await supabase
     .from('suppliers')
-    .select('id, name, supplier_type')
+    .select('id, name, org_number, supplier_type')
     .eq('id', supplierId)
     .eq('company_id', companyId)
     .single()
@@ -4894,6 +4896,13 @@ async function commitCreateSupplierInvoiceFromInbox(
       }
     }
   }
+
+  // The model's original reading of the underlag, taken before anything is written.
+  const extractionSnapshot = await snapshotInboxExtraction(supabase, companyId, {
+    id: inboxItemId,
+    document_id: (inbox.document_id as string | null) ?? documentId,
+    extracted_data: inbox.extracted_data,
+  })
 
   const { data: arrivalNum, error: arrivalErr } = await supabase
     .rpc('get_next_arrival_number', { p_company_id: companyId })
@@ -5136,6 +5145,24 @@ async function commitCreateSupplierInvoiceFromInbox(
   if (paymentDetails) {
     await backfillSupplierPaymentDetails(supabase, companyId, supplierId, paymentDetails)
   }
+
+  await recordInboxDecision(supabase, extractionSnapshot, {
+    supplier_invoice_id: invoice.id as string,
+    journal_entry_id: registrationJournalEntryId,
+    fields: {
+      supplier_name: (supplier.name as string | null) ?? null,
+      supplier_org_number: (supplier.org_number as string | null) ?? null,
+      invoice_number: supplierInvoiceNumber,
+      invoice_date: invoiceDate,
+      due_date: dueDate,
+      payment_reference: paymentReference,
+      currency,
+      total,
+      vat_amount: vatAmount,
+      accounts: resultAccounts(items.map((line) => line.account_number)),
+    },
+    lines: await loadEntryLines(supabase, companyId, registrationJournalEntryId),
+  }, userId)
 
   try {
     await eventBus.emit({

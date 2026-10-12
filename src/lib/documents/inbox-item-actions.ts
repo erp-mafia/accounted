@@ -31,6 +31,7 @@ import {
 } from '@/lib/transactions/inbox-underlag'
 import type { InvoiceExtractionResult } from '@/types'
 import { INBOX_DOCUMENT_KINDS } from '@/lib/documents/inbox-kind'
+import { recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -297,7 +298,7 @@ export async function deleteInboxItem(
 ): Promise<OperationOutcome<{ id: string; deleted: true }>> {
   const { data: item, error: fetchError } = await ctx.supabase
     .from('invoice_inbox_items')
-    .select('id, document_id, created_supplier_invoice_id, created_journal_entry_id')
+    .select('id, document_id, created_supplier_invoice_id, created_journal_entry_id, extracted_data')
     .eq('id', inboxItemId)
     .eq('company_id', ctx.companyId)
     .maybeSingle()
@@ -318,12 +319,16 @@ export async function deleteInboxItem(
     }
   }
 
+  // Deleting the item dismisses the model's reading of its underlag.
+  const extractionSnapshot = await snapshotInboxExtraction(ctx.supabase, ctx.companyId, item)
+
   const { error } = await ctx.supabase
     .from('invoice_inbox_items')
     .delete()
     .eq('id', inboxItemId)
     .eq('company_id', ctx.companyId)
   if (error) return failed(error)
+  await recordInboxDecision(ctx.supabase, extractionSnapshot, null, ctx.userId)
   return { ok: true, data: { id: inboxItemId, deleted: true } }
 }
 

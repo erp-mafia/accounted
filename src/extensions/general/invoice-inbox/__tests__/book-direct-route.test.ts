@@ -8,10 +8,31 @@ import {
   makeTransaction,
 } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
+import { recordInboxDecision } from '@/lib/suggestion-log/inbox'
+import { recordDecisions } from '@/lib/suggestion-log/record'
 
 const createJournalEntryMock = vi.fn()
 const linkToJournalEntryMock = vi.fn()
 const reverseOrphanedJournalEntryMock = vi.fn()
+
+// suggestion_log is recorded around the booking; its own reads and writes
+// are covered in lib/suggestion-log, not by this file's queued client.
+vi.mock('@/lib/suggestion-log/inbox', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/suggestion-log/inbox')>()),
+  snapshotInboxExtraction: vi.fn(async (_supabase: unknown, companyId: string, item: { id: string; document_id?: string | null }) => ({
+    companyId,
+    inboxItemId: item.id,
+    documentId: item.document_id ?? null,
+    extraction: null,
+    model: null,
+  })),
+  recordInboxDecision: vi.fn(async () => undefined),
+}))
+vi.mock('@/lib/suggestion-log/record', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/suggestion-log/record')>()),
+  snapshotSuggestions: vi.fn(async (_supabase: unknown, companyId: string) => ({ companyId, byTransaction: new Map() })),
+  recordDecisions: vi.fn(async () => undefined),
+}))
 
 vi.mock('@/lib/bookkeeping/engine', () => ({
   createJournalEntry: (...args: unknown[]) => createJournalEntryMock(...args),
@@ -63,6 +84,8 @@ describe('POST /items/:id/book-direct', () => {
   const route = findRoute('POST', '/items/:id/book-direct')
 
   beforeEach(() => {
+    vi.mocked(recordInboxDecision).mockClear()
+    vi.mocked(recordDecisions).mockClear()
     createJournalEntryMock.mockReset()
     linkToJournalEntryMock.mockReset()
     reverseOrphanedJournalEntryMock.mockReset()
@@ -188,6 +211,47 @@ describe('POST /items/:id/book-direct', () => {
       'doc-1',
       'je-1',
     )
+  })
+
+  it('records the underlag decision with the total and VAT it booked, and no bank line', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const item = makeInvoiceInboxItem({ document_id: 'doc-1' })
+    enqueue({ data: item })
+    enqueue({ data: null })
+    createJournalEntryMock.mockResolvedValue({
+      id: 'je-1',
+      lines: VALID_BODY.lines.map((l) => ({ ...l })),
+    })
+
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: VALID_BODY,
+      searchParams: { _id: 'item-1' },
+    })
+    await route.handler(request, buildCtx(supabase))
+
+    expect(vi.mocked(recordInboxDecision)).toHaveBeenCalledWith(
+      supabase,
+      expect.objectContaining({ inboxItemId: item.id, documentId: 'doc-1' }),
+      expect.objectContaining({ journal_entry_id: 'je-1', fields: { total: 99, vat_amount: 19.8 } }),
+      'user-1',
+    )
+    expect(vi.mocked(recordDecisions)).not.toHaveBeenCalled()
+  })
+
+  it('records nothing when the verifikat is refused', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1' }) })
+    createJournalEntryMock.mockRejectedValue(new Error('locked'))
+
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: VALID_BODY,
+      searchParams: { _id: 'item-1' },
+    })
+    await route.handler(request, buildCtx(supabase))
+
+    expect(vi.mocked(recordInboxDecision)).not.toHaveBeenCalled()
   })
 
   it('posts each line with its own dimensions bag (the dialog tags lines one by one)', async () => {
@@ -610,6 +674,13 @@ describe('POST /items/:id/book-direct', () => {
     expect(body).toMatchObject({
       data: { transaction_id: TX_UUID },
     })
+    // The bank line it settles is a decision too.
+    expect(vi.mocked(recordDecisions)).toHaveBeenCalledWith(
+      supabase,
+      expect.objectContaining({ companyId: 'company-1' }),
+      [expect.objectContaining({ transactionId: TX_UUID, final: expect.objectContaining({ journal_entry_id: 'je-1' }) })],
+      'user-1',
+    )
     expect(createJournalEntryMock).toHaveBeenCalledWith(
       expect.anything(),
       'company-1',

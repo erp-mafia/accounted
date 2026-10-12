@@ -9,6 +9,22 @@ import {
   makeCompanySettings,
 } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
+import { recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
+
+// suggestion_log records each inbox decision; its reads and writes are
+// covered in lib/suggestion-log, not by this file's queued client.
+vi.mock('@/lib/suggestion-log/inbox', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/suggestion-log/inbox')>()),
+  snapshotInboxExtraction: vi.fn(async (_supabase: unknown, companyId: string, item: { id: string; document_id?: string | null }) => ({
+    companyId,
+    inboxItemId: item.id,
+    documentId: item.document_id ?? null,
+    extraction: null,
+    model: null,
+  })),
+  loadEntryLines: vi.fn(async () => []),
+  recordInboxDecision: vi.fn(async () => undefined),
+}))
 
 vi.mock('@/lib/bookkeeping/supplier-invoice-entries', () => ({
   createSupplierInvoiceRegistrationEntry: vi.fn().mockResolvedValue({ id: 'je-1' }),
@@ -262,6 +278,20 @@ describe('POST /items/:id/convert', () => {
     expect(status).toBe(200)
     expect(body.data.id).toBe('invoice-1')
     expect(body.data.inbox_item_id).toBe('item-1')
+    // The model's reading is taken before the invoice is written, and the
+    // registration is recorded against it afterwards.
+    expect(vi.mocked(snapshotInboxExtraction).mock.invocationCallOrder[0]).toBeLessThan(
+      supabase.rpc.mock.invocationCallOrder[0],
+    )
+    expect(vi.mocked(recordInboxDecision)).toHaveBeenCalledWith(
+      supabase,
+      expect.objectContaining({ inboxItemId: inboxItem.id, documentId: 'doc-1' }),
+      expect.objectContaining({
+        supplier_invoice_id: 'invoice-1',
+        fields: expect.objectContaining({ invoice_number: 'F-2024-001', invoice_date: VALID_CONVERT_BODY.invoice_date }),
+      }),
+      'user-1',
+    )
   })
 
   it('defaults the supplier invoice notes to the rendered WhatsApp channel context', async () => {
