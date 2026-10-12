@@ -250,6 +250,7 @@ export default function SupplierInvoicesPage() {
       !query ||
       (inv.supplier?.name ?? '').toLowerCase().includes(query) ||
       (inv.supplier_invoice_number ?? '').toLowerCase().includes(query) ||
+      (inv.fortnox_number ?? '').toLowerCase().includes(query) ||
       String(inv.arrival_number ?? '').includes(query)
     const matchesFy =
       !fyPeriod ||

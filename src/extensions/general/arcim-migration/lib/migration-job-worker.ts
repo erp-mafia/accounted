@@ -267,6 +267,10 @@ const CREDIT_PAIRING = {
  * invoices only, and the wizard shows none for supplier invoices yet: a
  * supplier credit note left unpaired here is logged, and carries the number
  * the provider named in its notes.
+ *
+ * Fortnox names the credited supplier invoice by its löpnummer, which the
+ * company's invoices keep in fortnox_number (crm#1157); only a row imported
+ * before that column holds the löpnummer as its supplier number instead.
  */
 export async function pairMigratedCreditNotes(supabase: SupabaseClient, job: ProviderMigrationJob, chunks: MigrationChunk[], deadline: number): Promise<void> {
   for (const c of chunks) {
@@ -286,10 +290,18 @@ export async function pairMigratedCreditNotes(supabase: SupabaseClient, job: Pro
       if (error) throw new Error(error.message)
       target = (data as { target_id?: string | null } | null)?.target_id ?? null
     }
+    const fortnoxSupplier = own !== null && job.provider === 'fortnox'
+    if (!target && fortnoxSupplier && ref.id) {
+      const { data, error } = await withinMigrationDeadline(supabase.from('supplier_invoices').select('id')
+        .eq('company_id', job.company_id).eq('fortnox_number', ref.id).neq('id', c.target_id).limit(1), deadline)
+      if (error) throw new Error(error.message)
+      target = (data as { id: string }[] | null)?.[0]?.id ?? null
+    }
     if (!target && ref.invoiceNumber) {
       let query = supabase.from(table).select('id')
         .eq('company_id', job.company_id).eq(numberColumn, ref.invoiceNumber).neq('id', c.target_id)
       if (own) query = query.eq('supplier_id', own.supplier_id).eq('is_credit_note', false)
+      if (fortnoxSupplier) query = query.is('fortnox_number', null)
       const { data, error } = await withinMigrationDeadline(query.limit(2), deadline)
       if (error) throw new Error(error.message)
       const rows = (data ?? []) as { id: string }[]

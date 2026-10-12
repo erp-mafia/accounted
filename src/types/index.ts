@@ -1280,6 +1280,12 @@ export interface SupplierInvoice {
    * identifies the invoice in the leverantörsreskontra.
    */
   supplier_invoice_number: string | null
+  /**
+   * Fortnox's own number for the invoice (löpnummer), kept when it was
+   * imported from Fortnox. Vouchers imported from Fortnox cite it, and the
+   * import recognises the invoice by it. NULL for every other invoice.
+   */
+  fortnox_number?: string | null
 
   invoice_date: string
   due_date: string

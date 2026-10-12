@@ -60,6 +60,7 @@ vi.mock('../lib/insert-fallback', () => ({
 }))
 
 import { executeMigration } from '../lib/migration-orchestrator'
+import { resolveConsent } from '@/lib/providers/resolve-consent'
 import {
   fetchSalesInvoicesDirect,
   fetchSupplierInvoicesDirect,
@@ -260,6 +261,44 @@ describe('executeMigration: per-step requests (#2469)', () => {
     expect(tables).not.toContain('suppliers')
     const rows = (insertWithPerRowFallback as Mock).mock.calls.find((c) => c[1] === 'supplier_invoices')![2]
     expect(rows[0].supplier_id).toBe('supp-existing')
+  })
+
+  it('keeps the Fortnox löpnummer on an imported supplier invoice and knows a stored one by it (crm#1157)', async () => {
+    vi.mocked(resolveConsent).mockResolvedValueOnce({
+      consent: { provider: 'fortnox' }, accessToken: 'tok', providerCompanyId: null,
+    } as unknown as Awaited<ReturnType<typeof resolveConsent>>)
+    const lev = { name: 'Leverantör AB', identifications: [{ schemeId: 'SE:ORGNR', id: '5566778899' }] }
+    mListSupplier.mockResolvedValue([
+      // Stored with its löpnummer beside a supplier number typed by hand.
+      { ...supplierDto('21879926', '2026-09-25', false), id: '367', supplier: lev },
+      // Stored before fortnox_number: its supplier number is the löpnummer.
+      { ...supplierDto('368', '2026-09-26', false), id: '368', supplier: lev },
+      { ...supplierDto('369', '2026-09-27', false), id: '369', supplier: lev },
+    ])
+    ;(fetchAllRows as Mock)
+      .mockResolvedValueOnce([{ id: 'supp-existing', org_number: '5566778899', name: 'Leverantör AB' }])
+      .mockResolvedValueOnce([
+        { supplier_invoice_number: 'typed by hand', supplier_id: 'supp-existing', invoice_date: '2026-09-25', total: 2500, fortnox_number: '367' },
+        { supplier_invoice_number: '368', supplier_id: 'supp-existing', invoice_date: '2026-09-26', total: 2500, fortnox_number: null },
+      ])
+      .mockResolvedValue([])
+
+    const results = await executeMigration(baseOptions({ importSupplierInvoices: true }))
+
+    expect(hydratedNumbers(mHydrateSupplier)).toEqual(['369'])
+    const rows = (insertWithPerRowFallback as Mock).mock.calls.find((c) => c[1] === 'supplier_invoices')![2]
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ supplier_id: 'supp-existing', supplier_invoice_number: '369', fortnox_number: '369' })
+    expect(results.supplierInvoices).toMatchObject({ total: 3, imported: 1, skipped: 2, skipReasons: { duplicate: 2 } })
+  })
+
+  it('stores no löpnummer for another provider', async () => {
+    mListSupplier.mockResolvedValue([supplierDto('L-9', '2026-03-01', false)])
+
+    await executeMigration(baseOptions({ importSupplierInvoices: true }))
+
+    const rows = (insertWithPerRowFallback as Mock).mock.calls.find((c) => c[1] === 'supplier_invoices')![2]
+    expect(rows[0]).not.toHaveProperty('fortnox_number')
   })
 
   it('reads an opaque 403 as one closed register when an earlier request proved the grant', async () => {

@@ -619,8 +619,8 @@ describe('pairMigratedCreditNotes', () => {
   type Update = { table: string; payload: unknown; filters: unknown[][] }
   type SupplierFacts = { supplier_id: string; currency: string; total: number; is_credit_note: boolean }
   function pairingDb(answers: { chunkTarget?: string | null; invoicesByNumber?: { id: string }[]; updateError?: { code: string; message: string }
-    /** supplier_invoices rows by id (the pairing facts), and the ids a number lookup answers with. */
-    supplierRows?: Record<string, SupplierFacts>; supplierIdsByNumber?: { id: string }[] } = {}) {
+    /** supplier_invoices rows by id (the pairing facts), and the ids a number or löpnummer lookup answers with. */
+    supplierRows?: Record<string, SupplierFacts>; supplierIdsByNumber?: { id: string }[]; supplierIdsByFortnoxNumber?: { id: string }[] } = {}) {
     const updates: Update[] = []
     const reads: { table: string; filters: unknown[][] }[] = []
     const from = vi.fn((table: string) => {
@@ -639,6 +639,9 @@ describe('pairMigratedCreditNotes', () => {
         if (table === 'invoices') return resolve({ data: answers.invoicesByNumber ?? [], error: null })
         if (table === 'supplier_invoices') {
           const byId = filters.find(f => f[0] === 'eq' && f[1] === 'id')
+          if (filters.some(f => f[0] === 'eq' && f[1] === 'fortnox_number')) {
+            return resolve({ data: answers.supplierIdsByFortnoxNumber ?? [], error: null })
+          }
           return resolve({ data: byId ? answers.supplierRows?.[byId[2] as string] ?? null : answers.supplierIdsByNumber ?? [], error: null })
         }
         return resolve({ data: null, error: null })
@@ -737,6 +740,26 @@ describe('pairMigratedCreditNotes', () => {
       expect(db.reads.find(r => r.table === 'supplier_invoices' && r.filters.some(f => f[1] === 'supplier_invoice_number'))).toMatchObject({
         filters: expect.arrayContaining([['eq', 'company_id', 'company'], ['eq', 'supplier_invoice_number', '311'],
           ['neq', 'id', 'scn-row'], ['eq', 'supplier_id', 'sup-1'], ['eq', 'is_credit_note', false]]) })
+    })
+
+    it('pairs a Fortnox credit note on the löpnummer it names, before any supplier number (crm#1157)', async () => {
+      const fortnoxJob = { ...job, provider: 'fortnox' } as ProviderMigrationJob
+      const db = pairingDb({ chunkTarget: null, supplierIdsByFortnoxNumber: [{ id: 'orig-row' }], supplierIdsByNumber: [{ id: 'wrong-row' }],
+        supplierRows: { 'scn-row': credit, 'orig-row': original } })
+      await pairMigratedCreditNotes(db.supabase, fortnoxJob, [supplierChunk()], deadline())
+      expect(db.updates.map(u => u.payload)).toEqual([{ credited_invoice_id: 'orig-row' }])
+      expect(db.reads.find(r => r.table === 'supplier_invoices' && r.filters.some(f => f[1] === 'fortnox_number'))).toMatchObject({
+        filters: expect.arrayContaining([['eq', 'company_id', 'company'], ['eq', 'fortnox_number', '311'], ['neq', 'id', 'scn-row']]) })
+      expect(db.reads.some(r => r.table === 'supplier_invoices' && r.filters.some(f => f[1] === 'supplier_invoice_number'))).toBe(false)
+    })
+
+    it('falls back for Fortnox only to a row imported before the löpnummer column', async () => {
+      const fortnoxJob = { ...job, provider: 'fortnox' } as ProviderMigrationJob
+      const db = pairingDb({ chunkTarget: null, supplierIdsByNumber: [{ id: 'orig-row' }], supplierRows: { 'scn-row': credit, 'orig-row': original } })
+      await pairMigratedCreditNotes(db.supabase, fortnoxJob, [supplierChunk()], deadline())
+      expect(db.updates.map(u => u.payload)).toEqual([{ credited_invoice_id: 'orig-row' }])
+      expect(db.reads.find(r => r.table === 'supplier_invoices' && r.filters.some(f => f[1] === 'supplier_invoice_number'))).toMatchObject({
+        filters: expect.arrayContaining([['eq', 'supplier_invoice_number', '311'], ['eq', 'supplier_id', 'sup-1'], ['is', 'fortnox_number', null]]) })
     })
 
     it.each([

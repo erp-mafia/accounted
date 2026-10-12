@@ -69,7 +69,9 @@ import {
   type FxUnresolved,
 } from './entity-mapper'
 import { invoiceWithinScope, type FiscalYearScope } from './invoice-scope'
-import { existingInvoiceKey, listedInvoiceKeys, type ExistingSupplierInvoiceIdentity } from './supplier-invoice-identity'
+import {
+  existingInvoiceKeys, fortnoxNumberOf, listedInvoiceKeys, listedMatchNumber, type ExistingSupplierInvoiceIdentity,
+} from './supplier-invoice-identity'
 
 const log = createLogger('extensions/arcim-migration/migration-orchestrator')
 
@@ -1231,19 +1233,20 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         await loadSupplierRegister()
 
         // Load every existing supplier invoice's identity once: (supplier,
-        // number), or (supplier, date, amount) for a number-less one.
+        // number), or (supplier, date, amount) for a number-less one, and the
+        // Fortnox löpnummer of a Fortnox import.
         const existingSuppInv = await fetchAllRows<ExistingSupplierInvoiceIdentity>(({ from, to }) =>
           supabase
             .from('supplier_invoices')
-            .select('supplier_invoice_number, supplier_id, invoice_date, total')
+            .select('supplier_invoice_number, supplier_id, invoice_date, total, fortnox_number')
             .eq('company_id', companyId)
             .range(from, to)
         )
         const existingSuppInvKeys = new Set(
-          existingSuppInv.map(existingInvoiceKey).filter((key): key is string => key !== null)
+          existingSuppInv.flatMap(existingInvoiceKeys)
         )
         const isStored = (supplierId: string, inv: SupplierInvoiceDto): boolean =>
-          listedInvoiceKeys(supplierId, inv).some((key) => existingSuppInvKeys.has(key))
+          listedInvoiceKeys(supplierId, inv, provider).some((key) => existingSuppInvKeys.has(key))
 
         // Compute next arrival number locally. Unique index is
         // (company_id, arrival_number); we're the only writer during
@@ -1418,8 +1421,10 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             skipped++
             return false
           }
-          if (r.dto.invoiceNumber) {
-            const dupKey = `${r.supplierId}::${r.dto.invoiceNumber}`
+          // A Fortnox record is the same record by its löpnummer.
+          const matchNumber = listedMatchNumber(provider, r.dto)
+          if (matchNumber) {
+            const dupKey = `${r.supplierId}::${matchNumber}`
             if (seenSuppInvKeys.has(dupKey)) {
               skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
               skipped++
@@ -1454,6 +1459,8 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
               r.dto, userId, companyId, r.supplierId, fxRates
             )
             invoice.arrival_number = nextArrivalNumber++
+            const fortnoxNumber = fortnoxNumberOf(provider, r.dto)
+            if (fortnoxNumber) invoice.fortnox_number = fortnoxNumber
             return { invoice, items, fxUnresolved: fx, vatUnresolved: vatMissing, rowsMismatch: rowsOff === true, rowsUnaccounted: rowsNoAccount === true, creditedInvoiceRef, dto: r.dto, supplierId: r.supplierId }
           })
 

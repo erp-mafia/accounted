@@ -6018,6 +6018,7 @@
     "uncredit_success_description": "Originalfakturan är återställd och numret är ledigt.",
     "credit_note_banner_original_fallback": "originalfakturan",
     "arrival_number_label": "Ankomstnummer",
+    "fortnox_number_label": "Löpnummer i Fortnox",
     "invoice_number_label": "Fakturanummer",
     "invoice_date_label": "Fakturadatum",
     "due_date_label": "Förfallodatum",

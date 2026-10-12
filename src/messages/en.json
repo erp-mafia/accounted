@@ -6018,6 +6018,7 @@
     "uncredit_success_description": "The original invoice has been restored and the number is available.",
     "credit_note_banner_original_fallback": "the original invoice",
     "arrival_number_label": "Arrival number",
+    "fortnox_number_label": "Fortnox number",
     "invoice_number_label": "Invoice number",
     "invoice_date_label": "Invoice date",
     "due_date_label": "Due date",

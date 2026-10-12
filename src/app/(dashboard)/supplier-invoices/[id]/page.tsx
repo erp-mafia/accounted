@@ -747,6 +747,11 @@ export default function SupplierInvoiceDetailPage() {
         <span>
           {t('arrival_number_label')} <span className="tabular-nums text-foreground">#{invoice.arrival_number}</span>
         </span>
+        {invoice.fortnox_number && (
+          <span>
+            {t('fortnox_number_label')} <span className="tabular-nums text-foreground">{invoice.fortnox_number}</span>
+          </span>
+        )}
         {invoice.payment_reference && (
           <span>
             {t('ocr_reference_label')} <span className="tabular-nums text-foreground">{invoice.payment_reference}</span>
