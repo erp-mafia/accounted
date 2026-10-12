@@ -96,11 +96,20 @@ export interface SigningChallenge {
 
 export type SigningState = 'pending' | 'finalised' | 'failed'
 
+/**
+ * Where a signing in several BankID steps stands. A Swedish bank may chain
+ * them, each with its own QR and a short life: identify the person, approve
+ * a payee it has not paid before, then sign the payment. Null when the bank
+ * does not say.
+ */
+export type SigningStep = 'identify' | 'approve_payee' | 'sign'
+
 export interface SigningProgress {
   state: SigningState
   challenge: SigningChallenge | null
   /** Provider code when the signing failed (e.g. a cancelled or expired BankID). */
   failureCode: string | null
+  step: SigningStep | null
 }
 
 export type SigningTarget =

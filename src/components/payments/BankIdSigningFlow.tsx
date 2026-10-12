@@ -9,7 +9,7 @@ import { AttnLine } from '@/components/ui/attn-line'
 import { DialogFooter } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency } from '@/lib/utils'
 import { BankIdChallengeQr } from './BankIdChallengeQr'
 import { BankMark } from '@/components/banks/BankMark'
 import { PAYMENT_ORDER_STATUS_BADGE, PERMANENT_SIGNING_FAILURES } from './payment-order-status'
@@ -23,11 +23,22 @@ import {
   startSigning,
   type PaymentOrderStatus,
   type SigningMethod,
+  type SigningStep,
   type SigningView,
 } from './payments-client'
 
 /** How often the signer's screen asks where the signing stands: the animated QR changes every second. */
 const POLL_MS = 1000
+
+/**
+ * How long one of the bank's QR codes lives. Swedbank closed a step 33 s
+ * after it started it (SIGNING_SESSION_EXPIRED); the countdown is a nudge,
+ * the bank's answer decides.
+ */
+const QR_LIFETIME_S = 30
+
+/** The steps a bank may chain, in the order they come; a bank skips the ones it does not need. */
+const STEP_ORDER: SigningStep[] = ['identify', 'approve_payee', 'sign']
 
 /** What the flow needs to show per order: the rest stays on the server. */
 export interface SigningOrderSummary {
@@ -87,6 +98,11 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
   const [signing, setSigning] = useState<SigningView | null>(null)
   const [refusal, setRefusal] = useState<'verification' | 'redirect' | null>(null)
   const sentToBank = useRef(false)
+  // The bank's step, when it signs in several: which one, since when, and
+  // which ones this signing has been through (a new one means a new QR).
+  const [stepSince, setStepSince] = useState<number | null>(null)
+  const [stepsSeen, setStepsSeen] = useState<SigningStep[]>([])
+  const [now, setNow] = useState(() => Date.now())
 
   const setStage = useCallback(
     (next: SigningFlowStage) => {
@@ -123,9 +139,15 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
     if (signingFinished(view)) setStage('done')
   }
 
+  function resetSteps() {
+    setStepSince(null)
+    setStepsSeen([])
+  }
+
   async function begin(chosen: SigningMethod) {
     setMethod(chosen)
     setRefusal(null)
+    resetSteps()
     setBusy(true)
     try {
       const view = await startSigning({ orderIds: orders.map((o) => o.id), method: chosen, personalNumber: typedNumber })
@@ -154,6 +176,7 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
   async function restart(chosen: SigningMethod) {
     if (!signing) return
     setMethod(chosen)
+    resetSteps()
     setBusy(true)
     try {
       applyView(await restartSigning({ batchId: signing.batch_id, method: chosen, personalNumber: typedNumber }))
@@ -220,6 +243,26 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
     }
   }, [polling, batchId, typedNumber, setStage])
 
+  // A new step from the bank: note when it began and that it happened.
+  const step = signing?.status === 'awaiting_signature' ? (signing.step ?? null) : null
+  const stepBatch = signing?.batch_id ?? null
+  useEffect(() => {
+    if (!step) return
+    setStepSince(Date.now())
+    setStepsSeen((seen) => (seen.includes(step) ? seen : [...seen, step]))
+  }, [step, stepBatch])
+
+  // The countdown ticks while a QR is on screen.
+  const counting = stage === 'signing' && signing?.status === 'awaiting_signature' && stepSince !== null
+  useEffect(() => {
+    if (!counting) return
+    setNow(Date.now())
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [counting])
+  const secondsLeft = stepSince === null ? null : Math.max(0, QR_LIFETIME_S - Math.floor((now - stepSince) / 1000))
+  const payeeLabel = orders.length === 1 ? orders[0]!.payee_name : t('several_payees', { count: orders.length })
+
   const statusLabel = (status: string) => {
     const key = `status_${status}`
     return t.has(key) ? t(key) : status
@@ -273,20 +316,44 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
     const failure = signing.failure_code
     const permanent = failure ? PERMANENT_SIGNING_FAILURES.has(failure) : false
     const waiting = signing.status === 'awaiting_signature'
+    const anotherStep = step !== null && stepsSeen.length > 1
+    const qrFooter = (
+      <>
+        <p className="text-[13px] text-muted-foreground">{t('signing_qr_hint')}</p>
+        {secondsLeft !== null && (
+          <p className={cn('text-[12.5px] tabular-nums', secondsLeft > 0 ? 'text-muted-foreground' : 'text-foreground')}>
+            {secondsLeft > 0 ? t('qr_seconds_left', { seconds: secondsLeft }) : t('qr_maybe_expired')}
+          </p>
+        )}
+      </>
+    )
     return (
       <div className="space-y-4 text-center">
         {waiting && bankLine}
+        {waiting && step && (
+          <div className="space-y-1">
+            <p className="text-[13px] text-muted-foreground">{t('steps_intro')}</p>
+            <p className="text-[13px] font-medium">
+              {t('step_heading', { n: STEP_ORDER.indexOf(step) + 1 })}: {t(`step_${step}`, { payee: payeeLabel })}
+            </p>
+            {anotherStep && <AttnLine>{t('step_new_qr')}</AttnLine>}
+          </div>
+        )}
         {waiting && signing.challenge?.qrData && (
           <>
             <BankIdChallengeQr data={signing.challenge.qrData} label={t('qr_label')} />
-            <p className="text-[13px] text-muted-foreground">{t('signing_qr_hint')}</p>
+            {qrFooter}
           </>
         )}
         {waiting && !signing.challenge?.qrData && signing.challenge?.qrImage && (
           <>
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={signing.challenge.qrImage} alt={t('qr_label')} className="mx-auto h-[200px] w-[200px] rounded-lg border border-border bg-white p-1" />
-            <p className="text-[13px] text-muted-foreground">{t('signing_qr_hint')}</p>
+            <img
+              src={signing.challenge.qrImage}
+              alt={t('qr_label')}
+              className={cn('mx-auto h-[200px] w-[200px] rounded-lg border bg-white p-1', anotherStep ? 'border-foreground' : 'border-border')}
+            />
+            {qrFooter}
           </>
         )}
         {waiting && !signing.challenge?.qrData && !signing.challenge?.qrImage && signing.challenge?.autostartToken && (

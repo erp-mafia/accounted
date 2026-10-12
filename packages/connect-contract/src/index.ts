@@ -896,6 +896,12 @@ export const paymentsSigningProgressSchema = z.object({
   challenge: paymentsSigningChallengeSchema.nullable(),
   /** Provider code when the signing failed (a cancelled or expired BankID, missing rights, redirect only). */
   failureCode: z.string().nullable(),
+  /**
+   * The bank's SCA status as Open Payments reports it (authenticationStarted,
+   * authoriseCreditorAccountStarted, started, ...): which step of a signing in
+   * several BankID steps the person is at. Absent from older connectors.
+   */
+  scaStatus: z.string().nullable().optional(),
 })
 export type PaymentsSigningProgress = z.infer<typeof paymentsSigningProgressSchema>
 

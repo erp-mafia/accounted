@@ -46,6 +46,7 @@ import {
   type PaymentPartyContext,
   type ProviderWriteOutcome,
   type SigningChallenge,
+  type SigningStep,
   type SigningTarget,
 } from '@/lib/payments/initiation/provider'
 import { openPaymentsDoor } from './switched-on'
@@ -67,6 +68,8 @@ export interface SigningView {
   /** Only for the person signing: a QR or autostart token is theirs alone. */
   challenge: SigningChallenge | null
   failure_code: string | null
+  /** Which BankID step the bank is at when it signs in several; null when it does not say. */
+  step: SigningStep | null
   orders: Array<{ id: string; status: string; provider_status: string | null; outcome_unknown: boolean }>
 }
 
@@ -174,12 +177,19 @@ async function loadBatch(writer: SupabaseClient, companyId: string, batchId: str
   return { batch: batch as PaymentOrderBatchRow, orders: (orders ?? []) as PaymentOrderRow[] }
 }
 
-function view(batch: PaymentOrderBatchRow, orders: PaymentOrderRow[], challenge: SigningChallenge | null, failure: string | null): SigningView {
+function view(
+  batch: PaymentOrderBatchRow,
+  orders: PaymentOrderRow[],
+  challenge: SigningChallenge | null,
+  failure: string | null,
+  step: SigningStep | null = null,
+): SigningView {
   return {
     batch_id: batch.id,
     status: batch.status,
     challenge,
     failure_code: failure,
+    step,
     orders: orders.map((o) => ({ id: o.id, status: o.status, provider_status: o.provider_status, outcome_unknown: Boolean(o.outcome_unknown_at) })),
   }
 }
@@ -482,7 +492,7 @@ async function beginSca(
     { company_id: ctx.companyId, batch_id: batch.id, event_type: 'signing_started', actor_user_id: ctx.userId, detail: { method: started.method } },
   ], ctx.log)
   const refreshed = await loadBatch(writer, ctx.companyId, batch.id)
-  return { ok: true, data: view(updated as PaymentOrderBatchRow, refreshed?.orders ?? waiting, started.challenge, null) }
+  return { ok: true, data: view(updated as PaymentOrderBatchRow, refreshed?.orders ?? waiting, started.challenge, null, started.step) }
 }
 
 /** A basket over the payments of a signing, stored once. */
@@ -823,7 +833,7 @@ export async function pollPaymentSigning(
   } catch (error) {
     return { ok: false, code: readFailure(error), details: { provider_code: errorCodeOf(error) } }
   }
-  if (progress.state === 'pending') return { ok: true, data: view(batch, orders, progress.challenge, null) }
+  if (progress.state === 'pending') return { ok: true, data: view(batch, orders, progress.challenge, null, progress.step) }
 
   if (progress.state === 'failed') {
     const code = progress.failureCode ?? 'SCA_FAILED'

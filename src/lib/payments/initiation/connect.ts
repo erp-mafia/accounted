@@ -34,8 +34,7 @@ import {
   type PaymentInitiationProvider,
   type PaymentPartyContext,
   type SigningChallenge,
-  type SigningTarget,
-} from './provider'
+  type SigningTarget, type SigningStep } from './provider'
 
 /** Connect's own client timeout is 20 s; wait long enough to hear its answer, its timeout included. */
 export const PAYMENTS_CONNECT_TIMEOUT_MS = 30_000
@@ -109,6 +108,23 @@ export function toPaymentProviderError(error: unknown, operation: PaymentsOperat
   if (/^HTTP_(5\d\d|429)$/.test(error.code)) return new PaymentProviderError(error.message, error.code, true, status, false)
   // Configuration, scope, key, contract and request errors: a person or an operator must act.
   return new PaymentProviderError(error.message, error.code, false, status, false)
+}
+
+/** The bank's SCA status (Open Payments' scaStatus) as the step the person is at. */
+export function signingStepFrom(scaStatus: string | null | undefined): SigningStep | null {
+  switch (scaStatus) {
+    case 'authenticationStarted':
+    case 'psuIdentified':
+    case 'psuAuthenticated':
+      return 'identify'
+    case 'authoriseCreditorAccountStarted':
+      return 'approve_payee'
+    case 'scaMethodSelected':
+    case 'started':
+      return 'sign'
+    default:
+      return null
+  }
 }
 
 function toChallenge(challenge: {
@@ -199,6 +215,7 @@ export function createConnectPaymentsProvider(upstream: ConnectorUpstream, deps:
         state: started.state,
         challenge: toChallenge(started.challenge),
         failureCode: started.failureCode,
+        step: signingStepFrom(started.scaStatus),
       }
     },
 
@@ -209,7 +226,7 @@ export function createConnectPaymentsProvider(upstream: ConnectorUpstream, deps:
         providerAuthorisationId,
         method,
       })
-      return { state: progress.state, challenge: toChallenge(progress.challenge), failureCode: progress.failureCode }
+      return { state: progress.state, challenge: toChallenge(progress.challenge), failureCode: progress.failureCode, step: signingStepFrom(progress.scaStatus) }
     },
 
     async cancelPayment(ctx, providerPaymentId, product) {

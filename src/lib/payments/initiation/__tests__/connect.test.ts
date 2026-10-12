@@ -198,6 +198,7 @@ describe('the operations', () => {
       state: 'pending',
       challenge: { approach: 'decoupled', autostartToken: 'tok', qrData: 'bankid.qr', qrImage: null, redirectUrl: null },
       failureCode: null,
+      step: null,
     })
     expect(sentUrl(first)).toBe('https://connect.example.se/api/connect/payments/signings')
     const body = sentBody(first)
@@ -214,7 +215,7 @@ describe('the operations', () => {
   it('pollSigning passes the authorisation and method and maps a finished signing', async () => {
     const fetchMock = fetchAnswering(200, { state: 'finalised', challenge: null, failureCode: null })
     const progress = await provider(fetchMock).pollSigning(CTX, { kind: 'payment', providerPaymentId: 'pay-1', product: 'domestic' }, 'auth-1', 'qr')
-    expect(progress).toEqual({ state: 'finalised', challenge: null, failureCode: null })
+    expect(progress).toEqual({ state: 'finalised', challenge: null, failureCode: null, step: null })
     expect(sentUrl(fetchMock)).toBe('https://connect.example.se/api/connect/payments/signings/poll')
     expect(sentBody(fetchMock)).toEqual({
       party: toConnectorParty(CTX),
@@ -222,6 +223,20 @@ describe('the operations', () => {
       providerAuthorisationId: 'auth-1',
       method: 'qr',
     })
+  })
+
+  it('pollSigning turns the bank SCA status into the step the person is at', async () => {
+    const target = { kind: 'payment', providerPaymentId: 'pay-1', product: 'swedish-giro' } as const
+    for (const [scaStatus, step] of [
+      ['authenticationStarted', 'identify'],
+      ['authoriseCreditorAccountStarted', 'approve_payee'],
+      ['started', 'sign'],
+      ['somethingNew', null],
+    ] as const) {
+      const fetchMock = fetchAnswering(200, { state: 'pending', challenge: CHALLENGE, failureCode: null, scaStatus })
+      const progress = await provider(fetchMock).pollSigning(CTX, target, 'auth-1', 'qr')
+      expect(progress.step).toBe(step)
+    }
   })
 
   it('pollSigning keeps the failure code of a failed signing', async () => {

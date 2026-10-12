@@ -145,12 +145,17 @@ export type SigningBatchStatus =
   | 'cancelled'
   | 'failed'
 
+/** A bank may sign in several BankID steps, each with its own QR: identify, approve a new payee, sign. */
+export type SigningStep = 'identify' | 'approve_payee' | 'sign'
+
 export interface SigningView {
   batch_id: string
   status: SigningBatchStatus
   /** Only for the person signing; everyone else sees where the signing stands. */
   challenge: SigningChallenge | null
   failure_code: string | null
+  /** Which step the bank is at, when it says. */
+  step: SigningStep | null
   orders: Array<{ id: string; status: string; provider_status: string | null; outcome_unknown: boolean }>
 }
 
