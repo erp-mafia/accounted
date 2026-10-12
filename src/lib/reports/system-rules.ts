@@ -46,6 +46,23 @@ export const VOUCHER_SERIES_RULES = {
   ],
 } as const
 
+/**
+ * How a sales invoice gets its löpnummer (ML 17 kap 24 § p. 2): the series, the
+ * next number, and when a number is refused.
+ */
+export const INVOICE_NUMBER_RULES = {
+  serie:
+    'Kundfakturor och kreditfakturor numreras i företagets egen serie: fakturaprefixet följt av ett löpnummer med minst tre siffror. Proformafakturor har en egen serie (PF-) och tar inga nummer från fakturaserien. Offerter (OF-) och följesedlar (FS-) har egna serier.',
+  nasta_nummer:
+    'Nästa fakturanummer är det första lediga numret från den inställda startpunkten (Inställningar > Fakturor, Nästa fakturanummer). Nummer som redan finns, till exempel importerade från ett tidigare system, hoppas över; ett överhoppat nummer finns redan och är ingen lucka.',
+  unikt:
+    'Ett fakturanummer är ett värde: 1 och 001 är samma löpnummer. Databasen avvisar en faktura vars nummer redan finns skrivet på ett annat sätt, oavsett om fakturan skapas, importeras eller registreras via API.',
+  ordning:
+    'Ett nummer delas aldrig ut under ett högre nummer som redan finns i serien, eftersom det skulle fylla en lucka i serien eller starta om den. Då stoppas utfärdandet utan att något nummer förbrukas, och företaget anger var serien fortsätter: nästa nummer efter det högsta, eller ett nytt prefix för en ny serie. Inställningen avvisar ett nummer som redan finns eller ligger under det högsta. Varje ändring av nästa fakturanummer sparas i ändringsloggen (audit_log, i arkivet revision/behandlingshistorik.json) med tidpunkt och användare. Accounteds egna nummer i det äldre formatet med årtal före löpnumret (till exempel 2026383), utfärdade före den 11 maj 2026, räknas som en avslutad serie.',
+  andring:
+    'Regeln infördes med migration 20261012161600; programversion och första driftsättning framgår av behandlingshistoriken. Redan utfärdade fakturor och deras nummer ändras inte.',
+} as const
+
 /** What the supplier payment row means when a bank match settles a debt. */
 export const SUPPLIER_PAYMENT_RULES = {
   bankmatchning:

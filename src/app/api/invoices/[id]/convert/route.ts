@@ -30,6 +30,14 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         log.error('invoice conversion failed', result.cause as Error, { sourceId: id })
         return NextResponse.json({ error: getUserErrorMessage(result.cause) }, { status: 500 })
       }
+      if (result.code === 'INVOICE_NUMBER_SERIES_BEHIND') {
+        return errorResponseFromCode(result.code, log, {
+          requestId,
+          messageSv: result.messageSv,
+          messageEn: result.messageEn,
+          details: result.details,
+        })
+      }
       return errorResponseFromCode(result.code, log, { requestId })
     }
 

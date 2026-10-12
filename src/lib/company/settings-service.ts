@@ -49,6 +49,7 @@ import { propagateLegacyPayeeWrite } from '@/lib/cash-accounts/invoice-payee'
 import { importExistingDimensionCodes } from '@/lib/dimensions/import-existing'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
 import { requireCompanyAdmin } from '@/lib/operations/access'
+import { invoiceSeriesBehindMessages, readInvoiceSeries } from '@/lib/invoices/invoice-number-series'
 
 /** The dashboard's settings body after validation: column names, all optional. */
 export type CompanySettingsChanges = z.output<typeof UpdateSettingsSchema>
@@ -210,6 +211,38 @@ function refuse(code: string, messageSv?: string, details?: Record<string, unkno
   }
 }
 
+/**
+ * The invoice series (ML 17 kap 24 § p. 2): a next number that is already
+ * used, or lies under a number the series already has, would fill a hole in
+ * the series or restart it, so the save is refused with the number to use.
+ * Judged only when the save changes the prefix or the next number: another
+ * save is never refused for a series an import left behind (the first issue
+ * after it asks instead). A failed read fails closed.
+ */
+async function checkInvoiceSeriesChange(
+  ctx: Pick<OperationContext, 'supabase' | 'companyId' | 'log'>,
+  body: CompanySettingsChanges,
+  oldSettings: SettingsRow | null,
+): Promise<ReturnType<typeof refuse> | { ok: false; code: 'UNKNOWN_ERROR'; error: unknown } | null> {
+  const storedPrefix = (oldSettings?.invoice_prefix as string | null | undefined) ?? ''
+  const storedNext = (oldSettings?.next_invoice_number as number | null | undefined) ?? 1
+  const prefix = body.invoice_prefix !== undefined ? (body.invoice_prefix ?? '') : storedPrefix
+  const nextNumber = body.next_invoice_number ?? storedNext
+  if (prefix === storedPrefix && nextNumber === storedNext) return null
+
+  let series: Awaited<ReturnType<typeof readInvoiceSeries>>
+  try {
+    series = await readInvoiceSeries(ctx.supabase, ctx.companyId, { prefix, nextNumber })
+  } catch (error) {
+    ctx.log.error('invoice series read failed before a settings save', error as Error)
+    return { ok: false, code: 'UNKNOWN_ERROR', error }
+  }
+  if (!series || series.highest_number === null || nextNumber > series.highest_number) return null
+
+  const behind = { prefix, highest_number: series.highest_number, first_allowed: series.first_allowed }
+  return refuse('SETTINGS_INVOICE_NUMBER_IN_SERIES', invoiceSeriesBehindMessages(behind).sv, behind)
+}
+
 /** Why the semesterår basis cannot change right now; the one place that rule lives. */
 export type VacationBasisChangeCheck =
   | { changeable: true }
@@ -340,6 +373,9 @@ export async function updateCompanySettings(
       return refuse(basisCheck.code)
     }
   }
+
+  const seriesRefusal = await checkInvoiceSeriesChange(ctx, body, oldSettings)
+  if (seriesRefusal) return seriesRefusal
 
   // Turning VAT registration off retires the VAT-dependent flags, and
   // dropping EU trade retires the EU sales list: stale true values would

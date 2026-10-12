@@ -145,6 +145,11 @@ import { resolveTopBarMeta } from '@/lib/invoices/editor/top-bar-meta'
 import { buildEditorPreviewRequest, withQuoteValidity } from '@/lib/invoices/editor/preview-request'
 import { proposeDraftSendLines } from '@/lib/invoices/editor/voucher-preview'
 import { persistAndSend } from '@/lib/invoices/editor/send-sequence'
+import {
+  continueInvoiceSeries,
+  readNextNumberPreview,
+  type SeriesContinuation,
+} from '@/lib/invoices/next-number-preview'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
 import { customerChangedForReference, planYourReferencePrefill } from '@/lib/invoices/editor/customer-reference'
 import {
@@ -671,6 +676,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   )
   const [vatRegistered, setVatRegistered] = useState<boolean>(true)
   const [numberPreview, setNumberPreview] = useState<string | null>(null)
+  // Set when the series already has a higher number (an import): the confirm
+  // continues the series on this number instead.
+  const [seriesContinuation, setSeriesContinuation] = useState<SeriesContinuation | null>(null)
+  const [isContinuingSeries, setIsContinuingSeries] = useState(false)
   const [logoUrl, setLogoUrl] = useState<string | null>(null)
   // Artikelregister: active articles for the line picker + which line is mid quick-create.
   const { articles: articleRows } = useArticles()
@@ -1532,16 +1541,22 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     // preview. An unnumbered draft (Spara som utkast) gets one at send.
     if ((isEditMode && initial?.invoice_number) || watchDocumentType === 'delivery_note') {
       setNumberPreview(null)
+      setSeriesContinuation(null)
       return
     }
     let cancelled = false
     fetch(`/api/invoices/next-number?document_type=${encodeURIComponent(watchDocumentType)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((res) => {
-        if (!cancelled) setNumberPreview(res?.data?.preview ?? null)
+        if (cancelled) return
+        const read = readNextNumberPreview(res)
+        setNumberPreview(read.preview)
+        setSeriesContinuation(read.continuation)
       })
       .catch(() => {
-        if (!cancelled) setNumberPreview(null)
+        if (cancelled) return
+        setNumberPreview(null)
+        setSeriesContinuation(null)
       })
     return () => {
       cancelled = true
@@ -2249,8 +2264,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           { signal: AbortSignal.timeout(5000) },
         )
         if (r.ok) {
-          const json = await r.json()
-          setNumberPreview(json?.data?.preview ?? null)
+          const read = readNextNumberPreview(await r.json())
+          setNumberPreview(read.preview)
+          setSeriesContinuation(read.continuation)
         }
       } catch {
         // Preview is best-effort; the allocator at create time is the source of truth.
@@ -3179,10 +3195,14 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const confirmData = pendingData
   const confirmDocType = confirmData?.document_type ?? watchDocumentType
   const confirmChannel = confirmIntent?.kind === 'send' ? confirmIntent.channel : null
+  // Only a faktura continues the company's series through the settings; a
+  // numbered draft keeps its number.
+  const confirmContinuation =
+    confirmDocType === 'invoice' && !(isEditMode && initial?.invoice_number) ? seriesContinuation : null
   const confirmNumber =
     confirmDocType === 'delivery_note' && !isEditMode
       ? null
-      : (isEditMode ? initial?.invoice_number : null) ?? numberPreview
+      : (isEditMode ? initial?.invoice_number : null) ?? confirmContinuation?.number ?? numberPreview
   const confirmDoc = tShell(`doc_${confirmDocType}`)
   const confirmCustomer = selectedCustomer?.name ?? ''
   const confirmTitleKey =
@@ -3206,7 +3226,11 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   }
   confirmRows.push({
     label: tShell('confirm_row_number'),
-    value: confirmNumber ? tShell('confirm_number_locks', { number: confirmNumber }) : tShell('confirm_number_next'),
+    value: confirmContinuation
+      ? tShell('confirm_number_continues', { number: confirmContinuation.number, highest: confirmContinuation.highest })
+      : confirmNumber
+        ? tShell('confirm_number_locks', { number: confirmNumber })
+        : tShell('confirm_number_next'),
   })
   if (confirmDocType === 'quote') {
     confirmRows.push({
@@ -4926,10 +4950,27 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         }
         confirmLabel={confirmLabel}
         confirmDisabled={confirmDisabled}
-        busy={isSubmitting}
+        busy={isSubmitting || isContinuingSeries}
         onConfirm={() => {
-          if (confirmIntent?.kind === 'create') void createWithoutSending()
-          else if (confirmIntent?.kind === 'send') void sendFromEditor(confirmIntent.channel)
+          void (async () => {
+            // The confirm said where the series continues: save it first, so
+            // the document gets the number the dialog showed.
+            if (confirmContinuation) {
+              setIsContinuingSeries(true)
+              const continued = await continueInvoiceSeries(confirmContinuation)
+              setIsContinuingSeries(false)
+              if (!continued.ok) {
+                toast({
+                  title: tShell('series_continue_failed_title'),
+                  description: getErrorMessage(continued.error, { locale }),
+                  variant: 'destructive',
+                })
+                return
+              }
+            }
+            if (confirmIntent?.kind === 'create') void createWithoutSending()
+            else if (confirmIntent?.kind === 'send') void sendFromEditor(confirmIntent.channel)
+          })()
         }}
       />
 

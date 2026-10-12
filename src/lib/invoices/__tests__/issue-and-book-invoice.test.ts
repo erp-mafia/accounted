@@ -11,7 +11,8 @@ import type { Logger } from '@/lib/logger'
 const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
 const mockEnsureInvoiceNumber = vi.fn()
-vi.mock('@/lib/invoices/ensure-invoice-number', () => ({
+vi.mock('@/lib/invoices/ensure-invoice-number', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/invoices/ensure-invoice-number')>()),
   ensureInvoiceNumber: (...args: unknown[]) => mockEnsureInvoiceNumber(...args),
 }))
 
@@ -165,6 +166,23 @@ describe('issueAndBookInvoice', () => {
     const result = await issue()
 
     expect(result).toEqual({ ok: false, errorCode: 'INVOICE_CREATE_NUMBER_ASSIGN_FAILED' })
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('answers a series that is behind with its own code, sentence and numbers', async () => {
+    const { InvoiceNumberSeriesBehindError } = await import('@/lib/invoices/ensure-invoice-number')
+    const behind = new InvoiceNumberSeriesBehindError({ prefix: '', highest_number: 1002, first_allowed: 1003 })
+    mockEnsureInvoiceNumber.mockRejectedValue(behind)
+
+    const result = await issue()
+
+    expect(result).toEqual({
+      ok: false,
+      errorCode: 'INVOICE_NUMBER_SERIES_BEHIND',
+      details: { prefix: '', highest_number: 1002, first_allowed: 1003 },
+      messageSv: behind.message,
+      messageEn: behind.messageEn,
+    })
     expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
   })
 

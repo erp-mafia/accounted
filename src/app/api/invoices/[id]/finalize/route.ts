@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
-import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { ensureInvoiceNumber, invoiceNumberingFailure } from '@/lib/invoices/ensure-invoice-number'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -62,8 +62,16 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     try {
       await ensureInvoiceNumber(supabase, companyId!, invoice as Invoice)
     } catch (err) {
+      // A series refusal used up nothing and leaves the draft unnumbered: the
+      // company sets where its series continues and finalizes again.
       log.error('failed to assign invoice number on finalize', err as Error, { invoiceId: id })
-      return errorResponseFromCode('INVOICE_CREATE_NUMBER_ASSIGN_FAILED', log, { requestId })
+      const failure = invoiceNumberingFailure(err, 'INVOICE_CREATE_NUMBER_ASSIGN_FAILED')
+      return errorResponseFromCode(failure.code, log, {
+        requestId,
+        messageSv: failure.messageSv,
+        messageEn: failure.messageEn,
+        details: failure.details,
+      })
     }
 
     const { data: completeInvoice, error: refetchError } = await supabase

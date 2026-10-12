@@ -4,7 +4,7 @@ import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import { createSchedulesForCustomerInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
 import { eventBus } from '@/lib/events'
-import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { ensureInvoiceNumber, invoiceNumberingFailure } from '@/lib/invoices/ensure-invoice-number'
 import type { CustomIssuanceLine } from '@/lib/invoices/issuance-custom-lines'
 import { recordManualInvoiceDelivery } from '@/lib/invoices/invoice-deliveries'
 import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
@@ -44,7 +44,14 @@ export type IssueAndBookResult =
       journalEntryId: string | null
       partialFailures: IssuePartialFailure[]
     }
-  | { ok: false; errorCode: string; details?: Record<string, unknown> }
+  | {
+      ok: false
+      errorCode: string
+      details?: Record<string, unknown>
+      /** A sentence written for the user (the series refusal names its numbers). */
+      messageSv?: string
+      messageEn?: string
+    }
 
 export interface IssueAndBookOptions {
   supabase: SupabaseClient
@@ -409,7 +416,13 @@ export async function issueAndBookInvoice(
     await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
   } catch (err) {
     log.error('failed to assign invoice number on mark-sent', err as Error)
-    return { ok: false, errorCode: 'INVOICE_CREATE_NUMBER_ASSIGN_FAILED' }
+    const failure = invoiceNumberingFailure(err, 'INVOICE_CREATE_NUMBER_ASSIGN_FAILED')
+    return {
+      ok: false,
+      errorCode: failure.code,
+      ...(failure.details ? { details: failure.details } : {}),
+      ...(failure.messageSv ? { messageSv: failure.messageSv, messageEn: failure.messageEn } : {}),
+    }
   }
 
   const issued = await markInvoiceSentAndBook(opts)

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { formatQuoteNumber } from '@/lib/invoices/quote-status'
+import { formatSeriesNumber, readInvoiceSeries } from '@/lib/invoices/invoice-number-series'
 
 export const GET = withRouteContext(
   'invoice.peek_next_number',
@@ -40,16 +41,31 @@ export const GET = withRouteContext(
       return NextResponse.json({ data: { preview: next ? formatQuoteNumber(next) : null } })
     }
 
-    const { data, error } = await supabase.rpc('peek_next_invoice_number', {
-      p_company_id: companyId,
-      p_document_type: documentType,
-    })
-
-    if (error) {
-      log.error('peek_next_invoice_number failed', error)
+    // The invoices decide where the series stands (20261012161600). When a
+    // higher number already exists, nothing can be issued until the company
+    // says where the series continues: the confirm offers continue_number,
+    // the lowest number that continues it.
+    let series: Awaited<ReturnType<typeof readInvoiceSeries>>
+    try {
+      series = await readInvoiceSeries(supabase, companyId!, {
+        documentType: documentType as 'invoice' | 'proforma',
+      })
+    } catch (error) {
+      log.error('invoice_number_series_status failed', error as Error)
       return errorResponse(error, log, { requestId })
     }
 
-    return NextResponse.json({ data: { preview: data ?? null } })
+    if (series?.behind && series.highest_number !== null) {
+      return NextResponse.json({
+        data: {
+          preview: null,
+          behind: true,
+          highest_number: formatSeriesNumber(series.prefix, series.highest_number),
+          first_allowed: series.first_allowed,
+          continue_number: formatSeriesNumber(series.prefix, series.first_allowed),
+        },
+      })
+    }
+    return NextResponse.json({ data: { preview: series?.next_number ?? null, behind: false } })
   },
 )

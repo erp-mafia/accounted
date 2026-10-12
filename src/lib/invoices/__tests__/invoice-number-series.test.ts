@@ -1,13 +1,13 @@
 /**
- * The invoice series continues after a provider migration (agent feedback
- * seq 892914, 929266, 965009): the counter stood at its start value, so the
- * first invoice issued after the move restarted the old series at 001.
+ * Where a company's own invoice series stands (migration 20261012161600): the
+ * invoices decide, and a series already past the counter is a refusal that
+ * names the number the company sets, never a guess.
  */
-import { describe, it, expect } from 'vitest'
-import { createTableMockSupabase } from '@/tests/helpers'
+import { describe, it, expect, vi } from 'vitest'
 import {
-  advanceInvoiceSeriesPastImported,
-  isSeriesOutlier,
+  formatSeriesNumber,
+  invoiceSeriesBehindMessages,
+  readInvoiceSeries,
   seriesNumberOf,
 } from '../invoice-number-series'
 
@@ -38,105 +38,67 @@ describe('seriesNumberOf', () => {
   })
 })
 
-describe('isSeriesOutlier', () => {
-  const range = (from: number, to: number) => new Set(Array.from({ length: to - from + 1 }, (_, i) => from + i))
-
-  it('accepts a dense series ending close enough to the counter', () => {
-    expect(isSeriesOutlier(range(1, 70), 70, 1)).toBe(false)
-    expect(isSeriesOutlier(new Set([1]), 1, 1)).toBe(false)
-    expect(isSeriesOutlier(range(1, 3), 3, 1)).toBe(false)
-  })
-
-  it('refuses a jump of more than MAX_SERIES_JUMP', () => {
-    expect(isSeriesOutlier(range(525_000, 535_883), 535_883, 60_000)).toBe(true)
-    expect(isSeriesOutlier(range(1, 10_002), 10_002, 1)).toBe(true)
-  })
-
-  it('refuses a stray highest number with a sparse neighbourhood', () => {
-    expect(isSeriesOutlier(new Set([...range(1, 70), 9_000]), 9_000, 1)).toBe(true)
+describe('formatSeriesNumber', () => {
+  it('prints a value the way generate_invoice_number does', () => {
+    expect(formatSeriesNumber('', 7)).toBe('007')
+    expect(formatSeriesNumber('F-', 668)).toBe('F-668')
+    expect(formatSeriesNumber('PF-', 1)).toBe('PF-001')
+    expect(formatSeriesNumber('', 114647)).toBe('114647')
   })
 })
 
-describe('advanceInvoiceSeriesPastImported', () => {
-  const imported = Array.from({ length: 70 }, (_, i) => String(i + 1))
-
-  it('moves a counter at its start value to one past the highest imported number', async () => {
-    const { supabase, setTable, findCall } = createTableMockSupabase()
-    setTable('company_settings', [
-      { data: { invoice_prefix: null, next_invoice_number: 1 } },
-      { data: [{ next_invoice_number: 71 }] },
-    ])
-
-    const result = await advanceInvoiceSeriesPastImported(supabase as never, 'company-1', imported)
-
-    expect(result).toEqual({ advanced: true, from: 1, to: 71 })
-    expect(findCall('company_settings', 'update')).toEqual([{ next_invoice_number: 71 }])
-    // Conditional: never undoes a counter an invoice moved meanwhile.
-    expect(findCall('company_settings', 'lte')).toEqual(['next_invoice_number', 70])
+describe('invoiceSeriesBehindMessages', () => {
+  it('names the highest number and the next one to set, in both languages', () => {
+    const messages = invoiceSeriesBehindMessages({ prefix: '', highest_number: 668, first_allowed: 669 })
+    expect(messages.sv).toContain('upp till 668')
+    expect(messages.sv).toContain('Nästa fakturanummer på 669 eller högre')
+    expect(messages.sv).toContain('Inställningar > Fakturor')
+    expect(messages.en).toContain('next_invoice_number to 669 or higher')
   })
 
-  it('leaves a counter already past the imported numbers untouched', async () => {
-    const { supabase, setTable, findCall } = createTableMockSupabase()
-    setTable('company_settings', { data: { invoice_prefix: null, next_invoice_number: 20000 } })
+  it('prints the highest number with the series prefix', () => {
+    const messages = invoiceSeriesBehindMessages({ prefix: 'F-', highest_number: 42, first_allowed: 43 })
+    expect(messages.sv).toContain('upp till F-042')
+  })
+})
 
-    const result = await advanceInvoiceSeriesPastImported(supabase as never, 'company-1', imported)
+describe('readInvoiceSeries', () => {
+  it('asks invoice_number_series_status for the stored setting by default', async () => {
+    const state = {
+      prefix: '',
+      next_invoice_number: 667,
+      next_number: '669',
+      highest_number: 668,
+      behind: false,
+      first_allowed: 669,
+    }
+    const rpc = vi.fn().mockResolvedValue({ data: state, error: null })
 
-    expect(result).toEqual({ advanced: false, reason: 'already_ahead' })
-    expect(findCall('company_settings', 'update')).toBeUndefined()
+    await expect(readInvoiceSeries({ rpc } as never, 'company-1')).resolves.toEqual(state)
+    expect(rpc).toHaveBeenCalledWith('invoice_number_series_status', {
+      p_company_id: 'company-1',
+      p_document_type: 'invoice',
+      p_prefix: null,
+      p_next_number: null,
+    })
   })
 
-  it('writes nothing when no imported number is in the series', async () => {
-    const { supabase, setTable, findCall } = createTableMockSupabase()
-    setTable('company_settings', { data: { invoice_prefix: null, next_invoice_number: 1 } })
+  it('passes a proposed prefix and next number through for the settings check', async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: null, error: null })
 
-    const result = await advanceInvoiceSeriesPastImported(supabase as never, 'company-1', ['KR-5', 'INV-2025-9'])
-
-    expect(result).toEqual({ advanced: false, reason: 'no_series_numbers' })
-    expect(findCall('company_settings', 'update')).toBeUndefined()
+    await expect(readInvoiceSeries({ rpc } as never, 'company-1', { prefix: '', nextNumber: 669 })).resolves.toBeNull()
+    expect(rpc).toHaveBeenCalledWith('invoice_number_series_status', {
+      p_company_id: 'company-1',
+      p_document_type: 'invoice',
+      p_prefix: '',
+      p_next_number: 669,
+    })
   })
 
-  it('reports a lost race as already ahead (the conditional update matched nothing)', async () => {
-    const { supabase, setTable } = createTableMockSupabase()
-    setTable('company_settings', [
-      { data: { invoice_prefix: 'F-', next_invoice_number: 5 } },
-      { data: [] },
-    ])
+  it('throws the database error so a check fails closed', async () => {
+    const error = { code: '42501', message: 'unauthorized' }
+    const rpc = vi.fn().mockResolvedValue({ data: null, error })
 
-    const result = await advanceInvoiceSeriesPastImported(supabase as never, 'company-1', Array.from({ length: 42 }, (_, i) => `F-${String(i + 1).padStart(4, '0')}`))
-
-    expect(result).toEqual({ advanced: false, reason: 'already_ahead' })
-  })
-
-  it('leaves the counter alone when the highest imported number is an outlier', async () => {
-    // A prefixed series with bare-digit numbers in the register (another
-    // series), and one far-off prefixed number: neither moves the counter.
-    const { supabase, setTable, findCall } = createTableMockSupabase()
-    setTable('company_settings', { data: { invoice_prefix: 'A', next_invoice_number: 60000 } })
-
-    const bare = await advanceInvoiceSeriesPastImported(supabase as never, 'company-1', ['535883', '535882'])
-    expect(bare).toEqual({ advanced: false, reason: 'no_series_numbers' })
-
-    const far = await advanceInvoiceSeriesPastImported(supabase as never, 'company-1', ['A59990', 'A535883'])
-    expect(far).toEqual({ advanced: false, reason: 'outlier', current: 60000, highest: 535883 })
-    expect(findCall('company_settings', 'update')).toBeUndefined()
-  })
-
-  it('leaves the counter alone for a stray number above a short series', async () => {
-    const { supabase, setTable, findCall } = createTableMockSupabase()
-    setTable('company_settings', { data: { invoice_prefix: null, next_invoice_number: 1 } })
-
-    const result = await advanceInvoiceSeriesPastImported(supabase as never, 'company-1', [...imported, '133701141'])
-
-    expect(result).toEqual({ advanced: false, reason: 'outlier', current: 1, highest: 133701141 })
-    expect(findCall('company_settings', 'update')).toBeUndefined()
-  })
-
-  it('throws on a failed read so the caller can log it', async () => {
-    const { supabase, setTable } = createTableMockSupabase()
-    setTable('company_settings', { data: null, error: { message: 'boom' } })
-
-    await expect(advanceInvoiceSeriesPastImported(supabase as never, 'company-1', imported)).rejects.toThrow(
-      'invoice series read failed',
-    )
+    await expect(readInvoiceSeries({ rpc } as never, 'company-1')).rejects.toBe(error)
   })
 })

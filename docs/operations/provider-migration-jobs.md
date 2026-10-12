@@ -111,9 +111,12 @@ retention flow.
 
 Historical invoice numbers are preserved. This worker does not change the
 company's invoice prefix or next number and does not create a separate number
-namespace. Before issuing new invoices after a migration, check those settings
-against the imported numbers. The existing company-wide unique index refuses
-collisions instead of issuing a duplicate number.
+namespace. An imported number that already exists in another spelling (`012`
+next to `12`) is refused like a taken number and lands in the review list. When
+the imported numbers stand above the company's next number, Accounted refuses
+to issue the next invoice under them (`INVOICE_NUMBER_SERIES_BEHIND`, migration
+20261012161600) and the first issue asks where the series continues: the number
+after the highest imported one, or a new prefix. Nothing is used up meanwhile.
 
 ## Local session with staging
 

@@ -25,6 +25,11 @@ import { invoiceDisplayNumber, isTextLikeLine } from '@/lib/invoices/display'
 import { getDisplayTotal, getAmountToPay } from '@/lib/invoices/rounding'
 import { workTypeLabel } from '@/lib/invoices/rot-rut-rules'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
+import {
+  continueInvoiceSeries,
+  readNextNumberPreview,
+  type SeriesContinuation,
+} from '@/lib/invoices/next-number-preview'
 import { creditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { getCreditNoteSendMode } from '@/lib/invoices/credit-note-send-mode'
 import { canCopyInvoice } from '@/lib/invoices/copy-invoice'
@@ -370,6 +375,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [showFinalizeDialog, setShowFinalizeDialog] = useState(false)
   const [isFinalizing, setIsFinalizing] = useState(false)
   const [nextNumberPreview, setNextNumberPreview] = useState<string | null>(null)
+  // Set when the series already has a higher number: the confirm continues it.
+  const [seriesContinuation, setSeriesContinuation] = useState<SeriesContinuation | null>(null)
   const [oreRounding, setOreRounding] = useState<boolean>(true)
   const [vatRegistered, setVatRegistered] = useState<boolean>(true)
   const [accountingMethod, setAccountingMethod] = useState<'accrual' | 'cash'>('accrual')
@@ -1484,25 +1491,21 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   }
 
   // Open the finalize dialog and peek the next F-number so the user can see
-  // which number they'll get before committing. Read-only (peek_next_invoice_number);
-  // the real number is allocated atomically on confirm and may differ by one if
-  // another invoice is created in between.
+  // which number they'll get before committing. Read-only; the real number is
+  // allocated atomically on confirm and may differ by one if another invoice
+  // is created in between. When the series already has a higher number (an
+  // import), the dialog offers the number that continues it instead.
   async function openFinalizeDialog() {
     if (refuseWithoutCustomer()) return
     setNextNumberPreview(null)
+    setSeriesContinuation(null)
     setShowFinalizeDialog(true)
     try {
       const r = await fetch('/api/invoices/next-number?document_type=invoice')
       if (r.ok) {
-        const json = await r.json()
-        const preview = json?.data?.preview
-        // Only show a value that looks like a real invoice number. Guards the
-        // preview against an unexpected/oversized API response being rendered
-        // verbatim, a short alphanumeric token (optional series prefix), never
-        // free-form text.
-        setNextNumberPreview(
-          typeof preview === 'string' && /^[A-Za-z0-9-]{1,32}$/.test(preview) ? preview : null
-        )
+        const read = readNextNumberPreview(await r.json())
+        setNextNumberPreview(read.preview)
+        setSeriesContinuation(read.continuation)
       }
     } catch {
       // Best-effort preview; the dialog still works without it.
@@ -1518,6 +1521,13 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     setIsFinalizing(true)
 
     try {
+      // The confirm said where the series continues: save it first, so the
+      // number below is the one the dialog showed.
+      if (seriesContinuation) {
+        const continued = await continueInvoiceSeries(seriesContinuation)
+        if (!continued.ok) throw new Error(getUserErrorMessage(continued.error))
+      }
+
       const response = await fetch(`/api/invoices/${invoice.id}/finalize`, {
         method: 'POST',
       })
@@ -3080,18 +3090,30 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             <DialogTitle>{t('finalize_dialog_title')}</DialogTitle>
             <DialogDescription>{t('finalize_dialog_desc')}</DialogDescription>
           </DialogHeader>
-          {nextNumberPreview && (
+          {(seriesContinuation?.number ?? nextNumberPreview) && (
             <div className="flex items-center justify-between rounded-lg border border-border bg-secondary/40 px-4 py-3">
               <span className="text-sm text-muted-foreground">{t('finalize_dialog_number_label')}</span>
-              <span className="text-base font-medium tabular-nums">{nextNumberPreview}</span>
+              <span className="text-base font-medium tabular-nums">
+                {seriesContinuation?.number ?? nextNumberPreview}
+              </span>
             </div>
+          )}
+          {seriesContinuation && (
+            <AttnLine>
+              {t('finalize_series_continues', {
+                highest: seriesContinuation.highest,
+                number: seriesContinuation.number,
+              })}
+            </AttnLine>
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowFinalizeDialog(false)} disabled={isFinalizing}>
               {t('finalize_dialog_cancel')}
             </Button>
             <Button onClick={finalizeInvoice} loading={isFinalizing}>
-              {t('finalize_dialog_confirm')}
+              {seriesContinuation
+                ? t('finalize_dialog_confirm_continue', { number: seriesContinuation.number })
+                : t('finalize_dialog_confirm')}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -1998,8 +1998,8 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   },
   INVOICE_UPDATE_DOCUMENT_TYPE_LOCKED: {
     httpStatus: 400,
-    message_sv: 'Dokumenttypen kan inte ändras på en offert eller följesedel: numret hör till serien. Skapa ett nytt dokument i stället.',
-    message_en: 'The document type of a quote or delivery note cannot change: its number belongs to that series. Create a new document instead.',
+    message_sv: 'Dokumenttypen kan inte ändras på en offert, en följesedel eller ett dokument som redan har fått nummer: numret hör till serien. Skapa ett nytt dokument i stället.',
+    message_en: 'The document type of a quote, a delivery note or an already numbered document cannot change: its number belongs to that series. Create a new document instead.',
   },
   INVOICE_PAYMENT_CONFIRMATION_NOT_PAID: {
     httpStatus: 409,
@@ -7242,6 +7242,16 @@ const COMPANY_SETTINGS: Record<string, StructuredErrorEntry> = {
     message_sv: 'Enskild firma måste använda kalenderår (BFL 3 kap.)',
     message_en: 'An enskild firma must use the calendar year: fiscal_year_start_month must be 1 (BFL 3 kap.).',
   },
+  // The settings service composes the message with the series' highest
+  // number; this is the fallback.
+  SETTINGS_INVOICE_NUMBER_IN_SERIES: {
+    httpStatus: 400,
+    message_sv:
+      'Nästa fakturanummer finns redan eller ligger under ett nummer som redan finns i nummerserien. Ange ett nummer efter det högsta, eller ett nytt prefix för en ny nummerserie.',
+    message_en:
+      'next_invoice_number is already used or lies under a number the series already has. Choose a number past the highest one (details.first_allowed), or a new invoice_prefix.',
+    thrown_message_sv: true,
+  },
   SETTINGS_SHARE_CAPITAL_PAIR: {
     httpStatus: 400,
     message_sv: 'Aktiekapital och antal aktier måste anges tillsammans. Fyll i båda fälten eller lämna båda tomma.',
@@ -7341,6 +7351,24 @@ const DB_CONFLICTS = {
     httpStatus: 409,
     message_sv: 'Banksynkningen har stannat: kontovalet för bankkopplingen behöver sparas om. Öppna Välj konton och spara igen.',
     message_en: 'Bank sync has stopped: the account selection for this bank connection needs to be saved again. Open Choose accounts and save again.',
+  },
+  // 20261012161600: generate_invoice_number found a higher number in the
+  // company's own series, so the next one would fill a hole in it or restart
+  // it (ML 17 kap 24 § p. 2). Nothing was used up. lib/invoices/
+  // ensure-invoice-number.ts composes the message with the numbers; this one
+  // is the fallback for an envelope without them.
+  INVOICE_NUMBER_SERIES_BEHIND: {
+    httpStatus: 409,
+    message_sv:
+      'Det finns redan fakturor med högre nummer i nummerserien. Ställ in Nästa fakturanummer efter det högsta numret under Inställningar > Fakturor, eller lägg till ett prefix för en ny nummerserie.',
+    message_en:
+      'The invoice series already has a higher number, so the next invoice would land inside or under the series. Set next_invoice_number past the highest number (details.first_allowed), or an invoice_prefix for a new series, then retry.',
+    thrown_message_sv: true,
+    remediation: {
+      description:
+        'Ställ in nästa fakturanummer på details.first_allowed eller högre, eller ett nytt fakturaprefix, och försök igen.',
+      tool: 'gnubok_update_company_settings',
+    },
   },
 } satisfies Record<string, StructuredErrorEntry>
 

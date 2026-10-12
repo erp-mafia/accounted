@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
-import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { ensureInvoiceNumber, InvoiceNumberSeriesBehindError } from '@/lib/invoices/ensure-invoice-number'
 import { convertToSEK, fetchExchangeRate } from '@/lib/currency/riksbanken'
 import type { Invoice } from '@/types'
 
@@ -42,6 +42,14 @@ export type ConvertToInvoiceResult =
   | { ok: true; invoice: Invoice }
   | { ok: false; code: ConvertToInvoiceFailureCode }
   | { ok: false; code: 'INVOICE_CONVERT_FAILED'; cause: Error | { message: string } }
+  /** The series already has a higher number: nothing was used up, the source is restored. */
+  | {
+      ok: false
+      code: 'INVOICE_NUMBER_SERIES_BEHIND'
+      messageSv: string
+      messageEn: string
+      details: Record<string, unknown>
+    }
 
 interface SourceItem {
   sort_order: number
@@ -350,6 +358,15 @@ export async function convertToInvoice(params: {
         .eq('id', sourceId)
     }
     await supabase.from('invoices').delete().eq('id', invoice.id)
+    if (err instanceof InvoiceNumberSeriesBehindError) {
+      return {
+        ok: false,
+        code: err.code,
+        messageSv: err.message,
+        messageEn: err.messageEn,
+        details: { ...err.details },
+      }
+    }
     return {
       ok: false,
       code: 'INVOICE_CONVERT_FAILED',

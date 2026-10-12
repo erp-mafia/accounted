@@ -47,7 +47,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
-import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { ensureInvoiceNumber, invoiceNumberingFailure } from '@/lib/invoices/ensure-invoice-number'
 import { recordManualInvoiceDelivery } from '@/lib/invoices/invoice-deliveries'
 import {
   hasRequiredInvoicePaymentAccount,
@@ -287,8 +287,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         invoiceId,
         companyId: ctx.companyId,
       })
-      return v1ErrorResponseFromCode('INVOICE_SEND_NUMBER_ASSIGN_FAILED', ctx.log, {
+      const failure = invoiceNumberingFailure(err, 'INVOICE_SEND_NUMBER_ASSIGN_FAILED')
+      return v1ErrorResponseFromCode(failure.code, ctx.log, {
         requestId: ctx.requestId,
+        ...(failure.details ? { details: failure.details } : {}),
       })
     }
 

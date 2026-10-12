@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
-import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { ensureInvoiceNumber, invoiceNumberingFailure } from '@/lib/invoices/ensure-invoice-number'
 import {
   creditNoteNeedsJournalEntry,
   issueCreditNote,
@@ -120,6 +120,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       return errorResponseFromCode(result.errorCode, log, {
         requestId,
         ...(result.details ? { details: result.details } : {}),
+        ...(result.messageSv ? { messageSv: result.messageSv, messageEn: result.messageEn } : {}),
       })
     }
 
@@ -151,7 +152,13 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
   } catch (err) {
     log.error('failed to assign invoice number on mark-sent', err as Error)
-    return errorResponseFromCode('INVOICE_CREATE_NUMBER_ASSIGN_FAILED', log, { requestId })
+    const failure = invoiceNumberingFailure(err, 'INVOICE_CREATE_NUMBER_ASSIGN_FAILED')
+    return errorResponseFromCode(failure.code, log, {
+      requestId,
+      messageSv: failure.messageSv,
+      messageEn: failure.messageEn,
+      details: failure.details,
+    })
   }
 
   const accountingMethod = (settings.accounting_method || 'accrual') as AccountingMethod

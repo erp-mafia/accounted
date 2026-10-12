@@ -19,7 +19,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
 import { getVatRules, getPermittedVatRates } from '@/lib/invoices/vat-rules'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
-import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { ensureInvoiceNumber, InvoiceNumberSeriesBehindError } from '@/lib/invoices/ensure-invoice-number'
 import {
   applyRecurringPlaceholders,
   buildRecurringPlaceholderValues,
@@ -449,6 +449,19 @@ export async function executeRecurringSchedule(
   try {
     await ensureInvoiceNumber(supabase, schedule.company_id, invoice as Invoice)
   } catch (err) {
+    // The series refusal used up nothing, so the unnumbered row can go (no
+    // number, no gap), and the refusal itself is the run's reason: it names
+    // the number the company sets for the series to continue.
+    if (err instanceof InvoiceNumberSeriesBehindError) {
+      await supabase
+        .from('invoices')
+        .delete()
+        .eq('id', invoice.id)
+        .eq('company_id', schedule.company_id)
+        .eq('status', 'draft')
+        .is('invoice_number', null)
+      throw err
+    }
     // Soft-cancel to preserve the F-series sequence (ML 17 kap 24§).
     await supabase
       .from('invoices')

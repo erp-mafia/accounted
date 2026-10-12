@@ -225,7 +225,7 @@ import {
   resolveInvoiceReplyTo,
 } from '@/lib/invoices/email-recipients'
 import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
-import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { ensureInvoiceNumber, InvoiceNumberSeriesBehindError } from '@/lib/invoices/ensure-invoice-number'
 import { convertToInvoice } from '@/lib/invoices/convert-to-invoice'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import {
@@ -3001,6 +3001,9 @@ async function commitSendInvoice(
   try {
     await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
   } catch (err) {
+    if (err instanceof InvoiceNumberSeriesBehindError) {
+      return { error: err.message, errorCode: err.code, status: 409 }
+    }
     return { error: `Failed to assign invoice number: ${err instanceof Error ? err.message : 'unknown'}`, status: 500 }
   }
 
@@ -3245,6 +3248,9 @@ async function commitMarkInvoiceSent(
   try {
     await ensureInvoiceNumber(supabase, companyId, invoice as Invoice)
   } catch (err) {
+    if (err instanceof InvoiceNumberSeriesBehindError) {
+      return { error: err.message, errorCode: err.code, status: 409 }
+    }
     return { error: `Failed to assign invoice number: ${err instanceof Error ? err.message : 'unknown'}`, status: 500 }
   }
 
@@ -5511,6 +5517,9 @@ async function commitConvertInvoice(
   if (!result.ok) {
     if (result.code === 'INVOICE_CONVERT_FAILED') {
       return { error: result.cause.message, errorCode: result.code, status: 500 }
+    }
+    if (result.code === 'INVOICE_NUMBER_SERIES_BEHIND') {
+      return { error: result.messageSv, errorCode: result.code, status: 409 }
     }
     const entry = getErrorEntry(result.code)
     return {

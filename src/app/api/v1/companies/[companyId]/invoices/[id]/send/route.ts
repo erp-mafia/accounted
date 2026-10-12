@@ -74,7 +74,7 @@ import {
 } from '@/lib/invoices/issue-and-book-invoice'
 import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
-import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { ensureInvoiceNumber, invoiceNumberingFailure } from '@/lib/invoices/ensure-invoice-number'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import {
   reserveInvoiceDelivery,
@@ -527,8 +527,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         invoiceId,
         companyId: ctx.companyId,
       })
-      return v1ErrorResponseFromCode('INVOICE_SEND_NUMBER_ASSIGN_FAILED', ctx.log, {
+      const failure = invoiceNumberingFailure(err, 'INVOICE_SEND_NUMBER_ASSIGN_FAILED')
+      return v1ErrorResponseFromCode(failure.code, ctx.log, {
         requestId: ctx.requestId,
+        ...(failure.details ? { details: failure.details } : {}),
       })
     }
 

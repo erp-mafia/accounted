@@ -28,6 +28,7 @@ import {
   ANNUAL_REPORT_RULES,
   ARCHIVE_RULES,
   BEHANDLINGSHISTORIK_RULES,
+  INVOICE_NUMBER_RULES,
   SIE_IMPORT_RULES,
   SUPPLIER_INVOICE_ROUNDING_RULES,
   SUPPLIER_PAYMENT_RULES,
@@ -1779,6 +1780,8 @@ async function buildSystemDoc(
     // here (company_settings.default_voucher_series_per_source_type and
     // cash_accounts.voucher_series); changes to both are in behandlingshistorik.
     verifikationsserier_regler: VOUCHER_SERIES_RULES,
+    // ML 17 kap 24 § p. 2: how a sales invoice gets its löpnummer.
+    fakturanummer_regler: INVOICE_NUMBER_RULES,
     leverantorsbetalningar_regler: SUPPLIER_PAYMENT_RULES,
     arkivering: ARCHIVE_RULES,
     arsredovisning: ANNUAL_REPORT_RULES,

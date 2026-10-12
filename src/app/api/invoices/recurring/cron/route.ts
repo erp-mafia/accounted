@@ -204,7 +204,9 @@ export const GET = withCronContext('cron.recurring_invoices', async (_request, c
     try {
       result = await executeRecurringSchedule(supabase, schedule, now, { suppressAutoSend })
     } catch (err) {
-      const reason = (err instanceof Error ? err.message : String(err)).slice(0, 300)
+      // A sentence written for the user (the invoice series refusal) ends in a
+      // full stop of its own; the template adds one.
+      const reason = (err instanceof Error ? err.message : String(err)).slice(0, 300).replace(/\.$/, '')
       await supabase
         .from('recurring_invoice_schedules')
         .update({

@@ -18,7 +18,7 @@ import {
   type IssuableInvoice,
 } from '@/lib/invoices/issue-and-book-invoice'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
-import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { ensureInvoiceNumber, invoiceNumberingFailure } from '@/lib/invoices/ensure-invoice-number'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
 import {
   issueCreditNote,
@@ -338,8 +338,16 @@ export const POST = withRouteContext(
     try {
       await ensureInvoiceNumber(supabase, companyId!, invoice as Invoice)
     } catch (err) {
+      // A series refusal used up nothing; the reservation above is reused by
+      // this user's retry once the company has set where its series continues.
       opLog.error('failed to assign invoice number on send', err as Error)
-      return errorResponseFromCode('INVOICE_SEND_NUMBER_ASSIGN_FAILED', opLog, { requestId })
+      const failure = invoiceNumberingFailure(err, 'INVOICE_SEND_NUMBER_ASSIGN_FAILED')
+      return errorResponseFromCode(failure.code, opLog, {
+        requestId,
+        messageSv: failure.messageSv,
+        messageEn: failure.messageEn,
+        details: failure.details,
+      })
     }
 
     // Auto-create an online payment link (extension-provided, e.g. Stripe) now

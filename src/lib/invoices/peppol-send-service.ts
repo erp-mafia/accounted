@@ -39,7 +39,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
-import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import { ensureInvoiceNumber, invoiceNumberingFailure } from '@/lib/invoices/ensure-invoice-number'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import {
   finishIssuedInvoice,
@@ -363,7 +363,11 @@ export async function sendInvoiceViaPeppol(
       invoice.invoice_number = await ensureInvoiceNumber(supabase, companyId, invoice)
     } catch (err) {
       log.error('failed to assign invoice number before Peppol send', err as Error)
-      return refuse('INVOICE_CREATE_NUMBER_ASSIGN_FAILED')
+      const failure = invoiceNumberingFailure(err, 'INVOICE_CREATE_NUMBER_ASSIGN_FAILED')
+      return refuse(failure.code, {
+        ...(failure.details ? { details: failure.details } : {}),
+        ...(failure.messageSv ? { messageSv: failure.messageSv } : {}),
+      })
     }
   }
 

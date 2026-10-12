@@ -130,6 +130,20 @@ describe('PATCH /api/invoices/[id]', () => {
     expect(body.error.code).toBe('INVOICE_UPDATE_NOT_DRAFT')
   })
 
+  it('refuses to turn a numbered faktura draft into a proforma: its number belongs to the F series', async () => {
+    enqueue({
+      data: { id: 'inv-1', status: 'draft', invoice_number: 'F-042', journal_entry_id: null, is_self_billed: false, document_type: 'invoice' },
+      error: null,
+    })
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: unknown } }>(
+      await patch('inv-1', { ...VALID_BODY, document_type: 'proforma' }),
+    )
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_UPDATE_DOCUMENT_TYPE_LOCKED')
+    expect(body.error.details).toEqual({ from: 'invoice', to: 'proforma' })
+  })
+
   it('refuses to edit a draft that already carries a journal entry', async () => {
     enqueue({
       data: { id: 'inv-1', status: 'draft', invoice_number: 'F-1', journal_entry_id: 'je-1', is_self_billed: false },

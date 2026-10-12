@@ -539,6 +539,57 @@ describe('POST /api/invoices (create invoice)', () => {
     expect(status).toBe(500)
     expect((body.error as unknown as { code: string }).code).toBe('INVOICE_CREATE_NUMBER_ASSIGN_FAILED')
   })
+
+  it('removes the unnumbered row when the series already has a higher number: nothing was used up', async () => {
+    const customer = makeCustomer({ id: VALID_UUID })
+    const createdInvoice = makeInvoice({ id: 'inv-1', invoice_number: null })
+
+    mockGetVatRules.mockReturnValue({
+      treatment: 'standard_25',
+      rate: 25,
+      momsRuta: '10',
+      reverseChargeText: null,
+    })
+    mockGetAvailableVatRates.mockReturnValue([{ rate: 25, label: '25%', treatment: 'standard_25' }])
+
+    enqueue({ data: customer, error: null })
+    enqueue({ data: { vat_registered: true }, error: null })
+    enqueue({ data: createdInvoice, error: null })
+    enqueue({ data: null, error: null }) // items
+    enqueue({
+      data: null,
+      error: {
+        code: 'PT409',
+        message: 'INVOICE_NUMBER_SERIES_BEHIND',
+        details: JSON.stringify({ prefix: '', next_invoice_number: 1, highest_number: 114647, first_allowed: 114648 }),
+      },
+    })
+    enqueue({ data: null, error: null }) // delete of the unnumbered draft
+
+    const request = createMockRequest('/api/invoices', {
+      method: 'POST',
+      body: {
+        customer_id: VALID_UUID,
+        invoice_date: '2024-06-15',
+        due_date: '2024-07-15',
+        currency: 'SEK',
+        items: [{ description: 'Test', quantity: 1, unit: 'st', unit_price: 1000 }],
+      },
+    })
+    const response = await POST(request, { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; details: Record<string, unknown> }
+    }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('INVOICE_NUMBER_SERIES_BEHIND')
+    expect(body.error.message).toContain('114648 eller högre')
+    expect(body.error.details).toEqual({ prefix: '', highest_number: 114647, first_allowed: 114648 })
+    const removal = findCall('invoices', 'delete')
+    expect(removal).toBeDefined()
+    // Never a soft-cancelled leftover: the row had no number to keep.
+    expect(findCall('invoices', 'update')).toBeUndefined()
+  })
 })
 
 describe('POST /api/invoices (create credit note)', () => {

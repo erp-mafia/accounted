@@ -347,6 +347,97 @@ describe('PUT /api/settings', () => {
     expect(supabase.from).toHaveBeenCalledTimes(1)
   })
 
+  // ML 17 kap 24 § p. 2: a next number the series already has, or one under
+  // its highest number, would fill a hole in the series or restart it.
+  it('refuses a next invoice number the series already has, naming the number to use', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', invoice_prefix: null, next_invoice_number: 1 } }, // oldSettings
+      {
+        data: { prefix: '', next_invoice_number: 667, next_number: '669', highest_number: 668, behind: false, first_allowed: 669 },
+      }, // invoice_number_series_status
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { next_invoice_number: 667 },
+    }), { params: Promise.resolve({}) })
+    // The settings page answers a refusal with its Swedish sentence.
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toContain('upp till 668')
+    expect(body.error).toContain('669 eller högre')
+    expect(supabase.rpc).toHaveBeenCalledWith('invoice_number_series_status', {
+      p_company_id: 'company-1',
+      p_document_type: 'invoice',
+      p_prefix: '',
+      p_next_number: 667,
+    })
+    // Refused before the update: only the oldSettings fetch touched a table.
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('accepts a next invoice number past the highest one in the series', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', invoice_prefix: null, next_invoice_number: 1 } }, // oldSettings
+      {
+        data: { prefix: '', next_invoice_number: 669, next_number: '669', highest_number: 668, behind: false, first_allowed: 669 },
+      }, // invoice_number_series_status
+      { data: { id: 's1', next_invoice_number: 669 } }, // update ... returning
+      { data: null, count: 5 }, // deadlines count
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { next_invoice_number: 669 },
+    }), { params: Promise.resolve({}) })
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+  })
+
+  it('judges a new prefix as its own series', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', invoice_prefix: null, next_invoice_number: 1 } }, // oldSettings
+      {
+        data: { prefix: 'F', next_invoice_number: 1, next_number: 'F001', highest_number: null, behind: false, first_allowed: 1 },
+      }, // invoice_number_series_status
+      { data: { id: 's1', invoice_prefix: 'F' } }, // update ... returning
+      { data: null, count: 5 }, // deadlines count
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { invoice_prefix: 'F' },
+    }), { params: Promise.resolve({}) })
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(supabase.rpc).toHaveBeenCalledWith(
+      'invoice_number_series_status',
+      expect.objectContaining({ p_prefix: 'F', p_next_number: 1 }),
+    )
+  })
+
+  it('leaves the series alone when the save keeps the prefix and the next number', async () => {
+    // A company an import left behind can still save other settings: the
+    // first issue asks where the series continues instead.
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', invoice_prefix: null, next_invoice_number: 1 } }, // oldSettings
+      { data: { id: 's1', company_name: 'Nytt namn' } }, // update ... returning
+      { data: null, count: 5 }, // deadlines count
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { company_name: 'Nytt namn', invoice_prefix: '', next_invoice_number: 1 },
+    }), { params: Promise.resolve({}) })
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(supabase.rpc).not.toHaveBeenCalledWith('invoice_number_series_status', expect.anything())
+  })
+
   it('rejects clearing only one half of a stored share-capital pair', async () => {
     enqueue({
       data: {

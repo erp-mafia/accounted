@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import {
+  ensureInvoiceNumber,
+  invoiceNumberingFailure,
+  InvoiceNumberSeriesBehindError,
+} from '@/lib/invoices/ensure-invoice-number'
 
 type MockChain = {
   from: ReturnType<typeof vi.fn>
@@ -85,6 +89,52 @@ describe('ensureInvoiceNumber', () => {
     await expect(
       ensureInvoiceNumber(supabase as never, 'company-1', invoice)
     ).rejects.toThrow('no value returned')
+  })
+
+  it("turns the RPC's series refusal into InvoiceNumberSeriesBehindError with its numbers", async () => {
+    const invoice: { id: string; invoice_number: string | null } = { id: 'inv-1', invoice_number: null }
+    supabase.rpc.mockResolvedValue({
+      data: null,
+      error: {
+        code: 'PT409',
+        message: 'INVOICE_NUMBER_SERIES_BEHIND',
+        details: JSON.stringify({ prefix: '', next_invoice_number: 1, highest_number: 1002, first_allowed: 1003 }),
+      },
+    })
+
+    const err = await ensureInvoiceNumber(supabase as never, 'company-1', invoice).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(InvoiceNumberSeriesBehindError)
+    const behind = err as InvoiceNumberSeriesBehindError
+    expect(behind.code).toBe('INVOICE_NUMBER_SERIES_BEHIND')
+    expect(behind.details).toEqual({ prefix: '', highest_number: 1002, first_allowed: 1003 })
+    expect(behind.message).toContain('upp till 1002')
+    expect(behind.message).toContain('1003 eller högre')
+    // Nothing was written back.
+    expect(invoice.invoice_number).toBeNull()
+  })
+
+  it('keeps other RPC failures a plain error', async () => {
+    const invoice = { id: 'inv-1', invoice_number: null }
+    supabase.rpc.mockResolvedValue({ data: null, error: { code: 'PT409', message: 'SOMETHING_ELSE', details: null } })
+
+    const err = await ensureInvoiceNumber(supabase as never, 'company-1', invoice).catch((e: unknown) => e)
+
+    expect(err).not.toBeInstanceOf(InvoiceNumberSeriesBehindError)
+    expect((err as Error).message).toContain('Failed to assign invoice number')
+  })
+
+  it('answers a series refusal with its own code and sentence, anything else with the fallback', () => {
+    const behind = new InvoiceNumberSeriesBehindError({ prefix: 'F-', highest_number: 42, first_allowed: 43 })
+    expect(invoiceNumberingFailure(behind, 'INVOICE_CREATE_NUMBER_ASSIGN_FAILED')).toEqual({
+      code: 'INVOICE_NUMBER_SERIES_BEHIND',
+      messageSv: behind.message,
+      messageEn: behind.messageEn,
+      details: { prefix: 'F-', highest_number: 42, first_allowed: 43 },
+    })
+    expect(invoiceNumberingFailure(new Error('boom'), 'INVOICE_SEND_NUMBER_ASSIGN_FAILED')).toEqual({
+      code: 'INVOICE_SEND_NUMBER_ASSIGN_FAILED',
+    })
   })
 
   it('returns the external number for a self-billed invoice without touching the RPC', async () => {

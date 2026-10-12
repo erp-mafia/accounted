@@ -28,6 +28,7 @@ import {
   ARCHIVE_RULES,
   BEHANDLINGSHISTORIK_RULES,
   CORRECTION_AND_LOCK_RULES,
+  INVOICE_NUMBER_RULES,
   SIE_IMPORT_RULES,
   SUPPLIER_INVOICE_ROUNDING_RULES,
   SUPPLIER_PAYMENT_RULES,
@@ -256,6 +257,9 @@ export function buildSystemdokumentation(facts: SystemdokumentationFacts): Syste
   const behandlingsregler: SystemdokumentationRule[] = [
     { rubrik: 'Verifikationsnummer', text: 'Tilldelas i löpande följd av databasfunktionen commit_journal_entry vid bokföring, unikt per företag, räkenskapsår och serie, säkert vid samtidiga anrop. Kan inte sättas manuellt. Luckor förklaras i systemets funktion för nummerluckor och förklaringarna bevaras.' },
     { rubrik: 'Balanskontroll', text: 'Varje verifikation måste balansera (debet lika med kredit, båda större än noll); databasen avvisar allt annat.' },
+    { rubrik: 'Fakturanummer, serie', text: `${INVOICE_NUMBER_RULES.serie} ${INVOICE_NUMBER_RULES.nasta_nummer}` },
+    { rubrik: 'Fakturanummer, unika och i ordning', text: `${INVOICE_NUMBER_RULES.unikt} ${INVOICE_NUMBER_RULES.ordning}` },
+    { rubrik: 'Fakturanummer, införande', text: INVOICE_NUMBER_RULES.andring },
     { rubrik: 'Öresavrundning på kundfakturor', text: oreDefault ? 'Företagsinställningen avrundar fakturabeloppet till hel krona; skillnaden bokförs på 3740 utan moms.' : 'Företagsinställningen är avstängd: kundfakturor avrundas inte till hel krona.' },
     { rubrik: 'Öresavrundning på leverantörsfakturor', text: SUPPLIER_INVOICE_ROUNDING_RULES.val },
     { rubrik: 'Öresavrundning, registrering', text: SUPPLIER_INVOICE_ROUNDING_RULES.registrering },

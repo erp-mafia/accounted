@@ -115,9 +115,15 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     // Quotes and delivery notes are numbered at insert from their own series,
     // so their type is fixed: turning OF-007 into a faktura would carry a
-    // quote number into the F-series (and vice versa).
+    // quote number into the F-series (and vice versa). Since 20261012161600 a
+    // proforma has its own PF- series too, so a numbered draft keeps its type:
+    // F042 becoming a proforma (or PF-003 a faktura) would carry its number
+    // into the other series. An unnumbered draft still switches freely.
     const seriesLocked = (t: InvoiceDocumentType) => t === 'quote' || t === 'delivery_note'
-    if (existingType !== documentType && (seriesLocked(existingType) || seriesLocked(documentType))) {
+    if (
+      existingType !== documentType &&
+      (seriesLocked(existingType) || seriesLocked(documentType) || Boolean(existing.invoice_number))
+    ) {
       return errorResponseFromCode('INVOICE_UPDATE_DOCUMENT_TYPE_LOCKED', ctxLog, {
         requestId,
         details: { from: existingType, to: documentType },

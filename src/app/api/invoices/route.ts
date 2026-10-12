@@ -3,7 +3,11 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
 import { CreateInvoiceSchema, CreateCreditNoteSchema } from '@/lib/api/schemas'
 import type { Invoice, InvoiceDocumentType, InvoiceItem } from '@/types'
-import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
+import {
+  ensureInvoiceNumber,
+  invoiceNumberingFailure,
+  InvoiceNumberSeriesBehindError,
+} from '@/lib/invoices/ensure-invoice-number'
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
 import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
 import { buildCreditNoteItem } from '@/lib/invoices/build-credit-note-item'
@@ -240,6 +244,31 @@ export const POST = withRouteContext(
       try {
         await ensureInvoiceNumber(supabase, companyId!, invoice as Invoice)
       } catch (err) {
+        // The series refusal uses up nothing (generate_invoice_number rolls back
+        // before any write), so the unnumbered row can go: no number, no gap.
+        // The editor keeps the form, and the create after the company set
+        // where its series continues starts clean.
+        if (err instanceof InvoiceNumberSeriesBehindError) {
+          const { error: deleteErr } = await supabase
+            .from('invoices')
+            .delete()
+            .eq('id', invoice.id)
+            .eq('company_id', companyId!)
+            .eq('status', 'draft')
+            .is('invoice_number', null)
+          if (deleteErr) {
+            log.error('invoice series refusal: unnumbered draft could not be removed', deleteErr, {
+              invoiceId: invoice.id,
+            })
+          }
+          const failure = invoiceNumberingFailure(err, 'INVOICE_CREATE_NUMBER_ASSIGN_FAILED')
+          return errorResponseFromCode(failure.code, log, {
+            requestId,
+            messageSv: failure.messageSv,
+            messageEn: failure.messageEn,
+            details: failure.details,
+          })
+        }
         // Soft-cancel rather than hard-delete: if generate_invoice_number bumped
         // the sequence before failing to write the number back, hard-deleting
         // would leave a permanent gap in the F-series in violation of ML 17 kap
