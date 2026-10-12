@@ -44,12 +44,24 @@ describe('readVacationBalance', () => {
     expect(result.ok).toBe(true)
     if (result.ok) {
       expect(result.data.remaining_days).toBe(15)
+      expect(result.data.remaining_days_off).toBe(15)
       expect(result.data.saved_days).toEqual({ '2024': 2, '2025': 5 })
       expect(result.data.saved_days_total).toBe(7)
       expect(result.data.unpaid_days).toBe(0)
       expect(result.data.advance_days).toBe(0)
       expect(result.data.estimated_liability_sek).toBeGreaterThan(0)
     }
+  })
+
+  it('answers the days still to take off, fewer than the paid days on a short week', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    // 25 paid days at four days a week are 20 days off, so 15 paid days are 12.
+    enqueueMany([{ data: { ...EMPLOYEE, workdays_per_week: 4 } }, { data: BALANCE }])
+
+    const result = await readVacationBalance(supabase as never, ARGS)
+
+    expect(result.ok && result.data.remaining_days).toBe(15)
+    expect(result.ok && result.data.remaining_days_off).toBe(12)
   })
 
   it('floors the estimate at zero for an overdrawn balance', async () => {

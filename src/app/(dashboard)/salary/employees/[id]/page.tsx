@@ -22,6 +22,7 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { vacationDaysFromInput, vacationPayRateFromPercentInput, vacationPayRateToPercent } from '@/lib/salary/vacation-pay-rate'
+import { daysOffPerYear } from '@/lib/salary/vacation-net-days'
 import {
   validateEmployeeBankAccount,
   isValidClearing,
@@ -342,6 +343,9 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
     .sort((a, b) => Number(a) - Number(b))
     .map((k) => savedDimensions[k])
     .join(' · ')
+  // Under five workdays a week the paid days are taken as fewer days off
+  // (25 paid days are 20 days off at four days a week, semesterlagen 12 a §).
+  const vacationDaysOff = daysOffPerYear(employee.vacation_days_per_year, employee.workdays_per_week)
   const salaryValue =
     employee.salary_type === 'hourly'
       ? employee.hourly_rate != null
@@ -474,6 +478,12 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
         </DefRow>
         <DefRow label={t('form_vacation_days')}>
           <span className="tabular-nums">{employee.vacation_days_per_year}</span>
+          {vacationDaysOff !== employee.vacation_days_per_year && (
+            <span className="text-muted-foreground">
+              {' · '}
+              {t('detail_vacation_days_off', { days: vacationDaysOff, workdays: employee.workdays_per_week ?? 5 })}
+            </span>
+          )}
         </DefRow>
         {employee.vacation_pay_rate != null && (
           <DefRow label={t('form_vacation_pay_rate')}>
@@ -665,7 +675,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="workdays_per_week">{t('form_workdays_per_week')}</Label>
-                      <Input id="workdays_per_week" name="workdays_per_week" type="number" defaultValue={employee.workdays_per_week ?? 5} min="1" max="7" step="1" disabled={!canWrite} />
+                      <Input id="workdays_per_week" name="workdays_per_week" type="number" defaultValue={employee.workdays_per_week ?? 5} min="1" max="7" step="0.01" disabled={!canWrite} />
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="salary_type">{t('form_salary_type')}<RequiredMark /></Label>

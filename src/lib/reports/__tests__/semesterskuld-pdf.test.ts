@@ -13,6 +13,7 @@ const report: VacationLiabilityReport = {
       vacationDaysEntitled: 25,
       vacationDaysTaken: 5.5,
       vacationDaysRemaining: 19.5,
+      vacationDaysOffRemaining: null,
       vacationDaysSaved: 3,
       accruedAmount: 14200,
       accruedAvgifter: 4461.64,

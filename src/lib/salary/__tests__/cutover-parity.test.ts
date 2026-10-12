@@ -88,8 +88,9 @@ const LEGACY_OPENING_ROW = {
  */
 const NEW_LEDGER_DEFAULTS = { unpaid_days: 0, advance_days: 0, saved_days_taken: {} }
 // netLiability equals totalLiability whenever no förskottsskuld is loaded, so
-// its neutral value is the captured total, not zero.
-const NEW_LIABILITY_ROW_DEFAULTS = { advanceVacationDebt: 0, netLiability: 66235.68 }
+// its neutral value is the captured total, not zero. A five-day week has no
+// separate days-off figure (vacationDaysOffRemaining null).
+const NEW_LIABILITY_ROW_DEFAULTS = { advanceVacationDebt: 0, netLiability: 66235.68, vacationDaysOffRemaining: null }
 const NEW_LIABILITY_TOTALS_DEFAULTS = { advanceVacationDebt: 0, netLiability: 66235.68 }
 
 function omit<T extends Record<string, unknown>>(obj: T, keys: string[]): Record<string, unknown> {

@@ -61,7 +61,7 @@ describe('syncVacationLedgerForEmployees', () => {
 
   const queueBase = (over: {
     basis?: string
-    booked?: Array<{ employee_id: string; vacation_days_taken: number; salary_run: { period_year: number; period_month: number; status: string } }>
+    booked?: Array<{ employee_id: string; vacation_days_taken: number; vacation_paid_days_per_day_off?: number | null; salary_run: { period_year: number; period_month: number; status: string } }>
     openRows?: Array<Record<string, unknown>>
     opening?: Array<Record<string, unknown>>
     savedLegacy?: number
@@ -105,6 +105,25 @@ describe('syncVacationLedgerForEmployees', () => {
     expect(row.taken_days).toBe(5)
     // Calendar basis: sammanfallande year, accrued stays 0.
     expect(row.accrued_days).toBe(0)
+  })
+
+  it('counts a short week\'s days off as paid days at each payslip\'s factor (Semesterlagen 12 a §)', async () => {
+    // Four days a week: 20 days off use the year's 25 paid days, so nothing
+    // is left to save or pay out at the year close.
+    queueBase({
+      booked: [
+        { employee_id: EMPLOYEE_ID, vacation_days_taken: 15, vacation_paid_days_per_day_off: 1.25, salary_run: { period_year: 2026, period_month: 6, status: 'booked' } },
+        { employee_id: EMPLOYEE_ID, vacation_days_taken: 5, vacation_paid_days_per_day_off: 1.25, salary_run: { period_year: 2026, period_month: 7, status: 'booked' } },
+      ],
+    })
+
+    const result = await syncVacationLedgerForEmployees(supabase, COMPANY_ID, [EMPLOYEE_ID], '2026-07-13')
+    expect(result.ok).toBe(true)
+    const row = upserted![0]
+    expect(row.entitled_days).toBe(25)
+    expect(row.taken_days).toBe(25)
+    const select = String(mock.findCall('salary_run_employees', 'select')?.[0] ?? '')
+    expect(select).toContain('vacation_paid_days_per_day_off')
   })
 
   it('pro-rates entitled days for a mid-intjänandeår hire (Semesterlagen 7 §)', async () => {

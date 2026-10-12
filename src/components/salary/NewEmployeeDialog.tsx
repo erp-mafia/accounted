@@ -385,7 +385,7 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
               <Input id="hours_per_week" name="hours_per_week" type="number" defaultValue="40" min="1" max="80" step="0.5" />
             </Field>
             <Field label="Arbetsdagar per vecka" htmlFor="workdays_per_week">
-              <Input id="workdays_per_week" name="workdays_per_week" type="number" defaultValue="5" min="1" max="7" step="1" />
+              <Input id="workdays_per_week" name="workdays_per_week" type="number" defaultValue="5" min="1" max="7" step="0.01" />
             </Field>
             <Field label="Löneform" htmlFor="salary_type" required>
               <Select value={salaryType} onValueChange={setSalaryType}>

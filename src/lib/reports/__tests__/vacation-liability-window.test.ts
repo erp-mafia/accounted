@@ -212,3 +212,34 @@ describe('vacationLiabilityCheck', () => {
     })
   })
 })
+
+describe('generateVacationLiability on a short week (Semesterlagen 12 a §)', () => {
+  it('counts days off in paid days and shows the remaining days off', async () => {
+    mock.enqueue({ data: null }) // basis: calendar
+    mock.enqueue({ data: [] }) // no closures
+    mock.enqueue({ data: [{ ...EMPLOYEE, workdays_per_week: 4 }] })
+    // Eight days off on a four-day week use ten paid days.
+    mock.enqueue({ data: [{ ...run('2026-06-25', 3000, 8), vacation_paid_days_per_day_off: 1.25 }] })
+    mock.enqueue({ data: [] }) // ledger
+    mock.enqueue({ data: [] }) // no cutover opening
+
+    const report = await generateVacationLiability(supabase, COMPANY_ID, '2026-12-31')
+    const row = report.rows[0]
+    expect(row.vacationDaysTaken).toBe(10)
+    expect(row.vacationDaysRemaining).toBe(15)
+    expect(row.vacationDaysOffRemaining).toBe(12)
+  })
+
+  it('has no separate days-off figure on a five-day week', async () => {
+    mock.enqueue({ data: null })
+    mock.enqueue({ data: [] })
+    mock.enqueue({ data: [{ ...EMPLOYEE, workdays_per_week: 5 }] })
+    mock.enqueue({ data: [run('2026-06-25', 3000, 8)] })
+    mock.enqueue({ data: [] })
+    mock.enqueue({ data: [] })
+
+    const report = await generateVacationLiability(supabase, COMPANY_ID, '2026-12-31')
+    expect(report.rows[0].vacationDaysTaken).toBe(8)
+    expect(report.rows[0].vacationDaysOffRemaining).toBeNull()
+  })
+})

@@ -65,6 +65,7 @@ const sampleReport = {
       vacationDaysEntitled: 25,
       vacationDaysTaken: 5,
       vacationDaysRemaining: 20,
+      vacationDaysOffRemaining: null,
       vacationDaysSaved: 0,
       accruedAmount: 4200,
       accruedAvgifter: 1319.64,

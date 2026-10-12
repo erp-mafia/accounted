@@ -66,6 +66,7 @@ import { effectiveRow } from './effective-figures'
 import { refreshRunEmployeeSalaryType } from './base-salary-line'
 import { computePriorYtd, loadOpeningBalances } from './ytd'
 import { dailyDivisor, degreeAdjustedMonthlySalary, hourlyDivisor, scheduledHoursPerDay } from './work-schedule'
+import { paidDaysPerDayOff } from './vacation-net-days'
 import { vaxaStodRefundWarning } from './vaxa-stod'
 import type { WorkedDayShift } from './shift-premium-engine'
 import type { Logger } from '@/lib/logger'
@@ -933,6 +934,10 @@ export async function runSalaryCalculation(
         (sum: number, li: Record<string, unknown>) => sum + ((li.quantity as number) || 0),
         0,
       )
+    // The vacation lines hold days off; the ledger counts paid days. Frozen
+    // on the row so a later change to the schedule never re-counts this
+    // payslip's leave (Semesterlagen 12 a §, vacation-net-days.ts).
+    const vacationPaidDaysPerDayOff = paidDaysPerDayOff(emp.vacation_days_per_year, emp.workdays_per_week)
 
     // Keep raw engine figures for the calculation trace, but snapshots and
     // run totals must use the same effective values (review-step overrides
@@ -983,6 +988,7 @@ export async function runSalaryCalculation(
       vab_days: vabDays,
       parental_days: parentalDays,
       vacation_days_taken: vacationDays,
+      vacation_paid_days_per_day_off: vacationPaidDaysPerDayOff,
       calculation_breakdown: { steps: result.steps },
       ytd_gross: roundOre((ytdByEmployee.get(sre.employee_id)?.gross || 0) + result.grossSalary),
       ytd_tax: roundOre((ytdByEmployee.get(sre.employee_id)?.tax || 0) + effectiveTax),

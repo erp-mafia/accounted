@@ -4742,7 +4742,12 @@ export interface SalaryRunEmployee {
   sick_days: number
   vab_days: number
   parental_days: number
+  /** Days off on the payslip's vacation lines, as entered. */
   vacation_days_taken: number
+  /** Paid semesterdagar each of those days off used: 1.25 at four days a
+   *  week (vacation-net-days.ts). null on rows calculated before 2026-10-12
+   *  reads as 1. */
+  vacation_paid_days_per_day_off: number | null
   calculation_breakdown: Record<string, unknown> | null
   ytd_gross: number
   ytd_tax: number

@@ -139,7 +139,14 @@ export function SemesterskuldView({ periodId }: { periodId: string }) {
                     <TableCell>{row.employeeName}</TableCell>
                     <TableCell className={NUM}>{DAYS.format(row.vacationDaysEntitled)}</TableCell>
                     <TableCell className={NUM}>{DAYS.format(row.vacationDaysTaken)}</TableCell>
-                    <TableCell className={NUM}>{DAYS.format(row.vacationDaysRemaining)}</TableCell>
+                    <TableCell className={NUM}>
+                      {DAYS.format(row.vacationDaysRemaining)}
+                      {row.vacationDaysOffRemaining != null && (
+                        <div className="text-xs text-muted-foreground">
+                          {t('ss_days_off', { days: DAYS.format(row.vacationDaysOffRemaining) })}
+                        </div>
+                      )}
+                    </TableCell>
                     <TableCell className={NUM}>{DAYS.format(row.vacationDaysSaved)}</TableCell>
                     <TableCell className={NUM}>{formatAmount(row.accruedAmount)}</TableCell>
                     <TableCell className={NUM}>{formatAmount(row.accruedAvgifter)}</TableCell>

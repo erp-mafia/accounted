@@ -3,6 +3,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { remainingSavedDays, sumDays } from '@/lib/salary/vacation-category'
 import { getVacationYearBasis } from '@/lib/salary/vacation-ledger'
 import { getVacationYearBounds, getVacationYearStart } from '@/lib/salary/vacation-year'
+import { paidDaysAsDaysOff, paidDaysPerDayOff, storedPaidDaysPerDayOff } from '@/lib/salary/vacation-net-days'
 
 /**
  * Semesterlöneskuld: Vacation liability report per BFNAR 2016:10.
@@ -30,9 +31,14 @@ export interface VacationLiabilityRow {
   employeeName: string
   personnummerLast4: string
   vacationRule: string
+  /** Paid semesterdagar (Semesterlagen 4 §), as are taken, remaining and saved. */
   vacationDaysEntitled: number
   vacationDaysTaken: number
   vacationDaysRemaining: number
+  /** The remaining paid days as days off at the employee's current schedule
+   *  (20 days off for 25 paid at four days a week, Semesterlagen 12 a §);
+   *  null at five days a week or more, where the two are the same. */
+  vacationDaysOffRemaining: number | null
   vacationDaysSaved: number
   accruedAmount: number       // Account 2920
   accruedAvgifter: number     // Account 2940
@@ -120,7 +126,7 @@ export async function generateVacationLiability(
   const employees = await fetchAllRows(({ from, to }) =>
     supabase
       .from('employees')
-      .select('id, first_name, last_name, personnummer_last4, vacation_rule, vacation_days_per_year, vacation_days_saved')
+      .select('id, first_name, last_name, personnummer_last4, vacation_rule, vacation_days_per_year, vacation_days_saved, workdays_per_week')
       .eq('company_id', companyId)
       .eq('is_active', true)
       .not('vacation_rule', 'in', '(none,semesterersattning)')
@@ -144,6 +150,7 @@ export async function generateVacationLiability(
         vacation_accrual_avgifter,
         avgifter_rate,
         vacation_days_taken,
+        vacation_paid_days_per_day_off,
         salary_run:salary_runs!inner(payment_date, status)
       `)
       .eq('company_id', companyId)
@@ -251,9 +258,11 @@ export async function generateVacationLiability(
     }
     current.totalAccrual += sre.vacation_accrual
     current.totalAvgifter += sre.vacation_accrual_avgifter
-    // Days fallback (no ledger row) counts the current vacation year only.
+    // Days fallback (no ledger row) counts the current vacation year only,
+    // in paid days like the ledger (the payslip's own factor, 12 a §).
     if ((sre.salary_run as { payment_date: string }).payment_date >= vacationYearStart) {
-      current.totalDaysTaken += sre.vacation_days_taken
+      current.totalDaysTaken +=
+        sre.vacation_days_taken * storedPaidDaysPerDayOff(sre.vacation_paid_days_per_day_off)
     }
     current.lastRate = sre.avgifter_rate
     accrualsByEmployee.set(sre.employee_id, current)
@@ -301,6 +310,9 @@ export async function generateVacationLiability(
       daysSaved = emp.vacation_days_saved + (opening?.savedDays || 0)
     }
 
+    // The days off those paid days give at today's schedule (12 a §).
+    const daysOffFactor = paidDaysPerDayOff(emp.vacation_days_per_year, emp.workdays_per_week)
+
     const advanceVacationDebt = r(opening?.advanceDebt || 0)
 
     return {
@@ -311,6 +323,7 @@ export async function generateVacationLiability(
       vacationDaysEntitled: daysEntitled,
       vacationDaysTaken: daysTaken,
       vacationDaysRemaining: daysRemaining,
+      vacationDaysOffRemaining: daysOffFactor === 1 ? null : paidDaysAsDaysOff(daysRemaining, daysOffFactor),
       vacationDaysSaved: daysSaved,
       accruedAmount,
       accruedAvgifter,

@@ -110,6 +110,31 @@ describe('GET /employees/:id/vacation-balance', () => {
     // Liability = (15 remaining + 5 saved) x 1557.57 = 31151.4.
     expect(body.data.estimated_liability_sek).toBe(31151.4)
     expect(body.data.id).toBeUndefined()
+    // A five-day week takes the paid days off one for one.
+    expect(body.data.remaining_days_off).toBe(15)
+  })
+
+  it('shows the days still to take off on a four-day week (Semesterlagen 12 a §)', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: { data: { ...EMPLOYEE, workdays_per_week: 4 }, error: null },
+        employee_vacation_balances: { data: BALANCE, error: null },
+      }).supabase,
+    )
+
+    const res = await getBalance(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}/vacation-balance`,
+      ),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    // 15 paid days left are 12 days off at 1.25 paid days per day off.
+    expect(body.data.remaining_days).toBe(15)
+    expect(body.data.remaining_days_off).toBe(12)
   })
 
   it('returns 404 VACATION_BALANCE_NOT_FOUND before the ledger seeds', async () => {

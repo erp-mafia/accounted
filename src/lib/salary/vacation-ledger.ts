@@ -71,6 +71,7 @@ interface LedgerOpeningRow {
 interface BookedRunRow {
   employee_id: string
   vacation_days_taken: number
+  vacation_paid_days_per_day_off: number | null
   line_items?: VacationLineLike[] | null
   salary_run: {
     period_year: number
@@ -162,7 +163,7 @@ export async function syncVacationLedgerForEmployees(
       supabase
         .from('salary_run_employees')
         .select(
-          'employee_id, vacation_days_taken, ' +
+          'employee_id, vacation_days_taken, vacation_paid_days_per_day_off, ' +
             'line_items:salary_line_items(item_type, quantity, vacation_category, vacation_saved_year), ' +
             'salary_run:salary_runs!inner(period_year, period_month, status, deviation_period_start, deviation_period_end)',
         )

@@ -176,8 +176,8 @@
     "version": 3
   },
   "horizontal/swedish-payroll": {
-    "hash": "5d2b0d897e1768a00657a3f6e43ac8dc977b6646139b0a6597e6802ffa271288",
-    "version": 6
+    "hash": "a4e284d7b71b449391433856a7894533f16bb47dce716d30807e4bf1d6193455",
+    "version": 7
   },
   "horizontal/swedish-payroll/agi-filing": {
     "hash": "1b9ebae06fe7b94f91e07f736d38006df294dd51bc38da30bd4fbc3419b687cf",
@@ -220,8 +220,8 @@
     "version": 2
   },
   "horizontal/swedish-payroll/vacation-pay": {
-    "hash": "9402ebb6271e06cd6e74f5fdc42c87a82c17ef1fd13e6173e7496110b0ecf67d",
-    "version": 2
+    "hash": "9ba503fe0838dc007afc765d0acf8f111c1aa24c1e29e7759dc94a2073b31400",
+    "version": 3
   },
   "horizontal/swedish-project-accounting": {
     "hash": "55f17d8dcc80121d05e670615bffdee83e5f77537ba6c257f382fdbc38e61a87",

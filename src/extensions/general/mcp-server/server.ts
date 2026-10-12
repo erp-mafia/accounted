@@ -396,6 +396,7 @@ import {
 } from '@/lib/reconciliation/schemas'
 import { unknownAccountKeyError } from './reconciliation-key-error'
 import { decryptPersonnummer, maskEmployeeForResponse, maskPersonnummer } from '@/lib/salary/personnummer'
+import { daysOffPerYear } from '@/lib/salary/vacation-net-days'
 import { effectiveRow, effectiveRunTotals, type EffectiveFiguresInput } from '@/lib/salary/effective-figures'
 import { validateRunForApproval, type ApprovalRosterRow } from '@/lib/salary/approve-run'
 import {
@@ -19065,7 +19066,7 @@ export const tools: McpTool[] = [
         employment: { type: 'object', description: 'Type, start/end, degree' },
         pay: { type: 'object', description: 'Salary type + amounts' },
         tax: { type: 'object', description: 'Table, column, municipality, jamkning, F-skatt, sidoinkomst' },
-        vacation: { type: 'object', description: 'Rule, days per year, saved days, tillagg rate' },
+        vacation: { type: 'object', description: 'Rule, paid days/year, days off/year, saved days, tillagg rate' },
         vaxa_stod: { type: 'object', description: 'Eligibility window: refund to apply for, never a reduced avgift' },
         bank: { type: 'object', description: 'Clearing + account (payment routing)' },
         contact: { type: 'object', description: 'Email, phone and postal address' },
@@ -19122,6 +19123,8 @@ export const tools: McpTool[] = [
         vacation: {
           vacation_rule: e.vacation_rule,
           vacation_days_per_year: e.vacation_days_per_year,
+          // The days the paid days give off at this schedule (12 a §).
+          vacation_days_off_per_year: daysOffPerYear(e.vacation_days_per_year, e.workdays_per_week),
           vacation_days_saved: e.vacation_days_saved,
           semestertillagg_rate: e.semestertillagg_rate,
           vacation_pay_rate: e.vacation_pay_rate ?? null,
@@ -19771,7 +19774,7 @@ export const tools: McpTool[] = [
         employment_end: { type: 'string' },
         employment_degree: { type: 'number', description: '1-100 (default 100)' },
         hours_per_week: { type: 'number', description: 'Schedule hours/week (default 40; drives hourly divisor)' },
-        workdays_per_week: { type: 'number', description: 'Schedule days/week (default 5; drives daily divisor)' },
+        workdays_per_week: { type: 'number', description: 'Schedule days/week (default 5; drives daily divisor and vacation days off)' },
         salary_type: { type: 'string', enum: ['monthly', 'hourly'] },
         monthly_salary: { type: 'number' },
         hourly_rate: { type: 'number' },
@@ -19783,7 +19786,7 @@ export const tools: McpTool[] = [
         clearing_number: { type: 'string' },
         bank_account_number: { type: 'string' },
         vacation_rule: { type: 'string', enum: ['procentregeln', 'sammaloneregeln', 'semesterersattning', 'none'] },
-        vacation_days_per_year: { type: 'number' },
+        vacation_days_per_year: { type: 'number', description: 'Paid days/year, min 25 unless rule none; keep 25 on a short week' },
         vacation_pay_rate: { type: ['number', 'null'], description: 'CBA semesterlön fraction 0.12-0.30 (0.135 = 13.5 %); null = statutory' },
         email: { type: 'string' },
         phone: { type: 'string' },
@@ -19884,7 +19887,7 @@ export const tools: McpTool[] = [
         employment_end: { type: ['string', 'null'] },
         employment_degree: { type: 'number' },
         hours_per_week: { type: 'number' },
-        workdays_per_week: { type: 'number' },
+        workdays_per_week: { type: 'number', description: 'Days/week; below 5 gives fewer vacation days off' },
         salary_type: { type: 'string', enum: ['monthly', 'hourly'] },
         monthly_salary: { type: ['number', 'null'] },
         hourly_rate: { type: ['number', 'null'] },
@@ -19896,7 +19899,7 @@ export const tools: McpTool[] = [
         clearing_number: { type: ['string', 'null'] },
         bank_account_number: { type: ['string', 'null'] },
         vacation_rule: { type: 'string', enum: ['procentregeln', 'sammaloneregeln', 'semesterersattning', 'none'] },
-        vacation_days_per_year: { type: 'number' },
+        vacation_days_per_year: { type: 'number', description: 'Paid days/year, min 25 unless rule none; keep 25 on a short week' },
         vacation_pay_rate: { type: ['number', 'null'] },
         email: { type: ['string', 'null'] },
         phone: { type: ['string', 'null'] },
@@ -20236,6 +20239,7 @@ export const tools: McpTool[] = [
         accrued_days: { type: 'number' },
         taken_days: { type: 'number' },
         remaining_days: { type: 'number' },
+        remaining_days_off: { type: 'number', description: 'Days still to take off: fewer than remaining_days (paid days) below 5 workdays a week' },
         saved_days: { type: 'object', description: 'Origin year -> days still held (seed minus saved_days_taken)' },
         saved_days_total: { type: 'number' },
         saved_days_taken: { type: 'object', description: 'Origin year -> days consumed this year by saved vacation lines' },

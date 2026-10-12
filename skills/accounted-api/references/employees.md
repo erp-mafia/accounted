@@ -1543,6 +1543,7 @@ Returns the open vacation-ledger row (recomputed on every booking): entitled/tak
 **Pitfalls:**
 - 404 VACATION_BALANCE_NOT_FOUND until the first booking (or year-close) touches the employee: the ledger seeds lazily.
 - remaining_days can go negative if more days were taken than entitled: surface it, do not clamp.
+- The days are paid semesterdagar. remaining_days_off is the days the employee can still take off: equal to remaining_days at five workdays a week or more, fewer below (25 paid days are 20 days off at four days a week, Semesterlagen 12 a §).
 - The SEK estimate uses the year-close day valuation (simplified BFNAR 2016:10); the booked 2920 is reconciled only at year-close.
 - unpaid_days and advance_days are the cutover pools minus unpaid/advance vacation lines in booked runs; both read 0 for companies that never loaded categorized balances and outside the cutover year (unpaid days lapse at close, förskott is a one-time grant).
 
@@ -1562,6 +1563,7 @@ Response `200`:
     accrued_days: number,
     taken_days: number,
     remaining_days: number,
+    remaining_days_off: number,
     saved_days: Record<string, number>,
     saved_days_total: number,
     saved_days_taken: Record<string, number>,

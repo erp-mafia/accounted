@@ -37,6 +37,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre, sumOre } from '@/lib/money'
 import { dailyDivisor, degreeAdjustedMonthlySalary } from './work-schedule'
+import { paidDaysPerDayOff } from './vacation-net-days'
 import { resolveVacationPayRate } from './vacation-pay-rate'
 import { getVacationYearBounds, type VacationYearBasis } from './vacation-year'
 import { getVacationYearBasis, syncVacationLedgerForEmployees, type VacationBalanceRow } from './vacation-ledger'
@@ -149,11 +150,11 @@ export type DayValueEmployee = Pick<
 }
 
 /**
- * Simplified BFNAR 2016:10 value of one vacation day in SEK. Shared by the
- * year-close, the MCP vacation-balance tool and the v1 vacation-balance
- * route, so all three agree on the semesterlöneskuld estimate and a
- * kollektivavtal semesterlön rate (employees.vacation_pay_rate) reaches
- * every one of them.
+ * Simplified BFNAR 2016:10 value of one paid vacation day in SEK (the unit
+ * the ledger counts, vacation-net-days.ts). Shared by the year-close, the MCP
+ * vacation-balance tool and the v1 vacation-balance route, so all three agree
+ * on the semesterlöneskuld estimate and a kollektivavtal semesterlön rate
+ * (employees.vacation_pay_rate) reaches every one of them.
  */
 export function dayValueSek(emp: DayValueEmployee): number {
   const rate = resolveVacationPayRate(emp.vacation_days_per_year, emp.vacation_pay_rate)
@@ -165,10 +166,15 @@ export function dayValueSek(emp: DayValueEmployee): number {
   // worth a day of the pay they actually earn.
   const monthly = degreeAdjustedMonthlySalary(emp.monthly_salary, emp.employment_degree)
   if (emp.vacation_rule === 'sammaloneregeln') {
-    // Dagslön + semestertillägg per day at the employee's configured rate
-    // (many CBAs use 0.8 %); the statutory floor 0.43 % when absent.
+    // Dagslön + semestertillägg per paid day at the employee's configured
+    // rate (many CBAs use 0.8 %); the statutory floor 0.43 % when absent. The
+    // salary keeps running per day off, and on a short week a day off uses
+    // more than one paid day (25 paid days are 20 days off at four days a
+    // week), so the dagslön is spread over the paid days it covers. The
+    // tillägg is per paid day as it stands (Semesterlagen 16 a §).
     const tillagg = emp.semestertillagg_rate ?? 0.0043
-    return roundOre(monthly / dailyDivisor(emp.workdays_per_week) + monthly * tillagg)
+    const perDayOff = paidDaysPerDayOff(emp.vacation_days_per_year, emp.workdays_per_week)
+    return roundOre(monthly / dailyDivisor(emp.workdays_per_week) / perDayOff + monthly * tillagg)
   }
   return roundOre((monthly * 12 * rate) / Math.max(emp.vacation_days_per_year, 1))
 }

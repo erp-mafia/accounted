@@ -405,6 +405,22 @@ describe('gnubok_get_vacation_balance', () => {
     // the year-close use, so the description's promise is a real field.
     expect(result.estimated_liability_sek).toBe(40320)
     expect(getVacationBalance.outputSchema?.properties).toHaveProperty('estimated_liability_sek')
+    expect(result.remaining_days_off).toBe(15)
+  })
+
+  it('shows the days still to take off on a four-day week (Semesterlagen 12 a §)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...EMPLOYEE_ROW, workdays_per_week: 4 } })
+    enqueue({ data: BALANCE_ROW })
+
+    const result = (await getVacationBalance.execute(
+      { employee_id: 'emp-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as Record<string, unknown>
+
+    // 15 paid days left are 12 days off at 1.25 paid days per day off; a
+    // missing schedule (the other cases) takes them one for one.
+    expect(result.remaining_days).toBe(15)
+    expect(result.remaining_days_off).toBe(12)
   })
 
   it('floors the SEK estimate at zero when the balance is overdrawn', async () => {

@@ -19,6 +19,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { dayValueSek, type DayValueEmployee } from '@/lib/salary/semesterberedning'
 import { remainingSavedDays, sumDays } from '@/lib/salary/vacation-category'
+import { paidDaysAsDaysOff, paidDaysPerDayOff } from '@/lib/salary/vacation-net-days'
 
 export interface VacationBalance {
   employee_vacation_balance_id: string
@@ -28,6 +29,12 @@ export interface VacationBalance {
   accrued_days: number
   taken_days: number
   remaining_days: number
+  /**
+   * The days the employee can still take off: remaining_days at five workdays
+   * a week or more, fewer below (25 paid days are 20 days off at four days a
+   * week, Semesterlagen 12 a §; vacation-net-days.ts).
+   */
+  remaining_days_off: number
   /** Origin year -> days still held (the seed minus saved_days_taken). */
   saved_days: Record<string, number>
   saved_days_total: number
@@ -91,7 +98,8 @@ export async function readVacationBalance(
   const entitled = row.entitled_days ?? 0
   const taken = row.taken_days ?? 0
   const remaining = roundOre(entitled - taken)
-  const dayValue = dayValueSek(employee as unknown as DayValueEmployee)
+  const schedule = employee as unknown as DayValueEmployee
+  const dayValue = dayValueSek(schedule)
 
   return {
     ok: true,
@@ -103,6 +111,10 @@ export async function readVacationBalance(
       accrued_days: row.accrued_days ?? 0,
       taken_days: taken,
       remaining_days: remaining,
+      remaining_days_off: paidDaysAsDaysOff(
+        remaining,
+        paidDaysPerDayOff(schedule.vacation_days_per_year, schedule.workdays_per_week),
+      ),
       saved_days: savedDays,
       saved_days_total: savedTotal,
       saved_days_taken: savedTaken,
