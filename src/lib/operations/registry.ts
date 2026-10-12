@@ -225,6 +225,7 @@ import {
   posSalesVenuesList,
 } from './pos-sales'
 import { COLLECTIONS_OPERATION_LIST } from './collections'
+import { BANK_FEED_OPERATIONS } from './bank-feed'
 import { readCollectionsEnv } from '@/lib/collections/flags'
 import type { AnyOperation } from './types'
 
@@ -424,6 +425,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   posSalesDayGet,
   posSalesDayBook,
   posSalesFetch,
+  // bank-feed (reading a bank with BankID through Open Payments; no machine door yet, see the module header)
+  ...BANK_FEED_OPERATIONS,
 ]
 
 /**

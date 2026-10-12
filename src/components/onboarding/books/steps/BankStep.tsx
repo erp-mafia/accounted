@@ -24,6 +24,9 @@ import { OptRow, OptRows, Sentence } from '../ui/Sentence'
 import { VerdictList, Wait, type Verdict } from '../ui/Verdicts'
 import type { BooksCtx } from '../context'
 import { Button } from '@/components/ui/button'
+import { BankConnectDialog } from '@/components/bank-feed/BankConnectDialog'
+import { useBankConnectFlow } from '@/components/bank-feed/use-bank-connect-flow'
+import { useOpenPaymentsAvailability } from '@/components/bank-feed/use-open-payments-availability'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const EB = '/api/extensions/ext/enable-banking'
@@ -64,6 +67,11 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
   const supabase = useMemo(() => createClient(), [])
 
   const [attn, setAttn] = useState<string | null>(landedError)
+  // Bank reading through Open Payments, when switched on for the company,
+  // replaces the Enable Banking popup: the Koppla banken dialog runs here
+  // and the step reads its verdict from the findings once the bank is live.
+  const openPayments = useOpenPaymentsAvailability()
+  const bankFlow = useBankConnectFlow()
   const [banks, setBanks] = useState<Bank[] | null>(null)
   const [psuType, setPsuType] = useState<'personal' | 'business' | undefined>(undefined)
   const [more, setMore] = useState(false)
@@ -411,6 +419,18 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
             {loadingFindings ? <Wait text={t('bank_loading')} height={96} /> : <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => void loadFindings()}>{t('findings_retry')}</Button>}
             <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>{t('bank_manual')}</Button>
           </div>
+        ) : openPayments.status === 'loading' ? (
+          <Wait text={t('bank_loading')} height={96} />
+        ) : openPayments.status === 'available' ? (
+          <div className="jny-qactions is-stack">
+            <Button size="lg" onClick={() => bankFlow.open('new')}>
+              {t('bank_open_flow')}
+            </Button>
+            <p className="jny-qsub" style={{ textAlign: 'center' }}>{t('bank_open_flow_hint')}</p>
+            <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
+              {t('bank_manual')}
+            </Button>
+          </div>
         ) : !flags.hasBanking ? (
           <p className="jny-qsub" style={{ textAlign: 'center' }}>{t('bank_unavailable')}</p>
         ) : banks === null ? (
@@ -595,6 +615,8 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
       ) : null}
       </div>
       ) : null}
+
+      <BankConnectDialog flow={bankFlow} onConnected={() => void loadFindings()} />
 
       {/* One column: the primary alone, Hoppa över quietly under it. Tillbaka lives at the top of the act. */}
       <div className="jny-qactions is-stack">

@@ -31,6 +31,8 @@ import {
   SYNC_COOLDOWN_MS,
   type EnableBankingServices,
 } from '@/lib/bank-sync/trigger-sync-contract'
+import { getBankFeedConnect } from '@/lib/bank-feed/connect'
+import { runOpenPaymentsSync } from '@/lib/bank-feed/feed'
 
 const SyncResponse = z.object({
   connection_id: z.string().uuid(),
@@ -131,12 +133,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; connectionI
     }
 
     try {
-      const result = await services.triggerConnectionSync(ctx.supabase, {
-        companyId: ctx.companyId!,
-        userId: ctx.userId,
-        connectionId,
-        log: ctx.log,
-      })
+      const input = { companyId: ctx.companyId!, userId: ctx.userId, connectionId, log: ctx.log }
+      let result = await services.triggerConnectionSync(ctx.supabase, input)
+      // The Enable Banking runner only knows its own connections. An Open
+      // Payments connection is read by the core runner (lib/bank-feed/feed.ts).
+      if (!result.ok && result.code === 'NOT_FOUND' && getBankFeedConnect()) {
+        result = await runOpenPaymentsSync(ctx.supabase, { ...input, trigger: 'agent' })
+      }
 
       if (!result.ok) {
         const { ok: _ok, code, ...details } = result

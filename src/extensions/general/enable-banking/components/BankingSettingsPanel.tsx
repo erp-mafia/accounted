@@ -231,10 +231,13 @@ export default function BankingSettingsPanel() {
         return
       }
 
+      // This panel's actions all go to Enable Banking; an Open Payments
+      // connection is listed and handled by its own section instead.
       const { data: connections, error } = await supabase
         .from('bank_connections')
         .select('*')
         .eq('company_id', company.id)
+        .eq('aggregator', 'enable_banking')
         .order('created_at', { ascending: false })
 
       if (error) {
@@ -253,6 +256,7 @@ export default function BankingSettingsPanel() {
       const { data: allConnections } = await supabase
         .from('bank_connections')
         .select('bank_name, company_id, session_id, status')
+        .eq('aggregator', 'enable_banking')
         .in('status', ['active', 'pending_selection'])
       setOtherCompanyConnections(
         ((allConnections || []) as {

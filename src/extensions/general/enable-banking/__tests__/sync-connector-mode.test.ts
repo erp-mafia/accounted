@@ -103,6 +103,8 @@ describe('syncAccountTransactions in connector mode', () => {
       proprietary_bank_transaction_code: 'BG',
       value_date: '2026-09-03',
       provider_transaction_id: 'ENTRY-1',
+      end_to_end_id: 'ACC0F3A2026',
+      counterparty_iban: 'SE4550000000058398257466',
       raw_page_index: 1,
     }
     const lands: Record<keyof NormalizedBankTransaction, Partial<RawTransaction>> = {
@@ -118,6 +120,8 @@ describe('syncAccountTransactions in connector mode', () => {
       proprietary_bank_transaction_code: { proprietary_bank_transaction_code: 'BG' },
       value_date: { value_date: '2026-09-03' },
       provider_transaction_id: { provider_transaction_id: 'ENTRY-1' },
+      end_to_end_id: { end_to_end_id: 'ACC0F3A2026' },
+      counterparty_iban: { counterparty_iban: 'SE4550000000058398257466' },
       raw_page_index: { raw_document_id: 'doc-p2' },
     }
     h.upload.mockResolvedValueOnce({ id: 'doc-p1' }).mockResolvedValueOnce({ id: 'doc-p2' })

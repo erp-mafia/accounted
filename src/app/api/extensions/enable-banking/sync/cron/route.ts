@@ -39,6 +39,7 @@ import { planBankSyncRun } from '@/extensions/general/enable-banking/lib/cron-pl
 import { applyRateLimitCooldown, claimSyncLease } from '@/extensions/general/enable-banking/lib/sync-lease'
 import { sendConsentExpiryNotification } from '@/extensions/general/enable-banking/lib/consent-expiry-notification'
 import { mapWithConcurrency } from '@/lib/concurrency'
+import { ENABLE_BANKING_AGGREGATOR } from '@/lib/bank-sync/aggregator'
 
 // Without this export the route runs under the platform default (60s), which
 // is why the sync loop used to self-limit to 50s and starve the queue: ~17
@@ -87,11 +88,14 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
   const startTime = Date.now()
   const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
 
-  // Clean up stale pending connections (older than 1 hour)
+  // Clean up stale pending connections (older than 1 hour). Enable Banking
+  // rows only: every query here is scoped to this aggregator, so an Open
+  // Payments connection is never touched or sent to Enable Banking.
   const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString()
   const { data: stalePending } = await supabase
     .from('bank_connections')
     .delete()
+    .eq('aggregator', ENABLE_BANKING_AGGREGATOR)
     .eq('status', 'pending')
     .lt('created_at', oneHourAgo)
     .select('id')
@@ -107,6 +111,7 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
       ({ from, to }) => supabase
         .from('bank_connections')
         .select('*')
+        .eq('aggregator', ENABLE_BANKING_AGGREGATOR)
         .eq('status', 'active')
         .order('last_synced_at', { ascending: true, nullsFirst: true })
         .order('id', { ascending: true })

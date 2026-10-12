@@ -43,6 +43,7 @@ import {
 } from '@/lib/bank-sync/persist-sync-result'
 import { isBankRoutingConflict, isBankRouteUnresolved } from '@/lib/bank-sync/ingest-route'
 import { isSyncedAccount } from '@/lib/bank-sync/mirror-card-account'
+import { ENABLE_BANKING_AGGREGATOR } from '@/lib/bank-sync/aggregator'
 import { eventBus } from '@/lib/events/bus'
 import {
   SYNC_COOLDOWN_MS,
@@ -87,6 +88,9 @@ export async function triggerConnectionSync(
     )
     .eq('id', connectionId)
     .eq('company_id', companyId)
+    // An Open Payments connection is synced by lib/bank-feed/feed.ts; the v1
+    // route and the MCP tool fall through to it on NOT_FOUND.
+    .eq('aggregator', ENABLE_BANKING_AGGREGATOR)
     .maybeSingle()
 
   if (connectionError) throw connectionError

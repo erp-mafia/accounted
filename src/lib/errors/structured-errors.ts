@@ -7897,6 +7897,83 @@ const PAYMENT_ORDERS: Record<string, StructuredErrorEntry> = {
   },
 }
 
+// Reading a bank with BankID through Open Payments (lib/bank-feed): the
+// consent flow, the account selection and the first import.
+const OPEN_BANKING: Record<string, StructuredErrorEntry> = {
+  OPEN_BANKING_NOT_AVAILABLE: {
+    httpStatus: 403,
+    message_sv: 'Att koppla banken med BankID via Open Payments är inte aktiverat för det här företaget.',
+    message_en: 'Connecting a bank with BankID through Open Payments is not enabled for this company.',
+  },
+  BANK_CONSENT_PERSONAL_NUMBER_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Ange personnumret för den som loggar in med BankID.',
+    message_en: 'Enter the personal identity number of the person logging in with BankID.',
+  },
+  BANK_CONSENT_UNKNOWN_BANK: {
+    httpStatus: 400,
+    message_sv: 'Banken finns inte i listan över banker som kan kopplas.',
+    message_en: 'The bank is not in the list of banks that can be connected.',
+  },
+  BANK_CONSENT_REDIRECT_UNSUPPORTED: {
+    httpStatus: 409,
+    message_sv: 'Banken kräver inloggning på sin egen webbsida, vilket inte stöds här ännu. Koppla banken på det vanliga sättet i stället.',
+    message_en: 'The bank requires signing in on its own website, which is not supported here yet. Connect the bank the usual way instead.',
+  },
+  BANK_CONSENT_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Bankkopplingen ändrades under tiden. Börja om kopplingen.',
+    message_en: 'The bank connection changed in the meantime. Start the connection again.',
+  },
+  BANK_CONSENT_NOT_READY: {
+    httpStatus: 409,
+    message_sv: 'BankID-signeringen är inte klar ännu. Slutför den innan kontona väljs.',
+    message_en: 'The BankID signing is not finished yet. Complete it before picking accounts.',
+  },
+  BANK_CONSENT_OVER: {
+    httpStatus: 409,
+    message_sv: 'Samtycket till banken har löpt ut. Koppla banken igen med BankID för att fortsätta synka.',
+    message_en: 'The consent to the bank is over. Connect the bank again with BankID to keep syncing.',
+  },
+  BANK_CONSENT_SIGNING_FAILED: {
+    httpStatus: 409,
+    message_sv: 'BankID-signeringen kunde inte slutföras. Försök igen.',
+    message_en: 'The BankID signing could not be completed. Try again.',
+    thrown_message_sv: true,
+  },
+  BANK_CONSENT_ACTOR_DENIED: {
+    httpStatus: 403,
+    message_sv: 'Du har inte behörighet att koppla banken för det här företaget.',
+    message_en: 'You are not allowed to connect a bank for this company.',
+  },
+  BANK_CONSENT_INPUT_INVALID: {
+    httpStatus: 502,
+    message_sv: 'Bankens svar kunde inte läsas. Försök igen.',
+    message_en: 'The bank\'s answer could not be read. Try again.',
+  },
+  BANK_SUPERSEDE_ACTOR_DENIED: {
+    httpStatus: 403,
+    message_sv: 'Du har inte behörighet att ersätta bankkopplingen för det här företaget.',
+    message_en: 'You are not allowed to replace the bank connection for this company.',
+  },
+  BANK_SUPERSEDE_SCOPE_AMBIGUOUS: {
+    httpStatus: 409,
+    message_sv: 'Den gamla bankkopplingen har två olika historiker för samma konto. Kontakta supporten innan kopplingen byts.',
+    message_en: 'The old bank connection holds two different histories for the same account. Contact support before switching.',
+  },
+  BANK_PROVIDER_REFUSED: {
+    httpStatus: 502,
+    message_sv: 'Banken tog inte emot begäran. Kontrollera uppgifterna och försök igen.',
+    message_en: 'The bank did not accept the request. Check the details and try again.',
+  },
+  BANK_PROVIDER_UNAVAILABLE: {
+    httpStatus: 503,
+    message_sv: 'Banken svarar inte just nu. Försök igen om en stund.',
+    message_en: 'The bank is not responding right now. Try again in a moment.',
+    retryable: true,
+  },
+}
+
 const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...GENERIC,
   ...DB_CONFLICTS,
@@ -7953,6 +8030,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...NODE_SYSTEM,
   ...PAYMENT_ORDERS,
   ...COLLECTIONS,
+  ...OPEN_BANKING,
 }
 
 export function getErrorEntry(code: string): StructuredErrorEntry | undefined {

@@ -321,6 +321,34 @@ describe('ingestTransactions', () => {
   // -----------------------------------------------------------------------
   // 1c2. Stamps bank_file_import_id from the batch option
   // -----------------------------------------------------------------------
+  it('suggests the invoice of the bank payment whose end-to-end id the debit carries, case-insensitively, before any heuristic', async () => {
+    const { supabase, enqueue, updates } = createQueueMockSupabase()
+    const raw = makeRaw({ amount: -1000, end_to_end_id: 'acc0f3a', import_source: 'open_payments' })
+    enqueue({ data: [] }, { data: [] }) // booked map, unbooked map
+    enqueue({ data: [] }) // supplier invoices
+    enqueue({ data: [{ id: 'po-1', end_to_end_id: 'ACC0F3A', supplier_invoice_id: 'si-1' }] }) // open payment orders
+    enqueue({ data: [] }) // external_id dedup
+    enqueue({ data: makeTransaction({ id: 'tx-1', amount: -1000 }) }) // insert
+    enqueue({ data: null }, { data: null }) // suggestion update, match log
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+    expect(supabase.from).toHaveBeenCalledWith('payment_orders')
+    expect(updates['transactions']).toContainEqual({ potential_supplier_invoice_id: 'si-1' })
+    expect(result.auto_matched_invoices).toBe(1)
+    // A suggestion only: nothing is booked.
+    expect(mockEvaluateMappingRules).not.toHaveBeenCalled()
+    expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('reads no payment orders for a batch without end-to-end ids', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueue({ data: [] }, { data: [] }, { data: [] }, { data: [] }, { data: makeTransaction({ id: 'tx-1', amount: -50 }) })
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+    await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [makeRaw({ amount: -50 })])
+    expect(supabase.from).not.toHaveBeenCalledWith('payment_orders')
+  })
+
   it('stamps bank_file_import_id on the insert when bankFileImportId is given', async () => {
     const { supabase, enqueue, inserts } = createQueueMockSupabase()
     const raw = makeRaw({ amount: -100 })

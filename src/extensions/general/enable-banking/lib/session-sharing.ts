@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { normalizeIban } from '@/lib/cash-accounts/service'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { createLogger } from '@/lib/logger'
+import { ENABLE_BANKING_AGGREGATOR } from '@/lib/bank-sync/aggregator'
 import type { StoredAccount } from '../types'
 
 const log = createLogger('enable-banking/session-sharing')
@@ -155,6 +156,9 @@ export async function findReusableSessions(
     .from('bank_connections')
     .select('id, company_id, bank_name, provider, session_id, psu_type, consent_expires, accounts_data')
     .eq('user_id', userId)
+    // Only an Enable Banking session is shareable; an Open Payments consent is
+    // bound to the one company that signed it.
+    .eq('aggregator', ENABLE_BANKING_AGGREGATOR)
     .eq('status', 'active')
     .neq('company_id', activeCompanyId)
     .not('session_id', 'is', null)
@@ -520,6 +524,7 @@ export async function fanOutSessionRenewal(
     siblings = await fetchAllRows(range => supabase
       .from('bank_connections')
       .select('id, company_id')
+      .eq('aggregator', ENABLE_BANKING_AGGREGATOR)
       .eq('session_id', oldSessionId)
       .neq('id', excludeConnectionId)
       .neq('status', 'revoked')

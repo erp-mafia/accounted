@@ -1,0 +1,1032 @@
+/**
+ * Connecting a bank with BankID through Open Payments (Connect's AIS family),
+ * and keeping that connection: the service behind the operations in
+ * lib/operations/bank-feed.ts and the session routes under
+ * /api/bank/open-payments.
+ *
+ *   start      the consent is created at the bank and BankID started; the
+ *              attempt is a 'pending' bank_connections row (aggregator
+ *              open_payments, provider 'open_payments', bic, the consent id in
+ *              session_id, the authorisation in authorization_id, everything
+ *              else about the attempt in consent_attempt), so poll and
+ *              restart take no body and a person can resume from Kopplingar;
+ *   poll       fresh BankID data while pending; a valid consent's accounts
+ *              are read and finalize_open_payments_consent makes the row
+ *              await account selection (superseding older Open Payments rows
+ *              for the bank and adopting the Enable Banking dedup scope);
+ *              Svea's second consent (naming the chosen accounts) goes
+ *              straight to active with the selection saved earlier;
+ *   restart    a new BankID authorisation for the same consent (a new consent
+ *              when the bank says the first is over);
+ *   select     the same account selection every bank feed uses
+ *              (resolvePsd2LedgerAccount, save_bank_account_selection), the
+ *              Enable Banking row a switch replaces handed over, then the
+ *              first import inline; Svea gets its second consent instead;
+ *   sync       "Synka nu": one read with the person present;
+ *   disconnect the shared disconnect RPC, then the consent ended at the bank
+ *              under the revocation claim of the 'openpayments' namespace.
+ *
+ * The signer's personnummer comes from their BankID login or the number they
+ * typed; it is sent to the bank and never stored or logged.
+ */
+
+import type { AisAccount, AisBankDetails, AisConsentSigningProgress, AisConsentSigningStarted, AisParty } from '@accounted/connect-contract'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { hasSignerOnFile } from '@/lib/auth/bankid-signer'
+import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
+import { aggregatorOf, AGGREGATOR_SESSION_NAMESPACE, OPEN_PAYMENTS_AGGREGATOR, OPEN_PAYMENTS_PROVIDER_SLUG } from '@/lib/bank-sync/aggregator'
+import { disconnectBankConnection, readBankConfiguration, saveBankAccountSelection, type BankAccountSelection } from '@/lib/cash-accounts/configuration'
+import { resolvePsd2LedgerAccount } from '@/lib/cash-accounts/service'
+import { hasErrorEntry } from '@/lib/errors/structured-errors'
+import { eventBus } from '@/lib/events/bus'
+import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
+import type { SigningChallenge } from '@/lib/payments/initiation/provider'
+import { createServiceClient } from '@/lib/supabase/server'
+import type { TriggerSyncResult } from '@/lib/bank-sync/trigger-sync-contract'
+import { BANK_FEED_NOT_FOUND, BankFeedError, BankFeedRefusedError, ConsentOverError, getBankFeedConnect, type BankFeedConnect } from './connect'
+import { openBankFeedDoor } from './door'
+import { consentFailureText } from './failure-text'
+import { runOpenPaymentsSync } from './feed'
+import { accountContextOf, buildBankFeedParty, psuTypeOf, UNATTENDED_SIGNER, type BankFeedSignerInput } from './party'
+import { normalizeIban, type BankFeedAccount } from './sync'
+
+export type ConsentMethod = 'same_device' | 'qr'
+export type ConsentStep = 'identify' | 'consent' | null
+
+/** The BankID attempt in flight, as the browser renders it. */
+export interface AttemptView {
+  authorisation_id: string | null
+  method: ConsentMethod
+  state: 'pending' | 'failed' | 'partially_authorised'
+  challenge: SigningChallenge | null
+  sca_status: string | null
+  step: ConsentStep
+  failure_code: string | null
+  failure_text: string | null
+}
+
+export interface StartView {
+  connection_id: string
+  attempt: AttemptView
+}
+
+/** One account the consent reaches, with the ledger it would get. */
+export interface ConsentAccountView {
+  uid: string
+  name: string | null
+  iban: string | null
+  bban: string | null
+  currency: string
+  usage: string | null
+  /** The company's accounts (ORGA) start selected; the signer's own (PRIV) do not. */
+  preselected: boolean
+  enabled: boolean
+  /** The BAS number a new account would get. */
+  suggested_ledger_account: string | null
+  /** The ledger of the cash account this company already books the same IBAN + currency on; null when none. */
+  matches_existing: string | null
+}
+
+export interface PollView {
+  connection_id: string
+  state: 'pending' | 'valid' | 'partially_authorised' | 'failed'
+  method: ConsentMethod
+  challenge: SigningChallenge | null
+  sca_status: string | null
+  step: ConsentStep
+  failure_code: string | null
+  failure_text: string | null
+  /** On valid, while the connection awaits account selection. */
+  accounts?: ConsentAccountView[]
+  consent_expires?: string | null
+  /** Svea: the first consent only lists accounts; a second one naming the chosen ones follows. */
+  needs_second_consent?: boolean
+  /** The connection's status after this poll. */
+  status: string
+}
+
+export interface ConnectionView {
+  connection_id: string
+  bank_name: string | null
+  bic: string | null
+  provider: string
+  status: string
+  consent_expires: string | null
+  last_synced_at: string | null
+  initial_sync_completed_at: string | null
+  error_message: string | null
+  accounts: Array<{ uid: string; name: string | null; iban: string | null; currency: string; enabled: boolean; ledger_account: string | null; usage: string | null }>
+}
+
+export interface OverviewView {
+  available: boolean
+  reason: 'no_connector' | 'not_in_pilot' | 'subscription' | null
+  connections: ConnectionView[]
+  /** The person has a personnummer on file (BankID login or remembered), so no typing is needed. Never the number itself. */
+  signer_known: boolean
+}
+
+export interface SelectView {
+  connection: ConnectionView
+  /** The first import, when it finished inside the request; null when it runs on (sync_pending) or was not due. */
+  sync: { imported: number; duplicates: number; from: string; to: string } | null
+  sync_pending: boolean
+  /** Svea: the second consent to sign; poll the connection again, then call sync. */
+  attempt?: AttemptView
+}
+
+/** The consent is asked to last this long; the bank clamps it and validUntil comes back. */
+export const CONSENT_DAYS = 180
+/** A pending attempt older than this was abandoned, unless a second signatory is still to sign. */
+export const STALE_ATTEMPT_MS = 60 * 60 * 1000
+/** The first import answers inside this; a longer one finishes in the background. */
+export const INITIAL_SYNC_WAIT_MS = 240_000
+/** Svea Bank lists accounts under a first consent and reads them under a second one naming them. */
+export const SVEA_BIC = 'SVEASESS'
+const LEDGER = /^19\d{2}$/
+const MAX_ENABLED_ACCOUNTS = 50
+
+/** What the row keeps about the attempt (bank_connections.consent_attempt). */
+export interface ConsentAttempt {
+  method?: ConsentMethod
+  state?: 'pending' | 'failed' | 'partially_authorised'
+  sca_status?: string | null
+  failure_code?: string | null
+  started_at?: string
+  /** Svea: this consent only lists accounts. */
+  listing_only?: boolean
+  replace_connection_id?: string | null
+  extended_history_days?: number | null
+  /** Kept through finalize for the selection step (listing_only, replace_connection_id, extended_history_days, and Svea's chosen accounts). */
+  selection?: {
+    listing_only?: boolean
+    replace_connection_id?: string | null
+    extended_history_days?: number | null
+    accounts?: Array<{ uid: string; enabled: boolean; ledger_account: string | null }>
+    method?: ConsentMethod
+  }
+}
+
+type Row = {
+  id: string
+  company_id: string
+  user_id: string
+  status: string
+  aggregator?: string | null
+  provider: string
+  bic: string | null
+  affiliated_aspsp_id: string | null
+  psu_type: string | null
+  bank_name: string | null
+  session_id: string | null
+  authorization_id: string | null
+  consent_expires: string | null
+  last_synced_at: string | null
+  initial_sync_completed_at: string | null
+  error_message: string | null
+  accounts_data: BankFeedAccount[] | null
+  consent_attempt: ConsentAttempt | null
+}
+
+const ROW_COLUMNS =
+  'id, company_id, user_id, status, aggregator, provider, bic, affiliated_aspsp_id, psu_type, bank_name, session_id, authorization_id, consent_expires, last_synced_at, initial_sync_completed_at, error_message, accounts_data, consent_attempt'
+
+type Failure = Extract<OperationOutcome<never>, { ok: false }>
+
+function providerFailure(error: unknown): Failure {
+  if (error instanceof ConsentOverError) return { ok: false, code: 'BANK_CONSENT_OVER', details: { provider_code: error.providerCode } }
+  if (error instanceof BankFeedError) {
+    if (error.code === BANK_FEED_NOT_FOUND) return { ok: false, code: 'BANK_CONSENT_CHANGED', details: { provider_code: error.providerCode } }
+    return {
+      ok: false,
+      code: error.retryable ? 'BANK_PROVIDER_UNAVAILABLE' : 'BANK_PROVIDER_REFUSED',
+      details: { provider_code: error.providerCode ?? error.code, ...(error.providerCode ? { provider_text: consentFailureText(error.providerCode).sv } : {}) },
+    }
+  }
+  return { ok: false, code: 'BANK_PROVIDER_REFUSED', details: { provider_code: 'UNEXPECTED_ERROR' } }
+}
+
+/** A database refusal raised by name (the finalize, selection and supersede RPCs) keeps that name as its code. */
+function databaseFailure(error: unknown): Failure {
+  const message = (error as { message?: unknown } | null)?.message
+  if (typeof message === 'string' && hasErrorEntry(message)) return { ok: false, code: message }
+  const code = (error as { code?: unknown } | null)?.code
+  if (typeof code === 'string' && hasErrorEntry(code)) return { ok: false, code }
+  if (code === 'P0002') return { ok: false, code: 'NOT_FOUND' }
+  return { ok: false, code: 'INTERNAL_ERROR', error }
+}
+
+/**
+ * Which BankID step the person is at, from the bank's SCA status as the
+ * provider relays it: an identification first (authenticationStarted), then
+ * the consent signing. Null when the status says neither.
+ */
+export function consentStep(scaStatus: string | null | undefined): ConsentStep {
+  if (!scaStatus) return null
+  if (/authentic|identif/i.test(scaStatus)) return 'identify'
+  if (/authoris|started|sign|consent|scaMethodSelected/i.test(scaStatus)) return 'consent'
+  return null
+}
+
+function toChallenge(challenge: AisConsentSigningStarted['challenge']): SigningChallenge | null {
+  if (!challenge) return null
+  return {
+    approach: challenge.approach,
+    autostartToken: challenge.autostartToken,
+    qrData: challenge.qrData,
+    qrImage: challenge.qrImage ?? null,
+    redirectUrl: challenge.redirectUrl,
+  }
+}
+
+function attemptView(
+  method: ConsentMethod,
+  authorisationId: string | null,
+  progress: Pick<AisConsentSigningProgress, 'challenge' | 'failureCode' | 'scaStatus'> & { state: 'pending' | 'failed' | 'partially_authorised' },
+): AttemptView {
+  const failure = progress.state === 'failed' ? (progress.failureCode ?? 'SIGNING_UNSUCCESSFUL') : null
+  return {
+    authorisation_id: authorisationId,
+    method,
+    state: progress.state,
+    challenge: progress.state === 'pending' ? toChallenge(progress.challenge) : null,
+    sca_status: progress.scaStatus ?? null,
+    step: progress.state === 'pending' ? consentStep(progress.scaStatus) : null,
+    failure_code: failure,
+    failure_text: failure ? consentFailureText(failure).sv : null,
+  }
+}
+
+function connectionView(row: Row): ConnectionView {
+  return {
+    connection_id: row.id,
+    bank_name: row.bank_name,
+    bic: row.bic,
+    provider: row.provider,
+    status: row.status,
+    consent_expires: row.consent_expires,
+    last_synced_at: row.last_synced_at,
+    initial_sync_completed_at: row.initial_sync_completed_at,
+    error_message: row.error_message,
+    accounts: (row.accounts_data ?? []).map((a) => ({
+      uid: a.uid,
+      name: a.name ?? null,
+      iban: a.iban ?? null,
+      currency: a.currency,
+      enabled: a.enabled !== false,
+      ledger_account: a.ledger_account ?? null,
+      usage: a.usage ?? null,
+    })),
+  }
+}
+
+/** The consent grants access through its last day. */
+function consentExpiresAt(validUntil: string): string {
+  return `${validUntil}T23:59:59Z`
+}
+
+function validUntilRequested(now: number): string {
+  return new Date(now + CONSENT_DAYS * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+}
+
+/**
+ * The consent's accounts as accounts_data entries. The company's accounts
+ * (usage ORGA) start selected; the signer's own (PRIV) do not and keep only
+ * what the picker shows (no balance, no owner name: accounts_data is readable
+ * by every member of the company). When the bank reports no usage at all,
+ * every account starts selected.
+ */
+export function toStoredAccounts(accounts: readonly AisAccount[], observedAt: string): Array<BankFeedAccount & { enabled: boolean }> {
+  const anyUsage = accounts.some((a) => a.usage === 'ORGA' || a.usage === 'PRIV')
+  return accounts.map((a) => {
+    const enabled = anyUsage ? a.usage === 'ORGA' : true
+    const entry: BankFeedAccount & { enabled: boolean } = { uid: a.uid, currency: a.currency.toUpperCase(), enabled }
+    const iban = normalizeIban(a.iban)
+    if (iban) entry.iban = iban
+    if (a.bban) entry.bban = a.bban
+    if (a.name) entry.name = a.name
+    if (a.usage) entry.usage = a.usage
+    if (!enabled) return entry
+    if (a.balance !== null) {
+      entry.balance = a.balance
+      if (a.availableBalance !== null) entry.available_balance = a.availableBalance
+      entry.balance_updated_at = observedAt
+    }
+    return entry
+  })
+}
+
+async function loadRow(ctx: OperationContext, connectionId: string): Promise<Row | null> {
+  const { data, error } = await ctx.supabase
+    .from('bank_connections')
+    .select(ROW_COLUMNS)
+    .eq('id', connectionId)
+    .eq('company_id', ctx.companyId)
+    .eq('aggregator', OPEN_PAYMENTS_AGGREGATOR)
+    .maybeSingle()
+  if (error) throw error
+  return (data as Row | null) ?? null
+}
+
+async function partyFor(ctx: OperationContext, row: Pick<Row, 'bic' | 'affiliated_aspsp_id' | 'psu_type'>, signer: BankFeedSignerInput, requireSigner: boolean) {
+  return buildBankFeedParty(ctx.supabase, {
+    companyId: ctx.companyId,
+    bic: row.bic ?? '',
+    affiliatedAspspId: row.affiliated_aspsp_id,
+    psuType: row.psu_type,
+    signer,
+    userId: ctx.userId,
+    requireSigner,
+  })
+}
+
+async function writeAttempt(ctx: OperationContext, row: Row, patch: Record<string, unknown>): Promise<void> {
+  const { error } = await ctx.supabase
+    .from('bank_connections')
+    .update(patch)
+    .eq('id', row.id)
+    .eq('company_id', ctx.companyId)
+    .eq('aggregator', OPEN_PAYMENTS_AGGREGATOR)
+  if (error) throw error
+}
+
+// ---------------------------------------------------------------------------
+// banks, overview
+// ---------------------------------------------------------------------------
+
+export interface BankView {
+  bic: string
+  name: string
+  logo_url: string | null
+  decoupled: boolean | null
+  redirect: boolean | null
+}
+
+export async function listBankFeedBanks(ctx: OperationContext): Promise<OperationOutcome<{ banks: BankView[] }>> {
+  const door = await openBankFeedDoor(ctx)
+  if (!door.ok) return { ok: false, code: 'OPEN_BANKING_NOT_AVAILABLE', details: { reason: door.reason } }
+  try {
+    const banks = await door.connect.banks(ctx.companyId)
+    return { ok: true, data: { banks: banks.map((b) => ({ bic: b.bic, name: b.name, logo_url: b.logoUrl, decoupled: b.decoupled, redirect: b.redirect })) } }
+  } catch (error) {
+    return providerFailure(error)
+  }
+}
+
+export async function getBankFeedOverview(ctx: OperationContext): Promise<OperationOutcome<OverviewView>> {
+  const door = await openBankFeedDoor(ctx)
+  const { data, error } = await ctx.supabase
+    .from('bank_connections')
+    .select(ROW_COLUMNS)
+    .eq('company_id', ctx.companyId)
+    .eq('aggregator', OPEN_PAYMENTS_AGGREGATOR)
+    .in('status', ['pending', 'pending_selection', 'active', 'error', 'expired'])
+    .order('created_at', { ascending: false })
+  if (error) throw error
+  return {
+    ok: true,
+    data: {
+      available: door.ok,
+      reason: door.ok ? null : door.reason,
+      connections: ((data ?? []) as Row[]).map(connectionView),
+      signer_known: await hasSignerOnFile(ctx.userId),
+    },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// start, poll, restart
+// ---------------------------------------------------------------------------
+
+export interface StartInput {
+  bic: string
+  affiliatedAspspId?: string | null
+  accountContext?: 'corporate' | 'private' | null
+  method: ConsentMethod
+  signer: BankFeedSignerInput
+  /** Switch mode: the Enable Banking connection this one replaces at account selection. */
+  replaceConnectionId?: string | null
+  now?: number
+}
+
+async function startSigning(
+  ctx: OperationContext,
+  connect: BankFeedConnect,
+  row: Row,
+  party: AisParty,
+  method: ConsentMethod,
+): Promise<OperationOutcome<StartView>> {
+  let started: AisConsentSigningStarted
+  try {
+    started = await connect.startConsentSigning(ctx.companyId, { party, consentId: row.session_id!, method })
+  } catch (error) {
+    return providerFailure(error)
+  }
+  if (started.method === 'redirect') {
+    await writeAttempt(ctx, row, {
+      authorization_id: started.providerAuthorisationId,
+      consent_attempt: { ...(row.consent_attempt ?? {}), method, state: 'failed', sca_status: started.scaStatus, failure_code: 'SCA_REDIRECT_UNSUPPORTED', started_at: new Date().toISOString() },
+    })
+    return { ok: false, code: 'BANK_CONSENT_REDIRECT_UNSUPPORTED' }
+  }
+  const attempt = attemptView(method, started.providerAuthorisationId, { ...started, state: started.state })
+  await writeAttempt(ctx, row, {
+    authorization_id: started.providerAuthorisationId,
+    consent_attempt: {
+      ...(row.consent_attempt ?? {}),
+      method,
+      state: attempt.state,
+      sca_status: started.scaStatus,
+      failure_code: attempt.failure_code,
+      started_at: new Date().toISOString(),
+    },
+  })
+  return { ok: true, data: { connection_id: row.id, attempt } }
+}
+
+export async function startBankFeedConsent(ctx: OperationContext, input: StartInput): Promise<OperationOutcome<StartView>> {
+  const door = await openBankFeedDoor(ctx)
+  if (!door.ok) return { ok: false, code: 'OPEN_BANKING_NOT_AVAILABLE', details: { reason: door.reason } }
+  const connect = door.connect
+  const now = input.now ?? Date.now()
+
+  let bank: AisBankDetails
+  try {
+    bank = await connect.bank(ctx.companyId, input.bic)
+  } catch (error) {
+    if (error instanceof BankFeedRefusedError && error.code === BANK_FEED_NOT_FOUND) return { ok: false, code: 'BANK_CONSENT_UNKNOWN_BANK' }
+    return providerFailure(error)
+  }
+  if (input.affiliatedAspspId && bank.affiliates.length > 0 && !bank.affiliates.some((a) => a.id === input.affiliatedAspspId)) {
+    return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'affiliated_aspsp_id', reason: 'unknown_affiliate' } }
+  }
+
+  // The bank agreement of a legal form that trades under the owner's
+  // personnummer is the owner's private one; every other form has a
+  // corporate agreement. The caller may say otherwise.
+  const { data: company } = await ctx.supabase.from('companies').select('entity_type').eq('id', ctx.companyId).maybeSingle()
+  const entityType = (company as { entity_type?: string | null } | null)?.entity_type
+  const accountContext = input.accountContext ?? (isEntityType(entityType) && usesPersonnummerAsOrgNumber(entityType) ? 'private' : 'corporate')
+  const psuType = psuTypeOf(accountContext)
+
+  const party = await buildBankFeedParty(ctx.supabase, {
+    companyId: ctx.companyId,
+    bic: bank.bic,
+    affiliatedAspspId: input.affiliatedAspspId ?? null,
+    psuType,
+    signer: input.signer,
+    userId: ctx.userId,
+    requireSigner: true,
+  })
+  if (!party.ok) return party.outcome
+
+  if (input.replaceConnectionId) {
+    const { data: replaced, error } = await ctx.supabase
+      .from('bank_connections')
+      .select('id, status, aggregator')
+      .eq('id', input.replaceConnectionId)
+      .eq('company_id', ctx.companyId)
+      .maybeSingle()
+    if (error) throw error
+    const old = replaced as { id: string; status: string; aggregator?: string | null } | null
+    if (!old || aggregatorOf(old) !== 'enable_banking' || old.status === 'revoked') {
+      return { ok: false, code: 'NOT_FOUND', details: { field: 'replace_connection_id' } }
+    }
+  }
+
+  // A new attempt replaces an abandoned one for the same bank, and the
+  // company's stale attempts go with it. A partially authorised attempt waits
+  // for its second signatory and is never swept. Never-finished rows hold no data.
+  const { data: pendingRows } = await ctx.supabase
+    .from('bank_connections')
+    .select('id, bic, created_at, consent_attempt')
+    .eq('company_id', ctx.companyId)
+    .eq('aggregator', OPEN_PAYMENTS_AGGREGATOR)
+    .eq('status', 'pending')
+  const sweep = ((pendingRows ?? []) as Array<{ id: string; bic: string | null; created_at: string; consent_attempt: ConsentAttempt | null }>)
+    .filter((r) => r.consent_attempt?.state !== 'partially_authorised')
+    .filter((r) => r.bic === bank.bic || new Date(r.consent_attempt?.started_at ?? r.created_at).getTime() < now - STALE_ATTEMPT_MS)
+    .map((r) => r.id)
+  if (sweep.length > 0) {
+    await ctx.supabase.from('bank_connections').delete().in('id', sweep).eq('company_id', ctx.companyId).eq('aggregator', OPEN_PAYMENTS_AGGREGATOR).eq('status', 'pending')
+  }
+
+  const listingOnly = bank.bic === SVEA_BIC
+  let created
+  try {
+    created = await connect.createConsent(ctx.companyId, { party: party.party, validUntil: validUntilRequested(now) })
+  } catch (error) {
+    ctx.log.warn('bank consent did not start', { code: error instanceof BankFeedError ? error.code : undefined })
+    return providerFailure(error)
+  }
+
+  const attempt: ConsentAttempt = {
+    method: input.method,
+    state: 'pending',
+    started_at: new Date(now).toISOString(),
+    listing_only: listingOnly,
+    replace_connection_id: input.replaceConnectionId ?? null,
+    extended_history_days: bank.extendedTransactionHistoryMaxDays ?? bank.transactionHistoryMaxDays ?? null,
+  }
+  const { data: inserted, error: insertError } = await ctx.supabase
+    .from('bank_connections')
+    .insert({
+      company_id: ctx.companyId,
+      user_id: ctx.userId,
+      aggregator: OPEN_PAYMENTS_AGGREGATOR,
+      provider: OPEN_PAYMENTS_PROVIDER_SLUG,
+      bank_name: bank.name,
+      bic: bank.bic,
+      affiliated_aspsp_id: input.affiliatedAspspId ?? null,
+      session_id: created.consentId,
+      status: 'pending',
+      psu_type: psuType,
+      consent_expires: consentExpiresAt(created.validUntil),
+      consent_attempt: attempt,
+    })
+    .select(ROW_COLUMNS)
+    .single()
+  if (insertError || !inserted) {
+    // Nothing points at the consent: end it rather than leave it signable.
+    await connect.revokeConsent(ctx.companyId, { party: party.party, consentId: created.consentId }).catch(() => {})
+    return { ok: false, code: 'INTERNAL_ERROR', error: insertError ?? new Error('Bank connection attempt not stored') }
+  }
+  return startSigning(ctx, connect, inserted as Row, party.party, input.method)
+}
+
+export async function restartBankFeedConsent(
+  ctx: OperationContext,
+  input: { connectionId: string; method?: ConsentMethod | null; signer?: BankFeedSignerInput; now?: number },
+): Promise<OperationOutcome<StartView>> {
+  const connect = getBankFeedConnect()
+  if (!connect) return { ok: false, code: 'OPEN_BANKING_NOT_AVAILABLE', details: { reason: 'no_connector' } }
+  const row = await loadRow(ctx, input.connectionId)
+  if (!row) return { ok: false, code: 'NOT_FOUND' }
+  if (row.status !== 'pending' || !row.session_id || !row.bic) return { ok: false, code: 'BANK_CONSENT_CHANGED' }
+  const method = input.method ?? row.consent_attempt?.method ?? 'qr'
+  const party = await partyFor(ctx, row, input.signer ?? UNATTENDED_SIGNER, false)
+  if (!party.ok) return party.outcome
+  // A consent whose signing window closed is created anew; the attempt record
+  // (listing-only, the row a switch replaces) carries over.
+  const started = await startSigning(ctx, connect, row, party.party, method)
+  if (!started.ok && started.code === 'BANK_CONSENT_OVER') {
+    const now = input.now ?? Date.now()
+    let created
+    try {
+      created = await connect.createConsent(ctx.companyId, {
+        party: party.party,
+        validUntil: validUntilRequested(now),
+        ...(row.consent_attempt?.selection?.accounts
+          ? { accounts: chosenIbans(row) }
+          : {}),
+      })
+    } catch (error) {
+      return providerFailure(error)
+    }
+    await writeAttempt(ctx, row, { session_id: created.consentId, consent_expires: consentExpiresAt(created.validUntil), authorization_id: null })
+    return startSigning(ctx, connect, { ...row, session_id: created.consentId }, party.party, method)
+  }
+  return started
+}
+
+function chosenIbans(row: Row): Array<{ iban: string }> {
+  const chosen = new Set((row.consent_attempt?.selection?.accounts ?? []).filter((a) => a.enabled).map((a) => a.uid))
+  return (row.accounts_data ?? [])
+    .filter((a) => chosen.has(a.uid))
+    .map((a) => normalizeIban(a.iban))
+    .filter((iban): iban is string => Boolean(iban))
+    .map((iban) => ({ iban }))
+}
+
+/** The accounts of a connection awaiting selection, each with the ledger it would get and the one it already has. */
+async function accountChoices(ctx: OperationContext, accounts: readonly BankFeedAccount[]): Promise<ConsentAccountView[]> {
+  const used = new Set<string>()
+  const views = new Map<string, ConsentAccountView>()
+  // Selected accounts are placed first so they get the natural BAS numbers.
+  const ordered = [...accounts].sort((a, b) => Number(b.enabled !== false) - Number(a.enabled !== false))
+  for (const account of ordered) {
+    let suggested: string | null = account.ledger_account ?? null
+    let existing: string | null = null
+    if (!suggested) {
+      const resolved = await resolvePsd2LedgerAccount(ctx.supabase, ctx.companyId, ctx.userId, {
+        iban: account.iban ?? null, currency: account.currency, accountName: account.name ?? null, exclude: used, prepareOnly: true,
+      }).catch(() => null)
+      suggested = resolved?.ledgerAccount ?? null
+      if (resolved?.source === 'iban') existing = resolved.ledgerAccount
+    }
+    if (suggested) used.add(suggested)
+    views.set(account.uid, {
+      uid: account.uid,
+      name: account.name ?? null,
+      iban: account.iban ?? null,
+      bban: account.bban ?? null,
+      currency: account.currency,
+      usage: account.usage ?? null,
+      preselected: account.enabled !== false,
+      enabled: account.enabled !== false,
+      suggested_ledger_account: suggested,
+      matches_existing: existing,
+    })
+  }
+  return accounts.map((a) => views.get(a.uid)!)
+}
+
+export async function pollBankFeedConsent(
+  ctx: OperationContext,
+  input: { connectionId: string; signer?: BankFeedSignerInput; keepAlive?: (work: Promise<unknown>) => void },
+): Promise<OperationOutcome<PollView>> {
+  const connect = getBankFeedConnect()
+  if (!connect) return { ok: false, code: 'OPEN_BANKING_NOT_AVAILABLE', details: { reason: 'no_connector' } }
+  const row = await loadRow(ctx, input.connectionId)
+  if (!row) return { ok: false, code: 'NOT_FOUND' }
+  const method: ConsentMethod = row.consent_attempt?.method ?? 'qr'
+  const base = (state: PollView['state'], extra: Partial<PollView> = {}): OperationOutcome<PollView> => ({
+    ok: true,
+    data: {
+      connection_id: row.id, state, method, challenge: null, sca_status: null, step: null, failure_code: null, failure_text: null,
+      status: row.status, ...extra,
+    },
+  })
+
+  // A second poll that also saw the consent valid finds the work done.
+  if (row.status === 'pending_selection') {
+    return base('valid', { accounts: await accountChoices(ctx, row.accounts_data ?? []), consent_expires: row.consent_expires, needs_second_consent: row.consent_attempt?.selection?.listing_only === true })
+  }
+  if (row.status === 'active') return base('valid', { consent_expires: row.consent_expires })
+  if (row.status !== 'pending' || !row.session_id || !row.bic) return { ok: false, code: 'BANK_CONSENT_CHANGED' }
+  if (!row.authorization_id) {
+    const failure = row.consent_attempt?.failure_code ?? 'SIGNING_UNSUCCESSFUL'
+    return base('failed', { failure_code: failure, failure_text: consentFailureText(failure).sv })
+  }
+
+  const party = await partyFor(ctx, row, input.signer ?? UNATTENDED_SIGNER, false)
+  if (!party.ok) return party.outcome
+  let progress: AisConsentSigningProgress
+  try {
+    progress = await connect.pollConsentSigning(ctx.companyId, { party: party.party, consentId: row.session_id, providerAuthorisationId: row.authorization_id, method })
+  } catch (error) {
+    return providerFailure(error)
+  }
+
+  const state = progress.state
+  if (state === 'pending' || state === 'partially_authorised') {
+    const previous = row.consent_attempt?.state
+    if (previous !== state || (row.consent_attempt?.sca_status ?? null) !== (progress.scaStatus ?? null)) {
+      await writeAttempt(ctx, row, { consent_attempt: { ...(row.consent_attempt ?? {}), state, sca_status: progress.scaStatus ?? null } })
+    }
+    const view = attemptView(method, row.authorization_id, { ...progress, state })
+    return base(state, { challenge: view.challenge, sca_status: view.sca_status, step: view.step })
+  }
+  if (progress.state === 'failed') {
+    // The attempt is over but the row stays: restart gives it a new authorisation.
+    const failure = progress.failureCode ?? 'SIGNING_UNSUCCESSFUL'
+    await writeAttempt(ctx, row, { consent_attempt: { ...(row.consent_attempt ?? {}), state: 'failed', sca_status: progress.scaStatus ?? null, failure_code: failure } })
+    return base('failed', { sca_status: progress.scaStatus ?? null, failure_code: failure, failure_text: consentFailureText(failure).sv })
+  }
+
+  // Valid: read the accounts and make the row await selection, once.
+  const listingOnly = row.consent_attempt?.listing_only === true
+  let accounts: AisAccount[]
+  try {
+    accounts = await connect.accounts(ctx.companyId, { party: party.party, consentId: row.session_id, withBalance: !listingOnly })
+  } catch (error) {
+    return providerFailure(error)
+  }
+  const observedAt = new Date().toISOString()
+  const expires = progress.validUntil ? consentExpiresAt(progress.validUntil) : row.consent_expires
+  const { data: finalized, error } = await createServiceClient().rpc('finalize_open_payments_consent', {
+    p_company_id: ctx.companyId,
+    p_user_id: ctx.userId,
+    p_connection_id: row.id,
+    p_consent_id: row.session_id,
+    p_consent_expires: expires,
+    p_accounts: toStoredAccounts(accounts, observedAt),
+  })
+  if (error) return databaseFailure(error)
+  const receipt = finalized as { already_finalized?: boolean; accounts?: BankFeedAccount[]; superseded?: Array<{ id: string; session_id: string | null }> } | null
+  if (receipt && receipt.already_finalized !== true) {
+    await emitQuietly(ctx, {
+      type: 'bank_connection.consent_granted',
+      payload: { connectionId: row.id, bankName: row.bank_name, accountCount: receipt.accounts?.length ?? 0, consentExpiresAt: expires, userId: ctx.userId, companyId: ctx.companyId },
+    })
+    for (const sibling of receipt.superseded ?? []) {
+      await emitQuietly(ctx, {
+        type: 'bank_connection.superseded',
+        payload: { connectionId: sibling.id, supersededById: row.id, bankName: row.bank_name, userId: ctx.userId, companyId: ctx.companyId },
+      })
+    }
+  }
+
+  // Svea's second consent: the person chose the accounts before signing it,
+  // so the selection is saved now and the connection goes straight to active.
+  // The first import is the sync the browser asks for next.
+  const chosen = row.consent_attempt?.selection?.accounts
+  if (chosen && !listingOnly) {
+    const fresh = await loadRow(ctx, row.id)
+    if (fresh) {
+      const saved = await saveSelection(ctx, fresh, chosen.map((a) => ({ uid: a.uid, enabled: a.enabled, ledgerAccount: a.ledger_account })), { skipInitialSync: true })
+      if (!saved.ok) return saved
+    }
+    return base('valid', { consent_expires: expires, status: 'active' })
+  }
+  return base('valid', {
+    accounts: await accountChoices(ctx, (receipt?.accounts ?? []) as BankFeedAccount[]),
+    consent_expires: expires,
+    needs_second_consent: listingOnly,
+    status: 'pending_selection',
+  })
+}
+
+type CoreEventInput = Parameters<typeof eventBus.emit>[0]
+
+async function emitQuietly(ctx: OperationContext, event: CoreEventInput): Promise<void> {
+  try {
+    await eventBus.emit(event)
+  } catch (emitError) {
+    ctx.log.error('bank feed event not emitted', { type: event.type, message: emitError instanceof Error ? emitError.message : String(emitError) })
+  }
+}
+
+// ---------------------------------------------------------------------------
+// select, sync, disconnect
+// ---------------------------------------------------------------------------
+
+export interface SelectionInput {
+  uid: string
+  enabled: boolean
+  ledgerAccount?: string | null
+}
+
+async function saveSelection(
+  ctx: OperationContext,
+  row: Row,
+  selection: SelectionInput[],
+  options: { skipInitialSync?: boolean; signer?: BankFeedSignerInput; keepAlive?: (work: Promise<unknown>) => void; now?: number } = {},
+): Promise<OperationOutcome<SelectView>> {
+  let snapshot
+  try {
+    snapshot = await readBankConfiguration(ctx.supabase, ctx.companyId, row.id)
+  } catch (error) {
+    return databaseFailure(error)
+  }
+  const connection = snapshot.connection as typeof snapshot.connection & { aggregator?: string | null }
+  if (aggregatorOf(connection) !== 'open_payments') return { ok: false, code: 'NOT_FOUND' }
+  if (connection.status !== 'pending_selection' && connection.status !== 'active') return { ok: false, code: 'BANK_CONFIGURATION_CHANGED' }
+
+  const existing = (Array.isArray(connection.accounts_data) ? connection.accounts_data : []) as BankFeedAccount[]
+  const byUid = new Map(selection.map((a) => [a.uid, a]))
+  if (selection.some((a) => !existing.some((e) => e.uid === a.uid))) {
+    return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'accounts', reason: 'unknown_account' } }
+  }
+  if (selection.some((a) => a.ledgerAccount && !LEDGER.test(a.ledgerAccount))) {
+    return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'ledger_account', reason: 'not_a_bank_account' } }
+  }
+  const enabled = existing.filter((a) => byUid.get(a.uid)?.enabled === true)
+  if (enabled.length === 0 || enabled.length > MAX_ENABLED_ACCOUNTS) {
+    return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'accounts', reason: enabled.length === 0 ? 'none_selected' : 'too_many' } }
+  }
+  const explicit = enabled.map((a) => byUid.get(a.uid)?.ledgerAccount).filter((l): l is string => Boolean(l))
+  if (new Set(explicit).size !== explicit.length) return { ok: false, code: 'BANK_SELECTION_LEDGER_CONFLICT' }
+
+  // The company's cash rows: an account already synced before (by another
+  // feed or connection) keeps its row and history when its IBAN matches.
+  const { data: cashRows, error: cashError } = await ctx.supabase
+    .from('cash_accounts')
+    .select('id, iban, currency, ledger_account')
+    .eq('company_id', ctx.companyId)
+  if (cashError) return databaseFailure(cashError)
+  const rows = (cashRows ?? []) as Array<{ id: string; iban: string | null; currency: string; ledger_account: string }>
+
+  // Selected accounts claim their BAS numbers first. An unselected account
+  // keeps the number it already had only while no selected account wants it
+  // (it yields, as in every bank feed's picker), and never gets a new one.
+  const used = new Set(explicit)
+  const selectionByUid = new Map<string, BankAccountSelection>()
+  for (const account of enabled) {
+    let ledger = byUid.get(account.uid)?.ledgerAccount ?? account.ledger_account ?? null
+    let reuse: string | null = null
+    if (!ledger || (used.has(ledger) && !explicit.includes(ledger))) {
+      const resolved = await resolvePsd2LedgerAccount(ctx.supabase, ctx.companyId, ctx.userId, {
+        iban: account.iban ?? null, currency: account.currency, accountName: account.name ?? null, exclude: used, prepareOnly: true,
+      })
+      if (!resolved) return { ok: false, code: 'BANK_SELECTION_LEDGER_CONFLICT' }
+      ledger = resolved.ledgerAccount
+      reuse = resolved.reuseCashAccountId
+    }
+    used.add(ledger)
+    const iban = normalizeIban(account.iban)
+    if (!reuse && iban) {
+      reuse = rows.find((r) => normalizeIban(r.iban) === iban && r.currency === account.currency && r.ledger_account === ledger)?.id ?? null
+    }
+    selectionByUid.set(account.uid, { uid: account.uid, enabled: true, currency: account.currency, ledger_account: ledger, reuse_cash_account_id: reuse })
+  }
+  const selections: BankAccountSelection[] = existing.map((account) => {
+    const selected = selectionByUid.get(account.uid)
+    if (selected) return selected
+    const kept = account.ledger_account && !used.has(account.ledger_account) ? account.ledger_account : null
+    return { uid: account.uid, enabled: false, currency: account.currency, ...(kept ? { ledger_account: kept } : {}), reuse_cash_account_id: null }
+  })
+
+  let saved
+  try {
+    saved = await saveBankAccountSelection(ctx.supabase, ctx.companyId, ctx.userId, connection.id, snapshot.token, selections)
+  } catch (error) {
+    return databaseFailure(error)
+  }
+  await emitQuietly(ctx, {
+    type: 'bank_connection.account_selection_changed',
+    payload: {
+      connectionId: connection.id, bankName: connection.bank_name, previousStatus: connection.status, newStatus: saved.status,
+      enabledCount: enabled.length, totalCount: existing.length, userId: ctx.userId, companyId: ctx.companyId,
+    },
+  })
+
+  // Switch mode: the Enable Banking row hands over its history now that the
+  // selection has adopted its cash rows, and is revoked. Its consent at Enable
+  // Banking lapses on its own; the Enable Banking paths never touch a revoked row.
+  const replaced = row.consent_attempt?.selection?.replace_connection_id ?? row.consent_attempt?.replace_connection_id ?? null
+  if (replaced && connection.status === 'pending_selection') {
+    const { data: handover, error: supersedeError } = await ctx.supabase.rpc('supersede_enable_banking_connection', {
+      p_company_id: ctx.companyId, p_user_id: ctx.userId, p_new: connection.id, p_old: replaced,
+    })
+    if (supersedeError) {
+      // The selection stands; the switch is reported, not undone.
+      ctx.log.warn('enable banking connection not superseded', { connectionId: connection.id, replaced, message: supersedeError.message })
+    } else {
+      const moved = (handover as { superseded?: Array<{ id: string }> } | null)?.superseded ?? []
+      for (const sibling of moved) {
+        await emitQuietly(ctx, {
+          type: 'bank_connection.superseded',
+          payload: { connectionId: sibling.id, supersededById: connection.id, bankName: connection.bank_name, userId: ctx.userId, companyId: ctx.companyId },
+        })
+      }
+    }
+  }
+
+  const after = await loadRow(ctx, row.id)
+  const view = connectionView(after ?? { ...row, status: saved.status, accounts_data: saved.accounts as BankFeedAccount[] })
+  if (options.skipInitialSync || connection.status !== 'pending_selection') {
+    return { ok: true, data: { connection: view, sync: null, sync_pending: false } }
+  }
+
+  // The first import runs now so the person sees their transactions at once
+  // (the extended history window the bank serves right after the consent);
+  // past the wait it keeps going, and the cron retries whatever did not land.
+  const sync = runOpenPaymentsSync(ctx.supabase, {
+    companyId: ctx.companyId, userId: ctx.userId, connectionId: connection.id, log: ctx.log,
+    trigger: 'initial', signer: options.signer, now: options.now,
+  })
+  sync.catch(() => {})
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const result = await Promise.race([
+    sync,
+    new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), INITIAL_SYNC_WAIT_MS) }),
+  ]).catch(() => null)
+  if (timer) clearTimeout(timer)
+  if (!result) options.keepAlive?.(sync)
+  const synced = await loadRow(ctx, row.id)
+  return {
+    ok: true,
+    data: {
+      connection: synced ? connectionView(synced) : view,
+      sync: result && result.ok ? { imported: result.imported, duplicates: result.duplicates, from: result.from_date, to: result.to_date } : null,
+      sync_pending: !result,
+    },
+  }
+}
+
+export async function selectBankFeedAccounts(
+  ctx: OperationContext,
+  input: { connectionId: string; accounts: SelectionInput[]; method?: ConsentMethod | null; signer?: BankFeedSignerInput; keepAlive?: (work: Promise<unknown>) => void; now?: number },
+): Promise<OperationOutcome<SelectView>> {
+  const connect = getBankFeedConnect()
+  if (!connect) return { ok: false, code: 'OPEN_BANKING_NOT_AVAILABLE', details: { reason: 'no_connector' } }
+  const row = await loadRow(ctx, input.connectionId)
+  if (!row) return { ok: false, code: 'NOT_FOUND' }
+  if (row.status === 'pending') return { ok: false, code: 'BANK_CONSENT_NOT_READY' }
+  if (row.status !== 'pending_selection' && row.status !== 'active') return { ok: false, code: 'BANK_CONFIGURATION_CHANGED' }
+
+  // Svea: the first consent only listed the accounts. A second consent naming
+  // the chosen ones is created and signed; the selection waits on the row and
+  // is saved when that consent is valid (pollBankFeedConsent).
+  if (row.status === 'pending_selection' && row.consent_attempt?.selection?.listing_only === true) {
+    const chosen = input.accounts.filter((a) => a.enabled)
+    if (chosen.length === 0) return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'accounts', reason: 'none_selected' } }
+    const existing = row.accounts_data ?? []
+    if (chosen.some((a) => !existing.some((e) => e.uid === a.uid))) {
+      return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'accounts', reason: 'unknown_account' } }
+    }
+    const ibans = chosen.map((a) => normalizeIban(existing.find((e) => e.uid === a.uid)?.iban)).filter((iban): iban is string => Boolean(iban))
+    if (ibans.length !== chosen.length) return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'accounts', reason: 'iban_missing' } }
+    const method = input.method ?? row.consent_attempt?.selection?.method ?? 'qr'
+    const party = await partyFor(ctx, row, input.signer ?? UNATTENDED_SIGNER, true)
+    if (!party.ok) return party.outcome
+    const now = input.now ?? Date.now()
+    let created
+    try {
+      created = await connect.createConsent(ctx.companyId, { party: party.party, validUntil: validUntilRequested(now), accounts: ibans.map((iban) => ({ iban })) })
+    } catch (error) {
+      return providerFailure(error)
+    }
+    // The listing consent has served its purpose; ending it is best effort.
+    if (row.session_id) await connect.revokeConsent(ctx.companyId, { party: party.party, consentId: row.session_id }).catch(() => {})
+    const attempt: ConsentAttempt = {
+      method,
+      state: 'pending',
+      started_at: new Date(now).toISOString(),
+      listing_only: false,
+      selection: {
+        ...(row.consent_attempt?.selection ?? {}),
+        listing_only: false,
+        method,
+        accounts: input.accounts.map((a) => ({ uid: a.uid, enabled: a.enabled, ledger_account: a.ledgerAccount ?? null })),
+      },
+    }
+    await writeAttempt(ctx, row, {
+      session_id: created.consentId,
+      consent_expires: consentExpiresAt(created.validUntil),
+      status: 'pending',
+      authorization_id: null,
+      accounts_data: existing.map((a) => ({ ...a, enabled: chosen.some((c) => c.uid === a.uid) })),
+      consent_attempt: attempt,
+    })
+    const started = await startSigning(ctx, connect, { ...row, session_id: created.consentId, status: 'pending', consent_attempt: attempt }, party.party, method)
+    if (!started.ok) return started
+    return {
+      ok: true,
+      data: {
+        connection: connectionView({ ...row, status: 'pending', session_id: created.consentId }),
+        sync: null,
+        sync_pending: false,
+        ...(started.dryRun ? {} : { attempt: started.data.attempt }),
+      },
+    }
+  }
+
+  return saveSelection(ctx, row, input.accounts, { signer: input.signer, keepAlive: input.keepAlive, now: input.now })
+}
+
+/** "Synka nu": one read of the connection with the person present. The first read after selection takes the extended window. */
+export async function syncBankFeedConnection(
+  ctx: OperationContext,
+  input: { connectionId: string; signer: BankFeedSignerInput; now?: number },
+): Promise<OperationOutcome<Extract<TriggerSyncResult, { ok: true }>>> {
+  if (!getBankFeedConnect()) return { ok: false, code: 'OPEN_BANKING_NOT_AVAILABLE', details: { reason: 'no_connector' } }
+  const result = await runOpenPaymentsSync(ctx.supabase, {
+    companyId: ctx.companyId, userId: ctx.userId, connectionId: input.connectionId, log: ctx.log, trigger: 'manual', signer: input.signer, now: input.now,
+  })
+  if (result.ok) return { ok: true, data: result }
+  const { ok: _ok, code, ...details } = result
+  return { ok: false, code, details }
+}
+
+/** Remove the connection and end its consent at the bank. */
+export async function disconnectBankFeedConnection(ctx: OperationContext, connectionId: string): Promise<OperationOutcome<{ connection_id: string }>> {
+  const row = await loadRow(ctx, connectionId)
+  if (!row) return { ok: false, code: 'NOT_FOUND' }
+  let released
+  try {
+    const snapshot = await readBankConfiguration(ctx.supabase, ctx.companyId, connectionId)
+    released = await disconnectBankConnection(ctx.supabase, ctx.companyId, ctx.userId, connectionId, snapshot.token)
+  } catch (error) {
+    return databaseFailure(error)
+  }
+
+  // The local disconnect stands. Ending the consent at the bank is best
+  // effort, under a claim that fences a new holder while the call is out.
+  const connect = getBankFeedConnect()
+  if (released.session_id && row.bic && connect) {
+    const service = createServiceClient()
+    const identity = { p_provider: AGGREGATOR_SESSION_NAMESPACE.open_payments, p_session_id: released.session_id }
+    try {
+      const { data: claim, error: claimError } = await service.rpc('claim_bank_session_revocation', identity)
+      if (claimError) throw claimError
+      const token = (claim as { claimed?: boolean; token?: string } | null)
+      if (token?.claimed === true && typeof token.token === 'string') {
+        let succeeded = false
+        const party = await partyFor(ctx, row, UNATTENDED_SIGNER, false)
+        if (party.ok) {
+          succeeded = await connect.revokeConsent(ctx.companyId, { party: party.party, consentId: released.session_id }).then(() => true, () => false)
+        }
+        await service.rpc('finish_bank_session_revocation', { ...identity, p_claim_token: token.token, p_succeeded: succeeded })
+      }
+    } catch (error) {
+      ctx.log.warn('bank consent not ended at the bank', { message: error instanceof Error ? error.message : String(error) })
+    }
+  }
+  await emitQuietly(ctx, {
+    type: 'bank_connection.revoked',
+    payload: { connectionId, bankName: released.bank_name, userId: ctx.userId, companyId: ctx.companyId },
+  })
+  return { ok: true, data: { connection_id: connectionId } }
+}
+
+/** The connection as the dashboard shows it, for the routes that answer with one. */
+export async function getBankFeedConnection(ctx: OperationContext, connectionId: string): Promise<OperationOutcome<ConnectionView>> {
+  const row = await loadRow(ctx, connectionId)
+  if (!row) return { ok: false, code: 'NOT_FOUND' }
+  return { ok: true, data: connectionView(row) }
+}
+
+export type { SupabaseClient }
+export { accountContextOf }

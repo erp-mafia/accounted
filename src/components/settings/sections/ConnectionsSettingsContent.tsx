@@ -1,10 +1,17 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { HandCoins, Landmark, Store } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { BankConnectDialog } from '@/components/bank-feed/BankConnectDialog'
+import { OpenPaymentsConnectionRow } from '@/components/bank-feed/OpenPaymentsConnectionRows'
+import { useBankConnectFlow } from '@/components/bank-feed/use-bank-connect-flow'
+import { useOpenPaymentsAvailability } from '@/components/bank-feed/use-open-payments-availability'
+import { useOpenPaymentsConnections } from '@/components/bank-feed/use-open-payments-connections'
+import { RESUME_PARAM } from '@/components/bank-feed/verification-mail'
 import { bankLogoUrl } from '@/lib/reconciliation/bank-logos'
 import { collectionsEntryShown, useCollectionsAvailability } from '@/components/collections/collections-client'
 import { GoogleMark } from '@/components/ui/provider-marks'
@@ -77,6 +84,31 @@ export function ConnectionsSettingsContent() {
   const collectionsState = collections?.connection?.state ?? null
 
   const hasBanking = ENABLED_EXTENSION_IDS.has('enable-banking') && !isSandbox
+  // Bank reading through Open Payments: switched on per company. When it is,
+  // the bank rows are per connection (Enable Banking rows offer the switch,
+  // Open Payments rows their renewal) and Koppla bank opens the flow here.
+  const openPayments = useOpenPaymentsAvailability()
+  const opAvailable = openPayments.status === 'available' && !isSandbox
+  const bankFlow = useBankConnectFlow()
+  const bankConnections = useOpenPaymentsConnections(opAvailable ? companyId : null)
+  const [bankGeneration, setBankGeneration] = useState(0)
+  // A second signatory arrives with ?bank_connect=<id> (the reminder link):
+  // open the flow at its BankID step, once, and drop the param.
+  const searchParams = useSearchParams()
+  const resumeHandled = useRef(false)
+  const resumeId = searchParams.get(RESUME_PARAM)
+  const openBankFlow = bankFlow.open
+  useEffect(() => {
+    if (!opAvailable || !resumeId || resumeHandled.current) return
+    resumeHandled.current = true
+    const timer = setTimeout(() => {
+      openBankFlow('resume', { connectionId: resumeId })
+      const url = new URL(window.location.href)
+      url.searchParams.delete(RESUME_PARAM)
+      window.history.replaceState(window.history.state, '', url.pathname + url.search)
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [opAvailable, resumeId, openBankFlow])
   const hasSkatteverket = ENABLED_EXTENSION_IDS.has('skatteverket') && !isSandbox
   const hasWhatsApp = ENABLED_EXTENSION_IDS.has('whatsapp-inbox') && !isSandbox
   const hasMail = ENABLED_EXTENSION_IDS.has('mail') && !isSandbox
@@ -143,7 +175,7 @@ export function ConnectionsSettingsContent() {
     return () => {
       cancelled = true
     }
-  }, [companyId, hasMail])
+  }, [companyId, hasMail, bankGeneration])
 
   // Bank payments answer in well under a second; the row must not wait for
   // the slowest of the other readouts (mail, Peppol) to appear.
@@ -175,13 +207,17 @@ export function ConnectionsSettingsContent() {
     connected: boolean | null
     /** The state is an exception the person has to act on (ochre). */
     attention?: boolean
+    /** Replaces the default link button (the bank rows carry their own actions). */
+    actions?: React.ReactNode
+    /** The label carries user data (a bank name) and is masked in session replays. */
+    maskLabel?: boolean
   }) {
     return (
       <SettingsRow
         label={
           <span className="flex items-center gap-3">
             <LogoTile>{opts.logo}</LogoTile>
-            {opts.name}
+            {opts.maskLabel ? <span data-ph-mask="">{opts.name}</span> : opts.name}
           </span>
         }
         help={opts.help}
@@ -192,11 +228,77 @@ export function ConnectionsSettingsContent() {
           </SettingsRowNote>
         ) : null}
         <SettingsRowEnd>
-          <Button variant="outline" size="sm" asChild>
-            <Link href={opts.href}>{opts.connected === null ? t('open') : opts.connected ? t('manage') : t('connect')}</Link>
-          </Button>
+          {opts.actions ?? (
+            <Button variant="outline" size="sm" asChild>
+              <Link href={opts.href}>{opts.connected === null ? t('open') : opts.connected ? t('manage') : t('connect')}</Link>
+            </Button>
+          )}
         </SettingsRowEnd>
       </SettingsRow>
+    )
+  }
+
+  const bankLandmark = <Landmark className="h-4 w-4 text-foreground" aria-hidden="true" />
+
+  // The bank rows when Open Payments reads for this company: one row per
+  // connection. An Enable Banking row offers the switch; an Open Payments row
+  // its state and renewal; none at all offers Koppla bank.
+  function openPaymentsBankRows() {
+    const rows = bankConnections.rows ?? []
+    if (rows.length === 0) {
+      return row({
+        logo: bankLandmark,
+        name: t('bank'),
+        help: t('bank_help'),
+        state: t('not_connected'),
+        href: '/settings/banking',
+        connected: false,
+        actions: (
+          <>
+            {hasBanking && (
+              <Button variant="outline" size="sm" asChild>
+                <Link href="/settings/banking">{t('open')}</Link>
+              </Button>
+            )}
+            <Button size="sm" onClick={() => bankFlow.open('new')}>
+              {t('connect_bank')}
+            </Button>
+          </>
+        ),
+      })
+    }
+    return (
+      <>
+        {bankConnections.enableBanking.map((connection) => {
+          const logo = bankLogoUrl(connection.bank_name)
+          return (
+            <div key={connection.id}>
+              {row({
+                logo: logo ? <ImgLogo src={logo} /> : bankLandmark,
+                name: connection.bank_name ?? t('bank'),
+                maskLabel: true,
+                help: t('bank_help'),
+                state: t('connected'),
+                href: '/settings/banking',
+                connected: true,
+                actions: (
+                  <>
+                    <Button variant="outline" size="sm" asChild>
+                      <Link href="/settings/banking">{t('manage')}</Link>
+                    </Button>
+                    <Button size="sm" onClick={() => bankFlow.open('switch', { bank: { bic: '', name: connection.bank_name ?? '' }, replaceConnectionId: connection.id })}>
+                      {t('switch_connection')}
+                    </Button>
+                  </>
+                ),
+              })}
+            </div>
+          )
+        })}
+        {bankConnections.openPayments.map((connection) => (
+          <OpenPaymentsConnectionRow key={connection.id} connection={connection} flow={bankFlow} onChanged={bankConnections.refresh} />
+        ))}
+      </>
     )
   }
 
@@ -221,9 +323,11 @@ export function ConnectionsSettingsContent() {
     <div>
       <SettingsSectionHeader title={tNav('connections')} intro={tIntro('connections')} />
 
-      {hasBanking || hasSkatteverket ? (
+      {hasBanking || opAvailable || hasSkatteverket ? (
         <SettingsGroup label={t('group_bank_authorities')}>
-          {hasBanking &&
+          {opAvailable && bankConnections.rows !== null
+            ? openPaymentsBankRows()
+            : hasBanking &&
             row({
               logo: bankLogo ? <ImgLogo src={bankLogo} /> : <Landmark className="h-4 w-4 text-foreground" aria-hidden="true" />,
               name: t('bank'),
@@ -352,6 +456,16 @@ export function ConnectionsSettingsContent() {
             })}
         </SettingsGroup>
       ) : null}
+
+      {opAvailable && (
+        <BankConnectDialog
+          flow={bankFlow}
+          onConnected={() => {
+            bankConnections.refresh()
+            setBankGeneration((g) => g + 1)
+          }}
+        />
+      )}
     </div>
   )
 }

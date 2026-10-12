@@ -1,4 +1,4 @@
-import { COLLECTIONS_BASE_PATH, DELIVERY_BASE_PATH, PAYMENTS_BASE_PATH } from '@accounted/connect-contract'
+import { AIS_BASE_PATH, COLLECTIONS_BASE_PATH, DELIVERY_BASE_PATH, PAYMENTS_BASE_PATH } from '@accounted/connect-contract'
 import { getConnectorConfig } from './config'
 import {
   hasOwnEnableBankingCredentials,
@@ -107,6 +107,19 @@ export function paymentsConnectorMode(): ConnectorUpstream | null {
   const cfg = getConnectorConfig()
   if (!cfg) return null
   return { baseUrl: `${cfg.baseUrl}${PAYMENTS_BASE_PATH}`, key: cfg.key }
+}
+
+/**
+ * Reading a bank through the account information provider (lib/bank-feed):
+ * consents, BankID, accounts, balances and booked transactions. Connect is
+ * the only route, like payments: no installation holds the provider's
+ * credentials or client certificate. The Enable Banking feed keeps its own
+ * routing (bankConnectorMode); the two never share a session.
+ */
+export function aisConnectorMode(): ConnectorUpstream | null {
+  const cfg = getConnectorConfig()
+  if (!cfg) return null
+  return { baseUrl: `${cfg.baseUrl}${AIS_BASE_PATH}`, key: cfg.key }
 }
 
 /**

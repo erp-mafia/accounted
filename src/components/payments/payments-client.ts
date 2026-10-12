@@ -366,7 +366,6 @@ export function orderInvoiceLabel(order: PaymentOrder): string {
   return number ? `${supplier} ${number}` : supplier
 }
 
-/** The BankID app on this device, with no return URL (the page keeps polling). */
-export function bankIdAutostartHref(token: string): string {
-  return `bankid:///?autostarttoken=${encodeURIComponent(token)}&redirect=null`
-}
+// Shared with the bank reading consents (components/bankid); re-exported so
+// the signing flow's import keeps working.
+export { bankIdAutostartHref } from '@/components/bankid/autostart'

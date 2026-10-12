@@ -525,6 +525,8 @@ import { getEmailService } from '@/lib/email/service'
 import { hasCapability, capabilityBlockedError } from '@/lib/entitlements/has-capability'
 import { MCP_TOOL_CAPABILITY_MAP } from '@/lib/entitlements/keys'
 import { triggerConnectionSync } from '@/extensions/general/enable-banking/lib/trigger-sync'
+import { getBankFeedConnect } from '@/lib/bank-feed/connect'
+import { runOpenPaymentsSync } from '@/lib/bank-feed/feed'
 import {
   completePendingDocumentUpload,
   createPendingDocumentUpload,
@@ -6254,12 +6256,13 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_WRITE_OPEN_WORLD,
     async execute(args, companyId, userId, supabase) {
       const connectionId = typeof args.connection_id === 'string' ? args.connection_id.trim() : ''
-      const result = await triggerConnectionSync(supabase, {
-        companyId,
-        userId,
-        connectionId,
-        log,
-      })
+      const input = { companyId, userId, connectionId, log }
+      let result = await triggerConnectionSync(supabase, input)
+      // The Enable Banking runner only knows its own connections. An Open
+      // Payments connection is read by the core runner (lib/bank-feed/feed.ts).
+      if (!result.ok && result.code === 'NOT_FOUND' && getBankFeedConnect()) {
+        result = await runOpenPaymentsSync(supabase, { ...input, trigger: 'agent' })
+      }
 
       if (!result.ok) {
         // Cooldown is not a failure: the data is fresh. Say so in-band so the

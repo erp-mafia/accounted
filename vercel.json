@@ -35,6 +35,10 @@
       "schedule": "30 4 * * *"
     },
     {
+      "path": "/api/bank/open-payments/sync/cron",
+      "schedule": "20 * * * *"
+    },
+    {
       "path": "/api/extensions/stripe/transactions/cron",
       "schedule": "30 3 * * *"
     },

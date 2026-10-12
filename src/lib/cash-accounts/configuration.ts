@@ -13,6 +13,10 @@ export interface BankConfigurationSnapshot {
     session_id: string | null
     bank_name: string | null
     accounts_data: unknown
+    /** bank_connections.aggregator (lib/bank-sync/aggregator.ts). */
+    aggregator?: string | null
+    /** The bank an Open Payments consent is bound to; null for Enable Banking. */
+    bic?: string | null
   }
 }
 

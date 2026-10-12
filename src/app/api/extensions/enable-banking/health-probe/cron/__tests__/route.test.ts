@@ -53,7 +53,7 @@ function makeClient(state: ClientState) {
       let inIds: unknown[] | null = null
       let updatePayload: Record<string, unknown> | null = null
       const chain: Record<string, unknown> = {}
-      for (const method of ['select', 'not', 'order', 'limit']) chain[method] = vi.fn(() => chain)
+      for (const method of ['select', 'eq', 'not', 'order', 'limit']) chain[method] = vi.fn(() => chain)
       chain.in = vi.fn((col: string, values: unknown[]) => {
         if (col === 'id') inIds = values
         return chain

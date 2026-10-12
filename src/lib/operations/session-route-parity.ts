@@ -71,6 +71,7 @@ const CRON = 'machine endpoint: cron receiver'
 const WEBHOOK = 'machine endpoint: inbound webhook'
 const CONNECTOR = 'machine endpoint: self-hosted connector proxy, authenticated by a connector key'
 const PAYMENT_SIGNING = 'BankID signing of a bank payment: the account holder signs money out in person, no machine door signs'
+const BANK_CONSENT = 'BankID consent to read a bank account: the account holder gives it in person, no machine door consents'
 const PREVIEW = 'preview/parse helper for an unsaved form or import wizard; the API takes structured input'
 const EXT_SYNC = 'webshop/payment integration sync is cron-driven; manual trigger has no API'
 const COLLECTIONS_AGREEMENT = "entering or ending the company's agreement with a collection provider: a person consents, accepts and signs"
@@ -434,6 +435,14 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/payments/verification': covered([`POST ${V}/payment-orders/verification/start`], 'answers the provider\'s know-your-customer form link, which a signatory fills in and signs'),
   'POST /api/payments/orders/status/cron': machine(CRON),
 
+  // ── Bank connections through Open Payments (lib/bank-feed) ──────────
+  'POST /api/bank/open-payments/connections': uiOnly(BANK_CONSENT),
+  'POST /api/bank/open-payments/connections/:id/poll': uiOnly(BANK_CONSENT),
+  'POST /api/bank/open-payments/connections/:id/restart': uiOnly(BANK_CONSENT),
+  'POST /api/bank/open-payments/connections/:id/select': gap('P3', 'map connected bank accounts to ledger accounts, as for Enable Banking (Svea: also signs the second consent, which stays a person\'s act)'),
+  'POST /api/bank/open-payments/connections/:id/sync': covered([`POST ${V}/bank-connections/:connectionId/sync`, 'gnubok_sync_bank'], 'both doors fall through to the Open Payments runner for its connections'),
+  'DELETE /api/bank/open-payments/connections/:id': gap('P3', 'remove a bank connection, as for Enable Banking'),
+
   // ── Expenses, mileage, webshop ─────────────────────────────────────
   'POST /api/expense-claims': covered([`POST ${V}/expense-claims`, 'gnubok_create_expense_claim']),
   'DELETE /api/expense-claims/:id': covered([`DELETE ${V}/expense-claims/:id`, 'gnubok_delete_expense_claim']),
@@ -733,4 +742,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 127
+export const GAP_CEILING = 129

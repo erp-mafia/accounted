@@ -135,7 +135,7 @@ export type CoreEvent =
   | { type: 'bank_connection.sync_failed'; payload: {
       connectionId: string
       bankName: string | null
-      provider: 'enable_banking' | 'accounted_connect'
+      provider: 'enable_banking' | 'accounted_connect' | 'open_payments'
       trigger: 'agent' | 'cron' | 'manual'
       errorClass: 'session_expired' | 'bank_unavailable' | 'rate_limited' | 'connector' | 'unknown'
       status: string

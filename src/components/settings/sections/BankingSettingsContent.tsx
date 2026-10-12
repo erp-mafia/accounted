@@ -11,6 +11,12 @@ import { AlertTriangle, CreditCard, ExternalLink } from 'lucide-react'
 import { getSettingsPanel } from '@/lib/extensions/settings-panel-registry'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { SettingsBackLink, SettingsSectionHeader } from '@/components/settings/SettingsRows'
+import { BankConnectDialog } from '@/components/bank-feed/BankConnectDialog'
+import { OpenPaymentsBankSection } from '@/components/bank-feed/OpenPaymentsBankSection'
+import { useBankConnectFlow } from '@/components/bank-feed/use-bank-connect-flow'
+import { useOpenPaymentsAvailability } from '@/components/bank-feed/use-open-payments-availability'
+import { useOpenPaymentsConnections } from '@/components/bank-feed/use-open-payments-connections'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { useBranding } from '@/lib/branding/brand-context'
 
 const BankingPanel = getSettingsPanel('enable-banking')
@@ -28,6 +34,14 @@ export function BankingSettingsContent() {
   const [isAccessDenied, setIsAccessDenied] = useState(false)
   const [showHbPoaHint, setShowHbPoaHint] = useState(false)
   const hasBankingExtension = ENABLED_EXTENSION_IDS.has('enable-banking')
+  // Bank reading through Open Payments, when switched on for the company:
+  // its own section above the Enable Banking panel, which keeps managing
+  // the older connections until they are switched over.
+  const companyId = useCompanyOptional()?.company?.id ?? null
+  const openPayments = useOpenPaymentsAvailability()
+  const opAvailable = openPayments.status === 'available'
+  const bankFlow = useBankConnectFlow()
+  const opConnections = useOpenPaymentsConnections(opAvailable ? companyId : null)
 
   // Surface a bank connection/authorization failure that the OAuth callback
   // bounced back as `?bank_error=...`. The success path is handled by the
@@ -141,12 +155,19 @@ export function BankingSettingsContent() {
         </div>
       )}
 
+      {opAvailable && (
+        <>
+          <OpenPaymentsBankSection flow={bankFlow} connections={opConnections.openPayments} onChanged={opConnections.refresh} />
+          <BankConnectDialog flow={bankFlow} onConnected={opConnections.refresh} />
+        </>
+      )}
+
       {hasBankingExtension && BankingPanel ? (
         // No BankSyncStatusChip here: on this page the chip links to itself,
         // and the panel now carries its own single attention sentence. The
         // chip stays on /transactions.
         <BankingPanel />
-      ) : (
+      ) : opAvailable ? null : (
         <div className="pt-8">
           <EmptyState
             icon={CreditCard}

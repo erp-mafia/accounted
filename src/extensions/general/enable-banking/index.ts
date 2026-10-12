@@ -58,6 +58,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { attachSharedBankSession, readBankConfiguration, saveBankAccountSelection } from '@/lib/cash-accounts/configuration'
 import { bankAccountLabel, ibanLast4, ledgerSyncedElsewhereMessage } from '@/lib/cash-accounts/selection-refusal'
 import { errorResponse } from '@/lib/errors/get-structured-error'
+import { aggregatorOf, ENABLE_BANKING_AGGREGATOR } from '@/lib/bank-sync/aggregator'
 
 // Per-user limits keep one tenant from spamming any single bank handler.
 // Sliding 60s windows: generous enough for legitimate retry, tight enough
@@ -324,6 +325,9 @@ export const enableBankingExtension: Extension = {
               .select('id, bank_name, provider, session_id, psu_type')
               .eq('id', reconnectId)
               .eq('company_id', companyId)
+              // Only an Enable Banking connection is renewed here; an Open
+              // Payments one renews through its own BankID consent.
+              .eq('aggregator', ENABLE_BANKING_AGGREGATOR)
               .single()
             if (findErr || !data) {
               return NextResponse.json({ error: 'Connection not found' }, { status: 404 })
@@ -438,6 +442,7 @@ export const enableBankingExtension: Extension = {
               .from('bank_connections')
               .select('id, created_at')
               .eq('company_id', companyId)
+              .eq('aggregator', ENABLE_BANKING_AGGREGATOR)
               .eq('bank_name', resolvedAspspName)
               .eq('status', 'pending')
               .order('created_at', { ascending: false })
@@ -474,6 +479,7 @@ export const enableBankingExtension: Extension = {
               .from('bank_connections')
               .delete()
               .eq('company_id', companyId)
+              .eq('aggregator', ENABLE_BANKING_AGGREGATOR)
               .eq('bank_name', resolvedAspspName)
               .in('status', ['pending', 'error'])
               .is('session_id', null)
@@ -511,6 +517,7 @@ export const enableBankingExtension: Extension = {
                   .from('bank_connections')
                   .select('id, status, consent_expires, accounts_data')
                   .eq('company_id', companyId)
+                  .eq('aggregator', ENABLE_BANKING_AGGREGATOR)
                   .eq('bank_name', resolvedAspspName)
                   .in('status', ['expired', 'error', 'pending_selection'])
                   .order('created_at', { ascending: false })
@@ -800,6 +807,9 @@ export const enableBankingExtension: Extension = {
           .select('*')
           .eq('id', connection_id)
           .eq('company_id', companyId)
+          // An Open Payments connection is synced through its own route
+          // (/api/bank/open-payments/connections/:id/sync), never through here.
+          .eq('aggregator', ENABLE_BANKING_AGGREGATOR)
           .single()
 
         if (connectionError || !connection) {
@@ -1281,6 +1291,12 @@ export const enableBankingExtension: Extension = {
           return errorResponse(error, log)
         }
         const connection = snapshot.connection
+
+        // Saving here starts an Enable Banking backfill: an Open Payments
+        // connection is configured through its own route instead.
+        if (aggregatorOf(connection as { aggregator?: string | null }) !== ENABLE_BANKING_AGGREGATOR) {
+          return NextResponse.json({ error: 'Connection not found' }, { status: 404 })
+        }
 
         if (connection.status !== 'pending_selection' && connection.status !== 'active') {
           return NextResponse.json(

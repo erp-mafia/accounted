@@ -122,6 +122,17 @@ describe('detectBrokenBankConnections', () => {
     expect(findCall('bank_connections', 'in')).toEqual(['status', ['expired', 'error']])
   })
 
+  it('treats an Open Payments connection exactly like an Enable Banking one: no aggregator or provider filter', async () => {
+    enqueue({ data: [{ id: 'c1', status: 'expired', bank_name: 'Swedbank' }] })
+    const notice = await detectBrokenBankConnections(supabase, COMPANY)
+    expect(notice).toMatchObject({ messageKey: 'bank_broken_one', messageParams: { bank: 'Swedbank' }, actionHref: '/settings/banking' })
+    expect(findCalls('bank_connections', 'eq')).toEqual([['company_id', COMPANY]])
+    enqueue({ data: [{ id: 'c2', bank_name: 'Swedbank', consent_expires: new Date(NOW.getTime() + 3 * 24 * 60 * 60 * 1000).toISOString() }] })
+    const expiring = await detectExpiringBankConnections(supabase, COMPANY, NOW)
+    expect(expiring).toMatchObject({ messageKey: 'bank_expiring_one', messageParams: { bank: 'Swedbank', days: 3 }, actionHref: '/settings/banking' })
+    expect(findCalls('bank_connections', 'eq')).toEqual([['company_id', COMPANY], ['company_id', COMPANY], ['status', 'active']])
+  })
+
   it('shapes a single broken connection with its bank name', async () => {
     enqueue({ data: [{ id: 'c1', status: 'expired', bank_name: 'SEB' }] })
     const notice = await detectBrokenBankConnections(supabase, COMPANY)

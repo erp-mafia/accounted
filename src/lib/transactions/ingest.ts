@@ -900,6 +900,8 @@ export async function ingestTransactions(
   // invoices and exchange rates: they are not used.
   let unpaidSupplierInvoices: SupplierInvoice[] = []
   let openRotRutPayoutRequests: RotRutPayoutRequestCandidate[] = []
+  // Open bank payment orders by the end-to-end id their own debit carries (lower-cased).
+  const openPaymentOrdersByE2E = new Map<string, { id: string; supplier_invoice_id: string }>()
   // Keyed by `${currency}|${date}` so each non-SEK transaction gets the
   // rate that was valid on its own transaction date, not the import date.
   const exchangeRatesByDate = new Map<string, ExchangeRate>()
@@ -925,6 +927,30 @@ export async function ingestTransactions(
   // longer explain (remaining_amount is net of the deduction), so the begäran
   // is the candidate. Small table: a company has a handful of open requests.
   openRotRutPayoutRequests = await loadOpenRotRutPayoutRequests(supabase, companyId)
+  // Bank payments Accounted initiated (payment_orders) come back on their own
+  // debit with the order's end-to-end id. Only feeds that report one (Open
+  // Payments) trigger this read; every other batch skips it. The match is
+  // case-insensitive: banks have echoed the id in another case. Non-critical.
+  const endToEndIds = [...new Set(rawTransactions.map(raw => raw.end_to_end_id?.trim()).filter((id): id is string => Boolean(id)))]
+  if (endToEndIds.length > 0) {
+    try {
+      const variants = [...new Set(endToEndIds.flatMap(id => [id, id.toUpperCase(), id.toLowerCase()]))]
+      const wanted = new Set(endToEndIds.map(id => id.toLowerCase()))
+      const { data: orders } = await supabase
+        .from('payment_orders')
+        .select('id, end_to_end_id, supplier_invoice_id')
+        .eq('company_id', companyId)
+        .in('end_to_end_id', variants)
+        .in('status', ['accepted', 'awaiting_second_signer', 'executed'])
+        .is('supplier_invoice_payment_id', null)
+      for (const order of (orders ?? []) as Array<{ id: string; end_to_end_id: string; supplier_invoice_id: string | null }>) {
+        const key = order.end_to_end_id.toLowerCase()
+        if (order.supplier_invoice_id && wanted.has(key)) openPaymentOrdersByE2E.set(key, { id: order.id, supplier_invoice_id: order.supplier_invoice_id })
+      }
+    } catch {
+      // Non-critical: the heuristics below still run
+    }
+  }
   }
 
   // Pre-fetch exchange rates for each unique (currency, date) pair in the
@@ -1280,6 +1306,31 @@ export async function ingestTransactions(
         }
       } catch {
         // Non-critical: continue processing
+      }
+    }
+
+    // 3a. The debit of a bank payment Accounted initiated carries the order's
+    // own end-to-end id: the strongest evidence there is, so it goes before
+    // the heuristics. Still ONLY a suggestion (potential_supplier_invoice_id):
+    // the match route books the payment when a person confirms, and that
+    // payment row is what settles the order.
+    const paymentOrder = raw.end_to_end_id ? openPaymentOrdersByE2E.get(raw.end_to_end_id.trim().toLowerCase()) : undefined
+    if (newTransaction.amount < 0 && paymentOrder && !matchedSupplierInvoiceIds.has(paymentOrder.supplier_invoice_id)) {
+      const { error: hintError } = await supabase
+        .from('transactions')
+        .update({ potential_supplier_invoice_id: paymentOrder.supplier_invoice_id })
+        .eq('id', newTransaction.id)
+      if (!hintError) {
+        await logMatchEvent(supabase, userId, newTransaction.id, 'auto_suggested', {
+          supplierInvoiceId: paymentOrder.supplier_invoice_id,
+          matchConfidence: 0.99,
+          matchMethod: 'payment_order',
+          newState: { payment_order_id: paymentOrder.id },
+        })
+        matchedSupplierInvoiceIds.add(paymentOrder.supplier_invoice_id)
+        unpaidSupplierInvoices = unpaidSupplierInvoices.filter(inv => inv.id !== paymentOrder.supplier_invoice_id)
+        result.auto_matched_invoices++
+        continue
       }
     }
 

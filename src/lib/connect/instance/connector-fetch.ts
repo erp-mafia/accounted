@@ -69,10 +69,20 @@ export class ConnectorCallError extends Error {
   readonly status: number | null
   /** The provider's own code when the service relayed a provider refusal (the envelope's providerCode). */
   readonly providerCode: string | null
+  /** The service's Retry-After in seconds, when it sent one (a rate limit); null otherwise. */
+  readonly retryAfterSeconds: number | null
 
   constructor(
     message: string,
-    options: { code: string; retryable: boolean; detail?: string | null; status?: number | null; providerCode?: string | null; cause?: unknown },
+    options: {
+      code: string
+      retryable: boolean
+      detail?: string | null
+      status?: number | null
+      providerCode?: string | null
+      retryAfterSeconds?: number | null
+      cause?: unknown
+    },
   ) {
     super(message, options.cause === undefined ? undefined : { cause: options.cause })
     this.name = 'ConnectorCallError'
@@ -81,7 +91,18 @@ export class ConnectorCallError extends Error {
     this.detail = options.detail ?? null
     this.status = options.status ?? null
     this.providerCode = options.providerCode ?? null
+    this.retryAfterSeconds = options.retryAfterSeconds ?? null
   }
+}
+
+/** A Retry-After header as whole seconds: delta-seconds, or an HTTP date relative to now; null when absent or unreadable. */
+export function parseRetryAfterSeconds(header: string | null, now: number = Date.now()): number | null {
+  if (!header) return null
+  const trimmed = header.trim()
+  if (/^\d+$/.test(trimmed)) return Number(trimmed)
+  const at = Date.parse(trimmed)
+  if (!Number.isFinite(at)) return null
+  return Math.max(0, Math.ceil((at - now) / 1000))
 }
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
@@ -139,7 +160,7 @@ async function readJson(response: Response): Promise<unknown> {
   }
 }
 
-function failureFromResponse(operation: string, status: number, body: unknown): ConnectorCallError {
+function failureFromResponse(operation: string, status: number, body: unknown, retryAfter: string | null = null): ConnectorCallError {
   const parsed = connectorErrorSchema.safeParse(body)
   const envelope = parsed.success ? parsed.data : null
   const retryable = typeof envelope?.retryable === 'boolean' ? envelope.retryable : status === 429 || status >= 500
@@ -149,6 +170,7 @@ function failureFromResponse(operation: string, status: number, body: unknown): 
     detail: envelope?.detail ?? null,
     status,
     providerCode: envelope?.providerCode ?? null,
+    retryAfterSeconds: parseRetryAfterSeconds(retryAfter),
   })
 }
 
@@ -216,7 +238,7 @@ export async function callConnectorOperation<D extends ConnectorOperationDef>(
       body: payload,
     })
     const json = await readJson(response)
-    if (!response.ok) throw failureFromResponse(operation, response.status, json)
+    if (!response.ok) throw failureFromResponse(operation, response.status, json, response.headers.get('retry-after'))
     const parsed = def.response.safeParse(json)
     if (!parsed.success) {
       throw new ConnectorCallError(`Connector ${operation}: unexpected response shape`, {

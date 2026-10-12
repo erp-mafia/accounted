@@ -8,6 +8,7 @@ import {
   REAUTH_REQUIRED_MESSAGE,
 } from '@/extensions/general/enable-banking/lib/api-client'
 import { sendConsentExpiryNotification } from '@/extensions/general/enable-banking/lib/consent-expiry-notification'
+import { ENABLE_BANKING_AGGREGATOR } from '@/lib/bank-sync/aggregator'
 
 export const maxDuration = 300
 
@@ -57,6 +58,8 @@ export const GET = withCronContext('cron.bank_session_probe', async (_request, c
   const { data: candidates, error: candidatesError } = await supabase
     .from('bank_connections')
     .select('id, company_id, user_id, bank_name, session_id, status, last_synced_at, last_expiry_notification_at')
+    // Enable Banking sessions only: an Open Payments consent id means nothing to it.
+    .eq('aggregator', ENABLE_BANKING_AGGREGATOR)
     .in('status', ['active', 'pending_selection'])
     .not('session_id', 'is', null)
     .order('last_synced_at', { ascending: true, nullsFirst: true })

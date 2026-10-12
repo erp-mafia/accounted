@@ -4,6 +4,7 @@ import {
   convertTransaction,
   getAccountBalance,
   SessionExpiredError,
+  AspspUnavailableError,
   ConnectorSyncError,
   bankRateLimited,
 } from './api-client'
@@ -15,6 +16,10 @@ import { uploadDocument } from '@/lib/core/documents/document-service'
 import { resolveBankIngestRoute } from '@/lib/bank-sync/ingest-route'
 import { ingestTransactions as defaultIngest } from '@/lib/transactions/ingest'
 import { buildStableExternalIds, FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
+import { aggregatorOf } from '@/lib/bank-sync/aggregator'
+import { ConsentOverError, ProviderUnavailableError, RateLimitedError } from '@/lib/bank-feed/connect'
+import { buildBankFeedParty, UNATTENDED_SIGNER, type BankFeedSignerInput } from '@/lib/bank-feed/party'
+import { syncOpenPaymentsAccount } from '@/lib/bank-feed/sync'
 import type { RawTransaction, IngestResult, IngestOptions } from '@/types'
 import type { StoredAccount, TransactionsFetchStrategy } from '../types'
 
@@ -37,6 +42,12 @@ export interface SyncOptions {
    * to fetch the deepest available history (slower); omit for incremental syncs.
    */
   strategy?: TransactionsFetchStrategy
+  /**
+   * Open Payments connections only: the person asking (IP and user agent), so
+   * the bank does not count the read against the consent's unattended budget.
+   * Ignored for Enable Banking.
+   */
+  signer?: BankFeedSignerInput
 }
 
 /**
@@ -79,6 +90,10 @@ interface BookedTransactionFields {
   reference?: string
   value_date?: string
   provider_transaction_id?: string
+  /** The end-to-end id of a payment order the debit settles; the service sends it since contract 2026-10-12. */
+  end_to_end_id?: string
+  /** The counterparty's IBAN on its own, when the service separated it from the account. */
+  counterparty_iban?: string
   merchant_category_code?: string
   bank_transaction_code?: string
   proprietary_bank_transaction_code?: string
@@ -223,6 +238,15 @@ export async function syncAccountTransactions(
   if (account.ledger_account && account.ledger_account !== bankRoute.ledgerAccount) {
     throw Object.assign(new Error('Bank account configuration changed before sync; reload the connection'), { code: 'PT409' })
   }
+  // The route names the aggregator of the row it just verified. An Open
+  // Payments connection is read through Connect's AIS family
+  // (lib/bank-feed/sync.ts); its failures come back as the errors every
+  // Enable Banking caller already handles, so the row is flipped, cooled down
+  // or left alone exactly as for an Enable Banking session. Everything below
+  // this branch is the Enable Banking path, unchanged.
+  if (aggregatorOf(bankRoute) === 'open_payments') {
+    return syncOpenPaymentsAccountAsEnableBanking(supabase, companyId, userId, connectionId, account, fromDate, toDate, bankRoute, ingest, syncOptions)
+  }
   console.log('[enable-banking] syncAccountTransactions starting', {
     connectionId,
     accountUid: account.uid,
@@ -268,6 +292,8 @@ export async function syncAccountTransactions(
         reference: tx.reference ?? undefined,
         value_date: tx.value_date ?? undefined,
         provider_transaction_id: tx.provider_transaction_id ?? undefined,
+        end_to_end_id: tx.end_to_end_id ?? undefined,
+        counterparty_iban: tx.counterparty_iban ?? undefined,
         merchant_category_code: tx.merchant_category_code ?? undefined,
         bank_transaction_code: tx.bank_transaction_code ?? undefined,
         proprietary_bank_transaction_code: tx.proprietary_bank_transaction_code ?? undefined,
@@ -431,10 +457,13 @@ export async function syncAccountTransactions(
       reference: tx.reference || null,
       value_date: tx.value_date || null,
       provider_transaction_id: tx.provider_transaction_id || null,
+      // Carried when the service sends them (contract 2026-10-12); the direct
+      // path never does, so every other field and every stored key is unchanged.
+      end_to_end_id: tx.end_to_end_id || null,
       raw_document_id: page === undefined ? null : archivedPageIds[page] ?? null,
       bank_connection_id: connectionId,
       import_source: 'enable_banking',
-      counterparty_iban: looksLikeIban ? cpAccount!.replace(/\s+/g, '') : null,
+      counterparty_iban: tx.counterparty_iban?.replace(/\s+/g, '').toUpperCase() || (looksLikeIban ? cpAccount!.replace(/\s+/g, '') : null),
       counterparty_account: !looksLikeIban ? cpAccount : null,
       // Verbatim transaction-type codes: the ingest boundary classifies them
       // into transaction_method and persists them as evidence columns.
@@ -515,4 +544,72 @@ export async function syncAccountTransactions(
     effectiveFromDate,
     historyNarrowed,
   }
+}
+
+/**
+ * The Open Payments branch of syncAccountTransactions: the same signature and
+ * result, through lib/bank-feed/sync.ts, with the typed Connect failures
+ * translated into the classes this extension's callers dispatch on.
+ */
+async function syncOpenPaymentsAccountAsEnableBanking(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  connectionId: string,
+  account: StoredAccount,
+  fromDate: string,
+  toDate: string,
+  bankRoute: Awaited<ReturnType<typeof resolveBankIngestRoute>>,
+  ingest: IngestFn,
+  syncOptions?: SyncOptions,
+): Promise<SyncResult> {
+  const { data: row } = await supabase
+    .from('bank_connections')
+    .select('affiliated_aspsp_id, psu_type')
+    .eq('id', connectionId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  const connection = (row ?? {}) as { affiliated_aspsp_id?: string | null; psu_type?: string | null }
+  const party = await buildBankFeedParty(supabase, {
+    companyId,
+    bic: bankRoute.bic ?? '',
+    affiliatedAspspId: connection.affiliated_aspsp_id ?? null,
+    psuType: connection.psu_type ?? null,
+    signer: syncOptions?.signer ?? UNATTENDED_SIGNER,
+  })
+  if (!party.ok) throw new Error(`Open Payments sync: ${party.outcome.code}`)
+  try {
+    const result = await syncOpenPaymentsAccount(supabase, {
+      companyId, userId, connectionId, account, fromDate, toDate, bankRoute, party: party.party, ingest,
+      options: {
+        ...(syncOptions?.skipAutoCategorization ? { skipAutoCategorization: true } : {}),
+        ...(syncOptions?.rawInsertOnly ? { rawInsertOnly: true } : {}),
+      },
+    })
+    return {
+      imported: result.imported,
+      duplicates: result.duplicates,
+      errors: result.errors,
+      returnedMinBookingDate: result.returnedMinBookingDate,
+      returnedMaxBookingDate: result.returnedMaxBookingDate,
+      requestedFromDate: fromDate,
+      effectiveFromDate: result.effectiveFromDate,
+      historyNarrowed: result.historyNarrowed,
+    }
+  } catch (error) {
+    throw toEnableBankingSyncError(error, fromDate)
+  }
+}
+
+/** Connect's typed AIS failures as the errors every Enable Banking sync caller dispatches on. */
+export function toEnableBankingSyncError(error: unknown, fromDate: string): unknown {
+  if (error instanceof ConsentOverError) return new SessionExpiredError(error.status ?? 410, error.code)
+  if (error instanceof RateLimitedError) {
+    return new AspspUnavailableError(error.status ?? 429, error.code, 'rate-limited', fromDate, {
+      dailyQuota: true,
+      ...(error.retryAfterSeconds ? { retryAfterSeconds: error.retryAfterSeconds } : {}),
+    })
+  }
+  if (error instanceof ProviderUnavailableError) return new ConnectorSyncError(error.status, error.code, '')
+  return error
 }

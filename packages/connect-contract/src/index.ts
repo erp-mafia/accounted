@@ -28,7 +28,7 @@ import { z } from 'zod'
  * copy of `src/` pinned to a commit, so it must stay self-contained.
  */
 
-export const CONTRACT_VERSION = '2026-10-10'
+export const CONTRACT_VERSION = '2026-10-12'
 
 // ---------------------------------------------------------------------------
 // Keys, headers and paths
@@ -186,6 +186,16 @@ export const CONNECTOR_ERROR_CODES = [
   // The debtor cannot be reached through the requested delivery method.
   'CONNECTOR_DELIVERY_METHOD_UNAVAILABLE',
   'CONNECTOR_DELIVERY_DOCUMENT_REJECTED',
+  // The account information provider is not configured or not usable at the service (certificate, credentials): an operator must act.
+  'CONNECTOR_AIS_PROVIDER_UNAVAILABLE',
+  // A consent or authorisation may have been created before the answer was lost; creating another is harmless.
+  'CONNECTOR_AIS_OUTCOME_UNKNOWN',
+  // The provider or the bank refused the request for good; providerCode says why.
+  'CONNECTOR_AIS_REFUSED',
+  // The bank does not know this consent, account or authorisation.
+  'CONNECTOR_AIS_NOT_FOUND',
+  // The provider failed or could not be reached; trying again later may help.
+  'CONNECTOR_AIS_PROVIDER_FAILED',
 ] as const
 export type ConnectorErrorCode = (typeof CONNECTOR_ERROR_CODES)[number]
 
@@ -232,6 +242,12 @@ export const normalizedBankTransactionSchema = z.object({
   provider_transaction_id: z.string().nullable().optional(),
   /** Index into `raw_pages` of the page this row arrived in. */
   raw_page_index: z.number().int().min(0).nullable().optional(),
+  // Added 2026-10-12 with the AIS family; a producer that does not know them
+  // (the Enable Banking path) leaves them out.
+  /** The end-to-end id a payment order was sent with: how the debit is matched to the order. Never a NOTPROVIDED placeholder. */
+  end_to_end_id: z.string().nullable().optional(),
+  /** The counterparty's IBAN on its own, when the bank gave one. */
+  counterparty_iban: z.string().nullable().optional(),
 })
 export type NormalizedBankTransaction = z.infer<typeof normalizedBankTransactionSchema>
 
@@ -288,6 +304,16 @@ export const bankSyncResponseSchema = z.object({
   /** Set when the provider rejected the window and a narrower date_from was used. */
   effective_date_from: z.string().nullable(),
   pages: z.number().int().min(0),
+  // Added 2026-10-12 with the AIS family (syncTransactions); the Enable
+  // Banking sync leaves them out.
+  /** The page cap was reached before the bank ran out of pages: the window is incomplete, ask again with a later date_from. */
+  truncated: z.boolean().optional(),
+  /** The bank handed back a continuation key it had already given; paging stopped there. */
+  pagingLoop: z.boolean().optional(),
+  /** Rows dropped as exact repeats of a row already read (same id, booking date and amount). */
+  duplicates: z.number().int().min(0).optional(),
+  /** Rows kept although their id was already used by a row with another date or amount. */
+  conflicts: z.number().int().min(0).optional(),
 })
 export type BankSyncResponse = z.infer<typeof bankSyncResponseSchema>
 
@@ -1039,6 +1065,293 @@ export type PaymentsOperation = keyof typeof PAYMENTS_OPERATIONS
 
 /** Writes: they carry an idempotency key and are never sent to the provider twice. */
 export const PAYMENTS_WRITE_OPERATIONS = ['createPayment', 'cancelPayment', 'createBasket', 'startSigning'] as const satisfies readonly PaymentsOperation[]
+
+// ---------------------------------------------------------------------------
+// AIS (bank reading through an account information provider: consents,
+// BankID, accounts, balances, booked transactions; milestone 1 of the
+// connections plan)
+// ---------------------------------------------------------------------------
+
+/**
+ * The AIS family: the installation's bank connections send one
+ * provider-neutral operation per bank interaction, and the service forwards
+ * it to the account information provider with Accounted's credentials and
+ * client certificate. The service keeps no account, balance, row or person:
+ * a consent leaves an ownership row (a sha256 of the consent id, the
+ * company reference, the account uids it covers) and a per-day read count;
+ * everything else leaves metering.
+ *
+ * - Every call is a POST with a JSON body and carries X-Connector-Company.
+ * - Every call but `banks` and `bank` carries the party: whose accounts,
+ *   at which bank, who signs. The service forwards it as the provider's PSU
+ *   headers and never keeps it.
+ * - A consent is created, then signed with BankID (decoupled: QR or this
+ *   device), then read. Repeating a create or a signing start only makes
+ *   another consent or authorisation, which is harmless, so AIS writes carry
+ *   no idempotency key.
+ * - Banks allow four unattended reads per consent and day. The service
+ *   counts `accounts`, `balances` and `syncTransactions` calls without a
+ *   person present (psuIpAddress null) and answers the fifth with
+ *   CONNECTOR_BANK_RATE_LIMITED and a Retry-After until midnight in Sweden.
+ *   A read with the person present (psuIpAddress set) is not counted.
+ * - `syncTransactions` answers in the bank sync shape (bankSyncResponseSchema)
+ *   so an installation ingests this feed and the Enable Banking one the same
+ *   way.
+ */
+
+/** Base path of the AIS family. */
+export const AIS_BASE_PATH = '/api/connect/ais'
+
+/** Scope a connector key needs for the AIS family (the same as the bank proxy). */
+export const AIS_SCOPE = 'bank_sync'
+
+const aisBicSchema = z.string().regex(/^[A-Z0-9]{8}([A-Z0-9]{3})?$/, 'BIC: 8 or 11 characters')
+
+/** A Swedish organisationsnummer, 10 digits, no separator. */
+const aisOrgNumberSchema = z.string().regex(/^\d{10}$/, 'organisationsnummer: 10 digits')
+
+const aisConsentIdSchema = z.string().trim().min(1).max(128)
+const aisAccountUidSchema = z.string().trim().min(1).max(128)
+const aisIbanSchema = z.string().trim().min(1).max(34)
+
+/**
+ * Whose accounts, at which bank, and who signs. Sent with every AIS call and
+ * forwarded to the provider as PSU headers; the service never stores it.
+ * `personalNumber` is the signer's personnummer (12 digits) when the
+ * installation knows it. `psuIpAddress` set means a person is present: the
+ * read is not counted against the consent's daily budget. `affiliatedAspspId`
+ * names the savings bank behind a shared BIC (Swedbank's sparbanker, Ölands
+ * Bank); the `bank` operation lists them as `affiliates`.
+ */
+export const aisPartySchema = z.object({
+  orgNumber: aisOrgNumberSchema,
+  accountContext: paymentsAccountContextSchema,
+  bic: aisBicSchema,
+  personalNumber: z.string().regex(/^\d{12}$/, 'personnummer: 12 digits').nullable(),
+  psuIpAddress: z.string().max(64).nullable(),
+  psuUserAgent: z.string().max(300).nullable(),
+  affiliatedAspspId: z.string().trim().min(1).max(64).nullable().optional(),
+})
+export type AisParty = z.infer<typeof aisPartySchema>
+
+/** One bank in the catalogue; signing details are null until `bank` is asked. */
+export const aisBankSchema = z.object({
+  bic: aisBicSchema,
+  name: z.string(),
+  logoUrl: z.string().nullable(),
+  /** BankID in our screen (QR or this device); null when not known from the list. */
+  decoupled: z.boolean().nullable(),
+  /** Signing on the bank's own page; null when not known from the list. */
+  redirect: z.boolean().nullable(),
+})
+export type AisBank = z.infer<typeof aisBankSchema>
+
+export const aisBanksRequestSchema = z.object({ country: z.literal('SE').optional() })
+export type AisBanksRequest = z.infer<typeof aisBanksRequestSchema>
+
+export const aisBanksResponseSchema = z.object({ banks: z.array(aisBankSchema) })
+export type AisBanksResponse = z.infer<typeof aisBanksResponseSchema>
+
+export const aisBankRequestSchema = z.object({ bic: aisBicSchema })
+export type AisBankRequest = z.infer<typeof aisBankRequestSchema>
+
+/** One bank's reading capabilities: how a person signs, how far back it serves history, and the banks reached through it. */
+export const aisBankDetailsSchema = z.object({
+  bic: aisBicSchema,
+  name: z.string(),
+  decoupled: z.boolean().nullable(),
+  redirect: z.boolean().nullable(),
+  /** Days of history on an ordinary read; null when the bank does not say. */
+  transactionHistoryMaxDays: z.number().int().min(0).nullable(),
+  /** Days of history right after the consent was signed (Swedbank: 760) ... */
+  extendedTransactionHistoryMaxDays: z.number().int().min(0).nullable(),
+  /** ... for this many minutes (Swedbank: 60); afterwards transactionHistoryMaxDays applies. */
+  extendedTransactionHistoryAvailableWindowMinutes: z.number().int().min(0).nullable(),
+  /** Savings banks behind this BIC; the chosen one goes in the party's affiliatedAspspId. */
+  affiliates: z.array(z.object({ id: z.string().min(1), name: z.string() })),
+})
+export type AisBankDetails = z.infer<typeof aisBankDetailsSchema>
+
+export const aisCreateConsentRequestSchema = z.object({
+  party: aisPartySchema,
+  /** The consent's last day; default today plus 180 days. The bank may clamp it (read validUntil back). */
+  validUntil: z.iso.date().optional(),
+  /** Name the accounts the consent covers (a bank that lists accounts first and consents to the chosen ones second); default every account. */
+  accounts: z.array(z.object({ iban: aisIbanSchema })).max(100).optional(),
+})
+export type AisCreateConsentRequest = z.infer<typeof aisCreateConsentRequestSchema>
+
+export const aisConsentCreatedSchema = z.object({
+  consentId: z.string().min(1),
+  /** The provider's own consent status, verbatim (received until signed). */
+  consentStatus: z.string(),
+  validUntil: z.iso.date(),
+})
+export type AisConsentCreated = z.infer<typeof aisConsentCreatedSchema>
+
+export const aisStartConsentSigningRequestSchema = z.object({
+  party: aisPartySchema,
+  consentId: aisConsentIdSchema,
+  /** Decoupled BankID only: redirect (the bank's own page) needs the connection callback, which comes later. */
+  method: z.enum(['same_device', 'qr']),
+})
+export type AisStartConsentSigningRequest = z.infer<typeof aisStartConsentSigningRequestSchema>
+
+export const aisConsentSigningStartedSchema = z.object({
+  providerAuthorisationId: z.string().min(1),
+  /** The method the bank actually offered (it may impose redirect, which fails the signing: SCA_REDIRECT_UNSUPPORTED). */
+  method: paymentsSigningMethodSchema,
+  state: z.enum(['pending', 'failed']),
+  challenge: paymentsSigningChallengeSchema.nullable(),
+  failureCode: z.string().nullable(),
+  /** The bank's SCA status as the provider reports it. */
+  scaStatus: z.string().nullable(),
+})
+export type AisConsentSigningStarted = z.infer<typeof aisConsentSigningStartedSchema>
+
+export const aisPollConsentSigningRequestSchema = z.object({
+  party: aisPartySchema,
+  consentId: aisConsentIdSchema,
+  providerAuthorisationId: z.string().min(1),
+  method: paymentsSigningMethodSchema,
+})
+export type AisPollConsentSigningRequest = z.infer<typeof aisPollConsentSigningRequestSchema>
+
+/**
+ * Where a signing stands. `valid`: the consent can be read. `partially_authorised`:
+ * this signature went through and another signatory must sign (joint
+ * signing), never a failure. `failed`: failureCode says why.
+ */
+export const aisConsentSigningStateSchema = z.enum(['pending', 'valid', 'partially_authorised', 'failed'])
+export type AisConsentSigningState = z.infer<typeof aisConsentSigningStateSchema>
+
+export const aisConsentSigningProgressSchema = z.object({
+  state: aisConsentSigningStateSchema,
+  /** The current challenge while pending (the QR data changes on every poll). */
+  challenge: paymentsSigningChallengeSchema.nullable(),
+  failureCode: z.string().nullable(),
+  scaStatus: z.string().nullable(),
+  /** The provider's own consent status once BankID finished, verbatim (valid, partiallyAuthorised, ...). */
+  consentStatus: z.string().nullable(),
+  /** The consent's last day as the bank recorded it, once valid. */
+  validUntil: z.iso.date().nullable(),
+})
+export type AisConsentSigningProgress = z.infer<typeof aisConsentSigningProgressSchema>
+
+export const aisConsentStatusRequestSchema = z.object({ party: aisPartySchema, consentId: aisConsentIdSchema })
+export type AisConsentStatusRequest = z.infer<typeof aisConsentStatusRequestSchema>
+
+/** `over`: expired, revoked by the person, rejected or ended by us; only a new consent helps. */
+export const aisConsentStateSchema = z.enum(['pending', 'valid', 'partially_authorised', 'over'])
+export type AisConsentState = z.infer<typeof aisConsentStateSchema>
+
+export const aisConsentStatusSchema = z.object({
+  /** The provider's own consent status, verbatim. */
+  consentStatus: z.string(),
+  state: aisConsentStateSchema,
+  validUntil: z.iso.date().nullable(),
+})
+export type AisConsentStatus = z.infer<typeof aisConsentStatusSchema>
+
+export const aisAccountsRequestSchema = z.object({
+  party: aisPartySchema,
+  consentId: aisConsentIdSchema,
+  /** Default true. */
+  withBalance: z.boolean().optional(),
+})
+export type AisAccountsRequest = z.infer<typeof aisAccountsRequestSchema>
+
+/**
+ * One account of a consent, as an installation needs it to pick and name
+ * accounts. The signer's own accounts (usage PRIV), which a corporate
+ * consent can list, carry no balance and no owner name.
+ */
+export const aisAccountSchema = z.object({
+  uid: aisAccountUidSchema,
+  currency: z.string().regex(/^[A-Z]{3}$/),
+  iban: z.string().nullable(),
+  bban: z.string().nullable(),
+  name: z.string().nullable(),
+  /** ORGA (the company's), PRIV (the signer's own), or null when the bank does not say. */
+  usage: z.string().nullable(),
+  ownerName: z.string().nullable(),
+  bankgiro: z.string().nullable(),
+  plusgiro: z.string().nullable(),
+  balance: z.number().nullable(),
+  availableBalance: z.number().nullable(),
+})
+export type AisAccount = z.infer<typeof aisAccountSchema>
+
+export const aisAccountsResponseSchema = z.object({ accounts: z.array(aisAccountSchema) })
+export type AisAccountsResponse = z.infer<typeof aisAccountsResponseSchema>
+
+export const aisBalancesRequestSchema = z.object({
+  party: aisPartySchema,
+  consentId: aisConsentIdSchema,
+  accountUid: aisAccountUidSchema,
+})
+export type AisBalancesRequest = z.infer<typeof aisBalancesRequestSchema>
+
+export const aisBalancesSchema = z.object({
+  booked: z.number().nullable(),
+  available: z.number().nullable(),
+})
+export type AisBalances = z.infer<typeof aisBalancesSchema>
+
+export const aisSyncTransactionsRequestSchema = z.object({
+  party: aisPartySchema,
+  consentId: aisConsentIdSchema,
+  accountUid: aisAccountUidSchema,
+  accountCurrency: z.string().regex(/^[A-Z]{3}$/),
+  /** The account's usage as `accounts` reported it; PRIV keeps no running balance in the rows or the archived pages. */
+  accountUsage: z.string().max(16).optional(),
+  dateFrom: z.iso.date(),
+  /** Default today. */
+  dateTo: z.iso.date().optional(),
+})
+export type AisSyncTransactionsRequest = z.infer<typeof aisSyncTransactionsRequestSchema>
+
+export const aisRevokeConsentRequestSchema = z.object({ party: aisPartySchema, consentId: aisConsentIdSchema })
+export type AisRevokeConsentRequest = z.infer<typeof aisRevokeConsentRequestSchema>
+
+export const aisConsentRevokedSchema = z.object({ revoked: z.literal(true) })
+export type AisConsentRevoked = z.infer<typeof aisConsentRevokedSchema>
+
+/**
+ * The operation table: method, path under AIS_BASE_PATH, whether the call
+ * carries X-Connector-Company, and the request and response schemas. Every
+ * operation is a POST so that the party never travels in a URL.
+ */
+export const AIS_OPERATIONS = {
+  banks: { method: 'POST', path: '/banks', company: true, request: aisBanksRequestSchema, response: aisBanksResponseSchema },
+  bank: { method: 'POST', path: '/bank', company: true, request: aisBankRequestSchema, response: aisBankDetailsSchema },
+  createConsent: { method: 'POST', path: '/consents', company: true, request: aisCreateConsentRequestSchema, response: aisConsentCreatedSchema },
+  startConsentSigning: { method: 'POST', path: '/consents/signings', company: true, request: aisStartConsentSigningRequestSchema, response: aisConsentSigningStartedSchema },
+  pollConsentSigning: { method: 'POST', path: '/consents/signings/poll', company: true, request: aisPollConsentSigningRequestSchema, response: aisConsentSigningProgressSchema },
+  consentStatus: { method: 'POST', path: '/consents/status', company: true, request: aisConsentStatusRequestSchema, response: aisConsentStatusSchema },
+  accounts: { method: 'POST', path: '/accounts', company: true, request: aisAccountsRequestSchema, response: aisAccountsResponseSchema },
+  balances: { method: 'POST', path: '/accounts/balances', company: true, request: aisBalancesRequestSchema, response: aisBalancesSchema },
+  syncTransactions: { method: 'POST', path: '/sync', company: true, request: aisSyncTransactionsRequestSchema, response: bankSyncResponseSchema },
+  revokeConsent: { method: 'POST', path: '/consents/revoke', company: true, request: aisRevokeConsentRequestSchema, response: aisConsentRevokedSchema },
+} as const
+export type AisOperation = keyof typeof AIS_OPERATIONS
+
+/** Reads that count against the consent's daily budget when no person is present (psuIpAddress null). */
+export const AIS_COUNTED_READ_OPERATIONS = ['accounts', 'balances', 'syncTransactions'] as const satisfies readonly AisOperation[]
+
+/**
+ * Error codes specific to the AIS family, beside CONNECTOR_BANK_SESSION_EXPIRED
+ * (410: the consent is over, a new one is needed) and
+ * CONNECTOR_BANK_RATE_LIMITED (429: the consent's daily read budget, ours or
+ * the bank's, with Retry-After) from BANK_SYNC_ERROR_CODES.
+ */
+export const AIS_ERROR_CODES = [
+  'CONNECTOR_AIS_PROVIDER_UNAVAILABLE',
+  'CONNECTOR_AIS_OUTCOME_UNKNOWN',
+  'CONNECTOR_AIS_REFUSED',
+  'CONNECTOR_AIS_NOT_FOUND',
+  'CONNECTOR_AIS_PROVIDER_FAILED',
+] as const satisfies readonly ConnectorErrorCode[]
 
 // ---------------------------------------------------------------------------
 // Provider capabilities: shared primitives (catalogue, collections, delivery)

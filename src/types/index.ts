@@ -4209,6 +4209,10 @@ export interface BankIngestRoute {
   ledgerAccount: string
   currency: string
   token: string
+  /** The service that reaches the bank (bank_connections.aggregator); absent from routes resolved before 20261012120000. */
+  aggregator?: 'enable_banking' | 'open_payments'
+  /** The bank an Open Payments consent is bound to; null for Enable Banking. */
+  bic?: string | null
 }
 
 /** Options for the transaction ingestion pipeline */
