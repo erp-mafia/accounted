@@ -1332,8 +1332,11 @@ export async function deleteDocument(
     .eq('company_id', companyId)
 
   if (deleteError) {
+    // block_document_deletion() raises "Cannot delete document linked to a
+    // <status> journal entry (Bokforingslagen)" (no ö in prod's text) or
+    // "... within 7-year retention period": match either spelling.
     const msg = (deleteError as { message?: string }).message ?? ''
-    if (msg.includes('Bokföringslagen') || msg.includes('retention')) {
+    if (/Bokf[öo]ringslagen|retention/.test(msg)) {
       return {
         ok: false,
         reason: 'linked_to_entry',

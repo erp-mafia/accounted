@@ -1625,7 +1625,12 @@ describe('deleteDocument', () => {
     expect(serviceRemove).not.toHaveBeenCalled()
   })
 
-  it('keeps the storage objects when the DB row delete is blocked by the trigger', async () => {
+  // The two refusals block_document_deletion() raises, verbatim (prod's text
+  // spells the law without ö).
+  it.each([
+    'Cannot delete document linked to a posted journal entry (Bokforingslagen)',
+    'Cannot delete document within 7-year retention period (expires 2032-12-31)',
+  ])('keeps the storage objects when the DB row delete is blocked by the trigger: %s', async (message) => {
     results = [
       {
         data: {
@@ -1638,7 +1643,7 @@ describe('deleteDocument', () => {
         error: null,
       },
       ...pinResults(),
-      { data: null, error: { message: 'blocked by Bokföringslagen retention trigger' } },
+      { data: null, error: { message } },
     ]
 
     const serviceRemove = vi.fn().mockResolvedValue({ data: [], error: null })
