@@ -39,6 +39,10 @@ type MockConfig = {
   settingsOrg?: string | null
   duplicateFile?: { id: string; imported_at: string } | null
   duplicatePeriod?: Record<string, unknown> | null
+  /** Posted bookkeeping up to the file year's end: the import carries the prior year forward. */
+  priorActivity?: boolean
+  /** compute_prior_opening_balances rows: the balance carried to the file year's first day. */
+  carried?: Array<{ account_number: string; debit: number; credit: number }>
 }
 
 function mockSupabase(config: MockConfig = {}) {
@@ -70,6 +74,10 @@ function mockSupabase(config: MockConfig = {}) {
                 }
               } else if (table === 'sie_account_mappings') {
                 resolve({ data: config.storedMappings ?? [], error: null })
+              } else if (table === 'journal_entries') {
+                resolve({ data: config.priorActivity ? [{ id: 'entry-1' }] : [], error: null })
+              } else if (table === 'rpc:compute_prior_opening_balances') {
+                resolve({ data: config.carried ?? [], error: null })
               } else {
                 resolve({ data: [], error: null })
               }
@@ -84,7 +92,7 @@ function mockSupabase(config: MockConfig = {}) {
     )
     return chain
   }
-  return { from: (table: string) => makeChain(table) }
+  return { from: (table: string) => makeChain(table), rpc: (fn: string) => makeChain(`rpc:${fn}`) }
 }
 
 async function run(args: Record<string, unknown>, config?: MockConfig) {
@@ -200,6 +208,51 @@ describe('gnubok_sie_preflight', () => {
 
     expect(result.verdict).toBe('duplicate')
     expect((result.duplicate as Record<string, unknown>).kind).toBe('period')
+  })
+
+  // crm#1099: on top of earlier bookkeeping the file's #IB is not booked, so
+  // an agent must relay where the books will open on another amount.
+  const WITH_IB = VALID_SIE.replace(
+    '#KONTO 1930 "Bank"',
+    '#KONTO 1930 "Bank"\n#KONTO 2099 "Årets resultat"\n#IB 0 1930 5000.00\n#IB 0 2099 -5000.00',
+  )
+
+  it('warns when the year will open on another balance than the file states', async () => {
+    const result = await run(
+      { file_content: WITH_IB },
+      {
+        priorActivity: true,
+        carried: [
+          { account_number: '1930', debit: 4000, credit: 0 },
+          { account_number: '2099', debit: 0, credit: 4000 },
+        ],
+      },
+    )
+
+    expect(result.verdict).toBe('ok_with_warnings')
+    const continuity = result.opening_balance_continuity as { carriedForward: boolean; differences: unknown[] }
+    expect(continuity.carriedForward).toBe(true)
+    expect(continuity.differences).toEqual([
+      { account: '1930', file: 5000, books: 4000, difference: -1000 },
+      { account: '2099', file: -5000, books: -4000, difference: 1000 },
+    ])
+    const notices = (result.validation as { notices: Array<{ code: string; severity: string; text: string }> }).notices
+    expect(notices).toContainEqual(expect.objectContaining({ code: 'sie_ib_continuity', severity: 'action', text: expect.stringContaining('1930') }))
+  })
+
+  it('stays ok when the file agrees with the books', async () => {
+    const result = await run(
+      { file_content: WITH_IB },
+      {
+        priorActivity: true,
+        carried: [
+          { account_number: '1930', debit: 5000, credit: 0 },
+          { account_number: '2099', debit: 0, credit: 5000 },
+        ],
+      },
+    )
+    expect(result.verdict).toBe('ok')
+    expect((result.opening_balance_continuity as { differences: unknown[] }).differences).toEqual([])
   })
 
   it('decodes CP437 bytes from file_content_base64 so åäö survive', async () => {

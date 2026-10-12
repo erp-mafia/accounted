@@ -20,6 +20,7 @@ import {
 import type { ImportPreview, ParseIssue } from '@/lib/import/types'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { ImportStatRow } from '@/components/import/ImportStatRow'
+import { OpeningBalanceDifferencesTable } from '@/components/import/OpeningBalanceDifferencesTable'
 
 interface SIEPreviewStepProps {
   preview: ImportPreview
@@ -66,14 +67,28 @@ export default function SIEPreviewStep({
   // result) that would silently book a bogus amount to 2099. Mirrors the importer's
   // own `fileImbalance > 1.00` "serious" threshold (lib/import/sie-import.ts).
   const ibDiff = Math.round((preview.trialBalance.totalDebit - preview.trialBalance.totalCredit) * 100) / 100
-  const significantImbalance = !preview.trialBalance.isBalanced && Math.abs(ibDiff) > 1
   const [ackImbalance, setAckImbalance] = useState(false)
+
+  // crm#1099: a year imported on top of earlier bookkeeping opens on the
+  // carried-forward balance and never books the file's #IB, so the 2099 plug
+  // above does not happen, and where the two disagree the user sees the
+  // amounts and acknowledges them before continuing.
+  const continuity = preview.openingBalanceContinuity
+  const ibCarriedForward = continuity?.carriedForward === true
+  const ibDiffers = ibCarriedForward && continuity.differences.length > 0
+  const sourceEdits = !ibCarriedForward ? (continuity?.sourceEdits ?? []) : []
+  const showContinuity =
+    !!continuity && (ibDiffers || sourceEdits.length > 0 || continuity.missingYears.length > 0 || continuity.noVouchers)
+  const [ackContinuity, setAckContinuity] = useState(false)
+  const significantImbalance = !preview.trialBalance.isBalanced && Math.abs(ibDiff) > 1 && !ibCarriedForward
 
   // Only block on actual parsing errors, not unmapped accounts
   // (users need to proceed to mapping step to fix unmapped accounts).
-  // A significant IB imbalance is a soft block: the user must acknowledge it.
+  // A significant IB imbalance and an IB that differs from the books are
+  // soft blocks: the user must acknowledge them.
   const hasBlockingErrors = errors.length > 0
-  const blockContinue = hasBlockingErrors || (significantImbalance && !ackImbalance)
+  const blockContinue =
+    hasBlockingErrors || (significantImbalance && !ackImbalance) || (ibDiffers && !ackContinuity)
 
   return (
     <div className="space-y-6">
@@ -249,6 +264,65 @@ export default function SIEPreviewStep({
           )}
         </CardContent>
       </Card>
+
+      {/* Opening balance against the books and the years next to the file (crm#1099) */}
+      {showContinuity && continuity && (
+        <Card className="border-attn/50">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <AlertCircle className="h-5 w-5 text-attn" aria-hidden="true" />
+              {t('ib_continuity_title')}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4 text-[13px] leading-5">
+            {continuity.missingYears.map((gap) => (
+              <p key={`${gap.from}-${gap.to}`} className="tabular-nums">
+                {t('ib_continuity_missing_years', { from: gap.from, to: gap.to })}
+              </p>
+            ))}
+            {continuity.noVouchers && <p>{t('ib_continuity_no_vouchers')}</p>}
+            {ibDiffers && (
+              <>
+                <p>{t('ib_continuity_carried', { count: continuity.differences.length })}</p>
+                <OpeningBalanceDifferencesTable
+                  rows={continuity.differences.map((row) => ({
+                    account: row.account,
+                    left: row.file,
+                    right: row.books,
+                    difference: row.difference,
+                  }))}
+                  leftLabel={t('ib_continuity_col_file')}
+                  rightLabel={t('ib_continuity_col_books')}
+                />
+                <p className="text-muted-foreground">{t('ib_continuity_advice')}</p>
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <Checkbox
+                    checked={ackContinuity}
+                    onCheckedChange={(v) => setAckContinuity(v === true)}
+                    className="mt-0.5"
+                  />
+                  <span className="text-muted-foreground">{t('ib_continuity_ack')}</span>
+                </label>
+              </>
+            )}
+            {sourceEdits.length > 0 && (
+              <>
+                <p>{t('ib_continuity_source_edits', { count: sourceEdits.length })}</p>
+                <OpeningBalanceDifferencesTable
+                  rows={sourceEdits.map((edit) => ({
+                    account: edit.account,
+                    left: edit.previousClosing,
+                    right: edit.opening,
+                    difference: edit.difference,
+                  }))}
+                  leftLabel={t('ib_continuity_col_previous_closing')}
+                  rightLabel={t('ib_continuity_col_opening')}
+                />
+              </>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Mapping status */}
       <Card

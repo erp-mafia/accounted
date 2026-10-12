@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { mappingsToMap } from '@/lib/import/account-mapper'
+import { roundOre } from '@/lib/money'
+import { fileOpeningBalanceByAccount, storedOpeningBalances } from '@/lib/import/sie-continuity'
 import type { AccountMapping } from '@/lib/import/types'
 import type { OpeningBalanceLine } from './execute-helpers'
 
@@ -28,8 +29,6 @@ interface ImportRow {
   manifest: unknown
 }
 
-const round = (amount: number) => Math.round(amount * 100) / 100
-
 /**
  * Maps the stored balances through the import's own approved mappings, the
  * way buildSplitOpeningLines does: an account without a target is skipped,
@@ -40,20 +39,8 @@ export function toSIEFileOpeningBalance(row: ImportRow): SIEFileOpeningBalance |
     effectiveOpeningBalances?: unknown
     input?: { mappings?: unknown }
   }
-  const stored = Array.isArray(manifest.effectiveOpeningBalances) ? manifest.effectiveOpeningBalances : []
   const mappings = Array.isArray(manifest.input?.mappings) ? (manifest.input.mappings as AccountMapping[]) : []
-  const accountMap = mappingsToMap(mappings)
-
-  const byAccount = new Map<string, number>()
-  for (const balance of stored as { account?: unknown; amount?: unknown; yearIndex?: unknown }[]) {
-    if (balance.yearIndex !== undefined && balance.yearIndex !== 0) continue
-    if (typeof balance.account !== 'string') continue
-    const amount = Number(balance.amount)
-    if (!Number.isFinite(amount)) continue
-    const target = accountMap.get(balance.account)
-    if (!target) continue
-    byAccount.set(target, round((byAccount.get(target) ?? 0) + amount))
-  }
+  const byAccount = fileOpeningBalanceByAccount(storedOpeningBalances(manifest.effectiveOpeningBalances), mappings)
 
   const lines: OpeningBalanceLine[] = [...byAccount]
     .filter(([, amount]) => amount !== 0)
@@ -61,7 +48,7 @@ export function toSIEFileOpeningBalance(row: ImportRow): SIEFileOpeningBalance |
     .map(([account_number, amount]) => ({
       account_number,
       debit_amount: amount > 0 ? amount : 0,
-      credit_amount: amount < 0 ? round(-amount) : 0,
+      credit_amount: amount < 0 ? roundOre(-amount) : 0,
     }))
   if (lines.length === 0) return null
 
@@ -69,8 +56,8 @@ export function toSIEFileOpeningBalance(row: ImportRow): SIEFileOpeningBalance |
     importId: row.id,
     filename: row.filename ?? '',
     lines,
-    totalDebit: round(lines.reduce((sum, line) => sum + line.debit_amount, 0)),
-    totalCredit: round(lines.reduce((sum, line) => sum + line.credit_amount, 0)),
+    totalDebit: roundOre(lines.reduce((sum, line) => sum + line.debit_amount, 0)),
+    totalCredit: roundOre(lines.reduce((sum, line) => sum + line.credit_amount, 0)),
   }
 }
 

@@ -23321,6 +23321,7 @@ export const tools: McpTool[] = [
         duplicate: { type: ['object', 'null'] },
         mappings: { type: 'array', items: { type: 'object' } },
         mapping_stats: { type: 'object' },
+        opening_balance_continuity: { type: ['object', 'null'] },
         instructions: { type: 'string' },
       },
       required: ['verdict', 'file', 'validation', 'org_number_match', 'duplicate', 'mappings', 'mapping_stats', 'instructions'],
@@ -23418,7 +23419,19 @@ export const tools: McpTool[] = [
       const mappingStats = getMappingStats(mappings)
       const preview = generateImportPreview(parsed, mappings)
 
-      const allWarnings = [...validation.warnings, ...encodingWarnings]
+      // The file's #IB against what the year will open on in the books
+      // (crm#1099): a continuation import never books the file's IB, so the
+      // differences go to the user before the import is staged.
+      const { diagnoseOpeningBalanceContinuity, continuityWarnings } = await import('@/lib/import/sie-continuity')
+      const continuity = await diagnoseOpeningBalanceContinuity(supabase, companyId, parsed, mappings, {
+        replacesImportId: duplicatePeriod?.id ?? null,
+      })
+      const continuityTexts =
+        continuity && parsed.stats.fiscalYearStart && parsed.stats.fiscalYearEnd
+          ? continuityWarnings(continuity, { start: parsed.stats.fiscalYearStart, end: parsed.stats.fiscalYearEnd })
+          : []
+
+      const allWarnings = [...validation.warnings, ...encodingWarnings, ...continuityTexts]
       const verdict = !validation.valid
         ? 'invalid'
         : duplicate
@@ -23440,6 +23453,7 @@ export const tools: McpTool[] = [
         })
       }
       for (const w of encodingWarnings) notices.push({ code: 'sie_encoding_artifacts', severity: 'action', text: w })
+      for (const w of continuityTexts) notices.push({ code: 'sie_ib_continuity', severity: 'action', text: w })
       for (const w of validation.warnings) notices.push({ code: 'legacy', severity: 'notice', text: w })
 
       return {
@@ -23461,6 +23475,7 @@ export const tools: McpTool[] = [
         duplicate,
         mappings,
         mapping_stats: mappingStats,
+        opening_balance_continuity: continuity,
         instructions:
           verdict === 'invalid'
             ? 'The file has blocking errors: report them to the user and do not import. A fresh export from the source system usually fixes them.'

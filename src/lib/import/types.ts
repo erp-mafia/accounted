@@ -391,6 +391,13 @@ export interface ImportResultDetails {
   openingBalanceSkipped?: 'prior_activity'
 
   /**
+   * With openingBalanceSkipped: the accounts where the carried-forward
+   * balance differs from the file's #IB, so the books now open on another
+   * amount than the source system (crm#1099). Absent when they agree.
+   */
+  openingBalanceDifferences?: OpeningBalanceDifference[]
+
+  /**
    * Non-latest fiscal years whose P&L doesn't net to zero — their result
    * was never transferred to equity (omföring av årets resultat saknas).
    * Each corrupts every later derived opening balance by exactly pl_net,
@@ -557,6 +564,11 @@ export interface ImportPreview {
   // Absent when the file carries no #RAR 0 dates.
   fiscalYear?: FiscalYearPrecheck
 
+  // The file's #IB against what the year will open on in the books, missing
+  // years next to it and an empty ended year (crm#1099). Set by the parse
+  // route only; absent when the check could not run.
+  openingBalanceContinuity?: OpeningBalanceContinuity
+
   // Issues to review
   issues: ParseIssue[]
 }
@@ -593,6 +605,45 @@ export type FiscalYearPrecheck =
       // The Swedish refusal text the import raises, verbatim.
       message: string
     }
+
+/** A balance-sheet account where the books open on another amount than the file states. Debit-positive. */
+export interface OpeningBalanceDifference {
+  account: string
+  /** The file's #IB 0, mapped to the company's account. */
+  file: number
+  /** The balance the books carry forward to the year's first day. */
+  books: number
+  /** books minus file. */
+  difference: number
+}
+
+/** An account where the file's own #IB 0 differs from its #UB -1: the source changed the opening balance without a voucher. */
+export interface SourceOpeningBalanceEdit {
+  account: string
+  /** #UB -1: the previous year's closing balance as the file states it. */
+  previousClosing: number
+  /** #IB 0. */
+  opening: number
+  /** opening minus previousClosing. */
+  difference: number
+}
+
+/** IB/UB continuity between a SIE file and the books (lib/import/sie-continuity.ts, crm#1099). */
+export interface OpeningBalanceContinuity {
+  /**
+   * The import will not book the file's #IB: the books already have activity
+   * up to the year's end, so the year opens on the carried-forward balance.
+   */
+  carriedForward: boolean
+  /** Only when carriedForward: the accounts where the books will differ from the file. */
+  differences: OpeningBalanceDifference[]
+  /** The file's #IB 0 against its own #UB -1, in source account numbers. */
+  sourceEdits: SourceOpeningBalanceEdit[]
+  /** Fiscal years missing between the company's years and the file's year. */
+  missingYears: Array<{ from: string; to: string }>
+  /** The file's year has ended but the file holds no vouchers. */
+  noVouchers: boolean
+}
 
 /**
  * Structured systemdokumentation per BFNAR 2013:2 Chapter 9.

@@ -23,6 +23,7 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import TheaterCanvas from '@/components/import/TheaterCanvas'
 import { FiscalYearGapNotice } from '@/components/import/FiscalYearGapNotice'
+import { OpeningBalanceDifferencesTable } from '@/components/import/OpeningBalanceDifferencesTable'
 import type { ImportPreview, ImportResult } from '@/lib/import/types'
 import { resolveNotices } from '@/lib/import/notices'
 import { ImportNotices } from '@/components/import/ImportNotices'
@@ -69,13 +70,15 @@ export default function ImportResultStep({
   const hasErrors = result.errors.length > 0
   const skipped = result.details?.skippedVouchers
   const untransferred = result.details?.untransferredResults
+  const ibDifferences = result.details?.openingBalanceDifferences ?? []
 
-  // The skipped-voucher, untransferred-result and IB-resync cards below
-  // render those facts with their own explanations, so their notice codes
-  // are excluded here by code, never by matching Swedish sentences.
+  // The skipped-voucher, untransferred-result, IB-difference and IB-resync
+  // cards below render those facts with their own explanations, so their
+  // notice codes are excluded here by code, never by matching Swedish sentences.
   const notices = resolveNotices(result, [
     'sie_vouchers_skipped',
     'sie_untransferred_result',
+    'sie_ib_differs_from_file',
     'sie_next_ib_resynced',
     'sie_next_period_locked',
   ])
@@ -178,6 +181,32 @@ export default function ImportResultStep({
 
       {/* A year missing between the imported ones: say so here, where the next file is one click away. */}
       {result.success && <FiscalYearGapNotice />}
+
+      {/* The year opened on the carried-forward balance, which differs from the file's #IB (crm#1099) */}
+      {result.success && ibDifferences.length > 0 && (
+        <Card className="border-attn/50">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <AlertCircle className="h-5 w-5 text-attn" aria-hidden="true" />
+              {t('ib_differs_result_title')}
+            </CardTitle>
+            <CardDescription>{t('ib_differs_result_body', { count: ibDifferences.length })}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3 text-[13px] leading-5">
+            <OpeningBalanceDifferencesTable
+              rows={ibDifferences.map((row) => ({
+                account: row.account,
+                left: row.file,
+                right: row.books,
+                difference: row.difference,
+              }))}
+              leftLabel={t('ib_continuity_col_file')}
+              rightLabel={t('ib_continuity_col_books')}
+            />
+            <p className="text-muted-foreground">{t('ib_continuity_advice')}</p>
+          </CardContent>
+        </Card>
+      )}
 
       {result.success && result.nextPeriodOpeningBalanceReview && (
         <p className="text-sm text-warning" role="status">

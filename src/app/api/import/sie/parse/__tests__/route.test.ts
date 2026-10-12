@@ -85,7 +85,10 @@ type ParseResponse = {
   success: boolean
   parsed: { issues: ParseIssue[] }
   validation: { valid: boolean; warnings: string[] }
-  preview: Pick<ImportPreview, 'chart' | 'fiscalYear' | 'mappingStatus' | 'orgNumberMismatch' | 'companyOrgNumber'>
+  preview: Pick<
+    ImportPreview,
+    'chart' | 'fiscalYear' | 'mappingStatus' | 'orgNumberMismatch' | 'companyOrgNumber' | 'openingBalanceContinuity'
+  >
 }
 
 describe('POST /api/import/sie/parse', () => {
@@ -245,6 +248,82 @@ describe('POST /api/import/sie/parse', () => {
       expect(body.preview.fiscalYear.existingPeriod.id).toBe('seeded-2024')
       expect(body.preview.fiscalYear.message).toMatch(/2024-01-01 till 2024-12-31/)
       expect(body.preview.fiscalYear.message).toMatch(/Inställningar → Företag/)
+    })
+  })
+
+  // crm#1099: a year imported on top of earlier bookkeeping opens on the
+  // carried-forward balance, not the file's #IB. Queue order after the
+  // stored-mappings select: chart_of_accounts page, fiscal_periods containing,
+  // then the continuity check: journal_entries (prior activity), the
+  // compute_prior_opening_balances RPC, fiscal_periods (missing years).
+  describe('opening balance against the books', () => {
+    const SECOND_YEAR = [
+      '#FLAGGA 0',
+      '#SIETYP 4',
+      '#FNAMN "Migrerad AB"',
+      '#RAR 0 20190101 20191231',
+      '#RAR -1 20180101 20181231',
+      '#KONTO 1930 "Företagskonto"',
+      '#KONTO 2990 "Övriga upplupna kostnader"',
+      '#KONTO 3001 "Försäljning"',
+      '#UB -1 1930 1000.00',
+      '#UB -1 2990 -1000.00',
+      '#IB 0 1930 1036.00',
+      '#IB 0 2990 -1036.00',
+      '#VER A 1 20190115 "Försäljning"',
+      '{',
+      '#TRANS 1930 {} 100.00',
+      '#TRANS 3001 {} -100.00',
+      '}',
+    ].join('\n')
+
+    it('shows the accounts where the books will open on another amount than the file', async () => {
+      enqueue({ data: [] }) // company chart
+      enqueue({ data: { id: 'p-2019' } }) // containing period
+      enqueue({ data: [{ id: 'entry-2018' }] }) // activity up to the year's end
+      enqueue({
+        data: [
+          { account_number: '1930', debit: 1000, credit: 0 },
+          { account_number: '2990', debit: 0, credit: 1000 },
+        ],
+      })
+      enqueue({
+        data: [
+          { id: 'p-2018', name: 'Räkenskapsår 2018', period_start: '2018-01-01', period_end: '2018-12-31' },
+          { id: 'p-2019', name: 'Räkenskapsår 2019', period_start: '2019-01-01', period_end: '2019-12-31' },
+        ],
+      })
+
+      const response = await POST(fileRequest(SECOND_YEAR), emptyParams)
+      const body = (await response.json()) as ParseResponse
+
+      expect(response.status).toBe(200)
+      expect(body.preview.openingBalanceContinuity).toEqual({
+        carriedForward: true,
+        differences: [
+          { account: '1930', file: 1036, books: 1000, difference: -36 },
+          { account: '2990', file: -1036, books: -1000, difference: 36 },
+        ],
+        sourceEdits: [
+          { account: '1930', previousClosing: 1000, opening: 1036, difference: 36 },
+          { account: '2990', previousClosing: -1000, opening: -1036, difference: -36 },
+        ],
+        missingYears: [],
+        noVouchers: false,
+      })
+    })
+
+    it('says the file\'s IB is booked as it stands when the company has no earlier activity', async () => {
+      enqueue({ data: [] })
+      enqueue({ data: { id: 'p-2019' } })
+      enqueue({ data: [] }) // no activity: the import books the file's #IB
+      enqueue({ data: [] })
+
+      const response = await POST(fileRequest(SECOND_YEAR), emptyParams)
+      const body = (await response.json()) as ParseResponse
+
+      expect(body.preview.openingBalanceContinuity?.carriedForward).toBe(false)
+      expect(body.preview.openingBalanceContinuity?.differences).toEqual([])
     })
   })
 

@@ -15,6 +15,8 @@ import { openingBalanceSplitRefusedNotice, type OpeningBalanceSplitRefusal } fro
 import { buildSIEVatDefaults } from './account-sync'
 import { isoDay, sweepBankRowsAfterSIEImport } from './sie-post-import-sweep'
 import { diagnoseUntransferredResults, learnFromCompletedSIEImport, vouchersForLearning } from './sie-import-learning'
+import { continuityNotices, diagnoseCarriedForwardDifferences } from './sie-continuity'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const log = createLogger('sie-worker')
 
@@ -107,6 +109,20 @@ async function finalize(supabase: SupabaseClient, job: SIEJob, deadline: number,
     : {results:[],warnings:[],notices:[]}
   warnings.push(...untransferred.warnings)
   notices.push(...untransferred.notices)
+  // A continuation import never books the file's #IB (prior_activity): the
+  // year opens on the carried-forward balance. Where that differs from what
+  // the file stated, the result says so with the amounts (crm#1099); an ended
+  // year whose file held no vouchers is missing its bookkeeping.
+  const yearStart = isoDay(job.fiscal_year_start)
+  const yearEnd = parsed.stats.fiscalYearEnd
+  const ibDifferences = isImport && job.manifest.prior_activity && yearStart
+    ? await diagnoseCarriedForwardDifferences(supabase,job.company_id,yearStart,job.manifest.effectiveOpeningBalances,mappings)
+    : []
+  const continuity = continuityNotices({differences:ibDifferences,
+    noVouchers:isImport && parsed.stats.totalVouchers === 0 && yearStart && yearEnd && yearEnd < todayIsoStockholm()
+      ? {from:yearStart,to:yearEnd} : null})
+  warnings.push(...continuity.warnings)
+  notices.push(...continuity.notices)
   const voucherMap = entries.map(e => ({sourceId:e.sourceId,series:e.series,targetNumber:e.voucherNumber}))
   const stats = getMappingStats(mappings)
   const documentation: MigrationDocumentation = {
@@ -128,6 +144,7 @@ async function finalize(supabase: SupabaseClient, job: SIEJob, deadline: number,
     errors:[],warnings,notices,accountsCreated,accountsRenamed:renames.length,
     details:{fiscalYear:documentation.fiscalYear,skippedVouchers:skipped,
       openingBalanceSkipped:job.manifest.prior_activity && options.importOpeningBalances ? 'prior_activity' : undefined,
+      openingBalanceDifferences:ibDifferences.length ? ibDifferences.slice(0,200) : undefined,
       migrationAdjustment:{created:!!adjustment,accountsAdjusted:Number(job.manifest.migrationAdjustmentAccounts ?? 0)},
       untransferredResults:untransferred.results.length ? untransferred.results : undefined,
       retriedBatches:0,failedBatches:0}}

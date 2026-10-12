@@ -26,6 +26,7 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 import { readSIERequestFile } from '@/lib/import/sie-intake'
 import { resolveSIEFiscalYear } from '@/lib/import/sie-jobs'
 import { checkSIEOrgNumber } from '@/lib/import/sie-org-number'
+import { diagnoseOpeningBalanceContinuity } from '@/lib/import/sie-continuity'
 
 /**
  * POST /api/import/sie/parse
@@ -158,6 +159,15 @@ export const POST = withRouteContext(
           parsed.stats.fiscalYearEnd,
         )
       }
+
+      // What the year will open on in the books against the file's #IB
+      // (crm#1099): a continuation import carries the prior year forward and
+      // never books the file's IB, so the user sees the difference here. A
+      // replacement of the year's earlier import does not count that import.
+      const continuity = await diagnoseOpeningBalanceContinuity(supabase, companyId!, parsed, mappings, {
+        replacesImportId: periodDuplicate?.id ?? null,
+      })
+      if (continuity) preview.openingBalanceContinuity = continuity
 
       const fileHash = await calculateFileHash(content)
 
