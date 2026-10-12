@@ -31,7 +31,8 @@ import { todayIsoStockholm } from '@/lib/dates/iso'
 import { COLLECTIONS_BATCH_TYPE } from '@/lib/collections/batch'
 import { resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
 import { listPeppolFailedInvoiceIds } from '@/lib/invoices/peppol-failed-invoices'
-import type { ExpensePayoutDue, SkattekontoPaymentDue, SuggestedMatch } from './types'
+import { switchStateFor } from '@/lib/bank-feed/switch-campaign'
+import type { BankSwitchDue, ExpensePayoutDue, SkattekontoPaymentDue, SuggestedMatch } from './types'
 
 // Canonical home is lib/worklist/types.ts (dependency-free, client-safe);
 // re-exported here so existing server-side imports keep working.
@@ -867,6 +868,45 @@ export async function countExpensePayoutsDue(
   companyId: string,
 ): Promise<number> {
   return (await listExpensePayoutsDue(supabase, companyId)).length
+}
+
+/**
+ * The Enable Banking connections the switch campaign still waits for, one
+ * row each (see lib/worklist/types.ts bank_switch). Empty while the campaign
+ * is off or does not apply to the company; the state itself is computed in
+ * lib/bank-feed/switch-campaign.ts, which the notice line and the mails
+ * read too, so the three can never disagree. Soft-fails to empty with a
+ * logged error, like every other category.
+ */
+export async function listBankSwitchDue(
+  supabase: SupabaseClient,
+  companyId: string,
+  now: Date = new Date(),
+): Promise<BankSwitchDue[]> {
+  try {
+    const state = await switchStateFor({ supabase, companyId }, { now })
+    if (!state) return []
+    return state.pending.map((connection) => ({
+      connection_id: connection.connection_id,
+      bank_name: connection.bank_name,
+      deadline: state.deadline,
+      days_left: state.days_left,
+      passed: state.passed,
+      urgent: state.urgent,
+    }))
+  } catch (err) {
+    logAndZero('bank_switch', companyId, err as { message?: string })
+    return []
+  }
+}
+
+/** Number of bank connections still to switch (see listBankSwitchDue). */
+export async function countBankSwitchDue(
+  supabase: SupabaseClient,
+  companyId: string,
+  now: Date = new Date(),
+): Promise<number> {
+  return (await listBankSwitchDue(supabase, companyId, now)).length
 }
 
 /**

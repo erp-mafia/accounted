@@ -73,3 +73,41 @@ export async function resolveMemberEmail(
   }
   return (profile as { email?: string | null } | null)?.email ?? null
 }
+
+/**
+ * The emails of a company's owners and admins who are still active members:
+ * the recipients of company-wide notification mail (the bank switch
+ * campaign). Same two-query shape and the same service-role requirement as
+ * resolveMemberEmail. Profiles of deleted accounts (profiles.deleted_at set)
+ * and members without a profile email are left out; duplicates collapse.
+ * Best-effort: a failed read logs and resolves to no recipients.
+ */
+export async function resolveCompanyAdminEmails(supabase: SupabaseClient, companyId: string): Promise<string[]> {
+  const { data: members, error: memberError } = await supabase
+    .from('company_members')
+    .select('user_id, role')
+    .eq('company_id', companyId)
+    .in('role', ['owner', 'admin'])
+  if (memberError) {
+    log.warn('could not read company members for notification recipients', { companyId, error: memberError.message })
+    return []
+  }
+  const userIds = [...new Set(((members ?? []) as Array<{ user_id: string }>).map((m) => m.user_id))]
+  if (userIds.length === 0) return []
+
+  const { data: profiles, error: profileError } = await supabase
+    .from('profiles')
+    .select('id, email, deleted_at')
+    .in('id', userIds)
+  if (profileError) {
+    log.warn('could not read profile emails for notification recipients', { companyId, error: profileError.message })
+    return []
+  }
+  const emails = new Set<string>()
+  for (const profile of (profiles ?? []) as Array<{ id: string; email: string | null; deleted_at: string | null }>) {
+    if (profile.deleted_at) continue
+    const email = profile.email?.trim().toLowerCase()
+    if (email) emails.add(email)
+  }
+  return [...emails]
+}

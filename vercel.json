@@ -39,6 +39,10 @@
       "schedule": "*/10 * * * *"
     },
     {
+      "path": "/api/bank/open-payments/switch-reminders/cron",
+      "schedule": "30 6 * * *"
+    },
+    {
       "path": "/api/extensions/stripe/transactions/cron",
       "schedule": "30 3 * * *"
     },

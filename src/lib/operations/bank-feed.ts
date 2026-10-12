@@ -24,6 +24,9 @@ import {
 } from '@/lib/bank-feed/service'
 import type { BankFeedSignerInput } from '@/lib/bank-feed/party'
 import { BANK_CONNECT_RETURN_SURFACES } from '@/lib/bank-feed/return-url'
+import { getBankSwitchProgress } from '@/lib/bank-feed/switch-campaign'
+import { isCompanyAdmin } from '@/lib/auth/require-write'
+import { createServiceClient } from '@/lib/supabase/server'
 import { defineOperation } from './types'
 
 const CONNECTION_ID = z.string().uuid().describe('The bank connection (bank_connections.id).')
@@ -182,6 +185,53 @@ export const bankFeedOverview = defineOperation({
     signer_known: z.boolean(),
   }),
   run: async (ctx) => getBankFeedOverview(ctx),
+})
+
+const SwitchConnection = z.object({ connection_id: z.string().uuid(), bank_name: z.string() })
+
+const SwitchState = z.object({
+  state: z.enum(['done', 'pending', 'uncovered']),
+  pending: z.array(SwitchConnection),
+  uncovered: z.array(SwitchConnection),
+  open_payments: z.number().int().nonnegative(),
+  deadline: z.string(),
+  days_left: z.number().int(),
+  passed: z.boolean(),
+  urgent: z.boolean(),
+})
+
+const SwitchTotals = z.object({
+  companies: z.object({ pending: z.number(), uncovered: z.number(), done: z.number() }),
+  connections: z.object({ pending: z.number(), uncovered: z.number(), switched: z.number() }),
+  banks: z.array(z.object({ bank: z.string(), pending: z.number(), uncovered: z.number(), switched: z.number() })),
+})
+
+export const bankFeedSwitchProgress = defineOperation({
+  id: 'bank-feed.switch-progress',
+  kind: 'read',
+  scope: 'transactions:read',
+  risk: 'low',
+  reversible: false,
+  docs: {
+    summary: 'Where the company stands in the switch from Enable Banking to Open Payments.',
+    description: 'The campaign (on, deadline, days left), the company\'s state (the Enable Banking connections still to switch, the ones at banks Open Payments does not reach) and, for an owner or admin, the totals across companies (counts per bank, no company identities). Null company when the campaign does not apply to it.',
+    useWhen: 'Rendering the switch deadline, the deep link to the switch, or the founders\' counter.',
+    doNotUseFor: 'Starting the switch: that is bank-feed.start with replace_connection_id, and a person\'s BankID.',
+    pitfalls: ['totals come from a service-role RPC and are null for members below admin.'],
+    example: { response: { data: { campaign: { on: true, deadline: '2026-11-09', days_left: 20, passed: false }, company: null, totals: null } } },
+  },
+  input: z.object({}),
+  output: z.object({
+    campaign: z.object({ on: z.boolean(), deadline: z.string().nullable(), days_left: z.number().int().nullable(), passed: z.boolean() }),
+    company: SwitchState.nullable(),
+    totals: SwitchTotals.nullable(),
+  }),
+  run: async (ctx) => {
+    // Cross-company totals are the owners' and admins' to see: the rule lives
+    // here, beside the read, and the session route applies the same one.
+    const admin = await isCompanyAdmin(ctx.supabase, ctx.companyId)
+    return { ok: true, data: await getBankSwitchProgress(ctx, { totalsClient: admin ? createServiceClient() : null }) }
+  },
 })
 
 export const bankFeedStart = defineOperation({
@@ -375,6 +425,7 @@ export const BANK_FEED_OPERATIONS = [
   bankFeedBanks,
   bankFeedBank,
   bankFeedOverview,
+  bankFeedSwitchProgress,
   bankFeedStart,
   bankFeedPoll,
   bankFeedRestart,

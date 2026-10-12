@@ -7,6 +7,9 @@ import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { Badge } from '@/components/ui/badge'
+import { useFormat } from '@/lib/hooks/use-format'
+import { switchDeepLink } from '@/lib/bank-feed/switch-link'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -38,6 +41,7 @@ import {
   Gavel,
 } from 'lucide-react'
 import type {
+  BankSwitchDue,
   ExpensePayoutDue,
   SkattekontoPaymentDue,
   SuggestedMatch,
@@ -71,6 +75,12 @@ interface AttGoraSectionProps {
   expensePayouts?: ExpensePayoutDue[]
   /** The next skattekonto charge the balance does not cover: one Betala row. */
   skattekontoPayment?: SkattekontoPaymentDue | null
+  /**
+   * Bank connections still to switch from Enable Banking to Open Payments
+   * (lib/worklist bank_switch): one row each, in Bevaka while the deadline
+   * is far, at the top of the list inside 14 days and once it has passed.
+   */
+  bankSwitches?: BankSwitchDue[]
   expiringBankConnections?: ExpiringBankConnection[]
   /**
    * True while the setup checklist is open and the company has zero posted
@@ -178,6 +188,7 @@ export default function AttGoraSection({
   suggestedMatches,
   expensePayouts = [],
   skattekontoPayment = null,
+  bankSwitches = [],
   expiringBankConnections = [],
   emptyLedger = false,
   hasActiveBankConnection = true,
@@ -190,6 +201,7 @@ export default function AttGoraSection({
   const t = useTranslations('dashboard')
   const router = useRouter()
   const { toast } = useToast()
+  const { formatDateLong } = useFormat()
   // The Dokumentinkorg is a paid (AI) surface: a non-payer's home to-do list
   // must not offer a row that jumps to the gated workspace. Mirrors the sidebar
   // + command palette gate; the page itself enforces it server-side.
@@ -320,13 +332,19 @@ export default function AttGoraSection({
     counts.collection_decision > 0 ||
     counts.collection_attention > 0 ||
     counts.collection_batch_ready > 0
+  // The switch rows: urgent ones (inside 14 days, or past the deadline) lead
+  // the list under their own band; the rest wait in Bevaka with the other
+  // time-driven items.
+  const urgentSwitches = bankSwitches.filter((b) => b.urgent)
+  const calmSwitches = bankSwitches.filter((b) => !b.urgent)
   const bevakaRows =
     counts.overdue_invoice > 0 ||
     counts.deadline_action > 0 ||
     counts.agreement_payment_missed > 0 ||
     counts.reconciliation_due > 0 ||
+    calmSwitches.length > 0 ||
     expiringBankConnections.length > 0
-  const allClear = !bokforRows && !betalaRows && !granskaRows && !bevakaRows
+  const allClear = !bokforRows && !betalaRows && !granskaRows && !bevakaRows && urgentSwitches.length === 0
 
   // The header total must equal what the section actually shows, computed off
   // the same visibleWorklistTotal helper as the dashboard KPI tile so the two
@@ -354,6 +372,31 @@ export default function AttGoraSection({
     topMissingUnderlag && topMissingUnderlag.kind !== 'mail'
       ? t(`missing_underlag_next_${topMissingUnderlag.kind}`, { count: topMissingUnderlag.count })
       : undefined
+
+  // One row per connection to switch: the deep link opens Koppla banken in
+  // switch mode for exactly that row. Past the deadline the row says the
+  // feed has stopped; inside 14 days a chip counts the days (an exception,
+  // so a chip; convention 5).
+  const switchRow = (item: BankSwitchDue) => (
+    <WorklistRow
+      key={item.connection_id}
+      href={switchDeepLink(item.connection_id)}
+      icon={Landmark}
+      label={
+        item.passed
+          ? t('row_bank_switch_stopped', { bank: item.bank_name })
+          : t('row_bank_switch', { bank: item.bank_name, date: formatDateLong(item.deadline) })
+      }
+      detail={t('row_bank_switch_detail')}
+      badge={
+        item.passed ? (
+          <Badge variant="destructive">{t('bank_switch_stopped_badge')}</Badge>
+        ) : item.urgent ? (
+          <Badge variant="warning">{t('bank_switch_days_left', { days: Math.max(item.days_left, 0) })}</Badge>
+        ) : undefined
+      }
+    />
+  )
 
   return (
     <section aria-label={t('att_gora_title')}>
@@ -383,6 +426,13 @@ export default function AttGoraSection({
             </p>
           ) : (
             <div className="pb-2">
+              {urgentSwitches.length > 0 && (
+                <div>
+                  <BandHeader>{t('band_now')}</BandHeader>
+                  <div>{urgentSwitches.map(switchRow)}</div>
+                </div>
+              )}
+
               {bokforRows && (
                 <div>
                   <BandHeader>{t('band_bokfor')}</BandHeader>
@@ -689,6 +739,7 @@ export default function AttGoraSection({
                         count={counts.reconciliation_due}
                       />
                     )}
+                    {calmSwitches.map(switchRow)}
                     {expiringBankConnections.length > 0 && (
                       <WorklistRow
                         href="/settings/banking"

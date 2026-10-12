@@ -13,6 +13,7 @@ import {
   ACTION_NEEDED_THRESHOLD_DAYS,
   daysUntilDeadline,
 } from '@/lib/deadlines/status-engine'
+import type { CompanySwitchState } from '@/lib/bank-feed/switch-campaign'
 
 export type DeadlineUrgency = 'overdue' | 'action_needed' | 'upcoming'
 
@@ -21,6 +22,41 @@ export interface ClientDeadline {
   dueDate: string
   taxDeadlineType: string | null
   urgency: DeadlineUrgency
+}
+
+/**
+ * Where a client stands in the Enable Banking to Open Payments switch, as the
+ * cockpit column shows it: pending (byt senast), stopped (the deadline has
+ * passed with the switch not made), uncovered (banks Open Payments does not
+ * reach: file import), done (switched, or connected anew).
+ */
+export type ClientBankSwitchState = 'pending' | 'stopped' | 'uncovered' | 'done'
+
+export interface ClientBankSwitch {
+  state: ClientBankSwitchState
+  /** The campaign deadline (ISO date). */
+  deadline: string
+  daysLeft: number
+  /** The banks still to switch (pending, stopped) or unreachable (uncovered); empty when done. */
+  banks: string[]
+}
+
+/**
+ * The cockpit's view of a company's campaign state (lib/bank-feed/
+ * switch-campaign.ts). Null when the company never had a bank feed to
+ * switch: no Enable Banking row left and no Open Payments connection, which
+ * the column shows as a dash rather than a false "done".
+ */
+export function clientBankSwitchFrom(state: CompanySwitchState | null | undefined): ClientBankSwitch | null {
+  if (!state) return null
+  if (state.pending.length > 0) {
+    return { state: state.passed ? 'stopped' : 'pending', deadline: state.deadline, daysLeft: state.days_left, banks: state.pending.map((p) => p.bank_name) }
+  }
+  if (state.uncovered.length > 0) {
+    return { state: 'uncovered', deadline: state.deadline, daysLeft: state.days_left, banks: state.uncovered.map((u) => u.bank_name) }
+  }
+  if (state.open_payments > 0) return { state: 'done', deadline: state.deadline, daysLeft: state.days_left, banks: [] }
+  return null
 }
 
 export interface ClientOverviewRow {
@@ -34,6 +70,13 @@ export interface ClientOverviewRow {
   nextDeadline: ClientDeadline | null
   /** Latest posted verifikat date; null = nothing booked yet. */
   lastBookedDate: string | null
+  /**
+   * The client's state in the bank connection switch campaign. Only present
+   * when the fetch layer was asked for it and the campaign is on (the byrå
+   * cockpit); null for a client the campaign does not apply to or that never
+   * had a bank feed.
+   */
+  bankSwitch?: ClientBankSwitch | null
   /**
    * Open deadlines sorted by due date (at most DEADLINES_PER_COMPANY_CAP).
    * Only present when the fetch layer was asked for them (portfolio reads

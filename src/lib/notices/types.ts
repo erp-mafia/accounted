@@ -33,6 +33,27 @@ export const NOTICE_CATEGORIES = [
    */
   'bank_connection_broken',
   /**
+   * A bank connection must be switched from Enable Banking to Open Payments
+   * before the campaign deadline (lib/bank-feed/switch-campaign.ts).
+   * Pending:  the campaign is on and applies to the company, and an active
+   *           Enable Banking row at a bank Open Payments reaches has no Open
+   *           Payments sibling yet. Past the deadline the same state reads
+   *           as the broken-connection wording: the feed has stopped.
+   * Done:     the switch supersedes the row, an Open Payments connection at
+   *           the same bank goes live, the row is removed, or the campaign
+   *           is switched off.
+   */
+  'bank_switch_needed',
+  /**
+   * An Enable Banking connection at a bank Open Payments does not reach
+   * (Wise, PayPal, Bank Norwegian, Nordea First Card, Juni): once Enable
+   * Banking ends, bank statements come in as files.
+   * Pending:  the campaign is on and applies, and an active Enable Banking
+   *           row's bank is on the uncovered list.
+   * Done:     the row is removed, or the campaign is switched off.
+   */
+  'bank_switch_uncovered',
+  /**
    * The Skatteverket connection can no longer authenticate.
    * Pending:  a skatteverket_tokens row exists for (user, company) with
    *           status = 'needs_reconsent', or its access token is expired with
@@ -93,6 +114,11 @@ export const NOTICE_PRIORITY: readonly NoticeCategory[] = [
   // outranks any degraded integration.
   'no_fiscal_year',
   'bank_connection_broken',
+  // The switch has a date on it and a feed stops when it passes: below a
+  // connection that has already failed, above one whose consent merely
+  // runs out (that renewal would be made at the provider being left).
+  'bank_switch_needed',
+  'bank_switch_uncovered',
   'skv_disconnected',
   'backup_failing',
   'bank_connection_expiring',

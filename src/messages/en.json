@@ -7417,7 +7417,23 @@
     "access_duplicate": "That email is already on the list.",
     "access_save_failed": "Could not save the change.",
     "access_load_failed": "Could not load the settings.",
-    "access_no_brand": "The byrå has no white-label domain yet."
+    "access_no_brand": "The byrå has no white-label domain yet.",
+    "col_bank_switch": "Bank connection",
+    "bank_switch_done": "Switched",
+    "bank_switch_by": "Switch by {date}",
+    "bank_switch_stopped": "Stopped",
+    "bank_switch_file_import": "File import",
+    "bank_switch_nudge": "Ask the client to connect",
+    "bank_switch_nudge_title": "Ask {client} to connect the bank?",
+    "bank_switch_nudge_description": "An email goes to the company's owners and admins with a link to the switch. The switch is signed with the client's own BankID. At most one email per week per client.",
+    "bank_switch_nudge_confirm": "Send email",
+    "bank_switch_nudge_sent": "Email sent to {client}",
+    "bank_switch_nudge_failed": "The email could not be sent",
+    "bank_switch_bulk": "Send a reminder to everyone who has not switched ({count})",
+    "bank_switch_bulk_title": "Remind {count, plural, =1 {1 client} other {# clients}} about the bank switch?",
+    "bank_switch_bulk_description": "Every client that has not switched gets an email to its owners and admins with a link to the switch. Clients emailed in the last seven days are skipped.",
+    "bank_switch_bulk_confirm": "Send reminders",
+    "bank_switch_bulk_sent": "{sent, plural, =0 {No emails sent} =1 {1 email sent} other {# emails sent}}{recent, plural, =0 {} other {, # skipped (emailed recently)}}"
   },
   "byra": {
     "home_title": "Home",
@@ -8239,7 +8255,18 @@
     "skv_unexplained": "The tax account does not agree with the ledger: {amount} is unexplained after the latest fetch.",
     "skv_unexplained_action": "Reconcile",
     "more_count": "+{count} more",
-    "dismiss": "Hide"
+    "dismiss": "Hide",
+    "bank_switch_one": "The bank connection to {bank} is changing provider: make the switch by {deadline, date, long}.",
+    "bank_switch_one_unnamed": "A bank connection is changing provider: make the switch by {deadline, date, long}.",
+    "bank_switch_many": "{count} bank connections are changing provider: make the switches by {deadline, date, long}.",
+    "bank_switch_stopped_one": "The {bank} bank connection has stopped working and no longer fetches transactions.",
+    "bank_switch_stopped_one_unnamed": "A bank connection has stopped working and no longer fetches transactions.",
+    "bank_switch_stopped_many": "{count} bank connections have stopped working and no longer fetch transactions.",
+    "bank_switch_action": "Switch to the new connection",
+    "bank_uncovered_one": "The new provider does not reach {bank}: import bank statements as files.",
+    "bank_uncovered_one_unnamed": "The new provider does not reach one of the banks: import bank statements as files.",
+    "bank_uncovered_many": "The new provider does not reach {count} banks: import bank statements as files.",
+    "bank_uncovered_action": "Import a file"
   },
   "att_gora_v2": {
     "title": "To do",
@@ -8498,7 +8525,13 @@
     "resume_late": "Late",
     "rel_today": "today",
     "rel_yesterday": "yesterday",
-    "rel_days": "{count} days ago"
+    "rel_days": "{count} days ago",
+    "band_now": "Do now",
+    "row_bank_switch": "Switch the bank connection for {bank} by {date}",
+    "row_bank_switch_stopped": "The bank connection for {bank} has stopped: switch to the new connection",
+    "row_bank_switch_detail": "New connection with BankID, about two minutes. The history is kept.",
+    "bank_switch_days_left": "{days, plural, =0 {Last day} =1 {1 day left} other {# days left}}",
+    "bank_switch_stopped_badge": "Stopped"
   },
   "reports": {
     "title": "Reports",
@@ -12599,7 +12632,9 @@
     "disconnect_description": "Fetching stops. Booked transactions and the accounts are kept.",
     "disconnect_confirm": "Disconnect",
     "disconnected_title": "The connection is removed",
-    "disconnect_failed_title": "Could not disconnect"
+    "disconnect_failed_title": "Could not disconnect",
+    "switch_by": "Switch by {date}",
+    "switch_stopped": "Fetching has stopped: switch to the new connection"
   },
   "skatteverket_ombud": {
     "appoint": "Appoint {appName} as ombud at Skatteverket",

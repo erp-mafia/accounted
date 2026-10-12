@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { HandCoins, Landmark, Store } from 'lucide-react'
@@ -11,6 +12,9 @@ import { useBankConnectFlow } from '@/components/bank-feed/use-bank-connect-flow
 import { useBankConnectResume } from '@/components/bank-feed/use-bank-connect-resume'
 import { useOpenPaymentsAvailability } from '@/components/bank-feed/use-open-payments-availability'
 import { useOpenPaymentsConnections } from '@/components/bank-feed/use-open-payments-connections'
+import { useBankSwitchCampaign } from '@/components/bank-feed/use-bank-switch-campaign'
+import { SWITCH_DEEP_LINK_PARAM } from '@/lib/bank-feed/switch-link'
+import { useFormat } from '@/lib/hooks/use-format'
 import { bankLogoUrl } from '@/lib/reconciliation/bank-logos'
 import { collectionsEntryShown, useCollectionsAvailability } from '@/components/collections/collections-client'
 import { GoogleMark } from '@/components/ui/provider-marks'
@@ -95,6 +99,40 @@ export function ConnectionsSettingsContent() {
   // and a bank that signs on its own page sends the person back the same way:
   // open the flow at its BankID step, once, and drop the params.
   useBankConnectResume(bankFlow, opAvailable)
+  // The switch campaign (Enable Banking to Open Payments before a deadline):
+  // the deadline the switch intro names, and which Enable Banking rows still
+  // wait, so their state line says "Byt senast" instead of "Ansluten".
+  const switchCampaign = useBankSwitchCampaign()
+  const { formatDateLong } = useFormat()
+  const switchDeadline = switchCampaign.deadline
+  const switchPassed = switchCampaign.progress?.campaign.passed ?? false
+  const pendingSwitchIds = useMemo(
+    () => new Set(switchCampaign.progress?.company?.pending.map((p) => p.connection_id) ?? []),
+    [switchCampaign.progress],
+  )
+  // A nudge arrives with ?bank_connect_switch=<id> (the Att göra row, the
+  // notice line, the campaign mails): once the rows and the campaign have
+  // loaded, open Koppla banken in switch mode for that Enable Banking row,
+  // once, and drop the param. An id no live row carries opens nothing.
+  const searchParams = useSearchParams()
+  const openBankFlow = bankFlow.open
+  const switchId = searchParams.get(SWITCH_DEEP_LINK_PARAM)
+  const switchHandled = useRef(false)
+  const enableBankingRows = bankConnections.enableBanking
+  const rowsLoaded = bankConnections.rows !== null
+  const campaignLoaded = switchCampaign.loaded
+  useEffect(() => {
+    if (!opAvailable || !switchId || switchHandled.current || !rowsLoaded || !campaignLoaded) return
+    const row = enableBankingRows.find((r) => r.id === switchId)
+    const timer = setTimeout(() => {
+      switchHandled.current = true
+      if (row) openBankFlow('switch', { bank: { bic: '', name: row.bank_name ?? '' }, replaceConnectionId: row.id, deadline: switchDeadline })
+      const url = new URL(window.location.href)
+      url.searchParams.delete(SWITCH_DEEP_LINK_PARAM)
+      window.history.replaceState(window.history.state, '', url.pathname + url.search)
+    }, 0)
+    return () => clearTimeout(timer)
+  }, [opAvailable, switchId, rowsLoaded, campaignLoaded, enableBankingRows, openBankFlow, switchDeadline])
   const hasSkatteverket = ENABLED_EXTENSION_IDS.has('skatteverket') && !isSandbox
   const hasWhatsApp = ENABLED_EXTENSION_IDS.has('whatsapp-inbox') && !isSandbox
   const hasMail = ENABLED_EXTENSION_IDS.has('mail') && !isSandbox
@@ -257,6 +295,10 @@ export function ConnectionsSettingsContent() {
       <>
         {bankConnections.enableBanking.map((connection) => {
           const logo = bankLogoUrl(connection.bank_name)
+          // A row the campaign waits for says so in the one attention line;
+          // past the deadline, that its feed has stopped.
+          const pendingSwitch = pendingSwitchIds.has(connection.id)
+          const state = pendingSwitch && switchDeadline ? (switchPassed ? t('switch_stopped') : t('switch_by', { date: formatDateLong(switchDeadline) })) : t('connected')
           return (
             <div key={connection.id}>
               {row({
@@ -264,15 +306,19 @@ export function ConnectionsSettingsContent() {
                 name: connection.bank_name ?? t('bank'),
                 maskLabel: true,
                 help: t('bank_help'),
-                state: t('connected'),
+                state,
                 href: '/settings/banking',
                 connected: true,
+                attention: pendingSwitch,
                 actions: (
                   <>
                     <Button variant="outline" size="sm" asChild>
                       <Link href="/settings/banking">{t('manage')}</Link>
                     </Button>
-                    <Button size="sm" onClick={() => bankFlow.open('switch', { bank: { bic: '', name: connection.bank_name ?? '' }, replaceConnectionId: connection.id })}>
+                    <Button
+                      size="sm"
+                      onClick={() => bankFlow.open('switch', { bank: { bic: '', name: connection.bank_name ?? '' }, replaceConnectionId: connection.id, deadline: switchDeadline })}
+                    >
                       {t('switch_connection')}
                     </Button>
                   </>
@@ -448,6 +494,7 @@ export function ConnectionsSettingsContent() {
           flow={bankFlow}
           onConnected={() => {
             bankConnections.refresh()
+            switchCampaign.refresh()
             setBankGeneration((g) => g + 1)
           }}
         />

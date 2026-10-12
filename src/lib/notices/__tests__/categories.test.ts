@@ -15,9 +15,18 @@ vi.mock('@/lib/company/other-account-hint', () => ({
 vi.mock('@/lib/skatteverket/ombud-access', () => ({
   hasSkatteverketOmbudReadAccess: ombudReadAccessMock,
 }))
+const switchStateMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/bank-feed/switch-campaign', () => ({
+  switchStateFor: (...args: unknown[]) => switchStateMock(...args),
+}))
 
 import {
+  bankSwitchNeededNotice,
+  bankSwitchUncoveredNotice,
   detectBackupFailing,
+  detectBankSwitchNeeded,
+  detectBankSwitchNotices,
+  detectBankSwitchUncovered,
   detectBrokenBankConnections,
   detectExpiringBankConnections,
   detectNoFiscalYear,
@@ -112,6 +121,98 @@ describe('skvAuthErrorNeedsReconnect (pure)', () => {
   })
   it('never fires on non-401 statuses', () => {
     expect(skvAuthErrorNeedsReconnect(500, 'SESSION_EXPIRED')).toBe(false)
+  })
+})
+
+describe('bank switch notices', () => {
+  const DEADLINE_PARAM = Date.parse('2026-11-09T12:00:00Z')
+  const state = (overrides: Record<string, unknown> = {}) => ({
+    state: 'pending',
+    pending: [{ connection_id: 'c1', bank_name: 'Swedbank' }],
+    uncovered: [],
+    open_payments: 0,
+    deadline: '2026-11-09',
+    days_left: 20,
+    passed: false,
+    urgent: false,
+    ...overrides,
+  })
+
+  it('stays quiet while the campaign is off or does not apply (switchStateFor answers null)', async () => {
+    switchStateMock.mockResolvedValue(null)
+    await expect(detectBankSwitchNeeded(supabase, COMPANY, NOW)).resolves.toBeNull()
+    await expect(detectBankSwitchUncovered(supabase, COMPANY, NOW)).resolves.toBeNull()
+    await expect(detectBankSwitchNotices(supabase, COMPANY, NOW)).resolves.toEqual([])
+    expect(switchStateMock).toHaveBeenCalledWith({ supabase, companyId: COMPANY }, { now: NOW })
+  })
+
+  it('names the one connection and links straight into its switch, with the deadline as a date argument', async () => {
+    switchStateMock.mockResolvedValue(state())
+    const notice = await detectBankSwitchNeeded(supabase, COMPANY, NOW)
+    expect(notice).toEqual({
+      id: 'bank_switch_needed:c1=2026-11-09',
+      category: 'bank_switch_needed',
+      severity: 'warning',
+      messageKey: 'bank_switch_one',
+      messageParams: { bank: 'Swedbank', deadline: DEADLINE_PARAM },
+      actionKey: 'bank_switch_action',
+      actionHref: '/settings/connections?bank_connect_switch=c1',
+    })
+  })
+
+  it('folds several connections into one counted notice linking to Kopplingar, with a bounded id', async () => {
+    const digest = createHash('sha256').update('c1=2026-11-09,c2=2026-11-09').digest('hex').slice(0, 8)
+    const notice = bankSwitchNeededNotice(state({ pending: [{ connection_id: 'c2', bank_name: 'SEB' }, { connection_id: 'c1', bank_name: 'Swedbank' }] }) as never)
+    expect(notice).toMatchObject({
+      id: `bank_switch_needed:2@${digest}`,
+      messageKey: 'bank_switch_many',
+      messageParams: { count: 2, deadline: DEADLINE_PARAM },
+      actionHref: '/settings/connections',
+    })
+  })
+
+  it('becomes the broken-connection wording past the deadline, under a new id so a dismissal resurfaces', () => {
+    const notice = bankSwitchNeededNotice(state({ passed: true, days_left: -1, urgent: true }) as never)
+    expect(notice).toMatchObject({
+      id: 'bank_switch_needed:c1=2026-11-09:stopped',
+      severity: 'error',
+      messageKey: 'bank_switch_stopped_one',
+      messageParams: { bank: 'Swedbank', deadline: DEADLINE_PARAM },
+      actionHref: '/settings/connections?bank_connect_switch=c1',
+    })
+    expect(bankSwitchNeededNotice(state({ pending: [{ connection_id: 'c1', bank_name: '' }] }) as never)?.messageKey).toBe('bank_switch_one_unnamed')
+    expect(bankSwitchNeededNotice(state({ pending: [] }) as never)).toBeNull()
+  })
+
+  it('sends banks the new provider does not reach to the file import', async () => {
+    switchStateMock.mockResolvedValue(state({ state: 'uncovered', pending: [], uncovered: [{ connection_id: 'c9', bank_name: 'Wise' }] }))
+    const notice = await detectBankSwitchUncovered(supabase, COMPANY, NOW)
+    expect(notice).toEqual({
+      id: 'bank_switch_uncovered:c9',
+      category: 'bank_switch_uncovered',
+      severity: 'warning',
+      messageKey: 'bank_uncovered_one',
+      messageParams: { bank: 'Wise' },
+      actionKey: 'bank_uncovered_action',
+      actionHref: '/import',
+    })
+    expect(bankSwitchUncoveredNotice(state({ uncovered: [{ connection_id: 'a', bank_name: 'Wise' }, { connection_id: 'b', bank_name: 'PayPal' }] }) as never)).toMatchObject({
+      messageKey: 'bank_uncovered_many',
+      messageParams: { count: 2 },
+    })
+  })
+
+  it('derives both notices from one read of the state', async () => {
+    switchStateMock.mockResolvedValue(state({ uncovered: [{ connection_id: 'c9', bank_name: 'Wise' }] }))
+    const notices = await detectBankSwitchNotices(supabase, COMPANY, NOW)
+    expect(notices.map((n) => n.category)).toEqual(['bank_switch_needed', 'bank_switch_uncovered'])
+    expect(switchStateMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('soft-fails to nothing when the state cannot be read', async () => {
+    switchStateMock.mockRejectedValue(new Error('boom'))
+    await expect(detectBankSwitchNeeded(supabase, COMPANY, NOW)).resolves.toBeNull()
+    await expect(detectBankSwitchNotices(supabase, COMPANY, NOW)).resolves.toEqual([])
   })
 })
 

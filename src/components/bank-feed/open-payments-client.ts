@@ -276,6 +276,40 @@ export function fetchOpenPaymentsBankDetails(bic: string, signal?: AbortSignal):
   return send<OpenPaymentsBankDetails>(`${BASE}/banks/${encodeURIComponent(bic)}`, { signal })
 }
 
+/** One Enable Banking connection the switch campaign still waits for (GET .../switch-progress). */
+export interface BankSwitchConnection {
+  connection_id: string
+  bank_name: string
+}
+
+/** Where the company stands in the Enable Banking to Open Payments switch (lib/bank-feed/switch-campaign.ts). */
+export interface BankSwitchCompanyState {
+  state: 'done' | 'pending' | 'uncovered'
+  pending: BankSwitchConnection[]
+  uncovered: BankSwitchConnection[]
+  open_payments: number
+  deadline: string
+  days_left: number
+  passed: boolean
+  urgent: boolean
+}
+
+export interface BankSwitchProgressView {
+  campaign: { on: boolean; deadline: string | null; days_left: number | null; passed: boolean }
+  /** Null when the campaign does not apply to the company. */
+  company: BankSwitchCompanyState | null
+  /** Cross-company counts, owners and admins only; null otherwise. */
+  totals: {
+    companies: { pending: number; uncovered: number; done: number }
+    connections: { pending: number; uncovered: number; switched: number }
+    banks: Array<{ bank: string; pending: number; uncovered: number; switched: number }>
+  } | null
+}
+
+export function fetchBankSwitchProgress(signal?: AbortSignal): Promise<BankSwitchProgressView> {
+  return send<BankSwitchProgressView>(`${BASE}/switch-progress`, { signal })
+}
+
 export function fetchOpenPaymentsOverview(signal?: AbortSignal): Promise<OpenPaymentsOverview> {
   return send<OpenPaymentsOverview>(`${BASE}/connections`, { signal })
 }

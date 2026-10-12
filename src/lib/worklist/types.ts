@@ -217,9 +217,42 @@ export const WORKLIST_CATEGORIES = [
    *           it after 72 hours.
    */
   'collection_batch_ready',
+  /**
+   * Bank connections to switch from Enable Banking to Open Payments before
+   * the campaign deadline ("Byt bankkopplingen för {bank} senast {date}"),
+   * one item per connection.
+   * Pending:  the campaign is on (OPENPAYMENTS_SWITCH_DEADLINE) and applies
+   *           to the company (lib/bank-feed/door.ts), and an active Enable
+   *           Banking row at a bank Open Payments reaches has no Open Payments
+   *           sibling yet (lib/bank-feed/switch-campaign.ts switchStateFor).
+   * Done:     the switch supersedes the row (status revoked, superseded_by
+   *           set), an Open Payments connection at the same bank goes live,
+   *           the row is removed, or the campaign is switched off.
+   * Banks Open Payments does not reach are never counted here: their path is
+   * file import, said by the bank_switch_uncovered notice.
+   */
+  'bank_switch',
 ] as const
 
 export type WorklistCategory = (typeof WORKLIST_CATEGORIES)[number]
+
+/**
+ * One Enable Banking connection the switch campaign still waits for: the Att
+ * göra row "Byt bankkopplingen för {bank} senast {date}", which opens Koppla
+ * banken in switch mode for exactly that connection.
+ */
+export interface BankSwitchDue {
+  connection_id: string
+  bank_name: string
+  /** The campaign deadline (ISO date). */
+  deadline: string
+  /** Whole days left; 0 on the day, negative after. */
+  days_left: number
+  /** The deadline has passed: the row says the feed has stopped. */
+  passed: boolean
+  /** Inside 14 days of the deadline, or past it: the row moves to the top. */
+  urgent: boolean
+}
 
 /**
  * One person the company owes for registered, unpaid utlägg: the Att göra

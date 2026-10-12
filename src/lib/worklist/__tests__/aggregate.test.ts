@@ -23,6 +23,7 @@ vi.mock('../categories', () => ({
   countCollectionDecisions: vi.fn().mockResolvedValue(0),
   countCollectionAttention: vi.fn().mockResolvedValue(0),
   countCollectionBatchItems: vi.fn().mockResolvedValue(0),
+  countBankSwitchDue: vi.fn().mockResolvedValue(0),
 }))
 
 import { getWorklistCounts } from '../aggregate'
@@ -69,7 +70,22 @@ describe('getWorklistCounts', () => {
       collection_decision: 0,
       collection_attention: 0,
       collection_batch_ready: 0,
+      bank_switch: 0,
     })
+  })
+
+  it('counts the bank connections still to switch into the total, and takes the count from a caller-supplied list', async () => {
+    const { countBankSwitchDue } = await import('../categories')
+    vi.mocked(countBankSwitchDue).mockResolvedValueOnce(2)
+    const first = await getWorklistCounts(supabase, 'company-1')
+    expect(first.counts.bank_switch).toBe(2)
+    expect(first.total).toBe(37)
+    expect(countBankSwitchDue).toHaveBeenCalledWith(supabase, 'company-1')
+    vi.mocked(countBankSwitchDue).mockClear()
+    const due = [{ connection_id: 'c1' }] as never[]
+    const second = await getWorklistCounts(supabase, 'company-1', { bankSwitchDue: Promise.resolve(due) })
+    expect(second.counts.bank_switch).toBe(1)
+    expect(countBankSwitchDue).not.toHaveBeenCalled()
   })
 
   it('counts collection decisions and collections attention into the total', async () => {

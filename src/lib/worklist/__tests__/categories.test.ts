@@ -1,7 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+
+const switchStateMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/bank-feed/switch-campaign', () => ({
+  switchStateFor: (...args: unknown[]) => switchStateMock(...args),
+}))
+
 import {
+  countBankSwitchDue,
+  listBankSwitchDue,
   countDeadlinesNeedingAction,
   countFailedPeppolDeliveries,
   countInboxDocuments,
@@ -35,6 +43,40 @@ const COMPANY = 'company-1'
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
+})
+
+describe('listBankSwitchDue', () => {
+  const NOW = new Date('2026-10-20T08:00:00Z')
+
+  it('is empty while the campaign is off or does not apply', async () => {
+    switchStateMock.mockResolvedValue(null)
+    await expect(listBankSwitchDue(supabase, COMPANY, NOW)).resolves.toEqual([])
+    await expect(countBankSwitchDue(supabase, COMPANY, NOW)).resolves.toBe(0)
+    expect(switchStateMock).toHaveBeenCalledWith({ supabase, companyId: COMPANY }, { now: NOW })
+  })
+
+  it('answers one row per pending connection with the deadline math from the campaign state', async () => {
+    switchStateMock.mockResolvedValue({
+      state: 'pending',
+      pending: [{ connection_id: 'c1', bank_name: 'Swedbank' }, { connection_id: 'c2', bank_name: 'SEB' }],
+      uncovered: [{ connection_id: 'c3', bank_name: 'Wise' }],
+      open_payments: 0,
+      deadline: '2026-11-09',
+      days_left: 20,
+      passed: false,
+      urgent: false,
+    })
+    await expect(listBankSwitchDue(supabase, COMPANY, NOW)).resolves.toEqual([
+      { connection_id: 'c1', bank_name: 'Swedbank', deadline: '2026-11-09', days_left: 20, passed: false, urgent: false },
+      { connection_id: 'c2', bank_name: 'SEB', deadline: '2026-11-09', days_left: 20, passed: false, urgent: false },
+    ])
+    await expect(countBankSwitchDue(supabase, COMPANY, NOW)).resolves.toBe(2)
+  })
+
+  it('soft-fails to empty when the state cannot be read', async () => {
+    switchStateMock.mockRejectedValue(new Error('boom'))
+    await expect(listBankSwitchDue(supabase, COMPANY, NOW)).resolves.toEqual([])
+  })
 })
 
 describe('countUnbookedTransactions', () => {

@@ -442,6 +442,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/bank/open-payments/connections/:id/select': gap('P3', 'map connected bank accounts to ledger accounts, as for Enable Banking (Svea: also signs the second consent, which stays a person\'s act)'),
   'POST /api/bank/open-payments/connections/:id/sync': covered([`POST ${V}/bank-connections/:connectionId/sync`, 'gnubok_sync_bank'], 'both doors fall through to the Open Payments runner for its connections'),
   'DELETE /api/bank/open-payments/connections/:id': gap('P3', 'remove a bank connection, as for Enable Banking'),
+  'POST /api/clients/bank-switch/remind': uiOnly('a byrå mails its own clients about the one-off Enable Banking to Open Payments switch; the campaign ends with the deadline'),
 
   // ── Expenses, mileage, webshop ─────────────────────────────────────
   'POST /api/expense-claims': covered([`POST ${V}/expense-claims`, 'gnubok_create_expense_claim']),

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  clientBankSwitchFrom,
   countByCompany,
   deadlineUrgency,
   pickNextDeadlines,
@@ -207,5 +208,26 @@ describe('filterClientRows', () => {
 
   it('returns nothing on a miss', () => {
     expect(filterClientRows(rows, 'gamma')).toHaveLength(0)
+  })
+})
+
+describe('clientBankSwitchFrom', () => {
+  const base = { deadline: '2026-11-09', days_left: 12, passed: false, urgent: true, open_payments: 0, uncovered: [] as Array<{ connection_id: string; bank_name: string }>, pending: [] as Array<{ connection_id: string; bank_name: string }> }
+
+  it('is null without a state, and for a company that never had a bank feed', () => {
+    expect(clientBankSwitchFrom(null)).toBeNull()
+    expect(clientBankSwitchFrom(undefined)).toBeNull()
+    expect(clientBankSwitchFrom({ ...base, state: 'done' })).toBeNull()
+  })
+
+  it('reads pending as byt senast, and stopped once the deadline has passed', () => {
+    const pending = [{ connection_id: 'c1', bank_name: 'Swedbank' }]
+    expect(clientBankSwitchFrom({ ...base, state: 'pending', pending })).toEqual({ state: 'pending', deadline: '2026-11-09', daysLeft: 12, banks: ['Swedbank'] })
+    expect(clientBankSwitchFrom({ ...base, state: 'pending', pending, passed: true, days_left: -1 })).toMatchObject({ state: 'stopped', banks: ['Swedbank'] })
+  })
+
+  it('reads uncovered banks as file import and a company on Open Payments as done', () => {
+    expect(clientBankSwitchFrom({ ...base, state: 'uncovered', uncovered: [{ connection_id: 'c9', bank_name: 'Wise' }] })).toMatchObject({ state: 'uncovered', banks: ['Wise'] })
+    expect(clientBankSwitchFrom({ ...base, state: 'done', open_payments: 1 })).toMatchObject({ state: 'done', banks: [] })
   })
 })

@@ -24,7 +24,9 @@
 import { chunk as chunked } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { switchCampaign, switchStatesForCompanies } from '@/lib/bank-feed/switch-campaign'
 import {
+  clientBankSwitchFrom,
   countByCompany,
   groupDeadlinesByCompany,
   pickNextDeadlines,
@@ -54,6 +56,12 @@ export interface OverviewRowsOptions {
    * exactly what it was; the portfolio deadline-kind filter needs it.
    */
   includeDeadlines?: boolean
+  /**
+   * Also return each row's state in the bank connection switch campaign
+   * (`bankSwitch`), when the campaign is on. The byrå cockpit asks for it;
+   * the portfolio reads keep their payload.
+   */
+  includeBankSwitch?: boolean
 }
 
 /** Max ids per PostgREST .in() filter (mirrors lib/worklist IN_CLAUSE_CHUNK). */
@@ -128,7 +136,7 @@ export async function fetchClientOverview(
   return {
     team: { id: membership.teamId, name: membership.teamName },
     role: membership.role,
-    clients: await fetchOverviewRowsForCompanies(supabase, companies),
+    clients: await fetchOverviewRowsForCompanies(supabase, companies, { includeBankSwitch: true }),
   }
 }
 
@@ -265,6 +273,15 @@ export async function fetchOverviewRowsForCompanies(
     }
   }
 
+  // 8. The bank connection switch campaign, when it is on: one grouped read
+  // of the clients' live bank connections plus the door for the batch
+  // (lib/bank-feed/switch-campaign.ts). Best-effort: a failed read leaves
+  // the column empty rather than failing the cockpit.
+  let switchStates: Awaited<ReturnType<typeof switchStatesForCompanies>> | null = null
+  if (options.includeBankSwitch && switchCampaign().on) {
+    switchStates = await switchStatesForCompanies(supabase, companyIds).catch(() => null)
+  }
+
   const rows: ClientOverviewRow[] = companies.map((company) => {
     const settings = settingsByCompany.get(company.id)
     const row: ClientOverviewRow = {
@@ -277,6 +294,7 @@ export async function fetchOverviewRowsForCompanies(
       lastBookedDate: lastBookedByCompany.get(company.id) ?? null,
     }
     if (deadlinesByCompany) row.deadlines = deadlinesByCompany.get(company.id) ?? []
+    if (switchStates) row.bankSwitch = clientBankSwitchFrom(switchStates.get(company.id))
     return row
   })
 

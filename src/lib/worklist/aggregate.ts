@@ -1,9 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { ExpensePayoutDue, SkattekontoPaymentDue, SuggestedMatch } from './types'
+import type { BankSwitchDue, ExpensePayoutDue, SkattekontoPaymentDue, SuggestedMatch } from './types'
 import type { WorklistCounts } from './types'
 import type { MissingUnderlagSample } from './missing-underlag'
 import { isArkivBrainEnabled, isArkivSectionEnabled } from '@/lib/arkiv/flag'
 import {
+  countBankSwitchDue,
   countDeadlinesNeedingAction,
   countExpensePayoutsDue,
   countFailedPeppolDeliveries,
@@ -64,6 +65,12 @@ export interface GetWorklistCountsOptions {
    * passing it replaces the count call rather than adding one.
    */
   missingUnderlag?: MissingUnderlagSample | Promise<MissingUnderlagSample>
+  /**
+   * The bank connections still to switch to Open Payments the caller is
+   * already fetching (Hem renders one row per connection): the count is the
+   * list's length instead of a second read of bank_connections.
+   */
+  bankSwitchDue?: BankSwitchDue[] | Promise<BankSwitchDue[]>
 }
 
 export async function getWorklistCounts(
@@ -97,6 +104,7 @@ export async function getWorklistCounts(
     collectionDecision,
     collectionAttention,
     collectionBatchReady,
+    bankSwitch,
   ] = await Promise.all([
     countUnbookedTransactions(supabase, companyId),
     countUnbookedSkattekontoRows(supabase, companyId),
@@ -127,6 +135,9 @@ export async function getWorklistCounts(
     countCollectionDecisions(supabase, companyId),
     countCollectionAttention(supabase, companyId),
     countCollectionBatchItems(supabase, companyId),
+    options.bankSwitchDue
+      ? Promise.resolve(options.bankSwitchDue).then((b) => b.length)
+      : countBankSwitchDue(supabase, companyId),
   ])
 
   return {
@@ -152,6 +163,7 @@ export async function getWorklistCounts(
       collection_decision: collectionDecision,
       collection_attention: collectionAttention,
       collection_batch_ready: collectionBatchReady,
+      bank_switch: bankSwitch,
     },
     total:
       bookTransaction +
@@ -173,6 +185,7 @@ export async function getWorklistCounts(
       peppolDeliveryFailed +
       collectionDecision +
       collectionAttention +
-      collectionBatchReady,
+      collectionBatchReady +
+      bankSwitch,
   }
 }

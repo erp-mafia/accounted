@@ -22,6 +22,8 @@ import {
   skattekontoUnexplainedFrom,
   type SkattekontoReconciliationLatest,
 } from '@/lib/reconciliation/skattekonto-latest'
+import { switchStateFor, type CompanySwitchState } from '@/lib/bank-feed/switch-campaign'
+import { switchDeepLink } from '@/lib/bank-feed/switch-link'
 import { expiringBankConnectionsFrom, skvStatusNeedsReconnect } from './predicates'
 import { hasSkatteverketOmbudReadAccess } from '@/lib/skatteverket/ombud-access'
 import { isSkvSessionRefreshable } from '@/lib/skatteverket/session-lifetime'
@@ -197,6 +199,117 @@ export async function detectExpiringBankConnections(
       companyId,
       err instanceof Error ? { message: err.message } : null,
     )
+  }
+}
+
+/** The deadline as an ICU date argument: midday UTC, so the Swedish calendar day is the one shown in both time zones around it. */
+function deadlineParam(deadline: string): number {
+  return Date.parse(`${deadline}T12:00:00Z`)
+}
+
+/**
+ * bank_switch_needed: Enable Banking connections the switch campaign still
+ * waits for (lib/bank-feed/switch-campaign.ts, the same computation the Att
+ * göra row and the mails read). One notice however many connections: the
+ * single one links straight into Koppla banken in switch mode, several link
+ * to Kopplingar, where each row offers the switch. Past the deadline the
+ * wording is the broken connection's: the feed has stopped. The id carries
+ * the connection ids, the deadline and whether it has passed, so a dismissal
+ * before the deadline resurfaces when the feed stops.
+ */
+export async function detectBankSwitchNeeded(
+  supabase: SupabaseClient,
+  companyId: string,
+  now: Date = new Date(),
+): Promise<Notice | null> {
+  const state = await readSwitchState('bank_switch_needed', supabase, companyId, now)
+  return state ? bankSwitchNeededNotice(state) : null
+}
+
+/** One read of the campaign state, soft-failing to null like every predicate. */
+async function readSwitchState(category: string, supabase: SupabaseClient, companyId: string, now: Date): Promise<CompanySwitchState | null> {
+  try {
+    return await switchStateFor({ supabase, companyId }, { now })
+  } catch (err) {
+    return logAndNull(category, companyId, err instanceof Error ? { message: err.message } : null)
+  }
+}
+
+/**
+ * Both switch notices from ONE read of the campaign state: what the
+ * aggregate calls, so Hem pays for the door and the bank_connections read
+ * once, not once per category.
+ */
+export async function detectBankSwitchNotices(
+  supabase: SupabaseClient,
+  companyId: string,
+  now: Date = new Date(),
+): Promise<Notice[]> {
+  const state = await readSwitchState('bank_switch', supabase, companyId, now)
+  if (!state) return []
+  return [bankSwitchNeededNotice(state), bankSwitchUncoveredNotice(state)].filter((n): n is Notice => n !== null)
+}
+
+/** The bank_switch_needed notice for a computed state (pure; the detector and the tests share it). */
+export function bankSwitchNeededNotice(state: CompanySwitchState): Notice | null {
+  if (state.pending.length === 0) return null
+  const one = state.pending.length === 1 ? state.pending[0] : null
+  const discriminator = boundedDiscriminator(state.pending.map((p) => `${p.connection_id}=${state.deadline}`))
+  const bankName = one ? one.bank_name || null : null
+  const params: Record<string, string | number> = one
+    ? bankName
+      ? { bank: bankName, deadline: deadlineParam(state.deadline) }
+      : { deadline: deadlineParam(state.deadline) }
+    : { count: state.pending.length, deadline: deadlineParam(state.deadline) }
+  if (state.passed) {
+    return {
+      id: `bank_switch_needed:${discriminator}:stopped`,
+      category: 'bank_switch_needed',
+      severity: 'error',
+      messageKey: one ? (bankName ? 'bank_switch_stopped_one' : 'bank_switch_stopped_one_unnamed') : 'bank_switch_stopped_many',
+      messageParams: params,
+      actionKey: 'bank_switch_action',
+      actionHref: one ? switchDeepLink(one.connection_id) : '/settings/connections',
+    }
+  }
+  return {
+    id: `bank_switch_needed:${discriminator}`,
+    category: 'bank_switch_needed',
+    severity: 'warning',
+    messageKey: one ? (bankName ? 'bank_switch_one' : 'bank_switch_one_unnamed') : 'bank_switch_many',
+    messageParams: params,
+    actionKey: 'bank_switch_action',
+    actionHref: one ? switchDeepLink(one.connection_id) : '/settings/connections',
+  }
+}
+
+/**
+ * bank_switch_uncovered: Enable Banking connections at banks Open Payments
+ * does not reach. Their path once Enable Banking ends is the file import, so
+ * the line says so and links to /import. Stable per set of connections.
+ */
+export async function detectBankSwitchUncovered(
+  supabase: SupabaseClient,
+  companyId: string,
+  now: Date = new Date(),
+): Promise<Notice | null> {
+  const state = await readSwitchState('bank_switch_uncovered', supabase, companyId, now)
+  return state ? bankSwitchUncoveredNotice(state) : null
+}
+
+/** The bank_switch_uncovered notice for a computed state (pure). */
+export function bankSwitchUncoveredNotice(state: CompanySwitchState): Notice | null {
+  if (state.uncovered.length === 0) return null
+  const one = state.uncovered.length === 1 ? state.uncovered[0] : null
+  const bankName = one ? one.bank_name || null : null
+  return {
+    id: `bank_switch_uncovered:${boundedDiscriminator(state.uncovered.map((u) => u.connection_id))}`,
+    category: 'bank_switch_uncovered',
+    severity: 'warning',
+    messageKey: one ? (bankName ? 'bank_uncovered_one' : 'bank_uncovered_one_unnamed') : 'bank_uncovered_many',
+    messageParams: one ? (bankName ? { bank: bankName } : undefined) : { count: state.uncovered.length },
+    actionKey: 'bank_uncovered_action',
+    actionHref: '/import',
   }
 }
 

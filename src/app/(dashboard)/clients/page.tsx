@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { getTranslations } from 'next-intl/server'
 import { Button } from '@/components/ui/button'
 import { PageHeader } from '@/components/ui/page-header'
+import { switchCampaign, switchDaysLeft } from '@/lib/bank-feed/switch-campaign'
 import { fetchClientOverview } from '@/lib/clients/fetch-client-overview'
 import { getDashboardAuthContext } from '../request-context'
 import ClientsTable from './ClientsTable'
@@ -31,6 +32,11 @@ export default async function ClientsPage() {
 
   const t = await getTranslations('clients')
   const canCreate = overview.role === 'owner' || overview.role === 'admin'
+  // The bank connection switch campaign: the column and the nudges show
+  // while it is on. The route behind the nudge checks the caller's write role
+  // in each client company.
+  const campaign = switchCampaign()
+  const bankSwitchCampaign = campaign.on ? { deadline: campaign.deadline, passed: switchDaysLeft(campaign.deadline) < 0 } : null
 
   return (
     <div className="space-y-8">
@@ -45,7 +51,7 @@ export default async function ClientsPage() {
           </div>
         }
       />
-      <ClientsTable clients={overview.clients} />
+      <ClientsTable clients={overview.clients} bankSwitchCampaign={bankSwitchCampaign} />
     </div>
   )
 }

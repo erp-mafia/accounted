@@ -7417,7 +7417,23 @@
     "access_duplicate": "E-postadressen finns redan i listan.",
     "access_save_failed": "Kunde inte spara ändringen.",
     "access_load_failed": "Kunde inte hämta inställningarna.",
-    "access_no_brand": "Byrån har ingen egen domän ännu."
+    "access_no_brand": "Byrån har ingen egen domän ännu.",
+    "col_bank_switch": "Bankkoppling",
+    "bank_switch_done": "Bytt",
+    "bank_switch_by": "Byt senast {date}",
+    "bank_switch_stopped": "Stoppad",
+    "bank_switch_file_import": "Filimport",
+    "bank_switch_nudge": "Be kunden koppla",
+    "bank_switch_nudge_title": "Be {client} koppla banken?",
+    "bank_switch_nudge_description": "Ett mejl går till bolagets ägare och administratörer med en länk till bytet. Bytet signeras med kundens eget BankID. Högst ett mejl per vecka per kund.",
+    "bank_switch_nudge_confirm": "Skicka mejl",
+    "bank_switch_nudge_sent": "Mejl skickat till {client}",
+    "bank_switch_nudge_failed": "Mejlet kunde inte skickas",
+    "bank_switch_bulk": "Skicka påminnelse till alla som inte bytt ({count})",
+    "bank_switch_bulk_title": "Påminn {count, plural, =1 {1 kund} other {# kunder}} om bankbytet?",
+    "bank_switch_bulk_description": "Varje kund som inte bytt får ett mejl till sina ägare och administratörer med en länk till bytet. Kunder som fått ett mejl de senaste sju dagarna hoppas över.",
+    "bank_switch_bulk_confirm": "Skicka påminnelser",
+    "bank_switch_bulk_sent": "{sent, plural, =0 {Inga mejl skickade} =1 {1 mejl skickat} other {# mejl skickade}}{recent, plural, =0 {} other {, # hoppades över (mejlade nyligen)}}"
   },
   "byra": {
     "home_title": "Hem",
@@ -8239,7 +8255,18 @@
     "skv_unexplained": "Skattekontot stämmer inte med bokföringen: {amount} är oförklarat efter senaste hämtningen.",
     "skv_unexplained_action": "Stäm av",
     "more_count": "+{count} till",
-    "dismiss": "Dölj"
+    "dismiss": "Dölj",
+    "bank_switch_one": "Bankkopplingen till {bank} byter leverantör, gör bytet senast {deadline, date, long}.",
+    "bank_switch_one_unnamed": "En bankkoppling byter leverantör, gör bytet senast {deadline, date, long}.",
+    "bank_switch_many": "{count} bankkopplingar byter leverantör, gör bytena senast {deadline, date, long}.",
+    "bank_switch_stopped_one": "Bankkopplingen till {bank} har slutat fungera och hämtar inte längre transaktioner.",
+    "bank_switch_stopped_one_unnamed": "En bankkoppling har slutat fungera och hämtar inte längre transaktioner.",
+    "bank_switch_stopped_many": "{count} bankkopplingar har slutat fungera och hämtar inte längre transaktioner.",
+    "bank_switch_action": "Byt till ny koppling",
+    "bank_uncovered_one": "Banken {bank} nås inte av den nya leverantören: importera kontoutdrag som fil.",
+    "bank_uncovered_one_unnamed": "En av bankerna nås inte av den nya leverantören: importera kontoutdrag som fil.",
+    "bank_uncovered_many": "{count} banker nås inte av den nya leverantören: importera kontoutdrag som fil.",
+    "bank_uncovered_action": "Importera fil"
   },
   "att_gora_v2": {
     "title": "Att göra",
@@ -8498,7 +8525,13 @@
     "resume_late": "Försenad",
     "rel_today": "i dag",
     "rel_yesterday": "i går",
-    "rel_days": "för {count} dagar sedan"
+    "rel_days": "för {count} dagar sedan",
+    "band_now": "Gör nu",
+    "row_bank_switch": "Byt bankkopplingen för {bank} senast {date}",
+    "row_bank_switch_stopped": "Bankkopplingen för {bank} har stoppats: byt till den nya kopplingen",
+    "row_bank_switch_detail": "Ny koppling med BankID, cirka två minuter. Historiken behålls.",
+    "bank_switch_days_left": "{days, plural, =0 {Sista dagen} =1 {1 dag kvar} other {# dagar kvar}}",
+    "bank_switch_stopped_badge": "Stoppad"
   },
   "reports": {
     "title": "Rapporter",
@@ -12599,7 +12632,9 @@
     "disconnect_description": "Hämtningen stoppas. Bokförda transaktioner och kontona behålls.",
     "disconnect_confirm": "Koppla bort",
     "disconnected_title": "Kopplingen är borttagen",
-    "disconnect_failed_title": "Kunde inte koppla bort"
+    "disconnect_failed_title": "Kunde inte koppla bort",
+    "switch_by": "Byt senast {date}",
+    "switch_stopped": "Hämtningen har stoppats: byt till ny koppling"
   },
   "skatteverket_ombud": {
     "appoint": "Utse {appName} som ombud hos Skatteverket",

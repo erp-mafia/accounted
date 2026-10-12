@@ -3595,6 +3595,39 @@ const BANK_SYNC: Record<string, StructuredErrorEntry> = {
     message_en: 'The bank sync failed upstream. Retry after the cooldown; if it keeps failing the user should renew the connection.',
     retryable: true,
   },
+  // The Enable Banking to Open Payments switch campaign (lib/bank-feed/switch-campaign.ts).
+  BANK_SWITCH_CAMPAIGN_OFF: {
+    httpStatus: 409,
+    message_sv: 'Bytet av bankkoppling är inte igång: inget slutdatum är satt.',
+    message_en: 'The bank connection switch campaign is not running: no deadline is set (OPENPAYMENTS_SWITCH_DEADLINE).',
+  },
+  BANK_SWITCH_MAILS_OFF: {
+    httpStatus: 409,
+    message_sv: 'Mejl om bytet av bankkoppling är inte påslagna ännu.',
+    message_en: 'Bank switch mails are not switched on (OPENPAYMENTS_SWITCH_MAILS).',
+  },
+  BANK_SWITCH_NOT_PENDING: {
+    httpStatus: 409,
+    message_sv: 'Kunden har ingen bankkoppling som behöver bytas.',
+    message_en: 'The client has no bank connection left to switch.',
+  },
+  BANK_SWITCH_RECENTLY_SENT: {
+    httpStatus: 429,
+    message_sv: 'Kunden fick ett mejl om bytet för mindre än sju dagar sedan. Vänta med nästa.',
+    message_en: 'The client was mailed about the switch less than seven days ago (details.last_sent_at). Wait before the next one.',
+    retryable: true,
+  },
+  BANK_SWITCH_NO_RECIPIENT: {
+    httpStatus: 422,
+    message_sv: 'Kunden har ingen ägare eller administratör med e-postadress att mejla.',
+    message_en: 'The client has no owner or admin with an email address to mail.',
+  },
+  BANK_SWITCH_MAIL_FAILED: {
+    httpStatus: 502,
+    message_sv: 'Mejlet om bytet kunde inte skickas. Försök igen om en stund.',
+    message_en: 'The bank switch mail could not be sent. Retry in a while.',
+    retryable: true,
+  },
 }
 
 const SKATTEKONTO_FILE: Record<string, StructuredErrorEntry> = {

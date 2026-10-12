@@ -8,6 +8,7 @@ import ResumePane from '@/components/dashboard/ResumePane'
 import { HemNotices } from '@/components/dashboard/HemNotices'
 import {
   getWorklistCounts,
+  listBankSwitchDue,
   listExpensePayoutsDue,
   listSkattekontoPaymentDue,
   listSuggestedMatches,
@@ -236,12 +237,17 @@ export async function HemPanesSection({
   // need fetching from as the row's detail line, and the worklist count is the
   // total from the same RPC call rather than a second one at p_limit 1.
   const missingUnderlagPromise = listMissingUnderlagSample(supabase, companyId)
+  // And for the bank connections still to switch to Open Payments: Hem
+  // renders one row per connection with its deep link; the count is the
+  // list's length.
+  const bankSwitchPromise = listBankSwitchDue(supabase, companyId, now)
   const [
     worklist,
     suggestedMatches,
     expensePayouts,
     skattekontoPayment,
     missingUnderlag,
+    bankSwitches,
     resumeItems,
     bankConnectionsRes,
     postedEntries,
@@ -254,11 +260,13 @@ export async function HemPanesSection({
         expensePayoutsDue: expensePayoutsPromise,
         skattekontoPaymentDue: skattekontoPaymentPromise,
         missingUnderlag: missingUnderlagPromise,
+        bankSwitchDue: bankSwitchPromise,
       }),
       suggestedMatchesPromise,
       expensePayoutsPromise,
       skattekontoPaymentPromise,
       missingUnderlagPromise,
+      bankSwitchPromise,
       // In-progress work for the Fortsätt pane: pure draft-state derivation.
       listResumeItems(supabase, companyId, now),
       supabase.from('bank_connections').select('id, status, consent_expires, bank_name, last_sie_sweep').eq('company_id', companyId).eq('status', 'active'),
@@ -295,6 +303,7 @@ export async function HemPanesSection({
           expensePayouts={expensePayouts}
           skattekontoPayment={skattekontoPayment}
           missingUnderlag={missingUnderlag}
+          bankSwitches={bankSwitches}
           expiringBankConnections={expiringBankConnections}
           emptyLedger={emptyLedger}
           hasActiveBankConnection={hasActiveBankConnection}

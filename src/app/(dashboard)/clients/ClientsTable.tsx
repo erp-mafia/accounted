@@ -1,14 +1,31 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Loader2, Search } from 'lucide-react'
 import { cn, formatDate } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { performCompanySwitch } from '@/lib/company/switch-client'
-import { filterClientRows, type ClientOverviewRow } from '@/lib/clients/aggregate'
+import { filterClientRows, type ClientBankSwitch, type ClientOverviewRow } from '@/lib/clients/aggregate'
+
+/** The bank connection switch campaign as the page passes it: on with its deadline, or null. */
+export interface BankSwitchCampaignView {
+  deadline: string
+  passed: boolean
+}
+
+interface ClientsTableProps {
+  clients: ClientOverviewRow[]
+  /** Null while the campaign is off: no column, no nudges. */
+  bankSwitchCampaign?: BankSwitchCampaignView | null
+}
+
+type NudgeTarget = { kind: 'one'; row: ClientOverviewRow } | { kind: 'all'; count: number }
 
 /**
  * The cockpit client list (WL-14): dry-table, urgency-sorted server-side,
@@ -16,14 +33,28 @@ import { filterClientRows, type ClientOverviewRow } from '@/lib/clients/aggregat
  * sets the active company and lands DIRECTLY on that company's overview via
  * performCompanySwitch (one full-page load to the target, no start-page
  * bounce). The way back is the Klienter nav entry, which needs no switch.
+ *
+ * While the bank connection switch campaign is on, a Bankkoppling column
+ * says where each client stands (a chip only where the client deviates:
+ * byt senast, stoppad) and the byrå can ask one client, or every client that
+ * has not switched, to connect the bank: a mail to the client's own owners
+ * and admins (POST /api/clients/bank-switch/remind), since the switch is
+ * signed with the client's BankID, not the byrå's.
  */
-export default function ClientsTable({ clients }: { clients: ClientOverviewRow[] }) {
+export default function ClientsTable({ clients, bankSwitchCampaign = null }: ClientsTableProps) {
   const t = useTranslations('clients')
+  const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [query, setQuery] = useState('')
   const [pendingId, setPendingId] = useState<string | null>(null)
+  const [nudge, setNudge] = useState<NudgeTarget | null>(null)
 
   const rows = useMemo(() => filterClientRows(clients, query), [clients, query])
+  const showBankSwitch = bankSwitchCampaign !== null
+  const notSwitched = useMemo(
+    () => clients.filter((c) => c.bankSwitch?.state === 'pending' || c.bankSwitch?.state === 'stopped'),
+    [clients],
+  )
 
   const handleEnter = async (companyId: string) => {
     if (pendingId) return
@@ -35,6 +66,24 @@ export default function ClientsTable({ clients }: { clients: ClientOverviewRow[]
     }
   }
 
+  async function sendNudge(target: NudgeTarget) {
+    const res = await fetch('/api/clients/bank-switch/remind', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(target.kind === 'one' ? { company_id: target.row.companyId } : { all: true }),
+    })
+    const body = (await res.json().catch(() => ({}))) as { data?: { sent?: number; recently_sent?: number; recipients?: number }; error?: unknown }
+    if (!res.ok || body.error) {
+      toast({ title: t('bank_switch_nudge_failed'), description: getErrorMessage(body, { locale, statusCode: res.status }), variant: 'destructive' })
+      throw new Error('nudge failed')
+    }
+    if (target.kind === 'one') {
+      toast({ title: t('bank_switch_nudge_sent', { client: target.row.name }) })
+    } else {
+      toast({ title: t('bank_switch_bulk_sent', { sent: body.data?.sent ?? 0, recent: body.data?.recently_sent ?? 0 }) })
+    }
+  }
+
   if (clients.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">{t('empty')}</p>
@@ -43,15 +92,22 @@ export default function ClientsTable({ clients }: { clients: ClientOverviewRow[]
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2 max-w-xs rounded-lg border border-border px-3 py-2">
-        <Search className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder={t('filter_placeholder')}
-          aria-label={t('filter_placeholder')}
-          className="w-full bg-transparent text-[13px] text-foreground placeholder:text-muted-foreground/60 focus:outline-none"
-        />
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-2 max-w-xs flex-1 rounded-lg border border-border px-3 py-2">
+          <Search className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={t('filter_placeholder')}
+            aria-label={t('filter_placeholder')}
+            className="w-full bg-transparent text-[13px] text-foreground placeholder:text-muted-foreground/60 focus:outline-none"
+          />
+        </div>
+        {showBankSwitch && notSwitched.length > 0 && (
+          <Button variant="outline" size="sm" onClick={() => setNudge({ kind: 'all', count: notSwitched.length })}>
+            {t('bank_switch_bulk', { count: notSwitched.length })}
+          </Button>
+        )}
       </div>
 
       <div className="overflow-x-auto">
@@ -63,12 +119,13 @@ export default function ClientsTable({ clients }: { clients: ClientOverviewRow[]
               <th className={cn(TH_CLASS, 'text-right')}>{t('col_inbox')}</th>
               <th className={TH_CLASS}>{t('col_next_deadline')}</th>
               <th className={TH_CLASS}>{t('col_last_booked')}</th>
+              {showBankSwitch && <th className={TH_CLASS}>{t('col_bank_switch')}</th>}
             </tr>
           </thead>
           <tbody className="stagger-enter">
             {rows.length === 0 && (
               <tr>
-                <td className={cn(TD_CLASS, 'text-muted-foreground')} colSpan={5}>
+                <td className={cn(TD_CLASS, 'text-muted-foreground')} colSpan={showBankSwitch ? 6 : 5}>
                   {t('no_matches')}
                 </td>
               </tr>
@@ -153,11 +210,85 @@ export default function ClientsTable({ clients }: { clients: ClientOverviewRow[]
                     <span className="text-muted-foreground">{t('never_booked')}</span>
                   )}
                 </td>
+                {showBankSwitch && (
+                  <td className={TD_CLASS}>
+                    <BankSwitchCell
+                      value={row.bankSwitch ?? null}
+                      onNudge={() => setNudge({ kind: 'one', row })}
+                      nudgeLabel={t('bank_switch_nudge')}
+                      labels={{
+                        done: t('bank_switch_done'),
+                        fileImport: t('bank_switch_file_import'),
+                        stopped: t('bank_switch_stopped'),
+                        by: (date: string) => t('bank_switch_by', { date }),
+                      }}
+                    />
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      <ConfirmDialog
+        open={nudge !== null}
+        onOpenChange={(open) => {
+          if (!open) setNudge(null)
+        }}
+        title={nudge?.kind === 'one' ? t('bank_switch_nudge_title', { client: nudge.row.name }) : t('bank_switch_bulk_title', { count: nudge?.count ?? 0 })}
+        description={nudge?.kind === 'one' ? t('bank_switch_nudge_description') : t('bank_switch_bulk_description')}
+        confirmLabel={nudge?.kind === 'one' ? t('bank_switch_nudge_confirm') : t('bank_switch_bulk_confirm')}
+        onConfirm={async () => {
+          if (nudge) await sendNudge(nudge)
+        }}
+      />
     </div>
+  )
+}
+
+interface BankSwitchCellProps {
+  value: ClientBankSwitch | null
+  onNudge: () => void
+  nudgeLabel: string
+  labels: { done: string; fileImport: string; stopped: string; by: (date: string) => string }
+}
+
+/**
+ * One client's campaign state. Normal states are muted text (done, file
+ * import, no bank feed at all); the two that need the client to act carry a
+ * chip and the nudge button, which stops the row's click-through.
+ */
+function BankSwitchCell({ value, onNudge, nudgeLabel, labels }: BankSwitchCellProps) {
+  if (!value) return <span className="text-muted-foreground">-</span>
+  if (value.state === 'done') return <span className="text-muted-foreground">{labels.done}</span>
+  if (value.state === 'uncovered') {
+    return (
+      <span className="text-muted-foreground">
+        {labels.fileImport}
+        {value.banks.length > 0 && <span> · {value.banks.join(', ')}</span>}
+      </span>
+    )
+  }
+  return (
+    <span className="flex items-center gap-2">
+      {value.state === 'stopped' ? (
+        <Badge variant="destructive">{labels.stopped}</Badge>
+      ) : (
+        <Badge variant="warning">{labels.by(formatDate(value.deadline))}</Badge>
+      )}
+      {value.banks.length > 0 && <span className="truncate text-muted-foreground">{value.banks.join(', ')}</span>}
+      <Button
+        variant="ghost"
+        size="sm"
+        className="ml-auto text-muted-foreground hover:text-foreground"
+        onClick={(e) => {
+          e.stopPropagation()
+          onNudge()
+        }}
+      >
+        {nudgeLabel}
+      </Button>
+    </span>
   )
 }
