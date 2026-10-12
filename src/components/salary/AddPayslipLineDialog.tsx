@@ -16,7 +16,7 @@ import {
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
-import { roundOre } from '@/lib/money'
+import { roundOre, parseDecimalInput } from '@/lib/money'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
   MANUAL_PAYSLIP_LINE_SPECS,
@@ -28,12 +28,9 @@ import {
 
 const DEFAULT_TYPE: ManualPayslipLineType = 'mileage_taxfree'
 
-const parseNumber = (s: string): number | undefined => {
-  const trimmed = s.trim().replace(',', '.')
-  if (trimmed === '') return undefined
-  const n = Number(trimmed)
-  return Number.isFinite(n) ? n : undefined
-}
+// Quantity, unit price and amount keep what was typed; the line amount is
+// rounded where it is computed.
+const parseNumber = (s: string): number | undefined => parseDecimalInput(s) ?? undefined
 
 /**
  * One-off payslip line ("Lägg till rad"): milersättning, traktamente, bonus,

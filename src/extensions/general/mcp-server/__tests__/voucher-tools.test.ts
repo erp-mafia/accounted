@@ -1020,7 +1020,7 @@ describe('gnubok_reverse_journal_entry: staging gates', () => {
     expect(thrown).toBeInstanceOf(Error)
     const envelope = getStructuredError(thrown)
     expect(envelope.code).toBe('VALIDATION_ERROR')
-    expect(envelope.message_sv).toBe('Motiveringen får vara högst 500 tecken.')
+    expect(envelope.message_sv).toBe('reason: Motiveringen får vara högst 500 tecken.')
     expect(envelope.message_en).toMatch(/500 characters or fewer/)
   })
 

@@ -29,12 +29,9 @@ import type {
   PartyDto,
   PaymentStatusDto,
 } from '@/lib/providers/dto'
+import { roundOre } from '@/lib/money'
 
 // ── Helpers ─────────────────────────────────────────────────────────
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100
-}
 
 function formatAddress(addr?: PostalAddress): {
   address_line1: string | null
@@ -320,13 +317,13 @@ function isTextLine(line: LineShape): boolean {
 function resolveInvoiceVat(
   dto: { currencyCode: string; lines: readonly (LineShape & { taxPercent?: number; taxAmount?: { value: number } })[]; taxTotal?: { taxAmount: { value: number } }; legalMonetaryTotal: { lineExtensionAmount?: { value: number }; payableAmount: { value: number } } },
 ): InvoiceVatResolution {
-  const total = round2(dto.legalMonetaryTotal.payableAmount.value)
+  const total = roundOre(dto.legalMonetaryTotal.payableAmount.value)
   const statedNet = dto.legalMonetaryTotal.lineExtensionAmount?.value
-  const net = statedNet !== undefined ? round2(statedNet) : undefined
+  const net = statedNet !== undefined ? roundOre(statedNet) : undefined
 
   const vatAmount = dto.taxTotal !== undefined
-    ? round2(dto.taxTotal.taxAmount.value)
-    : sumLineVat(dto.lines) ?? (net !== undefined ? round2(total - net) : undefined)
+    ? roundOre(dto.taxTotal.taxAmount.value)
+    : sumLineVat(dto.lines) ?? (net !== undefined ? roundOre(total - net) : undefined)
 
   if (vatAmount === undefined) {
     return {
@@ -342,7 +339,7 @@ function resolveInvoiceVat(
     }
   }
 
-  const subtotal = net ?? round2(total - vatAmount)
+  const subtotal = net ?? roundOre(total - vatAmount)
 
   // A rate stated on a line beats one divided out of the totals: mixed-rate
   // invoices divide out to a blended figure that matches no statutory rate.
@@ -555,7 +552,7 @@ function resolveFx(
 
 /** Convert to SEK, or null when no conversion could be established. */
 function toSek(amount: number, sekFactor: number | null): number | null {
-  return sekFactor === null ? null : round2(amount * sekFactor)
+  return sekFactor === null ? null : roundOre(amount * sekFactor)
 }
 
 /**
@@ -760,7 +757,7 @@ function negate(n: number): number {
  */
 function withAbsoluteAmounts<T extends SalesInvoiceDto | SupplierInvoiceDto>(dto: T): T {
   const abs = (amount: AmountType): AmountType => ({ ...amount, value: Math.abs(amount.value) })
-  const rowNet = round2(dto.lines.reduce((sum, line) => sum + line.lineExtensionAmount.value, 0))
+  const rowNet = roundOre(dto.lines.reduce((sum, line) => sum + line.lineExtensionAmount.value, 0))
   // A net of zero decides nothing either way; the header's sign does.
   const statedNegative = rowNet !== 0 ? rowNet < 0 : dto.legalMonetaryTotal.payableAmount.value < 0
   const factor = statedNegative ? -1 : 1
@@ -804,7 +801,7 @@ function withAbsoluteAmounts<T extends SalesInvoiceDto | SupplierInvoiceDto>(dto
  * paid.
  */
 function trustedBalance(paymentStatus: PaymentStatusDto, total: number): number {
-  const balance = round2(paymentStatus.balance.value)
+  const balance = roundOre(paymentStatus.balance.value)
   if (paymentStatus.source === 'enum' && !paymentStatus.paid && balance <= 0) return total
   return balance
 }
@@ -854,7 +851,7 @@ export function resolveSupplierSettlement(
   const balance = trustedBalance(paymentStatus, total)
   // Treat the balance numerically (never strict === 0) so floating drift or a
   // residual öre resolves cleanly to paid/unpaid.
-  const paidAmount = paymentStatus.paid ? total : round2(total - balance)
+  const paidAmount = paymentStatus.paid ? total : roundOre(total - balance)
   const settled =
     paymentStatus.paid || (balance <= 0 && total > 0 && paymentStatus.source !== 'enum')
 
@@ -888,7 +885,7 @@ export function mapSalesInvoice(
   const amounts = isCreditNote ? withAbsoluteAmounts(dto) : dto
   const sign = (n: number): number => (isCreditNote ? negate(n) : n)
 
-  const total = sign(round2(amounts.legalMonetaryTotal.payableAmount.value))
+  const total = sign(roundOre(amounts.legalMonetaryTotal.payableAmount.value))
   const vat = resolveInvoiceVat(amounts)
   const subtotal = sign(vat.subtotal)
   const vatAmount = sign(vat.vatAmount)
@@ -932,7 +929,7 @@ export function mapSalesInvoice(
         // and WINT do. A null paid_at on a paid invoice is a state the detail
         // page already renders honestly (classifyPaymentHistoryGap).
         paidAt: dto.paymentStatus.paid ? dto.paymentStatus.lastPaymentDate || null : null,
-        paidAmount: dto.paymentStatus.paid ? total : round2(total - balance),
+        paidAmount: dto.paymentStatus.paid ? total : roundOre(total - balance),
         remainingAmount: dto.paymentStatus.paid ? 0 : Math.max(0, balance),
       }
 
@@ -1040,7 +1037,7 @@ function mapSalesInvoiceLine(
   invoiceRate: number | null,
   isCreditNote: boolean,
 ): Record<string, unknown> {
-  const lineTotal = round2(line.lineExtensionAmount.value)
+  const lineTotal = roundOre(line.lineExtensionAmount.value)
   const rate = line.taxPercent != null ? snapToSwedishRate(line.taxPercent) : invoiceRate
   const vatAmount = line.taxAmount?.value ?? lineVatFromPercent(lineTotal, rate ?? undefined)
   // A kreditfaktura reverses quantity, line total and VAT and keeps the unit
@@ -1067,12 +1064,12 @@ function mapSalesInvoiceLine(
     description: line.description || line.itemName || '',
     quantity: sign(line.quantity || 1),
     unit: line.unitCode || 'st',
-    unit_price: round2(line.unitPrice?.value ?? line.lineExtensionAmount.value),
+    unit_price: roundOre(line.unitPrice?.value ?? line.lineExtensionAmount.value),
     line_total: sign(lineTotal),
     // 0 rather than the old hardcoded 25 when nothing established a rate: a
     // 0 % line beside 0 kr of VAT is at least internally consistent.
     vat_rate: rate ?? 0,
-    vat_amount: sign(round2(vatAmount ?? 0)),
+    vat_amount: sign(roundOre(vatAmount ?? 0)),
     line_type: 'product',
   }
 }
@@ -1169,7 +1166,7 @@ export function mapSupplierInvoice(
   const rows = supplierInvoiceRows(dto)
   const amounts = isCreditNote ? withAbsoluteAmounts(rows) : rows
 
-  const total = round2(amounts.legalMonetaryTotal.payableAmount.value)
+  const total = roundOre(amounts.legalMonetaryTotal.payableAmount.value)
   const vat = resolveInvoiceVat(amounts)
   const subtotal = vat.subtotal
   const vatAmount = vat.vatAmount
@@ -1312,7 +1309,7 @@ function mapSupplierInvoiceLine(
   index: number,
   invoiceRate: number | null,
 ): Record<string, unknown> {
-  const lineTotal = round2(line.lineExtensionAmount.value)
+  const lineTotal = roundOre(line.lineExtensionAmount.value)
   // Foreign rates (19 % DE) must survive rather than be snapped to a Swedish
   // one, so the line's own percent is used as stated; only the fallback comes
   // from the invoice-level resolution.
@@ -1324,14 +1321,14 @@ function mapSupplierInvoiceLine(
     description: line.description || line.itemName || '',
     quantity: line.quantity || 1,
     unit: line.unitCode || 'st',
-    unit_price: round2(line.unitPrice?.value ?? line.lineExtensionAmount.value),
+    unit_price: roundOre(line.unitPrice?.value ?? line.lineExtensionAmount.value),
     line_total: lineTotal,
     // Never defaulted: mapSupplierInvoice drops a row set with a row lacking one.
     account_number: line.accountNumber || null,
     // supplier_invoice_items stores decimal fractions (0.25 = 25 %), unlike
     // customer invoice_items which store percent.
     vat_rate: normalizeVatRateToFraction(percent),
-    vat_amount: round2(vatAmount ?? 0),
+    vat_amount: roundOre(vatAmount ?? 0),
   }
 }
 

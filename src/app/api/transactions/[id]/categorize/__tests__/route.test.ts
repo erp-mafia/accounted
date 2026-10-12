@@ -159,8 +159,14 @@ describe('POST /api/transactions/[id]/categorize', () => {
 
   it('returns 409 and books nothing for a row anchored only by a bank_line link (bulk-book, NULL pointer)', async () => {
     await useRealGuard()
-    enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null }), error: null })
-    enqueue({ data: [{ journal_entry_id: 'je-samling', role: 'bank_line' }] }) // transaction_voucher_links
+    // The junction rows ride along on the transaction read.
+    enqueue({
+      data: {
+        ...makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null }),
+        transaction_voucher_links: [{ journal_entry_id: 'je-samling', role: 'bank_line' }],
+      },
+      error: null,
+    })
     enqueue({ data: [{ id: 'je-samling', status: 'posted' }] }) // journal_entries
 
     const request = createMockRequest('/api/transactions/tx-1/categorize', {
@@ -182,8 +188,8 @@ describe('POST /api/transactions/[id]/categorize', () => {
   it('books a row whose only link names a reversed verifikat (storno released it)', async () => {
     await useRealGuard()
     const tx = makeTransaction({ id: 'tx-1', amount: -500, merchant_name: 'GitHub', journal_entry_id: null })
-    enqueue({ data: tx, error: null }) // fetch transaction
-    enqueue({ data: [{ journal_entry_id: 'je-old', role: 'bank_line' }] }) // transaction_voucher_links
+    // The junction rows ride along on the transaction read.
+    enqueue({ data: { ...tx, transaction_voucher_links: [{ journal_entry_id: 'je-old', role: 'bank_line' }] }, error: null })
     enqueue({ data: [{ id: 'je-old', status: 'reversed' }] }) // journal_entries
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null }) // settings
     enqueue({ data: [], error: null }) // resolveSettlementAccount
@@ -277,6 +283,13 @@ describe('POST /api/transactions/[id]/categorize', () => {
       journal_entry_id: 'je-existing',
       category: 'uncategorized',
     })
+    // A posted verifikat books the row through its pointer.
+    mockAssertBookable.mockResolvedValue({
+      ok: false,
+      code: 'TRANSACTION_ALREADY_CATEGORIZED',
+      journalEntryId: 'je-existing',
+      via: 'pointer',
+    })
     // Fetch transaction
     enqueue({ data: tx, error: null })
     // Update transaction
@@ -344,8 +357,9 @@ describe('POST /api/transactions/[id]/categorize', () => {
         true,
         'ideell_forening',
         undefined,
-        null,
+        undefined,
         vatRegistered,
+        undefined,
       )
     },
   )
@@ -699,6 +713,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
       'user-1',
       expect.objectContaining({ id: 'tx-1' }),
       expect.objectContaining({ dimensions: { '1': 'KS1', '6': 'P001' } }),
+      undefined,
     )
   })
 
@@ -738,10 +753,10 @@ describe('POST /api/transactions/[id]/categorize', () => {
     enqueue({ data: [{ id: 'period-1' }], error: null }) // fiscal period check
     mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
     enqueue({ data: [{ id: 'tx-1' }], error: null }) // tx update (CAS matched)
-    // Inbox propagation: one matched item with a document
+    // Underlag propagation (propagateUnderlagForBookedTransaction): the row's
+    // own pin (none), then one matched item with a document.
+    enqueue({ data: { document_id: null }, error: null })
     enqueue({ data: [{ id: 'inbox-1', document_id: 'doc-1' }], error: null })
-    enqueue({ data: null, error: null }) // document_attachments update
-    enqueue({ data: null, error: null }) // invoice_inbox_items update
 
     const request = createMockRequest('/api/transactions/tx-1/categorize', {
       method: 'POST',
@@ -2234,7 +2249,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     // account_override chart lookup: 1940 exists and is active
-    enqueue({ data: { account_number: '1940', account_class: 1 }, error: null })
+    enqueue({ data: { account_number: '1940', account_class: 1, is_active: true }, error: null })
     // Guard: 1940 is held by an ACTIVE connection, so it is a genuine transfer target
     enqueue({
       data: [{ id: 'ca-live', ledger_account: '1940', bank_connection_id: 'conn-live', iban: 'SE455', enabled: true }],
@@ -2289,7 +2304,7 @@ describe('POST /api/transactions/[id]/categorize', () => {
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
-    enqueue({ data: { account_number: account, account_class: Number(account[0]) }, error: null })
+    enqueue({ data: { account_number: account, account_class: Number(account[0]), is_active: true }, error: null })
     // reconcileRcBasisWithChart: the company's momskoder on class 4-6 accounts
     enqueue({ data: treatment ? [{ account_number: account, default_vat_treatment: treatment }] : [], error: null })
     enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod

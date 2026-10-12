@@ -28,20 +28,11 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { UpdateEmployeeSchema } from '@/lib/api/schemas'
-import { maskPersonnummer } from '@/lib/api/v1/mask-personnummer'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
-import {
-  JAMKNING_END_REQUIRED,
-  JAMKNING_START_REQUIRED,
-  jamkningIssueFromDbError,
-  type JamkningFields,
-} from '@/lib/salary/jamkning-rules'
-import {
-  VAXA_START_REQUIRED,
-  validateEmployeeUpdate,
-  type EmployeeUpdateIssue,
-} from '@/lib/salary/employee-update-rules'
+import { JAMKNING_END_REQUIRED, JAMKNING_START_REQUIRED } from '@/lib/salary/jamkning-rules'
+import { VAXA_START_REQUIRED, type EmployeeUpdateIssue } from '@/lib/salary/employee-update-rules'
 import { softDeleteEmployee } from '@/lib/salary/employee-soft-delete'
+import { updateEmployee } from '@/lib/salary/employee-commands'
 
 const EmploymentType = z.enum(['employee', 'company_owner', 'board_member'])
 const SalaryType = z.enum(['monthly', 'hourly'])
@@ -109,31 +100,11 @@ const EmployeeWriteResponse = EmployeeDetail
   .omit({ personnummer: true })
   .extend({ personnummer_masked: z.string() })
 
-type ExistingRow = {
-  id: string
-  personnummer: string
-  [key: string]: unknown
-}
-
 /**
  * Merged-state issues whose fix is a companion field the caller left out of
  * the PATCH: the 400 names that key.
  */
 const SEND_IN_SAME_PATCH = new Set([JAMKNING_START_REQUIRED, JAMKNING_END_REQUIRED, VAXA_START_REQUIRED])
-
-/**
- * Convert a freshly-fetched / updated employee row into the write-response
- * shape: drop `personnummer`, add `personnummer_masked`. Caller is
- * responsible for passing a row that includes the raw `personnummer` field
- * (always the case for EMPLOYEE_DETAIL_COLUMNS reads).
- */
-function maskExistingForResponse(row: ExistingRow): Record<string, unknown> {
-  const { personnummer, ...rest } = row
-  // personnummer is stored encrypted; decrypt before masking so the write
-  // response is birthdate-visible (YYYYMMDDXXXX), not fully redacted. The
-  // decrypt helper passes legacy plaintext rows through unchanged.
-  return { ...rest, personnummer_masked: maskPersonnummer(decryptPersonnummer(personnummer)) }
-}
 
 registerEndpoint({
   operation: 'employees.get',
@@ -236,6 +207,7 @@ registerEndpoint({
     'salary_type changes require the matching salary field in the same request: switching to monthly without monthly_salary returns 400.',
     'A cleared field is checked against the stored row: nulling monthly_salary on a monthly employee, tax_table_number on an A-skatt employee without sidoinkomst, vaxa_stod_start while Växa-stöd is on, or only one of clearing_number/bank_account_number returns 400. To end an ongoing employment set employment_end; to reopen it send employment_end: null.',
     'tax_table_number changes only take effect on future salary runs; runs already in `review` or beyond use a frozen snapshot.',
+    'An enskild firma cannot employ its owner or board: employment_type company_owner or board_member returns 400 VALIDATION_ERROR on employment_type (the owner takes eget uttag, not salary).',
     'vaxa_stod_eligible never lowers the arbetsgivaravgifter: from redovisningsperiod 202601 (Lag 2025:1334) the AGI declares the full avgifter and the company applies to Skatteverket for the refund after filing. A salary run paid inside vaxa_stod_start..vaxa_stod_end (end optional; never past the 24th calendar month counted from the start month) notes the expected refund per employee and warns to apply.',
   ],
   example: {
@@ -306,22 +278,6 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     if (!parsed.success) return v1ValidationError(ctx, parsed.error)
     const body = parsed.data
 
-    // Fetch the existing row so dry-run + the eventual update see merged state
-    // (the Zod superRefine validates against the merged object). Also gives
-    // us a clean 404 path before any work happens.
-    const { data: existing, error: fetchErr } = await ctx.supabase
-      .from('employees')
-      .select(EMPLOYEE_DETAIL_COLUMNS)
-      .eq('company_id', ctx.companyId!)
-      .eq('id', idParse.data)
-      .maybeSingle()
-    if (fetchErr) {
-      return v1ErrorResponse(fetchErr, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!existing) {
-      return v1ErrorResponseFromCode('EMPLOYEE_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
-    }
-
     // The Zod schema accepts all base fields as optional. Filter to the
     // explicitly-supplied keys so unmentioned columns aren't overwritten to
     // their `default()` values (e.g. is_sidoinkomst would silently reset
@@ -342,81 +298,51 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       }
     }
 
-    // Merged-state rules through the one copy every door runs (#3008): the
-    // schema cannot see the existing row, so a sparse PATCH that clears a
-    // field (null) or flips a flag alone is checked on the row as it would be
-    // stored. Covers salary amount, tax table, Växa-stöd start (a caller
-    // flipping `vaxa_stod_eligible: true` alone on a row without a start),
-    // jämkning (only when the PATCH names a jämkning key, #2058) and bank
-    // details (only when they change). The first issue is returned; a
-    // missing companion field names the key to send in the same PATCH.
-    const issueDetails = (issue: EmployeeUpdateIssue) => ({
-      field: issue.field,
-      message: SEND_IN_SAME_PATCH.has(issue.message)
-        ? `${issue.message}. Skicka även \`${issue.field}\` i samma PATCH.`
-        : `${issue.message}.`,
+    // Merged-state rules, the EF-owner rule (#782) and the write are
+    // lib/salary/employee-commands.ts, the one update every door runs (#3008):
+    // a sparse PATCH that clears a field (null) or flips a flag alone is
+    // checked on the row as it would be stored. A dry run validates the
+    // merged row and writes nothing; an empty PATCH answers the row as it is.
+    // Rows come back masked (GDPR Art.5(1)(c)): the detail GET is the
+    // deliberate drill-in for the full value.
+    const result = await updateEmployee(ctx.supabase, {
+      companyId: ctx.companyId!,
+      employeeId: idParse.data,
+      patch: updates,
+      dryRun: ctx.dryRun,
+      columns: EMPLOYEE_DETAIL_COLUMNS,
     })
-    const mergedJamkning = { ...(existing as Record<string, unknown>), ...updates } as JamkningFields
-    const [issue] = validateEmployeeUpdate(existing as Record<string, unknown>, updates)
-    if (issue) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: issueDetails(issue),
-      })
-    }
-
-    if (Object.keys(updates).length === 0) {
-      // GDPR Art.5(1)(c): no-change PATCH still returns a write-shape, so
-      // mask personnummer just like the POST + PATCH success path.
-      return ok(maskExistingForResponse(existing as ExistingRow), {
-        requestId: ctx.requestId,
-      })
+    if (!result.ok) {
+      if (result.code === 'EMPLOYEE_NOT_FOUND') {
+        return v1ErrorResponseFromCode('EMPLOYEE_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
+      }
+      if (result.code === 'VALIDATION_ERROR') {
+        // The first issue; a missing companion field names the key to send in
+        // the same PATCH.
+        const [issue] = (result.details?.issues as EmployeeUpdateIssue[] | undefined) ?? []
+        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+          details: issue ? issueDetails(issue) : result.details,
+        })
+      }
+      return v1ErrorResponse(result.cause, ctx.log, { requestId: ctx.requestId })
     }
 
     if (ctx.dryRun) {
-      // Merge for the preview, then mask the natural-person identifier.
-      // Phase 5 PR-1 design: writes never echo back the supplied identity,
-      // only the GET drill-in does. The dry-run preview is a write-shape so
-      // it follows the write rule.
-      const merged = { ...(existing as ExistingRow), ...updates }
-      return dryRunPreview(maskExistingForResponse(merged), {
-        requestId: ctx.requestId,
-        log: ctx.log,
-      })
+      return dryRunPreview(result.data.row, { requestId: ctx.requestId, log: ctx.log })
     }
-
-    const { data, error } = await ctx.supabase
-      .from('employees')
-      .update(updates)
-      .eq('company_id', ctx.companyId!)
-      .eq('id', idParse.data)
-      .select(EMPLOYEE_DETAIL_COLUMNS)
-      .single()
-
-    if (error) {
-      // The CHECK constraint refused the row (#2256): either the merged-state
-      // check above passed against a snapshot another request has since
-      // changed, or this is a legacy incomplete row (stored before #2240)
-      // whose next edit must complete or clear the beslut. Same
-      // VALIDATION_ERROR and details as that check, derived from the merged row.
-      const jamkningIssue = jamkningIssueFromDbError(error, mergedJamkning)
-      if (jamkningIssue) {
-        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-          requestId: ctx.requestId,
-          details: issueDetails(jamkningIssue),
-        })
-      }
-      return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
-    }
-
-    // GDPR Art.5(1)(c): mask the natural-person identifier in the write
-    // response. The detail GET endpoint still returns the full value for
-    // callers who deliberately drill in.
-    return ok(maskExistingForResponse(data as ExistingRow), {
-      requestId: ctx.requestId,
-    })
+    return ok(result.data.row, { requestId: ctx.requestId })
   },
 )
+
+function issueDetails(issue: EmployeeUpdateIssue) {
+  return {
+    field: issue.field,
+    message: SEND_IN_SAME_PATCH.has(issue.message)
+      ? `${issue.message}. Skicka även \`${issue.field}\` i samma PATCH.`
+      : `${issue.message}.`,
+  }
+}
 
 // ──────────────────────────────────────────────────────────────────
 // DELETE: soft-delete (is_active=false)
@@ -469,9 +395,16 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
       dryRun: ctx.dryRun,
     })
     if (!result.ok) {
-      return result.code === 'EMPLOYEE_NOT_FOUND'
-        ? v1ErrorResponseFromCode('EMPLOYEE_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
-        : v1ErrorResponse(result.cause, ctx.log, { requestId: ctx.requestId })
+      if (result.code === 'EMPLOYEE_NOT_FOUND') {
+        return v1ErrorResponseFromCode('EMPLOYEE_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
+      }
+      if (result.code === 'VALIDATION_ERROR') {
+        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+          requestId: ctx.requestId,
+          details: result.details,
+        })
+      }
+      return v1ErrorResponse(result.cause, ctx.log, { requestId: ctx.requestId })
     }
 
     if (!result.data.committed) {

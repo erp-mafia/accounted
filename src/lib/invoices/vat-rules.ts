@@ -9,6 +9,7 @@ import {
   vatNumberCountryPrefix,
 } from '@/lib/vat/country-codes'
 import { isValidSwedishVatNumber, normalizeVatNumber } from '@/lib/vat/vat-number'
+import { treatmentForRate } from '@/lib/vat/gross-split'
 
 export interface VatRateOption {
   rate: number
@@ -161,21 +162,11 @@ export function getPermittedVatRates(
 }
 
 /**
- * Map a numeric VAT rate to a VatTreatment.
+ * Map a numeric VAT rate in percent (25, 12, 6, 0) to a VatTreatment: 0 is
+ * exempt, any other rate falls back to standard_25.
  */
 export function getVatTreatmentForRate(rate: number): VatTreatment {
-  switch (rate) {
-    case 25:
-      return 'standard_25'
-    case 12:
-      return 'reduced_12'
-    case 6:
-      return 'reduced_6'
-    case 0:
-      return 'exempt'
-    default:
-      return 'standard_25'
-  }
+  return treatmentForRate(rate / 100) ?? (rate === 0 ? 'exempt' : 'standard_25')
 }
 
 /**

@@ -29,6 +29,7 @@ import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { roundOre } from '@/lib/money'
 import { eventBus } from '@/lib/events/bus'
 import type { CreateJournalEntryLineInput, Currency, Invoice, Transaction } from '@/types'
+import { MATCHABLE_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
 
 /**
  * POST /api/transactions/[id]/match-invoice
@@ -718,7 +719,7 @@ export const POST = withRouteContext(
         remaining_amount: newRemaining,
       })
       .eq('id', invoice_id)
-      .in('status', ['sent', 'overdue', 'partially_paid'])
+      .in('status', [...MATCHABLE_INVOICE_STATUSES])
       .select('id')
 
     if (updateInvError) {

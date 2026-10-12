@@ -4,6 +4,7 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { findMatchingVouchersForSupplierInvoice } from '@/lib/invoices/supplier-voucher-matching'
 import { resolveSupplierSettlementSide } from '@/lib/invoices/supplier-settlement-side'
 import type { Supplier, SupplierInvoice } from '@/types'
+import { isMatchableSupplierInvoiceStatus } from '@/lib/invoices/matchable-statuses'
 
 /**
  * GET /api/supplier-invoices/[id]/voucher-candidates
@@ -44,7 +45,7 @@ export const GET = withRouteContext(
 
     const settlementSide = await resolveSupplierSettlementSide(supabase, companyId, id)
 
-    if (!['registered', 'approved', 'overdue', 'partially_paid'].includes(invoice.status)) {
+    if (!isMatchableSupplierInvoiceStatus(invoice.status)) {
       return NextResponse.json({
         data: {
           candidates: [],

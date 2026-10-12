@@ -2545,7 +2545,7 @@ Sets is_closed=true + closed_at on the period. Pre-requisites: period must be lo
 **Pitfalls:**
 - Idempotency-Key is mandatory.
 - IRREVERSIBLE. Once is_closed=true, the period is read-only forever (BFL 5 kap 8 § + 7 kap).
-- Pre-conditions: locked + closing_entry_id present. Otherwise the call returns CONFLICT.
+- Pre-conditions: locked + closing_entry_id present. Otherwise 400 PERIOD_NOT_LOCKED or 400 YEAR_END_NOT_RUN; an already closed period returns 409 PERIOD_ALREADY_CLOSED.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -2743,7 +2743,8 @@ Sets locked_at on the period. Refuses if uncategorised business transactions rem
 
 **Pitfalls:**
 - Idempotency-Key is mandatory.
-- A period with uncategorised business transactions cannot be locked; the response surfaces the count.
+- A period with uncategorised business transactions cannot be locked: 400 PERIOD_HAS_UNBOOKED_TRANSACTIONS, the message names the count.
+- An already locked period returns 409 PERIOD_LOCK_ALREADY_LOCKED; a closed one 409 PERIOD_ALREADY_CLOSED.
 - A year that an SIE import, or its undo, still holds returns 409 PERIOD_HAS_UNFINISHED_SIE_IMPORT: resume it (POST /imports/sie/{id}/resume) or undo it (POST /imports/sie/{id}/undo) first, then lock.
 - Locking is reversible until /close: POST /fiscal-periods/{id}/unlock lifts it.
 

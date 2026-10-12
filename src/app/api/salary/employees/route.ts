@@ -2,9 +2,9 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateEmployeeSchema } from '@/lib/api/schemas'
-import { getCompanyEntityType } from '@/lib/company/context'
-import { encryptPersonnummer, extractLast4, maskEmployeeForResponse, maskPersonnummer, validatePersonnummer } from '@/lib/salary/personnummer'
-import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/lib/salary/employment-rules'
+import { maskEmployeeForResponse } from '@/lib/salary/personnummer'
+import { createEmployee, sealPersonnummer } from '@/lib/salary/employee-commands'
+import { employeeCommandErrorResponse } from '@/lib/salary/employee-command-response'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export const GET = withRouteContext('salary.employees.list', async (request, { supabase, companyId }) => {
@@ -37,89 +37,23 @@ export const GET = withRouteContext('salary.employees.list', async (request, { s
 export const POST = withRouteContext('salary.employees.create', async (request, { supabase, companyId, user }) => {
   const validation = await validateBody(request, CreateEmployeeSchema)
   if (!validation.success) return validation.response
-  const body = validation.data
+  const { personnummer, ...fields } = validation.data
 
-  // Validate personnummer format + Luhn
-  const pnrValidation = validatePersonnummer(body.personnummer)
-  if (!pnrValidation.valid) {
-    return NextResponse.json({ error: pnrValidation.error }, { status: 400 })
-  }
+  // Format, date and check digit, then sealed: the service never sees the
+  // plaintext. The rules (EF owner, bank details, jämkning) and the insert
+  // are lib/salary/employee-commands.ts, shared with v1 and MCP.
+  const sealed = sealPersonnummer(personnummer)
+  if (!sealed.ok) return NextResponse.json({ error: sealed.message }, { status: 400 })
 
-  // An enskild firma owner cannot be put on payroll (they take egna uttag, not
-  // lön). Block owner/board employment types for EF before inserting. The DB
-  // trigger enforce_ef_no_owner_employee is the all-paths backstop; this gives
-  // a clean 400 with guidance. #782
-  const entityType = await getCompanyEntityType(supabase, companyId)
-  if (!isEmploymentTypeAllowedForEntity(entityType, body.employment_type)) {
-    return NextResponse.json({ error: EF_OWNER_EMPLOYMENT_ERROR }, { status: 400 })
-  }
+  const result = await createEmployee(supabase, {
+    companyId: companyId!,
+    userId: user.id,
+    input: { ...fields, ...sealed.identity },
+    columns: '*',
+  })
+  if (!result.ok) return employeeCommandErrorResponse(result)
 
-  // Encrypt personnummer
-  const encryptedPnr = encryptPersonnummer(body.personnummer)
-  const last4 = extractLast4(body.personnummer)
-
-  const { data: employee, error } = await supabase
-    .from('employees')
-    .insert({
-      company_id: companyId,
-      user_id: user.id,
-      first_name: body.first_name,
-      last_name: body.last_name,
-      personnummer: encryptedPnr,
-      personnummer_last4: last4,
-      employment_type: body.employment_type,
-      employment_start: body.employment_start,
-      employment_end: body.employment_end || null,
-      employment_degree: body.employment_degree,
-      hours_per_week: body.hours_per_week,
-      workdays_per_week: body.workdays_per_week,
-      salary_type: body.salary_type,
-      monthly_salary: body.monthly_salary || null,
-      hourly_rate: body.hourly_rate || null,
-      tax_table_number: body.tax_table_number || null,
-      tax_column: body.tax_column,
-      tax_municipality: body.tax_municipality || null,
-      is_sidoinkomst: body.is_sidoinkomst,
-      f_skatt_status: body.f_skatt_status,
-      clearing_number: body.clearing_number || null,
-      bank_account_number: body.bank_account_number || null,
-      vacation_rule: body.vacation_rule,
-      vacation_days_per_year: body.vacation_days_per_year,
-      semestertillagg_rate: body.semestertillagg_rate,
-      vacation_pay_rate: body.vacation_pay_rate ?? null,
-      email: body.email || null,
-      phone: body.phone || null,
-      address_line1: body.address_line1 || null,
-      postal_code: body.postal_code || null,
-      city: body.city || null,
-      vaxa_stod_eligible: body.vaxa_stod_eligible,
-      vaxa_stod_start: body.vaxa_stod_start || null,
-      vaxa_stod_end: body.vaxa_stod_end || null,
-      jamkning_percentage: body.jamkning_percentage ?? null,
-      jamkning_valid_from: body.jamkning_valid_from ?? null,
-      jamkning_valid_to: body.jamkning_valid_to ?? null,
-      // Dimensions PR8: bag for the employee's P&L cost lines at booking.
-      default_dimensions: body.default_dimensions ?? {},
-    })
-    .select()
-    .single()
-
-  if (error) {
-    if (error.code === '23505') {
-      return NextResponse.json({ error: 'En anställd med detta personnummer finns redan' }, { status: 409 })
-    }
-    return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
-  }
-
-  // Same rule as the read surfaces: the create response carries the mask under
-  // `personnummer_masked` only. Spreading the inserted row would otherwise echo
-  // the stored ciphertext under `personnummer`, and personnummer_last4 must not
-  // ride along with the mask (mask + last4 = the full personnummer).
-  const { personnummer: _storedPnr, personnummer_last4: _storedLast4, ...created } = employee
-  return NextResponse.json({
-    data: {
-      ...created,
-      personnummer_masked: maskPersonnummer(body.personnummer),
-    },
-  }, { status: 201 })
+  // The row is masked: the mask under `personnummer_masked` only, no
+  // ciphertext and no personnummer_last4 (mask + last4 = the full number).
+  return NextResponse.json({ data: result.data.row }, { status: 201 })
 }, { requireWrite: true })

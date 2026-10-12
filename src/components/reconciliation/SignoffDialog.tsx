@@ -16,7 +16,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { formatCurrency } from '@/lib/utils'
-import { roundOre } from '@/lib/money'
+import { roundOre, parseAmountInput } from '@/lib/money'
 
 /**
  * "Markera som avstämd": date, optional note, and (only when the engine
@@ -68,13 +68,6 @@ interface SignoffDialogProps {
   onPreview?: (input: SignoffSubmitInput) => Promise<SignoffPreviewResult>
   /** Returns an error message to show inline, or null on success. */
   onSubmit: (input: SignoffSubmitInput) => Promise<string | null>
-}
-
-function parseAmount(raw: string): number | null {
-  const normalized = raw.replace(/\s/g, '').replace(',', '.')
-  if (normalized === '' || normalized === '-') return null
-  const n = Number(normalized)
-  return Number.isFinite(n) ? roundOre(n) : null
 }
 
 export function SignoffDialog({
@@ -144,7 +137,7 @@ export function SignoffDialog({
   // With a stated balance the difference is against the booked balance;
   // otherwise the server's preview decides, and until it has answered the
   // engine's number from the page tile (or "unknown") stands in.
-  const stated = askExternalBalance ? parseAmount(external) : null
+  const stated = askExternalBalance ? parseAmountInput(external) : null
   const blocked = preview?.kind === 'blocked' ? preview.message : null
   const previewUnexplained = preview && preview.kind !== 'blocked' ? preview.unexplained : unexplained
   const effectiveUnexplained =

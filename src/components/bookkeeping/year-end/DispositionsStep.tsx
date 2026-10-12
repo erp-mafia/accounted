@@ -21,6 +21,7 @@ import type {
 } from '@/lib/bokslut/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { filesIncomeReturn, supportsCorporateTaxDispositions } from '@/lib/company/entity-type'
+import { parseAmountInput } from '@/lib/money'
 
 interface DispositionsStepProps {
   periodId: string
@@ -795,8 +796,8 @@ function createTaxAdjustmentDraft(
 }
 
 function parseNonNegativeAmount(value: string): number {
-  const parsed = Number(value.replace(',', '.'))
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0
+  const parsed = parseAmountInput(value)
+  return parsed !== null && parsed >= 0 ? parsed : 0
 }
 
 function numberValue(value: unknown): number {

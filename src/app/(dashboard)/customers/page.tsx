@@ -5,15 +5,16 @@ import { useCompanySettings, useCustomers } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import dynamic from 'next/dynamic'
 import { useLocale, useTranslations } from 'next-intl'
-import { useSearchParams, useRouter, usePathname } from 'next/navigation'
+import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
-import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { TD_CLASS, SHOW_MORE_STEP, ShowMoreFooter, SortableTh } from '@/components/ui/dry-table'
+import { useUrlSort } from '@/lib/hooks/use-url-sort'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { Plus, Users, Lock, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
+import { Plus, Users, Lock } from 'lucide-react'
 import { EmptyCustomers, EmptyState } from '@/components/ui/empty-state'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { RegisterImportButton } from '@/components/import/RegisterImportButton'
@@ -52,7 +53,6 @@ type SortColumn =
   | 'email'
   | 'city'
   | 'created_at'
-type SortDir = 'asc' | 'desc'
 
 const SORTABLE_COLUMNS: ReadonlyArray<SortColumn> = [
   'customer_number',
@@ -63,7 +63,6 @@ const SORTABLE_COLUMNS: ReadonlyArray<SortColumn> = [
   'city',
   'created_at',
 ]
-const INITIAL_VISIBLE_ROWS = 100
 
 // Business rows show org_number; individual rows show the masked
 // personnummer the API returns, and a legacy individual row that still
@@ -85,7 +84,7 @@ function CustomersPageInner() {
   const { customers, isLoading: customersLoading, error: customersError } = useCustomers()
   const isLoading = customersLoading && customers.length === 0
   const [searchTerm, setSearchTerm] = useState('')
-  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ROWS)
+  const [visibleCount, setVisibleCount] = useState(SHOW_MORE_STEP)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   // Company default payment terms (Inställningar → Fakturering). Prefilled
@@ -100,33 +99,15 @@ function CustomersPageInner() {
       : null
   const { toast } = useToast()
   const t = useTranslations('customers')
-  const tCommon = useTranslations('common')
   const errorLocale = useLocale() as ErrorLocale
 
   const router = useRouter()
-  const pathname = usePathname()
-  const searchParams = useSearchParams()
 
-  const sortParam = searchParams.get('sort')
-  const dirParam = searchParams.get('dir')
-  const sortColumn: SortColumn = (SORTABLE_COLUMNS as ReadonlyArray<string>).includes(sortParam ?? '')
-    ? (sortParam as SortColumn)
-    : 'name'
-  const sortDir: SortDir = dirParam === 'desc' ? 'desc' : 'asc'
-
-  const updateSort = useCallback(
-    (column: SortColumn) => {
-      setVisibleCount(INITIAL_VISIBLE_ROWS)
-      const params = new URLSearchParams(searchParams.toString())
-      let nextDir: SortDir = 'asc'
-      if (column === sortColumn) {
-        nextDir = sortDir === 'asc' ? 'desc' : 'asc'
-      }
-      params.set('sort', column)
-      params.set('dir', nextDir)
-      router.replace(`${pathname}?${params.toString()}`, { scroll: false })
-    },
-    [searchParams, sortColumn, sortDir, router, pathname]
+  const resetVisible = useCallback(() => setVisibleCount(SHOW_MORE_STEP), [])
+  const { column: sortColumn, direction: sortDir, toggle: updateSort } = useUrlSort(
+    SORTABLE_COLUMNS,
+    'name',
+    resetVisible,
   )
 
   useEffect(() => {
@@ -243,33 +224,6 @@ function CustomersPageInner() {
   }, [filteredCustomers, sortColumn, sortDir])
   const visibleCustomers = sortedCustomers.slice(0, visibleCount)
 
-  // Sortable dry-table head: the button inherits the uppercase hairline
-  // styling from TH_CLASS on the th.
-  function SortableHeader({
-    column,
-    label,
-    className,
-  }: {
-    column: SortColumn
-    label: string
-    className?: string
-  }) {
-    const isActive = sortColumn === column
-    const Icon = isActive ? (sortDir === 'asc' ? ChevronUp : ChevronDown) : ChevronsUpDown
-    return (
-      <th className={cn(TH_CLASS, className)}>
-        <button
-          type="button"
-          onClick={() => updateSort(column)}
-          className="inline-flex items-center gap-1 uppercase transition-colors duration-150 hover:text-foreground"
-        >
-          {label}
-          <Icon className="h-3 w-3 opacity-70" aria-hidden="true" />
-        </button>
-      </th>
-    )
-  }
-
   return (
     <div className="space-y-8">
       {/* Page header (concept scene 25): title + import + export + Ny kund */}
@@ -324,7 +278,7 @@ function CustomersPageInner() {
           value={searchTerm}
           onChange={(e) => {
             setSearchTerm(e.target.value)
-            setVisibleCount(INITIAL_VISIBLE_ROWS)
+            setVisibleCount(SHOW_MORE_STEP)
           }}
         />
       </div>
@@ -352,26 +306,30 @@ function CustomersPageInner() {
               <thead>
                 <tr>
                   {hasCustomerNumbers && (
-                    <SortableHeader
-                      column="customer_number"
+                    <SortableTh
+                      direction={sortColumn === 'customer_number' ? sortDir : null}
+                      onSort={() => updateSort('customer_number')}
                       label={t('col_customer_number')}
                       className="hidden sm:table-cell"
                     />
                   )}
-                  <SortableHeader column="name" label={t('col_name')} className="w-full" />
-                  <SortableHeader column="customer_type" label={t('col_type')} />
-                  <SortableHeader
-                    column="identifier"
+                  <SortableTh direction={sortColumn === 'name' ? sortDir : null} onSort={() => updateSort('name')} label={t('col_name')} className="w-full" />
+                  <SortableTh direction={sortColumn === 'customer_type' ? sortDir : null} onSort={() => updateSort('customer_type')} label={t('col_type')} />
+                  <SortableTh
+                    direction={sortColumn === 'identifier' ? sortDir : null}
+                    onSort={() => updateSort('identifier')}
                     label={t('col_identifier')}
                     className="hidden lg:table-cell"
                   />
-                  <SortableHeader
-                    column="email"
+                  <SortableTh
+                    direction={sortColumn === 'email' ? sortDir : null}
+                    onSort={() => updateSort('email')}
                     label={t('col_email')}
                     className="hidden md:table-cell"
                   />
-                  <SortableHeader
-                    column="city"
+                  <SortableTh
+                    direction={sortColumn === 'city' ? sortDir : null}
+                    onSort={() => updateSort('city')}
                     label={t('col_city')}
                     className="hidden sm:table-cell"
                   />
@@ -427,17 +385,11 @@ function CustomersPageInner() {
             {t('count_summary', { count: customers.length })}
           </p>
 
-          {visibleCount < sortedCustomers.length && (
-            <div className="flex justify-center">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setVisibleCount((count) => count + INITIAL_VISIBLE_ROWS)}
-              >
-                {tCommon('load_more')}
-              </Button>
-            </div>
-          )}
+          <ShowMoreFooter
+            shown={visibleCount}
+            total={sortedCustomers.length}
+            onMore={() => setVisibleCount((count) => count + SHOW_MORE_STEP)}
+          />
         </>
       )}
     </div>

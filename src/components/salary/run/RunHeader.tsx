@@ -42,18 +42,7 @@ import { hasCustomDeviationWindow, runDeviationWindow } from '@/lib/salary/devia
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { periodLabelOf, type RunDetail } from './types'
-
-// Same chip vocabulary as the Löner list (chips mark exceptions): in-flight
-// states wear the quiet beige chip, corrected the outline exception, and
-// paid and booked render as muted text.
-const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'muted' | 'warning' | 'destructive' | 'outline'> = {
-  draft: 'secondary',
-  review: 'secondary',
-  approved: 'secondary',
-  paid: 'muted',
-  booked: 'muted',
-  corrected: 'outline',
-}
+import { salaryRunStatusDisplay } from '@/lib/salary/run-status-display'
 
 const STATUS_RANK: Record<string, number> = {
   draft: 0,
@@ -114,8 +103,9 @@ export function RunHeader({
   const periodLabel = periodLabelOf(run)
   const hasEmailSend = useCapability(CAPABILITY.email_send)
 
-  const statusKey = `status_${run.status}`
-  const statusVariant = STATUS_VARIANTS[run.status] ?? 'secondary'
+  // The same status as the Löner list and the payslip page (lib/salary/run-status-display.ts).
+  const statusDisplay = salaryRunStatusDisplay(run.status)
+  const statusLabel = statusDisplay ? tSalary(statusDisplay.labelKey) : run.status
   const rank = STATUS_RANK[run.status] ?? 0
   const busy = !!actionLoading
   const deliveries = run.payslip_deliveries_summary
@@ -254,12 +244,10 @@ export function RunHeader({
             <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">
               {t('title', { period: periodLabel })}
             </h1>
-            {statusVariant === 'muted' ? (
-              <span className="text-sm text-muted-foreground">{tSalary(statusKey)}</span>
+            {statusDisplay && statusDisplay.chip === null ? (
+              <span className="text-sm text-muted-foreground">{statusLabel}</span>
             ) : (
-              <Badge variant={statusVariant}>
-                {tSalary(statusKey)}
-              </Badge>
+              <Badge variant={statusDisplay?.chip ?? 'secondary'}>{statusLabel}</Badge>
             )}
             {run.is_correction && run.corrects_run_id && (
               <Badge variant="outline">{t('correction_badge')}</Badge>

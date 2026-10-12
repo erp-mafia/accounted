@@ -184,10 +184,46 @@ describe('PATCH /api/salary/runs/[id]', () => {
       body: { payment_date: '2026-07-23' },
     })
     const response = await PATCH(request, createMockRouteParams({ id: 'run-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
 
     expect(status).toBe(400)
-    expect(body.error).toContain('utkast')
+    // The code the v1 PATCH and the MCP update tool answer for the same run
+    // (lib/salary/update-run.ts).
+    expect(body.error.code).toBe('SALARY_RUN_PATCH_NOT_DRAFT')
+    expect(body.error.message).toContain('utkast')
+  })
+
+  it('answers 404 SALARY_RUN_NOT_FOUND for a run outside the company', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    authorize(supabase)
+    enqueueMany([{ data: null }])
+
+    const request = createMockRequest('/api/salary/runs/run-1', {
+      method: 'PATCH',
+      body: { notes: 'x' },
+    })
+    const response = await PATCH(request, createMockRouteParams({ id: 'run-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(404)
+    expect(body.error.code).toBe('SALARY_RUN_NOT_FOUND')
+  })
+
+  it('answers a body naming none of the three fields with the run unchanged, writing nothing', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    authorize(supabase)
+    enqueueMany([{ data: DRAFT_RUN }])
+
+    const request = createMockRequest('/api/salary/runs/run-1', {
+      method: 'PATCH',
+      body: { status: 'booked' },
+    })
+    const response = await PATCH(request, createMockRouteParams({ id: 'run-1' }))
+    const { status, body } = await parseJsonResponse<{ data: { status: string } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.status).toBe('draft')
+    expect(findCall('salary_runs', 'update')).toBeUndefined()
   })
 
   it('updates payment_date on a draft and clears roster calculation_breakdown', async () => {
@@ -296,9 +332,11 @@ describe('PATCH /api/salary/runs/[id]', () => {
       body: { voucher_series: 'AB' },
     })
     const response = await PATCH(request, createMockRouteParams({ id: 'run-1' }))
-    const { status } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
 
     expect(status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.message).toBe('Verifikationsserie måste vara en bokstav A-Z')
     expect(findCall('salary_runs', 'update')).toBeUndefined()
   })
 
@@ -316,10 +354,11 @@ describe('PATCH /api/salary/runs/[id]', () => {
       body: { payment_date: '2026-07-23' },
     })
     const response = await PATCH(request, createMockRouteParams({ id: 'run-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
 
     expect(status).toBe(400)
-    expect(body.error).toContain('utkast')
+    expect(body.error.code).toBe('SALARY_RUN_PATCH_NOT_DRAFT')
+    expect(body.error.message).toContain('utkast')
     // The clear must not run when the locked update matched nothing.
     expect(findCall('salary_run_employees', 'update')).toBeUndefined()
   })

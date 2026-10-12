@@ -27,6 +27,9 @@ const read = (rel: string) => fs.readFileSync(path.resolve(__dirname, rel), 'utf
 const REVIEW_SRC = read('../QuickReviewDialog.tsx')
 const BOOKING_SRC = read('../TransactionBookingDialog.tsx')
 const MATCH_SRC = read('../InvoiceMatchDialog.tsx')
+// The match dialog's and the supplier payment dialog's Bokföring card.
+const CARD_SRC = read('../../bookkeeping/PaymentPreviewLinesCard.tsx')
+const SUPPLIER_PAY_SRC = read('../../supplier-invoices/SupplierPaymentDialog.tsx')
 const PICKER_SRC = read('../TemplatePicker.tsx')
 const HOOK_SRC = read('../use-transaction-underlag.ts')
 const ZONE_SRC = read('../../bookkeeping/DocumentUploadZone.tsx')
@@ -102,10 +105,15 @@ describe('kontoväljare: inactive BAS accounts are listed', () => {
     expect(REVIEW_SRC).toContain('onChange={handleAccountChange}')
   })
 
-  it('the invoice match lists the catalogue without deactivated accounts: its engine path never reactivates one', () => {
-    expect(MATCH_SRC).toContain('const { catalog: basCatalog } = useBasCatalog()')
-    expect(MATCH_SRC).toContain('catalog={basCatalog}')
-    expect(MATCH_SRC).toContain("notActivatedLabel={tJournal('account_not_activated')}")
+  it('the payment Bokföring card lists the catalogue without deactivated accounts: its engine path never reactivates one', () => {
+    // One card for the bank match and the supplier payment: both post the
+    // edited rows through createJournalEntry, which seeds a standard account
+    // the chart lacks but never a deliberately deactivated one.
+    expect(CARD_SRC).toContain('const { catalog } = useBasCatalog()')
+    expect(CARD_SRC).toContain('catalog={catalog}')
+    expect(CARD_SRC).toContain("notActivatedLabel={tJournal('account_not_activated')}")
+    expect(MATCH_SRC).toContain('<PaymentPreviewLinesCard')
+    expect(SUPPLIER_PAY_SRC).toContain('<PaymentPreviewLinesCard')
   })
 
   it("the bank row's template picker finds catalogue accounts in its Konton search, marked the same way", () => {

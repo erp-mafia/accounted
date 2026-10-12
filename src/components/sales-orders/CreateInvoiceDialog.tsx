@@ -21,6 +21,7 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 import { cn } from '@/lib/utils'
 import { formatQty } from '@/components/sales-orders/labels'
 import type { SalesOrder, SalesOrderItem } from '@/types'
+import { parseDecimalInput } from '@/lib/money'
 
 interface CreateInvoiceDialogProps {
   open: boolean
@@ -44,8 +45,8 @@ function deliveredNotInvoicedOf(item: SalesOrderItem): number {
 }
 
 function parseQty(value: string | undefined): number {
-  const n = parseFloat((value ?? '').replace(',', '.'))
-  return Number.isFinite(n) && n > 0 ? n : 0
+  const n = parseDecimalInput(value)
+  return n !== null && n > 0 ? n : 0
 }
 
 /**

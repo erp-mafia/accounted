@@ -29,7 +29,9 @@ import {
   fetchArticles,
   fetchBookingTemplates,
   fetchCashAccounts,
+  fetchCustomer,
   fetchCustomers,
+  fetchEmployees,
   fetchDimensions,
   fetchFiscalPeriods,
   fetchSuppliers,
@@ -109,6 +111,25 @@ describe('API fetchers', () => {
       '/api/suppliers',
       '/api/articles',
       '/api/articles?include_inactive=1',
+    ])
+  })
+
+  it('fetchCustomer reads one customer, archived ones included, and null when the body has none', async () => {
+    fetchMock.mockImplementationOnce(async () => jsonResponse({ data: { id: 'c 1', name: 'Arkiv AB' } }))
+    expect(await fetchCustomer('c 1')).toEqual({ id: 'c 1', name: 'Arkiv AB' })
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/customers/c%201')
+
+    fetchMock.mockImplementationOnce(async () => jsonResponse({}))
+    expect(await fetchCustomer('c2')).toBeNull()
+  })
+
+  it('fetchEmployees reads the masked roster route, former employees on request', async () => {
+    fetchMock.mockImplementation(async () => jsonResponse({ data: [{ id: 'e1' }] }))
+    expect(await fetchEmployees()).toEqual([{ id: 'e1' }])
+    expect(await fetchEmployees(true)).toEqual([{ id: 'e1' }])
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual([
+      '/api/salary/employees',
+      '/api/salary/employees?active=false',
     ])
   })
 

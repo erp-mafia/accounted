@@ -76,20 +76,19 @@ import {
 import { isEagerAuthRequested } from './auth-mode'
 import { createLogger } from '@/lib/logger'
 import { ORE_ROUNDING_SETTLEMENT_MAX, roundOre, sumOre } from '@/lib/money'
+import { grossVat } from '@/lib/vat/gross-split'
 import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { currentAppVersion } from '@/lib/reports/app-version'
 import {
   assertNoDeviationOverlap,
   resolveDeviationWindowForNewRun,
 } from '@/lib/salary/deviation-period'
-import type { DayValueEmployee } from '@/lib/salary/semesterberedning'
 import {
   getVatDeadlineForPeriod,
   type VatDeadlineCalculationSettings,
 } from '@/lib/tax/deadline-config'
 import { adjustDeadlineToNextBankingDay } from '@/lib/tax/swedish-holidays'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
 import {
   DEFAULT_REVERSE_CHARGE_KIND,
   REVERSE_CHARGE_TREATMENT_KINDS,
@@ -97,8 +96,6 @@ import {
   reverseChargeKindRuta,
   type ReverseChargeKind,
 } from '@/lib/bookkeeping/vat-entries'
-import { applyAccountOverride } from '@/lib/bookkeeping/account-override'
-import { reconcileRcBasisWithChart } from '@/lib/bookkeeping/rc-basis-reconcile'
 import { chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import {
   expandVoucherLineVatCodes,
@@ -122,8 +119,15 @@ import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
 import { dbError, errorCauseTag } from '@/lib/errors/db-error'
 import { getStructuredError } from '@/lib/errors/get-structured-error'
-import { codedRefusal, fieldValidationError, serviceRefusal, zodFieldIssues } from '@/lib/errors/refusal'
-import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
+import {
+  badArgument,
+  codedRefusal,
+  fieldValidationError,
+  serviceRefusal,
+  zodErrorFieldIssues,
+  zodFieldIssues,
+  type FieldIssue,
+} from '@/lib/errors/refusal'
 import { creditNoteNeedsJournalEntry, invoiceBookingMoment } from '@/lib/bookkeeping/booking-mode'
 import {
   buildIssuePreview,
@@ -133,7 +137,6 @@ import {
 } from './invoice-stage-preview'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
-import { buildTransactionEntryLines } from '@/lib/bookkeeping/transaction-entries'
 import { findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { formatVoucherLabel, hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
 import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
@@ -275,7 +278,6 @@ import {
   defaultCountryForParty,
   normalizeCountryCode,
 } from '@/lib/vat/country-codes'
-import { CreateSupplierParamsSchema } from '@/lib/pending-operations/schemas/create-supplier'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { CreateDimensionValueParamsSchema } from '@/lib/pending-operations/schemas/dimension-value'
 import { RetagLineDimensionsParamsSchema, RETAG_MAX_LINES } from '@/lib/pending-operations/schemas/retag-line-dimensions'
@@ -364,7 +366,8 @@ import { isPeriodLocked } from '@/lib/documents/underlag-import'
 import { documentHeldElsewhereReasonEn, type DocumentLinkHolder } from '@/lib/documents/link-holder'
 import { resolveInboxCreditTarget } from '@/lib/supplier-invoices/credit-target'
 import { CreditSupplierInvoiceInputSchema, creditSupplierInvoice } from '@/lib/supplier-invoices/credit'
-import { throwOutcomeFailure } from '@/lib/operations/errors'
+import { OperationError, throwOutcomeFailure } from '@/lib/operations/errors'
+import { createSupplier } from '@/lib/suppliers/create-supplier'
 import {
   matchSupplierByIdentity,
   matchSupplierId,
@@ -394,6 +397,7 @@ import {
 import { unknownAccountKeyError } from './reconciliation-key-error'
 import { decryptPersonnummer, maskEmployeeForResponse, maskPersonnummer } from '@/lib/salary/personnummer'
 import { effectiveRow, effectiveRunTotals, type EffectiveFiguresInput } from '@/lib/salary/effective-figures'
+import { validateRunForApproval, type ApprovalRosterRow } from '@/lib/salary/approve-run'
 import {
   deriveAgiFilingState,
   resolveRunAgiKvittensnummer,
@@ -422,6 +426,7 @@ import {
 } from '@/lib/invoices/rot-rut-payout-matching'
 import {
   CreateInvoiceFromSalesOrderSchema,
+  CreateSupplierSchema,
   CreateSalesOrderSchema,
   RegisterSalesOrderDeliverySchema,
   RotRutBeslutFileSchema,
@@ -463,14 +468,19 @@ import { countUnbookedBankTransactions, fetchAnchoredTransactionIds } from '@/li
 import { buildReportDataStatus } from '@/lib/reports/data-status'
 import { generateSIEExport } from '@/lib/reports/sie-export'
 import { generateFullArchive, estimateArchiveSize } from '@/lib/reports/full-archive-export'
-import { CorrectionChainTooDeepError, TransactionMissingSekValueError } from '@/lib/bookkeeping/errors'
+import { CorrectionChainTooDeepError } from '@/lib/bookkeeping/errors'
 import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
 import { getSuggestedCategories, buildMerchantHistory, merchantHistoryFor } from '@/lib/transactions/category-suggestions'
 import { proposeForTransactions } from '@/lib/transactions/propose'
 import { businessAccount, categorizeArgsFor, whyTextSv } from '@/lib/bookkeeping/proposal'
 import { booksWithoutReview } from '@/lib/transactions/direct-booking'
-import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
-import { buildDuplicateBookingClaim } from '@/lib/transactions/categorize-core'
+import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
+import {
+  agentDuplicateMessage,
+  categorizeInputFromStaged,
+  categorizeTransaction,
+  type CategorizeRefusal,
+} from '@/lib/transactions/categorize-core'
 import {
   enforceBulkBookDimensionPolicy,
   runBulkBookDuplicateGuard,
@@ -563,6 +573,7 @@ import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { getUserCompanies } from '@/lib/company/context'
 import { CURRENCIES, INVOICE_QR_MODES } from '@/types'
 import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, InvoiceQrMode, Currency, CompanySettings, Customer, InvoiceItem, PendingOperation, VatPeriodType, VatDeclarationRutor, VatRevenueAccountWithoutRuta, YearEndBlockerCode, SalesOrder, SalesOrderItem, SalesOrderStatus } from '@/types'
+import { isMatchableInvoiceStatus, isMatchableSupplierInvoiceStatus } from '@/lib/invoices/matchable-statuses'
 
 // ── Actor context ────────────────────────────────────────────
 
@@ -695,7 +706,7 @@ function resolveInvoiceLineFromArticle(
       vat_rate: 0,
     }
   }
-  if (!item.quantity || item.quantity <= 0) throw new Error(`Item ${lineNo}: quantity must be positive`)
+  if (!item.quantity || item.quantity <= 0) throw badArgument(`items.${index}.quantity`, `Item ${lineNo}: quantity must be positive`)
   // Strict typeof: a host that skips inputSchema validation could send a
   // string, which JS comparisons would coerce past a bare range check while
   // hasLineDiscount (typeof === 'number') then ignores it in the totals.
@@ -704,7 +715,7 @@ function resolveInvoiceLineFromArticle(
     (typeof item.discount_percent !== 'number' ||
       !(item.discount_percent >= 0 && item.discount_percent <= 100))
   ) {
-    throw new Error(`Item ${lineNo}: discount_percent must be a number between 0 and 100`)
+    throw badArgument(`items.${index}.discount_percent`, `Item ${lineNo}: discount_percent must be a number between 0 and 100`)
   }
   if (item.article_id && !article) {
     throw new Error(`Item ${lineNo}: article ${item.article_id} not found in this company. Use gnubok_list_articles to find valid IDs.`)
@@ -713,9 +724,9 @@ function resolveInvoiceLineFromArticle(
     throw new Error(`Item ${lineNo}: article "${article.name}" is deactivated. Reactivate it with gnubok_update_article (active: true) or drop article_id.`)
   }
   const description = item.description?.trim() || article?.name
-  if (!description) throw new Error(`Item ${lineNo}: description is required (or set article_id)`)
+  if (!description) throw badArgument(`items.${index}.description`, `Item ${lineNo}: description is required (or set article_id)`)
   const unit = item.unit?.trim() || (article ? article.unit || 'st' : undefined)
-  if (!unit) throw new Error(`Item ${lineNo}: unit is required (st, tim, dag)`)
+  if (!unit) throw badArgument(`items.${index}.unit`, `Item ${lineNo}: unit is required (st, tim, dag)`)
   let unitPrice = item.unit_price
   if (unitPrice == null && article) {
     if (article.price_excl_vat == null) {
@@ -729,7 +740,7 @@ function resolveInvoiceLineFromArticle(
     }
     unitPrice = article.price_excl_vat
   }
-  if (unitPrice == null) throw new Error(`Item ${lineNo}: unit_price is required (or set article_id)`)
+  if (unitPrice == null) throw badArgument(`items.${index}.unit_price`, `Item ${lineNo}: unit_price is required (or set article_id)`)
   return {
     ...item,
     description,
@@ -908,6 +919,30 @@ function salaryRunOrThrow<T>(
   if (result.error && result.error.code !== '22P02') throw dbError(result.error)
   if (!result.data) throw salaryRunNotFound(salaryRunId)
   return result.data as NonNullable<T>
+}
+
+/**
+ * A refused employee command (lib/salary/employee-commands.ts) as the agent
+ * reads it: every issue as a field refusal, the EF-owner rule with the way
+ * out in English; any other code as serviceRefusal phrases it.
+ */
+function employeeCommandRefusal(
+  context: string,
+  failure: { code: string; details?: Record<string, unknown> },
+): Error {
+  const issues = failure.details?.issues as Array<{ field: string; message: string }> | undefined
+  if (failure.code !== 'VALIDATION_ERROR' || !issues?.length) return serviceRefusal(context, failure)
+  return fieldValidationError(
+    context,
+    issues.map((issue) => ({
+      field: issue.field,
+      en:
+        issue.field === 'employment_type'
+          ? 'an enskild firma cannot employ its owner or board: the owner takes eget uttag (account 2013), not salary; use "employee" for hired staff'
+          : issue.message,
+      sv: issue.message,
+    })),
+  )
 }
 
 /** A missing salary_run_id: hosts do not always enforce inputSchema `required`. */
@@ -1483,14 +1518,10 @@ function parseQrModeArg(value: unknown): InvoiceQrMode | null {
 
 /**
  * `reason` is capped at 500 characters (inputSchema maxLength). Hosts do not
- * always enforce inputSchema, so the tools re-check at runtime. The message
- * text is what the error layer keys on: getStructuredError infers
- * VALIDATION_ERROR from it and getErrorMessage maps it to a specific Swedish
- * line (a structured `code` on the error would win over the message and
- * collapse the Swedish text to the generic validation fallback).
+ * always enforce inputSchema, so the tools re-check at runtime.
  */
 function reasonTooLongError(): Error {
-  return new Error('reason must be 500 characters or fewer')
+  return badArgument('reason', 'reason must be 500 characters or fewer', 'Motiveringen får vara högst 500 tecken.')
 }
 
 /**
@@ -1509,7 +1540,7 @@ function normalizeAccountNumber(value: unknown, field: string): string | undefin
         ? value.trim()
         : null
   if (str === null || !ACCOUNT_NUMBER_RE.test(str)) {
-    throw new Error(`${field} must be an account number string like "1930" (got ${JSON.stringify(value)})`)
+    throw badArgument(field, `${field} must be an account number string like "1930" (got ${JSON.stringify(value)})`)
   }
   return str
 }
@@ -2199,231 +2230,47 @@ function lockedPeriodLinkError(total: number, periods: LockedLinkPeriod[], other
 // guards cannot drift apart. See the DECISIONS.md archive 2026-07-26 lock-guard entry
 // for the predicate semantics.
 
-async function categorizeTransactionCore(
-  txId: string,
-  category: TransactionCategory,
-  vatTreatment: VatTreatment | undefined,
-  // Basis box of a reverse-charge purchase (ruta 20/21/22); undefined = the
-  // EU-services default, stated in the preview's reverse_charge summary.
-  reverseChargeKind: ReverseChargeKind | undefined,
-  // Underlag's actual VAT when it differs from rate × belopp (e.g. dricks on
-  // a restaurant receipt carries no moms). Replaces the computed VAT line.
-  vatAmount: number | undefined,
-  // Explicit business-side account replacing the category default (v1 REST
-  // account_override semantics): must exist active in chart_of_accounts.
-  accountOverride: string | undefined,
-  userId: string,
-  companyId: string,
-  supabase: SupabaseClient,
-): Promise<{
-  preview?: boolean
-  success?: boolean
-  journal_entry_created?: boolean
-  journal_entry_id?: string | null
-  journal_entry_error?: string | null
-  category: string
-  debit_account: string
-  credit_account: string
-  amount: number
-  currency: string
-  vat_lines?: Array<{ account_number: string; debit_amount: number; credit_amount: number; description: string }>
-  // The exact journal lines the commit executor will post (net cost line,
-  // VAT line, gross bank line) — always in SEK, matching the booked entry.
-  lines?: Array<{ account_number: string; debit_amount: number; credit_amount: number; description: string }>
-  message?: string
-  reverse_charge?: Record<string, unknown>
-  transaction?: Transaction
-  underlag?: {
-    document_id: string
-    total: number | null
-    vat_amount: number | null
-    currency: string | null
-  } | null
-}> {
-  // Validate category
-  if (!VALID_CATEGORIES.includes(category as typeof VALID_CATEGORIES[number])) {
-    throw fieldValidationError('Invalid arguments', [{
-      field: 'category',
-      en: `Invalid category "${category}". Valid categories: ${VALID_CATEGORIES.join(', ')}`,
-      sv: `Okänd kategori "${category}". Giltiga kategorier: ${VALID_CATEGORIES.join(', ')}.`,
-    }])
-  }
-
-  if (vatTreatment && !VALID_VAT_TREATMENTS.includes(vatTreatment as typeof VALID_VAT_TREATMENTS[number])) {
-    throw fieldValidationError('Invalid arguments', [{
-      field: 'vat_treatment',
-      en: `Invalid vat_treatment "${vatTreatment}". Valid: ${VALID_VAT_TREATMENTS.join(', ')}`,
-      sv: `Okänd momsbehandling "${vatTreatment}". Giltiga: ${VALID_VAT_TREATMENTS.join(', ')}.`,
-    }])
-  }
-
-  const isBusiness = category !== 'private'
-
-  // Fetch the transaction
-  const { data: transaction, error: fetchError } = await supabase
-    .from('transactions')
-    .select('*')
-    .eq('id', txId)
-    .eq('company_id', companyId)
-    .single()
-
-  if (fetchError || !transaction) {
+/**
+ * A categorize dry-run refusal as the error the agent reads. Three keep the
+ * wording agents act on: the row is not a bank transaction (a skattekonto row
+ * books with its own tool), it is already booked (correct or reverse the
+ * verifikat instead), and a likely double-booking (link to the existing
+ * verifikat, or rerun with allow_duplicate). Every other refusal carries its
+ * registry code and the service's own sentence.
+ */
+function categorizeStagingRefusal(refusal: CategorizeRefusal, transactionId: string): Error {
+  if (refusal.code === 'TX_CATEGORIZE_TX_NOT_FOUND') {
     // Only bank rows live in `transactions`. A skattekonto_transactions id
-    // (Skatteverket tax account) lands here as NOT_FOUND and agents concluded
-    // the row could not be booked (feedback seq 382367): name the right tool.
-    throw new Error(
-      'Transaction not found. Check the transaction_id is correct. ' +
+    // lands here as NOT_FOUND and agents concluded the row could not be
+    // booked (feedback seq 382367): name the right tool.
+    return new OperationError(refusal.code, {
+      messageSv:
+        'Transaction not found. Check the transaction_id is correct. ' +
         'A skattekonto row (Skatteverket tax account: ränta, avgift, preliminärskatt, moms) is not a bank transaction: book it with gnubok_book_skattekonto_row or gnubok_book_skattekonto_rows (find them via gnubok_search_tools "skattekonto").',
-    )
+    })
   }
-
-  // Underlag guard: if the transaction has an attached document with
-  // AI-extracted invoice data, use it to validate the proposed VAT treatment
-  // BEFORE we build the booking. The historical failure mode here was the
-  // agent stamping reverse_charge on any foreign-vendor charge and producing
-  // fictive 2645/2614 VAT lines (25% of the SEK amount) on an invoice where
-  // the seller had already debited real VAT. Block that explicitly.
-  let underlagSummary: {
-    document_id: string
-    total: number | null
-    vat_amount: number | null
-    currency: string | null
-  } | null = null
-  if (transaction.document_id) {
-    const { data: doc } = await supabase
-      .from('document_attachments')
-      .select('id, extracted_data')
-      .eq('id', transaction.document_id)
-      .eq('company_id', companyId)
-      .maybeSingle()
-    const ex = (doc?.extracted_data ?? null) as
-      | { totals?: { total?: number; vatAmount?: number }; invoice?: { currency?: string } }
-      | null
-    if (doc) {
-      underlagSummary = {
-        document_id: doc.id as string,
-        total: ex?.totals?.total ?? null,
-        vat_amount: ex?.totals?.vatAmount ?? null,
-        currency: ex?.invoice?.currency ?? null,
-      }
-      const sellerChargedVat = (ex?.totals?.vatAmount ?? 0) > 0
-      if (vatTreatment === 'reverse_charge' && sellerChargedVat) {
-        throw new Error(
-          `Reverse charge avvisas: underlaget (document_id=${doc.id}) visar att säljaren redan har debiterat moms ` +
-          `(${ex?.totals?.vatAmount} ${ex?.invoice?.currency ?? ''}). Omvänd skattskyldighet gäller bara fakturor utan säljarens moms. ` +
-          `Bokför som vanlig kostnad (utan vat_treatment, eller standard_25 om svensk faktura): den utländska momsen ingår i kostnaden.`,
-        )
-      }
+  if (refusal.code === 'TRANSACTION_ALREADY_CATEGORIZED') {
+    const journalEntryId = (refusal.details?.journal_entry_id as string | null | undefined) ?? 'unknown'
+    return new OperationError(refusal.code, {
+      details: refusal.details,
+      messageSv:
+        `Transaction is already booked (journal_entry_id ${journalEntryId}); ` +
+        'nothing to categorize. Use gnubok_list_uncategorized_transactions to find unbooked ones, ' +
+        'or gnubok_correct_entry / gnubok_reverse_journal_entry to change the existing verifikat.',
+    })
+  }
+  if (refusal.code === 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE') {
+    const candidate = refusal.details?.candidate as BookedDuplicateCandidate | undefined
+    if (candidate) {
+      return new OperationError(refusal.code, {
+        details: refusal.details,
+        messageSv: agentDuplicateMessage(candidate, refusal.transaction?.currency),
+      })
     }
   }
-
-  if (transaction.journal_entry_id) {
-    return {
-      success: true,
-      journal_entry_created: false,
-      journal_entry_id: transaction.journal_entry_id,
-      journal_entry_error: 'Transaction already has a journal entry: use gnubok_list_uncategorized_transactions to find unbooked ones.',
-      category,
-      debit_account: '',
-      credit_account: '',
-      amount: Math.abs(transaction.amount),
-      currency: transaction.currency,
-      transaction: transaction as Transaction,
-    }
-  }
-
-  // Get entity type and VAT registration
-  const { data: settings } = await supabase
-    .from('company_settings')
-    .select('entity_type, vat_registered')
-    .eq('company_id', companyId)
-    .single()
-
-  const entityType: EntityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
-
-  // Build mapping. A non-registered company books no moms line
-  // (lib/bookkeeping/vat-registration.ts); the flag is passed as loaded.
-  let mappingResult = buildMappingResultFromCategory(
-    category,
-    transaction as Transaction,
-    isBusiness,
-    entityType,
-    vatTreatment,
-    vatAmount,
-    settings?.vat_registered ?? null,
-    reverseChargeKind,
-  )
-  const settlementAccount = await resolveSettlementAccount(
-    supabase,
-    companyId,
-    transaction.cash_account_id,
-    log,
-    transaction.currency,
-  )
-  mappingResult = applySettlementAccount(mappingResult, settlementAccount, transaction.amount)
-
-  // Applied at staging so the agent gets the tight rejection (unknown or
-  // inactive account) BEFORE anything is queued for approval, and the staged
-  // preview shows the account that will actually be posted. The commit path
-  // (categorizeMatchedTransaction) re-validates independently.
-  if (accountOverride) {
-    if (!isBusiness) {
-      throw new Error('account_override kan inte kombineras med category "private".')
-    }
-    mappingResult = await applyAccountOverride(
-      supabase, companyId, accountOverride, transaction.amount, mappingResult,
-      // Explicit VAT intent: a stated treatment or an underlag vat_amount.
-      // Without it the override books gross (see applyAccountOverride).
-      vatTreatment != null || vatAmount != null,
-    )
-  }
-  // The basis pair the approval will post: none when the cost account (after
-  // any account_override) reports ruta 20-24 itself (crm#1096). The commit
-  // (categorizeMatchedTransaction) settles it the same way.
-  mappingResult = await reconcileRcBasisWithChart(mappingResult, chartVatTreatmentsLoader(supabase, companyId))
-
-  if (!mappingResult.debit_account || !mappingResult.credit_account) {
-    throw new Error(
-      `No account mapping for category "${category}" with entity type "${entityType}". ` +
-      'Try a different category or check your chart of accounts.'
-    )
-  }
-
-  // Preview only: the approval executes through categorizeMatchedTransaction
-  // (lib/transactions/categorize-core.ts), the one booking path every
-  // surface shares.
-  // Materialize the exact lines the commit executor will post, including
-  // the gross→net split on the cost line. Historically the preview only
-  // carried { debit/credit account, gross amount, vat_lines }, which reads
-  // as an unbalanced "gross on cost account + VAT debit" entry and misled
-  // both users and agents into rejecting correct proposals.
-  const entryLines = buildTransactionEntryLines(transaction as Transaction, mappingResult)
-  const reverseCharge = transaction.amount < 0
-    ? reverseChargeBasisSummary(mappingResult.vat_lines, reverseChargeKind, mappingResult.debit_account)
-    : undefined
-  return {
-    preview: true,
-    category,
-    debit_account: mappingResult.debit_account,
-    credit_account: mappingResult.credit_account,
-    amount: Math.abs(transaction.amount),
-    currency: transaction.currency,
-    lines: entryLines.map(l => ({
-      account_number: l.account_number,
-      debit_amount: l.debit_amount,
-      credit_amount: l.credit_amount,
-      description: l.line_description ?? '',
-    })),
-    vat_lines: mappingResult.vat_lines.map(v => ({
-      account_number: v.account_number,
-      debit_amount: v.debit_amount,
-      credit_amount: v.credit_amount,
-      description: v.description,
-    })),
-    message: 'Preview only: no changes made. Call again with confirm: true to create the journal entry.',
-    ...(reverseCharge ? { reverse_charge: reverseCharge } : {}),
-    underlag: underlagSummary,
-  }
+  if (refusal.cause instanceof Error && refusal.code === 'TX_MISSING_SEK_VALUE') return refusal.cause
+  log.info('categorize staging refused', { transactionId, code: refusal.code })
+  return new OperationError(refusal.code, { details: refusal.details, messageSv: refusal.message?.sv })
 }
 
 /**
@@ -2450,7 +2297,7 @@ function assertVoucherLineShape(line: Record<string, unknown>, label: string): v
   for (const key of ['debit_amount', 'credit_amount'] as const) {
     const v = line[key]
     if (v !== undefined && v !== null && !Number.isFinite(Number(v))) {
-      throw new Error(`${label}.${key} must be a number in SEK; got ${JSON.stringify(v)}`)
+      throw badArgument(`${label}.${key}`, `${label}.${key} must be a number in SEK; got ${JSON.stringify(v)}`)
     }
   }
 }
@@ -3852,7 +3699,7 @@ async function fetchInvoiceWithCustomer(supabase: SupabaseClient, companyId: str
     .eq('company_id', companyId)
     .single()
 
-  if (invoiceError || !invoice) throw new Error('Invoice not found')
+  if (invoiceError || !invoice) throw codedRefusal('NOT_FOUND', 'Invoice not found')
   return invoice
 }
 
@@ -4484,17 +4331,18 @@ function parseReportRangeArgs(
   for (const [key, value] of [[keys.from, rawFrom], [keys.to, rawTo]] as const) {
     if (value === undefined || key === undefined) continue
     if (typeof value !== 'string' || !ISO_DATE_RE.test(value)) {
-      throw new Error(`${key} must be an ISO date (YYYY-MM-DD).`)
+      throw badArgument(key, `${key} must be an ISO date (YYYY-MM-DD).`)
     }
     if (value < period.period_start || value > period.period_end) {
-      throw new Error(
+      throw badArgument(
+        key,
         `${key} must be within the fiscal period (${period.period_start} to ${period.period_end}). ` +
         `For another year, pass that year's period_id.`,
       )
     }
   }
   if (rawFrom && rawTo && rawFrom > rawTo) {
-    throw new Error(`${keys.from} must not be after ${keys.to}.`)
+    throw badArgument(keys.from ?? 'from', `${keys.from} must not be after ${keys.to}.`)
   }
   return { fromDate: rawFrom, toDate: rawTo }
 }
@@ -4505,7 +4353,8 @@ function parseReportRangeArgs(
 function rejectUnknownArgs(args: Record<string, unknown>, allowed: readonly string[]): void {
   const unknown = Object.keys(args).filter((k) => !allowed.includes(k))
   if (unknown.length > 0) {
-    throw new Error(
+    throw badArgument(
+      unknown[0],
       `Unknown parameter(s): ${unknown.join(', ')}. Allowed: ${allowed.join(', ')}. ` +
       `Unknown parameters are rejected rather than silently ignored.`,
     )
@@ -4572,7 +4421,7 @@ async function loadSalesOrderOrThrow(
   rawId: unknown,
 ): Promise<SalesOrder> {
   const orderId = String(rawId ?? '').trim()
-  if (!orderId) throw new Error('sales_order_id is required. Use gnubok_list_sales_orders to find IDs.')
+  if (!orderId) throw badArgument('sales_order_id', 'sales_order_id is required. Use gnubok_list_sales_orders to find IDs.')
   const res = await loadSalesOrder(supabase, companyId, orderId)
   if (!res.ok) {
     if ('code' in res && res.code === 'SALES_ORDER_NOT_FOUND') {
@@ -4583,11 +4432,20 @@ async function loadSalesOrderOrThrow(
   return res.order
 }
 
-/** First Zod issue of a staged sales-order payload as a tool error. */
+/** A staged sales-order payload's Zod issues as VALIDATION_ERROR, under `field` when given. */
 function throwFirstZodIssue(result: { success: false; error: z.ZodError }, field?: string): never {
-  const issue = result.error.issues[0]
-  const path = [field, ...(issue?.path ?? [])].filter((p) => p !== undefined && p !== '').join('.')
-  throw new Error(`Invalid ${path || 'arguments'}: ${issue?.message ?? 'validation failed'}`)
+  const issues = zodErrorFieldIssues(result.error).map((issue) =>
+    field ? { ...issue, field: issue.field === 'arguments' ? field : `${field}.${issue.field}` } : issue,
+  )
+  throw fieldValidationError('Invalid arguments', issues)
+}
+
+/**
+ * The issues of an update parsed as { <id>, changes }: the agent sent the
+ * changed fields at the top level, so a path names the field, not changes.x.
+ */
+function changesIssues(error: z.ZodError, input: unknown): FieldIssue[] {
+  return zodFieldIssues(error, input).map((issue) => ({ ...issue, field: issue.field.replace(/^changes\./, '') }))
 }
 
 function salesOrderSummary(order: SalesOrder) {
@@ -5599,7 +5457,7 @@ export const tools: McpTool[] = [
       const keyScopes = args.__keyScopes as ApiKeyScope[] | undefined
       const innerScope = TOOL_SCOPE_MAP[innerName]
       if (innerScope && keyScopes && !hasScope(keyScopes, innerScope)) {
-        throw new Error(`Insufficient scope: this API key does not have the "${innerScope}" scope`)
+        throw codedRefusal('INSUFFICIENT_SCOPE', `Insufficient scope: this API key does not have the "${innerScope}" scope`)
       }
       if (kind === 'vat') {
         if (typeof args.period_type !== 'string' || typeof args.year !== 'number' || typeof args.period !== 'number') {
@@ -5731,12 +5589,12 @@ export const tools: McpTool[] = [
       const keyScopes = args.__keyScopes as ApiKeyScope[] | undefined
       const innerScope = TOOL_SCOPE_MAP[innerName]
       if (innerScope && keyScopes && !hasScope(keyScopes, innerScope)) {
-        throw new Error(`Insufficient scope: this API key does not have the "${innerScope}" scope`)
+        throw codedRefusal('INSUFFICIENT_SCOPE', `Insufficient scope: this API key does not have the "${innerScope}" scope`)
       }
       const innerArgs = readInnerArguments(inner, args.arguments)
       const innerArgumentScope = argumentScopeFor(innerName, innerArgs)
       if (innerArgumentScope && keyScopes && !hasScope(keyScopes, innerArgumentScope)) {
-        throw new Error(`Insufficient scope: this API key does not have the "${innerArgumentScope}" scope`)
+        throw codedRefusal('INSUFFICIENT_SCOPE', `Insufficient scope: this API key does not have the "${innerArgumentScope}" scope`)
       }
       const mode: 'summary' | 'full' = args.response_format === 'full' ? 'full' : 'summary'
       const scope = await resolveMcpCompanyScope({
@@ -5846,7 +5704,7 @@ export const tools: McpTool[] = [
       const keyScopes = args.__keyScopes as ApiKeyScope[] | undefined
       const innerScope = TOOL_SCOPE_MAP[innerName]
       if (innerScope && keyScopes && !hasScope(keyScopes, innerScope)) {
-        throw new Error(`Insufficient scope: this API key does not have the "${innerScope}" scope`)
+        throw codedRefusal('INSUFFICIENT_SCOPE', `Insufficient scope: this API key does not have the "${innerScope}" scope`)
       }
       const sharedArgs = readInnerArguments(inner, args.arguments)
       const dryRun = args.dry_run === true
@@ -6764,7 +6622,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase, actor) {
       const slug = (args.slug as string | undefined)?.trim()
-      if (!slug) throw new Error('slug is required')
+      if (!slug) throw badArgument('slug', 'slug is required')
       const skill = await findSkill(slug, supabase, companyId)
       if (!skill) {
         const all = await loadAllSkills(supabase)
@@ -6834,7 +6692,8 @@ export const tools: McpTool[] = [
           OWN_SKILL_COPY[input.language],
         )
         : buildOwnText(input.name, input.description, input.text)
-      if (!skill.name || !skill.description) throw new Error('name and description are required')
+      if (!skill.name) throw badArgument('name', 'name is required')
+      if (!skill.description) throw badArgument('description', 'description is required')
       const body = SkillBodySchema.safeParse(skill.body)
       if (!body.success) {
         // buildOwnSkill cleans every field it writes, so a flow's body always
@@ -6904,10 +6763,10 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase) {
       const content = (args.content as string | undefined)?.trim()
-      if (!content || content.length < 2) throw new Error('content is required (min 2 chars)')
+      if (!content || content.length < 2) throw badArgument('content', 'content is required (min 2 chars)')
       const kind = (args.kind as string | undefined) ?? 'fact'
       if (!['fact', 'preference', 'pattern', 'correction'].includes(kind)) {
-        throw new Error(`invalid kind: ${kind}`)
+        throw badArgument('kind', `invalid kind: ${kind}`)
       }
       const rawScore = args.relevance_score
       const score =
@@ -6998,7 +6857,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, _userId, supabase) {
       const id = (args.id as string | undefined)?.trim()
-      if (!id) throw new Error('id is required')
+      if (!id) throw badArgument('id', 'id is required')
       const { data, error } = await supabase
         .from('agent_memory')
         .update({ is_active: false })
@@ -7066,8 +6925,8 @@ export const tools: McpTool[] = [
     },
     async execute(args, companyId, userId, supabase, actor) {
       const context = (args.context as string | undefined)?.trim()
-      if (!context) throw new Error('context is required')
-      if (context.length > 2000) throw new Error('context is too long (max 2000 chars)')
+      if (!context) throw badArgument('context', 'context is required')
+      if (context.length > 2000) throw badArgument('context', 'context is too long (max 2000 chars)')
 
       const sentiment = ((args.sentiment as string | undefined) ?? 'negative') as 'positive' | 'negative' | 'neutral'
       const suggestion = (args.suggestion as string | undefined)?.trim() || null
@@ -7643,10 +7502,10 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase, actor) {
       const items = args.transactions as Array<Record<string, unknown>> | undefined
       if (!Array.isArray(items) || items.length === 0) {
-        throw new Error('transactions must be a non-empty array.')
+        throw badArgument('transactions', 'transactions must be a non-empty array.')
       }
       if (items.length > 10) {
-        throw new Error('transactions exceeds the per-call limit of 10. Split into multiple calls.')
+        throw badArgument('transactions', 'transactions exceeds the per-call limit of 10. Split into multiple calls.')
       }
 
       const operations = []
@@ -7661,18 +7520,18 @@ export const tools: McpTool[] = [
         const externalId = (item.external_id as string) || null
 
         if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-          throw new Error(`transactions[${i}].date must be in YYYY-MM-DD format.`)
+          throw badArgument(`transactions.${i}.date`, `transactions[${i}].date must be in YYYY-MM-DD format.`)
         }
         if (!Number.isFinite(amount)) {
-          throw new Error(`transactions[${i}].amount must be a finite number.`)
+          throw badArgument(`transactions.${i}.amount`, `transactions[${i}].amount must be a finite number.`)
         }
         if (!description) {
-          throw new Error(`transactions[${i}].description is required.`)
+          throw badArgument(`transactions.${i}.description`, `transactions[${i}].description is required.`)
         }
         // Restrict the hint to BAS group 19 (kassa/bank): binding a transaction
         // to a non-cash account would misroute reconciliation and matching.
         if (ledgerAccount && !/^19\d{2}$/.test(ledgerAccount)) {
-          throw new Error(`transactions[${i}].ledger_account must be a BAS 19xx cash account (e.g. "1935").`)
+          throw badArgument(`transactions.${i}.ledger_account`, `transactions[${i}].ledger_account must be a BAS 19xx cash account (e.g. "1935").`)
         }
 
         const params = {
@@ -7756,7 +7615,7 @@ export const tools: McpTool[] = [
       // may well pass "1930" here: fail with a clear message instead of a
       // raw Postgres uuid cast error.
       if (cashAccountId && !UUID_RE.test(cashAccountId)) {
-        throw new Error('cash_account_id must be a cash account UUID (cash_accounts.id), not a ledger account number')
+        throw badArgument('cash_account_id', 'cash_account_id must be a cash account UUID (cash_accounts.id), not a ledger account number')
       }
 
       // The rows countUnbookedBankTransactions counts (lib/transactions/
@@ -8116,7 +7975,8 @@ export const tools: McpTool[] = [
       if (accountOverride !== undefined && !ACCOUNT_NUMBER_RE.test(accountOverride)) {
         // "2710,2731"-style values are the usual way an agent asks for a split
         // here (feedback seq 371965): say where a split actually lives.
-        throw new Error(
+        throw badArgument(
+          'account_override',
           'account_override must be exactly 4 digits, e.g. "4020": it books the whole business side on ONE account. ' +
             'To split a bank transaction over several accounts (e.g. a Skatteverket payment clearing 2710 + 2731), use gnubok_bulk_book_transactions with new_entry.lines (the bank leg is added automatically), ' +
             'or gnubok_create_voucher for the lines and then gnubok_bulk_book_transactions with existing_journal_entry_id.',
@@ -8126,10 +7986,11 @@ export const tools: McpTool[] = [
       // Presence guard (hosts don't always enforce inputSchema `required`).
       // Without it a call carrying only account_override reached the enum
       // check and surfaced as 'Invalid category "undefined"'. The enum check
-      // in categorizeTransactionCore still handles unknown category strings.
+      // below still handles unknown category strings.
       const category = typeof args.category === 'string' ? args.category.trim() : ''
       if (!category) {
-        throw new Error(
+        throw badArgument(
+          'category',
           'category is required; account_override only overrides the category\'s default account. ' +
           `Valid categories: ${VALID_CATEGORIES.join(', ')}`,
         )
@@ -8137,97 +7998,71 @@ export const tools: McpTool[] = [
 
       // reverse_charge_eu_services & co. resolve to 'reverse_charge' + kind.
       const { vatTreatment, reverseChargeKind } = splitCategorizeVatTreatment(args.vat_treatment)
+      if (!VALID_CATEGORIES.includes(category as typeof VALID_CATEGORIES[number])) {
+        throw fieldValidationError('Invalid arguments', [{
+          field: 'category',
+          en: `Invalid category "${category}". Valid categories: ${VALID_CATEGORIES.join(', ')}`,
+          sv: `Okänd kategori "${category}". Giltiga kategorier: ${VALID_CATEGORIES.join(', ')}.`,
+        }])
+      }
+      if (vatTreatment && !VALID_VAT_TREATMENTS.includes(vatTreatment as typeof VALID_VAT_TREATMENTS[number])) {
+        throw fieldValidationError('Invalid arguments', [{
+          field: 'vat_treatment',
+          en: `Invalid vat_treatment "${vatTreatment}". Valid: ${VALID_VAT_TREATMENTS.join(', ')}`,
+          sv: `Okänd momsbehandling "${vatTreatment}". Giltiga: ${VALID_VAT_TREATMENTS.join(', ')}.`,
+        }])
+      }
 
-      // Compute the preview (accounts, amounts, VAT lines). A foreign row with
-      // no SEK value cannot be previewed (TX_MISSING_SEK_VALUE); that refusal
-      // is held until the duplicate guard below has run, the same order as
-      // the commit path: a likely double-booking is answered with "link
-      // instead", which needs no rate.
-      const preview = await categorizeTransactionCore(
-        args.transaction_id as string,
-        category as TransactionCategory,
-        vatTreatment,
-        reverseChargeKind,
-        vatAmount,
-        accountOverride,
+      // The preview is the booking service's dry run (lib/transactions/
+      // categorize-core.ts), with the input the approval commits: it runs every
+      // check the approval runs, so a staged categorization that could never
+      // commit is refused here, and the lines are the ones the approval posts.
+      const outcome = await categorizeTransaction(
+        supabase,
         userId,
         companyId,
-        supabase,
-      ).then(
-        (previewResult) => ({ previewResult, missingSek: null }),
-        (err: unknown) => {
-          if (err instanceof TransactionMissingSekValueError) return { previewResult: null, missingSek: err }
-          throw err
-        },
+        args.transaction_id as string,
+        categorizeInputFromStaged({
+          category: category as TransactionCategory,
+          vatTreatment,
+          reverseChargeKind,
+          vatAmount,
+          accountOverride,
+          allowDuplicate: args.allow_duplicate === true,
+        }),
+        { dryRun: true, onBooked: 'refuse', invoiceMatchIntercept: false },
       )
-
-      // Already booked: categorizeTransactionCore returns a success-shaped
-      // object here, which fails STAGED_OPERATION_SCHEMA on strict clients and
-      // reached the agent as "Structured content does not match the tool's
-      // output schema" with the real reason swallowed (feedback seq 288574).
-      // Throw instead: the dispatcher's isError path carries no
-      // structuredContent, so the message survives.
-      const bookedPreview = preview.previewResult
-      if (bookedPreview && bookedPreview.success && bookedPreview.journal_entry_created === false) {
-        throw new Error(
-          `Transaction is already booked (journal_entry_id ${bookedPreview.journal_entry_id ?? 'unknown'}); ` +
-            'nothing to categorize. Use gnubok_list_uncategorized_transactions to find unbooked ones, ' +
-            'or gnubok_correct_entry / gnubok_reverse_journal_entry to change the existing verifikat.',
-        )
+      if (!outcome.ok) throw categorizeStagingRefusal(outcome, args.transaction_id as string)
+      if (!outcome.dryRun) throw new Error('categorize: unexpected booking on a dry run')
+      const { preview } = outcome
+      const tx = preview.transaction
+      const mapping = preview.mappingResult
+      const reverseCharge = tx.amount < 0
+        ? reverseChargeBasisSummary(mapping.vat_lines, reverseChargeKind, mapping.debit_account)
+        : undefined
+      const result = {
+        category: preview.category,
+        debit_account: mapping.debit_account,
+        credit_account: mapping.credit_account,
+        amount: Math.abs(tx.amount),
+        currency: tx.currency,
+        lines: preview.lines.map((l) => ({
+          account_number: l.account_number,
+          debit_amount: l.debit_amount,
+          credit_amount: l.credit_amount,
+          description: l.line_description ?? '',
+        })),
+        vat_lines: mapping.vat_lines.map((v) => ({
+          account_number: v.account_number,
+          debit_amount: v.debit_amount,
+          credit_amount: v.credit_amount,
+          description: v.description,
+        })),
+        reverse_charge: reverseCharge,
+        underlag: preview.underlag,
       }
 
-      // Fetch transaction description (and date for period_status) for the title
-      const { data: tx } = await supabase
-        .from('transactions')
-        // amount_sek / exchange_rate are projected for the duplicate guard: it
-        // compares this bank line against SEK ledger legs, and without them a
-        // non-SEK row has no SEK value to compare with.
-        .select('description, merchant_name, amount, currency, amount_sek, exchange_rate, date, cash_account_id')
-        .eq('id', args.transaction_id as string)
-        .eq('company_id', companyId)
-        .single()
-
-      // Booking-time duplicate guard: surface a likely double-booking to the
-      // agent NOW (before staging) so it can link to the existing verifikat
-      // instead of queuing a second one for approval. The commit executor
-      // re-checks as the hard gate; this is the early, actionable signal.
-      // Mirrors the web /categorize route's guard.
-      if (args.allow_duplicate !== true && tx) {
-        const txFx = tx as { cash_account_id?: string | null; amount_sek?: number | null; exchange_rate?: number | null }
-        const dup = await detectBookingDuplicate(supabase, companyId, {
-          id: args.transaction_id as string,
-          date: tx.date,
-          amount: tx.amount,
-          // `amount` is denominated in `currency`; the ledger legs the guard
-          // compares it against are always SEK, so the conversion fields have
-          // to come along or a non-SEK line cannot be compared at all.
-          currency: tx.currency ?? null,
-          amount_sek: txFx.amount_sek ?? null,
-          exchange_rate: txFx.exchange_rate ?? null,
-          cash_account_id: txFx.cash_account_id ?? null,
-        })
-        if (dup) {
-          const voucher = dup.voucher_label ? `verifikat ${dup.voucher_label}` : 'en befintlig verifikation'
-          // Shared three-branch claim (lib/transactions/categorize-core.ts):
-          // SEK figure when verified, the foreign amount when the sibling has
-          // no SEK value (dup.amount === null used to render "bokför null kr"
-          // here), and an explicit could-not-compare that attributes the
-          // missing rate to the TARGET row. One implementation for web + MCP.
-          const claim = buildDuplicateBookingClaim(dup, tx.currency ?? null)
-          throw new Error(
-            `Möjlig dubblettbokföring: ${voucher} (${dup.entry_date}) ${claim}. ` +
-            `Den här affärshändelsen ser redan ut att vara bokförd: länka transaktionen till den befintliga ` +
-            `verifikationen i stället. Anropa igen med allow_duplicate=true först om det är en genuint separat affärshändelse.`,
-          )
-        }
-      }
-
-      if (preview.missingSek) throw preview.missingSek
-      const result = preview.previewResult
-
-      const txDesc = tx
-        ? `${tx.merchant_name || tx.description || 'Transaktion'} ${tx.amount} ${tx.currency}`
-        : String(args.transaction_id)
+      const txDesc = `${tx.merchant_name || tx.description || 'Transaktion'} ${tx.amount} ${tx.currency}`
 
       // Resolve-don't-select: codes AND natural-language names resolve against
       // the registry in one pass (zero queries when untagged; free-text
@@ -8269,7 +8104,7 @@ export const tools: McpTool[] = [
           // Entry date, so the review queue can show which fiscal year a
           // categorization belongs to (two open years are indistinguishable
           // from the title alone).
-          date: tx?.date ?? null,
+          date: tx.date,
           // Exact journal lines the approval will post (net cost line, VAT
           // line, gross bank line, SEK). The summary fields above pair the
           // GROSS amount with the cost account — read alone they misled
@@ -8292,7 +8127,7 @@ export const tools: McpTool[] = [
           tool: 'gnubok_list_uncategorized_transactions',
         },
         {
-          ...(tx?.date ? { dateForPeriodCheck: tx.date } : {}),
+          dateForPeriodCheck: tx.date,
           // Categorize is the tool agents blind-retry after ambiguous
           // client-side failures (approval elicitation drops): the key makes
           // that retry safe instead of double-staging.
@@ -8520,19 +8355,19 @@ export const tools: McpTool[] = [
       const name = args.name as string
       const customerType = args.customer_type as string
 
-      if (!name?.trim()) throw new Error('Customer name is required.')
+      if (!name?.trim()) throw badArgument('name', 'Customer name is required.')
       if (!['individual', 'swedish_business', 'eu_business', 'non_eu_business'].includes(customerType)) {
-        throw new Error('Invalid customer_type. Must be: individual, swedish_business, eu_business, non_eu_business')
+        throw badArgument('customer_type', 'Invalid customer_type. Must be: individual, swedish_business, eu_business, non_eu_business')
       }
 
       // Runtime guard (hosts don't always enforce inputSchema maxLength).
       const customerNumberArg = args.customer_number
       if (customerNumberArg != null && typeof customerNumberArg !== 'string') {
-        throw new Error('customer_number must be a string.')
+        throw badArgument('customer_number', 'customer_number must be a string.')
       }
       const customerNumber = typeof customerNumberArg === 'string' ? customerNumberArg.trim() : ''
       if (customerNumber.length > 32) {
-        throw new Error('customer_number must be at most 32 characters.')
+        throw badArgument('customer_number', 'customer_number must be at most 32 characters.')
       }
 
       // Identifiers. A Swedish enskild firma's org number IS its owner's
@@ -8547,14 +8382,16 @@ export const tools: McpTool[] = [
       const orgNumberArg = typeof args.org_number === 'string' ? args.org_number.trim() : ''
       const personalNumberArg = typeof args.personal_number === 'string' ? args.personal_number.trim() : ''
       if (isPersonalNumberOrgNumberDisallowed(customerType, orgNumberArg)) {
-        throw new Error(
+        throw badArgument(
+          'org_number',
           'org_number looks like a Swedish personal identity number (personnummer), which a foreign business '
           + 'cannot have. Use customer_type "swedish_business" for a Swedish enskild firma, or "individual" with '
           + 'the number passed as personal_number for a private person.',
         )
       }
       if (isOrgNumberRefusedOnIndividual(customerType, orgNumberArg)) {
-        throw new Error(
+        throw badArgument(
+          'org_number',
           'An individual customer has no org number: org_number must be empty or the person\'s personnummer. '
           + 'Use customer_type "swedish_business" for a business.',
         )
@@ -8567,7 +8404,8 @@ export const tools: McpTool[] = [
       if (orgNumberHoldsPersonalNumber(customerType, orgNumber)) {
         const rerouted = normalizeReroutedPersonalNumber(orgNumber!)
         if (personalNumber && personalNumberDigits(personalNumber) !== personalNumberDigits(rerouted)) {
-          throw new Error(
+          throw badArgument(
+            'org_number',
             'org_number looks like a personnummer and differs from personal_number. An individual customer keeps '
             + 'its personnummer in personal_number; leave org_number empty.',
           )
@@ -8576,7 +8414,7 @@ export const tools: McpTool[] = [
         orgNumber = null
       }
       if (personalNumber && !PERSONAL_NUMBER_PLAINTEXT_RE.test(personalNumber)) {
-        throw new Error('personal_number must be a Swedish personnummer: YYYYMMDD-XXXX, YYMMDD-XXXX or the digits alone.')
+        throw badArgument('personal_number', 'personal_number must be a Swedish personnummer: YYYYMMDD-XXXX, YYMMDD-XXXX or the digits alone.')
       }
 
       // Country: stored as ISO 3166-1 alpha-2 (a name is accepted and
@@ -8591,7 +8429,8 @@ export const tools: McpTool[] = [
         ? normalizeCountryCode(countryArg)
         : defaultCountryForParty(customerType, vatNumberArg)
       if (!country) {
-        throw new Error(
+        throw badArgument(
+          'country',
           countryArg
             ? `country "${countryArg}" is not an ISO 3166-1 alpha-2 code or a known country name. Use a code such as SE, DE or NO.`
             : customerType === 'eu_business'
@@ -8605,7 +8444,7 @@ export const tools: McpTool[] = [
         vatNumber: vatNumberArg,
       })
       if (countryIssue) {
-        throw new Error(`country: ${COUNTRY_CONSISTENCY_MESSAGES[countryIssue].en}`)
+        throw badArgument('country', `country: ${COUNTRY_CONSISTENCY_MESSAGES[countryIssue].en}`, COUNTRY_CONSISTENCY_MESSAGES[countryIssue].sv)
       }
 
       // Resolved at staging, not at commit, so the approval preview shows the
@@ -8737,7 +8576,7 @@ export const tools: McpTool[] = [
       let personalNumber: string | null = null
       if (personalNumberArg !== undefined) {
         if (personalNumberArg !== null && typeof personalNumberArg !== 'string') {
-          throw new Error('personal_number must be a string or null.')
+          throw badArgument('personal_number', 'personal_number must be a string or null.')
         }
         const trimmed = personalNumberArg === null ? null : personalNumberArg.trim()
         if (trimmed === null) {
@@ -8745,7 +8584,8 @@ export const tools: McpTool[] = [
         } else if (isMaskedPersonalNumber(trimmed)) {
           // Echo of a read: leave the stored personnummer alone.
         } else if (!PERSONAL_NUMBER_PLAINTEXT_RE.test(trimmed)) {
-          throw new Error(
+          throw badArgument(
+            'personal_number',
             'personal_number must be a Swedish personnummer: YYYYMMDD-XXXX, YYMMDD-XXXX or the digits alone. '
             + 'Null clears the stored value; a masked value leaves it unchanged.',
           )
@@ -8790,7 +8630,8 @@ export const tools: McpTool[] = [
           ? (parsed.data.changes.org_number ?? current.org_number)
           : undefined
       if (isOrgNumberRefusedOnIndividual(effectiveCustomerType, individualOrgNumber)) {
-        throw new Error(
+        throw badArgument(
+          'org_number',
           'An individual customer has no org number: org_number must be empty or the person\'s personnummer. '
           + 'Send org_number "" to clear it, or use customer_type "swedish_business" for a business.',
         )
@@ -8798,7 +8639,8 @@ export const tools: McpTool[] = [
       if (orgNumberHoldsPersonalNumber(effectiveCustomerType, individualOrgNumber)) {
         const rerouted = normalizeReroutedPersonalNumber(individualOrgNumber!)
         if (personalNumber && personalNumberDigits(personalNumber) !== personalNumberDigits(rerouted)) {
-          throw new Error(
+          throw badArgument(
+            'org_number',
             'org_number looks like a personnummer and differs from personal_number. An individual customer keeps '
             + 'its personnummer in personal_number; leave org_number empty.',
           )
@@ -8825,7 +8667,7 @@ export const tools: McpTool[] = [
             })
           : null
       if (countryIssue) {
-        throw new Error(`country: ${COUNTRY_CONSISTENCY_MESSAGES[countryIssue].en}`)
+        throw badArgument('country', `country: ${COUNTRY_CONSISTENCY_MESSAGES[countryIssue].en}`, COUNTRY_CONSISTENCY_MESSAGES[countryIssue].sv)
       }
 
       const currentPreview = {
@@ -8977,9 +8819,9 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const name = (args.name as string)?.trim()
-      if (!name) throw new Error('Article name is required.')
+      if (!name) throw badArgument('name', 'Article name is required.')
       if (typeof args.price_excl_vat !== 'number') {
-        throw new Error('price_excl_vat is required and must be a number.')
+        throw badArgument('price_excl_vat', 'price_excl_vat is required and must be a number.')
       }
 
       const params: Record<string, unknown> = {
@@ -9047,7 +8889,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const articleId = args.article_id as string
-      if (!articleId) throw new Error('article_id is required.')
+      if (!articleId) throw badArgument('article_id', 'article_id is required.')
 
       const params: Record<string, unknown> = { article_id: articleId }
       for (const key of [
@@ -9290,7 +9132,7 @@ export const tools: McpTool[] = [
     catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase) {
       const invoiceId = args.invoice_id as string
-      if (!invoiceId) throw new Error('invoice_id is required. Use gnubok_list_invoices to find IDs.')
+      if (!invoiceId) throw badArgument('invoice_id', 'invoice_id is required. Use gnubok_list_invoices to find IDs.')
 
       // Explicit column list on purpose: invoices carries the encrypted
       // ROT/RUT personnummer columns, which must never reach the MCP surface.
@@ -9304,7 +9146,7 @@ export const tools: McpTool[] = [
         .maybeSingle()
 
       if (error) throw dbError(error)
-      if (!invoice) throw new Error('Invoice not found. Use gnubok_list_invoices to find valid IDs.')
+      if (!invoice) throw codedRefusal('NOT_FOUND', 'Invoice not found. Use gnubok_list_invoices to find valid IDs.')
 
       type InvoiceLineRow = {
         id: string
@@ -9486,8 +9328,8 @@ export const tools: McpTool[] = [
       const customerId = args.customer_id as string
       const rawItems = args.items as StagedInvoiceLineInput[]
 
-      if (!customerId) throw new Error('customer_id is required. Use gnubok_list_customers to find IDs.')
-      if (!rawItems?.length) throw new Error('At least one item is required.')
+      if (!customerId) throw badArgument('customer_id', 'customer_id is required. Use gnubok_list_customers to find IDs.')
+      if (!rawItems?.length) throw badArgument('items', 'At least one item is required.')
 
       // Line keys the tool does not know are refused, never staged: they were
       // silently dropped at approval, so a field the agent believed it set
@@ -9612,7 +9454,7 @@ export const tools: McpTool[] = [
           isHttps = false
         }
         if (!isHttps || paymentLinkUrl.length > 2048) {
-          throw new Error('payment_link_url must be a valid https URL (max 2048 chars).')
+          throw badArgument('payment_link_url', 'payment_link_url must be a valid https URL (max 2048 chars).')
         }
       }
 
@@ -9754,7 +9596,7 @@ export const tools: McpTool[] = [
       const status = typeof args.status === 'string' ? args.status : undefined
       const customerId = typeof args.customer_id === 'string' ? args.customer_id.trim() : ''
       if (status && !(SALES_ORDER_STATUSES as readonly string[]).includes(status)) {
-        throw new Error(`Invalid status "${status}". Allowed: ${SALES_ORDER_STATUSES.join(', ')}`)
+        throw badArgument('status', `Invalid status "${status}". Allowed: ${SALES_ORDER_STATUSES.join(', ')}`)
       }
 
       let query = supabase
@@ -9920,8 +9762,8 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase, actor) {
       const customerId = typeof args.customer_id === 'string' ? args.customer_id.trim() : ''
       const rawItems = Array.isArray(args.items) ? (args.items as StagedInvoiceLineInput[]) : []
-      if (!customerId) throw new Error('customer_id is required. Use gnubok_list_customers to find IDs.')
-      if (rawItems.length === 0) throw new Error('At least one item is required.')
+      if (!customerId) throw badArgument('customer_id', 'customer_id is required. Use gnubok_list_customers to find IDs.')
+      if (rawItems.length === 0) throw badArgument('items', 'At least one item is required.')
 
       const { data: customer, error: custError } = await supabase
         .from('customers')
@@ -10759,7 +10601,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const invoiceId = args.invoice_id as string
-      if (!invoiceId) throw new Error('invoice_id is required')
+      if (!invoiceId) throw badArgument('invoice_id', 'invoice_id is required')
 
       const invoice = await fetchInvoiceWithCustomer(supabase, companyId, invoiceId)
       // A quote is an offer, not a claim (parity with the dashboard mark-paid
@@ -10859,7 +10701,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_WRITE_OPEN_WORLD,
     async execute(args, companyId, userId, supabase, actor) {
       const invoiceId = args.invoice_id as string
-      if (!invoiceId) throw new Error('invoice_id is required')
+      if (!invoiceId) throw badArgument('invoice_id', 'invoice_id is required')
 
       const emailService = await getEmailService()
       if (!emailService.isConfigured()) {
@@ -10987,7 +10829,7 @@ export const tools: McpTool[] = [
         .maybeSingle()
 
       if (invoiceError) throw dbError(invoiceError)
-      if (!invoice) throw new Error('Invoice not found')
+      if (!invoice) throw codedRefusal('NOT_FOUND', 'Invoice not found')
 
       // Never read invoice_deliveries directly: the row carries the exact
       // subject, body and BCC of a customer mail. The RPC is the masking
@@ -11060,7 +10902,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const invoiceId = args.invoice_id as string
-      if (!invoiceId) throw new Error('invoice_id is required')
+      if (!invoiceId) throw badArgument('invoice_id', 'invoice_id is required')
 
       const invoice = await fetchInvoiceWithCustomer(supabase, companyId, invoiceId)
       if (invoice.status !== 'draft') throw new Error('Only draft invoices can be marked as sent')
@@ -11209,7 +11051,7 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase) {
       const given = (['party_id', 'supplier_id', 'customer_id'] as const).filter((k) => typeof args[k] === 'string' && (args[k] as string).trim())
       if (given.length !== 1) {
-        throw new Error('Pass exactly one of party_id, supplier_id or customer_id.')
+        throw badArgument('party_id', 'Pass exactly one of party_id, supplier_id or customer_id.', 'Ange exakt ett av party_id, supplier_id eller customer_id.')
       }
       let partyId: string | null = null
       if (given[0] === 'party_id') partyId = String(args.party_id)
@@ -11333,28 +11175,24 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       // Server-side validation (defense in depth): MCP transport already
-      // checks the JSON Schema, but we re-validate with Zod so financial
-      // identifiers (IBAN, BIC, bankgiro Luhn, org_number, VAT format) are
-      // rejected at the ingestion boundary rather than persisted.
-      // Strip MCP control fields before parsing: the strict schema rejects
-      // unknown keys to satisfy ASVS V4.5 field-allow-listing.
+      // checks the JSON Schema, but we re-validate with the register's one
+      // rule set (CreateSupplierSchema, shared with the dashboard and v1) so
+      // payment-routing identifiers (bankgiro Luhn, plusgiro, IBAN, BIC) are
+      // rejected at the ingestion boundary rather than persisted. The arg guard
+      // already refuses unknown keys; the MCP control fields are stripped here.
       const { dry_run, idempotency_key, ...supplierArgs } = args
-      let params
-      try {
-        params = CreateSupplierParamsSchema.parse(supplierArgs)
-      } catch (err) {
-        if (err instanceof z.ZodError) {
-          const issue = err.issues[0]
-          const path = issue?.path?.join('.') ?? 'params'
-          throw new Error(`Invalid ${path}: ${issue?.message ?? 'validation failed'}`)
-        }
-        throw err
-      }
+      const parsed = CreateSupplierSchema.safeParse(supplierArgs)
+      if (!parsed.success) throw fieldValidationError('Invalid arguments', zodFieldIssues(parsed.error, supplierArgs))
+      const params = { ...parsed.data, supplier_type: parsed.data.supplier_type ?? 'swedish_business' }
+      // The approver sees the row the approval inserts, the register's
+      // defaults applied (lib/suppliers/create-supplier.ts).
+      const preview = await createSupplier({ supabase, companyId, userId, log }, params, { dryRun: true })
+      if (!preview.ok || !preview.dryRun) throw new Error('create_supplier: preview failed')
 
       return stagePendingOperation(supabase, companyId, userId, 'create_supplier',
         `Ny leverantör: ${params.name}`,
         params,
-        params,
+        preview.preview,
         actor,
         {
           description: 'Once approved, you can book supplier invoices against this supplier with gnubok_create_supplier_invoice_from_inbox using the returned supplier_id.',
@@ -11409,7 +11247,7 @@ export const tools: McpTool[] = [
       // so non-string values reach execute() and are rejected here.
       for (const key of ['supplier_id', 'supplier_name', 'date_from', 'date_to'] as const) {
         if (args[key] !== undefined && typeof args[key] !== 'string') {
-          throw new Error(`${key} must be a string.`)
+          throw badArgument(key, `${key} must be a string.`)
         }
       }
       const supplierId = args.supplier_id as string | undefined
@@ -11418,12 +11256,12 @@ export const tools: McpTool[] = [
       const dateTo = args.date_to as string | undefined
 
       if (supplierName === '') {
-        throw new Error('supplier_name must not be blank.')
+        throw badArgument('supplier_name', 'supplier_name must not be blank.')
       }
       // Clear message instead of a raw Postgres uuid cast error: an agent may
       // well pass a supplier's name here; point it at supplier_name instead.
       if (supplierId && !UUID_RE.test(supplierId)) {
-        throw new Error('supplier_id must be a supplier UUID (suppliers.id). To filter by name, use supplier_name.')
+        throw badArgument('supplier_id', 'supplier_id must be a supplier UUID (suppliers.id). To filter by name, use supplier_name.')
       }
       for (const [key, value] of [['date_from', dateFrom], ['date_to', dateTo]] as const) {
         if (value === undefined) continue
@@ -11435,11 +11273,11 @@ export const tools: McpTool[] = [
           Number.isNaN(parsed.getTime()) ||
           parsed.toISOString().slice(0, 10) !== value
         ) {
-          throw new Error(`${key} must be a valid ISO date (YYYY-MM-DD).`)
+          throw badArgument(key, `${key} must be a valid ISO date (YYYY-MM-DD).`)
         }
       }
       if (dateFrom && dateTo && dateFrom > dateTo) {
-        throw new Error('date_from must not be after date_to.')
+        throw badArgument('date_from', 'date_from must not be after date_to.')
       }
 
       // supplier_name resolves server-side to supplier ids: a LITERAL
@@ -11610,7 +11448,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
       const ids = args.transaction_ids as string[]
-      if (!ids || ids.length === 0) throw new Error('transaction_ids is required (non-empty array)')
+      if (!ids || ids.length === 0) throw badArgument('transaction_ids', 'transaction_ids is required (non-empty array)')
       const limitedIds = ids.slice(0, 20)
 
       // Fetch transactions
@@ -11756,9 +11594,9 @@ export const tools: McpTool[] = [
       // existing caller sees the same rows as before, plus `total`.
       const compact = args.detail === 'compact'
       const limit = typeof args.limit === 'number' && Number.isInteger(args.limit) && args.limit >= 1 ? args.limit : undefined
-      if (args.limit !== undefined && limit === undefined) throw new Error('limit must be a positive integer')
+      if (args.limit !== undefined && limit === undefined) throw badArgument('limit', 'limit must be a positive integer')
       if (args.offset !== undefined && (typeof args.offset !== 'number' || !Number.isInteger(args.offset) || args.offset < 0)) {
-        throw new Error('offset must be a non-negative integer')
+        throw badArgument('offset', 'offset must be a non-negative integer')
       }
       const offset = (args.offset as number | undefined) ?? 0
 
@@ -11950,7 +11788,7 @@ export const tools: McpTool[] = [
     async execute(args, companyId, _userId, supabase) {
       const sieDimNo = Number(args.sie_dim_no)
       if (!Number.isInteger(sieDimNo) || sieDimNo < 1) {
-        throw new Error('sie_dim_no must be a positive integer SIE dimension number (1 = kostnadsställe, 6 = projekt).')
+        throw badArgument('sie_dim_no', 'sie_dim_no must be a positive integer SIE dimension number (1 = kostnadsställe, 6 = projekt).')
       }
       const includeInactive = args.include_inactive === true
       const limit = Math.min(Math.max(1, Number(args.limit) || 50), 200)
@@ -12054,9 +11892,7 @@ export const tools: McpTool[] = [
         params = CreateDimensionValueParamsSchema.parse(valueArgs)
       } catch (err) {
         if (err instanceof z.ZodError) {
-          const issue = err.issues[0]
-          const path = issue?.path?.join('.') ?? 'params'
-          throw new Error(`Invalid ${path}: ${issue?.message ?? 'validation failed'}`)
+          throw fieldValidationError('Invalid arguments', zodFieldIssues(err, valueArgs))
         }
         throw err
       }
@@ -12186,12 +12022,12 @@ export const tools: McpTool[] = [
 
       const reason = typeof args.reason === 'string' ? args.reason.trim() : ''
       if (reason.length < 3 || reason.length > 500) {
-        throw new Error('reason must be 3-500 characters: it is stored in the immutable dimension_retag_log.')
+        throw badArgument('reason', 'reason must be 3-500 characters: it is stored in the immutable dimension_retag_log.')
       }
 
       const inputBag = parseDimensionsArg(args.dimensions, 'dimensions')
       if (!inputBag) {
-        throw new Error('dimensions must contain at least one {"<sie_dim_no>":"<kod eller namn>"} pair, e.g. {"6":"P01"}.')
+        throw badArgument('dimensions', 'dimensions must contain at least one {"<sie_dim_no>":"<kod eller namn>"} pair, e.g. {"6":"P01"}.')
       }
 
       // merge by default: tagging projekt on a line that carries a
@@ -12199,7 +12035,7 @@ export const tools: McpTool[] = [
       // workbench. Hosts do not always enforce the enum, so check it here.
       const mode = args.mode ?? 'merge'
       if (mode !== 'merge' && mode !== 'replace') {
-        throw new Error("mode must be 'merge' (keep each line's other dimensions) or 'replace'.")
+        throw badArgument('mode', "mode must be 'merge' (keep each line's other dimensions) or 'replace'.")
       }
 
       // ── Filters: validated before any DB work so bad input fails fast.
@@ -12218,7 +12054,7 @@ export const tools: McpTool[] = [
       const dateTo = typeof filters.date_to === 'string' ? filters.date_to : undefined
       const text = typeof filters.text === 'string' ? filters.text.trim() : ''
       if (text.length > 200) {
-        throw new Error('filters.text must be 200 characters or shorter')
+        throw badArgument('filters.text', 'filters.text must be 200 characters or shorter')
       }
       const onlyUntagged = filters.only_untagged === true
 
@@ -12226,7 +12062,8 @@ export const tools: McpTool[] = [
         (accounts && accounts.length > 0) || accountFrom || accountTo || dateFrom || dateTo || text || onlyUntagged,
       )
       if (!hasFilter) {
-        throw new Error(
+        throw badArgument(
+          'filters',
           'Ange minst ett filter (konto, datum, text eller only_untagged): en företagsbred omtaggning måste avgränsas. ' +
           'Förhandsgranska träffmängden med gnubok_query_journal.',
         )
@@ -12566,7 +12403,7 @@ export const tools: McpTool[] = [
       // Positive-integer guard: the value is a key into each line's
       // dimensions bag downstream, so free-form strings are rejected.
       if (!/^[1-9]\d{0,3}$/.test(sieDimNo)) {
-        throw new Error("sie_dim_no must be a positive SIE dimension number, e.g. '1' (kostnadsställe) or '6' (projekt).")
+        throw badArgument('sie_dim_no', "sie_dim_no must be a positive SIE dimension number, e.g. '1' (kostnadsställe) or '6' (projekt).")
       }
 
       // A misspelled window (fromdate=) must not degrade to a full-year
@@ -12797,7 +12634,7 @@ export const tools: McpTool[] = [
       // storno-heavy quarter and demand a revert of correct books.
       const status = (args.status as string) || 'all'
       if (status !== 'all' && status !== 'posted' && status !== 'reversed') {
-        throw new Error("status must be 'posted', 'reversed' or 'all'")
+        throw badArgument('status', "status must be 'posted', 'reversed' or 'all'")
       }
       // Hosts don't always enforce inputSchema: `accounts: 1630` (a bare
       // number) or `accounts: "1630"` both reached us as-is. A number has no
@@ -12980,7 +12817,7 @@ export const tools: McpTool[] = [
         // Length guard: defence in depth against pathological inputs even
         // though .ilike() parameterises the value (compliance A.8.28).
         if (text.length > 200) {
-          throw new Error('text filter must be 200 characters or shorter')
+          throw badArgument('text', 'text filter must be 200 characters or shorter')
         }
 
         // LIKE wildcards `%` and `_` are escaped so a search for "2_441"
@@ -13332,7 +13169,8 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase, actor) {
       const transactionId = args.transaction_id as string
       const invoiceId = args.invoice_id as string
-      if (!transactionId || !invoiceId) throw new Error('transaction_id and invoice_id are required')
+      if (!transactionId) throw badArgument('transaction_id', 'transaction_id is required')
+      if (!invoiceId) throw badArgument('invoice_id', 'invoice_id is required')
       // No host validates inputSchema at runtime: check the override shape
       // here so a malformed binding is a validation error, never a silently
       // dropped one that then reads as a force mismatch.
@@ -13362,7 +13200,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .single()
 
-      if (txError || !transaction) throw new Error('Transaction not found')
+      if (txError || !transaction) throw codedRefusal('NOT_FOUND', 'Transaction not found')
       if (transaction.amount <= 0) throw new Error('Only income transactions (amount > 0) can be matched to invoices')
       if (transaction.invoice_id) throw new Error('Transaction is already linked to an invoice')
 
@@ -13373,7 +13211,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .single()
 
-      if (invError || !invoice) throw new Error('Invoice not found')
+      if (invError || !invoice) throw codedRefusal('NOT_FOUND', 'Invoice not found')
       // Parity with the dashboard match route: proformas, delivery notes and
       // quotes carry no receivable to settle.
       if (invoice.document_type && invoice.document_type !== 'invoice') {
@@ -13563,7 +13401,7 @@ export const tools: McpTool[] = [
         .eq('id', transactionId)
         .eq('company_id', companyId)
         .single()
-      if (txError || !transaction) throw new Error('Transaction not found')
+      if (txError || !transaction) throw codedRefusal('NOT_FOUND', 'Transaction not found')
       if (transaction.journal_entry_id) throw new Error('Transaction is already booked')
       if (transaction.amount === 0) throw new Error('Transaction has zero amount')
 
@@ -13844,7 +13682,7 @@ export const tools: McpTool[] = [
         .eq('id', transactionId)
         .eq('company_id', companyId)
         .maybeSingle()
-      if (txError || !tx) throw new Error('Transaction not found')
+      if (txError || !tx) throw codedRefusal('NOT_FOUND', 'Transaction not found')
       // Only a live posted link blocks re-linking; a stale pointer at a reversed
       // entry (storno/correction) reads as "utan koppling" and must stay
       // re-linkable (issue #988). The commit handler re-validates the same way.
@@ -13882,8 +13720,8 @@ export const tools: McpTool[] = [
           .eq('id', invoiceId)
           .eq('company_id', companyId)
           .maybeSingle()
-        if (invError || !invoice) throw new Error('Invoice not found')
-        if (!['sent', 'overdue', 'partially_paid'].includes(invoice.status)) {
+        if (invError || !invoice) throw codedRefusal('NOT_FOUND', 'Invoice not found')
+        if (!isMatchableInvoiceStatus(invoice.status)) {
           throw new Error(`Invoice is not in an open state (status=${invoice.status})`)
         }
         // Currency-mismatch pre-stage check (swedish-compliance PR #614
@@ -14351,16 +14189,16 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const itemIds = args.item_ids as string[]
-      if (!Array.isArray(itemIds) || itemIds.length === 0) throw new Error('item_ids is required (non-empty)')
+      if (!Array.isArray(itemIds) || itemIds.length === 0) throw badArgument('item_ids', 'item_ids is required (non-empty)')
       // Presence + enum guard at the boundary (hosts don't always enforce
       // inputSchema `required`/`enum`): without it a missing or unknown
       // category was staged as-is and only rejected at approval time.
       const category = typeof args.category === 'string' ? args.category.trim() : ''
       if (!category) {
-        throw new Error(`category is required. Valid categories: ${VALID_CATEGORIES.join(', ')}`)
+        throw badArgument('category', `category is required. Valid categories: ${VALID_CATEGORIES.join(', ')}`)
       }
       if (!VALID_CATEGORIES.includes(category as typeof VALID_CATEGORIES[number])) {
-        throw new Error(`Invalid category "${category}". Valid categories: ${VALID_CATEGORIES.join(', ')}`)
+        throw badArgument('category', `Invalid category "${category}". Valid categories: ${VALID_CATEGORIES.join(', ')}`)
       }
       const vatAmount = typeof args.vat_amount === 'number' && Number.isFinite(args.vat_amount)
         ? args.vat_amount
@@ -14493,7 +14331,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase) {
       const invoiceId = args.invoice_id as string
-      if (!invoiceId) throw new Error('invoice_id is required')
+      if (!invoiceId) throw badArgument('invoice_id', 'invoice_id is required')
       const limit = Math.min(Math.max(1, Number(args.limit) || 10), 50)
 
       const { data: invoice, error } = await supabase
@@ -14504,14 +14342,14 @@ export const tools: McpTool[] = [
         .eq('id', invoiceId)
         .eq('company_id', companyId)
         .single()
-      if (error || !invoice) throw new Error('Invoice not found')
+      if (error || !invoice) throw codedRefusal('NOT_FOUND', 'Invoice not found')
       // Same gate as gnubok_link_invoice_to_voucher: proformas, delivery
       // notes and quotes carry no receivable, so there is nothing to match.
       if (invoice.document_type && invoice.document_type !== 'invoice') {
         throw registryError('MATCH_INVOICE_NOT_INVOICE_TYPE')
       }
 
-      if (!['sent', 'overdue', 'partially_paid'].includes(invoice.status)) {
+      if (!isMatchableInvoiceStatus(invoice.status)) {
         return {
           invoice_id: invoiceId,
           invoice_status: invoice.status,
@@ -14554,9 +14392,8 @@ export const tools: McpTool[] = [
       const invoiceId = args.invoice_id as string
       const journalEntryId = args.journal_entry_id as string
       const notes = (args.notes as string | undefined) ?? undefined
-      if (!invoiceId || !journalEntryId) {
-        throw new Error('invoice_id and journal_entry_id are required')
-      }
+      if (!invoiceId) throw badArgument('invoice_id', 'invoice_id is required')
+      if (!journalEntryId) throw badArgument('journal_entry_id', 'journal_entry_id is required')
 
       const { data: invoice, error: invErr } = await supabase
         .from('invoices')
@@ -14566,13 +14403,13 @@ export const tools: McpTool[] = [
         .eq('id', invoiceId)
         .eq('company_id', companyId)
         .single()
-      if (invErr || !invoice) throw new Error('Invoice not found')
+      if (invErr || !invoice) throw codedRefusal('NOT_FOUND', 'Invoice not found')
       // Parity with the dashboard match route: proformas, delivery notes and
       // quotes carry no receivable to link a payment voucher to.
       if (invoice.document_type && invoice.document_type !== 'invoice') {
         throw registryError('MATCH_INVOICE_NOT_INVOICE_TYPE')
       }
-      if (!['sent', 'overdue', 'partially_paid'].includes(invoice.status)) {
+      if (!isMatchableInvoiceStatus(invoice.status)) {
         throw new Error('Invoice is not in a matchable state (must be sent, overdue, or partially_paid)')
       }
 
@@ -14846,7 +14683,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase) {
       const supplierInvoiceId = args.supplier_invoice_id as string
-      if (!supplierInvoiceId) throw new Error('supplier_invoice_id is required')
+      if (!supplierInvoiceId) throw badArgument('supplier_invoice_id', 'supplier_invoice_id is required')
       const limit = Math.min(Math.max(1, Number(args.limit) || 10), 50)
 
       const { data: invoice, error } = await supabase
@@ -14859,7 +14696,7 @@ export const tools: McpTool[] = [
         .single()
       if (error || !invoice) throw new Error('Supplier invoice not found')
 
-      if (!['registered', 'approved', 'overdue', 'partially_paid'].includes(invoice.status)) {
+      if (!isMatchableSupplierInvoiceStatus(invoice.status)) {
         return {
           supplier_invoice_id: supplierInvoiceId,
           invoice_status: invoice.status,
@@ -14908,9 +14745,8 @@ export const tools: McpTool[] = [
       const supplierInvoiceId = args.supplier_invoice_id as string
       const journalEntryId = args.journal_entry_id as string
       const notes = (args.notes as string | undefined) ?? undefined
-      if (!supplierInvoiceId || !journalEntryId) {
-        throw new Error('supplier_invoice_id and journal_entry_id are required')
-      }
+      if (!supplierInvoiceId) throw badArgument('supplier_invoice_id', 'supplier_invoice_id is required')
+      if (!journalEntryId) throw badArgument('journal_entry_id', 'journal_entry_id is required')
       // No host validates inputSchema at runtime: a share that is not a number
       // must not reach the validator as "no share stated".
       if (args.amount != null && typeof args.amount !== 'number') {
@@ -14927,7 +14763,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .single()
       if (invErr || !invoice) throw new Error('Supplier invoice not found')
-      if (!['registered', 'approved', 'overdue', 'partially_paid'].includes(invoice.status)) {
+      if (!isMatchableSupplierInvoiceStatus(invoice.status)) {
         throw new Error('Supplier invoice is not in a matchable state (must be registered, approved, overdue, or partially_paid)')
       }
 
@@ -15026,7 +14862,8 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase, actor) {
       const dateFrom = args.date_from as string
       const dateTo = args.date_to as string
-      if (!dateFrom || !dateTo) throw new Error('date_from and date_to are required')
+      if (!dateFrom) throw badArgument('date_from', 'date_from is required')
+      if (!dateTo) throw badArgument('date_to', 'date_to is required')
 
       const confidenceThreshold = typeof args.confidence_threshold === 'number'
         ? Math.max(0, Math.min(1, args.confidence_threshold))
@@ -15577,7 +15414,7 @@ export const tools: McpTool[] = [
       const accountKey = args.account_key as string
       const rowId = args.external_id as string | undefined
       const settlementId = args.settlement_id as string | undefined
-      if (!parseAccountKey(accountKey)) throw new Error(`Invalid account_key "${accountKey}"`)
+      if (!parseAccountKey(accountKey)) throw badArgument('account_key', `Invalid account_key "${accountKey}"`)
       if (Boolean(rowId) === Boolean(settlementId)) {
         throw codedError('VALIDATION_ERROR', 'Pass exactly one of external_id (an outside row) or settlement_id (verifikat settled against each other)')
       }
@@ -15638,7 +15475,7 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase, actor) {
       const accountKey = args.account_key as string
       const throughDate = args.through_date as string
-      if (!parseAccountKey(accountKey)) throw new Error(`Invalid account_key "${accountKey}"`)
+      if (!parseAccountKey(accountKey)) throw badArgument('account_key', `Invalid account_key "${accountKey}"`)
       // Policy runs now (dry run of the sign-off) so a refusal surfaces here,
       // not at approval time; the executor re-runs it when the user approves.
       const preview = await signOffAccount(
@@ -15714,9 +15551,9 @@ export const tools: McpTool[] = [
       const externalIds = args.external_ids as string[]
       const journalEntryId = args.journal_entry_id as string
       const kind = args.kind as 'bank_fee' | 'rounding' | 'interest_income' | 'interest_expense'
-      if (!parseAccountKey(accountKey)) throw new Error(`Invalid account_key "${accountKey}"`)
+      if (!parseAccountKey(accountKey)) throw badArgument('account_key', `Invalid account_key "${accountKey}"`)
       if (!Array.isArray(externalIds) || externalIds.length === 0 || externalIds.length > 50) {
-        throw new Error('external_ids must hold 1..50 transaction ids')
+        throw badArgument('external_ids', 'external_ids must hold 1..50 transaction ids')
       }
       // Policy runs now (dry run of the booking) so a refusal (zero, above the
       // cap, wrong direction, skattekonto) surfaces here, not at approval time;
@@ -15791,7 +15628,7 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase, actor) {
       const transactionId = args.skattekonto_transaction_id
       if (typeof transactionId !== 'string' || transactionId.length === 0) {
-        throw new Error('skattekonto_transaction_id is required')
+        throw badArgument('skattekonto_transaction_id', 'skattekonto_transaction_id is required')
       }
 
       const { data: row } = await supabase
@@ -15925,13 +15762,13 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase, actor) {
       const rawIds = args.skattekonto_transaction_ids
       if (!Array.isArray(rawIds) || rawIds.length === 0) {
-        throw new Error('skattekonto_transaction_ids is required (non-empty array)')
+        throw badArgument('skattekonto_transaction_ids', 'skattekonto_transaction_ids is required (non-empty array)')
       }
       const ids = [
         ...new Set(rawIds.filter((v): v is string => typeof v === 'string' && v.length > 0)),
       ]
       if (ids.length === 0 || ids.length > 200) {
-        throw new Error('skattekonto_transaction_ids must contain 1-200 row ids')
+        throw badArgument('skattekonto_transaction_ids', 'skattekonto_transaction_ids must contain 1-200 row ids')
       }
 
       const { data: rows } = await supabase
@@ -16430,10 +16267,10 @@ export const tools: McpTool[] = [
         }
       }
       if (cursorTs && !z.string().datetime({ offset: true }).safeParse(cursorTs).success) {
-        throw new Error('Invalid cursor timestamp. Pass next_cursor verbatim.')
+        throw badArgument('cursor', 'Invalid cursor timestamp. Pass next_cursor verbatim.')
       }
       if (cursorId && !z.string().uuid().safeParse(cursorId).success) {
-        throw new Error('Invalid cursor inbox item ID. Pass next_cursor verbatim.')
+        throw badArgument('cursor', 'Invalid cursor inbox item ID. Pass next_cursor verbatim.')
       }
 
       const fetchSize = unprocessedOnly ? 200 : limit
@@ -17212,7 +17049,7 @@ export const tools: McpTool[] = [
         printedLines.reduce(
           (sum, line, idx) =>
             sum + (linesReadAsGross
-              ? (!line.deductible && line.rate > 0 ? roundOre((line.amount * line.rate) / (1 + line.rate)) : 0)
+              ? (!line.deductible ? grossVat(line.amount, line.rate) : 0)
               : foreignVatInCost[idx]),
           0,
         ),
@@ -17646,7 +17483,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
       const documentId = args.document_id as string
-      if (!documentId) throw new Error('document_id is required')
+      if (!documentId) throw badArgument('document_id', 'document_id is required')
 
       const { data: doc, error: docError } = await supabase
         .from('document_attachments')
@@ -17704,8 +17541,8 @@ export const tools: McpTool[] = [
       const documentId = args.document_id as string
       const journalEntryId = args.journal_entry_id as string
       const journalEntryLineId = typeof args.journal_entry_line_id === 'string' ? args.journal_entry_line_id : undefined
-      if (!documentId) throw new Error('document_id is required')
-      if (!journalEntryId) throw new Error('journal_entry_id is required')
+      if (!documentId) throw badArgument('document_id', 'document_id is required')
+      if (!journalEntryId) throw badArgument('journal_entry_id', 'journal_entry_id is required')
 
       const [docRes, jeRes] = await Promise.all([
         supabase
@@ -17864,15 +17701,15 @@ export const tools: McpTool[] = [
         fiscal_year: number
         journal_entry_line_id?: string
       }>
-      if (!Array.isArray(rawLinks) || rawLinks.length === 0) throw new Error('links is required (non-empty)')
+      if (!Array.isArray(rawLinks) || rawLinks.length === 0) throw badArgument('links', 'links is required (non-empty)')
       if (rawLinks.length > 300) throw new Error('links: max 300 per call')
       for (const [i, l] of rawLinks.entries()) {
-        if (!l.document_id) throw new Error(`links[${i}]: document_id is required`)
-        if (!l.voucher_series) throw new Error(`links[${i}]: voucher_series is required`)
+        if (!l.document_id) throw badArgument(`links.${i}.document_id`, `links[${i}]: document_id is required`)
+        if (!l.voucher_series) throw badArgument(`links.${i}.voucher_series`, `links[${i}]: voucher_series is required`)
         if (!Number.isInteger(l.voucher_number) || l.voucher_number < 1) {
-          throw new Error(`links[${i}]: voucher_number must be a positive integer`)
+          throw badArgument(`links.${i}.voucher_number`, `links[${i}]: voucher_number must be a positive integer`)
         }
-        if (!Number.isInteger(l.fiscal_year)) throw new Error(`links[${i}]: fiscal_year must be an integer`)
+        if (!Number.isInteger(l.fiscal_year)) throw badArgument(`links.${i}.fiscal_year`, `links[${i}]: fiscal_year must be an integer`)
       }
 
       // ── Resolve fiscal_year → fiscal_period_id. A "fiscal_year" here means
@@ -18199,20 +18036,20 @@ export const tools: McpTool[] = [
       const tripDate = args.trip_date as string
       const distanceKm = args.distance_km as number
       if (typeof tripDate !== 'string' || !ISO_DATE_RE.test(tripDate)) {
-        throw new Error('trip_date must be YYYY-MM-DD')
+        throw badArgument('trip_date', 'trip_date must be YYYY-MM-DD')
       }
       if (typeof distanceKm !== 'number' || !(distanceKm > 0)) {
-        throw new Error('distance_km must be a positive number')
+        throw badArgument('distance_km', 'distance_km must be a positive number')
       }
       const odoStart = args.odometer_start as number | undefined
       const odoEnd = args.odometer_end as number | undefined
       if (odoStart != null && odoEnd != null && odoEnd <= odoStart) {
-        throw new Error('odometer_end must be greater than odometer_start')
+        throw badArgument('odometer_end', 'odometer_end must be greater than odometer_start')
       }
 
       const vehicleType = (args.vehicle_type as string) || 'own_car'
       if (vehicleType !== 'own_car' && !(args.vehicle_registration as string | undefined)?.trim()) {
-        throw new Error('vehicle_registration is required for a förmånsbil trip (körjournal must identify the vehicle)')
+        throw badArgument('vehicle_registration', 'vehicle_registration is required for a förmånsbil trip (körjournal must identify the vehicle)')
       }
       // Preview the tax-free allowance at the schablon rate; non-fatal if the
       // payroll config year is missing.
@@ -18287,10 +18124,10 @@ export const tools: McpTool[] = [
       const entryDate = args.entry_date as string
       for (const [label, value] of [['from', from], ['to', to], ['entry_date', entryDate]] as const) {
         if (typeof value !== 'string' || !ISO_DATE_RE.test(value)) {
-          throw new Error(`${label} must be YYYY-MM-DD`)
+          throw badArgument(label, `${label} must be YYYY-MM-DD`)
         }
       }
-      if (from > to) throw new Error('from must be <= to')
+      if (from > to) throw badArgument('from', 'from must be <= to')
       if (from.slice(0, 4) !== to.slice(0, 4)) {
         throw new Error('Schablon rates are per calendar year: book one year at a time')
       }
@@ -18539,13 +18376,13 @@ export const tools: McpTool[] = [
         deviation_period_end?: string
       }
       if (!Number.isInteger(period_year) || period_year < 1900 || period_year > 9999) {
-        throw new Error('period_year must be a 4-digit year')
+        throw badArgument('period_year', 'period_year must be a 4-digit year')
       }
       if (!Number.isInteger(period_month) || period_month < 1 || period_month > 12) {
-        throw new Error('period_month must be 1-12')
+        throw badArgument('period_month', 'period_month must be 1-12')
       }
       if (typeof payment_date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(payment_date)) {
-        throw new Error('payment_date must be YYYY-MM-DD')
+        throw badArgument('payment_date', 'payment_date must be YYYY-MM-DD')
       }
       // Resolve the avvikelseperiod at stage time so the approver sees which
       // month's absence the run will read, and an overlap fails before approval.
@@ -18613,7 +18450,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, _userId, supabase) {
       const id = args.salary_run_id as string
-      if (!id) throw new Error('salary_run_id is required')
+      if (!id) throw badArgument('salary_run_id', 'salary_run_id is required')
       // Call the extracted calculation lib directly: no self-fetch / forged
       // cookie, no NEXT_PUBLIC_APP_URL dependency. The lib enforces draft status
       // and owner-by-company itself.
@@ -18671,7 +18508,7 @@ export const tools: McpTool[] = [
 
       const { data: run, error } = await supabase
         .from('salary_runs')
-        .select('id, status, period_year, period_month, payment_date')
+        .select('id, status, period_year, period_month, payment_date, calculation_params')
         .eq('id', id)
         .eq('company_id', companyId)
         .maybeSingle()
@@ -18682,21 +18519,37 @@ export const tools: McpTool[] = [
         throw new Error(`Salary run cannot be booked from status "${run.status}"`)
       }
 
-      // Preflight: every roster row must be calculated, so the approver never
-      // authorises a booking that the executor would reject.
+      // Preflight: the approval rules the executor applies
+      // (validateRunForApproval, shared with the dashboard and v1), so the
+      // approver never authorises a booking that the executor would reject,
+      // and sees the warnings the executor will record.
       const { data: roster, error: rosterError } = await supabase
         .from('salary_run_employees')
         .select(
-          'id, calculation_breakdown, gross_salary, tax_withheld, tax_withheld_override, net_salary, avgifter_amount, avgifter_amount_override, vacation_accrual, vacation_accrual_avgifter, employee:employees(f_skatt_status)',
+          'id, employee_id, calculation_breakdown, gross_salary, tax_withheld, tax_withheld_override, net_salary, avgifter_amount, avgifter_amount_override, vacation_accrual, vacation_accrual_avgifter, employee:employees(first_name, last_name, clearing_number, bank_account_number, email, f_skatt_status)',
         )
         .eq('salary_run_id', id)
         .eq('company_id', companyId)
       if (rosterError) throw dbError(rosterError)
-      const rosterRows = (roster ?? []) as unknown as Array<EffectiveFiguresInput & { calculation_breakdown: unknown }>
-      const uncalculated = rosterRows.filter((r) => !r.calculation_breakdown).length
-      if (uncalculated > 0) {
-        throw new Error(`${uncalculated} employee(s) lack a calculation: run gnubok_calculate_salary_run first`)
+      const rosterRows = (roster ?? []) as unknown as Array<EffectiveFiguresInput & ApprovalRosterRow>
+      const verdict = validateRunForApproval(rosterRows, run as { status: string; calculation_params?: unknown })
+      if (verdict.blocking.length > 0) {
+        const what =
+          verdict.uncalculated.length > 0
+            ? `${verdict.uncalculated.length} employee(s) lack a calculation (${verdict.uncalculated.join(', ')})`
+            : 'the run has never been calculated'
+        throw codedRefusal(
+          'SALARY_RUN_NOT_CALCULATED',
+          `Salary run ${id} cannot be booked yet: ${what}. Run gnubok_calculate_salary_run first.`,
+          {
+            description: 'Calculate the run, then stage gnubok_book_salary_run again.',
+            tool: 'gnubok_calculate_salary_run',
+            args: { salary_run_id: id },
+          },
+        )
       }
+      const approvalWarnings =
+        run.status === 'draft' || run.status === 'review' ? [...verdict.bankDetails, ...verdict.warnings] : []
 
       // The preview shows what the verifikat will carry: review-step overrides
       // applied exactly as the booking applies them (salaryRunDataFromRows),
@@ -18722,6 +18575,7 @@ export const tools: McpTool[] = [
             const eff = effectiveRow(r)
             return eff.tax_overridden || eff.avgifter_overridden
           }),
+          ...(approvalWarnings.length > 0 ? { warnings: approvalWarnings } : {}),
         },
         actor,
         {
@@ -19223,7 +19077,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase) {
       const employeeId = args.employee_id as string
-      if (!employeeId) throw new Error('employee_id is required')
+      if (!employeeId) throw badArgument('employee_id', 'employee_id is required')
       const { data: e, error } = await supabase
         .from('employees')
         .select(
@@ -19330,7 +19184,8 @@ export const tools: McpTool[] = [
     async execute(args, companyId, _userId, supabase) {
       const salaryRunId = args.salary_run_id as string
       const employeeId = args.employee_id as string
-      if (!salaryRunId || !employeeId) throw new Error('salary_run_id and employee_id are required')
+      if (!salaryRunId) throw badArgument('salary_run_id', 'salary_run_id is required')
+      if (!employeeId) throw badArgument('employee_id', 'employee_id is required')
       const { data: sre, error } = await supabase
         .from('salary_run_employees')
         .select(
@@ -19425,7 +19280,9 @@ export const tools: McpTool[] = [
       const { employee_id, from, to, absence_type } = args as {
         employee_id: string; from: string; to: string; absence_type?: string
       }
-      if (!employee_id || !from || !to) throw new Error('employee_id, from and to are required')
+      if (!employee_id) throw badArgument('employee_id', 'employee_id is required')
+      if (!from) throw badArgument('from', 'from is required')
+      if (!to) throw badArgument('to', 'to is required')
       const { listAbsenceDays } = await import('@/lib/salary/absence')
       const result = await listAbsenceDays(supabase, {
         companyId,
@@ -19464,16 +19321,15 @@ export const tools: McpTool[] = [
         salary_run_id: string; salary_line_item_id: string
         amount?: number; description?: string; quantity?: number; unit_price?: number
       }
-      if (!salary_run_id || !salary_line_item_id) {
-        throw new Error('salary_run_id and salary_line_item_id are required')
-      }
+      if (!salary_run_id) throw badArgument('salary_run_id', 'salary_run_id is required')
+      if (!salary_line_item_id) throw badArgument('salary_line_item_id', 'salary_line_item_id is required')
       const patch: Record<string, unknown> = {}
       if (amount !== undefined) patch.amount = amount
       if (description !== undefined) patch.description = description
       if (quantity !== undefined) patch.quantity = quantity
       if (unit_price !== undefined) patch.unit_price = unit_price
       if (Object.keys(patch).length === 0) {
-        throw new Error('At least one of amount, description, quantity, unit_price is required')
+        throw badArgument('arguments', 'At least one of amount, description, quantity, unit_price is required', 'Ange minst ett av amount, description, quantity eller unit_price.')
       }
 
       // Preflight via the shared service in dry-run: verifies draft status and
@@ -19549,19 +19405,18 @@ export const tools: McpTool[] = [
       const { salary_run_id, employee_id, monthly_salary, hours_worked } = args as {
         salary_run_id: string; employee_id: string; monthly_salary?: number; hours_worked?: number
       }
-      if (!salary_run_id || !employee_id) {
-        throw new Error('salary_run_id and employee_id are required')
-      }
+      if (!salary_run_id) throw badArgument('salary_run_id', 'salary_run_id is required')
+      if (!employee_id) throw badArgument('employee_id', 'employee_id is required')
       const hasMonthly = monthly_salary !== undefined
       const hasHours = hours_worked !== undefined
       if (hasMonthly === hasHours) {
-        throw new Error('Pass exactly one of monthly_salary or hours_worked')
+        throw badArgument('monthly_salary', 'Pass exactly one of monthly_salary or hours_worked', 'Ange exakt ett av monthly_salary eller hours_worked.')
       }
       if (hasMonthly && (typeof monthly_salary !== 'number' || !Number.isFinite(monthly_salary) || monthly_salary < 0)) {
-        throw new Error('monthly_salary must be a number >= 0')
+        throw badArgument('monthly_salary', 'monthly_salary must be a number >= 0')
       }
       if (hasHours && (typeof hours_worked !== 'number' || !Number.isFinite(hours_worked) || hours_worked < 0)) {
-        throw new Error('hours_worked must be a number >= 0')
+        throw badArgument('hours_worked', 'hours_worked must be a number >= 0')
       }
 
       // Preflight via the shared service in dry-run: verifies draft status,
@@ -19658,14 +19513,14 @@ export const tools: McpTool[] = [
         salary_run_id: string; payment_date?: string; voucher_series?: string; notes?: string | null
       }
       if (!salary_run_id) {
-        throw new Error('salary_run_id is required')
+        throw badArgument('salary_run_id', 'salary_run_id is required')
       }
       const patch: Record<string, unknown> = {}
       if (payment_date !== undefined) patch.payment_date = payment_date
       if (voucher_series !== undefined) patch.voucher_series = voucher_series
       if (notes !== undefined) patch.notes = notes
       if (Object.keys(patch).length === 0) {
-        throw new Error('At least one of payment_date, voucher_series, notes is required')
+        throw badArgument('arguments', 'At least one of payment_date, voucher_series, notes is required', 'Ange minst ett av payment_date, voucher_series eller notes.')
       }
 
       // Preflight via the shared service in dry-run: verifies draft status
@@ -19757,12 +19612,12 @@ export const tools: McpTool[] = [
         employee_id: string; from: string; to: string; absence_type: string
         hours_per_day?: number; notes?: string; include_weekends?: boolean
       }
-      if (!employee_id || !from || !to || !absence_type) {
-        throw new Error('employee_id, from, to and absence_type are required')
-      }
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
-        throw new Error('from and to must be YYYY-MM-DD')
-      }
+      if (!employee_id) throw badArgument('employee_id', 'employee_id is required')
+      if (!from) throw badArgument('from', 'from is required')
+      if (!to) throw badArgument('to', 'to is required')
+      if (!absence_type) throw badArgument('absence_type', 'absence_type is required')
+      if (!ISO_DATE_RE.test(from)) throw badArgument('from', 'from and to must be YYYY-MM-DD')
+      if (!ISO_DATE_RE.test(to)) throw badArgument('to', 'from and to must be YYYY-MM-DD')
 
       // Preflight in dry-run: verifies the employee and expands the range so
       // the approver sees exactly which days would be written.
@@ -19846,12 +19701,11 @@ export const tools: McpTool[] = [
       const { employee_id, from, to, absence_type } = args as {
         employee_id: string; from: string; to: string; absence_type?: string
       }
-      if (!employee_id || !from || !to) {
-        throw new Error('employee_id, from and to are required')
-      }
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
-        throw new Error('from and to must be YYYY-MM-DD')
-      }
+      if (!employee_id) throw badArgument('employee_id', 'employee_id is required')
+      if (!from) throw badArgument('from', 'from is required')
+      if (!to) throw badArgument('to', 'to is required')
+      if (!ISO_DATE_RE.test(from)) throw badArgument('from', 'from and to must be YYYY-MM-DD')
+      if (!ISO_DATE_RE.test(to)) throw badArgument('to', 'from and to must be YYYY-MM-DD')
 
       // Preflight in dry-run: verifies the employee and counts the rows so
       // the approver sees exactly how many days would be removed.
@@ -19972,29 +19826,21 @@ export const tools: McpTool[] = [
       }
       const body = parsed.data
 
-      // Preflight the EF-owner rule so staging fails early with a clean error.
-      // Same code and field as the v1 create (VALIDATION_ERROR on employment_type).
-      const { getCompanyEntityType } = await import('@/lib/company/context')
-      const { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } = await import('@/lib/salary/employment-rules')
-      const entityType = await getCompanyEntityType(supabase, companyId)
-      if (!isEmploymentTypeAllowedForEntity(entityType, body.employment_type)) {
-        throw fieldValidationError('Invalid employee', [{
-          field: 'employment_type',
-          en: 'an enskild firma cannot employ its owner or board: the owner takes eget uttag (account 2013), not salary; use "employee" for hired staff',
-          sv: EF_OWNER_EMPLOYMENT_ERROR,
-        }])
-      }
-
-      // PII rule: encrypt AT STAGING TIME. pending_operations.params never
-      // holds the plaintext personnummer; previews and titles carry the
-      // masked form only.
-      const { encryptPersonnummer, extractLast4 } = await import('@/lib/salary/personnummer')
+      // PII rule: seal AT STAGING TIME, after the date and check-digit
+      // validation every door runs. pending_operations.params never holds the
+      // plaintext personnummer; previews and titles carry the masked form only.
+      const { createEmployee, sealPersonnummer } = await import('@/lib/salary/employee-commands')
       const { personnummer, ...fields } = body
-      const params: Record<string, unknown> = {
-        ...fields,
-        personnummer_encrypted: encryptPersonnummer(personnummer),
-        personnummer_last4: extractLast4(personnummer),
+      const sealed = sealPersonnummer(personnummer)
+      if (!sealed.ok) {
+        throw fieldValidationError('Invalid employee', [{ field: 'personnummer', en: 'is not a valid personnummer', sv: sealed.message }])
       }
+      const params: Record<string, unknown> = { ...fields, ...sealed.identity }
+
+      // The executor's own rules in dry run (EF owner #782, bank details,
+      // jämkning), so staging fails early with the code the approval would.
+      const preflight = await createEmployee(supabase, { companyId, userId, input: params as never, dryRun: true })
+      if (!preflight.ok) throw employeeCommandRefusal('Invalid employee', preflight)
       const masked = maskPersonnummer(personnummer)
 
       return stagePendingOperation(
@@ -20118,31 +19964,23 @@ export const tools: McpTool[] = [
         throw fieldValidationError('Invalid employee update', zodFieldIssues(parsedPatch.error, patch))
       }
 
-      const { data: existing, error } = await supabase
-        .from('employees')
-        .select('*')
-        .eq('id', employee_id)
-        .eq('company_id', companyId)
-        .maybeSingle()
-      if (error) throw dbError(error)
-      if (!existing) throw codedRefusal('EMPLOYEE_NOT_FOUND', `Employee not found: no employee with id ${employee_id} in this company.`)
-
-      // Preflight the merged row with the rules every update door runs
-      // (salary amount, tax table, Växa-stöd, jämkning #2058, bank details),
-      // so the agent gets the error at staging time instead of at approval.
-      // The executor (updateEmployee) runs the same validator again. #3008
-      const { validateEmployeeUpdate } = await import('@/lib/salary/employee-update-rules')
-      const issues = validateEmployeeUpdate(existing as Record<string, unknown>, patch)
-      if (issues.length > 0) {
-        throw fieldValidationError(
-          'Invalid employee update',
-          issues.map((issue) => ({ field: issue.field, en: issue.message, sv: issue.message })),
-        )
+      // The executor's update in dry run: the merged-state rules every update
+      // door runs (salary amount, tax table, Växa-stöd, jämkning #2058, bank
+      // details) and the EF-owner rule, so the agent gets the error at
+      // staging time instead of at approval. #3008
+      const { updateEmployee } = await import('@/lib/salary/employee-commands')
+      const preflight = await updateEmployee(supabase, { companyId, employeeId: employee_id, patch, dryRun: true })
+      if (!preflight.ok) {
+        if (preflight.code === 'EMPLOYEE_NOT_FOUND') {
+          throw codedRefusal('EMPLOYEE_NOT_FOUND', `Employee not found: no employee with id ${employee_id} in this company.`)
+        }
+        throw employeeCommandRefusal('Invalid employee update', preflight)
       }
+      const existing = preflight.data.previous
 
       const changes = Object.entries(patch).map(([field, to]) => ({
         field,
-        from: (existing as Record<string, unknown>)[field] ?? null,
+        from: existing[field] ?? null,
         to,
       }))
       const bankChanged = changes.some((c) => c.field === 'clearing_number' || c.field === 'bank_account_number')
@@ -20399,6 +20237,7 @@ export const tools: McpTool[] = [
         taken_days: { type: 'number' },
         remaining_days: { type: 'number' },
         saved_days: { type: 'object', description: 'Origin year -> days still held (seed minus saved_days_taken)' },
+        saved_days_total: { type: 'number' },
         saved_days_taken: { type: 'object', description: 'Origin year -> days consumed this year by saved vacation lines' },
         unpaid_days: { type: 'number', description: 'Obetalda days still available (cutover pool minus unpaid vacation lines)' },
         advance_days: { type: 'number', description: 'Förskott days still available (cutover pool minus advance vacation lines)' },
@@ -20415,65 +20254,22 @@ export const tools: McpTool[] = [
           { field: 'employee_id', en: 'is required', sv: 'Obligatoriskt fält saknas: ange den anställdas id.' },
         ])
       }
-      // The employee first, as on the v1 route: a wrong id (or a malformed
-      // one, 22P02) is EMPLOYEE_NOT_FOUND, never "no balance yet".
-      const { data: employee, error: empErr } = await supabase
-        .from('employees')
-        .select('vacation_rule, vacation_days_per_year, vacation_pay_rate, semestertillagg_rate, salary_type, monthly_salary, employment_degree, hourly_rate, hours_per_week, workdays_per_week')
-        .eq('id', employeeId)
-        .eq('company_id', companyId)
-        .maybeSingle()
-      if (empErr && empErr.code !== '22P02') throw dbError(empErr)
-      if (!employee) {
-        throw codedRefusal('EMPLOYEE_NOT_FOUND', `Employee not found: no employee with id ${employeeId} in this company.`)
-      }
-      const { data: balance, error } = await supabase
-        .from('employee_vacation_balances')
-        .select('id, employee_id, vacation_year_start, entitled_days, accrued_days, taken_days, saved_days, forced_payout_days, unpaid_days, advance_days, saved_days_taken')
-        .eq('company_id', companyId)
-        .eq('employee_id', employeeId)
-        .eq('status', 'open')
-        .order('vacation_year_start', { ascending: false })
-        .limit(1)
-        .maybeSingle()
-      if (error) throw dbError(error)
-      // Not an empty balance: the ledger row is seeded by the first booked run
-      // (or the vacation year close), and zeros would claim no entitlement.
-      if (!balance) {
+      // The read and the SEK estimate are the v1 route's
+      // (lib/salary/vacation-balance.ts): a wrong id is EMPLOYEE_NOT_FOUND,
+      // a missing ledger row VACATION_BALANCE_NOT_FOUND, never zeros.
+      const { readVacationBalance } = await import('@/lib/salary/vacation-balance')
+      const result = await readVacationBalance(supabase, { companyId, employeeId })
+      if (!result.ok) {
+        if (result.code === 'INTERNAL_ERROR') throw dbError(result.cause)
+        if (result.code === 'EMPLOYEE_NOT_FOUND') {
+          throw codedRefusal('EMPLOYEE_NOT_FOUND', `Employee not found: no employee with id ${employeeId} in this company.`)
+        }
         throw codedRefusal(
           'VACATION_BALANCE_NOT_FOUND',
           `No vacation balance exists for employee ${employeeId} yet: the vacation ledger is seeded when their first salary run is booked, or at the vacation year close.`,
         )
       }
-      const { id, ...rest } = balance as { id: string } & Record<string, unknown>
-      const entitled = (rest.entitled_days as number) ?? 0
-      const taken = (rest.taken_days as number) ?? 0
-      const remaining = roundOre(entitled - taken)
-
-      // Same simplified BFNAR 2016:10 day valuation the year-close and the v1
-      // vacation-balance route use, so the three surfaces agree on the SEK
-      // estimate. remaining + sparade dagar, floored at zero: an overdrawn
-      // balance is a receivable, not a negative skuld.
-      const { dayValueSek } = await import('@/lib/salary/semesterberedning')
-      // Sparade dagar still held: seeded years minus what 'saved' vacation
-      // lines consumed this year (same helper as the v1 route).
-      const { remainingSavedDays, sumDays } = await import('@/lib/salary/vacation-category')
-      const savedTaken = (rest.saved_days_taken as Record<string, number> | null) ?? {}
-      const savedDays = remainingSavedDays(rest.saved_days as Record<string, number> | null, savedTaken)
-      const savedTotal = sumDays(savedDays)
-      const liabilityDays = Math.max(0, remaining + savedTotal)
-      const estimatedLiability = roundOre(liabilityDays * dayValueSek(employee as DayValueEmployee))
-
-      return {
-        employee_vacation_balance_id: id,
-        ...rest,
-        saved_days: savedDays,
-        saved_days_taken: savedTaken,
-        unpaid_days: (rest.unpaid_days as number | null) ?? 0,
-        advance_days: (rest.advance_days as number | null) ?? 0,
-        remaining_days: remaining,
-        estimated_liability_sek: estimatedLiability,
-      }
+      return result.data
     },
   },
   {
@@ -20559,7 +20355,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_DESTRUCTIVE_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
-      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+      if (!fiscalPeriodId) throw badArgument('fiscal_period_id', 'fiscal_period_id is required')
 
       const { data: period, error: fetchError } = await supabase
         .from('fiscal_periods')
@@ -20569,9 +20365,9 @@ export const tools: McpTool[] = [
         .single()
 
       if (fetchError || !period) throw new Error('Fiscal period not found')
-      if (period.is_closed) throw new Error('Period is already closed')
-      if (!period.locked_at) throw new Error('Period must be locked before closing: call gnubok_lock_period first')
-      if (!period.closing_entry_id) throw new Error('Year-end closing entry must exist before the period can be closed')
+      if (period.is_closed) throw codedRefusal('PERIOD_ALREADY_CLOSED', 'Period is already closed')
+      if (!period.locked_at) throw codedRefusal('PERIOD_NOT_LOCKED', 'Period must be locked before closing: call gnubok_lock_period first')
+      if (!period.closing_entry_id) throw codedRefusal('YEAR_END_NOT_RUN', 'Year-end closing entry must exist before the period can be closed')
       // Same refusal closePeriod applies at commit: refuse here, not at approval.
       assertNoUnfinishedSieImport(period, 'close')
 
@@ -20613,7 +20409,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
-      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+      if (!fiscalPeriodId) throw badArgument('fiscal_period_id', 'fiscal_period_id is required')
 
       const { data: period, error: fetchError } = await supabase
         .from('fiscal_periods')
@@ -20623,8 +20419,8 @@ export const tools: McpTool[] = [
         .single()
 
       if (fetchError || !period) throw new Error('Fiscal period not found')
-      if (period.is_closed) throw new Error('Period is already closed')
-      if (period.locked_at) throw new Error('Period is already locked')
+      if (period.is_closed) throw codedRefusal('PERIOD_ALREADY_CLOSED', 'Period is already closed')
+      if (period.locked_at) throw codedRefusal('PERIOD_LOCK_ALREADY_LOCKED', 'Period is already locked')
       // Same refusal lockPeriod applies at commit: refuse here, not at approval.
       assertNoUnfinishedSieImport(period, 'lock')
 
@@ -20643,9 +20439,8 @@ export const tools: McpTool[] = [
           fiscalPeriodId,
           reason: err instanceof Error ? err.message : String(err),
         })
-        // Deliberately matches NEITHER of the two load-bearing phrases below:
-        // an unreachable DB must not send an agent off remediating
-        // transactions (mirrors period-service.ts).
+        // Uncoded on purpose: an unreachable DB must not send an agent off
+        // remediating transactions (mirrors period-service.ts).
         throw new Error(
           'Kunde inte kontrollera obokförda banktransaktioner i perioden. Ingen låsning har föreslagits. Försök igen.'
         )
@@ -20653,10 +20448,7 @@ export const tools: McpTool[] = [
 
       const blockingCount = unbooked.untriaged + unbooked.businessUnbooked
       if (blockingCount > 0) {
-        // Wording mirrors lockPeriod in period-service.ts and is load-bearing:
-        // "saknar bokföring" and /Kan inte låsa period:.*affärstransaktion/
-        // both feed matchers (inferCode in lib/errors/get-structured-error.ts
-        // derives PERIOD_HAS_UNBOOKED_TRANSACTIONS for the MCP surface).
+        // Mirrors lockPeriod in period-service.ts, code and sentence.
         const breakdown = [
           unbooked.untriaged > 0 ? `${unbooked.untriaged} ej hanterade` : null,
           unbooked.businessUnbooked > 0
@@ -20665,10 +20457,11 @@ export const tools: McpTool[] = [
         ]
           .filter(Boolean)
           .join(', ')
-        throw new Error(
+        throw codedRefusal(
+          'PERIOD_HAS_UNBOOKED_TRANSACTIONS',
           `Kan inte låsa period: ${blockingCount} banktransaktion(er) i perioden saknar bokföring ` +
             `(${breakdown}). Alla affärstransaktioner måste vara bokförda innan perioden låses. ` +
-            `Bokför dem eller markera dem som privata eller ignorerade, och lås perioden därefter.`
+            `Bokför dem eller markera dem som privata eller ignorerade, och lås perioden därefter.`,
         )
       }
 
@@ -20711,7 +20504,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const transactionId = args.transaction_id as string
-      if (!transactionId) throw new Error('transaction_id is required')
+      if (!transactionId) throw badArgument('transaction_id', 'transaction_id is required')
 
       const { data: tx, error: txError } = await supabase
         .from('transactions')
@@ -20720,7 +20513,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .single()
 
-      if (txError || !tx) throw new Error('Transaction not found')
+      if (txError || !tx) throw codedRefusal('NOT_FOUND', 'Transaction not found')
       if (!tx.journal_entry_id) throw new Error('Transaction has no journal entry to reverse')
 
       const { data: entry } = await supabase
@@ -20779,7 +20572,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const transactionId = String(args.transaction_id ?? '').trim()
-      if (!transactionId) throw new Error('transaction_id is required')
+      if (!transactionId) throw badArgument('transaction_id', 'transaction_id is required')
       const restore = args.restore === true
 
       const { data: tx, error: txError } = await supabase
@@ -20789,7 +20582,7 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .maybeSingle()
       if (txError) throw dbError(txError)
-      if (!tx) throw new Error('Transaction not found')
+      if (!tx) throw codedRefusal('NOT_FOUND', 'Transaction not found')
 
       // Preflight through the shared core in dry run (issue #1661): the booked
       // check covers all three anchors (journal_entry_id, payment allocations,
@@ -20875,7 +20668,7 @@ export const tools: McpTool[] = [
     catalogVisibility: 'search',
     async execute(args, companyId, _userId, supabase) {
       const fiscalPeriodId = args.fiscal_period_id as string
-      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+      if (!fiscalPeriodId) throw badArgument('fiscal_period_id', 'fiscal_period_id is required')
 
       const { data: company } = await supabase
         .from('company_settings')
@@ -21478,7 +21271,7 @@ export const tools: McpTool[] = [
     async execute(args, companyId, _userId, supabase) {
       const raw = args.file_content as string
       if (typeof raw !== 'string' || raw.trim() === '') {
-        throw new Error('file_content is required (the beslutsfil JSON text)')
+        throw badArgument('file_content', 'file_content is required (the beslutsfil JSON text)')
       }
       let parsed: unknown
       try {
@@ -21557,7 +21350,7 @@ export const tools: McpTool[] = [
     shouldRunAsTask: (args) => args.estimate_only !== true,
     async execute(args, companyId, userId, supabase) {
       const fiscalPeriodId = args.fiscal_period_id as string
-      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+      if (!fiscalPeriodId) throw badArgument('fiscal_period_id', 'fiscal_period_id is required')
       const includeDocuments = args.include_documents !== false
       const estimateOnly = args.estimate_only === true
       const SIZE_LIMIT_BYTES = 80 * 1024 * 1024
@@ -21720,7 +21513,7 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase) {
       const fiscalPeriodId = args.fiscal_period_id as string
       const includePreview = args.include_preview === true
-      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+      if (!fiscalPeriodId) throw badArgument('fiscal_period_id', 'fiscal_period_id is required')
 
       // Fetch period for context (the validate function returns errors if not found,
       // but agents benefit from period metadata in the response)
@@ -21867,7 +21660,7 @@ export const tools: McpTool[] = [
     catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase, actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
-      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+      if (!fiscalPeriodId) throw badArgument('fiscal_period_id', 'fiscal_period_id is required')
 
       // #3440: refuse before any read, so nothing is assessed or staged. The
       // approval door (commitPendingOperation) reads the same switch for an
@@ -22071,7 +21864,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_DESTRUCTIVE_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
-      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+      if (!fiscalPeriodId) throw badArgument('fiscal_period_id', 'fiscal_period_id is required')
 
       const { data: period } = await supabase
         .from('fiscal_periods')
@@ -22079,7 +21872,7 @@ export const tools: McpTool[] = [
         .eq('id', fiscalPeriodId).eq('company_id', companyId).single()
 
       if (!period) throw new Error('Fiscal period not found')
-      if (period.is_closed) throw new Error('Period is already closed')
+      if (period.is_closed) throw codedRefusal('PERIOD_ALREADY_CLOSED', 'Period is already closed')
       // The closing entry posts INTO the period and the service locks it
       // itself (executeYearEndClosing step 7), so a lock taken beforehand
       // would only fail at approval as the trigger's "Cannot write to
@@ -22161,7 +21954,8 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase, actor) {
       const closedId = args.closed_period_id as string
       const nextId = args.next_period_id as string
-      if (!closedId || !nextId) throw new Error('closed_period_id and next_period_id are required')
+      if (!closedId) throw badArgument('closed_period_id', 'closed_period_id is required')
+      if (!nextId) throw badArgument('next_period_id', 'next_period_id is required')
 
       // Resolve human-readable period names so the approver doesn't see two raw
       // UUIDs in the staged-ops list. Both lookups are scoped to the company so
@@ -22212,7 +22006,8 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase, actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
       const closingDate = args.closing_date as string
-      if (!fiscalPeriodId || !closingDate) throw new Error('fiscal_period_id and closing_date are required')
+      if (!fiscalPeriodId) throw badArgument('fiscal_period_id', 'fiscal_period_id is required')
+      if (!closingDate) throw badArgument('closing_date', 'closing_date is required')
 
       return stagePendingOperation(supabase, companyId, userId, 'run_currency_revaluation',
         `Valutaomvärdering ${closingDate}`,
@@ -22322,7 +22117,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const explanation = args.explanation as string
-      if (!explanation?.trim()) throw new Error('explanation is required')
+      if (!explanation?.trim()) throw badArgument('explanation', 'explanation is required')
 
       return stagePendingOperation(supabase, companyId, userId, 'explain_voucher_gap',
         `Förklara verifikationslucka ${args.voucher_series}:${args.gap_start}-${args.gap_end}`,
@@ -22364,7 +22159,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const id = args.supplier_invoice_id as string
-      if (!id) throw new Error('supplier_invoice_id is required')
+      if (!id) throw badArgument('supplier_invoice_id', 'supplier_invoice_id is required')
 
       const { data: inv } = await supabase
         .from('supplier_invoices')
@@ -22412,7 +22207,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_DESTRUCTIVE_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const id = args.supplier_invoice_id as string
-      if (!id) throw new Error('supplier_invoice_id is required')
+      if (!id) throw badArgument('supplier_invoice_id', 'supplier_invoice_id is required')
       const parsed = CreditSupplierInvoiceInputSchema.safeParse(
         typeof args.inbox_item_id === 'string' ? { inbox_item_id: args.inbox_item_id } : {},
       )
@@ -22486,9 +22281,9 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const id = args.invoice_id as string
-      if (!id) throw new Error('invoice_id is required')
+      if (!id) throw badArgument('invoice_id', 'invoice_id is required')
       const target = (args.target as string | undefined) ?? 'invoice'
-      if (target !== 'invoice' && target !== 'order') throw new Error('target must be invoice or order')
+      if (target !== 'invoice' && target !== 'order') throw badArgument('target', 'target must be invoice or order')
       const toOrder = target === 'order'
 
       const { data: inv } = await supabase
@@ -22698,7 +22493,7 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase, actor) {
       const id = args.invoice_id as string
       const reason = args.reason as string | undefined
-      if (!id) throw new Error('invoice_id is required')
+      if (!id) throw badArgument('invoice_id', 'invoice_id is required')
 
       // The booked-ness fields decide whether approval will post a verifikat:
       // the preview must say which, so the agent never promises "nothing is
@@ -22715,7 +22510,7 @@ export const tools: McpTool[] = [
           .maybeSingle(),
       ])
 
-      if (!inv) throw new Error('Invoice not found')
+      if (!inv) throw codedRefusal('NOT_FOUND', 'Invoice not found')
       if (inv.document_type && inv.document_type !== 'invoice') {
         throw new Error('Credit notes can only be created from standard invoices')
       }
@@ -22833,7 +22628,7 @@ export const tools: McpTool[] = [
     // stays search-only and is named through the bridge above.
     async execute(args, companyId, userId, supabase, actor) {
       const invoiceId = args.invoice_id as string
-      if (!invoiceId) throw new Error('invoice_id is required. Use gnubok_list_invoices to find IDs.')
+      if (!invoiceId) throw badArgument('invoice_id', 'invoice_id is required. Use gnubok_list_invoices to find IDs.')
 
       const rawItems = args.items as StagedInvoiceLineInput[] | undefined
 
@@ -22842,7 +22637,8 @@ export const tools: McpTool[] = [
       // carrying article_id legitimately omits all three.
       if (rawItems !== undefined) {
         if (!Array.isArray(rawItems) || rawItems.length === 0) {
-          throw new Error(
+          throw badArgument(
+            'items',
             'items must be a non-empty array: it fully REPLACES every existing line on the draft. ' +
             'Read the current lines with gnubok_get_invoice first.',
           )
@@ -22852,7 +22648,7 @@ export const tools: McpTool[] = [
           // that way from gnubok_get_invoice (web parity: the canonical
           // CreateInvoiceItemSchema exempts them from the quantity rule).
           if (item.line_type === 'text') continue
-          if (!item.quantity || item.quantity <= 0) throw new Error(`Item ${i + 1}: quantity must be positive`)
+          if (!item.quantity || item.quantity <= 0) throw badArgument(`items.${i}.quantity`, `Item ${i + 1}: quantity must be positive`)
         }
       }
 
@@ -22864,7 +22660,7 @@ export const tools: McpTool[] = [
       // omitted qr_mode leaves it alone.
       if (args.qr_mode !== undefined) headerChanges.qr_mode = parseQrModeArg(args.qr_mode)
       if (rawItems === undefined && args.default_dimensions === undefined && Object.keys(headerChanges).length === 0) {
-        throw new Error('Invalid invoice update: at least one invoice field must be supplied')
+        throw badArgument('arguments', 'Invalid invoice update: at least one invoice field must be supplied', 'Ange minst ett fakturafält att ändra.')
       }
 
       // The draft first: its customer (VAT rules for the article prefill) and
@@ -22881,7 +22677,7 @@ export const tools: McpTool[] = [
         .maybeSingle()
 
       if (error) throw dbError(error)
-      if (!invoice) throw new Error('Invoice not found. Use gnubok_list_invoices to find valid IDs.')
+      if (!invoice) throw codedRefusal('NOT_FOUND', 'Invoice not found. Use gnubok_list_invoices to find valid IDs.')
 
       // Editable drafts only: the shared predicate the web PATCH route gates
       // on. The commit executor re-checks it at approval time (staging is not
@@ -23086,8 +22882,7 @@ export const tools: McpTool[] = [
 
       const parsed = UpdateInvoiceParamsSchema.safeParse({ invoice_id: invoiceId, changes })
       if (!parsed.success) {
-        const issue = parsed.error.issues[0]
-        throw new Error(`Invalid invoice update: ${issue ? `${issue.path.join('.')}: ${issue.message}` : 'validation failed'}`)
+        throw fieldValidationError('Invalid invoice update', changesIssues(parsed.error, { invoice_id: invoiceId, changes }))
       }
 
       // Same VAT-treatment explanation as gnubok_create_invoice (#2749,
@@ -23178,14 +22973,14 @@ export const tools: McpTool[] = [
     // search-only WRITE is unreachable from the claude.ai connector.
     async execute(args, companyId, userId, supabase, actor) {
       const invoiceId = args.invoice_id as string
-      if (!invoiceId) throw new Error('invoice_id is required. Use gnubok_list_invoices to find IDs.')
+      if (!invoiceId) throw badArgument('invoice_id', 'invoice_id is required. Use gnubok_list_invoices to find IDs.')
 
       const { data: inv } = await supabase
         .from('invoices')
         .select('id, invoice_number, status, total, currency, customer:customers(name)')
         .eq('id', invoiceId).eq('company_id', companyId).single()
 
-      if (!inv) throw new Error('Invoice not found')
+      if (!inv) throw codedRefusal('NOT_FOUND', 'Invoice not found')
       if (inv.status !== 'draft') {
         throw new Error(
           `Only draft invoices can be deleted (status: ${inv.status}). ` +
@@ -23526,9 +23321,11 @@ export const tools: McpTool[] = [
       const filename = args.filename as string
       const mappings = args.mappings as unknown[] | undefined
 
-      if (!fileContent || !filename || !Array.isArray(mappings)) {
-        throw new Error('file content (upload_id, file_content_base64 or file_content), filename, and mappings are required')
+      if (!fileContent) {
+        throw badArgument('upload_id', 'file content (upload_id, file_content_base64 or file_content) is required')
       }
+      if (!filename) throw badArgument('filename', 'filename is required')
+      if (!Array.isArray(mappings)) throw badArgument('mappings', 'mappings is required')
 
       // Parse + validate at stage time so the approver sees real content (which
       // entries, what balances) and a broken/unbalanced file is rejected HERE,
@@ -23659,7 +23456,7 @@ export const tools: McpTool[] = [
       const importId = args.import_id
       if (importId === undefined || importId === null || importId === '') return listRecentSIEImports(supabase, companyId)
       if (!isImportId(importId)) {
-        throw new Error(`import_id must be the UUID of a sie_imports row (got ${JSON.stringify(importId)}). Omit it to list recent imports.`)
+        throw badArgument('import_id', `import_id must be the UUID of a sie_imports row (got ${JSON.stringify(importId)}). Omit it to list recent imports.`)
       }
       return readSIEImportStatus(supabase,companyId,importId)
     },
@@ -23748,8 +23545,10 @@ export const tools: McpTool[] = [
       const description = String(args.description ?? '').trim()
       const rawLines = args.lines as Array<Record<string, unknown>> | undefined
 
-      if (!entryDate || !description || !Array.isArray(rawLines) || rawLines.length < 2) {
-        throw new Error('entry_date, description, and at least two lines are required')
+      if (!entryDate) throw badArgument('entry_date', 'entry_date is required')
+      if (!description) throw badArgument('description', 'description is required')
+      if (!Array.isArray(rawLines) || rawLines.length < 2) {
+        throw badArgument('lines', 'at least two lines are required', 'Minst två rader.')
       }
 
       // Normalize so validateBalance + preview see consistent numeric types.
@@ -24102,8 +23901,9 @@ export const tools: McpTool[] = [
       const rawLines = args.lines as Array<Record<string, unknown>> | undefined
       const allowDeepChain = args.allow_deep_chain === true
 
-      if (!entryRef || !Array.isArray(rawLines) || rawLines.length < 2) {
-        throw new Error('entry_id and at least two lines are required')
+      if (!entryRef) throw badArgument('entry_id', 'entry_id is required')
+      if (!Array.isArray(rawLines) || rawLines.length < 2) {
+        throw badArgument('lines', 'at least two lines are required', 'Minst två rader.')
       }
 
       for (const [i, l] of rawLines.entries()) assertVoucherLineShape(l, `lines[${i}]`)
@@ -24305,13 +24105,13 @@ export const tools: McpTool[] = [
       const allowDeepChain = args.allow_deep_chain === true
 
       if (!entryRef) {
-        throw new Error('entry_id is required')
+        throw badArgument('entry_id', 'entry_id is required')
       }
       // Belt-and-braces runtime check: inputSchema declares the pattern, but the
       // MCP dispatcher does not always enforce it: validate again here so a
       // malformed date never reaches the pending_operations payload.
       if (reversalDate !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(reversalDate)) {
-        throw new Error('reversal_date must be ISO yyyy-MM-dd')
+        throw badArgument('reversal_date', 'reversal_date must be ISO yyyy-MM-dd')
       }
       if (reason !== undefined && reason.length > 500) {
         throw reasonTooLongError()
@@ -24470,7 +24270,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase, _actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
-      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+      if (!fiscalPeriodId) throw badArgument('fiscal_period_id', 'fiscal_period_id is required')
       const { buildDispositionsProposal } = await import('@/lib/bokslut/dispositions-proposal-builder')
       return buildDispositionsProposal(supabase, companyId, fiscalPeriodId)
     },
@@ -24494,7 +24294,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase, _actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
-      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+      if (!fiscalPeriodId) throw badArgument('fiscal_period_id', 'fiscal_period_id is required')
       const { buildAccrualsProposal } = await import('@/lib/bokslut/accruals/accrual-detector')
       return buildAccrualsProposal(supabase, companyId, fiscalPeriodId)
     },
@@ -24570,7 +24370,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase, _actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
-      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+      if (!fiscalPeriodId) throw badArgument('fiscal_period_id', 'fiscal_period_id is required')
       const { proposeAnnualPostings } = await import('@/lib/bokslut/assets/depreciation-engine')
       return proposeAnnualPostings(supabase, companyId, fiscalPeriodId)
     },
@@ -24599,7 +24399,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
-      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+      if (!fiscalPeriodId) throw badArgument('fiscal_period_id', 'fiscal_period_id is required')
       const assetIds = Array.isArray(args.asset_ids) ? (args.asset_ids as string[]) : undefined
 
       const { data: period } = await supabase
@@ -24714,7 +24514,7 @@ export const tools: McpTool[] = [
     catalogVisibility: 'search',
     async execute(args, companyId, _userId, supabase) {
       const assetId = args.asset_id
-      if (typeof assetId !== 'string' || !UUID_RE.test(assetId)) throw new Error('asset_id must be a UUID')
+      if (typeof assetId !== 'string' || !UUID_RE.test(assetId)) throw badArgument('asset_id', 'asset_id must be a UUID')
       const asset = await getFixedAsset(supabase, companyId, assetId)
       if (!asset) throw new AssetNotFoundError()
       const { data: schedules, error } = await supabase
@@ -24753,9 +24553,7 @@ export const tools: McpTool[] = [
       const { dry_run, idempotency_key, ...rest } = args
       const parsed = CreateAssetSchema.safeParse(rest)
       if (!parsed.success) {
-        const issue = parsed.error.issues[0]
-        const path = issue?.path?.join('.') || 'args'
-        throw new Error(`Invalid ${path}: ${issue?.message ?? 'validation failed'}`)
+        throw fieldValidationError('Invalid arguments', zodFieldIssues(parsed.error, rest))
       }
       const body = parsed.data
       const gate = await checkCreateAssetGates(supabase, companyId, body)
@@ -24822,15 +24620,13 @@ export const tools: McpTool[] = [
     catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase, actor) {
       const { dry_run, idempotency_key, asset_id: assetId, ...rest } = args
-      if (typeof assetId !== 'string' || !UUID_RE.test(assetId)) throw new Error('asset_id must be a UUID')
+      if (typeof assetId !== 'string' || !UUID_RE.test(assetId)) throw badArgument('asset_id', 'asset_id must be a UUID')
       const parsed = UpdateAssetSchema.safeParse(rest)
       if (!parsed.success) {
-        const issue = parsed.error.issues[0]
-        const path = issue?.path?.join('.') || 'args'
-        throw new Error(`Invalid ${path}: ${issue?.message ?? 'validation failed'}`)
+        throw fieldValidationError('Invalid arguments', zodFieldIssues(parsed.error, rest))
       }
       const changes = parsed.data
-      if (Object.keys(changes).length === 0) throw new Error('At least one field to change is required')
+      if (Object.keys(changes).length === 0) throw badArgument('arguments', 'At least one field to change is required', 'Ange minst ett fält att ändra.')
       const existing = await getFixedAsset(supabase, companyId, assetId)
       if (!existing) throw new AssetNotFoundError()
       // Pre-flight the correction lock so the agent hears about it at staging
@@ -24896,12 +24692,10 @@ export const tools: McpTool[] = [
     catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase, actor) {
       const { dry_run, idempotency_key, asset_id: assetId, ...rest } = args
-      if (typeof assetId !== 'string' || !UUID_RE.test(assetId)) throw new Error('asset_id must be a UUID')
+      if (typeof assetId !== 'string' || !UUID_RE.test(assetId)) throw badArgument('asset_id', 'asset_id must be a UUID')
       const parsed = DisposeAssetSchema.safeParse(rest)
       if (!parsed.success) {
-        const issue = parsed.error.issues[0]
-        const path = issue?.path?.join('.') || 'args'
-        throw new Error(`Invalid ${path}: ${issue?.message ?? 'validation failed'}`)
+        throw fieldValidationError('Invalid arguments', zodFieldIssues(parsed.error, rest))
       }
       const body = parsed.data
       // Throws the typed asset errors (not found, already disposed, blocked,
@@ -24948,7 +24742,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase, _actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
-      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+      if (!fiscalPeriodId) throw badArgument('fiscal_period_id', 'fiscal_period_id is required')
       const { buildCanonicalAnnualReport } = await import('@/lib/bokslut/arsredovisning/model')
       const { getAnnualReportCapabilities } = await import(
         '@/lib/bokslut/arsredovisning/capabilities'
@@ -24997,7 +24791,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase, _actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
-      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+      if (!fiscalPeriodId) throw badArgument('fiscal_period_id', 'fiscal_period_id is required')
       const stage = (args.stage as 'draft' | 'signing' | 'filing' | undefined) ?? 'draft'
       const { buildCanonicalAnnualReport } = await import('@/lib/bokslut/arsredovisning/model')
       const model = await buildCanonicalAnnualReport(supabase, companyId, fiscalPeriodId, {
@@ -25032,7 +24826,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase, _actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
-      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+      if (!fiscalPeriodId) throw badArgument('fiscal_period_id', 'fiscal_period_id is required')
       const { listAnnualReportVersions } = await import(
         '@/lib/bokslut/arsredovisning/version-service'
       )
@@ -25072,7 +24866,7 @@ export const tools: McpTool[] = [
     catalogVisibility: 'search',
     async execute(args, companyId, _userId, supabase, _actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
-      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+      if (!fiscalPeriodId) throw badArgument('fiscal_period_id', 'fiscal_period_id is required')
       const { data, error } = await supabase
         .from('arsredovisning_submissions')
         .select(
@@ -25152,7 +24946,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, _userId, supabase, _actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
-      if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
+      if (!fiscalPeriodId) throw badArgument('fiscal_period_id', 'fiscal_period_id is required')
       const { computeEfDeclarationPreview } = await import('@/lib/bokslut/enskild-firma/ef-declaration-preview')
       return computeEfDeclarationPreview(supabase, companyId, fiscalPeriodId, {
         category: args.category as 'full' | 'pensioner' | 'passive' | undefined,
@@ -25314,8 +25108,8 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase, actor) {
       const operationId = typeof args.operation_id === 'string' ? args.operation_id : ''
       const batchId = typeof args.batch_id === 'string' ? args.batch_id : ''
-      if (!operationId && !batchId) throw new Error('operation_id or batch_id is required')
-      if (operationId && batchId) throw new Error('Pass either operation_id or batch_id, not both')
+      if (!operationId && !batchId) throw badArgument('operation_id', 'operation_id or batch_id is required', 'Ange operation_id eller batch_id.')
+      if (operationId && batchId) throw badArgument('batch_id', 'Pass either operation_id or batch_id, not both', 'Ange operation_id eller batch_id, inte båda.')
 
       // Resolve the user's email so commitPendingOperation can attribute the
       // journal_entries.committed_by_email and any user-facing email side
@@ -25506,7 +25300,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const operationId = args.operation_id as string
-      if (!operationId) throw new Error('operation_id is required')
+      if (!operationId) throw badArgument('operation_id', 'operation_id is required')
 
       const reason = typeof args.reason === 'string' && args.reason.trim() ? args.reason.trim().slice(0, 500) : undefined
       // Hosts don't always enforce the enum: an unknown category is refused,
@@ -25632,7 +25426,7 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
       const inboxItemId = args.inbox_item_id as string
-      if (!inboxItemId) throw new Error('inbox_item_id is required')
+      if (!inboxItemId) throw badArgument('inbox_item_id', 'inbox_item_id is required')
 
       const extraction = AgentExtractionSchema.safeParse(args.extracted_data)
       if (!extraction.success) {
@@ -26002,8 +25796,7 @@ export const tools: McpTool[] = [
 
       const parsed = CreateRecurringScheduleParamsSchema.safeParse(candidate)
       if (!parsed.success) {
-        const issue = parsed.error.issues[0]
-        throw new Error(`Invalid recurring schedule: ${issue ? `${issue.path.join('.')}: ${issue.message}` : 'validation failed'}`)
+        throw fieldValidationError('Invalid recurring schedule', zodFieldIssues(parsed.error, candidate))
       }
       const params = parsed.data
 
@@ -26217,8 +26010,10 @@ export const tools: McpTool[] = [
         changes,
       })
       if (!parsed.success) {
-        const issue = parsed.error.issues[0]
-        throw new Error(`Invalid schedule update: ${issue ? `${issue.path.join('.')}: ${issue.message}` : 'validation failed'}`)
+        throw fieldValidationError(
+          'Invalid schedule update',
+          changesIssues(parsed.error, { schedule_id: args.schedule_id, changes }),
+        )
       }
       const parsedChanges = parsed.data.changes
 
@@ -26271,7 +26066,7 @@ export const tools: McpTool[] = [
         }
         const { date: todayStockholm } = getStockholmDateHour(new Date())
         if (parsedChanges.next_run_date <= todayStockholm) {
-          throw new Error(`next_run_date must be after today in Europe/Stockholm (${todayStockholm}).`)
+          throw badArgument('next_run_date', `next_run_date must be after today in Europe/Stockholm (${todayStockholm}).`)
         }
       }
 
@@ -27455,7 +27250,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       if (missingScope || unmapped) {
         const scopeError = toToolError(
           missingScope
-            ? new Error(`Insufficient scope: this API key does not have the "${missingScope}" scope`)
+            ? codedRefusal('INSUFFICIENT_SCOPE', `Insufficient scope: this API key does not have the "${missingScope}" scope`)
             : codedError('FORBIDDEN', `${toolName} has no scope assigned, so no key may call it until it gets one.`),
           { toolName }
         )

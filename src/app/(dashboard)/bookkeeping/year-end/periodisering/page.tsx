@@ -1,11 +1,10 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useCompanySettings, useFiscalPeriods } from '@/lib/reference-data/hooks'
-import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
+import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
-import { ArrowLeft, ArrowRight, Lock, Plus, Trash2 } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Lock } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -21,9 +20,14 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useCompany } from '@/contexts/CompanyContext'
 import { cn, formatCurrency } from '@/lib/utils'
 import {
-  PERIODISERING_TEMPLATES,
-  type PeriodiseringTemplate,
-} from '@/lib/bokslut/accruals/templates'
+  buildAccrualItems,
+  manualEntryToItem,
+  templateOf,
+  type AuditFeeState,
+  type ManualAccrualEntry,
+} from '@/lib/bokslut/accruals/manual-items'
+import { ManualAccrualsEditor } from '@/components/bookkeeping/year-end/ManualAccrualsEditor'
+import { parseAmountInput } from '@/lib/money'
 import type { AccrualsProposal } from '@/lib/bokslut/accruals/types'
 import type {
   PeriodiseringSuggestion,
@@ -56,31 +60,9 @@ interface PeriodOption {
 
 type ProposalResponse = AccrualsProposal & { autoDetected: PeriodiseringSuggestion[] }
 
-interface AuditState {
-  enabled: boolean
-  amount: string
-  liabilityAccount: '2991' | '2992'
-}
-
 interface AutoState {
   /** key = source_invoice_id + '|' + source_type, value = accepted */
   selections: Record<string, boolean>
-}
-
-interface ManualEntry {
-  id: string
-  templateKind: PeriodiseringTemplate['kind']
-  amount: string
-  description: string
-  /** Editable accounts (pre-filled from template). */
-  primaryAccount: string
-  secondaryAccount: string
-  /** Kostnadsställe/projekt for the result leg (the secondary account). */
-  dimensions?: Record<string, string>
-}
-
-function uid() {
-  return Math.random().toString(36).slice(2, 10)
 }
 
 function suggestionKey(s: PeriodiseringSuggestion): string {
@@ -122,7 +104,7 @@ export default function PeriodiseringWizardPage() {
   const [loading, setLoading] = useState(false)
 
   const [vacationAccepted, setVacationAccepted] = useState(true)
-  const [auditState, setAuditState] = useState<AuditState>({
+  const [auditState, setAuditState] = useState<AuditFeeState>({
     enabled: false,
     amount: '',
     liabilityAccount: '2992',
@@ -138,7 +120,7 @@ export default function PeriodiseringWizardPage() {
     )
   }, [isEF])
   const [autoState, setAutoState] = useState<AutoState>({ selections: {} })
-  const [manualEntries, setManualEntries] = useState<ManualEntry[]>([])
+  const [manualEntries, setManualEntries] = useState<ManualAccrualEntry[]>([])
 
   const [posting, setPosting] = useState(false)
   const [postError, setPostError] = useState<string | null>(null)
@@ -209,53 +191,20 @@ export default function PeriodiseringWizardPage() {
   const progressValue = ((currentStepIndex + 1) / STEP_ORDER.length) * 100
   const showWizard = selectedPeriodId !== null && (periods?.length ?? 0) > 0 && !loading && !loadError
 
-  // ---- Manual entry editing helpers ----
-  const addManualFromTemplate = useCallback((template: PeriodiseringTemplate) => {
-    const primary =
-      template.prepaid_account ?? template.deferred_account ?? template.accrued_account ?? ''
-    const secondary =
-      template.expense_account ?? template.revenue_account ?? ''
-    setManualEntries((prev) => [
-      ...prev,
-      {
-        id: uid(),
-        templateKind: template.kind,
-        amount: '',
-        description: '',
-        primaryAccount: primary,
-        secondaryAccount: secondary,
-      },
-    ])
-  }, [])
-
-  const updateManual = useCallback((id: string, patch: Partial<ManualEntry>) => {
-    setManualEntries((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)))
-  }, [])
-
-  const removeManual = useCallback((id: string) => {
-    setManualEntries((prev) => prev.filter((m) => m.id !== id))
-  }, [])
-
   // ---- Final post ----
   const handlePost = useCallback(async () => {
     if (!selectedPeriodId) return
     setPosting(true)
     setPostError(null)
     try {
-      const items: unknown[] = []
-      if (vacationProposal && vacationAccepted) {
-        items.push({ kind: 'vacation_liability_change' })
-      }
-      if (auditState.enabled) {
-        const amount = parseFloat(auditState.amount)
-        if (Number.isFinite(amount) && amount > 0) {
-          items.push({
-            kind: 'audit_fee',
-            amount,
-            liability_account: auditState.liabilityAccount,
-          })
-        }
-      }
+      // The vacation change, the fee and the manual entries through the one
+      // builder the bokslut wizard uses too (lib/bokslut/accruals/manual-items).
+      const shared = buildAccrualItems({
+        vacation: !!vacationProposal && vacationAccepted,
+        auditFee: auditState,
+        manual: [],
+      })
+      const items: unknown[] = [...shared]
       for (const s of proposal?.autoDetected ?? []) {
         if (!autoState.selections[suggestionKey(s)]) continue
         if (s.source_type === 'supplier_invoice') {
@@ -277,65 +226,8 @@ export default function PeriodiseringWizardPage() {
         }
       }
       for (const m of manualEntries) {
-        const amount = parseFloat(m.amount)
-        if (!Number.isFinite(amount) || amount <= 0) continue
-        if (!m.description.trim()) continue
-        const tpl = PERIODISERING_TEMPLATES.find((t) => t.kind === m.templateKind)
-        if (!tpl) continue
-        // The route puts the bag on the result leg (the secondary account).
-        const dims = m.dimensions && Object.keys(m.dimensions).length > 0 ? { dimensions: m.dimensions } : {}
-        switch (tpl.side) {
-          case 'prepaid':
-            items.push({
-              kind: 'manual_prepaid_expense',
-              amount,
-              expense_account: m.secondaryAccount,
-              prepaid_account: m.primaryAccount,
-              description: m.description,
-              ...dims,
-            })
-            break
-          case 'accrued':
-            items.push({
-              kind: 'manual_accrued_expense',
-              amount,
-              expense_account: m.secondaryAccount,
-              accrued_account: m.primaryAccount,
-              description: m.description,
-              ...dims,
-            })
-            break
-          case 'deferred_revenue':
-            items.push({
-              kind: 'deferred_revenue',
-              amount,
-              revenue_account: m.secondaryAccount,
-              deferred_account: m.primaryAccount,
-              description: m.description,
-              ...dims,
-            })
-            break
-          case 'accrued_interest':
-            items.push({
-              kind: 'accrued_interest',
-              amount,
-              expense_account: m.secondaryAccount,
-              accrued_account: m.primaryAccount,
-              description: m.description,
-              ...dims,
-            })
-            break
-          case 'accrued_utility':
-            items.push({
-              kind: 'accrued_utility',
-              amount,
-              expense_account: m.secondaryAccount,
-              accrued_account: m.primaryAccount,
-              description: m.description,
-              ...dims,
-            })
-            break
-        }
+        const item = manualEntryToItem(m)
+        if (item) items.push(item)
       }
 
       if (items.length === 0) {
@@ -492,9 +384,7 @@ export default function PeriodiseringWizardPage() {
           {step === 'manual' && (
             <ManualStep
               entries={manualEntries}
-              onAdd={addManualFromTemplate}
-              onUpdate={updateManual}
-              onRemove={removeManual}
+              onChange={setManualEntries}
               onBack={() => setStep('auto')}
               onNext={() => setStep('review')}
             />
@@ -601,8 +491,8 @@ function AuditStep({
   onNext,
 }: {
   isEF: boolean
-  state: AuditState
-  onChange: (s: AuditState) => void
+  state: AuditFeeState
+  onChange: (s: AuditFeeState) => void
   onBack: () => void
   onNext: () => void
 }) {
@@ -773,16 +663,12 @@ function AutoStep({
 
 function ManualStep({
   entries,
-  onAdd,
-  onUpdate,
-  onRemove,
+  onChange,
   onBack,
   onNext,
 }: {
-  entries: ManualEntry[]
-  onAdd: (t: PeriodiseringTemplate) => void
-  onUpdate: (id: string, patch: Partial<ManualEntry>) => void
-  onRemove: (id: string) => void
+  entries: ManualAccrualEntry[]
+  onChange: (entries: ManualAccrualEntry[]) => void
   onBack: () => void
   onNext: () => void
 }) {
@@ -795,37 +681,8 @@ function ManualStep({
             Använd mallarna nedan för vanliga fall, eller hoppa direkt till granskning.
           </p>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {PERIODISERING_TEMPLATES.map((t) => (
-              <Button
-                key={t.kind}
-                variant="outline"
-                size="sm"
-                onClick={() => onAdd(t)}
-                className="justify-start text-left h-auto px-3"
-              >
-                <Plus className="mr-2 h-3.5 w-3.5 shrink-0" />
-                <span className="flex-1 min-w-0 py-2">
-                  <span className="block font-medium">{t.name}</span>
-                  <span className="block text-xs text-muted-foreground truncate">{t.hint}</span>
-                </span>
-              </Button>
-            ))}
-          </div>
-
-          {entries.length > 0 && (
-            <div className="space-y-3 pt-2">
-              {entries.map((entry) => (
-                <ManualEntryEditor
-                  key={entry.id}
-                  entry={entry}
-                  onChange={(patch) => onUpdate(entry.id, patch)}
-                  onRemove={() => onRemove(entry.id)}
-                />
-              ))}
-            </div>
-          )}
+        <CardContent>
+          <ManualAccrualsEditor entries={entries} onChange={onChange} />
         </CardContent>
       </Card>
       <div className="flex justify-between">
@@ -835,95 +692,6 @@ function ManualStep({
         <Button onClick={onNext}>
           Granska <ArrowRight className="ml-1 h-4 w-4" />
         </Button>
-      </div>
-    </div>
-  )
-}
-
-function ManualEntryEditor({
-  entry,
-  onChange,
-  onRemove,
-}: {
-  entry: ManualEntry
-  onChange: (patch: Partial<ManualEntry>) => void
-  onRemove: () => void
-}) {
-  // Kostnadsställe/projekt for the result leg, shown only when the company
-  // uses dimensions (read before the early return: hooks run every render).
-  const { settings: companySettings } = useCompanySettings()
-  const dimensionsEnabled = companySettings?.dimensions_enabled === true
-  const template = PERIODISERING_TEMPLATES.find((t) => t.kind === entry.templateKind)
-  if (!template) return null
-  const primaryLabel =
-    template.side === 'prepaid'
-      ? '17xx-konto'
-      : template.side === 'deferred_revenue'
-        ? '29xx-konto (deferred)'
-        : '29xx-konto'
-  const secondaryLabel =
-    template.side === 'deferred_revenue' ? 'Intäktskonto' : 'Kostnadskonto'
-
-  return (
-    <div className="rounded-lg border border-border p-3 space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="text-sm font-medium">{template.name}</p>
-        <Button variant="ghost" size="icon-sm" onClick={onRemove} aria-label="Ta bort">
-          <Trash2 className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1">
-          <Label className="text-xs">Belopp (kr)</Label>
-          <Input
-            type="number"
-            step="1"
-            min="0"
-            value={entry.amount}
-            onChange={(e) => onChange({ amount: e.target.value })}
-            className="tabular-nums h-8"
-          />
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">{primaryLabel}</Label>
-          <Input
-            value={entry.primaryAccount}
-            onChange={(e) => onChange({ primaryAccount: e.target.value })}
-            className="tabular-nums h-8"
-          />
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">{secondaryLabel}</Label>
-          <Input
-            value={entry.secondaryAccount}
-            onChange={(e) => onChange({ secondaryAccount: e.target.value })}
-            className="tabular-nums h-8"
-          />
-        </div>
-        <div className="space-y-1 col-span-2">
-          <Label className="text-xs">Beskrivning</Label>
-          <Input
-            value={entry.description}
-            onChange={(e) => onChange({ description: e.target.value })}
-            placeholder="t.ex. Försäkring 2026"
-            className="h-8"
-          />
-        </div>
-        {dimensionsEnabled && (
-          <div className="col-span-2">
-            <LineDimensionFields
-              dimensions={entry.dimensions}
-              onChange={(dimNo, code) => {
-                const next = { ...(entry.dimensions ?? {}) }
-                const trimmed = code?.trim()
-                if (trimmed) next[dimNo] = trimmed
-                else delete next[dimNo]
-                onChange({ dimensions: next })
-              }}
-              inputClassName="h-8"
-            />
-          </div>
-        )}
       </div>
     </div>
   )
@@ -945,10 +713,10 @@ function ReviewStep({
 }: {
   vacationProposal: AccrualsProposal['proposals'][number] | null
   vacationAccepted: boolean
-  auditState: AuditState
+  auditState: AuditFeeState
   suggestions: PeriodiseringSuggestion[]
   selections: Record<string, boolean>
-  manualEntries: ManualEntry[]
+  manualEntries: ManualAccrualEntry[]
   postError: string | null
   postSummary: { created: number; skipped: number } | null
   posting: boolean
@@ -956,12 +724,11 @@ function ReviewStep({
   onBack: () => void
   onPost: () => void
 }) {
-  const auditAmount = parseFloat(auditState.amount)
+  const auditAmount = parseAmountInput(auditState.amount) ?? NaN
   const auditValid = auditState.enabled && Number.isFinite(auditAmount) && auditAmount > 0
   const selectedSuggestions = suggestions.filter((s) => selections[suggestionKey(s)])
-  const validManual = manualEntries.filter(
-    (m) => Number.isFinite(parseFloat(m.amount)) && parseFloat(m.amount) > 0 && m.description.trim(),
-  )
+  // What the post will book: the entries the shared builder takes.
+  const validManual = manualEntries.filter((m) => manualEntryToItem(m) !== null)
 
   const totalCount =
     (vacationProposal && vacationAccepted ? 1 : 0) +
@@ -1004,7 +771,7 @@ function ReviewStep({
             />
           ))}
           {validManual.map((m) => {
-            const tpl = PERIODISERING_TEMPLATES.find((t) => t.kind === m.templateKind)
+            const tpl = templateOf(m.templateKind)
             // The tags the result leg will carry, e.g. "KS01 · P001".
             const dims = Object.entries(m.dimensions ?? {})
               .filter(([, v]) => v)
@@ -1015,7 +782,7 @@ function ReviewStep({
               <ReviewLine
                 key={m.id}
                 label={`${tpl?.name ?? 'Periodisering'}: ${m.description}`}
-                amount={parseFloat(m.amount)}
+                amount={parseAmountInput(m.amount) ?? 0}
                 note={[tpl?.name, dims].filter(Boolean).join(' · ')}
               />
             )

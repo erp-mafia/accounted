@@ -32,6 +32,7 @@ import type {
   TaxDepreciationRule as TaxRule,
 } from '@/lib/bokslut/assets/tax-depreciation'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { parseAmountInput } from '@/lib/money'
 
 interface ProposalItem {
   asset: Asset
@@ -366,8 +367,8 @@ function TaxDepreciationCard({
       setSaveError('Ange skattemässigt värde vid årets ingång.')
       return null
     }
-    const opening = Number(openingValue.replace(',', '.'))
-    if (!Number.isFinite(opening) || opening < 0) {
+    const opening = parseAmountInput(openingValue)
+    if (opening === null || opening < 0) {
       setSaveError('Ange ett ingående skattemässigt värde på 0 kr eller mer.')
       return null
     }
@@ -424,8 +425,8 @@ function TaxDepreciationCard({
       setSaveError('Ange årets faktiska skattemässiga avdrag.')
       return
     }
-    const deduction = Number(electedDeduction.replace(',', '.'))
-    if (!Number.isFinite(deduction) || deduction < 0) {
+    const deduction = parseAmountInput(electedDeduction)
+    if (deduction === null || deduction < 0) {
       setSaveError('Årets faktiska avdrag måste vara 0 kr eller mer.')
       return
     }

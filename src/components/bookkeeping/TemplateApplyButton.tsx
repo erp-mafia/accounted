@@ -13,7 +13,7 @@ import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useAccounts } from '@/lib/reference-data/hooks'
 import { chartVatTreatmentsOf } from '@/lib/bookkeeping/vat-entries'
-import { roundOre } from '@/lib/money'
+import { parseAmountInput, formatAmountInput } from '@/lib/money'
 import type { BookingTemplateCategory, BookingTemplateLibrary, EntityType } from '@/types'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 
@@ -28,8 +28,8 @@ interface Props {
 type Picked = { kind: 'library'; raw: BookingTemplateLibrary } | { kind: 'static'; template: BookingTemplate }
 
 function parseAmount(raw: string): number {
-  const n = parseFloat(raw.replace(/\s/g, '').replace(',', '.'))
-  return Number.isFinite(n) && n > 0 ? roundOre(n) : 0
+  const n = parseAmountInput(raw)
+  return n !== null && n > 0 ? n : 0
 }
 
 /**
@@ -59,7 +59,7 @@ export default function TemplateApplyButton({ onApply, entityType, defaultAmount
   // Opening starts clean: nothing held, the total the caller knows prefilled.
   const open = (button: HTMLElement) => {
     setPicked(null)
-    setAmount(defaultAmount != null && defaultAmount > 0 ? String(roundOre(defaultAmount)) : '')
+    setAmount(defaultAmount != null && defaultAmount > 0 ? formatAmountInput(defaultAmount) : '')
     setAnchor(button)
   }
 

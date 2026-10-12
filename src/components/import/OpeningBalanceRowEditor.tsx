@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS } from '@/components/ui/popover-surface'
 import { Plus, Trash2, AlertTriangle, Scale } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn, formatAmount } from '@/lib/utils'
 import { getBasLoaded } from '@/lib/bookkeeping/bas-lazy'
 import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
 import type { BASReferenceAccount } from '@/lib/bookkeeping/bas-reference'
@@ -420,7 +420,7 @@ export default function OpeningBalanceRowEditor({
           <Button variant="outline" size="sm" onClick={handleAutoBalance}>
             <Scale className="h-3.5 w-3.5 mr-1.5" />
             Avrunda ({totals.diff > 0 ? '+' : ''}
-            {totals.diff.toFixed(2)} till 2099)
+            {formatAmount(totals.diff)} till 2099)
           </Button>
         )}
       </div>

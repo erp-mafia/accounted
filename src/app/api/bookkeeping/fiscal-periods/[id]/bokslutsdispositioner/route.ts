@@ -8,27 +8,21 @@ import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 import {
   calculateBolagsskatt,
-  getBookedBolagsskatt,
   sumPostedYearEndDispositions,
 } from '@/lib/bokslut/tax-provision/bolagsskatt-calculator'
-import {
-  loadTaxAdjustmentSnapshot,
-  saveTaxAdjustments,
-} from '@/lib/bokslut/tax-provision/tax-adjustment-service'
+import { saveTaxAdjustments } from '@/lib/bokslut/tax-provision/tax-adjustment-service'
 import { calculateSarskildLoneskatt } from '@/lib/bokslut/tax-provision/sarskild-loneskatt-calculator'
-import {
-  getPeriodiseringsfondCohortAccount,
-  listExistingPeriodiseringsfonder,
-  proposeAvsattning,
-  proposeAteforing,
-  resolveSchablonintaktRate,
-} from '@/lib/bokslut/reserves/periodiseringsfond-service'
 import { proposeOveravskrivningar } from '@/lib/bokslut/reserves/overavskrivningar-service'
 import { calculateOveravskrivningar } from '@/lib/bokslut/reserves/overavskrivningar-calculator'
-import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { roundOre } from '@/lib/money'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
-import { buildDispositionsProposal } from '@/lib/bokslut/dispositions-proposal-builder'
+import {
+  ateforingDispositions,
+  avsattningDisposition,
+  bolagsskattDisposition,
+  buildDispositionsProposal,
+  loadDispositionState,
+} from '@/lib/bokslut/dispositions-proposal-builder'
 import type { ProposedDisposition } from '@/lib/bokslut/types'
 import type { JournalEntry } from '@/types'
 
@@ -234,7 +228,6 @@ export const POST = withRouteContext(
         return errorResponseFromCode('PERIOD_LOCKED', opLog, { requestId })
       }
 
-      const fiscalYear = parseInt(period.period_end.slice(0, 4), 10)
       const created: { kind: string; entry: JournalEntry }[] = []
 
       // Process items in canonical bokslut order regardless of client array
@@ -253,7 +246,7 @@ export const POST = withRouteContext(
       // produces correct amounts on top of what's already there. A future
       // RPC-level wrapper (Phase 5+) will make this atomic.
       for (const item of sortedItems) {
-        const proposal = await computeProposal(item, supabase, companyId, period, fiscalYear)
+        const proposal = await computeProposal(item, supabase, companyId, period)
         if (!proposal) continue
 
         const entry = await createJournalEntry(supabase, companyId, user.id, {
@@ -344,53 +337,21 @@ async function computeProposal(
   supabase: Parameters<typeof calculateBolagsskatt>[0],
   companyId: string,
   period: ValidatedPeriod,
-  fiscalYear: number,
 ): Promise<ProposedDisposition | null> {
   const fiscalPeriodId = period.id
   switch (item.kind) {
     case 'bolagsskatt': {
-      // Dispositioner are booked as source_type='year_end', which the income
-      // statement excludes, so net_result alone overstates resultat före skatt.
-      // Add the already-posted dispositions back (avsättning −, återföring +,
-      // SLP −, överavskrivningar −); bolagsskatt is sorted LAST so they are
-      // committed by now. Without this the booked tax ignores the avsättning
-      // (the original customer bug, too-high tax, ÅR/INK2 mismatch).
-      const [incomeStatement, dispositionsEffect, taxAdjustments, bookedTax, existingFonder] =
-        await Promise.all([
-          generateIncomeStatement(supabase, companyId, fiscalPeriodId),
-          sumPostedYearEndDispositions(supabase, companyId, fiscalPeriodId),
-          loadTaxAdjustmentSnapshot(supabase, companyId, fiscalPeriodId),
-          getBookedBolagsskatt(supabase, companyId, fiscalPeriodId),
-          listExistingPeriodiseringsfonder(
-            supabase,
-            companyId,
-            period.period_end,
-            period.period_start,
-            period.opening_balance_entry_id,
-          ),
-        ])
-      const schablonintaktRate = resolveSchablonintaktRate(fiscalYear, existingFonder)
-      const schablonintakt = existingFonder.reduce(
-        (sum, fund) => sum + Math.max(0, fund.opening_balance) * schablonintaktRate,
-        0,
-      )
-      const manuallyBookedTax = Math.max(
-        0,
-        bookedTax - dispositionsEffect.taxProvisionPortion,
-      )
-      const proposal = await calculateBolagsskatt(supabase, companyId, fiscalPeriodId, {
-        resultBeforeTaxOverride:
-          incomeStatement.net_result + dispositionsEffect.total + manuallyBookedTax,
-        manualAdjustments: {
-          nonDeductibleExpenses: taxAdjustments.nonDeductibleExpenses,
-          nonTaxableIncome: taxAdjustments.nonTaxableIncome,
-          deficitCarryforward: taxAdjustments.deficitCarryforward ?? 0,
-          schablonintaktPeriodiseringsfond: Math.round(schablonintakt),
-        },
+      // The preview's own computation (bolagsskattDisposition) on the ledger
+      // as it stands now: bolagsskatt is sorted LAST, so every disposition of
+      // this batch is posted and in postedEffect, nothing is pending.
+      const state = await loadDispositionState(supabase, companyId, period)
+      const proposal = await bolagsskattDisposition(supabase, companyId, state, {
+        pendingResultEffect: 0,
+        schablonintaktAmount: ateforingDispositions(state).schablonintaktAmount,
       })
       const expectedTax = proposal?.amount ?? 0
-      if (bookedTax > 0 && bookedTax === expectedTax) return null
-      if (bookedTax > 0) throw new TaxProvisionConflictError(bookedTax, expectedTax)
+      if (state.bookedTax > 0 && state.bookedTax === expectedTax) return null
+      if (state.bookedTax > 0) throw new TaxProvisionConflictError(state.bookedTax, expectedTax)
       return proposal && proposal.amount > 0 ? proposal : null
     }
     case 'sarskild_loneskatt': {
@@ -403,88 +364,28 @@ async function computeProposal(
       })
     }
     case 'periodiseringsfond_avsattning': {
-      // Re-derive the cap base from current state so the user can't sneak in
-      // a higher desiredAmount than 25 % of actual skattemässigt resultat.
-      const incomeStatement = await generateIncomeStatement(
-        supabase,
-        companyId,
-        fiscalPeriodId,
-      )
-      const existing = await listExistingPeriodiseringsfonder(
-        supabase,
-        companyId,
-        period.period_end,
-        period.period_start,
-        period.opening_balance_entry_id,
-      )
-      const schablonintaktRate = resolveSchablonintaktRate(
-        fiscalYear,
-        existing,
-        item.schablonintaktRate,
-      )
-      // Schablonintäkt applies to the fond balance at the START of the tax
-      // year (IL 30 kap 6a §): opening balances, regardless of what has
-      // been avsatt or återfört during the period.
-      const schablonintakt = existing.reduce(
-        (sum, f) => sum + Math.max(0, f.opening_balance) * schablonintaktRate,
-        0,
-      )
-      // A previous avsättning in this bokslut consumes 25 %-cap headroom:
-      // without this, re-running the flow books the fond twice. Measured as
-      // the current cohort ACCOUNT's growth during the period so a
-      // prior-year fond sharing the account (shortened brutet räkenskapsår,
-      // decade wrap) does not consume this year's headroom.
-      const currentCohort = existing.find(
-        (f) => f.account_number === getPeriodiseringsfondCohortAccount(fiscalYear),
-      )
-      const alreadyProvisioned = currentCohort
-        ? Math.max(0, currentCohort.balance - Math.max(0, currentCohort.opening_balance))
-        : 0
-      // A posted current-year allocation is a completed user decision. New
-      // tax adjustments may increase the legal ceiling, but must never cause
-      // the page to propose an unsolicited incremental allocation on reload.
-      if (alreadyProvisioned > 0) return null
-      // Dispositions posted earlier in this batch (återföring, över-
-      // avskrivningar, SLP: all sorted before avsättning) are year_end-typed
-      // and thus invisible in net_result, yet they move the cap base. Add
-      // their signed effect back, then add back any posted avsättning itself
-      // (the cap applies to the result BEFORE avsättning; headroom is
-      // handled via alreadyProvisioned).
-      const postedEffect = await sumPostedYearEndDispositions(
-        supabase,
-        companyId,
-        fiscalPeriodId,
-      )
-      const taxAdjustments = await loadTaxAdjustmentSnapshot(
-        supabase,
-        companyId,
-        fiscalPeriodId,
-      )
-      const base =
-        incomeStatement.net_result + postedEffect.total + alreadyProvisioned
-        + Math.round(schablonintakt)
-        + taxAdjustments.nonDeductibleExpenses - taxAdjustments.nonTaxableIncome
-        - (taxAdjustments.deficitCarryforward ?? 0)
-      return proposeAvsattning({
-        skattemassigtResultatBeforeAvsattning: base,
+      // The preview's cap base (avsattningDisposition), re-derived from the
+      // current ledger so the user cannot sneak in a higher desiredAmount than
+      // 25 % of the actual skattemässigt resultat. Återföring, över-
+      // avskrivningar and SLP are sorted before avsättning, so they are posted
+      // and in postedEffect: nothing is pending. A posted current-year
+      // avsättning is a completed decision: never topped up (null).
+      const state = await loadDispositionState(supabase, companyId, period)
+      return avsattningDisposition(state, {
+        pendingResultEffect: 0,
+        schablonintaktAmount: ateforingDispositions(state, {
+          schablonintaktRate: item.schablonintaktRate,
+        }).schablonintaktAmount,
         desiredAmount: item.desiredAmount,
-        fiscalYear,
-        alreadyProvisioned,
       })
     }
     case 'periodiseringsfond_ateforing': {
       // Recompute existing fonder server-side so the user can't return more
       // than is on the books.
-      const existing = await listExistingPeriodiseringsfonder(
-        supabase,
-        companyId,
-        period.period_end,
-        period.period_start,
-        period.opening_balance_entry_id,
-      )
-      const result = proposeAteforing(existing, {
+      const state = await loadDispositionState(supabase, companyId, period)
+      const result = ateforingDispositions(state, {
         returns: item.returns,
-        schablonintaktRate: resolveSchablonintaktRate(fiscalYear, existing, item.schablonintaktRate),
+        schablonintaktRate: item.schablonintaktRate,
       })
       // Combine multiple cohort reversals into a single voucher with multiple
       // lines so we don't blow up voucher numbering, but each fond is its own

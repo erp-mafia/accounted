@@ -8,7 +8,7 @@ import { resolveSekAmount, resolveSekAmountOrNull } from './currency-utils'
 import { roundOre, ORE_TOLERANCE } from '@/lib/money'
 import { InvoiceFxRateMissingError } from './invoice-accounts'
 import { buildInvoiceCashLines } from './invoice-lines'
-import { oreRoundingLine, oreSettlementResidual } from './ore-rounding'
+import { fxDifferenceLine, oreRoundingLine, oreSettlementResidual } from './ore-rounding'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import type { CreateJournalEntryLineInput, EntityType, InvoiceItem, VatTreatment } from '@/types'
@@ -293,21 +293,7 @@ function proposeAccrualLines(
       line_description: desc,
     })
 
-    if (exchangeRateDifference > 0) {
-      lines.push({
-        account_number: '3960',
-        debit_amount: '',
-        credit_amount: toFormAmount(exchangeRateDifference),
-        line_description: 'Valutakursvinst',
-      })
-    } else {
-      lines.push({
-        account_number: '7960',
-        debit_amount: toFormAmount(Math.abs(exchangeRateDifference)),
-        credit_amount: '',
-        line_description: 'Valutakursförlust',
-      })
-    }
+    lines.push(toFormLine(fxDifferenceLine(exchangeRateDifference)))
   } else {
     const amount = Math.round(bookedSekAmount * 100) / 100
     lines.push({

@@ -27,7 +27,7 @@ import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/regis
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
-import { maskPersonnummer } from '@/lib/api/v1/mask-personnummer'
+import { maskPersonnummer } from '@/lib/salary/personnummer-format'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
 import { AddEmployeeToRunSchema } from '@/lib/api/schemas'
 import { addEmployeeToRun } from '@/lib/salary/run-employees'
@@ -95,7 +95,7 @@ registerEndpoint({
           employee_id: 'emp_77b2…',
           first_name: 'Anna',
           last_name: 'Andersson',
-          personnummer_masked: 'YYYYMMDDXXXX',
+          personnummer_masked: 'YYYYMMDD-XXXX',
           salary_type: 'monthly',
           gross_salary: 35000,
           tax_withheld: -8200,

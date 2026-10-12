@@ -58,7 +58,7 @@
 import type { CreateJournalEntryLineInput } from '@/types'
 import { resolveSekAmount } from './currency-utils'
 import { coerceDimensionsBag } from './dimension-resolver'
-import { oreRoundingLine, oreSettlementResidual } from './ore-rounding'
+import { fxDifferenceLine, oreRoundingLine, oreSettlementResidual } from './ore-rounding'
 import { overpaymentAllowed, overpaymentExcess, overpaymentLine } from './overpayment'
 
 const TWO_DP = (n: number): number => Math.round(n * 100) / 100
@@ -364,23 +364,9 @@ export function buildInvoicePaymentClearingLines(
   // rounding allowance per BFL 5 kap 4-5§. Same rationale as the balance
   // pre-check in gnubok_bulk_book_transactions.
   if (Math.abs(fxDiffSek) > 0.005) {
-    if (fxDiffSek > 0) {
-      // arSek > bankSek → bank received fewer SEK than booked. Loss → 7960 debit.
-      lines.push({
-        account_number: '7960',
-        debit_amount: Math.abs(fxDiffSek),
-        credit_amount: 0,
-        line_description: 'Valutakursförlust',
-      })
-    } else {
-      // bankSek > arSek → bank received more SEK than booked. Gain → 3960 credit.
-      lines.push({
-        account_number: '3960',
-        debit_amount: 0,
-        credit_amount: Math.abs(fxDiffSek),
-        line_description: 'Valutakursvinst',
-      })
-    }
+    // arSek > bankSek: the bank received fewer SEK than booked, a loss (Dr
+    // 7960); bankSek > arSek a gain (Cr 3960).
+    lines.push(fxDifferenceLine(-fxDiffSek))
   }
 
   // Öresavrundning (3740): pure-SEK only, mutually exclusive with an FX diff.

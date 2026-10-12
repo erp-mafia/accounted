@@ -10,7 +10,7 @@ import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import { Search, FileText, Loader2, Landmark } from 'lucide-react'
 import { useCompany } from '@/contexts/CompanyContext'
-import type { Invoice, Customer, DeductionType } from '@/types'
+import type { Invoice, Customer, DeductionType, SupplierInvoice, Supplier } from '@/types'
 import { DEDUCTION_TYPE_LABEL_KEYS } from '@/lib/invoices/rot-rut-rules'
 import type { PotentialRotRutPayoutRequest, TransactionWithInvoice } from './transaction-types'
 import {
@@ -22,22 +22,51 @@ import {
   expectedRotRutPayoutAmount,
   OPEN_ROT_RUT_PAYOUT_STATUSES,
 } from '@/lib/invoices/rot-rut-payout-matching'
-import { PICKER_LIMIT, searchOpenInvoices } from '@/lib/invoices/open-invoice-search'
+import { PICKER_LIMIT, loadOpenInvoicesForMatch } from '@/lib/invoices/open-invoice-search'
+import { invoiceStatusDisplay } from '@/lib/invoices/status-display'
+import { supplierInvoiceStatusDisplay } from '@/lib/supplier-invoices/status-display'
+import { statusChipTextClass } from '@/lib/status-display'
 
 /** Pause after the last keystroke before the search goes to the database. */
 const SEARCH_DEBOUNCE_MS = 250
 
-type OpenInvoice = Invoice & { customer?: Customer }
+export type OpenInvoice = Invoice & { customer?: Customer }
+export type OpenSupplierInvoice = SupplierInvoice & { supplier?: Supplier }
 
-interface InvoicePickerProps {
-  transaction: TransactionWithInvoice
-  onSelect: (invoice: OpenInvoice) => void
-  /** Pick one or several open ROT/RUT begäran instead of an invoice
-   *  (Skatteverkets utbetalning). A row click hands over that begäran alone;
-   *  the checkboxes build a bundle for a transfer that paid several beslut,
-   *  which the automatic set matcher refuses when two begäran carry the same
-   *  amount (#2425). The section only renders when the company has one. */
-  onSelectRotRutPayout?: (requests: PotentialRotRutPayoutRequest[]) => void
+/**
+ * The one picker for matching a bank transaction to an open invoice, in
+ * either direction: customer invoices for money in, supplier invoices for
+ * money out. The rows, the search (in the database, via
+ * loadOpenInvoicesForMatch) and the amount ranking are the same for both; only
+ * the customer side offers Skatteverket's ROT/RUT payouts.
+ */
+type InvoicePickerProps =
+  | {
+      kind?: 'customer'
+      transaction: TransactionWithInvoice
+      onSelect: (invoice: OpenInvoice) => void
+      /** Pick one or several open ROT/RUT begäran instead of an invoice
+       *  (Skatteverkets utbetalning). A row click hands over that begäran alone;
+       *  the checkboxes build a bundle for a transfer that paid several beslut,
+       *  which the automatic set matcher refuses when two begäran carry the same
+       *  amount (#2425). The section only renders when the company has one. */
+      onSelectRotRutPayout?: (requests: PotentialRotRutPayoutRequest[]) => void
+    }
+  | {
+      kind: 'supplier'
+      transaction: TransactionWithInvoice
+      onSelect: (invoice: OpenSupplierInvoice) => void
+      onSelectRotRutPayout?: never
+    }
+
+type PickerRow = OpenInvoice | OpenSupplierInvoice
+
+function rowNumber(row: PickerRow): string | null {
+  return 'supplier_invoice_number' in row ? row.supplier_invoice_number : row.invoice_number
+}
+
+function rowCounterparty(row: PickerRow): string | null {
+  return 'supplier_invoice_number' in row ? (row.supplier?.name ?? null) : (row.customer?.name ?? null)
 }
 
 type RotRutRequestRow = {
@@ -54,13 +83,17 @@ type RotRutRequestRow = {
   }> | null
 }
 
-export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPayout }: InvoicePickerProps) {
+export default function InvoicePicker(props: InvoicePickerProps) {
+  const { transaction, onSelectRotRutPayout } = props
+  const kind = props.kind ?? 'customer'
+  const isSupplier = kind === 'supplier'
   const t = useTranslations('tx_invoice_picker')
   const tInvoices = useTranslations('invoices')
+  const tSupplierInvoices = useTranslations('supplier_invoices')
   const { company } = useCompany()
   const supabase = useMemo(() => createClient(), [])
   // Rows for the applied search term (the newest open invoices without one).
-  const [invoices, setInvoices] = useState<OpenInvoice[]>([])
+  const [invoices, setInvoices] = useState<PickerRow[]>([])
   // Whether the request came back full: older rows exist past the limit.
   const [capped, setCapped] = useState(false)
   // Whether the company has any open invoice at all (the unsearched load):
@@ -97,36 +130,19 @@ export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPay
       try {
         // The search runs in the database across every open invoice: the
         // newest-first list is capped, so filtering it here could never find
-        // an older open invoice. Settled, credited and proforma rows are
-        // excluded there (lib/invoices/open-invoice-search).
-        const all = await searchOpenInvoices<OpenInvoice>(supabase, companyId, appliedSearch)
+        // an older open invoice. The matchable statuses and the status-leak
+        // guard (an unpaid status on a row that already has a payment
+        // voucher) live there too (lib/invoices/open-invoice-search).
+        const { rows, capped: full } = await loadOpenInvoicesForMatch<PickerRow>(
+          supabase,
+          companyId,
+          kind,
+          appliedSearch,
+        )
         if (cancelled) return
-
-        // Status-leak guard: if an invoice still says 'sent'/'overdue' but
-        // already has a payment voucher attached (manual or system), hide it.
-        // Partially-paid invoices intentionally pass through: they may take
-        // more payments. Mirrors the server-side filter in loadInvoiceMatchPool.
-        const fullIds = all
-          .filter((inv) => inv.status === 'sent' || inv.status === 'overdue')
-          .map((inv) => inv.id)
-        let visible = all
-        if (fullIds.length > 0) {
-          const { data: paid } = await supabase
-            .from('invoice_payments')
-            .select('invoice_id')
-            .eq('company_id', companyId)
-            .in('invoice_id', fullIds)
-            .not('journal_entry_id', 'is', null)
-          if (cancelled) return
-          const paidSet = new Set<string>(
-            ((paid as { invoice_id: string }[] | null) ?? []).map((r) => r.invoice_id),
-          )
-          visible = all.filter((inv) => !paidSet.has(inv.id))
-        }
-
-        setInvoices(visible)
-        setCapped(all.length >= PICKER_LIMIT)
-        if (!appliedSearch) setHasOpenInvoices(visible.length > 0)
+        setInvoices(rows)
+        setCapped(full)
+        if (!appliedSearch) setHasOpenInvoices(rows.length > 0)
       } catch {
         if (cancelled) return
         setInvoices([])
@@ -142,13 +158,13 @@ export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPay
     return () => {
       cancelled = true
     }
-  }, [company, supabase, appliedSearch])
+  }, [company, supabase, appliedSearch, kind])
 
   useEffect(() => {
     // Open ROT/RUT begäran: the manual fallback when the SKV payout got no
     // auto-hint (amount differs from the request, or the row predates the
     // hint). Non-fatal: the invoice list renders either way.
-    if (!company || !wantRotRutRequests) return
+    if (!company || !wantRotRutRequests || isSupplier) return
     const companyId = company.id
     let cancelled = false
     async function loadRotRutRequests() {
@@ -182,7 +198,7 @@ export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPay
     return () => {
       cancelled = true
     }
-  }, [company, supabase, wantRotRutRequests])
+  }, [company, supabase, wantRotRutRequests, isSupplier])
 
   const sorted = useMemo(
     () =>
@@ -202,7 +218,7 @@ export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPay
     return (
       <div className="flex items-center justify-center py-8 text-muted-foreground">
         <Loader2 className="h-5 w-5 animate-spin mr-2" />
-        {t('loading')}
+        {isSupplier ? t('loading_supplier') : t('loading')}
       </div>
     )
   }
@@ -236,7 +252,7 @@ export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPay
     )
   }
   const rotRutSection =
-    onSelectRotRutPayout && txIsSek && rotRutRequests.length > 0 ? (
+    onSelectRotRutPayout && !isSupplier && txIsSek && rotRutRequests.length > 0 ? (
       <div className="space-y-1.5">
         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           {t('rot_rut_section_title')}
@@ -321,7 +337,7 @@ export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPay
       <div className="space-y-3">
         {rotRutSection}
         <div className="text-center py-8 text-muted-foreground">
-          <p className="text-sm">{t('empty')}</p>
+          <p className="text-sm">{isSupplier ? t('empty_supplier') : t('empty')}</p>
         </div>
       </div>
     )
@@ -337,7 +353,7 @@ export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPay
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         )}
         <Input
-          placeholder={t('search_placeholder')}
+          placeholder={isSupplier ? t('search_placeholder_supplier') : t('search_placeholder')}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="pl-9"
@@ -355,12 +371,22 @@ export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPay
           // "chips mark exceptions"). It is what explains why a row is or is
           // not ranked as close.
           const foreignCurrency = proximity.basis !== 'same_currency'
+          // The invoice's own status (lib/invoices/status-display.ts or
+          // lib/supplier-invoices/status-display.ts), shown only when it
+          // deviates; the tone follows its chip.
+          const statusDisplay = isSupplier
+            ? supplierInvoiceStatusDisplay(invoice.status)
+            : invoiceStatusDisplay(invoice.status)
 
           return (
             <button
               key={invoice.id}
               type="button"
-              onClick={() => onSelect(invoice)}
+              onClick={() =>
+                props.kind === 'supplier'
+                  ? props.onSelect(invoice as OpenSupplierInvoice)
+                  : props.onSelect(invoice as OpenInvoice)
+              }
               className={cn(
                 'w-full text-left rounded-lg border px-3 py-2.5 transition-colors',
                 'hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
@@ -373,16 +399,11 @@ export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPay
                   <div className="flex items-center gap-2">
                     <FileText className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
                     <span className="font-medium text-sm">
-                      {invoice.invoice_number ?? t('no_number')}
+                      {rowNumber(invoice) ?? t('no_number')}
                     </span>
-                    {invoice.status === 'overdue' && (
-                      <span className="text-[11px] uppercase tracking-wide text-destructive">
-                        {t('status_overdue')}
-                      </span>
-                    )}
-                    {invoice.status === 'partially_paid' && (
-                      <span className="text-[11px] uppercase tracking-wide text-attn">
-                        {t('status_partially_paid')}
+                    {statusDisplay?.chip && (
+                      <span className={cn('text-[11px] uppercase tracking-wide', statusChipTextClass(statusDisplay.chip))}>
+                        {isSupplier ? tSupplierInvoices(statusDisplay.labelKey) : tInvoices(statusDisplay.labelKey)}
                       </span>
                     )}
                     {foreignCurrency && (
@@ -392,7 +413,8 @@ export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPay
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground mt-0.5 truncate">
-                    {invoice.customer?.name || t('unknown_customer')} · {t('due_short', { date: formatDate(invoice.due_date) })}
+                    {rowCounterparty(invoice) || (isSupplier ? t('unknown_supplier') : t('unknown_customer'))} ·{' '}
+                    {t('due_short', { date: formatDate(invoice.due_date) })}
                   </p>
                 </div>
                 <div className="text-right flex-shrink-0">

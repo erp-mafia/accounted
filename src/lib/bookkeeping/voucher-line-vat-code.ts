@@ -152,7 +152,7 @@ const PURCHASE_KIND_BY_TREATMENT: Partial<Record<AccountVatTreatment, ReverseCha
 /**
  * The box a debit on the account reports, as the declaration resolves it: a
  * configured momskod decides (resolveVatTreatmentRuta), otherwise the fixed
- * BAS map (ACCOUNT_TO_BOX, asserted equal to ACCOUNT_RUTA).
+ * BAS map (ACCOUNT_TO_BOX; ACCOUNT_RUTA reads the same VAT_ACCOUNT_TABLE).
  */
 function purchaseBox(accountNumber: string, treatment: string | null): keyof VatDeclarationRutor | null {
   if (isAccountVatTreatment(treatment)) {

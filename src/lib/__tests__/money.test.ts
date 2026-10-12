@@ -4,6 +4,8 @@ import path from 'node:path'
 import {
   roundOre,
   parseAmountInput,
+  parseDecimalInput,
+  formatAmountInput,
   truncateToWholeKronor,
   ORE_TOLERANCE,
   ORE_ROUNDING_ACCOUNT,
@@ -267,15 +269,116 @@ describe('parseAmountInput call sites', () => {
     // The page parsed with Number(s.replace(',', '.')): "12 345,67" became
     // NaN, then 0, so the typed SEK figure never reached the mark-paid
     // preview or the booking, and the default SEK amount was booked instead.
-    const src = read('app/(dashboard)/supplier-invoices/[id]/page.tsx')
+    // The payment dialog moved out of the page into SupplierPaymentDialog.
+    const src = read('components/supplier-invoices/SupplierPaymentDialog.tsx')
     expect(src).toContain("from '@/lib/money'")
     expect(src).toMatch(/paySekNum = isForeignInvoice \? parseAmountInput\(paySek\)/)
     expect(src).not.toContain(".replace(',', '.')")
     expect(parseAmountInput('12 345,67')).toBe(12345.67)
   })
 
-  it('the invoice-match dialog reads edited line amounts with parseAmountInput', () => {
-    const src = read('components/transactions/InvoiceMatchDialog.tsx')
-    expect(src).toMatch(/function parseAmount\(s: string\): number \{\s*return parseAmountInput\(s\) \?\? 0/)
+  it('the payment Bokföring rows read edited line amounts with parseAmountInput', () => {
+    // One module for the bank-match dialog and the supplier payment dialog.
+    const src = read('components/bookkeeping/payment-preview-lines.ts')
+    expect(src).toMatch(/function amountOf\(line: EditablePaymentLine\): number \{\s*return parseAmountInput\(line\.amount\) \?\? 0/)
+  })
+
+  /*
+   * Every UI field that takes a typed amount, quantity or rate parses it with
+   * parseAmountInput or parseDecimalInput. A hand-rolled
+   * `Number(s.replace(',', '.'))` reads "12 345,67" as NaN (then 0) and a
+   * Unicode minus as nothing, and a local naive round2 rounds 1,005 down.
+   */
+  const UI_ROOTS = ['components', 'app', 'extensions']
+  const uiFiles = (): string[] => {
+    const out: string[] = []
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name)
+        if (entry.isDirectory()) {
+          if (entry.name === '__tests__' || full.endsWith(path.join('app', 'api'))) continue
+          walk(full)
+        } else if (/\.tsx?$/.test(entry.name)) {
+          out.push(full)
+        }
+      }
+    }
+    for (const root of UI_ROOTS) walk(path.resolve(__dirname, '../../', root))
+    return out
+  }
+  const rel = (full: string) => path.relative(path.resolve(__dirname, '../../'), full)
+
+  // Each entry names who removes it.
+  const COMMA_PARSE_ALLOWED = new Set([
+    // Bank-file preview: reads the file's own decimal mark, like the bank
+    // parsers it previews (plan step B3, one parseSwedishAmount).
+    'components/import/BankFileColumnMappingStep.tsx',
+    // Deleted by the one register review step (plan step H1).
+    'components/import/ArticlesEditStep.tsx',
+  ])
+
+  it('no UI field parses a typed number with replace(",", ".")', () => {
+    const offenders = uiFiles()
+      .filter((f) => /replace\(\s*['"],['"]\s*,\s*['"]\.['"]\s*\)/.test(fs.readFileSync(f, 'utf8')))
+      .map(rel)
+      .filter((f) => !COMMA_PARSE_ALLOWED.has(f))
+    expect(offenders).toEqual([])
+  })
+
+  it('no UI module keeps a local round2 helper', () => {
+    const offenders = uiFiles()
+      .filter((f) => /\b(function round2|const round2 =)/.test(fs.readFileSync(f, 'utf8')))
+      .map(rel)
+    expect(offenders).toEqual([])
+  })
+})
+
+describe('parseDecimalInput', () => {
+  it('reads the same Swedish forms as parseAmountInput, without rounding', () => {
+    expect(parseDecimalInput('12 345,6789')).toBe(12345.6789)
+    expect(parseDecimalInput('0,125')).toBe(0.125)
+    expect(parseDecimalInput('10,8642')).toBe(10.8642)
+    expect(parseDecimalInput('\u22121,5')).toBe(-1.5)
+  })
+
+  it('refuses the same ambiguous or non-numeric input', () => {
+    for (const input of ['', '-', ',', 'abc', '1e5', '12,3,4', '1.234.567', null, undefined]) {
+      expect(parseDecimalInput(input as string | null | undefined), String(input)).toBeNull()
+    }
+  })
+
+  it('never returns negative zero', () => {
+    expect(Object.is(parseDecimalInput('-0'), 0)).toBe(true)
+  })
+})
+
+describe('formatAmountInput', () => {
+  it('writes two decimals with a decimal comma and no grouping', () => {
+    expect(formatAmountInput(1234.5)).toBe('1234,50')
+    expect(formatAmountInput(1234567.891)).toBe('1234567,89')
+    expect(formatAmountInput(-12.3)).toBe('-12,30')
+    expect(formatAmountInput(0)).toBe('0,00')
+  })
+
+  it('writes a dot for number inputs', () => {
+    expect(formatAmountInput(1234.5, '.')).toBe('1234.50')
+  })
+
+  it('rounds with roundOre where toFixed rounds the half down', () => {
+    expect((1.005).toFixed(2)).toBe('1.00')
+    expect(formatAmountInput(1.005, '.')).toBe('1.01')
+    expect(formatAmountInput(10.075)).toBe('10,08')
+  })
+
+  it('never writes a negative zero', () => {
+    expect(formatAmountInput(-0)).toBe('0,00')
+    expect(formatAmountInput(-0.001)).toBe('0,00')
+  })
+
+  it('round-trips through parseAmountInput', () => {
+    for (const n of [0, 1, 0.5, 1.01, 12345.67, -9876.54, 1234567.89]) {
+      expect(parseAmountInput(formatAmountInput(n))).toBe(n)
+      expect(parseAmountInput(formatAmountInput(n, '.'))).toBe(n)
+    }
   })
 })

@@ -15,11 +15,10 @@
  * _MISMATCH), and a bypass leaves a durable behandlingshistorik record
  * (BFNAR 2013:2 p. 9.16).
  *
- * Shared by the dashboard route POST /api/transactions/{id}/categorize and
- * the v1 :categorize / batch-categorize routes so every door refuses the same
+ * Called by categorizeTransaction (lib/transactions/categorize-core.ts), the
+ * service behind every categorize door, so each refuses the same
  * double-bookings with the same code and honours the same override. The
- * detection itself is `detectBookingDuplicate` (the same detector the
- * agent-path core in lib/transactions/categorize-core.ts calls).
+ * detection itself is `detectBookingDuplicate`.
  *
  * Fail-open without force: a detection error never blocks a legitimate
  * booking. Fail-closed with force: a bypass that cannot be re-verified is

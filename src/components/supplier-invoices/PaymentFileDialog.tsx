@@ -20,6 +20,7 @@ import { downloadFile } from '@/lib/browser/download-file'
 import { failureDescription } from '@/lib/browser/action-failure'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { formatCurrency } from '@/lib/utils'
+import { parseAmountInput } from '@/lib/money'
 
 interface PreviewLine {
   id: string
@@ -125,8 +126,7 @@ export default function PaymentFileDialog({
     (line: PreviewLine): number => {
       const raw = amounts[line.id]
       if (raw === undefined) return line.amount
-      const parsed = Number.parseFloat(raw.replace(',', '.'))
-      return Number.isFinite(parsed) ? parsed : 0
+      return parseAmountInput(raw) ?? 0
     },
     [amounts],
   )

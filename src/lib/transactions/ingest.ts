@@ -26,6 +26,7 @@ import { createLogger } from '@/lib/logger'
 import { scheduleCollectionSweep } from '@/lib/collections/sweep-hook'
 import { physicalAccountKey, reenableIfUnused, sameCashAccount } from '@/lib/cash-accounts/service'
 import type { Transaction, RawTransaction, IngestResult, IngestOptions, IngestSkipReason, IngestSkippedRow, SupplierInvoice, Currency, ExchangeRate } from '@/types'
+import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
 
 /**
  * Sentinel for a (date, öre) bucket whose incoming rows carry more than one
@@ -911,7 +912,7 @@ export async function ingestTransactions(
         .from('supplier_invoices')
         .select('*, supplier:suppliers(*)')
         .eq('company_id', companyId)
-        .in('status', ['registered', 'approved'])
+        .in('status', [...MATCHABLE_SUPPLIER_INVOICE_STATUSES])
         .gt('remaining_amount', 0)
         .order('id', { ascending: true })
         .range(from, to)

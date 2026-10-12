@@ -12,13 +12,7 @@ import { Switch } from '@/components/ui/switch'
 import AiFilledIndicator from '@/components/ui/ai-filled-indicator'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+import CustomerCombobox from '@/components/customers/CustomerCombobox'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
@@ -47,7 +41,7 @@ import {
   findUnflaggedForeignZeroVatRows,
 } from '@/lib/vat/supplier-invoice-line-checks'
 import { SLP_RATE, isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
-import { roundOre } from '@/lib/money'
+import { roundOre, parseAmountInput } from '@/lib/money'
 import {
   buildSupplierInvoicePayload,
   type SupplierInvoiceFormData,
@@ -61,7 +55,7 @@ import { useSupplierInvoiceSubmit } from '@/components/supplier-invoices/use-sup
 import { PayerChoiceSelect } from '@/components/expenses/PayerChoiceSelect'
 import { ExpenseClaimantFields } from '@/components/expenses/ExpenseClaimantFields'
 import { isPersonPayer } from '@/lib/expenses/payer'
-import { ArrowLeft, Plus, Trash2, ChevronDown, Loader2, Lock, AlertCircle, AlertTriangle, MessageCircle, CalendarClock, Tags, FileText } from 'lucide-react'
+import { ArrowLeft, Plus, Trash2, Loader2, Lock, AlertCircle, AlertTriangle, MessageCircle, CalendarClock, Tags, FileText } from 'lucide-react'
 import type { Supplier, InvoiceExtractionResult } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
@@ -84,15 +78,6 @@ interface NewSupplierForm {
 
 function RequiredMark() {
   return <span className="text-destructive ml-0.5" aria-hidden="true">*</span>
-}
-
-// Accepts sv-SE formatted numbers ("12 345,67" with regular, no-break or
-// narrow no-break group separators) as well as plain "12345.67".
-function parseFlexibleNumber(s: string): number | null {
-  const cleaned = s.replace(/[\s  ]/g, '').replace(',', '.')
-  if (!cleaned) return null
-  const n = parseFloat(cleaned)
-  return Number.isFinite(n) ? n : null
 }
 
 const EMPTY_NEW_SUPPLIER: NewSupplierForm = {
@@ -259,8 +244,7 @@ export default function NewSupplierInvoiceForm({
 
   // Shell state
   const [forvalOpen, setForvalOpen] = useState(false)
-  const [supplierMenuOpen, setSupplierMenuOpen] = useState(false)
-  const supplierTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const supplierInputRef = useRef<HTMLInputElement | null>(null)
   const entryInputRef = useRef<HTMLInputElement | null>(null)
   const [entryResetKey, setEntryResetKey] = useState(0)
   const amountInputRefs = useRef<Record<number, HTMLInputElement | null>>({})
@@ -1057,7 +1041,7 @@ export default function NewSupplierInvoiceForm({
 
   // Total cross-check (change 2): client-only compare against the displayed
   // payable; a mismatch renders field-adjacent, never blocks, never travels.
-  const enteredFakturaTotal = parseFlexibleNumber(fakturaTotalStr)
+  const enteredFakturaTotal = parseAmountInput(fakturaTotalStr)
   const crosscheckDiff =
     enteredFakturaTotal == null ? null : roundOre(enteredFakturaTotal - figures.toPay)
   const crosscheckMatches = crosscheckDiff != null && Math.abs(crosscheckDiff) <= 0.005
@@ -1085,8 +1069,9 @@ export default function NewSupplierInvoiceForm({
     setShowNewSupplier(true)
   }
 
-  function openSupplierDialogBlank() {
-    setNewSupplier(EMPTY_NEW_SUPPLIER)
+  /** "Skapa leverantör" from the supplier picker, with what was typed as the name. */
+  function openSupplierDialogNamed(name: string) {
+    setNewSupplier({ ...EMPTY_NEW_SUPPLIER, name })
     setShowNewSupplier(true)
   }
 
@@ -1352,8 +1337,8 @@ export default function NewSupplierInvoiceForm({
     rowIndex?: number,
   ) {
     if (field === 'supplier') {
-      setSupplierMenuOpen(true)
-      supplierTriggerRef.current?.focus()
+      // Focusing the supplier combobox opens its list.
+      supplierInputRef.current?.focus()
     } else if (field === 'invoice_number') {
       invoiceNumberInputRef.current?.focus()
     } else if (field === 'rows') {
@@ -1676,76 +1661,26 @@ export default function NewSupplierInvoiceForm({
               </div>
             )}
 
-            <DropdownMenu open={supplierMenuOpen} onOpenChange={setSupplierMenuOpen}>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  ref={supplierTriggerRef}
-                  className={cn(
-                    'w-full rounded-lg border border-border px-4 py-4 text-left transition-colors hover:bg-secondary/60',
-                    settledFields.has('supplier_id') && 'prefill-settle',
-                  )}
-                  aria-haspopup="menu"
-                  aria-expanded={supplierMenuOpen}
-                >
-                  <span className="flex items-center justify-between gap-3">
-                    <span
-                      className={cn(
-                        'font-display text-lg leading-snug',
-                        selectedSupplier ? 'text-foreground' : 'text-muted-foreground',
-                      )}
-                    >
-                      {selectedSupplier?.name ?? t('supplier_placeholder')}
-                    </span>
-                    <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  </span>
-                  {selectedSupplier?.org_number && (
-                    <span className="mt-1 block text-[13px] text-muted-foreground">
-                      {t('org_number_prefix', { number: selectedSupplier.org_number })}
-                    </span>
-                  )}
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                align="start"
-                className="max-h-80 w-[var(--radix-dropdown-menu-trigger-width)] overflow-y-auto"
-                onCloseAutoFocus={(e) => {
-                  // Picking a supplier routes focus to the invoice-number
-                  // field; the menu's default close behavior would yank it
-                  // back to the trigger.
-                  e.preventDefault()
-                }}
-              >
-                {suppliers.length === 0 && (
-                  <div className="px-2 py-2 text-[13px] text-muted-foreground">
-                    {t('no_suppliers_yet')}
-                  </div>
-                )}
-                {suppliers.map((s) => (
-                  <DropdownMenuItem
-                    key={s.id}
-                    onSelect={() => {
-                      setValue('supplier_id', s.id, { shouldDirty: true })
-                      requestAnimationFrame(() => invoiceNumberInputRef.current?.focus())
-                    }}
-                  >
-                    <div className="min-w-0">
-                      <div className="truncate text-sm">{s.name}</div>
-                      {s.org_number && (
-                        <div className="text-xs text-muted-foreground">
-                          {t('org_number_prefix', { number: s.org_number })}
-                        </div>
-                      )}
-                    </div>
-                  </DropdownMenuItem>
-                ))}
-                {/* No separator over an empty list: it reads as a stray line. */}
-                {suppliers.length > 0 && <DropdownMenuSeparator />}
-                <DropdownMenuItem onSelect={openSupplierDialogBlank} className="text-muted-foreground">
-                  {t('add_new_supplier')}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <CustomerCombobox
+              kind="supplier"
+              value={watchedSupplierId ?? ''}
+              customers={suppliers}
+              onChange={(supplierId) => {
+                setValue('supplier_id', supplierId, { shouldDirty: true })
+                requestAnimationFrame(() => invoiceNumberInputRef.current?.focus())
+              }}
+              inputRef={supplierInputRef}
+              className={cn('h-11 text-[15px]', settledFields.has('supplier_id') && 'prefill-settle')}
+              aria-required
+              loading={!suppliersLoaded}
+              emptyLabel={t('no_suppliers_yet')}
+              onCreateCustomer={openSupplierDialogNamed}
+            />
+            {selectedSupplier?.org_number && (
+              <p className="mt-2 text-[12.5px] text-muted-foreground">
+                {t('org_number_prefix', { number: selectedSupplier.org_number })}
+              </p>
+            )}
           </section>
 
           {/* ── Fakturauppgifter ─────────────────────────────────── */}
@@ -2367,7 +2302,7 @@ export default function NewSupplierInvoiceForm({
                 value={fakturaTotalStr}
                 onChange={(e) => setFakturaTotalStr(e.target.value)}
                 onBlur={() => {
-                  const parsed = parseFlexibleNumber(fakturaTotalStr)
+                  const parsed = parseAmountInput(fakturaTotalStr)
                   if (parsed != null) setFakturaTotalStr(formatAmount(parsed))
                 }}
               />

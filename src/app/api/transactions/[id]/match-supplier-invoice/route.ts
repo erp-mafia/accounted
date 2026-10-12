@@ -19,6 +19,7 @@ import { emitSupplierInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { eventBus } from '@/lib/events/bus'
 import type { SupplierInvoice, Transaction } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
 
 /**
  * POST /api/transactions/[id]/match-supplier-invoice
@@ -217,7 +218,7 @@ export const POST = withRouteContext(
         transaction_id: transactionId,
       })
       .eq('id', supplier_invoice_id)
-      .in('status', ['registered', 'approved', 'partially_paid', 'overdue'])
+      .in('status', [...MATCHABLE_SUPPLIER_INVOICE_STATUSES])
       .select('id')
 
     if (updateInvError) {

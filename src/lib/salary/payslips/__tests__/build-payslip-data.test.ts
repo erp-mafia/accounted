@@ -115,6 +115,23 @@ describe('buildPayslipData', () => {
     expect(overrideRow?.formula).toBe('jämkning')
   })
 
+  it('ignores an avgifter override on an F-skatt payee, as the booking and the AGI do', () => {
+    // An F-skatt payee forms no underlag for arbetsgivaravgifter, so the
+    // override never reaches the verifikat or the AGI; the payslip used to
+    // print it anyway.
+    const data = buildPayslipData({
+      run,
+      sre: sre({ avgifter_amount: 0, avgifter_amount_override: 5000, override_reason: 'fel' }),
+      employee: { ...employee, f_skatt_status: 'f_skatt' },
+      company: { name: 'Bolaget AB', org_number: '5560000000' },
+      audience: EMPLOYER,
+    })
+
+    expect(data.employerCost?.avgifterAmount).toBe(0)
+    expect(data.employerCost?.totalEmployerCost).toBe(40519.74)
+    expect(data.breakdownSteps?.some((step) => step.label === 'Manuell justering: Arbetsgivaravgifter')).toBe(false)
+  })
+
   it('falls back to schablon tax reference and omits bank account when data missing', () => {
     const data = buildPayslipData({
       run,

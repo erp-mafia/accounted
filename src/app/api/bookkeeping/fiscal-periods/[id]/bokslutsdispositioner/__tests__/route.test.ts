@@ -8,7 +8,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
-vi.mock('@/lib/bokslut/dispositions-proposal-builder', () => ({
+// Partial: the POST computes each item with the builder's real per-kind
+// functions (the ones the GET preview uses) on the mocked calculators below.
+vi.mock('@/lib/bokslut/dispositions-proposal-builder', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bokslut/dispositions-proposal-builder')>()),
   buildDispositionsProposal: vi.fn(),
 }))
 

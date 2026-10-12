@@ -96,8 +96,8 @@ const UNTRANSLATED_ACCOUNTS_LISTED = 6
 
 /**
  * The momsdeklaration box the built-in BAS mapping already routes this account
- * to, or undefined when it has none. Kept in sync with ACCOUNT_RUTA by the
- * drift test in lib/vat/__tests__/moms-box-mapping.test.ts.
+ * to, or undefined when it has none. ACCOUNT_TO_BOX and ACCOUNT_RUTA are both
+ * read from VAT_ACCOUNT_TABLE (lib/vat/moms-box-mapping.ts).
  */
 function basBoxFor(mapping: AccountMapping): string | undefined {
   return ACCOUNT_TO_BOX[mapping.targetAccount ?? mapping.sourceAccount]

@@ -18,6 +18,7 @@ import { CalendarPlus, Lock, Plus } from 'lucide-react'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useCustomers } from '@/lib/reference-data/hooks'
 import { formatCurrency } from '@/lib/utils'
 import type { Deadline } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -48,12 +49,14 @@ export default function DeadlinesPage() {
   const t = useTranslations('deadlines')
   const { canWrite } = useCanWrite()
   const [deadlines, setDeadlines] = useState<Deadline[]>([])
-  const [customers, setCustomers] = useState<{ id: string; name: string }[]>([])
   const [overdueInvoices, setOverdueInvoices] = useState<{ count: number; total: number; unconverted: number }>({ count: 0, total: 0, unconverted: 0 })
   const [isLoading, setIsLoading] = useState(true)
   const [isGenerating, setIsGenerating] = useState(false)
   const [showForm, setShowForm] = useState(false)
   const [editingDeadline, setEditingDeadline] = useState<Deadline | null>(null)
+  // The shared customer cache; a deadline pointing at an archived customer
+  // keeps that one in the list so the edit form does not show it blank.
+  const { customers } = useCustomers({ keepId: editingDeadline?.customer_id })
   const { toast } = useToast()
 
   // Returns whether the list on screen was actually refreshed. Handlers that
@@ -70,7 +73,7 @@ export default function DeadlinesPage() {
       // which would truncate the deadline list and undercount overdue
       // invoices for large companies. The secondary .order('id') gives the
       // stable total order paging requires.
-      const [deadlineRows, customerRows, overdueRows] = await Promise.all([
+      const [deadlineRows, overdueRows] = await Promise.all([
         fetchAllRows<Deadline>(({ from, to }) =>
           supabase
             .from('deadlines')
@@ -78,16 +81,6 @@ export default function DeadlinesPage() {
             .eq('company_id', companyId)
             .is('dismissed_at', null)
             .order('due_date', { ascending: true })
-            .order('id', { ascending: true })
-            .range(from, to),
-        ),
-        fetchAllRows<{ id: string; name: string }>(({ from, to }) =>
-          supabase
-            .from('customers')
-            .select('id, name')
-            .eq('company_id', companyId)
-            .is('archived_at', null)
-            .order('name', { ascending: true })
             .order('id', { ascending: true })
             .range(from, to),
         ),
@@ -128,7 +121,6 @@ export default function DeadlinesPage() {
       }
 
       setDeadlines(deadlineRows)
-      setCustomers(customerRows)
       setOverdueInvoices({ count: overdueRows.length, total: overdueTotal, unconverted: unconvertedCount })
       return true
     } catch {

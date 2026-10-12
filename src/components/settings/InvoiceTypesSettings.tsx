@@ -1,20 +1,18 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
-import { useLocale, useTranslations } from 'next-intl'
+import { useTranslations } from 'next-intl'
 import { Switch } from '@/components/ui/switch'
-import { useToast } from '@/components/ui/use-toast'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { SettingsGroup } from '@/components/settings/SettingsRows'
 import { useSettings } from '@/components/settings/useSettings'
+import { useSaveSettings } from '@/components/settings/use-save-settings'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import {
   INVOICE_TYPE_TOGGLES,
   isInvoiceTypeEnabled,
   type InvoiceTypeToggle,
 } from '@/lib/invoices/invoice-type-toggles'
-import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 /**
  * Company-level on/off switches for the optional invoice kinds (offert,
@@ -27,47 +25,22 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
  */
 export function InvoiceTypesSettings() {
   const t = useTranslations('settings_invoice_types')
-  const errorLocale = useLocale() as ErrorLocale
   const { settings, updateSettings } = useSettings()
   const { canWrite } = useCanWrite()
-  const { toast } = useToast()
-  const router = useRouter()
+  const saveSettings = useSaveSettings()
   const [saving, setSaving] = useState<InvoiceTypeToggle | null>(null)
 
   async function handleChange(toggle: InvoiceTypeToggle, next: boolean) {
     setSaving(toggle)
-    try {
-      const res = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ [toggle]: next }),
-      })
-      const json = await res.json().catch(() => null)
-      if (!res.ok) {
-        toast({
-          title: t('save_failed_title'),
-          description: getErrorMessage(json, { locale: errorLocale }),
-          variant: 'destructive',
-        })
-        return
-      }
-      // The invoice list and editor read the same SWR row, so the patch
-      // reaches them without a reload. The Offerter nav row is gated by the
-      // server-rendered dashboard layout, so it needs a refresh to follow.
-      updateSettings({ [toggle]: next })
-      if (toggle === 'quotes_enabled') router.refresh()
-    } catch (err) {
-      // A rejected fetch never reaches the !res.ok arm, and the switch is
-      // controlled by the settings context, so it stays put: without this
-      // toast the click looks like a dead control rather than a failed save.
-      toast({
-        title: t('save_failed_title'),
-        description: getErrorMessage(err, { locale: errorLocale }),
-        variant: 'destructive',
-      })
-    } finally {
-      setSaving(null)
-    }
+    // The invoice list and editor read the same SWR row, so the patch
+    // reaches them without a reload. The Offerter nav row is gated by the
+    // server-rendered dashboard layout, so it needs a refresh to follow.
+    const saved = await saveSettings(
+      { [toggle]: next },
+      { failedTitle: t('save_failed_title'), refreshNav: toggle === 'quotes_enabled' },
+    )
+    if (saved) updateSettings({ [toggle]: next })
+    setSaving(null)
   }
 
   return (

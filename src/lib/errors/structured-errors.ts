@@ -565,6 +565,10 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Bokslutsåtgärder måste utföras innan perioden kan stängas.',
     message_en: 'Year-end closing must be executed before the period can be closed.',
+    remediation: {
+      description: 'Run the year-end closing first (gnubok_run_year_end, POST /fiscal-periods/{id}/year-end), then close.',
+      tool: 'gnubok_run_year_end',
+    },
   },
   // Bokslutsdispositioner: the schablonintäkt on periodiseringsfonder
   // (IL 30 kap 6a §) needs the SLR for the closing year, kept in a table in
@@ -697,6 +701,20 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
     message_sv: 'Bokföringsmallen är ogiltig eller passar inte din bolagsform.',
     message_en: 'The supplied booking template is invalid or does not match the entity type.',
   },
+  // The pinned underlag shows the seller already charged moms, so the
+  // purchase is not reverse charge: the foreign VAT is part of the cost. The
+  // service composes the message with the document and the amount.
+  TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT: {
+    httpStatus: 400,
+    message_sv:
+      'Omvänd skattskyldighet avvisas: underlaget visar att säljaren redan har debiterat moms. Bokför som vanlig kostnad: den utländska momsen ingår i kostnaden.',
+    message_en:
+      'Reverse charge refused: the attached document shows the seller already charged VAT. Book it as an ordinary cost; the foreign VAT is part of the cost.',
+    remediation: {
+      description:
+        'Resend without vat_treatment reverse_charge (omit it, or standard_25 for a Swedish invoice). Omvänd skattskyldighet only covers invoices without the seller\'s VAT.',
+    },
+  },
   TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT: {
     httpStatus: 400,
     message_sv:
@@ -746,7 +764,7 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
   // executed transfer) is not an affärshändelse at all: ignoring it writes no
   // verifikat and is therefore allowed in a locked period. Returned instead
   // of PERIOD_LOCKED so the remediation names that path. The wording must not
-  // contain "Bokföringen är låst" (inferCode maps that phrase to PERIOD_LOCKED).
+  // contain "Bokföringen är låst" (classifyError reads that phrase as PERIOD_LOCKED).
   TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED: {
     httpStatus: 400,
     message_sv:
@@ -5091,6 +5109,11 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     httpStatus: 500,
     message_sv: 'Lönekörningen kunde inte bokföras.',
     message_en: 'Failed to book salary run.',
+  },
+  SALARY_RUN_APPROVE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Lönekörningen kunde inte godkännas.',
+    message_en: 'Failed to approve salary run.',
   },
   // Phase 5 PR-1: v1 REST surface error codes.
   EMPLOYEE_NOT_FOUND: {

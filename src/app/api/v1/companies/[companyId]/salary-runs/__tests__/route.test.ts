@@ -520,6 +520,51 @@ describe('PATCH /api/v1/companies/:companyId/salary-runs/:id', () => {
     expect(res.status).toBe(404)
   })
 
+  it('answers an empty body with the run unchanged, writing nothing', async () => {
+    const flex = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      salary_runs: { data: SAMPLE_RUN, error: null },
+      idempotency_keys: { data: null, error: null },
+    }).supabase
+    mockServiceClient.mockReturnValue(flex)
+
+    const res = await updateSalaryRun(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({}),
+      }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.payment_date).toBe('2026-05-25')
+    expect(flex.from).not.toHaveBeenCalledWith('salary_run_employees')
+  })
+
+  it('previews the merged row on a dry run without writing or clearing calculations', async () => {
+    const tables = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      salary_runs: { data: SAMPLE_RUN, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(tables.supabase)
+
+    const res = await updateSalaryRun(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}?dry_run=true`, {
+        method: 'PATCH',
+        body: JSON.stringify({ payment_date: '2026-05-23' }),
+      }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.preview.payment_date).toBe('2026-05-23')
+    expect(body.data.preview.voucher_series).toBe('L')
+    expect(tables.supabase.from).not.toHaveBeenCalledWith('salary_run_employees')
+  })
+
   it('rejects voucher_series that is not a single A-Z letter', async () => {
     mockServiceClient.mockReturnValue(
       createTableMockSupabase({

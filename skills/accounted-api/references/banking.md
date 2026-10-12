@@ -3272,7 +3272,8 @@ Resolves the BAS account mapping for the transaction (via category, booking temp
 - A bank line the ledger already books (a booked sibling transaction, or a voucher booking the same amount on the bank account such as a supplier invoice marked paid) is refused with 409 TRANSACTION_BOOK_POSSIBLE_DUPLICATE and the candidate in `details.candidate`: link the transaction to that verifikat instead. Only if it is a genuinely separate event, resend with `force: true` plus `expected_duplicate_journal_entry_id` (or `expected_duplicate_transaction_id`) echoing the candidate; a stale id returns TRANSACTION_BOOK_FORCE_CANDIDATE_MISMATCH.
 - A plain 244x (supplier payment) or 151x (customer receipt) categorization that an open invoice covers is refused with 409 TX_CATEGORIZE_SUGGEST_SI_MATCH / TX_CATEGORIZE_SUGGEST_CI_MATCH: match the invoice via `:match-supplier-invoice` / `:match-invoice`, or pass `confirm_no_match: true` to keep the plain categorization.
 - Already-categorized fast path: if the transaction already has a journal_entry_id, only flags get updated. The JE is immutable post-commit.
-- account_override must exist in the chart of accounts; an unknown account returns TX_CATEGORIZE_INVALID_ACCOUNT.
+- account_override must exist and be active in the chart of accounts (else TX_CATEGORIZE_INVALID_ACCOUNT). It books the business side gross unless you also pass vat_treatment or vat_amount: the category default VAT is never carried onto an arbitrary account.
+- vat_amount replaces the rate-based VAT line with the underlag's actual moms (e.g. dricks); it needs a rate-based treatment, else TX_CATEGORIZE_INVALID_VAT_AMOUNT.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

@@ -119,12 +119,12 @@ describe('settings operations: field split', () => {
 describe('settings resource: the org number of an enskild firma', () => {
   it('masks the last four digits when the org number is a personnummer', () => {
     const resource = toSettingsResource('c1', { entity_type: 'enskild_firma', org_number: '198501011234' } as never)
-    expect(resource.org_number).toBe('19850101XXXX')
+    expect(resource.org_number).toBe('19850101-XXXX')
   })
 
   it('treats an unknown legal form as a person', () => {
     const resource = toSettingsResource('c1', { entity_type: null, org_number: '8501011234' } as never)
-    expect(resource.org_number).toBe('850101XXXX')
+    expect(resource.org_number).toBe('850101-XXXX')
   })
 
   it("returns a legal person's org number as it is: it is public", () => {

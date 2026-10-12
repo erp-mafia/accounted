@@ -1,4 +1,5 @@
 import { roundOre } from '@/lib/money'
+import { FX_GAIN_ACCOUNT, FX_LOSS_ACCOUNT } from '@/lib/bookkeeping/ore-rounding'
 
 /**
  * The verifikat `match_batch_allocate` will post, computed from the same
@@ -86,8 +87,6 @@ export interface BatchAllocationPreview {
 const AR_ACCOUNT = '1510'
 const AP_ACCOUNT = '2440'
 const ORE_ROUNDING_ACCOUNT = '3740'
-const FX_LOSS_ACCOUNT = '7960'
-const FX_GAIN_ACCOUNT = '3960'
 
 /** `ORDER BY COALESCE(invoice_id, supplier_invoice_id, '')`: plain text order. */
 function allocationSortKey(a: BatchAllocationPreviewAllocation): string {

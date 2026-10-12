@@ -94,7 +94,7 @@ import {
   peppolRegister,
   peppolRequestAccess,
 } from './peppol'
-import { suppliersUpdate } from './suppliers'
+import { suppliersCreate, suppliersUpdate } from './suppliers'
 import {
   supplierInvoicesDelete,
   supplierInvoicesMarkBankEntered,
@@ -308,7 +308,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   peppolGetRegistration,
   peppolRegister,
   peppolRequestAccess,
-  // suppliers (update only: create, list, get and archive are hand-written doors)
+  // suppliers (create and update: list, get and archive are hand-written doors)
+  suppliersCreate,
   suppliersUpdate,
   // supplier-invoice-actions
   supplierInvoicesDelete,

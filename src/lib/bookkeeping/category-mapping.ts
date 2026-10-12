@@ -7,6 +7,7 @@ import {
 } from './vat-entries'
 import { resolveSekAmount } from './currency-utils'
 import { roundOre } from '@/lib/money'
+import { grossVat } from '@/lib/vat/gross-split'
 import { byEntityType, ownerSettlementAccount } from '@/lib/company/entity-type'
 import {
   isNotVatRegistered,
@@ -401,7 +402,7 @@ export function buildMappingResultFromCategory(
     // any legitimate document VAT: even on mixed-rate receipts. The bound and
     // the override share the transaction's currency (both come off the
     // underlag), so the comparison stays in that currency.
-    const maxVat = roundOre(absAmount * 0.25 / 1.25)
+    const maxVat = grossVat(absAmount, 0.25)
     if (vatAmountOverride > maxVat) {
       const currencyTag = transaction.currency && transaction.currency !== 'SEK'
         ? ` ${transaction.currency}` : ''
@@ -445,7 +446,7 @@ export function buildMappingResultFromCategory(
       // zero-amount transaction already failed the maxVat bound above.
       const vatAmount = hasVatOverride
         ? roundOre((vatAmountOverride as number) * (absSekAmount / absAmount))
-        : roundOre(absSekAmount * vatRate / (1 + vatRate))
+        : grossVat(absSekAmount, vatRate)
 
       // One moms line, on the account and the side getCategoryAccountMapping
       // gave it: beside the business line, so debited when money goes out

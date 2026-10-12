@@ -38,6 +38,7 @@
  * links the lines to their journal entry.
  */
 
+import { swedishMonthName } from '@/lib/dates/swedish-months'
 import { roundOre } from '@/lib/money'
 import { lastDayOfMonth } from './date-utils'
 
@@ -120,21 +121,6 @@ export interface SandboxLedgerHistory {
  */
 const SOURCE_TYPE = 'manual'
 const VOUCHER_SERIES = 'A'
-
-const MONTH_NAMES_SV = [
-  'januari',
-  'februari',
-  'mars',
-  'april',
-  'maj',
-  'juni',
-  'juli',
-  'augusti',
-  'september',
-  'oktober',
-  'november',
-  'december',
-]
 
 /** Billed hours per month. July is semester, autumn is the busy season. */
 const CONSULTING_HOURS = [96, 104, 120, 112, 108, 88, 40, 72, 116, 124, 118, 84]
@@ -345,7 +331,7 @@ export function buildSandboxLedgerHistory({
   }
 
   for (let month = 1; month <= lastMonth; month++) {
-    const monthName = MONTH_NAMES_SV[month - 1]
+    const monthName = swedishMonthName(month)
     const hours = CONSULTING_HOURS[month - 1]
     const revenueNet = hours * HOURLY_RATE
     const revenueVat = vatOf(revenueNet, 25)
@@ -391,7 +377,7 @@ export function buildSandboxLedgerHistory({
     // ── day 20: the previous month's faktura is paid ─────────────────────
     // 30 day terms, so January has nothing to collect.
     if (month > 1) {
-      const previousMonthName = MONTH_NAMES_SV[month - 2]
+      const previousMonthName = swedishMonthName(month - 1)
       const previousNet = CONSULTING_HOURS[month - 2] * HOURLY_RATE
       const previousGross = roundOre(previousNet + vatOf(previousNet, 25))
       addEntry(

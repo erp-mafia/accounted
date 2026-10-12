@@ -17,6 +17,8 @@ vi.mock('@/lib/core/bookkeeping/period-service', () => ({
 import { requireAuth } from '@/lib/auth/require-auth'
 import { lockPeriod } from '@/lib/core/bookkeeping/period-service'
 import { assertNoUnfinishedSieImport } from '@/lib/core/bookkeeping/sie-import-hold'
+import { codedRefusal } from '@/lib/errors/refusal'
+import { userFacing } from '@/lib/errors/user-facing'
 import { POST } from '../route'
 
 function lockRequest(): Request {
@@ -46,12 +48,15 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/lock', () => {
   })
 
   // Regression: an unbooked-transactions failure must surface as a clear 400,
-  // not a generic 500. lockPeriod throws a plain Error (no code) with the
-  // Swedish count message; the route maps it to PERIOD_HAS_UNBOOKED_TRANSACTIONS.
+  // not a generic 500. lockPeriod throws it coded, with the Swedish count
+  // message written for the reader.
   it('maps the unbooked-transactions error to a 400, not a 500', async () => {
     mockAuth()
     ;(lockPeriod as ReturnType<typeof vi.fn>).mockRejectedValue(
-      new Error('Kan inte låsa period: 3 affärstransaktion(er) saknar bokföring. Bokför alla transaktioner innan perioden låses.'),
+      userFacing(
+        new Error('Kan inte låsa period: 3 affärstransaktion(er) saknar bokföring. Bokför alla transaktioner innan perioden låses.'),
+        'PERIOD_HAS_UNBOOKED_TRANSACTIONS',
+      ),
     )
     const res = await POST(lockRequest(), createMockRouteParams({ id: 'p1' }))
     expect(res.status).toBe(400)
@@ -61,7 +66,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/lock', () => {
 
   it('maps an already-locked period to a 409', async () => {
     mockAuth()
-    ;(lockPeriod as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Period is already locked'))
+    ;(lockPeriod as ReturnType<typeof vi.fn>).mockRejectedValue(codedRefusal('PERIOD_LOCK_ALREADY_LOCKED', 'Period is already locked'))
     const res = await POST(lockRequest(), createMockRouteParams({ id: 'p1' }))
     expect(res.status).toBe(409)
     const body = await res.json()
@@ -90,7 +95,7 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/lock', () => {
 
   it('maps a missing period to a 404', async () => {
     mockAuth()
-    ;(lockPeriod as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Fiscal period not found'))
+    ;(lockPeriod as ReturnType<typeof vi.fn>).mockRejectedValue(codedRefusal('PERIOD_NOT_FOUND', 'Fiscal period not found'))
     const res = await POST(lockRequest(), createMockRouteParams({ id: 'p1' }))
     expect(res.status).toBe(404)
     const body = await res.json()

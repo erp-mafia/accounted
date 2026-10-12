@@ -19,9 +19,14 @@ import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate, cn, isValidExchangeRate } from '@/lib/utils'
-import { Search, X, Plus, Check, AlertTriangle, Link2 } from 'lucide-react'
+import { Search, X, Plus, Check, AlertTriangle, Link2, Loader2 } from 'lucide-react'
 import type { Invoice, Customer, SupplierInvoice, Supplier } from '@/types'
+import { PICKER_LIMIT, loadOpenInvoicesForMatch } from '@/lib/invoices/open-invoice-search'
 import type { TransactionWithInvoice } from './transaction-types'
+import { parseAmountInput, formatAmountInput, roundOre } from '@/lib/money'
+
+/** Pause after the last keystroke before the search goes to the database. */
+const SEARCH_DEBOUNCE_MS = 250
 
 interface MatchAllocationDialogProps {
   open: boolean
@@ -91,7 +96,8 @@ function readExplainingSet(value: unknown): ExplainingSet | null {
 }
 
 type AllocationDraft = {
-  candidateId: string
+  /** Kept with the draft: a later search must not drop a row already picked. */
+  candidate: AllocationCandidate
   amount: string
 }
 
@@ -99,14 +105,7 @@ type CustomerInvoiceRow = Invoice & { customer?: Customer | null }
 type SupplierInvoiceRow = SupplierInvoice & { supplier?: Supplier | null }
 
 function parseAmount(s: string): number {
-  // Accept Swedish-style decimal comma + thousand spaces. Empty string → 0.
-  const cleaned = s.replace(/\s+/g, '').replace(',', '.')
-  const n = parseFloat(cleaned)
-  return Number.isFinite(n) ? n : 0
-}
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100
+  return parseAmountInput(s) ?? 0
 }
 
 export default function MatchAllocationDialog({
@@ -119,6 +118,7 @@ export default function MatchAllocationDialog({
   const { company } = useCompany()
   const supabase = useMemo(() => createClient(), [])
   const t = useTranslations('tx_match_allocation')
+  const tPicker = useTranslations('tx_invoice_picker')
 
   const kind: 'customer_invoice' | 'supplier_invoice' = useMemo(() => {
     // Strict > 0 (was >= 0): a zero-amount tx would otherwise load customer
@@ -128,8 +128,12 @@ export default function MatchAllocationDialog({
   }, [transaction])
 
   const [candidates, setCandidates] = useState<AllocationCandidate[]>([])
+  const [capped, setCapped] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [isSearching, setIsSearching] = useState(false)
   const [search, setSearch] = useState('')
+  // The term the database was asked for, trailing the input by a short pause.
+  const [appliedSearch, setAppliedSearch] = useState('')
   const [drafts, setDrafts] = useState<Record<string, AllocationDraft>>({})
   const [submitting, setSubmitting] = useState(false)
   // Already-explained guard: the vouchers that already book this row, if any.
@@ -141,27 +145,31 @@ export default function MatchAllocationDialog({
   const [linking, setLinking] = useState(false)
 
   useEffect(() => {
+    const handle = setTimeout(() => setAppliedSearch(search.trim()), SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(handle)
+  }, [search])
+
+  useEffect(() => {
     if (!open || !transaction || !company) return
     const companyId = company.id
     let cancelled = false
 
     async function load() {
-      setLoading(true)
+      if (appliedSearch) setIsSearching(true)
+      else setLoading(true)
       try {
+        // The same loader as the invoice picker: the statuses the batch RPC
+        // accepts, the search in the database (so an older open invoice past
+        // the newest PICKER_LIMIT is found), and the status-leak guard.
         if (kind === 'customer_invoice') {
-          // Mirror InvoicePicker's filter: only true invoices (no proformas)
-          // in an open state with a positive remaining balance.
-          const { data } = await supabase
-            .from('invoices')
-            .select('*, customer:customers(id, name)')
-            .eq('company_id', companyId)
-            .eq('document_type', 'invoice')
-            .is('credited_invoice_id', null)
-            .in('status', ['sent', 'overdue', 'partially_paid'])
-            .gt('remaining_amount', 0)
-            .order('due_date', { ascending: true })
+          const { rows, capped: full } = await loadOpenInvoicesForMatch<CustomerInvoiceRow>(
+            supabase,
+            companyId,
+            'customer',
+            appliedSearch,
+          )
           if (cancelled) return
-          const rows = (data ?? []) as CustomerInvoiceRow[]
+          setCapped(full)
           setCandidates(
             rows.map((r) => ({
               kind: 'customer_invoice',
@@ -177,15 +185,14 @@ export default function MatchAllocationDialog({
             })),
           )
         } else {
-          const { data } = await supabase
-            .from('supplier_invoices')
-            .select('*, supplier:suppliers(id, name)')
-            .eq('company_id', companyId)
-            .in('status', ['registered', 'approved', 'overdue', 'partially_paid'])
-            .gt('remaining_amount', 0)
-            .order('due_date', { ascending: true })
+          const { rows, capped: full } = await loadOpenInvoicesForMatch<SupplierInvoiceRow>(
+            supabase,
+            companyId,
+            'supplier',
+            appliedSearch,
+          )
           if (cancelled) return
-          const rows = (data ?? []) as SupplierInvoiceRow[]
+          setCapped(full)
           setCandidates(
             rows.map((r) => ({
               kind: 'supplier_invoice',
@@ -201,15 +208,22 @@ export default function MatchAllocationDialog({
             })),
           )
         }
+      } catch {
+        if (cancelled) return
+        setCandidates([])
+        setCapped(false)
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!cancelled) {
+          setLoading(false)
+          setIsSearching(false)
+        }
       }
     }
     load()
     return () => {
       cancelled = true
     }
-  }, [open, transaction, company, kind, supabase, t])
+  }, [open, transaction, company, kind, supabase, t, appliedSearch])
 
   // Pre-flight: does the ledger already explain this row? Same detector the
   // route refuses with, so the panel shows before a doomed submit. Fail-open:
@@ -238,6 +252,7 @@ export default function MatchAllocationDialog({
     if (!open) {
       setDrafts({})
       setSearch('')
+      setAppliedSearch('')
       setExplaining(null)
       setExplainingAcknowledged(false)
     }
@@ -262,7 +277,7 @@ export default function MatchAllocationDialog({
     return Object.values(drafts).reduce((sum, d) => sum + parseAmount(d.amount), 0)
   }, [drafts])
 
-  const leftover = round2(txAmountAbs - allocated)
+  const leftover = roundOre(txAmountAbs - allocated)
   // 0.005 SEK matches the RPC's BATCH_AMOUNT_EXCEEDS_TX guard so the
   // "balanced ✓" indicator never lies to the user about what the server
   // will accept.
@@ -272,26 +287,23 @@ export default function MatchAllocationDialog({
     Math.abs(leftover) < TOLERANCE && Object.keys(drafts).length > 0
   const undershoot = leftover > TOLERANCE
 
+  // Picked rows first (they stay whatever the search says), then the rows the
+  // search returned, oldest due date first.
   const filteredCandidates = useMemo(() => {
-    const selectedIds = new Set(Object.keys(drafts))
-    const sorted = [...candidates].sort((a, b) => {
-      const aSel = selectedIds.has(a.id)
-      const bSel = selectedIds.has(b.id)
-      if (aSel !== bSel) return aSel ? -1 : 1
-      return a.dueDate.localeCompare(b.dueDate)
-    })
-    if (!search.trim()) return sorted
-    const needle = search.trim().toLowerCase()
-    return sorted.filter((c) => {
-      const haystack = `${c.label} ${c.counterpartyName}`.toLowerCase()
-      return haystack.includes(needle)
-    })
-  }, [candidates, drafts, search])
+    const picked = Object.values(drafts)
+      .map((d) => d.candidate)
+      .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+    const pickedIds = new Set(picked.map((c) => c.id))
+    const rest = candidates
+      .filter((c) => !pickedIds.has(c.id))
+      .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+    return [...picked, ...rest]
+  }, [candidates, drafts])
 
   function addAllocation(candidate: AllocationCandidate) {
     setDrafts((prev) => {
       if (prev[candidate.id]) return prev
-      const remainingTxBudget = Math.max(0, round2(txAmountAbs - allocated))
+      const remainingTxBudget = Math.max(0, roundOre(txAmountAbs - allocated))
       const sameCurrency = candidate.currency === txCurrency
 
       // Same-currency: partial allowed, default to min(remaining, budget).
@@ -306,7 +318,7 @@ export default function MatchAllocationDialog({
       if (sameCurrency) {
         defaultAmount = Math.min(candidate.remaining, remainingTxBudget)
       } else if (isValidExchangeRate(candidate.exchangeRate)) {
-        defaultAmount = round2(candidate.remaining * candidate.exchangeRate)
+        defaultAmount = roundOre(candidate.remaining * candidate.exchangeRate)
       } else {
         // No (or out-of-range) FX rate. Leave the amount blank rather
         // than guessing a misleading default; the user must enter the
@@ -318,8 +330,8 @@ export default function MatchAllocationDialog({
       return {
         ...prev,
         [candidate.id]: {
-          candidateId: candidate.id,
-          amount: defaultAmount > 0 ? defaultAmount.toFixed(2).replace('.', ',') : '',
+          candidate,
+          amount: defaultAmount > 0 ? formatAmountInput(defaultAmount) : '',
         },
       }
     })
@@ -334,10 +346,11 @@ export default function MatchAllocationDialog({
   }
 
   function setDraftAmount(candidateId: string, amount: string) {
-    setDrafts((prev) => ({
-      ...prev,
-      [candidateId]: { candidateId, amount },
-    }))
+    setDrafts((prev) => {
+      const draft = prev[candidateId]
+      if (!draft) return prev
+      return { ...prev, [candidateId]: { ...draft, amount } }
+    })
   }
 
   async function handleConfirm() {
@@ -351,8 +364,7 @@ export default function MatchAllocationDialog({
     try {
       const allocations = Object.values(drafts)
         .map((d) => {
-          const cand = candidates.find((c) => c.id === d.candidateId)
-          if (!cand) return null
+          const cand = d.candidate
           const amount = parseAmount(d.amount)
           if (amount <= 0) return null
           return cand.kind === 'customer_invoice'
@@ -457,7 +469,7 @@ export default function MatchAllocationDialog({
               account_number: explaining.bank_account_number,
               allocations: explaining.vouchers.map((v) => ({
                 journal_entry_id: v.journal_entry_id,
-                amount: round2(sign * v.amount),
+                amount: roundOre(sign * v.amount),
               })),
             }
       const res = await fetch('/api/reconciliation/bank/link', {
@@ -628,7 +640,11 @@ export default function MatchAllocationDialog({
 
           {/* Search */}
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            {isSearching ? (
+              <Loader2 className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-muted-foreground" />
+            ) : (
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            )}
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -746,6 +762,13 @@ export default function MatchAllocationDialog({
                   </li>
                 )
               })}
+              {capped && (
+                <li className="py-2 text-center text-xs text-muted-foreground">
+                  {appliedSearch
+                    ? tPicker('capped_search_hint', { limit: PICKER_LIMIT })
+                    : tPicker('capped_hint', { limit: PICKER_LIMIT })}
+                </li>
+              )}
             </ul>
           )}
 

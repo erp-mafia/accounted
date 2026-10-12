@@ -5,6 +5,17 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase, makeTransaction } from '@/tests/helpers'
+
+// The booking service's chart pre-validation and period-lock pre-check have
+// their own tests; complete and open here.
+vi.mock('@/lib/bookkeeping/account-validation', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/account-validation')>()),
+  findUnresolvableAccounts: vi.fn().mockResolvedValue([]),
+}))
+vi.mock('@/lib/api/v1/check-period-lock', () => ({
+  checkPeriodLock: vi.fn().mockResolvedValue({ locked: false }),
+}))
+
 import { tools } from '../server'
 
 const categorizeTransaction = tools.find((t) => t.name === 'gnubok_categorize_transaction')!
@@ -19,7 +30,6 @@ function stage(args: Record<string, unknown>) {
   enqueue({ data: tx, error: null })
   enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
   enqueue({ data: { ledger_account: '1930', currency: 'SEK' }, error: null })
-  enqueue({ data: tx, error: null })
   enqueue({ data: null, error: null })
   enqueue({ data: null, error: null })
   enqueue({ data: { id: 'op-1' }, error: null })

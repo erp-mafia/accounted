@@ -50,7 +50,9 @@ const { createTxJE, reverseEntryMock, createInvPmtJE, createInvCashJE, createSup
   findFiscalPeriodMock: vi.fn().mockResolvedValue('fp-2026-05'),
 }))
 
-vi.mock('@/lib/bookkeeping/transaction-entries', () => ({
+// The real line builder: a dry run previews the lines the booking posts.
+vi.mock('@/lib/bookkeeping/transaction-entries', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/transaction-entries')>()),
   createTransactionJournalEntry: createTxJE,
 }))
 vi.mock('@/lib/bookkeeping/engine', () => ({
@@ -307,7 +309,12 @@ describe('POST :id/categorize', () => {
           error: null,
         },
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        fiscal_periods: [
+      // ensureFiscalPeriod: an open period covers the date
+      { data: [{ id: 'period-1' }], error: null },
+      // checkPeriodLock: the covering period's lock state
+      { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+    ],
       }).supabase,
     )
     // Pre-validation passes: race condition where an account got

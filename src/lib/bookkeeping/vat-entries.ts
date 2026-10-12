@@ -6,6 +6,8 @@ import {
 } from '@/lib/vat/account-vat-treatment'
 import { rcBasisAccountRate } from '@/lib/reports/vat-filing-gate'
 import { roundOre } from '@/lib/money'
+import { reverseChargeBasisAccounts, vatBasisAccount } from '@/lib/vat/moms-box-mapping'
+import { grossVat } from '@/lib/vat/gross-split'
 
 /**
  * Generate VAT journal entry lines based on VAT treatment
@@ -57,14 +59,10 @@ export function getVatRate(treatment: VatTreatment): number {
  *   ruta 22  non-EU services      4531/4532/4533
  *   ruta 23  domestic goods RC    4415/4416/4417
  *   ruta 24  domestic services RC 4425/4426/4427
+ *
+ * Derived from VAT_ACCOUNT_TABLE (lib/vat/moms-box-mapping.ts).
  */
-export const RC_BASIS_ACCOUNTS: ReadonlySet<string> = new Set([
-  '4515', '4516', '4517',
-  '4535', '4536', '4537',
-  '4531', '4532', '4533',
-  '4415', '4416', '4417',
-  '4425', '4426', '4427',
-])
+export const RC_BASIS_ACCOUNTS: ReadonlySet<string> = new Set(reverseChargeBasisAccounts())
 
 export function isReverseChargeBasisAccount(account: string): boolean {
   return RC_BASIS_ACCOUNTS.has(account)
@@ -465,36 +463,21 @@ function basisPairLines(
   ]
 }
 
+const BASIS_LABEL: Record<ReverseChargeKind, string> = {
+  eu_goods: 'Inköp varor från annat EU-land',
+  eu_services: 'Inköp tjänster annat EU-land',
+  non_eu_services: 'Inköp tjänster land utanför EU',
+  // domestic_services: domestic RC (byggtjänster m.m.)
+  domestic_services: 'Inköp tjänster i Sverige omvänd skattskyldighet',
+}
+
+/** The basis account for a kind at a sats, from VAT_ACCOUNT_TABLE; null for any other sats. */
 function pickBasisAccount(
   vatRate: number,
   kind: ReverseChargeKind,
 ): { account: string; label: string } | null {
-  const rateIdx = vatRate === 0.25 ? 0 : vatRate === 0.12 ? 1 : vatRate === 0.06 ? 2 : -1
-  if (rateIdx < 0) return null
-
-  if (kind === 'eu_goods') {
-    return {
-      account: ['4515', '4516', '4517'][rateIdx],
-      label: 'Inköp varor från annat EU-land',
-    }
-  }
-  if (kind === 'eu_services') {
-    return {
-      account: ['4535', '4536', '4537'][rateIdx],
-      label: 'Inköp tjänster annat EU-land',
-    }
-  }
-  if (kind === 'non_eu_services') {
-    return {
-      account: ['4531', '4532', '4533'][rateIdx],
-      label: 'Inköp tjänster land utanför EU',
-    }
-  }
-  // domestic_services: domestic RC (byggtjänster m.m.)
-  return {
-    account: ['4425', '4426', '4427'][rateIdx],
-    label: 'Inköp tjänster i Sverige omvänd skattskyldighet',
-  }
+  const account = vatBasisAccount(kind, vatRate)
+  return account ? { account, label: BASIS_LABEL[kind] } : null
 }
 
 /**
@@ -557,7 +540,7 @@ export function generateInputVatLine(
   if (vatRate === 0) return null
 
   // Extract VAT from total amount (VAT-inclusive)
-  const vatAmount = Math.round((totalAmount * vatRate) / (1 + vatRate) * 100) / 100
+  const vatAmount = grossVat(totalAmount, vatRate)
 
   return {
     account_number: '2641', // Debiterad ingående moms

@@ -35,6 +35,11 @@ vi.mock('@/lib/salary/salary-entries', async (importOriginal) => ({
 vi.mock('@/lib/salary/ytd', () => ({
   refreshRunYtd: vi.fn().mockResolvedValue({ ok: true, updated: 0 }),
 }))
+// The payment-date period pre-check has its own tests (book-run.test.ts);
+// an open period here, so the booking fixtures need not queue its reads.
+vi.mock('@/lib/api/v1/check-period-lock', () => ({
+  checkPeriodLock: vi.fn().mockResolvedValue({ locked: false }),
+}))
 
 import { POST } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'

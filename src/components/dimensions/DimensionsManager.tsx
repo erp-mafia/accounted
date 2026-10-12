@@ -13,7 +13,7 @@ import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
-import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { TD_CLASS, QUIET_LINK_CLASS, SortableTh } from '@/components/ui/dry-table'
 import {
   Dialog,
   DialogContent,
@@ -37,10 +37,7 @@ import {
   Search,
   Lock,
   Tags,
-  ChevronUp,
-  ChevronDown,
   ChevronRight,
-  ChevronsUpDown,
   Trash2,
 } from 'lucide-react'
 import DimensionValueForm, {
@@ -385,31 +382,6 @@ export default function DimensionsManager() {
     }
   }
 
-  function SortableHeader({
-    column,
-    label,
-    className,
-  }: {
-    column: SortColumn
-    label: string
-    className?: string
-  }) {
-    const isActive = sortColumn === column
-    const Icon = isActive ? (sortDir === 'asc' ? ChevronUp : ChevronDown) : ChevronsUpDown
-    return (
-      <th className={cn(TH_CLASS, className)}>
-        <button
-          type="button"
-          onClick={() => updateSort(column)}
-          className="inline-flex items-center gap-1 transition-colors duration-150 hover:text-foreground"
-        >
-          {label}
-          <Icon className="h-3 w-3 opacity-70" aria-hidden="true" />
-        </button>
-      </th>
-    )
-  }
-
   function renderStatus(value: DimensionValueDto) {
     return value.is_active ? (
       <span className="text-muted-foreground">{t('status_active')}</span>
@@ -542,23 +514,25 @@ export default function DimensionsManager() {
           <table className="w-full border-collapse text-[13px]">
             <thead>
               <tr>
-                <SortableHeader column="code" label={t('col_code')} />
-                <SortableHeader column="name" label={t('col_name')} className="w-full" />
+                <SortableTh direction={sortColumn === 'code' ? sortDir : null} onSort={() => updateSort('code')} label={t('col_code')} />
+                <SortableTh direction={sortColumn === 'name' ? sortDir : null} onSort={() => updateSort('name')} label={t('col_name')} className="w-full" />
                 {showDates && (
                   <>
-                    <SortableHeader
-                      column="start_date"
+                    <SortableTh
+                      direction={sortColumn === 'start_date' ? sortDir : null}
+                      onSort={() => updateSort('start_date')}
                       label={t('col_start')}
                       className="hidden text-right sm:table-cell"
                     />
-                    <SortableHeader
-                      column="end_date"
+                    <SortableTh
+                      direction={sortColumn === 'end_date' ? sortDir : null}
+                      onSort={() => updateSort('end_date')}
                       label={t('col_end')}
                       className="hidden text-right sm:table-cell"
                     />
                   </>
                 )}
-                <SortableHeader column="status" label={t('col_status')} />
+                <SortableTh direction={sortColumn === 'status' ? sortDir : null} onSort={() => updateSort('status')} label={t('col_status')} />
               </tr>
             </thead>
             <tbody className="stagger-enter">

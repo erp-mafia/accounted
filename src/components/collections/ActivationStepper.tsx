@@ -27,6 +27,7 @@ import {
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { cn } from '@/lib/utils'
 import { collectionsAction, useCollectionsWords, type CollectionsSettingsData } from './collections-client'
+import { parseDecimalInput } from '@/lib/money'
 
 /**
  * The activation, in the order the data allows (build spec 1.7, 3.2):
@@ -84,7 +85,10 @@ interface RulesForm {
 }
 
 const orNull = (value: string): string | null => (value.trim() === '' ? null : value.trim())
-const toNumber = (value: string): number => Number(value.replace(/\s/g, '').replace(',', '.'))
+// Empty reads as 0, as Number('') did; text that is no number stays NaN for the
+// server's validation to name.
+const toNumber = (value: string): number =>
+  value.trim() === '' ? 0 : (parseDecimalInput(value) ?? Number.NaN)
 
 function companyInput(form: CompanyForm): CompanyStepInput {
   const [cashAccountId, kind] = form.payout.split(':')

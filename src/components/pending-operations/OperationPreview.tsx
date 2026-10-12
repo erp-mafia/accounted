@@ -12,11 +12,10 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { ArrowDown } from 'lucide-react'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
-import { roundOre } from '@/lib/money'
 import { isUuid } from '@/lib/invariants/uuid'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Skeleton } from '@/components/ui/skeleton'
-import { QUIET_LINK_CLASS, VTH_CLASS, VTD_CLASS } from '@/components/ui/dry-table'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import type { PendingOperation } from '@/types'
 import { DEDUCTION_TYPE_LABELS, isDeductionType } from '@/lib/invoices/rot-rut-rules'
 import { isRegisterBookedInvoiceParams } from '@/lib/invoices/register-booked-invoice-mode'
@@ -24,6 +23,7 @@ import { AttachDocumentPreview } from '@/components/bookkeeping/AttachDocumentPr
 import { MatchTransactionInvoicePreview } from '@/components/bookkeeping/MatchTransactionInvoicePreview'
 import { LinkDocumentsPreview } from './LinkDocumentsPreview'
 import { DocumentViewButton } from '@/components/bookkeeping/DocumentViewButton'
+import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import { complianceWarningOf, type ComplianceWarning } from './vocabulary'
 import { formatPreviewNumber } from './preview-facts'
@@ -53,7 +53,6 @@ function money(v: unknown, currency: string): string {
 }
 
 function CategorizePreview({ data }: { data: Record<string, unknown> }) {
-  const accountNames = useContext(AccountNamesContext)
   // The exact journal lines the approval will post (net cost line, VAT line,
   // gross bank line, SEK): staged by the server since the preview-lines fix.
   const lines = (data.lines as Array<{ account_number?: string; debit_amount?: number; credit_amount?: number; description?: string }>) || []
@@ -83,32 +82,7 @@ function CategorizePreview({ data }: { data: Record<string, unknown> }) {
             <span className="tabular-nums shrink-0">{formatCurrency(txAmount, txCurrency)}</span>
           </div>
         )}
-        {lines.map((line, i) => {
-          const debitAmt = typeof line.debit_amount === 'number' ? line.debit_amount : 0
-          const creditAmt = typeof line.credit_amount === 'number' ? line.credit_amount : 0
-          return (
-            <div key={i} className="flex justify-between gap-4 font-mono text-xs">
-              <span className="truncate">
-                {line.account_number ?? '?'}{' '}
-                {/* The account's own name first: it is what the posting means.
-                    The line text follows only when it adds something the name
-                    does not already say. */}
-                <span className="text-foreground">
-                  {(line.account_number && accountNames[line.account_number]) || line.description || ''}
-                </span>
-                {line.description &&
-                line.account_number &&
-                accountNames[line.account_number] &&
-                line.description !== accountNames[line.account_number] ? (
-                  <span className="text-muted-foreground"> · {line.description}</span>
-                ) : null}
-              </span>
-              <span className="tabular-nums shrink-0">
-                {debitAmt > 0 ? `D ${formatCurrency(debitAmt)}` : `K ${formatCurrency(creditAmt)}`}
-              </span>
-            </div>
-          )
-        })}
+        <StagedLinesTable lines={lines} />
       </div>
     )
   }
@@ -150,21 +124,7 @@ function CategorizePreview({ data }: { data: Record<string, unknown> }) {
       {vatLines.length > 0 && (
         <div className="border-t pt-2">
           <p className="text-xs text-muted-foreground mb-1">Momsrader</p>
-          {vatLines.map((line, i) => (
-            <div key={i} className="flex justify-between font-mono text-xs">
-              <span>
-                {line.account_number}{' '}
-                {accountNames[line.account_number] || line.description}
-                {accountNames[line.account_number] &&
-                line.description !== accountNames[line.account_number] ? (
-                  <span className="text-muted-foreground"> · {line.description}</span>
-                ) : null}
-              </span>
-              <span className="tabular-nums">
-                {line.debit_amount > 0 ? `D ${formatCurrency(line.debit_amount)}` : `K ${formatCurrency(line.credit_amount)}`}
-              </span>
-            </div>
-          ))}
+          <StagedLinesTable lines={vatLines} />
         </div>
       )}
     </div>
@@ -561,40 +521,52 @@ type VoucherLine = {
   line_description?: string | null
 }
 
-function VoucherLinesTable({ lines, currency }: { lines: VoucherLine[]; currency?: string }) {
+// Staged or posted lines through the shared VoucherLinesTable, named from
+// this card's AccountNamesContext and never the active company's chart: the
+// operation may be another company's. Reads both line shapes the payloads
+// use (account/debit/credit and account_number/debit_amount/credit_amount).
+type StagedLine = {
+  account?: string
+  account_number?: string
+  account_name?: string | null
+  description?: string | null
+  line_description?: string | null
+  debit?: number
+  credit?: number
+  debit_amount?: number
+  credit_amount?: number
+}
+
+function StagedLinesTable({
+  lines,
+  showTotals = false,
+  label,
+}: {
+  lines: readonly StagedLine[]
+  showTotals?: boolean
+  label?: string
+}) {
   const accountNames = useContext(AccountNamesContext)
   return (
-    <div className="border-t pt-2 space-y-1">
-      {lines.map((line, i) => {
-        // The account's own name first (staged account_name, else the chart
-        // name); the line text only when it adds something.
-        const name = line.account_name || accountNames[line.account_number] || ''
-        const text = line.line_description || ''
-        return (
-        <div key={i} className="grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-xs items-baseline">
-          <span className="font-mono text-muted-foreground">{line.account_number}</span>
-          <span className="truncate">
-            {name || text || '-'}
-            {name && text && text !== name ? (
-              <span className="text-muted-foreground"> · {text}</span>
-            ) : null}
-          </span>
-          <span className="font-mono tabular-nums text-right w-24">
-            {line.debit_amount > 0 ? formatCurrency(line.debit_amount, currency || 'SEK') : ''}
-          </span>
-          <span className="font-mono tabular-nums text-right w-24">
-            {line.credit_amount > 0 ? formatCurrency(line.credit_amount, currency || 'SEK') : ''}
-          </span>
-        </div>
-        )
-      })}
-    </div>
+    <VoucherLinesTable
+      accountNames={accountNames}
+      withCurrency
+      showTotals={showTotals}
+      aria-label={label}
+      lines={lines.map((line) => ({
+        account_number: String(line.account_number ?? line.account ?? '?'),
+        account_name: line.account_name,
+        description: line.line_description ?? line.description,
+        debit_amount: line.debit_amount ?? line.debit,
+        credit_amount: line.credit_amount ?? line.credit,
+      }))}
+    />
   )
 }
 
-// The verifikat's kontering with its column heads and, when known, the sums:
-// the staged lines of create_voucher and a toEntryPreview payload, and the
-// posted lines a link_document_to_voucher review fetches.
+// The verifikat's kontering with, when known, its sums: the staged lines of
+// create_voucher and a toEntryPreview payload, and the posted lines a
+// link_document_to_voucher review fetches.
 function VoucherLinesBlock({
   lines,
   totalDebit,
@@ -604,33 +576,8 @@ function VoucherLinesBlock({
   totalDebit?: number
   totalCredit?: number
 }) {
-  return (
-    <>
-      {lines.length > 0 && (
-        <div>
-          <div className="grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-[11px] uppercase tracking-wider text-muted-foreground pb-1">
-            <span>Konto</span>
-            <span>Text</span>
-            <span className="text-right w-24">Debet</span>
-            <span className="text-right w-24">Kredit</span>
-          </div>
-          <VoucherLinesTable lines={lines} />
-        </div>
-      )}
-      {totalDebit != null && totalCredit != null && (
-        <div className="border-t pt-2 grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-xs">
-          <span></span>
-          <span className="text-muted-foreground">Summa</span>
-          <span className="font-mono tabular-nums text-right w-24 font-medium">
-            {formatCurrency(totalDebit)}
-          </span>
-          <span className="font-mono tabular-nums text-right w-24 font-medium">
-            {formatCurrency(totalCredit)}
-          </span>
-        </div>
-      )}
-    </>
-  )
+  if (lines.length === 0) return null
+  return <StagedLinesTable lines={lines} showTotals={totalDebit != null && totalCredit != null} />
 }
 
 // showSeries: false for a toEntryPreview payload, which carries no series;
@@ -683,8 +630,6 @@ function BulkBookPreview({ data }: { data: Record<string, unknown> }) {
   const txSum = typeof data.tx_sum === 'number' && Number.isFinite(data.tx_sum) ? data.tx_sum : null
   const currency = (data.currency as string) || 'SEK'
   const linkExisting = data.mode === 'link_existing'
-  const totalDebit = lines.reduce((s, l) => s + (l.debit_amount > 0 ? l.debit_amount : 0), 0)
-  const totalCredit = lines.reduce((s, l) => s + (l.credit_amount > 0 ? l.credit_amount : 0), 0)
 
   return (
     <div className="space-y-3 text-sm">
@@ -705,27 +650,7 @@ function BulkBookPreview({ data }: { data: Record<string, unknown> }) {
           </>
         ) : null}
       </div>
-      {lines.length > 0 && (
-        <div>
-          <div className="grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-[11px] uppercase tracking-wider text-muted-foreground pb-1">
-            <span>Konto</span>
-            <span>Text</span>
-            <span className="text-right w-24">Debet</span>
-            <span className="text-right w-24">Kredit</span>
-          </div>
-          <VoucherLinesTable lines={lines} />
-          <div className="border-t pt-2 grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-xs">
-            <span></span>
-            <span className="text-muted-foreground">Summa</span>
-            <span className="font-mono tabular-nums text-right w-24 font-medium">
-              {formatCurrency(totalDebit)}
-            </span>
-            <span className="font-mono tabular-nums text-right w-24 font-medium">
-              {formatCurrency(totalCredit)}
-            </span>
-          </div>
-        </div>
-      )}
+      {lines.length > 0 && <StagedLinesTable lines={lines} showTotals />}
       {linkExisting && lines.length === 0 && (
         <p className="text-xs text-muted-foreground">
           Transaktionerna kopplas till ett redan bokfört verifikat; ingen ny kontering skapas.
@@ -756,28 +681,14 @@ function CorrectEntryPreview({ data }: { data: Record<string, unknown> }) {
           Originalverifikation V{original.voucher ?? ''}, {original.entry_date ?? ''}
         </p>
         <p className="text-xs text-muted-foreground italic mb-2">{original.description ?? ''}</p>
-        {original.lines && original.lines.length > 0 && (
-          <VoucherLinesTable lines={original.lines} />
-        )}
+        {original.lines && original.lines.length > 0 && <StagedLinesTable lines={original.lines} />}
       </div>
       <div>
         <p className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
           Korrigerad verifikation ({correction.line_count ?? correction.lines?.length ?? 0} rader)
         </p>
         {correction.lines && correction.lines.length > 0 && (
-          <VoucherLinesTable lines={correction.lines} />
-        )}
-        {correction.total_debit != null && (
-          <div className="border-t pt-1 grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-xs mt-1">
-            <span></span>
-            <span className="text-muted-foreground">Summa</span>
-            <span className="font-mono tabular-nums text-right w-24 font-medium">
-              {formatCurrency(correction.total_debit)}
-            </span>
-            <span className="font-mono tabular-nums text-right w-24 font-medium">
-              {formatCurrency(correction.total_credit ?? 0)}
-            </span>
-          </div>
+          <StagedLinesTable lines={correction.lines} showTotals={correction.total_debit != null} />
         )}
       </div>
     </div>
@@ -850,39 +761,7 @@ function isKonteringLines(value: unknown): value is PreviewKonteringLine[] {
 }
 
 function PreviewKonteringTable({ lines, label = 'Föreslagen kontering' }: { lines: PreviewKonteringLine[]; label?: string }) {
-  const accountNames = useContext(AccountNamesContext)
-  const amount = (n: number | undefined) =>
-    n && n > 0 ? n.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) : ''
-  return (
-    <table className="w-full border-collapse text-[12.5px]" aria-label={label}>
-      <thead>
-        <tr>
-          <th className={cn(VTH_CLASS, 'w-[70px]')}>Konto</th>
-          <th className={VTH_CLASS}>Beskrivning</th>
-          <th className={cn(VTH_CLASS, 'text-right')}>Debet</th>
-          <th className={cn(VTH_CLASS, 'text-right')}>Kredit</th>
-        </tr>
-      </thead>
-      <tbody>
-        {lines.map((line, i) => (
-          <tr key={i}>
-            <td className={cn(VTD_CLASS, 'whitespace-nowrap font-mono tabular-nums')}>
-              {line.account ?? line.account_number}
-            </td>
-            <td className={cn(VTD_CLASS, 'text-muted-foreground')}>
-              {line.description || accountNames[String(line.account ?? line.account_number ?? '')] || ''}
-            </td>
-            <td className={cn(VTD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>
-              {amount(line.debit ?? line.debit_amount)}
-            </td>
-            <td className={cn(VTD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>
-              {amount(line.credit ?? line.credit_amount)}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  )
+  return <StagedLinesTable lines={lines} label={label} />
 }
 
 // Keys GenericPreview never lists as a row: period_status has its own banner
@@ -1157,11 +1036,7 @@ function LinkDocumentToVoucherPreview({
               <Skeleton className="h-4 w-full rounded-sm" />
             </div>
           ) : lines && lines.length > 0 ? (
-            <VoucherLinesBlock
-              lines={lines}
-              totalDebit={roundOre(lines.reduce((sum, line) => sum + line.debit_amount, 0))}
-              totalCredit={roundOre(lines.reduce((sum, line) => sum + line.credit_amount, 0))}
-            />
+            <StagedLinesTable lines={lines} showTotals />
           ) : (
             <p className="text-xs text-muted-foreground">{t('preview_link_lines_failed')}</p>
           )}

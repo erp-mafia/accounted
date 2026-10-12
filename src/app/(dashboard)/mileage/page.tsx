@@ -34,6 +34,7 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { Car, Copy, Download, Plus, Trash2, Pencil, ChevronDown, ChevronUp } from 'lucide-react'
 import type { MileageTrip, MileageVehicleType } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { parseDecimalInput } from '@/lib/money'
 
 interface TripFormState {
   trip_date: string
@@ -303,7 +304,7 @@ export default function MileagePage() {
   }
 
   const submitForm = async () => {
-    const km = Number(form.distance_km.replace(',', '.'))
+    const km = parseDecimalInput(form.distance_km) ?? 0
     if (!(km > 0) || !form.from_location.trim() || !form.to_location.trim() || !form.purpose.trim()) {
       toast({ title: t('form_incomplete'), variant: 'destructive' })
       return

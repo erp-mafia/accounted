@@ -25,7 +25,9 @@ import {
 
 /**
  * The one customer picker every form uses (invoice editor, recurring
- * schedule, sales order, deadline). Modelled on AccountCombobox: a text input
+ * schedule, sales order, deadline), and with `kind="supplier"` the supplier
+ * picker of the supplier invoice form: a supplier row has the same id, name,
+ * org number and email the search and the row read. Modelled on AccountCombobox: a text input
  * that filters the cached customer list as you type (lib/customers/search),
  * with a portaled, viewport-clamped dropdown that renders only the matches,
  * capped at 50, so opening it costs the same with ten customers or ten
@@ -47,6 +49,8 @@ function stopScrollPropagation(e: Event) {
 const NONE_ROW = '__none__'
 
 interface CustomerComboboxProps<T extends SearchableCustomer> {
+  /** Which register the rows come from: decides the wording. Default 'customer'. */
+  kind?: 'customer' | 'supplier'
   value: string
   customers: readonly T[]
   onChange: (customerId: string) => void
@@ -80,6 +84,7 @@ interface CustomerComboboxProps<T extends SearchableCustomer> {
 }
 
 export default function CustomerCombobox<T extends SearchableCustomer>({
+  kind = 'customer',
   value,
   customers,
   onChange,
@@ -97,7 +102,7 @@ export default function CustomerCombobox<T extends SearchableCustomer>({
   'aria-required': ariaRequired,
   'aria-invalid': ariaInvalid,
 }: CustomerComboboxProps<T>) {
-  const t = useTranslations('customer_picker')
+  const t = useTranslations(kind === 'supplier' ? 'supplier_picker' : 'customer_picker')
   // What the user has typed since the list opened. While `queryActive` is
   // false the field shows the selected customer's name and the list shows
   // everyone, so focusing a field that already holds "Anna Andersson" browses
@@ -349,7 +354,7 @@ export default function CustomerCombobox<T extends SearchableCustomer>({
     >
       <Plus className="h-3.5 w-3.5 shrink-0" />
       <span className="truncate">
-        {trimmedQuery ? t('create_customer_named', { query: trimmedQuery }) : t('create_customer')}
+        {trimmedQuery ? t('create_named', { query: trimmedQuery }) : t('create')}
       </span>
     </button>
   ) : null

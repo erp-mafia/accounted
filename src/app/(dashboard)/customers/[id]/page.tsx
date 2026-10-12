@@ -30,6 +30,8 @@ import { PartyFactsSection } from '@/components/parties/PartyFactsSection'
 import { CustomerCollectionsExclusion } from '@/components/collections/CustomerCollectionsExclusion'
 import { usePartyDossier } from '@/components/parties/use-party-dossier'
 import { fromRegistry, addressRowsFromRegistry, listSv } from '@/lib/parties/registry-summary'
+import { invoiceStatusDisplay } from '@/lib/invoices/status-display'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 
 const CUSTOMER_TYPE_KEY: Record<CustomerType, string> = {
   individual: 'type_individual',
@@ -69,6 +71,7 @@ export default function CustomerDetailPage({
   const { canWrite } = useCanWrite()
   const t = useTranslations('customer_detail')
   const tParties = useTranslations('parties')
+  const tInvoices = useTranslations('invoices')
   const errorLocale = useLocale() as ErrorLocale
   const [customer, setCustomer] = useState<CustomerWithRelations | null>(null)
   const partyId = customer && customer.customer_type !== 'individual' ? ((customer as { party_id?: string | null }).party_id ?? null) : null
@@ -171,6 +174,8 @@ export default function CustomerDetailPage({
         description: data.name,
       })
       setIsEditOpen(false)
+      // Every customer picker reads the cached register: refresh it now.
+      void invalidateReferenceData('ref:customers')
       fetchCustomer()
     } catch {
       toast({
@@ -213,6 +218,7 @@ export default function CustomerDetailPage({
         title: t('deleted_title'),
         description: customer.name,
       })
+      void invalidateReferenceData('ref:customers')
       router.push('/customers')
     } catch {
       toast({
@@ -418,39 +424,39 @@ export default function CustomerDetailPage({
       >
         {customer.invoices?.length > 0 ? (
           <div className="divide-y divide-border">
-            {customer.invoices.map((invoice) => (
-              <Link
-                key={invoice.id}
-                href={`/invoices/${invoice.id}`}
-                className="flex items-center gap-3 py-3 text-sm transition-colors duration-150 hover:bg-secondary/35"
-              >
-                <span
-                  className={cn(
-                    'min-w-0 truncate',
-                    !invoice.invoice_number && 'italic text-muted-foreground',
-                  )}
+            {customer.invoices.map((invoice) => {
+              // The same status as the invoice list (lib/invoices/status-display.ts).
+              const statusDisplay = invoiceStatusDisplay(invoice.status)
+              const statusLabel = statusDisplay ? tInvoices(statusDisplay.labelKey) : invoice.status
+              return (
+                <Link
+                  key={invoice.id}
+                  href={`/invoices/${invoice.id}`}
+                  className="flex items-center gap-3 py-3 text-sm transition-colors duration-150 hover:bg-secondary/35"
                 >
-                  {invoiceNumberDisplay(invoice.invoice_number)}
-                </span>
-                <span className="text-muted-foreground tabular-nums">
-                  {formatDate(invoice.invoice_date)}
-                </span>
-                <span className="ml-auto tabular-nums">
-                  {formatCurrency(invoice.total, invoice.currency)}
-                </span>
-                {/* Chips mark exceptions: an overdue invoice is the deviation
-                    worth a chip; paid and not-yet-due render as muted text. */}
-                {invoice.status === 'overdue' ? (
-                  <Badge variant="destructive">{t('invoice_status_overdue')}</Badge>
-                ) : (
-                  <span className="min-w-14 text-right text-xs text-muted-foreground">
-                    {invoice.status === 'paid'
-                      ? t('invoice_status_paid')
-                      : t('invoice_status_unpaid')}
+                  <span
+                    className={cn(
+                      'min-w-0 truncate',
+                      !invoice.invoice_number && 'italic text-muted-foreground',
+                    )}
+                  >
+                    {invoiceNumberDisplay(invoice.invoice_number)}
                   </span>
-                )}
-              </Link>
-            ))}
+                  <span className="text-muted-foreground tabular-nums">
+                    {formatDate(invoice.invoice_date)}
+                  </span>
+                  <span className="ml-auto tabular-nums">
+                    {formatCurrency(invoice.total, invoice.currency)}
+                  </span>
+                  {/* Chips mark exceptions: sent and paid render as muted text. */}
+                  {statusDisplay?.chip ? (
+                    <Badge variant={statusDisplay.chip}>{statusLabel}</Badge>
+                  ) : (
+                    <span className="min-w-14 text-right text-xs text-muted-foreground">{statusLabel}</span>
+                  )}
+                </Link>
+              )
+            })}
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">{t('no_invoices')}</p>

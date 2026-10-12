@@ -28,6 +28,7 @@ import { Plus, LayoutTemplate, Sparkles } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { JournalEntry, JournalEntryLine } from '@/types'
+import { formatAmountInput } from '@/lib/money'
 
 const NewJournalEntryDialog = dynamic(
   () => import('@/components/bookkeeping/NewJournalEntryDialog'),
@@ -126,8 +127,8 @@ export default function BookkeepingPage() {
           const credit = Number(l.credit_amount) || 0
           return {
             account_number: l.account_number,
-            debit_amount: debit > 0 ? debit.toFixed(2) : '',
-            credit_amount: credit > 0 ? credit.toFixed(2) : '',
+            debit_amount: debit > 0 ? formatAmountInput(debit, '.') : '',
+            credit_amount: credit > 0 ? formatAmountInput(credit, '.') : '',
             line_description: l.line_description || '',
           }
         })

@@ -26,6 +26,7 @@ import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import { createLogger } from '@/lib/logger'
 import { conflictCode } from '@/lib/errors/structured-errors'
 import type { Invoice, Transaction } from '@/types'
+import { isMatchableInvoiceStatus, MATCHABLE_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
 
 const log = createLogger('transactions/link-journal-entry')
 
@@ -243,11 +244,7 @@ export async function linkTransactionToJournalEntry(
       return { ok: false, code: 'LINK_TX_INVOICE_CREDIT_NOTE' }
     }
 
-    if (
-      invoiceRow.status !== 'sent' &&
-      invoiceRow.status !== 'overdue' &&
-      invoiceRow.status !== 'partially_paid'
-    ) {
+    if (!isMatchableInvoiceStatus(invoiceRow.status as string)) {
       return {
         ok: false,
         code: 'LINK_TX_INVOICE_NOT_OPEN',
@@ -394,7 +391,7 @@ export async function linkTransactionToJournalEntry(
       })
       .eq('id', invoiceId)
       .eq('company_id', companyId)
-      .in('status', ['sent', 'overdue', 'partially_paid'])
+      .in('status', [...MATCHABLE_INVOICE_STATUSES])
       .select('id')
 
     if (updateInvError) {

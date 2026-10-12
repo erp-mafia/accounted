@@ -53,6 +53,7 @@ import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { roundOre } from '@/lib/money'
 import { eventBus } from '@/lib/events/bus'
 import type { Currency, EntityType, Invoice, Transaction } from '@/types'
+import { MATCHABLE_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
 
 const MatchInvoiceResponse = z.object({
   success: z.boolean(),
@@ -680,7 +681,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
       .eq('id', invoice_id)
       .eq('company_id', ctx.companyId!)
-      .in('status', ['sent', 'overdue', 'partially_paid'])
+      .in('status', [...MATCHABLE_INVOICE_STATUSES])
       .select('id')
     if (updateInvErr) return v1ErrorResponse(updateInvErr, txLog, { requestId: ctx.requestId })
     if (!updatedRows || updatedRows.length === 0) {

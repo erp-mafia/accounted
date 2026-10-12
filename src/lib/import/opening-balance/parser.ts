@@ -10,28 +10,16 @@ import type {
   ParsedOpeningBalanceRow,
   OpeningBalanceParseResult,
 } from './types'
+import { parseSwedishAmount } from '@/lib/money'
 
 /**
- * Parse a numeric value from a cell, handling Swedish decimal commas,
- * thousand separators, and various string formats.
+ * A cell's amount, through the importers' one parser (parseSwedishAmount in
+ * lib/money.ts). An empty or unreadable cell reads as 0, as this sheet parser
+ * always has: an opening balance row without an amount is a zero row.
  */
 export function parseAmount(value: unknown): number {
-  if (value === null || value === undefined || value === '') return 0
-  if (typeof value === 'number') return Math.round(value * 100) / 100
-
-  const str = String(value).trim()
-  if (str === '' || str === '-') return 0
-
-  // Remove thousand separators (spaces and dots before comma)
-  // Then replace comma with dot for parsing
-  const cleaned = str
-    .replace(/\s/g, '')       // Remove spaces (thousand separator)
-    .replace(/\.(?=\d{3})/g, '') // Remove dots used as thousand separators
-    .replace(',', '.')        // Swedish decimal comma → dot
-
-  const num = parseFloat(cleaned)
-  if (isNaN(num)) return 0
-  return Math.round(num * 100) / 100
+  if (typeof value !== 'string' && typeof value !== 'number') return 0
+  return parseSwedishAmount(value) ?? 0
 }
 
 /**

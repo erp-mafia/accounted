@@ -205,10 +205,10 @@ describe('gnubok_create_asset', () => {
   it('rejects invalid arguments before any DB call', async () => {
     await expect(
       createTool.execute({ ...validArgs, acquisition_cost: -1 }, COMPANY_ID, 'user-1', noopSupabase),
-    ).rejects.toThrow(/Invalid acquisition_cost/)
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', message: expect.stringMatching(/acquisition_cost/) })
     await expect(
       createTool.execute({ ...validArgs, bas_asset_account: '1110' }, COMPANY_ID, 'user-1', noopSupabase),
-    ).rejects.toThrow(/Invalid bas_asset_account/)
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', message: expect.stringMatching(/bas_asset_account/) })
   })
 
   it('refuses k3_components for a K2 company with the registry code', async () => {
@@ -315,7 +315,7 @@ describe('gnubok_dispose_asset', () => {
         'user-1',
         noopSupabase,
       ),
-    ).rejects.toThrow(/Invalid disposed_proceeds/)
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', message: expect.stringMatching(/disposed_proceeds/) })
     expect(vi.mocked(previewAssetDisposal)).not.toHaveBeenCalled()
   })
 

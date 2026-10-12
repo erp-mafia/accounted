@@ -28,6 +28,7 @@ import {
 } from './dimension-resolver'
 import { DimensionValidationError, type DimensionValidationIssue } from './dimension-errors'
 import { resolveSekAmount } from './currency-utils'
+import { grossVat, treatmentForRate } from '@/lib/vat/gross-split'
 import { stripBankNoise as stripBankMethodPhrases } from './booking-templates'
 import { bankSideOf, isCashLedger, settleBankLeg, type BankSide } from './bank-leg'
 import { createLogger } from '@/lib/logger'
@@ -271,13 +272,6 @@ const REVERSE_CHARGE_VAT_ACCOUNTS = new Set([
 /** Legal Swedish VAT rates a learned pattern is allowed to carry. */
 const LEGAL_VAT_RATES = [0.25, 0.12, 0.06]
 
-/** Map a learned VAT rate back to its treatment string. */
-function rateToTreatment(rate: number): string | null {
-  if (rate === 0.25) return 'standard_25'
-  if (rate === 0.12) return 'reduced_12'
-  if (rate === 0.06) return 'reduced_6'
-  return null
-}
 
 /**
  * Livsmedel VAT dropped from 12% to 6% on 2026-04-01 (Prop. 2025/26:55);
@@ -979,7 +973,7 @@ function buildMultiLineMappingResult(
   let totalVat = 0
   for (const entry of plan.entries) {
     if (entry.type === 'vat' && entry.vat_rate && keepsVatEntry(entry.account)) {
-      const vatAmount = Math.round(absAmount * entry.vat_rate / (1 + entry.vat_rate) * 100) / 100
+      const vatAmount = grossVat(absAmount, entry.vat_rate)
       totalVat += vatAmount
       allLines.push({
         account_number: entry.account,
@@ -1835,7 +1829,7 @@ export async function populateTemplatesFromSieVouchers(
     const firstVat = vatEntries[0]
     let vatAccount = firstVat?.account ?? null
     let vatTreatment = firstVat?.vat_rate !== undefined
-      ? rateToTreatment(firstVat.vat_rate)
+      ? treatmentForRate(firstVat.vat_rate)
       : (vatAccount ? (VAT_ACCOUNT_TREATMENT[vatAccount] ?? null) : null)
 
     // Reverse-charge counterparty (fiktiv moms in every source voucher, no

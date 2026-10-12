@@ -41,6 +41,17 @@ describe('findSupplierInvoiceMatch', () => {
     expect(findSupplierInvoiceMatch(tx, [inv])).toBeNull()
   })
 
+  // The statuses match-supplier-invoice takes a payment in: an overdue or
+  // part-paid invoice is still a debt the payment can settle.
+  it.each(['overdue', 'partially_paid'] as const)('suggests a %s invoice like a registered one', (status) => {
+    const tx = makeTransaction({ amount: -1000, reference: '12345' })
+    const inv = makeSupplierInvoice({ status, remaining_amount: 1000, payment_reference: '12345' })
+
+    const result = findSupplierInvoiceMatch(tx, [inv])
+
+    expect(result?.matchMethod).toBe('payment_reference')
+  })
+
   // Pass 1: Payment reference
   it('matches by payment reference with confidence 0.98', () => {
     const tx = makeTransaction({ amount: -5000, reference: '73100 12345 67890' })

@@ -5,6 +5,7 @@ import { useState, useCallback, useRef, type ChangeEvent } from 'react'
 import { Loader2, Trash2, Upload } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
+import { useSaveSettings } from '@/components/settings/use-save-settings'
 import { HelpPopover } from '@/components/ui/help-popover'
 import {
   SettingsGroup,
@@ -116,6 +117,7 @@ export function QrModeRadioGroup<T extends string = InvoiceQrMode>({
 export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) {
   const t = useTranslations('settings_pdf_print')
   const { toast } = useToast()
+  const saveSettings = useSaveSettings()
   const [lateFeeText, setLateFeeText] = useState(settings.invoice_late_fee_text || '')
   const [creditTermsText, setCreditTermsText] = useState(settings.invoice_credit_terms_text || '')
   const [isSavingFont, setIsSavingFont] = useState(false)
@@ -123,69 +125,31 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
   const [isDeletingFont, setIsDeletingFont] = useState(false)
   const fontInputRef = useRef<HTMLInputElement>(null)
 
+  // Every save shows the server's reason on a refusal (useSaveSettings);
+  // these used to show a bare "could not save", and the font save rendered
+  // the error envelope as "[object Object]".
+  const failedTitle = t('toast_save_failed')
   const saveToggle = useCallback(async (field: string, value: boolean) => {
-    try {
-      const response = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ [field]: value }),
-      })
-      if (!response.ok) throw new Error()
-      onUpdate({ [field]: value } as Partial<CompanySettings>)
-    } catch {
-      toast({ title: t('toast_save_failed'), variant: 'destructive' })
-    }
-  }, [onUpdate, toast, t])
+    const update = { [field]: value } as Partial<CompanySettings>
+    if (await saveSettings(update, { failedTitle })) onUpdate(update)
+  }, [onUpdate, saveSettings, failedTitle])
 
   const saveQrMode = useCallback(async (mode: InvoiceQrMode) => {
-    try {
-      const response = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ invoice_qr_mode: mode }),
-      })
-      if (!response.ok) throw new Error()
-      onUpdate({ invoice_qr_mode: mode })
-    } catch {
-      toast({ title: t('toast_save_failed'), variant: 'destructive' })
-    }
-  }, [onUpdate, toast, t])
+    if (await saveSettings({ invoice_qr_mode: mode }, { failedTitle })) onUpdate({ invoice_qr_mode: mode })
+  }, [onUpdate, saveSettings, failedTitle])
 
   const saveText = useCallback(async (field: string, value: string) => {
-    try {
-      const response = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ [field]: value || null }),
-      })
-      if (!response.ok) throw new Error()
-      onUpdate({ [field]: value || null } as Partial<CompanySettings>)
-    } catch {
-      toast({ title: t('toast_save_failed'), variant: 'destructive' })
-    }
-  }, [onUpdate, toast, t])
+    const update = { [field]: value || null } as Partial<CompanySettings>
+    if (await saveSettings(update, { failedTitle })) onUpdate(update)
+  }, [onUpdate, saveSettings, failedTitle])
 
   const saveFont = useCallback(async (fontFamily: InvoiceFontFamily) => {
     setIsSavingFont(true)
-    try {
-      const response = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ invoice_font_family: fontFamily }),
-      })
-      const result = await response.json()
-      if (!response.ok) throw new Error(result.error || t('toast_save_failed'))
+    if (await saveSettings({ invoice_font_family: fontFamily }, { failedTitle })) {
       onUpdate({ invoice_font_family: fontFamily })
-    } catch (error) {
-      toast({
-        title: t('toast_save_failed'),
-        description: error instanceof Error ? getUserErrorMessage(error) : undefined,
-        variant: 'destructive',
-      })
-    } finally {
-      setIsSavingFont(false)
     }
-  }, [onUpdate, toast, t])
+    setIsSavingFont(false)
+  }, [onUpdate, saveSettings, failedTitle])
 
   async function uploadFont(file: File) {
     setIsUploadingFont(true)

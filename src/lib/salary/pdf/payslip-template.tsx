@@ -1,4 +1,5 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
+import { swedishMonthName } from '@/lib/dates/swedish-months'
 import { pdfNumberText, pdfText } from '@/lib/pdf/number-text'
 import { getBranding } from '@/lib/branding/service'
 
@@ -271,13 +272,8 @@ function fmt(amount: number): string {
   )
 }
 
-const MONTH_NAMES = [
-  'januari', 'februari', 'mars', 'april', 'maj', 'juni',
-  'juli', 'augusti', 'september', 'oktober', 'november', 'december',
-]
-
 export function PayslipPDF({ data }: { data: PayslipData }) {
-  const periodLabel = `${MONTH_NAMES[data.periodMonth - 1]} ${data.periodYear}`
+  const periodLabel = `${swedishMonthName(data.periodMonth)} ${data.periodYear}`
 
   return (
     <Document>

@@ -29,6 +29,7 @@ import {
 } from '@/lib/salary/payment/bank-account'
 import EmployeeTaxCard, { type EmployeeTaxValue } from '@/components/salary/EmployeeTaxCard'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 
 function RequiredMark() {
   return <span className="text-destructive ml-0.5">*</span>
@@ -137,7 +138,11 @@ async function submitEmployee(body: unknown, locale: ErrorLocale): Promise<Submi
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
-    if (res.ok) return null
+    if (res.ok) {
+      // The roster pickers (expense claimant, reports) read the cached list.
+      void invalidateReferenceData('ref:employees')
+      return null
+    }
 
     // A body that is not JSON leaves null: getErrorMessage then falls back to
     // the HTTP status map, still in the user's language.

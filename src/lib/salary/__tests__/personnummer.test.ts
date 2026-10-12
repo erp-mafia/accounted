@@ -281,6 +281,18 @@ describe('maskPersonnummer', () => {
   it('strips non-digits before masking', () => {
     expect(maskPersonnummer('19900101-9802')).toBe('19900101-XXXX')
   })
+
+  it('masks the 10-digit form (an enskild firma org number) without showing any serial digit', () => {
+    // The 8-digit slice used to show '90010198-XXXX': two serial digits.
+    expect(maskPersonnummer('9001019802')).toBe('900101-XXXX')
+    expect(maskPersonnummer('900101-9802')).toBe('900101-XXXX')
+  })
+
+  it('redacts a value of any other length whole', () => {
+    expect(maskPersonnummer('199001019')).toBe('XXXXXXXX-XXXX')
+    expect(maskPersonnummer('')).toBe('XXXXXXXX-XXXX')
+    expect(maskPersonnummer(null)).toBe('XXXXXXXX-XXXX')
+  })
 })
 
 describe('formatPersonnummer', () => {

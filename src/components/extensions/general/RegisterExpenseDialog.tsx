@@ -22,7 +22,7 @@ import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { useAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency } from '@/lib/utils'
-import { roundOre } from '@/lib/money'
+import { roundOre, parseAmountInput, formatAmountInput } from '@/lib/money'
 import { ACCOUNT_NUMBER_RE, ISO_DATE_RE } from '@/lib/invariants'
 import { ownerFallbackName, resolveExpenseLiabilityAccount, type ExpensePayer } from '@/lib/expenses/payer'
 import {
@@ -65,8 +65,7 @@ function todayIso(): string {
 }
 
 function parseAmount(raw: string): number {
-  const n = parseFloat(raw.replace(/\s/g, '').replace(',', '.'))
-  return Number.isFinite(n) ? n : 0
+  return parseAmountInput(raw) ?? 0
 }
 
 /**
@@ -118,10 +117,10 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
     setExpenseDate(data?.invoice?.invoiceDate || todayIso())
     const total = data?.totals?.total
     const vat = data?.totals?.vatAmount
-    setAmountInput(total != null && total > 0 ? String(roundOre(total)).replace('.', ',') : '')
+    setAmountInput(total != null && total > 0 ? formatAmountInput(total) : '')
     // VAT the extraction did not read stays empty: a Swedish receipt's moms
     // is typed, never assumed to be 0.
-    setVatInput(vat != null && vat > 0 ? String(roundOre(vat)).replace('.', ',') : vat === 0 ? '0' : '')
+    setVatInput(vat != null && vat > 0 ? formatAmountInput(vat) : vat === 0 ? '0' : '')
     // Prefilled only from VAT the receipt shows; otherwise the user answers.
     setVatCase(vatCaseFromReceipt({ currency, vatAmount: vat, sellerVatNumber: data?.supplier?.vatNumber }))
     setExpenseAccount('')

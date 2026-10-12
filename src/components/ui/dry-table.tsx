@@ -1,6 +1,10 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
+import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 // Concept dry-table (scenes 9/10): borderless table straight on the panel,
 // uppercase hairline heads, 13px rows, hover-revealed row controls. Shared by
@@ -57,6 +61,62 @@ export function RowFoldout({ children }: { children: React.ReactNode }) {
       style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
     >
       <div className="min-h-0 overflow-hidden">{children}</div>
+    </div>
+  )
+}
+
+/** Rows a client-side list shows at first and adds per "Ladda fler". */
+export const SHOW_MORE_STEP = 100
+
+interface SortableThProps {
+  label: string
+  /** The column's sort, or null when the list is sorted on another column. */
+  direction: 'asc' | 'desc' | null
+  onSort: () => void
+  align?: 'left' | 'right'
+  className?: string
+}
+
+/**
+ * A sortable dry-table head: the TH_CLASS idiom with a button that keeps the
+ * uppercase (Preflight resets text-transform on buttons), states the sort to
+ * assistive tech (aria-sort, "Sortera efter X"), has a keyboard focus ring
+ * and a 40px target. The invoice and supplier invoice lists had this; the
+ * customer, article and dimension lists had a bare button without any of it.
+ */
+export function SortableTh({ label, direction, onSort, align = 'left', className }: SortableThProps) {
+  const t = useTranslations('common')
+  const SortIcon = direction === 'asc' ? ArrowUp : direction === 'desc' ? ArrowDown : ArrowUpDown
+  return (
+    <th
+      className={cn(TH_CLASS, className)}
+      aria-sort={direction === 'asc' ? 'ascending' : direction === 'desc' ? 'descending' : 'none'}
+    >
+      <button
+        type="button"
+        className={cn(
+          '-mx-2 inline-flex min-h-10 items-center gap-1 rounded-sm px-2 uppercase focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+          align === 'right' && 'ml-auto justify-end',
+        )}
+        aria-label={t('sort_by', { column: label })}
+        onClick={onSort}
+      >
+        <span>{label}</span>
+        <SortIcon aria-hidden="true" className={cn('h-3.5 w-3.5 shrink-0', !direction && 'text-muted-foreground/60')} />
+      </button>
+    </th>
+  )
+}
+
+/** "Ladda fler" under a client-side list cut at `shown` of `total` rows; renders nothing when all are shown. */
+export function ShowMoreFooter({ shown, total, onMore }: { shown: number; total: number; onMore: () => void }) {
+  const t = useTranslations('common')
+  if (shown >= total) return null
+  return (
+    <div className="flex justify-center">
+      <Button type="button" variant="outline" onClick={onMore}>
+        {t('load_more')}
+      </Button>
     </div>
   )
 }

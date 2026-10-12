@@ -29,8 +29,8 @@ const updateEmployee = tools.find((t) => t.name === 'gnubok_update_employee')!
 const setOpeningBalances = tools.find((t) => t.name === 'gnubok_set_employee_opening_balances')!
 const closeVacationYear = tools.find((t) => t.name === 'gnubok_close_vacation_year')!
 
-// Synthetic fixture personnummer (year 1900, zero suffix).
-const SAMPLE_PERSONNUMMER = '190001010000'
+// Synthetic fixture personnummer (year 1900, a zero suffix with a valid check digit: staging runs the Luhn check).
+const SAMPLE_PERSONNUMMER = '190001010008'
 
 /** Flexible per-table mock that also captures insert payloads, so tests can
  * assert what stagePendingOperation persisted to pending_operations. */
@@ -601,6 +601,92 @@ describe('gnubok_book_salary_run', () => {
       ),
     ).rejects.toThrow(/lack a calculation/)
   })
+
+  it('refuses an uncalculated roster with SALARY_RUN_NOT_CALCULATED, naming the employee', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: RUN_ROW })
+    enqueue({
+      data: [
+        {
+          ...ROSTER_ROW,
+          employee_id: 'e1',
+          calculation_breakdown: null,
+          employee: { first_name: 'Anna', last_name: 'Svensson', f_skatt_status: 'a_skatt' },
+        },
+      ],
+    })
+
+    const error = (await bookSalaryRun
+      .execute({ salary_run_id: 'run-1' }, 'company-1', 'user-1', supabase as never, { type: 'user' })
+      .catch((err: unknown) => err)) as Error & { code?: string }
+
+    expect(error.code).toBe('SALARY_RUN_NOT_CALCULATED')
+    expect(error.message).toContain('Anna Svensson')
+  })
+
+  it('refuses a draft that was never calculated, the review step\'s rule, even with no employees', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...RUN_ROW, status: 'draft', calculation_params: null } })
+    enqueue({ data: [] })
+
+    const error = (await bookSalaryRun
+      .execute({ salary_run_id: 'run-1' }, 'company-1', 'user-1', supabase as never, { type: 'user' })
+      .catch((err: unknown) => err)) as Error & { code?: string }
+
+    expect(error.code).toBe('SALARY_RUN_NOT_CALCULATED')
+    expect(error.message).toContain('never been calculated')
+  })
+
+  it('shows the approver the warnings the approval will record: bank details for a payout, missing email', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: RUN_ROW })
+    enqueue({
+      data: [
+        {
+          ...ROSTER_ROW,
+          employee_id: 'e1',
+          employee: {
+            first_name: 'Anna',
+            last_name: 'Svensson',
+            clearing_number: null,
+            bank_account_number: null,
+            email: null,
+            f_skatt_status: 'a_skatt',
+          },
+        },
+        {
+          ...ROSTER_ROW,
+          id: 'sre-2',
+          employee_id: 'e2',
+          net_salary: 0,
+          tax_withheld: 0,
+          employee: {
+            first_name: 'Nils',
+            last_name: 'Noll',
+            clearing_number: null,
+            bank_account_number: null,
+            email: 'nils@example.se',
+            f_skatt_status: 'a_skatt',
+          },
+        },
+      ],
+    })
+    enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
+    enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: { id: 'op-1' }, error: null }) // pending_operations insert
+
+    const result = (await bookSalaryRun.execute(
+      { salary_run_id: 'run-1' },
+      'company-1', 'user-1', supabase as never, { type: 'user' },
+    )) as { staged: boolean; preview: { warnings?: string[] } }
+
+    expect(result.staged).toBe(true)
+    const warnings = result.preview.warnings ?? []
+    expect(warnings.some((w) => w.startsWith('Anna Svensson:') && /bank|clearing|konto/i.test(w))).toBe(true)
+    expect(warnings).toContain('Anna Svensson: E-post saknas, lönebesked kan inte skickas')
+    // Nothing to pay out, so no bank details needed (no payment-file line).
+    expect(warnings.some((w) => w.startsWith('Nils Noll:'))).toBe(false)
+  })
 })
 
 describe('gnubok_delete_absence', () => {
@@ -676,7 +762,7 @@ describe('gnubok_create_employee', () => {
     }
     expect(inserted).toBeDefined()
     expect(inserted.params.personnummer).toBeUndefined()
-    expect(inserted.params.personnummer_last4).toBe('0000')
+    expect(inserted.params.personnummer_last4).toBe('0008')
     expect(decryptPersonnummer(inserted.params.personnummer_encrypted as string)).toBe(SAMPLE_PERSONNUMMER)
     expect(JSON.stringify(inserted.params)).not.toContain(SAMPLE_PERSONNUMMER)
     expect(JSON.stringify(inserted.preview_data)).not.toContain(SAMPLE_PERSONNUMMER)

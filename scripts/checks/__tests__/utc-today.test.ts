@@ -9,6 +9,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { findUtcTodaySites, UTC_TODAY_ALLOWED } from '../utc-today.mjs'
 
+/** The repository scans walk all of src: seconds locally, longer on the shared CI runner. */
+const REPO_SCAN_TIMEOUT_MS = 60_000
+
 const tempDirs: string[] = []
 afterAll(() => {
   for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true })
@@ -58,11 +61,11 @@ describe('utc-today guard', () => {
     const root = path.resolve(__dirname, '..', '..', '..', 'src')
     const outside = findUtcTodaySites(root).filter((f) => !UTC_TODAY_ALLOWED.has(f.file))
     expect(outside).toEqual([])
-  })
+  }, REPO_SCAN_TIMEOUT_MS)
 
   it('keeps the allowlist free of files that no longer need it', () => {
     const root = path.resolve(__dirname, '..', '..', '..', 'src')
     const flagged = new Set(findUtcTodaySites(root).map((f) => f.file))
     expect([...UTC_TODAY_ALLOWED].filter((f) => !flagged.has(f))).toEqual([])
-  })
+  }, REPO_SCAN_TIMEOUT_MS)
 })

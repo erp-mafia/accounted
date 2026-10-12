@@ -97,6 +97,7 @@ import { shrinkImageForUpload } from '@/lib/documents/shrink-image'
 import { uploadViaSignedUrl } from '@/lib/documents/direct-upload'
 import { INBOX_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { parseAmountInput } from '@/lib/money'
 
 /**
  * A failure whose message is already the sentence to show the user, resolved
@@ -3643,8 +3644,8 @@ function buildPatchBody(key: FieldKey, raw: string, currency: string) {
   const trimmed = raw.trim()
 
   if (group === 'totals') {
-    const num = trimmed === '' ? null : Number(trimmed.replace(',', '.'))
-    if (num != null && !Number.isFinite(num)) return null
+    const num = trimmed === '' ? null : parseAmountInput(trimmed)
+    if (trimmed !== '' && num === null) return null
     return { totals: { [name]: num } }
   }
   if (group === 'invoice' && (name === 'invoiceDate' || name === 'dueDate')) {

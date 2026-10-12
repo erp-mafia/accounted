@@ -17,8 +17,8 @@ import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { Plus, Trash2, Search, Check, BookmarkPlus, Tags } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
-import { cn, formatCurrency } from '@/lib/utils'
-import { roundOre } from '@/lib/money'
+import { cn, formatCurrency, formatAmount } from '@/lib/utils'
+import { roundOre, formatAmountInput } from '@/lib/money'
 import {
   applyCostAccountSuggestion,
   buildBookDirectPrefillLines,
@@ -520,8 +520,8 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
       updateLine(
         idx,
         side === 'debit'
-          ? { debit_amount: fill.toFixed(2), credit_amount: '' }
-          : { credit_amount: fill.toFixed(2), debit_amount: '' }
+          ? { debit_amount: formatAmountInput(fill, '.'), credit_amount: '' }
+          : { credit_amount: formatAmountInput(fill, '.'), debit_amount: '' }
       )
     },
     [computeBalancingDiff, updateLine]
@@ -947,7 +947,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                             reconciles the sums: what is still missing to balance. */}
                         {totals.diff !== 0 ? (
                           <span className="tabular-nums font-medium text-destructive">
-                            Differens {Math.abs(totals.diff).toFixed(2)}
+                            Differens {formatAmount(Math.abs(totals.diff))}
                           </span>
                         ) : (
                           <span />
@@ -963,7 +963,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                         totals.diff !== 0 && 'text-destructive'
                       )}
                     >
-                      {totals.debit.toFixed(2)}
+                      {formatAmount(totals.debit)}
                     </td>
                     <td
                       className={cn(
@@ -971,7 +971,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                         totals.diff !== 0 && 'text-destructive'
                       )}
                     >
-                      {totals.credit.toFixed(2)}
+                      {formatAmount(totals.credit)}
                     </td>
                     <td />
                   </tr>

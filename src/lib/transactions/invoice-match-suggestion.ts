@@ -9,10 +9,9 @@
  * candidate invoices, so the caller matches the payment to the invoice
  * instead; `confirm_no_match: true` keeps the plain categorization.
  *
- * Shared by every categorize door that books from a resolved mapping (the
- * dashboard route POST /api/transactions/{id}/categorize and the v1
- * :categorize / batch-categorize routes) so they refuse the same bookings
- * with the same code (TX_CATEGORIZE_SUGGEST_SI_MATCH /
+ * Called by categorizeTransaction (lib/transactions/categorize-core.ts), so
+ * the dashboard and the v1 :categorize / batch-categorize doors refuse the
+ * same bookings with the same code (TX_CATEGORIZE_SUGGEST_SI_MATCH /
  * TX_CATEGORIZE_SUGGEST_CI_MATCH) and honour the same override. Read-only:
  * safe on a dry-run.
  */
@@ -33,6 +32,7 @@ import {
 } from '@/lib/invoices/duplicate-guard-currency'
 import { resolveTransactionAmountSek } from '@/lib/transactions/booking-duplicate-detection'
 import type { Logger } from '@/lib/logger'
+import { MATCHABLE_INVOICE_STATUSES, MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
 
 /** The `transactions` columns the intercept reads. */
 export interface InvoiceMatchTransaction {
@@ -231,7 +231,7 @@ export async function findInvoiceMatchSuggestion(
             )
             .eq('company_id', companyId)
             .in('supplier_id', supplierIds)
-            .in('status', ['registered', 'approved', 'partially_paid', 'overdue'])
+            .in('status', [...MATCHABLE_SUPPLIER_INVOICE_STATUSES])
             .or(sweep.currencyFilter)
             .gte('remaining_amount', sweep.low)
             .lte('remaining_amount', sweep.high)
@@ -365,7 +365,7 @@ export async function findInvoiceMatchSuggestion(
             .select(CANDIDATE_COLUMNS)
             .eq('company_id', companyId)
             .in('customer_id', customerIds)
-            .in('status', ['sent', 'overdue', 'partially_paid'])
+            .in('status', [...MATCHABLE_INVOICE_STATUSES])
             .or(sweep.currencyFilter)
             .gte('remaining_amount', sweep.low)
             .lte('remaining_amount', sweep.high)
@@ -399,7 +399,7 @@ export async function findInvoiceMatchSuggestion(
             .from('invoices')
             .select(CANDIDATE_COLUMNS)
             .eq('company_id', companyId)
-            .in('status', ['sent', 'overdue', 'partially_paid'])
+            .in('status', [...MATCHABLE_INVOICE_STATUSES])
             .or(sweep.currencyFilter)
             .gte('remaining_amount', sweep.low)
             .lte('remaining_amount', sweep.high)

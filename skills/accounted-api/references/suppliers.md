@@ -2776,7 +2776,7 @@ Example response `200`:
 **Create a supplier.**
 `scope:suppliers:write · risk:low · idempotent · dry-run · reversible`
 
-Creates a new supplier for the company. Requires Idempotency-Key (UUID). Supports ?dry_run=true for input validation without committing: the dry-run response shows the would-be record minus id and timestamps.
+Creates a new supplier for the company. Bankgiro (with its Luhn check digit), plusgiro, IBAN and BIC are format-checked, since payment files read them. Omitted supplier_type is swedish_business. Requires Idempotency-Key (UUID). Supports ?dry_run=true: the dry run answers the would-be record without id and timestamps.
 
 **Use when:** You need to register a new supplier before booking supplier invoices against them. Use dry-run first to catch validation errors before committing.
 **Do not use for:** Updating an existing supplier (PATCH instead). Creating customers (different resource).
@@ -2784,6 +2784,7 @@ Creates a new supplier for the company. Requires Idempotency-Key (UUID). Support
 **Pitfalls:**
 - Idempotency-Key is mandatory: calls without it return 400 VALIDATION_ERROR.
 - org_number uniqueness is enforced at the database level; duplicate inserts return 409 SUPPLIER_DUPLICATE_ORG_NUMBER.
+- A Swedish-shaped org_number is stored as the 10-digit key; a foreign registration number is stored as sent.
 - Unlike customers, suppliers carry no `vat_number_validated` flag: vat_number is stored as supplied without VIES verification. Validate externally if your workflow requires it.
 - default_expense_account is a BAS account number (e.g. "5410"); the value is stored as-is and used as the suggested debit account when supplier invoices are booked.
 
@@ -2796,7 +2797,7 @@ Request body:
 ```ts
 {
   name: string,
-  supplier_type: "swedish_business" | "eu_business" | "non_eu_business",
+  supplier_type?: "swedish_business" | "eu_business" | "non_eu_business",
   email?: string,
   phone?: string,
   address_line1?: string,
@@ -2838,9 +2839,9 @@ Response `200`:
 ```ts
 {
   data: {
-    id: string | null,
+    id: string,
     name: string,
-    supplier_type: "swedish_business" | "eu_business" | "non_eu_business",
+    supplier_type: string,
     email: string | null,
     phone: string | null,
     address_line1: string | null,
@@ -2853,15 +2854,18 @@ Response `200`:
     bankgiro: string | null,
     plusgiro: string | null,
     bank_account: string | null,
+    clearing_number: string | null,
+    account_number: string | null,
     iban: string | null,
     bic: string | null,
     default_expense_account: string | null,
     default_payment_terms: number,
     default_currency: string,
     notes: string | null,
+    party_id: string | null,
     archived_at: string | null,
-    created_at: string | null,
-    updated_at: string | null
+    created_at: string,
+    updated_at: string
   },
   meta: {
     request_id: string,
@@ -2883,14 +2887,29 @@ Example response `200`:
     "name": "Office Depot AB",
     "supplier_type": "swedish_business",
     "email": "invoices@officedepot.example",
+    "phone": null,
+    "address_line1": "Box 123",
+    "address_line2": null,
+    "postal_code": "111 22",
+    "city": "Stockholm",
+    "country": "SE",
     "org_number": "5566778899",
+    "vat_number": "SE556677889901",
     "bankgiro": "123-4567",
+    "plusgiro": null,
+    "bank_account": null,
+    "clearing_number": null,
+    "account_number": null,
+    "iban": null,
+    "bic": null,
     "default_expense_account": "5410",
-    "default_payment_terms": 30,
+    "default_payment_terms": 14,
     "default_currency": "SEK",
+    "notes": null,
+    "party_id": null,
     "archived_at": null,
-    "created_at": "2026-05-13T15:00:00Z",
-    "updated_at": "2026-05-13T15:00:00Z"
+    "created_at": "2026-04-12T08:30:00Z",
+    "updated_at": "2026-04-12T08:30:00Z"
   },
   "meta": {
     "request_id": "req_…",
@@ -3187,7 +3206,7 @@ Bulk-create endpoint mirroring /customers/bulk-create. Each supplier is validate
 Request body:
 ```ts
 {
-  suppliers: { name: string, supplier_type: "swedish_business" | "eu_business" | "non_eu_business", email?: string, phone?: string, address_line1?: string, address_line2?: string, postal_code?: string, city?: string, country?: string, org_number?: string, vat_number?: string, bankgiro?: string, plusgiro?: string, bank_account?: string, iban?: string, bic?: string, clearing_number?: string, account_number?: string, default_expense_account?: string, default_payment_terms?: number, default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD" | null, notes?: string }[],
+  suppliers: { name: string, supplier_type?: "swedish_business" | "eu_business" | "non_eu_business", email?: string, phone?: string, address_line1?: string, address_line2?: string, postal_code?: string, city?: string, country?: string, org_number?: string, vat_number?: string, bankgiro?: string, plusgiro?: string, bank_account?: string, iban?: string, bic?: string, clearing_number?: string, account_number?: string, default_expense_account?: string, default_payment_terms?: number, default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD" | null, notes?: string }[],
   all_or_nothing?: boolean
 }
 ```

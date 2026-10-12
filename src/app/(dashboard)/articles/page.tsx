@@ -3,17 +3,19 @@
 import { useState, useEffect, useMemo, useCallback, useRef, Suspense } from 'react'
 import dynamic from 'next/dynamic'
 import { useLocale, useTranslations } from 'next-intl'
+import { useArticles } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
-import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS, SHOW_MORE_STEP, ShowMoreFooter, SortableTh } from '@/components/ui/dry-table'
+import { useUrlSort } from '@/lib/hooks/use-url-sort'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { Plus, Package, Lock, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
+import { Plus, Package, Lock } from 'lucide-react'
 import { ActivateAccountsDialog } from '@/components/bookkeeping/ActivateAccountsDialog'
 import {
   useSubmitWithAccountActivation,
@@ -32,7 +34,6 @@ import {
   resolveCurrencyScope,
 } from '@/lib/articles/currency-scope'
 import Link from 'next/link'
-import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { Article, ArticleType, CreateArticleInput } from '@/types'
 
@@ -55,7 +56,6 @@ const ARTICLE_TYPE_LABEL_KEYS: Record<ArticleType, string> = {
 }
 
 type SortColumn = 'name' | 'article_number' | 'type' | 'unit' | 'price_excl_vat' | 'vat_rate'
-type SortDir = 'asc' | 'desc'
 
 const SORTABLE_COLUMNS: ReadonlyArray<SortColumn> = [
   'name',
@@ -65,82 +65,48 @@ const SORTABLE_COLUMNS: ReadonlyArray<SortColumn> = [
   'price_excl_vat',
   'vat_rate',
 ]
-const INITIAL_VISIBLE_ROWS = 100
 
 function compareStrings(a: string, b: string): number {
   return a.localeCompare(b, 'sv', { sensitivity: 'base' })
 }
 
 function ArticlesPageInner() {
-  const { company } = useCompany()
   const { canWrite } = useCanWrite()
-  const [articles, setArticles] = useState<Article[]>([])
-  const [isLoading, setIsLoading] = useState(true)
+  // The register from the session cache (lib/reference-data), inactive
+  // articles included; /api/articles pages past PostgREST's 1000-row cap,
+  // which the direct select here did not. A create refreshes every picker.
+  const { articles, isLoading, error: articlesError } = useArticles({ includeInactive: true })
   const [searchTerm, setSearchTerm] = useState('')
-  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ROWS)
+  const [visibleCount, setVisibleCount] = useState(SHOW_MORE_STEP)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const { toast } = useToast()
-  const supabase = createClient()
   const t = useTranslations('articles')
-  const tCommon = useTranslations('common')
   const errorLocale = useLocale() as ErrorLocale
 
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
 
-  const sortParam = searchParams.get('sort')
-  const dirParam = searchParams.get('dir')
   // Currency scope (#1189). In the URL like the sort, so a filtered register
   // survives opening an article and coming back, and can be linked to.
   const currencyParam = searchParams.get('currency')
   // Default to the user's own article numbering (numeric-aware), issue #1053.
-  const sortColumn: SortColumn = (SORTABLE_COLUMNS as ReadonlyArray<string>).includes(sortParam ?? '')
-    ? (sortParam as SortColumn)
-    : 'article_number'
-  const sortDir: SortDir = dirParam === 'desc' ? 'desc' : 'asc'
-
-  const updateSort = useCallback(
-    (column: SortColumn) => {
-      setVisibleCount(INITIAL_VISIBLE_ROWS)
-      const params = new URLSearchParams(searchParams.toString())
-      let nextDir: SortDir = 'asc'
-      if (column === sortColumn) {
-        nextDir = sortDir === 'asc' ? 'desc' : 'asc'
-      }
-      params.set('sort', column)
-      params.set('dir', nextDir)
-      router.replace(`${pathname}?${params.toString()}`, { scroll: false })
-    },
-    [searchParams, sortColumn, sortDir, router, pathname]
+  const resetVisible = useCallback(() => setVisibleCount(SHOW_MORE_STEP), [])
+  const { column: sortColumn, direction: sortDir, toggle: updateSort } = useUrlSort(
+    SORTABLE_COLUMNS,
+    'article_number',
+    resetVisible,
   )
 
-  async function fetchArticles() {
-    if (!company) return
-    setIsLoading(true)
-    const { data, error } = await supabase
-      .from('articles')
-      .select('*')
-      .eq('company_id', company.id)
-      .order('name', { ascending: true })
-
-    if (error) {
-      toast({
-        title: t('load_failed_title'),
-        description: t('load_failed_description'),
-        variant: 'destructive',
-      })
-    } else {
-      setArticles(data || [])
-    }
-    setIsLoading(false)
-  }
-
   useEffect(() => {
-    fetchArticles()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    if (!articlesError) return
+    toast({
+      title: t('load_failed_title'),
+      description: t('load_failed_description'),
+      variant: 'destructive',
+    })
+  }, [articlesError, toast, t])
 
   // Create runs through useSubmitWithAccountActivation so an ACCOUNTS_NOT_IN_CHART
   // response (revenue account not yet activated) opens the standard
@@ -165,12 +131,12 @@ function ArticlesPageInner() {
     setIsCreating(true)
     pendingCreateRef.current = data
     try {
-      const result = await runCreate()
+      await runCreate()
       toast({
         title: t('created_title'),
         description: t('created_description', { name: data.name }),
       })
-      setArticles([...articles, result.data])
+      await invalidateReferenceData('ref:articles')
       setIsDialogOpen(false)
     } catch (err) {
       // The user closing the activation dialog is not an error worth toasting.
@@ -192,7 +158,7 @@ function ArticlesPageInner() {
 
   const updateCurrencyFilter = useCallback(
     (next: string) => {
-      setVisibleCount(INITIAL_VISIBLE_ROWS)
+      setVisibleCount(SHOW_MORE_STEP)
       const params = new URLSearchParams(searchParams.toString())
       if (next === ALL_CURRENCIES) params.delete('currency')
       else params.set('currency', next)
@@ -246,33 +212,6 @@ function ArticlesPageInner() {
   }, [filteredArticles, sortColumn, sortDir])
   const visibleArticles = sortedArticles.slice(0, visibleCount)
 
-  // Sortable dry-table head: the button inherits the TH typography and only
-  // adds the direction affordance.
-  function SortableTh({
-    column,
-    label,
-    className,
-  }: {
-    column: SortColumn
-    label: string
-    className?: string
-  }) {
-    const isActive = sortColumn === column
-    const Icon = isActive ? (sortDir === 'asc' ? ChevronUp : ChevronDown) : ChevronsUpDown
-    return (
-      <th className={cn(TH_CLASS, className)}>
-        <button
-          type="button"
-          onClick={() => updateSort(column)}
-          className="inline-flex items-center gap-1 transition-colors duration-150 hover:text-foreground"
-        >
-          {label}
-          <Icon className="h-3 w-3 opacity-70" aria-hidden="true" />
-        </button>
-      </th>
-    )
-  }
-
   return (
     <div className="space-y-8">
       {/* Page header (concept scene 27): title + import + export + Ny artikel */}
@@ -324,7 +263,7 @@ function ArticlesPageInner() {
           value={searchTerm}
           onChange={(e) => {
             setSearchTerm(e.target.value)
-            setVisibleCount(INITIAL_VISIBLE_ROWS)
+            setVisibleCount(SHOW_MORE_STEP)
           }}
         />
         {/* A single-currency register needs no scope: the chip would be a
@@ -389,12 +328,12 @@ function ArticlesPageInner() {
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
-                  <SortableTh column="article_number" label={t('col_number')} />
-                  <SortableTh column="name" label={t('col_name')} className="w-full" />
-                  <SortableTh column="type" label={t('col_type')} className="hidden md:table-cell" />
-                  <SortableTh column="unit" label={t('col_unit')} className="hidden text-right sm:table-cell" />
-                  <SortableTh column="price_excl_vat" label={t('col_price')} className="text-right" />
-                  <SortableTh column="vat_rate" label={t('col_vat')} className="hidden text-right sm:table-cell" />
+                  <SortableTh direction={sortColumn === 'article_number' ? sortDir : null} onSort={() => updateSort('article_number')} label={t('col_number')} />
+                  <SortableTh direction={sortColumn === 'name' ? sortDir : null} onSort={() => updateSort('name')} label={t('col_name')} className="w-full" />
+                  <SortableTh direction={sortColumn === 'type' ? sortDir : null} onSort={() => updateSort('type')} label={t('col_type')} className="hidden md:table-cell" />
+                  <SortableTh direction={sortColumn === 'unit' ? sortDir : null} onSort={() => updateSort('unit')} label={t('col_unit')} className="hidden text-right sm:table-cell" />
+                  <SortableTh direction={sortColumn === 'price_excl_vat' ? sortDir : null} onSort={() => updateSort('price_excl_vat')} label={t('col_price')} className="text-right" />
+                  <SortableTh direction={sortColumn === 'vat_rate' ? sortDir : null} onSort={() => updateSort('vat_rate')} label={t('col_vat')} className="hidden text-right sm:table-cell" />
                   <th className={cn(TH_CLASS, 'text-right')}>{t('col_status')}</th>
                 </tr>
               </thead>
@@ -449,17 +388,11 @@ function ArticlesPageInner() {
             {t('count_footer', { count: sortedArticles.length })}
           </p>
 
-          {visibleCount < sortedArticles.length && (
-            <div className="flex justify-center">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setVisibleCount((count) => count + INITIAL_VISIBLE_ROWS)}
-              >
-                {tCommon('load_more')}
-              </Button>
-            </div>
-          )}
+          <ShowMoreFooter
+            shown={visibleCount}
+            total={sortedArticles.length}
+            onMore={() => setVisibleCount((count) => count + SHOW_MORE_STEP)}
+          />
         </>
       )}
 

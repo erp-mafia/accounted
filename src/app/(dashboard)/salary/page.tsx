@@ -26,29 +26,7 @@ import {
   type RunPeriodChoice,
 } from '@/lib/salary/next-run-period'
 import type { EmployeeMasked, SalaryRun } from '@/types'
-
-const STATUS_LABEL_KEYS: Record<string, string> = {
-  draft: 'status_draft',
-  review: 'status_review',
-  approved: 'status_approved',
-  paid: 'status_paid',
-  booked: 'status_booked',
-  corrected: 'status_corrected',
-}
-
-// In-flight states all wear the quiet beige chip (concept scene 22's Utkast
-// look): the payout-date note beside the chip carries the urgency, not an
-// ochre border. Booked renders as muted text, corrected as the outline
-// exception.
-// paid and booked are the normal outcome, so they render as muted text
-// (MUTED_STATUSES) and never reach the chip.
-const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'warning' | 'destructive' | 'outline'> = {
-  draft: 'secondary',
-  review: 'secondary',
-  approved: 'secondary',
-  corrected: 'outline',
-}
-const MUTED_STATUSES = new Set(['paid', 'booked'])
+import { salaryRunStatusDisplay } from '@/lib/salary/run-status-display'
 
 /**
  * Löner landing (concept scene 22): header + the lönekörningar dry-table,
@@ -264,6 +242,11 @@ export default function SalaryPage() {
                       run as SalaryRun & { employee_count?: { count: number }[] }
                     ).employee_count?.[0]?.count
                     const inFlight = run.status !== 'booked' && run.status !== 'corrected'
+                    // The same status as the run header and the payslip page
+                    // (lib/salary/run-status-display.ts): in-flight states wear
+                    // the beige chip, paid and booked are muted text.
+                    const statusDisplay = salaryRunStatusDisplay(run.status)
+                    const statusLabel = statusDisplay ? t(statusDisplay.labelKey) : run.status
                     return (
                       <tr
                         key={run.id}
@@ -283,15 +266,11 @@ export default function SalaryPage() {
                             truncates so it must clip. */}
                         <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden whitespace-nowrap')}>
                           <span className="inline-flex items-center gap-2">
-                            {run.status === 'booked' ? (
-                              <span className="text-muted-foreground">{t('status_booked')}</span>
-                            ) : MUTED_STATUSES.has(run.status) ? (
-                              <span className="text-muted-foreground">
-                                {STATUS_LABEL_KEYS[run.status] ? t(STATUS_LABEL_KEYS[run.status]) : run.status}
-                              </span>
+                            {statusDisplay && statusDisplay.chip === null ? (
+                              <span className="text-muted-foreground">{statusLabel}</span>
                             ) : (
-                              <Badge variant={STATUS_VARIANTS[run.status] || 'secondary'} className="font-normal">
-                                {STATUS_LABEL_KEYS[run.status] ? t(STATUS_LABEL_KEYS[run.status]) : run.status}
+                              <Badge variant={statusDisplay?.chip ?? 'secondary'} className="font-normal">
+                                {statusLabel}
                               </Badge>
                             )}
                             {inFlight && (

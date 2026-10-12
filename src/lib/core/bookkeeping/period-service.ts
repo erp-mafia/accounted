@@ -6,6 +6,8 @@ import { validatePeriodDuration } from '@/lib/bookkeeping/validate-period-durati
 import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
 import { assertNoUnfinishedSieImport, sieHoldRefusal } from './sie-import-hold'
+import { codedRefusal } from '@/lib/errors/refusal'
+import { userFacing } from '@/lib/errors/user-facing'
 import type { FiscalPeriod } from '@/types'
 
 const log = createLogger('period-service')
@@ -109,15 +111,15 @@ export async function lockPeriod(
     .single()
 
   if (fetchError || !period) {
-    throw new Error('Fiscal period not found')
+    throw codedRefusal('PERIOD_NOT_FOUND', 'Fiscal period not found')
   }
 
   if (period.is_closed) {
-    throw new Error('Period is already closed')
+    throw codedRefusal('PERIOD_ALREADY_CLOSED', 'Period is already closed')
   }
 
   if (period.locked_at) {
-    throw new Error('Period is already locked')
+    throw codedRefusal('PERIOD_LOCK_ALREADY_LOCKED', 'Period is already locked')
   }
 
   assertNoUnfinishedSieImport(period, 'lock')
@@ -159,19 +161,9 @@ export async function lockPeriod(
 
   const blockingCount = unbooked.untriaged + unbooked.businessUnbooked
   if (blockingCount > 0) {
-    // Message wording is load-bearing for two separate matchers; keep both
-    // phrases when editing:
-    //   - "saknar bokföring" -> both lock routes map this to the
-    //     PERIOD_HAS_UNBOOKED_TRANSACTIONS envelope (400) instead of a 500
-    //     (app/api/bookkeeping/fiscal-periods/[id]/lock/route.ts and
-    //      app/api/v1/companies/[companyId]/fiscal-periods/[id]/lock/route.ts)
-    //   - /Kan inte låsa period:.*affärstransaktion/ -> inferCode() in
-    //     lib/errors/get-structured-error.ts derives the same code for the
-    //     MCP/agent surfaces, which have no HTTP envelope to read. The word
-    //     "affärstransaktion" therefore has to appear unconditionally, not
-    //     only in the breakdown clause that the untriaged-only case omits.
-    // The infra message above deliberately matches neither: an unreachable DB
-    // must not send an agent off remediating transactions.
+    // Coded, so every door answers PERIOD_HAS_UNBOOKED_TRANSACTIONS with this
+    // sentence. The infra failure above carries no code on purpose: an
+    // unreachable database must not send an agent off booking transactions.
     const breakdown = [
       unbooked.untriaged > 0 ? `${unbooked.untriaged} ej hanterade` : null,
       unbooked.businessUnbooked > 0
@@ -180,10 +172,13 @@ export async function lockPeriod(
     ]
       .filter(Boolean)
       .join(', ')
-    throw new Error(
-      `Kan inte låsa period: ${blockingCount} banktransaktion(er) i perioden saknar bokföring ` +
-        `(${breakdown}). Alla affärstransaktioner måste vara bokförda innan perioden låses. ` +
-        `Gå till Transaktioner, bokför dem eller markera dem som privata eller ignorerade, och lås perioden därefter.`
+    throw userFacing(
+      new Error(
+        `Kan inte låsa period: ${blockingCount} banktransaktion(er) i perioden saknar bokföring ` +
+          `(${breakdown}). Alla affärstransaktioner måste vara bokförda innan perioden låses. ` +
+          `Gå till Transaktioner, bokför dem eller markera dem som privata eller ignorerade, och lås perioden därefter.`
+      ),
+      'PERIOD_HAS_UNBOOKED_TRANSACTIONS',
     )
   }
 
@@ -230,15 +225,15 @@ export async function unlockPeriod(
     .single()
 
   if (fetchError || !period) {
-    throw new Error('Fiscal period not found')
+    throw codedRefusal('PERIOD_NOT_FOUND', 'Fiscal period not found')
   }
 
   if (period.is_closed) {
-    throw new Error('Cannot unlock a closed period')
+    throw codedRefusal('PERIOD_UNLOCK_CLOSED', 'Cannot unlock a closed period')
   }
 
   if (!period.locked_at) {
-    throw new Error('Period is not locked')
+    throw codedRefusal('PERIOD_UNLOCK_NOT_LOCKED', 'Period is not locked')
   }
 
   const priorLockedAt = period.locked_at
@@ -299,19 +294,19 @@ export async function closePeriod(
     .single()
 
   if (fetchError || !period) {
-    throw new Error('Fiscal period not found')
+    throw codedRefusal('PERIOD_NOT_FOUND', 'Fiscal period not found')
   }
 
   if (period.is_closed) {
-    throw new Error('Period is already closed')
+    throw codedRefusal('PERIOD_ALREADY_CLOSED', 'Period is already closed')
   }
 
   if (!period.locked_at) {
-    throw new Error('Period must be locked before closing')
+    throw codedRefusal('PERIOD_NOT_LOCKED', 'Period must be locked before closing')
   }
 
   if (!period.closing_entry_id) {
-    throw new Error('Year-end closing must be executed before closing the period')
+    throw codedRefusal('YEAR_END_NOT_RUN', 'Year-end closing must be executed before closing the period')
   }
 
   assertNoUnfinishedSieImport(period, 'close')
@@ -406,12 +401,13 @@ export async function assertPeriodExternallyClosable(
   const fiscalPeriodId = period.id
 
   if (period.is_closed) {
-    throw new Error('Period is already closed')
+    throw codedRefusal('FISCAL_PERIOD_CLOSE_EXTERNAL_ALREADY_CLOSED', 'Period is already closed')
   }
 
   if (period.closing_entry_id) {
-    throw new Error(
-      'Period has a closing entry in Accounted: use the normal year-end close instead'
+    throw codedRefusal(
+      'FISCAL_PERIOD_CLOSE_EXTERNAL_HAS_CLOSING_ENTRY',
+      'Period has a closing entry in Accounted: use the normal year-end close instead',
     )
   }
 
@@ -419,7 +415,7 @@ export async function assertPeriodExternallyClosable(
 
   const today = todayIsoStockholm()
   if (period.period_end > today) {
-    throw new Error('Cannot mark a period that has not ended yet as closed')
+    throw codedRefusal('FISCAL_PERIOD_CLOSE_EXTERNAL_NOT_ENDED', 'Cannot mark a period that has not ended yet as closed')
   }
 
   // Klarmarkera exists for MIGRATED years. A period bookkept natively in
@@ -446,7 +442,7 @@ export async function assertPeriodExternallyClosable(
     .gte('entry_date', period.period_start)
     .lte('entry_date', period.period_end)
   if (importedError) {
-    throw new Error('Kunde inte kontrollera periodens verifikat. Försök igen.')
+    throw userFacing(new Error('Kunde inte kontrollera periodens verifikat. Försök igen.'), 'FISCAL_PERIOD_CLOSE_EXTERNAL_CHECK_FAILED')
   }
   if ((importedCount ?? 0) === 0) {
     let ledger: PeriodLedgerShape
@@ -458,18 +454,24 @@ export async function assertPeriodExternallyClosable(
         period.period_end,
       )
     } catch {
-      throw new Error('Kunde inte kontrollera periodens verifikat. Försök igen.')
+      throw userFacing(new Error('Kunde inte kontrollera periodens verifikat. Försök igen.'), 'FISCAL_PERIOD_CLOSE_EXTERNAL_CHECK_FAILED')
     }
     if (ledger.hasResultLines) {
-      throw new Error(
-        'Perioden innehåller resultatkonton (3000-8999) bokförda i Accounted och inga importerade verifikat. Använd det vanliga årsbokslutet i stället, så att årets resultat förs över.'
+      throw userFacing(
+        new Error(
+          'Perioden innehåller resultatkonton (3000-8999) bokförda i Accounted och inga importerade verifikat. Använd det vanliga årsbokslutet i stället, så att årets resultat förs över.'
+        ),
+        'FISCAL_PERIOD_CLOSE_EXTERNAL_NATIVE_BOOKKEEPING',
       )
     }
     if (ledger.entryCount > 0) {
       const nextPeriod = await findNextPeriod(supabase, companyId, fiscalPeriodId)
       if (!nextPeriod?.opening_balance_entry_id) {
-        throw new Error(
-          'Perioden innehåller bokföring skapad i Accounted och nästa räkenskapsår saknar ingående balanser. Använd det vanliga årsbokslutet i stället, så förs balanserna över.'
+        throw userFacing(
+          new Error(
+            'Perioden innehåller bokföring skapad i Accounted och nästa räkenskapsår saknar ingående balanser. Använd det vanliga årsbokslutet i stället, så förs balanserna över.'
+          ),
+          'FISCAL_PERIOD_CLOSE_EXTERNAL_NATIVE_BOOKKEEPING',
         )
       }
     }
@@ -492,8 +494,9 @@ export async function assertPeriodExternallyClosable(
       fiscalPeriodId,
       reason: err instanceof Error ? err.message : String(err),
     })
-    throw new Error(
-      'Kunde inte kontrollera obokförda banktransaktioner i perioden. Perioden lämnas öppen. Försök igen.'
+    throw userFacing(
+      new Error('Kunde inte kontrollera obokförda banktransaktioner i perioden. Perioden lämnas öppen. Försök igen.'),
+      'FISCAL_PERIOD_CLOSE_EXTERNAL_CHECK_FAILED',
     )
   }
 
@@ -507,10 +510,13 @@ export async function assertPeriodExternallyClosable(
     ]
       .filter(Boolean)
       .join(', ')
-    throw new Error(
-      `Kan inte klarmarkera period: ${blockingCount} banktransaktion(er) i perioden saknar bokföring ` +
-        `(${breakdown}). Alla affärstransaktioner måste vara bokförda innan perioden stängs. ` +
-        `Gå till Transaktioner, bokför dem eller markera dem som privata eller ignorerade, och klarmarkera därefter.`
+    throw userFacing(
+      new Error(
+        `Kan inte klarmarkera period: ${blockingCount} banktransaktion(er) i perioden saknar bokföring ` +
+          `(${breakdown}). Alla affärstransaktioner måste vara bokförda innan perioden stängs. ` +
+          `Gå till Transaktioner, bokför dem eller markera dem som privata eller ignorerade, och klarmarkera därefter.`
+      ),
+      'PERIOD_HAS_UNBOOKED_TRANSACTIONS',
     )
   }
 }
@@ -550,7 +556,7 @@ export async function markPeriodClosedExternally(
     .single()
 
   if (fetchError || !period) {
-    throw new Error('Fiscal period not found')
+    throw codedRefusal('PERIOD_NOT_FOUND', 'Fiscal period not found')
   }
 
   await assertPeriodExternallyClosable(supabase, companyId, period as FiscalPeriod)
@@ -633,16 +639,17 @@ export async function reopenExternallyClosedPeriod(
     .single()
 
   if (fetchError || !period) {
-    throw new Error('Fiscal period not found')
+    throw codedRefusal('PERIOD_NOT_FOUND', 'Fiscal period not found')
   }
 
   if (!period.is_closed) {
-    throw new Error('Period is not closed')
+    throw codedRefusal('PERIOD_REOPEN_NOT_CLOSED', 'Period is not closed')
   }
 
   if (!period.closed_externally || period.closing_entry_id) {
-    throw new Error(
-      'Period was closed with a year-end run in Accounted and cannot be reopened here'
+    throw codedRefusal(
+      'PERIOD_REOPEN_NOT_EXTERNAL',
+      'Period was closed with a year-end run in Accounted and cannot be reopened here',
     )
   }
 
@@ -722,7 +729,7 @@ export async function createNextPeriod(
     .single()
 
   if (fetchError || !current) {
-    throw new Error('Current fiscal period not found')
+    throw codedRefusal('PERIOD_NOT_FOUND', 'Current fiscal period not found')
   }
 
   // Compute next period start (day after current end) in pure UTC, see
@@ -885,6 +892,69 @@ export async function findNextPeriod(
     .maybeSingle()
 
   return (byDate as FiscalPeriod | null) ?? null
+}
+
+/** What resolvePreviousFiscalPeriod needs of the period it looks back from. */
+export interface PreviousPeriodAnchor {
+  period_start: string
+  previous_period_id?: string | null
+}
+
+/**
+ * The räkenskapsår immediately before `current`, out of rows the caller
+ * already holds: the period ending the day before `current` starts. The
+ * previous_period_id link picks it when the link is date-adjacent; a link to
+ * anything else is ignored, like findNextPeriod ignores one. Null when no
+ * period ends that day: an earlier year across a gap is never the previous
+ * year, because its UB is not this year's IB (IB = föregående års UB, ÅRL 2
+ * kap. 4 § p. 7: .claude/skills/swedish-sie-import-export, and kontinuitet in
+ * swedish-accounting-compliance references/bfl-bfnar.md).
+ */
+export function pickPreviousFiscalPeriod<P extends { id: string; period_end: string }>(
+  current: PreviousPeriodAnchor,
+  periods: readonly P[],
+): P | null {
+  const expectedEnd = addDaysIso(current.period_start, -1)
+  if (current.previous_period_id) {
+    const linked = periods.find((period) => period.id === current.previous_period_id)
+    if (linked && linked.period_end === expectedEnd) return linked
+  }
+  return periods.find((period) => period.period_end === expectedEnd) ?? null
+}
+
+/**
+ * pickPreviousFiscalPeriod against the database: the linked period when it
+ * ends the day before `current` starts, else the company's period ending that
+ * day, else null. `columns` must include id and period_end. Throws on a failed
+ * read: a comparison year that silently disappears looks like a first year.
+ */
+export async function resolvePreviousFiscalPeriod<P extends { id: string; period_end: string }>(
+  supabase: SupabaseClient,
+  companyId: string,
+  current: PreviousPeriodAnchor,
+  columns: string,
+): Promise<P | null> {
+  const expectedEnd = addDaysIso(current.period_start, -1)
+  if (current.previous_period_id) {
+    const { data: linked, error } = await supabase
+      .from('fiscal_periods')
+      .select(columns)
+      .eq('id', current.previous_period_id)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (error) throw new Error(`Failed to read the previous fiscal year: ${error.message}`)
+    const row = linked as unknown as P | null
+    if (row && row.period_end === expectedEnd) return row
+  }
+  const { data: byDate, error } = await supabase
+    .from('fiscal_periods')
+    .select(columns)
+    .eq('company_id', companyId)
+    .eq('period_end', expectedEnd)
+    .limit(1)
+    .maybeSingle()
+  if (error) throw new Error(`Failed to read the previous fiscal year: ${error.message}`)
+  return (byDate as unknown as P | null) ?? null
 }
 
 export type PeriodStatusValue = 'open' | 'locked' | 'closed'

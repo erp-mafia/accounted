@@ -1083,9 +1083,13 @@ export const employeesDelete = defineOperation({
     if (!result.ok) {
       // A database failure travels as the raw error, so MCP classifies it
       // (a timeout is retryable) as it does any other.
-      return result.code === 'EMPLOYEE_NOT_FOUND'
-        ? { ok: false, code: result.code }
-        : { ok: false, code: result.code, error: result.cause }
+      if (result.code === 'EMPLOYEE_NOT_FOUND') return { ok: false, code: result.code }
+      // The row's incomplete jämkning beslut blocks the update (#2697): the
+      // sentence says what to complete or clear.
+      if (result.code === 'VALIDATION_ERROR') {
+        return { ok: false, code: result.code, details: result.details, messageSv: result.details.message }
+      }
+      return { ok: false, code: result.code, error: result.cause }
     }
     const { employee } = result.data
     if (!result.data.committed) {

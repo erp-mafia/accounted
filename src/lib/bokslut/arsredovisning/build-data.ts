@@ -7,6 +7,7 @@ import { listAssets } from '@/lib/bokslut/assets/asset-service'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { LATENT_TAX_DEFAULT_RATE } from '@/lib/bokslut/tax-provision/latent-tax-calculator'
 import { roundOre } from '@/lib/money'
+import { pickPreviousFiscalPeriod } from '@/lib/core/bookkeeping/period-service'
 import {
   k2LegalFormOf,
   mapTrialBalancesToK2,
@@ -71,8 +72,8 @@ export interface AnnualReportStatements {
   /** The K2 mapping of the current year against the comparison year. */
   mapping: K2MappingResult
   /**
-   * The comparison year (the period's previous_period_id), null when there
-   * is none. `loaded` is false when its trial balances could not be built:
+   * The comparison year (the year ending the day before this one starts,
+   * pickPreviousFiscalPeriod), null when there is none. `loaded` is false when its trial balances could not be built:
    * the statements then carry no comparison column.
    */
   comparison: { id: string; period_start: string; period_end: string; loaded: boolean } | null
@@ -202,9 +203,9 @@ export async function buildArsredovisningReport(
   // year" with a warning instead of blocking the whole document (partial SIE
   // imports can leave prior years without IB continuity).
   const statementWarnings: string[] = []
-  const prevPeriodRow = period.previous_period_id
-    ? ((periodList ?? []) as PeriodRow[]).find((p) => p.id === period.previous_period_id) ?? null
-    : null
+  // The year ending the day before this one starts (pickPreviousFiscalPeriod):
+  // the link when it is adjacent, the date otherwise, never across a gap.
+  const prevPeriodRow = pickPreviousFiscalPeriod(period, (periodList ?? []) as PeriodRow[])
 
   // Flerårsöversikt window: the current period + up to 3 prior (oldest
   // first). Resolved here so the prior-period trial balances it needs can

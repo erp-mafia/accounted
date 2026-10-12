@@ -950,7 +950,7 @@ describe('CreateSupplierSchema', () => {
 
   it('accepts supplier with payment details', () => {
     const result = CreateSupplierSchema.safeParse(validSupplier({
-      bankgiro: '123-4567',
+      bankgiro: '5050-1055',
       plusgiro: '12345-6',
       iban: 'SE1234567890123456789',
       bic: 'ESSESESS',
@@ -2911,9 +2911,15 @@ describe('UpdateSupplierSchema', () => {
   it('accepts partial update', () => {
     const result = UpdateSupplierSchema.safeParse({
       name: 'New Supplier',
-      bankgiro: '999-8888',
+      bankgiro: '5050-1055',
     })
     expect(result.success).toBe(true)
+  })
+
+  // The register's one rule set: an update that sends a bankgiro sends one a
+  // payment file can route, as a create must.
+  it('refuses a bankgiro whose check digit is wrong', () => {
+    expect(UpdateSupplierSchema.safeParse({ bankgiro: '999-8888' }).success).toBe(false)
   })
 
   // Update routes pass fields straight into .update(), where undefined keys

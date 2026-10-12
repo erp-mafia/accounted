@@ -40,7 +40,9 @@ const { createTxJE, findMissingAccountsMock, reverseEntryMock } = vi.hoisted(() 
   reverseEntryMock: vi.fn().mockResolvedValue(undefined),
 }))
 
-vi.mock('@/lib/bookkeeping/transaction-entries', () => ({
+// The real line builder: a dry run previews the lines the booking posts.
+vi.mock('@/lib/bookkeeping/transaction-entries', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/transaction-entries')>()),
   createTransactionJournalEntry: createTxJE,
 }))
 vi.mock('@/lib/bookkeeping/engine', () => ({
@@ -165,7 +167,13 @@ describe('POST batch-categorize', () => {
         { data: [{ id: TX_A }], error: null },
       ],
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      fiscal_periods: [
+        // Per item: ensureFiscalPeriod (an open period covers the date),
+        // then checkPeriodLock (the covering period's lock state).
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      ],
     })
     mockServiceClient.mockReturnValue(supabase)
 
@@ -220,7 +228,13 @@ describe('POST batch-categorize', () => {
         },
       ],
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      fiscal_periods: [
+        // Per item: ensureFiscalPeriod (an open period covers the date),
+        // then checkPeriodLock (the covering period's lock state).
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      ],
     })
     mockServiceClient.mockReturnValue(supabase)
 
@@ -265,7 +279,13 @@ describe('POST batch-categorize', () => {
         error: null,
       },
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-      fiscal_periods: { data: { id: 'period-2025', is_closed: true, locked_at: null }, error: null },
+      fiscal_periods: [
+        // Per item: ensureFiscalPeriod (an open period covers the date),
+        // then checkPeriodLock (the covering period's lock state).
+        { data: [{ id: 'period-2025' }], error: null }, { data: { id: 'period-2025', is_closed: true, locked_at: null }, error: null },
+        { data: [{ id: 'period-2025' }], error: null }, { data: { id: 'period-2025', is_closed: true, locked_at: null }, error: null },
+        { data: [{ id: 'period-2025' }], error: null }, { data: { id: 'period-2025', is_closed: true, locked_at: null }, error: null },
+      ],
     })
     mockServiceClient.mockReturnValue(supabase)
 
@@ -317,7 +337,13 @@ describe('POST batch-categorize', () => {
         error: null,
       },
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      fiscal_periods: [
+        // Per item: ensureFiscalPeriod (an open period covers the date),
+        // then checkPeriodLock (the covering period's lock state).
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      ],
     })
     mockServiceClient.mockReturnValue(supabase)
     createTxJE.mockResolvedValueOnce(null)
@@ -365,7 +391,13 @@ describe('POST batch-categorize', () => {
         },
       ],
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      fiscal_periods: [
+        // Per item: ensureFiscalPeriod (an open period covers the date),
+        // then checkPeriodLock (the covering period's lock state).
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      ],
     })
     mockServiceClient.mockReturnValue(supabase)
 
@@ -403,7 +435,13 @@ describe('POST batch-categorize', () => {
         },
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
         cash_accounts: { data: { ledger_account: '1931', currency: 'SEK' }, error: null },
-        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        fiscal_periods: [
+        // Per item: ensureFiscalPeriod (an open period covers the date),
+        // then checkPeriodLock (the covering period's lock state).
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      ],
       }).supabase,
     )
 
@@ -431,6 +469,7 @@ describe('POST batch-categorize', () => {
       'user-1',
       expect.objectContaining({ id: TX_A, cash_account_id: 'cash-1' }),
       expect.objectContaining({ credit_account: '1931' }),
+      undefined,
     )
   })
 
@@ -458,7 +497,13 @@ describe('POST batch-categorize', () => {
           { data: null, error: null }, // item B flags-flip update
         ],
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        fiscal_periods: [
+        // Per item: ensureFiscalPeriod (an open period covers the date),
+        // then checkPeriodLock (the covering period's lock state).
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      ],
       }).supabase,
     )
 
@@ -522,7 +567,13 @@ describe('POST batch-categorize', () => {
           { data: null, error: { message: 'temporary lookup failure' } },
           { data: { ledger_account: '1931', currency: 'SEK' }, error: null },
         ],
-        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        fiscal_periods: [
+        // Per item: ensureFiscalPeriod (an open period covers the date),
+        // then checkPeriodLock (the covering period's lock state).
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      ],
       }).supabase,
     )
 
@@ -542,7 +593,8 @@ describe('POST batch-categorize', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.results[0].ok).toBe(false)
-    expect(body.data.results[0].error.code).toBe('INTERNAL_ERROR')
+    // The thrown failure keeps its structured code, as on :categorize.
+    expect(body.data.results[0].error.code).toBe('BOOKKEEPING_DATABASE_ERROR')
     expect(body.data.results[1].ok).toBe(true)
     expect(body.data.summary).toEqual({ total: 2, succeeded: 1, failed: 1 })
     expect(createTxJE).toHaveBeenCalledTimes(1)
@@ -552,6 +604,7 @@ describe('POST batch-categorize', () => {
       'user-1',
       expect.objectContaining({ id: TX_B }),
       expect.objectContaining({ credit_account: '1931' }),
+      undefined,
     )
   })
 
@@ -574,7 +627,13 @@ describe('POST batch-categorize', () => {
           error: null,
         },
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        fiscal_periods: [
+        // Per item: ensureFiscalPeriod (an open period covers the date),
+        // then checkPeriodLock (the covering period's lock state).
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      ],
       }).supabase,
     )
 
@@ -627,7 +686,13 @@ describe('POST batch-categorize', () => {
           error: null,
         },
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        fiscal_periods: [
+        // Per item: ensureFiscalPeriod (an open period covers the date),
+        // then checkPeriodLock (the covering period's lock state).
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      ],
       }).supabase,
     )
     // Pre-validation passes: race where an account got deactivated between
@@ -688,7 +753,13 @@ describe('POST batch-categorize', () => {
         { data: [{ id: TX_B }], error: null },
       ],
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      fiscal_periods: [
+        // Per item: ensureFiscalPeriod (an open period covers the date),
+        // then checkPeriodLock (the covering period's lock state).
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      ],
     })
     mockServiceClient.mockReturnValue(supabase)
     const { BookkeepingDatabaseError } = await import('@/lib/bookkeeping/errors')
@@ -753,7 +824,13 @@ describe('POST batch-categorize', () => {
         { data: [], error: null },
       ],
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      fiscal_periods: [
+        // Per item: ensureFiscalPeriod (an open period covers the date),
+        // then checkPeriodLock (the covering period's lock state).
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      ],
       journal_entries: {
         data: { fiscal_period_id: 'period-1', voucher_series: 'B', voucher_number: 42 },
         error: null,
@@ -831,7 +908,13 @@ describe('POST batch-categorize', () => {
           { data: [{ id: TX_A }], error: null },
         ],
         company_settings: { data: { entity_type: 'ideell_forening', vat_registered }, error: null },
-        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        fiscal_periods: [
+        // Per item: ensureFiscalPeriod (an open period covers the date),
+        // then checkPeriodLock (the covering period's lock state).
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      ],
       })
       mockServiceClient.mockReturnValue(supabase)
 
@@ -871,7 +954,13 @@ describe('POST batch-categorize reverse-charge basis pair', () => {
         txRow(TX_B), { data: [{ id: TX_B }], error: null },
       ],
       company_settings: { data: { entity_type: 'aktiebolag' }, error: null },
-      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      fiscal_periods: [
+        // Per item: ensureFiscalPeriod (an open period covers the date),
+        // then checkPeriodLock (the covering period's lock state).
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      ],
       chart_of_accounts: { data: [{ account_number: '5420', default_vat_treatment: 'reverse_charge_eu_services' }], error: null },
     })
     mockServiceClient.mockReturnValue(supabase)
@@ -974,7 +1063,13 @@ describe('POST batch-categorize double-booking guards (parity with :categorize a
         { data: [{ id: TX_B }], error: null }, // item B CAS update: owned
       ],
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      fiscal_periods: [
+        // Per item: ensureFiscalPeriod (an open period covers the date),
+        // then checkPeriodLock (the covering period's lock state).
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      ],
     })
     mockServiceClient.mockReturnValue(supabase)
     detectDupMock.mockResolvedValueOnce(candidate).mockResolvedValueOnce(null)
@@ -1019,7 +1114,13 @@ describe('POST batch-categorize double-booking guards (parity with :categorize a
           { data: [{ id: TX_B }], error: null },
         ],
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        fiscal_periods: [
+        // Per item: ensureFiscalPeriod (an open period covers the date),
+        // then checkPeriodLock (the covering period's lock state).
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      ],
       }).supabase,
     )
     createTxJE.mockResolvedValueOnce({ id: 'je-a' }).mockResolvedValueOnce({ id: 'je-b' })
@@ -1049,7 +1150,13 @@ describe('POST batch-categorize double-booking guards (parity with :categorize a
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         transactions: [txRow(TX_A), { data: [{ id: TX_A }], error: null }],
         company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        fiscal_periods: [
+        // Per item: ensureFiscalPeriod (an open period covers the date),
+        // then checkPeriodLock (the covering period's lock state).
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      ],
       }).supabase,
     )
     detectDupMock.mockResolvedValue(candidate)
@@ -1112,7 +1219,13 @@ describe('POST batch-categorize double-booking guards (parity with :categorize a
           ],
           error: null,
         },
-        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        fiscal_periods: [
+        // Per item: ensureFiscalPeriod (an open period covers the date),
+        // then checkPeriodLock (the covering period's lock state).
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      ],
       })
     categoryMappingOverride.current = () => ({
       rule: null,
@@ -1165,13 +1278,20 @@ describe('POST batch-categorize already-booked guard', () => {
           merchant_name: 'ICA',
           cash_account_id: null,
           journal_entry_id: null,
+          // The junction rows ride along on the transaction read.
+          transaction_voucher_links: [{ journal_entry_id: 'je-samling', role: 'bank_line' }],
         },
         error: null,
       },
-      transaction_voucher_links: { data: [{ journal_entry_id: 'je-samling', role: 'bank_line' }], error: null },
       journal_entries: { data: [{ id: 'je-samling', status: 'posted' }], error: null },
       company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
-      fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      fiscal_periods: [
+        // Per item: ensureFiscalPeriod (an open period covers the date),
+        // then checkPeriodLock (the covering period's lock state).
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+        { data: [{ id: 'period-1' }], error: null }, { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      ],
     })
     mockServiceClient.mockReturnValue(supabase)
 
@@ -1190,6 +1310,69 @@ describe('POST batch-categorize already-booked guard', () => {
         details: { journal_entry_id: 'je-samling', via: 'link' },
       }),
     )
+    expect(createTxJE).not.toHaveBeenCalled()
+    expect(payloads('transactions', 'update')).toEqual([])
+  })
+})
+
+describe('POST batch-categorize counter-leg guard (as on :categorize)', () => {
+  it('refuses an item whose override counter is a stale twin of a live bank ledger', async () => {
+    const { supabase, payloads } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: {
+        data: {
+          id: TX_A,
+          company_id: COMPANY_ID,
+          date: '2026-05-12',
+          amount: 500,
+          currency: 'SEK',
+          merchant_name: 'Kund AB',
+          cash_account_id: null,
+          journal_entry_id: null,
+        },
+        error: null,
+      },
+      company_settings: { data: { entity_type: 'aktiebolag' }, error: null },
+      cash_accounts: [
+        // resolveSettlementAccount: no enabled cash account in SEK -> 1930
+        { data: [], error: null },
+        // The guard's topology: 1931 is held by a revoked connection and shares
+        // its (IBAN, currency) with the live 1940 row, a stale twin.
+        {
+          data: [
+            { id: 'ca-live', ledger_account: '1940', bank_connection_id: 'conn-live', iban: 'SE455', enabled: true, currency: 'SEK' },
+            { id: 'ca-orphan', ledger_account: '1931', bank_connection_id: 'conn-old', iban: 'SE455', enabled: true, currency: 'SEK' },
+          ],
+          error: null,
+        },
+      ],
+      bank_connections: {
+        data: [
+          { id: 'conn-live', status: 'active' },
+          { id: 'conn-old', status: 'revoked' },
+        ],
+        error: null,
+      },
+      chart_of_accounts: { data: { account_number: '1931', account_class: 1, is_active: true }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await POST(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`, {
+        items: [
+          {
+            transaction_id: TX_A,
+            categorization: { is_business: true, category: 'income_services', vat_treatment: 'exempt', account_override: '1931' },
+          },
+        ],
+      }),
+      batchParams(),
+    )
+
+    const body = await res.json()
+    expect(body.data.results[0].ok).toBe(false)
+    expect(body.data.results[0].error.code).toBe('TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT')
+    expect(body.data.results[0].error.details).toEqual({ accountNumber: '1931' })
     expect(createTxJE).not.toHaveBeenCalled()
     expect(payloads('transactions', 'update')).toEqual([])
   })

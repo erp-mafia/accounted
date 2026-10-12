@@ -4,9 +4,8 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { DetailSection } from '@/components/ui/detail-section'
-import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import { Calculator, FileText } from 'lucide-react'
-import { cn } from '@/lib/utils'
 import { formatRunAmount } from './types'
 
 export interface EntryPreviewLine {
@@ -106,30 +105,15 @@ export function RunJournalPreview({ preview, onRecalculate, recalculating, under
                 </p>
               )}
               <div className="overflow-x-auto">
-                <table className="w-full border-collapse text-[13px]">
-                  <thead>
-                    <tr>
-                      <th className={cn(TH_CLASS, 'pl-0')}>{t('journal_th_account')}</th>
-                      <th className={TH_CLASS}>{t('journal_th_description')}</th>
-                      <th className={cn(TH_CLASS, 'text-right')}>{t('journal_th_debit')}</th>
-                      <th className={cn(TH_CLASS, 'pr-0 text-right')}>{t('journal_th_credit')}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {entry.lines.map((line, li) => (
-                      <tr key={li}>
-                        <td className={cn(TD_CLASS, 'pl-0 tabular-nums font-mono')}>{line.account_number}</td>
-                        <td className={cn(TD_CLASS, 'text-muted-foreground')}>{line.line_description}</td>
-                        <td className={cn(TD_CLASS, 'text-right tabular-nums')}>
-                          {line.debit_amount ? formatRunAmount(line.debit_amount) : ''}
-                        </td>
-                        <td className={cn(TD_CLASS, 'pr-0 text-right tabular-nums')}>
-                          {line.credit_amount ? formatRunAmount(line.credit_amount) : ''}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <VoucherLinesTable
+                  withCurrency
+                  lines={entry.lines.map((line) => ({
+                    account_number: line.account_number,
+                    description: line.line_description,
+                    debit_amount: line.debit_amount,
+                    credit_amount: line.credit_amount,
+                  }))}
+                />
               </div>
             </div>
           ))}

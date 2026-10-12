@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -30,6 +31,7 @@ import { FileText, AlertTriangle, Check, Plus, Trash2, Paperclip } from 'lucide-
 import type { BookingTemplateLibraryLine } from '@/types'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
 import type { TransactionWithInvoice } from './transaction-types'
+import { parseAmountInput, formatAmountInput, roundOre } from '@/lib/money'
 
 interface BulkBookDialogProps {
   open: boolean
@@ -56,15 +58,8 @@ interface ManualLine {
   line_description: string
 }
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100
-}
-
 function parseAmount(s: string): number {
-  if (!s) return 0
-  const cleaned = s.replace(/\s/g, '').replace(',', '.')
-  const n = Number.parseFloat(cleaned)
-  return Number.isFinite(n) ? n : 0
+  return parseAmountInput(s) ?? 0
 }
 
 function newManualLineId(): string {
@@ -128,7 +123,7 @@ export default function BulkBookDialog({
     return transactions[0]!.amount > 0 ? 'income' : 'expense'
   }, [transactions])
   const txSumAbs = useMemo(
-    () => round2(transactions.reduce((s, tx) => s + Math.abs(tx.amount), 0)),
+    () => roundOre(transactions.reduce((s, tx) => s + Math.abs(tx.amount), 0)),
     [transactions],
   )
 
@@ -143,7 +138,7 @@ export default function BulkBookDialog({
     const byCurrency = new Map<string, number>()
     for (const tx of transactions) {
       const code = tx.currency ?? 'SEK'
-      byCurrency.set(code, round2((byCurrency.get(code) ?? 0) + Math.abs(tx.amount)))
+      byCurrency.set(code, roundOre((byCurrency.get(code) ?? 0) + Math.abs(tx.amount)))
     }
     return Array.from(byCurrency.entries()).sort(([a], [b]) => a.localeCompare(b))
   }, [transactions])
@@ -194,8 +189,8 @@ export default function BulkBookDialog({
       return {
         id: newManualLineId(),
         account_number: account,
-        debit_amount: isIncome ? Math.abs(tx.amount).toFixed(2).replace('.', ',') : '',
-        credit_amount: isIncome ? '' : Math.abs(tx.amount).toFixed(2).replace('.', ','),
+        debit_amount: isIncome ? formatAmountInput(Math.abs(tx.amount)) : '',
+        credit_amount: isIncome ? '' : formatAmountInput(Math.abs(tx.amount)),
         line_description: (tx.description || '').slice(0, 40).trim(),
       }
     })
@@ -219,8 +214,8 @@ export default function BulkBookDialog({
       return manualLines
         .map<PreviewLine>((ml) => ({
           account_number: ml.account_number,
-          debit_amount: round2(parseAmount(ml.debit_amount)),
-          credit_amount: round2(parseAmount(ml.credit_amount)),
+          debit_amount: roundOre(parseAmount(ml.debit_amount)),
+          credit_amount: roundOre(parseAmount(ml.credit_amount)),
           line_description: ml.line_description.trim() || undefined,
         }))
         .filter((l) => l.debit_amount > 0 || l.credit_amount > 0)
@@ -236,8 +231,8 @@ export default function BulkBookDialog({
         if (debit === 0 && credit === 0) continue
         lines.push({
           account_number: fl.account_number,
-          debit_amount: round2(debit),
-          credit_amount: round2(credit),
+          debit_amount: roundOre(debit),
+          credit_amount: roundOre(credit),
           line_description: fl.line_description,
         })
       }
@@ -251,8 +246,8 @@ export default function BulkBookDialog({
           const tag = (tx.description || '').slice(0, 40).trim()
           lines.push({
             account_number: fl.account_number,
-            debit_amount: round2(debit),
-            credit_amount: round2(credit),
+            debit_amount: roundOre(debit),
+            credit_amount: roundOre(credit),
             line_description: tag
               ? `${fl.line_description ?? ''}, ${tag}`.trim()
               : fl.line_description,
@@ -266,7 +261,7 @@ export default function BulkBookDialog({
   const previewTotals = useMemo(() => {
     const debit = previewLines.reduce((s, l) => s + l.debit_amount, 0)
     const credit = previewLines.reduce((s, l) => s + l.credit_amount, 0)
-    return { debit: round2(debit), credit: round2(credit) }
+    return { debit: roundOre(debit), credit: roundOre(credit) }
   }, [previewLines])
 
   // Balance + bank-leg match are the two invariants the RPC will check; we
@@ -758,48 +753,17 @@ export default function BulkBookDialog({
                   </Badge>
                 )}
               </div>
-              <div className="rounded-lg border bg-muted/30 overflow-hidden">
-                <table className="w-full text-xs tabular-nums">
-                  <thead>
-                    <tr className="border-b text-muted-foreground">
-                      <th className="px-3 py-2 text-left font-medium">{t('col_account')}</th>
-                      <th className="px-3 py-2 text-left font-medium">{t('col_description')}</th>
-                      <th className="px-3 py-2 text-right font-medium">{t('col_debit')}</th>
-                      <th className="px-3 py-2 text-right font-medium">{t('col_credit')}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {previewLines.slice(0, 30).map((line, i) => (
-                      <tr key={i} className="border-b border-border last:border-b-0">
-                        <td className="px-3 py-1.5 font-mono">{line.account_number}</td>
-                        <td className="px-3 py-1.5 text-muted-foreground truncate max-w-[240px]">
-                          {line.line_description ?? '-'}
-                        </td>
-                        <td className="px-3 py-1.5 text-right">
-                          {line.debit_amount > 0 ? formatCurrency(line.debit_amount) : ''}
-                        </td>
-                        <td className="px-3 py-1.5 text-right">
-                          {line.credit_amount > 0 ? formatCurrency(line.credit_amount) : ''}
-                        </td>
-                      </tr>
-                    ))}
-                    {previewLines.length > 30 && (
-                      <tr>
-                        <td colSpan={4} className="px-3 py-1.5 text-center text-muted-foreground">
-                          {t('preview_truncated', { remaining: previewLines.length - 30 })}
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                  <tfoot>
-                    <tr className="border-t bg-card font-medium">
-                      <td colSpan={2} className="px-3 py-2 text-right">{t('total_label')}</td>
-                      <td className="px-3 py-2 text-right">{formatCurrency(previewTotals.debit)}</td>
-                      <td className="px-3 py-2 text-right">{formatCurrency(previewTotals.credit)}</td>
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
+              <VoucherLinesTable
+                withCurrency
+                showTotals
+                maxRows={30}
+                lines={previewLines.map((line) => ({
+                  account_number: line.account_number,
+                  description: line.line_description,
+                  debit_amount: line.debit_amount,
+                  credit_amount: line.credit_amount,
+                }))}
+              />
 
               {/* Invariant indicators */}
               <div className="space-y-1">

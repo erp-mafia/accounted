@@ -21,6 +21,11 @@ vi.mock('@/lib/salary/vacation-ledger', () => ({
 vi.mock('@/lib/salary/ytd', () => ({
   refreshRunYtd: vi.fn().mockResolvedValue({ ok: true, updated: 0 }),
 }))
+// The period pre-check reads fiscal periods through period-service; the
+// verdict is the contract here, so it is mocked (open unless a test says).
+vi.mock('@/lib/api/v1/check-period-lock', () => ({
+  checkPeriodLock: vi.fn(),
+}))
 // The pre-booking claim check stays real (zero queries without linked lines,
 // one queued expense_claims read with them); only the settle RPC is mocked.
 vi.mock('@/lib/salary/expense-claim-lines', async () => {
@@ -30,12 +35,13 @@ vi.mock('@/lib/salary/expense-claim-lines', async () => {
   return { ...actual, settleExpenseClaimsForBookedRun: vi.fn() }
 })
 
-import { advanceAndBookSalaryRun, bookPaidSalaryRun } from '../book-run'
+import { advanceAndBookSalaryRun, bookPaidSalaryRun, previewPaidSalaryRunBooking } from '../book-run'
 import { createSalaryRunEntries } from '@/lib/salary/salary-entries'
 import { settleExpenseClaimsForBookedRun } from '@/lib/salary/expense-claim-lines'
 import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
 import { refreshRunYtd } from '@/lib/salary/ytd'
 import { eventBus } from '@/lib/events'
+import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 
 const log = {
   info: vi.fn(),
@@ -94,6 +100,7 @@ const makeSre = (overrides: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(checkPeriodLock).mockResolvedValue({ locked: false })
   vi.mocked(syncVacationLedgerForEmployees).mockResolvedValue({ ok: true } as never)
   vi.mocked(createSalaryRunEntries).mockResolvedValue({
     salaryEntry: { id: 'je-1' },
@@ -187,6 +194,59 @@ describe('advanceAndBookSalaryRun', () => {
     }
   })
 
+  it('refuses a draft that was never calculated, the review step it skips', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueMany([{ data: makeRun({ status: 'draft', calculation_params: null }) }, { data: [] }])
+
+    const result = await advanceAndBookSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('SALARY_RUN_NOT_CALCULATED')
+    expect(findCall('salary_runs', 'update')).toBeUndefined()
+  })
+
+  it('refuses a locked payment date with PERIOD_LOCKED before any status moves', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueMany([{ data: makeRun({ status: 'review' }) }, { data: [makeSre()] }])
+    vi.mocked(checkPeriodLock).mockResolvedValue({ locked: true, reason: 'company_lock_date_covers' })
+
+    const result = await advanceAndBookSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.code).toBe('PERIOD_LOCKED')
+      expect(result.details).toMatchObject({ reason: 'company_lock_date_covers', payment_date: '2026-06-25' })
+    }
+    // The run stays in review: nothing was approved, paid or posted.
+    expect(findCall('salary_runs', 'update')).toBeUndefined()
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
+  })
+
+  it('needs no bank details for an employee with nothing to pay out', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'review' }) },
+      {
+        data: [
+          makeSre({
+            net_salary: 0,
+            tax_withheld: 0,
+            employee: { ...makeSre().employee, clearing_number: null, bank_account_number: null },
+          }),
+        ],
+      },
+      { data: { id: 'run-1' } }, // review → approved
+      { data: { id: 'run-1' } }, // approved → paid
+      { data: BOOKING_CLAIM }, // claim_salary_run_booking
+      { data: { id: 'run-1', status: 'booked' } }, // paid → booked
+    ])
+
+    const result = await advanceAndBookSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.data.warnings).toEqual([])
+  })
+
   it('books a paid zero-total run as nollkörning without journal entries', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     enqueueMany([
@@ -220,17 +280,83 @@ describe('advanceAndBookSalaryRun', () => {
 })
 
 describe('bookPaidSalaryRun', () => {
-  it('requires the run to be in paid status', async () => {
+  it('answers SALARY_RUN_BOOK_NOT_PAID with the current status for a run not yet paid', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: null, error: { message: 'No rows' } }) // status filter misses
+    enqueue({ data: makeRun({ status: 'approved' }) })
 
     const result = await bookPaidSalaryRun(supabase as never, ARGS)
 
     expect(result.ok).toBe(false)
     if (!result.ok) {
-      expect(result.code).toBe('SALARY_RUN_NOT_CALCULATED')
-      expect(result.details).toEqual({ reason: 'must_be_paid_status' })
+      expect(result.code).toBe('SALARY_RUN_BOOK_NOT_PAID')
+      expect(result.details).toEqual({ current_status: 'approved' })
     }
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
+  })
+
+  it('answers SALARY_RUN_NOT_FOUND for a run outside the company', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null })
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('SALARY_RUN_NOT_FOUND')
+  })
+
+  it('refuses a payment date in a locked period with PERIOD_LOCKED before claiming or posting', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeRun({ status: 'paid' }) })
+    vi.mocked(checkPeriodLock).mockResolvedValue({
+      locked: true,
+      reason: 'period_locked_at_set',
+      fiscal_period_id: 'fp-1',
+    })
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.code).toBe('PERIOD_LOCKED')
+      expect(result.details).toEqual({
+        reason: 'period_locked_at_set',
+        fiscal_period_id: 'fp-1',
+        payment_date: '2026-06-25',
+      })
+    }
+    expect(checkPeriodLock).toHaveBeenCalledWith(supabase, 'company-1', '2026-06-25')
+    expect(supabase.rpc).not.toHaveBeenCalled()
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
+  })
+
+  it('books a paid nollkörning without asking about the period: nothing is posted', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    const zeroRun = makeRun({
+      status: 'paid',
+      total_gross: 0,
+      total_tax: 0,
+      total_net: 0,
+      total_avgifter: 0,
+      total_vacation_accrual: 0,
+    })
+    enqueueMany([
+      { data: zeroRun },
+      { data: [] }, // roster
+      { data: BOOKING_CLAIM }, // claim
+      { data: { ...zeroRun, status: 'booked' } }, // flip
+    ])
+    vi.mocked(checkPeriodLock).mockResolvedValue({ locked: true, reason: 'period_is_closed' })
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.nollkorning).toBe(true)
+      expect(result.data.entryIds).toEqual([])
+      expect(result.data.salaryVoucherNumber).toBeNull()
+    }
+    expect(checkPeriodLock).not.toHaveBeenCalled()
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
   })
 
   it('books a paid run and returns the entry ids', async () => {
@@ -259,6 +385,37 @@ describe('bookPaidSalaryRun', () => {
       'user-1',
       expect.objectContaining({ calculation_params: { slpRate: 0.2426 } }),
     )
+  })
+})
+
+describe('previewPaidSalaryRunBooking', () => {
+  it('previews the verifikationer the booking would post, after the same refusals', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([{ data: makeRun({ status: 'paid' }) }, { data: [makeSre()] }])
+
+    const result = await previewPaidSalaryRunBooking(supabase as never, ARGS)
+
+    expect(result).toEqual({
+      ok: true,
+      data: expect.objectContaining({
+        id: 'run-1',
+        would_advance_status_from: 'paid',
+        would_advance_status_to: 'booked',
+        nollkorning: false,
+        would_post_entries: ['salary (gross + tax withholding + net payment)', 'arbetsgivaravgifter'],
+      }),
+    })
+    expect(supabase.rpc).not.toHaveBeenCalled()
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
+  })
+
+  it('answers SALARY_RUN_BOOK_NOT_PAID like the booking does', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeRun({ status: 'review' }) })
+
+    const result = await previewPaidSalaryRunBooking(supabase as never, ARGS)
+
+    expect(result).toEqual({ ok: false, code: 'SALARY_RUN_BOOK_NOT_PAID', details: { current_status: 'review' } })
   })
 })
 

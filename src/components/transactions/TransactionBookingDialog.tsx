@@ -27,6 +27,7 @@ import type { BookingTemplateLibrary } from '@/types'
 import type { TransactionWithInvoice } from './transaction-types'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
+import { roundOre, formatAmountInput } from '@/lib/money'
 
 interface TransactionBookingDialogProps {
   open: boolean
@@ -65,13 +66,13 @@ function buildInitialLines(
   bankAccount: string = '1930',
   counterAccount?: string | null,
 ): FormLine[] {
-  const sekAmount = Math.round(Math.abs(resolveSekAmount(
+  const sekAmount = roundOre(Math.abs(resolveSekAmount(
     transaction.amount,
     transaction.amount_sek,
     transaction.currency,
     transaction.exchange_rate
-  )) * 100) / 100
-  const amountStr = sekAmount.toFixed(2)
+  )))
+  const amountStr = formatAmountInput(sekAmount, '.')
   const isExpense = transaction.amount < 0
 
   const isForeign = !!transaction.currency && transaction.currency !== 'SEK'

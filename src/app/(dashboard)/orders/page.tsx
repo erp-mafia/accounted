@@ -8,7 +8,7 @@ import { MoreHorizontal, ShoppingCart } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { FLOATING_BULK_BAR_CLASS } from '@/components/ui/floating-bulk-bar'
+import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
   DropdownMenu,
@@ -20,8 +20,8 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { ContextPicker } from '@/components/common/ContextPicker'
-import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
-import { useRangeSelect } from '@/lib/hooks/use-range-select'
+import { TH_CLASS, TD_CLASS, CHECKBOX_REVEAL_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -105,7 +105,6 @@ export default function OrdersPage() {
   const [bookingOrder, setBookingOrder] = useState<WebshopOrder | null>(null)
   const [invoicingOrder, setInvoicingOrder] = useState<WebshopOrder | null>(null)
   const [markingOrder, setMarkingOrder] = useState<WebshopOrder | null>(null)
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   // Snapshot of the selection the bulk dialog opened with: the list refresh
   // after a partial failure clears the live selection, but the dialog must
   // keep showing its per-order report.
@@ -113,9 +112,6 @@ export default function OrdersPage() {
 
   const load = useCallback(async () => {
     setLoading(true)
-    // A reload changes which rows exist and which are still bookable
-    // (tab/page/store switch, or a completed sweep): start selection over.
-    setSelectedIds(new Set())
     try {
       const storeParam = storeScope ? `&store_scope=${encodeURIComponent(storeScope)}` : ''
       const res = await fetch(
@@ -201,11 +197,10 @@ export default function OrdersPage() {
     .filter((o) => isBulkBookable(o, canWrite))
     .map((o) => o.id)
 
-  const range = useRangeSelect({ visibleIds: selectableIds, selectedIds, setSelectedIds })
-  const toggleSelect = useCallback(
-    (id: string, extend?: boolean) => range.toggle(id, extend),
-    [range],
-  )
+  // A tab, page or store switch, or a sweep that books rows, changes which
+  // rows are bookable: the selection follows (useBulkSelection prunes).
+  const selection = useBulkSelection(selectableIds)
+  const { selectedIds, toggle: toggleSelect } = selection
 
   const openBulkBooking = useCallback(() => {
     setBulkOrders(rows.filter((o) => selectedIds.has(o.id)))
@@ -293,39 +288,17 @@ export default function OrdersPage() {
         <div className="stagger-enter">
           {/* Bulkbar (transactions-page pattern): hidden until at least one
               bookable order is selected via the hover checkboxes. */}
-          {selectedIds.size > 0 && (
-            <div className={FLOATING_BULK_BAR_CLASS}>
-              <span className="whitespace-nowrap">
-                <strong className="font-semibold tabular-nums">{selectedIds.size}</strong>{' '}
-                {t('bulk_selected', { count: selectedIds.size })}
-              </span>
-              <Button size="sm" onClick={openBulkBooking}>
-                {t('bulk_book_selected')}
-              </Button>
-              {selectedIds.size < selectableIds.length && (
-                <button
-                  type="button"
-                  className={QUIET_LINK_CLASS}
-                  onClick={() => {
-                    setSelectedIds(new Set(selectableIds))
-                    range.resetAnchor()
-                  }}
-                >
-                  {t('bulk_select_all', { count: selectableIds.length })}
-                </button>
-              )}
-              <button
-                type="button"
-                className={QUIET_LINK_CLASS}
-                onClick={() => {
-                  setSelectedIds(new Set())
-                  range.resetAnchor()
-                }}
-              >
-                {t('bulk_clear')}
-              </button>
-            </div>
-          )}
+          <BulkSelectionBar
+            selection={selection}
+            selectableCount={selectableIds.length}
+            countLabel={t('bulk_selected', { count: selectedIds.size })}
+            selectAllLabel={t('bulk_select_all', { count: selectableIds.length })}
+            clearLabel={t('bulk_clear')}
+          >
+            <Button size="sm" onClick={openBulkBooking}>
+              {t('bulk_book_selected')}
+            </Button>
+          </BulkSelectionBar>
           {/* Negative margin + matching padding: lets the hover-revealed
               selection checkbox hang into the page margins without being
               clipped by the overflow container (transactions-page pattern). */}
@@ -427,7 +400,7 @@ export default function OrdersPage() {
           orders={bulkOrders}
           settingsFor={settingsFor}
           onBooked={() => {
-            setSelectedIds(new Set())
+            selection.clear()
             void load()
           }}
         />

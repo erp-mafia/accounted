@@ -27,7 +27,7 @@ import { hasDimensionValues } from '@/lib/invoices/editor-payload'
 import { sortArticles } from '@/lib/articles/sort'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
 import UnitPicker from '@/components/invoices/UnitPicker'
-import { roundOre } from '@/lib/money'
+import { roundOre, parseDecimalInput } from '@/lib/money'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency } from '@/lib/utils'
 import { formatQty, todayIso } from '@/components/sales-orders/labels'
@@ -85,8 +85,7 @@ function nextKey(): string {
 }
 
 function parseNumber(value: string): number {
-  const n = parseFloat(value.replace(',', '.'))
-  return Number.isFinite(n) ? n : 0
+  return parseDecimalInput(value) ?? 0
 }
 
 function lineFromItem(item: SalesOrderItem): LineState {
@@ -153,7 +152,7 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
   const router = useRouter()
   const { toast } = useToast()
 
-  const { customers, isLoading: customersLoading } = useCustomers()
+  const { customers, isLoading: customersLoading } = useCustomers({ keepId: initial?.customer_id })
   const { articles: articleRows } = useArticles()
   const articles = useMemo(
     () => sortArticles(articleRows.filter((a) => a.active !== false)),

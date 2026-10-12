@@ -171,7 +171,7 @@ export async function generateDimensionPnl(
   const codes = [...codesSeen].sort((a, b) => a.localeCompare(b, 'sv'))
 
   // ── Matrix rows: tagged columns + untagged residual + Totalt ───
-  // Per account: values[i] = round2(signed bucket), untagged = round2(total −
+  // Per account: values[i] = roundOre(signed bucket), untagged = roundOre(total −
   // Σ rounded tagged) so the row sums exactly; total = signedAmount(tb row),
   // the very number resultatrapport renders for the account.
   type AccountRow = DimensionPnlRow & { account_class: number }
@@ -179,13 +179,13 @@ export async function generateDimensionPnl(
   let anyUntagged = false
 
   for (const tbRow of pnlRows) {
-    const total = round2(signedAmount(tbRow))
+    const total = roundOre(signedAmount(tbRow))
     const byCode = buckets.get(tbRow.account_number)
     const tagged = codes.map((code) => {
       const agg = byCode?.get(code)
-      return agg ? round2(agg.credit - agg.debit) : 0
+      return agg ? roundOre(agg.credit - agg.debit) : 0
     })
-    const untagged = round2(total - tagged.reduce((s, v) => s + v, 0))
+    const untagged = roundOre(total - tagged.reduce((s, v) => s + v, 0))
     if (Math.abs(untagged) >= 0.005) anyUntagged = true
 
     const values = [...tagged, untagged]
@@ -220,23 +220,23 @@ export async function generateDimensionPnl(
     if (rows.length === 0) continue
 
     const subtotals = Array.from({ length: columnCount }, (_, i) =>
-      round2(rows.reduce((s, r) => s + r.values[i], 0))
+      roundOre(rows.reduce((s, r) => s + r.values[i], 0))
     )
     groups.push({
       class: klass,
       class_label: CLASS_LABELS[klass],
       rows: rows.map(({ account_class: _klass, ...row }) => row),
       subtotals,
-      subtotal_total: round2(rows.reduce((s, r) => s + r.total, 0)),
+      subtotal_total: roundOre(rows.reduce((s, r) => s + r.total, 0)),
     })
   }
 
   const netPerColumn = Array.from({ length: columnCount }, (_, i) =>
-    round2(accountRows.reduce((s, r) => s + r.values[i], 0))
+    roundOre(accountRows.reduce((s, r) => s + r.values[i], 0))
   )
   // resultatrapport's net_result_current, computed the way it computes it:
   // the rounded sum of signedAmount over the same rows.
-  const netTotal = round2(pnlRows.reduce((s, r) => s + signedAmount(r), 0))
+  const netTotal = roundOre(pnlRows.reduce((s, r) => s + signedAmount(r), 0))
 
   return {
     dimension: {
@@ -267,6 +267,3 @@ function defaultDimensionName(sieDimNo: string): string {
   return `Dimension ${sieDimNo}`
 }
 
-function round2(n: number): number {
-  return roundOre(n)
-}

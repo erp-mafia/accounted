@@ -121,6 +121,7 @@ describe('GET /api/salary/runs/[id]/payslips/[employeeId]/pdf', () => {
       { data: { id: 'run-1', period_year: 2026, period_month: 6, payment_date: '2026-06-25' } },
       { data: { employee: { first_name: 'Anna', last_name: 'A', personnummer: 'enc' }, line_items: [] } },
       { data: { name: 'Bolaget AB', org_number: '5560000000' } },
+      { data: { company_name: 'Ny Firma AB' } }, // company_settings
     ])
 
     const response = await GET(
@@ -130,8 +131,9 @@ describe('GET /api/salary/runs/[id]/payslips/[employeeId]/pdf', () => {
 
     expect(response.status).toBe(200)
     expect(response.headers.get('Content-Type')).toBe('application/pdf')
-    // Employer name follows the current company_settings.company_name (resolved
-    // by getCompanyDisplayName), not the frozen onboarding companies.name.
+    // Employer name follows the current company_settings.company_name (the
+    // shared loader, lib/salary/payslips/load-payslip.ts), not the frozen
+    // onboarding companies.name.
     expect(vi.mocked(buildPayslipData)).toHaveBeenCalledWith(
       expect.objectContaining({ company: { name: 'Ny Firma AB', org_number: '5560000000' } }),
     )

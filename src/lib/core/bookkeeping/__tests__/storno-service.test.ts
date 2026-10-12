@@ -132,6 +132,40 @@ describe('correctEntry', () => {
     expect(result.reversal.reverses_id).toBe('orig-1')
   })
 
+  // A line booked before the non-negative CHECK (debit -0.25) used to be
+  // swapped as is into the storno (credit -0.25), which the CHECK refuses:
+  // the rättelse failed where a plain storno worked. Both now build the
+  // storno with buildStornoLines.
+  it('writes the storno of a legacy negative-side line as a positive line on the opposite side', async () => {
+    setupResults()
+    results[0] = {
+      data: {
+        ...originalEntry,
+        lines: [
+          makeJournalEntryLine({ account_number: '5410', debit_amount: 1000.25, credit_amount: 0 }),
+          makeJournalEntryLine({ account_number: '3740', debit_amount: -0.25, credit_amount: 0 }),
+          makeJournalEntryLine({ account_number: '1930', debit_amount: 0, credit_amount: 1000 }),
+        ],
+      },
+      error: null,
+    }
+    const supabase = makeClient()
+    await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines)
+
+    const reversalLines = inserts.find((i) => i.table === 'journal_entry_lines')!.payload as Array<{
+      account_number: string
+      debit_amount: number
+      credit_amount: number
+      line_description: string
+    }>
+    expect(reversalLines.map(({ account_number, debit_amount, credit_amount }) => ({ account_number, debit_amount, credit_amount }))).toEqual([
+      { account_number: '5410', debit_amount: 0, credit_amount: 1000.25 },
+      { account_number: '3740', debit_amount: 0.25, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 1000, credit_amount: 0 },
+    ])
+    expect(reversalLines.every((l) => l.line_description.startsWith('Storno: '))).toBe(true)
+  })
+
   it('links original ↔ reversal ↔ corrected via IDs', async () => {
     setupResults()
     const supabase = makeClient()

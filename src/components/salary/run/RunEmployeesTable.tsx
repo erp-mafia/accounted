@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { effectiveRow } from '@/lib/salary/effective-figures'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
@@ -30,6 +31,7 @@ type SreWithEmployee = SalaryRunEmployee & {
     // the encrypted `personnummer` column never reaches the client.
     personnummer_masked: string
     default_dimensions?: Record<string, string>
+    f_skatt_status?: string | null
   }
 }
 
@@ -173,9 +175,12 @@ export function RunEmployeesTable({
                   .sort((a, b) => Number(a) - Number(b))
                   .map(k => dims[k])
                   .join(' · ')
-                const taxValue = sre.tax_withheld_override ?? sre.tax_withheld
-                const avgifterValue = sre.avgifter_amount_override ?? sre.avgifter_amount
-                const netValue = roundOre(sre.net_salary + (sre.tax_withheld - taxValue))
+                // The figures the booking and the AGI use (effectiveRow): an
+                // avgifter override on an F-skatt row is ignored there, so here.
+                const figures = effectiveRow({ ...sre, employee })
+                const taxValue = figures.tax_withheld
+                const avgifterValue = figures.avgifter_amount
+                const netValue = figures.net_salary
                 const editableSalary = isDraft && canWrite && sre.salary_type === 'monthly'
                 const primaryNumber = showInputSalary ? sre.monthly_salary : sre.gross_salary
                 // In a draft the number on the row is the full-time monthly salary

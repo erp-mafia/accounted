@@ -1,14 +1,11 @@
 /**
  * Invoice statuses a bank transaction can still be matched against.
  *
- * These mirror the CAS guards the match routes actually enforce:
- *   app/api/transactions/[id]/match-invoice/route.ts          (.in('status', ...))
- *   app/api/transactions/[id]/match-supplier-invoice/route.ts (.in('status', ...))
- *
- * Every surface that offers a match (suggestion lists, the match dialog, the
- * batch-allocation picker) must filter on the same lists. Offering a target
- * outside them produces a confirm button that can only ever fail with
- * MATCH_INVOICE_ALREADY_PAID / MATCH_SI_ALREADY_PAID.
+ * The match routes' CAS guards (dashboard and v1 match-invoice and
+ * match-supplier-invoice), the link to an existing verifikat, the agent's
+ * match tools, the suggestion passes and the pickers all read these lists, so
+ * a surface cannot offer a target the confirm refuses with
+ * MATCH_INVOICE_ALREADY_PAID / MATCH_SI_ALREADY_PAID, nor hide one it takes.
  *
  * Dependency-free on purpose: client components import this too.
  */
@@ -20,6 +17,16 @@ export const MATCHABLE_SUPPLIER_INVOICE_STATUSES = [
   'overdue',
   'partially_paid',
 ] as const
+
+/** Whether a customer invoice in this status can still take a matched payment. */
+export function isMatchableInvoiceStatus(status: string | null | undefined): boolean {
+  return (MATCHABLE_INVOICE_STATUSES as readonly string[]).includes(status ?? '')
+}
+
+/** Whether a supplier invoice in this status can still take a matched payment. */
+export function isMatchableSupplierInvoiceStatus(status: string | null | undefined): boolean {
+  return (MATCHABLE_SUPPLIER_INVOICE_STATUSES as readonly string[]).includes(status ?? '')
+}
 
 export type InvoiceMatchTargetState = 'matchable' | 'settled' | 'not_open'
 

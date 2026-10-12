@@ -157,7 +157,23 @@ describe('INK2 SRU Generator', () => {
       expect(submission.blanketterSru).toContain('INK2-2025P1')
     })
 
-    it('uses P2 suffix for fiscal year ending in May-Aug', () => {
+    it('uses P3 suffix for a fiscal year ending in July or August (was P2)', () => {
+      const declaration = makeDeclaration({
+        fiscalYear: {
+          id: 'p3',
+          name: 'FY',
+          start: '2024-09-01',
+          end: '2025-08-31',
+          isClosed: true,
+        },
+      })
+      const submission = generateSRUSubmission(declaration)
+      expect(submission.blanketterSru).toContain('#BLANKETT INK2-2025P3')
+      expect(submission.blanketterSru).toContain('#BLANKETT INK2R-2025P3')
+      expect(submission.blanketterSru).toContain('#BLANKETT INK2S-2025P3')
+    })
+
+    it('uses P2 suffix for fiscal year ending in May-June', () => {
       const declaration = makeDeclaration({
         fiscalYear: {
           id: 'p2',

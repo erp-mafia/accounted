@@ -42,6 +42,7 @@ import { filedVatPeriodsReopenedBy } from '@/lib/vat/filed-periods-reopened'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { parseEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { INVOICE_QR_MODES } from '@/types'
+import { maskPersonnummer } from '@/lib/salary/personnummer-format'
 
 const S = UpdateSettingsSchema.shape
 
@@ -185,16 +186,14 @@ export function toSettingsResource(companyId: string, row: SettingsRow): Record<
  * An enskild firma's org number is the owner's personnummer (GDPR Art. 5(1)(c)
  * data minimisation): this read also feeds MCP, i.e. an agent's context, so
  * the birth date is kept and the last four digits (sex and checksum) are
- * masked, the same rule as maskPersonnummer on v1 rosters. An unknown legal
- * form is treated as a person. A legal person's org number is public.
+ * masked: maskPersonnummer, the one display form. An unknown legal form is
+ * treated as a person. A legal person's org number is public.
  */
 function minimizedOrgNumber(orgNumber: unknown, entityType: unknown): string | null {
   if (typeof orgNumber !== 'string' || orgNumber === '') return null
   const form = typeof entityType === 'string' ? parseEntityType(entityType) : null
   if (form && !usesPersonnummerAsOrgNumber(form)) return orgNumber
-  const digits = orgNumber.replace(/\D/g, '')
-  if (digits.length !== 10 && digits.length !== 12) return 'XXXXXXXXXX'
-  return `${digits.slice(0, digits.length - 4)}XXXX`
+  return maskPersonnummer(orgNumber)
 }
 
 /** A column-keyed map under public names (default_our_reference is contact_person). */

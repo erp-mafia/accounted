@@ -43,7 +43,7 @@ async function refusal(name: string, args: Record<string, unknown>, supabase: un
 const VALID_EMPLOYEE = {
   first_name: 'Anna',
   last_name: 'Andersson',
-  personnummer: '190001010000',
+  personnummer: '190001010008',
   employment_start: '2026-01-15',
   salary_type: 'monthly',
   monthly_salary: 35000,
@@ -108,9 +108,32 @@ describe('gnubok_create_employee', () => {
     expect(error.message_en).toMatch(/^Invalid employee: employment_type: /)
     expect(error.message_sv).toMatch(/^employment_type: En enskild firma kan inte ha sin ägare/)
   })
+
+  it('refuses a personnummer with a wrong check digit at staging, like the dashboard and v1', async () => {
+    // The schema only checks for 12 digits; the MCP tool used to stage a
+    // number Skatteverket would reject on the AGI weeks later.
+    const { supabase } = createQueuedMockSupabase()
+
+    const error = await refusal('gnubok_create_employee', { ...VALID_EMPLOYEE, personnummer: '190001010000' }, supabase)
+
+    expect(error.code).toBe('VALIDATION_ERROR')
+    expect(error.message_sv).toBe('personnummer: Ogiltigt kontrollnummer (Luhn)')
+    expect(JSON.stringify(error)).not.toContain('190001010000')
+  })
 })
 
 describe('gnubok_update_employee', () => {
+  it('refuses to put an enskild firma\'s owner on payroll at staging, the rule the approval applies', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'emp-1', first_name: 'Test', last_name: 'Testsson', employment_type: 'employee' } })
+    enqueue({ data: { entity_type: 'enskild_firma' } }) // company_settings
+
+    const error = await refusal('gnubok_update_employee', { employee_id: 'emp-1', employment_type: 'company_owner' }, supabase)
+
+    expect(error.code).toBe('VALIDATION_ERROR')
+    expect(error.message_en).toMatch(/^Invalid employee update: employment_type: an enskild firma cannot employ/)
+  })
+
   it('names vacation_days_per_year in the update schema refusal', async () => {
     const { supabase } = createQueuedMockSupabase()
     const error = await refusal('gnubok_update_employee', { employee_id: 'emp-1', vacation_days_per_year: 41 }, supabase)

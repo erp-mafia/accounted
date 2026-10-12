@@ -7,8 +7,8 @@ import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /** paid → booked (creates immutable journal entries). The booking core lives
- * in lib/salary/book-run.ts, shared with the book_salary_run pending-operation
- * executor (MCP gnubok_book_salary_run). */
+ * in lib/salary/book-run.ts, shared with the v1 :book verb and the
+ * book_salary_run pending-operation executor (MCP gnubok_book_salary_run). */
 export const POST = withRouteContext(
   'salary_run.book',
   async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {

@@ -14,6 +14,8 @@ import {
   generateInputVatLine,
 } from './vat-entries'
 import { resolveSekAmount } from './currency-utils'
+import { getOutputVatAccount } from './invoice-accounts'
+import { grossVat } from '@/lib/vat/gross-split'
 import { templateAccountForForm } from '@/lib/company/entity-type'
 import { vatTreatmentForRegistration, type VatRegistration } from './vat-registration'
 
@@ -2616,16 +2618,9 @@ export function buildMappingResultFromTemplate(
       }
     } else if (vatRate > 0 && !isExpense) {
       // Output VAT (income)
-      const vatAmount = Math.round((absAmount * vatRate / (1 + vatRate)) * 100) / 100
-      let vatAccount: string
-      switch (vatTreatment) {
-        case 'standard_25': vatAccount = '2611'; break
-        case 'reduced_12': vatAccount = '2621'; break
-        case 'reduced_6': vatAccount = '2631'; break
-        default: vatAccount = '2611'
-      }
+      const vatAmount = grossVat(absAmount, vatRate)
       vatLines.push({
-        account_number: vatAccount,
+        account_number: getOutputVatAccount(vatTreatment),
         debit_amount: 0,
         credit_amount: vatAmount,
         description: `Utgående moms ${vatRate * 100}%`,

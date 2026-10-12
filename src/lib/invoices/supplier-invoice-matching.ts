@@ -27,6 +27,7 @@
  */
 
 import type { Transaction, SupplierInvoice } from '@/types'
+import { isMatchableSupplierInvoiceStatus } from '@/lib/invoices/matchable-statuses'
 
 export interface SupplierInvoiceMatch {
   supplierInvoice: SupplierInvoice
@@ -160,8 +161,8 @@ export function findSupplierInvoiceMatch(
   let amountDateMatchCount = 0
 
   for (const invoice of unpaidInvoices) {
-    // Only match against registered/approved invoices with remaining amount
-    if (!['registered', 'approved'].includes(invoice.status)) continue
+    // Only match against invoices that can take a payment, with a remainder
+    if (!isMatchableSupplierInvoiceStatus(invoice.status)) continue
     const remaining = invoice.remaining_amount ?? invoice.total
     if (remaining <= 0) continue
 

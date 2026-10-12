@@ -65,6 +65,27 @@ export function fieldValidationError(context: string, issues: FieldIssue[]): Err
 }
 
 /**
+ * VALIDATION_ERROR for one argument a door checks by hand (the hand-written
+ * MCP tools). `message` is the English sentence the agent reads, verbatim as
+ * message_en, so it names the field itself. The Swedish reason is `sv`, else
+ * the message when it is Swedish already, else the generic one for a missing
+ * or a wrong value; message_sv renders it as "<field>: <skäl>".
+ */
+export function badArgument(field: string, message: string, sv?: string): Error {
+  const reason =
+    sv ??
+    (isSwedishUserMessage(message)
+      ? message
+      : /\b(is|are) required\b/.test(message)
+        ? 'Obligatoriskt fält saknas.'
+        : 'Ogiltigt värde.')
+  return Object.assign(new Error(message), {
+    code: 'VALIDATION_ERROR',
+    issues: [{ field, message: reason }],
+  })
+}
+
+/**
  * Every issue of a failed Zod parse as a FieldIssue: Zod's own message in
  * English, and a Swedish reason (the schema's words where it wrote Swedish,
  * otherwise rendered from the issue). `input` is what was parsed, so a

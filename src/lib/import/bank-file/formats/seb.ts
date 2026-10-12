@@ -14,15 +14,11 @@
  */
 
 import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFileParseIssue } from '../types'
-import { roundOre } from '@/lib/money'
+import { roundOre, parseSwedishAmount } from '@/lib/money'
 import { prepareContent } from '../../shared/encoding'
 import { normalizeDate } from '../date-utils'
 import { parseCSVLine } from './nordea'
 
-function parseCommaDecimal(value: string): number {
-  const cleaned = value.replace(/\s/g, '').replace(',', '.')
-  return parseFloat(cleaned)
-}
 
 const DEPOSIT_COLUMN_RE = /^ins(ä|a)ttning/
 const WITHDRAWAL_COLUMN_RE = /^uttag/
@@ -147,14 +143,14 @@ export const sebFormat: BankFileFormat = {
 
       let amount: number
       if (hasSplitAmount) {
-        const deposit = fields[depositIdx] ? parseCommaDecimal(fields[depositIdx]) : 0
-        const rawWithdrawal = fields[withdrawalIdx] ? parseCommaDecimal(fields[withdrawalIdx]) : 0
+        const deposit = fields[depositIdx] ? (parseSwedishAmount(fields[depositIdx]) ?? NaN) : 0
+        const rawWithdrawal = fields[withdrawalIdx] ? (parseSwedishAmount(fields[withdrawalIdx]) ?? NaN) : 0
         // Uttag values carry their own minus sign in SEB's export; normalize
         // so a variant exporting magnitudes still lands as an expense.
         const withdrawal = rawWithdrawal > 0 ? -rawWithdrawal : rawWithdrawal
         amount = roundOre(deposit + withdrawal)
       } else {
-        amount = parseCommaDecimal(amountStr)
+        amount = parseSwedishAmount(amountStr) ?? NaN
       }
       if (isNaN(amount)) {
         issues.push({ row: i + 1, message: `Ogiltigt belopp: ${amountStr}`, severity: 'warning' })
@@ -169,7 +165,7 @@ export const sebFormat: BankFileFormat = {
         continue
       }
 
-      const balance = balanceStr ? parseCommaDecimal(balanceStr) : null
+      const balance = balanceStr ? (parseSwedishAmount(balanceStr) ?? NaN) : null
 
       transactions.push({
         date: normalizedDate,

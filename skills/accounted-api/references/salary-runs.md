@@ -393,16 +393,16 @@ Response `204`.
 **Approve a reviewed salary run.**
 `scope:payroll:write · risk:low · idempotent · dry-run`
 
-Advances a salary run from `review` to `approved` after validating every employee has the data required for the payment step (bank account + clearing number for the bank transfer) and the booking step (`calculation_breakdown` proves `:calculate` ran). Records the approving user + timestamp. Strict-mode: validation errors return a complete list rather than failing on the first one.
+Advances a salary run from `review` to `approved` after validating every employee has the data required for the payment step (bank account + clearing number for an employee with a payout) and the booking step (`calculation_breakdown` proves `:calculate` ran). Records the approving user + timestamp. Strict-mode: validation errors return a complete list rather than failing on the first one.
 
 **Use when:** You have a salary run in `review` status and want to authorize it for payment. This is the human (or agent) signoff step before money moves; the verifikation is still pending and won't exist until `:book` runs.
 **Do not use for:** Posting journal entries (use `:book` after `:mark-paid`). Reverting an approval (POST /salary-runs/{id}/unapprove while the run is unpaid and its AGI unfiled; call `:correct` once the run is booked).
 
 **Pitfalls:**
 - Run must be in `review`: non-`review` runs return 400 SALARY_RUN_APPROVE_NOT_REVIEW.
-- Every employee on the run needs a `clearing_number` + `bank_account_number` that name a payable account (clearing 4 digits, or 5 starting with 8; account 5-10 digits without the clearing number). Missing or invalid bank details return 400 SALARY_RUN_APPROVE_VALIDATION_FAILED with the per-employee list; the list names employees, never account numbers.
+- Every employee with a payout (net after any tax override > 0) needs a `clearing_number` + `bank_account_number` that name a payable account (clearing 4 digits, or 5 starting with 8; account 5-10 digits without the clearing number). Missing or invalid bank details return 400 SALARY_RUN_APPROVE_VALIDATION_FAILED with the per-employee list; the list names employees, never account numbers. An employee with nothing to pay out (nollkörning, or a net fully used by a nettolöneavdrag) needs none: the payment file has no line for them.
 - Every employee on the run needs `calculation_breakdown` populated. If you skipped `:calculate` somehow, approve fails.
-- Employees without email get a non-blocking warning (lönebesked can't be sent automatically).
+- Employees without email get a non-blocking warning (lönebesked can't be sent automatically), and so does an employee whose F-skatt is not verified (30% skatteavdrag and full avgifter apply).
 - No period-lock check here: that lives on `:book` where the verifikation is posted. An agent can approve a run whose payment date falls in a now-locked period; `:book` will later refuse.
 
 | Parameter | In | Type | Required | Notes |
@@ -459,7 +459,7 @@ Example response `200`:
 **Post the verifikationer for a paid salary run.**
 `scope:payroll:write · risk:high · idempotent · dry-run`
 
-Creates 1-4 journal entries (1: salary brutto/tax/net; 2 if the run has any: arbetsgivaravgifter; 3 if applicable: semesterlöneskuld accrual; 4 if applicable: pension + SLP from löneväxling), then advances status `paid` → `booked` with all the entry IDs recorded on the salary_runs row. Strict-mode: any engine failure aborts BEFORE the status flip, and all entries are validated before the first is posted, so a refusal (locked period, missing BAS account, required or archived dimension value, etc.) posts nothing: the run stays in `paid` so the caller can fix the cause and retry.
+Creates 1-4 journal entries (1: salary brutto/tax/net; 2 if the run has any: arbetsgivaravgifter; 3 if applicable: semesterlöneskuld accrual; 4 if applicable: pension + SLP from löneväxling), then advances status `paid` → `booked` with all the entry IDs recorded on the salary_runs row. Strict-mode: any engine failure aborts BEFORE the status flip, and all entries are validated before the first is posted, so a refusal (locked period, missing BAS account, required or archived dimension value, etc.) posts nothing: the run stays in `paid` so the caller can fix the cause and retry. A nollkörning (a run without amounts, or without employees) posts no entries: it is booked with salary_entry_id null and no audit block, and the AGI nolldeklaration is the period's only artefact.
 
 **Use when:** You've marked a salary run as paid and want to post the BFL-required verifikationer. This is the final lifecycle verb before AGI generation; after :book, the run can no longer be edited and corrections must use the (forthcoming) `:correct` verb.
 **Do not use for:** Posting salary entries outside the salary-run lifecycle (use POST /journal-entries directly). Re-booking an already-booked run (returns 400 SALARY_RUN_BOOK_NOT_PAID).
@@ -470,6 +470,7 @@ Creates 1-4 journal entries (1: salary brutto/tax/net; 2 if the run has any: arb
 - BFL 5 kap immutability: once `:book` succeeds the verifikationer cannot be edited or deleted. Corrections require `:correct` (Phase 5 PR-3) which does a storno-then-rebook.
 - The salary verifikation is the primary one; its voucher_number appears in the response audit block. The avgifter, vacation, and pension entries get separate voucher numbers (returned as `entry_ids`).
 - A run without arbetsgivaravgifter (only utlägg repaid, or only payees without avgifter such as F-skatt holders) posts no avgifter entry: avgifter_entry_id is null.
+- A nollkörning (every total 0, or no employees) is booked without entries: entry_ids is [], salary_entry_id is null and meta.audit is absent. No period lock applies to it, since nothing is posted.
 - Strict-mode: every entry is validated before the first is posted, so a refusal posts nothing and the run stays in `paid`. If posting stops partway on a transient failure, calling :book again adopts the entries already posted (when they match the run exactly) and posts only the missing ones, never twice. A posted entry of the run that does not match returns 409 SALARY_RUN_PARTIALLY_BOOKED with details.voucher_numbers: reverse those, then retry.
 - One booking per run at a time: while another :book call (or a dashboard or MCP booking) for the same run is in flight, this call returns 409 SALARY_RUN_BOOKING_IN_PROGRESS and posts nothing. Do not retry at once after a client timeout: wait, GET the run, and call :book again only if it is still `paid`.
 
@@ -487,7 +488,7 @@ Response `200`:
     status: "booked",
     booked_at: string,
     booked_by: string | null,
-    salary_entry_id: string,
+    salary_entry_id: string | null,
     avgifter_entry_id: string | null,
     vacation_entry_id: string | null,
     pension_entry_id: string | null,
@@ -740,7 +741,7 @@ Example response `200`:
       "employee_id": "emp_77b2…",
       "first_name": "Anna",
       "last_name": "Andersson",
-      "personnummer_masked": "YYYYMMDDXXXX",
+      "personnummer_masked": "YYYYMMDD-XXXX",
       "salary_type": "monthly",
       "gross_salary": 35000,
       "tax_withheld": -8200,
@@ -923,7 +924,7 @@ Example response `200`:
     "employee_id": "emp_77b2…",
     "first_name": "Anna",
     "last_name": "Andersson",
-    "personnummer_masked": "YYYYMMDDXXXX",
+    "personnummer_masked": "YYYYMMDD-XXXX",
     "gross_salary": 35000,
     "tax_withheld": -8200,
     "net_salary": 26800,

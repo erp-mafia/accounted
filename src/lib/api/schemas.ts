@@ -23,6 +23,7 @@ import {
 } from '@/lib/invariants/zod'
 import { ISO_DATE_RE, ISO_DATE_MESSAGE_SV } from '@/lib/invariants/iso-date'
 import { orgNumberKey } from '@/lib/invariants/org-number'
+import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
 import { DIMENSION_RULE_POLICY } from '@/lib/bookkeeping/dimension-rule-policy'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
@@ -1589,30 +1590,52 @@ function emptyStringAsUndefined<T extends z.ZodTypeAny>(inner: T) {
  */
 const supplierOrgNumber = z.string().transform((v) => orgNumberKey(v) ?? v.trim())
 
+/**
+ * A payment-routing field: free text a payment file reads, so a value that
+ * cannot route a payment is refused at every door (the dashboard, v1 and the
+ * agent's create_supplier used to apply three different rule sets). An empty
+ * string passes: on create it means "not set", on update "clear it".
+ */
+function paymentRoutingField(max: number, valid: (compact: string) => boolean, message: string) {
+  return z
+    .string()
+    .max(max)
+    .refine((v) => v.trim() === '' || valid(v.replace(/\s/g, '').toUpperCase()), message)
+    .optional()
+}
+
+/**
+ * The supplier register's one rule set: the dashboard form, v1 and the MCP
+ * gnubok_create_supplier create through it (lib/suppliers/create-supplier.ts),
+ * and UpdateSupplierSchema is its partial.
+ */
 export const CreateSupplierSchema = z.object({
-  name: z.string().min(1, 'Supplier name is required'),
-  supplier_type: SupplierTypeSchema,
-  email: emptyStringAsUndefined(z.string().email('Invalid email address')),
-  phone: z.string().optional(),
-  address_line1: z.string().optional(),
-  address_line2: z.string().optional(),
-  postal_code: z.string().optional(),
-  city: z.string().optional(),
+  name: z.string().trim().min(1, 'Supplier name is required').max(255),
+  // Omitted: swedish_business, as the agent path always defaulted it.
+  supplier_type: SupplierTypeSchema.optional(),
+  email: emptyStringAsUndefined(z.string().email('Invalid email address').max(255)),
+  phone: z.string().max(50).optional(),
+  address_line1: z.string().max(255).optional(),
+  address_line2: z.string().max(255).optional(),
+  postal_code: z.string().max(20).optional(),
+  city: z.string().max(100).optional(),
   country: CountryCodeSchema,
   org_number: supplierOrgNumber.optional(),
-  vat_number: z.string().optional(),
-  bankgiro: z.string().optional(),
-  plusgiro: z.string().optional(),
-  bank_account: z.string().optional(),
-  iban: z.string().optional(),
-  bic: z.string().optional(),
+  // Free text: a non-EU supplier's tax number has no VIES prefix, and reverse
+  // charge never reads it (see lib/bookkeeping/supplier-invoice-entries.ts).
+  vat_number: z.string().max(20).optional(),
+  bankgiro: paymentRoutingField(20, validateBankgiroNumber, 'Invalid Bankgiro (must be 7-8 digits with valid Luhn check digit)'),
+  plusgiro: paymentRoutingField(20, (v) => /^\d{1,7}-?\d$/.test(v), 'Invalid Plusgiro (expected 2-8 digits)'),
+  bank_account: z.string().max(50).optional(),
+  iban: paymentRoutingField(42, (v) => /^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(v), 'Invalid IBAN format'),
+  bic: paymentRoutingField(11, (v) => /^[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}([A-Z0-9]{3})?$/.test(v), 'Invalid BIC/SWIFT format'),
   clearing_number: z.string().optional(),
   account_number: z.string().optional(),
   default_expense_account: emptyStringAsUndefined(accountNumber),
   // Whole days 0-365; 0 = betalning direkt / vid mottagande (issue #2070).
   default_payment_terms: z.number().int().min(0).max(365).optional(),
   default_currency: CurrencySchema.nullable().optional(),
-  notes: z.string().optional(),
+  notes: z.string().max(2000).optional(),
 })
 
 /**

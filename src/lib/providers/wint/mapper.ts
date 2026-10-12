@@ -7,17 +7,14 @@ import type {
   AmountType, PartyDto, PostalAddress,
 } from '../dto';
 import { creditNoteTypeCode } from '../dto';
+import { roundOre } from '@/lib/money';
 
 // Field names follow WINT's v1 swagger exactly (PascalCase). Amounts arrive as
 // JSON numbers; account numbers arrive as INTEGERS and must leave every mapper
 // as strings (they are identifiers, never quantities).
 
 function amount(value: number | undefined | null, currency: string = 'SEK'): AmountType {
-  return { value: round2(value ?? 0), currencyCode: currency };
-}
-
-function round2(value: number): number {
-  return Math.round(value * 100) / 100;
+  return { value: roundOre(value ?? 0), currencyCode: currency };
 }
 
 function num(value: unknown): number | undefined {
@@ -123,7 +120,7 @@ export function mapWintToSalesInvoice(raw: Record<string, unknown>): SalesInvoic
   const lines: SalesInvoiceLineDto[] = rows.map((row, idx) => {
     const quantity = num(row['Quantity']);
     const unitPrice = num(row['OverriddenUnitPrice']) ?? num(row['UnitPrice']);
-    const lineTotal = quantity != null && unitPrice != null ? round2(quantity * unitPrice) : 0;
+    const lineTotal = quantity != null && unitPrice != null ? roundOre(quantity * unitPrice) : 0;
     const unit = row['Unit'] as Record<string, unknown> | undefined;
     return {
       id: String(row['Id'] ?? idx + 1),
@@ -141,7 +138,7 @@ export function mapWintToSalesInvoice(raw: Record<string, unknown>): SalesInvoic
   const legalMonetaryTotal: LegalMonetaryTotalDto = {
     // Undefined rather than `total` when WINT omits the tax total: reporting
     // the gross as the net is what makes an invoice read as 0 kr VAT.
-    lineExtensionAmount: totalTax != null ? amount(round2(total - totalTax), currency) : undefined,
+    lineExtensionAmount: totalTax != null ? amount(roundOre(total - totalTax), currency) : undefined,
     taxInclusiveAmount: amount(total, currency),
     payableAmount: amount(total, currency),
   };
@@ -229,7 +226,7 @@ export function mapWintToAccountingAccount(raw: Record<string, unknown>): Accoun
     name: (raw['Name'] as string) ?? '',
     type,
     active: true,
-    balanceBroughtForward: raw['Ib'] != null ? round2(Number(raw['Ib'])) : undefined,
+    balanceBroughtForward: raw['Ib'] != null ? roundOre(Number(raw['Ib'])) : undefined,
     sruCode: raw['SRU'] != null ? String(raw['SRU']) : undefined,
     _raw: raw,
   };

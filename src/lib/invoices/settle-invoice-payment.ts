@@ -18,6 +18,7 @@ import {
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import type { CreateJournalEntryInput, Customer, EntityType, Invoice } from '@/types'
+import { MATCHABLE_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
 
 /**
  * The core "apply a payment to an invoice" operation, extracted from the
@@ -337,7 +338,7 @@ export async function settleInvoicePayment(
     })
     .eq('id', invoice.id)
     .eq('company_id', companyId)
-    .in('status', ['sent', 'overdue', 'partially_paid'])
+    .in('status', [...MATCHABLE_INVOICE_STATUSES])
     .select('id')
 
   if (updateError) {

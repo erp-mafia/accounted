@@ -1,12 +1,12 @@
 'use client'
 
-import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
+import { useEmployees } from '@/lib/reference-data/hooks'
 import { ownerFallbackName, type ExpensePayer } from '@/lib/expenses/payer'
 
 interface EmployeeOption {
@@ -50,27 +50,10 @@ export function ExpenseClaimantFields({
   // The placeholder is the label the claim gets when the field stays empty,
   // so it must be the form's word for the person (Ägare, Medlem).
   const ownerPlaceholder = ownerFallbackName(useCompanyOptional()?.company?.entity_type)
-  const [employees, setEmployees] = useState<EmployeeOption[]>([])
-  const [employeesLoaded, setEmployeesLoaded] = useState(false)
-
-  useEffect(() => {
-    if (payer !== 'employee' || employeesLoaded) return
-    let cancelled = false
-    fetch('/api/salary/employees')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((json) => {
-        if (!cancelled) setEmployees((json?.data ?? []) as EmployeeOption[])
-      })
-      .catch(() => {
-        if (!cancelled) setEmployees([])
-      })
-      .finally(() => {
-        if (!cancelled) setEmployeesLoaded(true)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [payer, employeesLoaded])
+  // The roster from the session cache, fetched once the payer is an employee.
+  const { employees: roster, isLoading: rosterLoading } = useEmployees()
+  const employees: EmployeeOption[] = payer === 'employee' ? roster : []
+  const employeesLoaded = payer === 'employee' && !rosterLoading
 
   if (payer === 'owner') {
     return (

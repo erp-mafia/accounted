@@ -38,21 +38,18 @@ import { OpenInNewTab } from '@/components/ui/open-in-new-tab'
 import {
   TH_CLASS,
   TD_CLASS,
-  VTH_CLASS,
-  VTD_CLASS,
   QUIET_LINK_CLASS,
   CHECKBOX_REVEAL_CLASS,
   HOVER_REVEAL_CLASS,
   RowFoldout,
 } from '@/components/ui/dry-table'
 import { ArrowDown, ArrowUp, ArrowUpDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Copy, Paperclip, CircleSlash, Loader2, BookOpen, X, Lock, Search, SlidersHorizontal } from 'lucide-react'
-import { cn, formatDate, formatCurrency } from '@/lib/utils'
+import { cn, formatAmount, formatDate, formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveCurrentPeriodId } from '@/lib/bookkeeping/suggest-fiscal-period'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { Input } from '@/components/ui/input'
-import { AccountNumber } from '@/components/ui/account-number'
-import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
+import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
 import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttachments'
 import JournalEntryTransactionLinks from '@/components/bookkeeping/JournalEntryTransactionLinks'
@@ -1778,64 +1775,25 @@ export default function JournalEntryList({
                               {lines.length === 0 ? (
                                 <p className="text-sm text-muted-foreground py-2">{t('no_lines')}</p>
                               ) : (
-                                <table className="w-full border-collapse text-[12.5px]" aria-label={formatVoucher(entry)}>
-                                  <thead>
-                                    <tr>
-                                      <th className={cn(VTH_CLASS, 'w-[180px]')}>{t('account_column')}</th>
-                                      <th className={VTH_CLASS}>{t('description_column')}</th>
-                                      <th className={cn(VTH_CLASS, 'text-right')}>{t('debit')}</th>
-                                      <th className={cn(VTH_CLASS, 'text-right')}>{t('credit')}</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {lines
-                                      .slice()
-                                      .sort((a, b) => a.sort_order - b.sort_order)
-                                      .map((line) => {
-                                        const accountName = getAccountDescription(line.account_number)?.name
-                                        const desc = line.line_description
-                                        const showDesc = desc
-                                          && desc.toLowerCase() !== accountName?.toLowerCase()
-                                          && desc.toLowerCase() !== entry.description?.toLowerCase()
-                                        const debit = Number(line.debit_amount) || 0
-                                        const credit = Number(line.credit_amount) || 0
-                                        const fx = line.currency && line.currency !== 'SEK' && line.amount_in_currency != null
-                                          ? `${Number(line.amount_in_currency).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} ${line.currency}`
-                                          : null
-                                        return (
-                                          <tr key={line.id}>
-                                            <td className={cn(VTD_CLASS, 'whitespace-nowrap')}>
-                                              <AccountNumber number={line.account_number} showName />
-                                            </td>
-                                            <td className={cn(VTD_CLASS, 'text-muted-foreground')}>
-                                              {showDesc ? desc : ''}
-                                            </td>
-                                            <td className={cn(VTD_CLASS, 'text-right tabular-nums whitespace-nowrap')}>
-                                              {debit > 0 ? debit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) : ''}
-                                              {debit > 0 && fx && (
-                                                <span className="block text-xs text-muted-foreground tabular-nums">{fx}</span>
-                                              )}
-                                            </td>
-                                            <td className={cn(VTD_CLASS, 'text-right tabular-nums whitespace-nowrap')}>
-                                              {credit > 0 ? credit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) : ''}
-                                              {credit > 0 && fx && (
-                                                <span className="block text-xs text-muted-foreground tabular-nums">{fx}</span>
-                                              )}
-                                            </td>
-                                          </tr>
-                                        )
-                                      })}
-                                    <tr>
-                                      <td colSpan={2} className="py-[7px] pr-4 font-medium">{t('sum_label')}</td>
-                                      <td className="py-[7px] pr-4 text-right tabular-nums font-medium">
-                                        {lines.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
-                                      </td>
-                                      <td className="py-[7px] pr-4 text-right tabular-nums font-medium">
-                                        {lines.reduce((sum, l) => sum + (Number(l.credit_amount) || 0), 0).toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
-                                      </td>
-                                    </tr>
-                                  </tbody>
-                                </table>
+                                <VoucherLinesTable
+                                  aria-label={formatVoucher(entry)}
+                                  showTotals
+                                  redundantTexts={[entry.description]}
+                                  lines={lines
+                                    .slice()
+                                    .sort((a, b) => a.sort_order - b.sort_order)
+                                    .map((line) => ({
+                                      key: line.id,
+                                      account_number: line.account_number,
+                                      description: line.line_description,
+                                      debit_amount: line.debit_amount,
+                                      credit_amount: line.credit_amount,
+                                      foreignAmount:
+                                        line.currency && line.currency !== 'SEK' && line.amount_in_currency != null
+                                          ? `${formatAmount(Number(line.amount_in_currency))} ${line.currency}`
+                                          : null,
+                                    }))}
+                                />
                               )}
 
                               {entry.notes && (

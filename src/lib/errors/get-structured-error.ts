@@ -159,27 +159,19 @@ function extractCode(error: unknown): string | null {
 }
 
 /**
- * Heuristically infer a code from the message text when nothing structured
- * is available. Keeps known-error patterns programmatically dispatchable.
+ * Refusals the database raises as plain text (RAISE EXCEPTION with no code of
+ * ours): the period-lock trigger (migration 017) and the company lock date.
+ * Triggers are never edited, so their two sentences are read here, once, for
+ * every door. Application code throws a code instead (codedRefusal,
+ * userFacing): a sentence is never how the app tells a door what failed.
  */
-function inferCode(message: string): string | null {
-  if (/Period must be locked before closing/i.test(message)) return 'PERIOD_NOT_LOCKED'
-  if (/Year-end closing must be executed/i.test(message)) return 'YEAR_END_NOT_RUN'
-  if (/Kan inte låsa period:.*affärstransaktion/i.test(message)) return 'PERIOD_HAS_UNBOOKED_TRANSACTIONS'
-  if (/Insufficient scope/i.test(message)) return 'INSUFFICIENT_SCOPE'
-  if (/already has a journal entry/i.test(message)) return 'TRANSACTION_ALREADY_CATEGORIZED'
-  if (/already been sent/i.test(message) || /already sent/i.test(message)) return 'INVOICE_ALREADY_SENT'
-  if (/locked\/closed fiscal period/i.test(message)) return 'PERIOD_LOCKED'
-  // close_period / lock_period / run_year_end and period-service throw these
-  // as plain strings; without a code they surfaced as UNKNOWN_ERROR with
-  // "Något gick fel" (feedback seq 392722, close_period after run_year_end).
-  if (/Period is already closed|already closed/i.test(message)) return 'PERIOD_ALREADY_CLOSED'
-  if (/Period is already locked|already locked/i.test(message)) return 'PERIOD_LOCK_ALREADY_LOCKED'
-  if (/Bokföringen är låst/i.test(message)) return 'PERIOD_LOCKED'
-  if (/Transaction not found/i.test(message)) return 'NOT_FOUND'
-  if (/Invoice not found/i.test(message)) return 'NOT_FOUND'
-  if (/must be \d+ characters or fewer/i.test(message)) return 'VALIDATION_ERROR'
-  return null
+const DATABASE_REFUSALS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/locked\/closed fiscal period/i, 'PERIOD_LOCKED'],
+  [/Bokföringen är låst/, 'PERIOD_LOCKED'],
+]
+
+function databaseRefusalCode(message: string): string | null {
+  return DATABASE_REFUSALS.find(([pattern]) => pattern.test(message))?.[1] ?? null
 }
 
 /**
@@ -235,8 +227,142 @@ function extractEnglishMessage(error: unknown): string {
   return 'Unknown error'
 }
 
+const NO_ROW_MESSAGE_EN =
+  'Not found: no record with that id exists in this company. Check the id, and company_id if the record belongs to another company.'
+
 /**
- * Build a StructuredError for an arbitrary thrown value.
+ * What a thrown value is, as a registry code. The one decision behind every
+ * door: errorResponse (REST, and v1 through it) and getStructuredError (MCP)
+ * both take the code from here, so a failure answers the same code wherever
+ * it surfaces. The doors differ only in their wording (the registry sentence
+ * for REST, the thrown text for an agent) and their fallback name.
+ */
+export interface ErrorClassification {
+  /** Registry code; UNKNOWN_ERROR when nothing identifies the failure. */
+  code: string
+  /** Structured context for the REST envelope (field issues, pgCode, the typed error's fields). */
+  details?: Record<string, unknown>
+  /** A sentence that replaces the registry's: the refusal's own, or the one its thrower wrote. */
+  message_sv?: string
+  message_en?: string
+  /** Both messages were written for this failure (userFacing): nothing may reword them. */
+  authored?: boolean
+  remediation?: StructuredErrorRemediation
+  /** The identical request may succeed after a backoff. */
+  transient: boolean
+}
+
+function asDetails(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined
+}
+
+/** The field issues a VALIDATION_ERROR refusal carries (fieldValidationError, badArgument). */
+function thrownIssues(error: unknown): Record<string, unknown> | undefined {
+  const issues = (error as { issues?: unknown } | null)?.issues
+  return Array.isArray(issues) && issues.length > 0 ? { issues } : undefined
+}
+
+export function classifyError(error: unknown): ErrorClassification {
+  // Typed bookkeeping errors carry their own code and the fields behind it.
+  if (isBookkeepingError(error)) {
+    const { code, details } = extractBookkeepingDetails(error)
+    return { code, details: asDetails(details), transient: false }
+  }
+
+  // A Zod `.parse()` that threw past its call site. A parse of data the
+  // server built itself is a server bug, not a caller mistake: such a site
+  // must catch its own failure and throw INTERNAL_ERROR.
+  if (isZodError(error) && Array.isArray(error.issues) && error.issues.length > 0) {
+    const issues = error.issues.map((i) => ({ field: i.path.join('.'), message: i.message, code: i.code }))
+    return { code: 'VALIDATION_ERROR', details: { issues }, transient: false }
+  }
+
+  // A `.single()` lookup that matched no row. 46 MCP tools read one record
+  // that way, and a wrong or other-company id surfaced as UNKNOWN_ERROR with
+  // "Något gick fel. Försök igen.", which tells an agent to retry a call
+  // that can never succeed (get_inbox_item: 56 calls, 4 companies, 30 days).
+  if (isNoRowFromSingle(error)) {
+    return {
+      code: 'NOT_FOUND',
+      message_sv: getErrorEntry('NOT_FOUND')?.message_sv ?? 'Resursen kunde inte hittas.',
+      message_en: NO_ROW_MESSAGE_EN,
+      transient: false,
+    }
+  }
+
+  // A delete the database refused because other rows still point at the row
+  // (#2831): a code to branch on, English to act on and the way back.
+  // details names the referencing table so an API client knows what holds it.
+  const refusal = foreignKeyRefusal(error)
+  if (refusal) {
+    return {
+      code: refusal.code,
+      details: {
+        ...(isPostgresError(error) ? { pgCode: error.code } : {}),
+        ...(refusal.referencedBy ? { referenced_by: refusal.referencedBy } : {}),
+        ...(refusal.register ? { register: refusal.register } : {}),
+      },
+      ...(refusal.message_sv ? { message_sv: refusal.message_sv } : {}),
+      message_en: refusal.message_en,
+      ...(refusal.remediation ? { remediation: refusal.remediation } : {}),
+      transient: false,
+    }
+  }
+
+  const message = extractEnglishMessage(error)
+  const transient = isTransientFailure(error, message)
+
+  if (isPostgresError(error)) {
+    // Application conflicts use PT409 so PostgREST does not retry them as
+    // serialization failures. A serialization failure or a statement timeout
+    // is the opposite: the same statement may succeed on retry.
+    const code = isIgnoredTransactionJournalConstraint(error)
+      ? 'TX_CATEGORIZE_IGNORED_CONFLICT'
+      : error.code === 'PT409'
+        ? conflictCode(error.message)
+        : TRANSIENT_SQLSTATES.has(error.code)
+          ? 'TRANSIENT_ERROR'
+          : postgresCodeToStructured(error.code)
+    if (code) return { code, details: { pgCode: error.code }, transient }
+  }
+
+  // A refusal its author wrote for the reader keeps that sentence in both
+  // languages (Swedish, like the engine's other domain errors).
+  // The throw site knows more than the registry when it attaches a hint.
+  const remediation = extractRemediation(error)
+
+  const spoken = userFacingCode(error)
+  if (spoken) {
+    return {
+      code: spoken,
+      message_sv: message,
+      message_en: message,
+      authored: true,
+      ...(remediation ? { remediation } : {}),
+      transient,
+    }
+  }
+
+  const code = extractCode(error)
+  if (code) {
+    return {
+      code,
+      ...(code === 'VALIDATION_ERROR' ? { details: thrownIssues(error) } : {}),
+      ...(remediation ? { remediation } : {}),
+      transient,
+    }
+  }
+
+  const databaseCode = databaseRefusalCode(message)
+  if (databaseCode) return { code: databaseCode, transient: false }
+
+  // Nothing more specific matched but the failure is transient: the stable
+  // TRANSIENT_ERROR code lets a client dispatch on it.
+  return { code: transient ? 'TRANSIENT_ERROR' : 'UNKNOWN_ERROR', transient }
+}
+
+/**
+ * Build a StructuredError for an arbitrary thrown value: the MCP door.
  *
  * Always returns a valid StructuredError; never throws.
  */
@@ -244,58 +370,19 @@ export function getStructuredError(
   error: unknown,
   options: StructuredErrorOptions = {}
 ): StructuredError {
-  // A `.single()` lookup that matched no row. 46 MCP tools read one record
-  // that way, and a wrong or other-company id surfaced as UNKNOWN_ERROR with
-  // "Något gick fel. Försök igen.", which tells an agent to retry a call
-  // that can never succeed (get_inbox_item: 56 calls, 4 companies, 30 days).
-  if (isNoRowFromSingle(error)) {
-    const entry = getErrorEntry('NOT_FOUND')
-    return {
-      code: 'NOT_FOUND',
-      message_sv: entry?.message_sv ?? 'Resursen kunde inte hittas.',
-      message_en:
-        'Not found: no record with that id exists in this company. Check the id, and company_id if the record belongs to another company.',
-      retryable: false,
-    }
-  }
-
-  // A delete the database refused because other rows still point at the row.
-  // Before #2831 an agent got UNKNOWN_ERROR and the raw Postgres sentence;
-  // now it gets a code to branch on, English it can act on and the way back.
-  const refusal = foreignKeyRefusal(error)
-  if (refusal) {
-    return {
-      code: refusal.code,
-      message_sv: refusal.message_sv ?? getErrorMessage(error),
-      message_en: refusal.message_en,
-      remediation: refusal.remediation,
-      retryable: false,
-    }
-  }
-
-  // A Zod `.parse()` that threw past its call site. errorResponse below has
-  // always answered VALIDATION_ERROR for it; this door answered UNKNOWN_ERROR
-  // with the issue list as raw JSON (create_skill, set_inbox_extracted_data).
-  // A parse of data the server built itself is a server bug, not a caller
-  // mistake: such a site must catch its own failure and throw INTERNAL_ERROR.
+  // A Zod parse names every field at fault in both languages, as a refusal
+  // thrown with fieldValidationError does.
   if (isZodError(error) && Array.isArray(error.issues) && error.issues.length > 0) {
     return getStructuredError(fieldValidationError('Invalid arguments', zodErrorFieldIssues(error)), options)
   }
 
-  const message_en = extractEnglishMessage(error)
-  const message_sv = getErrorMessage(error)
-
-  const transient = isTransientFailure(error, message_en)
-  let code = isIgnoredTransactionJournalConstraint(error)
-    ? 'TX_CATEGORIZE_IGNORED_CONFLICT'
-    : extractCode(error) ?? inferCode(message_en) ?? 'UNKNOWN_ERROR'
-  // Nothing more specific matched but the failure is transient: surface the
-  // stable TRANSIENT_ERROR code so agents can dispatch on it.
-  if (code === 'UNKNOWN_ERROR' && transient) code = 'TRANSIENT_ERROR'
+  const classified = classifyError(error)
+  const { code } = classified
+  const message_en = classified.message_en ?? extractEnglishMessage(error)
+  const message_sv = classified.message_sv ?? getErrorMessage(error)
 
   const entry = getErrorEntry(code)
-  // The throw site knows more than the registry when it attaches a hint.
-  let remediation = extractRemediation(error) ?? entry?.remediation
+  let remediation = classified.remediation ?? entry?.remediation
 
   // Specialize INSUFFICIENT_SCOPE with the actual scope name when known.
   // Approve gets its own hint: it is never pre-ticked on the MCP consent page
@@ -318,7 +405,7 @@ export function getStructuredError(
     ...(remediation ? { remediation } : {}),
     // Registry declaration wins; otherwise the transient inference decides.
     // Always explicit: agents must never have to distinguish absent from false.
-    retryable: entry?.retryable ?? transient,
+    retryable: entry?.retryable ?? classified.transient,
   }
 }
 
@@ -428,14 +515,11 @@ export function isIgnoredTransactionJournalConstraint(error: unknown): boolean {
 }
 
 /**
- * Build the canonical REST error envelope for any thrown value.
- *
- * Order of dispatch:
- *   1. typed BookkeepingError → reuses bookkeepingErrorResponse()
- *   2. ZodError                → VALIDATION_ERROR with field-level details
- *   3. Postgres error code     → mapped to a structured code
- *   4. Error with `code` field present in registry → use that
- *   5. Anything else            → INTERNAL_ERROR
+ * Build the canonical REST error envelope for any thrown value. The code is
+ * classifyError's, so REST, v1 and MCP answer the same code for the same
+ * failure. Only registered codes are part of the REST contract: an
+ * unregistered or unidentified failure is the INTERNAL_ERROR (500) it always
+ * was. The messages are the registry's, unless the failure brought its own.
  *
  * Always logs the underlying error (no silent error returns). The caller
  * must pass a logger so the request id propagates to the log line.
@@ -445,116 +529,39 @@ export function errorResponse(
   log: MinimalLogger,
   ctx: ErrorResponseContext = {},
 ): NextResponse {
-  // 1. Bookkeeping domain errors: route through the registry, preserving
-  //    the structured details each typed error class carries.
-  if (isBookkeepingError(err)) {
-    const { code, details } = extractBookkeepingDetails(err)
-    const entry = entryFor(code)
-    logAtLevel(log, entry.httpStatus, code, err as Error, { requestId: ctx.requestId })
-    return buildResponse(code, entry, ctx.requestId, details ?? ctx.details)
+  const classified = classifyError(err)
+  const code =
+    classified.code !== 'UNKNOWN_ERROR' && getErrorEntry(classified.code) ? classified.code : 'INTERNAL_ERROR'
+  const registered = entryFor(code)
+  // The failure's own sentences and hint only speak for the code they came with.
+  const own = code === classified.code ? classified : undefined
+  const entry: StructuredErrorEntry = {
+    ...registered,
+    httpStatus: ctx.status ?? registered.httpStatus,
+    message_sv: own?.message_sv ?? registered.message_sv,
+    message_en: own?.message_en ?? registered.message_en,
+    remediation: own?.remediation ?? registered.remediation,
   }
-
-  // 2. Zod validation errors
-  if (isZodError(err)) {
-    const issues = (err as ZodError).issues.map((i) => ({
-      field: i.path.join('.'),
-      message: i.message,
-      code: i.code,
-    }))
-    logAtLevel(log, 400, 'validation failed', err as Error, {
+  const pgCode = classified.details?.pgCode
+  if (code === 'INTERNAL_ERROR') {
+    log.error('unhandled error', err instanceof Error ? err : new Error(String(err)), {
       requestId: ctx.requestId,
-      issueCount: issues.length,
+      ...(pgCode ? { pgCode } : {}),
     })
-    const entry = entryFor('VALIDATION_ERROR')
-    const details = mergeDetails({ issues }, ctx.details)
-    return buildResponse('VALIDATION_ERROR', entry, ctx.requestId, details)
-  }
-
-  // 3. Postgres errors
-  if (isPostgresError(err)) {
-    // A refused delete gets its own code, sentence and remediation instead of
-    // the generic VALIDATION_ERROR (#2831). details names the referencing
-    // table so an API client knows what still holds the row.
-    const refusal = foreignKeyRefusal(err)
-    if (refusal) {
-      const entry = entryFor(refusal.code)
-      logAtLevel(log, entry.httpStatus, 'refused delete', err as unknown as Error, {
-        requestId: ctx.requestId,
-        pgCode: err.code,
-      })
-      const details = mergeDetails(
-        {
-          pgCode: err.code,
-          ...(refusal.referencedBy ? { referenced_by: refusal.referencedBy } : {}),
-          ...(refusal.register ? { register: refusal.register } : {}),
-        },
-        ctx.details,
-      )
-      return buildResponse(
-        refusal.code,
-        {
-          ...entry,
-          message_sv: refusal.message_sv ?? entry.message_sv,
-          message_en: refusal.message_en,
-          remediation: refusal.remediation,
-        },
-        ctx.requestId,
-        details,
-      )
-    }
-    const mapped = isIgnoredTransactionJournalConstraint(err)
-      ? 'TX_CATEGORIZE_IGNORED_CONFLICT'
-      : err.code === 'PT409' ? conflictCode(err.message) : postgresCodeToStructured(err.code)
-    if (mapped) {
-      const entry = entryFor(mapped)
-      logAtLevel(log, entry.httpStatus, 'database error', err as unknown as Error, {
-        requestId: ctx.requestId,
-        pgCode: err.code,
-      })
-      const details = mergeDetails({ pgCode: err.code }, ctx.details)
-      return buildResponse(mapped, entry, ctx.requestId, details)
-    }
-    log.error('database error', err as unknown as Error, {
+  } else {
+    logAtLevel(log, entry.httpStatus, code, err instanceof Error ? err : new Error(String(err)), {
       requestId: ctx.requestId,
-      pgCode: err.code,
+      ...(pgCode ? { pgCode } : {}),
     })
   }
-
-  // 3b. Errors written for the reader. Before the registry lookup, because the
-  //     point is to keep the sentence the author wrote instead of the canned
-  //     one the code maps to: a paused import and a klarmarkerat räkenskapsår
-  //     both name the setting to change, and both arrived as generic text.
-  //     Swedish in both locales, like the engine's other domain errors.
-  const spoken = userFacingCode(err)
-  if (spoken && getErrorEntry(spoken)) {
-    const entry = entryFor(spoken)
-    const status = ctx.status ?? entry.httpStatus
-    const message = (err as Error).message
-    logAtLevel(log, status, spoken, err as Error, { requestId: ctx.requestId })
-    return buildResponse(
-      spoken,
-      { ...entry, httpStatus: status, message_sv: message, message_en: message },
-      ctx.requestId,
-      ctx.details,
-      true,
-    )
-  }
-
-  // 4. Errors with a known structured code on them
-  const code = extractCode(err)
-  if (code && getErrorEntry(code)) {
-    const entry = entryFor(code)
-    const status = ctx.status ?? entry.httpStatus
-    logAtLevel(log, status, `${code}`, err instanceof Error ? err : new Error(String(err)), { requestId: ctx.requestId })
-    return buildResponse(code, { ...entry, httpStatus: status }, ctx.requestId, ctx.details)
-  }
-
-  // 5. Fallback: log the actual error so we can still debug
-  log.error('unhandled error', err instanceof Error ? err : new Error(String(err)), {
-    requestId: ctx.requestId,
-  })
-  const fallback = entryFor('INTERNAL_ERROR')
-  return buildResponse('INTERNAL_ERROR', fallback, ctx.requestId, ctx.details)
+  // A typed bookkeeping error's details are canonical and stand alone; any
+  // other failure's details take the route's extra context alongside.
+  const details = own?.details
+    ? isBookkeepingError(err)
+      ? own.details
+      : mergeDetails(own.details, ctx.details)
+    : ctx.details
+  return buildResponse(code, entry, ctx.requestId, details, own?.authored === true)
 }
 
 function mergeDetails(

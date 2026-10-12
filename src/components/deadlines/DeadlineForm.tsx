@@ -225,6 +225,7 @@ export function DeadlineForm({
                 id="deadline-customer"
                 value={formData.customer_id || ''}
                 customers={customers}
+                keepId={initialData?.customer_id}
                 onChange={(v) => updateField('customer_id', v)}
                 placeholder="Välj kund..."
                 noneLabel="Ingen kund"

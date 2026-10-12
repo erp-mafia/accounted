@@ -19,7 +19,10 @@ vi.mock('@/lib/company/context', () => ({
 // call them, the dimension path must still route through them. The pure
 // builders (buildIncomeStatementFromRows, assembleMonthlyBreakdown) stay real
 // so the happy path asserts the full KPI JSON end to end.
-vi.mock('@/lib/reports/trial-balance', () => ({
+// Partial: the KPI rows and the year-end exclusion use the module's real
+// helpers (buildTrialBalanceRows, fetchReversedYearEndEntryIds).
+vi.mock('@/lib/reports/trial-balance', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/reports/trial-balance')>()),
   generateTrialBalance: vi.fn(),
 }))
 vi.mock('@/lib/reports/ar-ledger', () => ({

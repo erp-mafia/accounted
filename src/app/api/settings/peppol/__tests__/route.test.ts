@@ -189,7 +189,8 @@ describe('/api/settings/peppol', () => {
     enqueue({ data: [registeredRow], error: null })
     enqueue({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } })
     const response = await get()
-    expect(response.status).toBe(500)
+    // A statement timeout is transient: 503 TRANSIENT_ERROR, still never a success.
+    expect(response.status).toBe(503)
     const body = await response.json()
     expect(body.error.code).toBeDefined()
     expect(body.data).toBeUndefined()

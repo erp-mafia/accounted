@@ -9,7 +9,8 @@
 import { readdirSync, readFileSync } from 'fs'
 import path from 'path'
 import { describe, expect, it } from 'vitest'
-import { V1_ENDPOINT_SCOPES } from '@/lib/auth/scopes'
+import { listEndpoints } from '@/lib/api/v1/registry'
+import '@/lib/api/v1/load-routes'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/scope-catalog'
 import { FIRST_PARTY_EXTENSIONS } from '@/lib/extensions/_generated/extension-list'
 import { GAP_CEILING, SESSION_ROUTE_PARITY } from '../session-route-parity'
@@ -145,7 +146,7 @@ describe('session route parity manifest', () => {
   })
 
   it('points every covered entry at a real public door', () => {
-    const doors = new Set([...Object.keys(V1_ENDPOINT_SCOPES), ...Object.keys(TOOL_SCOPE_MAP)])
+    const doors = new Set([...listEndpoints().map((e) => `${e.method} ${e.path}`), ...Object.keys(TOOL_SCOPE_MAP)])
     const unknown: string[] = []
     const empty: string[] = []
     for (const [key, entry] of Object.entries(SESSION_ROUTE_PARITY)) {
@@ -156,7 +157,7 @@ describe('session route parity manifest', () => {
       }
     }
     expect(empty, 'covered entries need at least one `by` door').toEqual([])
-    expect(unknown, '`by` must name a V1_ENDPOINT_SCOPES key or a TOOL_SCOPE_MAP tool').toEqual([])
+    expect(unknown, '`by` must name a registered v1 endpoint or a TOOL_SCOPE_MAP tool').toEqual([])
   })
 
   it('gives every ui-only and machine entry a reason', () => {

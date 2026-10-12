@@ -130,6 +130,9 @@ const CHECK_CONSTRAINT_ERROR = {
 // refusal sentence is derived from. This one has no beslut.
 const DELETE_READ_ROW = {
   id: 'emp-1',
+  first_name: 'Test',
+  last_name: 'Testsson',
+  is_active: true,
   jamkning_percentage: null,
   jamkning_valid_from: null,
   jamkning_valid_to: null,
@@ -179,7 +182,7 @@ describe('DELETE /api/salary/employees/[id]', () => {
   })
 
   it('404 when no employee row matches (unknown id or another company), and nothing is written', async () => {
-    enqueue({ data: null, error: { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' } })
+    enqueue({ data: null })
 
     const response = await DELETE(deleteRequest(), params)
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
@@ -194,7 +197,7 @@ describe('DELETE /api/salary/employees/[id]', () => {
     // #2240, no end date. The constraint refuses ANY update of it, the
     // deactivation included. The user must be told what to complete, in the
     // validator's own words, not "not found" (the row exists) and not 500.
-    enqueue({ data: { id: 'emp-1', jamkning_percentage: 30, jamkning_valid_from: '2025-09-29', jamkning_valid_to: null } })
+    enqueue({ data: { ...DELETE_READ_ROW, jamkning_percentage: 30, jamkning_valid_from: '2025-09-29', jamkning_valid_to: null } })
     enqueue({ data: null, error: CHECK_CONSTRAINT_ERROR })
 
     const response = await DELETE(deleteRequest(), params)

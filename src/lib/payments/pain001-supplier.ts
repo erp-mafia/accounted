@@ -91,7 +91,7 @@
  */
 
 import { escapeXml } from '@/lib/xml/escape'
-import { roundOre } from '@/lib/money'
+import { formatPainAmount, max35, painControlSum, suffixId } from './pain001-format'
 import { payeeAccountParts } from '@/lib/salary/payment/bank-account'
 import { sanitizeMigText } from './mig-text'
 import { SWEDBANK_BIC, swedbankCreditorAccount, type SwedbankFileIds } from './swedbank'
@@ -232,7 +232,7 @@ export function generateSupplierPain001(
   lines.push(`      <MsgId>${escapeXml(msgId)}</MsgId>`)
   lines.push(`      <CreDtTm>${creDtTm}</CreDtTm>`)
   lines.push(`      <NbOfTxs>${payments.length}</NbOfTxs>`)
-  lines.push(`      <CtrlSum>${formatDecimal(totalAmount)}</CtrlSum>`)
+  lines.push(`      <CtrlSum>${formatPainAmount(totalAmount)}</CtrlSum>`)
   lines.push('      <InitgPty>')
   lines.push(`        <Nm>${escapeXml(debtorName)}</Nm>`)
   lines.push('        <Id>')
@@ -262,7 +262,7 @@ export function generateSupplierPain001(
     lines.push('      <PmtMtd>TRF</PmtMtd>')
     lines.push('      <BtchBookg>true</BtchBookg>')
     lines.push(`      <NbOfTxs>${group.length}</NbOfTxs>`)
-    lines.push(`      <CtrlSum>${formatDecimal(groupTotal)}</CtrlSum>`)
+    lines.push(`      <CtrlSum>${formatPainAmount(groupTotal)}</CtrlSum>`)
     if (swedbank) {
       // Appendix, Supplier Payments: "requested using the CategoryPurpose code
       // of SUPP (Supplier Payment) and ServiceLevel code NURG". XSD order:
@@ -333,7 +333,7 @@ export function generateSupplierPain001(
       lines.push(`          <EndToEndId>${escapeXml(txId)}</EndToEndId>`)
       lines.push('        </PmtId>')
       lines.push('        <Amt>')
-      lines.push(`          <InstdAmt Ccy="SEK">${formatDecimal(payment.amount)}</InstdAmt>`)
+      lines.push(`          <InstdAmt Ccy="SEK">${formatPainAmount(payment.amount)}</InstdAmt>`)
       lines.push('        </Amt>')
       pushCreditor(lines, payment, swedbank !== null, text)
       pushRemittance(lines, payment, swedbank !== null, text)
@@ -455,7 +455,7 @@ function pushRemittance(
       // Not in Swedbank ISO 2.0: RfrdDocAmt only with extended remittance,
       // RmtdAmt only for CINV, and one reference is at most 140 characters.
       lines.push('            <RfrdDocAmt>')
-      lines.push(`              <RmtdAmt Ccy="SEK">${formatDecimal(amount)}</RmtdAmt>`)
+      lines.push(`              <RmtdAmt Ccy="SEK">${formatPainAmount(amount)}</RmtdAmt>`)
       lines.push('            </RfrdDocAmt>')
     }
     lines.push('            <CdtrRefInf>')
@@ -476,19 +476,7 @@ function pushRemittance(
 // production-hardened and stays untouched; see DECISIONS.md 2026-08-10)
 // ============================================================
 
-/** Control sums add the amounts AS RENDERED: each rounded to öre first. */
+/** Control sums add the amounts AS RENDERED (painControlSum). */
 function sumRendered(payments: readonly SupplierPain001Payment[]): number {
-  return payments.reduce((sum, p) => sum + roundOre(p.amount), 0)
-}
-
-function formatDecimal(amount: number): string {
-  return roundOre(amount).toFixed(2)
-}
-
-function max35(value: string): string {
-  return value.slice(0, 35)
-}
-
-function suffixId(base: string, suffix: string): string {
-  return base.slice(0, Math.max(1, 35 - suffix.length)) + suffix
+  return painControlSum(payments.map((p) => p.amount))
 }

@@ -21,6 +21,7 @@ import {
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
 import type { WebshopOrder, WebshopStoreSettings } from '@/types'
+import { formatAmountInput } from '@/lib/money'
 
 interface OrderBookingDialogProps {
   open: boolean
@@ -67,8 +68,8 @@ export default function OrderBookingDialog({
         paymentAccount,
       }).map((line) => ({
         account_number: line.account_number,
-        debit_amount: line.debit_amount ? line.debit_amount.toFixed(2) : '',
-        credit_amount: line.credit_amount ? line.credit_amount.toFixed(2) : '',
+        debit_amount: line.debit_amount ? formatAmountInput(line.debit_amount, '.') : '',
+        credit_amount: line.credit_amount ? formatAmountInput(line.credit_amount, '.') : '',
         line_description: line.line_description ?? '',
         ...(line.currency
           ? {

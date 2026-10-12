@@ -41,7 +41,7 @@ import {
   reopenExternallyClosedPeriod,
   unlockPeriod,
 } from '@/lib/core/bookkeeping/period-service'
-import { PERIOD_HAS_UNFINISHED_SIE_IMPORT } from '@/lib/core/bookkeeping/sie-import-hold'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { userFacingCode } from '@/lib/errors/user-facing'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
 import type { FiscalPeriod } from '@/types'
@@ -594,12 +594,16 @@ function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : ''
 }
 
-/** unlockPeriod's refusals as codes (its messages are stable, see its tests). */
-function unlockFailure(err: unknown): Failure {
-  const message = messageOf(err)
-  if (/not found/i.test(message)) return { ok: false, code: 'PERIOD_NOT_FOUND' }
-  if (/closed/i.test(message)) return { ok: false, code: 'PERIOD_UNLOCK_CLOSED' }
-  if (/not locked/i.test(message)) return { ok: false, code: 'PERIOD_UNLOCK_NOT_LOCKED' }
+/**
+ * A period-service refusal as a Failure: the code it threw, and its sentence
+ * when it wrote one for the reader. An uncoded throw is a failure nobody
+ * planned for (a database error), kept as UNKNOWN_ERROR with the error.
+ */
+function periodFailure(err: unknown): Failure {
+  const spoken = userFacingCode(err)
+  if (spoken) return { ok: false, code: spoken, messageSv: messageOf(err) }
+  const code = (err as { code?: unknown } | null)?.code
+  if (typeof code === 'string' && getErrorEntry(code)) return { ok: false, code }
   return { ok: false, code: 'UNKNOWN_ERROR', error: err }
 }
 
@@ -635,34 +639,10 @@ export async function unlockFiscalPeriod(
     const period = await unlockPeriod(ctx.supabase, ctx.companyId, ctx.userId, fiscalPeriodId)
     return { ok: true, data: period }
   } catch (err) {
-    const failure = unlockFailure(err)
+    const failure = periodFailure(err)
     if (failure.code === 'UNKNOWN_ERROR') ctx.log.error('failed to unlock period', err as Error)
     return failure
   }
-}
-
-/** markPeriodClosedExternally's refusals as codes. */
-function closeExternalFailure(err: unknown): Failure {
-  const message = messageOf(err)
-  if (userFacingCode(err) === PERIOD_HAS_UNFINISHED_SIE_IMPORT) {
-    return { ok: false, code: PERIOD_HAS_UNFINISHED_SIE_IMPORT, messageSv: message }
-  }
-  if (/not found/i.test(message)) return { ok: false, code: 'PERIOD_NOT_FOUND' }
-  if (/already closed/i.test(message)) return { ok: false, code: 'FISCAL_PERIOD_CLOSE_EXTERNAL_ALREADY_CLOSED' }
-  if (/closing entry in Accounted/i.test(message)) {
-    return { ok: false, code: 'FISCAL_PERIOD_CLOSE_EXTERNAL_HAS_CLOSING_ENTRY' }
-  }
-  if (/not ended yet/i.test(message)) return { ok: false, code: 'FISCAL_PERIOD_CLOSE_EXTERNAL_NOT_ENDED' }
-  if (/resultatkonton|saknar ingående balanser/i.test(message)) {
-    return { ok: false, code: 'FISCAL_PERIOD_CLOSE_EXTERNAL_NATIVE_BOOKKEEPING', messageSv: message }
-  }
-  if (/saknar bokföring/i.test(message)) {
-    return { ok: false, code: 'PERIOD_HAS_UNBOOKED_TRANSACTIONS', messageSv: message }
-  }
-  if (/Kunde inte kontrollera/i.test(message)) {
-    return { ok: false, code: 'FISCAL_PERIOD_CLOSE_EXTERNAL_CHECK_FAILED', messageSv: message }
-  }
-  return { ok: false, code: 'UNKNOWN_ERROR', error: err }
 }
 
 /**
@@ -683,7 +663,7 @@ export async function closeFiscalPeriodExternally(
     try {
       await assertPeriodExternallyClosable(ctx.supabase, ctx.companyId, period)
     } catch (err) {
-      return closeExternalFailure(err)
+      return periodFailure(err)
     }
     return {
       ok: true,
@@ -702,19 +682,10 @@ export async function closeFiscalPeriodExternally(
     const period = await markPeriodClosedExternally(ctx.supabase, ctx.companyId, ctx.userId, fiscalPeriodId)
     return { ok: true, data: period }
   } catch (err) {
-    const failure = closeExternalFailure(err)
+    const failure = periodFailure(err)
     if (failure.code === 'UNKNOWN_ERROR') ctx.log.error('failed to mark period closed externally', err as Error)
     return failure
   }
-}
-
-/** reopenExternallyClosedPeriod's refusals as codes. */
-function reopenExternalFailure(err: unknown): Failure {
-  const message = messageOf(err)
-  if (/not found/i.test(message)) return { ok: false, code: 'PERIOD_NOT_FOUND' }
-  if (/not closed/i.test(message)) return { ok: false, code: 'PERIOD_REOPEN_NOT_CLOSED' }
-  if (/year-end run/i.test(message)) return { ok: false, code: 'PERIOD_REOPEN_NOT_EXTERNAL' }
-  return { ok: false, code: 'UNKNOWN_ERROR', error: err }
 }
 
 /**
@@ -745,7 +716,7 @@ export async function reopenExternallyClosedFiscalPeriod(
     const period = await reopenExternallyClosedPeriod(ctx.supabase, ctx.companyId, ctx.userId, fiscalPeriodId)
     return { ok: true, data: period }
   } catch (err) {
-    const failure = reopenExternalFailure(err)
+    const failure = periodFailure(err)
     if (failure.code === 'UNKNOWN_ERROR') ctx.log.error('failed to reopen externally closed period', err as Error)
     return failure
   }

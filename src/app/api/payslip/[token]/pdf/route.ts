@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { resolvePayslipToken, isValidPayslipTokenFormat } from '@/lib/salary/payslips/links'
-import { buildPayslipData, payslipFileName } from '@/lib/salary/payslips/build-payslip-data'
-import { issuePayslipSections } from '@/lib/salary/payslips/section-snapshot'
+import { loadPayslip, preparePayslip, renderPayslipPdf } from '@/lib/salary/payslips/load-payslip'
 import { contentDisposition } from '@/lib/api/content-disposition'
 import { createTokenRateLimiter } from '@/lib/api/token-rate-limit'
 
@@ -43,79 +42,32 @@ export async function GET(
 
   const { link } = resolved
 
-  const [{ data: run }, { data: sre }, { data: company }, { data: settings, error: settingsError }] = await Promise.all([
-    serviceClient
-      .from('salary_runs')
-      .select('*')
-      .eq('id', link.salary_run_id)
-      .eq('company_id', link.company_id)
-      .single(),
-    serviceClient
-      .from('salary_run_employees')
-      .select('*, employee:employees(first_name, last_name, personnummer, employment_type, tax_table_number, tax_column, clearing_number, bank_account_number), line_items:salary_line_items(*)')
-      .eq('salary_run_id', link.salary_run_id)
-      .eq('employee_id', link.employee_id)
-      .single(),
-    serviceClient
-      .from('companies')
-      .select('name, org_number')
-      .eq('id', link.company_id)
-      .single(),
-    serviceClient
-      .from('company_settings')
-      .select('company_name, salary_payslip_show_employer_cost, salary_payslip_show_breakdown')
-      .eq('company_id', link.company_id)
-      .maybeSingle(),
-  ])
-
-  if (!run || !sre || !company) {
-    return new NextResponse('Not found', { status: 404 })
+  // The one payslip render path (lib/salary/payslips/load-payslip.ts). This
+  // link is what the employee receives: the employee copy, and the run's
+  // sections are fixed here if the send did not fix them first, so the copy
+  // renders what was issued, not today's switches.
+  const loaded = await loadPayslip(serviceClient, {
+    companyId: link.company_id,
+    salaryRunId: link.salary_run_id,
+    employeeId: link.employee_id,
+  })
+  if (!loaded.ok) {
+    return loaded.reason === 'db_error'
+      ? new NextResponse('Could not load payslip', { status: 500 })
+      : new NextResponse('Not found', { status: 404 })
   }
-
+  const prepared = await preparePayslip(serviceClient, loaded.payslip, {
+    companyId: link.company_id,
+    audience: 'employee',
+    mayIssue: true,
+  })
   // Fail closed: without the company's section switches this copy would fall
   // back to the defaults and print sections hidden from the employee.
-  if (settingsError) {
+  if (!prepared.ok) {
     return new NextResponse('Could not load payslip', { status: 500 })
   }
-
-  // The send fixed the sections this copy prints on the run; a run issued
-  // some other way first is fixed here, before the employee sees it. Either
-  // way the copy renders what was issued, not today's switches.
-  const issued = await issuePayslipSections(serviceClient, { companyId: link.company_id, run, settings })
-  if (!issued.ok) {
-    return new NextResponse('Could not load payslip', { status: 500 })
-  }
-  const issuedRun = { ...run, ...issued.snapshot }
-
-  const emp = sre.employee as unknown as {
-    first_name: string
-    last_name: string
-    personnummer: string
-    employment_type: string
-    tax_table_number: number | null
-    tax_column: number
-    clearing_number: string | null
-    bank_account_number: string | null
-  }
-
-  // Employer name follows the current company_settings.company_name, falling
-  // back to the frozen onboarding companies.name. This link is what the
-  // employee receives: the sections the run was issued with apply.
-  const data = buildPayslipData({
-    run: issuedRun,
-    sre,
-    employee: emp,
-    company: { name: settings?.company_name || company.name, org_number: company.org_number },
-    audience: { kind: 'employee', settings },
-  })
-  const fileName = payslipFileName(run, emp)
-
-  const [{ renderToBuffer }, { PayslipPDF }] = await Promise.all([
-    import('@react-pdf/renderer'),
-    import('@/lib/salary/pdf/payslip-template'),
-  ])
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const buffer = await renderToBuffer(PayslipPDF({ data }) as any)
+  const buffer = await renderPayslipPdf(prepared.data)
+  const fileName = prepared.fileName
 
   return new Response(buffer as unknown as BodyInit, {
     headers: {

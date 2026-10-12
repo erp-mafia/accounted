@@ -1,4 +1,5 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
+import { swedishMonthName } from '@/lib/dates/swedish-months'
 import { pdfNumberText } from '@/lib/pdf/number-text'
 import { getBranding } from '@/lib/branding/service'
 import type { SalaryRunUnderlagData } from '@/lib/salary/run-underlag'
@@ -131,13 +132,8 @@ function fmtOrBlank(amount: number): string {
   return amount === 0 ? '' : fmt(amount)
 }
 
-const MONTH_NAMES = [
-  'januari', 'februari', 'mars', 'april', 'maj', 'juni',
-  'juli', 'augusti', 'september', 'oktober', 'november', 'december',
-]
-
 export function SalaryRunUnderlagPDF({ data }: { data: SalaryRunUnderlagData }) {
-  const periodLabel = `${MONTH_NAMES[data.periodMonth - 1]} ${data.periodYear}`
+  const periodLabel = `${swedishMonthName(data.periodMonth)} ${data.periodYear}`
   const generatedDate = data.generatedAt.slice(0, 10)
   const vouchers = data.entries.map((e) => e.voucher).filter((v): v is string => !!v)
 

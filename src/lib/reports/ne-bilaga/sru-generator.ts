@@ -1,4 +1,4 @@
-import { getBranding } from '@/lib/branding/service'
+import { buildInfoSru, sruBlankettType, sruFile, sruIncomeYear, sruText } from '@/lib/reports/sru/envelope'
 import { sruAmount as formatAmount, sruDate as formatDate, sruTime as formatTime } from '@/lib/reports/sru/format'
 import type { NEDeclaration, NEDeclarationRutor, SRUSubmission } from '@/lib/reports/ne-bilaga/types'
 
@@ -13,8 +13,10 @@ import type { NEDeclaration, NEDeclarationRutor, SRUSubmission } from '@/lib/rep
  * person, so the identifier is the owner's PERSONNUMMER (12-digit YYYYMMDDNNNN):
  * NOT a juridisk-person org number with the "16" century prefix used by INK2.
  *
+ * The envelope (line endings, sanitising, blankett type, INFO.SRU) is shared
+ * with INK2: lib/reports/sru/envelope.ts.
  * Encoding: ISO 8859-1 (applied by the API route via encodeISO88591).
- * Line endings: CRLF. Amounts: integers in hela kronor (öre truncated per SFL 22:1).
+ * Amounts: integers in hela kronor (öre truncated per SFL 22:1).
  *
  * Field codes (Fältkod -> Rad NE) are taken from BAS-kontogruppen's official
  * coupling table "NE - Inkomst av näringsverksamhet, Enskilda näringsidkare"
@@ -22,9 +24,6 @@ import type { NEDeclaration, NEDeclarationRutor, SRUSubmission } from '@/lib/rep
  *   R1 7400 · R2 7401 · R3 7402 · R4 7403 · R5 7500 · R6 7501 · R7 7502 ·
  *   R8 7503 · R9 7504 · R10 7505 · R11 7440. Period dates: 7011 (start) / 7012 (end).
  */
-
-const CRLF = '\r\n'
-const PROGRAM_VERSION = '1.0'
 
 /** Räkenskapsårets start-/slutdatum (standard period date fält, shared across blanketter). */
 const FISCAL_START_CODE = '7011'
@@ -43,23 +42,6 @@ const NE_SRU_FIELD_CODES: Record<keyof NEDeclarationRutor, string> = {
   R9: '7504', // Avskrivningar och nedskrivningar byggnader och markanläggningar
   R10: '7505', // Avskrivningar och nedskrivningar maskiner/inventarier/immateriella tillgångar
   R11: '7440', // Bokfört resultat
-}
-
-/**
- * Compute the period suffix for the blankett type string, from the month the
- * fiscal year ENDS in. Enskild firma is almost always calendar-year (-> P4).
- *   P1 = Jan-Apr, P2 = May-Aug, P4 = Sep-Dec. P3 (short first year) is handled manually.
- */
-function computePeriodSuffix(fiscalYearEnd: string): string {
-  const endMonth = parseInt(fiscalYearEnd.substring(5, 7), 10)
-  if (endMonth >= 1 && endMonth <= 4) return 'P1'
-  if (endMonth >= 5 && endMonth <= 8) return 'P2'
-  return 'P4'
-}
-
-/** The income year (inkomstår) is the year the fiscal year ends. */
-function getIncomeYear(fiscalYearEnd: string): string {
-  return fiscalYearEnd.substring(0, 4)
 }
 
 /**
@@ -93,48 +75,12 @@ function dateStringToSRU(dateStr: string): string {
   return dateStr.replace(/-/g, '')
 }
 
-/** Sanitize string for SRU: '#' is reserved, strip newlines, cap at 250 chars (STR_250). */
-function sanitizeString(str: string): string {
-  return str.replace(/#/g, '').replace(/[\r\n]/g, ' ').substring(0, 250)
-}
-
-/** Generate the INFO.SRU file content (submitter metadata). */
-function generateInfoSru(declaration: NEDeclaration, now: Date, identity12: string): string {
-  const lines: string[] = []
-
-  // DATABESKRIVNING block (required order)
-  lines.push('#DATABESKRIVNING_START')
-  lines.push('#PRODUKT SRU')
-  lines.push(`#SKAPAD ${formatDate(now)} ${formatTime(now)}`)
-  lines.push(`#PROGRAM ${sanitizeString(getBranding().appName.toLowerCase())} ${PROGRAM_VERSION}`)
-  lines.push('#FILNAMN BLANKETTER.SRU')
-  lines.push('#DATABESKRIVNING_SLUT')
-
-  // MEDIELEV block (mandatory: ORGNR, NAMN, POSTNR, POSTORT)
-  lines.push('#MEDIELEV_START')
-  lines.push(`#ORGNR ${identity12}`)
-  lines.push(`#NAMN ${sanitizeString(declaration.companyInfo.companyName)}`)
-  if (declaration.companyInfo.addressLine1) {
-    lines.push(`#ADRESS ${sanitizeString(declaration.companyInfo.addressLine1)}`)
-  }
-  lines.push(`#POSTNR ${(declaration.companyInfo.postalCode || '00000').replace(/\s/g, '')}`)
-  lines.push(`#POSTORT ${sanitizeString(declaration.companyInfo.city || 'Okänd')}`)
-  if (declaration.companyInfo.email) {
-    lines.push(`#EMAIL ${sanitizeString(declaration.companyInfo.email)}`)
-  }
-  lines.push('#MEDIELEV_SLUT')
-
-  return lines.join(CRLF) + CRLF
-}
-
 /** Generate the BLANKETTER.SRU file content (a single NE blankett block). */
 function generateBlanketterSru(declaration: NEDeclaration, now: Date, identity12: string): string {
   const lines: string[] = []
-  const incomeYearStr = getIncomeYear(declaration.fiscalYear.end)
-  const periodSuffix = computePeriodSuffix(declaration.fiscalYear.end)
-  const taxpayerName = sanitizeString(declaration.companyInfo.companyName)
+  const taxpayerName = sruText(declaration.companyInfo.companyName)
 
-  lines.push(`#BLANKETT NE-${incomeYearStr}${periodSuffix}`)
+  lines.push(`#BLANKETT ${sruBlankettType('NE', declaration.fiscalYear.end)}`)
   lines.push(`#IDENTITET ${identity12} ${formatDate(now)} ${formatTime(now)}`)
   lines.push(`#NAMN ${taxpayerName}`)
 
@@ -156,7 +102,7 @@ function generateBlanketterSru(declaration: NEDeclaration, now: Date, identity12
   lines.push('#BLANKETTSLUT')
   lines.push('#FIL_SLUT')
 
-  return lines.join(CRLF) + CRLF
+  return sruFile(lines)
 }
 
 /**
@@ -180,7 +126,7 @@ export function generateNESRUSubmission(declaration: NEDeclaration): SRUSubmissi
   }
 
   const now = new Date()
-  const incomeYear = parseInt(getIncomeYear(declaration.fiscalYear.end), 10)
+  const incomeYear = parseInt(sruIncomeYear(declaration.fiscalYear.end), 10)
   const identity12 = formatIdentityNumber12(declaration.companyInfo.orgNumber, incomeYear)
 
   // A valid NE filing requires the owner's personnummer. Refuse rather than ship a
@@ -194,7 +140,17 @@ export function generateNESRUSubmission(declaration: NEDeclaration): SRUSubmissi
   }
 
   return {
-    infoSru: generateInfoSru(declaration, now, identity12),
+    infoSru: buildInfoSru(
+      {
+        identity12,
+        name: declaration.companyInfo.companyName,
+        addressLine1: declaration.companyInfo.addressLine1,
+        postalCode: declaration.companyInfo.postalCode,
+        city: declaration.companyInfo.city,
+        email: declaration.companyInfo.email,
+      },
+      now,
+    ),
     blanketterSru: generateBlanketterSru(declaration, now, identity12),
     generatedAt: now.toISOString(),
   }
@@ -203,7 +159,7 @@ export function generateNESRUSubmission(declaration: NEDeclaration): SRUSubmissi
 /** Get the ZIP filename for download. Uses the income year (fiscal year END) so the
  * filename matches the blankett type/identity for broken fiscal years. */
 export function getZipFilename(declaration: NEDeclaration): string {
-  const year = getIncomeYear(declaration.fiscalYear.end)
+  const year = sruIncomeYear(declaration.fiscalYear.end)
   const orgNumber = declaration.companyInfo.orgNumber?.replace(/\D/g, '') || 'unknown'
   return `NE_SRU_${orgNumber}_${year}.zip`
 }

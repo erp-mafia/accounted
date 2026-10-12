@@ -36,6 +36,7 @@ import { POST as unlockPeriod } from '../[id]/unlock/route'
 import { POST as closeExternal } from '../[id]/close-external/route'
 import { POST as reopenExternal } from '../[id]/reopen-external/route'
 import { POST as lockPeriodRoute } from '../[id]/lock/route'
+import { POST as closePeriodRoute } from '../[id]/close/route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -594,5 +595,44 @@ describe('a year an SIE import still holds', () => {
     const json = await res.json()
     expect(json.error.code).toBe('PERIOD_HAS_UNFINISHED_SIE_IMPORT')
     expect(writesTo(client, ['fiscal_periods', 'audit_log'])).toHaveLength(0)
+  })
+})
+
+// F1 (one classifyError): lock and close answer the code period-service
+// throws, the same one the dashboard and MCP answer. Before, each route matched
+// the service's message text and mapped it to CONFLICT or its own choice.
+describe('POST /lock and /close answer the service code', () => {
+  async function call(route: typeof lockPeriodRoute, action: 'lock' | 'close', row: Record<string, unknown>) {
+    const client = makeClient({ company_members: MEMBER, fiscal_periods: { data: periodRow(row), error: null } })
+    mockServiceClient.mockReturnValue(client)
+    const res = await route(request(`${BASE}/${PERIOD_ID}/${action}`, { method: 'POST' }), periodParams)
+    const json = await res.json()
+    return { status: res.status, code: json.error?.code as string, hint: json.error?.recovery_hint as string | undefined, client }
+  }
+
+  it.each([
+    ['lock', { locked_at: '2028-01-31T10:00:00Z' }, 409, 'PERIOD_LOCK_ALREADY_LOCKED'],
+    ['lock', { is_closed: true, locked_at: '2028-01-31T10:00:00Z' }, 409, 'PERIOD_ALREADY_CLOSED'],
+    ['close', { is_closed: true, locked_at: '2028-01-31T10:00:00Z' }, 409, 'PERIOD_ALREADY_CLOSED'],
+    ['close', {}, 400, 'PERIOD_NOT_LOCKED'],
+    ['close', { locked_at: '2028-01-31T10:00:00Z' }, 400, 'YEAR_END_NOT_RUN'],
+  ] as const)('%s on %j answers %i %s and writes nothing', async (action, row, status, code) => {
+    const result = await call(action === 'lock' ? lockPeriodRoute : closePeriodRoute, action, row)
+    expect(result.status).toBe(status)
+    expect(result.code).toBe(code)
+    expect(writesTo(result.client, ['fiscal_periods', 'audit_log'])).toHaveLength(0)
+  })
+
+  it('points a close before the year-end run at the year-end', async () => {
+    const result = await call(closePeriodRoute, 'close', { locked_at: '2028-01-31T10:00:00Z' })
+    expect(result.hint).toMatch(/year-end/)
+  })
+
+  it('answers 404 PERIOD_NOT_FOUND for a period the company does not have', async () => {
+    const client = makeClient({ company_members: MEMBER, fiscal_periods: { data: null, error: { code: 'PGRST116', message: 'no rows' } } })
+    mockServiceClient.mockReturnValue(client)
+    const res = await closePeriodRoute(request(`${BASE}/${PERIOD_ID}/close`, { method: 'POST' }), periodParams)
+    expect(res.status).toBe(404)
+    expect((await res.json()).error.code).toBe('PERIOD_NOT_FOUND')
   })
 })

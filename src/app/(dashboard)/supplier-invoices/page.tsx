@@ -8,16 +8,16 @@ import { groupRows } from '@/lib/lists/group-rows'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { FLOATING_BULK_BAR_CLASS } from '@/components/ui/floating-bulk-bar'
+import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
 import { Checkbox } from '@/components/ui/checkbox'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { DataListEmpty } from '@/components/ui/data-list'
-import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
-import { useRangeSelect } from '@/lib/hooks/use-range-select'
+import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS, HOVER_REVEAL_CLASS, SortableTh } from '@/components/ui/dry-table'
+import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { Plus, FileInput, Lock, ArrowUp, ArrowDown, ArrowUpDown, SlidersHorizontal } from 'lucide-react'
+import { Plus, FileInput, Lock, SlidersHorizontal } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -46,6 +46,7 @@ import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { FiscalPeriod, SupplierInvoice } from '@/types'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import { fetchPaymentsAvailability } from '@/components/payments/payments-client'
+import { supplierInvoiceStatusDisplay } from '@/lib/supplier-invoices/status-display'
 
 const NewSupplierInvoiceDialog = dynamic(
   () => import('@/components/supplier-invoices/NewSupplierInvoiceDialog'),
@@ -77,32 +78,6 @@ function isBatchSelectable(inv: SupplierInvoice): boolean {
   )
 }
 
-// One derivable chip per row (concept scene 21): Registrerad is the "waiting
-// for attest" state (outline), Godkänd the beige ready-to-pay state; paid is
-// the sage exception-free end state.
-// Chips mark exceptions (design.md convention 5): approved and paid are the
-// normal flow and render as muted text, the same rule as the detail header.
-// Only these deviating states get a chip.
-const EXCEPTION_STATUS_VARIANTS: Record<string, 'secondary' | 'outline' | 'warning' | 'destructive'> = {
-  registered: 'outline',
-  partially_paid: 'warning',
-  overdue: 'destructive',
-  disputed: 'warning',
-  credited: 'secondary',
-  reversed: 'secondary',
-}
-
-const STATUS_LABEL_KEYS: Record<string, string> = {
-  registered: 'status_registered',
-  approved: 'status_approved',
-  paid: 'status_paid',
-  partially_paid: 'status_partially_paid',
-  overdue: 'status_overdue',
-  disputed: 'status_disputed',
-  credited: 'status_credited',
-  reversed: 'status_reversed',
-}
-
 const TABS = ['all', 'registered', 'approved', 'to_pay', 'paid'] as const
 type ListTab = (typeof TABS)[number]
 
@@ -118,56 +93,6 @@ const TAB_LABEL_KEYS: Record<ListTab, string> = {
 // Like the verifikat list (and unlike /invoices, which starts unsorted), this
 // list has a meaningful default order (förfallodatum stigande from the API),
 // so the click cycle is tri-state: asc → desc → back to the default.
-interface SortableHeaderProps {
-  label: string
-  sortLabel: string
-  column: SupplierInvoiceListSortColumn
-  sort: SupplierInvoiceListSort | null
-  onSort: (column: SupplierInvoiceListSortColumn) => void
-  className?: string
-  align?: 'left' | 'right'
-}
-
-function SortableHeader({
-  label,
-  sortLabel,
-  column,
-  sort,
-  onSort,
-  className,
-  align = 'left',
-}: SortableHeaderProps) {
-  const active = sort?.column === column
-  const direction = active ? sort.direction : null
-  const SortIcon = direction === 'asc' ? ArrowUp : direction === 'desc' ? ArrowDown : ArrowUpDown
-
-  return (
-    <th
-      className={cn(TH_CLASS, className)}
-      aria-sort={direction === 'asc' ? 'ascending' : direction === 'desc' ? 'descending' : 'none'}
-    >
-      {/* Preflight sets text-transform: none on buttons, which would drop the
-          TH_CLASS uppercase idiom inside the sort control. */}
-      <button
-        type="button"
-        className={cn(
-          '-mx-2 inline-flex min-h-10 items-center gap-1 rounded-sm px-2 uppercase focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
-          align === 'right' && 'ml-auto justify-end',
-        )}
-        aria-label={sortLabel}
-        onClick={() => onSort(column)}
-      >
-        <span>{label}</span>
-        <SortIcon
-          aria-hidden="true"
-          className={cn('h-3.5 w-3.5 shrink-0', !active && 'text-muted-foreground/60')}
-        />
-      </button>
-    </th>
-  )
-}
-
-
 // Row grouping (same pattern as the customer invoice list): 'none' (the flat
 // list) is the default; the other modes are opt-in via ?group=, and 'status'
 // reproduces the payment-queue sections.
@@ -220,7 +145,6 @@ export default function SupplierInvoicesPage() {
   // the server confirms, so a double click cannot flip it twice.
   const [bankEnteringId, setBankEnteringId] = useState<string | null>(null)
   // Payment-file bulk selection + the "already in an active betalfil" chip map.
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   // Radix' onCheckedChange carries no mouse event: the preceding click records
   // whether shift was held, for range selection.
   const shiftHeld = useRef(false)
@@ -438,20 +362,14 @@ export default function SupplierInvoicesPage() {
   ).length
 
   const selectableInvoices = filteredInvoices.filter(isBatchSelectable)
-  const allSelectableSelected =
-    selectableInvoices.length > 0 && selectableInvoices.every((inv) => selectedIds.has(inv.id))
-
-  // Ranges walk the selectable rows in rendered order: sorted, then sectioned
-  // by the active grouping, which is what the user sees on screen.
-  const range = useRangeSelect({
-    visibleIds: orderedInvoices.filter(isBatchSelectable).map((inv) => inv.id),
-    selectedIds,
-    setSelectedIds,
-  })
-
-  function toggleSelect(id: string, extend?: boolean) {
-    range.toggle(id, extend)
-  }
+  // The selection is the payable invoices of the current tab, filter and
+  // search: a row they hide leaves it (useBulkSelection). Ranges walk the
+  // rows in rendered order: sorted, then sectioned by the active grouping.
+  const selection = useBulkSelection(
+    selectableInvoices.map((inv) => inv.id),
+    { rangeIds: orderedInvoices.filter(isBatchSelectable).map((inv) => inv.id) },
+  )
+  const { selectedIds, toggle: toggleSelect } = selection
 
   // Labels the excluded rows in the payment dialog ("Derome CD3014794407"),
   // so a server-side exclusion never reads as a bare UUID. An invoice without
@@ -464,7 +382,7 @@ export default function SupplierInvoicesPage() {
   )
 
   const handleBatchCreated = () => {
-    setSelectedIds(new Set())
+    selection.clear()
     fetchInvoices()
     fetchActiveBatchMembership()
   }
@@ -485,7 +403,7 @@ export default function SupplierInvoicesPage() {
 
   // Drafts made, approved or sent to the bank: the list and the chips move.
   const handleBankPaymentDone = () => {
-    setSelectedIds(new Set())
+    selection.clear()
     fetchInvoices()
     fetchActiveBatchMembership()
   }
@@ -651,44 +569,22 @@ export default function SupplierInvoicesPage() {
       </div>
 
       {/* Bulkbar: appears once anything is selected (transactions-page shape). */}
-      {selectedIds.size > 0 && (
-        <div className={FLOATING_BULK_BAR_CLASS}>
-          <span className="whitespace-nowrap">
-            <strong className="font-semibold tabular-nums">{selectedIds.size}</strong>{' '}
-            {t('bulkbar_selected', { count: selectedIds.size })}
-          </span>
-          {bankPaymentsAvailable && (
-            <Button size="sm" onClick={() => setShowPayViaBankDialog(true)}>
-              {t('bulk_pay_via_bank')}
-            </Button>
-          )}
-          <Button size="sm" variant={bankPaymentsAvailable ? 'outline' : 'default'} onClick={() => setShowPaymentDialog(true)}>
-            {t('bulk_create_file')}
+      <BulkSelectionBar
+        selection={selection}
+        selectableCount={selectableInvoices.length}
+        countLabel={t('bulkbar_selected', { count: selectedIds.size })}
+        selectAllLabel={t('bulk_select_all', { count: selectableInvoices.length })}
+        clearLabel={t('bulk_clear')}
+      >
+        {bankPaymentsAvailable && (
+          <Button size="sm" onClick={() => setShowPayViaBankDialog(true)}>
+            {t('bulk_pay_via_bank')}
           </Button>
-          {!allSelectableSelected && (
-            <button
-              type="button"
-              className={QUIET_LINK_CLASS}
-              onClick={() => {
-                setSelectedIds(new Set(selectableInvoices.map((inv) => inv.id)))
-                range.resetAnchor()
-              }}
-            >
-              {t('bulk_select_all', { count: selectableInvoices.length })}
-            </button>
-          )}
-          <button
-            type="button"
-            className={QUIET_LINK_CLASS}
-            onClick={() => {
-              setSelectedIds(new Set())
-              range.resetAnchor()
-            }}
-          >
-            {t('bulk_clear')}
-          </button>
-        </div>
-      )}
+        )}
+        <Button size="sm" variant={bankPaymentsAvailable ? 'outline' : 'default'} onClick={() => setShowPaymentDialog(true)}>
+          {t('bulk_create_file')}
+        </Button>
+      </BulkSelectionBar>
 
       {isLoading ? (
         <div className="space-y-3">
@@ -733,66 +629,57 @@ export default function SupplierInvoicesPage() {
             <thead>
               <tr>
                 {canWrite && <th className={cn(TH_CLASS, 'w-[26px] !pl-1')} aria-hidden="true"></th>}
-                <SortableHeader
+                <SortableTh
                   label={t('th_supplier')}
-                  sortLabel={t('sort_by', { column: t('th_supplier') })}
-                  column="supplier"
-                  sort={sort}
-                  onSort={updateSort}
                   className="w-full"
+                  direction={sort?.column === 'supplier' ? sort.direction : null}
+                  onSort={() => updateSort('supplier')}
                 />
-                <SortableHeader
+                <SortableTh
                   label={t('th_invoice_number')}
-                  sortLabel={t('sort_by', { column: t('th_invoice_number') })}
-                  column="number"
-                  sort={sort}
-                  onSort={updateSort}
+                  direction={sort?.column === 'number' ? sort.direction : null}
+                  onSort={() => updateSort('number')}
                 />
-                <SortableHeader
+                <SortableTh
                   label={t('th_due_date')}
-                  sortLabel={t('sort_by', { column: t('th_due_date') })}
-                  column="due"
-                  sort={sort}
-                  onSort={updateSort}
                   className="hidden text-right sm:table-cell"
                   align="right"
+                  direction={sort?.column === 'due' ? sort.direction : null}
+                  onSort={() => updateSort('due')}
                 />
-                <SortableHeader
+                <SortableTh
                   label={t('th_amount')}
-                  sortLabel={t('sort_by', { column: t('th_amount') })}
-                  column="amount"
-                  sort={sort}
-                  onSort={updateSort}
                   className="text-right"
                   align="right"
+                  direction={sort?.column === 'amount' ? sort.direction : null}
+                  onSort={() => updateSort('amount')}
                 />
-                <SortableHeader
+                <SortableTh
                   label={t('th_remaining')}
-                  sortLabel={t('sort_by', { column: t('th_remaining') })}
-                  column="remaining"
-                  sort={sort}
-                  onSort={updateSort}
                   className="hidden text-right lg:table-cell"
                   align="right"
+                  direction={sort?.column === 'remaining' ? sort.direction : null}
+                  onSort={() => updateSort('remaining')}
                 />
-                <SortableHeader
+                <SortableTh
                   label={t('th_status')}
-                  sortLabel={t('sort_by', { column: t('th_status') })}
-                  column="status"
-                  sort={sort}
-                  onSort={updateSort}
+                  direction={sort?.column === 'status' ? sort.direction : null}
+                  onSort={() => updateSort('status')}
                 />
                 <th className={cn(TH_CLASS, 'w-[108px]')} aria-hidden="true"></th>
               </tr>
             </thead>
             <tbody className="stagger-enter">
               {orderedInvoices.map((inv, rowIndex) => {
-                const chipVariant = EXCEPTION_STATUS_VARIANTS[inv.status]
+                // One chip per row, the same as the detail header and the
+                // supplier page (lib/supplier-invoices/status-display.ts).
+                const statusDisplay = supplierInvoiceStatusDisplay(inv.status)
+                const chipVariant = statusDisplay?.chip ?? undefined
                 const chipLabel =
                   inv.status === 'paid' && inv.paid_at
                     ? t('status_paid_date', { date: formatDate(inv.paid_at) })
-                    : STATUS_LABEL_KEYS[inv.status]
-                      ? t(STATUS_LABEL_KEYS[inv.status])
+                    : statusDisplay
+                      ? t(statusDisplay.labelKey)
                       : inv.status
                 // Aged-but-unapproved invoices sit on 'overdue' (the cron flips
                 // them there), so attest keys off approved_at, not the status.

@@ -2,6 +2,7 @@ import type { PayrollConfig } from './payroll-config'
 import type { TaxTableRate } from './tax-tables'
 import { lookupTaxAmount, calculateJamkningTax, calculateSidoinkomstTax } from './tax-tables'
 import { calculateAgeAtYearStart, decryptPersonnummer } from './personnummer'
+import { avgiftAgeTier } from './avgift-tier'
 import { TAX_FREE_REIMBURSEMENT_TYPES } from './account-mapping'
 import { resolveVacationPayRate } from './vacation-pay-rate'
 import type { SalaryCalculationPolicy } from './calculation-policy'
@@ -976,10 +977,12 @@ export function calculateAvgifterRate(
   }
 
   const ageAtYearStart = calculateAgeAtYearStart(pnr, paymentYear)
+  // The age tier the vacation year close shares (avgift-tier.ts).
+  const tier = avgiftAgeTier(pnr, paymentYear, config.reducedAvgiftAge)
 
   // Born ≤1937: 0%
   const birthYear = parseInt(pnr.slice(0, 4))
-  if (birthYear <= 1937) {
+  if (tier === 'exempt') {
     steps.push({
       label: 'Avgiftskategori',
       formula: 'Född 1937 eller tidigare: inga arbetsgivaravgifter',
@@ -990,7 +993,7 @@ export function calculateAvgifterRate(
   }
 
   // 67+ at year start (reduced: only ålderspension)
-  if (ageAtYearStart >= config.reducedAvgiftAge) {
+  if (tier === 'reduced') {
     steps.push({
       label: 'Avgiftskategori',
       formula: `Ålder ${ageAtYearStart} år: reducerad avgift ${fmtPct(config.avgifterReduced65plus)} (endast ålderspensionsavgift)`,

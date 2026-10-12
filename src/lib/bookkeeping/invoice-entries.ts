@@ -1,6 +1,7 @@
 import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import { createJournalEntry, findFiscalPeriod } from './engine'
 import { coerceDimensionsBag } from './dimension-resolver'
+import { fxDifferenceLine } from './ore-rounding'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -243,24 +244,9 @@ export function buildInvoicePaymentLines(
       line_description: desc,
     })
 
-    // Exchange rate difference
-    if (exchangeRateDifference > 0) {
-      // Gain: Credit 3960 (received more than booked)
-      lines.push({
-        account_number: '3960',
-        debit_amount: 0,
-        credit_amount: Math.round(exchangeRateDifference * 100) / 100,
-        line_description: 'Valutakursvinst',
-      })
-    } else {
-      // Loss: Debit 7960 (received less than booked)
-      lines.push({
-        account_number: '7960',
-        debit_amount: Math.round(Math.abs(exchangeRateDifference) * 100) / 100,
-        credit_amount: 0,
-        line_description: 'Valutakursförlust',
-      })
-    }
+    // Exchange rate difference: received more than booked is a gain (Cr 3960),
+    // less a loss (Dr 7960).
+    lines.push(fxDifferenceLine(exchangeRateDifference))
   } else {
     // Standard SEK payment or no exchange rate difference
     lines.push(

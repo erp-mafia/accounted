@@ -8,6 +8,7 @@ import {
 } from '@/lib/bookkeeping/vat-entries'
 import { rcBasisAccountRate } from '@/lib/reports/vat-filing-gate'
 import { roundOre } from '@/lib/money'
+import { grossVat, treatmentForRate } from '@/lib/vat/gross-split'
 
 /**
  * Prefix for library template ids when they are mapped into the
@@ -49,7 +50,7 @@ export function applyTemplate(
         ? // Self-assessed VAT on top of the base (the total)
           roundOre(totalAmount * line.vat_rate)
         : // VAT extracted from the total inclusive amount
-          roundOre(totalAmount * line.vat_rate / (1 + line.vat_rate))
+          grossVat(totalAmount, line.vat_rate)
     } else if (line.type === 'settlement') {
       amount = Math.round(totalAmount * (line.ratio ?? 1) * 100) / 100
     } else {
@@ -85,13 +86,6 @@ export const SCOPE_LABELS: Record<ReturnType<typeof getTemplateScope>, string> =
   system: 'Standard',
   team: 'Team',
   company: 'Företag',
-}
-
-function vatRateToTreatment(rate: number): VatTreatment | null {
-  if (rate === 0.25) return 'standard_25'
-  if (rate === 0.12) return 'reduced_12'
-  if (rate === 0.06) return 'reduced_6'
-  return null
 }
 
 /**
@@ -130,7 +124,7 @@ export function convertLibraryToBookingTemplate(
     const inputVat = vat.find((v) => v.side === 'debit' && v.vat_rate)
       ?? vat.find((v) => v.vat_rate)
     if (inputVat?.vat_rate) {
-      const treatment = vatRateToTreatment(inputVat.vat_rate)
+      const treatment = treatmentForRate(inputVat.vat_rate)
       if (treatment) {
         vatTreatment = treatment
         vatRate = inputVat.vat_rate

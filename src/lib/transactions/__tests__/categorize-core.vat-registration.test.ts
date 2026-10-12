@@ -40,6 +40,20 @@ vi.mock('@/lib/processing-history/append', () => ({
   appendProcessingHistory: vi.fn().mockResolvedValue(undefined),
 }))
 
+// The service's own checks that have their own tests: the chart
+// pre-validation, the period-lock pre-check and the merchant-rule learning.
+vi.mock('@/lib/bookkeeping/account-validation', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/account-validation')>()),
+  findUnresolvableAccounts: vi.fn().mockResolvedValue([]),
+}))
+vi.mock('@/lib/bookkeeping/mapping-engine', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/mapping-engine')>()),
+  saveUserMappingRule: vi.fn().mockResolvedValue(undefined),
+}))
+vi.mock('@/lib/api/v1/check-period-lock', () => ({
+  checkPeriodLock: vi.fn().mockResolvedValue({ locked: false }),
+}))
+
 import { categorizeMatchedTransaction } from '../categorize-core'
 
 const TX_ID = '00000000-0000-4000-8000-0000000000dd'

@@ -151,8 +151,8 @@ export interface EndpointDefinition {
   }
 
   /**
-   * Required scope; 'authenticated' for an endpoint any valid key may call
-   * (V1_AUTHENTICATED_ENDPOINTS); null for public endpoints.
+   * Required scope, read by withApiV1 on every request; 'authenticated' for
+   * an endpoint any valid key may call; null for a public endpoint.
    */
   scope: V1RequiredScope | null
 
@@ -214,9 +214,9 @@ const ENDPOINTS = new Map<string, EndpointDefinition>()
  *     ...
  *   })
  *
- * The wrapper does not depend on registration: scope resolution lives in
- * `lib/auth/scopes.ts` so a missing register() call only affects docs, not
- * runtime auth. CI test asserts every wrapped route appears in the registry.
+ * The definition is also the route's runtime contract: withApiV1 reads the
+ * required scope from it (getEndpointForOperation), so a route that never
+ * registers answers NOT_FOUND to every caller instead of running unscoped.
  */
 export function registerEndpoint(def: EndpointDefinition): void {
   const key = `${def.method} ${def.path}`
@@ -227,6 +227,18 @@ export function registerEndpoint(def: EndpointDefinition): void {
     console.warn(`[api/v1/registry] duplicate endpoint registration: ${key}`)
   }
   ENDPOINTS.set(key, def)
+}
+
+/**
+ * The endpoint a withApiV1 handler serves: its operation id and the request's
+ * method. The route module registered it at load, before any request reached
+ * the handler. Undefined for a handler whose route never registered.
+ */
+export function getEndpointForOperation(operation: string, method: string): EndpointDefinition | undefined {
+  for (const def of ENDPOINTS.values()) {
+    if (def.operation === operation && def.method === method) return def
+  }
+  return undefined
 }
 
 export function listEndpoints(): EndpointDefinition[] {

@@ -159,7 +159,6 @@ const MatchVoucherDialog = dynamic(
   { loading: DialogLoadingSkeleton },
 )
 const InvoicePicker = dynamic(() => import('@/components/transactions/InvoicePicker'), { loading: InlineDialogContentLoading })
-const SupplierInvoicePicker = dynamic(() => import('@/components/transactions/SupplierInvoicePicker'), { loading: InlineDialogContentLoading })
 const MatchAllocationDialog = dynamic(() => import('@/components/transactions/MatchAllocationDialog'), { loading: DialogLoadingSkeleton })
 const BulkBookDialog = dynamic(() => import('@/components/transactions/BulkBookDialog'), { loading: DialogLoadingSkeleton })
 const TransactionBookingDialog = dynamic(() => import('@/components/transactions/TransactionBookingDialog'), { loading: DialogLoadingSkeleton })
@@ -4916,7 +4915,7 @@ export default function TransactionsPage() {
       >
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Matcha med leverantörsfaktura</DialogTitle>
+            <DialogTitle>{t('dialog_pick_supplier_invoice')}</DialogTitle>
           </DialogHeader>
           {supplierInvoicePickerTransaction && (
             <>
@@ -4926,7 +4925,8 @@ export default function TransactionsPage() {
                   {formatCurrency(supplierInvoicePickerTransaction.amount, supplierInvoicePickerTransaction.currency)}
                 </span>
               </div>
-              <SupplierInvoicePicker
+              <InvoicePicker
+                kind="supplier"
                 transaction={supplierInvoicePickerTransaction}
                 onSelect={handleSelectSupplierInvoiceFromPicker}
               />
@@ -5067,7 +5067,7 @@ export default function TransactionsPage() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{t('dialog_match_supplier_invoice')}</DialogTitle>
+            <DialogTitle>{t('dialog_pick_supplier_invoice')}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">

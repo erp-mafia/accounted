@@ -10,7 +10,7 @@
  * reachable company the role and whether the company gate lets a write
  * through (`companyWriteRefusal`, shared with the gate itself).
  *
- * Any valid key may call it, whatever its scopes (V1_AUTHENTICATED_ENDPOINTS):
+ * Any valid key may call it, whatever its scopes (its endpoint declares scope 'authenticated'):
  * a key missing a scope must still be able to learn which one it misses.
  * It returns company ids and roles only, never names or org numbers, which
  * stay behind companies:read on GET /api/v1/companies. Echoing a grant to

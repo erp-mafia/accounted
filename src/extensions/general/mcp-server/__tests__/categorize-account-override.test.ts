@@ -20,13 +20,23 @@ vi.mock('@/lib/transactions/booking-duplicate-detection', () => ({
   detectBookingDuplicate: (...args: unknown[]) => mockDetectDup(...args),
 }))
 
+// The booking service's chart pre-validation and period-lock pre-check have
+// their own tests; complete and open here.
+vi.mock('@/lib/bookkeeping/account-validation', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/account-validation')>()),
+  findUnresolvableAccounts: vi.fn().mockResolvedValue([]),
+}))
+vi.mock('@/lib/api/v1/check-period-lock', () => ({
+  checkPeriodLock: vi.fn().mockResolvedValue({ locked: false }),
+}))
+
 import { tools } from '../server'
 
 const categorize = tools.find((t) => t.name === 'gnubok_categorize_transaction')!
 
 const TX_ID = '00000000-0000-4000-8000-0000000000bb'
 
-/** `transactions` row for categorizeTransactionCore's select('*'). Synthetic. */
+/** `transactions` row for the booking service's read. Synthetic. */
 const coreTxRow = (over: Record<string, unknown> = {}) => ({
   id: TX_ID,
   date: '2026-07-10',
@@ -40,19 +50,6 @@ const coreTxRow = (over: Record<string, unknown> = {}) => ({
   document_id: null,
   journal_entry_id: null,
   is_business: true,
-  ...over,
-})
-
-/** The narrower projection the tool re-fetches for the guard + title. */
-const guardTxRow = (over: Record<string, unknown> = {}) => ({
-  description: 'SECOND HAND BUTIK',
-  merchant_name: null,
-  amount: -479,
-  currency: 'SEK',
-  amount_sek: -479,
-  exchange_rate: 1,
-  date: '2026-07-10',
-  cash_account_id: null,
   ...over,
 })
 
@@ -144,7 +141,6 @@ describe('gnubok_categorize_transaction: account_override', () => {
     enqueue({ data: settingsRow }) // core: company_settings
     enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: { account_number: '4020', account_class: 4, is_active: true } }) // override chart hit
-    enqueue({ data: guardTxRow() }) // tool: transactions re-fetch
     enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
     enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
     enqueue({ data: { id: 'op-override-1' } }) // pending_operations insert

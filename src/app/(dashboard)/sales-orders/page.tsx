@@ -11,7 +11,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { ContextPicker } from '@/components/common/ContextPicker'
-import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS, SHOW_MORE_STEP, ShowMoreFooter } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
@@ -26,7 +26,6 @@ import type { SalesOrder, SalesOrderStatus } from '@/types'
 
 const ALL = 'all'
 const STATUSES: SalesOrderStatus[] = ['draft', 'confirmed', 'completed', 'cancelled']
-const INITIAL_VISIBLE_ROWS = 100
 
 function isStatus(value: string | null): value is SalesOrderStatus {
   return !!value && (STATUSES as string[]).includes(value)
@@ -34,7 +33,6 @@ function isStatus(value: string | null): value is SalesOrderStatus {
 
 function SalesOrdersPageInner() {
   const t = useTranslations('sales_orders')
-  const tCommon = useTranslations('common')
   const errorLocale = useLocale() as ErrorLocale
   const { canWrite } = useCanWrite()
   const { toast } = useToast()
@@ -48,11 +46,11 @@ function SalesOrdersPageInner() {
   const [orders, setOrders] = useState<SalesOrder[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
-  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ROWS)
+  const [visibleCount, setVisibleCount] = useState(SHOW_MORE_STEP)
 
   const updateStatus = useCallback(
     (next: string) => {
-      setVisibleCount(INITIAL_VISIBLE_ROWS)
+      setVisibleCount(SHOW_MORE_STEP)
       const params = new URLSearchParams(searchParams.toString())
       if (next === ALL) params.delete('status')
       else params.set('status', next)
@@ -142,7 +140,7 @@ function SalesOrdersPageInner() {
           value={searchTerm}
           onChange={(e) => {
             setSearchTerm(e.target.value)
-            setVisibleCount(INITIAL_VISIBLE_ROWS)
+            setVisibleCount(SHOW_MORE_STEP)
           }}
         />
       </div>
@@ -243,17 +241,11 @@ function SalesOrdersPageInner() {
             {t('count_footer', { count: filtered.length })}
           </p>
 
-          {visibleCount < filtered.length && (
-            <div className="flex justify-center">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setVisibleCount((count) => count + INITIAL_VISIBLE_ROWS)}
-              >
-                {tCommon('load_more')}
-              </Button>
-            </div>
-          )}
+          <ShowMoreFooter
+            shown={visibleCount}
+            total={filtered.length}
+            onMore={() => setVisibleCount((count) => count + SHOW_MORE_STEP)}
+          />
         </>
       )}
     </div>

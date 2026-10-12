@@ -12,8 +12,8 @@
  *   rather than assuming it is line 0.
  * - Fields may be double-quoted and a quoted "Text" field can itself contain a
  *   semicolon, so we use the quote-aware parseCSVLine rather than split(';').
- * - Negative amounts may use a Unicode minus (U+2212) or dash; normalizeMinusSign
- *   maps those to ASCII '-' so parseFloat does not return NaN.
+ * - Negative amounts may use a Unicode minus (U+2212) or dash; parseSwedishAmount
+ *   (lib/money.ts, shared by every importer) reads those as the sign.
  * - Filter rows with "Prel" prefix (preliminary/pending transactions).
  * - Of the two date columns we emit Reskontradatum, the booking date; see the
  *   primaryDateIdx comment below for why the transaction date is wrong here.
@@ -23,16 +23,11 @@ import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFi
 import { prepareContent } from '../../shared/encoding'
 import { normalizeDate } from '../date-utils'
 import { parseCSVLine } from './nordea'
-import { normalizeMinusSign } from './generic-csv'
+import { parseSwedishAmount } from '@/lib/money'
 
 // How many leading lines to scan for the header (allows for a metadata preamble)
 const HEADER_SCAN_LIMIT = 15
 
-function parseCommaDecimal(value: string): number {
-  // Swedish format "1 234,56" / "-1 234,56", tolerating Unicode minus on negatives
-  const cleaned = normalizeMinusSign(value).replace(/\s/g, '').replace(',', '.')
-  return parseFloat(cleaned)
-}
 
 /**
  * Check if a line is the Handelsbanken transaction header: semicolon-delimited
@@ -157,7 +152,7 @@ export const handelsbankenFormat: BankFileFormat = {
         continue
       }
 
-      const amount = parseCommaDecimal(amountStr)
+      const amount = parseSwedishAmount(amountStr) ?? NaN
       if (isNaN(amount)) {
         issues.push({ row: i + 1, message: `Invalid amount: ${amountStr}`, severity: 'warning' })
         skippedRows++
@@ -171,7 +166,7 @@ export const handelsbankenFormat: BankFileFormat = {
         continue
       }
 
-      const balance = balanceStr ? parseCommaDecimal(balanceStr) : null
+      const balance = balanceStr ? (parseSwedishAmount(balanceStr) ?? NaN) : null
 
       transactions.push({
         date: normalizedDate,

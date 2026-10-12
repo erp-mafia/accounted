@@ -41,7 +41,8 @@ import { resolveVacationPayRate } from './vacation-pay-rate'
 import { getVacationYearBounds, type VacationYearBasis } from './vacation-year'
 import { getVacationYearBasis, syncVacationLedgerForEmployees, type VacationBalanceRow } from './vacation-ledger'
 import { remainingSavedDays } from './vacation-category'
-import { calculateAgeAtYearStart, decryptPersonnummer } from './personnummer'
+import { decryptPersonnummer } from './personnummer'
+import { avgiftAgeTier } from './avgift-tier'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
@@ -190,12 +191,11 @@ function avgifterRateFor(emp: EmployeeRosterRow, settlementYear: number): number
   } catch {
     return STANDARD_AVGIFTER_RATE
   }
-  const birthYear = parseInt(pnr.slice(0, 4))
-  if (!Number.isFinite(birthYear)) return STANDARD_AVGIFTER_RATE
-  if (birthYear <= 1937) return 0
-  if (calculateAgeAtYearStart(pnr, settlementYear) >= REDUCED_AVGIFT_AGE) {
-    return REDUCED_AVGIFTER_RATE
-  }
+  // The engine's own tier (avgift-tier.ts), so the 2940 target uses the
+  // rates the per-run accruals booked.
+  const tier = avgiftAgeTier(pnr, settlementYear, REDUCED_AVGIFT_AGE)
+  if (tier === 'exempt') return 0
+  if (tier === 'reduced') return REDUCED_AVGIFTER_RATE
   return STANDARD_AVGIFTER_RATE
 }
 

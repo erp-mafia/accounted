@@ -19,6 +19,7 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 import { cn } from '@/lib/utils'
 import { formatQty, todayIso } from '@/components/sales-orders/labels'
 import type { SalesOrder, SalesOrderItem } from '@/types'
+import { parseDecimalInput } from '@/lib/money'
 
 interface RegisterDeliveryDialogProps {
   open: boolean
@@ -80,7 +81,7 @@ export default function RegisterDeliveryDialog({
           delivery_date: deliveryDate || undefined,
           lines: lines.map((item) => ({
             sales_order_item_id: item.id,
-            delivered_qty: Math.max(0, parseFloat((quantities[item.id] ?? '0').replace(',', '.')) || 0),
+            delivered_qty: Math.max(0, parseDecimalInput(quantities[item.id] ?? '0') ?? 0),
           })),
         }),
       })

@@ -12,9 +12,7 @@ import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
-import { roundOre } from '@/lib/money'
-import { dayValueSek, type DayValueEmployee } from '@/lib/salary/semesterberedning'
-import { remainingSavedDays, sumDays } from '@/lib/salary/vacation-category'
+import { readVacationBalance } from '@/lib/salary/vacation-balance'
 
 const VacationBalanceResponse = z.object({
   employee_vacation_balance_id: z.string().uuid(),
@@ -85,83 +83,20 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
       })
     }
 
-    const { data: employee, error: empErr } = await ctx.supabase
-      .from('employees')
-      .select('id, vacation_rule, vacation_days_per_year, vacation_pay_rate, semestertillagg_rate, salary_type, monthly_salary, employment_degree, hourly_rate, hours_per_week, workdays_per_week')
-      .eq('id', idParse.data)
-      .eq('company_id', ctx.companyId!)
-      .maybeSingle()
-    if (empErr) {
-      return v1ErrorResponse(empErr, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!employee) {
-      return v1ErrorResponseFromCode('EMPLOYEE_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
-    }
-
-    const { data: balance, error: balErr } = await ctx.supabase
-      .from('employee_vacation_balances')
-      .select('id, employee_id, vacation_year_start, entitled_days, accrued_days, taken_days, saved_days, forced_payout_days, unpaid_days, advance_days, saved_days_taken')
-      .eq('company_id', ctx.companyId!)
-      .eq('employee_id', idParse.data)
-      .eq('status', 'open')
-      .order('vacation_year_start', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-    if (balErr) {
-      return v1ErrorResponse(balErr, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!balance) {
-      return v1ErrorResponseFromCode('VACATION_BALANCE_NOT_FOUND', ctx.log, {
+    // The read and the SEK estimate are lib/salary/vacation-balance.ts,
+    // shared with the MCP tool gnubok_get_vacation_balance.
+    const result = await readVacationBalance(ctx.supabase, {
+      companyId: ctx.companyId!,
+      employeeId: idParse.data,
+    })
+    if (!result.ok) {
+      if (result.code === 'INTERNAL_ERROR') return v1ErrorResponse(result.cause, ctx.log, { requestId: ctx.requestId })
+      return v1ErrorResponseFromCode(result.code, ctx.log, {
         requestId: ctx.requestId,
-        details: { employee_id: idParse.data },
+        ...(result.code === 'VACATION_BALANCE_NOT_FOUND' ? { details: { employee_id: idParse.data } } : {}),
       })
     }
 
-    const row = balance as {
-      id: string
-      employee_id: string
-      vacation_year_start: string
-      entitled_days: number
-      accrued_days: number
-      taken_days: number
-      saved_days: Record<string, number> | null
-      forced_payout_days: number
-      unpaid_days?: number | null
-      advance_days?: number | null
-      saved_days_taken?: Record<string, number> | null
-    }
-    // Sparade dagar still held: the seeded years minus what 'saved' vacation
-    // lines consumed this year (a company without categorized lines sees the
-    // seed unchanged).
-    const savedTaken = row.saved_days_taken ?? {}
-    const savedDays = remainingSavedDays(row.saved_days ?? {}, savedTaken)
-    const savedTotal = sumDays(savedDays)
-    const remaining = roundOre(row.entitled_days - row.taken_days)
-
-    // The same simplified BFNAR 2016:10 day valuation the year-close and the
-    // MCP vacation-balance tool use (one definition, so a kollektivavtal
-    // semesterlön rate reaches all three).
-    const dayValue = dayValueSek(employee as DayValueEmployee)
-    const estimatedLiability = roundOre(Math.max(0, remaining + savedTotal) * dayValue)
-
-    return ok(
-      {
-        employee_vacation_balance_id: row.id,
-        employee_id: row.employee_id,
-        vacation_year_start: row.vacation_year_start,
-        entitled_days: row.entitled_days,
-        accrued_days: row.accrued_days,
-        taken_days: row.taken_days,
-        remaining_days: remaining,
-        saved_days: savedDays,
-        saved_days_total: savedTotal,
-        saved_days_taken: savedTaken,
-        unpaid_days: row.unpaid_days ?? 0,
-        advance_days: row.advance_days ?? 0,
-        forced_payout_days: row.forced_payout_days,
-        estimated_liability_sek: estimatedLiability,
-      },
-      { requestId: ctx.requestId },
-    )
+    return ok(result.data, { requestId: ctx.requestId })
   },
 )

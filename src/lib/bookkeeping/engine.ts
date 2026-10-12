@@ -39,7 +39,7 @@ import {
   isDimensionValidationExemptSource,
 } from '@/lib/bookkeeping/dimension-rules'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
-import { creditNatural } from '@/lib/bookkeeping/line-side'
+import { buildStornoLines } from '@/lib/bookkeeping/line-side'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { syncInvoiceStatusFromPaymentEntry, isPaymentSourceType } from '@/lib/bookkeeping/payment-sync'
 import { syncRotRutReclaimAfterReversal } from '@/lib/invoices/rot-rut-reclaim-reversal'
@@ -1818,18 +1818,15 @@ export async function reverseEntry(
 
   const lines = (original.lines as JournalEntryLine[]) || []
 
-  // Create reversed lines (swap debit and credit, preserve dimensions). The
-  // swap runs on the line's NET so a legacy negative-side line (debit -0.25,
-  // booked before the non-negative CHECK) reverses to a well-formed positive
-  // line on the opposite side instead of copying the bad sign into the storno.
-  const reversedLines: CreateJournalEntryLineInput[] = lines.map((line) => ({
+  // Create reversed lines (buildStornoLines: the opposite side, swapped on
+  // the line's net), preserving dimensions.
+  const reversedLines: CreateJournalEntryLineInput[] = buildStornoLines(lines).map(({ line, ...storno }) => ({
     account_number: line.account_number,
-    ...creditNatural((line.debit_amount || 0) - (line.credit_amount || 0)),
+    debit_amount: storno.debit_amount,
+    credit_amount: storno.credit_amount,
     line_description: `Reversal: ${line.line_description || ''}`,
     currency: line.currency,
-    amount_in_currency: line.amount_in_currency
-      ? -line.amount_in_currency
-      : undefined,
+    amount_in_currency: storno.amount_in_currency ?? undefined,
     exchange_rate: line.exchange_rate || undefined,
     tax_code: line.tax_code || undefined,
     dimensions: line.dimensions || undefined,

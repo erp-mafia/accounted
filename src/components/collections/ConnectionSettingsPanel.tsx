@@ -18,6 +18,7 @@ import { validateRulesStep, type ActivationErrorKey } from '@/lib/collections/ac
 import type { CollectionConnectionView } from '@/lib/collections/connection'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { collectionsAction, useCollectionsWords, type CollectionsSettingsData } from './collections-client'
+import { parseDecimalInput } from '@/lib/money'
 
 /**
  * An active connection: its rules (the two approvals locked on), delivery
@@ -46,7 +47,10 @@ function formOf(connection: CollectionConnectionView): RulesForm {
   }
 }
 
-const toNumber = (value: string): number => Number(value.replace(/\s/g, '').replace(',', '.'))
+// Empty reads as 0, as Number('') did; text that is no number stays NaN for the
+// server's validation to name.
+const toNumber = (value: string): number =>
+  value.trim() === '' ? 0 : (parseDecimalInput(value) ?? Number.NaN)
 
 interface Props {
   data: CollectionsSettingsData

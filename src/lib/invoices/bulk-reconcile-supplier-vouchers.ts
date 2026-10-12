@@ -35,6 +35,7 @@ import {
   type SupplierVoucherCandidate,
 } from './supplier-voucher-matching'
 import type { SupplierInvoice, Supplier } from '@/types'
+import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
 
 const log = createLogger('bulk-reconcile-supplier-vouchers')
 
@@ -57,9 +58,6 @@ const AUTO_LINK_MIN_MARGIN = 0.1
 const AMOUNT_TOLERANCE = 0.005
 /** Safety cap on invoices processed in a single run (Vercel 300s budget). */
 const DEFAULT_MAX_INVOICES = 2000
-
-/** Supplier-invoice statuses that represent an open payable. */
-const PAYABLE_STATUSES = ['registered', 'approved', 'overdue', 'partially_paid']
 
 type ReconcileInvoiceRow = SupplierInvoice & {
   is_credit_note?: boolean | null
@@ -166,7 +164,7 @@ export async function reconcileSupplierInvoiceVouchers(
         .from('supplier_invoices')
         .select(SELECT_COLUMNS)
         .eq('company_id', companyId)
-        .in('status', PAYABLE_STATUSES)
+        .in('status', [...MATCHABLE_SUPPLIER_INVOICE_STATUSES])
       if (opts.invoiceIds) query = query.in('id', opts.invoiceIds)
       return query
         .order('due_date', { ascending: true })

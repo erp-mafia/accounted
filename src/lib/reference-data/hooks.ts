@@ -27,6 +27,7 @@ import useSWR, { type SWRConfiguration } from 'swr'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type {
   Article,
+  Employee,
   BASAccount,
   Customer,
   FiscalPeriod,
@@ -35,13 +36,16 @@ import type {
 import type { DimensionDto } from '@/components/dimensions/types'
 import type { CashAccountWithBank } from '@/lib/cash-accounts/labels'
 import { refKeys } from './keys'
+import { missingKeepId, withKeptRow } from './keep-row'
 import {
   fetchAccounts,
   fetchArticles,
   fetchBookingTemplates,
   fetchCashAccounts,
+  fetchCustomer,
   fetchCustomers,
   fetchDimensions,
+  fetchEmployees,
   fetchFiscalPeriods,
   fetchSuppliers,
   type BookingTemplateWithUsage,
@@ -136,16 +140,49 @@ export function useBookingTemplates(): ReferenceListState & { templates: Booking
   return { templates: items, ...state }
 }
 
-export function useCustomers(): ReferenceListState & { customers: Customer[] } {
+/**
+ * The company's customers. /api/customers leaves archived customers out, so a
+ * form editing a draft, schedule, order or deadline that points at one passes
+ * its id as `keepId`: that one customer is fetched on its own and kept in the
+ * list (CustomerCombobox's `keepId` then keeps it selectable), or the picker
+ * would render blank.
+ */
+export function useCustomers(
+  options: { keepId?: string | null } = {},
+): ReferenceListState & { customers: Customer[] } {
   const companyId = useActiveCompanyId()
   const { items, ...state } = useReferenceList(refKeys.customers(companyId), () => fetchCustomers())
-  return { customers: items, ...state }
+  const { data: kept } = useSWR<Customer | null>(
+    refKeys.customer(companyId, missingKeepId(items, options.keepId, state.isLoading)),
+    ([, , id]: readonly [string, string, string]) =>
+      // A customer that no longer resolves simply leaves the picker unselected.
+      fetchCustomer(id).catch(() => null),
+    REFERENCE_SWR_OPTIONS,
+  )
+  const customers = useMemo(() => withKeptRow(items, kept), [items, kept])
+  return { customers, ...state }
 }
 
 export function useSuppliers(): ReferenceListState & { suppliers: Supplier[] } {
   const companyId = useActiveCompanyId()
   const { items, ...state } = useReferenceList(refKeys.suppliers(companyId), () => fetchSuppliers())
   return { suppliers: items, ...state }
+}
+
+/**
+ * The salary roster, active employees unless `includeInactive`. Invalidate
+ * 'ref:employees' after creating, editing or removing an employee.
+ */
+export function useEmployees(
+  options: { includeInactive?: boolean } = {},
+): ReferenceListState & { employees: Employee[] } {
+  const companyId = useActiveCompanyId()
+  const includeInactive = options.includeInactive ?? false
+  const { items, ...state } = useReferenceList(
+    refKeys.employees(companyId, includeInactive),
+    ([, , inactive]) => fetchEmployees(inactive),
+  )
+  return { employees: items, ...state }
 }
 
 export function useArticles(

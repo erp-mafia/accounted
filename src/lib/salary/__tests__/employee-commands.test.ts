@@ -24,6 +24,7 @@ import {
   EMPLOYEE_CREATE_COLUMNS,
   EMPLOYEE_UPDATE_COLUMNS,
   createEmployee,
+  sealPersonnummer,
   updateEmployee,
 } from '@/lib/salary/employee-commands'
 
@@ -159,11 +160,14 @@ describe('updateEmployee', () => {
     expect(mock.findCalls('employees', 'update')).toEqual([[{ phone: '0700000000' }]])
   })
 
-  it('refuses a patch with nothing writable, before reading or writing', async () => {
+  it('answers a patch with nothing writable with the row as it is, and writes nothing', async () => {
+    // A tampered key (company_id) is not writable, so nothing is left: the
+    // v1 PATCH has always answered an empty patch with the current row. The
+    // MCP tool refuses to stage an empty patch before it gets here.
+    mock.enqueue({ data: STORED })
     const result = await updateEmployee(supabase, args({ company_id: 'other-company' }))
 
-    expect(result).toMatchObject({ ok: false, code: 'VALIDATION_ERROR' })
-    expect(mock.findCall('employees', 'select')).toBeUndefined()
+    expect(result).toMatchObject({ ok: true, data: { employee_id: EMPLOYEE_ID, changes: {} } })
     expect(mock.findCall('employees', 'update')).toBeUndefined()
   })
 
@@ -209,3 +213,46 @@ describe('createEmployee', () => {
     expect(inserted).toMatchObject({ company_id: COMPANY_ID, first_name: 'Anna', monthly_salary: 35000 })
   })
 })
+
+describe('sealPersonnummer', () => {
+  it('seals a valid personnummer: ciphertext and last four digits, never the plaintext', () => {
+    const sealed = sealPersonnummer('190001010008')
+    expect(sealed.ok).toBe(true)
+    if (sealed.ok) {
+      expect(sealed.identity.personnummer_last4).toBe('0008')
+      expect(sealed.identity.personnummer_encrypted).not.toContain('190001010008')
+    }
+  })
+
+  it('refuses an empty value, a masked display value and a wrong check digit, without echoing the input', () => {
+    expect(sealPersonnummer('')).toMatchObject({ ok: false, message: expect.stringContaining('kan inte tömmas') })
+    expect(sealPersonnummer(null)).toMatchObject({ ok: false })
+    expect(sealPersonnummer('19000101-XXXX')).toMatchObject({ ok: false, message: expect.stringContaining('Maskerat') })
+    const wrong = sealPersonnummer('190001010000')
+    expect(wrong).toEqual({ ok: false, message: 'Ogiltigt kontrollnummer (Luhn)' })
+  })
+})
+
+describe('updateEmployee: dry run and columns', () => {
+  it('validates the merged row and answers it masked in the caller\'s columns, writing nothing', async () => {
+    mock.enqueue({ data: STORED })
+
+    const result = await updateEmployee(supabase, {
+      companyId: COMPANY_ID,
+      employeeId: EMPLOYEE_ID,
+      patch: { phone: '0700000000' },
+      dryRun: true,
+      columns: 'id, personnummer, phone',
+    })
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(Object.keys(result.data.row).sort()).toEqual(['id', 'personnummer_masked', 'phone'])
+      expect(result.data.row.phone).toBe('0700000000')
+      expect(result.data.previous.phone).toBeNull()
+      expect(result.data.changes).toEqual({ phone: '0700000000' })
+    }
+    expect(mock.findCall('employees', 'update')).toBeUndefined()
+  })
+})
+

@@ -1,5 +1,5 @@
 import { sruAmount as formatAmount, sruDate as formatDate, sruTime as formatTime } from '@/lib/reports/sru/format'
-import { getBranding } from '@/lib/branding/service'
+import { buildInfoSru, sruBlankettType, sruFile, sruText } from '@/lib/reports/sru/envelope'
 import type {
   INK2Declaration,
   INK2RSRUCode,
@@ -19,37 +19,12 @@ import {
  *   - INFO.SRU: submitter metadata
  *   - BLANKETTER.SRU: three blankett blocks (INK2, INK2R, INK2S)
  *
+ * The envelope (line endings, sanitising, blankett type, INFO.SRU) is shared
+ * with the NE-bilaga: lib/reports/sru/envelope.ts.
  * Encoding: ISO 8859-1 (handled by the API route when writing the response)
- * Line endings: CRLF
  * Amounts: integers in hela kronor, no decimals, no thousands separators
  * Org number: 12 digits with century prefix 16 for juridisk person
  */
-
-const CRLF = '\r\n'
-const PROGRAM_VERSION = '1.0'
-
-/**
- * Compute the period suffix for blankett type strings.
- * Based on which month the fiscal year ENDS in:
- *   P1 = Jan-Apr, P2 = May-Aug, P3 = special, P4 = Sep-Dec
- */
-function computePeriodSuffix(fiscalYearEnd: string): string {
-  const endMonth = parseInt(fiscalYearEnd.substring(5, 7), 10)
-  if (endMonth >= 1 && endMonth <= 4) return 'P1'
-  if (endMonth >= 5 && endMonth <= 8) return 'P2'
-  // P4 covers Sep-Dec (most common: calendar year companies)
-  // NOTE: P3 (first/short fiscal year) cannot be derived from end month alone.
-  // Callers must handle P3 manually for brutet räkenskapsår.
-  return 'P4'
-}
-
-/**
- * Get the income year from the fiscal year end date.
- * The year in the blankett type string is the income year.
- */
-function getIncomeYear(fiscalYearEnd: string): string {
-  return fiscalYearEnd.substring(0, 4)
-}
 
 /**
  * Format org number as 12-digit with century prefix.
@@ -65,43 +40,6 @@ function formatOrgNumber12(orgNumber: string): string {
 }
 
 /**
- * Generate the INFO.SRU file content
- */
-function generateInfoSru(declaration: INK2Declaration, now: Date): string {
-  const lines: string[] = []
-  const orgNumber12 = declaration.companyInfo.orgNumber
-    ? formatOrgNumber12(declaration.companyInfo.orgNumber)
-    : '000000000000'
-
-  // DATABESKRIVNING block (required order)
-  lines.push('#DATABESKRIVNING_START')
-  lines.push('#PRODUKT SRU')
-  lines.push(`#SKAPAD ${formatDate(now)} ${formatTime(now)}`)
-  lines.push(`#PROGRAM ${sanitizeString(getBranding().appName.toLowerCase())} ${PROGRAM_VERSION}`)
-  lines.push('#FILNAMN BLANKETTER.SRU')
-  lines.push('#DATABESKRIVNING_SLUT')
-
-  // MEDIELEV block
-  lines.push('#MEDIELEV_START')
-  lines.push(`#ORGNR ${orgNumber12}`)
-  lines.push(`#NAMN ${sanitizeString(declaration.companyInfo.companyName)}`)
-
-  if (declaration.companyInfo.addressLine1) {
-    lines.push(`#ADRESS ${sanitizeString(declaration.companyInfo.addressLine1)}`)
-  }
-  lines.push(`#POSTNR ${declaration.companyInfo.postalCode || '00000'}`)
-  lines.push(`#POSTORT ${sanitizeString(declaration.companyInfo.city || 'Okänd')}`)
-
-  if (declaration.companyInfo.email) {
-    lines.push(`#EMAIL ${declaration.companyInfo.email}`)
-  }
-
-  lines.push('#MEDIELEV_SLUT')
-
-  return lines.join(CRLF) + CRLF
-}
-
-/**
  * Generate the BLANKETTER.SRU file content with three blankett blocks
  */
 function generateBlanketterSru(declaration: INK2Declaration, now: Date): string {
@@ -110,9 +48,8 @@ function generateBlanketterSru(declaration: INK2Declaration, now: Date): string 
     ? formatOrgNumber12(declaration.companyInfo.orgNumber)
     : '000000000000'
 
-  const incomeYear = getIncomeYear(declaration.fiscalYear.end)
-  const periodSuffix = computePeriodSuffix(declaration.fiscalYear.end)
-  const companyName = sanitizeString(declaration.companyInfo.companyName)
+  const fiscalYearEnd = declaration.fiscalYear.end
+  const companyName = sruText(declaration.companyInfo.companyName)
   const dateStr = formatDate(now)
 
   // Each blankett gets a unique timestamp (increment seconds)
@@ -121,7 +58,7 @@ function generateBlanketterSru(declaration: INK2Declaration, now: Date): string 
   const time2 = formatTime(new Date(now.getTime() + 2000))
 
   // ---- Block 1: INK2 (huvudblankett) ----
-  lines.push(`#BLANKETT INK2-${incomeYear}${periodSuffix}`)
+  lines.push(`#BLANKETT ${sruBlankettType('INK2', fiscalYearEnd)}`)
   lines.push(`#IDENTITET ${orgNumber12} ${dateStr} ${time0}`)
   lines.push(`#NAMN ${companyName}`)
 
@@ -140,7 +77,7 @@ function generateBlanketterSru(declaration: INK2Declaration, now: Date): string 
   lines.push('#BLANKETTSLUT')
 
   // ---- Block 2: INK2R (räkenskapsschema) ----
-  lines.push(`#BLANKETT INK2R-${incomeYear}${periodSuffix}`)
+  lines.push(`#BLANKETT ${sruBlankettType('INK2R', fiscalYearEnd)}`)
   lines.push(`#IDENTITET ${orgNumber12} ${dateStr} ${time1}`)
   lines.push(`#NAMN ${companyName}`)
 
@@ -164,7 +101,7 @@ function generateBlanketterSru(declaration: INK2Declaration, now: Date): string 
   lines.push('#BLANKETTSLUT')
 
   // ---- Block 3: INK2S (skattemässiga justeringar) ----
-  lines.push(`#BLANKETT INK2S-${incomeYear}${periodSuffix}`)
+  lines.push(`#BLANKETT ${sruBlankettType('INK2S', fiscalYearEnd)}`)
   lines.push(`#IDENTITET ${orgNumber12} ${dateStr} ${time2}`)
   lines.push(`#NAMN ${companyName}`)
 
@@ -195,14 +132,7 @@ function generateBlanketterSru(declaration: INK2Declaration, now: Date): string 
   // Required terminator
   lines.push('#FIL_SLUT')
 
-  return lines.join(CRLF) + CRLF
-}
-
-/**
- * Sanitize string for SRU: remove # characters (reserved), limit to 250 chars
- */
-function sanitizeString(str: string): string {
-  return str.replace(/#/g, '').replace(/[\r\n]/g, ' ').substring(0, 250)
+  return sruFile(lines)
 }
 
 /**
@@ -210,9 +140,20 @@ function sanitizeString(str: string): string {
  */
 export function generateSRUSubmission(declaration: INK2Declaration): SRUSubmission {
   const now = new Date()
+  const info = declaration.companyInfo
 
   return {
-    infoSru: generateInfoSru(declaration, now),
+    infoSru: buildInfoSru(
+      {
+        identity12: info.orgNumber ? formatOrgNumber12(info.orgNumber) : '000000000000',
+        name: info.companyName,
+        addressLine1: info.addressLine1,
+        postalCode: info.postalCode,
+        city: info.city,
+        email: info.email,
+      },
+      now,
+    ),
     blanketterSru: generateBlanketterSru(declaration, now),
     generatedAt: now.toISOString(),
   }

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { dbError } from '@/lib/errors/db-error'
+import { roundOre } from '@/lib/money'
 import type { EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { getOpeningBalances } from './opening-balances'
 import type { TrialBalanceRow } from '@/types'
@@ -67,10 +68,11 @@ export type ClosingEntryMode =
    */
   | 'exclude-all-year-end'
 
-type AccountSums = Map<string, { debit: number; credit: number }>
+/** Debit and credit per account number. */
+export type AccountSums = Map<string, { debit: number; credit: number }>
 
 /** Additive fold with the Number()||0 coercion the line loops always used. */
-function addActivity(target: AccountSums, accountNumber: string, debit: unknown, credit: unknown): void {
+export function addActivity(target: AccountSums, accountNumber: string, debit: unknown, credit: unknown): void {
   const existing = target.get(accountNumber) || { debit: 0, credit: 0 }
   existing.debit += Number(debit) || 0
   existing.credit += Number(credit) || 0
@@ -332,10 +334,34 @@ export async function generateTrialBalance(
     })
   }
 
-  // Merge account numbers from both opening and period
+  const rows = buildTrialBalanceRows(openingBalances, periodBalances, accountMap)
+
+  const totalDebit = roundOre(rows.reduce((sum, r) => sum + r.closing_debit, 0))
+  const totalCredit = roundOre(rows.reduce((sum, r) => sum + r.closing_credit, 0))
+
+  return {
+    rows,
+    totalDebit,
+    totalCredit,
+    isBalanced: Math.abs(totalDebit - totalCredit) < 0.01,
+  }
+}
+
+/**
+ * The trial balance rows from per-account IB and period activity: the merged
+ * account set, `Konto <n>` and the first digit as class for an account missing
+ * from the chart, öre rounding on all six amounts (IB + period = UB), sorted
+ * by account number. The one row builder: generateTrialBalance and the KPI
+ * reports (kpi-aggregates.ts), which sum the same activity in SQL, both build
+ * their rows here.
+ */
+export function buildTrialBalanceRows(
+  openingBalances: AccountSums,
+  periodBalances: AccountSums,
+  accountMap: ReadonlyMap<string, { name: string; class: number }>,
+): TrialBalanceRow[] {
   const allAccountNumbers = new Set([...openingBalances.keys(), ...periodBalances.keys()])
 
-  // Build rows: IB + period = UB
   const rows: TrialBalanceRow[] = []
   for (const accountNumber of allAccountNumbers) {
     const opening = openingBalances.get(accountNumber) || { debit: 0, credit: 0 }
@@ -349,24 +375,15 @@ export async function generateTrialBalance(
       account_number: accountNumber,
       account_name: accountInfo.name,
       account_class: accountInfo.class,
-      opening_debit: Math.round(opening.debit * 100) / 100,
-      opening_credit: Math.round(opening.credit * 100) / 100,
-      period_debit: Math.round(periodActivity.debit * 100) / 100,
-      period_credit: Math.round(periodActivity.credit * 100) / 100,
-      closing_debit: Math.round((opening.debit + periodActivity.debit) * 100) / 100,
-      closing_credit: Math.round((opening.credit + periodActivity.credit) * 100) / 100,
+      opening_debit: roundOre(opening.debit),
+      opening_credit: roundOre(opening.credit),
+      period_debit: roundOre(periodActivity.debit),
+      period_credit: roundOre(periodActivity.credit),
+      closing_debit: roundOre(opening.debit + periodActivity.debit),
+      closing_credit: roundOre(opening.credit + periodActivity.credit),
     })
   }
 
   rows.sort((a, b) => a.account_number.localeCompare(b.account_number))
-
-  const totalDebit = Math.round(rows.reduce((sum, r) => sum + r.closing_debit, 0) * 100) / 100
-  const totalCredit = Math.round(rows.reduce((sum, r) => sum + r.closing_credit, 0) * 100) / 100
-
-  return {
-    rows,
-    totalDebit,
-    totalCredit,
-    isBalanced: Math.abs(totalDebit - totalCredit) < 0.01,
-  }
+  return rows
 }

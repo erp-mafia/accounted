@@ -35,6 +35,7 @@ import { normalizeCurrencyCode, invoiceAmountSek } from './duplicate-guard-curre
 import { normalizeOcrReference } from './duplicate-payment-guard'
 import { matchesNormalizedReference, distinctiveReferenceKeys } from './ocr-keys'
 import type { Invoice, Transaction, Customer } from '@/types'
+import { MATCHABLE_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
 
 export interface InvoiceMatch {
   invoice: Invoice & { customer?: Customer }
@@ -305,7 +306,7 @@ export async function loadInvoiceMatchPool(
         .eq('company_id', companyId)
         .eq('document_type', 'invoice')
         .is('credited_invoice_id', null)
-        .in('status', ['sent', 'overdue', 'partially_paid'])
+        .in('status', [...MATCHABLE_INVOICE_STATUSES])
         .order('id', { ascending: true })
         .range(from, to),
     )

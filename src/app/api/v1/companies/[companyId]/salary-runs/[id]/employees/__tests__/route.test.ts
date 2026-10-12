@@ -164,7 +164,7 @@ describe('GET /api/v1/companies/:companyId/salary-runs/:id/employees', () => {
     expect(body.data[0].gross_salary).toBe(35000)
     expect(body.data[0].net_salary).toBe(26800)
     // GDPR Art.5(1)(c): payslip-shaped responses always mask.
-    expect(body.data[0].personnummer_masked).toBe('19000101XXXX')
+    expect(body.data[0].personnummer_masked).toBe('19000101-XXXX')
     expect(JSON.stringify(body)).not.toContain(SAMPLE_PERSONNUMMER)
     // The list omits line items: the detail endpoint carries them.
     expect(body.data[0].line_items).toBeUndefined()
@@ -284,7 +284,7 @@ describe('GET /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId
     const body = await res.json()
     expect(body.data.salary_run_employee_id).toBe(SRE_ID)
     expect(body.data.employee_id).toBe(EMPLOYEE_ID)
-    expect(body.data.personnummer_masked).toBe('19000101XXXX')
+    expect(body.data.personnummer_masked).toBe('19000101-XXXX')
     expect(body.data.line_items).toHaveLength(1)
     expect(body.data.line_items[0].salary_line_item_id).toBe(LINE_ID)
     expect(body.data.line_items[0].item_type).toBe('monthly_salary')

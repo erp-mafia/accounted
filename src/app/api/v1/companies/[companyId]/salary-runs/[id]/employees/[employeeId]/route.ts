@@ -17,7 +17,7 @@ import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope, NoBodyResponse } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
-import { maskPersonnummer } from '@/lib/api/v1/mask-personnummer'
+import { maskPersonnummer } from '@/lib/salary/personnummer-format'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
 import { removeEmployeeFromRun, setRunEmployeeSalary } from '@/lib/salary/run-employees'
 
@@ -117,7 +117,7 @@ registerEndpoint({
         employee_id: 'emp_77b2…',
         first_name: 'Anna',
         last_name: 'Andersson',
-        personnummer_masked: 'YYYYMMDDXXXX',
+        personnummer_masked: 'YYYYMMDD-XXXX',
         gross_salary: 35000,
         tax_withheld: -8200,
         net_salary: 26800,

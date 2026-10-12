@@ -12,7 +12,7 @@
  *
  * Statuses:
  *   covered  : a public machine door does the same core action. `by` lists
- *              V1_ENDPOINT_SCOPES keys ('POST /api/v1/...') and/or MCP tool
+ *              registered v1 endpoints ('POST /api/v1/...') and/or MCP tool
  *              names from TOOL_SCOPE_MAP ('gnubok_*'). Partial coverage
  *              counts only when the core action is the same; the gap goes in
  *              `note`.
@@ -651,6 +651,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'DELETE /api/extensions/ext/skatteverket/declaration/lock': gap('P3', 'unlock a declaration awaiting signature'),
   'POST /api/extensions/ext/skatteverket/declaration/submit': covered(['gnubok_vat_declaration_submit']),
   'POST /api/extensions/ext/skatteverket/agi/submit': covered(['gnubok_agi_submit']),
+  'POST /api/extensions/ext/skatteverket/agi/send-for-signing': covered(['gnubok_agi_submit']),
   'POST /api/extensions/ext/skatteverket/agi/lasUpp': gap('P3', 'unlock an AGI awaiting signature'),
   'POST /api/extensions/ext/skatteverket/agi/granskningsunderlag': gap('P3', 'fetch Skatteverket\'s granskningsunderlag'),
   'POST /api/extensions/ext/skatteverket/skattekonto/sync': covered([`POST ${V}/skattekonto/sync`]),

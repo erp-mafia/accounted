@@ -23,6 +23,7 @@ import {
 } from '@/lib/bokslut/assets/depreciation-engine'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { Asset } from '@/types'
+import { roundOre } from '@/lib/money'
 
 export interface AssetDepreciationFigures {
   /** Accumulated depreciation on the books at period start. */
@@ -46,8 +47,6 @@ export interface PeriodLike {
   period_start: string
   period_end: string
 }
-
-const round2 = (n: number) => Math.round(n * 100) / 100
 
 /** Posted (journal-linked) schedule rows for the whole company, paginated. */
 export async function loadPostedSchedules(
@@ -113,7 +112,7 @@ function fallbackAccumulatedBefore(
   for (const window of [...synthetic, ...priorPeriods]) {
     if (window.period_end < asset.acquisition_date) continue
     const { amount } = computeAnnualDepreciation(asset, window, accumulated)
-    accumulated = round2(accumulated + amount)
+    accumulated = roundOre(accumulated + amount)
   }
   return accumulated
 }
@@ -168,7 +167,7 @@ export function computeAssetNoteFigures(params: {
     // amount from the asset itself).
     let accountedAck: number
     if (priorPosted.length > 0) {
-      accountedAck = round2(
+      accountedAck = roundOre(
         priorPosted.reduce((sum, r) => sum + (Number(r.planned_depreciation) || 0), 0),
       )
     } else if (asset.acquisition_date >= currentPeriod.period_start) {
@@ -176,7 +175,7 @@ export function computeAssetNoteFigures(params: {
     } else {
       accountedAck = fallbackAccumulatedBefore(asset, currentPeriod.period_start, fiscalPeriods)
     }
-    const ibAck = round2(openingAck + accountedAck)
+    const ibAck = roundOre(openingAck + accountedAck)
 
     const disposedDuringPeriod =
       asset.disposed_at != null &&
@@ -194,7 +193,7 @@ export function computeAssetNoteFigures(params: {
         aretsAvskrivning = currentPosted
           ? Number(currentPosted.planned_depreciation) || 0
           : 0
-        avgaendeAck = round2(
+        avgaendeAck = roundOre(
           openingAck +
             rows.reduce((sum, r) => sum + (Number(r.planned_depreciation) || 0), 0),
         )
@@ -202,7 +201,7 @@ export function computeAssetNoteFigures(params: {
         // Nothing ever posted: preview what the engine would have booked so
         // the disposed asset still nets out of the roll-forward.
         aretsAvskrivning = computeAnnualDepreciation(asset, currentPeriod, accountedAck).amount
-        avgaendeAck = round2(ibAck + aretsAvskrivning)
+        avgaendeAck = roundOre(ibAck + aretsAvskrivning)
       }
     } else if (currentPosted) {
       aretsAvskrivning = Number(currentPosted.planned_depreciation) || 0
@@ -212,7 +211,7 @@ export function computeAssetNoteFigures(params: {
 
     figures.set(asset.id, {
       ibAck,
-      aretsAvskrivning: round2(aretsAvskrivning),
+      aretsAvskrivning: roundOre(aretsAvskrivning),
       avgaendeAck,
     })
   }

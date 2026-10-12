@@ -44,6 +44,20 @@ vi.mock('@/lib/processing-history/append', () => ({
   appendProcessingHistory: vi.fn().mockResolvedValue(undefined),
 }))
 
+// The service's own checks that have their own tests: the chart
+// pre-validation, the period-lock pre-check and the merchant-rule learning.
+vi.mock('@/lib/bookkeeping/account-validation', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/account-validation')>()),
+  findUnresolvableAccounts: vi.fn().mockResolvedValue([]),
+}))
+vi.mock('@/lib/bookkeeping/mapping-engine', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/mapping-engine')>()),
+  saveUserMappingRule: vi.fn().mockResolvedValue(undefined),
+}))
+vi.mock('@/lib/api/v1/check-period-lock', () => ({
+  checkPeriodLock: vi.fn().mockResolvedValue({ locked: false }),
+}))
+
 import { categorizeMatchedTransaction } from '../categorize-core'
 
 const TX_ID = '00000000-0000-4000-8000-0000000000cc'
@@ -82,10 +96,7 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
     enqueue({ data: settingsRow })
     enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: 'fp-1' }] })
-    // Issue #1661: a private marking runs checkPeriodLock before the engine
-    // (company lock date, then the covering fiscal period). Open here.
-    enqueue({ data: { bookkeeping_locked_through: null } })
-    enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null } })
+    // checkPeriodLock is mocked open (issue #1661's pre-check reads nothing here).
     enqueue({
       data: [txRow({
         is_business: false,
@@ -321,11 +332,8 @@ describe('categorizeMatchedTransaction: accountOverride', () => {
     enqueue({ data: settingsRow })
     enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
     enqueue({ data: [{ id: 'fp-1' }] })
-    // The private-marking lock check (checkPeriodLock). Without these two the
-    // constraint error below was read as the lock lookup, which used to fail
-    // open and only passed by accident.
-    enqueue({ data: { bookkeeping_locked_through: null } })
-    enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null } })
+    // checkPeriodLock is mocked open, so the constraint error below is the
+    // update's own answer.
     enqueue({
       data: null,
       error: {

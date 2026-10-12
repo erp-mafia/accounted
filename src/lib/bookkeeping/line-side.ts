@@ -40,3 +40,29 @@ export function creditNatural(amount: number): LineSides {
   if (rounded < 0) return { debit_amount: -rounded, credit_amount: 0 }
   return { debit_amount: 0, credit_amount: rounded }
 }
+
+/** What a storno reads of a posted line (numeric columns may arrive as strings). */
+export interface StornoSourceLine {
+  debit_amount: number | string | null
+  credit_amount: number | string | null
+  amount_in_currency?: number | string | null
+}
+
+/**
+ * The storno of each posted line: the same amount on the opposite side, for
+ * reverseEntry and correctEntry alike (each adds its own texts and columns).
+ * The swap runs on the line's NET (creditNatural of debit minus credit), so a
+ * legacy negative-side line (debit -0.25, booked before the non-negative
+ * CHECK, journal_entry_lines_amounts_non_negative) reverses to a well-formed
+ * positive line on the opposite side instead of copying the bad sign into the
+ * storno, which the CHECK refuses. amount_in_currency is negated.
+ */
+export function buildStornoLines<L extends StornoSourceLine>(
+  lines: readonly L[],
+): Array<{ line: L; debit_amount: number; credit_amount: number; amount_in_currency: number | null }> {
+  return lines.map((line) => ({
+    line,
+    ...creditNatural((Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0)),
+    amount_in_currency: line.amount_in_currency ? -Number(line.amount_in_currency) : null,
+  }))
+}

@@ -3,6 +3,7 @@ import type {
   VatCheckAccountTotals,
 } from './vat-declaration-checks'
 import { roundOre } from '@/lib/money'
+import { reverseChargeBasisAccounts } from '@/lib/vat/moms-box-mapping'
 import type { VatDeclarationRutor } from '@/types'
 
 /**
@@ -81,18 +82,18 @@ export type RcBasisGapScan =
   | { status: 'scanned'; gapCount: number }
 
 /**
- * The reverse-charge basis accounts grouped by momssats. One column per rate
- * across the five purchase-type families (EU goods, EU services, non-EU
- * services, domestic goods RC, domestic services RC). This is the single
- * source for the per-rate downgrade evidence, and rc-basis-gaps.ts derives
- * its flat account set from it, so the scan and the evidence can never
- * disagree about which accounts carry RC basis.
+ * The reverse-charge basis accounts grouped by momssats: per rate, the five
+ * purchase-type families (EU goods, EU services, non-EU services, domestic
+ * goods RC, domestic services RC) from VAT_ACCOUNT_TABLE. Import basis
+ * (4545-4547, ruta 50) is not reverse charge and stays out. The per-rate
+ * downgrade evidence reads this, and rc-basis-gaps.ts derives its flat account
+ * set from it, so the scan and the evidence cannot disagree.
  */
-export const RC_BASIS_ACCOUNTS_BY_RATE = {
-  r25: ['4515', '4535', '4531', '4415', '4425'],
-  r12: ['4516', '4536', '4532', '4416', '4426'],
-  r6: ['4517', '4537', '4533', '4417', '4427'],
-} as const
+export const RC_BASIS_ACCOUNTS_BY_RATE: Readonly<Record<'r25' | 'r12' | 'r6', readonly string[]>> = {
+  r25: reverseChargeBasisAccounts(0.25),
+  r12: reverseChargeBasisAccounts(0.12),
+  r6: reverseChargeBasisAccounts(0.06),
+}
 
 /** The momssats a static RC basis account books its basis at (4531 is 25 %), read from the groups above; null for any other account. */
 export function rcBasisAccountRate(account: string): 0.25 | 0.12 | 0.06 | null {

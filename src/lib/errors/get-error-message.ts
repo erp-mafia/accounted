@@ -125,10 +125,6 @@ const GENERIC_FALLBACK: Bilingual = { sv: 'Något gick fel. Försök igen.', en:
 // Known error patterns → user-friendly Swedish messages
 const ERROR_PATTERN_MAP: [RegExp, string | null][] = [
   [
-    /reason must be 500 characters or fewer/i,
-    'Motiveringen får vara högst 500 tecken.',
-  ],
-  [
     /locked\/closed fiscal period/i,
     'Perioden är låst. Verifikationen kan inte skapas i en stängd eller låst period.',
   ],
@@ -149,14 +145,6 @@ const ERROR_PATTERN_MAP: [RegExp, string | null][] = [
     // collected is part of its payout and is rebooked, never removed.
     /COLLECTED_PAYMENT_(DELETE_BLOCKED|SOURCE_LOCKED)/,
     'Betalningen togs emot av inkassobolaget och ingår i dess utbetalning. Den kan inte tas bort här; bokför om den via avräkningen.',
-  ],
-  [
-    /Period is already closed/i,
-    'Perioden är redan stängd: bokslutet är genomfört och perioden kan inte öppnas igen.',
-  ],
-  [
-    /Period is already locked/i,
-    'Perioden är redan låst.',
   ],
   [
     /Cannot attach documents to entries in a locked/i,

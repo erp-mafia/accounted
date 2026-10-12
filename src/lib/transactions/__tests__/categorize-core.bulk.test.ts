@@ -61,6 +61,20 @@ vi.mock('@/lib/core/documents/document-service', () => ({
   linkToJournalEntry: (...args: unknown[]) => mockLinkToJE(...args),
 }))
 
+// The service's own checks that have their own tests: the chart
+// pre-validation, the period-lock pre-check and the merchant-rule learning.
+vi.mock('@/lib/bookkeeping/account-validation', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/account-validation')>()),
+  findUnresolvableAccounts: vi.fn().mockResolvedValue([]),
+}))
+vi.mock('@/lib/bookkeeping/mapping-engine', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/mapping-engine')>()),
+  saveUserMappingRule: vi.fn().mockResolvedValue(undefined),
+}))
+vi.mock('@/lib/api/v1/check-period-lock', () => ({
+  checkPeriodLock: vi.fn().mockResolvedValue({ locked: false }),
+}))
+
 import { bulkBookMatchedInboxItems } from '../categorize-core'
 import { recordInboxDecision } from '@/lib/suggestion-log/inbox'
 import { TransactionMissingSekValueError } from '@/lib/bookkeeping/errors'

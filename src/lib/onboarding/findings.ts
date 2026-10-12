@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { hasSkatteverketOmbudReadAccess } from '@/lib/skatteverket/ombud-access'
 import type { AiClient } from '@/lib/onboarding/ai-clients'
 import { loadAiConnection } from '@/lib/onboarding/ai-clients.server'
+import { roundOre } from '@/lib/money'
 
 /**
  * Genomlysning: what the books act (issue #2438) can say about a company
@@ -68,9 +69,8 @@ interface BooksSummary {
   ledger_1630: number | string | null
 }
 
-const round2 = (x: number) => Math.round(x * 100) / 100
 /** -0 would survive JSON as 0 but not toBe(0); keep the API value canonical. */
-const toOre = (v: number | string) => round2(Number(v)) + 0
+const toOre = (v: number | string) => roundOre(Number(v)) + 0
 
 const TAX_DEADLINES_OF_INTEREST = ['moms_monthly', 'moms_quarterly', 'moms_yearly', 'arbetsgivardeklaration']
 

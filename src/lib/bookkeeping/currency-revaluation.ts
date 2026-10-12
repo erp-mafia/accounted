@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { fxDifferenceLine } from '@/lib/bookkeeping/ore-rounding'
 import {
   fetchPaymentsAsOf,
   outstandingAsOf,
@@ -516,22 +517,9 @@ export async function previewCurrencyRevaluation(
       line_description: 'Omvärdering leverantörsskulder: orealiserad kursförlust',
     })
   }
-  if (credit3960 > 0) {
-    lines.push({
-      account_number: '3960',
-      debit_amount: 0,
-      credit_amount: Math.round(credit3960 * 100) / 100,
-      line_description: 'Orealiserade valutakursvinster',
-    })
-  }
-  if (debit7960 > 0) {
-    lines.push({
-      account_number: '7960',
-      debit_amount: Math.round(debit7960 * 100) / 100,
-      credit_amount: 0,
-      line_description: 'Orealiserade valutakursförluster',
-    })
-  }
+  const unrealised = { gain: 'Orealiserade valutakursvinster', loss: 'Orealiserade valutakursförluster' }
+  if (credit3960 > 0) lines.push(fxDifferenceLine(credit3960, unrealised))
+  if (debit7960 > 0) lines.push(fxDifferenceLine(-debit7960, unrealised))
 
   const totalGain = Math.round(credit3960 * 100) / 100
   const totalLoss = Math.round(debit7960 * 100) / 100

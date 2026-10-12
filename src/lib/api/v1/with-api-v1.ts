@@ -66,9 +66,9 @@ import {
 } from '@/lib/auth/api-keys'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import { withSIEExternalReport } from '@/lib/import/sie-period-read'
-import { resolveRequiredScope, type V1RequiredScope } from '@/lib/auth/scopes'
+import type { V1RequiredScope } from '@/lib/auth/scopes'
 import { getMultiUserState, isMembershipDormant } from '@/lib/entitlements/multi-user'
-import { getEndpointByConcretePath } from './registry'
+import { getEndpointByConcretePath, getEndpointForOperation } from './registry'
 import {
   assertReportQuery,
   IGNORED_QUERY_PARAMS_HEADER,
@@ -541,9 +541,13 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
     const forensic = extractForensicContext(request, log)
 
     try {
-      // 1. Determine required scope before auth. Public endpoints can skip
-      //    authentication entirely.
-      const requiredScope = options.requireScope ?? resolveRequiredScope(request.method, path)
+      // 1. Determine required scope before auth, from the route's own
+      //    endpoint definition. Public endpoints skip authentication. A
+      //    handler whose route never registered fails closed: NOT_FOUND
+      //    for every caller, never an unscoped run.
+      const endpoint = getEndpointForOperation(operation, request.method)
+      const requiredScope =
+        options.requireScope ?? (endpoint === undefined ? null : endpoint.scope === null ? 'public' : endpoint.scope)
 
       if (requiredScope === null) {
         log.warn('endpoint not registered', { path, method: request.method, ...forensic })

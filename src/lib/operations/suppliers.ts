@@ -1,9 +1,13 @@
 /**
- * Supplier register (leverantörsregister) operations. Only the update is an
- * operation so far: create, list, get and archive stay the hand-written v1
- * routes and MCP tools they were. The rules live in
- * lib/suppliers/update-supplier.ts, shared with the dashboard's
- * PUT /api/suppliers/:id.
+ * Supplier register (leverantörsregister) operations: create and update. List,
+ * get and archive stay the hand-written v1 routes and MCP tools they were. The
+ * rules live in lib/suppliers/create-supplier.ts and update-supplier.ts,
+ * shared with the dashboard's POST /api/suppliers and PUT /api/suppliers/:id
+ * and with the approval of a staged gnubok_create_supplier.
+ *
+ * suppliers.create keeps the v1 POST contract it replaced (path, body,
+ * Idempotency-Key, dry run, 201). The MCP gnubok_create_supplier stays the
+ * hand-written tool, validating with the same CreateSupplierSchema.
  *
  * suppliers.update keeps the v1 PATCH contract it replaced (path, body,
  * Idempotency-Key, dry run, archived rule) and adds the MCP door
@@ -12,7 +16,8 @@
  * a duplicate gnubok_create_supplier (crm#1060).
  */
 import { z } from 'zod'
-import { UpdateSupplierSchema } from '@/lib/api/schemas'
+import { CreateSupplierSchema, UpdateSupplierSchema } from '@/lib/api/schemas'
+import { createSupplier } from '@/lib/suppliers/create-supplier'
 import { SupplierRecordSchema, updateSupplier } from '@/lib/suppliers/update-supplier'
 import { defineOperation } from './types'
 
@@ -45,6 +50,54 @@ const SUPPLIER_EXAMPLE = {
   created_at: '2026-04-12T08:30:00Z',
   updated_at: '2026-05-12T09:00:00Z',
 }
+
+export const suppliersCreate = defineOperation({
+  id: 'suppliers.create',
+  kind: 'write',
+  scope: 'suppliers:write',
+  risk: 'low',
+  reversible: true,
+  docs: {
+    summary: 'Create a supplier.',
+    description:
+      'Creates a new supplier for the company. Bankgiro (with its Luhn check digit), plusgiro, IBAN and BIC are format-checked, since payment files read them. Omitted supplier_type is swedish_business. Requires Idempotency-Key (UUID). Supports ?dry_run=true: the dry run answers the would-be record without id and timestamps.',
+    useWhen:
+      'You need to register a new supplier before booking supplier invoices against them. Use dry-run first to catch validation errors before committing.',
+    doNotUseFor:
+      'Updating an existing supplier (PATCH instead). Creating customers (different resource).',
+    pitfalls: [
+      'Idempotency-Key is mandatory: calls without it return 400 VALIDATION_ERROR.',
+      'org_number uniqueness is enforced at the database level; duplicate inserts return 409 SUPPLIER_DUPLICATE_ORG_NUMBER.',
+      'A Swedish-shaped org_number is stored as the 10-digit key; a foreign registration number is stored as sent.',
+      'Unlike customers, suppliers carry no `vat_number_validated` flag: vat_number is stored as supplied without VIES verification. Validate externally if your workflow requires it.',
+      'default_expense_account is a BAS account number (e.g. "5410"); the value is stored as-is and used as the suggested debit account when supplier invoices are booked.',
+    ],
+    example: {
+      request: {
+        name: 'Office Depot AB',
+        supplier_type: 'swedish_business',
+        email: 'invoices@officedepot.example',
+        org_number: '556677-8899',
+        bankgiro: '123-4567',
+        default_expense_account: '5410',
+        default_payment_terms: 30,
+        default_currency: 'SEK',
+      },
+      response: {
+        data: { ...SUPPLIER_EXAMPLE, notes: null, updated_at: '2026-04-12T08:30:00Z' },
+        meta: { request_id: 'req_…', api_version: '2026-05-12' },
+      },
+    },
+  },
+  input: CreateSupplierSchema,
+  output: SupplierRecordSchema,
+  errorCodes: ['SUPPLIER_DUPLICATE_ORG_NUMBER', 'SUPPLIER_CREATE_FAILED', 'VALIDATION_ERROR'],
+  http: {
+    method: 'POST',
+    path: '/api/v1/companies/:companyId/suppliers',
+  },
+  run: (ctx, input, { dryRun }) => createSupplier(ctx, input, { dryRun }),
+})
 
 export const suppliersUpdate = defineOperation({
   id: 'suppliers.update',

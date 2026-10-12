@@ -37,6 +37,39 @@ import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-key
 import { getActor } from '@/lib/bookkeeping/actor-context'
 import { withApiV1 } from '../with-api-v1'
 import { ok } from '../response'
+import { z } from 'zod'
+import { registerEndpoint } from '../registry'
+
+// withApiV1 reads each handler's scope from its endpoint definition, by
+// operation id and method. These fixtures stand in for the route files the
+// tests imitate, with the scopes those routes declare. Vitest isolates module
+// state per test file, so the registrations stay in this file.
+for (const [operation, method, path, scope] of [
+  ['companies.list', 'GET', '/api/v1/companies', 'companies:read'],
+  ['api-key.get', 'GET', '/api/v1/api-key', 'authenticated'],
+  ['health.check', 'GET', '/api/v1/health', null],
+  ['journal-entries.create', 'POST', '/api/v1/companies/:companyId/journal-entries', 'bookkeeping:write'],
+  ['journal-entries.list', 'GET', '/api/v1/companies/:companyId/journal-entries', 'reports:read'],
+] as const) {
+  registerEndpoint({
+    operation,
+    method,
+    path,
+    summary: `${operation} (test fixture).`,
+    description: 'Fixture registration for the wrapper tests.',
+    useWhen: 'never: test fixture',
+    doNotUseFor: 'anything outside this test file',
+    pitfalls: [],
+    example: { response: {} },
+    scope,
+    risk: method === 'GET' ? 'low' : 'medium',
+    idempotent: method === 'GET',
+    reversible: false,
+    dryRunSupported: false,
+    response: { success: z.object({}) },
+  })
+}
+
 
 const mockValidate = vi.mocked(validateApiKey)
 const mockServiceClient = vi.mocked(createServiceClientNoCookies)

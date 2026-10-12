@@ -27,6 +27,7 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import type { Asset, AssetDisposalType, VatTreatment } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { parseAmountInput, roundOre } from '@/lib/money'
 
 interface PeriodOption {
   id: string
@@ -42,18 +43,6 @@ const VAT_TREATMENTS = ['standard_25', 'reverse_charge', 'export', 'exempt'] as 
 // Flat Fönster inputs are sized by the row; amounts, dates and account
 // numbers get a fixed short width so the row does not stretch them.
 const FIELD_CLASS = 'max-w-44 flex-none tabular-nums'
-
-function round2(value: number): number {
-  return Math.round(value * 100) / 100
-}
-
-// Accept Swedish-formatted amounts ("125 000,50") as well as dot decimals.
-function parseAmount(raw: string): number | null {
-  const normalized = raw.replace(/\s/g, '').replace(',', '.')
-  if (normalized === '') return null
-  const value = Number(normalized)
-  return Number.isFinite(value) ? value : null
-}
 
 export default function DisposeAssetPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
@@ -133,15 +122,15 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
     }
   }, [disposalType])
 
-  const parsedProceeds = parseAmount(proceeds)
+  const parsedProceeds = parseAmountInput(proceeds)
   const proceedsNumber = parsedProceeds ?? 0
   const proceedsInvalid =
     disposalType !== 'scrap' && proceeds.trim() !== '' && parsedProceeds === null
   const vatAmount =
     disposalType === 'sale' && vatTreatment === 'standard_25'
-      ? round2(proceedsNumber * (0.25 / 1.25))
+      ? roundOre(proceedsNumber * (0.25 / 1.25))
       : 0
-  const netProceeds = round2(proceedsNumber - vatAmount)
+  const netProceeds = roundOre(proceedsNumber - vatAmount)
   const selectedPeriod = periods.find((period) => period.id === periodId)
   const periodLocked = Boolean(
     selectedPeriod && (selectedPeriod.is_closed || selectedPeriod.locked_at !== null),

@@ -1,6 +1,7 @@
 import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import { createJournalEntry, findFiscalPeriod } from './engine'
 import { resolveSekAmount, buildCurrencyMetadata } from './currency-utils'
+import { fxDifferenceLine } from './ore-rounding'
 import { resolveBookingAccount } from './accruals/account-suggestions'
 import { buildSupplierDescription, supplierInvoiceReference } from './supplier-invoice-description'
 import {
@@ -500,24 +501,9 @@ export function buildSupplierInvoicePaymentLines(
       line_description: desc,
     })
 
-    // Exchange rate difference
-    if (exchangeRateDifference > 0) {
-      // Gain: Credit 3960
-      lines.push({
-        account_number: '3960',
-        debit_amount: 0,
-        credit_amount: Math.round(Math.abs(exchangeRateDifference) * 100) / 100,
-        line_description: 'Valutakursvinst',
-      })
-    } else {
-      // Loss: Debit 7960
-      lines.push({
-        account_number: '7960',
-        debit_amount: Math.round(Math.abs(exchangeRateDifference) * 100) / 100,
-        credit_amount: 0,
-        line_description: 'Valutakursförlust',
-      })
-    }
+    // Exchange rate difference: paid less than booked is a gain (Cr 3960),
+    // more a loss (Dr 7960).
+    lines.push(fxDifferenceLine(exchangeRateDifference))
   } else {
     // Standard SEK payment
     lines.push({

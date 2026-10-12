@@ -121,8 +121,8 @@ export type TransactionBookableVerdict =
 
 /**
  * The booking doors' single answer to "may this bank row get a NEW
- * verifikat?" (categorize, v1 categorize, batch-categorize, the manual book
- * route, and the shared categorize core). A row is already booked when
+ * verifikat?" (categorizeTransaction behind every categorize door, the
+ * manual book route, link-journal-entry). A row is already booked when
  *
  *   - its pointer (transactions.journal_entry_id) names a posted verifikat, or
  *   - a 'bank_line' transaction_voucher_links row names a posted verifikat

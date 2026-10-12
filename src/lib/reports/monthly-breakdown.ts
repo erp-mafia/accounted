@@ -1,7 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { dbError } from '@/lib/errors/db-error'
 import { roundOre } from '@/lib/money'
+import { excludeYearEndChain, fetchReversedYearEndEntryIds } from './trial-balance'
 
 export interface MonthlyBreakdownMonth {
   label: string
@@ -122,69 +123,51 @@ export async function generateMonthlyBreakdown(
   }
 ): Promise<MonthlyBreakdown> {
 
-  // Get the fiscal period date range
+  // Get the fiscal period date range. An unknown period is an empty chart;
+  // a failed read is an error, not a chart of zeros.
   const { data: period, error: periodError } = await supabase
     .from('fiscal_periods')
     .select('period_start, period_end')
     .eq('id', fiscalPeriodId)
     .eq('company_id', companyId)
-    .single()
+    .maybeSingle()
 
-  if (periodError || !period) {
+  if (periodError) throw dbError(periodError, 'monthly breakdown: fiscal period read failed')
+  if (!period) {
     return { months: [] }
   }
 
-  // Ids of REVERSED year-end entries, company-wide (no period filter): a storno
-  // in this period can reverse a year-end entry from another period. Mirrors the
-  // wave-1 fetch in lib/reports/trial-balance.ts and ye_reversed in
-  // get_kpi_report_aggregates.
-  const reversedYearEndIds = (
-    await fetchAllRows<{ id: string }>(({ from, to }) =>
-      supabase
-        .from('journal_entries')
-        .select('id')
-        .eq('company_id', companyId)
-        .eq('source_type', 'year_end')
-        .eq('status', 'reversed')
-        .order('id', { ascending: true })
-        .range(from, to)
-    )
-  ).map((r) => r.id)
+  // Year-end exclusion, the trial balance's 'exclude-all-year-end' rule
+  // (excludeYearEndChain), the same set as tb_ex_ye_entries in
+  // get_kpi_report_aggregates. The reversed year-end ids are company-wide:
+  // a storno in this period can reverse a year-end entry of another period.
+  const reversedYearEndIds = await fetchReversedYearEndEntryIds(supabase, companyId)
 
   // Get all posted and reversed journal entry lines for this period with their
   // entry dates, via the two-step entry-lines fetch (lib/bookkeeping/entry-lines.ts).
+  // A failed read throws: the callers answer 500 instead of drawing an empty chart.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let lines: any[]
-  try {
-    lines = await fetchEntryLines({
-      supabase,
-      entryColumns: 'entry_date, status, company_id, fiscal_period_id',
-      lineColumns: 'account_number, debit_amount, credit_amount',
-      filterEntries: (q: EntryLinesQuery) => {
-        let query = q
+  const lines: any[] = await fetchEntryLines({
+    supabase,
+    entryColumns: 'entry_date, status, company_id, fiscal_period_id',
+    lineColumns: 'account_number, debit_amount, credit_amount',
+    filterEntries: (q: EntryLinesQuery) =>
+      excludeYearEndChain(
+        q
           .eq('fiscal_period_id', fiscalPeriodId)
           .eq('company_id', companyId)
           // posted + reversed: the same set as tb_ex_ye_entries in the RPC.
-          .in('status', ['posted', 'reversed'])
-          .neq('source_type', 'year_end')
-        if (reversedYearEndIds.length > 0) {
-          const idList = `(${reversedYearEndIds.join(',')})`
-          query = query.or(`reverses_id.is.null,reverses_id.not.in.${idList}`)
-          query = query.or(`correction_of_id.is.null,correction_of_id.not.in.${idList}`)
-        }
-        return query
-      },
-      filterLines:
-        options?.dimensions && Object.keys(options.dimensions).length > 0
-          ? // jsonb containment (@>): served by idx_jel_dimensions_gin.
-            (q: EntryLinesQuery) => q.contains('dimensions', options.dimensions)
-          : undefined,
-      // The old embed was aliased: journal_entry:journal_entries!inner(...).
-      attachEntriesAs: 'journal_entry',
-    })
-  } catch {
-    return { months: [] }
-  }
+          .in('status', ['posted', 'reversed']),
+        reversedYearEndIds,
+      ),
+    filterLines:
+      options?.dimensions && Object.keys(options.dimensions).length > 0
+        ? // jsonb containment (@>): served by idx_jel_dimensions_gin.
+          (q: EntryLinesQuery) => q.contains('dimensions', options.dimensions)
+        : undefined,
+    // The old embed was aliased: journal_entry:journal_entries!inner(...).
+    attachEntriesAs: 'journal_entry',
+  })
 
   // Sum lines into per-month buckets (raw sums; assembleMonthlyBreakdown
   // rounds once per bucket), keyed year-aware for non-calendar fiscal years.

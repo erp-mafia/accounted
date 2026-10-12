@@ -3,6 +3,8 @@ import { z } from 'zod'
 import { getStructuredError } from '../get-structured-error'
 import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 import { dbError } from '../db-error'
+import { badArgument, codedRefusal } from '../refusal'
+import { userFacing } from '../user-facing'
 
 describe('getStructuredError', () => {
   it.each([
@@ -51,17 +53,17 @@ describe('getStructuredError', () => {
     expect(result.remediation?.resource).toBe('Accounted://chart-of-accounts')
   })
 
-  it('infers PERIOD_NOT_LOCKED from message text', () => {
-    const result = getStructuredError(new Error('Period must be locked before closing'))
+  it('answers PERIOD_NOT_LOCKED with its remediation', () => {
+    const result = getStructuredError(codedRefusal('PERIOD_NOT_LOCKED', 'Period must be locked before closing'))
     expect(result.code).toBe('PERIOD_NOT_LOCKED')
     expect(result.remediation?.tool).toBe('gnubok_lock_period')
   })
 
   // close_period / lock_period / run_year_end (MCP) and period-service throw
-  // these as plain strings. They used to fall through to UNKNOWN_ERROR with
+  // these coded. As plain strings they once fell through to UNKNOWN_ERROR with
   // "Något gick fel" (feedback seq 392722: close_period after run_year_end).
-  it('infers PERIOD_ALREADY_CLOSED from the plain "Period is already closed" throw', () => {
-    const result = getStructuredError(new Error('Period is already closed'))
+  it('answers PERIOD_ALREADY_CLOSED with the Swedish sentence and the way on', () => {
+    const result = getStructuredError(codedRefusal('PERIOD_ALREADY_CLOSED', 'Period is already closed'))
     expect(result.code).toBe('PERIOD_ALREADY_CLOSED')
     expect(result.retryable).toBe(false)
     expect(result.message_sv).toMatch(/redan stängd/)
@@ -69,8 +71,8 @@ describe('getStructuredError', () => {
     expect(result.remediation?.tool).toBe('gnubok_list_fiscal_periods')
   })
 
-  it('infers PERIOD_LOCK_ALREADY_LOCKED from the plain "Period is already locked" throw', () => {
-    const result = getStructuredError(new Error('Period is already locked'))
+  it('answers PERIOD_LOCK_ALREADY_LOCKED with the Swedish sentence and the way on', () => {
+    const result = getStructuredError(codedRefusal('PERIOD_LOCK_ALREADY_LOCKED', 'Period is already locked'))
     expect(result.code).toBe('PERIOD_LOCK_ALREADY_LOCKED')
     expect(result.retryable).toBe(false)
     expect(result.message_sv).toBe('Perioden är redan låst.')
@@ -79,22 +81,45 @@ describe('getStructuredError', () => {
   })
 
   it('maps an over-long reason to VALIDATION_ERROR with a specific Swedish message', () => {
-    const result = getStructuredError(new Error('reason must be 500 characters or fewer'))
+    const result = getStructuredError(
+      badArgument('reason', 'reason must be 500 characters or fewer', 'Motiveringen får vara högst 500 tecken.'),
+    )
     expect(result.code).toBe('VALIDATION_ERROR')
-    expect(result.message_sv).toBe('Motiveringen får vara högst 500 tecken.')
+    expect(result.message_sv).toBe('reason: Motiveringen får vara högst 500 tecken.')
   })
 
-  it('infers PERIOD_HAS_UNBOOKED_TRANSACTIONS from Swedish lock-error message', () => {
-    const result = getStructuredError(
-      new Error('Kan inte låsa period: 3 affärstransaktion(er) saknar bokföring.')
-    )
+  it('answers a user-facing refusal with its code and its own sentence', () => {
+    const sentence = 'Kan inte låsa period: 3 banktransaktion(er) i perioden saknar bokföring.'
+    const result = getStructuredError(userFacing(new Error(sentence), 'PERIOD_HAS_UNBOOKED_TRANSACTIONS'))
     expect(result.code).toBe('PERIOD_HAS_UNBOOKED_TRANSACTIONS')
+    expect(result.message_sv).toBe(sentence)
     expect(result.remediation?.tool).toBe('gnubok_list_uncategorized_transactions')
+  })
+
+  // A sentence is not a code: the throw site says what failed. The inference
+  // table these replaced matched words ("already closed") that other
+  // refusals also use.
+  it.each([
+    'Period must be locked before closing',
+    'Period is already closed',
+    'Kan inte låsa period: 3 affärstransaktion(er) saknar bokföring.',
+    'Transaction already has a journal entry',
+    'Invoice not found',
+  ])('reads no code into the plain sentence %j', (sentence) => {
+    expect(getStructuredError(new Error(sentence)).code).toBe('UNKNOWN_ERROR')
+  })
+
+  it.each([
+    'Cannot write to locked/closed fiscal period "2025" (is_closed=t, locked_at=2026-01-31)',
+    'Bokföringen är låst t.o.m. 2025-12-31. Kan inte skapa verifikation med datum 2025-11-03.',
+  ])('names the database lock refusal %j PERIOD_LOCKED: triggers raise it as text', (sentence) => {
+    expect(getStructuredError({ code: 'P0001', message: sentence }).code).toBe('PERIOD_LOCKED')
+    expect(getStructuredError(new Error(`Database error: ${sentence}`)).code).toBe('PERIOD_LOCKED')
   })
 
   it('produces INSUFFICIENT_SCOPE remediation with attempted scope', () => {
     const result = getStructuredError(
-      new Error('Insufficient scope: this API key does not have the "bookkeeping:write" scope'),
+      codedRefusal('INSUFFICIENT_SCOPE', 'Insufficient scope: this API key does not have the "bookkeeping:write" scope'),
       { attemptedScope: 'bookkeeping:write' }
     )
     expect(result.code).toBe('INSUFFICIENT_SCOPE')
@@ -104,7 +129,7 @@ describe('getStructuredError', () => {
 
   it('points a key without approve at the review list in the app (issue #3408)', () => {
     const result = getStructuredError(
-      new Error('Insufficient scope: this API key does not have the "pending_operations:approve" scope'),
+      codedRefusal('INSUFFICIENT_SCOPE', 'Insufficient scope: this API key does not have the "pending_operations:approve" scope'),
       { attemptedScope: 'pending_operations:approve' }
     )
     expect(result.code).toBe('INSUFFICIENT_SCOPE')
@@ -115,12 +140,6 @@ describe('getStructuredError', () => {
     expect(result.remediation?.description).not.toContain('add it to the existing key')
   })
 
-  it('infers TRANSACTION_ALREADY_CATEGORIZED', () => {
-    const result = getStructuredError(new Error('Transaction already has a journal entry'))
-    expect(result.code).toBe('TRANSACTION_ALREADY_CATEGORIZED')
-    expect(result.remediation?.tool).toBe('gnubok_uncategorize_transaction')
-  })
-
   it('falls back to UNKNOWN_ERROR when no code or pattern matches', () => {
     const result = getStructuredError(new Error('Something weird happened'))
     expect(result.code).toBe('UNKNOWN_ERROR')
@@ -129,7 +148,7 @@ describe('getStructuredError', () => {
 
   it('handles plain string errors', () => {
     const result = getStructuredError('Period must be locked before closing')
-    expect(result.code).toBe('PERIOD_NOT_LOCKED')
+    expect(result.code).toBe('UNKNOWN_ERROR')
     expect(result.message_en).toBe('Period must be locked before closing')
   })
 
@@ -180,9 +199,9 @@ describe('retryable contract (always present, transient inference)', () => {
     expect(getStructuredError(new Error('connect ECONNRESET 1.2.3.4:443')).retryable).toBe(true)
   })
 
-  it('keeps a specific inferred code but still computes retryable from the failure', () => {
+  it('keeps a specific code but still computes retryable from the failure', () => {
     // NOT_FOUND is permanent even though nothing in the registry says so explicitly.
-    const result = getStructuredError(new Error('Transaction not found'))
+    const result = getStructuredError(codedRefusal('NOT_FOUND', 'Transaction not found'))
     expect(result.code).toBe('NOT_FOUND')
     expect(result.retryable).toBe(false)
   })
@@ -218,7 +237,7 @@ describe('getStructuredError: throw-site remediation', () => {
   })
 
   it('ignores a malformed throw-site remediation and keeps the registry one', () => {
-    const err = Object.assign(new Error('Period must be locked before closing'), {
+    const err = Object.assign(codedRefusal('PERIOD_NOT_LOCKED', 'Period must be locked before closing'), {
       remediation: { tool: 'gnubok_lock_period' }, // no description: not a hint
     })
     const result = getStructuredError(err)

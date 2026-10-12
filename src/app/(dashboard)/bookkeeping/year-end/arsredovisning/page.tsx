@@ -31,6 +31,7 @@ import type { SignatureRequest } from '@/lib/bokslut/arsredovisning/signature-se
 import type { AnnualReportVersionSummary } from '@/lib/bokslut/arsredovisning/compliance-types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { parseAmountInput } from '@/lib/money'
 
 const SIGNATURE_EVIDENCE_REFERENCE_PATTERN =
   /^(archive|document|receipt):[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/
@@ -286,8 +287,8 @@ export default function ArsredovisningPage() {
     // non-numeric input with a toast so the API doesn't return a 400.
     let longTermDebtParsed: number | null = null
     if (longTermDebt.trim()) {
-      const parsed = Number(longTermDebt.replace(',', '.'))
-      if (!Number.isFinite(parsed) || parsed < 0) {
+      const parsed = parseAmountInput(longTermDebt)
+      if (parsed === null || parsed < 0) {
         toast({
           title: 'Ogiltigt belopp',
           description:
@@ -315,8 +316,8 @@ export default function ArsredovisningPage() {
     }
     let proposedDividendParsed = 0
     if (proposedDividend.trim()) {
-      const parsed = Number(proposedDividend.replace(/\s/g, '').replace(',', '.'))
-      if (!Number.isFinite(parsed) || parsed < 0) {
+      const parsed = parseAmountInput(proposedDividend)
+      if (parsed === null || parsed < 0) {
         toast({
           title: 'Ogiltigt belopp',
           description: 'Föreslagen utdelning måste vara noll eller ett positivt belopp.',
@@ -324,14 +325,14 @@ export default function ArsredovisningPage() {
         })
         return
       }
-      proposedDividendParsed = Math.round(parsed * 100) / 100
+      proposedDividendParsed = parsed
     }
     // ÅRL 6 kap. 3 § amounts: empty means "inga"; otherwise a non-negative
     // amount in kronor.
     const parseMemberAmount = (raw: string, label: string): number | null | false => {
       if (!raw.trim()) return null
-      const parsed = Number(raw.replace(/\s/g, '').replace(',', '.'))
-      if (!Number.isFinite(parsed) || parsed < 0) {
+      const parsed = parseAmountInput(raw)
+      if (parsed === null || parsed < 0) {
         toast({
           title: 'Ogiltigt belopp',
           description: `${label} måste vara noll eller ett positivt belopp (eller lämnas tomt).`,
@@ -339,7 +340,7 @@ export default function ArsredovisningPage() {
         })
         return false
       }
-      return Math.round(parsed * 100) / 100
+      return parsed
     }
     const insatserRepayableParsed = parseMemberAmount(
       insatserRepayable,

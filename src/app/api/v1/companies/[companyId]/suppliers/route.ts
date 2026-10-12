@@ -3,9 +3,9 @@
  *
  * GET  : list with filters (supplier_type, search, include_archived).
  *         Cursor pagination on (created_at ASC, id ASC).
- * POST : create. Idempotent (mandatory Idempotency-Key). Dry-runnable
- *         (?dry_run=true returns the validated would-be record without
- *         committing).
+ * POST : create: the suppliers.create operation (lib/suppliers/create-
+ *         supplier.ts, shared with the dashboard and the agent's approval).
+ *         Idempotent (mandatory Idempotency-Key). Dry-runnable.
  *
  * VIES validation note: unlike customers, suppliers do not carry a
  * `vat_number_validated` flag in the schema today. The vat_number is
@@ -14,21 +14,18 @@
  */
 
 import { z } from 'zod'
-import { created, paginated } from '@/lib/api/v1/response'
-import { dryRunPreview } from '@/lib/api/v1/dry-run'
+import { paginated } from '@/lib/api/v1/response'
 import {
   decodeDefaultCursor,
   encodeDefaultCursor,
   parsePaginationParams,
   PaginationQueryShape,
 } from '@/lib/api/v1/pagination'
-import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
+import { registerEndpoint, listEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
-import { readV1JsonBody } from '@/lib/api/v1/body'
-import { CreateSupplierSchema } from '@/lib/api/schemas'
-import { eventBus } from '@/lib/events'
-import type { Supplier } from '@/types'
+import { v1ErrorResponse, v1ValidationError } from '@/lib/api/v1/errors'
+import { v1OperationHandler } from '@/lib/operations/v1'
+import { suppliersCreate } from '@/lib/operations/suppliers'
 
 const SupplierType = z.enum([
   'swedish_business',
@@ -235,195 +232,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
 )
 
 // ──────────────────────────────────────────────────────────────────
-// POST: create supplier
+// POST: create supplier (operation suppliers.create)
 // ──────────────────────────────────────────────────────────────────
 
-const SupplierCreated = z.object({
-  id: z.string().uuid().nullable(),
-  name: z.string(),
-  supplier_type: SupplierType,
-  email: z.string().nullable(),
-  phone: z.string().nullable(),
-  address_line1: z.string().nullable(),
-  address_line2: z.string().nullable(),
-  postal_code: z.string().nullable(),
-  city: z.string().nullable(),
-  country: z.string(),
-  org_number: z.string().nullable(),
-  vat_number: z.string().nullable(),
-  bankgiro: z.string().nullable(),
-  plusgiro: z.string().nullable(),
-  bank_account: z.string().nullable(),
-  iban: z.string().nullable(),
-  bic: z.string().nullable(),
-  default_expense_account: z.string().nullable(),
-  default_payment_terms: z.number(),
-  default_currency: z.string(),
-  notes: z.string().nullable(),
-  archived_at: z.string().nullable(),
-  created_at: z.string().nullable(),
-  updated_at: z.string().nullable(),
-})
-
-const SUPPLIER_RESPONSE_COLUMNS =
-  'id, name, supplier_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, bankgiro, plusgiro, bank_account, iban, bic, default_expense_account, default_payment_terms, default_currency, notes, archived_at, created_at, updated_at'
-
-registerEndpoint({
-  operation: 'suppliers.create',
-  method: 'POST',
-  path: '/api/v1/companies/:companyId/suppliers',
-  summary: 'Create a supplier.',
-  description:
-    'Creates a new supplier for the company. Requires Idempotency-Key (UUID). Supports ?dry_run=true for input validation without committing: the dry-run response shows the would-be record minus id and timestamps.',
-  useWhen:
-    'You need to register a new supplier before booking supplier invoices against them. Use dry-run first to catch validation errors before committing.',
-  doNotUseFor:
-    'Updating an existing supplier (PATCH instead). Creating customers (different resource).',
-  pitfalls: [
-    'Idempotency-Key is mandatory: calls without it return 400 VALIDATION_ERROR.',
-    'org_number uniqueness is enforced at the database level; duplicate inserts return 409 SUPPLIER_DUPLICATE_ORG_NUMBER.',
-    'Unlike customers, suppliers carry no `vat_number_validated` flag: vat_number is stored as supplied without VIES verification. Validate externally if your workflow requires it.',
-    'default_expense_account is a BAS account number (e.g. "5410"); the value is stored as-is and used as the suggested debit account when supplier invoices are booked.',
-  ],
-  example: {
-    request: {
-      name: 'Office Depot AB',
-      supplier_type: 'swedish_business',
-      email: 'invoices@officedepot.example',
-      org_number: '556677-8899',
-      bankgiro: '123-4567',
-      default_expense_account: '5410',
-      default_payment_terms: 30,
-      default_currency: 'SEK',
-    },
-    response: {
-      data: {
-        id: '0e9c…',
-        name: 'Office Depot AB',
-        supplier_type: 'swedish_business',
-        email: 'invoices@officedepot.example',
-        // Stored and returned as the 10-digit key; the request above shows
-        // the accepted hyphenated input.
-        org_number: '5566778899',
-        bankgiro: '123-4567',
-        default_expense_account: '5410',
-        default_payment_terms: 30,
-        default_currency: 'SEK',
-        archived_at: null,
-        created_at: '2026-05-13T15:00:00Z',
-        updated_at: '2026-05-13T15:00:00Z',
-      },
-      meta: { request_id: 'req_…', api_version: '2026-05-12' },
-    },
-  },
-  scope: 'suppliers:write',
-  risk: 'low',
-  idempotent: true,
-  reversible: true,
-  dryRunSupported: true,
-  request: { body: CreateSupplierSchema },
-  response: { success: dataEnvelope(SupplierCreated) },
-})
-
-export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
-  'suppliers.create',
-  async (request, ctx) => {
-    const rawBodyResult = await readV1JsonBody(request, ctx)
-    if (!rawBodyResult.ok) return rawBodyResult.response
-    const rawBody = rawBodyResult.body
-
-    const parsed = CreateSupplierSchema.safeParse(rawBody)
-    if (!parsed.success) return v1ValidationError(ctx, parsed.error)
-    const body = parsed.data
-
-    if (ctx.dryRun) {
-      return dryRunPreview(
-        {
-          id: null,
-          name: body.name,
-          supplier_type: body.supplier_type,
-          email: body.email ?? null,
-          phone: body.phone ?? null,
-          address_line1: body.address_line1 ?? null,
-          address_line2: body.address_line2 ?? null,
-          postal_code: body.postal_code ?? null,
-          city: body.city ?? null,
-          country: body.country ?? 'SE',
-          org_number: body.org_number ?? null,
-          vat_number: body.vat_number ?? null,
-          bankgiro: body.bankgiro ?? null,
-          plusgiro: body.plusgiro ?? null,
-          bank_account: body.bank_account ?? null,
-          iban: body.iban ?? null,
-          bic: body.bic ?? null,
-          default_expense_account: body.default_expense_account ?? null,
-          default_payment_terms: body.default_payment_terms ?? 30,
-          default_currency: body.default_currency ?? 'SEK',
-          notes: body.notes ?? null,
-          archived_at: null,
-          created_at: null,
-          updated_at: null,
-        },
-        { requestId: ctx.requestId, log: ctx.log },
-      )
-    }
-
-    const { data, error } = await ctx.supabase
-      .from('suppliers')
-      .insert({
-        user_id: ctx.userId,
-        company_id: ctx.companyId!,
-        name: body.name,
-        supplier_type: body.supplier_type,
-        email: body.email ?? null,
-        phone: body.phone ?? null,
-        address_line1: body.address_line1 ?? null,
-        address_line2: body.address_line2 ?? null,
-        postal_code: body.postal_code ?? null,
-        city: body.city ?? null,
-        country: body.country ?? 'SE',
-        org_number: body.org_number ?? null,
-        vat_number: body.vat_number ?? null,
-        bankgiro: body.bankgiro ?? null,
-        plusgiro: body.plusgiro ?? null,
-        bank_account: body.bank_account ?? null,
-        iban: body.iban ?? null,
-        bic: body.bic ?? null,
-        default_expense_account: body.default_expense_account ?? null,
-        default_payment_terms: body.default_payment_terms ?? 30,
-        default_currency: body.default_currency ?? 'SEK',
-        notes: body.notes ?? null,
-      })
-      .select(SUPPLIER_RESPONSE_COLUMNS)
-      .single()
-
-    if (error) {
-      if (error.code === '23505') {
-        // Symmetric with customers: do NOT echo body.org_number: guards
-        // against accidentally leaking a natural-person identifier in the
-        // future if SupplierType ever gains an `individual` variant.
-        return v1ErrorResponseFromCode('SUPPLIER_DUPLICATE_ORG_NUMBER', ctx.log, {
-          requestId: ctx.requestId,
-          details: { field: 'org_number' },
-        })
-      }
-      return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
-    }
-
-    try {
-      await eventBus.emit({
-        type: 'supplier.created',
-        payload: {
-          supplier: { ...(data as Record<string, unknown>), user_id: ctx.userId, company_id: ctx.companyId! } as unknown as Supplier,
-          companyId: ctx.companyId!,
-          userId: ctx.userId,
-        },
-      })
-    } catch (err) {
-      ctx.log.warn('supplier.created emit failed', err as Error)
-    }
-
-    return created(data, { requestId: ctx.requestId })
-  },
-  { requireIdempotencyKey: true },
-)
+export const POST = v1OperationHandler(suppliersCreate)

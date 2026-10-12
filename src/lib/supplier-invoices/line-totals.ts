@@ -1,4 +1,5 @@
 import { roundOre } from '@/lib/money'
+import { grossVat } from '@/lib/vat/gross-split'
 
 /**
  * How far a supplier invoice's document total may sit from its lines incl.
@@ -99,7 +100,7 @@ export function readSupplierInvoiceLinesAsGross<T extends GrossReadableLine>(
 ): LinesReadAsGross<T> | null {
   if (printed.length !== lines.length) return null
   const vatsInside = printed.map((line) =>
-    line.rate > 0 ? roundOre((line.amount * line.rate) / (1 + line.rate)) : 0,
+    grossVat(line.amount, line.rate),
   )
   const grossSum = roundOre(printed.reduce((sum, line) => sum + line.amount, 0))
   const vatSum = roundOre(vatsInside.reduce((sum, vat) => sum + vat, 0))

@@ -22,19 +22,12 @@ import { PartyFactsSection } from '@/components/parties/PartyFactsSection'
 import { usePartyDossier } from '@/components/parties/use-party-dossier'
 import { fromRegistry, addressRowsFromRegistry, listSv } from '@/lib/parties/registry-summary'
 import { formatOrgNumber } from '@/lib/utils'
+import { supplierInvoiceStatusDisplay } from '@/lib/supplier-invoices/status-display'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 
 // Supplier invoices carry their own currency; "kr" is only correct for SEK.
 function amountWithCurrency(amount: number, currency?: string | null): string {
   return `${formatAmount(amount)} ${!currency || currency === 'SEK' ? 'kr' : currency}`
-}
-
-// Chips mark exceptions (design.md convention 5), the same states as the
-// supplier-invoice list: approved and paid render as muted text.
-const EXCEPTION_STATUS_VARIANTS: Record<string, 'outline' | 'secondary' | 'warning' | 'destructive'> = {
-  registered: 'outline',
-  partially_paid: 'warning',
-  overdue: 'destructive',
-  credited: 'secondary',
 }
 
 interface SupplierCurrencyStats {
@@ -143,6 +136,9 @@ export default function SupplierDetailPage() {
       toast({ title: t('update_failed_title'), description: getErrorMessage(result, { context: 'supplier' }), variant: 'destructive' })
     } else {
       toast({ title: t('saved_title'), description: t('saved_description') })
+      // Every supplier picker reads the cached roster: refresh it now, not
+      // after the dedupe window, so a renamed supplier shows renamed.
+      void invalidateReferenceData('ref:suppliers')
       setSupplier({ ...result.data, stats: supplier?.stats })
       setIsEditOpen(false)
     }
@@ -164,6 +160,7 @@ export default function SupplierDetailPage() {
       toast({ title: t('delete_failed_title'), description: getErrorMessage(result, { context: 'supplier' }), variant: 'destructive' })
     } else {
       toast({ title: t('deleted_title'), description: t('deleted_description') })
+      void invalidateReferenceData('ref:suppliers')
       router.push('/suppliers')
     }
   }
@@ -181,15 +178,6 @@ export default function SupplierDetailPage() {
         </Button>
       </div>
     )
-  }
-
-  const statusLabels: Record<string, string> = {
-    registered: t('status_registered'),
-    approved: t('status_approved'),
-    paid: t('status_paid'),
-    partially_paid: t('status_partially_paid'),
-    overdue: t('status_overdue'),
-    credited: t('status_credited'),
   }
 
   // One fallback row keeps the figures band composed for a supplier that has
@@ -374,8 +362,11 @@ export default function SupplierDetailPage() {
                Chips mark exceptions: paid and approved render as muted text. */
             <div className="divide-y divide-border">
               {invoices.map((inv) => {
-                const exceptionVariant = EXCEPTION_STATUS_VARIANTS[inv.status]
-                const label = statusLabels[inv.status] || inv.status
+                // The same status as the supplier-invoice list and detail
+                // (lib/supplier-invoices/status-display.ts).
+                const statusDisplay = supplierInvoiceStatusDisplay(inv.status)
+                const exceptionVariant = statusDisplay?.chip ?? undefined
+                const label = statusDisplay ? tInvoices(statusDisplay.labelKey) : inv.status
                 return (
                   <Link
                     key={inv.id}

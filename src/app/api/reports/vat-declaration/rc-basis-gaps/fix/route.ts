@@ -25,6 +25,7 @@ import {
   type RcBasisAtRate,
 } from '@/lib/reports/rc-basis-gaps'
 import { roundOre } from '@/lib/money'
+import { vatBasisAccount, type VatBasisKind } from '@/lib/vat/moms-box-mapping'
 import type { CreateJournalEntryLineInput, JournalEntryLine } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -78,7 +79,7 @@ const FixGapSchema = z.object({
     .optional(),
 })
 
-const RATE_INDEX: Record<RcOutputAccount, number> = { '2614': 0, '2624': 1, '2634': 2 }
+const OUTPUT_ACCOUNT_RATE: Record<RcOutputAccount, number> = { '2614': 0.25, '2624': 0.12, '2634': 0.06 }
 
 /**
  * The BAS basis account for a sats and classification: EU services
@@ -92,14 +93,12 @@ function pickBasisAccount(
   supplierType: z.infer<typeof SUPPLIER_TYPE>,
   supplyType: z.infer<typeof SERVICE_OR_GOODS>,
 ): string | null {
-  const rateIdx = RATE_INDEX[outputAccount]
-  if (supplierType === 'eu_business') {
-    return (supplyType === 'service' ? ['4535', '4536', '4537'] : ['4515', '4516', '4517'])[rateIdx]
-  }
-  if (supplierType === 'non_eu_business') {
-    return supplyType === 'service' ? ['4531', '4532', '4533'][rateIdx] : null
-  }
-  return (supplyType === 'service' ? ['4425', '4426', '4427'] : ['4415', '4416', '4417'])[rateIdx]
+  const service = supplyType === 'service'
+  const kind: VatBasisKind | null =
+    supplierType === 'eu_business' ? (service ? 'eu_services' : 'eu_goods')
+      : supplierType === 'non_eu_business' ? (service ? 'non_eu_services' : null)
+        : service ? 'domestic_services' : 'domestic_goods'
+  return kind ? vatBasisAccount(kind, OUTPUT_ACCOUNT_RATE[outputAccount]) : null
 }
 
 /**

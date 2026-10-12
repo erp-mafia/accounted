@@ -63,3 +63,27 @@ export function oreRoundingLine(
     line_description: 'Öresavrundning',
   }
 }
+
+/** 3960 Valutakursvinster. */
+export const FX_GAIN_ACCOUNT = '3960'
+/** 7960 Valutakursförluster. */
+export const FX_LOSS_ACCOUNT = '7960'
+
+/**
+ * The kursdiff leg of a cross-currency settlement or revaluation: a gain
+ * (gainSek > 0) credits 3960, a loss (gainSek <= 0) debits 7960, with the
+ * amount öre-rounded (roundOre). The leg every generator builds the same way;
+ * only the texts differ, so they are the one option (the defaults are the
+ * realised texts, currency-revaluation passes the orealiserade ones).
+ *
+ * Callers decide whether there is a difference at all before asking.
+ */
+export function fxDifferenceLine(
+  gainSek: number,
+  texts: { gain: string; loss: string } = { gain: 'Valutakursvinst', loss: 'Valutakursförlust' },
+): CreateJournalEntryLineInput {
+  const amount = roundOre(Math.abs(gainSek))
+  return gainSek > 0
+    ? { account_number: FX_GAIN_ACCOUNT, debit_amount: 0, credit_amount: amount, line_description: texts.gain }
+    : { account_number: FX_LOSS_ACCOUNT, debit_amount: amount, credit_amount: 0, line_description: texts.loss }
+}

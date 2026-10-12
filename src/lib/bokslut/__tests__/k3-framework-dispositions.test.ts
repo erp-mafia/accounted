@@ -17,7 +17,10 @@ vi.mock('@/lib/reports/income-statement', () => ({
   generateIncomeStatement: vi.fn(),
 }))
 
-vi.mock('@/lib/reports/trial-balance', () => ({
+// Partial: the KPI rows and the year-end exclusion use the module's real
+// helpers (buildTrialBalanceRows, fetchReversedYearEndEntryIds).
+vi.mock('@/lib/reports/trial-balance', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/reports/trial-balance')>()),
   generateTrialBalance: vi.fn(),
 }))
 

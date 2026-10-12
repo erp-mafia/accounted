@@ -113,6 +113,8 @@ import { useCaseWords, useInvoiceCollection } from '@/components/collections/cas
 import { remindersAside, showSendToCollection } from '@/lib/collections/invoice-entry'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { newEditorHref } from '@/lib/invoices/editor/new-editor-params'
+import { invoiceStatusDisplay } from '@/lib/invoices/status-display'
+import type { StatusChip } from '@/lib/status-display'
 
 /** Minimized Peppol delivery projection from GET /api/invoices/[id]/peppol/deliveries. */
 interface PeppolDeliveryView {
@@ -400,7 +402,15 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // the toggle alone defaults to on and would claim a schedule nothing runs.
   const [autoRemindersEnabled, setAutoRemindersEnabled] = useState<boolean | null>(null)
 
-  const statusLabel = (status: InvoiceStatus): string => t(`status_${status}`)
+  // The plain status, as every invoice surface shows it (lib/invoices/status-display.ts).
+  const baseStatus = (
+    status: InvoiceStatus,
+  ): { label: string; exception: boolean; variant?: StatusChip } => {
+    const display = invoiceStatusDisplay(status)
+    if (!display) return { label: status, exception: false }
+    return { label: tInvoices(display.labelKey), exception: display.chip !== null, variant: display.chip ?? undefined }
+  }
+  const statusLabel = (status: InvoiceStatus): string => baseStatus(status).label
   const reminderLevelLabel = (level: 1 | 2 | 3): string => t(`reminder_level_${level}`)
 
   // Latest-request guard for fetchInvoice. A mutation refresh can overlap the
@@ -1767,33 +1777,21 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             : null
   // One status element, same rule as the list page (chips mark exceptions):
   // sent and paid render as muted text, everything that deviates gets a chip.
-  const status: { label: string; exception: boolean; variant?: 'secondary' | 'outline' | 'warning' } =
+  const status: { label: string; exception: boolean; variant?: StatusChip } =
     invoice.status === 'cancelled'
-      ? { label: statusLabel('cancelled'), exception: true, variant: 'secondary' }
+      ? baseStatus('cancelled')
       : quoteStatusDescriptor
         ? quoteStatusDescriptor
-      : invoice.status === 'credited'
-        ? { label: statusLabel('credited'), exception: true, variant: 'secondary' }
-        : invoice.status === 'draft'
-          ? isUnsentNumberedInvoice
-            ? { label: t('status_unsent'), exception: true, variant: 'outline' }
-            : { label: statusLabel('draft'), exception: true, variant: 'secondary' }
-          : invoice.status === 'partially_paid'
-            ? { label: statusLabel('partially_paid'), exception: true, variant: 'warning' }
-            : invoice.status === 'overdue' && invoice.due_date
-              ? {
-                  label: tInvoices('status_overdue_days', { days: Math.max(1, daysOverdue(invoice.due_date)) }),
-                  exception: true,
-                  variant: 'warning',
-                }
-              : invoice.status === 'paid'
-                ? {
-                    label: invoice.paid_at
-                      ? tInvoices('status_paid_date', { date: formatDate(invoice.paid_at) })
-                      : statusLabel('paid'),
-                    exception: false,
-                  }
-                : { label: statusLabel('sent'), exception: false }
+      : invoice.status === 'draft' && isUnsentNumberedInvoice
+        ? { label: t('status_unsent'), exception: true, variant: 'outline' }
+        : invoice.status === 'overdue' && invoice.due_date
+          ? {
+              ...baseStatus('overdue'),
+              label: tInvoices('status_overdue_days', { days: Math.max(1, daysOverdue(invoice.due_date)) }),
+            }
+          : invoice.status === 'paid' && invoice.paid_at
+            ? { label: tInvoices('status_paid_date', { date: formatDate(invoice.paid_at) }), exception: false }
+            : baseStatus(invoice.status)
 
   const metaParts = [
     customer?.name,

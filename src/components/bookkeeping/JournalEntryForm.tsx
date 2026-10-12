@@ -48,7 +48,7 @@ import {
 } from '@/lib/documents/link-documents'
 import { cn, formatAmount, formatCurrency } from '@/lib/utils'
 import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
-import { roundOre } from '@/lib/money'
+import { roundOre, formatAmountInput } from '@/lib/money'
 import { buildVoucherSeriesOptions, formatVoucher, resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveFxLineSlot } from '@/lib/bookkeeping/fx-line-slot'
 import { resolveVoucherEnter, type VoucherEnterAction } from '@/lib/bookkeeping/voucher-enter-key'
@@ -715,7 +715,7 @@ export default function JournalEntryForm({
     const diff = computeBalancingDiff(index)
     const fill = side === 'debit' ? diff : -diff
     if (fill <= 0) return
-    updateLine(index, side === 'debit' ? 'debit_amount' : 'credit_amount', fill.toFixed(2))
+    updateLine(index, side === 'debit' ? 'debit_amount' : 'credit_amount', formatAmountInput(fill, '.'))
   }
 
   // Tabbing (or clicking) into an untouched amount proposes the outstanding
@@ -735,7 +735,7 @@ export default function JournalEntryForm({
       const diff = computeBalancingDiff(index)
       const fill = side === 'debit' ? diff : -diff
       if (fill <= 0) return
-      updateLine(index, side === 'debit' ? 'debit_amount' : 'credit_amount', fill.toFixed(2))
+      updateLine(index, side === 'debit' ? 'debit_amount' : 'credit_amount', formatAmountInput(fill, '.'))
       // Select after the controlled re-render has written the value.
       requestAnimationFrame(() => target.select())
     }
@@ -1638,7 +1638,7 @@ export default function JournalEntryForm({
               </Label>
               <Input
                 type="number"
-                value={foreignAmount || (computedForeignAmount > 0 && !parsedForeignInput ? computedForeignAmount.toFixed(2) : '')}
+                value={foreignAmount || (computedForeignAmount > 0 && !parsedForeignInput ? formatAmountInput(computedForeignAmount, '.') : '')}
                 onChange={(e) => setForeignAmount(e.target.value)}
                 placeholder="0,00"
                 className="mt-1 h-8"

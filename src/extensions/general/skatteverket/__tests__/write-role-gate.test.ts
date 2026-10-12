@@ -96,6 +96,7 @@ describe('skatteverket write-role gate', () => {
       'POST /declaration/draft',
       'PUT /declaration/lock',
       'POST /agi/submit',
+      'POST /agi/send-for-signing',
       'POST /agi/granskningsunderlag',
       'POST /agi/lasUpp',
     ]) {

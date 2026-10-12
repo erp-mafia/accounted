@@ -11,7 +11,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
-import { createClient } from '@/lib/supabase/client'
+import { useCustomers } from '@/lib/reference-data/hooks'
 import { useCompany } from '@/contexts/CompanyContext'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { readPdfPreviewMeta } from '@/lib/invoices/editor/preview-request'
@@ -35,10 +35,12 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
   const currentUrlRef = useRef<string | null>(null)
 
   const sampleItemDescription = t('sample_item_description')
+  // The sample invoice's customer: the first of the cached register.
+  const { customers } = useCustomers()
+  const sampleCustomerId = customers[0]?.id ?? null
 
   useEffect(() => {
     if (!open || !company?.id) return
-    const companyId = company.id
 
     let cancelled = false
     const controller = new AbortController()
@@ -55,17 +57,6 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
       setError(null)
 
       try {
-        const supabase = createClient()
-        const { data: customer, error: customerError } = await supabase
-          .from('customers')
-          .select('id')
-          .eq('company_id', companyId)
-          .is('archived_at', null)
-          .limit(1)
-          .maybeSingle()
-
-        if (customerError) throw customerError
-        if (cancelled) return
 
         // Non-momsregistrerade säljare ska inte få en exempel-rad med 25 %
         // VAT: förhandsvisningen är hårdkodad sample-data, inte ett val
@@ -78,7 +69,7 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
           headers: { 'Content-Type': 'application/json' },
           signal: controller.signal,
           body: JSON.stringify({
-            customer_id: customer?.id,
+            customer_id: sampleCustomerId ?? undefined,
             // Sample number, the placeholder the route uses for its mock
             // customer. Without one the bank-app QR (and the Swish message)
             // cannot be built, so the preview beside "QR-kod på fakturan"
@@ -144,7 +135,7 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
       clearTimeout(timer)
       controller.abort()
     }
-  }, [open, settings, company?.id, sampleItemDescription, locale])
+  }, [open, settings, company?.id, sampleItemDescription, locale, sampleCustomerId])
 
   useEffect(() => {
     return () => {

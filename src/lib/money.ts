@@ -156,9 +156,11 @@ export function sumOre(values: readonly number[]): number {
 }
 
 /**
- * Parse an amount a person typed or pasted into a form field, rounded to the
- * öre with `roundOre`. Returns null when the text is not one unambiguous
- * amount, so a caller can tell "nothing usable typed" from zero.
+ * Parse a decimal number a person typed or pasted into a form field, as
+ * written: no rounding. Returns null when the text is not one unambiguous
+ * number, so a caller can tell "nothing usable typed" from zero. For money use
+ * `parseAmountInput`, which rounds to the öre; this is for what keeps its
+ * decimals (a quantity, a unit price, an exchange rate, a percentage).
  *
  * Accepts what Swedish users actually enter: space-grouped thousands
  * ("12 345,67"), including the non-breaking and narrow no-break spaces that
@@ -172,9 +174,51 @@ export function sumOre(values: readonly number[]): number {
  * `Number(s.replace(',', '.'))` is the bug this replaces: it turns
  * "12 345,67" into NaN, which call sites then read as 0.
  */
-export function parseAmountInput(input: string | null | undefined): number | null {
+export function parseDecimalInput(input: string | null | undefined): number | null {
   if (input == null) return null
-  const compact = input.replace(/\s/g, '').replace(/−/g, '-')
+  return parseAmountText(input.replace(/\s/g, '').replace(/−/g, '-'), false)
+}
+
+/**
+ * Parse an amount from a bank statement, a Skatteverket skattekonto export or
+ * an opening-balance sheet: the one parser every file importer reads amounts
+ * with, rounded to the öre. Returns null when the cell is not one amount.
+ *
+ * The same grammar as parseAmountInput, plus what files carry and a person
+ * does not type: a Unicode minus or dash lookalike (U+2212, U+2010-U+2013) or
+ * a leading plus as the sign, a trailing "kr", and dot-grouped thousands
+ * without a decimal ("1.234", "1.234.567"), which a Swedish export means as
+ * thousands. A number (a spreadsheet cell) is rounded as is.
+ */
+export function parseSwedishAmount(value: string | number | null | undefined): number | null {
+  if (value == null) return null
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return null
+    const rounded = roundOre(value)
+    return rounded === 0 ? 0 : rounded
+  }
+  const compact = value
+    .replace(/\s/g, '')
+    .replace(/kr$/i, '')
+    .replace(/^[\u2212\u2010-\u2013]/, '-')
+    .replace(/^\+/, '')
+  const n = parseAmountText(compact, true)
+  if (n === null) return null
+  const rounded = roundOre(n)
+  return rounded === 0 ? 0 : rounded
+}
+
+/**
+ * The amount grammar both parsers share, on whitespace-free text: an optional
+ * hyphen sign, digits, and at most one decimal mark. When both a comma and a
+ * dot appear the last is the decimal and the other must group whole
+ * thousands. `dotThousands` also reads a dot-only strict thousands grouping
+ * ("1.234") as thousands rather than as a decimal.
+ */
+function parseAmountText(compact: string, dotThousands: boolean): number | null {
+  if (dotThousands && /^-?\d{1,3}(\.\d{3})+$/.test(compact)) {
+    return finishAmount(compact.split('.').join(''), '')
+  }
   const lastSep = Math.max(compact.lastIndexOf(','), compact.lastIndexOf('.'))
   let whole = lastSep === -1 ? compact : compact.slice(0, lastSep)
   const fraction = lastSep === -1 ? '' : compact.slice(lastSep + 1)
@@ -187,12 +231,48 @@ export function parseAmountInput(input: string | null | undefined): number | nul
       whole = whole.split(groupSep).join('')
     }
   }
+  return finishAmount(whole, fraction)
+}
 
+function finishAmount(whole: string, fraction: string): number | null {
   if (!/^-?\d*$/.test(whole) || !/^\d*$/.test(fraction)) return null
   if (whole.replace('-', '') === '' && fraction === '') return null
 
   const n = Number(fraction ? `${whole}.${fraction}` : whole)
   if (!Number.isFinite(n)) return null
+  return n === 0 ? 0 : n
+}
+
+/**
+ * Parse an amount a person typed or pasted into a form field, rounded to the
+ * öre with `roundOre`. Same grammar as `parseDecimalInput`; null when the text
+ * is not one unambiguous amount.
+ */
+export function parseAmountInput(input: string | null | undefined): number | null {
+  const n = parseDecimalInput(input)
+  if (n === null) return null
   const rounded = roundOre(n)
   return rounded === 0 ? 0 : rounded
+}
+
+const AMOUNT_INPUT_FORMAT = new Intl.NumberFormat('en-US', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+  useGrouping: false,
+})
+
+/**
+ * An amount as the value of an amount field: rounded to the öre, two
+ * decimals, no grouping, so `parseAmountInput` reads it back unchanged
+ * ("1234,50"). `decimal` is ',' for the text fields Swedish users type into
+ * and '.' for an <input type="number">, which only takes a dot. For an amount
+ * shown rather than edited use `formatAmount` (lib/utils.ts).
+ *
+ * Replaces `n.toFixed(2)`, which rounds 1.005 down to "1.00" (the double
+ * below 1.005) where `roundOre` gives 1.01.
+ */
+export function formatAmountInput(n: number, decimal: ',' | '.' = ','): string {
+  const rounded = roundOre(n)
+  const text = AMOUNT_INPUT_FORMAT.format(rounded === 0 ? 0 : rounded)
+  return decimal === ',' ? text.replace('.', ',') : text
 }

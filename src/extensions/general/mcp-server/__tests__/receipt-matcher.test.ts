@@ -359,10 +359,13 @@ describe('MCP Receipt Matcher', () => {
       const tx = makeTransaction({ id: 'tx-1', amount: -500 })
 
       enqueueMany([
-        { data: tx, error: null },           // fetch transaction (preview)
+        { data: tx, error: null },           // fetch transaction (the booking service's dry run)
         { data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null },
         { data: [], error: null }, // resolveSettlementAccount: no enabled cash accounts -> 1930
-        { data: tx, error: null },            // fetch transaction for title
+        // findUnresolvableAccounts: every account the verifikat posts to is active
+        { data: [{ account_number: '6110' }, { account_number: '1930' }, { account_number: '2641' }], error: null },
+        { data: null, error: null },          // checkPeriodLock: company lock date
+        { data: null, error: null },          // checkPeriodLock: covering fiscal period
         { data: null, error: null },          // resolvePeriodStatusForDate: company_settings
         { data: null, error: null },          // resolvePeriodStatusForDate: fiscal_periods
         { data: { id: 'op-1' }, error: null }, // insert into pending_operations
@@ -406,7 +409,10 @@ describe('MCP Receipt Matcher', () => {
         { data: tx, error: null },
         { data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null },
         { data: [], error: null }, // resolveSettlementAccount: no enabled cash accounts -> 1930
-        { data: tx, error: null },            // fetch transaction for title
+        // findUnresolvableAccounts: every account the verifikat posts to is active
+        { data: [{ account_number: '6110' }, { account_number: '1930' }, { account_number: '2641' }], error: null },
+        { data: null, error: null },          // checkPeriodLock: company lock date
+        { data: null, error: null },          // checkPeriodLock: covering fiscal period
         { data: null, error: null },          // resolvePeriodStatusForDate: company_settings
         { data: null, error: null },          // resolvePeriodStatusForDate: fiscal_periods
         { data: { id: 'op-1' }, error: null }, // insert into pending_operations

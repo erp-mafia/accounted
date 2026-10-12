@@ -52,7 +52,7 @@ import {
   formatAgiPeriodDashed,
 } from '@/lib/salary/agi/reporting-period'
 import { runCalculationState } from '@/lib/salary/calculation-state'
-import { roundOre } from '@/lib/money'
+import { parseAmountInput, roundOre } from '@/lib/money'
 import type { EmployeeMasked, SalaryRunEmployee } from '@/types'
 
 /** The fields of GET /api/expense-claims?status=registered the run page reads. */
@@ -586,8 +586,8 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   // reads this per-run value at calc time. Saved on blur; the user then clicks
   // Beräkna to refresh the outcome.
   async function handleSalaryEdit(employeeId: string, raw: string, previous: number) {
-    const monthly = Number(raw.replace(/\s/g, '').replace(',', '.'))
-    if (!Number.isFinite(monthly) || monthly < 0 || monthly === previous) return
+    const monthly = parseAmountInput(raw)
+    if (monthly === null || monthly < 0 || monthly === previous) return
     setActionLoading(`salary-${employeeId}`)
     try {
       const res = await fetch(`/api/salary/runs/${id}/employees/${employeeId}`, {

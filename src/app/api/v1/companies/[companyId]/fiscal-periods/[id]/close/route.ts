@@ -15,8 +15,6 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { closePeriod } from '@/lib/core/bookkeeping/period-service'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { userFacingCode } from '@/lib/errors/user-facing'
 
 const PeriodClosedResponse = z.object({
   id: z.string().uuid(),
@@ -38,7 +36,7 @@ registerEndpoint({
   pitfalls: [
     'Idempotency-Key is mandatory.',
     'IRREVERSIBLE. Once is_closed=true, the period is read-only forever (BFL 5 kap 8 § + 7 kap).',
-    'Pre-conditions: locked + closing_entry_id present. Otherwise the call returns CONFLICT.',
+    'Pre-conditions: locked + closing_entry_id present. Otherwise 400 PERIOD_NOT_LOCKED or 400 YEAR_END_NOT_RUN; an already closed period returns 409 PERIOD_ALREADY_CLOSED.',
   ],
   example: {
     response: {
@@ -65,40 +63,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         details: { field: 'id', message: 'fiscal_period id must be a UUID.' },
       })
     }
-    // Explicit pre-flight checks BEFORE the engine call. closePeriod throws
-    // Swedish error strings on each precondition violation; matching against
-    // those strings is brittle (engine message changes silently). Read the
-    // period's state columns directly and return structured codes here.
-    const { data: period } = await ctx.supabase
-      .from('fiscal_periods')
-      .select('id, is_closed, locked_at, closing_entry_id')
-      .eq('id', idParse.data)
-      .eq('company_id', ctx.companyId!)
-      .maybeSingle()
-    if (!period) {
-      return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
-        requestId: ctx.requestId, details: { resource: 'fiscal_period' },
-      })
-    }
-    const periodRow = period as { is_closed: boolean; locked_at: string | null; closing_entry_id: string | null }
-    if (periodRow.is_closed) {
-      return v1ErrorResponseFromCode('CONFLICT', ctx.log, {
-        requestId: ctx.requestId, details: { reason: 'already_closed' },
-      })
-    }
-    if (!periodRow.locked_at) {
-      return v1ErrorResponseFromCode('PERIOD_NOT_LOCKED', ctx.log, { requestId: ctx.requestId })
-    }
-    if (!periodRow.closing_entry_id) {
-      return v1ErrorResponseFromCode('CONFLICT', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          reason: 'year_end_not_executed',
-          remediation: 'Call POST /fiscal-periods/{id}/year-end first.',
-        },
-      })
-    }
-
     try {
       const updated = await closePeriod(ctx.supabase, ctx.companyId!, ctx.userId, idParse.data)
       return ok(
@@ -106,35 +70,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         { requestId: ctx.requestId },
       )
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'unknown'
-      ctx.log.warn('fiscal-periods.close refused', { fiscalPeriodId: idParse.data, reason: msg })
-      if (userFacingCode(err)) {
-        return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
-      }
-      if (msg.includes('not found')) {
-        return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
-          requestId: ctx.requestId, details: { resource: 'fiscal_period' },
-        })
-      }
-      if (msg.includes('already closed')) {
-        return v1ErrorResponseFromCode('CONFLICT', ctx.log, {
-          requestId: ctx.requestId, details: { reason: 'already_closed' },
-        })
-      }
-      if (msg.includes('must be locked')) {
-        return v1ErrorResponseFromCode('PERIOD_NOT_LOCKED', ctx.log, {
-          requestId: ctx.requestId,
-        })
-      }
-      if (msg.includes('Year-end closing must be executed')) {
-        return v1ErrorResponseFromCode('CONFLICT', ctx.log, {
-          requestId: ctx.requestId,
-          details: { reason: 'year_end_not_executed', remediation: 'Call POST /fiscal-periods/{id}/year-end first.' },
-        })
-      }
-      return v1ErrorResponseFromCode('INTERNAL_ERROR', ctx.log, {
-        requestId: ctx.requestId, details: { reason: getErrorMessage(err, { locale: 'en' }) },
-      })
+      // closePeriod's refusals carry their codes (PERIOD_NOT_FOUND,
+      // PERIOD_ALREADY_CLOSED, PERIOD_NOT_LOCKED, YEAR_END_NOT_RUN), so this
+      // answers the same code as the dashboard and MCP (classifyError).
+      return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
     }
   },
   { requireIdempotencyKey: true },

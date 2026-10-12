@@ -133,6 +133,7 @@ vi.mock('@/lib/invoices/invoice-deliveries', () => ({
 
 import { commitPendingOperation } from '../commit'
 import { unlockPeriod } from '@/lib/core/bookkeeping/period-service'
+import { codedRefusal } from '@/lib/errors/refusal'
 import { parseSIEFile } from '@/lib/import/sie-parser'
 import { requestSIEJobAction, submitSIEJob } from '@/lib/import/sie-jobs'
 import { commitAnnualPostings } from '@/lib/bokslut/assets/depreciation-engine'
@@ -211,7 +212,7 @@ describe('commitPendingOperation: unlock_period', () => {
   })
 
   it('answers the service refusal with its code', async () => {
-    vi.mocked(unlockPeriod).mockRejectedValueOnce(new Error('Period is not locked'))
+    vi.mocked(unlockPeriod).mockRejectedValueOnce(codedRefusal('PERIOD_UNLOCK_NOT_LOCKED', 'Period is not locked'))
 
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim

@@ -1,10 +1,12 @@
 /**
  * Shared salary-run booking orchestration.
  *
- * `bookPaidSalaryRun` is the booking core extracted from the dashboard's
- * `POST /api/salary/runs/{id}/book` route: load the paid run + roster,
- * handle the nollkörning branch (zero-amount runs post nothing: the engine
- * forbids zero vouchers), otherwise post 2-4 verifikationer via
+ * `bookPaidSalaryRun` is the booking core of the dashboard's
+ * `POST /api/salary/runs/{id}/book` route and the v1 :book verb (whose dry
+ * run is `previewPaidSalaryRunBooking`): load the paid run + roster, refuse
+ * a payment date in a locked period with PERIOD_LOCKED before anything is
+ * posted, handle the nollkörning branch (zero-amount runs post nothing: the
+ * engine forbids zero vouchers), otherwise post 2-4 verifikationer via
  * `createSalaryRunEntries()`, advance `paid` → `booked`, emit
  * `salary_run.booked`, and sync the vacation ledger (non-fatal).
  * `createSalaryRunEntries()` posts all of the run's vouchers or none, and a
@@ -14,17 +16,17 @@
  * `advanceAndBookSalaryRun` is the pending-operation executor path for the
  * MCP tool `gnubok_book_salary_run`: the human approval of the staged
  * operation is the authorization act, so it walks a calculated run through
- * the remaining statuses (draft → review → approved → paid) with the same
- * validations the dashboard routes apply, then books. Missing bank details
- * surface as warnings rather than blockers (mirroring the dashboard's
- * force-approve path): the payment-file generators hard-block on them where
- * it actually matters.
+ * the remaining statuses (draft → review → approved → paid) with the
+ * approval rules every door shares (validateRunForApproval in
+ * lib/salary/approve-run.ts), then books. Missing bank details surface as
+ * warnings rather than blockers (mirroring the dashboard's force-approve
+ * path): the payment-file generators hard-block on them where it actually
+ * matters.
  *
  * Bookkeeping-engine errors (period locks, unbalanced entries) and
  * SalaryRunPartiallyBookedError THROW out of both functions: callers map them
- * via their own envelope, exactly like the route did before extraction. The
- * v1 route keeps its own strict-mode mirror (period pre-check) on purpose,
- * but takes the same booking claim and flips through the same
+ * via their own envelope, exactly like the route did before extraction.
+ * Every door takes the same booking claim and flips through the same
  * markClaimedRunBooked, so every door is serialized by one invariant.
  *
  * Booking claim (accounted#3251): reading the run as 'paid', posting its
@@ -50,8 +52,8 @@ import {
 } from '@/lib/salary/salary-entries'
 import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
 import { refreshRunYtd } from '@/lib/salary/ytd'
-import { effectiveNetPayout } from '@/lib/salary/payment/effective-net'
-import { employeeBankDetailsRemark } from '@/lib/salary/payment/bank-account'
+import { validateRunForApproval, type ApprovalRosterRow } from '@/lib/salary/approve-run'
+import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { eventBus } from '@/lib/events'
 
 export type BookRunResult<T> =
@@ -62,6 +64,8 @@ export interface BookedRunData {
   run: Record<string, unknown>
   entryIds: string[]
   nollkorning: boolean
+  /** The salary verifikat's voucher number; null for a nollkörning. */
+  salaryVoucherNumber: string | null
 }
 
 export interface BookRunArgs {
@@ -256,6 +260,53 @@ export async function markClaimedRunBooked(
   return { ok: true, data: { run: bookedRun as unknown as Record<string, unknown>, entryIds } }
 }
 
+/**
+ * Nollkörning: a run with no monetary effect (employees set to 0 kr, or no
+ * roster at all) has nothing to post. The bookkeeping engine forbids
+ * zero-amount vouchers (every entry must balance with debit & credit > 0),
+ * so such a run is booked without journal entries; the AGI nolldeklaration
+ * is then the only artefact for the period. The net is part of the test: a
+ * run that only repays utlägg has gross 0 but a payout, and its 2820 D /
+ * 1930 K must be posted.
+ */
+export function isNollkorning(run: Record<string, unknown>): boolean {
+  return (
+    Math.round(((run.total_gross as number) ?? 0) * 100) === 0 &&
+    Math.round(((run.total_tax as number) ?? 0) * 100) === 0 &&
+    Math.round(((run.total_net as number) ?? 0) * 100) === 0 &&
+    Math.round(((run.total_avgifter as number) ?? 0) * 100) === 0 &&
+    Math.round(((run.total_vacation_accrual as number) ?? 0) * 100) === 0
+  )
+}
+
+/**
+ * PERIOD_LOCKED before anything moves when the payment date, the date every
+ * verifikat of the run carries, is in a closed or locked period or behind
+ * the company lock date. The database triggers stay authoritative; this
+ * answers with the period instead of an engine error, and before the MCP
+ * walk has advanced the run's status. A nollkörning posts nothing, so no
+ * period stands in its way.
+ */
+async function bookingPeriodRefusal(
+  supabase: SupabaseClient,
+  companyId: string,
+  run: Record<string, unknown>,
+): Promise<BookRunResult<never> | null> {
+  if (isNollkorning(run)) return null
+  const paymentDate = run.payment_date as string
+  const verdict = await checkPeriodLock(supabase, companyId, paymentDate)
+  if (!verdict.locked) return null
+  return {
+    ok: false,
+    code: 'PERIOD_LOCKED',
+    details: {
+      reason: verdict.reason,
+      fiscal_period_id: verdict.fiscal_period_id,
+      payment_date: paymentDate,
+    },
+  }
+}
+
 function bookingClaimRefusal(
   refusal: Exclude<SalaryRunBookingClaim, { ok: true }>,
 ): BookRunResult<never> {
@@ -321,21 +372,9 @@ async function bookClaimedRun(
     return { ok: false, code: claimsCheck.code, details: claimsCheck.details }
   }
 
-  // Nollkörning: a run with no monetary effect (employees set to 0 kr, or no
-  // roster at all) has nothing to post. The bookkeeping engine forbids
-  // zero-amount vouchers (every entry must balance with debit & credit > 0),
-  // so we skip journal-entry creation entirely and just advance to 'booked'.
-  // The AGI nolldeklaration is then the only artefact for the period. The net
-  // is part of the test: a run that only repays utlägg has gross 0 but a
-  // payout, and its 2820 D / 1930 K must be posted.
-  const nothingToBook =
-    Math.round(((run.total_gross as number) ?? 0) * 100) === 0 &&
-    Math.round(((run.total_tax as number) ?? 0) * 100) === 0 &&
-    Math.round(((run.total_net as number) ?? 0) * 100) === 0 &&
-    Math.round(((run.total_avgifter as number) ?? 0) * 100) === 0 &&
-    Math.round(((run.total_vacation_accrual as number) ?? 0) * 100) === 0
-
-  if (nothingToBook) {
+  // Nollkörning (isNollkorning): nothing to post, so skip journal-entry
+  // creation entirely and just advance to 'booked'.
+  if (isNollkorning(run)) {
     const flipped = await markClaimedRunBooked(supabase, args, claimId, null)
     if (!flipped.ok) return flipped
 
@@ -356,7 +395,10 @@ async function bookClaimedRun(
     }
 
     log.info('salary run booked as nollkörning (no journal entries)', { salaryRunId })
-    return { ok: true, data: { run: flipped.data.run, entryIds: [], nollkorning: true } }
+    return {
+      ok: true,
+      data: { run: flipped.data.run, entryIds: [], nollkorning: true, salaryVoucherNumber: null },
+    }
   }
 
   // Rows -> engine input through the same mapper the journal preview route
@@ -412,37 +454,139 @@ async function bookClaimedRun(
     log.warn('vacation ledger sync failed after booking', { message: ledgerSync.message })
   }
 
-  return { ok: true, data: { run: bookedRun, entryIds, nollkorning: false } }
+  const voucherNumber = (vouchers.salaryEntry as { voucher_number?: string | number | null }).voucher_number
+  return {
+    ok: true,
+    data: {
+      run: bookedRun,
+      entryIds,
+      nollkorning: false,
+      salaryVoucherNumber: voucherNumber == null ? null : String(voucherNumber),
+    },
+  }
+}
+
+interface PaidRunForBooking {
+  run: Record<string, unknown>
+  roster: RosterRow[]
 }
 
 /**
- * paid → booked. Exact semantics of the dashboard book route: the run must
- * already be in 'paid' status.
+ * The paid run and its roster, or why it cannot be booked: not found, not
+ * paid, or a payment date in a locked period. One read for every door that
+ * books a paid run, so they refuse alike.
  */
-export async function bookPaidSalaryRun(
+async function loadPaidRunForBooking(
   supabase: SupabaseClient,
   args: BookRunArgs,
-): Promise<BookRunResult<BookedRunData>> {
+): Promise<BookRunResult<PaidRunForBooking>> {
   const { data: run, error: runError } = await supabase
     .from('salary_runs')
     .select('*')
     .eq('id', args.salaryRunId)
     .eq('company_id', args.companyId)
-    .eq('status', 'paid')
-    .single()
-
-  if (runError || !run) {
-    return {
-      ok: false,
-      code: 'SALARY_RUN_NOT_CALCULATED',
-      details: { reason: 'must_be_paid_status' },
-    }
+    .maybeSingle()
+  if (runError) return { ok: false, code: 'SALARY_RUN_BOOK_FAILED', dbError: runError }
+  if (!run) return { ok: false, code: 'SALARY_RUN_NOT_FOUND' }
+  const status = (run as { status: string }).status
+  if (status !== 'paid') {
+    return { ok: false, code: 'SALARY_RUN_BOOK_NOT_PAID', details: { current_status: status } }
   }
+
+  const periodRefusal = await bookingPeriodRefusal(supabase, args.companyId, run)
+  if (periodRefusal) return periodRefusal
 
   const roster = await loadRoster(supabase, args.salaryRunId)
   if (!roster.ok) return roster
+  return { ok: true, data: { run, roster: roster.data } }
+}
 
-  return bookLoadedRun(supabase, args, run, roster.data)
+/**
+ * paid → booked: the dashboard book route and the v1 :book verb. The run
+ * must already be in 'paid' status.
+ */
+export async function bookPaidSalaryRun(
+  supabase: SupabaseClient,
+  args: BookRunArgs,
+): Promise<BookRunResult<BookedRunData>> {
+  const loaded = await loadPaidRunForBooking(supabase, args)
+  if (!loaded.ok) return loaded
+  return bookLoadedRun(supabase, args, loaded.data.run, loaded.data.roster)
+}
+
+export interface SalaryRunBookingPreview {
+  id: string
+  would_advance_status_from: 'paid'
+  would_advance_status_to: 'booked'
+  nollkorning: boolean
+  would_post_entries: string[]
+  note: string
+}
+
+/**
+ * What bookPaidSalaryRun would do, after the same refusals, without claiming
+ * the run or posting: the v1 dry run. Which verifikationer exist follows the
+ * booking's own mapper (overrides, F-skatt rows), so a run without avgifter
+ * previews no avgifter entry and a nollkörning previews none at all.
+ */
+export async function previewPaidSalaryRunBooking(
+  supabase: SupabaseClient,
+  args: BookRunArgs,
+): Promise<BookRunResult<SalaryRunBookingPreview>> {
+  const loaded = await loadPaidRunForBooking(supabase, args)
+  if (!loaded.ok) return loaded
+  const { run, roster } = loaded.data
+
+  const claimsCheck = await assertLinkedExpenseClaimsOpen(supabase, args.companyId, roster)
+  if (!claimsCheck.ok) return { ok: false, code: claimsCheck.code, details: claimsCheck.details }
+
+  const base = {
+    id: args.salaryRunId,
+    would_advance_status_from: 'paid' as const,
+    would_advance_status_to: 'booked' as const,
+  }
+  if (isNollkorning(run)) {
+    return {
+      ok: true,
+      data: {
+        ...base,
+        nollkorning: true,
+        would_post_entries: [],
+        note: 'Nollkörning: the run has no amounts, so it is booked without journal entries; the AGI nolldeklaration is the only artefact for the period.',
+      },
+    }
+  }
+
+  const engineInput = salaryRunDataFromRows(run as unknown as SalaryRunRow, roster)
+  const totalVacation = roster.reduce((sum, e) => sum + ((e.vacation_accrual as number) ?? 0), 0)
+  const totalVacationAvgifter = roster.reduce(
+    (sum, e) => sum + ((e.vacation_accrual_avgifter as number) ?? 0),
+    0,
+  )
+  return {
+    ok: true,
+    data: {
+      ...base,
+      nollkorning: false,
+      would_post_entries: [
+        'salary (gross + tax withholding + net payment)',
+        ...(engineInput.employees.some((employee) => Math.round(employee.avgifter_amount * 100) !== 0)
+          ? ['arbetsgivaravgifter']
+          : []),
+        ...(totalVacation > 0 || totalVacationAvgifter > 0 ? ['vacation accrual'] : []),
+        ...(roster.some((employee) =>
+          (employee.line_items || []).some(
+            (line) =>
+              line.item_type === 'gross_deduction_pension' &&
+              Math.round(Math.abs(line.amount as number) * 100) !== 0,
+          ),
+        )
+          ? ['pension provision and SLP']
+          : []),
+      ],
+      note: 'A live call validates all 2-4 verifikationer before posting the first (createSalaryRunEntries). Voucher numbers are assigned at commit time.',
+    },
+  }
 }
 
 export interface AdvanceAndBookData extends BookedRunData {
@@ -454,11 +598,14 @@ export interface AdvanceAndBookData extends BookedRunData {
  *
  * Used by the `book_salary_run` pending-operation executor: the staged
  * operation's human approval covers the authorization the dashboard collects
- * per-status. Validation parity with the dashboard routes:
- *   - every roster row must carry a calculation_breakdown (blocking)
- *   - missing or invalid bank details (for a positive net payout) and missing
- *     email are warnings, not blockers (dashboard force-approve semantics)
- *   - F-skatt not verified surfaces as a warning (review route parity)
+ * per-status. The approval rules are validateRunForApproval's, the ones
+ * every door applies:
+ *   - a draft never calculated, or a roster row without a
+ *     calculation_breakdown, is blocking
+ *   - missing or invalid bank details (for a positive net payout), missing
+ *     email and F-skatt not verified are warnings, not blockers (dashboard
+ *     force-approve semantics)
+ * A payment date in a locked period is refused before any status moves.
  */
 export async function advanceAndBookSalaryRun(
   supabase: SupabaseClient,
@@ -492,38 +639,25 @@ export async function advanceAndBookSalaryRun(
   const warnings: string[] = []
 
   if (status === 'draft' || status === 'review') {
-    // Blocking: a roster row without a calculation would post a wrong
-    // verifikation. Same gate as the dashboard approve route.
-    const uncalculated = roster
-      .filter((sre) => !sre.calculation_breakdown)
-      .map((sre) => `${sre.employee?.first_name ?? ''} ${sre.employee?.last_name ?? ''}`.trim() || sre.employee_id)
-    if (uncalculated.length > 0) {
+    // The approval rules every door shares (lib/salary/approve-run.ts). A
+    // blocking problem would post a wrong verifikat; bank details and the
+    // rest are warnings here, because the approval of the staged operation
+    // is the user's "Godkänn ändå" (the payment-file step refuses them).
+    const verdict = validateRunForApproval(roster as unknown as ApprovalRosterRow[], run)
+    if (verdict.blocking.length > 0) {
       return {
         ok: false,
         code: 'SALARY_RUN_NOT_CALCULATED',
-        details: { employees: uncalculated },
+        details: { employees: verdict.uncalculated },
       }
     }
-
-    for (const sre of roster) {
-      const emp = sre.employee
-      if (!emp) continue
-      const name = `${emp.first_name} ${emp.last_name}`
-      if (emp.f_skatt_status === 'not_verified') {
-        warnings.push(
-          `${name}: F-skatt ej verifierad: 30% skatteavdrag och fulla avgifter tillämpas (f-skatt.md)`,
-        )
-      }
-      const bankRemark =
-        effectiveNetPayout(sre) > 0
-          ? employeeBankDetailsRemark(name, emp.clearing_number, emp.bank_account_number)
-          : null
-      if (bankRemark) warnings.push(bankRemark)
-      if (!emp.email) {
-        warnings.push(`${name}: E-post saknas, lönebesked kan inte skickas`)
-      }
-    }
+    warnings.push(...verdict.bankDetails, ...verdict.warnings)
   }
+
+  // Before any status moves: a payment date in a locked period would leave
+  // the run walked to paid with nothing booked.
+  const periodRefusal = await bookingPeriodRefusal(supabase, companyId, run)
+  if (periodRefusal) return periodRefusal
 
   if (status === 'draft') {
     const { data: reviewed, error } = await supabase

@@ -11,7 +11,6 @@ import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import { describe, expect, it } from 'vitest'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/scope-catalog'
-import { V1_ENDPOINT_SCOPES } from '@/lib/auth/scopes'
 import { OPERATION_RISK_TIERS } from '@/lib/pending-operations/risk-tiers'
 import { OPERATION_LABEL_KEYS, singleActionWarnings } from '@/components/pending-operations/vocabulary'
 import { listEndpoints } from '@/lib/api/v1/registry'
@@ -57,7 +56,7 @@ describe('operation registry contract', () => {
       const endpoint = registered.get(op.id)
       expect(endpoint, `${op.id}: route file missing or not imported by load-routes.ts`).toBeDefined()
       expect(endpoint!.path).toBe(op.http!.path)
-      expect(V1_ENDPOINT_SCOPES[`${op.http!.method} ${op.http!.path}`], `${op.id}: V1_ENDPOINT_SCOPES`).toBe(op.scope)
+      expect(endpoint!.scope, `${op.id}: endpoint scope`).toBe(op.scope)
     }
   })
 

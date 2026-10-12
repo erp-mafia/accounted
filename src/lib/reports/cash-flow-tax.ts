@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { TrialBalanceRow } from '@/types'
 import { fetchEntryLines } from '@/lib/bookkeeping/entry-lines'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { excludeYearEndChain, fetchReversedYearEndEntryIds } from './trial-balance'
 
 // BAS current income tax, including prior-year adjustments and refunds.
 // Deferred tax (894x) has no payment effect. Other 89xx accounts need an
@@ -43,7 +43,6 @@ interface TaxLine {
   account_number: string
   debit_amount: number
   credit_amount: number
-  journal_entries: { reverses_id: string | null; correction_of_id: string | null }
 }
 
 /**
@@ -61,29 +60,24 @@ async function nonIncomeTaxTransfer(
   fiscalPeriodId: string,
   openingEntryId: string | null,
 ): Promise<number> {
-  const [reversedYearEnd, lines] = await Promise.all([
-    fetchAllRows<{ id: string }>(({ from, to }) =>
-      supabase.from('journal_entries').select('id')
-        .eq('company_id', companyId).eq('source_type', 'year_end').eq('status', 'reversed')
-        .order('id', { ascending: true }).range(from, to),
-    ),
-    fetchEntryLines<TaxLine>({
-      supabase,
-      entryColumns: 'id, reverses_id, correction_of_id',
-      lineColumns: 'account_number, debit_amount, credit_amount',
-      filterEntries: query => {
-        const scoped = query.eq('company_id', companyId).eq('fiscal_period_id', fiscalPeriodId)
-          .in('status', ['posted', 'reversed']).neq('source_type', 'year_end')
-        return openingEntryId ? scoped.neq('id', openingEntryId) : scoped
-      },
-    }),
-  ])
-  const excluded = new Set(reversedYearEnd.map(entry => entry.id))
+  // The trial balance's 'exclude-all-year-end' rule (excludeYearEndChain),
+  // the same entry set as the account totals this corrects.
+  const reversedYearEndIds = await fetchReversedYearEndEntryIds(supabase, companyId)
+  const lines = await fetchEntryLines<TaxLine>({
+    supabase,
+    attachEntriesAs: null,
+    lineColumns: 'account_number, debit_amount, credit_amount',
+    filterEntries: query => {
+      const scoped = excludeYearEndChain(
+        query.eq('company_id', companyId).eq('fiscal_period_id', fiscalPeriodId)
+          .in('status', ['posted', 'reversed']),
+        reversedYearEndIds,
+      )
+      return openingEntryId ? scoped.neq('id', openingEntryId) : scoped
+    },
+  })
   const entries = new Map<string, TaxLine[]>()
   for (const line of lines) {
-    const entry = line.journal_entries
-    if ((entry.reverses_id && excluded.has(entry.reverses_id))
-      || (entry.correction_of_id && excluded.has(entry.correction_of_id))) continue
     if (!line.debit_amount && !line.credit_amount) continue
     const group = entries.get(line.journal_entry_id) ?? []
     group.push(line)

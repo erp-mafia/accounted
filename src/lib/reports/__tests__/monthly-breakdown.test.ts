@@ -15,6 +15,7 @@ function chain(result: unknown) {
     c[m] = () => c
   }
   c.single = () => Promise.resolve(result)
+  c.maybeSingle = () => Promise.resolve(result)
   c.range = () => Promise.resolve(result)
   return c
 }
@@ -25,10 +26,34 @@ beforeEach(() => {
 
 describe('generateMonthlyBreakdown', () => {
   it('returns empty months when no fiscal period found', async () => {
-    mockResult({ data: null, error: { message: 'not found' } })
+    supabase.from.mockImplementation(() => chain({ data: null, error: null }))
 
     const result = await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1')
     expect(result.months).toEqual([])
+  })
+
+  // A failed read used to come back as { months: [] }: an empty chart that
+  // looked like a company without bookings.
+  it('throws when the fiscal period read fails', async () => {
+    supabase.from.mockImplementation(() => chain({ data: null, error: { message: 'timeout', code: '57014' } }))
+
+    await expect(generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1')).rejects.toMatchObject({
+      code: '57014',
+    })
+  })
+
+  it('throws when the journal line read fails', async () => {
+    let callCount = 0
+    supabase.from.mockImplementation(() => {
+      callCount++
+      if (callCount === 1) {
+        return chain({ data: { period_start: '2024-01-01', period_end: '2024-12-31' }, error: null })
+      }
+      if (callCount === 2) return chain({ data: [], error: null })
+      return chain({ data: null, error: { message: 'timeout', code: '57014' } })
+    })
+
+    await expect(generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1')).rejects.toThrow()
   })
 
   it('returns empty months when no journal entries exist', async () => {

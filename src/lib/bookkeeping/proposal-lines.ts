@@ -19,9 +19,10 @@
  *   - line pattern         -> buildMultiLineMappingResult (counterparty-templates.ts)
  *   - line assembly/nets   -> buildTransactionEntryLines (transaction-entries.ts)
  *
- * That is why VAT is single-rounded and the net leg is ALWAYS gross minus the
- * rounded VAT (never independently rounded: at 12% both halves round up for
- * gross = 14 mod 28 ore and the entry goes off by 1 ore), why the fiktiv-moms
+ * That is why the VAT inside a gross is the engine's own split (grossVat,
+ * lib/vat/gross-split.ts) and the net leg is ALWAYS gross minus that VAT
+ * (never independently rounded: at 12% both halves round up for gross = 14
+ * mod 28 ore and the entry goes off by 1 ore), why the fiktiv-moms
  * pair uses the engine's plain rounding (roundOre takes exact-half floats like
  * 8.62 * 0.25 up where plain rounding takes them down), and why sign-mismatched
  * counterparty matches are mirrored exactly as the server mirrors them. The
@@ -47,6 +48,7 @@ import {
 import { booksReverseChargePurchase, getCategoryAccountMapping } from '@/lib/bookkeeping/category-mapping'
 import { buildCurrencyMetadata } from '@/lib/bookkeeping/currency-utils'
 import { roundOre } from '@/lib/money'
+import { grossVat } from '@/lib/vat/gross-split'
 import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
 import { templateAccountForForm } from '@/lib/company/entity-type'
 import {
@@ -314,7 +316,7 @@ function computeRateLines(input: ProposalLinesInput): ProposalLine[] {
     let totalVat = 0
     for (const entry of plan.entries) {
       if (entry.type === 'vat' && entry.vat_rate) {
-        const vatAmt = engineRound(absAmount * entry.vat_rate / (1 + entry.vat_rate))
+        const vatAmt = grossVat(absAmount, entry.vat_rate)
         totalVat += vatAmt
         result.push({ side: side(entry.side), account: entry.account, amount: vatAmt })
       }
@@ -389,7 +391,7 @@ function computeRateLines(input: ProposalLinesInput): ProposalLine[] {
           result.push(...reverseChargeOn(templateDebitAccount, { rate: 0.25, kind: DEFAULT_REVERSE_CHARGE_KIND }))
         } else {
           const vatRate = treatment ? getVatRate(treatment) : 0
-          const vatAmt = vatRate > 0 ? engineRound(absAmount * vatRate / (1 + vatRate)) : 0
+          const vatAmt = vatRate > 0 ? grossVat(absAmount, vatRate) : 0
           const netAmt = vatAmt > 0 ? engineRound(absAmount - vatAmt) : absAmount
           result.push({ side: 'debet', account: templateDebitAccount, amount: netAmt })
           if (vatAmt > 0) {
@@ -416,7 +418,7 @@ function computeRateLines(input: ProposalLinesInput): ProposalLine[] {
         result.push(...reverseChargeOn(templateDebitAccount, { rate: 0.25, kind: DEFAULT_REVERSE_CHARGE_KIND }, true))
       } else {
         const vatRate = treatment ? getVatRate(treatment) : 0
-        const vatAmt = vatRate > 0 ? engineRound(absAmount * vatRate / (1 + vatRate)) : 0
+        const vatAmt = vatRate > 0 ? grossVat(absAmount, vatRate) : 0
         const netAmt = vatAmt > 0 ? engineRound(absAmount - vatAmt) : absAmount
         result.push({ side: 'debet', account: templateCreditAccount, amount: absAmount, settlement: true })
         result.push({ side: 'kredit', account: templateDebitAccount, amount: netAmt })
@@ -441,7 +443,7 @@ function computeRateLines(input: ProposalLinesInput): ProposalLine[] {
     // as gross minus that VAT (transaction-entries.ts). Independently rounding
     // net and VAT (the old extractNet/extractVat pair) goes off by 1 ore at
     // 12% whenever gross = 14 mod 28 ore.
-    const vatAmt = vatRate > 0 ? engineRound(absAmount * vatRate / (1 + vatRate)) : 0
+    const vatAmt = vatRate > 0 ? grossVat(absAmount, vatRate) : 0
     const netAmt = vatAmt > 0 ? engineRound(absAmount - vatAmt) : absAmount
     const isReverseCharge = templateVatTreatment === 'reverse_charge' && !isIncome
 
@@ -490,9 +492,9 @@ function computeRateLines(input: ProposalLinesInput): ProposalLine[] {
 
   const treatment = mapping.vatTreatment as VatTreatment | null
   const vatRate = treatment ? getVatRate(treatment) : 0
-  // buildMappingResultFromCategory computes the VAT leg with roundOre and the
+  // buildMappingResultFromCategory computes the VAT leg with grossVat and the
   // net as gross minus that leg (transaction-entries.ts).
-  const vatAmt = vatRate > 0 ? roundOre(absAmount * vatRate / (1 + vatRate)) : 0
+  const vatAmt = vatRate > 0 ? grossVat(absAmount, vatRate) : 0
 
   // The mapping has already put the business account and its moms account on
   // the side this row books them (getCategoryAccountMapping): a row against

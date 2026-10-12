@@ -86,6 +86,26 @@ interface KontrollFinding {
   identifierare?: string
 }
 
+/**
+ * The summarized kontrollrapport the send-for-signing route answers with on a
+ * refusal at kontroll (personnummer already masked). Local, not imported: core
+ * components never import from an extension.
+ */
+interface KontrollrapportSummary {
+  valideringsfel?: Array<{ felmeddelande: string }>
+  bearbetningsfel?: Array<{ felmeddelande: string }>
+  redovisningsperioder?: Array<{
+    kontrollfel?: Array<{
+      uppgiftsTyp: string
+      textNyckel: string
+      specifikationsnummer?: number
+      identifierare?: string
+      felmeddelande: string
+      felstatus: string
+    }>
+  }>
+}
+
 /** Subset of SkatteverketAGIKontrollresultat we use in the panel. */
 interface Kontrollresultat {
   status: 'PROCESSING' | 'DONE_SUCCESS' | 'DONE_FAILED' | 'DONE_REJECTED'
@@ -551,6 +571,25 @@ export function AGIPanel(props: AGIPanelProps) {
    * kontrollfel under one shape so the UI doesn't need to walk three nested
    * arrays per render.
    */
+  /** The server chain's summarized kontrollrapport as panel findings. */
+  function findingsFromRapport(rapport: KontrollrapportSummary): KontrollFinding[] {
+    const stopp = (f: { felmeddelande: string }): KontrollFinding => ({ status: 'STOPP', beskrivning: f.felmeddelande })
+    return [
+      ...(rapport.bearbetningsfel ?? []).map(stopp),
+      ...(rapport.valideringsfel ?? []).map(stopp),
+      ...(rapport.redovisningsperioder ?? []).flatMap((rp) =>
+        (rp.kontrollfel ?? []).map((kf): KontrollFinding => ({
+          kod: kf.textNyckel,
+          status: kf.felstatus as KontrollFinding['status'],
+          beskrivning: kf.felmeddelande,
+          uppgiftsTyp: kf.uppgiftsTyp,
+          specifikationsnummer: kf.specifikationsnummer,
+          identifierare: kf.identifierare,
+        })),
+      ),
+    ]
+  }
+
   function extractFindings(kr: Kontrollresultat | undefined): KontrollFinding[] {
     if (!kr?.kontrollrapport) return []
     const out: KontrollFinding[] = []
@@ -610,11 +649,11 @@ export function AGIPanel(props: AGIPanelProps) {
    * On DONE_REJECTED we surface the validation findings; the user can still
    * choose to save (so they can fix it in Mina Sidor) or abort.
    *
-   * Failures surface via setError/setKontroller and return false. Shared by
-   * the one-click chain and the advanced "Skicka in underlag" button;
-   * `onKontrollPhase` lets the chain advance its stepper when polling starts.
+   * Failures surface via setError/setKontroller and return false. The
+   * advanced "Skicka in underlag" step; the one-click chain runs server-side
+   * (runSendForSigning).
    */
-  async function runSubmitUnderlag(onKontrollPhase?: () => void): Promise<boolean> {
+  async function runSubmitUnderlag(): Promise<boolean> {
     setKontroller([])
     const submitRes = await fetch('/api/extensions/ext/skatteverket/agi/submit', {
       method: 'POST',
@@ -633,7 +672,6 @@ export function AGIPanel(props: AGIPanelProps) {
     }
 
     // Poll kontrollresultat until DONE_*
-    onKontrollPhase?.()
     let kr: Kontrollresultat | undefined
     for (let attempt = 0; attempt < 8; attempt++) {
       const krRes = await fetch(
@@ -694,8 +732,35 @@ export function AGIPanel(props: AGIPanelProps) {
   }
 
   /**
-   * One-click filing: generate (if missing) → POST underlag → poll kontroll →
-   * create signing link → hand over to BankID signing in Mina Sidor.
+   * The server-side chain behind one-click filing (submitAgiChain): POST the
+   * underlag, poll kontrollresultat, create the signing link with the period
+   * locked. Returns the link ('' when the response carried none) or null on
+   * failure, with the error and any kontroll findings already surfaced.
+   */
+  async function runSendForSigning(): Promise<string | null> {
+    setKontroller([])
+    const res = await fetch('/api/extensions/ext/skatteverket/agi/send-for-signing', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ salaryRunId }),
+    })
+    const json = await res.json().catch(() => ({}))
+    if (!res.ok || json.error) {
+      const rapport = json.details?.kontrollrapport as KontrollrapportSummary | undefined
+      if (rapport) setKontroller(findingsFromRapport(rapport))
+      setError(json.error || t('submit_failed_status', { status: res.status }))
+      return null
+    }
+    // The user typically opens the link, signs in Mina Sidor, then returns
+    // later (or never). Auto-poll so we capture the kvittens (and stamp
+    // agi_submitted_at) without forcing the user to click "Hämta kvittens".
+    scheduleKvittensPolls()
+    return typeof json.data?.signing_url === 'string' ? json.data.signing_url : ''
+  }
+
+  /**
+   * One-click filing: generate (if missing) → the server chain (underlag,
+   * kontroll, signing link) → hand over to BankID signing in Mina Sidor.
    *
    * The signing link opens in a tab we open synchronously at click time:
    * window.open after the async chain would be popup-blocked. On failure the
@@ -721,14 +786,10 @@ export function AGIPanel(props: AGIPanelProps) {
       setChain({ current: 'generate', failed: false, done: false })
       if (!(await ensureAgiGenerated())) throw new ChainFailed()
 
+      // Submit, kontroll and the signing link run server-side as one chain
+      // (POST /agi/send-for-signing, the chain MCP approval runs too).
       setChain({ current: 'submit', failed: false, done: false })
-      const submitted = await runSubmitUnderlag(() =>
-        setChain({ current: 'kontroll', failed: false, done: false }),
-      )
-      if (!submitted) throw new ChainFailed()
-
-      setChain({ current: 'link', failed: false, done: false })
-      const link = await runCreateSigningLink()
+      const link = await runSendForSigning()
       if (link === null) throw new ChainFailed()
 
       setChain({ current: 'link', failed: false, done: true })

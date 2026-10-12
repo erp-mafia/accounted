@@ -6,6 +6,7 @@ import type {
   JournalEntryLine,
 } from '@/types'
 import { validateBalance, allocateVoucherNumber, cancelOrphanedEntry } from '@/lib/bookkeeping/engine'
+import { buildStornoLines } from '@/lib/bookkeeping/line-side'
 import {
   dimensionsBagKey,
   normalizeLineDimensions,
@@ -327,17 +328,19 @@ export async function correctEntry(
     throw new BookkeepingDatabaseError('create_reversal_entry', reversalError?.message)
   }
 
-  // Insert reversed lines (swap debit and credit, preserve dimensions)
-  const reversalLineInserts = originalLines.map((line, index) => {
+  // Insert reversed lines, the engine's storno of each (buildStornoLines: the
+  // opposite side, swapped on the net, so a legacy negative-side line
+  // reverses to a well-formed one), preserving dimensions.
+  const reversalLineInserts = buildStornoLines(originalLines).map(({ line, ...storno }, index) => {
     const dimensions = normalizeLineDimensions(line)
     return {
       journal_entry_id: reversalEntry.id,
       account_number: line.account_number,
       account_id: line.account_id || null,
-      debit_amount: Math.round((Number(line.credit_amount) || 0) * 100) / 100,
-      credit_amount: Math.round((Number(line.debit_amount) || 0) * 100) / 100,
+      debit_amount: storno.debit_amount,
+      credit_amount: storno.credit_amount,
       currency: line.currency || 'SEK',
-      amount_in_currency: line.amount_in_currency ? -Number(line.amount_in_currency) : null,
+      amount_in_currency: storno.amount_in_currency,
       exchange_rate: line.exchange_rate || null,
       line_description: `Storno: ${line.line_description || ''}`,
       tax_code: line.tax_code || null,

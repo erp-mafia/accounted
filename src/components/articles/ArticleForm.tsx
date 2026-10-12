@@ -33,6 +33,7 @@ import {
 } from '@/lib/invoices/rot-rut-rules'
 import { UNIT_MAX_LENGTH } from '@/lib/invoices/units'
 import UnitPicker from '@/components/invoices/UnitPicker'
+import { roundOre } from '@/lib/money'
 
 // A row from the currencies reference table (lib migration
 // 20260630110000_currencies_reference_table.sql).
@@ -46,9 +47,6 @@ interface CurrencyOption {
 const VAT_RATES = [25, 12, 6, 0] as const
 
 /** Money is rounded to öre with arithmetic, never toFixed (CLAUDE.md rule 6). */
-function round2(value: number): number {
-  return Math.round(value * 100) / 100
-}
 
 // SettingsInput is a bare input, so it does not carry the wheel guard that
 // components/ui/input.tsx applies to type="number". Without it, scrolling the
@@ -213,8 +211,8 @@ export default function ArticleForm({
   // impossible to miss here.
   const price = Number.isFinite(watchedPrice) ? Number(watchedPrice) : 0
   const effectiveVat = vatRegistered ? Number(watchedVat) || 0 : 0
-  const vatAmount = round2((price * effectiveVat) / 100)
-  const totalInclVat = round2(price + vatAmount)
+  const vatAmount = roundOre((price * effectiveVat) / 100)
+  const totalInclVat = roundOre(price + vatAmount)
   const currency = watchedCurrency || 'SEK'
 
   // Keep the article's own currency selectable even before the fetch resolves

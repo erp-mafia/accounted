@@ -181,7 +181,7 @@ import {
   type DocumentLinkHolder,
 } from '@/lib/documents/link-holder'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
-import { userFacingCode } from '@/lib/errors/user-facing'
+import { classifyError } from '@/lib/errors/get-structured-error'
 import { requiresWebApproval } from '@/lib/pending-operations/risk-tiers'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { createDimensionValue } from '@/lib/dimensions/registry-service'
@@ -235,7 +235,7 @@ import {
 } from '@/lib/invoices/invoice-deliveries'
 import { createLogger } from '@/lib/logger'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
-import { CreateSupplierParamsSchema } from '@/lib/pending-operations/schemas/create-supplier'
+import { createSupplier } from '@/lib/suppliers/create-supplier'
 import { CreateArticleParamsSchema, UpdateArticleParamsSchema } from '@/lib/pending-operations/schemas/article'
 import { CreateDimensionValueParamsSchema } from '@/lib/pending-operations/schemas/dimension-value'
 import { RetagLineDimensionsParamsSchema } from '@/lib/pending-operations/schemas/retag-line-dimensions'
@@ -282,7 +282,7 @@ import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
 import { applyRecurringScheduleUpdate } from '@/lib/invoices/apply-recurring-schedule-update'
 import { toRecurringScheduleItemRow } from '@/lib/invoices/recurring-schedule-items'
 import { periodPlaceholderProblem } from '@/lib/invoices/recurring-placeholders'
-import { BulkBookInboxSchema, OpeningBalancesBulkSchema } from '@/lib/api/schemas'
+import { BulkBookInboxSchema, CreateSupplierSchema, OpeningBalancesBulkSchema } from '@/lib/api/schemas'
 import { ensureArticleNumber } from '@/lib/articles/ensure-article-number'
 import { isValidRevenueAccount } from '@/lib/articles/validate-revenue-account'
 import { z } from 'zod'
@@ -315,6 +315,7 @@ import type {
   FiscalPeriod,
 } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { MATCHABLE_INVOICE_STATUSES, isMatchableInvoiceStatus } from '@/lib/invoices/matchable-statuses'
 
 const log = createLogger('pending-operations/commit')
 
@@ -496,7 +497,8 @@ async function commitRegisteredOperation(
     const partial = outcome.partialPostedIds && Object.keys(outcome.partialPostedIds).length > 0
     return {
       // Never an empty string: an empty error reads as success downstream.
-      error: outcome.messageSv || entry?.message_en || outcome.code,
+      // Swedish first, like every other executor: the approver reads it.
+      error: outcome.messageSv || entry?.message_sv || entry?.message_en || outcome.code,
       errorCode: outcome.code,
       status: entry?.httpStatus ?? 400,
       // A failure after an irreversible step: failed_partial, not rejected.
@@ -1666,55 +1668,28 @@ async function commitCreateSupplier(
   companyId: string,
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
-  // Defense in depth: re-validate the staged params at the commit boundary so a
-  // tampered pending_operations row cannot inject unexpected fields or
-  // malformed payment-routing data into the suppliers table (ASVS V4.5).
-  let validated
-  try {
-    validated = CreateSupplierParamsSchema.parse(params)
-  } catch (err) {
-    if (err instanceof z.ZodError) {
-      const issue = err.issues[0]
-      const path = issue?.path?.join('.') ?? 'params'
-      return { error: `Invalid ${path}: ${issue?.message ?? 'validation failed'}`, status: 400 }
-    }
-    throw err
+  // Defense in depth: re-validate the staged params at the commit boundary
+  // with the register's one rule set, so a tampered pending_operations row
+  // cannot inject malformed payment-routing data (ASVS V4.5).
+  const validated = CreateSupplierSchema.safeParse(params)
+  if (!validated.success) {
+    const issue = validated.error.issues[0]
+    const path = issue?.path?.join('.') || 'params'
+    return { error: `Invalid ${path}: ${issue?.message ?? 'validation failed'}`, status: 400 }
   }
 
-  const { data, error } = await supabase
-    .from('suppliers')
-    .insert({
-      user_id: userId,
-      company_id: companyId,
-      name: validated.name,
-      supplier_type: validated.supplier_type,
-      email: validated.email ?? null,
-      phone: validated.phone ?? null,
-      org_number: validated.org_number ?? null,
-      vat_number: validated.vat_number ?? null,
-      address_line1: validated.address_line1 ?? null,
-      address_line2: validated.address_line2 ?? null,
-      postal_code: validated.postal_code ?? null,
-      city: validated.city ?? null,
-      country: validated.country ?? 'SE',
-      bankgiro: validated.bankgiro ?? null,
-      plusgiro: validated.plusgiro ?? null,
-      bank_account: validated.bank_account ?? null,
-      iban: validated.iban ?? null,
-      bic: validated.bic ?? null,
-      default_expense_account: validated.default_expense_account ?? null,
-      default_payment_terms: validated.default_payment_terms,
-      default_currency: validated.default_currency ?? 'SEK',
-      notes: validated.notes ?? null,
-    })
-    .select()
-    .single()
-
-  if (error) return { error: error.message, status: 500 }
-
-  await eventBus.emit({ type: 'supplier.created', payload: { supplier: data as Supplier, userId, companyId } })
-
-  return { data: { supplier_id: data.id } }
+  // The insert the dashboard and v1 make (lib/suppliers/create-supplier.ts).
+  const outcome = await createSupplier({ supabase, companyId, userId, log }, validated.data)
+  if (!outcome.ok) {
+    const entry = getErrorEntry(outcome.code)
+    return {
+      error: outcome.messageSv ?? entry?.message_sv ?? outcome.code,
+      errorCode: outcome.code,
+      status: entry?.httpStatus ?? 500,
+    }
+  }
+  if (outcome.dryRun) return { error: 'create_supplier: unexpected dry-run outcome', status: 500 }
+  return { data: { supplier_id: outcome.data.id } }
 }
 
 /**
@@ -2803,7 +2778,7 @@ async function commitMarkInvoicePaid(
     })
     .eq('id', invoiceId)
     .eq('company_id', companyId)
-    .in('status', ['sent', 'overdue', 'partially_paid'])
+    .in('status', [...MATCHABLE_INVOICE_STATUSES])
     .select('id')
 
   if (updateError) {
@@ -3365,7 +3340,7 @@ async function commitMatchTransactionInvoice(
       status: 409,
     }
   }
-  if (!['sent', 'overdue', 'partially_paid'].includes(invoice.status)) {
+  if (!isMatchableInvoiceStatus(invoice.status)) {
     return { error: 'Invoice is not in a matchable state', status: 409 }
   }
 
@@ -3611,7 +3586,7 @@ async function commitMatchTransactionInvoice(
       remaining_amount: newRemaining,
     })
     .eq('id', invoiceId)
-    .in('status', ['sent', 'overdue', 'partially_paid'])
+    .in('status', [...MATCHABLE_INVOICE_STATUSES])
     .select('id')
 
   if (updateInvError) {
@@ -3868,9 +3843,11 @@ async function runPeriodTransition(
     const period = await transition(supabase, companyId, userId, id)
     return { data: { period_id: period.id, [timestampKey]: period[timestampKey] } }
   } catch (err) {
-    // A refusal written for the reader (an SIE import still holding the year)
-    // keeps its code, so the approval answers it instead of UNKNOWN_ERROR.
-    const code = userFacingCode(err)
+    // period-service's refusals carry their codes (an SIE import still holding
+    // the year, a period that is not locked yet), so the approval answers the
+    // same code as the dashboard and v1 instead of UNKNOWN_ERROR.
+    const classified = classifyError(err).code
+    const code = classified === 'UNKNOWN_ERROR' ? null : classified
     return {
       error: err instanceof Error ? err.message : fallback,
       status: code ? (getErrorEntry(code)?.httpStatus ?? 400) : 400,
@@ -6403,7 +6380,10 @@ async function commitCreateEmployee(
         status: entry?.httpStatus ?? 500,
       }
     }
-    return { data: { ...result.data } }
+    // The summary only: result_data is stored, and the row carries bank and
+    // contact details nobody reading the operation needs.
+    const { row: _row, ...summary } = result.data
+    return { data: summary }
   } catch (err) {
     return {
       error: err instanceof Error ? err.message : 'Failed to create employee',
@@ -6435,7 +6415,9 @@ async function commitUpdateEmployee(
         status: entry?.httpStatus ?? 500,
       }
     }
-    return { data: { ...result.data } }
+    // The summary only, as for create.
+    const { row: _row, previous: _previous, changes: _changes, ...summary } = result.data
+    return { data: summary }
   } catch (err) {
     return {
       error: err instanceof Error ? err.message : 'Failed to update employee',

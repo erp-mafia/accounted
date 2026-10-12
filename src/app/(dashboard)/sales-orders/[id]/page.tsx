@@ -25,7 +25,8 @@ import {
   STATUS_LABEL_KEY,
   formatQty,
 } from '@/components/sales-orders/labels'
-import type { Invoice, InvoiceStatus, SalesOrder, SalesOrderItem } from '@/types'
+import type { Invoice, SalesOrder, SalesOrderItem } from '@/types'
+import { invoiceStatusDisplay } from '@/lib/invoices/status-display'
 
 type Transition = 'confirm' | 'cancel' | 'reopen'
 
@@ -60,28 +61,11 @@ function isTextLine(item: SalesOrderItem): boolean {
   return item.line_type === 'text'
 }
 
-const INVOICE_STATUS_LABEL_KEY: Record<InvoiceStatus, string> = {
-  draft: 'invoice_status_draft',
-  sent: 'invoice_status_sent',
-  paid: 'invoice_status_paid',
-  partially_paid: 'invoice_status_partially_paid',
-  overdue: 'invoice_status_overdue',
-  cancelled: 'invoice_status_cancelled',
-  credited: 'invoice_status_credited',
-}
-
-// Chips mark exceptions: a draft, an overdue or a cancelled invoice deviates
-// from the paid-in-time path; the rest render as muted text.
-const INVOICE_STATUS_BADGE: Partial<Record<InvoiceStatus, 'outline' | 'warning' | 'destructive'>> = {
-  draft: 'outline',
-  overdue: 'warning',
-  cancelled: 'destructive',
-}
-
 export default function SalesOrderDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
   const t = useTranslations('sales_order_detail')
   const tList = useTranslations('sales_orders')
+  const tInvoices = useTranslations('invoices')
   const tCommon = useTranslations('common')
   const errorLocale = useLocale() as ErrorLocale
   const router = useRouter()
@@ -426,8 +410,10 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
             </thead>
             <tbody>
               {invoices.map((invoice) => {
-                const variant = INVOICE_STATUS_BADGE[invoice.status]
-                const label = t(INVOICE_STATUS_LABEL_KEY[invoice.status] ?? 'invoice_status_draft')
+                // The same status as the invoice list (lib/invoices/status-display.ts).
+                const statusDisplay = invoiceStatusDisplay(invoice.status)
+                const variant = statusDisplay?.chip ?? undefined
+                const label = statusDisplay ? tInvoices(statusDisplay.labelKey) : invoice.status
                 return (
                   <tr key={invoice.id} className="transition-colors duration-150 hover:bg-secondary/35">
                     <td className={cn(TD_CLASS, 'pl-0 tabular-nums')}>

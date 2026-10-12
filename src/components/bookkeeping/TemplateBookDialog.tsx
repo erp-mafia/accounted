@@ -20,7 +20,7 @@ import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import TemplatePicker from '@/components/transactions/TemplatePicker'
 import { useCompany } from '@/contexts/CompanyContext'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
-import { roundOre } from '@/lib/money'
+import { roundOre, parseAmountInput } from '@/lib/money'
 import { ArrowLeft, Check } from 'lucide-react'
 import type { BookingTemplateLibrary } from '@/types'
 import { useAccounts, useFiscalPeriods } from '@/lib/reference-data/hooks'
@@ -73,8 +73,8 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
   }, [open])
 
   const amount = useMemo(() => {
-    const parsed = parseFloat(amountInput.replace(/\s/g, '').replace(',', '.'))
-    return Number.isFinite(parsed) && parsed > 0 ? roundOre(parsed) : 0
+    const parsed = parseAmountInput(amountInput)
+    return parsed !== null && parsed > 0 ? parsed : 0
   }, [amountInput])
 
   // The live kontering: recomputed from the template's line pattern on

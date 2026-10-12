@@ -2,55 +2,32 @@
  * POST /api/v1/companies/{companyId}/transactions/batch-categorize
  *
  * Apply a single categorization to up to 100 transactions in one call.
- * Partial-success semantics: per-item failure does not roll back items
- * that succeeded. Each item is processed through the same orchestration
- * as the single :categorize endpoint, so it can fail individually for any
- * of the same reasons (invalid template, invalid mapping, race, etc.),
- * including the two double-booking guards the single endpoint and the
- * dashboard share (TRANSACTION_BOOK_POSSIBLE_DUPLICATE with the bound
- * force override; TX_CATEGORIZE_SUGGEST_SI_MATCH / _CI_MATCH with
- * confirm_no_match). Like the other bulk booking drivers, an item never
- * dedupes against a verifikat booked earlier in the same batch.
+ * Partial-success semantics: per-item failure does not roll back items that
+ * succeeded. Each item is one call of categorizeTransaction
+ * (lib/transactions/categorize-core.ts), the service behind :categorize and
+ * the dashboard, so an item accepts the same fields and fails for the same
+ * reasons with the same codes, including both double-booking guards
+ * (TRANSACTION_BOOK_POSSIBLE_DUPLICATE with the bound force override;
+ * TX_CATEGORIZE_SUGGEST_SI_MATCH / _CI_MATCH with confirm_no_match). Like the
+ * other bulk booking drivers, an item never dedupes against a verifikat booked
+ * earlier in the same batch.
  *
  * Idempotent over the whole batch. Dry-runnable.
  */
 import { z } from 'zod'
-import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
-import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { CategorizeTransactionSchema } from '@/lib/api/schemas'
-import type { SupabaseClient } from '@supabase/supabase-js'
-import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
-import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
-import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
-import { reconcileRcBasisWithChart } from '@/lib/bookkeeping/rc-basis-reconcile'
-import { chartVatTreatmentsLoader, type ChartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
-import {
-  getTemplateById,
-  buildMappingResultFromTemplate,
-  validateTemplateForEntity,
-} from '@/lib/bookkeeping/booking-templates'
-import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
-import { finalFromCategorize, recordDecisions, snapshotSuggestions, type SuggestionSnapshot } from '@/lib/suggestion-log/record'
-import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
-import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
-import { collectMappingResultAccounts, findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
-import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
-import { runBookingDuplicateGuard } from '@/lib/transactions/booking-duplicate-guard'
-import { assertTransactionBookable } from '@/lib/transactions/is-booked'
-import type { BookingDuplicateExclusions } from '@/lib/transactions/booking-duplicate-detection'
-import { findInvoiceMatchSuggestion } from '@/lib/transactions/invoice-match-suggestion'
+import { chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
+import { snapshotSuggestions } from '@/lib/suggestion-log/record'
+import { categorizeTransaction, type CategorizeOutcome } from '@/lib/transactions/categorize-core'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { getStructuredError } from '@/lib/errors/get-structured-error'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
-import { eventBus } from '@/lib/events'
-import type { Logger } from '@/lib/logger'
-import type { EntityType, Transaction, TransactionCategory } from '@/types'
 
 const BatchItem = z.object({
   transaction_id: z.string().uuid(),
@@ -133,525 +110,60 @@ interface Item {
   error?: { code: string; message: string; details?: unknown }
 }
 
-/** Per-item refusal from one of the shared double-booking guards. */
-function guardRefusal(
-  index: number,
-  transactionId: string,
-  code: string,
-  details: unknown,
-): Item {
-  return {
-    ok: false,
-    request_index: index,
-    transaction_id: transactionId,
-    error: {
-      code,
-      message:
-        getErrorEntry(code)?.message_sv ??
-        'Transaktionen bokfördes inte: se felkoden och detaljerna.',
-      details,
-    },
-  }
-}
-
-function categorizeUpdateError(error: unknown): NonNullable<Item['error']> {
-  const structured = getStructuredError(error)
-  if (structured.code === 'TX_CATEGORIZE_IGNORED_CONFLICT') {
-    const mapped = getErrorEntry(structured.code)
-    return {
-      code: structured.code,
-      message: mapped?.message_sv ?? 'Transaktionens tillstånd ändrades samtidigt.',
-    }
-  }
-  return {
-    code: 'INTERNAL_ERROR',
-    message: getErrorMessage(error),
-  }
-}
-
-async function categorizeOne(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
-  entityType: EntityType,
-  /** company_settings.vat_registered as loaded (lib/bookkeeping/vat-registration.ts). */
-  vatRegistered: boolean | null,
-  index: number,
-  transactionId: string,
-  input: z.infer<typeof CategorizeTransactionSchema>,
-  dryRun: boolean,
-  log: Logger,
-  /** Transactions / verifikat booked earlier in THIS batch (see BookingDuplicateExclusions). */
-  exclude: BookingDuplicateExclusions,
-  /** The company's momskoder, shared by the whole batch so they are read once at most. */
-  loadChart: ChartVatTreatmentsLoader,
-  /** What was on offer for the batch's rows before any of them was booked; null on a dry run. */
-  suggestionSnapshot: SuggestionSnapshot | null,
-): Promise<Item> {
-  const { data: transaction, error: fetchErr } = await supabase
-    .from('transactions')
-    .select('*')
-    .eq('id', transactionId)
-    .eq('company_id', companyId)
-    .single()
-  if (fetchErr || !transaction) {
-    return {
-      ok: false,
-      request_index: index,
-      transaction_id: transactionId,
-      error: { code: 'TX_CATEGORIZE_TX_NOT_FOUND', message: 'Transaction not found.' },
-    }
-  }
-
-  // Only a row without a verifikat gets booked; an already-categorized row
-  // takes the flag-only path below, so neither double-booking guard applies.
-  const wouldBook = !transaction.journal_entry_id
-  const itemLog = log.child({ transactionId, request_index: index })
-
-  // A NULL pointer is not "unbooked": a bulk-booked, split or
-  // correction-relinked row is anchored only through a bank_line voucher link
-  // (assertTransactionBookable, shared with every booking door). Read-only,
-  // so a dry-run previews the refusal too.
-  if (wouldBook) {
-    const bookable = await assertTransactionBookable(supabase, companyId, transaction)
-    if (!bookable.ok) {
-      return guardRefusal(index, transactionId, bookable.code, {
-        journal_entry_id: bookable.journalEntryId,
-        via: bookable.via,
-      })
-    }
-  }
-
-  // Booking-time duplicate guard: same helper, code and bound force override
-  // as :categorize and the dashboard route. The dismissal of an honoured
-  // force is recorded only when the item is really booked (not on a dry-run).
-  if (wouldBook) {
-    const duplicateVerdict = await runBookingDuplicateGuard(
-      supabase,
-      companyId,
-      userId,
-      {
-        id: transactionId,
-        date: transaction.date,
-        amount: transaction.amount,
-        // `amount` is denominated in `currency`; the ledger legs the guard
-        // compares it against are always SEK. Selected above via select('*').
-        currency: transaction.currency ?? null,
-        amount_sek: transaction.amount_sek ?? null,
-        exchange_rate: transaction.exchange_rate ?? null,
-        cash_account_id: transaction.cash_account_id ?? null,
-      },
-      input,
-      itemLog,
-      { exclude, recordDismissal: !dryRun, via: 'api_force' },
-    )
-    if (!duplicateVerdict.ok) {
-      return guardRefusal(index, transactionId, duplicateVerdict.code, duplicateVerdict.details)
-    }
-  }
-
-  const { is_business, category } = input
-  let finalCategory: TransactionCategory
-  if (input.template_id) {
-    const template = getTemplateById(input.template_id)
-    if (!template) {
-      return {
-        ok: false,
-        request_index: index,
-        transaction_id: transactionId,
-        error: {
-          code: 'TX_CATEGORIZE_INVALID_TEMPLATE',
-          message: 'Unknown template id.',
-          details: { templateId: input.template_id },
-        },
-      }
-    }
-    const valid = validateTemplateForEntity(template, entityType)
-    if (!valid.valid) {
-      return {
-        ok: false,
-        request_index: index,
-        transaction_id: transactionId,
-        error: {
-          code: 'TX_CATEGORIZE_INVALID_TEMPLATE',
-          message: 'Template not valid for entity type.',
-          details: { templateId: input.template_id, reason: valid.error },
-        },
-      }
-    }
-    finalCategory = is_business ? template.fallback_category : 'private'
-  } else {
-    finalCategory = is_business ? category || 'uncategorized' : 'private'
-  }
-
-  let mappingResult
-  if (input.template_id) {
-    const template = getTemplateById(input.template_id)!
-    mappingResult = buildMappingResultFromTemplate(
-      template, transaction as Transaction, entityType, vatRegistered,
-    )
-  } else {
-    mappingResult = buildMappingResultFromCategory(
-      finalCategory,
-      transaction as Transaction,
-      is_business,
-      entityType,
-      input.vat_treatment,
-      null,
-      vatRegistered,
-    )
-  }
-  try {
-    const settlementAccount = await resolveSettlementAccount(
-      supabase,
-      companyId,
-      transaction.cash_account_id,
-      log,
-      transaction.currency,
-    )
-    mappingResult = applySettlementAccount(mappingResult, settlementAccount, transaction.amount)
-    // A reverse-charge purchase keeps its 45xx/4598 basis pair only when its
-    // cost account does not report ruta 20-24 itself (crm#1096).
-    mappingResult = await reconcileRcBasisWithChart(mappingResult, loadChart)
-  } catch (err) {
-    log.error('batch-categorize: settlement account or momskod lookup failed', err as Error, {
-      request_index: index,
-      transactionId,
-    })
+/** One item's outcome in the batch's result shape. */
+function itemFromOutcome(index: number, transactionId: string, outcome: CategorizeOutcome): Item {
+  if (!outcome.ok) {
     return {
       ok: false,
       request_index: index,
       transaction_id: transactionId,
       error: {
-        code: 'INTERNAL_ERROR',
-        message: isBookkeepingError(err) ? getErrorMessage(err, { context: 'transaction' }) : getErrorMessage(err),
+        code: outcome.code,
+        message:
+          outcome.message?.sv ??
+          getErrorEntry(outcome.code)?.message_sv ??
+          'Transaktionen bokfördes inte: se felkoden och detaljerna.',
+        ...(outcome.details ? { details: outcome.details } : {}),
       },
     }
   }
-  // Dimensions: an explicitly supplied bag tags the business lines of the
-  // generated verifikat (bank/VAT legs stay untagged).
-  if (input.dimensions && Object.keys(input.dimensions).length > 0) {
-    mappingResult.dimensions = input.dimensions
-  }
-  if (!mappingResult.debit_account || !mappingResult.credit_account) {
-    return {
-      ok: false,
-      request_index: index,
-      transaction_id: transactionId,
-      error: {
-        code: 'TX_CATEGORIZE_INVALID_MAPPING',
-        message: 'Could not resolve debit/credit accounts.',
-      },
-    }
-  }
-
-  // Pre-validate every account in the mapping against the company's
-  // chart_of_accounts. Templates and category defaults can reference accounts
-  // that aren't activated in this company's kontoplan; without this check the
-  // engine throws AccountsNotInChartError mid-flight and the legacy
-  // partial-success branch silently marks the row bokförd with no
-  // verifikation. Validate in both dry-run and live paths so previews
-  // surface the same actionable error. Standard BAS accounts merely absent
-  // from the chart pass: the engine seeds them on demand.
-  const missingAccounts = await findUnresolvableAccounts(
-    supabase,
-    companyId,
-    collectMappingResultAccounts(mappingResult),
-  )
-  if (missingAccounts.length > 0) {
-    return {
-      ok: false,
-      request_index: index,
-      transaction_id: transactionId,
-      error: {
-        code: 'ACCOUNTS_NOT_IN_CHART',
-        message: `Följande konton behöver aktiveras: ${missingAccounts.join(', ')}`,
-        details: { account_numbers: missingAccounts },
-      },
-    }
-  }
-
-  // Invoice-match intercept: same helper, codes and confirm_no_match override
-  // as :categorize and the dashboard route. Read-only, so dry-runs see it too.
-  if (wouldBook) {
-    const invoiceSuggestion = await findInvoiceMatchSuggestion(
-      supabase,
-      companyId,
-      {
-        transaction: transaction as Transaction & { reference?: string | null },
-        debitAccount: mappingResult.debit_account,
-        creditAccount: mappingResult.credit_account,
-        isBusiness: is_business,
-        confirmNoMatch: input.confirm_no_match,
-      },
-      itemLog,
-    )
-    if (invoiceSuggestion) {
-      return guardRefusal(index, transactionId, invoiceSuggestion.code, invoiceSuggestion.details)
-    }
-  }
-
-  if (dryRun) {
+  if (outcome.dryRun) {
+    const { preview } = outcome
     return {
       ok: true,
       request_index: index,
       transaction_id: transactionId,
       data: {
         preview: {
-          category: finalCategory,
-          debit_account: mappingResult.debit_account,
-          credit_account: mappingResult.credit_account,
-          vat_lines: mappingResult.vat_lines,
-          would_create_journal_entry: !transaction.journal_entry_id,
+          category: preview.category,
+          debit_account: preview.mappingResult.debit_account,
+          credit_account: preview.mappingResult.credit_account,
+          vat_lines: preview.mappingResult.vat_lines,
+          would_create_journal_entry: preview.would_create_journal_entry,
         },
       },
     }
   }
-
-  // Already-categorized: just flip flags.
-  if (transaction.journal_entry_id) {
-    const { error: updateErr } = await supabase
-      .from('transactions')
-      .update({ is_business, category: finalCategory, is_ignored: false })
-      .eq('id', transactionId)
-      .eq('company_id', companyId)
-    if (updateErr) {
-      return {
-        ok: false,
-        request_index: index,
-        transaction_id: transactionId,
-        error: categorizeUpdateError(updateErr),
-      }
-    }
-    return {
-      ok: true,
-      request_index: index,
-      transaction_id: transactionId,
-      data: {
-        journal_entry_created: false,
-        journal_entry_id: transaction.journal_entry_id,
-        category: finalCategory,
-        already_had_journal_entry: true,
-      },
-    }
-  }
-
-  // Period-lock pre-check: same rationale as the single :categorize route.
-  // A locked period surfaces as PERIOD_LOCKED on the per-item error rather
-  // than a generic INTERNAL_ERROR from the trigger exception.
-  const periodLock = await checkPeriodLock(supabase, companyId, transaction.date)
-  if (periodLock.locked) {
-    // Issue #1661: a private marking is a real booking (eget uttag /
-    // insättning), so the lock applies, but the row the caller wants to
-    // clear is usually not a business event at all. Name the ignore path
-    // instead of a bare PERIOD_LOCKED so an agent clearing PSD2 ghost rows
-    // out of a closed period is not steered to unlock it.
-    if (!is_business) {
-      return {
-        ok: false,
-        request_index: index,
-        transaction_id: transactionId,
-        error: {
-          code: 'TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED',
-          message:
-            getErrorEntry('TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED')?.message_sv ??
-            'Perioden är låst. Ignorera raden i stället om den inte är en affärshändelse.',
-          details: {
-            transaction_date: transaction.date,
-            reason: periodLock.reason,
-            fiscal_period_id: periodLock.fiscal_period_id,
-            suggested_action: 'ignore',
-          },
-        },
-      }
-    }
-    return {
-      ok: false,
-      request_index: index,
-      transaction_id: transactionId,
-      error: {
-        code: 'PERIOD_LOCKED',
-        message: 'Period is locked or closed; cannot post journal entry.',
-        details: {
-          transaction_date: transaction.date,
-          reason: periodLock.reason,
-          fiscal_period_id: periodLock.fiscal_period_id,
-        },
-      },
-    }
-  }
-
-  let journalEntryId: string | null = null
-  let bookedEntry: Awaited<ReturnType<typeof createTransactionJournalEntry>> = null
-  try {
-    const je = await createTransactionJournalEntry(
-      supabase,
-      companyId,
-      userId,
-      transaction as Transaction,
-      mappingResult,
-    )
-    if (je) {
-      journalEntryId = je.id
-      bookedEntry = je
-    }
-  } catch (err) {
-    log.error('batch-categorize: journal entry creation failed', err as Error, {
-      request_index: index,
-      transactionId,
-    })
-    // AccountsNotInChartError means an account was deactivated between our
-    // pre-validation and the engine call (rare race). Return the per-item
-    // failure WITHOUT the transaction update below so the row stays in
-    // "Att bokföra": partial-success on a missing-account error would
-    // mark it bokförd with no verifikation.
-    if (err instanceof AccountsNotInChartError) {
-      return {
-        ok: false,
-        request_index: index,
-        transaction_id: transactionId,
-        error: {
-          code: 'ACCOUNTS_NOT_IN_CHART',
-          message: `Följande konton behöver aktiveras: ${err.accountNumbers.join(', ')}`,
-          details: { account_numbers: err.accountNumbers },
-        },
-      }
-    }
-    // Fail closed (issue #1947): the verifikat IS the booking. Any other
-    // engine failure is a per-item refusal with nothing written, so the row
-    // keeps matching the worklist predicate (is_business IS NULL) instead of
-    // vanishing from "Att bokföra" as categorized-but-unbooked.
-    return {
-      ok: false,
-      request_index: index,
-      transaction_id: transactionId,
-      error: {
-        code: 'TX_CATEGORIZE_JOURNAL_ENTRY_FAILED',
-        message: getErrorMessage(err, { context: 'transaction' }),
-        details: { cause: getStructuredError(err).code },
-      },
-    }
-  }
-
-  // createTransactionJournalEntry returns null (no throw) when no fiscal
-  // period covers the date and the pre-FY clamp does not apply. Same
-  // fail-closed rule: refuse the item rather than mark it categorized-but-unbooked.
-  if (!journalEntryId) {
-    return {
-      ok: false,
-      request_index: index,
-      transaction_id: transactionId,
-      error: {
-        code: 'NO_OPEN_PERIOD_FOR_DATE',
-        message:
-          getErrorEntry('NO_OPEN_PERIOD_FOR_DATE')?.message_sv ??
-          'Det finns ingen räkenskapsperiod som täcker det valda datumet.',
-        details: { transaction_date: transaction.date },
-      },
-    }
-  }
-
-  if (suggestionSnapshot && bookedEntry) {
-    await recordDecisions(supabase, suggestionSnapshot, [{
-      transactionId,
-      actedOn: input.proposal_id ?? null,
-      final: finalFromCategorize({
-        journalEntry: bookedEntry,
-        mappingResult,
-        amount: transaction.amount,
-        templateId: input.template_id ?? null,
-        counterpartyTemplateId: input.counterparty_template_id ?? null,
-        category: finalCategory,
-        vatTreatment: input.vat_treatment ?? null,
-      }),
-    }], userId)
-  }
-
-  const { data: updated, error: updateErr } = await supabase
-    .from('transactions')
-    .update({
-      is_business,
-      category: finalCategory,
-      is_ignored: false,
-      journal_entry_id: journalEntryId,
-    })
-    .eq('id', transactionId)
-    .eq('company_id', companyId)
-    .is('journal_entry_id', null)
-    .select('*')
-  if (updateErr) {
-    if (journalEntryId) {
-      await reverseOrphanedJournalEntry(
-        supabase,
-        companyId,
-        userId,
-        journalEntryId,
-        'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
-      )
-    }
-    return {
-      ok: false,
-      request_index: index,
-      transaction_id: transactionId,
-      error: categorizeUpdateError(updateErr),
-    }
-  }
-  if (!updated || updated.length === 0) {
-    if (journalEntryId) {
-      await reverseOrphanedJournalEntry(
-        supabase,
-        companyId,
-        userId,
-        journalEntryId,
-        'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
-      )
-    }
-    return {
-      ok: false,
-      request_index: index,
-      transaction_id: transactionId,
-      error: { code: 'TX_CATEGORIZE_RACE', message: 'Concurrent state change.' },
-    }
-  }
-
-  const updatedTransaction = updated[0] as Transaction
-
-  // Propagate the underlag onto the new verifikat: anchor the transaction's
-  // pinned document and stamp matched inbox items. Same shared step as the
-  // single :categorize route and every dashboard booking path; best-effort
-  // by contract (logged inside), never fails the item. Runs only when THIS
-  // item won the CAS write.
-  if (journalEntryId) {
-    await propagateUnderlagForBookedTransaction(supabase, companyId, transactionId, journalEntryId)
-  }
-
-  try {
-    await eventBus.emit({
-      type: 'transaction.categorized',
-      payload: {
-        transaction: updatedTransaction,
-        account: mappingResult.debit_account,
-        taxCode: mappingResult.vat_lines[0]?.account_number || '',
-        userId,
-        companyId,
-      },
-    })
-  } catch (err) {
-    log.warn('batch-categorize: event emit failed (non-critical)', err as Error)
-  }
-
+  const { booked } = outcome
   return {
     ok: true,
     request_index: index,
     transaction_id: transactionId,
-    data: {
-      journal_entry_created: !!journalEntryId,
-      journal_entry_id: journalEntryId,
-      // Always null: a failed verifikat is a per-item refusal above (#1947).
-      // Kept for response-shape compatibility.
-      journal_entry_error: null,
-      category: finalCategory,
-    },
+    data: booked.already_had_journal_entry
+      ? {
+          journal_entry_created: false,
+          journal_entry_id: booked.journal_entry_id,
+          category: booked.category,
+          already_had_journal_entry: true,
+        }
+      : {
+          journal_entry_created: booked.journal_entry_created,
+          journal_entry_id: booked.journal_entry_id,
+          // Always null: a failed verifikat is a per-item refusal (#1947).
+          // Kept for response-shape compatibility.
+          journal_entry_error: null,
+          category: booked.category,
+        },
   }
 }
 
@@ -660,8 +172,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
   async (request, ctx) => {
     const rawBodyResult = await readV1JsonBody(request, ctx)
     if (!rawBodyResult.ok) return rawBodyResult.response
-    const rawBody = rawBodyResult.body
-    const parsed = BatchRequest.safeParse(rawBody)
+    const parsed = BatchRequest.safeParse(rawBodyResult.body)
     if (!parsed.success) return v1ValidationError(ctx, parsed.error)
     const body = parsed.data
 
@@ -675,49 +186,54 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
-    const { data: settings } = await ctx.supabase
-      .from('company_settings')
-      .select('entity_type, vat_registered')
-      .eq('company_id', ctx.companyId!)
-      .single()
-    const entityType: EntityType = await resolveCompanyEntityType(ctx.supabase, ctx.companyId!, settings?.entity_type)
-    const vatRegistered: boolean | null = settings?.vat_registered ?? null
-
     const results: Item[] = []
     // Transactions and verifikat booked so far in THIS batch. Passed to the
     // next item's duplicate guard so distinct bank movements the caller
     // listed that share (date, amount, account) never dedupe against each
     // other's fresh verifikat; a duplicate that existed before the batch is
-    // in neither list and is still refused. Same rule as the bulk inbox
-    // driver (lib/transactions/categorize-core.ts).
+    // in neither list and is still refused.
     const bookedTransactionIds: string[] = []
     const bookedJournalEntryIds: string[] = []
     const loadChart = chartVatTreatmentsLoader(ctx.supabase, ctx.companyId!)
     // One snapshot for the whole batch, before any row is booked: the
     // learning after one booking must not reach the next row's suggestions.
     const suggestionSnapshot = ctx.dryRun
-      ? null
+      ? undefined
       : await snapshotSuggestions(ctx.supabase, ctx.companyId!, body.items.map((item) => item.transaction_id))
     for (let i = 0; i < body.items.length; i++) {
       const item = body.items[i]
-      const r = await categorizeOne(
-        ctx.supabase,
-        ctx.companyId!,
-        ctx.userId,
-        entityType,
-        vatRegistered,
-        i,
-        item.transaction_id,
-        item.categorization,
-        ctx.dryRun,
-        ctx.log,
-        {
-          excludeTransactionIds: [...bookedTransactionIds],
-          excludeJournalEntryIds: [...bookedJournalEntryIds],
-        },
-        loadChart,
-        suggestionSnapshot,
-      )
+      let r: Item
+      try {
+        const outcome = await categorizeTransaction(
+          ctx.supabase,
+          ctx.userId,
+          ctx.companyId!,
+          item.transaction_id,
+          item.categorization,
+          {
+            dryRun: ctx.dryRun,
+            onBooked: 'update_flags',
+            forceVia: 'api_force',
+            exclude: {
+              excludeTransactionIds: [...bookedTransactionIds],
+              excludeJournalEntryIds: [...bookedJournalEntryIds],
+            },
+            loadChart,
+            suggestionSnapshot,
+            log: ctx.log.child({ request_index: i }),
+          },
+        )
+        r = itemFromOutcome(i, item.transaction_id, outcome)
+      } catch (err) {
+        // An unexpected failure of one item never fails the batch.
+        ctx.log.error('batch-categorize: item failed', err as Error, { request_index: i })
+        r = {
+          ok: false,
+          request_index: i,
+          transaction_id: item.transaction_id,
+          error: { code: getStructuredError(err).code, message: getErrorMessage(err, { context: 'transaction' }) },
+        }
+      }
       results.push(r)
       const booked = r.data as { journal_entry_created?: boolean; journal_entry_id?: string | null } | undefined
       if (r.ok && booked?.journal_entry_created && booked.journal_entry_id) {

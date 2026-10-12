@@ -14,12 +14,8 @@
 import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFileParseIssue } from '../types'
 import { prepareContent } from '../../shared/encoding'
 import { normalizeDate } from '../date-utils'
+import { parseSwedishAmount } from '@/lib/money'
 
-function parseCommaDecimal(value: string): number {
-  // Swedish format: "1 234,56" or "-1 234,56"
-  const cleaned = value.replace(/\s/g, '').replace(',', '.')
-  return parseFloat(cleaned)
-}
 
 export const nordeaFormat: BankFileFormat = {
   id: 'nordea',
@@ -73,7 +69,7 @@ export const nordeaFormat: BankFileFormat = {
         continue
       }
 
-      const amount = parseCommaDecimal(amountStr)
+      const amount = parseSwedishAmount(amountStr) ?? NaN
       if (isNaN(amount)) {
         issues.push({ row: i + 1, message: `Invalid amount: ${amountStr}`, severity: 'warning' })
         skippedRows++
@@ -87,7 +83,7 @@ export const nordeaFormat: BankFileFormat = {
         continue
       }
 
-      const balance = balanceStr ? parseCommaDecimal(balanceStr) : null
+      const balance = balanceStr ? (parseSwedishAmount(balanceStr) ?? NaN) : null
 
       transactions.push({
         date: normalizedDate,

@@ -126,6 +126,15 @@ function makeClient(fixture: Fixture) {
       in: vi.fn((key: string, values: unknown[]) => {
         filters.set(key, values); predicates.push(row => values.includes(row[key])); return builder
       }),
+      // excludeYearEndChain's PostgREST filters: `col.is.null,col.not.in.(a,b)`.
+      or: vi.fn((expr: string) => {
+        const match = /^(\w+)\.is\.null,\1\.not\.in\.\((.*)\)$/.exec(expr)
+        if (!match) throw new Error(`Unexpected or(): ${expr}`)
+        const [, key, list] = match
+        const ids = list.split(',')
+        predicates.push(row => row[key] == null || !ids.includes(String(row[key])))
+        return builder
+      }),
       order: vi.fn(() => builder),
       range: vi.fn((from: number, to: number) => { bounds = [from, to]; return builder }),
       single: vi.fn(async () => result()),

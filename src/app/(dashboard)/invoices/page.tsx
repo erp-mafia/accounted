@@ -10,7 +10,7 @@ import { useLocale, useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { Button } from '@/components/ui/button'
-import { FLOATING_BULK_BAR_CLASS } from '@/components/ui/floating-bulk-bar'
+import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
@@ -18,8 +18,8 @@ import { RowStatus, type RowStatusDescriptor } from '@/components/ui/row-status'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Skeleton } from '@/components/ui/skeleton'
 import { DataListEmpty } from '@/components/ui/data-list'
-import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
-import { useRangeSelect } from '@/lib/hooks/use-range-select'
+import { TH_CLASS, TD_CLASS, CHECKBOX_REVEAL_CLASS, SortableTh, SHOW_MORE_STEP, ShowMoreFooter } from '@/components/ui/dry-table'
+import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { SplitButton, type SplitButtonOption } from '@/components/ui/split-button'
@@ -74,19 +74,7 @@ import {
   type RotRutListState,
 } from '@/lib/invoices/rot-rut-list-status'
 import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
-import {
-  ArrowDown,
-  ArrowUp,
-  ArrowUpDown,
-  Plus,
-  ReceiptText,
-  Repeat,
-  FileInput,
-  FileDown,
-  FileText,
-  FileClock,
-  SlidersHorizontal,
-} from 'lucide-react'
+import { Plus, ReceiptText, Repeat, FileInput, FileDown, FileText, FileClock, SlidersHorizontal } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -98,12 +86,12 @@ import { StartCard } from '@/components/dashboard/StartCard'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { FiscalPeriod, Invoice } from '@/types'
+import { invoiceStatusDisplay } from '@/lib/invoices/status-display'
 
 const RotRutPayoutDialog = dynamic(
   () => import('@/components/invoices/RotRutPayoutDialog'),
 )
 
-const INITIAL_VISIBLE_ROWS = 100
 
 const CREATE_MODES = ['faktura', 'aterkommande', 'sjalvfaktura'] as const
 
@@ -228,55 +216,6 @@ function daysOverdue(dueDateStr: string): number {
   return Math.round((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
 }
 
-interface SortableHeaderProps {
-  label: string
-  sortLabel: string
-  column: InvoiceListSortColumn
-  sort: InvoiceListSort | null
-  onSort: (column: InvoiceListSortColumn) => void
-  className?: string
-  align?: 'left' | 'right'
-}
-
-function SortableHeader({
-  label,
-  sortLabel,
-  column,
-  sort,
-  onSort,
-  className,
-  align = 'left',
-}: SortableHeaderProps) {
-  const active = sort?.column === column
-  const direction = active ? sort.direction : null
-  const SortIcon = direction === 'asc' ? ArrowUp : direction === 'desc' ? ArrowDown : ArrowUpDown
-
-  return (
-    <th
-      className={cn(TH_CLASS, className)}
-      aria-sort={direction === 'asc' ? 'ascending' : direction === 'desc' ? 'descending' : 'none'}
-    >
-      {/* Preflight sets text-transform: none on buttons, which would drop the
-          TH_CLASS uppercase idiom inside the sort control. */}
-      <button
-        type="button"
-        className={cn(
-          '-mx-2 inline-flex min-h-10 items-center gap-1 rounded-sm px-2 uppercase focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
-          align === 'right' && 'ml-auto justify-end',
-        )}
-        aria-label={sortLabel}
-        onClick={() => onSort(column)}
-      >
-        <span>{label}</span>
-        <SortIcon
-          aria-hidden="true"
-          className={cn('h-3.5 w-3.5 shrink-0', !active && 'text-muted-foreground/60')}
-        />
-      </button>
-    </th>
-  )
-}
-
 export default function InvoicesPage() {
   // 'invoices' (default) or 'quotes': /quotes renders this same component
   // inside InvoiceListVariantProvider. A quote is not an invoice, so the two
@@ -327,7 +266,6 @@ export default function InvoicesPage() {
   // Booking mode drives which rows are bulk-bookable (kontantmetoden: none).
   const accountingMethod: string = companySettings?.accounting_method ?? 'accrual'
   const deferInvoiceBooking: boolean = companySettings?.defer_invoice_booking ?? false
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   // Radix' onCheckedChange carries no mouse event: the preceding click records
   // whether shift was held, for range selection.
   const shiftHeld = useRef(false)
@@ -350,7 +288,7 @@ export default function InvoicesPage() {
   const [rotRutFilter, setRotRutFilter] = useState<RotRutListFilter>(
     () => parseRotRutListFilter(searchParams.get('rotrut')) ?? 'all',
   )
-  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ROWS)
+  const [visibleCount, setVisibleCount] = useState(SHOW_MORE_STEP)
   // Fiscal-year scope (convention 8): null = all years.
   const [fyPeriodId, setFyPeriodId] = useState<string | null>(null)
   const [fyPeriod, setFyPeriod] = useState<FiscalPeriod | null>(null)
@@ -359,7 +297,6 @@ export default function InvoicesPage() {
   const t = useTranslations('invoices')
   const tCollections = useTranslations('collections')
   const locale = useLocale()
-  const tCommon = useTranslations('common')
   const tStart = useTranslations('start_cards')
   const { uiState, loaded: uiStateLoaded } = useUiState()
 
@@ -643,7 +580,7 @@ export default function InvoicesPage() {
     return counts
   }, [searchScopedInvoices])
 
-  const resetPaging = () => setVisibleCount(INITIAL_VISIBLE_ROWS)
+  const resetPaging = () => setVisibleCount(SHOW_MORE_STEP)
   // Status sections bucket by invoice payment state, which a quote has none of.
   const groupModes: readonly GroupMode[] = isQuotesList
     ? GROUP_MODES.filter((mode) => mode !== 'status')
@@ -712,22 +649,19 @@ export default function InvoicesPage() {
   }
 
   const selectableInvoices = filteredInvoices.filter(isBulkSelectable)
-  const allSelectableSelected =
-    selectableInvoices.length > 0 && selectableInvoices.every((inv) => selectedIds.has(inv.id))
-
-  // Ranges walk the selectable rows that are actually rendered: the list is
-  // sorted and cut at visibleCount, so rows below the fold are not in range.
-  const range = useRangeSelect({
-    visibleIds: visibleRows
-      .filter((entry) => isBulkSelectable(entry.row))
-      .map((entry) => entry.row.id),
-    selectedIds,
-    setSelectedIds,
-  })
-
-  function toggleSelect(id: string, extend?: boolean) {
-    range.toggle(id, extend)
-  }
+  // The selection is the selectable invoices of the current tab, filter and
+  // search: a row they hide leaves it (useBulkSelection). Ranges walk the
+  // rendered rows only: the list is cut at visibleCount, so rows below the
+  // fold are not in range.
+  const selection = useBulkSelection(
+    selectableInvoices.map((inv) => inv.id),
+    {
+      rangeIds: visibleRows
+        .filter((entry) => isBulkSelectable(entry.row))
+        .map((entry) => entry.row.id),
+    },
+  )
+  const { selectedIds, toggle: toggleSelect } = selection
 
   const selectedInvoices = invoices.filter((inv) => selectedIds.has(inv.id))
   const selectedDraftCount = selectedInvoices.filter((inv) => inv.status === 'draft').length
@@ -774,7 +708,7 @@ export default function InvoicesPage() {
         })
       }
       setShowBulkBookConfirm(false)
-      setSelectedIds(new Set())
+      selection.clear()
       fetchInvoices()
     } catch (err) {
       toast({
@@ -839,17 +773,21 @@ export default function InvoicesPage() {
   // One derivable status chip per row (concept scene 15). Doc-type markers
   // (proforma/följesedel/självfaktura) only appear in views where the type
   // isn't already implied.
+  // The plain status, as every invoice surface shows it
+  // (lib/invoices/status-display.ts); the list adds what only it knows.
+  function baseStatus(status: Invoice['status']): RowStatusDescriptor {
+    const display = invoiceStatusDisplay(status)
+    if (!display) return { label: status }
+    return { label: t(display.labelKey), exception: display.chip !== null, variant: display.chip ?? undefined }
+  }
+
   function statusDescriptor(invoice: Invoice): RowStatusDescriptor {
     const isCreditNote = !!invoice.credited_invoice_id
-    if (invoice.status === 'cancelled') {
-      return { label: t('status_cancelled'), exception: true, variant: 'secondary' }
-    }
+    if (invoice.status === 'cancelled') return baseStatus('cancelled')
     if (isCreditNote && invoice.status !== 'paid') {
       return { label: t('badge_credit'), exception: true, variant: 'destructive' }
     }
-    if (invoice.status === 'credited') {
-      return { label: t('status_credited'), exception: true, variant: 'secondary' }
-    }
+    if (invoice.status === 'credited') return baseStatus('credited')
     // Offert: the decision (or derived expiry) is the status. Open and
     // accepted are the normal states; declined and expired deviate.
     const quoteStatus =
@@ -867,7 +805,7 @@ export default function InvoicesPage() {
     if (invoice.status === 'draft') {
       return isUnsentNumberedInvoice(invoice)
         ? { label: t('status_unsent'), exception: true, variant: 'outline' }
-        : { label: t('status_draft'), exception: true, variant: 'secondary' }
+        : baseStatus('draft')
     }
     // An open collection case: where the provider has the invoice outranks
     // the overdue count (chips mark exceptions; an invoice with a case is one).
@@ -886,28 +824,23 @@ export default function InvoicesPage() {
       return { label: tCollections('chip_failed'), exception: true, variant: 'destructive' }
     }
     if (invoice.status === 'paid') {
-      return {
-        label: invoice.paid_at
-          ? t('status_paid_date', { date: formatDate(invoice.paid_at) })
-          : t('status_paid'),
-      }
+      return invoice.paid_at
+        ? { label: t('status_paid_date', { date: formatDate(invoice.paid_at) }) }
+        : baseStatus('paid')
     }
-    if (invoice.status === 'partially_paid') {
-      return { label: t('status_partially_paid'), exception: true, variant: 'warning' }
-    }
+    if (invoice.status === 'partially_paid') return baseStatus('partially_paid')
     // Issued, and the Peppol network did not take it: the likely reason it is
     // unpaid outranks the overdue count.
     if (peppolFailedIds.has(invoice.id)) {
       return { label: t('status_peppol_failed'), exception: true, variant: 'destructive' }
     }
-    if (invoice.status === 'overdue' && invoice.due_date) {
-      return {
-        label: t('status_overdue_days', { days: Math.max(1, daysOverdue(invoice.due_date)) }),
-        exception: true,
-        variant: 'warning',
-      }
+    if (invoice.status === 'overdue') {
+      const overdue = baseStatus('overdue')
+      return invoice.due_date
+        ? { ...overdue, label: t('status_overdue_days', { days: Math.max(1, daysOverdue(invoice.due_date)) }) }
+        : overdue
     }
-    return { label: t('status_sent') }
+    return baseStatus('sent')
   }
 
   function rotRutDescriptor(state: NonNullable<RotRutListState>): RowStatusDescriptor {
@@ -1056,43 +989,19 @@ export default function InvoicesPage() {
       )}
 
       {/* Bulkbar: appears once anything is selected (supplier-invoices shape). */}
-      {selectedIds.size > 0 && (
-        <div className={FLOATING_BULK_BAR_CLASS}>
-          <span className="whitespace-nowrap">
-            <strong className="font-semibold tabular-nums">{selectedIds.size}</strong>{' '}
-            {t('bulkbar_selected', { count: selectedIds.size })}
-          </span>
-          <Button size="sm" onClick={() => setShowBulkBookConfirm(true)}>
-            {bulkMode === 'issue'
-              ? t('bulk_book_and_send_action', { count: selectedIds.size })
-              : t('bulk_book_action', { count: selectedIds.size })}
-          </Button>
-          {/* Hidden when the current view has no selectable rows: a
-              "Markera alla (0)" link would only wipe the selection. */}
-          {selectableInvoices.length > 0 && !allSelectableSelected && (
-            <button
-              type="button"
-              className={QUIET_LINK_CLASS}
-              onClick={() => {
-                setSelectedIds(new Set(selectableInvoices.map((inv) => inv.id)))
-                range.resetAnchor()
-              }}
-            >
-              {t('bulk_select_all', { count: selectableInvoices.length })}
-            </button>
-          )}
-          <button
-            type="button"
-            className={QUIET_LINK_CLASS}
-            onClick={() => {
-              setSelectedIds(new Set())
-              range.resetAnchor()
-            }}
-          >
-            {t('bulk_clear')}
-          </button>
-        </div>
-      )}
+      <BulkSelectionBar
+        selection={selection}
+        selectableCount={selectableInvoices.length}
+        countLabel={t('bulkbar_selected', { count: selectedIds.size })}
+        selectAllLabel={t('bulk_select_all', { count: selectableInvoices.length })}
+        clearLabel={t('bulk_clear')}
+      >
+        <Button size="sm" onClick={() => setShowBulkBookConfirm(true)}>
+          {bulkMode === 'issue'
+            ? t('bulk_book_and_send_action', { count: selectedIds.size })
+            : t('bulk_book_action', { count: selectedIds.size })}
+        </Button>
+      </BulkSelectionBar>
 
       {isLoading ? (
         <div className="space-y-3">
@@ -1155,48 +1064,38 @@ export default function InvoicesPage() {
                 {showSelection && (
                   <th className={cn(TH_CLASS, 'w-[26px] !pl-1')} aria-hidden="true"></th>
                 )}
-                <SortableHeader
+                <SortableTh
                   label={t('th_nr')}
-                  sortLabel={t('sort_by', { column: t('th_nr') })}
-                  column="number"
-                  sort={sort}
-                  onSort={updateSort}
+                  direction={sort?.column === 'number' ? sort.direction : null}
+                  onSort={() => updateSort('number')}
                 />
-                <SortableHeader
+                <SortableTh
                   label={t('th_customer')}
-                  sortLabel={t('sort_by', { column: t('th_customer') })}
-                  column="customer"
-                  sort={sort}
-                  onSort={updateSort}
                   className="w-full"
+                  direction={sort?.column === 'customer' ? sort.direction : null}
+                  onSort={() => updateSort('customer')}
                 />
-                <SortableHeader
+                <SortableTh
                   label={t(isQuotesList ? 'th_valid_until' : 'th_due')}
-                  sortLabel={t('sort_by', { column: t(isQuotesList ? 'th_valid_until' : 'th_due') })}
-                  column="due"
-                  sort={sort}
-                  onSort={updateSort}
                   className="hidden text-right sm:table-cell"
                   align="right"
+                  direction={sort?.column === 'due' ? sort.direction : null}
+                  onSort={() => updateSort('due')}
                 />
-                <SortableHeader
+                <SortableTh
                   label={t('th_amount')}
-                  sortLabel={t('sort_by', { column: t('th_amount') })}
-                  column="amount"
-                  sort={sort}
-                  onSort={updateSort}
                   className="text-right"
                   align="right"
+                  direction={sort?.column === 'amount' ? sort.direction : null}
+                  onSort={() => updateSort('amount')}
                 />
                 {showRotRut && (
                   <th className={cn(TH_CLASS, 'whitespace-nowrap')}>{t('th_rot_rut')}</th>
                 )}
-                <SortableHeader
+                <SortableTh
                   label={t('th_status')}
-                  sortLabel={t('sort_by', { column: t('th_status') })}
-                  column="status"
-                  sort={sort}
-                  onSort={updateSort}
+                  direction={sort?.column === 'status' ? sort.direction : null}
+                  onSort={() => updateSort('status')}
                 />
               </tr>
             </thead>
@@ -1340,16 +1239,12 @@ export default function InvoicesPage() {
         </div>
       )}
 
-      {!isLoading && visibleCount < flatRows.length && (
-        <div className="flex justify-center">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => setVisibleCount((count) => count + INITIAL_VISIBLE_ROWS)}
-          >
-            {tCommon('load_more')}
-          </Button>
-        </div>
+      {!isLoading && (
+        <ShowMoreFooter
+          shown={visibleCount}
+          total={flatRows.length}
+          onMore={() => setVisibleCount((count) => count + SHOW_MORE_STEP)}
+        />
       )}
 
       {showRotRutPayout && (

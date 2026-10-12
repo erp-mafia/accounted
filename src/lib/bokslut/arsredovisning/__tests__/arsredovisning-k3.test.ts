@@ -60,6 +60,8 @@ function makeSupabase(opts: {
   antalAktier?: number | null
   agmDate?: string | null
   previousPeriodId?: string | null
+  /** The current period's dates; the comparison year must end the day before it starts. */
+  period?: { name: string; period_start: string; period_end: string }
   medelantalOverride?: number | null
   noteOverrides?: Record<string, string>
   omitCashFlow?: boolean
@@ -79,6 +81,7 @@ function makeSupabase(opts: {
                     name: '2025',
                     period_start: '2025-01-01',
                     period_end: '2025-12-31',
+                    ...opts.period,
                     previous_period_id: opts.previousPeriodId ?? null,
                     closing_entry_id: null,
                   },
@@ -892,7 +895,7 @@ describe('buildArsredovisningData: comparison year without bookkeeping', () => {
     mockedTrialBalance.mockImplementation(async (client, companyId, periodId, opts) =>
       periodId === 'fp0' ? EMPTY_TB : standard!(client, companyId, periodId, opts),
     )
-    const supabase = makeSupabase({ accountingFramework: 'k2', previousPeriodId: 'fp0' })
+    const supabase = makeSupabase({ accountingFramework: 'k2', previousPeriodId: 'fp0', period: TWO_PERIODS[0] })
     // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
     const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
 
@@ -907,7 +910,7 @@ describe('buildArsredovisningData: comparison year without bookkeeping', () => {
 
   it('stays silent when the previous year carries balances', async () => {
     mockFetchAllRows.mockResolvedValue(TWO_PERIODS)
-    const supabase = makeSupabase({ accountingFramework: 'k2', previousPeriodId: 'fp0' })
+    const supabase = makeSupabase({ accountingFramework: 'k2', previousPeriodId: 'fp0', period: TWO_PERIODS[0] })
     // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
     const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
 

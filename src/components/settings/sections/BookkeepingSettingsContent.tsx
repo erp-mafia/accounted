@@ -12,8 +12,7 @@ import { VoucherSeriesPerSourceTypeForm } from '@/components/settings/VoucherSer
 import { VoucherSeriesPerCashAccountForm } from '@/components/settings/VoucherSeriesPerCashAccountForm'
 import { applyDefaultSeriesToMap, voucherSeriesLabel } from '@/lib/bookkeeping/voucher-series-resolver'
 import { DimensionsToggle } from '@/components/settings/DimensionsToggle'
-import { MileageToggle } from '@/components/settings/MileageToggle'
-import { SalesOrdersToggle } from '@/components/settings/SalesOrdersToggle'
+import { NavGateToggle } from '@/components/settings/NavGateToggle'
 import { AccountingFrameworkForm } from '@/components/settings/AccountingFrameworkForm'
 import {
   SettingsGroup,
@@ -204,8 +203,8 @@ export function BookkeepingSettingsContent() {
           </Link>
         </SettingsRow>
         <DimensionsToggle />
-        <MileageToggle />
-        <SalesOrdersToggle />
+        <NavGateToggle setting="mileage_enabled" namespace="mileage" href="/mileage" />
+        <NavGateToggle setting="sales_orders_enabled" namespace="sales_orders" href="/sales-orders" />
       </SettingsGroup>
 
       <SettingsGroup>

@@ -180,7 +180,7 @@ describe('GET /api/v1/companies/:companyId/employees', () => {
     expect(body.data).toHaveLength(1)
     expect(body.data[0].first_name).toBe('Anna')
     // GDPR Art.5(1)(c): birthdate visible, last-4 hidden.
-    expect(body.data[0].personnummer_masked).toBe('19000101XXXX')
+    expect(body.data[0].personnummer_masked).toBe('19000101-XXXX')
     // The full personnummer must NEVER appear in the response, even in
     // unrelated fields.
     expect(JSON.stringify(body)).not.toContain(SAMPLE_PERSONNUMMER)
@@ -224,7 +224,7 @@ describe('GET /api/v1/companies/:companyId/employees', () => {
 
   it('decrypts an encrypted-at-rest row and masks it birthdate-visible', async () => {
     // Rows are stored encrypted; the list must decrypt before masking so the
-    // mask is YYYYMMDDXXXX (not fully redacted). Neither the ciphertext nor
+    // mask is YYYYMMDD-XXXX (not fully redacted). Neither the ciphertext nor
     // the plaintext may leak in the response.
     const encRow = { ...SAMPLE_EMPLOYEE, personnummer: encryptPersonnummer(SAMPLE_PERSONNUMMER) }
     mockServiceClient.mockReturnValue(
@@ -241,7 +241,7 @@ describe('GET /api/v1/companies/:companyId/employees', () => {
 
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body.data[0].personnummer_masked).toBe('19000101XXXX')
+    expect(body.data[0].personnummer_masked).toBe('19000101-XXXX')
     expect(JSON.stringify(body)).not.toContain(encRow.personnummer)
     expect(JSON.stringify(body)).not.toContain(SAMPLE_PERSONNUMMER)
   })
@@ -267,6 +267,32 @@ describe('GET /api/v1/companies/:companyId/employees/:id', () => {
     // Detail endpoint deliberately returns the full personnummer: the
     // caller already has read scope and the id.
     expect(body.data.personnummer).toBe(SAMPLE_PERSONNUMMER)
+  })
+
+  it('refuses to put an enskild firma\'s owner on payroll with VALIDATION_ERROR on employment_type, like the dashboard and MCP (#782)', async () => {
+    // The v1 PATCH used to skip this rule; the database trigger then refused
+    // the write with a 500.
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: { data: SAMPLE_EMPLOYEE, error: null },
+        company_settings: { data: { entity_type: 'enskild_firma' }, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await updateEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ employment_type: 'company_owner' }),
+      }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.field).toBe('employment_type')
   })
 
   it('returns 404 EMPLOYEE_NOT_FOUND when the row is missing', async () => {
@@ -354,7 +380,7 @@ describe('POST /api/v1/companies/:companyId/employees', () => {
     expect(res.status).toBe(201)
     const body = await res.json()
     expect(body.data.first_name).toBe('Anna')
-    expect(body.data.personnummer_masked).toBe('19000101XXXX')
+    expect(body.data.personnummer_masked).toBe('19000101-XXXX')
     // Response shape never contains the raw personnummer.
     expect(JSON.stringify(body)).not.toContain(SAMPLE_PERSONNUMMER)
   })
@@ -512,7 +538,7 @@ describe('POST /api/v1/companies/:companyId/employees', () => {
     // The dry-run preview must mask personnummer the same way the live
     // response shape does: never echo back the supplied identifier.
     const body = await res.json()
-    expect(body.data.preview.personnummer_masked).toBe('19000101XXXX')
+    expect(body.data.preview.personnummer_masked).toBe('19000101-XXXX')
     expect(JSON.stringify(body)).not.toContain(SAMPLE_PERSONNUMMER)
   })
 
@@ -706,7 +732,7 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id', () => {
     expect(body.data.monthly_salary).toBe(38000)
     // GDPR Art.5(1)(c): PATCH success response masks personnummer (write
     // shape): the full value is only echoed by the GET drill-in.
-    expect(body.data.personnummer_masked).toBe('19000101XXXX')
+    expect(body.data.personnummer_masked).toBe('19000101-XXXX')
     expect(body.data.personnummer).toBeUndefined()
     expect(JSON.stringify(body)).not.toContain(SAMPLE_PERSONNUMMER)
   })
@@ -1101,7 +1127,7 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id', () => {
     expect(res.status).toBe(200)
     expect(res.headers.get('X-Dry-Run')).toBe('true')
     const body = await res.json()
-    expect(body.data.preview.personnummer_masked).toBe('19000101XXXX')
+    expect(body.data.preview.personnummer_masked).toBe('19000101-XXXX')
     expect(body.data.preview.personnummer).toBeUndefined()
     expect(JSON.stringify(body)).not.toContain(SAMPLE_PERSONNUMMER)
   })
@@ -1264,7 +1290,7 @@ describe('PATCH /api/v1/companies/:companyId/employees/:id is_active (crm#1133)'
     const body = await res.json()
     expect(body.data.is_active).toBe(true)
     // Write shape: the personnummer stays masked, as on every other PATCH.
-    expect(body.data.personnummer_masked).toBe('19000101XXXX')
+    expect(body.data.personnummer_masked).toBe('19000101-XXXX')
     expect(body.data.personnummer).toBeUndefined()
   })
 

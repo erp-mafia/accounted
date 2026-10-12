@@ -884,7 +884,11 @@ describe('gnubok_categorize_transaction: dimensions bag', () => {
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
     enqueue({ data: { ledger_account: '1931', currency: 'SEK' }, error: null }) // resolveSettlementAccount: explicit cash_account_id lookup
-    enqueue({ data: tx, error: null })
+    // findUnresolvableAccounts: every account the verifikat posts to is active
+    enqueue({ data: [{ account_number: '6110' }, { account_number: '1930' }, { account_number: '1931' }, { account_number: '2641' }], error: null })
+    // checkPeriodLock: no company lock date, no covering period
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
     enqueue({ data: { id: 'op-cat-settlement' }, error: null })
@@ -913,12 +917,15 @@ describe('gnubok_categorize_transaction: dimensions bag', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const inserts = captureInserts(supabase)
     const tx = makeTransaction({ id: 'tx-1', amount: -500 })
-    // categorizeTransactionCore: transaction fetch + company_settings
+    // The booking service's dry run: transaction fetch + company_settings
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
-    // transaction fetch for the title
-    enqueue({ data: tx, error: null })
+    // findUnresolvableAccounts: every account the verifikat posts to is active
+    enqueue({ data: [{ account_number: '6110' }, { account_number: '1930' }, { account_number: '1931' }, { account_number: '2641' }], error: null })
+    // checkPeriodLock: no company lock date, no covering period
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
     // resolveDimensionBags: settings → ensure rpc → dimensions → dimension_values
     enqueue({ data: { dimensions_enabled: true }, error: null })
     enqueue({ data: null, error: null })
@@ -974,7 +981,11 @@ describe('gnubok_categorize_transaction: dimensions bag', () => {
     enqueue({ data: tx, error: null })
     enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
     enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
-    enqueue({ data: tx, error: null })
+    // findUnresolvableAccounts: every account the verifikat posts to is active
+    enqueue({ data: [{ account_number: '6110' }, { account_number: '1930' }, { account_number: '1931' }, { account_number: '2641' }], error: null })
+    // checkPeriodLock: no company lock date, no covering period
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
     enqueue({ data: null, error: null }) // period status layer 1
     enqueue({ data: null, error: null }) // period status layer 2
     enqueue({ data: { id: 'op-cat-plain' }, error: null })

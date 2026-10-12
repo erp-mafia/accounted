@@ -20,6 +20,7 @@
 
 import { createClient } from '@/lib/supabase/client'
 import type {
+  Employee,
   Article,
   BASAccount,
   BookingTemplateLibrary,
@@ -110,8 +111,20 @@ export function fetchCustomers(): Promise<Customer[]> {
   return getJson<Customer[]>('/api/customers', (b) => b.data)
 }
 
+/** One customer by id, archived ones included (GET /api/customers/[id]); null when the body has none. */
+export async function fetchCustomer(customerId: string): Promise<Customer | null> {
+  const row = await getJson<unknown>(`/api/customers/${encodeURIComponent(customerId)}`, (b) => b.data)
+  return row && typeof row === 'object' && !Array.isArray(row) ? (row as Customer) : null
+}
+
 export function fetchSuppliers(): Promise<Supplier[]> {
   return getJson<Supplier[]>('/api/suppliers', (b) => b.data)
+}
+
+/** The salary roster (GET /api/salary/employees: personnummer masked); active employees unless includeInactive. */
+export function fetchEmployees(includeInactive = false): Promise<Employee[]> {
+  const url = includeInactive ? '/api/salary/employees?active=false' : '/api/salary/employees'
+  return getJson<Employee[]>(url, (b) => b.data)
 }
 
 export function fetchArticles(includeInactive = false): Promise<Article[]> {

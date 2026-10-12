@@ -6,6 +6,7 @@ import type {
   VatRevenueAccountWithoutRuta,
 } from '@/types'
 import { ORE_ROUNDING_ACCOUNT } from '@/lib/money'
+import { VAT_ACCOUNT_TABLE } from '@/lib/vat/moms-box-mapping'
 import type { VatCheckAccountTotals } from './vat-declaration-checks'
 import { rcBasisTotalsByRate } from './vat-filing-gate'
 import { fetchDynamicVatAccounts, type DynamicVatAccounts } from './vat-revenue-accounts'
@@ -23,129 +24,23 @@ import { fetchDynamicVatAccounts, type DynamicVatAccounts } from './vat-revenue-
  */
 
 /**
- * Account-to-ruta mapping for the Swedish momsdeklaration (SKV 4700).
+ * Account-to-ruta mapping for the Swedish momsdeklaration (SKV 4700): the
+ * declared rows of VAT_ACCOUNT_TABLE (lib/vat/moms-box-mapping.ts, where the
+ * accounts and their rutor are listed and explained), keyed by ruta field.
  *
  * Pure ledger projection: every Ruta on the SKV 4700 form maps to one or more
- * BAS account balances aggregated over the period. The mapping below follows
- * the BAS 2026 chart and Skatteverket's published BAS-to-Ruta spec
- * (`.claude/skills/swedish-vat/references/vat-compliance-reference.md` §7).
- *
- * Output VAT (261x/262x/263x) → ruta 10/11/12 per rate (credit balance)
- *   Includes parent/summary accounts (2610/2620/2630) for users who post
- *   directly to the group account, and vilande accounts (2618/2628/2638)
- *   used by cash-method bookkeepers for invoices not yet paid.
- * Reverse charge output (2614/2624/2634) → ruta 30/31/32 (credit)
- * Import VAT (2615/2625/2635) → ruta 60/61/62 (credit)
- * Input VAT (2640-2649) → ruta 48 (debit), incl. parent 2640
- * Domestic taxable sales (3000-3003) → ruta 05 (credit)
- *   The company's OWN class 3 accounts marked with a moms-sats join ruta 05 on
- *   top of this fixed list: see fetchDynamicRuta05Accounts (#1261). This map
- *   only covers the accounts Accounted itself seeds.
- * Uttag (3401-3403) → ruta 06 (credit)
- * EU goods (3108) → ruta 35; EU services (3308) → ruta 39 (credit)
- * Export (3105/3305) → ruta 36/40; Exempt (3004/3100/3404/3994/3980) → ruta 42 (credit)
- * Reverse-charge purchase bases: read from the cost account the journal
- * entry posted to (debit balance), not from supplier classification:
- *   4515/4516/4517 (EU goods 25/12/6%) → ruta 20
- *   4535/4536/4537 (EU services 25/12/6%) → ruta 21
- *   4531/4532/4533 (non-EU services 25/12/6%) → ruta 22
- *   4415/4416/4417 (domestic goods reverse charge) → ruta 23
- *   4425/4426/4427 (domestic services reverse charge) → ruta 24
- *   4545/4546/4547 (import) → ruta 50
+ * BAS account balances aggregated over the period. Reverse-charge purchase
+ * bases are read from the cost account the journal entry posted to (debit
+ * balance), not from supplier classification. The company's OWN class 3
+ * accounts marked with a moms-sats join ruta 05 on top of this fixed list: see
+ * fetchDynamicRuta05Accounts (#1261).
  */
-export const ACCOUNT_RUTA: Record<string, { box: keyof VatDeclarationRutor; side: 'credit' | 'debit' }> = {
-  // Output VAT 25% → ruta 10
-  '2610': { box: 'ruta10', side: 'credit' },  // Utgående moms 25% (summary/parent)
-  '2611': { box: 'ruta10', side: 'credit' },  // Försäljning inom Sverige
-  '2612': { box: 'ruta10', side: 'credit' },  // Egna uttag
-  '2613': { box: 'ruta10', side: 'credit' },  // Uthyrning (frivillig skattskyldighet)
-  '2616': { box: 'ruta10', side: 'credit' },  // Vinstmarginalbeskattning
-  '2618': { box: 'ruta10', side: 'credit' },  // Vilande utgående moms 25%
-  // Output VAT 12% → ruta 11
-  '2620': { box: 'ruta11', side: 'credit' },  // Utgående moms 12% (summary/parent)
-  '2621': { box: 'ruta11', side: 'credit' },
-  '2622': { box: 'ruta11', side: 'credit' },  // Egna uttag
-  '2623': { box: 'ruta11', side: 'credit' },  // Uthyrning
-  '2626': { box: 'ruta11', side: 'credit' },  // VMB
-  '2628': { box: 'ruta11', side: 'credit' },  // Vilande utgående moms 12%
-  // Output VAT 6% → ruta 12
-  '2630': { box: 'ruta12', side: 'credit' },  // Utgående moms 6% (summary/parent)
-  '2631': { box: 'ruta12', side: 'credit' },
-  '2632': { box: 'ruta12', side: 'credit' },  // Egna uttag
-  '2633': { box: 'ruta12', side: 'credit' },  // Uthyrning
-  '2636': { box: 'ruta12', side: 'credit' },  // VMB
-  '2638': { box: 'ruta12', side: 'credit' },  // Vilande utgående moms 6%
-  // Reverse charge output VAT → ruta 30/31/32
-  '2614': { box: 'ruta30', side: 'credit' },
-  '2624': { box: 'ruta31', side: 'credit' },
-  '2634': { box: 'ruta32', side: 'credit' },
-  // Input VAT → ruta 48
-  '2640': { box: 'ruta48', side: 'debit' },   // Ingående moms (summary/parent)
-  '2641': { box: 'ruta48', side: 'debit' },   // Debiterad ingående moms
-  '2642': { box: 'ruta48', side: 'debit' },   // Frivillig skattskyldighet
-  '2645': { box: 'ruta48', side: 'debit' },   // Förvärv utlandet (EU/non-EU RC)
-  '2646': { box: 'ruta48', side: 'debit' },   // Uthyrning
-  '2647': { box: 'ruta48', side: 'debit' },   // Omvänd skattskyldighet i Sverige
-  '2648': { box: 'ruta48', side: 'debit' },   // Vilande ingående moms vid bokslut
-  '2649': { box: 'ruta48', side: 'debit' },   // Blandad verksamhet
-  // Import VAT (since 2015, via momsdeklaration) → ruta 60/61/62
-  '2615': { box: 'ruta60', side: 'credit' },  // Import 25%
-  '2625': { box: 'ruta61', side: 'credit' },  // Import 12%
-  '2635': { box: 'ruta62', side: 'credit' },  // Import 6%
-  // Revenue: domestic taxable sales → ruta 05
-  '3000': { box: 'ruta05', side: 'credit' },  // Försäljning inom Sverige (summary/parent)
-  '3001': { box: 'ruta05', side: 'credit' },
-  '3002': { box: 'ruta05', side: 'credit' },
-  '3003': { box: 'ruta05', side: 'credit' },
-  // Revenue: momspliktiga uttag → ruta 06
-  '3401': { box: 'ruta06', side: 'credit' },
-  '3402': { box: 'ruta06', side: 'credit' },
-  '3403': { box: 'ruta06', side: 'credit' },
-  // Revenue: EU goods/services → ruta 35/39
-  '3108': { box: 'ruta35', side: 'credit' },  // Varuförsäljning till EU
-  // Trepartshandel. Adding these two also widens p_ruta_accounts below, which
-  // is the settlement SHAPE detector: an entry touching one of them AND
-  // 2650/1650 is now classified a momsredovisning and dropped from the totals.
-  // Accepted because the scheme carries no VAT, so such a voucher has no
-  // reason to touch the clearing account, and every other revenue account in
-  // this table already lives with the same rule.
-  '3107': { box: 'ruta38', side: 'credit' },  // Mellanmans försäljning, trepartshandel
-  '3308': { box: 'ruta39', side: 'credit' },  // Tjänsteförsäljning till EU
-  // Revenue: export/other → ruta 36/40/42
-  '3105': { box: 'ruta36', side: 'credit' },  // Varuförsäljning export
-  '3305': { box: 'ruta40', side: 'credit' },  // Tjänsteförsäljning export
-  '3004': { box: 'ruta42', side: 'credit' },  // Momsfri försäljning (AB)
-  '3100': { box: 'ruta42', side: 'credit' },  // Momsfria intäkter (EF)
-  '3404': { box: 'ruta42', side: 'credit' },  // Momsfria uttag
-  '3980': { box: 'ruta42', side: 'credit' },  // Erhållna offentliga stöd m.m.
-  '3994': { box: 'ruta42', side: 'credit' },  // Övriga rörelseintäkter momsfria
-  // Revenue: omvänd skattskyldighet inom Sverige → ruta 41. The seller books
-  // NO output VAT (the buyer accounts for it via rutor 23-24/30-32), so these
-  // deliberately stay OUT of the ruta 05-08 vs 10-12 pairing checks.
-  '3231': { box: 'ruta41', side: 'credit' },  // Försäljning byggsektorn, omvänd betalningsskyldighet
-  '3232': { box: 'ruta41', side: 'credit' },  // Omvänd betalningsskyldighet, övriga (skrot m.m.)
-  '3233': { box: 'ruta41', side: 'credit' },  // Omvänd betalningsskyldighet, övriga
-  // Reverse-charge purchase bases (debit on cost accounts) → ruta 20-24, 50
-  '4512': { box: 'ruta37', side: 'debit' },   // Mellanmans inköp, trepartshandel
-  '4515': { box: 'ruta20', side: 'debit' },   // Inköp varor EU 25%
-  '4516': { box: 'ruta20', side: 'debit' },   // Inköp varor EU 12%
-  '4517': { box: 'ruta20', side: 'debit' },   // Inköp varor EU 6%
-  '4535': { box: 'ruta21', side: 'debit' },   // Inköp tjänster EU 25%
-  '4536': { box: 'ruta21', side: 'debit' },   // Inköp tjänster EU 12%
-  '4537': { box: 'ruta21', side: 'debit' },   // Inköp tjänster EU 6%
-  '4531': { box: 'ruta22', side: 'debit' },   // Inköp tjänster utanför EU 25%
-  '4532': { box: 'ruta22', side: 'debit' },   // Inköp tjänster utanför EU 12%
-  '4533': { box: 'ruta22', side: 'debit' },   // Inköp tjänster utanför EU 6%
-  '4415': { box: 'ruta23', side: 'debit' },   // Inköp varor SE reverse charge 25%
-  '4416': { box: 'ruta23', side: 'debit' },   // Inköp varor SE reverse charge 12%
-  '4417': { box: 'ruta23', side: 'debit' },   // Inköp varor SE reverse charge 6%
-  '4425': { box: 'ruta24', side: 'debit' },   // Inköp tjänster SE reverse charge 25%
-  '4426': { box: 'ruta24', side: 'debit' },   // Inköp tjänster SE reverse charge 12%
-  '4427': { box: 'ruta24', side: 'debit' },   // Inköp tjänster SE reverse charge 6%
-  '4545': { box: 'ruta50', side: 'debit' },   // Beskattningsunderlag import 25%
-  '4546': { box: 'ruta50', side: 'debit' },   // Beskattningsunderlag import 12%
-  '4547': { box: 'ruta50', side: 'debit' },   // Beskattningsunderlag import 6%
-}
+export const ACCOUNT_RUTA: Readonly<Record<string, { box: keyof VatDeclarationRutor; side: 'credit' | 'debit' }>> =
+  Object.fromEntries(
+    Object.entries(VAT_ACCOUNT_TABLE)
+      .filter(([, row]) => row.declared !== false)
+      .map(([account, row]) => [account, { box: `ruta${row.box}` as keyof VatDeclarationRutor, side: row.side }]),
+  )
 
 /**
  * The fixed BAS accounts that define a momsdeklaration line, and with it the

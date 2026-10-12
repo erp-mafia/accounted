@@ -8,11 +8,13 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { ArrowRight, Plus, Trash2 } from 'lucide-react'
+import { ArrowRight } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
 import type { AccrualsProposal } from '@/lib/bokslut/accruals/types'
+import { buildAccrualItems, type AuditFeeState, type ManualAccrualEntry } from '@/lib/bokslut/accruals/manual-items'
+import { ManualAccrualsEditor } from './ManualAccrualsEditor'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface AccrualsStepProps {
@@ -23,21 +25,6 @@ interface AccrualsStepProps {
 
 interface AutoState {
   vacation: { accept: boolean }
-}
-
-interface ManualEntry {
-  id: string
-  kind: 'audit_fee' | 'manual_prepaid_expense' | 'manual_accrued_expense'
-  amount: string
-  description: string
-  expenseAccount: string
-  prepaidAccount: string
-  accruedAccount: string
-  liabilityAccount: '2991' | '2992'
-}
-
-function makeId() {
-  return Math.random().toString(36).slice(2, 10)
 }
 
 export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps) {
@@ -51,7 +38,14 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [auto, setAuto] = useState<AutoState>({ vacation: { accept: true } })
-  const [manual, setManual] = useState<ManualEntry[]>([])
+  // The fee and the manual entries share the periodisering page's model and
+  // editor (lib/bokslut/accruals/manual-items, ManualAccrualsEditor): every
+  // template kind and kostnadsställe/projekt on the result leg.
+  const [auditFee, setAuditFee] = useState<AuditFeeState>({ enabled: false, amount: '', liabilityAccount: '2992' })
+  const [manual, setManual] = useState<ManualAccrualEntry[]>([])
+  // EF defaults the fee to 2991 (bokslut): it has no revision to accrue for.
+  // The company row loads async, so follow it until the user touches the fee.
+  const feeAccount = auditFee.enabled || auditFee.amount !== '' ? auditFee.liabilityAccount : isEF ? '2991' : '2992'
   const [posting, setPosting] = useState(false)
 
   useEffect(() => {
@@ -79,67 +73,15 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
     }
   }, [periodId])
 
-  const addManual = useCallback(
-    (kind: ManualEntry['kind']) => {
-      setManual((prev) => [
-        ...prev,
-        {
-          id: makeId(),
-          kind,
-          amount: '',
-          description: '',
-          expenseAccount: kind === 'audit_fee' ? '6420' : '',
-          prepaidAccount: '',
-          accruedAccount: '',
-          // EF defaults to 2991 (bokslut): it has no revision to accrue for.
-          liabilityAccount: isEF ? '2991' : '2992',
-        },
-      ])
-    },
-    [isEF],
-  )
-
-  const removeManual = useCallback((id: string) => {
-    setManual((prev) => prev.filter((m) => m.id !== id))
-  }, [])
-
-  const updateManual = useCallback((id: string, patch: Partial<ManualEntry>) => {
-    setManual((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)))
-  }, [])
-
   const handleCommit = useCallback(async () => {
     if (!proposal) return
     setPosting(true)
     try {
-      const items: unknown[] = []
-      if (proposal.proposals.find((p) => p.kind === 'vacation_liability_change') && auto.vacation.accept) {
-        items.push({ kind: 'vacation_liability_change' })
-      }
-      for (const m of manual) {
-        const amount = parseFloat(m.amount)
-        if (!Number.isFinite(amount) || amount <= 0) continue
-        if (m.kind === 'audit_fee') {
-          items.push({ kind: 'audit_fee', amount, liability_account: m.liabilityAccount })
-        } else if (m.kind === 'manual_prepaid_expense') {
-          if (!m.expenseAccount || !m.prepaidAccount || !m.description) continue
-          items.push({
-            kind: 'manual_prepaid_expense',
-            amount,
-            expense_account: m.expenseAccount,
-            prepaid_account: m.prepaidAccount,
-            description: m.description,
-          })
-        } else if (m.kind === 'manual_accrued_expense') {
-          if (!m.expenseAccount || !m.accruedAccount || !m.description) continue
-          items.push({
-            kind: 'manual_accrued_expense',
-            amount,
-            expense_account: m.expenseAccount,
-            accrued_account: m.accruedAccount,
-            description: m.description,
-          })
-        }
-      }
+      const items = buildAccrualItems({
+        vacation: !!proposal.proposals.find((p) => p.kind === 'vacation_liability_change') && auto.vacation.accept,
+        auditFee: { ...auditFee, liabilityAccount: feeAccount },
+        manual,
+      })
       if (items.length === 0) {
         onContinue()
         return
@@ -167,7 +109,7 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
     } finally {
       setPosting(false)
     }
-  }, [proposal, auto, manual, periodId, onContinue, toast])
+  }, [proposal, auto, auditFee, feeAccount, manual, periodId, onContinue, toast])
 
   if (loading) {
     return (
@@ -273,30 +215,45 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
-          {manual.length === 0 && (
-            <p className="text-sm text-muted-foreground italic">Inga manuella periodiseringar tillagda än.</p>
-          )}
-          {manual.map((m) => (
-            <ManualEntryEditor
-              key={m.id}
-              entry={m}
-              isEF={isEF}
-              onChange={(patch) => updateManual(m.id, patch)}
-              onRemove={() => removeManual(m.id)}
-            />
-          ))}
-          <div className="flex flex-wrap gap-2 pt-2">
-            <Button variant="outline" size="sm" onClick={() => addManual('audit_fee')}>
-              <Plus className="mr-1 h-3.5 w-3.5" />{' '}
-              {isEF ? 'Bokslutsarvode' : 'Revisions-/bokslutsarvode'}
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => addManual('manual_prepaid_expense')}>
-              <Plus className="mr-1 h-3.5 w-3.5" /> Förutbetald kostnad
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => addManual('manual_accrued_expense')}>
-              <Plus className="mr-1 h-3.5 w-3.5" /> Upplupen kostnad
-            </Button>
+          <div className="rounded-lg border border-border p-3 space-y-3">
+            <div className="flex items-center gap-2">
+              <Checkbox
+                id="accrue-audit-fee"
+                checked={auditFee.enabled}
+                onCheckedChange={(c) => setAuditFee({ ...auditFee, enabled: Boolean(c), liabilityAccount: feeAccount })}
+              />
+              <Label htmlFor="accrue-audit-fee" className="text-sm cursor-pointer select-none">
+                {isEF ? 'Bokslutsarvode' : 'Revisions-/bokslutsarvode'}
+              </Label>
+            </div>
+            {auditFee.enabled && (
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">Belopp (kr)</Label>
+                  <Input
+                    type="number"
+                    step="1"
+                    min="0"
+                    value={auditFee.amount}
+                    onChange={(e) => setAuditFee({ ...auditFee, amount: e.target.value, liabilityAccount: feeAccount })}
+                    className="tabular-nums h-8"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Konto</Label>
+                  <select
+                    className="border border-border rounded-lg h-8 text-sm px-2 w-full bg-background"
+                    value={feeAccount}
+                    onChange={(e) => setAuditFee({ ...auditFee, liabilityAccount: e.target.value as '2991' | '2992' })}
+                  >
+                    <option value="2992">2992: Revision</option>
+                    <option value="2991">2991: Bokslut</option>
+                  </select>
+                </div>
+              </div>
+            )}
           </div>
+          <ManualAccrualsEditor entries={manual} onChange={setManual} />
         </CardContent>
       </Card>
 
@@ -319,105 +276,6 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
             </>
           )}
         </Button>
-      </div>
-    </div>
-  )
-}
-
-function ManualEntryEditor({
-  entry,
-  isEF,
-  onChange,
-  onRemove,
-}: {
-  entry: ManualEntry
-  isEF: boolean
-  onChange: (patch: Partial<ManualEntry>) => void
-  onRemove: () => void
-}) {
-  return (
-    <div className="rounded-lg border border-border p-3 space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="text-sm font-medium">
-          {entry.kind === 'audit_fee' && (isEF ? 'Bokslutsarvode' : 'Revisions-/bokslutsarvode')}
-          {entry.kind === 'manual_prepaid_expense' && 'Förutbetald kostnad'}
-          {entry.kind === 'manual_accrued_expense' && 'Upplupen kostnad'}
-        </p>
-        <Button variant="ghost" size="icon-sm" aria-label="Ta bort post" onClick={onRemove}>
-          <Trash2 className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1">
-          <Label className="text-xs">Belopp (kr)</Label>
-          <Input
-            type="number"
-            step="1"
-            min="0"
-            value={entry.amount}
-            onChange={(e) => onChange({ amount: e.target.value })}
-            className="tabular-nums h-8"
-          />
-        </div>
-        {entry.kind === 'audit_fee' && (
-          <div className="space-y-1">
-            <Label className="text-xs">Konto</Label>
-            <select
-              className="border border-border rounded-lg h-8 text-sm px-2 w-full bg-background"
-              value={entry.liabilityAccount}
-              onChange={(e) =>
-                onChange({ liabilityAccount: e.target.value as '2991' | '2992' })
-              }
-            >
-              <option value="2992">2992: Revision</option>
-              <option value="2991">2991: Bokslut</option>
-            </select>
-          </div>
-        )}
-        {entry.kind !== 'audit_fee' && (
-          <>
-            <div className="space-y-1">
-              <Label className="text-xs">Kostnadskonto</Label>
-              <Input
-                value={entry.expenseAccount}
-                onChange={(e) => onChange({ expenseAccount: e.target.value })}
-                placeholder="t.ex. 6310"
-                className="tabular-nums h-8"
-              />
-            </div>
-            {entry.kind === 'manual_prepaid_expense' && (
-              <div className="space-y-1">
-                <Label className="text-xs">17xx-konto</Label>
-                <Input
-                  value={entry.prepaidAccount}
-                  onChange={(e) => onChange({ prepaidAccount: e.target.value })}
-                  placeholder="t.ex. 1730"
-                  className="tabular-nums h-8"
-                />
-              </div>
-            )}
-            {entry.kind === 'manual_accrued_expense' && (
-              <div className="space-y-1">
-                <Label className="text-xs">29xx-konto</Label>
-                <Input
-                  value={entry.accruedAccount}
-                  onChange={(e) => onChange({ accruedAccount: e.target.value })}
-                  placeholder="t.ex. 2990"
-                  className="tabular-nums h-8"
-                />
-              </div>
-            )}
-            <div className="space-y-1 col-span-2">
-              <Label className="text-xs">Beskrivning</Label>
-              <Input
-                value={entry.description}
-                onChange={(e) => onChange({ description: e.target.value })}
-                placeholder="t.ex. Försäkring 2026"
-                className="h-8"
-              />
-            </div>
-          </>
-        )}
       </div>
     </div>
   )

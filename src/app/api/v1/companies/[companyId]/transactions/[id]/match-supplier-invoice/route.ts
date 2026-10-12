@@ -31,6 +31,7 @@ import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { eventBus } from '@/lib/events/bus'
 import { emitSupplierInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import type { SupplierInvoice, Transaction } from '@/types'
+import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
 
 const MatchSIResponse = z.object({
   success: z.boolean(),
@@ -368,7 +369,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       // 'overdue' must appear here: the early status guard accepts it as
       // matchable, so excluding it here would return MATCH_SI_NOT_OPEN
       // for a legitimately payable invoice.
-      .in('status', ['registered', 'approved', 'partially_paid', 'overdue'])
+      .in('status', [...MATCHABLE_SUPPLIER_INVOICE_STATUSES])
       .select('id')
     if (updateInvErr) return v1ErrorResponse(updateInvErr, txLog, { requestId: ctx.requestId })
     if (!updatedRows || updatedRows.length === 0) {

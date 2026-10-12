@@ -1,6 +1,8 @@
 import type { Metadata } from 'next'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { resolvePayslipToken } from '@/lib/salary/payslips/links'
+import { loadPayslip } from '@/lib/salary/payslips/load-payslip'
+import { effectiveRow, type EffectiveFiguresInput } from '@/lib/salary/effective-figures'
 import { formatCurrency } from '@/lib/utils'
 
 // The token is the authentication — no session, no company context. Swedish
@@ -64,27 +66,16 @@ export default async function PayslipPage({
 
   const { link } = resolved
 
-  const [{ data: run }, { data: sre }, { data: company }] = await Promise.all([
-    serviceClient
-      .from('salary_runs')
-      .select('period_year, period_month, payment_date')
-      .eq('id', link.salary_run_id)
-      .eq('company_id', link.company_id)
-      .single(),
-    serviceClient
-      .from('salary_run_employees')
-      .select('gross_salary, tax_withheld, tax_withheld_override, net_salary, employee:employees(first_name, last_name)')
-      .eq('salary_run_id', link.salary_run_id)
-      .eq('employee_id', link.employee_id)
-      .single(),
-    serviceClient
-      .from('companies')
-      .select('name')
-      .eq('id', link.company_id)
-      .single(),
-  ])
+  // The one payslip load (lib/salary/payslips/load-payslip.ts), so this page
+  // shows the employer name and the figures the PDF prints: the effective
+  // figures the booking and the AGI use (effectiveRow).
+  const loaded = await loadPayslip(serviceClient, {
+    companyId: link.company_id,
+    salaryRunId: link.salary_run_id,
+    employeeId: link.employee_id,
+  })
 
-  if (!run || !sre || !company) {
+  if (!loaded.ok) {
     return (
       <MessageShell
         title="Lönespecifikationen hittades inte"
@@ -93,9 +84,11 @@ export default async function PayslipPage({
     )
   }
 
-  const emp = sre.employee as unknown as { first_name: string; last_name: string } | null
-  const effectiveTax = (sre.tax_withheld_override as number | null) ?? (sre.tax_withheld as number)
-  const effectiveNet = (sre.net_salary as number) + ((sre.tax_withheld as number) - effectiveTax)
+  const { run, sre, employee: emp, company } = loaded.payslip
+  const figures = effectiveRow({
+    ...(sre as unknown as EffectiveFiguresInput),
+    employee: { f_skatt_status: emp.f_skatt_status ?? null },
+  })
   const monthName = MONTH_NAMES[run.period_month - 1]
 
   return (
@@ -116,15 +109,15 @@ export default async function PayslipPage({
         <dl className="space-y-3 text-sm">
           <div className="flex items-center justify-between">
             <dt className="text-muted-foreground">Bruttolön</dt>
-            <dd className="tabular-nums">{formatCurrency(sre.gross_salary as number)}</dd>
+            <dd className="tabular-nums">{formatCurrency(figures.gross_salary)}</dd>
           </div>
           <div className="flex items-center justify-between">
             <dt className="text-muted-foreground">Skatteavdrag</dt>
-            <dd className="tabular-nums">−{formatCurrency(effectiveTax)}</dd>
+            <dd className="tabular-nums">−{formatCurrency(figures.tax_withheld)}</dd>
           </div>
           <div className="flex items-center justify-between border-t border-border pt-3">
             <dt className="font-medium">Nettolön</dt>
-            <dd className="font-display text-xl tabular-nums">{formatCurrency(effectiveNet)}</dd>
+            <dd className="font-display text-xl tabular-nums">{formatCurrency(figures.net_salary)}</dd>
           </div>
           <div className="flex items-center justify-between">
             <dt className="text-muted-foreground">Utbetalningsdag</dt>

@@ -1,0 +1,284 @@
+/**
+ * categorizeTransaction: the rules every categorize door now shares.
+ *
+ * Each door used to decide these on its own: whether a dry run runs the
+ * guards, what a row a verifikat already books gets, whether a stale pointer
+ * at a reversed verifikat blocks a new booking, how the inbox item a booking
+ * started from is completed, and whether a reverse-charge booking may land on
+ * an invoice where the seller charged moms.
+ */
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { createTableMockSupabase } from '@/tests/helpers'
+
+const { createTxJE, propagate, saveRule, intercept, lock } = vi.hoisted(() => ({
+  createTxJE: vi.fn(),
+  propagate: vi.fn(),
+  saveRule: vi.fn(),
+  intercept: vi.fn(),
+  lock: vi.fn(),
+}))
+
+vi.mock('@/lib/bookkeeping/transaction-entries', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/transaction-entries')>()),
+  createTransactionJournalEntry: createTxJE,
+}))
+vi.mock('@/lib/transactions/booking-duplicate-detection', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/transactions/booking-duplicate-detection')>()),
+  detectBookingDuplicate: vi.fn().mockResolvedValue(null),
+}))
+vi.mock('@/lib/suggestion-log/record', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/suggestion-log/record')>()),
+  snapshotSuggestions: vi.fn(async (_s: unknown, companyId: string) => ({ companyId, byTransaction: new Map() })),
+  recordDecisions: vi.fn(async () => undefined),
+}))
+vi.mock('@/lib/bookkeeping/account-validation', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/account-validation')>()),
+  findUnresolvableAccounts: vi.fn().mockResolvedValue([]),
+}))
+vi.mock('@/lib/api/v1/check-period-lock', () => ({ checkPeriodLock: lock }))
+vi.mock('@/lib/transactions/inbox-underlag', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/transactions/inbox-underlag')>()),
+  propagateUnderlagForBookedTransaction: propagate,
+}))
+vi.mock('@/lib/bookkeeping/counterparty-templates', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/counterparty-templates')>()),
+  upsertCounterpartyTemplate: vi.fn().mockResolvedValue(undefined),
+}))
+vi.mock('@/lib/bookkeeping/mapping-engine', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/mapping-engine')>()),
+  saveUserMappingRule: saveRule,
+}))
+vi.mock('@/lib/transactions/invoice-match-suggestion', () => ({
+  findInvoiceMatchSuggestion: intercept,
+}))
+
+import { categorizeTransaction, type CategorizeOptions } from '../categorize-core'
+
+const COMPANY_ID = 'company-1'
+const TX_ID = 'tx-1'
+
+const row = (over: Record<string, unknown> = {}) => ({
+  id: TX_ID,
+  company_id: COMPANY_ID,
+  date: '2026-05-12',
+  amount: -1250,
+  currency: 'SEK',
+  amount_sek: -1250,
+  exchange_rate: 1,
+  description: 'KONTORSBOLAGET',
+  merchant_name: 'Kontorsbolaget',
+  cash_account_id: null,
+  document_id: null,
+  journal_entry_id: null,
+  transaction_voucher_links: [],
+  ...over,
+})
+
+function ledger(tables: Parameters<typeof createTableMockSupabase>[0] = {}) {
+  return createTableMockSupabase({
+    transactions: [{ data: row(), error: null }, { data: [row({ journal_entry_id: 'je-1' })], error: null }],
+    company_settings: { data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1, vat_registered: true }, error: null },
+    cash_accounts: { data: [], error: null },
+    fiscal_periods: { data: [{ id: 'fp-1' }], error: null },
+    ...tables,
+  })
+}
+
+const business = { is_business: true, category: 'expense_office' } as const
+const live: CategorizeOptions = { onBooked: 'update_flags' }
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  createTxJE.mockResolvedValue({ id: 'je-1', lines: [] })
+  propagate.mockResolvedValue(undefined)
+  saveRule.mockResolvedValue(undefined)
+  intercept.mockResolvedValue(null)
+  lock.mockResolvedValue({ locked: false })
+})
+
+describe('categorizeTransaction: dry run', () => {
+  it('answers with the lines the booking posts and writes nothing', async () => {
+    const { supabase, payloads } = ledger()
+
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, business, {
+      ...live,
+      dryRun: true,
+    })
+
+    expect(outcome.ok && outcome.dryRun).toBe(true)
+    if (!outcome.ok || !outcome.dryRun) return
+    expect(outcome.preview.would_create_journal_entry).toBe(true)
+    const lines = outcome.preview.lines
+    const debit = lines.reduce((sum, l) => sum + l.debit_amount, 0)
+    const credit = lines.reduce((sum, l) => sum + l.credit_amount, 0)
+    expect(Math.round(debit * 100)).toBe(Math.round(credit * 100))
+    expect(lines).toContainEqual(expect.objectContaining({ account_number: '1930', credit_amount: 1250 }))
+    expect(createTxJE).not.toHaveBeenCalled()
+    expect(payloads('transactions', 'update')).toEqual([])
+    expect(payloads('fiscal_periods', 'upsert')).toEqual([])
+  })
+
+  it('runs the period lock and the invoice-match intercept like the booking', async () => {
+    lock.mockResolvedValue({ locked: true, reason: 'period_locked_at_set', fiscal_period_id: 'fp-1' })
+
+    const locked = await categorizeTransaction(ledger().supabase as never, 'user-1', COMPANY_ID, TX_ID, business, {
+      ...live,
+      dryRun: true,
+    })
+    expect(locked).toMatchObject({ ok: false, code: 'PERIOD_LOCKED', details: { reason: 'period_locked_at_set' } })
+
+    lock.mockResolvedValue({ locked: false })
+    intercept.mockResolvedValue({ code: 'TX_CATEGORIZE_SUGGEST_SI_MATCH', details: { candidates: [] } })
+    const matched = await categorizeTransaction(ledger().supabase as never, 'user-1', COMPANY_ID, TX_ID, business, {
+      ...live,
+      dryRun: true,
+    })
+    expect(matched).toMatchObject({ ok: false, code: 'TX_CATEGORIZE_SUGGEST_SI_MATCH' })
+  })
+
+  it('leaves the invoice-match intercept to the doors that keep it', async () => {
+    intercept.mockResolvedValue({ code: 'TX_CATEGORIZE_SUGGEST_SI_MATCH', details: { candidates: [] } })
+
+    const outcome = await categorizeTransaction(ledger().supabase as never, 'user-1', COMPANY_ID, TX_ID, business, {
+      onBooked: 'refuse',
+      dryRun: true,
+      invoiceMatchIntercept: false,
+    })
+
+    expect(outcome.ok).toBe(true)
+    expect(intercept).not.toHaveBeenCalled()
+  })
+})
+
+describe('categorizeTransaction: a row a verifikat already books', () => {
+  const booked = () =>
+    ledger({
+      transactions: { data: row({ journal_entry_id: 'je-old' }), error: null },
+      journal_entries: { data: [{ id: 'je-old', status: 'posted' }], error: null },
+    })
+
+  it('updates the flags only on the dashboard and v1 doors', async () => {
+    const { supabase, payloads } = booked()
+
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, business, live)
+
+    expect(outcome).toMatchObject({
+      ok: true,
+      dryRun: false,
+      booked: { journal_entry_created: false, journal_entry_id: 'je-old', already_had_journal_entry: true },
+    })
+    expect(payloads('transactions', 'update')).toEqual([
+      { is_business: true, category: 'expense_office', is_ignored: false },
+    ])
+    expect(createTxJE).not.toHaveBeenCalled()
+  })
+
+  it('refuses on the approval doors, which must not report a booking that did not happen', async () => {
+    const { supabase, payloads } = booked()
+
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, business, {
+      onBooked: 'refuse',
+    })
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      code: 'TRANSACTION_ALREADY_CATEGORIZED',
+      details: { journal_entry_id: 'je-old', via: 'pointer' },
+    })
+    expect(payloads('transactions', 'update')).toEqual([])
+  })
+
+  it('books a row whose pointer names a reversed verifikat, compare-and-set on that pointer', async () => {
+    const { supabase, findCalls } = ledger({
+      transactions: [
+        { data: row({ journal_entry_id: 'je-reversed' }), error: null },
+        { data: [row({ journal_entry_id: 'je-1' })], error: null },
+      ],
+      journal_entries: { data: [{ id: 'je-reversed', status: 'reversed' }], error: null },
+    })
+
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, business, live)
+
+    expect(outcome).toMatchObject({ ok: true, booked: { journal_entry_created: true, journal_entry_id: 'je-1' } })
+    expect(findCalls('transactions', 'eq')).toContainEqual(['journal_entry_id', 'je-reversed'])
+  })
+})
+
+describe('categorizeTransaction: after the booking', () => {
+  it('matches the inbox item the booking started from, then propagates its underlag', async () => {
+    const { supabase, findCalls, payloads } = ledger()
+
+    const outcome = await categorizeTransaction(
+      supabase as never,
+      'user-1',
+      COMPANY_ID,
+      TX_ID,
+      { ...business, inbox_item_id: 'inbox-1' },
+      live,
+    )
+
+    expect(outcome.ok).toBe(true)
+    expect(payloads('invoice_inbox_items', 'update')).toEqual([{ matched_transaction_id: TX_ID }])
+    // Only an item nothing has consumed yet joins the row.
+    expect(findCalls('invoice_inbox_items', 'is')).toEqual([
+      ['created_journal_entry_id', null],
+      ['created_supplier_invoice_id', null],
+    ])
+    expect(propagate).toHaveBeenCalledWith(supabase, COMPANY_ID, TX_ID, 'je-1')
+  })
+
+  it('learns the merchant rule only from a booking that won its write', async () => {
+    const won = await categorizeTransaction(ledger().supabase as never, 'user-1', COMPANY_ID, TX_ID, business, live)
+    expect(won.ok).toBe(true)
+    expect(saveRule).toHaveBeenCalledTimes(1)
+
+    vi.clearAllMocks()
+    createTxJE.mockResolvedValue({ id: 'je-1', lines: [] })
+    const { supabase } = ledger({ transactions: [{ data: row(), error: null }, { data: [], error: null }] })
+    const lost = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, business, live)
+    expect(lost).toMatchObject({ ok: false, code: 'TX_CATEGORIZE_RACE' })
+    expect(saveRule).not.toHaveBeenCalled()
+  })
+})
+
+describe('categorizeTransaction: refusals every door shares', () => {
+  it('refuses reverse charge when the pinned underlag shows the seller charged moms', async () => {
+    const { supabase } = ledger({
+      transactions: { data: row({ document_id: 'doc-1' }), error: null },
+      document_attachments: {
+        data: { id: 'doc-1', extracted_data: { totals: { total: 1250, vatAmount: 250 }, invoice: { currency: 'EUR' } } },
+        error: null,
+      },
+    })
+
+    const outcome = await categorizeTransaction(
+      supabase as never,
+      'user-1',
+      COMPANY_ID,
+      TX_ID,
+      { ...business, vat_treatment: 'reverse_charge' },
+      { onBooked: 'refuse' },
+    )
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      code: 'TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT',
+      details: { document_id: 'doc-1', seller_vat_amount: 250 },
+    })
+    expect(createTxJE).not.toHaveBeenCalled()
+  })
+
+  it('refuses an account override on a private marking', async () => {
+    const outcome = await categorizeTransaction(
+      ledger().supabase as never,
+      'user-1',
+      COMPANY_ID,
+      TX_ID,
+      { is_business: false, account_override: '4020' },
+      live,
+    )
+
+    expect(outcome).toMatchObject({ ok: false, code: 'VALIDATION_ERROR', details: { field: 'account_override' } })
+    expect(createTxJE).not.toHaveBeenCalled()
+  })
+})

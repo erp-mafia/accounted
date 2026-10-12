@@ -55,7 +55,7 @@ Example response `200`:
       "id": "a8f1…",
       "first_name": "Anna",
       "last_name": "Andersson",
-      "personnummer_masked": "YYYYMMDDXXXX",
+      "personnummer_masked": "YYYYMMDD-XXXX",
       "employment_type": "employee",
       "employment_start": "2024-01-15",
       "employment_end": null,
@@ -202,7 +202,7 @@ Example response `200`:
     "id": "a8f1…",
     "first_name": "Anna",
     "last_name": "Andersson",
-    "personnummer_masked": "YYYYMMDDXXXX",
+    "personnummer_masked": "YYYYMMDD-XXXX",
     "employment_type": "employee",
     "employment_start": "2024-01-15",
     "employment_end": null,
@@ -345,6 +345,7 @@ Partial update of an employee. Only the fields supplied in the body are changed:
 - salary_type changes require the matching salary field in the same request: switching to monthly without monthly_salary returns 400.
 - A cleared field is checked against the stored row: nulling monthly_salary on a monthly employee, tax_table_number on an A-skatt employee without sidoinkomst, vaxa_stod_start while Växa-stöd is on, or only one of clearing_number/bank_account_number returns 400. To end an ongoing employment set employment_end; to reopen it send employment_end: null.
 - tax_table_number changes only take effect on future salary runs; runs already in `review` or beyond use a frozen snapshot.
+- An enskild firma cannot employ its owner or board: employment_type company_owner or board_member returns 400 VALIDATION_ERROR on employment_type (the owner takes eget uttag, not salary).
 - vaxa_stod_eligible never lowers the arbetsgivaravgifter: from redovisningsperiod 202601 (Lag 2025:1334) the AGI declares the full avgifter and the company applies to Skatteverket for the refund after filing. A salary run paid inside vaxa_stod_start..vaxa_stod_end (end optional; never past the 24th calendar month counted from the start month) notes the expected refund per employee and warns to apply.
 
 | Parameter | In | Type | Required | Notes |

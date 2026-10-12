@@ -54,6 +54,20 @@ vi.mock('@/lib/processing-history/append', () => ({
   appendProcessingHistory: vi.fn().mockResolvedValue(undefined),
 }))
 
+// The service's own checks that have their own tests: the chart
+// pre-validation, the period-lock pre-check and the merchant-rule learning.
+vi.mock('@/lib/bookkeeping/account-validation', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/account-validation')>()),
+  findUnresolvableAccounts: vi.fn().mockResolvedValue([]),
+}))
+vi.mock('@/lib/bookkeeping/mapping-engine', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/mapping-engine')>()),
+  saveUserMappingRule: vi.fn().mockResolvedValue(undefined),
+}))
+vi.mock('@/lib/api/v1/check-period-lock', () => ({
+  checkPeriodLock: vi.fn().mockResolvedValue({ locked: false }),
+}))
+
 import { categorizeMatchedTransaction, ensureFiscalPeriod } from '../categorize-core'
 
 const TX_ID = '00000000-0000-4000-8000-0000000000fe'
@@ -145,10 +159,7 @@ describe('categorizeMatchedTransaction: pre-FY transaction gets a journal entry'
     enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 } }) // settings
     enqueue({ data: [] }) // ensureFiscalPeriod: no covering open period
     enqueue({ data: [{ period_start: '2026-05-12' }] }) // ensureFiscalPeriod: earliest
-    // Issue #1661: a private marking runs checkPeriodLock before the engine.
-    // A pre-FY date has no covering period, which is not a lock.
-    enqueue({ data: { bookkeeping_locked_through: null } })
-    enqueue({ data: null })
+    // checkPeriodLock is mocked: a pre-FY date has no covering period, which is not a lock.
     // createTransactionJournalEntry clamp: earliest full row (open, unlocked)
     enqueue({
       data: [{ id: 'period-first', period_start: '2026-05-12', is_closed: false, locked_at: null }],

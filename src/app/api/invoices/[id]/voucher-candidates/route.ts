@@ -3,6 +3,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { findMatchingVouchersForInvoice } from '@/lib/invoices/voucher-matching'
 import type { Invoice, Customer } from '@/types'
+import { isMatchableInvoiceStatus } from '@/lib/invoices/matchable-statuses'
 
 /**
  * GET /api/invoices/[id]/voucher-candidates
@@ -32,7 +33,7 @@ export const GET = withRouteContext(
       return errorResponseFromCode('LINK_VOUCHER_INVOICE_NOT_FOUND', log, { requestId })
     }
 
-    if (!['sent', 'overdue', 'partially_paid'].includes(invoice.status)) {
+    if (!isMatchableInvoiceStatus(invoice.status)) {
       return NextResponse.json({ data: { candidates: [], invoice_status: invoice.status } })
     }
 

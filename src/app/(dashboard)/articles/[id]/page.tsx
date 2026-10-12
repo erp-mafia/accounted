@@ -23,6 +23,7 @@ import { formatCurrency } from '@/lib/utils'
 import { DEDUCTION_TYPE_LABEL_KEYS, articleDeductionPrefill, workTypeLabel } from '@/lib/invoices/rot-rut-rules'
 import type { Article, ArticleType, CreateArticleInput } from '@/types'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 
 const ARTICLE_TYPE_KEY: Record<ArticleType, string> = {
   vara: 'type_vara',
@@ -103,6 +104,8 @@ export default function ArticleDetailPage({
         description: data.name,
       })
       setIsEditOpen(false)
+      // Every article picker reads the cached register: refresh it now.
+      void invalidateReferenceData('ref:articles')
       fetchArticle()
     } catch (err) {
       // The user closing the activation dialog is not an error worth toasting.
@@ -148,6 +151,7 @@ export default function ArticleDetailPage({
       const { data } = (await throwOnStructuredError(response)) as { data: Article }
 
       setArticle(data)
+      void invalidateReferenceData('ref:articles')
       toast({
         title: nextActive ? t('activated_title') : t('deactivated_title'),
         description: article.name,
@@ -186,6 +190,7 @@ export default function ArticleDetailPage({
         title: t('deleted_title'),
         description: article.name,
       })
+      void invalidateReferenceData('ref:articles')
       router.push('/articles')
     } catch (err) {
       const body = (err as { body?: unknown }).body

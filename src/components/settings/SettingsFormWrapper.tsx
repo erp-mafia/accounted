@@ -1,13 +1,12 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { useLocale, useTranslations } from 'next-intl'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Check, Lock } from 'lucide-react'
-import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { settingsSaveErrorMessage } from '@/lib/settings/save-error'
+import { useSaveSettings } from '@/components/settings/use-save-settings'
+import type { CompanySettings } from '@/types'
 import { cn } from '@/lib/utils'
 
 type SaveResult =
@@ -27,8 +26,7 @@ interface SettingsFormWrapperProps {
  */
 export function SettingsFormWrapper({ children, onSave, className }: SettingsFormWrapperProps) {
   const t = useTranslations('settings_company')
-  const errorLocale = useLocale() as ErrorLocale
-  const { toast } = useToast()
+  const saveSettings = useSaveSettings()
   const { canWrite } = useCanWrite()
   const [isSaving, setIsSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -58,37 +56,16 @@ export function SettingsFormWrapper({ children, onSave, className }: SettingsFor
     setIsSaving(true)
     setSaved(false)
 
-    try {
-      const response = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates),
-      })
-
-      const result = await response.json().catch(() => null)
-
-      if (!response.ok) {
-        toast({
-          title: t('wrapper_save_failed_title'),
-          description: settingsSaveErrorMessage(result, response.status, errorLocale),
-          variant: 'destructive',
-        })
-      } else {
-        onSuccess?.(result?.data ?? updates)
-        setDirty(false)
-        setSaved(true)
-        timerRef.current = setTimeout(() => setSaved(false), 2000)
-      }
-    } catch (error) {
-      toast({
-        title: t('wrapper_save_failed_title'),
-        description: error instanceof Error ? getUserErrorMessage(error, { locale: errorLocale }) : t('wrapper_try_again'),
-        variant: 'destructive',
-      })
+    const result = await saveSettings(updates as Partial<CompanySettings>, { failedTitle: t('wrapper_save_failed_title') })
+    if (result) {
+      onSuccess?.((result.data as Record<string, unknown> | undefined) ?? (updates as Record<string, unknown>))
+      setDirty(false)
+      setSaved(true)
+      timerRef.current = setTimeout(() => setSaved(false), 2000)
     }
 
     setIsSaving(false)
-  }, [onSave, toast, t, errorLocale])
+  }, [onSave, saveSettings, t])
 
   const barVisible = dirty || isSaving || saved
 

@@ -8,6 +8,7 @@ import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { getOpeningBalances } from './opening-balances'
 import { excludeYearEndChain, fetchReversedYearEndEntryIds, generateTrialBalance } from './trial-balance'
+import { resolvePreviousFiscalPeriod } from '@/lib/core/bookkeeping/period-service'
 import type { SIEExportOptions, JournalEntry, JournalEntryLine, BASAccount } from '@/types'
 
 const log = createLogger('reports:sie-export')
@@ -70,16 +71,16 @@ async function generateSIEExportSnapshot(supabase: SupabaseClient,companyId: str
     throw new Error('Fiscal period not found')
   }
 
-  // Fetch previous fiscal year for #RAR -1 (per SIE spec, both years should be
-  // present) and its #IB -1 / #UB -1 / #RES -1 balances below.
-  const { data: prevPeriod } = await supabase
-    .from('fiscal_periods')
-    .select('id, period_start, period_end, opening_balance_entry_id')
-    .eq('company_id', companyId)
-    .lt('period_end', period.period_start)
-    .order('period_end', { ascending: false })
-    .limit(1)
-    .single()
+  // The previous fiscal year for #RAR -1 (per SIE spec, both years should be
+  // present) and its #IB -1 / #UB -1 / #RES -1 balances below: the year ending
+  // the day before this one starts. A year across a gap is not year -1 (its
+  // UB is not this year's IB), so the file then announces no previous year.
+  const prevPeriod = await resolvePreviousFiscalPeriod<{
+    id: string
+    period_start: string
+    period_end: string
+    opening_balance_entry_id: string | null
+  }>(supabase, companyId, period, 'id, period_start, period_end, opening_balance_entry_id')
 
   // Fetch all accounts
   const accounts = await fetchAllRows(({ from, to }) =>

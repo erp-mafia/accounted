@@ -281,6 +281,8 @@ describe('POST /salary-runs/:id/approve', () => {
   it('returns SALARY_RUN_APPROVE_VALIDATION_FAILED for missing bank details', async () => {
     const noBankEmployee = {
       calculation_breakdown: { steps: [] },
+      net_salary: 25000,
+      tax_withheld: 9000,
       employee: {
         first_name: 'Bo',
         last_name: 'Berg',
@@ -315,6 +317,8 @@ describe('POST /salary-runs/:id/approve', () => {
     // Invented number: 11 digits that do not repeat the clearing.
     const unpayableEmployee = {
       calculation_breakdown: { steps: [] },
+      net_salary: 25000,
+      tax_withheld: 9000,
       employee: {
         first_name: 'Lena',
         last_name: 'Lund',
@@ -347,6 +351,46 @@ describe('POST /salary-runs/:id/approve', () => {
       'Lena Lund: kontonumret är ogiltigt (5-10 siffror, utan clearingnummer). Rätta bankuppgifterna.',
     ])
     expect(text).not.toContain('96123456789')
+  })
+
+  it('approves an employee with nothing to pay out who has no bank details (no payment-file line)', async () => {
+    // Nollkörning row: net 0, so no destination account is needed, the rule
+    // the dashboard, the MCP book tool and the payment-file generators apply.
+    const zeroNetEmployee = {
+      calculation_breakdown: { steps: [] },
+      net_salary: 0,
+      tax_withheld: 0,
+      employee: {
+        first_name: 'Nils',
+        last_name: 'Noll',
+        clearing_number: null,
+        bank_account_number: null,
+        email: 'nils@test',
+      },
+    }
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        salary_runs: [
+          { data: { id: RUN_ID, status: 'review' }, error: null },
+          { data: { id: RUN_ID, status: 'approved', approved_at: '2026-05-14T12:00:00Z', approved_by: USER_ID }, error: null },
+        ],
+        salary_run_employees: { data: [zeroNetEmployee], error: null },
+        idempotency_keys: { data: null, error: null },
+      }).supabase,
+    )
+
+    const res = await approve(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/approve`, {
+        method: 'POST',
+      }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.status).toBe('approved')
+    expect(body.data.warnings).toEqual([])
   })
 
   it('refuses to approve a non-review run', async () => {
@@ -628,6 +672,86 @@ describe('POST /salary-runs/:id/book', () => {
     expect(body.data.entry_ids).toEqual(['je_salary'])
   })
 
+  it('books a nollkörning (no amounts, no employees) without entries and without an audit block', async () => {
+    // v1 used to refuse an empty roster (SALARY_RUN_NO_EMPLOYEES) and to hand
+    // a zero run to the engine, which refuses zero vouchers; it now books
+    // through the dashboard's service, nollkörning included.
+    const zeroRun = {
+      ...paidRun,
+      total_gross: 0,
+      total_tax: 0,
+      total_net: 0,
+      total_avgifter: 0,
+      total_vacation_accrual: 0,
+    }
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        salary_runs: [
+          { data: zeroRun, error: null },
+          {
+            data: {
+              id: RUN_ID, status: 'booked', booked_at: '2026-05-26T09:15:00Z', booked_by: USER_ID,
+              salary_entry_id: null, avgifter_entry_id: null, vacation_entry_id: null, pension_entry_id: null,
+            },
+            error: null,
+          },
+        ],
+        salary_run_employees: { data: [], error: null },
+        'rpc:claim_salary_run_booking': { data: BOOKING_CLAIM, error: null },
+        idempotency_keys: { data: null, error: null },
+      }).supabase,
+    )
+
+    const res = await book(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/book`, {
+        method: 'POST',
+      }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.status).toBe('booked')
+    expect(body.data.salary_entry_id).toBeNull()
+    expect(body.data.entry_ids).toEqual([])
+    expect(body.meta.audit).toBeUndefined()
+    expect(mocks.createSalaryRunEntries).not.toHaveBeenCalled()
+    expect(mocks.checkPeriodLock).not.toHaveBeenCalled()
+  })
+
+  it('previews a nollkörning as no entries on a dry run', async () => {
+    const zeroRun = {
+      ...paidRun,
+      total_gross: 0,
+      total_tax: 0,
+      total_net: 0,
+      total_avgifter: 0,
+      total_vacation_accrual: 0,
+    }
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        salary_runs: { data: zeroRun, error: null },
+        salary_run_employees: { data: [], error: null },
+        idempotency_keys: { data: null, error: null },
+      }).supabase,
+    )
+
+    const res = await book(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/book?dry_run=true`, {
+        method: 'POST',
+      }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.preview.nollkorning).toBe(true)
+    expect(body.data.preview.would_post_entries).toEqual([])
+    expect(mocks.createSalaryRunEntries).not.toHaveBeenCalled()
+  })
+
   it('returns PERIOD_LOCKED before invoking the engine when payment_date is locked', async () => {
     mockServiceClient.mockReturnValue(
       createTableMockSupabase({
@@ -876,7 +1000,7 @@ describe('POST /salary-runs/:id/book: one booking per run at a time', () => {
     expect(mock.calls.some((c) => c.table === 'salary_runs' && c.method === 'update')).toBe(false)
   })
 
-  it('answers SALARY_RUN_BOOK_NOT_PAID when a concurrent call booked the run after the precheck', async () => {
+  it('answers 409 SALARY_RUN_ALREADY_BOOKED when a concurrent call booked the run after the precheck', async () => {
     mockServiceClient.mockReturnValue(
       createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
@@ -892,10 +1016,11 @@ describe('POST /salary-runs/:id/book: one booking per run at a time', () => {
 
     const res = await post()
 
-    expect(res.status).toBe(400)
+    // The code every door answers here (bookingClaimRefusal in
+    // lib/salary/book-run.ts), as the dashboard and MCP always did.
+    expect(res.status).toBe(409)
     const body = await res.json()
-    expect(body.error.code).toBe('SALARY_RUN_BOOK_NOT_PAID')
-    expect(body.error.details).toEqual({ current_status: 'booked' })
+    expect(body.error.code).toBe('SALARY_RUN_ALREADY_BOOKED')
     expect(mocks.createSalaryRunEntries).not.toHaveBeenCalled()
   })
 

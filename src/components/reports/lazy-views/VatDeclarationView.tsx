@@ -52,6 +52,7 @@ import type {
 } from '@/lib/reports/vat-settlement'
 import type { ReportSourceLine, ReportSourceFetcher } from '@/lib/reports/source-lines'
 import type { VatDeclaration, VatPeriodType } from '@/types'
+import { formatAmountInput } from '@/lib/money'
 
 // The full journal entry editor is heavy (BAS catalogue, comboboxes, review
 // dialogs): defer it until the user opens the momsverifikat dialog.
@@ -165,11 +166,11 @@ function VatBookingCard({
   const [dialogOpen, setDialogOpen] = useState(false)
 
   // FormLine amounts are input strings; the proposal's numbers are already
-  // öre-rounded server-side, so this is display formatting, not money math.
+  // öre-rounded server-side.
   const initialLines: FormLine[] = (proposal?.lines ?? []).map((l) => ({
     account_number: l.account_number,
-    debit_amount: l.debit_amount > 0 ? l.debit_amount.toFixed(2) : '',
-    credit_amount: l.credit_amount > 0 ? l.credit_amount.toFixed(2) : '',
+    debit_amount: l.debit_amount > 0 ? formatAmountInput(l.debit_amount, '.') : '',
+    credit_amount: l.credit_amount > 0 ? formatAmountInput(l.credit_amount, '.') : '',
     line_description: l.line_description ?? '',
   }))
 

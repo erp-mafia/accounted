@@ -35,7 +35,7 @@ import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import InboxDocumentPicker, { type AvailableInboxDoc } from '@/components/bookkeeping/InboxDocumentPicker'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
-import { useAccounts, useBookingTemplates, useCompanySettings } from '@/lib/reference-data/hooks'
+import { useAccounts, useBookingTemplates, useCompanySettings, useEmployees } from '@/lib/reference-data/hooks'
 import type { BookingTemplateWithUsage } from '@/lib/reference-data/fetchers'
 import { TemplateForm } from '@/components/settings/TemplateForm'
 import { applyTemplate, deriveTemplateLinesFromBooking } from '@/lib/bookkeeping/template-library'
@@ -43,11 +43,11 @@ import { BOOKING_TEMPLATES, findMatchingTemplates } from '@/lib/bookkeeping/book
 import { computeProposalLines } from '@/lib/bookkeeping/proposal-lines'
 import { chartVatTreatmentsOf } from '@/lib/bookkeeping/vat-entries'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
-import { roundOre, sumOre } from '@/lib/money'
+import { roundOre, sumOre, formatAmountInput } from '@/lib/money'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { formatCurrency, formatDate } from '@/lib/utils'
+import { formatCurrency, formatDate, formatAmount } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { INBOX_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 import { CURRENCIES, type BookingTemplateLibrary } from '@/types'
@@ -68,12 +68,6 @@ interface ExpenseClaim {
   journal_entry_id: string | null
   document: { id: string; file_name: string | null } | null
   batch: { id: string; payout_date: string } | null
-}
-
-interface EmployeeOption {
-  id: string
-  first_name: string
-  last_name: string
 }
 
 interface InboxOption {
@@ -156,7 +150,8 @@ export default function ExpenseClaimsPage() {
   const appliedDeepLink = useRef(false)
 
   const [claims, setClaims] = useState<ExpenseClaim[]>([])
-  const [employees, setEmployees] = useState<EmployeeOption[]>([])
+  // The roster from the session cache (lib/reference-data).
+  const { employees } = useEmployees()
   const { accounts } = useAccounts()
   const [inboxOptions, setInboxOptions] = useState<InboxOption[]>([])
   const [inboxLoaded, setInboxLoaded] = useState(false)
@@ -284,10 +279,6 @@ export default function ExpenseClaimsPage() {
     load()
     loadInbox()
     loadPayouts()
-    fetch('/api/salary/employees')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((json) => setEmployees(json?.data ?? []))
-      .catch(() => setEmployees([]))
   }, [load, loadInbox, loadPayouts])
 
   const cashAccounts = useMemo(
@@ -354,15 +345,15 @@ export default function ExpenseClaimsPage() {
   const generatedRows = useMemo<BookingRow[]>(() => {
     if (sellerCountry === 'se') {
       return [
-        { key: -1, account: expenseAccount, debit: netAmount.toFixed(2), credit: '' },
+        { key: -1, account: expenseAccount, debit: formatAmountInput(netAmount, '.'), credit: '' },
         ...(parsedVat > 0
-          ? [{ key: -2, account: '2641', debit: parsedVat.toFixed(2), credit: '' }]
+          ? [{ key: -2, account: '2641', debit: formatAmountInput(parsedVat, '.'), credit: '' }]
           : []),
       ]
     }
     if (!reverseCharge || sellerCountry === 'abroad') {
       return [
-        { key: -1, account: expenseAccount, debit: parsedAmount.toFixed(2), credit: '' },
+        { key: -1, account: expenseAccount, debit: formatAmountInput(parsedAmount, '.'), credit: '' },
       ]
     }
     return computeProposalLines({
@@ -378,8 +369,8 @@ export default function ExpenseClaimsPage() {
       .map((line, i) => ({
         key: -(i + 1),
         account: line.account,
-        debit: line.side === 'debet' ? line.amount.toFixed(2) : '',
-        credit: line.side === 'kredit' ? line.amount.toFixed(2) : '',
+        debit: line.side === 'debet' ? formatAmountInput(line.amount, '.') : '',
+        credit: line.side === 'kredit' ? formatAmountInput(line.amount, '.') : '',
       }))
   }, [sellerCountry, reverseCharge, expenseAccount, liabilityAccount, netAmount, parsedAmount, parsedVat, accounts])
 
@@ -595,7 +586,7 @@ export default function ExpenseClaimsPage() {
             credit_amount: r.credit,
             line_description: '',
           })),
-          { account_number: liabilityAccount, debit_amount: '', credit_amount: parsedAmount.toFixed(2), line_description: '' },
+          { account_number: liabilityAccount, debit_amount: '', credit_amount: formatAmountInput(parsedAmount, '.'), line_description: '' },
         ],
         Object.fromEntries(accounts.map((a) => [a.account_number, a.account_name])),
       ),
@@ -1748,7 +1739,7 @@ export default function ExpenseClaimsPage() {
                     </td>
                     <td className={`${TD_CLASS} text-right`} />
                     <td className={`${TD_CLASS} text-right tabular-nums`}>
-                      {parsedAmount.toFixed(2)} {currency}
+                      {formatAmount(parsedAmount)} {currency}
                     </td>
                     <td className={TD_CLASS} />
                   </tr>
@@ -1762,10 +1753,10 @@ export default function ExpenseClaimsPage() {
                       )}
                     </td>
                     <td className={`${TD_CLASS} text-right font-medium tabular-nums`}>
-                      {totalDebit.toFixed(2)}
+                      {formatAmount(totalDebit)}
                     </td>
                     <td className={`${TD_CLASS} text-right font-medium tabular-nums`}>
-                      {totalCredit.toFixed(2)}
+                      {formatAmount(totalCredit)}
                     </td>
                     <td className={TD_CLASS}>
                       {bookingBalanced && bookingRowsValid ? (

@@ -60,6 +60,16 @@ vi.mock('@/lib/currency/riksbanken', () => ({
   convertToSEK: vi.fn((amount: number, rate: number) => Math.round(amount * rate * 100) / 100),
 }))
 
+// The categorize service's chart pre-validation and period-lock pre-check
+// have their own tests; open and complete here.
+vi.mock('@/lib/bookkeeping/account-validation', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/account-validation')>()),
+  findUnresolvableAccounts: vi.fn().mockResolvedValue([]),
+}))
+vi.mock('@/lib/api/v1/check-period-lock', () => ({
+  checkPeriodLock: vi.fn().mockResolvedValue({ locked: false }),
+}))
+
 import { POST } from '../route'
 
 describe('POST /api/pending-operations/:id/commit', () => {

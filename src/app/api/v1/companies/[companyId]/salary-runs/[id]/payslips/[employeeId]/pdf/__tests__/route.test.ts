@@ -212,7 +212,7 @@ describe('GET /api/v1/companies/[companyId]/salary-runs/[id]/payslips/[employeeI
       })
     })
 
-    it('renders the employer view (every section) without an audience and never reads the switches', async () => {
+    it('renders the employer view (every section) without an audience and issues nothing', async () => {
       const stub = makeTableStub(rows)
       mockServiceClient.mockReturnValue(stub)
 
@@ -226,7 +226,8 @@ describe('GET /api/v1/companies/[companyId]/salary-runs/[id]/payslips/[employeeI
       expect(vi.mocked(buildPayslipData)).toHaveBeenCalledWith(
         expect.objectContaining({ audience: { kind: 'employer' } }),
       )
-      expect(stub.from.mock.calls.map((c) => c[0])).not.toContain('company_settings')
+      // The settings row is read for the employer name only (company_name);
+      // the employer view prints every section whatever the switches say.
       expect(vi.mocked(issuePayslipSections)).not.toHaveBeenCalled()
     })
 

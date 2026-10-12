@@ -15,6 +15,7 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { parseAmountInput } from '@/lib/money'
 
 interface SalaryOverridePanelProps {
   runId: string
@@ -35,12 +36,7 @@ interface SalaryOverridePanelProps {
 // covers values, not attributes.
 const FIELD_CLASS = 'max-w-44 flex-none tabular-nums ph-no-capture'
 
-function num(v: string): number | null {
-  const trimmed = v.trim()
-  if (!trimmed) return null
-  const n = Number(trimmed.replace(',', '.'))
-  return Number.isFinite(n) ? n : null
-}
+const num = parseAmountInput
 
 export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
   const t = useTranslations('salary_override')

@@ -21,6 +21,7 @@ function makeBuilder(table: string) {
     return b
   })
   b.single = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
+  b.maybeSingle = b.single
   b.then = (resolve: (v: unknown) => void) => resolve(results[resultIdx++] ?? { data: null, error: null })
   return b
 }
@@ -62,7 +63,8 @@ const baseOptions = {
 
 // Queue consumption order (dimensions registry replaced cost_centers/projects):
 //   0: fiscal_periods.single()
-//   1: previous fiscal period .single() (#RAR -1)
+//   1: previous fiscal period .maybeSingle() (#RAR -1, the period ending the
+//      day before this one starts)
 //   2: chart_of_accounts        (fetchAllRows)
 //   3: journal_entries          (fetchAllRows)
 //   4: journal_entry_lines      (fetchLinesByEntryIds; SKIPPED when slot 3
@@ -1130,6 +1132,8 @@ describe('generateSIEExport: exclude_year_end_closing with an undone bokslut', (
           : null,
         error: null,
       })
+      // The previous fiscal year (resolvePreviousFiscalPeriod): none here.
+      b.maybeSingle = async () => ({ data: null, error: null })
       b.then = (resolve: (v: unknown) => void) => {
         const source = table === 'journal_entries' ? entries : table === 'journal_entry_lines' ? lines : []
         const rows = source.filter((r) => filters.every((f) => f(r)))

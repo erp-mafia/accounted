@@ -1,9 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { roundOre } from '@/lib/money'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
-import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import { fetchReversedYearEndEntryIds, generateTrialBalance } from '@/lib/reports/trial-balance'
 import type { ProposedDisposition } from '../types'
 
 /** Bolagsskatt rate. 20.6 % since 2021 (gäller räkenskapsår påbörjat efter 31 dec 2020). */
@@ -159,18 +158,7 @@ export async function sumPostedYearEndDispositions(
     // prior-period year_end entry when that period is locked) while the
     // correction entries themselves stay scoped to this period, matching the
     // trial balance's company-wide chain exclusion.
-    const reversedYearEndIds = (
-      await fetchAllRows<{ id: string }>(({ from, to }) =>
-        supabase
-          .from('journal_entries')
-          .select('id')
-          .eq('company_id', companyId)
-          .eq('source_type', 'year_end')
-          .eq('status', 'reversed')
-          .order('id', { ascending: true })
-          .range(from, to)
-      )
-    ).map((r) => r.id)
+    const reversedYearEndIds = await fetchReversedYearEndEntryIds(supabase, companyId)
 
     if (reversedYearEndIds.length > 0) {
       const corrections = await fetchEntryLines<Row>({

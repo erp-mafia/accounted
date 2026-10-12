@@ -24,6 +24,16 @@ vi.mock('@/lib/transactions/booking-duplicate-detection', () => ({
   detectBookingDuplicate: (...args: unknown[]) => mockDetectDup(...args),
 }))
 
+// The booking service's chart pre-validation and period-lock pre-check have
+// their own tests; complete and open here.
+vi.mock('@/lib/bookkeeping/account-validation', async (importActual) => ({
+  ...(await importActual<typeof import('@/lib/bookkeeping/account-validation')>()),
+  findUnresolvableAccounts: vi.fn().mockResolvedValue([]),
+}))
+vi.mock('@/lib/api/v1/check-period-lock', () => ({
+  checkPeriodLock: vi.fn().mockResolvedValue({ locked: false }),
+}))
+
 import { tools } from '../server'
 
 const categorize = tools.find((t) => t.name === 'gnubok_categorize_transaction')!
@@ -46,17 +56,6 @@ const coreTxRow = {
   is_business: true,
 }
 
-const guardTxRow = {
-  description: 'GOOGLE PLAY',
-  merchant_name: null,
-  amount: -250,
-  currency: 'SEK',
-  amount_sek: -250,
-  exchange_rate: 1,
-  date: '2026-09-10',
-  cash_account_id: null,
-}
-
 const settingsRow = { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }
 
 type Line = { account_number: string; debit_amount: number; credit_amount: number }
@@ -74,7 +73,6 @@ async function stage(
   if (overrideRow) enqueue({ data: overrideRow }) // applyAccountOverride: chart row
   // reconcileRcBasisWithChart reads the momskoder once the mapping carries a basis pair.
   if (String(args.vat_treatment ?? '').startsWith('reverse_charge')) enqueue({ data: momskoder })
-  enqueue({ data: guardTxRow }) // tool: transactions re-fetch
   enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
   enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
   enqueue({ data: { id: 'op-rc-1' } }) // pending_operations insert

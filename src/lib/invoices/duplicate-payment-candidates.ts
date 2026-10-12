@@ -20,6 +20,7 @@ import { resolveTransactionAmountSek } from '@/lib/transactions/booking-duplicat
 import { findExactCoveringSet } from '@/lib/reconciliation/covering-set'
 import { roundOre } from '@/lib/money'
 import { createLogger } from '@/lib/logger'
+import { MATCHABLE_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
 
 const log = createLogger('invoices/duplicate-payment-candidates')
 
@@ -499,7 +500,7 @@ async function findAggregateCandidates(
     .eq('company_id', companyId)
     .eq('document_type', 'invoice')
     .is('credited_invoice_id', null)
-    .in('status', ['sent', 'overdue', 'partially_paid'])
+    .in('status', [...MATCHABLE_INVOICE_STATUSES])
     .gt('remaining_amount', 0)
     .or('currency.is.null,currency.eq.SEK')
   if (invoiceNumber) othersQuery = othersQuery.neq('invoice_number', invoiceNumber)

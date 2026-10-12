@@ -1,5 +1,6 @@
 'use client'
 
+import { effectiveRow, type EffectiveFiguresInput } from '@/lib/salary/effective-figures'
 import { use, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
@@ -19,6 +20,7 @@ import { hasCustomDeviationWindow } from '@/lib/salary/deviation-period'
 import { payslipCalendarWindow } from '@/lib/salary/payslip-calendar'
 import type { SalaryRun, SalaryRunEmployee, SalaryLineItem, SalaryLineItemType, EmployeeMasked } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { salaryRunStatusDisplay } from '@/lib/salary/run-status-display'
 
 /** Translation keys in the `salary_run_employee` namespace. */
 const LINE_ITEM_TYPE_KEYS: Record<SalaryLineItemType, string> = {
@@ -62,18 +64,6 @@ const LINE_ITEM_TYPE_KEYS: Record<SalaryLineItemType, string> = {
   correction: 'li_correction',
   other: 'li_other',
 }
-
-// Same chip vocabulary as the Löner list and the run header (chips mark
-// exceptions): booked renders as muted text, everything else as a chip.
-// paid and booked are the normal outcome, so they render as muted text
-// (MUTED_STATUSES) and never reach the chip.
-const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'warning' | 'destructive' | 'outline'> = {
-  draft: 'secondary',
-  review: 'secondary',
-  approved: 'secondary',
-  corrected: 'outline',
-}
-const MUTED_STATUSES = new Set(['paid', 'booked'])
 
 /** A line as the detail route returns it: the source columns say where it came from. */
 type LineRow = SalaryLineItem & {
@@ -257,24 +247,26 @@ export default function SalaryRunEmployeeDetailPage({
   // Lines can be added to and taken off the payslip only while the run is a
   // draft (the line commands' gate); the button and the column exist only then.
   const canEditLines = run.status === 'draft'
-  const statusLabel = tSalary(`status_${run.status}`)
+  // The same status as the Löner list and the run header (lib/salary/run-status-display.ts).
+  const statusDisplay = salaryRunStatusDisplay(run.status)
+  const statusLabel = statusDisplay ? tSalary(statusDisplay.labelKey) : run.status
 
-  const taxValue = runEmployee.tax_withheld_override ?? runEmployee.tax_withheld
-  const taxOverridden = runEmployee.tax_withheld_override !== null
-  const avgifterOverridden = runEmployee.avgifter_amount_override !== null
+  // The figures the booking, the AGI and the payslip use (effectiveRow): an
+  // avgifter override on an F-skatt row is ignored there, so here too.
+  const figures = effectiveRow(runEmployee as unknown as EffectiveFiguresInput)
   const kpis: Array<{ label: string; value: number; accent?: boolean; overridden?: boolean }> = [
-    { label: t('gross'), value: runEmployee.gross_salary },
-    { label: t('tax'), value: taxValue, overridden: taxOverridden },
+    { label: t('gross'), value: figures.gross_salary },
+    { label: t('tax'), value: figures.tax_withheld, overridden: figures.tax_overridden },
     {
       label: t('net'),
-      value: runEmployee.net_salary + (runEmployee.tax_withheld - taxValue),
+      value: figures.net_salary,
       accent: true,
-      overridden: taxOverridden,
+      overridden: figures.tax_overridden,
     },
     {
       label: t('avgifter'),
-      value: runEmployee.avgifter_amount_override ?? runEmployee.avgifter_amount,
-      overridden: avgifterOverridden,
+      value: figures.avgifter_amount,
+      overridden: figures.avgifter_overridden,
     },
   ]
   const absenceCounts = [
@@ -304,10 +296,10 @@ export default function SalaryRunEmployeeDetailPage({
             <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">
               {employee.first_name} {employee.last_name}
             </h1>
-            {MUTED_STATUSES.has(run.status) ? (
+            {statusDisplay && statusDisplay.chip === null ? (
               <span className="text-sm text-muted-foreground">{statusLabel}</span>
             ) : (
-              <Badge variant={STATUS_VARIANTS[run.status] || 'secondary'}>{statusLabel}</Badge>
+              <Badge variant={statusDisplay?.chip ?? 'secondary'}>{statusLabel}</Badge>
             )}
             {loading && (
               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-label={t('loading')} />

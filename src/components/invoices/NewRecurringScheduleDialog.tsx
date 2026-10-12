@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useTranslations } from 'next-intl'
-import { createClient } from '@/lib/supabase/client'
 import { useForm, useFieldArray, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -25,11 +24,11 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
-import { useCompany, useCapability } from '@/contexts/CompanyContext'
+import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { Plus, Tags, Trash2, Type } from 'lucide-react'
-import { CURRENCIES, type Customer, type Currency, type RecurringInvoiceSchedule } from '@/types'
+import { CURRENCIES, type Currency, type RecurringInvoiceSchedule } from '@/types'
 import CustomerCombobox from '@/components/customers/CustomerCombobox'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -48,7 +47,7 @@ import {
 } from '@/lib/invoices/recurring-placeholders'
 import UnitPicker from '@/components/invoices/UnitPicker'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
-import { useCompanySettings } from '@/lib/reference-data/hooks'
+import { useCompanySettings, useCustomers } from '@/lib/reference-data/hooks'
 import { hasDimensionValues } from '@/lib/invoices/editor-payload'
 
 const currencies: readonly Currency[] = CURRENCIES
@@ -139,13 +138,13 @@ function NewRecurringScheduleForm({
   onCancel: () => void
 }) {
   const { toast } = useToast()
-  const { company } = useCompany()
-  const supabase = createClient()
   const t = useTranslations('invoice_recurring_new')
   // The per-row dimension affordances share the invoice editor's wording: a
   // schedule's default bag becomes each generated invoice's default.
   const tInvoice = useTranslations('invoice_editor')
-  const [customers, setCustomers] = useState<Customer[]>([])
+  // The shared customer cache (/api/customers, personnummer masked); a
+  // schedule being edited keeps its customer even when it was archived.
+  const { customers } = useCustomers({ keepId: schedule?.customer_id })
   const [isSubmitting, setIsSubmitting] = useState(false)
   // Dimension tagging (kostnadsställe/projekt). The pickers render only when
   // company_settings.dimensions_enabled, but the stored bags always round-trip:
@@ -324,17 +323,6 @@ function NewRecurringScheduleForm({
   })
 
   const { fields, append, remove } = useFieldArray({ control, name: 'items' })
-
-  useEffect(() => {
-    if (!company) return
-    // Archived customers (v1 API soft-delete) are not offered in the picker,
-    // but a schedule being edited keeps its current customer visible.
-    const base = supabase.from('customers').select('*').eq('company_id', company.id)
-    const query = schedule?.customer_id
-      ? base.or(`archived_at.is.null,id.eq.${schedule.customer_id}`)
-      : base.is('archived_at', null)
-    query.order('name').then(({ data }) => setCustomers(data ?? []))
-  }, [company, schedule?.customer_id])
 
   async function onSubmit(data: FormData) {
     setIsSubmitting(true)

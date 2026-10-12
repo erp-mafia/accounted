@@ -3,7 +3,7 @@
  * the real withApiV1 wrapper (auth, scope, membership, idempotency) with the
  * Supabase client mocked per table.
  *
- * The 401 case is the regression guard: the route had no V1_ENDPOINT_SCOPES
+ * The 401 case is the regression guard: the route once had no scope-map
  * entry, so the wrapper answered NOT_FOUND to every caller (valid key or not)
  * before this file existed.
  */

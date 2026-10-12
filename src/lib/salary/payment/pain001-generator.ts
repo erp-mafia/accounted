@@ -52,6 +52,7 @@
  */
 
 import { escapeXml } from '@/lib/xml/escape'
+import { formatPainAmount, max35, painControlSum, suffixId } from '@/lib/payments/pain001-format'
 import { previousBankDayIso } from '@/lib/payments/bank-days'
 import { sanitizeMigText } from '@/lib/payments/mig-text'
 import { SWEDBANK_BIC, swedbankCreditorAccount, type SwedbankFileIds } from '@/lib/payments/swedbank'
@@ -101,8 +102,8 @@ export function generatePain001(
   options: Pain001Options
 ): string {
   const now = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
-  const totalAmount = employees.reduce((sum, e) => sum + e.netSalary, 0)
-  const formattedTotal = formatDecimal(totalAmount)
+  // The amounts as rendered, so CtrlSum equals the sum of the InstdAmt values.
+  const formattedTotal = formatPainAmount(painControlSum(employees.map((e) => e.netSalary)))
   const msgId = max35(options.messageId)
   const orgDigits = company.orgNumber.replace(/\D/g, '')
   const swedbank = company.swedbank ?? null
@@ -203,7 +204,7 @@ export function generatePain001(
     lines.push(`          <EndToEndId>${escapeXml(txId)}</EndToEndId>`)
     lines.push('        </PmtId>')
     lines.push('        <Amt>')
-    lines.push(`          <InstdAmt Ccy="SEK">${formatDecimal(emp.netSalary)}</InstdAmt>`)
+    lines.push(`          <InstdAmt Ccy="SEK">${formatPainAmount(emp.netSalary)}</InstdAmt>`)
     lines.push('        </Amt>')
     // Creditor bank identified by clearing number in the Swedish clearing
     // system (SESBA). XSD order: CdtrAgt before Cdtr/CdtrAcct.
@@ -279,19 +280,4 @@ function pushPostalAddress(
   lines.push(`${indent}</PstlAdr>`)
 }
 
-/** Format number as decimal with 2 decimal places (ISO 20022 requires dot separator) */
-function formatDecimal(amount: number): string {
-  return (Math.round(amount * 100) / 100).toFixed(2)
-}
 
-/** Truncate to Max35Text. */
-function max35(value: string): string {
-  return value.slice(0, 35)
-}
-
-/** Append a suffix to a base id, truncating the BASE so the result stays
- *  Max35Text: the suffix carries the uniqueness (per-tx counter) and must
- *  survive intact. */
-function suffixId(base: string, suffix: string): string {
-  return base.slice(0, Math.max(1, 35 - suffix.length)) + suffix
-}

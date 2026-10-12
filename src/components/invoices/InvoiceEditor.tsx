@@ -598,34 +598,17 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // field populated on the first paint and reopening the dialog costs no
   // requests. Customers come through /api/customers, which masks the
   // personnummer column; nothing here rendered it.
-  const { customers: cachedCustomers, isLoading: customersLoading, error: customersError } = useCustomers()
   // Archived customers (v1 API soft-delete) are not offered in the picker
   // (/api/customers filters archived_at IS NULL). An existing draft or copied
   // invoice may still point at one (archiving only refuses when open invoices
-  // exist, drafts do not count), so that single row is fetched on its own and
-  // kept in the list, or the select would render blank.
+  // exist, drafts do not count), so useCustomers keeps that one in the list,
+  // or the select would render blank.
   const keepCustomerId = initial?.customer_id ?? copyInitial?.customer_id ?? null
-  const [keptCustomer, setKeptCustomer] = useState<Customer | null>(null)
-  useEffect(() => {
-    if (!keepCustomerId || customersLoading) return
-    if (cachedCustomers.some((c) => c.id === keepCustomerId)) return
-    let cancelled = false
-    fetch(`/api/customers/${encodeURIComponent(keepCustomerId)}`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((json: { data?: Customer } | null) => {
-        if (!cancelled && json?.data) setKeptCustomer(json.data)
-      })
-      .catch(() => {
-        // The picker simply shows no selection for a customer that no longer resolves.
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [keepCustomerId, customersLoading, cachedCustomers])
-  const customers = useMemo(() => {
-    if (!keptCustomer || cachedCustomers.some((c) => c.id === keptCustomer.id)) return cachedCustomers
-    return [...cachedCustomers, keptCustomer].sort((a, b) => a.name.localeCompare(b.name))
-  }, [cachedCustomers, keptCustomer])
+  const {
+    customers,
+    isLoading: customersLoading,
+    error: customersError,
+  } = useCustomers({ keepId: keepCustomerId })
   const {
     settings: companySettings,
     updateSettings: patchCompanySettings,

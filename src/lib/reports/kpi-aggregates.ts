@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { roundOre } from '@/lib/money'
 import type { TrialBalanceRow } from '@/types'
+import { addActivity, buildTrialBalanceRows as buildRows, type AccountSums as AccountBalances } from './trial-balance'
 
 /**
  * Client-side companion for the get_kpi_report_aggregates RPC
@@ -94,92 +94,33 @@ export async function fetchKpiAggregates(
  * Build the opening-balance map for the fiscal period.
  *
  * Pass `priorRows: null` when the period has an opening-balance entry: the
- * balances then come from the RPC's `ob` section, mirroring the OB-entry
- * branch of getOpeningBalances (lib/reports/opening-balances.ts lines
- * 57-62: additive accumulation with Number()||0 coercion). Otherwise pass
- * the rows returned by the compute_prior_opening_balances RPC, mirroring
- * the fallback branch (lines 77-86: per-row set with Number()||0).
+ * balances then come from the RPC's `ob` section (the OB-entry branch of
+ * getOpeningBalances in lib/reports/opening-balances.ts). Otherwise pass the
+ * rows returned by the compute_prior_opening_balances RPC (its fallback
+ * branch). Either way the fold is the trial balance's (addActivity).
  */
 export function buildOpeningBalances(
   agg: KpiAggregates,
   priorRows:
     | Array<{ account_number: string; debit: number | string; credit: number | string }>
     | null
-): Map<string, { debit: number; credit: number }> {
-  const balances = new Map<string, { debit: number; credit: number }>()
-
-  if (priorRows === null) {
-    for (const line of agg.ob) {
-      const existing = balances.get(line.account_number) || { debit: 0, credit: 0 }
-      existing.debit += Number(line.debit) || 0
-      existing.credit += Number(line.credit) || 0
-      balances.set(line.account_number, existing)
-    }
-  } else {
-    for (const row of priorRows) {
-      balances.set(row.account_number, {
-        debit: Number(row.debit) || 0,
-        credit: Number(row.credit) || 0,
-      })
-    }
-  }
-
+): AccountBalances {
+  const balances: AccountBalances = new Map()
+  for (const row of priorRows ?? agg.ob) addActivity(balances, row.account_number, row.debit, row.credit)
   return balances
 }
 
 /**
- * Assemble TrialBalanceRow[] from pre-summed per-account period activity.
- *
- * Pinned to the row-building tail of generateTrialBalance
- * (lib/reports/trial-balance.ts lines 287-322, which is read-only): merged
- * key set of opening + period accounts, `Konto <n>` /
- * `parseInt(n[0]) || 0` fallback for accounts missing from the chart,
- * öre rounding on all six amount fields, and a final localeCompare sort.
- * Rounding goes through roundOre (the antipattern guard forbids new raw
- * Math.round(x * 100) / 100): identical to the source expression except
- * within float epsilon of half-öre boundaries. Keep the two in sync if
- * the source ever changes.
+ * TrialBalanceRow[] from the RPC's pre-summed per-account activity, built by
+ * the trial balance's own row builder (buildTrialBalanceRows in
+ * trial-balance.ts), so the KPI rows and generateTrialBalance cannot drift.
  */
 export function buildTrialBalanceRows(
-  openingBalances: Map<string, { debit: number; credit: number }>,
+  openingBalances: AccountBalances,
   periodSums: AccountSums[],
   accountMap: Map<string, { name: string; class: number }>
 ): TrialBalanceRow[] {
-  const periodBalances = new Map<string, { debit: number; credit: number }>()
-  for (const sums of periodSums) {
-    const existing = periodBalances.get(sums.account_number) || { debit: 0, credit: 0 }
-    existing.debit += Number(sums.debit) || 0
-    existing.credit += Number(sums.credit) || 0
-    periodBalances.set(sums.account_number, existing)
-  }
-
-  // Merge account numbers from both opening and period
-  const allAccountNumbers = new Set([...openingBalances.keys(), ...periodBalances.keys()])
-
-  // Build rows: IB + period = UB
-  const rows: TrialBalanceRow[] = []
-  for (const accountNumber of allAccountNumbers) {
-    const opening = openingBalances.get(accountNumber) || { debit: 0, credit: 0 }
-    const periodActivity = periodBalances.get(accountNumber) || { debit: 0, credit: 0 }
-    const accountInfo = accountMap.get(accountNumber) || {
-      name: `Konto ${accountNumber}`,
-      class: parseInt(accountNumber[0]) || 0,
-    }
-
-    rows.push({
-      account_number: accountNumber,
-      account_name: accountInfo.name,
-      account_class: accountInfo.class,
-      opening_debit: roundOre(opening.debit),
-      opening_credit: roundOre(opening.credit),
-      period_debit: roundOre(periodActivity.debit),
-      period_credit: roundOre(periodActivity.credit),
-      closing_debit: roundOre(opening.debit + periodActivity.debit),
-      closing_credit: roundOre(opening.credit + periodActivity.credit),
-    })
-  }
-
-  rows.sort((a, b) => a.account_number.localeCompare(b.account_number))
-
-  return rows
+  const periodBalances: AccountBalances = new Map()
+  for (const sums of periodSums) addActivity(periodBalances, sums.account_number, sums.debit, sums.credit)
+  return buildRows(openingBalances, periodBalances, accountMap)
 }

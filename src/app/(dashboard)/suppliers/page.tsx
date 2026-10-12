@@ -4,13 +4,14 @@ import { useState, useEffect } from 'react'
 import dynamic from 'next/dynamic'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { createClient } from '@/lib/supabase/client'
+import { useSuppliers } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { Button } from '@/components/ui/button'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
-import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS, SHOW_MORE_STEP, ShowMoreFooter } from '@/components/ui/dry-table'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { RegisterImportButton } from '@/components/import/RegisterImportButton'
 import { useToast } from '@/components/ui/use-toast'
@@ -18,7 +19,6 @@ import { Plus, Lock, Truck } from 'lucide-react'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { formatOrgNumberDisplay, stripOrgNumberFormatting } from '@/lib/invariants/org-number'
-import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { Supplier, SupplierType, CreateSupplierInput } from '@/types'
 
@@ -40,7 +40,6 @@ const SUPPLIER_TYPE_KEYS: Record<SupplierType, string> = {
   eu_business: 'type_eu_business',
   non_eu_business: 'type_non_eu_business',
 }
-const INITIAL_VISIBLE_ROWS = 100
 
 // "Betalsätt" cell (concept scene 26): the supplier's primary payment route,
 // e.g. "BG 5050-1055". First match wins, mirroring the detail page's order.
@@ -53,48 +52,26 @@ function getPaymentInfo(supplier: Supplier, t: (key: string) => string): { label
 }
 
 export default function SuppliersPage() {
-  const { company } = useCompany()
   const { canWrite } = useCanWrite()
   const t = useTranslations('suppliers')
-  const [suppliers, setSuppliers] = useState<Supplier[]>([])
-  const [isLoading, setIsLoading] = useState(true)
+  // The roster from the session cache (lib/reference-data), the list every
+  // supplier picker reads: a create here refreshes them all.
+  const { suppliers, isLoading, error: suppliersError } = useSuppliers()
   const [searchTerm, setSearchTerm] = useState('')
-  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ROWS)
+  const [visibleCount, setVisibleCount] = useState(SHOW_MORE_STEP)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const { toast } = useToast()
-  const supabase = createClient()
-  const tCommon = useTranslations('common')
   const router = useRouter()
 
-  async function fetchSuppliers() {
-    if (!company) return
-    setIsLoading(true)
-    // Archived suppliers (v1 API soft-delete) are kept for retention but are
-    // not part of the roster: same filter as /api/suppliers and the v1 list.
-    const { data, error } = await supabase
-      .from('suppliers')
-      .select('*')
-      .eq('company_id', company.id)
-      .is('archived_at', null)
-      .order('name', { ascending: true })
-
-    if (error) {
-      toast({
-        title: t('load_failed_title'),
-        description: t('load_failed_description'),
-        variant: 'destructive',
-      })
-    } else {
-      setSuppliers(data || [])
-    }
-    setIsLoading(false)
-  }
-
   useEffect(() => {
-    fetchSuppliers()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    if (!suppliersError) return
+    toast({
+      title: t('load_failed_title'),
+      description: t('load_failed_description'),
+      variant: 'destructive',
+    })
+  }, [suppliersError, toast, t])
 
   async function handleCreateSupplier(data: CreateSupplierInput) {
     setIsCreating(true)
@@ -119,7 +96,7 @@ export default function SuppliersPage() {
         title: t('created_title'),
         description: t('created_description', { name: data.name }),
       })
-      setSuppliers([...suppliers, result.data])
+      await invalidateReferenceData('ref:suppliers')
       setIsDialogOpen(false)
     }
 
@@ -187,7 +164,7 @@ export default function SuppliersPage() {
           value={searchTerm}
           onChange={(e) => {
             setSearchTerm(e.target.value)
-            setVisibleCount(INITIAL_VISIBLE_ROWS)
+            setVisibleCount(SHOW_MORE_STEP)
           }}
         />
       </div>
@@ -269,17 +246,11 @@ export default function SuppliersPage() {
             {t('count_summary', { count: suppliers.length })}
           </p>
 
-          {visibleCount < filteredSuppliers.length && (
-            <div className="flex justify-center">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setVisibleCount((count) => count + INITIAL_VISIBLE_ROWS)}
-              >
-                {tCommon('load_more')}
-              </Button>
-            </div>
-          )}
+          <ShowMoreFooter
+            shown={visibleCount}
+            total={filteredSuppliers.length}
+            onMore={() => setVisibleCount((count) => count + SHOW_MORE_STEP)}
+          />
         </>
       )}
     </div>

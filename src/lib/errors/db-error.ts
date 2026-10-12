@@ -56,8 +56,8 @@ export interface DatabaseError extends Error {
 /**
  * @param error   the `error` half of a supabase-js `{ data, error }` result
  * @param context prefix for the message; defaults to the historical
- *                "Database error" so existing message-pattern matching in
- *                `inferCode()` keeps working unchanged. Pass `null` to keep
+ *                "Database error" so the message reads as before (and the
+ *                database lock refusals classifyError reads still match). Pass `null` to keep
  *                the driver's message verbatim, for call sites whose exact
  *                text callers already depend on.
  */

@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ContinuityCheckResult, ContinuityDiscrepancy } from '@/types'
 import { generateTrialBalance } from './trial-balance'
 import { getOpeningBalances } from './opening-balances'
+import { resolvePreviousFiscalPeriod } from '@/lib/core/bookkeeping/period-service'
 import { roundOre, ORE_TOLERANCE } from '@/lib/bokslut/rounding'
 
 /**
@@ -35,8 +36,16 @@ export async function validateBalanceContinuity(
     throw new Error('Fiscal period not found')
   }
 
-  // First period: nothing to compare against
-  if (!period.previous_period_id) {
+  // The year ending the day before this one starts (the continuity link when
+  // it is adjacent, the date otherwise). None: a first year, nothing to
+  // compare against.
+  const prevPeriod = await resolvePreviousFiscalPeriod<{ id: string; name: string; period_end: string }>(
+    supabase,
+    companyId,
+    period,
+    'id, name, period_end',
+  )
+  if (!prevPeriod) {
     return {
       valid: true,
       period_name: period.name,
@@ -44,18 +53,6 @@ export async function validateBalanceContinuity(
       discrepancies: [],
       checked_accounts: 0,
     }
-  }
-
-  // Fetch previous period name
-  const { data: prevPeriod } = await supabase
-    .from('fiscal_periods')
-    .select('id, name')
-    .eq('id', period.previous_period_id)
-    .eq('company_id', companyId)
-    .single()
-
-  if (!prevPeriod) {
-    throw new Error('Previous fiscal period not found')
   }
 
   // Previous period UB: trial balance filtered to class 1-2

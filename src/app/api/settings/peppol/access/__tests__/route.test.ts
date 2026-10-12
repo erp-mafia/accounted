@@ -156,7 +156,7 @@ describe('POST /api/settings/peppol/access', () => {
     enqueue({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } })
 
     const response = await post({ wants_receiving: true })
-    expect(response.status).toBe(500)
+    expect(response.status).toBe(503) // a statement timeout is transient
     expect(service.calls.some((c) => c.method === 'upsert')).toBe(false)
     expect(sendEmailMock).not.toHaveBeenCalled()
   })

@@ -33,8 +33,10 @@ import type { MappingResult } from '@/types'
  * settles it on the final account afterwards (reconcileRcBasisWithChart in
  * lib/bookkeeping/rc-basis-reconcile.ts), as every bank-categorization door does.
  *
- * Throws on unknown/inactive account or a degenerate same-account entry; the
- * message is Swedish and actionable for both the agent and the approval UI.
+ * Throws on unknown/inactive account (TX_CATEGORIZE_INVALID_ACCOUNT) or a
+ * degenerate same-account entry (TX_CATEGORIZE_INVALID_MAPPING); the message
+ * is Swedish and actionable for both the agent and the approval UI. A thrown
+ * error without a code is a database failure.
  */
 export async function applyAccountOverride(
   supabase: SupabaseClient,
@@ -74,9 +76,12 @@ export async function applyAccountOverride(
   }
 
   if (mappingResult.debit_account === mappingResult.credit_account) {
-    throw new Error(
-      `account_override ${accountOverride} är samma konto som motkontot: ` +
-      'verifikatet skulle debitera och kreditera samma konto. Välj ett annat konto.',
+    throw Object.assign(
+      new Error(
+        `account_override ${accountOverride} är samma konto som motkontot: ` +
+        'verifikatet skulle debitera och kreditera samma konto. Välj ett annat konto.',
+      ),
+      { code: 'TX_CATEGORIZE_INVALID_MAPPING' },
     )
   }
 
