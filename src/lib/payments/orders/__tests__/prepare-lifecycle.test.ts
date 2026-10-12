@@ -213,6 +213,16 @@ describe('preparePaymentOrders', () => {
     expect((preview.preview as { lines: Array<Record<string, unknown>> }).lines[0]).toMatchObject({ requested_execution_date: '2027-01-04', date_moved_from: '2027-01-01' })
   })
 
+  it('never dates a payment today: an invoice due today goes to the next banking day', async () => {
+    db.setTable('supplier_invoices', { data: [invoice('a', { due_date: '2026-10-12' })] }) // a Monday, due today
+    db.setTable('rpc:create_payment_orders', { data: { ok: true, orders: [{ id: 'order-a', supplier_invoice_id: 'a', payee_check: 'known' }] } })
+    const result = await preparePaymentOrders(ctx, { supplierInvoiceIds: ['a'], cashAccountId: 'acct-1', today: '2026-10-12' })
+    if (!result.ok || result.dryRun) throw new Error('unexpected')
+    const [args] = db.findCall('rpc:create_payment_orders', 'rpc') as [{ p_orders: Array<Record<string, unknown>> }]
+    expect(args.p_orders[0]).toMatchObject({ requested_execution_date: '2026-10-13' })
+    expect(result.data.warnings).toContainEqual({ supplier_invoice_id: 'a', code: 'date_moved', from: '2026-10-12', to: '2026-10-13' })
+  })
+
   it('refuses an execution date in the past', async () => {
     expect(
       await preparePaymentOrders(ctx, { supplierInvoiceIds: ['a'], cashAccountId: 'acct-1', executionDate: '2026-09-01', today: '2026-09-30' }),
@@ -262,6 +272,20 @@ describe('approvePaymentOrders', () => {
     expect(patches[1]).toMatchObject({ status: 'approved' })
     const [events] = db.findCall('payment_order_events', 'insert') as [Array<Record<string, unknown>>]
     expect(events[0]).toMatchObject({ event_type: 'approved', detail: { date_moved_from: '2026-10-10', date_moved_to: '2026-10-12' } })
+  })
+
+  it('moves a draft dated today to the next banking day as it approves: the bank never takes today', async () => {
+    db.setTable('payment_orders', [
+      { data: [{ id: 'o1', status: 'draft', payee_check: 'known', supplier_invoice_id: 'a', requested_execution_date: '2026-10-12' }] },
+      { data: [{ id: 'o1' }] }, // the date
+      { data: [{ id: 'o1' }] }, // the approval
+    ])
+    const result = await approvePaymentOrders(ctx, { orderIds: ['o1'], today: '2026-10-12' })
+    expect(result).toMatchObject({ ok: true, data: { approved: ['o1'] } })
+    const patches = db.findCalls('payment_orders', 'update').map(([p]) => p as Record<string, unknown>)
+    expect(patches[0]).toEqual({ requested_execution_date: '2026-10-13' })
+    const [events] = db.findCall('payment_order_events', 'insert') as [Array<Record<string, unknown>>]
+    expect(events[0]).toMatchObject({ event_type: 'approved', detail: { date_moved_from: '2026-10-12', date_moved_to: '2026-10-13' } })
   })
 
   it('refuses orders that are no longer drafts', async () => {

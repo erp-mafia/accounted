@@ -1,18 +1,42 @@
 /**
- * A bank executes a payment on a banking day. A requested execution date on a
- * Saturday, a Sunday or a Swedish holiday is refused by the payment initiation
- * provider (EXECUTION_DATE_INVALID), so every date that leaves here is the
- * next banking day on or after the one asked for.
+ * A bank executes a payment on a banking day, and Open Payments takes an
+ * execution date only when it is "a valid banking day, not a weekend or
+ * holiday, between 1 day and 12 months from today" (its EXECUTION_DATE_INVALID,
+ * dev_docs/open-payments/error_messages.md). Same-day payments are therefore
+ * never offered: the earliest date is the first banking day after today, and
+ * every date that leaves here is a banking day on or after the one asked for.
  */
 
 import { getNextBankingDay, isBankingDay } from '@/lib/tax/swedish-holidays'
+
+function toIso(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
 
 /** YYYY-MM-DD of the first banking day on or after the given YYYY-MM-DD. */
 export function nextBankDayIso(iso: string): string {
   const [year, month, day] = iso.split('-').map(Number)
   // Local noon: the day never shifts whatever the process time zone is.
-  const date = getNextBankingDay(new Date(year, month - 1, day, 12))
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+  return toIso(getNextBankingDay(new Date(year, month - 1, day, 12)))
+}
+
+/**
+ * YYYY-MM-DD of the first banking day strictly after today: the earliest
+ * execution date the provider accepts. Today is the Stockholm date.
+ */
+export function earliestExecutionDateIso(today: string): string {
+  const [year, month, day] = today.split('-').map(Number)
+  return toIso(getNextBankingDay(new Date(year, month - 1, day + 1, 12)))
+}
+
+/**
+ * The execution date for the day someone wanted: the first banking day on or
+ * after it, and never before the earliest the provider accepts.
+ */
+export function executionDateFor(wanted: string, today: string): string {
+  const earliest = earliestExecutionDateIso(today)
+  const onOrAfter = nextBankDayIso(wanted)
+  return onOrAfter < earliest ? earliest : onOrAfter
 }
 
 /**

@@ -20,7 +20,7 @@ import {
 import { createServiceClient } from '@/lib/supabase/server'
 import { buildPartyContext } from './party'
 import { logPaymentOrderEvents, type PaymentOrderRow } from './types'
-import { nextBankDayIso } from '@/lib/payments/bank-days'
+import { executionDateFor } from '@/lib/payments/bank-days'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /** What a person is told when the bank answered a cancel with anything but a confirmation. */
@@ -65,10 +65,13 @@ async function loadOrders(ctx: OperationContext, orderIds: string[]): Promise<Pa
  * that invoice named in confirmedPayeeInvoiceIds: one confirmation per
  * invoice, never one flag for a whole selection.
  */
-/** The banking day an order gets when its date is none, or has passed: never earlier than today. */
+/**
+ * The banking day an order gets for the date it carries: never earlier than
+ * the first banking day after today, which is the earliest the provider takes.
+ */
 export function bankDayFor(requested: string | null | undefined, today: string): string | null {
   if (!requested) return null
-  return nextBankDayIso(requested < today ? today : requested)
+  return executionDateFor(requested, today)
 }
 
 export async function approvePaymentOrders(

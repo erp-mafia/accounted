@@ -18,7 +18,7 @@ import { randomUUID } from 'node:crypto'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { evaluateInvoiceForBatch, type BatchExclusionReason } from '@/lib/payments/batch-eligibility'
 import { openPaymentsDoor } from './switched-on'
-import { nextBankDayIso } from '@/lib/payments/bank-days'
+import { executionDateFor } from '@/lib/payments/bank-days'
 import { formatPayeeLabel, type SupplierPayee } from '@/lib/payments/supplier-payee'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { createServiceClient } from '@/lib/supabase/server'
@@ -50,7 +50,7 @@ export interface PreparedOrderWarning {
   code: 'unattested' | 'ocr_invalid' | 'payee_changed' | 'payee_new' | 'date_moved'
   /** For payee warnings: the other account, so the person can compare. */
   alternative_payee?: string | null
-  /** For date_moved: the day asked for, which was no banking day, and the banking day it became. */
+  /** For date_moved: the day asked for (no banking day, or too soon for the bank) and the banking day it became. */
   from?: string
   to?: string
 }
@@ -240,10 +240,11 @@ export async function preparePaymentOrders(
     alternatives.set(id, payee.alternative ? formatPayeeLabel(payee.alternative) : null)
 
     const reference = evaluation.reference
-    // The bank pays on banking days only: a weekend or a Swedish holiday is
-    // refused by the provider, so the date moves to the next banking day.
+    // The provider takes a banking day from tomorrow on: a weekend, a Swedish
+    // holiday or today itself is refused, so the date moves to the first day
+    // it will take.
     const wantedDate = input.executionDate ?? evaluation.defaults.payment_date
-    const executionDate = nextBankDayIso(wantedDate)
+    const executionDate = executionDateFor(wantedDate, input.today)
     if (executionDate !== wantedDate) warnings.push({ supplier_invoice_id: id, code: 'date_moved', from: wantedDate, to: executionDate })
     payloads.push({
       supplier_invoice_id: id,

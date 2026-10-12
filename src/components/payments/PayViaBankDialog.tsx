@@ -15,6 +15,7 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { BankIdSigningFlow, type SigningFlowStage } from './BankIdSigningFlow'
 import { BankMark } from '@/components/banks/BankMark'
+import { earliestExecutionDateIso } from '@/lib/payments/bank-days'
 import {
   approvePaymentOrders,
   fetchPaymentsAvailability,
@@ -286,7 +287,7 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
                         <Input
                           type="date"
                           aria-label={t('date_label')}
-                          min={new Date().toLocaleDateString('sv-SE')}
+                          min={earliestExecutionDateIso(new Date().toLocaleDateString('sv-SE'))}
                           value={executionDate}
                           onChange={(e) => setExecutionDate(e.target.value)}
                           className="h-8 w-[160px] tabular-nums"
