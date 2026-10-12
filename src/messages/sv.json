@@ -12600,7 +12600,7 @@
     "confirm_and_sign": "Bekräfta och signera",
     "title_confirm": "Bekräfta mottagarkonto",
     "account_from": "Från",
-    "date_default": "Betalningsdag: förfallodagen, tidigast i dag",
+    "date_default": "Betalningsdag: förfallodagen, tidigast nästa bankdag",
     "date_chosen": "Betalningsdag: {date} för alla",
     "change_date": "Ändra",
     "reset_date": "Per faktura",
