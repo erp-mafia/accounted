@@ -4,6 +4,7 @@ import {
   deleteOpenPaymentsConnection,
   fetchOpenPaymentsAvailability,
   fetchOpenPaymentsOverview,
+  isBankBusy,
   isSecondConsent,
   isSyncCooldown,
   OpenPaymentsClientError,
@@ -76,6 +77,17 @@ describe('the session calls', () => {
     expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json')
   })
 
+  it('poll sends an empty body, or the typed personnummer again so the bank sees the PSU on every call', async () => {
+    const fetchMock = answering(200, { data: { connection_id: 'c-1', state: 'pending', method: 'qr', challenge: null, sca_status: null, step: null, failure_code: null, failure_text: null, status: 'pending' } })
+    vi.stubGlobal('fetch', fetchMock)
+    await pollOpenPaymentsConnection('c-1')
+    expect(JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string)).toEqual({})
+    await pollOpenPaymentsConnection('c-1', undefined, { personal_number: '199001010017' })
+    const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit]
+    expect(url).toBe('/api/bank/open-payments/connections/c-1/poll')
+    expect(JSON.parse(init.body as string)).toEqual({ personal_number: '199001010017' })
+  })
+
   it('restart carries the method and the typed personnummer again (the server stores none)', async () => {
     const fetchMock = answering(200, { data: { connection_id: 'c-1', attempt: { ...ATTEMPT, authorisation_id: 'a2' } } })
     vi.stubGlobal('fetch', fetchMock)
@@ -118,6 +130,14 @@ describe('the session calls', () => {
     vi.stubGlobal('fetch', answering(429, { error: { code: 'BANK_SYNC_COOLDOWN', message: 'x', message_en: 'y', details: { next_allowed_at: '2026-10-12T11:00:00Z' } } }))
     const cooldown = await syncOpenPaymentsConnection('c-1').catch((e) => e)
     expect(isSyncCooldown(cooldown)).toBe(true)
+    expect(isBankBusy(cooldown)).toBe(false)
+
+    // The bank's short throttle is its own calm kind: one line, the feed tries again on its own.
+    vi.stubGlobal('fetch', answering(429, { error: { code: 'BANK_THROTTLED', message: 'x', message_en: 'y', details: { next_allowed_at: '2026-10-12T10:01:00Z' } } }))
+    const busy = await syncOpenPaymentsConnection('c-1').catch((e) => e)
+    expect(isBankBusy(busy)).toBe(true)
+    expect(isSyncCooldown(busy)).toBe(false)
+    expect(isBankBusy(new Error('x'))).toBe(false)
     expect((cooldown as OpenPaymentsClientError).nextAllowedAt).toBe('2026-10-12T11:00:00Z')
     vi.stubGlobal('fetch', answering(429, { error: { code: 'BANK_RATE_LIMITED', message: 'x', message_en: 'y' } }))
     expect(isSyncCooldown(await syncOpenPaymentsConnection('c-1').catch((e) => e))).toBe(true)

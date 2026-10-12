@@ -10,7 +10,10 @@
  *   2. marks connections whose consent has run out 'expired' (through
  *      persist_bank_sync_failure for synced rows) and sends the existing
  *      consent expiry mail, which is what the bank notices read to ask for a
- *      renewal;
+ *      renewal; a consent inside its last RENEWAL_NOTICE_DAYS gets that mail
+ *      once beforehand, with the deep link that opens Kopplingar in renew
+ *      mode, unless a renewal is already in flight (the worklist row is the
+ *      campaign branch's, not duplicated here);
  *   3. syncs the connections whose turn it is: the day is cut into 144
  *      ten-minute windows and every connection owns two of them, twelve hours
  *      apart, chosen from its id (syncSlotOf), so the fetching is spread over
@@ -55,6 +58,19 @@ export const SYNC_SLOTS = WINDOWS_PER_DAY / 2
 export const CATCHUP_AFTER_MS = 14 * 60 * 60 * 1000
 /** At most this many catch-ups per run, so a recovery stays spread too. */
 export const CATCHUP_PER_RUN = 5
+/** The renewal mail goes out this many days before the consent runs out: the same window the Kopplingar row turns ochre in (RENEWAL_WINDOW_DAYS). */
+export const RENEWAL_NOTICE_DAYS = 14
+const DAY_MS = 24 * 60 * 60 * 1000
+
+/** The renew deep link: Kopplingar opens Koppla banken in renew mode for this connection (use-bank-connect-resume.ts). */
+export function renewalDeepLink(baseUrl: string, connectionId: string): string {
+  return `${baseUrl}/settings/connections?bank_connect=${encodeURIComponent(connectionId)}&renew=1`
+}
+
+/** Rows of one company at one bank are one connection lineage: a newer row is the renewal of an older one. */
+function lineageKey(row: { company_id: string; bic: string | null; bank_name: string | null }): string {
+  return `${row.company_id}:${row.bic ?? row.bank_name ?? 'unknown'}`
+}
 
 /** The slot (0 to 71) a connection owns, from its id alone, so it never moves. */
 export function syncSlotOf(connectionId: string): number {
@@ -89,6 +105,8 @@ interface CronConnection {
   company_id: string
   user_id: string
   bank_name: string | null
+  /** The bank reached (SWEDSESS for every sparbank): what the per-bank spacing keys on. */
+  bic: string | null
   status: string
   session_id: string | null
   consent_expires: string | null
@@ -104,6 +122,8 @@ export interface OpenPaymentsCronResult {
   connector: boolean
   staleAttemptsRemoved: number
   expired: number
+  /** Renewal mails sent for consents inside their last RENEWAL_NOTICE_DAYS. */
+  renewalNoticed: number
   due: number
   synced: number
   failed: number
@@ -120,7 +140,7 @@ export async function runOpenPaymentsCron(
   const now = options.now ?? Date.now()
   const baseUrl = options.baseUrl ?? process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'
   const result: OpenPaymentsCronResult = {
-    connector: false, staleAttemptsRemoved: 0, expired: 0, due: 0, synced: 0, failed: 0,
+    connector: false, staleAttemptsRemoved: 0, expired: 0, renewalNoticed: 0, due: 0, synced: 0, failed: 0,
     skipped: { notAdmitted: 0, notEntitled: 0, noAccounts: 0, fresh: 0, leased: 0, notScheduled: 0, budget: 0 },
     caughtUp: 0,
   }
@@ -128,11 +148,12 @@ export async function runOpenPaymentsCron(
   // 1. Abandoned attempts. Nothing points at their consent; the bank lets it lapse.
   const { data: pendingRows, error: pendingError } = await supabase
     .from('bank_connections')
-    .select('id, created_at, consent_attempt')
+    .select('id, company_id, bic, bank_name, created_at, consent_attempt')
     .eq('aggregator', OPEN_PAYMENTS_AGGREGATOR)
     .eq('status', 'pending')
   if (pendingError) throw pendingError
-  const stale = ((pendingRows ?? []) as Array<Pick<CronConnection, 'id' | 'created_at' | 'consent_attempt'>>)
+  const pending = (pendingRows ?? []) as Array<Pick<CronConnection, 'id' | 'company_id' | 'bic' | 'bank_name' | 'created_at' | 'consent_attempt'>>
+  const stale = pending
     .filter((row) => row.consent_attempt?.state !== 'partially_authorised')
     .filter((row) => new Date(row.consent_attempt?.started_at ?? row.created_at).getTime() < now - STALE_ATTEMPT_MS)
     .map((row) => row.id)
@@ -150,7 +171,7 @@ export async function runOpenPaymentsCron(
 
   const { data: rows, error } = await supabase
     .from('bank_connections')
-    .select('id, company_id, user_id, bank_name, status, session_id, consent_expires, last_synced_at, last_expiry_notification_at, sync_lease_until, created_at, accounts_data, consent_attempt')
+    .select('id, company_id, user_id, bank_name, bic, status, session_id, consent_expires, last_synced_at, last_expiry_notification_at, sync_lease_until, created_at, accounts_data, consent_attempt')
     .eq('aggregator', OPEN_PAYMENTS_AGGREGATOR)
     .in('status', ['active', 'error', 'pending_selection'])
     .is('superseded_by', null)
@@ -158,12 +179,41 @@ export async function runOpenPaymentsCron(
   if (error) throw error
   const connections = (rows ?? []) as CronConnection[]
 
-  // 2. Consents that have run out.
+  // A renewal in flight: a younger row of the same company at the same bank,
+  // signing (pending, swept ones excluded) or already live.
+  const swept = new Set(stale)
+  const lineages = new Map<string, number[]>()
+  for (const row of [...pending.filter((r) => !swept.has(r.id)), ...connections]) {
+    const key = lineageKey(row)
+    lineages.set(key, [...(lineages.get(key) ?? []), new Date(row.created_at).getTime()])
+  }
+  const renewalInFlight = (connection: CronConnection): boolean => {
+    const createdAt = new Date(connection.created_at).getTime()
+    return (lineages.get(lineageKey(connection)) ?? []).some((other) => other > createdAt)
+  }
+
+  // 2. Consents that have run out, and the ones about to.
   const live: CronConnection[] = []
   for (const connection of connections) {
     const expires = connection.consent_expires ? new Date(connection.consent_expires).getTime() : Number.POSITIVE_INFINITY
     if (expires > now) {
       live.push(connection)
+      // Once, inside the last two weeks, to a connection nobody has renewed
+      // yet: the mail's button opens Kopplingar in renew mode for this row.
+      // last_expiry_notification_at is the once (and the mail's own 48 h
+      // cooldown); the expiry mail after it passes that cooldown anyway.
+      const daysLeft = Math.ceil((expires - now) / DAY_MS)
+      if (
+        (connection.status === 'active' || connection.status === 'error') &&
+        daysLeft <= RENEWAL_NOTICE_DAYS &&
+        !connection.last_expiry_notification_at &&
+        !renewalInFlight(connection)
+      ) {
+        await sendConsentExpiryNotification(supabase, connection as unknown as Record<string, unknown>, daysLeft, false, baseUrl, {
+          renewalUrl: renewalDeepLink(baseUrl, connection.id),
+        })
+        result.renewalNoticed++
+      }
       continue
     }
     const startedAt = new Date(now).toISOString()
@@ -217,10 +267,12 @@ export async function runOpenPaymentsCron(
   result.due = due.length
 
   // Banks in parallel, one connection at a time per bank: a burst at one bank
-  // is what trips its rate limit, not the total.
+  // is what trips its rate limit, not the total. Keyed by BIC: a sparbank
+  // connection carries the sparbank's name but is read through Swedbank's
+  // API (SWEDSESS), so several sparbanker are one bank here.
   const byBank = new Map<string, CronConnection[]>()
   for (const connection of due) {
-    const key = connection.bank_name ?? 'unknown'
+    const key = connection.bic ?? connection.bank_name ?? 'unknown'
     byBank.set(key, [...(byBank.get(key) ?? []), connection])
   }
   const startedRun = Date.now()

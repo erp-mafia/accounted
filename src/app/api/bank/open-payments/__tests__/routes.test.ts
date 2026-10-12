@@ -165,12 +165,17 @@ describe('open payments routes map the service answers', () => {
     })
   })
 
-  it('POST poll takes no body and answers 404 for a row the company does not have', async () => {
+  it('POST poll works without a body, carries a typed personnummer when given, and answers 404 for a row the company does not have', async () => {
     service.pollBankFeedConsent.mockResolvedValue({ ok: false, code: 'NOT_FOUND' })
     const { status, body } = await parseJsonResponse<ErrorBody>(await poll(post(`/api/bank/open-payments/connections/${ID}/poll`), params(ID)))
     expect(status).toBe(404)
     expect(body.error.code).toBe('NOT_FOUND')
     expect(service.pollBankFeedConsent).toHaveBeenCalledWith(expect.anything(), { connectionId: ID, signer: { personalNumber: null, ipAddress: '203.0.113.9', userAgent: 'Browser/1.0' } })
+    await poll(post(`/api/bank/open-payments/connections/${ID}/poll`, { personal_number: '199001011239' }), params(ID))
+    expect(service.pollBankFeedConsent).toHaveBeenLastCalledWith(expect.anything(), { connectionId: ID, signer: { personalNumber: '199001011239', ipAddress: '203.0.113.9', userAgent: 'Browser/1.0' } })
+    // A malformed body is read as none.
+    await poll(post(`/api/bank/open-payments/connections/${ID}/poll`, { personal_number: 42 }), params(ID))
+    expect(service.pollBankFeedConsent).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ signer: expect.objectContaining({ personalNumber: null }) }))
   })
 
   it('POST restart works without a body, reads an optional one, and always knows the origin to come back to', async () => {
@@ -190,8 +195,12 @@ describe('open payments routes map the service answers', () => {
     const response = await select(post(`/api/bank/open-payments/connections/${ID}/select`, { accounts: [{ uid: 'A', enabled: true, ledger_account: '1930' }, { uid: 'B', enabled: false, ledger_account: null }] }), params(ID))
     expect(response.status).toBe(200)
     expect(service.selectBankFeedAccounts).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      connectionId: ID, accounts: [{ uid: 'A', enabled: true, ledgerAccount: '1930' }, { uid: 'B', enabled: false, ledgerAccount: null }], method: null, keepAlive: expect.any(Function),
+      connectionId: ID, accounts: [{ uid: 'A', enabled: true, ledgerAccount: '1930' }, { uid: 'B', enabled: false, ledgerAccount: null }], method: null, returnTo: null, returnOrigin: null, keepAlive: expect.any(Function),
     }))
+    // The page to come back to rides along, so Svea's second consent can sign on the bank's page.
+    await select(post(`/api/bank/open-payments/connections/${ID}/select`, { accounts: [{ uid: 'A', enabled: true }], return_to: 'connections' }), params(ID))
+    expect(service.selectBankFeedAccounts).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ returnTo: 'connections', returnOrigin: 'https://app.accounted.se' }))
+    expect((await select(post(`/api/bank/open-payments/connections/${ID}/select`, { accounts: [{ uid: 'A', enabled: true }], return_to: '/evil' }), params(ID))).status).toBe(400)
     service.selectBankFeedAccounts.mockResolvedValue({ ok: false, code: 'BANK_SELECTION_LEDGER_CONFLICT' })
     const { status, body } = await parseJsonResponse<ErrorBody>(await select(post(`/api/bank/open-payments/connections/${ID}/select`, { accounts: [{ uid: 'A', enabled: true }] }), params(ID)))
     expect(status).toBe(400)

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { OPEN_BANKING_FAILURE_TEXTS, OPEN_BANKING_GENERIC_FAILURE, consentFailureText } from '../failure-text'
+import { OPEN_BANKING_FAILURE_TEXTS, OPEN_BANKING_GENERIC_FAILURE, OPEN_BANKING_PERMANENT_FAILURES, consentFailureText, isPermanentConsentFailure } from '../failure-text'
 
 const messages = (lang: 'sv' | 'en') =>
   JSON.parse(readFileSync(fileURLToPath(new URL(`../../../messages/${lang}.json`, import.meta.url)), 'utf8')) as {
@@ -27,6 +27,29 @@ describe('consentFailureText', () => {
     expect(Object.keys(en.failure).sort()).toEqual(Object.keys(OPEN_BANKING_FAILURE_TEXTS).sort())
     expect(sv.failure_generic).toBe(OPEN_BANKING_GENERIC_FAILURE.sv)
     expect(en.failure_generic).toBe(OPEN_BANKING_GENERIC_FAILURE.en)
+  })
+
+  it('tells the person to start again on the bank\'s page when the bank imposed it, now that that works', () => {
+    expect(consentFailureText('SCA_REDIRECT_UNSUPPORTED').sv).toBe('Banken vill att du signerar på sin egen sida. Starta om och välj att signera på bankens sida.')
+    expect(consentFailureText('SCA_REDIRECT_UNSUPPORTED').sv).not.toMatch(/stöds inte/)
+    expect(consentFailureText('SCA_REDIRECT_UNSUPPORTED').en).not.toMatch(/not supported/)
+  })
+
+  it('has a Swedish text for every code a consent flow can hit, and marks the ones resolved in the online bank as permanent', () => {
+    for (const code of ['PSU_CREDENTIALS_INVALID', 'PSU_OPEN_BANKING_RIGHTS_MISSING', 'BANK_AGREEMENT_MISSING', 'BANKID_EXTENDED_USE_REQUIRED', 'KYC_INVALID', 'AUTHENTICATION_SESSION_ONGOING', 'STRONGER_AUTHENTICATION_NEEDED', 'BANK_REQUEST_LIMIT_EXCEEDED']) {
+      expect(OPEN_BANKING_FAILURE_TEXTS[code], code).toBeDefined()
+      expect(consentFailureText(code), code).not.toEqual(OPEN_BANKING_GENERIC_FAILURE)
+    }
+    for (const code of ['BANK_AGREEMENT_MISSING', 'BANKID_EXTENDED_USE_REQUIRED', 'BANKID_NOT_ACTIVATED', 'KYC_INVALID', 'PSU_OPEN_BANKING_RIGHTS_MISSING', 'PSU_RIGHTS_MISSING', 'PSU_CREDENTIALS_INVALID', 'PSU_ACCOUNT_MISSING']) {
+      expect(isPermanentConsentFailure(code), code).toBe(true)
+      expect(OPEN_BANKING_FAILURE_TEXTS[code], `${code} has a text`).toBeDefined()
+    }
+    expect(isPermanentConsentFailure(' kyc_invalid ')).toBe(true)
+    // Trying again helps here: a session that ran out, a cancelled signing, a busy bank, an unknown code.
+    for (const code of ['SIGNING_SESSION_EXPIRED', 'AUTHENTICATION_SESSION_PSU_CANCELLED', 'BANK_REQUEST_LIMIT_EXCEEDED', 'AUTHENTICATION_SESSION_ONGOING', 'SCA_REDIRECT_UNSUPPORTED', 'SOMETHING_NEW', null, undefined]) {
+      expect(isPermanentConsentFailure(code), String(code)).toBe(false)
+    }
+    for (const code of OPEN_BANKING_PERMANENT_FAILURES) expect(OPEN_BANKING_FAILURE_TEXTS[code], code).toBeDefined()
   })
 
   it('uses no em or en dashes', () => {

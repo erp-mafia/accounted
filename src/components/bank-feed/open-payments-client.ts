@@ -237,6 +237,13 @@ export function isSyncCooldown(error: unknown): boolean {
   return error instanceof OpenPaymentsClientError && error.code !== null && SYNC_COOLDOWN_CODES.has(error.code)
 }
 
+/** The bank's short throttle (429 BANK_THROTTLED): busy for a moment, not the daily cap; one calm line, the feed tries again on its own. */
+export const BANK_BUSY_CODE = 'BANK_THROTTLED'
+
+export function isBankBusy(error: unknown): boolean {
+  return error instanceof OpenPaymentsClientError && error.code === BANK_BUSY_CODE
+}
+
 const BASE = '/api/bank/open-payments'
 
 async function send<T>(input: string, init?: RequestInit): Promise<T> {
@@ -322,10 +329,11 @@ export function createOpenPaymentsConnection(input: CreateConnectionInput): Prom
   return send<CreateConnectionResult>(`${BASE}/connections`, { method: 'POST', body: JSON.stringify(input) })
 }
 
-export function pollOpenPaymentsConnection(connectionId: string, signal?: AbortSignal): Promise<ConnectionPoll> {
+/** The poll repeats the typed personnummer: the bank wants the PSU named on every call about the consent. */
+export function pollOpenPaymentsConnection(connectionId: string, signal?: AbortSignal, signer: Pick<SignerInput, 'personal_number'> = {}): Promise<ConnectionPoll> {
   return send<ConnectionPoll>(`${BASE}/connections/${encodeURIComponent(connectionId)}/poll`, {
     method: 'POST',
-    body: JSON.stringify({}),
+    body: JSON.stringify(signer.personal_number ? { personal_number: signer.personal_number } : {}),
     signal,
   })
 }

@@ -24,6 +24,7 @@ import {
   deleteOpenPaymentsConnection,
   fetchOpenPaymentsConnection,
   fetchOpenPaymentsOverview,
+  isBankBusy,
   isSecondConsent,
   isSyncCooldown,
   OpenPaymentsClientError,
@@ -179,14 +180,17 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
   }, [needsBank, connectionId])
 
   // Poll while the bank works on the consent. One request at a time; a
-  // consent waiting for a second signatory is asked about less often.
+  // consent waiting for a second signatory is asked about less often. The
+  // typed personnummer rides along (the bank wants the PSU on every call);
+  // the server never stores it.
   const polling = pollingActive(state)
   const secondSigner = state.pollState === 'partially_authorised'
   const pollAtOnce = state.attempt === null
+  const typedPersonalNumber = signerKnown ? null : normalizePersonalNumber(state.personalNumber)
   useEffect(() => {
     if (!polling || !connectionId) return
     return startPollLoop({
-      poll: (signal) => pollOpenPaymentsConnection(connectionId, signal),
+      poll: (signal) => pollOpenPaymentsConnection(connectionId, signal, typedPersonalNumber ? { personal_number: typedPersonalNumber } : {}),
       onResult: (poll) => {
         dispatch({ type: 'polled', poll })
         return poll.state === 'pending' || poll.state === 'partially_authorised'
@@ -194,11 +198,12 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
       intervalMs: secondSigner ? SECOND_SIGNER_POLL_MS : CONSENT_POLL_MS,
       immediate: pollAtOnce,
     })
-  }, [polling, connectionId, secondSigner, pollAtOnce])
+  }, [polling, connectionId, secondSigner, pollAtOnce, typedPersonalNumber])
 
   // Svea's second round went through: the connection is live, run the first
   // sync, then read the connection as the routes describe it. A 429 (synced
-  // recently, or the bank limits reads) is calm: the import runs on its own.
+  // recently, or the bank limits reads) is calm: the import runs on its own;
+  // a bank busy for a moment gets one calm line.
   const confirmed = state.confirmed
   const bankName = state.bank?.name ?? null
   const bankBic = state.bank?.bic ?? null
@@ -226,7 +231,10 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
       } catch (error) {
         if (cancelled) return
         if (isSyncCooldown(error)) syncPending = true
-        else toast({ title: t('activate_failed_title'), description: describe(error, t('activate_failed_title')), variant: 'destructive' })
+        else if (isBankBusy(error)) {
+          syncPending = true
+          toast({ title: t('bank_busy') })
+        } else toast({ title: t('activate_failed_title'), description: describe(error, t('activate_failed_title')), variant: 'destructive' })
       }
       const connection = await fetchOpenPaymentsConnection(connectionId).catch(() => fallbackView)
       if (!cancelled) dispatch({ type: 'activated', connection, sync, syncPending })
@@ -303,7 +311,9 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
         method,
         personal_number: personalNumber,
         replace_connection_id: state.replaceConnectionId ?? undefined,
-        return_to: method === 'redirect' && returnTo ? returnTo : undefined,
+        // Always named when the surface has a page: the server picks the bank's
+        // page for a bank that signs only there, whatever was asked for.
+        return_to: returnTo ?? undefined,
       })
       dispatch({ type: 'started', result })
       leaveForBank(result)
@@ -313,27 +323,41 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
   }
 
   // A restart or a select may start a BankID: the method and, when nothing
-  // is on file, the typed personnummer again (the server never stores it).
-  // A redirect names the page to come back to as well.
-  function signerInput(): SignerInput {
+  // is on file, the typed personnummer again (the server never stores it),
+  // and the page to come back to, so a bank that signs on its own page
+  // (Svea's second consent included) can be started that way.
+  function signerInput(method: ConnectMethod = state.method): SignerInput {
     const typed = signerKnown ? null : normalizePersonalNumber(state.personalNumber)
     return {
-      method: state.method,
+      method,
       ...(typed ? { personal_number: typed } : {}),
-      ...(state.method === 'redirect' && returnTo ? { return_to: returnTo } : {}),
+      ...(returnTo ? { return_to: returnTo } : {}),
     }
   }
 
-  async function restart() {
+  async function restart(method: ConnectMethod = state.method) {
     if (!connectionId) return
     dispatch({ type: 'start' })
     try {
-      const result = await restartOpenPaymentsConnection(connectionId, signerInput())
+      const result = await restartOpenPaymentsConnection(connectionId, signerInput(method))
       dispatch({ type: 'started', result })
       leaveForBank(result)
     } catch (error) {
       dispatch({ type: 'start_failed', message: describe(error, t('restart_failed_title')) })
     }
+  }
+
+  // The second signatory of a partially authorised consent: their own BankID
+  // on the same consent, with their personnummer when none is on file. The
+  // bank then has both mandated authorisations and the consent turns valid.
+  async function signAsSignatory(method: ConnectMethod) {
+    if (!signerKnown && !normalizePersonalNumber(state.personalNumber)) {
+      setPersonalNumberInvalid(true)
+      return
+    }
+    setPersonalNumberInvalid(false)
+    dispatch({ type: 'method_set', method })
+    await restart(method)
   }
 
   async function activate() {
@@ -515,7 +539,8 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
               mobile={mobile}
               bankName={titleBank ?? ''}
               onStart={start}
-              onRestart={restart}
+              onRestart={() => void restart()}
+              onSignAsSignatory={signAsSignatory}
               onContinueToBank={continueToBank}
               onCopyReminder={copyReminder}
               closeButton={cancelButton}

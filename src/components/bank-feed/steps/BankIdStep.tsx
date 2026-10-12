@@ -7,6 +7,7 @@ import { AttnLine } from '@/components/ui/attn-line'
 import { DialogFooter } from '@/components/ui/dialog'
 import { BankIdChallengeView } from '@/components/bankid/BankIdChallengeView'
 import { BankIdMark } from '@/components/bankid/BankIdMark'
+import { isPermanentConsentFailure } from '@/lib/bank-feed/failure-text'
 import type { SigningApproach } from '../bank-help'
 import { redirectInFlight, type FlowAction, type FlowState } from '../connect-flow-reducer'
 import type { ConnectMethod } from '../open-payments-client'
@@ -28,6 +29,8 @@ interface BankIdStepProps {
   bankName: string
   onStart: (method: ConnectMethod) => void
   onRestart: () => void
+  /** The second signatory of a partially authorised consent starts their own BankID. */
+  onSignAsSignatory: (method: ConnectMethod) => void
   /** Leave for the bank's own page (the top window, never a popup). */
   onContinueToBank: (url: string) => void
   onCopyReminder: () => void
@@ -42,8 +45,13 @@ interface BankIdStepProps {
  * new-QR attention line and the 30 s countdown. A bank that signs on its own
  * page gets one line and one button, Fortsätt till {bank}; coming back from
  * it, the step waits for the bank's answer without a QR or a countdown. A
- * refusal shows the bank's text and offers a restart; a consent waiting for a
- * second signatory says so and hands over a link to copy.
+ * refusal shows the bank's text and offers a restart (none when the bank's
+ * code names something to fix in the online bank); a consent waiting for a
+ * second signatory says so and hands over a link to copy. Opened from that
+ * link (resume), the second signatory gets the personnummer field and
+ * Signera som firmatecknare, which starts their own BankID on the same
+ * consent (the bank's partiallyAuthorised: "some but not all mandated
+ * authorisations have been performed").
  */
 export function BankIdStep({
   state,
@@ -56,6 +64,7 @@ export function BankIdStep({
   bankName,
   onStart,
   onRestart,
+  onSignAsSignatory,
   onContinueToBank,
   onCopyReminder,
   closeButton,
@@ -124,7 +133,16 @@ export function BankIdStep({
   }
 
   const failed = state.pollState === 'failed'
+  // A refusal the person resolves in the online bank: the text, no Försök igen.
+  const permanent = failed && isPermanentConsentFailure(state.failure?.code)
   const partial = state.pollState === 'partially_authorised'
+  // The second signatory arrived through the reminder link: they sign here.
+  // The first signatory's own screen only says who is still to sign.
+  const secondSignatory = partial && state.mode === 'resume'
+  // Where the second signatory signs: the bank's page when that is the only
+  // way, BankID on this device on a phone, else the QR.
+  const signatoryMethod: ConnectMethod = approach === 'redirect' ? 'redirect' : mobile ? 'same_device' : 'qr'
+  const signatoryDisabled = state.starting || (!signerKnown && state.personalNumber.trim().length === 0)
   const redirect = redirectInFlight(state)
   const redirectUrl = state.attempt?.challenge?.redirectUrl ?? null
   // Back from the bank's page, or still waiting for its link: nothing to scan, the poll decides.
@@ -144,9 +162,23 @@ export function BankIdStep({
         <div className="space-y-3 text-center">
           {/* One attention line: a restart that failed replaces the bank's earlier refusal. */}
           <AttnLine className="text-center">{state.startError ?? failureText}</AttnLine>
-          <Button onClick={onRestart} loading={state.starting}>
-            {t('try_again')}
-          </Button>
+          {!permanent && (
+            <Button onClick={onRestart} loading={state.starting}>
+              {t('try_again')}
+            </Button>
+          )}
+        </div>
+      ) : secondSignatory ? (
+        <div className="space-y-4">
+          <BankIdMark className="mx-auto" size={24} />
+          <p className="text-center text-[13px] leading-relaxed">{t('partially_authorised_sign')}</p>
+          {personalNumberField}
+          {state.startError && <AttnLine>{state.startError}</AttnLine>}
+          <div className="text-center">
+            <button type="button" onClick={onCopyReminder} className="text-[12.5px] underline underline-offset-2 hover:opacity-80">
+              {t('send_reminder')}
+            </button>
+          </div>
         </div>
       ) : partial ? (
         <div className="space-y-3 text-center">
@@ -184,6 +216,11 @@ export function BankIdStep({
       )}
       <DialogFooter>
         {closeButton}
+        {secondSignatory && (
+          <Button onClick={() => onSignAsSignatory(signatoryMethod)} loading={state.starting} disabled={signatoryDisabled}>
+            {t('sign_as_signatory')}
+          </Button>
+        )}
         {redirect && !redirectWaiting && !failed && !partial && !state.confirmed && redirectUrl && (
           <Button onClick={() => onContinueToBank(redirectUrl)}>{t('redirect_continue', { bank: bankName })}</Button>
         )}

@@ -35,9 +35,20 @@ vi.mock('@/lib/events/bus', () => ({ eventBus: { emit: (...a: unknown[]) => mock
 
 import { createTableMockSupabase, type TableMockResult } from '@/tests/helpers'
 import { BankSyncResultObsoleteError } from '@/lib/bank-sync/persist-sync-result'
-import { ConsentOverError, ProviderUnavailableError, RateLimitedError, type BankFeedConnect } from '../connect'
-import { RATE_LIMIT_COOLDOWN_MS } from '../lease'
-import { CONSENT_EXPIRED_MESSAGE, SYNC_FAILED_MESSAGE, incrementalWindow, initialWindow, runOpenPaymentsSync } from '../feed'
+import { SYNC_COOLDOWN_MS } from '@/lib/bank-sync/trigger-sync-contract'
+import { BankThrottledError, ConsentOverError, ProviderUnavailableError, RateLimitedError, type BankFeedConnect } from '../connect'
+import { RATE_LIMIT_COOLDOWN_MS, rateLimitHoldUntil } from '../lease'
+import {
+  bankHistoryLimits,
+  CONSENT_EXPIRED_MESSAGE,
+  DEFAULT_BANK_HISTORY_LIMITS,
+  DEFAULT_TRANSACTION_HISTORY_MAX_DAYS,
+  extendedHistoryWindowOpen,
+  incrementalWindow,
+  initialWindow,
+  runOpenPaymentsSync,
+  SYNC_FAILED_MESSAGE,
+} from '../feed'
 
 const NOW = Date.parse('2026-10-12T10:00:00Z')
 const DAY = 24 * 60 * 60 * 1000
@@ -55,8 +66,13 @@ function row(overrides: Record<string, unknown> = {}) {
     id: 'conn-1', company_id: 'co-1', user_id: 'owner-1', bank_name: 'Swedbank', session_id: 'consent-1', status: 'active', bic: 'SWEDSESS',
     affiliated_aspsp_id: null, psu_type: 'business', accounts_data: [{ uid: 'A', currency: 'SEK', enabled: true, ledger_account: '1930' }],
     last_synced_at: new Date(NOW - 2 * DAY).toISOString(), initial_sync_completed_at: '2026-09-01T00:00:00Z', sync_lease_until: '1970-01-01T00:00:00Z',
-    consent_attempt: null, ...overrides,
+    created_at: new Date(NOW - 10 * 60_000).toISOString(), consent_attempt: null, ...overrides,
   }
+}
+
+/** An adapter whose bank details say how far back the bank serves. */
+function connectWithBank(details: { transactionHistoryMaxDays: number | null; extendedTransactionHistoryAvailableWindowMinutes: number | null }): BankFeedConnect {
+  return { getBankDetails: vi.fn().mockResolvedValue({ bic: 'SWEDSESS', name: 'Swedbank', decoupled: true, redirect: false, extendedTransactionHistoryMaxDays: 760, affiliates: [], ...details }) } as unknown as BankFeedConnect
 }
 
 function run(supabase: never, extra: Record<string, unknown> = {}) {
@@ -77,11 +93,28 @@ beforeEach(() => {
 })
 
 describe('windows', () => {
-  it('asks incrementally for the gap since the last sync plus a day, between a week and 90 days', () => {
+  it('asks incrementally for the gap since the last sync plus a day, between a week and what the bank serves (88 days unless it says)', () => {
     expect(incrementalWindow({ last_synced_at: new Date(NOW - 2 * DAY).toISOString() }, NOW)).toMatchObject({ fromDate: '2026-10-05', toDate: '2026-10-12', lookbackDays: 7 })
     expect(incrementalWindow({ last_synced_at: new Date(NOW - 20 * DAY).toISOString() }, NOW).lookbackDays).toBe(21)
-    expect(incrementalWindow({ last_synced_at: new Date(NOW - 400 * DAY).toISOString() }, NOW).lookbackDays).toBe(90)
+    expect(incrementalWindow({ last_synced_at: new Date(NOW - 400 * DAY).toISOString() }, NOW).lookbackDays).toBe(88)
+    expect(incrementalWindow({ last_synced_at: new Date(NOW - 400 * DAY).toISOString() }, NOW, 30).lookbackDays).toBe(30)
+    expect(incrementalWindow({ last_synced_at: new Date(NOW - 2 * DAY).toISOString() }, NOW, 5).lookbackDays).toBe(5)
     expect(incrementalWindow({ last_synced_at: null }, NOW).lookbackDays).toBe(7)
+    expect(DEFAULT_TRANSACTION_HISTORY_MAX_DAYS).toBe(88)
+  })
+
+  it('reads the extended history window from the row\'s age against the bank\'s minutes, open when the age is unknown', () => {
+    expect(extendedHistoryWindowOpen({ created_at: new Date(NOW - 59 * 60_000).toISOString() }, 60, NOW)).toBe(true)
+    expect(extendedHistoryWindowOpen({ created_at: new Date(NOW - 61 * 60_000).toISOString() }, 60, NOW)).toBe(false)
+    expect(extendedHistoryWindowOpen({ created_at: new Date(NOW - 61 * 60_000).toISOString() }, 120, NOW)).toBe(true)
+    expect(extendedHistoryWindowOpen({ created_at: null }, 60, NOW)).toBe(true)
+  })
+
+  it('takes the bank\'s limits from the adapter\'s cached details and falls back to the defaults', async () => {
+    expect(await bankHistoryLimits(connectWithBank({ transactionHistoryMaxDays: 30, extendedTransactionHistoryAvailableWindowMinutes: 15 }), 'co-1', 'SWEDSESS')).toEqual({ maxDays: 30, extendedWindowMinutes: 15 })
+    expect(await bankHistoryLimits(connectWithBank({ transactionHistoryMaxDays: null, extendedTransactionHistoryAvailableWindowMinutes: null }), 'co-1', 'SWEDSESS')).toEqual(DEFAULT_BANK_HISTORY_LIMITS)
+    expect(await bankHistoryLimits({ getBankDetails: vi.fn().mockRejectedValue(new Error('down')) } as unknown as BankFeedConnect, 'co-1', 'SWEDSESS')).toEqual(DEFAULT_BANK_HISTORY_LIMITS)
+    expect(await bankHistoryLimits(connect, 'co-1', 'SWEDSESS')).toEqual(DEFAULT_BANK_HISTORY_LIMITS)
   })
 
   it('asks the first import from the later of the extended window and the Enable Banking history minus a week', () => {
@@ -116,7 +149,8 @@ describe('runOpenPaymentsSync', () => {
     expect(result).toEqual({ ok: true, connection_id: 'conn-1', bank: 'Swedbank', imported: 2, duplicates: 1, from_date: '2026-10-05', to_date: '2026-10-12', last_synced_at: expect.any(String) })
     expect(calls).toContainEqual({ table: 'bank_connections', method: 'eq', args: ['aggregator', 'open_payments'] })
     expect(mocks.claimLease).toHaveBeenCalledWith(supabase, 'conn-1', NOW)
-    expect(mocks.party).toHaveBeenCalledWith(supabase, expect.objectContaining({ bic: 'SWEDSESS', affiliatedAspspId: null, psuType: 'business', signer: { personalNumber: null, ipAddress: '203.0.113.1', userAgent: 'UA' } }))
+    // The PSU is the connection's owner, whoever pressed Synka nu.
+    expect(mocks.party).toHaveBeenCalledWith(supabase, expect.objectContaining({ bic: 'SWEDSESS', affiliatedAspspId: null, psuType: 'business', userId: 'owner-1', signer: { personalNumber: null, ipAddress: '203.0.113.1', userAgent: 'UA' } }))
     expect(mocks.syncAccount).toHaveBeenCalledWith(supabase, expect.objectContaining({ connectionId: 'conn-1', fromDate: '2026-10-05', toDate: '2026-10-12', options: {} }))
     expect(mocks.persistResult).toHaveBeenCalledWith(supabase, expect.objectContaining({ connectionId: 'conn-1', sessionId: 'consent-1', initialSync: undefined }))
     expect(mocks.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'transaction.synced' }))
@@ -130,11 +164,46 @@ describe('runOpenPaymentsSync', () => {
       sie_imports: [{ data: { id: 'sie' }, error: null }],
     })
     const result = await run(supabase, { trigger: 'initial' })
-    expect(result).toMatchObject({ ok: true, from_date: '2026-09-24' })
+    expect(result).toMatchObject({ ok: true, from_date: '2026-09-24', history_window: 'extended' })
     expect(mocks.syncAccount).toHaveBeenCalledWith(supabase, expect.objectContaining({ fromDate: '2026-09-24', options: { rawInsertOnly: true, skipAutoCategorization: true } }))
     expect(mocks.persistResult).toHaveBeenCalledWith(supabase, expect.objectContaining({ initialSync: expect.objectContaining({ requestedFrom: '2026-09-24', returnedMin: '2026-10-05', lookbackDays: 18 }) }))
     // Viewers get raw inserts: no synced event for them.
     expect(mocks.emit).not.toHaveBeenCalled()
+  })
+
+  it('a first import the cron retries after the extended window closed asks for the ordinary window and says so', async () => {
+    const bank = connectWithBank({ transactionHistoryMaxDays: 88, extendedTransactionHistoryAvailableWindowMinutes: 60 })
+    const { supabase } = stub({
+      bank_connections: [{ data: row({ initial_sync_completed_at: null, last_synced_at: null, created_at: new Date(NOW - 3 * 60 * 60_000).toISOString(), consent_attempt: { selection: { extended_history_days: 760 } } }), error: null }],
+      transactions: [{ data: null, error: null }],
+      sie_imports: [{ data: null, error: null }],
+    })
+    const result = await run(supabase, { trigger: 'cron', unattended: true, connect: bank })
+    expect(result).toMatchObject({ ok: true, from_date: '2026-07-16', to_date: '2026-10-12', history_window: 'ordinary' })
+    expect(mocks.syncAccount).toHaveBeenCalledWith(supabase, expect.objectContaining({ fromDate: '2026-07-16' }))
+    expect(mocks.persistResult).toHaveBeenCalledWith(supabase, expect.objectContaining({ initialSync: expect.objectContaining({ requestedFrom: '2026-07-16', lookbackDays: 88 }) }))
+    expect(bank.getBankDetails).toHaveBeenCalledWith('co-1', 'SWEDSESS')
+
+    // Inside the window the extended range stands, from the Enable Banking history when there is one.
+    const soon = stub({
+      bank_connections: [{ data: row({ initial_sync_completed_at: null, last_synced_at: null, created_at: new Date(NOW - 20 * 60_000).toISOString(), consent_attempt: { selection: { extended_history_days: 760 } } }), error: null }],
+      transactions: [{ data: null, error: null }],
+      sie_imports: [{ data: null, error: null }],
+    })
+    expect(await run(soon.supabase, { trigger: 'cron', unattended: true, connect: bank })).toMatchObject({ ok: true, from_date: '2024-09-12', history_window: 'extended' })
+  })
+
+  it('clamps the incremental window to the bank\'s transactionHistoryMaxDays', async () => {
+    const bank = connectWithBank({ transactionHistoryMaxDays: 30, extendedTransactionHistoryAvailableWindowMinutes: 60 })
+    const { supabase } = stub({
+      bank_connections: [{ data: row({ last_synced_at: new Date(NOW - 400 * DAY).toISOString() }), error: null }],
+      sie_imports: [{ data: null, error: null }],
+      transactions: [{ data: [], error: null }],
+    })
+    const result = await run(supabase, { trigger: 'cron', unattended: true, connect: bank })
+    expect(result).toMatchObject({ ok: true, from_date: '2026-09-12', to_date: '2026-10-12' })
+    expect(result).not.toHaveProperty('history_window')
+    expect(mocks.syncAccount).toHaveBeenCalledWith(supabase, expect.objectContaining({ fromDate: '2026-09-12' }))
   })
 
   it('answers the cooldown after a recent sync or a held lease, and a lost claim', async () => {
@@ -158,6 +227,8 @@ describe('runOpenPaymentsSync', () => {
     const cron = stub({ bank_connections: [{ data: row(), error: null }], sie_imports: [{ data: null, error: null }], transactions: [{ data: [], error: null }] })
     expect(await run(cron.supabase, { trigger: 'cron', unattended: true })).toMatchObject({ ok: true })
     expect(cron.from).not.toHaveBeenCalledWith('company_members')
+    // Unattended, but never anonymous: the owner's number on file is the PSU-ID.
+    expect(mocks.party).toHaveBeenCalledWith(cron.supabase, expect.objectContaining({ userId: 'owner-1', signer: { personalNumber: null, ipAddress: null, userAgent: null } }))
     const stranger = stub({ bank_connections: [{ data: row(), error: null }], company_members: [{ data: null, error: null }] })
     expect(await run(stranger.supabase)).toEqual({ ok: false, code: 'NOT_FOUND', connection_id: 'conn-1' })
   })
@@ -180,6 +251,21 @@ describe('runOpenPaymentsSync', () => {
     mocks.syncAccount.mockRejectedValueOnce(new RateLimitedError('budget'))
     const again = stub({ bank_connections: [{ data: row(), error: null }], company_members: [{ data: { role: 'owner' }, error: null }], sie_imports: [{ data: null, error: null }] })
     expect(await run(again.supabase)).toMatchObject({ retry_after_seconds: RATE_LIMIT_COOLDOWN_MS / 1000 })
+  })
+
+  it('holds the lease for the bank\'s short throttle only, never the budget hold, and leaves the row alone', async () => {
+    mocks.syncAccount.mockRejectedValueOnce(new BankThrottledError('busy', { retryAfterSeconds: 45 }))
+    const { supabase } = stub({ bank_connections: [{ data: row(), error: null }], company_members: [{ data: { role: 'owner' }, error: null }], sie_imports: [{ data: null, error: null }] })
+    expect(await run(supabase)).toMatchObject({ ok: false, code: 'BANK_THROTTLED', status: 'active', retry_after_seconds: 60, next_allowed_at: new Date(NOW + 60_000).toISOString() })
+    expect(mocks.holdLease).toHaveBeenCalledWith(supabase, 'conn-1', NOW + 60_000)
+    expect(mocks.persistFailure).not.toHaveBeenCalled()
+    expect(mocks.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'bank_connection.sync_failed', payload: expect.objectContaining({ errorClass: 'throttled', cooldownSeconds: 60 }) }))
+
+    // A longer Retry-After is honoured up to an ordinary claim: the hold still reads as a cooldown, not a spent budget.
+    mocks.syncAccount.mockRejectedValueOnce(new BankThrottledError('busy', { retryAfterSeconds: 3600 }))
+    const long = stub({ bank_connections: [{ data: row(), error: null }], company_members: [{ data: { role: 'owner' }, error: null }], sie_imports: [{ data: null, error: null }] })
+    expect(await run(long.supabase)).toMatchObject({ code: 'BANK_THROTTLED', retry_after_seconds: SYNC_COOLDOWN_MS / 1000 })
+    expect(rateLimitHoldUntil({ sync_lease_until: new Date(NOW + SYNC_COOLDOWN_MS).toISOString() }, NOW)).toBeNull()
   })
 
   it('leaves the row untouched when the provider is unavailable, and parks an unknown failure in error', async () => {

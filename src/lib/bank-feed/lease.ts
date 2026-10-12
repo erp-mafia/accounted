@@ -11,6 +11,10 @@
  * - A spent daily budget (CONNECTOR_BANK_RATE_LIMITED) HOLDS it until the
  *   service's Retry-After, else RATE_LIMIT_COOLDOWN_MS: the bank allows four
  *   unattended reads a day, and a retry next hour only spends a refused call.
+ * - The bank's short throttle (CONNECTOR_BANK_THROTTLED, Retry-After of about
+ *   45 s) holds it for that long, never past an ordinary claim: the next cron
+ *   window or the next Synka nu may read again, and rateLimitHoldUntil keeps
+ *   reading a hold that short as a cooldown, not a spent budget.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { OPEN_PAYMENTS_AGGREGATOR } from '@/lib/bank-sync/aggregator'
@@ -18,6 +22,8 @@ import { SYNC_COOLDOWN_MS } from '@/lib/bank-sync/trigger-sync-contract'
 
 /** A spent daily budget without a Retry-After: half a day, the cron's cadence twice. */
 export const RATE_LIMIT_COOLDOWN_MS = 12 * 60 * 60 * 1000
+/** A throttle without a Retry-After: a minute. */
+export const THROTTLE_COOLDOWN_MS = 60 * 1000
 /** The cron syncs an Open Payments connection at most this often: two of the consent's four unattended reads a day. */
 export const SYNC_DUE_AFTER_MS = 11 * 60 * 60 * 1000
 
@@ -55,6 +61,12 @@ export async function holdBankFeedLease(supabase: SupabaseClient, connectionId: 
 export function rateLimitCooldownMs(retryAfterSeconds: number | null | undefined): number {
   if (typeof retryAfterSeconds !== 'number' || !Number.isFinite(retryAfterSeconds) || retryAfterSeconds <= 0) return RATE_LIMIT_COOLDOWN_MS
   return Math.min(Math.max(retryAfterSeconds * 1000, 60 * 60 * 1000), RATE_LIMIT_COOLDOWN_MS)
+}
+
+/** How long a throttle keeps every path away: the bank's Retry-After, at least THROTTLE_COOLDOWN_MS, never past an ordinary claim. */
+export function throttleCooldownMs(retryAfterSeconds: number | null | undefined): number {
+  const asked = typeof retryAfterSeconds === 'number' && Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0 ? retryAfterSeconds * 1000 : THROTTLE_COOLDOWN_MS
+  return Math.min(Math.max(asked, THROTTLE_COOLDOWN_MS), SYNC_COOLDOWN_MS)
 }
 
 /**

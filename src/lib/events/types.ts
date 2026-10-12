@@ -137,7 +137,8 @@ export type CoreEvent =
       bankName: string | null
       provider: 'enable_banking' | 'accounted_connect' | 'open_payments'
       trigger: 'agent' | 'cron' | 'manual'
-      errorClass: 'session_expired' | 'bank_unavailable' | 'rate_limited' | 'connector' | 'unknown'
+      /** throttled: the bank's short throttle (Open Payments), a retry in a minute; rate_limited: the daily cap. */
+      errorClass: 'session_expired' | 'bank_unavailable' | 'rate_limited' | 'throttled' | 'connector' | 'unknown'
       status: string
       /** Redacted summary (class name + scrubbed phrase); never a raw provider body. */
       diagnostic: string

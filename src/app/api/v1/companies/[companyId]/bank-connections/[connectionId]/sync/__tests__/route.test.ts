@@ -220,6 +220,24 @@ describe('v1 bank-connections sync', () => {
     expect(body.error.details).toMatchObject({ next_allowed_at: '2026-09-20T16:00:00.000Z', status: 'active' })
   })
 
+  it('429 BANK_THROTTLED (the bank\'s short throttle) with a short Retry-After, connection still active', async () => {
+    authOk(['transactions:write'])
+    triggerSyncMock.mockResolvedValue({
+      ok: false,
+      code: 'BANK_THROTTLED',
+      connection_id: CONNECTION_ID,
+      status: 'active',
+      next_allowed_at: '2026-09-20T10:00:45.000Z',
+      retry_after_seconds: 45,
+    })
+    const res = await POST(req(), params)
+    expect(res.status).toBe(429)
+    expect(res.headers.get('Retry-After')).toBe('45')
+    const body = (await res.json()) as { error: { code: string; details: { next_allowed_at: string; status: string } } }
+    expect(body.error.code).toBe('BANK_THROTTLED')
+    expect(body.error.details).toMatchObject({ next_allowed_at: '2026-09-20T10:00:45.000Z', status: 'active' })
+  })
+
   it('409 BANK_SESSION_EXPIRED with a recovery hint pointing at the connect link', async () => {
     authOk(['transactions:write'])
     triggerSyncMock.mockResolvedValue({

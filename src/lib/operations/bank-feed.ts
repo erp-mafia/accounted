@@ -289,7 +289,7 @@ export const bankFeedPoll = defineOperation({
     pitfalls: ['partially_authorised: another signatory must sign; keep the attempt, poll later.'],
     example: { response: { data: { connection_id: EXAMPLE_CONNECTION, state: 'pending', method: 'qr', challenge: null, sca_status: 'started', step: 'identify', failure_code: null, failure_text: null, status: 'pending' } } },
   },
-  input: z.object({ connection_id: CONNECTION_ID, ip_address: z.string().max(64).nullish(), user_agent: z.string().max(300).nullish() }),
+  input: z.object({ connection_id: CONNECTION_ID, personal_number: PERSONAL_NUMBER, ip_address: z.string().max(64).nullish(), user_agent: z.string().max(300).nullish() }),
   output: z.object({
     connection_id: z.string().uuid(),
     state: z.enum(['pending', 'valid', 'partially_authorised', 'failed']),
@@ -362,6 +362,8 @@ export const bankFeedSelect = defineOperation({
     accounts: z.array(z.object({ uid: z.string().min(1), enabled: z.boolean(), ledger_account: z.string().regex(/^19\d{2}$/).nullish() })).min(1).max(100),
     method: METHOD.nullish(),
     personal_number: PERSONAL_NUMBER,
+    return_to: RETURN_TO,
+    return_origin: RETURN_ORIGIN,
     ip_address: z.string().max(64).nullish(),
     user_agent: z.string().max(300).nullish(),
   }),
@@ -377,6 +379,8 @@ export const bankFeedSelect = defineOperation({
       connectionId: input.connection_id,
       accounts: input.accounts.map((a) => ({ uid: a.uid, enabled: a.enabled, ledgerAccount: a.ledger_account ?? null })),
       method: input.method ?? null,
+      returnTo: input.return_to ?? null,
+      returnOrigin: input.return_origin ?? null,
       signer: signerOf(input),
     }),
 })
@@ -392,12 +396,12 @@ export const bankFeedSync = defineOperation({
     description: 'One read with the person present (the bank does not count it against the consent\'s unattended budget). The first read after selection takes the extended history window; later ones the gap since the last sync. A connection synced within 15 minutes answers BANK_SYNC_COOLDOWN.',
     useWhen: 'A person presses Synka nu, or the first import after a Svea consent.',
     doNotUseFor: 'Polling: the cron reads every connection twice a day.',
-    pitfalls: ['BANK_RATE_LIMITED: the consent\'s daily budget is spent; wait for next_allowed_at.'],
+    pitfalls: ['BANK_RATE_LIMITED: the consent\'s daily budget is spent; wait for next_allowed_at.', 'BANK_THROTTLED: the bank is busy for a moment; try once more after next_allowed_at (about a minute).'],
     example: { response: { data: { connection_id: EXAMPLE_CONNECTION, bank: 'Swedbank', imported: 3, duplicates: 12, from_date: '2026-10-05', to_date: '2026-10-12', last_synced_at: '2026-10-12T09:14:03Z' } } },
   },
   input: z.object({ connection_id: CONNECTION_ID, ip_address: z.string().max(64).nullish(), user_agent: z.string().max(300).nullish() }),
   output: SyncOut,
-  errorCodes: ['OPEN_BANKING_NOT_AVAILABLE', 'NOT_FOUND', 'BANK_SYNC_NOT_ACTIVE', 'BANK_SYNC_NO_ACCOUNTS', 'BANK_SYNC_COOLDOWN', 'BANK_RATE_LIMITED', 'BANK_SESSION_EXPIRED', 'BANK_SYNC_FAILED'],
+  errorCodes: ['OPEN_BANKING_NOT_AVAILABLE', 'NOT_FOUND', 'BANK_SYNC_NOT_ACTIVE', 'BANK_SYNC_NO_ACCOUNTS', 'BANK_SYNC_COOLDOWN', 'BANK_RATE_LIMITED', 'BANK_THROTTLED', 'BANK_SESSION_EXPIRED', 'BANK_SYNC_FAILED'],
   run: async (ctx, input) => syncBankFeedConnection(ctx, { connectionId: input.connection_id, signer: signerOf(input) }),
 })
 

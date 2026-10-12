@@ -318,14 +318,20 @@ export const bankSyncResponseSchema = z.object({
 export type BankSyncResponse = z.infer<typeof bankSyncResponseSchema>
 
 /**
- * Error codes specific to the bank sync operation. CONNECTOR_BANK_RATE_LIMITED
- * is the BANK's 429 (not the service's own budget, CONNECTOR_RATE_LIMITED):
- * answered with HTTP 429 and the bank's Retry-After header when it sent one.
+ * Error codes specific to the bank sync operation. Two BANK 429s (neither is
+ * the service's own budget, CONNECTOR_RATE_LIMITED), both answered with HTTP
+ * 429 and a Retry-After header:
+ *   - CONNECTOR_BANK_RATE_LIMITED: the consent's daily cap is spent;
+ *     Retry-After until the next bank day.
+ *   - CONNECTOR_BANK_THROTTLED: the bank's short throttle (too many requests
+ *     in a moment); Retry-After of about 45 seconds. Try again shortly, the
+ *     cap is untouched.
  */
 export const BANK_SYNC_ERROR_CODES = [
   'CONNECTOR_BANK_SESSION_EXPIRED',
   'CONNECTOR_BANK_UPSTREAM_ERROR',
   'CONNECTOR_BANK_RATE_LIMITED',
+  'CONNECTOR_BANK_THROTTLED',
 ] as const
 
 // ---------------------------------------------------------------------------
@@ -1416,9 +1422,10 @@ export const AIS_COUNTED_READ_OPERATIONS = ['accounts', 'balances', 'syncTransac
 
 /**
  * Error codes specific to the AIS family, beside CONNECTOR_BANK_SESSION_EXPIRED
- * (410: the consent is over, a new one is needed) and
- * CONNECTOR_BANK_RATE_LIMITED (429: the consent's daily read budget, ours or
- * the bank's, with Retry-After) from BANK_SYNC_ERROR_CODES.
+ * (410: the consent is over, a new one is needed), CONNECTOR_BANK_RATE_LIMITED
+ * (429: the consent's daily read budget, ours or the bank's, with Retry-After)
+ * and CONNECTOR_BANK_THROTTLED (429: the bank's short throttle, Retry-After of
+ * about 45 s) from BANK_SYNC_ERROR_CODES.
  */
 export const AIS_ERROR_CODES = [
   'CONNECTOR_AIS_PROVIDER_UNAVAILABLE',

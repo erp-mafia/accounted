@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { addDaysIso, daysBetweenIso, todayIsoStockholm, toIsoDate } from '../iso'
+import { addDaysIso, daysBetweenIso, endOfDayIsoStockholm, todayIsoStockholm, toIsoDate } from '../iso'
 
 describe('todayIsoStockholm', () => {
   it('rolls over to the next Swedish calendar day before UTC midnight (CEST, UTC+2)', () => {
@@ -36,5 +36,23 @@ describe('UTC helpers', () => {
     const late = new Date('2026-06-30T22:30:00Z')
     expect(toIsoDate(late)).toBe('2026-06-30')
     expect(todayIsoStockholm(late)).toBe('2026-07-01')
+  })
+})
+
+describe('endOfDayIsoStockholm', () => {
+  it('ends a summer day at 21:59:59Z and a winter day at 22:59:59Z', () => {
+    expect(endOfDayIsoStockholm('2027-04-10')).toBe('2027-04-10T21:59:59Z')
+    expect(endOfDayIsoStockholm('2027-01-15')).toBe('2027-01-15T22:59:59Z')
+  })
+
+  it('handles the clock-change days themselves (last Sunday of March and October)', () => {
+    expect(endOfDayIsoStockholm('2027-03-28')).toBe('2027-03-28T21:59:59Z')
+    expect(endOfDayIsoStockholm('2027-10-31')).toBe('2027-10-31T22:59:59Z')
+    expect(endOfDayIsoStockholm('2027-03-27')).toBe('2027-03-27T22:59:59Z')
+  })
+
+  it('is still inside the Swedish day it names', () => {
+    expect(todayIsoStockholm(new Date(endOfDayIsoStockholm('2027-04-10')))).toBe('2027-04-10')
+    expect(todayIsoStockholm(new Date(new Date(endOfDayIsoStockholm('2027-04-10')).getTime() + 1000))).toBe('2027-04-11')
   })
 })

@@ -8,9 +8,13 @@
  *     whose bank agreement is the owner's private one ('private'). The
  *     context chosen at connect time is kept on bank_connections.psu_type
  *     ('business' | 'personal') so every later read uses the same one.
- *   - personalNumber: the signer's personnummer, only while BankID is in
- *     flight; from their BankID login or the remembered number
- *     (lib/auth/bankid-signer.ts), else what they typed. Never stored.
+ *   - personalNumber: the PSU-ID the provider wants on every request
+ *     ("Always include PSU-ID in all requests to ensure proper consent
+ *     tracking per user", dev_docs/open-payments/consent_and_ais.md): the
+ *     number the person typed, else the one on file for the user the call
+ *     acts for (their BankID login or the remembered number,
+ *     lib/auth/bankid-signer.ts); the connection's owner on an unattended
+ *     read. Null only when nothing is known. Never stored.
  *   - psuIpAddress / psuUserAgent: set when a person asked (the bank does not
  *     count the read against the consent's unattended budget); null on the
  *     cron.
@@ -64,8 +68,9 @@ export interface PartyInput {
   affiliatedAspspId: string | null
   psuType: string | null
   signer: BankFeedSignerInput
-  /** The person's own personnummer is looked up when the signer did not type one; BankID needs it. */
+  /** Whose personnummer on file stands in when none was typed: the signed-in person, or the connection's owner on an unattended read. */
   userId?: string
+  /** A BankID start cannot do without one: refuse instead of sending nothing. */
   requireSigner?: boolean
 }
 
@@ -78,7 +83,7 @@ export async function buildBankFeedParty(supabase: SupabaseClient, input: PartyI
   if (input.signer.personalNumber && !typed) {
     return { ok: false, outcome: { ok: false, code: 'BANK_CONSENT_PERSONAL_NUMBER_REQUIRED', details: { reason: 'invalid' } } }
   }
-  const personalNumber = typed ?? (input.userId && input.requireSigner ? await signerPersonalNumberOnFile(input.userId) : null)
+  const personalNumber = typed ?? (input.userId ? await signerPersonalNumberOnFile(input.userId) : null)
   if (input.requireSigner && !personalNumber) return { ok: false, outcome: { ok: false, code: 'BANK_CONSENT_PERSONAL_NUMBER_REQUIRED' } }
   return {
     ok: true,

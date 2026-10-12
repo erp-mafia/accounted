@@ -17,7 +17,9 @@
  *   - Every failure becomes a typed error the feed and the consent flow
  *     branch on: ConsentOverError (the consent is over, only a new one helps),
  *     RateLimitedError (the consent's daily read budget, ours or the bank's,
- *     with the Retry-After the service sent), ProviderUnavailableError (the
+ *     with the Retry-After the service sent), BankThrottledError (the bank's
+ *     short throttle, Retry-After of about 45 s: a retry in a minute, the
+ *     budget untouched), ProviderUnavailableError (the
  *     provider or the service could not answer; later may differ) and
  *     BankFeedRefusedError (a refusal that a retry never fixes, with the
  *     provider's own code when it gave one).
@@ -54,6 +56,8 @@ export const BANK_DETAILS_TTL_MS = 24 * 60 * 60 * 1000
 export const BANK_FEED_CONSENT_OVER = 'BANK_FEED_CONSENT_OVER'
 /** The daily read budget of the consent is spent (ours or the bank's). */
 export const BANK_FEED_RATE_LIMITED = 'BANK_FEED_RATE_LIMITED'
+/** The bank is busy for a moment (its short throttle): try again shortly. */
+export const BANK_FEED_THROTTLED = 'BANK_FEED_THROTTLED'
 /** The bank does not know the consent, account or authorisation. */
 export const BANK_FEED_NOT_FOUND = 'BANK_FEED_NOT_FOUND'
 
@@ -92,6 +96,17 @@ export class RateLimitedError extends BankFeedError {
   }
 }
 
+/** The bank's short throttle (CONNECTOR_BANK_THROTTLED): too many requests in a moment, not the daily cap. */
+export class BankThrottledError extends BankFeedError {
+  /** Seconds until the bank accepts the next request, when the service said (about 45). */
+  readonly retryAfterSeconds: number | null
+  constructor(message: string, options: { status?: number | null; providerCode?: string | null; retryAfterSeconds?: number | null } = {}) {
+    super(message, { code: BANK_FEED_THROTTLED, retryable: true, status: options.status, providerCode: options.providerCode })
+    this.name = 'BankThrottledError'
+    this.retryAfterSeconds = options.retryAfterSeconds ?? null
+  }
+}
+
 export class ProviderUnavailableError extends BankFeedError {
   constructor(message: string, options: { code: string; status?: number | null; providerCode?: string | null; cause?: unknown }) {
     super(message, { ...options, retryable: true })
@@ -119,6 +134,9 @@ export function toBankFeedError(error: unknown, operation: AisOperation): BankFe
   }
   if (error.code === 'CONNECTOR_BANK_RATE_LIMITED') {
     return new RateLimitedError(error.message, { status, providerCode: error.providerCode, retryAfterSeconds: error.retryAfterSeconds })
+  }
+  if (error.code === 'CONNECTOR_BANK_THROTTLED') {
+    return new BankThrottledError(error.message, { status, providerCode: error.providerCode, retryAfterSeconds: error.retryAfterSeconds })
   }
   switch (error.code) {
     case 'CONNECTOR_AIS_NOT_FOUND':

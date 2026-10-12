@@ -7,6 +7,10 @@
  * an English counterpart. The same table is published under the `bankFeed`
  * namespace of src/messages so the browser can localise a code itself
  * (failure-text.test.ts keeps the two in step).
+ *
+ * A code whose action is in the online bank (an agreement, a right, a
+ * BankID setting, KYC) is permanent for the flow: trying again here cannot
+ * help, so the step shows the text and no Försök igen.
  */
 
 export interface FailureText {
@@ -112,8 +116,8 @@ export const OPEN_BANKING_FAILURE_TEXTS: Readonly<Record<string, FailureText>> =
     en: 'The resource was not found. It is incorrect, removed or expired.',
   },
   SCA_REDIRECT_UNSUPPORTED: {
-    sv: 'Banken kräver inloggning på sin egen webbsida, vilket inte stöds här ännu.',
-    en: 'The bank requires signing in on its own website, which is not supported here yet.',
+    sv: 'Banken vill att du signerar på sin egen sida. Starta om och välj att signera på bankens sida.',
+    en: 'The bank wants you to sign on its own page. Start again and choose to sign on the bank\'s page.',
   },
   SIGNING_SESSION_EXPIRED: {
     sv: 'Signeringssessionen gick ut. Starta om och signera inom 30 sekunder.',
@@ -135,6 +139,30 @@ export const OPEN_BANKING_FAILURE_TEXTS: Readonly<Record<string, FailureText>> =
     sv: 'Okänt felmeddelande från banken. Försök igen.',
     en: 'Unknown error message from the bank. Try again.',
   },
+}
+
+/**
+ * Codes the person resolves in the online bank, not by trying again here
+ * (the provider's Action column: "Login to online bank and check bank
+ * account settings", "Add third party services (API/Open Banking) in online
+ * bank", "Edit user rights in online bank", "Complete KYC in online
+ * banking", "activate Mobile BankID for extended use", "Check end user
+ * credentials", "Select relevant bank office").
+ */
+export const OPEN_BANKING_PERMANENT_FAILURES: ReadonlySet<string> = new Set([
+  'BANK_AGREEMENT_MISSING',
+  'BANKID_EXTENDED_USE_REQUIRED',
+  'BANKID_NOT_ACTIVATED',
+  'KYC_INVALID',
+  'PSU_ACCOUNT_MISSING',
+  'PSU_CREDENTIALS_INVALID',
+  'PSU_OPEN_BANKING_RIGHTS_MISSING',
+  'PSU_RIGHTS_MISSING',
+])
+
+/** Whether a provider failure code is one the person must act on in the online bank: no automatic retry offer. */
+export function isPermanentConsentFailure(code: string | null | undefined): boolean {
+  return Boolean(code) && OPEN_BANKING_PERMANENT_FAILURES.has(code!.trim().toUpperCase())
 }
 
 export const OPEN_BANKING_GENERIC_FAILURE: FailureText = {

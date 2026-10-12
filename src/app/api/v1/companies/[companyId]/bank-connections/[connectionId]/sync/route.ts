@@ -87,6 +87,7 @@ registerEndpoint({
     errorCodes: [
       'BANK_SYNC_COOLDOWN',
       'BANK_RATE_LIMITED',
+      'BANK_THROTTLED',
       'BANK_SYNC_NOT_ACTIVE',
       'BANK_SYNC_NO_ACCOUNTS',
       'BANK_SESSION_EXPIRED',

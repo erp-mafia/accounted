@@ -43,3 +43,34 @@ export function todayIsoStockholm(now: Date = new Date()): string {
     day: '2-digit',
   }).format(now)
 }
+
+/** Minutes Europe/Stockholm is ahead of UTC at `at` (60 in winter, 120 in summer). */
+function stockholmOffsetMinutes(at: Date): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Stockholm',
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(at)
+  const read = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((p) => p.type === type)?.value)
+  const wall = Date.UTC(read('year'), read('month') - 1, read('day'), read('hour'), read('minute'), read('second'))
+  return Math.round((wall - at.getTime()) / 60_000)
+}
+
+/**
+ * The last second of a Swedish calendar day (`YYYY-MM-DD`) as an ISO
+ * instant: 21:59:59Z in summer, 22:59:59Z in winter. For things a Swedish
+ * bank grants "through" a date, such as a consent's validUntil: its day ends
+ * at midnight in Stockholm, not in UTC.
+ */
+export function endOfDayIsoStockholm(isoDate: string): string {
+  const atUtcMidnightEnd = new Date(`${isoDate}T23:59:59Z`)
+  // Sweden changes clocks at 01:00 UTC, never within the last hours of a day,
+  // so the offset at 23:59:59Z is the offset at the local end of that day.
+  const instant = new Date(atUtcMidnightEnd.getTime() - stockholmOffsetMinutes(atUtcMidnightEnd) * 60_000)
+  return instant.toISOString().replace(/\.000Z$/, 'Z')
+}

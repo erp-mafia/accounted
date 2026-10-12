@@ -3580,6 +3580,12 @@ const BANK_SYNC: Record<string, StructuredErrorEntry> = {
     message_en: 'The bank is temporarily rate limiting this consent. Do not sync again before next_allowed_at: it is our cooldown (the bank\'s Retry-After when it sent one, bounded backoff otherwise), not a reset time confirmed by the bank. The connection is still valid: do not ask the user to renew it.',
     retryable: true,
   },
+  BANK_THROTTLED: {
+    httpStatus: 429,
+    message_sv: 'Banken är upptagen just nu. Försök igen om en stund.',
+    message_en: 'The bank is busy right now: a short throttle, not the daily cap. Try again after next_allowed_at (about a minute). The connection is still valid.',
+    retryable: true,
+  },
   BANK_SESSION_EXPIRED: {
     httpStatus: 409,
     message_sv: 'Bankanslutningen har löpt ut. Förnya anslutningen med BankID för att fortsätta synka.',
@@ -7969,8 +7975,8 @@ const OPEN_BANKING: Record<string, StructuredErrorEntry> = {
   },
   BANK_CONSENT_REDIRECT_UNSUPPORTED: {
     httpStatus: 409,
-    message_sv: 'Banken kräver inloggning på sin egen webbsida, vilket inte stöds här ännu. Koppla banken på det vanliga sättet i stället.',
-    message_en: 'The bank requires signing in on its own website, which is not supported here yet. Connect the bank the usual way instead.',
+    message_sv: 'Banken vill att du signerar på sin egen sida. Starta om och välj att signera på bankens sida.',
+    message_en: 'The bank wants you to sign on its own page. Start again and choose to sign on the bank\'s page.',
   },
   BANK_CONSENT_CHANGED: {
     httpStatus: 409,

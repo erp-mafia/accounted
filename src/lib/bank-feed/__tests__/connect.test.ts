@@ -6,8 +6,10 @@ import {
   AIS_SYNC_TIMEOUT_MS,
   BANK_DETAILS_TTL_MS,
   BANK_FEED_NOT_FOUND,
+  BANK_FEED_THROTTLED,
   BankFeedError,
   BankFeedRefusedError,
+  BankThrottledError,
   ConsentOverError,
   ProviderUnavailableError,
   RateLimitedError,
@@ -182,6 +184,15 @@ describe('createBankFeedConnect', () => {
       .balances('co-1', { party: PARTY, consentId: 'c-1', accountUid: 'A' }))
     expect(limited).toBeInstanceOf(RateLimitedError)
     expect((limited as RateLimitedError).retryAfterSeconds).toBe(3600)
+
+    // The bank's short throttle is its own error, never mistaken for the daily cap.
+    const throttled = await failure(adapter(fetchAnswering(429, { error: 'busy', code: 'CONNECTOR_BANK_THROTTLED', retryable: true }, { 'Retry-After': '45' }))
+      .syncTransactions('co-1', { party: PARTY, consentId: 'c-1', accountUid: 'A', accountCurrency: 'SEK', dateFrom: '2026-10-01' }))
+    expect(throttled).toBeInstanceOf(BankThrottledError)
+    expect(throttled).not.toBeInstanceOf(RateLimitedError)
+    expect(throttled.code).toBe(BANK_FEED_THROTTLED)
+    expect(throttled.retryable).toBe(true)
+    expect((throttled as BankThrottledError).retryAfterSeconds).toBe(45)
 
     const refused = await failure(adapter(fetchAnswering(422, { error: 'no', code: 'CONNECTOR_AIS_REFUSED', providerCode: 'PSU_RIGHTS_MISSING' }))
       .createConsent('co-1', { party: PARTY }))

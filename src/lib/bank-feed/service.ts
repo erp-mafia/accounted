@@ -25,7 +25,10 @@
  *   select     the same account selection every bank feed uses
  *              (resolvePsd2LedgerAccount, save_bank_account_selection), the
  *              Enable Banking row a switch replaces handed over, then the
- *              first import inline; Svea gets its second consent instead;
+ *              first import inline; Svea gets its second consent instead,
+ *              started as the first was (the bank's page with the entry
+ *              point's return when that is how the bank signs), the listing
+ *              consent ended once the second is valid;
  *   sync       "Synka nu": one read with the person present;
  *   disconnect the shared disconnect RPC, then the consent ended at the bank
  *              under the revocation claim of the 'openpayments' namespace.
@@ -41,6 +44,7 @@ import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-
 import { aggregatorOf, AGGREGATOR_SESSION_NAMESPACE, OPEN_PAYMENTS_AGGREGATOR, OPEN_PAYMENTS_PROVIDER_SLUG } from '@/lib/bank-sync/aggregator'
 import { disconnectBankConnection, readBankConfiguration, saveBankAccountSelection, type BankAccountSelection } from '@/lib/cash-accounts/configuration'
 import { resolvePsd2LedgerAccount } from '@/lib/cash-accounts/service'
+import { endOfDayIsoStockholm } from '@/lib/dates/iso'
 import { hasErrorEntry } from '@/lib/errors/structured-errors'
 import { eventBus } from '@/lib/events/bus'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
@@ -51,7 +55,7 @@ import { BANK_FEED_NOT_FOUND, BankFeedError, BankFeedRefusedError, ConsentOverEr
 import { openBankFeedDoor } from './door'
 import { consentFailureText } from './failure-text'
 import { runOpenPaymentsSync } from './feed'
-import { accountContextOf, buildBankFeedParty, psuTypeOf, UNATTENDED_SIGNER, type BankFeedSignerInput } from './party'
+import { accountContextOf, buildBankFeedParty, psuTypeOf, UNATTENDED_SIGNER, type BankFeedSignerInput, type PsuType } from './party'
 import { bankConnectReturnUrl, type BankConnectReturnSurface } from './return-url'
 import { normalizeIban, type BankFeedAccount } from './sync'
 
@@ -165,6 +169,8 @@ export interface ConsentAttempt {
   extended_history_days?: number | null
   /** Redirect: the entry point the browser comes back to, so a restart needs no body. */
   return_to?: BankConnectReturnSurface | null
+  /** Svea: the listing consent, ended once the second consent (naming the chosen accounts) is valid. */
+  listing_consent_id?: string | null
   /** Kept through finalize for the selection step (listing_only, replace_connection_id, extended_history_days, and Svea's chosen accounts). */
   selection?: {
     listing_only?: boolean
@@ -172,6 +178,7 @@ export interface ConsentAttempt {
     extended_history_days?: number | null
     accounts?: Array<{ uid: string; enabled: boolean; ledger_account: string | null }>
     method?: ConsentMethod
+    return_to?: BankConnectReturnSurface | null
   }
 }
 
@@ -288,9 +295,9 @@ function connectionView(row: Row): ConnectionView {
   }
 }
 
-/** The consent grants access through its last day. */
+/** The consent grants access through its last day: the bank's day ends at midnight in Stockholm, not in UTC. */
 function consentExpiresAt(validUntil: string): string {
-  return `${validUntil}T23:59:59Z`
+  return endOfDayIsoStockholm(validUntil)
 }
 
 function validUntilRequested(now: number): string {
@@ -446,12 +453,20 @@ export interface StartInput {
   accountContext?: 'corporate' | 'private' | null
   method: ConsentMethod
   signer: BankFeedSignerInput
-  /** Switch mode: the Enable Banking connection this one replaces at account selection. */
+  /** The connection this one replaces: an Enable Banking row (switch, handed over at account selection) or an Open Payments row (renewal, superseded when the new consent is valid). */
   replaceConnectionId?: string | null
   /** Redirect: the entry point to come back to, and the app origin the request came to (the route resolves it). */
   returnTo?: BankConnectReturnSurface | null
   returnOrigin?: string | null
   now?: number
+}
+
+/** What a renewal takes from the Open Payments row it replaces: the bank and the agreement the consent was granted under. */
+interface RenewedConnection {
+  bic: string | null
+  affiliated_aspsp_id: string | null
+  bank_name: string | null
+  psu_type: string | null
 }
 
 /** Where a redirect signing sends the browser back: the entry point, on the resolved app origin. */
@@ -521,17 +536,45 @@ export async function startBankFeedConsent(ctx: OperationContext, input: StartIn
   const connect = door.connect
   const now = input.now ?? Date.now()
 
+  // The connection this one replaces. An Open Payments row is a RENEWAL: its
+  // bank, sparbank, name and agreement context fix the new consent, and
+  // finalize_open_payments_consent supersedes it as it does any older row of
+  // the bank once the new consent is valid (the new recurring consent makes
+  // the old one expire at the bank when authorised). An Enable Banking row is
+  // a SWITCH, handed over at account selection.
+  let renewed: RenewedConnection | null = null
+  if (input.replaceConnectionId) {
+    const { data: replaced, error } = await ctx.supabase
+      .from('bank_connections')
+      .select('id, status, aggregator, bic, affiliated_aspsp_id, bank_name, psu_type')
+      .eq('id', input.replaceConnectionId)
+      .eq('company_id', ctx.companyId)
+      .maybeSingle()
+    if (error) throw error
+    const old = replaced as ({ id: string; status: string; aggregator?: string | null } & RenewedConnection) | null
+    if (!old || old.status === 'revoked') return { ok: false, code: 'NOT_FOUND', details: { field: 'replace_connection_id' } }
+    if (aggregatorOf(old) === 'open_payments') renewed = old
+  }
+  // A renewal stays at its bank: the row's BIC, not the browser's, and a
+  // browser naming another bank is a bug surfaced, not a silent move.
+  if (renewed?.bic && input.bic !== renewed.bic) {
+    return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'bic', reason: 'renewal_other_bank' } }
+  }
+  const bic = renewed?.bic ?? input.bic
+
   let bank: AisBankDetails
   try {
-    bank = await connect.getBankDetails(ctx.companyId, input.bic)
+    bank = await connect.getBankDetails(ctx.companyId, bic)
   } catch (error) {
     if (error instanceof BankFeedRefusedError && error.code === BANK_FEED_NOT_FOUND) return { ok: false, code: 'BANK_CONSENT_UNKNOWN_BANK' }
     return providerFailure(error)
   }
   // The sparbank behind a shared BIC: the connection is named after it, not
-  // after Swedbank, so the rows and the title say which bank it is.
-  const affiliate = input.affiliatedAspspId ? (bank.affiliates.find((a) => a.id === input.affiliatedAspspId) ?? null) : null
-  if (input.affiliatedAspspId && bank.affiliates.length > 0 && !affiliate) {
+  // after Swedbank, so the rows and the title say which bank it is. A renewal
+  // keeps the row's sparbank.
+  const affiliatedAspspId = renewed ? renewed.affiliated_aspsp_id ?? input.affiliatedAspspId ?? null : input.affiliatedAspspId ?? null
+  const affiliate = affiliatedAspspId ? (bank.affiliates.find((a) => a.id === affiliatedAspspId) ?? null) : null
+  if (affiliatedAspspId && bank.affiliates.length > 0 && !affiliate) {
     return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'affiliated_aspsp_id', reason: 'unknown_affiliate' } }
   }
   // A bank that only signs on its own page is started that way when the
@@ -544,36 +587,23 @@ export async function startBankFeedConsent(ctx: OperationContext, input: StartIn
 
   // The bank agreement of a legal form that trades under the owner's
   // personnummer is the owner's private one; every other form has a
-  // corporate agreement. The caller may say otherwise.
+  // corporate agreement. The caller may say otherwise; a renewal keeps the
+  // agreement the consent was granted under.
   const { data: company } = await ctx.supabase.from('companies').select('entity_type').eq('id', ctx.companyId).maybeSingle()
   const entityType = (company as { entity_type?: string | null } | null)?.entity_type
   const accountContext = input.accountContext ?? (isEntityType(entityType) && usesPersonnummerAsOrgNumber(entityType) ? 'private' : 'corporate')
-  const psuType = psuTypeOf(accountContext)
+  const psuType: PsuType = renewed?.psu_type === 'personal' || renewed?.psu_type === 'business' ? renewed.psu_type : psuTypeOf(accountContext)
 
   const party = await buildBankFeedParty(ctx.supabase, {
     companyId: ctx.companyId,
     bic: bank.bic,
-    affiliatedAspspId: input.affiliatedAspspId ?? null,
+    affiliatedAspspId,
     psuType,
     signer: input.signer,
     userId: ctx.userId,
     requireSigner: true,
   })
   if (!party.ok) return party.outcome
-
-  if (input.replaceConnectionId) {
-    const { data: replaced, error } = await ctx.supabase
-      .from('bank_connections')
-      .select('id, status, aggregator')
-      .eq('id', input.replaceConnectionId)
-      .eq('company_id', ctx.companyId)
-      .maybeSingle()
-    if (error) throw error
-    const old = replaced as { id: string; status: string; aggregator?: string | null } | null
-    if (!old || aggregatorOf(old) !== 'enable_banking' || old.status === 'revoked') {
-      return { ok: false, code: 'NOT_FOUND', details: { field: 'replace_connection_id' } }
-    }
-  }
 
   // A new attempt replaces an abandoned one for the same bank, and the
   // company's stale attempts go with it. A partially authorised attempt waits
@@ -606,7 +636,9 @@ export async function startBankFeedConsent(ctx: OperationContext, input: StartIn
     state: 'pending',
     started_at: new Date(now).toISOString(),
     listing_only: listingOnly,
-    replace_connection_id: input.replaceConnectionId ?? null,
+    // The Enable Banking row a switch hands over at selection; a renewed Open
+    // Payments row is superseded by finalize instead, never handed over.
+    replace_connection_id: renewed ? null : input.replaceConnectionId ?? null,
     extended_history_days: bank.extendedTransactionHistoryMaxDays ?? bank.transactionHistoryMaxDays ?? null,
     return_to: ret?.surface ?? null,
   }
@@ -617,9 +649,10 @@ export async function startBankFeedConsent(ctx: OperationContext, input: StartIn
       user_id: ctx.userId,
       aggregator: OPEN_PAYMENTS_AGGREGATOR,
       provider: OPEN_PAYMENTS_PROVIDER_SLUG,
-      bank_name: affiliate?.name ?? bank.name,
+      // The same name as the renewed row: finalize supersedes by bank_name.
+      bank_name: renewed?.bank_name ?? affiliate?.name ?? bank.name,
       bic: bank.bic,
-      affiliated_aspsp_id: input.affiliatedAspspId ?? null,
+      affiliated_aspsp_id: affiliatedAspspId,
       session_id: created.consentId,
       status: 'pending',
       psu_type: psuType,
@@ -653,8 +686,12 @@ export async function restartBankFeedConsent(
   const row = await loadRow(ctx, input.connectionId)
   if (!row) return { ok: false, code: 'NOT_FOUND' }
   if (row.status !== 'pending' || !row.session_id || !row.bic) return { ok: false, code: 'BANK_CONSENT_CHANGED' }
-  const method = input.method ?? row.consent_attempt?.method ?? 'qr'
   const ret = signingReturn(input.returnTo ?? row.consent_attempt?.return_to, input.returnOrigin)
+  // The bank imposed its own page on the last attempt (SCA_REDIRECT_UNSUPPORTED):
+  // "starta om och välj bankens sida" is this restart, so it goes there when
+  // the browser said where to come back to, whatever method it asked for.
+  const imposed = row.consent_attempt?.state === 'failed' && row.consent_attempt.failure_code === 'SCA_REDIRECT_UNSUPPORTED'
+  const method: ConsentMethod = imposed && ret ? 'redirect' : input.method ?? row.consent_attempt?.method ?? 'qr'
   const party = await partyFor(ctx, row, input.signer ?? UNATTENDED_SIGNER, false)
   if (!party.ok) return party.outcome
   // A consent whose signing window closed is created anew; the attempt record
@@ -810,13 +847,19 @@ export async function pollBankFeedConsent(
 
   // Svea's second consent: the person chose the accounts before signing it,
   // so the selection is saved now and the connection goes straight to active.
-  // The first import is the sync the browser asks for next.
+  // The first import is the sync the browser asks for next. The listing
+  // consent has served its purpose only now that the second one is valid:
+  // ending it is best effort.
   const chosen = row.consent_attempt?.selection?.accounts
   if (chosen && !listingOnly) {
     const fresh = await loadRow(ctx, row.id)
     if (fresh) {
       const saved = await saveSelection(ctx, fresh, chosen.map((a) => ({ uid: a.uid, enabled: a.enabled, ledgerAccount: a.ledger_account })), { skipInitialSync: true })
       if (!saved.ok) return saved
+    }
+    const listingConsentId = row.consent_attempt?.listing_consent_id
+    if (listingConsentId && listingConsentId !== row.session_id) {
+      await connect.revokeConsent(ctx.companyId, { party: party.party, consentId: listingConsentId }).catch(() => {})
     }
     return base('valid', { consent_expires: expires, status: 'active' })
   }
@@ -988,7 +1031,17 @@ async function saveSelection(
 
 export async function selectBankFeedAccounts(
   ctx: OperationContext,
-  input: { connectionId: string; accounts: SelectionInput[]; method?: ConsentMethod | null; signer?: BankFeedSignerInput; keepAlive?: (work: Promise<unknown>) => void; now?: number },
+  input: {
+    connectionId: string
+    accounts: SelectionInput[]
+    method?: ConsentMethod | null
+    signer?: BankFeedSignerInput
+    /** Svea's second consent may sign on the bank's page: the entry point to come back to and the app origin the request came to, as for start. */
+    returnTo?: BankConnectReturnSurface | null
+    returnOrigin?: string | null
+    keepAlive?: (work: Promise<unknown>) => void
+    now?: number
+  },
 ): Promise<OperationOutcome<SelectView>> {
   const connect = getBankFeedConnect()
   if (!connect) return { ok: false, code: 'OPEN_BANKING_NOT_AVAILABLE', details: { reason: 'no_connector' } }
@@ -999,7 +1052,8 @@ export async function selectBankFeedAccounts(
 
   // Svea: the first consent only listed the accounts. A second consent naming
   // the chosen ones is created and signed; the selection waits on the row and
-  // is saved when that consent is valid (pollBankFeedConsent).
+  // is saved when that consent is valid (pollBankFeedConsent), which is also
+  // when the listing consent is ended.
   if (row.status === 'pending_selection' && row.consent_attempt?.selection?.listing_only === true) {
     const chosen = input.accounts.filter((a) => a.enabled)
     if (chosen.length === 0) return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'accounts', reason: 'none_selected' } }
@@ -1009,7 +1063,25 @@ export async function selectBankFeedAccounts(
     }
     const ibans = chosen.map((a) => normalizeIban(existing.find((e) => e.uid === a.uid)?.iban)).filter((iban): iban is string => Boolean(iban))
     if (ibans.length !== chosen.length) return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'accounts', reason: 'iban_missing' } }
-    const method = input.method ?? row.consent_attempt?.selection?.method ?? 'qr'
+    // The second signing is started the way the first was: on the bank's
+    // page when that is the only way it signs and the browser said where
+    // to come back to, else with the person's method. The bank's details
+    // come from the adapter's cache.
+    const ret = signingReturn(input.returnTo ?? row.consent_attempt?.selection?.return_to ?? row.consent_attempt?.return_to, input.returnOrigin)
+    const requested = input.method ?? row.consent_attempt?.selection?.method ?? 'qr'
+    let redirectOnly = false
+    if (row.bic) {
+      try {
+        const bank = await connect.getBankDetails(ctx.companyId, row.bic)
+        redirectOnly = bank.decoupled === false && bank.redirect === true
+      } catch {
+        // The person's method stands.
+      }
+    }
+    // Without a return there is no way back from the bank's page: refused
+    // before a consent exists.
+    if ((redirectOnly || requested === 'redirect') && !ret) return RETURN_REQUIRED
+    const method: ConsentMethod = redirectOnly ? 'redirect' : requested
     const party = await partyFor(ctx, row, input.signer ?? UNATTENDED_SIGNER, true)
     if (!party.ok) return party.outcome
     const now = input.now ?? Date.now()
@@ -1019,13 +1091,15 @@ export async function selectBankFeedAccounts(
     } catch (error) {
       return providerFailure(error)
     }
-    // The listing consent has served its purpose; ending it is best effort.
-    if (row.session_id) await connect.revokeConsent(ctx.companyId, { party: party.party, consentId: row.session_id }).catch(() => {})
+    // The listing consent stays until the second one is valid: should the
+    // second signing fail, the accounts can still be listed and chosen again.
     const attempt: ConsentAttempt = {
       method,
       state: 'pending',
       started_at: new Date(now).toISOString(),
       listing_only: false,
+      listing_consent_id: row.session_id,
+      return_to: ret?.surface ?? null,
       selection: {
         ...(row.consent_attempt?.selection ?? {}),
         listing_only: false,
@@ -1041,7 +1115,7 @@ export async function selectBankFeedAccounts(
       accounts_data: existing.map((a) => ({ ...a, enabled: chosen.some((c) => c.uid === a.uid) })),
       consent_attempt: attempt,
     })
-    const started = await startSigning(ctx, connect, { ...row, session_id: created.consentId, status: 'pending', consent_attempt: attempt }, party.party, method, null)
+    const started = await startSigning(ctx, connect, { ...row, session_id: created.consentId, status: 'pending', consent_attempt: attempt }, party.party, method, ret)
     if (!started.ok) return started
     return {
       ok: true,

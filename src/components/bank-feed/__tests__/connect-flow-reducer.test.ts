@@ -266,6 +266,27 @@ describe('the BankID step', () => {
     expect(pollingActive(partial)).toBe(true)
     expect(partial.attempt?.challenge).toEqual(QR)
   })
+
+  it('the second signatory, resumed from the reminder link, starts their own BankID on the same consent and the QR takes over', () => {
+    const waiting = run(openFlow('resume', { connectionId: 'c-1' }), { type: 'polled', poll: poll({ state: 'partially_authorised', method: 'qr' }) })
+    expect(waiting.pollState).toBe('partially_authorised')
+    expect(waiting.attempt).toBeNull()
+    expect(pollingActive(waiting)).toBe(true)
+    // Typing the personnummer and pressing Signera som firmatecknare: the poll keeps going while the restart is out.
+    const starting = run(waiting, { type: 'personal_number_set', value: '199002092386' }, { type: 'method_set', method: 'qr' }, { type: 'start' })
+    expect(starting.starting).toBe(true)
+    expect(starting.pollState).toBe('partially_authorised')
+    expect(pollingActive(starting)).toBe(true)
+    const signing = flowReducer(starting, { type: 'started', result: { connection_id: 'c-1', attempt: attempt({ authorisation_id: 'auth-2', step: 'identify' }) } })
+    expect(signing.pollState).toBe('pending')
+    expect(signing.attempt?.authorisation_id).toBe('auth-2')
+    expect(signing.attempt?.challenge).toEqual(QR)
+    expect(signing.personalNumber).toBe('199002092386')
+    expect(pollingActive(signing)).toBe(true)
+    // Both signatures in: the consent is valid and the accounts step opens as for a first signer.
+    const valid = flowReducer(signing, { type: 'polled', poll: poll({ state: 'valid', accounts: [account()] }) })
+    expect(valid.step).toBe('accounts')
+  })
 })
 
 describe('the accounts step', () => {

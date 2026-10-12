@@ -35,6 +35,8 @@ export type TriggerSyncFailureCode =
   | 'BANK_SYNC_NO_ACCOUNTS'
   | 'BANK_SYNC_COOLDOWN'
   | 'BANK_RATE_LIMITED'
+  /** The bank's short throttle (Open Payments): try again in a minute, the daily cap is untouched. */
+  | 'BANK_THROTTLED'
   | 'BANK_SESSION_EXPIRED'
   | 'BANK_SYNC_FAILED'
 
@@ -48,6 +50,12 @@ export type TriggerSyncResult =
       from_date: string
       to_date: string
       last_synced_at: string
+      /**
+       * A first import only (Open Payments): whether the bank's extended history
+       * was asked for, or the ordinary window because the extended one had closed
+       * before the import ran (lib/bank-feed/feed.ts).
+       */
+      history_window?: 'extended' | 'ordinary'
     }
   | {
       ok: false

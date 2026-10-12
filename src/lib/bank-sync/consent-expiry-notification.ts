@@ -23,7 +23,9 @@ export async function sendConsentExpiryNotification(
   connection: Record<string, unknown>,
   daysLeft: number,
   isExpired: boolean,
-  baseUrl: string
+  baseUrl: string,
+  /** Where the mail's button leads; the bank settings page unless the caller has a deep link (Open Payments: the renew flow of this connection). */
+  options: { renewalUrl?: string } = {},
 ): Promise<void> {
   try {
     if (process.env.BANK_CONSENT_EXPIRY_EMAILS !== 'true') return
@@ -54,7 +56,7 @@ export async function sendConsentExpiryNotification(
     const emailData = {
       bankName: connection.bank_name as string,
       daysUntilExpiry: daysLeft,
-      renewalUrl: `${baseUrl}/settings/banking`,
+      renewalUrl: options.renewalUrl ?? `${baseUrl}/settings/banking`,
       companyName: companySettings?.company_name || '',
       isExpired,
     }
