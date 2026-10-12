@@ -6,7 +6,6 @@ import {
   descriptionsBridge,
   normalizeImportedDescription,
   reconcileStableExternalIds,
-  shiftIsoDate,
   FALLBACK_DESCRIPTION,
 } from '../external-id'
 
@@ -208,27 +207,6 @@ describe('normalizeImportedDescription', () => {
 
   it('does NOT clobber a real title that merely contains the word "unknown"', () => {
     expect(normalizeImportedDescription('Unknown Pizza AB')).toBe('Unknown Pizza AB')
-  })
-})
-
-describe('shiftIsoDate', () => {
-  it('shifts a date forward and backward by whole days', () => {
-    expect(shiftIsoDate('2024-06-15', 1)).toBe('2024-06-16')
-    expect(shiftIsoDate('2024-06-15', -1)).toBe('2024-06-14')
-    expect(shiftIsoDate('2024-06-15', 0)).toBe('2024-06-15')
-  })
-
-  it('crosses month and year boundaries', () => {
-    expect(shiftIsoDate('2024-06-30', 1)).toBe('2024-07-01')
-    expect(shiftIsoDate('2024-07-01', -1)).toBe('2024-06-30')
-    expect(shiftIsoDate('2025-12-31', 1)).toBe('2026-01-01')
-    expect(shiftIsoDate('2026-01-01', -1)).toBe('2025-12-31')
-  })
-
-  it('handles the leap day deterministically (no wall-clock dependency)', () => {
-    expect(shiftIsoDate('2024-02-28', 1)).toBe('2024-02-29') // 2024 is a leap year
-    expect(shiftIsoDate('2024-03-01', -1)).toBe('2024-02-29')
-    expect(shiftIsoDate('2025-02-28', 1)).toBe('2025-03-01') // 2025 is not
   })
 })
 

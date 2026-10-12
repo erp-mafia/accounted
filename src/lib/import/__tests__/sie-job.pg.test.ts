@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import type { PoolClient } from 'pg'
 import { getPool } from '@/tests/pg/setup'
 import { stagingSIEClient } from '@/tests/pg/sie-client'
@@ -8,6 +8,16 @@ import { prepareSIEJob } from '../sie-job-preparation'
 import { runSIEWorker } from '../sie-job-worker'
 import { createHash } from 'node:crypto'
 import type { SIEJob } from '../sie-job-contract'
+import type { SIEVoucher } from '../types'
+
+// The learning after completion (sie-import-learning.ts) is observed here,
+// not run: the staging client has no insert. Its wiring is what this checks.
+const learn = vi.hoisted(() => vi.fn(async (_supabase: unknown, _job: SIEJob, _vouchers: SIEVoucher[]) =>
+  ({ templates: 0, parties: null })))
+vi.mock('../sie-import-learning', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../sie-import-learning')>()),
+  learnFromCompletedSIEImport: learn,
+}))
 
 // Fixtures and optional migration dry run always roll back on staging.
 let client: PoolClient
@@ -36,6 +46,7 @@ afterAll(async () => {
   if (client) { await client.query('ROLLBACK'); client.release() }
 })
 beforeEach(async () => {
+  learn.mockClear()
   await client.query('SAVEPOINT scenario')
   ;[company, actor, period, worker] = Array.from({ length: 4 }, () => randomUUID())
   await client.query(`INSERT INTO auth.users(id,email,instance_id) VALUES($1,$2,'00000000-0000-0000-0000-000000000000')`, [actor, `sie-${actor}@test.invalid`])
@@ -319,6 +330,20 @@ describe('SIE database execution protocol', () => {
     // leaves its receipt. This company has no bank rows, so the matcher is skipped.
     expect(finished.bank_sweep).toMatchObject({state:'done',attempt:1,skipped:'no_unlinked_bank_rows',
       auto_linked:0,date_from:'2026-01-01',date_to:'2026-12-31'})
+    // The completing invocation teaches the company once, from the source
+    // vouchers on the company's accounts, read before completion deleted them.
+    expect(learn).toHaveBeenCalledTimes(1)
+    const [, learnedJob, learnedVouchers] = learn.mock.calls[0]
+    expect(learnedJob).toMatchObject({id:job,job_state:'completed'})
+    expect(learnedVouchers).toHaveLength(205)
+    expect(learnedVouchers[0].date).toBeInstanceOf(Date)
+    expect(learnedVouchers[0].lines.map(line=>line.account)).toEqual(['1930','3001'])
+    expect((await client.query("SELECT count(*)::int n FROM sie_import_chunks WHERE import_id=$1 AND phase='prepare' AND chunk_no > 100000 AND chunk_no < 200000 AND payload IS NOT NULL",[job])).rows[0].n).toBe(0)
+    // An undo through the worker never learns.
+    await client.query('SELECT request_sie_import_undo($1,$2,$3)',[company,job,actor])
+    await runSIEWorker({supabase,importId:job,budgetMs:60_000})
+    expect((await client.query('SELECT job_state FROM sie_imports WHERE id=$1',[job])).rows[0].job_state).toBe('undone')
+    expect(learn).toHaveBeenCalledTimes(1)
   },60_000)
   it('splits the IB per project from #OIB through the resumable job path (issue #3313)', async () => {
     const content = ['#FLAGGA 0','#PROGRAM "Synthetic" 1','#SIETYP 4','#FNAMN "Synthetic AB"','#RAR 0 20260101 20261231',

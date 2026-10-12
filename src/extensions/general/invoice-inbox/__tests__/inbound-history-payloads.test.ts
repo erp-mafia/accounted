@@ -207,7 +207,6 @@ describe('POST /inbound behandlingshistorik payloads', () => {
     const payload = historyPayload('InboundMailReceived')
     expect(payload).toEqual({
       inbox_id: 'inbox-1',
-      custom_domain: false,
       tags: ['lev'],
       unknown_tag_count: 1,
       kind_hint: 'supplier_invoice',

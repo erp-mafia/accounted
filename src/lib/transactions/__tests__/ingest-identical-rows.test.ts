@@ -153,10 +153,9 @@ describe('identical rows that are separate movements', () => {
     expect(externalIds(db.stored())).toEqual([`acct_${DAY}_-1250_0`, `acct_${DAY}_-1250_1`])
   })
 
-  // The date-drift shadow measures rows an enforcing rule WOULD drop as a
-  // copy of a twin one day away. Yesterday's fee under another bank reference
-  // is not such a twin; counting it would argue for a rule that loses it.
-  it('keeps the daily fee of the next day out of the date-drift measurement', async () => {
+  // Yesterday's fee under another bank reference is not a copy of today's:
+  // the next day's identical fee imports.
+  it('imports the daily fee of the next day under its own bank reference', async () => {
     const db = createFakeDb()
     await ingest(db, [feedFee('ref-1')], STABLE)
 
@@ -167,8 +166,6 @@ describe('identical rows that are separate movements', () => {
     ], STABLE)
 
     expect(result.imported).toBe(2)
-    expect(result.shadow_date_drift_candidates).toBe(0)
-    expect(result.shadow_scope_drift_candidates).toBe(0)
   })
 })
 

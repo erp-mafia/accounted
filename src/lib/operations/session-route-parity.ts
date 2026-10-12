@@ -307,8 +307,6 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/documents/:id/admission': gap('P3', 'admit or discard a held document'),
   'POST /api/documents/:id/classification': gap('P3', 'human document type classification'),
   'POST /api/documents/:id/extraction/fields': gap('P3', 'settle extracted fields on an archive document'),
-  'POST /api/documents/:id/links': gap('P3', 'link a document to a party/agreement/asset (not a verifikat)'),
-  'DELETE /api/documents/:id/links/:linkId': gap('P3'),
   'POST /api/arkiv/facts/:id/revert': gap('P3', 'revert a company fact (gnubok_propose_fact stages new ones)'),
   'POST /api/arkiv/findings/:id': gap('P3', 'close an Arkiv finding'),
 
@@ -403,7 +401,6 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'DELETE /api/invoices/recurring/:id': gap('P3', 'delete a schedule (pause is covered by gnubok_update_recurring_schedule)'),
   'POST /api/invoices/recurring/:id/run': gap('P3', 'run a schedule now'),
   'POST /api/invoices/recurring/cron': machine(CRON),
-  'POST /api/invoices/reminders/cron': machine(CRON),
   'POST /api/invoices/reminders/action': machine('machine endpoint: public token link for the invoice recipient'),
 
   // ── Suppliers and supplier invoices ────────────────────────────────
@@ -683,9 +680,6 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/extensions/ext/invoice-inbox/items/bulk-book': covered(['gnubok_bulk_book_inbox_items']),
   'DELETE /api/extensions/ext/invoice-inbox/items/:id': covered([`DELETE ${V}/inbox-items/:id`, 'gnubok_delete_inbox_item']),
   'POST /api/extensions/ext/invoice-inbox/inbox/rotate': gap('P3', 'rotate the inbound e-mail address'),
-  'POST /api/extensions/ext/invoice-inbox/inbox/domain': gap('P3'),
-  'POST /api/extensions/ext/invoice-inbox/inbox/domain/verify': gap('P3'),
-  'DELETE /api/extensions/ext/invoice-inbox/inbox/domain': gap('P3'),
   'POST /api/extensions/ext/invoice-inbox/inbound': machine(WEBHOOK),
 
   // mail (Gmail receipt hunt). Searching a mailbox stays a press by a
@@ -738,4 +732,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 132
+export const GAP_CEILING = 127

@@ -36,7 +36,7 @@ describe('GET /api/import/sie/[id]/recovery', () => {
   it('preserves the hosted MFA refusal', async () => {
     requireAuthMock.mockResolvedValue({
       user: null, supabase: db.supabase,
-      error: NextResponse.json({ error: { code: 'MFA_REQUIRED' } }, { status: 403 }),
+      error: NextResponse.json({ error: 'MFA verification required' }, { status: 403 }),
     })
     expect((await request()).status).toBe(403)
     expect(db.supabase.from).not.toHaveBeenCalled()

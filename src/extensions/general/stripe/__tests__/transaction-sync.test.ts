@@ -26,7 +26,6 @@ import { eventBus } from '@/lib/events/bus'
 import {
   STRIPE_IMPORT_SOURCE,
   STRIPE_LEDGER_ACCOUNT,
-  linkPayoutFeedRows,
   mapBalanceTransaction,
   stripeExternalId,
   stripeFeeExternalId,
@@ -299,39 +298,6 @@ describe('mapBalanceTransaction', () => {
   })
 })
 
-describe('linkPayoutFeedRows', () => {
-  it('links the payout row and every fee row to the payout entry, unlinked rows only', async () => {
-    const { supabase, queriesFor, op } = createCaptureSupabase({
-      transactions: [{ data: [{ id: 't1' }, { id: 't2' }, { id: 't3' }], error: null }],
-    })
-
-    const linked = await linkPayoutFeedRows(supabase, 'company-1', 'acct_1', 'je-po-1', [
-      { id: 'txn_c1', type: 'charge', fee: 1450 },
-      { id: 'txn_c2', type: 'charge', fee: 0 },
-      { id: 'txn_p1', type: 'payout', fee: 0 },
-    ])
-
-    expect(linked).toBe(3)
-    const query = queriesFor('transactions')[0]
-    expect(op(query, 'update')!.args[0]).toEqual({ journal_entry_id: 'je-po-1' })
-    expect(op(query, 'in')!.args).toEqual([
-      'external_id',
-      ['stripe_acct_1_txn_c1_fee', 'stripe_acct_1_txn_p1'],
-    ])
-    expect(op(query, 'is')!.args).toEqual(['journal_entry_id', null])
-    expect(op(query, 'eq')!.args).toEqual(['company_id', 'company-1'])
-  })
-
-  it('is a no-op without fee or payout rows', async () => {
-    const { supabase, queries } = createCaptureSupabase()
-    const linked = await linkPayoutFeedRows(supabase, 'company-1', 'acct_1', 'je-1', [
-      { id: 'txn_c1', type: 'charge', fee: 0 },
-    ])
-    expect(linked).toBe(0)
-    expect(queries).toHaveLength(0)
-  })
-})
-
 describe('syncStripeBalanceTransactions', () => {
   const CONNECTED_SEC = Math.floor(Date.parse(CONNECTION.connected_at!) / 1000)
 
@@ -481,58 +447,6 @@ describe('syncStripeBalanceTransactions', () => {
       last_balance_txn_synced_at: new Date((CREATED + 3600) * 1000).toISOString(),
     })
     expect(op(cursorUpdate, 'eq')!.args).toEqual(['id', 'conn-1'])
-  })
-
-  it('pre-links gross rows of charges the checkout flow already settled', async () => {
-    stubList([makeCharge()])
-    const { supabase, queriesFor, op } = createCaptureSupabase({
-      company_settings: [{ data: null, error: null }],
-      stripe_payment_events: [
-        { data: [{ payment_intent_id: 'pi_1', journal_entry_id: 'je-settle-1' }], error: null },
-      ],
-      transactions: [{ data: [{ id: 't1' }], error: null }],
-    })
-
-    const summary = await syncStripeBalanceTransactions(supabase, { ...CONNECTION })
-
-    expect(summary.linked).toBe(1)
-    const eventsQuery = queriesFor('stripe_payment_events')[0]
-    expect(op(eventsQuery, 'in')!.args).toEqual(['payment_intent_id', ['pi_1']])
-    const linkQuery = queriesFor('transactions')[0]
-    expect(op(linkQuery, 'update')!.args[0]).toEqual({ journal_entry_id: 'je-settle-1' })
-    expect(op(linkQuery, 'in')!.args).toEqual(['external_id', ['stripe_acct_1_txn_charge_1']])
-    expect(op(linkQuery, 'is')!.args).toEqual(['journal_entry_id', null])
-  })
-
-  it('claims fee rows and the payout row of an already-booked payout', async () => {
-    const charge = makeCharge()
-    const payoutTxn = makePayoutTxn()
-    stubList([charge, payoutTxn], [charge, payoutTxn])
-    const { supabase, queriesFor, op } = createCaptureSupabase({
-      company_settings: [{ data: null, error: null }],
-      stripe_payment_events: [{ data: [], error: null }],
-      stripe_payouts: [
-        { data: [{ payout_id: 'po_1', journal_entry_id: 'je-po-1' }], error: null },
-      ],
-      transactions: [{ data: [{ id: 't1' }, { id: 't2' }], error: null }],
-    })
-
-    const summary = await syncStripeBalanceTransactions(supabase, { ...CONNECTION })
-
-    expect(summary.linked).toBe(2)
-    const payoutQuery = queriesFor('stripe_payouts')[0]
-    expect(op(payoutQuery, 'in')!.args).toEqual(['payout_id', ['po_1']])
-    // The per-payout balance transaction list resolves the fee rows.
-    const payoutListCall = balanceTransactionsList.mock.calls.find(
-      (c) => 'payout' in (c[0] as Record<string, unknown>),
-    )
-    expect(payoutListCall?.[0]).toMatchObject({ payout: 'po_1' })
-    const linkQuery = queriesFor('transactions')[0]
-    expect(op(linkQuery, 'update')!.args[0]).toEqual({ journal_entry_id: 'je-po-1' })
-    expect(op(linkQuery, 'in')!.args).toEqual([
-      'external_id',
-      ['stripe_acct_1_txn_charge_1_fee', 'stripe_acct_1_txn_payout_1'],
-    ])
   })
 
   it('stops before ingesting when the deadline already passed and reports it', async () => {

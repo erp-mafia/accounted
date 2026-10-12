@@ -116,8 +116,8 @@ export const handelsbankenFormat: BankFileFormat = {
     // transaction date, and the value_date path caused the June 2026 fleet-wide
     // re-import; see extensions/general/enable-banking/lib/sync.ts). So a CSV
     // row dated on transaktionsdatum lands in a different bucket than the feed
-    // row for the same affärshändelse, the ±1-day drift bridge is
-    // measurement-only, and both rows insert as duplicates.
+    // row for the same affärshändelse, no dedup layer looks across days, and
+    // both rows insert as duplicates.
     //
     // Booking date is also what the Saldo column ties to: dating the row on the
     // swipe date desynchronizes the 19xx balance from the bank statement.

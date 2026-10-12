@@ -1268,112 +1268,12 @@ describe('ingestTransactions', () => {
     expect(txUpdates).toContainEqual({ cash_account_id: 'acct-B' })
   })
 
-  // -----------------------------------------------------------------------
-  // 2c-shadow. Same-feed scope-drift (Hole A): SHADOW MODE. Enable Banking
-  //     returns the same account under a drifted IBAN, so the IBAN-embedded
-  //     external_id is new (Layer-1 misses) and, because both rows are the SAME
-  //     feed, the cross-channel mirror does not fire. The shadow detector
-  //     MEASURES how often an enforcing rule would treat this as a re-import:   //     it logs/counts but NEVER changes what is inserted. These tests pin both
-  //     that it detects the real case and, crucially, that it never flags a
-  //     genuine row (the only failure mode that would matter).
-  // -----------------------------------------------------------------------
-  it('shadow-flags a same-feed scope-drift re-import but still imports it (no behavior change)', async () => {
+  it('imports a genuinely new same-day same-amount row when the stored sibling id re-arrives', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
-    // Same account re-fetched under a drifted IBAN → new external_id, and a
-    // description that shares no prefix with the stored row (so the text bridge
-    // cannot catch it either: this is purely the scope-drift signal).
-    const raw = makeRaw({
-      date: '2024-06-15',
-      amount: -250,
-      description: 'TELENOR SVERIGE',
-      external_id: 'eb_SE_NEW_2024-06-15_-25000_0',
-      import_source: 'enable_banking',
-      bank_connection_id: 'conn-1',
-    })
-    const inserted = makeTransaction({ id: 'tx-new', external_id: raw.external_id })
-
-    enqueue({ data: [], error: null }) // booked map: none
-    // Unbooked map: the stored twin from the SAME feed under the OLD id scope.
-    enqueue({
-      data: [{
-        date: '2024-06-15', amount: -250,
-        original_description: 'LOAN PAYMENT 19', description: 'LOAN PAYMENT 19',
-        import_source: 'enable_banking', bank_connection_id: 'conn-1',
-        cash_account_id: 'ca-1930', external_id: 'eb_SE_OLD_2024-06-15_-25000_0',
-      }],
-      error: null,
-    })
-    enqueue({ data: [], error: null }) // supplier invoices: none
-    enqueue({ data: [], error: null }) // external_id dedup: OLD id not among incoming NEW ids
-    enqueue({ data: cashAccountRows('ca-1930', '1930'), error: null }) // cash_accounts: same account as the stored row
-    enqueue({ data: inserted, error: null }) // insert: STILL imported (shadow only logs)
-    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
-
-    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw], {
-      settlementAccount: '1930',
-    })
-
-    // Detected, but NOT acted on: imports exactly as before.
-    expect(result.imported).toBe(1)
-    expect(result.duplicates).toBe(0)
-    expect(result.shadow_scope_drift_candidates).toBe(1)
-  })
-
-  it('does not shadow-flag an asymmetric same-feed bucket (counts differ)', async () => {
-    const { supabase, enqueue } = createQueueMockSupabase()
-    // TWO incoming rows share (date, amount) but only ONE stored twin exists →
-    // the channels disagree on how many transactions the bucket holds, so the
-    // signal is ambiguous and we stay silent.
-    const rows = [
-      makeRaw({ date: '2024-06-15', amount: -250, description: 'BETALNING A', external_id: 'eb_NEW_a', import_source: 'enable_banking' }),
-      makeRaw({ date: '2024-06-15', amount: -250, description: 'BETALNING B', external_id: 'eb_NEW_b', import_source: 'enable_banking' }),
-    ]
-    enqueue({ data: [], error: null }) // booked
-    enqueue({
-      data: [{ date: '2024-06-15', amount: -250, original_description: 'OCR 9988', description: 'OCR 9988', import_source: 'enable_banking', cash_account_id: null, external_id: 'eb_OLD_x' }],
-      error: null,
-    }) // unbooked: ONE stored twin
-    enqueue({ data: [], error: null }) // supplier
-    enqueue({ data: [], error: null }) // external_id dedup
-    enqueue({ data: makeTransaction({ id: 'tx-a' }), error: null }) // insert a
-    enqueue({ data: makeTransaction({ id: 'tx-b' }), error: null }) // insert b
-    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
-
-    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, rows)
-
-    expect(result.imported).toBe(2)
-    expect(result.duplicates).toBe(0)
-    expect(result.shadow_scope_drift_candidates).toBe(0)
-  })
-
-  it('does not shadow-flag when the stored twin is on a different known cash account', async () => {
-    const { supabase, enqueue } = createQueueMockSupabase()
-    const raw = makeRaw({ date: '2024-06-15', amount: -250, description: 'TELENOR', external_id: 'eb_NEW_acctB', import_source: 'enable_banking' })
-    const inserted = makeTransaction({ id: 'tx-b', external_id: raw.external_id })
-    enqueue({ data: [], error: null }) // booked
-    enqueue({
-      data: [{ date: '2024-06-15', amount: -250, original_description: 'OCR', description: 'OCR', import_source: 'enable_banking', cash_account_id: 'acct-A', external_id: 'eb_OLD_acctA' }],
-      error: null,
-    }) // unbooked twin on account A
-    enqueue({ data: [], error: null }) // supplier
-    enqueue({ data: [], error: null }) // external_id dedup
-    enqueue({ data: cashAccountRows('acct-B', '1931'), error: null }) // cash_accounts → batch settled on account B
-    enqueue({ data: inserted, error: null }) // insert
-    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
-
-    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw], { settlementAccount: '1931' })
-
-    expect(result.imported).toBe(1)
-    expect(result.shadow_scope_drift_candidates).toBe(0)
-  })
-
-  it('does not shadow-flag a genuinely new row when the stored sibling id re-arrives (not drift)', async () => {
-    const { supabase, enqueue } = createQueueMockSupabase()
-    // The stored row's id IS present in this batch (normal re-sync, no drift) →
-    // Layer-1 dedupes it. The SECOND incoming row is a genuinely new same-day /
-    // same-amount transaction with a non-bridging description: it must import
-    // AND must NOT be shadow-flagged, because the stored sibling is not
-    // "orphaned" by a drifted id. This is the data-loss guard.
+    // The stored row's id IS present in this batch (normal re-sync) → Layer-1
+    // dedupes it. The SECOND incoming row is a genuinely new same-day /
+    // same-amount transaction with a non-bridging description: it must import.
+    // This is the data-loss guard.
     const rows = [
       makeRaw({ date: '2024-06-15', amount: -250, description: 'COFFEE STARBUCKS', external_id: 'eb_X_0', import_source: 'enable_banking' }),
       makeRaw({ date: '2024-06-15', amount: -250, description: 'LUNCH RESTAURANG', external_id: 'eb_X_1', import_source: 'enable_banking' }),
@@ -1392,7 +1292,6 @@ describe('ingestTransactions', () => {
 
     expect(result.duplicates).toBe(1) // eb_X_0 deduped by Layer-1
     expect(result.imported).toBe(1)   // eb_X_1 (genuine new) imported
-    expect(result.shadow_scope_drift_candidates).toBe(0) // and NOT shadow-flagged
   })
 
   // -----------------------------------------------------------------------
@@ -1675,16 +1574,16 @@ describe('ingestTransactions', () => {
   })
 
   // -----------------------------------------------------------------------
-  // 2h-shadow. Date-drift (the residual gap behind the reported bank↔bank dupes).
-  //     Every dedup layer buckets on EXACT (date, öre), so a twin whose booking
-  //     date drifted a day is invisible to all of them. The date-drift shadow
-  //     MEASURES how often a ±1-day rule would fire: it logs/counts but NEVER
-  //     changes what is inserted. These pin both that it detects the real cases
-  //     and, crucially, that it never flags a genuine row.
+  // 2h. No date-drift dedup. Every dedup layer buckets on EXACT (date, öre),
+  //     so a twin one day away always imports. Measured on prod (2026-10-12):
+  //     a ±1-day rule matched recurring same-text charges far more often than
+  //     re-imports, and dropping a real charge loses bookkeeping while a
+  //     visible duplicate can be ignored. These pin that decision.
   // -----------------------------------------------------------------------
-  it('shadow-flags an EB↔EB twin one day apart with a bridging description, but still imports it', async () => {
+  it('imports a same-feed twin one day apart with a bridging description', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
-    // Same hotel expense, booking date drifted 15→16 (a real date-drift case).
+    // Same text and amount one day apart: a recurring charge looks exactly
+    // like a drifted copy, so the row imports.
     const raw = makeRaw({
       date: '2024-06-16',
       amount: -1500,
@@ -1708,26 +1607,21 @@ describe('ingestTransactions', () => {
     enqueue({ data: [], error: null }) // supplier invoices
     enqueue({ data: [], error: null }) // external_id dedup: different date bucket, no match
     enqueue({ data: cashAccountRows('ca-1930', '1930'), error: null }) // cash_accounts: same account
-    enqueue({ data: inserted, error: null }) // insert: STILL imported (shadow only logs)
+    enqueue({ data: inserted, error: null }) // insert
     mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw], {
       settlementAccount: '1930',
     })
 
-    // Detected, but NOT acted on: imports exactly as before.
     expect(result.imported).toBe(1)
     expect(result.duplicates).toBe(0)
-    expect(result.shadow_date_drift_candidates).toBe(1)
-    // A different (adjacent) bucket → this is date-drift, not same-bucket scope-drift.
-    expect(result.shadow_scope_drift_candidates).toBe(0)
   })
 
-  it('shadow-flags a CSV↔EB twin one day apart via cross-channel symmetry when descriptions do not bridge', async () => {
+  it('imports a CSV↔EB twin one day apart even when the channels are count-symmetric', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
-    // Nordea CSV row (payee-only desc) and its PSD2 twin booked a day later
-    // (OCR/message desc): descriptions share no prefix, so only the
-    // cross-channel mirror DISPLACED by a day can catch it (a real date-drift case).
+    // Nordea CSV row (payee-only desc) and a PSD2 row a day later: the
+    // cross-channel mirror is exact-date only, so the row imports.
     const raw = makeRaw({
       date: '2024-06-15',
       amount: -2500,
@@ -1749,159 +1643,13 @@ describe('ingestTransactions', () => {
     })
     enqueue({ data: [], error: null }) // supplier invoices
     enqueue({ data: [], error: null }) // external_id dedup: no match
-    enqueue({ data: inserted, error: null }) // insert: STILL imported
+    enqueue({ data: inserted, error: null }) // insert
     mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
 
     expect(result.imported).toBe(1)
     expect(result.duplicates).toBe(0)
-    expect(result.shadow_date_drift_candidates).toBe(1)
-  })
-
-  it('does not shadow-flag a date-drift twin on a different known cash account', async () => {
-    const { supabase, enqueue } = createQueueMockSupabase()
-    const raw = makeRaw({
-      date: '2024-06-16', amount: -250, description: 'Hotel expense',
-      external_id: 'eb_acctB_2024-06-16_-25000_0', import_source: 'enable_banking',
-    })
-    const inserted = makeTransaction({ id: 'tx-b', external_id: raw.external_id })
-
-    enqueue({ data: [], error: null }) // booked
-    enqueue({
-      data: [{
-        date: '2024-06-15', amount: -250,
-        original_description: 'Hotel expense', description: 'Hotel expense',
-        import_source: 'enable_banking', cash_account_id: 'acct-A',
-        external_id: 'eb_acctA_2024-06-15_-25000_0',
-      }],
-      error: null,
-    }) // bridging twin one day earlier, but on account A
-    enqueue({ data: [], error: null }) // supplier
-    enqueue({ data: [], error: null }) // external_id dedup
-    enqueue({ data: cashAccountRows('acct-B', '1931'), error: null }) // cash_accounts → batch on account B
-    enqueue({ data: inserted, error: null }) // insert
-    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
-
-    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw], {
-      settlementAccount: '1931',
-    })
-
-    expect(result.imported).toBe(1)
-    expect(result.shadow_date_drift_candidates).toBe(0)
-  })
-
-  it('does not shadow-flag a twin two days away (outside the ±1-day window)', async () => {
-    const { supabase, enqueue } = createQueueMockSupabase()
-    const raw = makeRaw({
-      date: '2024-06-17', amount: -250, description: 'Hotel expense',
-      external_id: 'eb_2024-06-17_-25000_0', import_source: 'enable_banking',
-    })
-    const inserted = makeTransaction({ id: 'tx-far', external_id: raw.external_id })
-
-    enqueue({ data: [], error: null }) // booked
-    enqueue({
-      data: [{
-        date: '2024-06-15', amount: -250,
-        original_description: 'Hotel expense', description: 'Hotel expense',
-        import_source: 'enable_banking', cash_account_id: null,
-        external_id: 'eb_2024-06-15_-25000_0',
-      }],
-      error: null,
-    }) // bridging twin TWO days earlier
-    enqueue({ data: [], error: null }) // supplier
-    enqueue({ data: [], error: null }) // external_id dedup
-    enqueue({ data: inserted, error: null }) // insert
-    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
-
-    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
-
-    expect(result.imported).toBe(1)
-    expect(result.shadow_date_drift_candidates).toBe(0)
-  })
-
-  it('does not shadow-flag two genuinely-distinct same-amount rows a day apart (non-bridging, same feed)', async () => {
-    const { supabase, enqueue } = createQueueMockSupabase()
-    const raw = makeRaw({
-      date: '2024-06-16', amount: -250, description: 'LUNCH RESTAURANG',
-      external_id: 'eb_2024-06-16_-25000_0', import_source: 'enable_banking',
-    })
-    const inserted = makeTransaction({ id: 'tx-lunch', external_id: raw.external_id })
-
-    enqueue({ data: [], error: null }) // booked
-    enqueue({
-      data: [{
-        date: '2024-06-15', amount: -250,
-        original_description: 'COFFEE STARBUCKS', description: 'COFFEE STARBUCKS',
-        import_source: 'enable_banking', cash_account_id: null,
-        external_id: 'eb_2024-06-15_-25000_0',
-      }],
-      error: null,
-    }) // distinct same-amount neighbour, same feed, non-bridging desc
-    enqueue({ data: [], error: null }) // supplier
-    enqueue({ data: [], error: null }) // external_id dedup
-    enqueue({ data: inserted, error: null }) // insert
-    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
-
-    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
-
-    expect(result.imported).toBe(1)
-    expect(result.shadow_date_drift_candidates).toBe(0)
-  })
-
-  it('does not double-count: an exact-date Layer-2 dedupe is not also a date-drift candidate', async () => {
-    const { supabase, enqueue } = createQueueMockSupabase()
-    const raw = makeRaw({
-      date: '2024-06-15', amount: -250, description: 'KAFFE',
-      external_id: 'eb_new_2024-06-15_-25000_0', import_source: 'enable_banking',
-    })
-
-    enqueue({ data: [], error: null }) // booked
-    // Two stored twins: one EXACT-date (Layer-2 dedupes it) and one a day later.
-    // The row is consumed by Layer-2 and never reaches the date-drift gate.
-    enqueue({
-      data: [
-        { date: '2024-06-15', amount: -250, original_description: 'KAFFE', description: 'KAFFE',
-          import_source: 'enable_banking', cash_account_id: null, external_id: 'eb_old_0615' },
-        { date: '2024-06-16', amount: -250, original_description: 'KAFFE', description: 'KAFFE',
-          import_source: 'enable_banking', cash_account_id: null, external_id: 'eb_old_0616' },
-      ],
-      error: null,
-    })
-    enqueue({ data: [], error: null }) // supplier
-    enqueue({ data: [], error: null }) // external_id dedup: no match
-    // No insert: deduped by Layer-2.
-    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
-
-    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
-
-    expect(result.duplicates).toBe(1)
-    expect(result.imported).toBe(0)
-    expect(result.shadow_date_drift_candidates).toBe(0)
-  })
-
-  it('never lets the date-drift measurement break an import (malformed date is fail-safe)', async () => {
-    const { supabase, enqueue } = createQueueMockSupabase()
-    // A malformed date would make shiftIsoDate throw; the guard must skip
-    // detection so the row imports exactly as before: measurement can never
-    // abort a sync. (Without the guard this test throws instead of asserting.)
-    const raw = makeRaw({
-      date: 'not-a-date', amount: -250, description: 'Hotel expense',
-      external_id: 'eb_bad_date_0', import_source: 'enable_banking',
-    })
-    const inserted = makeTransaction({ id: 'tx-baddate', external_id: raw.external_id })
-
-    enqueue({ data: [], error: null }) // booked
-    enqueue({ data: [], error: null }) // unbooked
-    enqueue({ data: [], error: null }) // supplier
-    enqueue({ data: [], error: null }) // external_id dedup
-    enqueue({ data: inserted, error: null }) // insert: still happens
-    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
-
-    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
-
-    expect(result.imported).toBe(1)
-    expect(result.shadow_date_drift_candidates).toBe(0)
   })
 
   // -----------------------------------------------------------------------
@@ -2437,8 +2185,6 @@ describe('ingestTransactions', () => {
       auto_matched_invoices: 0,
       errors: 0,
       transaction_ids: [],
-      shadow_scope_drift_candidates: 0,
-      shadow_date_drift_candidates: 0,
     })
   })
 
@@ -3038,25 +2784,6 @@ describe('ingestTransactions', () => {
 
       expect(result.duplicates).toBe(0)
       expect(result.imported).toBe(1)
-    })
-
-    it('shadow-flags a date-drift twin stored on the IBAN twin', async () => {
-      const { supabase, enqueue } = createQueueMockSupabase()
-      const raw = incomingOnB({ date: '2026-06-25' })
-      enqueue({ data: [], error: null }) // booked map
-      enqueue({ data: [storedOnA()], error: null }) // unbooked: one day earlier, on twin A
-      enqueue({ data: [], error: null }) // supplier invoices
-      enqueue({ data: [], error: null }) // external_id dedup
-      enqueue({ data: cashAccountRows('acct-B', '1931', IBAN, twin(IBAN)), error: null })
-      enqueue({ data: makeTransaction({ id: 'tx-new', amount: -520 }), error: null }) // insert
-      mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
-
-      const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw], {
-        settlementAccount: '1931',
-      })
-
-      expect(result.imported).toBe(1)
-      expect(result.shadow_date_drift_candidates).toBe(1)
     })
   })
 })

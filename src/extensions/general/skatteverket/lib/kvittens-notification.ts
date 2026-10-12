@@ -8,8 +8,8 @@
  * kvittens crons (AGI and VAT) call this after flipping the local state.
  *
  * Email is the delivery channel: it is the one notification surface that is
- * always available (push-notifications is a separate, optional extension and
- * cross-extension imports are not allowed). Deduplication goes through
+ * always available (cross-extension imports are not allowed, so it cannot use
+ * another extension's channel). Deduplication goes through
  * notification_log under type 'skv_kvittens' so a re-observed kvittens never
  * notifies twice: the log row is inserted FIRST as a claim, guarded by a
  * partial unique index on (user_id, reference_id) where notification_type =

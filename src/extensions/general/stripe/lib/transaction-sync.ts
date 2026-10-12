@@ -34,17 +34,6 @@ const defaultLog = createLogger('stripe/transaction-sync')
  * (+gross -fee per charge, -net per payout), which is what makes the cash
  * account reconcile against the real Stripe balance.
  *
- * Double-booking protection: money the deterministic flows already booked is
- * imported pre-linked to its journal entry instead of appearing bookable:
- *   - charge gross rows whose checkout session settled an invoice link to the
- *     settlement entry (stripe_payment_events.matched_booked),
- *   - payout rows AND the fee rows of the charges inside a booked payout link
- *     to the payout entry (stripe_payouts.booked): the payout booking carries
- *     the whole payout's fees in aggregate (see payouts.ts), so its 1686+6570
- *     movement equals the payout row plus those fee rows.
- * Fee rows whose payout has not been booked yet stay unbooked and are claimed
- * by processPayoutPaidEvent when the payout books (linkPayoutFeedRows below).
- *
  * Cursor: stripe_connections.last_balance_txn_synced_at (max `created`
  * processed), re-polled with a 24h overlap. Safe because balance transactions
  * are immutable and carry stable txn_... ids: a re-seen transaction collides
@@ -94,8 +83,6 @@ export interface StripeTransactionSyncSummary {
   imported: number
   /** Rows skipped by external_id / content dedup. */
   duplicates: number
-  /** Rows pre-linked to journal entries the deterministic flows already booked. */
-  linked: number
   errors: number
   /** Set when the caller's time budget ran out before all chunks processed. */
   deadlineReached?: boolean
@@ -157,8 +144,8 @@ function describeBalanceTxn(txn: BalanceTxnLike): string {
       if (txn.reporting_category === 'dispute') return 'Stripe-tvist'
       return txn.description ? `Stripe-justering: ${txn.description}` : 'Stripe-justering'
     case 'payout':
-      // Mirrors the payout journal entry description ("Stripe-utbetalning
-      // po_...") so the linked pair reads as one event.
+      // Carries the po_ id so the row reads as the same event as the bank
+      // deposit of that payout. Never reword: content dedup keys off it.
       return `Stripe-utbetalning ${sourceId(txn.source) ?? txn.id}`
     default:
       return txn.description ? `Stripe: ${txn.description}` : `Stripe ${txn.type}`
@@ -234,50 +221,6 @@ export function mapBalanceTransaction(
     })
   }
   return rows
-}
-
-/**
- * Link a booked payout's feed rows to the payout journal entry: the payout
- * row itself plus every fee row among the payout's balance transactions (the
- * payout entry books those fees in aggregate: 6570 + reverse charge). Called
- * from processPayoutPaidEvent at booking time AND from the sync when it
- * imports rows for an already-booked payout; idempotent either way (only
- * unlinked rows are claimed) and a no-op for companies without the feed.
- */
-export async function linkPayoutFeedRows(
-  supabase: SupabaseClient,
-  companyId: string,
-  stripeAccountId: string,
-  journalEntryId: string,
-  txns: Array<Pick<BalanceTxnLike, 'id' | 'type' | 'fee'>>,
-  log: Logger = defaultLog,
-): Promise<number> {
-  const externalIds: string[] = []
-  for (const txn of txns) {
-    if (txn.type === 'payout') externalIds.push(stripeExternalId(stripeAccountId, txn.id))
-    if (txn.fee) externalIds.push(stripeFeeExternalId(stripeAccountId, txn.id))
-  }
-  if (externalIds.length === 0) return 0
-
-  const { data, error } = await supabase
-    .from('transactions')
-    .update({ journal_entry_id: journalEntryId })
-    .eq('company_id', companyId)
-    .in('external_id', externalIds)
-    .is('journal_entry_id', null)
-    .select('id')
-
-  if (error) {
-    // Non-fatal by contract: the payout booking itself must never unwind
-    // because feed-row linking failed. The sync's next run retries.
-    log.warn('failed to link payout feed rows', {
-      companyId,
-      journalEntryId,
-      error: error.message,
-    })
-    return 0
-  }
-  return data?.length ?? 0
 }
 
 /** The cursor-window view of a connection (see lib/feed-sync/cursor-window). */
@@ -372,134 +315,6 @@ async function ensureStripeBalanceAccount(
   }
 }
 
-/** Gross rows of charges the checkout flow already settled → settlement entry. */
-async function linkSettledCharges(
-  supabase: SupabaseClient,
-  connection: StripeConnection,
-  txns: BalanceTxnLike[],
-  log: Logger,
-): Promise<number> {
-  const grossIdByPaymentIntent = new Map<string, string>()
-  for (const txn of txns) {
-    if (txn.type !== 'charge' && txn.type !== 'payment') continue
-    const charge = chargeOf(txn)
-    const pi =
-      typeof charge?.payment_intent === 'string'
-        ? charge.payment_intent
-        : charge?.payment_intent?.id
-    if (!pi) continue
-    grossIdByPaymentIntent.set(pi, stripeExternalId(connection.stripe_account_id!, txn.id))
-  }
-  if (grossIdByPaymentIntent.size === 0) return 0
-
-  const { data: events, error } = await supabase
-    .from('stripe_payment_events')
-    .select('payment_intent_id, journal_entry_id')
-    .eq('connection_id', connection.id)
-    .eq('status', 'matched_booked')
-    .not('journal_entry_id', 'is', null)
-    .in('payment_intent_id', [...grossIdByPaymentIntent.keys()])
-  if (error) {
-    log.warn('settled-charge lookup failed; rows stay unlinked this run', {
-      connectionId: connection.id,
-      error: error.message,
-    })
-    return 0
-  }
-  if (!events || events.length === 0) return 0
-
-  const externalIdsByEntry = new Map<string, string[]>()
-  for (const event of events as Array<{
-    payment_intent_id: string | null
-    journal_entry_id: string | null
-  }>) {
-    if (!event.payment_intent_id || !event.journal_entry_id) continue
-    const externalId = grossIdByPaymentIntent.get(event.payment_intent_id)
-    if (!externalId) continue
-    const ids = externalIdsByEntry.get(event.journal_entry_id)
-    if (ids) ids.push(externalId)
-    else externalIdsByEntry.set(event.journal_entry_id, [externalId])
-  }
-
-  let linked = 0
-  for (const [journalEntryId, externalIds] of externalIdsByEntry) {
-    const { data, error: linkError } = await supabase
-      .from('transactions')
-      .update({ journal_entry_id: journalEntryId })
-      .eq('company_id', connection.company_id)
-      .in('external_id', externalIds)
-      .is('journal_entry_id', null)
-      .select('id')
-    if (linkError) {
-      log.warn('settled-charge link failed', {
-        connectionId: connection.id,
-        journalEntryId,
-        error: linkError.message,
-      })
-      continue
-    }
-    linked += data?.length ?? 0
-  }
-  return linked
-}
-
-/**
- * Payout rows in this chunk whose payout the payout flow already booked:
- * link the payout row + the payout's fee rows to the payout entry. One extra
- * Stripe list call per booked payout (bounded by payouts in the window; the
- * balance transaction itself does not reference its payout).
- */
-async function linkBookedPayouts(
-  supabase: SupabaseClient,
-  connection: StripeConnection,
-  txns: BalanceTxnLike[],
-  stripe: Stripe,
-  requestOptions: Stripe.RequestOptions,
-  log: Logger,
-): Promise<number> {
-  const payoutIds: string[] = []
-  for (const txn of txns) {
-    if (txn.type !== 'payout') continue
-    const id = sourceId(txn.source)
-    if (id) payoutIds.push(id)
-  }
-  if (payoutIds.length === 0) return 0
-
-  const { data: payouts, error } = await supabase
-    .from('stripe_payouts')
-    .select('payout_id, journal_entry_id')
-    .eq('connection_id', connection.id)
-    .eq('status', 'booked')
-    .not('journal_entry_id', 'is', null)
-    .in('payout_id', payoutIds)
-  if (error) {
-    log.warn('booked-payout lookup failed; rows stay unlinked this run', {
-      connectionId: connection.id,
-      error: error.message,
-    })
-    return 0
-  }
-
-  let linked = 0
-  for (const payout of (payouts ?? []) as Array<{
-    payout_id: string
-    journal_entry_id: string
-  }>) {
-    const payoutTxns = await stripe.balanceTransactions
-      .list({ payout: payout.payout_id, limit: 100 }, requestOptions)
-      .autoPagingToArray({ limit: 1000 })
-    linked += await linkPayoutFeedRows(
-      supabase,
-      connection.company_id,
-      connection.stripe_account_id!,
-      payout.journal_entry_id,
-      payoutTxns,
-      log,
-    )
-  }
-  return linked
-}
-
 export async function syncStripeBalanceTransactions(
   supabase: SupabaseClient,
   connection: StripeConnection,
@@ -515,7 +330,6 @@ export async function syncStripeBalanceTransactions(
     fetched: 0,
     imported: 0,
     duplicates: 0,
-    linked: 0,
     errors: 0,
   }
   if (!connection.stripe_account_id || connection.status !== 'active') return summary
@@ -545,9 +359,7 @@ export async function syncStripeBalanceTransactions(
   summary.fetched = txns.length
   if (txns.length === 0) return summary
 
-  // Oldest first: cursor advancement stays chronological, and a payout's
-  // charges are always ingested before (or with) the payout row their fee
-  // linking depends on.
+  // Oldest first: cursor advancement stays chronological.
   txns.sort((a, b) => a.created - b.created)
 
   await ensureStripeBalanceAccount(supabase, connection, firstRun, log)
@@ -566,10 +378,9 @@ export async function syncStripeBalanceTransactions(
     const rows = chunk.flatMap((txn) =>
       mapBalanceTransaction(connection.stripe_account_id!, txn),
     )
-    // Auto-categorization is skipped on purpose: for Stripe money the
-    // deterministic settle/payout flows own booking; everything else is a
-    // human decision in the inbox. Invoice matching still runs (suggestions
-    // only), and FX enrichment covers non-SEK rows.
+    // Auto-categorization is skipped on purpose: booking Stripe money is a
+    // human decision in the inbox, like any bank feed. Invoice matching still
+    // runs (suggestions only), and FX enrichment covers non-SEK rows.
     //
     // stableExternalIds: the ids embed Stripe's balance-transaction id, which
     // names one booking for good. Two refunds of the same amount on the same
@@ -586,16 +397,6 @@ export async function syncStripeBalanceTransactions(
     summary.imported += result.imported
     summary.duplicates += result.duplicates
     summary.errors += result.errors
-
-    summary.linked += await linkSettledCharges(supabase, connection, chunk, log)
-    summary.linked += await linkBookedPayouts(
-      supabase,
-      connection,
-      chunk,
-      stripe,
-      requestOptions,
-      log,
-    )
 
     // Persist the cursor after each chunk so a crash or deadline stop resumes
     // from the last fully-processed chunk (the 24h overlap absorbs the rest).

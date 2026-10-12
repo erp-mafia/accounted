@@ -1,15 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { isReminderExcluded, loadReminderExclusions } from '../reminder-guard'
 import { createMemorySupabase, type MemorySupabase } from './memory-supabase'
-
-const memory = vi.hoisted(() => ({ current: null as MemorySupabase | null }))
-
-vi.mock('@supabase/ssr', () => ({
-  createServerClient: vi.fn(() => memory.current!.client),
-}))
-vi.mock('@/lib/email/service', () => ({ getEmailService: () => ({ sendEmail: vi.fn() }) }))
-
-import { processOverdueReminders } from '@/lib/invoices/reminder-processor'
 
 const ACTIVE = 'company-active'
 const CASE_ONLY = 'company-case-only'
@@ -49,35 +40,5 @@ describe('loadReminderExclusions', () => {
     expect(await loadReminderExclusions(db.client, [])).toEqual({ companies: new Set(), invoices: new Set() })
     db.failures.set('collection_cases:select', { message: 'relation does not exist' })
     await expect(loadReminderExclusions(db.client, [{ id: 'x', company_id: FREE }])).rejects.toThrow()
-  })
-})
-
-describe('processOverdueReminders and the collections provider', () => {
-  const overdue = (id: string, companyId: string) => ({
-    id,
-    company_id: companyId,
-    status: 'sent',
-    document_type: 'invoice',
-    credited_invoice_id: null,
-    invoice_number: id,
-    due_date: '2026-01-01',
-    customer: { email: 'kund@example.se', name: 'Kund' },
-    credit_notes: [],
-  })
-
-  beforeEach(() => {
-    memory.current = seed()
-    memory.current.seed('invoices', [overdue('inv-active', ACTIVE), overdue('inv-case', CASE_ONLY), overdue('inv-free', FREE)])
-  })
-
-  it('never reminds beside the provider: only the free invoice reaches the reminder steps', async () => {
-    const result = await processOverdueReminders()
-    // The free invoice's company has no settings row here, so it is reported as a failure; the others never get that far.
-    expect(result.results.map((r) => r.invoiceId)).toEqual(['inv-free'])
-  })
-
-  it('sends nothing at all when the guard cannot read the cases', async () => {
-    memory.current!.failures.set('collection_cases:select', { message: 'timeout' })
-    expect(await processOverdueReminders()).toEqual({ processed: 0, sent: 0, failed: 0, results: [] })
   })
 })

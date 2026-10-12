@@ -35,6 +35,7 @@ const PREVIEW: EfDeclarationPreview = {
       warnings: [],
     },
   ],
+  pfondFonder: [],
 }
 
 function mkReq(query = '') {
@@ -71,6 +72,8 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/ef-declaration', () => {
     ['a non-numeric amount', '?kapitalunderlag=abc'],
     ['an unknown egenavgifter category', '?category=retired'],
     ['a negative prior-year amount', '?priorYearSchablonavdrag=-100'],
+    ['earlier funds not written as år:belopp', '?pfondExistingFonder=2019-50000'],
+    ['the same avsättningsår twice', '?pfondExistingFonder=2019:1000,2019:2000'],
   ])('returns 400 for %s', async (_label, query) => {
     signedIn()
 
@@ -191,5 +194,22 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/ef-declaration', () => {
     const res = await GET(mkReq('?kapitalunderlag=100000&expansionsfondDesiredChange=-50000'), mkParams())
     const body = await res.json()
     expect(body.data.inputWarnings).toEqual([])
+  })
+
+  it('passes earlier periodiseringsfonder on as year and balance', async () => {
+    const { enqueue } = signedIn()
+    enqueue({ data: { id: 'period-1' } })
+    enqueue({ count: 4 })
+    vi.mocked(computeEfDeclarationPreview).mockResolvedValue(PREVIEW)
+
+    const res = await GET(mkReq('?kapitalunderlag=0&pfondExistingFonder=2019:50000,2021:30000.5'), mkParams())
+    expect(res.status).toBe(200)
+    expect(computeEfDeclarationPreview).toHaveBeenCalledWith(expect.anything(), 'company-1', 'period-1', {
+      kapitalunderlag: 0,
+      pfondExistingFonder: [
+        { cohort_year: 2019, balance: 50_000 },
+        { cohort_year: 2021, balance: 30_000.5 },
+      ],
+    })
   })
 })

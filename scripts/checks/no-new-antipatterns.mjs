@@ -1565,7 +1565,7 @@ if (newUngatedRoutes.length) {
   newUngatedRoutes.forEach((f) => console.error(`    ${f}`))
   console.error(
     "  → refuse (503 EXTENSION_DISABLED) when await extensionRegistry.get('<id>')\n" +
-      '    is undefined, like app/api/extensions/push-notifications/cron/route.ts.',
+      '    is undefined, like app/api/extensions/invoice-inbox/sweep/cron/route.ts.',
   )
 }
 

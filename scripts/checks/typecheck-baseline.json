@@ -73,7 +73,6 @@
     "src/lib/import/__tests__/sie-import.test.ts": 1,
     "src/lib/invoices/__tests__/pdf-template-amounts.test.ts": 1,
     "src/lib/invoices/__tests__/peppol-bis-billing.test.ts": 1,
-    "src/lib/invoices/__tests__/reminder-processor.test.ts": 3,
     "src/lib/invoices/__tests__/supplier-invoice-matching.test.ts": 1,
     "src/lib/pending-operations/__tests__/commit-authorization-recoverable.test.ts": 1,
     "src/lib/reports/__tests__/vat-declaration.test.ts": 5,

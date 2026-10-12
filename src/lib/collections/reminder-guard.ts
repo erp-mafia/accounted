@@ -4,11 +4,12 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 /**
  * Accounted's own reminders never run beside the collections provider's
  * (build spec 3.5, founder decision 2026-10-03: the provider runs the whole
- * ladder). The dormant reminder processor skips an invoice with an open
- * case, and every invoice of a company whose collections connection is
- * active, so turning REMINDERS_SENDING_ENABLED on can never send a reminder,
- * or book a reminder fee, on an invoice the provider is pursuing or is about
- * to be given.
+ * ladder). An Accounted-side reminder sender must skip an invoice with an
+ * open case, and every invoice of a company whose collections connection is
+ * active, so it can never send a reminder, or book a reminder fee, on an
+ * invoice the provider is pursuing or is about to be given. The old dormant
+ * sender (lib/invoices/reminder-processor.ts) was removed in Plan 2 step 18;
+ * this guard stays for whichever sender comes next.
  */
 export interface ReminderExclusions {
   /** Companies with an active collections connection. */

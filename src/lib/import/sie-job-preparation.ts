@@ -92,6 +92,17 @@ function reviveVoucher(value: SIEVoucher): SIEVoucher {
   return { ...value, date: new Date(value.date), registrationDate: value.registrationDate ? new Date(value.registrationDate) : undefined }
 }
 
+/** Every source voucher, revived. Read before complete_sie_import_job, which deletes the groups. */
+export async function readSIESourceVouchers(supabase: SupabaseClient, job: SIEJob, groups: number): Promise<SIEVoucher[]> {
+  const vouchers: SIEVoucher[] = []
+  for (let group = 0; group < groups; group++) {
+    const raw = await readCheckpoint<SIEVoucher[]>(supabase,job,SIE_CHECKPOINTS.snapshot+1+group)
+    if (!raw) throw new Error('SIE source group missing')
+    for (const voucher of raw) vouchers.push(reviveVoucher(voucher))
+  }
+  return vouchers
+}
+
 // Appended keys only: the metadata groups before them keep their shape.
 // The object balances (#OIB/#OUB, issue #3313) split the IB per project.
 const SNAPSHOT_ARRAYS = ['accounts','openingBalances','closingBalances','resultBalances','dimensions','dimensionValues','issues',

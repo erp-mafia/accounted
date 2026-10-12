@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
+import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -47,6 +48,19 @@ interface TripFormState {
   visited: string
   is_round_trip: boolean
   notes: string
+}
+
+/** A payroll run that still accepts lines, as the push-to-salary dialog lists it. */
+interface OpenSalaryRun {
+  id: string
+  period_year: number
+  period_month: number
+  status: 'draft' | 'review'
+}
+
+interface RunEmployeeOption {
+  id: string
+  name: string
 }
 
 function monthBounds(month: string): { from: string; to: string } {
@@ -124,6 +138,23 @@ export default function MileagePage() {
   const [bookEntryDate, setBookEntryDate] = useState(todayIsoStockholm())
   const [counterAccount, setCounterAccount] = useState<'2820' | '2893' | '1930'>('2820')
   const [booking, setBooking] = useState(false)
+
+  // Push to salary: the unbooked trips become a tax-free milersättning line on
+  // one employee's row in a draft or review payroll run (POST
+  // /api/mileage/salary-push), instead of a separate verifikat.
+  const tSalary = useTranslations('salary')
+  const [pushOpen, setPushOpen] = useState(false)
+  const [pushRuns, setPushRuns] = useState<OpenSalaryRun[] | null>(null)
+  const [pushRunId, setPushRunId] = useState('')
+  const [pushEmployees, setPushEmployees] = useState<RunEmployeeOption[] | null>(null)
+  const [pushEmployeeId, setPushEmployeeId] = useState('')
+  const [pushFrom, setPushFrom] = useState('')
+  const [pushTo, setPushTo] = useState('')
+  const [pushIncludeUnassigned, setPushIncludeUnassigned] = useState(true)
+  const [pushing, setPushing] = useState(false)
+  // Only the latest run's employee lookup may land: switching runs while one
+  // is in flight must not show the previous run's employees.
+  const pushEmployeesRequest = useRef(0)
 
   const loadTrips = useCallback(async () => {
     try {
@@ -372,6 +403,111 @@ export default function MileagePage() {
     }
   }
 
+  const loadRunEmployees = async (runId: string) => {
+    const generation = ++pushEmployeesRequest.current
+    setPushEmployees(null)
+    setPushEmployeeId('')
+    try {
+      const res = await fetch(`/api/salary/runs/${runId}`)
+      const body = await res.json().catch(() => null)
+      if (generation !== pushEmployeesRequest.current) return
+      if (!res.ok) {
+        toast({ title: t('runs_load_error'), variant: 'destructive' })
+        setPushEmployees([])
+        return
+      }
+      const rows: Array<{
+        employee_id: string
+        employee: { first_name?: string | null; last_name?: string | null } | null
+      }> = body?.data?.employees ?? []
+      const options = rows.map((row) => ({
+        id: row.employee_id,
+        name:
+          [row.employee?.first_name, row.employee?.last_name].filter(Boolean).join(' ') ||
+          row.employee_id,
+      }))
+      setPushEmployees(options)
+      if (options.length === 1) setPushEmployeeId(options[0].id)
+    } catch {
+      if (generation !== pushEmployeesRequest.current) return
+      toast({ title: t('runs_load_error'), variant: 'destructive' })
+      setPushEmployees([])
+    }
+  }
+
+  const selectPushRun = (runId: string) => {
+    setPushRunId(runId)
+    void loadRunEmployees(runId)
+  }
+
+  const openPush = async () => {
+    const base = month === 'all' ? todayIsoStockholm().slice(0, 7) : month
+    const bounds = monthBounds(base)
+    setPushFrom(bounds.from)
+    setPushTo(bounds.to)
+    setPushIncludeUnassigned(true)
+    setPushRuns(null)
+    setPushRunId('')
+    setPushEmployees(null)
+    setPushEmployeeId('')
+    pushEmployeesRequest.current += 1
+    setPushOpen(true)
+    try {
+      const res = await fetch('/api/salary/runs')
+      const body = await res.json().catch(() => null)
+      if (!res.ok) {
+        toast({ title: t('runs_load_error'), variant: 'destructive' })
+        setPushRuns([])
+        return
+      }
+      const open = ((body?.data ?? []) as OpenSalaryRun[]).filter(
+        (run) => run.status === 'draft' || run.status === 'review'
+      )
+      setPushRuns(open)
+      if (open.length === 1) selectPushRun(open[0].id)
+    } catch {
+      toast({ title: t('runs_load_error'), variant: 'destructive' })
+      setPushRuns([])
+    }
+  }
+
+  const submitPush = async () => {
+    if (!pushRunId || !pushEmployeeId) return
+    setPushing(true)
+    try {
+      const res = await fetch('/api/mileage/salary-push', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          run_id: pushRunId,
+          employee_id: pushEmployeeId,
+          from: pushFrom,
+          to: pushTo,
+          include_unassigned: pushIncludeUnassigned,
+        }),
+      })
+      const body = await res.json().catch(() => null)
+      if (!res.ok) {
+        const message = typeof body?.error === 'string' ? body.error : body?.error?.message
+        toast({ title: message || t('push_error'), variant: 'destructive' })
+        return
+      }
+      setPushOpen(false)
+      toast({
+        title: t('pushed_title'),
+        description: t('booked_description', {
+          count: body.data.trip_count,
+          amount: formatCurrency(body.data.total_amount),
+        }),
+      })
+      await loadTrips()
+    } catch {
+      toast({ title: t('push_error'), variant: 'destructive' })
+    } finally {
+      setPushing(false)
+    }
+  }
+
   const exportHref = useMemo(() => {
     if (month === 'all') return '/api/mileage/export'
     const bounds = monthBounds(month)
@@ -402,9 +538,14 @@ export default function MileagePage() {
         )}
         <div className="ml-auto flex items-center gap-2">
           {canWrite && draftTrips.length > 0 && (
-            <Button size="sm" variant="secondary" onClick={openBook}>
-              {t('book_period')}
-            </Button>
+            <>
+              <Button size="sm" variant="secondary" onClick={openBook}>
+                {t('book_period')}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={openPush}>
+                {t('push_to_salary')}
+              </Button>
+            </>
           )}
           {trips.length > 0 && (
             <Button size="sm" variant="ghost" asChild>
@@ -805,6 +946,116 @@ export default function MileagePage() {
               <Button onClick={submitBook} disabled={booking}>
                 {booking ? t('booking') : t('confirm_book')}
               </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={pushOpen} onOpenChange={setPushOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t('push_title')}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            {pushRuns === null ? (
+              <div className="space-y-2" role="status">
+                <Skeleton className="h-9 w-full" />
+                <Skeleton className="h-9 w-full" />
+              </div>
+            ) : pushRuns.length === 0 ? (
+              <div className="space-y-3">
+                <p className="text-sm text-muted-foreground">{t('push_no_runs')}</p>
+                <Button size="sm" variant="secondary" asChild>
+                  <Link href="/salary">{t('push_go_to_salary')}</Link>
+                </Button>
+              </div>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="push_run">{t('field_salary_run')}</Label>
+                  <Select value={pushRunId} onValueChange={selectPushRun}>
+                    <SelectTrigger id="push_run">
+                      <SelectValue placeholder={t('push_choose')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {pushRuns.map((run) => (
+                        <SelectItem key={run.id} value={run.id}>
+                          {t('run_option', {
+                            period: `${run.period_year}-${String(run.period_month).padStart(2, '0')}`,
+                            status: tSalary(run.status === 'draft' ? 'status_draft' : 'status_review'),
+                          })}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {pushRunId && (
+                  <div className="space-y-2">
+                    <Label htmlFor="push_employee">{t('field_employee')}</Label>
+                    {pushEmployees === null ? (
+                      <Skeleton className="h-9 w-full" />
+                    ) : pushEmployees.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">{t('push_no_employees')}</p>
+                    ) : (
+                      <Select value={pushEmployeeId} onValueChange={setPushEmployeeId}>
+                        <SelectTrigger id="push_employee">
+                          <SelectValue placeholder={t('push_choose')} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {pushEmployees.map((employee) => (
+                            <SelectItem key={employee.id} value={employee.id}>
+                              {employee.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </div>
+                )}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="push_from">{t('field_period_from')}</Label>
+                    <Input
+                      id="push_from"
+                      type="date"
+                      value={pushFrom}
+                      onChange={(e) => setPushFrom(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="push_to">{t('field_period_to')}</Label>
+                    <Input
+                      id="push_to"
+                      type="date"
+                      value={pushTo}
+                      onChange={(e) => setPushTo(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <label className="flex cursor-pointer items-start gap-3 text-sm">
+                  <Checkbox
+                    checked={pushIncludeUnassigned}
+                    onCheckedChange={(v) => setPushIncludeUnassigned(v === true)}
+                    className="mt-0.5"
+                  />
+                  <span>{t('push_include_unassigned')}</span>
+                </label>
+                <p className="text-sm text-muted-foreground">{t('push_explainer')}</p>
+              </>
+            )}
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="ghost" onClick={() => setPushOpen(false)}>
+                {t('cancel')}
+              </Button>
+              {pushRuns !== null && pushRuns.length > 0 && (
+                <Button
+                  onClick={submitPush}
+                  loading={pushing}
+                  disabled={!pushRunId || !pushEmployeeId}
+                >
+                  {t('confirm_push')}
+                </Button>
+              )}
             </div>
           </div>
         </DialogContent>

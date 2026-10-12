@@ -66,8 +66,7 @@ function markPrereqSeen(): void {
  * the chat URL (see aiPrefilledChatLink). Renders nothing while no client is
  * connected.
  *
- * The same outline button as HandoffButton, on an Att göra row and in a
- * page header alike, so the two AI actions never look like different things.
+ * The same outline button on an Att göra row and in a page header alike.
  */
 export function KvittojaktenButton({
   clients,

@@ -3,7 +3,6 @@
 import { useTranslations } from 'next-intl'
 import { InvoiceReminderSettingsForm } from '@/components/settings/InvoiceSettingsForm'
 import { InvoiceEmailTextsSettings } from '@/components/settings/InvoiceEmailTextsSettings'
-import { ReminderEmailTextsSettings } from '@/components/settings/ReminderEmailTextsSettings'
 import { InvoiceEmailRecipientsSettings } from '@/components/settings/InvoiceEmailRecipientsSettings'
 import { InvoiceSenderDomainSettings } from '@/components/settings/InvoiceSenderDomainSettings'
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
@@ -55,9 +54,6 @@ export function SendingSettingsContent() {
 
       {/* Invoice email texts: autosaves on blur */}
       <InvoiceEmailTextsSettings settings={settings} onUpdate={updateSettings} />
-
-      {/* Reminder email texts per level: autosaves on blur */}
-      <ReminderEmailTextsSettings settings={settings} onUpdate={updateSettings} />
 
       <SettingsFormWrapper onSave={handleSave}>
         <InvoiceReminderSettingsForm settings={settings} />

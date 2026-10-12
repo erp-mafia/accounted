@@ -4,7 +4,6 @@ import {
   extractSharedRecipientsForDomain,
   groupSharedRecipientsByInbox,
   kindHintFromTag,
-  parseRecipients,
   resolveKindHintForTags,
   splitKnownInboxTags,
 } from '@/extensions/general/invoice-inbox/lib/resend-inbound'
@@ -103,27 +102,6 @@ describe('kindHintFromTag', () => {
     expect(kindHintFromTag('')).toBeNull()
     expect(kindHintFromTag(null)).toBeNull()
     expect(kindHintFromTag(undefined)).toBeNull()
-  })
-})
-
-describe('parseRecipients', () => {
-  it('splits recipients into lowercased localPart/domain pairs in order', () => {
-    expect(
-      parseRecipients(['Faktura@HansBolag.SE', 'billing@acme.se'])
-    ).toEqual([
-      { localPart: 'faktura', domain: 'hansbolag.se' },
-      { localPart: 'billing', domain: 'acme.se' },
-    ])
-  })
-
-  it('skips malformed addresses', () => {
-    expect(parseRecipients(['not-an-email', '@x.se', 'foo@', 'ok@a.se'])).toEqual([
-      { localPart: 'ok', domain: 'a.se' },
-    ])
-  })
-
-  it('returns an empty array for no recipients', () => {
-    expect(parseRecipients([])).toEqual([])
   })
 })
 

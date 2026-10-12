@@ -69,8 +69,8 @@ function isLFHeader(line: string): boolean {
  * value_date path caused the June 2026 fleet-wide re-import; see
  * extensions/general/enable-banking/lib/sync.ts). A CSV row dated on Datum
  * therefore lands in a different bucket than the feed row for the same
- * affärshändelse, the ±1-day drift bridge is measurement-only, and both rows
- * insert as duplicates. Booking date is also what the Saldo column ties to.
+ * affärshändelse, no dedup layer looks across days, and both rows insert as
+ * duplicates. Booking date is also what the Saldo column ties to.
  *
  * The header-less column order is pinned by isLFRow (two adjacent YYYY-MM-DD
  * fields, comma number in field 4), i.e. Datum;Bokföringsdag;Typ;Text;Belopp;

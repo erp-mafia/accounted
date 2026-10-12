@@ -57,6 +57,7 @@ function makeClient() {
   let attempt = 0
   let state = 'new'
   const deadlineInserts: unknown[][] = []
+  const tableInserts: Array<{ table: string; payload: unknown }> = []
 
   const from = vi.fn((table: string) => {
     if (table === 'journal_entries' || table === 'journal_entry_lines') throw new Error('Seed must use the engine')
@@ -74,6 +75,7 @@ function makeClient() {
 
     chain.insert = (payload: unknown) => {
       insertPayload = payload
+      tableInserts.push({ table, payload })
       if (table === 'deadlines') deadlineInserts.push(payload as unknown[])
       return chain
     }
@@ -108,7 +110,7 @@ function makeClient() {
     }),
   }
 
-  return Object.assign(supabase, { deadlineInserts })
+  return Object.assign(supabase, { deadlineInserts, tableInserts })
 }
 
 function createMockSupabase(): MockSupabaseResult {
@@ -201,6 +203,26 @@ describe('POST /api/sandbox/seed', () => {
     }
     expect(db.rpc).toHaveBeenLastCalledWith('finish_sandbox_seed', {
       p_attempt_id: 'attempt-1', p_success: true,
+    })
+  })
+
+  it('records the paid demo invoice in invoice_payments through the single writer (#2019)', async () => {
+    const db = makeClient()
+    authenticate(db)
+    expect((await POST(request())).status).toBe(200)
+    const paymentVoucherIndex = mocks.createJournalEntry.mock.calls.findIndex(call => call[3].source_type === 'invoice_paid')
+    expect(paymentVoucherIndex).toBeGreaterThanOrEqual(0)
+    const paymentRows = db.tableInserts.filter(insert => insert.table === 'invoice_payments')
+    expect(paymentRows).toHaveLength(1)
+    expect(paymentRows[0].payload).toMatchObject({
+      company_id: 'company-1',
+      user_id: 'user-1',
+      amount: 18750,
+      currency: 'SEK',
+      payment_date: '2026-04-30',
+      journal_entry_id: `entry-${paymentVoucherIndex + 1}`,
+      transaction_id: null,
+      source: 'manual',
     })
   })
 

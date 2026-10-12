@@ -80,8 +80,6 @@ import RegisterExpenseDialog, { type ExpensePayer } from '@/components/extension
 import { PayerChoiceSelect, type PayerChoice } from '@/components/expenses/PayerChoiceSelect'
 import NewSupplierInvoiceDialog from '@/components/supplier-invoices/NewSupplierInvoiceDialog'
 import BulkBookInboxDialog from '@/components/extensions/general/BulkBookInboxDialog'
-// InboxCustomDomainDialog (egen domän) is built but gated off: see
-// INBOX_CUSTOM_DOMAINS_ENABLED in extensions/general/invoice-inbox/index.ts.
 import TransactionMatchPicker from '@/components/inbox/TransactionMatchPicker'
 import { InboxCreditNotePanel } from './InboxCreditNotePanel'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
@@ -251,7 +249,6 @@ interface InboundMail {
   email_id: string
   occurred_at: string
   inbox_id: string | null
-  custom_domain: boolean
   tags: string[]
   unknown_tag_count: number
   inbox_local_part: string | null
@@ -2118,13 +2115,11 @@ function InboundMailRow({
   // The address is reconstructed from the inbox row, never read from the
   // event: one line per tag the mail used, or the bare address.
   const tags = mail.tags ?? []
-  const address = mail.custom_domain
-    ? t('inbound_mail_custom_domain')
-    : mail.inbox_local_part
-      ? (tags.length > 0 ? tags : [null])
-          .map((tag) => `${mail.inbox_local_part}${tag ? `+${tag}` : ''}@${domain}`)
-          .join(', ')
-      : t('inbound_mail_former_address')
+  const address = mail.inbox_local_part
+    ? (tags.length > 0 ? tags : [null])
+        .map((tag) => `${mail.inbox_local_part}${tag ? `+${tag}` : ''}@${domain}`)
+        .join(', ')
+    : t('inbound_mail_former_address')
   const counts = { filed: 0, duplicate: 0, rejected: 0, failed: 0, ignored: 0 }
   for (const a of mail.attachments ?? []) {
     if (a.outcome in counts) counts[a.outcome] += 1

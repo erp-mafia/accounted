@@ -10,6 +10,7 @@ import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
 import { encryptPersonnummer } from '@/lib/salary/personnummer'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { markEntriesNoDocRequired } from '@/lib/bookkeeping/no-doc-required'
+import { recordInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
 import { buildSandboxCustomers } from './customers'
 import { buildSandboxPendingOperations } from './pending-operations'
 import { buildSandboxArticles } from './articles'
@@ -555,6 +556,21 @@ export async function POST(request: Request) {
       .update({ journal_entry_id: invoiceEntry.id })
       .eq('id', invoiceMap['F-2026001']).eq('company_id', companyId)
     if (invoiceLinkError) throw invoiceLinkError
+    // The paid invoice's AR sub-ledger row, through the single writer every
+    // settlement uses (#2019): without it the demo books break the rule real
+    // books follow, and the invoice page shows a paid header with no payment
+    // date. paid_amount 0 is the state before this payment, so the row's
+    // amount is the full 18 750 the voucher clears.
+    const paymentRow = await recordInvoicePaymentRow(supabase, {
+      userId,
+      companyId,
+      invoice: { id: invoiceMap['F-2026001'], currency: 'SEK', exchange_rate: null, paid_amount: 0 },
+      paymentDate: toDateStr(fifteenDaysAgo),
+      newPaidAmount: 18750,
+      journalEntryId: je2.id,
+      source: 'manual',
+    })
+    if (!paymentRow.ok) throw new Error(`Sandbox invoice payment row failed: ${paymentRow.error}`)
 
     // 11. Create transactions
     const { data: txRows, error: txError } = await supabase

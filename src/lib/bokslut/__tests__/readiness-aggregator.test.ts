@@ -215,6 +215,7 @@ describe('buildBokslutReadinessReport', () => {
       fiscalPeriod: PERIOD,
       bookedSurplus: 80_000,
       items: [],
+      pfondFonder: [],
     })
     const supabase = makeSupabase({
       period: { data: PERIOD, error: null },

@@ -58,7 +58,7 @@ export interface SIEBankSweepReceipt extends SieSweepSummary {
 }
 
 /** PostgREST hands dates over as 'YYYY-MM-DD'; a direct pg client hands over a Date. */
-function isoDay(value: unknown): string | null {
+export function isoDay(value: unknown): string | null {
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
     const pad = (n: number) => String(n).padStart(2, '0')
     return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`

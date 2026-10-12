@@ -19,7 +19,7 @@ import { findRotRutPayoutSetMatch } from '@/lib/invoices/rot-rut-payout-set-matc
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { contentBucketKey, descriptionsBridge, normalizeImportedDescription, reconcileStableExternalIds, shiftIsoDate } from '@/lib/transactions/external-id'
+import { contentBucketKey, descriptionsBridge, normalizeImportedDescription, reconcileStableExternalIds } from '@/lib/transactions/external-id'
 import { classifyTransactionMethod } from '@/lib/transactions/transaction-method'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { createLogger } from '@/lib/logger'
@@ -59,11 +59,9 @@ export type BucketEntry = {
    */
   currency: string | null
   /**
-   * The stored row's `external_id`. Used ONLY by the shadow-mode same-feed
-   * scope-drift instrumentation (see ingestTransactions): a stored row is a
-   * "drift candidate" when its id is NOT among the incoming batch's ids, which
-   * is what distinguishes an IBAN-scope re-import from a normal sibling whose id
-   * Layer-1 already reconciles. Null for rows predating the column.
+   * The stored row's `external_id`: names the matched row in the skip report
+   * and lets isOtherBookingOfSameFeed tell another booking of the same feed
+   * from a copy. Null for rows predating the column.
    */
   externalId: string | null
   /**
@@ -528,9 +526,8 @@ export function buildIngestDedupState(input: {
 
   // Incoming rows Layer-1 will NOT reconcile (their external_id is not already
   // stored): the honest per-bucket count of rows that will actually reach the
-  // content-dedup layer. Shared by the hand-entered mirror (enforcing) and the
-  // scope-drift shadow (measure-only): the coarse incomingByBucket would let a
-  // Layer-1 duplicate inflate the symmetry check.
+  // content-dedup layer. The hand-entered mirror's symmetry check uses it: the
+  // coarse incomingByBucket would let a Layer-1 duplicate inflate the count.
   const unmatchedIncomingByBucket = new Map<string, number>()
   if (batchIsImportFeed) {
     for (const raw of rows) {
@@ -863,8 +860,6 @@ export async function ingestTransactions(
     auto_matched_invoices: 0,
     errors: 0,
     transaction_ids: [],
-    shadow_scope_drift_candidates: 0,
-    shadow_date_drift_candidates: 0,
   }
   // Every row that is not inserted because it is judged already stored goes
   // through here, so the count, the per-reason split and the per-row list can
@@ -886,29 +881,6 @@ export async function ingestTransactions(
   }
 
   const log = createLogger('transactions.ingest', { companyId })
-  // SHADOW-ONLY instrumentation for the same-feed scope-drift bridge (Hole A:
-  // Enable Banking returns the same account under a drifted IBAN, the
-  // IBAN-embedded external_id changes, Layer-1 dedup misses the re-import, and
-  // because both rows are the SAME feed the cross-channel mirror does not fire).
-  // When on, we LOG which rows an enforcing rule WOULD treat as re-imports and
-  // count them, but never change what gets inserted. Default on; set
-  // DEDUP_SCOPE_DRIFT_MODE=off to silence. There is deliberately NO 'enforce'
-  // branch yet: we validate on real fleet data first (see the plan).
-  //
-  // Off for a feed whose ids identify bookings (stableExternalIds): there a
-  // stored same-feed row under an id the batch does not carry is another
-  // booking, not a drifted id, and counting it would measure real movements as
-  // re-imports.
-  const scopeDriftShadow = process.env.DEDUP_SCOPE_DRIFT_MODE !== 'off' && !options?.stableExternalIds
-  // SHADOW-ONLY instrumentation for the date-drift bridge: the content bridge
-  // buckets on EXACT (date, öre), so a booking date that drifts a day between
-  // syncs lands its twin in an ADJACENT bucket and every dedup layer misses it
-  // (this produced the observed EB↔EB and CSV↔EB 1-day-apart duplicates). When
-  // on, we LOG + COUNT which surviving rows a ±1-day-tolerant rule WOULD treat
-  // as re-imports, but never change what is inserted. Default on; set
-  // DEDUP_DATE_DRIFT_MODE=off to silence. No 'enforce' branch, same as
-  // scope-drift, we validate on real fleet data first.
-  const dateDriftShadow = process.env.DEDUP_DATE_DRIFT_MODE !== 'off'
 
   // Pre-fetch existing transactions for content-based dedup (date+amount+
   // description prefix, plus the cross-channel mirror below). Booked rows catch
@@ -1036,81 +1008,6 @@ export async function ingestTransactions(
     physicalKeyById,
     stableExternalIds: options?.stableExternalIds,
   })
-  const { batchSource, batchIsImportFeed, incomingByBucket, unmatchedIncomingByBucket } = dedup
-
-  // ── Shadow-mode same-feed scope-drift precompute (measure only) ──────────
-  // Two per-(date, öre) bucket counts that, when EQUAL and non-zero, mark a
-  // bucket as a probable scope-drift mirror:
-  //   - unmatchedIncomingByBucket: incoming rows whose external_id is NOT
-  //     already stored (i.e. Layer-1 will not reconcile them, the ones that
-  //     would otherwise insert as fresh rows).
-  //   - driftCandidateStoredByBucket: stored rows from THIS SAME feed whose id
-  //     the incoming batch does NOT carry (so they are "orphaned" by a drifted
-  //     id), restricted to account-compatible rows. Account compatibility uses
-  //     the batch settlement account (cash_account_id), which is keyed on the
-  //     provider's STABLE account uid, not the drifting IBAN that broke the
-  //     external_id (see lib/cash-accounts/service.ts upsertFromPsd2). So a
-  //     genuinely different account on the same company is never a candidate.
-  // Equality is the safety signal (same as the cross-channel mirror): it means
-  // the same set of transactions re-arrived once, under new ids. An asymmetric
-  // bucket is left alone. Counts are pre-loop snapshots; the gate is evaluated
-  // per incoming row inside the loop.
-  const incomingIdSet = new Set(externalIds)
-
-  const driftCandidateStoredByBucket = new Map<string, number>()
-  if (batchIsImportFeed && scopeDriftShadow) {
-    // Same-feed orphaned-id rows on an INcompatible account are excluded from
-    // the candidates (a genuinely different account on the same company must
-    // never bridge), but they are exactly what a reconnect that minted a NEW
-    // cash_account for the same physical account produces (issue #1709): every
-    // stored twin then sits on the old account and the shadow stays 0 during
-    // the incident it was built to measure. Count them separately, log-only,
-    // so fleet validation can see those incidents.
-    let accountIncompatibleDriftRows = 0
-    for (const bucket of [existingMaps.booked, existingMaps.unbookedImported]) {
-      for (const [k, entries] of bucket) {
-        for (const entry of entries) {
-          const sameFeed = entry.isImportFeed && entry.source === batchSource
-          const accountCompatible = sameCashAccount(cashAccountId, entry.cashAccountId, physicalKeyById)
-          const idOrphaned = entry.externalId !== null && !incomingIdSet.has(entry.externalId)
-          if (sameFeed && accountCompatible && idOrphaned) {
-            driftCandidateStoredByBucket.set(k, (driftCandidateStoredByBucket.get(k) ?? 0) + 1)
-          } else if (sameFeed && idOrphaned) {
-            accountIncompatibleDriftRows++
-          }
-        }
-      }
-    }
-    if (accountIncompatibleDriftRows > 0) {
-      log.info('import dedup shadow: account-incompatible same-feed orphaned ids', {
-        decision: 'same-feed-scope-drift-cross-account',
-        mode: 'shadow',
-        count: accountIncompatibleDriftRows,
-        cashAccountId,
-        batchSource,
-      })
-    }
-  }
-
-  // ── Shadow-mode date-drift precompute (measure only) ─────────────────────
-  // The content bridge matches only the EXACT (date, öre) bucket, so a twin
-  // whose booking date drifted a day is invisible to it. Snapshot the stored
-  // buckets BEFORE the dedup loop (a COPY of each bucket's entries, so Layer-2's
-  // splices don't mutate what the shadow reads), so each surviving row can look
-  // one day to either side for an account-compatible twin without disturbing
-  // real dedup. Window is ±1 day (the only gap observed); a named constant so
-  // widening to ±2 is one line if fleet data shows it.
-  const DATE_DRIFT_WINDOW_DAYS = 1
-  const storedByBucketForDrift = new Map<string, BucketEntry[]>()
-  if (batchIsImportFeed && dateDriftShadow) {
-    for (const bucket of [existingMaps.booked, existingMaps.unbookedImported]) {
-      for (const [k, entries] of bucket) {
-        const snapshot = storedByBucketForDrift.get(k)
-        if (snapshot) snapshot.push(...entries)
-        else storedByBucketForDrift.set(k, [...entries])
-      }
-    }
-  }
 
   // Track already-matched invoice IDs within this ingestion batch
   // to prevent suggesting the same invoice for multiple transactions
@@ -1181,7 +1078,7 @@ export async function ingestTransactions(
       // and the stored row it matched), which the v1 ingest response returns;
       // the dashboard and the bank sync show counts only, so this log stays
       // the operator's per-row record of WHICH affärshändelse was dropped and
-      // against what. Same field shape as the two shadow blocks below.
+      // against what.
       log.info('import dedup: content-bridge duplicate skipped', {
         decision: 'content-bridge',
         mode: 'enforced',
@@ -1253,124 +1150,6 @@ export async function ingestTransactions(
         }
       }
       continue
-    }
-
-    // SHADOW-ONLY: this row survived Layer-1 and Layer-2, so today it WILL
-    // insert. If its bucket is a symmetric same-feed scope-drift mirror (equal
-    // non-zero counts of unreconciled incoming rows and account-compatible
-    // same-feed drift candidates), an enforcing rule WOULD treat it as a
-    // re-import. We only record it (full content on both sides so every
-    // decision can be human-verified against real fleet data before any
-    // enforcement is switched on), then fall through and insert exactly as
-    // before. This block has NO effect on result.imported/duplicates.
-    if (scopeDriftShadow && batchIsImportFeed) {
-      const driftCount = driftCandidateStoredByBucket.get(bucketKey) ?? 0
-      const unmatchedCount = unmatchedIncomingByBucket.get(bucketKey) ?? 0
-      if (driftCount > 0 && unmatchedCount === driftCount) {
-        let matched: BucketEntry | undefined
-        for (const bucket of [existingMaps.booked, existingMaps.unbookedImported]) {
-          const entries = bucket.get(bucketKey)
-          if (!entries) continue
-          matched = entries.find(
-            (e) =>
-              e.isImportFeed &&
-              e.source === batchSource &&
-              e.externalId !== null &&
-              !incomingIdSet.has(e.externalId) &&
-              sameCashAccount(cashAccountId, e.cashAccountId, physicalKeyById)
-          )
-          if (matched) break
-        }
-        if (matched) {
-          result.shadow_scope_drift_candidates =
-            (result.shadow_scope_drift_candidates ?? 0) + 1
-          log.info('import dedup shadow: same-feed scope-drift candidate', {
-            decision: 'same-feed-scope-drift',
-            mode: 'shadow',
-            bucket: bucketKey,
-            unmatchedIncoming: unmatchedCount,
-            driftCandidates: driftCount,
-            incomingExternalId: raw.external_id,
-            incomingDescription: description,
-            incomingAmount: raw.amount,
-            incomingSource: raw.import_source ?? null,
-            cashAccountId,
-            matchedStoredExternalId: matched.externalId,
-            matchedStoredDescription: matched.desc,
-            matchedStoredCashAccountId: matched.cashAccountId,
-          })
-        }
-      }
-    }
-
-    // SHADOW-ONLY: date-drift. This row survived Layer-1 + Layer-2 and WILL
-    // insert. The content bridge only matched its EXACT (date, öre) bucket, so a
-    // twin whose booking date drifted a day is invisible to it. Look ±1 day for
-    // an account-compatible stored twin that EITHER bridges by description
-    // (same/enriched title, the EB↔EB hotel/fee case) OR is a cross-feed
-    // count-symmetric mirror displaced by a day (the CSV↔EB case where the
-    // descriptions don't bridge). Record it for fleet validation, then insert
-    // unchanged: this block never affects result.imported/duplicates.
-    //
-    // Fail-safe date guard: measurement must NEVER abort a real import. raw.date
-    // is always ISO in practice, but a malformed value would make shiftIsoDate
-    // throw (new Date(NaN).toISOString()), so we skip detection rather than risk
-    // it. Any /^\d{4}-\d{2}-\d{2}$/ value is safe: Date.UTC normalizes
-    // out-of-range parts to a finite epoch, never NaN.
-    if (dateDriftShadow && batchIsImportFeed && /^\d{4}-\d{2}-\d{2}$/.test(raw.date)) {
-      let driftMatch: { entry: BucketEntry; gap: number; signal: 'desc' | 'cross-channel' } | undefined
-      const incomingHere = incomingByBucket.get(bucketKey) ?? 0
-      for (let delta = 1; delta <= DATE_DRIFT_WINDOW_DAYS && !driftMatch; delta++) {
-        for (const sign of [-1, 1] as const) {
-          const adjKey = contentBucketKey(shiftIsoDate(raw.date, sign * delta), raw.amount)
-          const entries = storedByBucketForDrift.get(adjKey)
-          if (!entries) continue
-          // Cross-feed count-symmetry across the drift: equal counts of incoming
-          // rows in THIS bucket and account-compatible cross-feed rows one day
-          // over, the cross-channel mirror, displaced by a date drift.
-          const adjCrossFeed = entries.filter(
-            (e) =>
-              e.isImportFeed &&
-              e.source !== batchSource &&
-              sameCashAccount(cashAccountId, e.cashAccountId, physicalKeyById),
-          ).length
-          const mirrorSymmetric = adjCrossFeed > 0 && incomingHere === adjCrossFeed
-          for (const entry of entries) {
-            const sameAccount = sameCashAccount(cashAccountId, entry.cashAccountId, physicalKeyById)
-            if (!sameAccount) continue
-            // Another booking of the same feed by its own ids (a daily fee):
-            // not a drifted copy, so not a candidate.
-            if (isOtherBookingOfSameFeed(dedup, raw, entry)) continue
-            if (descriptionsBridge(description, entry.desc)) {
-              driftMatch = { entry, gap: sign * delta, signal: 'desc' }
-              break
-            }
-            if (mirrorSymmetric && entry.isImportFeed && entry.source !== batchSource) {
-              driftMatch = { entry, gap: sign * delta, signal: 'cross-channel' }
-              break
-            }
-          }
-          if (driftMatch) break
-        }
-      }
-      if (driftMatch) {
-        result.shadow_date_drift_candidates = (result.shadow_date_drift_candidates ?? 0) + 1
-        log.info('import dedup shadow: date-drift candidate', {
-          decision: 'date-drift',
-          mode: 'shadow',
-          signal: driftMatch.signal,
-          dayGap: driftMatch.gap,
-          bucket: bucketKey,
-          incomingExternalId: raw.external_id,
-          incomingDescription: description,
-          incomingAmount: raw.amount,
-          incomingSource: raw.import_source ?? null,
-          cashAccountId,
-          matchedStoredExternalId: driftMatch.entry.externalId,
-          matchedStoredDescription: driftMatch.entry.desc,
-          matchedStoredCashAccountId: driftMatch.entry.cashAccountId,
-        })
-      }
     }
 
     // 2. Insert new transaction (with SEK conversion for foreign currencies)

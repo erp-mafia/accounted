@@ -23,6 +23,7 @@ import {
   preparesArsredovisning,
   resultClosingAccounts,
 } from '@/lib/company/entity-type'
+import { StatementReconciliationPanel } from './StatementReconciliationPanel'
 
 interface ResultStepProps {
   result: YearEndResult
@@ -136,6 +137,8 @@ export function ResultStep({ result }: ResultStepProps) {
           checkedAccounts={continuity.checked_accounts}
         />
       )}
+
+      <StatementReconciliationPanel periodId={result.closingEntry.fiscal_period_id} />
 
       <section className="space-y-4 px-1">
           <label className="flex items-start gap-3 cursor-pointer">

@@ -214,7 +214,6 @@ describe('INVOICE_ENGINE_SOURCE_TYPES', () => {
   it('covers every source_type the invoice engine writes', () => {
     const writers = [
       'lib/bookkeeping/invoice-entries.ts',
-      'lib/bookkeeping/reminder-fee-entries.ts',
       'lib/bookkeeping/rot-rut-entries.ts',
       'lib/core/bookkeeping/storno-service.ts',
     ]

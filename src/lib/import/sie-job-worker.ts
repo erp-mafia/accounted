@@ -4,22 +4,25 @@ import { createLogger } from '@/lib/logger'
 import { commitSIEImportChunk, reverseSIEImportChunk } from '@/lib/bookkeeping/engine'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { applyMetadata, jobInput, prepareSIEJob, readCheckpoint, SIE_CHECKPOINTS, sieJobRPC } from './sie-job-preparation'
+import { applyMetadata, jobInput, prepareSIEJob, readCheckpoint, readSIESourceVouchers, SIE_CHECKPOINTS, sieJobRPC } from './sie-job-preparation'
 import { getSIEJob, runsSIEJobs, SIEJobValidationError } from './sie-jobs'
 import { isSIEJobUnresolved, type SIEChunkResult, type SIEJob } from './sie-job-contract'
 import { getMappingStats } from './account-mapper'
 import { computeVoucherNumberRanges } from './sie-import'
-import type { ImportResult, MigrationDocumentation, ParsedSIEFile } from './types'
+import type { ImportResult, MigrationDocumentation, ParsedSIEFile, SIEVoucher } from './types'
 import { legacyNotices } from './notices'
 import { openingBalanceSplitRefusedNotice, type OpeningBalanceSplitRefusal } from './sie-object-balances'
 import { buildSIEVatDefaults } from './account-sync'
-import { sweepBankRowsAfterSIEImport } from './sie-post-import-sweep'
+import { isoDay, sweepBankRowsAfterSIEImport } from './sie-post-import-sweep'
+import { diagnoseUntransferredResults, learnFromCompletedSIEImport, vouchersForLearning } from './sie-import-learning'
 
 const log = createLogger('sie-worker')
 
 interface CheckpointRow { phase:string; chunk_no:number; payload_hash:string; result:Record<string,unknown> | SIEChunkResult }
+/** What finalize leaves for the learning after completion (sie-import-learning.ts). */
+interface FinalizeLearning { completed?:boolean; vouchers?:SIEVoucher[] }
 
-async function finalize(supabase: SupabaseClient, job: SIEJob, deadline: number): Promise<boolean> {
+async function finalize(supabase: SupabaseClient, job: SIEJob, deadline: number, learning: FinalizeLearning): Promise<boolean> {
   const { options, mappings } = jobInput(job)
   const done = await fetchAllRows<{chunk_no:number}>(({from,to}) => supabase.from('sie_import_chunks')
     .select('chunk_no').eq('company_id',job.company_id).eq('import_id',job.id).eq('phase','prepare')
@@ -67,7 +70,7 @@ async function finalize(supabase: SupabaseClient, job: SIEJob, deadline: number)
       await applyMetadata(supabase,job,'no_documents',SIE_CHECKPOINTS.noDocuments+n/100,ids.slice(n,n+100))
     }
   }
-  const snapshot = await readCheckpoint<{parsed:ParsedSIEFile}>(supabase,job,SIE_CHECKPOINTS.snapshot)
+  const snapshot = await readCheckpoint<{parsed:ParsedSIEFile;voucherGroups:number}>(supabase,job,SIE_CHECKPOINTS.snapshot)
   if (!snapshot) throw new Error('SIE source manifest missing')
   const parsed = snapshot.parsed
   const skipped = job.manifest.skippedCounts as {empty:number;unbalanced:number;unmapped:number;singleLine:number;total:number}
@@ -96,6 +99,14 @@ async function finalize(supabase: SupabaseClient, job: SIEJob, deadline: number)
     warnings.push(refused.text)
     notices.push(refused.notice)
   }
+  // The untransferred-results check (#2462) the one-shot writer ran after
+  // every import. Its finding belongs in the stored result: before completion.
+  if (Date.now() > deadline) return false
+  const isImport = (job.job_kind ?? 'import') === 'import'
+  const untransferred = isImport ? await diagnoseUntransferredResults(supabase,job.company_id,isoDay(job.fiscal_year_start))
+    : {results:[],warnings:[],notices:[]}
+  warnings.push(...untransferred.warnings)
+  notices.push(...untransferred.notices)
   const voucherMap = entries.map(e => ({sourceId:e.sourceId,series:e.series,targetNumber:e.voucherNumber}))
   const stats = getMappingStats(mappings)
   const documentation: MigrationDocumentation = {
@@ -118,10 +129,21 @@ async function finalize(supabase: SupabaseClient, job: SIEJob, deadline: number)
     details:{fiscalYear:documentation.fiscalYear,skippedVouchers:skipped,
       openingBalanceSkipped:job.manifest.prior_activity && options.importOpeningBalances ? 'prior_activity' : undefined,
       migrationAdjustment:{created:!!adjustment,accountsAdjusted:Number(job.manifest.migrationAdjustmentAccounts ?? 0)},
+      untransferredResults:untransferred.results.length ? untransferred.results : undefined,
       retriedBatches:0,failedBatches:0}}
+  // The learning after completion reads the source vouchers, and
+  // complete_sie_import_job deletes them. Unreadable only costs the learning.
+  if (isImport) {
+    try { learning.vouchers = vouchersForLearning(await readSIESourceVouchers(supabase,job,snapshot.voucherGroups),mappings) }
+    catch (err) {
+      log.warn('SIE source vouchers unreadable; no templates are learned from this import',
+        {companyId:job.company_id,importId:job.id,message:err instanceof Error ? err.message : String(err)})
+    }
+  }
   await sieJobRPC(supabase,job,'complete_sie_import_job',{p_result:result,p_documentation:{...documentation,
     accountRenamesTruncated:renames.length > 200,
     voucherNumberMappingTruncated:entries.length > 200,entryManifest:{table:'sie_import_chunks',importId:job.id}}})
+  learning.completed = true
   return true
 }
 
@@ -138,6 +160,7 @@ export async function runSIEWorker(options: { importId?:string; budgetMs?:number
     if (error) throw new Error(error.message)
     if (!data?.id) break
     let job = data as SIEJob
+    const learning: FinalizeLearning = {}
     jobs++
     try {
       while (Date.now() < deadline && runsSIEJobs() && isSIEJobUnresolved(job.job_state)) {
@@ -154,7 +177,7 @@ export async function runSIEWorker(options: { importId?:string; budgetMs?:number
         } else if (job.job_phase === 'undo') {
           await reverseSIEImportChunk(supabase,job)
           chunks++
-        } else if (!await finalize(supabase,job,deadline)) break
+        } else if (!await finalize(supabase,job,deadline,learning)) break
         const durationMs = Date.now()-started
         if (durationMs > 30_000) log.warn('SIE slow job step',{alert:true,companyId:job.company_id,importId:job.id,phase:job.job_phase,durationMs})
         const current = await getSIEJob(supabase,job.company_id,job.id)
@@ -169,6 +192,9 @@ export async function runSIEWorker(options: { importId?:string; budgetMs?:number
       // so bank rows can be matched against the new verifikat. Never throws;
       // the receipt lets the cron finish a sweep this invocation cannot.
       if (job.job_state === 'completed') await sweepBankRowsAfterSIEImport(supabase,job)
+      // Counterparty templates and suggested parties, once, by the invocation
+      // that completed the job (sie-import-learning.ts). Never throws.
+      if (learning.completed) await learnFromCompletedSIEImport(supabase,job,learning.vouchers ?? [])
     } catch (err) {
       const reason = err instanceof Error ? err.message : 'Unknown SIE worker error'
       log.error('SIE job requires recovery',err as Error,{alert:true,companyId:job.company_id,importId:job.id,phase:job.job_phase})

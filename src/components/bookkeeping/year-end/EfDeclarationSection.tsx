@@ -9,8 +9,11 @@ import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { AlertTriangle, FileDown, Info } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
+import { isFiscalYear } from '@/lib/invariants/fiscal-year'
 import type { EgenavgiftCategory } from '@/lib/bokslut/enskild-firma/egenavgifter-calculator'
 import type { EfDeclarationItem } from '@/lib/bokslut/enskild-firma/types'
+import type { EfFondState } from '@/lib/bokslut/enskild-firma/periodiseringsfond-ef'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface EfDeclarationSectionProps {
@@ -29,6 +32,8 @@ interface EfOverrideInputs {
   priorSchablon: string
   priorActual: string
   pfondDesired: string
+  /** Earlier years' periodiseringsfonder, as typed (year and balance). */
+  pfondFonder: Array<{ year: string; balance: string }>
   expansionsfondBalance: string
   expansionsfondChange: string
 }
@@ -42,6 +47,7 @@ interface EfPreviewResponse {
   }
   bookedSurplus: number
   items: EfDeclarationItem[]
+  pfondFonder?: EfFondState[]
   postedEntryCount: number
   inputWarnings: string[]
 }
@@ -53,6 +59,7 @@ const DEFAULT_OVERRIDES: EfOverrideInputs = {
   priorSchablon: '',
   priorActual: '',
   pfondDesired: '',
+  pfondFonder: [],
   expansionsfondBalance: '',
   expansionsfondChange: '',
 }
@@ -88,7 +95,11 @@ export function EfDeclarationSection({
       const raw = window.localStorage.getItem(storageKey)
       if (raw) {
         const parsed = JSON.parse(raw) as Partial<EfOverrideInputs>
-        setOverrides({ ...DEFAULT_OVERRIDES, ...parsed })
+        setOverrides({
+          ...DEFAULT_OVERRIDES,
+          ...parsed,
+          pfondFonder: Array.isArray(parsed.pfondFonder) ? parsed.pfondFonder : [],
+        })
       }
     } catch {
       // Ignore: start with defaults.
@@ -118,6 +129,10 @@ export function EfDeclarationSection({
     if (Number.isFinite(pa)) params.set('priorYearActualCharged', String(pa))
     const pf = parseFloat(overrides.pfondDesired)
     if (Number.isFinite(pf)) params.set('pfondDesiredAmount', String(pf))
+    const fonder = enteredFonder(overrides.pfondFonder)
+    if (fonder.length > 0) {
+      params.set('pfondExistingFonder', fonder.map((f) => `${f.year}:${f.balance}`).join(','))
+    }
     const eb = parseFloat(overrides.expansionsfondBalance)
     if (Number.isFinite(eb)) params.set('expansionsfondExistingBalance', String(eb))
     const ec = parseFloat(overrides.expansionsfondChange)
@@ -162,6 +177,19 @@ export function EfDeclarationSection({
     },
     [],
   )
+
+  const updateFond = useCallback((index: number, field: 'year' | 'balance', value: string) => {
+    setOverrides((prev) => ({
+      ...prev,
+      pfondFonder: prev.pfondFonder.map((row, i) => (i === index ? { ...row, [field]: value } : row)),
+    }))
+  }, [])
+  const addFond = useCallback(() => {
+    setOverrides((prev) => ({ ...prev, pfondFonder: [...prev.pfondFonder, { year: '', balance: '' }] }))
+  }, [])
+  const removeFond = useCallback((index: number) => {
+    setOverrides((prev) => ({ ...prev, pfondFonder: prev.pfondFonder.filter((_, i) => i !== index) }))
+  }, [])
 
   const items = preview?.items ?? []
   const inputWarnings = preview?.inputWarnings ?? []
@@ -306,6 +334,46 @@ export function EfDeclarationSection({
               />
             </div>
           </div>
+          <div className="space-y-2">
+            <Label className="text-xs">
+              Tidigare periodiseringsfonder (avsättningsår och belopp, från respektive års NE-bilaga R34)
+            </Label>
+            {overrides.pfondFonder.map((row, index) => (
+              <div key={index} className="grid grid-cols-[6rem_1fr_auto] items-center gap-2">
+                <Input
+                  type="number"
+                  step="1"
+                  value={row.year}
+                  onChange={(e) => updateFond(index, 'year', e.target.value)}
+                  placeholder="År"
+                  aria-label="Avsättningsår"
+                  className="tabular-nums h-9"
+                />
+                <Input
+                  type="number"
+                  step="1"
+                  value={row.balance}
+                  onChange={(e) => updateFond(index, 'balance', e.target.value)}
+                  placeholder="Belopp"
+                  aria-label="Belopp kvar i fonden"
+                  className="tabular-nums h-9"
+                />
+                <Button type="button" variant="ghost" size="sm" onClick={() => removeFond(index)}>
+                  Ta bort
+                </Button>
+                <FondStatusLine
+                  row={row}
+                  rows={overrides.pfondFonder}
+                  index={index}
+                  states={preview?.pfondFonder ?? []}
+                  fiscalYear={fiscalYear}
+                />
+              </div>
+            ))}
+            <Button type="button" variant="outline" size="sm" onClick={addFond}>
+              Lägg till fond
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
@@ -385,4 +453,51 @@ export function EfDeclarationSection({
       </Card>
     </div>
   )
+}
+
+/** Rows with a valid year and a positive balance; a repeated year counts once. */
+function enteredFonder(rows: Array<{ year: string; balance: string }>): Array<{ year: string; balance: string }> {
+  const seen = new Set<string>()
+  const out: Array<{ year: string; balance: string }> = []
+  for (const row of rows) {
+    const year = row.year.trim()
+    const balance = parseFloat(row.balance)
+    if (!isFiscalYear(year) || !(balance > 0) || seen.has(year)) continue
+    seen.add(year)
+    out.push({ year, balance: String(roundOre(balance)) })
+  }
+  return out
+}
+
+function FondStatusLine({
+  row,
+  rows,
+  index,
+  states,
+  fiscalYear,
+}: {
+  row: { year: string; balance: string }
+  rows: Array<{ year: string; balance: string }>
+  index: number
+  states: EfFondState[]
+  fiscalYear: number
+}) {
+  const year = row.year.trim()
+  if (!isFiscalYear(year)) return null
+  const repeated = rows.slice(0, index).some((other) => other.year.trim() === year)
+  if (repeated) {
+    return <p className="col-span-3 text-xs text-attn">Året finns redan i listan och räknas en gång.</p>
+  }
+  const state = states.find((s) => s.cohort_year === Number(year))
+  if (!state) return null
+  const text =
+    state.status === 'mandatory'
+      ? `Återförs i år (senast ${state.latest_return_year}).`
+      : state.status === 'overdue'
+        ? `Skulle ha återförts senast ${state.latest_return_year}: återförs nu.`
+        : state.status === 'optional'
+          ? `Kan återföras frivilligt, senast ${state.latest_return_year}.`
+          : `Avsättningsåret måste vara före ${fiscalYear}.`
+  const attention = state.status === 'overdue' || state.status === 'invalid'
+  return <p className={`col-span-3 text-xs ${attention ? 'text-attn' : 'text-muted-foreground'}`}>{text}</p>
 }

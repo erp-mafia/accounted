@@ -16,8 +16,7 @@ export const maxDuration = 300
  * transactions inbox as a bank-style feed on the 1686 cash account.
  *
  * Read-only against Stripe, and it never posts to the journal: rows land
- * unbooked (or pre-linked to entries the deterministic settle/payout flows
- * already created); booking stays a human decision. Idempotent via the
+ * unbooked; booking stays a human decision. Idempotent via the
  * (company_id, external_id) unique index, so overlapping windows and re-runs
  * are no-ops. A connection Stripe reports as revoked is marked revoked here.
  */
@@ -67,7 +66,6 @@ export const GET = withCronContext('cron.stripe_transaction_sync', async (_reque
     connectionId: string
     imported: number
     duplicates: number
-    linked: number
     status: 'synced' | 'revoked' | 'error'
   }> = []
 
@@ -93,7 +91,6 @@ export const GET = withCronContext('cron.stripe_transaction_sync', async (_reque
         connectionId: connection.id,
         imported: summary.imported,
         duplicates: summary.duplicates,
-        linked: summary.linked,
         status: summary.revoked ? 'revoked' : 'synced',
       })
     } catch (error) {
@@ -105,7 +102,6 @@ export const GET = withCronContext('cron.stripe_transaction_sync', async (_reque
         connectionId: connection.id,
         imported: 0,
         duplicates: 0,
-        linked: 0,
         status: 'error',
       })
     }
@@ -114,14 +110,12 @@ export const GET = withCronContext('cron.stripe_transaction_sync', async (_reque
   const totals = results.reduce(
     (acc, r) => ({
       imported: acc.imported + r.imported,
-      linked: acc.linked + r.linked,
     }),
-    { imported: 0, linked: 0 },
+    { imported: 0 },
   )
   ctx.log.info('stripe transaction sync summary', {
     processed: results.length,
     totalImported: totals.imported,
-    totalLinked: totals.linked,
     failed: results.filter((r) => r.status === 'error').length,
   })
 

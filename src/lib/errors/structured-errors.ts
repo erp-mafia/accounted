@@ -77,11 +77,6 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
     message_sv: 'Din session har gått ut. Logga in igen.',
     message_en: 'Authentication required.',
   },
-  MFA_REQUIRED: {
-    httpStatus: 403,
-    message_sv: 'Tvåstegsverifiering krävs för att utföra åtgärden.',
-    message_en: 'MFA verification required.',
-  },
   FORBIDDEN: {
     httpStatus: 403,
     message_sv: 'Du har inte behörighet att utföra denna åtgärd.',
@@ -798,11 +793,6 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
         'Match the transaction via POST /api/transactions/{id}/match-invoice, or resend with confirm_no_match: true to keep the plain 151x categorization.',
     },
   },
-  TX_UNCATEGORIZE_NO_LINKED_ENTRY: {
-    httpStatus: 400,
-    message_sv: 'Transaktionen har ingen kopplad verifikation att stornera.',
-    message_en: 'Transaction has no linked journal entry to reverse.',
-  },
   TX_EXCHANGE_RATE_UNAVAILABLE: {
     httpStatus: 502,
     message_sv:
@@ -915,11 +905,6 @@ const MATCH_INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kunde inte koppla transaktionen till fakturan.',
     message_en: 'Failed to link transaction to invoice.',
     retryable: true,
-  },
-  MATCH_INVOICE_PARTIAL: {
-    httpStatus: 200,
-    message_sv: 'Matchningen registrerades men verifikationen kunde inte skapas.',
-    message_en: 'Match recorded but the journal entry could not be created.',
   },
   MATCH_INVOICE_ALREADY_HAS_PAYMENT_VOUCHER: {
     httpStatus: 409,
@@ -1114,17 +1099,6 @@ const MATCH_SI: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Verifikationen är inte bokförd. Reversal kan inte utföras.',
     message_en: 'Journal entry is not in posted status; reversal is not possible.',
-  },
-  TX_INGEST_INSERT_FAILED: {
-    httpStatus: 500,
-    message_sv: 'Transaktionerna kunde inte importeras.',
-    message_en: 'Transaction ingest failed.',
-    retryable: true,
-  },
-  TX_BATCH_CATEGORIZE_EMPTY: {
-    httpStatus: 400,
-    message_sv: 'Batchen är tom.',
-    message_en: 'Batch is empty: pass at least one item.',
   },
 }
 
@@ -2138,37 +2112,6 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_en:
       'The recurring schedule update failed and the compensating rollback did not fully apply: the schedule may be left in a partial state (header fields and items out of sync). Inspect the schedule fields and items before retrying.',
   },
-  // Quotes / Offerter
-  QUOTE_NOT_FOUND: {
-    httpStatus: 404,
-    message_sv: 'Offerten kunde inte hittas.',
-    message_en: 'Quote not found.',
-  },
-  QUOTE_INVALID_STATE: {
-    httpStatus: 400,
-    message_sv: 'Offerten är inte i en status som tillåter denna åtgärd.',
-    message_en: 'Quote is not in a state that allows this action.',
-  },
-  QUOTE_TOKEN_INVALID: {
-    httpStatus: 404,
-    message_sv: 'Länken är ogiltig eller har gått ut.',
-    message_en: 'The link is invalid or has expired.',
-  },
-  QUOTE_NUMBER_ASSIGN_FAILED: {
-    httpStatus: 500,
-    message_sv: 'Kunde inte tilldela offertnummer.',
-    message_en: 'Failed to assign quote number.',
-  },
-  QUOTE_CONVERSION_FAILED: {
-    httpStatus: 500,
-    message_sv: 'Offerten kunde inte konverteras till faktura.',
-    message_en: 'Failed to convert quote to invoice.',
-  },
-  QUOTE_NOT_QUOTE: {
-    httpStatus: 400,
-    message_sv: 'Detta dokument är inte en offert.',
-    message_en: 'This document is not a quote.',
-  },
   // Kundorder (sales orders): lib/sales-orders/*, app/api/sales-orders/*
   SALES_ORDER_NOT_FOUND: {
     httpStatus: 404,
@@ -2622,25 +2565,6 @@ const SUPPLIER_INVOICE: Record<string, StructuredErrorEntry> = {
         'Set exchange_rate on the supplier invoice (the rate at the invoice date) and retry the booking.',
     },
   },
-  PO_THREE_WAY_MATCH_FAILED: {
-    httpStatus: 422,
-    message_sv:
-      'Trevägs-matchning misslyckades: leverantörsfakturan stämmer inte med inköpsordern eller godsmottagningen.',
-    message_en:
-      'Three-way match failed: the supplier invoice does not reconcile with the purchase order / goods receipt.',
-  },
-  PO_LINK_REQUIRED: {
-    httpStatus: 422,
-    message_sv:
-      'Inställningarna kräver att varje leverantörsfaktura kopplas till en inköpsorder.',
-    message_en:
-      'Company settings require every supplier invoice to be linked to a purchase order.',
-  },
-  PO_NOT_FOUND: {
-    httpStatus: 404,
-    message_sv: 'Inköpsordern kunde inte hittas.',
-    message_en: 'Purchase order not found.',
-  },
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -2675,11 +2599,6 @@ const PERIOD: Record<string, StructuredErrorEntry> = {
       'NE-bilagans beräkningar (egenavgifter, räntefördelning, periodiseringsfond och expansionsfond) gäller bara enskild firma, inte företagets företagsform.',
     message_en:
       'The NE-bilaga preview (egenavgifter, räntefördelning, periodiseringsfond and expansionsfond) applies only to an enskild firma, not to this company\'s legal form.',
-  },
-  PERIOD_LOCK_FAILED: {
-    httpStatus: 400,
-    message_sv: 'Perioden kunde inte låsas.',
-    message_en: 'Failed to lock period.',
   },
   PERIOD_LOCK_HAS_DRAFTS: {
     httpStatus: 400,
@@ -3387,16 +3306,6 @@ const SIE_IMPORT: Record<string, StructuredErrorEntry> = {
     message_en: 'One or more accounts have no mapping target.',
     remediation: { description: 'Map every source account to a BAS account before importing.' },
   },
-  SIE_IMPORT_ACCOUNT_ACTIVATION_FAILED: {
-    httpStatus: 500,
-    message_sv: 'Kunde inte aktivera konton i kontoplanen. Kontrollera att kontona inte redan finns med andra inställningar.',
-    message_en: 'Failed to activate mapped accounts in the chart of accounts.',
-  },
-  SIE_IMPORT_FAILED: {
-    httpStatus: 400,
-    message_sv: 'Importen slutfördes med fel. Se detaljerna nedan.',
-    message_en: 'SIE import completed with errors.',
-  },
   SIE_IMPORT_UNEXPECTED: {
     httpStatus: 500,
     message_sv: 'Importens resultat kunde inte bekräftas. Kontrollera importhistoriken innan du försöker igen.',
@@ -3406,11 +3315,6 @@ const SIE_IMPORT: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'SIE-importen kunde inte ersättas.',
     message_en: 'Failed to replace SIE import.',
-  },
-  SIE_REPLACE_FORBIDDEN: {
-    httpStatus: 403,
-    message_sv: 'Endast ägare eller administratörer kan ersätta en SIE-import.',
-    message_en: 'Only company owners and admins can replace an SIE import.',
   },
   SIE_UNDO_FAILED: {
     httpStatus: 400,
@@ -4471,11 +4375,6 @@ const INBOX_UPLOAD: Record<string, StructuredErrorEntry> = {
     message_sv: 'Filtypen stöds inte. Tillåtna format: PDF, JPEG, PNG, HEIC och WebP.',
     message_en: 'Unsupported file type. Allowed: PDF, JPEG, PNG, HEIC, WebP.',
   },
-  INBOX_UPLOAD_TX_NOT_IN_COMPANY: {
-    httpStatus: 400,
-    message_sv: 'Den angivna transaktionen (matched_transaction_id) tillhör ett annat företag.',
-    message_en: 'matched_transaction_id refers to a transaction outside this company.',
-  },
   INBOX_UPLOAD_FAILED: {
     httpStatus: 500,
     message_sv: 'Uppladdningen misslyckades. Försök igen.',
@@ -4487,11 +4386,6 @@ const INBOX_UPLOAD: Record<string, StructuredErrorEntry> = {
     httpStatus: 403,
     message_sv: 'Du har inte behörighet att ladda upp underlag i det här företaget. Medlemmar med läsbehörighet kan inte lägga till dokument.',
     message_en: 'You do not have permission to upload documents to this company. Read-only members cannot add documents.',
-  },
-  INBOX_ATTACH_FAILED: {
-    httpStatus: 500,
-    message_sv: 'Bilagan kunde inte kopplas. Försök igen.',
-    message_en: 'Failed to attach the document.',
   },
 }
 
@@ -5178,11 +5072,6 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     },
     retryable: false,
   },
-  SALARY_RUN_PERIOD_LOCKED: {
-    httpStatus: 400,
-    message_sv: 'Lönekörningen kan inte göras i en låst period.',
-    message_en: 'Salary run cannot be processed in a locked period.',
-  },
   SALARY_RUN_NOT_CALCULATED: {
     httpStatus: 400,
     message_sv: 'Lönekörningen måste beräknas innan bokföring.',
@@ -5202,21 +5091,6 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     httpStatus: 500,
     message_sv: 'Lönekörningen kunde inte bokföras.',
     message_en: 'Failed to book salary run.',
-  },
-  AGI_NO_SALARY_RUN: {
-    httpStatus: 400,
-    message_sv: 'Det finns ingen lönekörning för perioden.',
-    message_en: 'No salary run exists for the period.',
-  },
-  AGI_FSKATT_VERIFICATION_FAILED: {
-    httpStatus: 400,
-    message_sv: 'F-skattekontrollen misslyckades. Kontrollera leverantörens F-skatt.',
-    message_en: 'F-skatt verification failed.',
-  },
-  AGI_GENERATION_FAILED: {
-    httpStatus: 500,
-    message_sv: 'AGI-deklarationen kunde inte genereras.',
-    message_en: 'Failed to generate AGI declaration.',
   },
   // Phase 5 PR-1: v1 REST surface error codes.
   EMPLOYEE_NOT_FOUND: {
@@ -5596,12 +5470,6 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'Betalfilen kunde inte skapas: kontrollera bankuppgifterna för företaget och de anställda.',
     message_en: 'The payment file could not be generated: check the bank details of the company and its employees.',
   },
-  // Phase 5 PR-3: additional import error codes.
-  SIE_IMPORT_DUPLICATE: {
-    httpStatus: 409,
-    message_sv: 'Den här SIE-filen har redan importerats.',
-    message_en: 'This SIE file has already been imported.',
-  },
   BANK_IMPORT_FAILED: {
     httpStatus: 500,
     message_sv: 'Bankfilsimporten misslyckades.',
@@ -5620,16 +5488,6 @@ const SALARY: Record<string, StructuredErrorEntry> = {
 }
 
 const COMPANY: Record<string, StructuredErrorEntry> = {
-  COMPANY_CREATE_DUPLICATE_ORG_NUMBER: {
-    httpStatus: 409,
-    message_sv: 'Ett företag med samma organisationsnummer finns redan.',
-    message_en: 'A company with that organisation number already exists.',
-  },
-  COMPANY_CREATE_BAS_SEED_FAILED: {
-    httpStatus: 500,
-    message_sv: 'Kontoplanen kunde inte skapas. Försök igen.',
-    message_en: 'Failed to seed the chart of accounts.',
-  },
   COMPANY_CREATE_FAILED: {
     httpStatus: 500,
     message_sv: 'Företaget kunde inte skapas.',
@@ -5687,16 +5545,6 @@ const API_KEY: Record<string, StructuredErrorEntry> = {
     httpStatus: 500,
     message_sv: 'API-nyckeln kunde inte skapas.',
     message_en: 'Failed to create API key.',
-  },
-  API_KEY_REVOKE_FAILED: {
-    httpStatus: 500,
-    message_sv: 'API-nyckeln kunde inte återkallas.',
-    message_en: 'Failed to revoke API key.',
-  },
-  API_KEY_NOT_FOUND: {
-    httpStatus: 404,
-    message_sv: 'API-nyckeln kunde inte hittas.',
-    message_en: 'API key not found.',
   },
   API_KEY_SOD_CONFLICT: {
     httpStatus: 409,

@@ -12,7 +12,9 @@ beforeEach(()=>{
   vi.clearAllMocks();verify.mockReturnValue(null)
   worker.mockResolvedValue({jobs:1,chunks:3})
   sweeps.mockResolvedValue({considered:1,swept:1})
-  rpc.mockResolvedValue({data:{duplicate_groups:0,missing_holds:0,stale_holds:0},error:null})
+  rpc.mockImplementation(async(fn:string)=>fn==='check_invoice_payment_row_invariant'
+    ? {data:{missing_payment_rows:0,companies:0,sample_invoice_ids:[]},error:null}
+    : {data:{duplicate_groups:0,missing_holds:0,stale_holds:0},error:null})
 })
 describe('SIE recovery and invariant schedules',()=>{
   it.each([run,check])('requires the cron secret',async(route)=>{
@@ -30,9 +32,30 @@ describe('SIE recovery and invariant schedules',()=>{
     expect(sweeps).toHaveBeenCalledTimes(1)
   })
   it('surfaces violated ledger invariants as a failed scheduled check',async()=>{
-    rpc.mockResolvedValue({data:{duplicate_groups:1,missing_holds:0,stale_holds:0},error:null})
+    rpc.mockImplementation(async(fn:string)=>fn==='check_invoice_payment_row_invariant'
+      ? {data:{missing_payment_rows:0,companies:0,sample_invoice_ids:[]},error:null}
+      : {data:{duplicate_groups:1,missing_holds:0,stale_holds:0},error:null})
     expect((await check(request())).status).toBe(503)
     expect(rpc).toHaveBeenCalledWith('check_sie_import_invariants')
   })
-  it('acknowledges a clean invariant scan',async()=>{expect((await check(request())).status).toBe(200)})
+  it('surfaces a paid invoice whose payment voucher has no payment row (#2019)',async()=>{
+    rpc.mockImplementation(async(fn:string)=>fn==='check_invoice_payment_row_invariant'
+      ? {data:{missing_payment_rows:2,companies:1,sample_invoice_ids:['inv-1','inv-2']},error:null}
+      : {data:{duplicate_groups:0,missing_holds:0,stale_holds:0},error:null})
+    const response=await check(request())
+    expect(response.status).toBe(503)
+    expect(rpc).toHaveBeenCalledWith('check_invoice_payment_row_invariant')
+    expect((await response.json()).paymentRows).toEqual({missing_payment_rows:2,companies:1,sample_invoice_ids:['inv-1','inv-2']})
+  })
+  it('fails the scan when the payment-row check cannot run',async()=>{
+    rpc.mockImplementation(async(fn:string)=>fn==='check_invoice_payment_row_invariant'
+      ? {data:null,error:{message:'statement timeout'}}
+      : {data:{duplicate_groups:0,missing_holds:0,stale_holds:0},error:null})
+    expect((await check(request())).status).toBe(500)
+  })
+  it('acknowledges a clean invariant scan',async()=>{
+    const response=await check(request())
+    expect(response.status).toBe(200)
+    expect((await response.json()).paymentRows).toEqual({missing_payment_rows:0,companies:0,sample_invoice_ids:[]})
+  })
 })

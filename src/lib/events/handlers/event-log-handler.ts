@@ -29,7 +29,6 @@ const PERSISTED_EVENT_TYPES: CoreEventType[] = [
   'customer.created',
   'article.deleted',
   'supplier.created',
-  'receipt.matched',
   'supplier_invoice.registered',
   'supplier_invoice.approved',
   'supplier_invoice.paid',
@@ -75,7 +74,6 @@ const PERSISTED_EVENT_TYPES: CoreEventType[] = [
 
 // Excluded (with reasoning):
 // - journal_entry.drafted: always followed by .committed
-// - receipt.extracted: intermediate AI step; .matched is actionable
 
 /**
  * Extract the primary entity ID from an event payload.

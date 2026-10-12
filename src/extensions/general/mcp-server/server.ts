@@ -25112,6 +25112,21 @@ export const tools: McpTool[] = [
         prior_year_schablonavdrag: { type: 'number' },
         prior_year_actual_charged: { type: 'number' },
         pfond_desired_amount: { type: 'number' },
+        pfond_existing_fonder: {
+          type: 'array',
+          maxItems: 10,
+          description:
+            'Earlier periodiseringsfonder (NE R34 per avsättningsår), from the owner: an enskild firma never books them. A fund in its sixth year is återförd (R32); pfondFonder lists the rest.',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              cohort_year: { type: 'integer' },
+              balance: { type: 'number', minimum: 0 },
+            },
+            required: ['cohort_year', 'balance'],
+          },
+        },
         expansionsfond_existing_balance: { type: 'number' },
         expansionsfond_desired_change: { type: 'number' },
       },
@@ -25130,6 +25145,12 @@ export const tools: McpTool[] = [
         priorYearSchablonavdrag: args.prior_year_schablonavdrag as number | undefined,
         priorYearActualCharged: args.prior_year_actual_charged as number | undefined,
         pfondDesiredAmount: args.pfond_desired_amount as number | undefined,
+        pfondExistingFonder: Array.isArray(args.pfond_existing_fonder)
+          ? (args.pfond_existing_fonder as Array<{ cohort_year: unknown; balance: unknown }>).map((fond) => ({
+              cohort_year: Number(fond.cohort_year),
+              balance: Number(fond.balance),
+            }))
+          : undefined,
         expansionsfondExistingBalance: args.expansionsfond_existing_balance as number | undefined,
         expansionsfondDesiredChange: args.expansionsfond_desired_change as number | undefined,
       })

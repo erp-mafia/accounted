@@ -3,7 +3,7 @@ import { tools, deriveToolMeta, isDefaultCatalogTool } from '../server'
 import { isMultiCompanyOnlyTool, projectToolInputSchema } from '../company-routing'
 
 // Ceiling for the catalog a single-company key is served (see the second case).
-const SIMPLE_CATALOG_CEILING = 60_600
+const SIMPLE_CATALOG_CEILING = 60_800
 import { projectToolReferences } from '../tool-namespace'
 
 // Mirror the real tools/list serializer, including the derived staging _meta
@@ -654,7 +654,12 @@ describe('tools/list payload size guard', () => {
     //     tools generated from their operations each fitted alone. Together
     //     they measured 65 596, after the share's description had already
     //     been shortened to its minimum.
-    expect(approxTokens).toBeLessThan(65_600)
+    //   * 65.6K to 65.8K (and the single-company catalog 60.6K to 60.8K):
+    //     pfond_existing_fonder on gnubok_preview_ef_declaration (Plan 2
+    //     step 24), about 108 tokens with its description at the minimum
+    //     that still tells an agent to ask the owner. Main had 66 tokens
+    //     of headroom, so no parameter of use fitted under the old ceiling.
+    expect(approxTokens).toBeLessThan(65_800)
   })
 
   it('serves a single-company key a smaller catalog than the multi-company one', () => {

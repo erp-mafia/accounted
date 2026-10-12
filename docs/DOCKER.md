@@ -169,7 +169,7 @@ If you already have nginx / a managed load balancer / Cloudflare in front, skip 
 
 ## Optional Extensions
 
-The self-hosted image ships with a curated set of general extensions, including email, invoice inbox, document extraction, push notifications, calendar, and the MCP server. Enable Banking and Skatteverket are in the preset too: they run on a connector key or on your own credentials (see [SELF-HOSTING.md](SELF-HOSTING.md), "Connector subscription"). Each extension activates when you provide its env vars: without them, the app works normally and the feature is simply unavailable.
+The self-hosted image ships with a curated set of general extensions, including email, invoice inbox, document extraction, calendar, and the MCP server. Enable Banking and Skatteverket are in the preset too: they run on a connector key or on your own credentials (see [SELF-HOSTING.md](SELF-HOSTING.md), "Connector subscription"). Each extension activates when you provide its env vars: without them, the app works normally and the feature is simply unavailable.
 
 ### AI Features (document-extraction, invoice-inbox, AI assistant)
 
@@ -202,16 +202,6 @@ RESEND_DELIVERY_WEBHOOK_SECRET=whsec_...
 ```
 
 Invitations do not need Resend: the accept link is returned to the inviter in the app. See [SELF-HOSTING.md](./SELF-HOSTING.md#email-invoice-sending-invitations-and-reminders).
-
-### Push Notifications
-
-```env
-NEXT_PUBLIC_VAPID_PUBLIC_KEY=...
-VAPID_PRIVATE_KEY=...
-VAPID_SUBJECT=mailto:you@example.com
-```
-
-Generate VAPID keys with: `npx web-push generate-vapid-keys`
 
 ### Calendar
 
@@ -277,7 +267,7 @@ The compose setup runs two containers:
 | Container | What it does |
 |-----------|-------------|
 | `app` | Next.js application server |
-| `cron` | Lightweight Alpine sidecar that runs scheduled jobs (deadline checks, invoice reminders, tax deadline sync, document verification) via [supercronic](https://github.com/aptible/supercronic) |
+| `cron` | Lightweight Alpine sidecar that runs scheduled jobs (deadline checks, tax deadline sync, document verification) via [supercronic](https://github.com/aptible/supercronic) |
 
 The cron container waits for the app's healthcheck to pass before starting. It calls the app's cron API endpoints over the internal Docker network.
 

@@ -9,8 +9,8 @@ A rule belongs here only when consumers **outside the owning module** need the
 identical invariant to validate input or to generate compatible output.
 
 Our consumers are the web app, the public `/api/v1` surface, the MCP server, the
-SIE importer and exporter, and the Skatteverket-bound generators (AGI, KU10,
-SRU, iXBRL). When two of those disagree about what a valid value looks like, the
+SIE importer and exporter, and the Skatteverket-bound generators (AGI, SRU,
+iXBRL). When two of those disagree about what a valid value looks like, the
 disagreement is invisible until a customer's filing fails.
 
 ## What does not belong here

@@ -29,8 +29,6 @@ Copyleft and dual-license notes:
 - libheif-js (used through heic-convert to read HEIC photos) is licensed under
   LGPL-3.0. It is used as an unmodified npm package and can be replaced by end
   users.
-- web-push is licensed under MPL-2.0. Source code is available from its
-  upstream repository.
 - JSZip is dual-licensed under MIT or GPL-3.0-or-later. This project uses it
   under the MIT license.
 - DOMPurify (through posthog-js) is dual-licensed under MPL-2.0 or Apache-2.0.
@@ -47,11 +45,11 @@ Copyleft and dual-license notes:
 
 --- BEGIN GENERATED: npm run notice:generate ---
 
-Shipped third-party packages (654): every package npm installs
+Shipped third-party packages (642): every package npm installs
 with --omit=dev, read from package-lock.json. Licenses are the SPDX
 expressions each package declares; dual-license choices are noted above.
 
-MIT (415)
+MIT (407)
   @anthropic-ai/bedrock-sdk 0.29.1
   @anthropic-ai/sdk 0.95.0
   @babel/runtime 7.28.6
@@ -197,16 +195,13 @@ MIT (415)
   @upstash/ratelimit 2.0.8
   @upstash/redis 1.38.0
   abs-svg-path 0.1.1
-  agent-base 7.1.4
   ansi-regex 5.0.1
   ansi-styles 4.3.0
   aria-hidden 1.2.6
-  asn1.js 5.4.1
   bail 2.0.2
   base64-js 0.0.8
   base64-js 1.5.1
   bidi-js 1.0.3
-  bn.js 4.12.4
   bowser 2.14.1
   brotli 1.3.3
   browserify-zlib 0.2.0
@@ -265,8 +260,6 @@ MIT (415)
   html-to-text 10.0.1
   html-url-attributes 3.0.1
   htmlparser2 10.1.0
-  http_ece 1.2.0
-  https-proxy-agent 7.0.6
   iceberg-js 0.8.1
   iconv-lite 0.7.3
   icu-minify 4.13.2
@@ -288,8 +281,6 @@ MIT (415)
   js-tokens 4.0.0
   js-yaml 4.3.2
   json-schema-to-ts 3.1.1
-  jwa 2.0.1
-  jws 4.0.1
   leac 0.7.0
   libbase64 1.3.1
   libmime 5.4.6
@@ -346,7 +337,6 @@ MIT (415)
   micromark-util-subtokenize 2.1.0
   micromark-util-symbol 2.0.1
   micromark-util-types 2.0.2
-  minimist 1.2.8
   motion-dom 12.42.2
   motion-utils 12.39.0
   ms 2.1.3
@@ -468,7 +458,7 @@ MIT (415)
   zod 4.4.3
   zwitch 2.0.4
 
-Apache-2.0 (156)
+Apache-2.0 (155)
   @ai-sdk/gateway 3.0.177
   @ai-sdk/openai-compatible 2.0.69
   @ai-sdk/provider 3.0.15
@@ -620,13 +610,12 @@ Apache-2.0 (156)
   baseline-browser-mapping 2.11.20
   class-variance-authority 0.7.1
   detect-libc 2.1.2
-  ecdsa-sig-formatter 1.0.11
   fuse.js 7.4.2
   sharp 0.35.4
   web-vitals 5.3.0
   xlsx 0.20.3
 
-ISC (30)
+ISC (29)
   @ungap/structured-clone 1.3.0
   cliui 6.0.0
   d3-array 3.2.4
@@ -648,7 +637,6 @@ ISC (30)
   inherits 2.0.4
   internmap 2.0.3
   lucide-react 1.24.0
-  minimalistic-assert 1.0.1
   picocolors 1.1.1
   require-main-filename 2.0.0
   semver 7.8.5
@@ -683,20 +671,19 @@ LGPL-3.0-or-later (10)
   @img/sharp-libvips-linuxmusl-arm64 1.3.3
   @img/sharp-libvips-linuxmusl-x64 1.3.3
 
-BSD-3-Clause (6)
-  buffer-equal-constant-time 1.0.1
-  d3-ease 3.0.1
-  deepmerge-ts 8.0.2
-  intl-messageformat 11.2.12
-  jpeg-js 0.4.4
-  source-map-js 1.2.2
-
 BSD-2-Clause (5)
   domelementtype 2.3.0
   domhandler 5.0.3
   domutils 3.2.2
   entities 4.5.0
   entities 7.0.1
+
+BSD-3-Clause (5)
+  d3-ease 3.0.1
+  deepmerge-ts 8.0.2
+  intl-messageformat 11.2.12
+  jpeg-js 0.4.4
+  source-map-js 1.2.2
 
 Apache-2.0 AND LGPL-3.0-or-later (3)
   @img/sharp-win32-arm64 0.35.4
@@ -743,9 +730,6 @@ LGPL-3.0 (1)
 
 MIT AND ISC (1)
   victory-vendor 37.3.6
-
-MPL-2.0 (1)
-  web-push 3.6.7
 
 Python-2.0 (1)
   argparse 2.0.1

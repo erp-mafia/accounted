@@ -311,7 +311,7 @@ npx tsx scripts/smoke-ai.ts ./receipt.pdf    # also runs document extraction
 
 ### Email (Invoice Sending, Invitations and Reminders)
 
-Outbound mail (invoices, reminders, payslips) goes through one of two providers. Auth/account mail is sent by Supabase Auth and is not affected.
+Outbound mail (invoices, payslips) goes through one of two providers. Auth/account mail is sent by Supabase Auth and is not affected.
 
 **Option 1: Resend** (what hosted runs):
 
@@ -342,7 +342,7 @@ Without either, invoices can still be generated as PDFs but cannot be emailed.
 
 **Invitations do not require Resend.** When no mail provider is configured, the invite is still created and the accept link is returned to the inviter in the app (a copy button under the pending invitations list, plus a warn-level log record whose msg is `email service not configured: invite email skipped`; the Docker image logs JSON, so grep for the message text, not a `WARN` prefix; the token is never logged). Share the link manually; it is valid until the invitation expires. A mail provider (Resend, or your own relay with `EMAIL_PROVIDER=smtp`, both above) is only needed if you want the invitation mailed automatically. There is no re-send for company invitations: revoke and invite again for a new link.
 
-Note the two separate mail paths: this variable drives the app's own mail (invoices, invitations, reminders); account mail from GoTrue (signup confirmation, password reset, and the account-provisioning invite when `AUTH_SIGNUPS_DISABLED=true`) goes through the Supabase **Authentication > SMTP Settings** described in [Configure Authentication](#2-configure-supabase-auth) and [Troubleshooting](#troubleshooting).
+Note the two separate mail paths: this variable drives the app's own mail (invoices, invitations); account mail from GoTrue (signup confirmation, password reset, and the account-provisioning invite when `AUTH_SIGNUPS_DISABLED=true`) goes through the Supabase **Authentication > SMTP Settings** described in [Configure Authentication](#2-configure-supabase-auth) and [Troubleshooting](#troubleshooting).
 
 ```bash
 AUTH_SIGNUPS_DISABLED=true
@@ -412,16 +412,6 @@ Set all five base URLs: every default points at Skatteverket's test environment,
 **Bank sync as a connector operation.** In connector mode the bank paging, the booked-only filter and the normalization run on the hosted service (`POST /api/connect/bank/sync`); the instance sends the session id it holds and receives the rows plus the raw provider pages it archives, and keeps computing its own stored transaction keys, so nothing about dedup changes. `CONNECT_BANK_CANARY_COMPANIES` (comma-separated company ids) routes only those companies through the connector while own credentials remain set, which is how an installation moves a few companies at a time. `CONNECT_SKV_CANARY_COMPANIES` does the same for Skatteverket: the listed companies' user-token data calls (skattekonto, moms, AGI) go through the connector's data proxy while the installation's own OAuth client still refreshes the tokens.
 
 **Connector mode, for comparison.** With a key you set `GNUBOK_CONNECTOR_KEY` and, if you are not on the default hosted origin, `GNUBOK_CONNECT_URL` (https only; plain http is accepted for loopback only, and an invalid URL disables the connector with a warning in the log). Skatteverket in connector mode still needs `SKATTEVERKET_ENABLED=true` and `SKATTEVERKET_TOKEN_ENCRYPTION_KEY`: the BankID tokens are stored in your database, so the encryption key stays operator-side. Leave every other Enable Banking and Skatteverket variable unset.
-
-### Push Notifications
-
-```bash
-NEXT_PUBLIC_VAPID_PUBLIC_KEY=...
-VAPID_PRIVATE_KEY=...
-VAPID_SUBJECT=mailto:you@example.com
-```
-
-Generate VAPID keys with `npx web-push generate-vapid-keys`. Push notifications require HTTPS.
 
 ### Error Tracking
 

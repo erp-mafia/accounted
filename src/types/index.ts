@@ -371,9 +371,9 @@ export interface InvoiceEmailTexts {
   en?: InvoiceEmailTextOverrides
 }
 
-// Editable reminder email texts per reminder level (Swedish only, matching
-// the reminder templates). Missing / whitespace-only fields fall back to the
-// defaults in lib/email/reminder-templates.ts (REMINDER_EMAIL_DEFAULT_TEXTS).
+// Editable reminder email texts per reminder level (Swedish only), stored in
+// company_settings.reminder_text_overrides. The sender that read them was
+// removed in Plan 2 step 18; the column and its settings schema remain.
 // Supports the fixed placeholder set {fakturanummer} {kundnamn} {förnamn}
 // {företag} {fakturadatum} {förfallodatum} {belopp} {dagar}. TEXT only:
 // reminder fee and interest math are unaffected (Lag 1981:739 caps the
@@ -3115,44 +3115,6 @@ export interface Deadline {
 }
 
 // ============================================================
-// Push Notification Types
-// ============================================================
-
-// Notification settings per user
-export interface NotificationSettings {
-  id: string
-  user_id: string
-  tax_deadlines_enabled: boolean
-  invoice_reminders_enabled: boolean
-  quiet_start: string // time format "HH:MM"
-  quiet_end: string   // time format "HH:MM"
-  email_enabled: boolean
-  push_enabled: boolean
-  period_locked_enabled: boolean
-  period_year_closed_enabled: boolean
-  invoice_sent_enabled: boolean
-  receipt_extracted_enabled: boolean
-  receipt_matched_enabled: boolean
-  missing_underlag_enabled: boolean
-  created_at: string
-  updated_at: string
-}
-
-// Notification type for logging
-export type NotificationType =
-  | 'tax_deadline'
-  | 'invoice_due'
-  | 'invoice_overdue'
-  | 'period_locked'
-  | 'period_year_closed'
-  | 'receipt_extracted'
-  | 'receipt_matched'
-  | 'invoice_sent'
-  | 'missing_underlag'
-  | 'skv_kvittens'
-  | 'skv_connection_expired'
-
-// ============================================================
 // Calendar Feed Types (ICS)
 // ============================================================
 
@@ -3194,11 +3156,11 @@ export interface CompanyInbox {
   deprecated_at: string | null
 }
 
-export type CompanyInboundDomainStatus = 'pending' | 'verified' | 'failed'
+export type CompanySendingDomainStatus = 'pending' | 'verified' | 'failed'
 
-// A DNS record the user must publish to verify their custom inbound domain
+// A DNS record the user must publish to verify their custom sending domain
 // (verbatim from the Resend domains API).
-export interface InboundDomainDnsRecord {
+export interface SendingDomainDnsRecord {
   record: string
   name: string
   value: string
@@ -3207,25 +3169,6 @@ export interface InboundDomainDnsRecord {
   status: string
   priority?: number
 }
-
-export interface CompanyInboundDomain {
-  id: string
-  company_id: string
-  domain: string
-  status: CompanyInboundDomainStatus
-  resend_domain_id: string | null
-  dns_records: InboundDomainDnsRecord[] | null
-  verified_at: string | null
-  last_checked_at: string | null
-  created_at: string
-  updated_at: string
-}
-
-export type CompanySendingDomainStatus = 'pending' | 'verified' | 'failed'
-
-// A DNS record the user must publish to verify their custom sending domain
-// (verbatim from the Resend domains API; same shape as the inbound records).
-export type SendingDomainDnsRecord = InboundDomainDnsRecord
 
 // Opt-in per-company sender identity for invoice email. Only a row with
 // status = 'verified' AND enabled = true changes the From header; everything
@@ -4342,21 +4285,6 @@ export interface IngestResult {
   transaction_ids: string[]
   /** First insert error encountered, surfaced for debugging. Optional. */
   first_error?: { message: string; code?: string | null; details?: string | null; hint?: string | null }
-  /**
-   * SHADOW-MODE counter: rows that an enforcing same-feed scope-drift dedup rule
-   * WOULD have treated as re-imports (IBAN-drift re-imports the external_id
-   * check misses). These are still imported: the field only measures how often
-   * the rule would fire, so it can be validated on real data before enforcement.
-   */
-  shadow_scope_drift_candidates?: number
-  /**
-   * SHADOW-MODE counter: rows that an enforcing date-drift dedup rule WOULD have
-   * treated as re-imports: a twin with the same öre and an account-compatible,
-   * bridging (or cross-channel count-symmetric) match one day away, which the
-   * exact-date content bridge misses. Still imported; the field only measures
-   * how often the rule would fire, for validation before any enforcement.
-   */
-  shadow_date_drift_candidates?: number
 }
 
 // ── Webshop orders (Orders page; synced by the woocommerce/shopify/zettle extensions) ──

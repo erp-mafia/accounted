@@ -43,8 +43,7 @@ const NOT_CONFIGURED_MESSAGE =
  * Auto-creates a Stripe Payment Link when an invoice is sent, and imports the
  * account's balance transactions into the transactions inbox as a bank feed
  * for the Stripe balance (1686). Feed-only by decision 2026-07-24: nothing is
- * auto-booked; the event/settlement sync (lib/sync.ts, lib/payouts.ts) is
- * retained in the repo but not wired to any cron or route.
+ * auto-booked.
  *
  * Required environment variables:
  * - STRIPE_SECRET_KEY (the platform account key, shared with billing)
@@ -149,10 +148,8 @@ export const stripeExtension: Extension = {
           const serviceClient = createServiceClientNoCookies()
           const typedConnection = connection as StripeConnection
           // Feed-only (2026-07-24): Stripe sync imports balance transactions
-          // into the inbox, nothing more. The event/settlement sync
-          // (syncStripeConnection in lib/sync.ts) stays in the repo but is
-          // deliberately not called: booking is a user decision in the inbox,
-          // like any bank feed. The manual button ignores
+          // into the inbox, nothing more: booking is a user decision in the
+          // inbox, like any bank feed. The manual button ignores
           // transaction_sync_enabled (that flag gates the nightly cron):
           // pressing it IS the opt-in.
           const transactions = await syncStripeBalanceTransactions(serviceClient, typedConnection)

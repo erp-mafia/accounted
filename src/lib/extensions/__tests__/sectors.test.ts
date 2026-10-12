@@ -41,8 +41,8 @@ import {
 } from '../sectors'
 
 describe('extension definitions', () => {
-  it('should have 19 total extensions', () => {
-    expect(getAllExtensions().length).toBe(19)
+  it('should have 18 total extensions', () => {
+    expect(getAllExtensions().length).toBe(18)
   })
 
   it('should have unique slugs', () => {

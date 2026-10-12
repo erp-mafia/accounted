@@ -115,15 +115,6 @@ describe('event-log-handler', () => {
     expect(mockInsert).not.toHaveBeenCalled()
   })
 
-  it('does NOT persist receipt.extracted (excluded noise event)', async () => {
-    await eventBus.emit({
-      type: 'receipt.extracted',
-      payload: { receipt: {} as never, documentId: null, confidence: 0.9, userId: 'user-1', companyId: 'company-1' },
-    })
-
-    expect(mockInsert).not.toHaveBeenCalled()
-  })
-
   it('does not throw when persistence fails', async () => {
     mockInsert.mockResolvedValue({ error: { message: 'DB down' } })
 

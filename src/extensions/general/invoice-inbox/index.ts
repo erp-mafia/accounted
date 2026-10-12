@@ -42,7 +42,6 @@ import {
   resolveKindHintForTags,
   splitKnownInboxTags,
   type InboxKindHint,
-  parseRecipients,
   isEmailReceivedEvent,
   ResendSignatureError,
 } from './lib/resend-inbound'
@@ -51,14 +50,6 @@ import {
   getActiveInbox,
   composeInboxAddress,
 } from './lib/inbox-provisioning'
-import {
-  claimCustomDomain,
-  checkCustomDomainVerification,
-  removeCustomDomain,
-  getCustomDomain,
-  findCompanyForRecipientDomains,
-  applyDomainStatusFromWebhook,
-} from './lib/custom-domains'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
@@ -235,20 +226,6 @@ function signedUploadFailureResponse(
   }
   return errorResponseFromCode('INBOX_UPLOAD_FAILED', ctx.log, { requestId: ctx.requestId, reason })
 }
-
-// Custom inbound domains are fully built but deliberately not exposed,
-// product decision 2026-07-02: the default is the Fortnox-style shared
-// address (+ user-side forwarding); own-domain inbound waits for real demand.
-// Flip INBOX_CUSTOM_DOMAINS_ENABLED=true to re-enable the /inbox/domain
-// routes. The globe entry point in InvoiceInboxWorkspace was removed at the
-// same time. Restore it when re-enabling.
-const customDomainsEnabled = () => process.env.INBOX_CUSTOM_DOMAINS_ENABLED === 'true'
-
-const customDomainsDisabledResponse = () =>
-  NextResponse.json(
-    { error: 'Egen domän är inte tillgänglig.', code: 'FEATURE_DISABLED' },
-    { status: 403 }
-  )
 
 // ── Admin/owner check helper ──────────────────────────────────
 
@@ -1132,123 +1109,6 @@ export const invoiceInboxExtension: Extension = {
       },
     },
 
-    // ── Custom inbound domain: read current state ────────────
-    {
-      method: 'GET',
-      path: '/inbox/domain',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        if (!customDomainsEnabled()) return customDomainsDisabledResponse()
-
-        try {
-          const row = await getCustomDomain(ctx.supabase, ctx.companyId)
-          // null when the company has no custom domain: the UI renders the
-          // claim form in that case.
-          return NextResponse.json({ data: row })
-        } catch (err) {
-          return NextResponse.json(
-            { error: err instanceof Error ? err.message : 'Failed to load domain' },
-            { status: 500 }
-          )
-        }
-      },
-    },
-
-    // ── Custom inbound domain: claim (admin/owner only) ──────
-    {
-      method: 'POST',
-      path: '/inbox/domain',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        if (!customDomainsEnabled()) return customDomainsDisabledResponse()
-
-        const isAdmin = await isCompanyAdmin(ctx.supabase, ctx.userId, ctx.companyId)
-        if (!isAdmin) return NextResponse.json({ error: 'Behörighet saknas.' }, { status: 403 })
-
-        // Sandbox companies are anonymous 24h demo accounts: letting them
-        // register domains in our Resend account is a pure abuse vector.
-        if (await isSandboxCompany(ctx.supabase, ctx.companyId)) {
-          return NextResponse.json(
-            { error: 'Egen domän är inte tillgänglig i sandlådan.' },
-            { status: 403 }
-          )
-        }
-
-        // Claiming hits the Resend domains API: share the per-company inbox
-        // quota so a claim/delete loop can't burn the provider budget.
-        const limit = await checkInboxUploadRateLimit(ctx.supabase, ctx.companyId)
-        if (!limit.ok) {
-          return NextResponse.json(
-            { error: 'För många förfrågningar, försök igen om en stund.', retry_after: limit.retryAfterSec },
-            { status: 429, headers: { 'Retry-After': String(limit.retryAfterSec ?? 60) } },
-          )
-        }
-
-        let body: z.infer<typeof ClaimDomainSchema>
-        try {
-          body = ClaimDomainSchema.parse(await request.json())
-        } catch (err) {
-          return NextResponse.json(
-            { error: err instanceof Error ? err.message : 'Invalid request body' },
-            { status: 400 }
-          )
-        }
-
-        const result = await claimCustomDomain(ctx.supabase, ctx.companyId, body.domain)
-        if (!result.ok) {
-          return NextResponse.json({ error: result.error }, { status: result.status })
-        }
-        return NextResponse.json({ data: result.data })
-      },
-    },
-
-    // ── Custom inbound domain: re-check verification ─────────
-    {
-      method: 'POST',
-      path: '/inbox/domain/verify',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        if (!customDomainsEnabled()) return customDomainsDisabledResponse()
-
-        const isAdmin = await isCompanyAdmin(ctx.supabase, ctx.userId, ctx.companyId)
-        if (!isAdmin) return NextResponse.json({ error: 'Behörighet saknas.' }, { status: 403 })
-
-        // verify() triggers a DNS check at Resend: rate-limit the button.
-        const limit = await checkInboxUploadRateLimit(ctx.supabase, ctx.companyId)
-        if (!limit.ok) {
-          return NextResponse.json(
-            { error: 'För många kontroller, försök igen om en stund.', retry_after: limit.retryAfterSec },
-            { status: 429, headers: { 'Retry-After': String(limit.retryAfterSec ?? 60) } },
-          )
-        }
-
-        const result = await checkCustomDomainVerification(ctx.supabase, ctx.companyId)
-        if (!result.ok) {
-          return NextResponse.json({ error: result.error }, { status: result.status })
-        }
-        return NextResponse.json({ data: result.data })
-      },
-    },
-
-    // ── Custom inbound domain: remove (admin/owner only) ─────
-    {
-      method: 'DELETE',
-      path: '/inbox/domain',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        if (!customDomainsEnabled()) return customDomainsDisabledResponse()
-
-        const isAdmin = await isCompanyAdmin(ctx.supabase, ctx.userId, ctx.companyId)
-        if (!isAdmin) return NextResponse.json({ error: 'Behörighet saknas.' }, { status: 403 })
-
-        const result = await removeCustomDomain(ctx.supabase, ctx.companyId)
-        if (!result.ok) {
-          return NextResponse.json({ error: result.error }, { status: result.status })
-        }
-        return NextResponse.json({ data: result.data })
-      },
-    },
-
     // ── Resend Inbound webhook (Svix-signed, no user auth) ──
     {
       method: 'POST',
@@ -1274,23 +1134,6 @@ export const invoiceInboxExtension: Extension = {
           return NextResponse.json({ error: 'Verification failed' }, { status: 500 })
         }
 
-        // Resend pushes domain.* lifecycle events to the same webhook. Apply
-        // domain.updated to custom-domain rows so verification flips without
-        // the user pressing "Kontrollera igen" (requires the event type to be
-        // subscribed on the Resend webhook; harmless when it isn't).
-        if (event.type === 'domain.updated') {
-          const domainServiceSupabase = createServiceRoleClient(
-            process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.SUPABASE_SERVICE_ROLE_KEY!
-          )
-          const matched = await applyDomainStatusFromWebhook(domainServiceSupabase, {
-            id: event.data.id,
-            status: event.data.status,
-            records: event.data.records,
-          })
-          return NextResponse.json({ data: { domain_updated: matched } })
-        }
-
         if (!isEmailReceivedEvent(event)) {
           return NextResponse.json({ data: { ignored: event.type } }, { status: 200 })
         }
@@ -1305,16 +1148,10 @@ export const invoiceInboxExtension: Extension = {
         // Recipient → company resolution. Every shared-domain recipient is
         // read (#2181): one mail can name the same inbox under two tags, or
         // two inboxes at once, and reading only the first lost the rest with
-        // no trace. Per-company verified custom domains come after, and only
-        // when no shared address resolved. Custom domains are catch-all by
-        // design: MX routing is per-domain, and a supplier typing fakturor@
-        // instead of faktura@ must land in the inbox rather than silently
-        // vanish (Resend has already accepted the message; there is no
-        // bounce path).
+        // no trace.
         interface InboundTarget {
           companyId: string
           inboxId: string | null
-          customDomain: boolean
           /** The documented tags (+lev / +ver) that reached this inbox. */
           tags: string[]
           /** Tags outside the documented set: counted, never stored. */
@@ -1325,7 +1162,6 @@ export const invoiceInboxExtension: Extension = {
         const targets: InboundTarget[] = []
         let sharedInboxStatus: string | null = null
         let localPart: string | null = null
-        const domainLower = domain.toLowerCase()
 
         const sharedRecipients = extractSharedRecipientsForDomain(to, domain)
         for (const group of groupSharedRecipientsByInbox(sharedRecipients)) {
@@ -1344,40 +1180,18 @@ export const invoiceInboxExtension: Extension = {
           if (targets.some((t) => t.companyId === inbox.company_id)) continue
           // Sender-declared kind from the +lev / +ver tag. Set only from the
           // addresses that resolved this company: a tag on an unknown or
-          // retired shared address must not ride along onto a custom-domain
-          // match further down. Custom domains are catch-all and stay
-          // unhinted. Contradicting tags on one mail resolve to no hint.
+          // retired shared address must not ride along. Contradicting tags on
+          // one mail resolve to no hint.
           const { kindHint, conflict } = resolveKindHintForTags(group.tags)
           const { known, unknownCount } = splitKnownInboxTags(group.tags)
           targets.push({
             companyId: inbox.company_id,
             inboxId: inbox.id,
-            customDomain: false,
             tags: known,
             unknownTagCount: unknownCount,
             kindHint,
             tagConflict: conflict,
           })
-        }
-
-        if (targets.length === 0) {
-          const customDomains = parseRecipients(to)
-            .map((r) => r.domain)
-            .filter((d) => d !== domainLower)
-          if (customDomains.length > 0) {
-            const match = await findCompanyForRecipientDomains(serviceSupabase, customDomains)
-            if (match) {
-              targets.push({
-                companyId: match.companyId,
-                inboxId: null,
-                customDomain: true,
-                tags: [],
-                unknownTagCount: 0,
-                kindHint: null,
-                tagConflict: false,
-              })
-            }
-          }
         }
 
         // Fan-out cap: the first targets in recipient order are processed,
@@ -1985,7 +1799,6 @@ export const invoiceInboxExtension: Extension = {
               eventType: 'InboundMailReceived',
               payload: {
                 inbox_id: target.inboxId,
-                custom_domain: target.customDomain,
                 tags: target.tags,
                 unknown_tag_count: target.unknownTagCount,
                 kind_hint: target.kindHint,
@@ -2013,7 +1826,6 @@ export const invoiceInboxExtension: Extension = {
               eventType: 'InboundMailReceived',
               payload: {
                 inbox_id: target.inboxId,
-                custom_domain: target.customDomain,
                 tags: target.tags,
                 unknown_tag_count: target.unknownTagCount,
                 kind_hint: target.kindHint,

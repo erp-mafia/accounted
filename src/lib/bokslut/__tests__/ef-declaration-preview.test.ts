@@ -249,3 +249,83 @@ describe('computeEfDeclarationPreview: expansionsfond uses the closing kapitalun
     expect(exp?.amount).toBe(0)
   })
 })
+
+describe('computeEfDeclarationPreview: återföring (R32) of earlier periodiseringsfonder', () => {
+  // NE R11 = 120 000 (one sale), fiscal year 2025. Per the
+  // swedish-ef-skatteplanering skill a fund returns at the latest in the sixth
+  // year after the avsättning (a 2019 fund in 2025), oldest first, in R32, and
+  // R33 is the result after räntefördelning and återföring, before this
+  // year's avsättning (IL 30 kap 6 §).
+  const ateforingOf = (items: Array<{ kind: string }>) =>
+    items.find((i) => i.kind === 'periodiseringsfond_ateforing') as
+      | { amount: number; label: string; ne_ruta: string; warnings: string[]; computation: Record<string, unknown> }
+      | undefined
+  const avsattningOf = (items: Array<{ kind: string }>) =>
+    items.find((i) => i.kind === 'periodiseringsfond_avsattning') as
+      | { amount: number; computation: Record<string, unknown> }
+      | undefined
+
+  it('returns a fund in its last year in R32 and adds it to the R33 base', async () => {
+    const { supabase } = makeSupabase('enskild_firma')
+
+    const preview = await computeEfDeclarationPreview(supabase, 'co-1', 'fp-1', {
+      pfondExistingFonder: [{ cohort_year: 2019, balance: 50_000 }],
+    })
+
+    const ateforing = ateforingOf(preview.items)
+    expect(ateforing?.amount).toBe(50_000)
+    expect(ateforing?.ne_ruta).toBe('R32')
+    expect(ateforing?.label).toBe('Periodiseringsfond 2019: återföring')
+    // R33 = 120 000 + 50 000; R34 max 30 % = 51 000.
+    expect(avsattningOf(preview.items)?.computation).toMatchObject({ surplus: 170_000 })
+    expect(avsattningOf(preview.items)?.amount).toBe(51_000)
+    const kinds = preview.items.map((i) => i.kind)
+    expect(kinds.indexOf('periodiseringsfond_ateforing')).toBeLessThan(kinds.indexOf('periodiseringsfond_avsattning'))
+    expect(preview.pfondFonder).toEqual([
+      { cohort_year: 2019, balance: 50_000, latest_return_year: 2025, status: 'mandatory' },
+    ])
+  })
+
+  it('lists a fund not yet due with its last year and never returns it on its own', async () => {
+    const { supabase } = makeSupabase('enskild_firma')
+
+    const preview = await computeEfDeclarationPreview(supabase, 'co-1', 'fp-1', {
+      pfondExistingFonder: [{ cohort_year: 2021, balance: 30_000 }],
+    })
+
+    expect(ateforingOf(preview.items)).toBeUndefined()
+    expect(avsattningOf(preview.items)?.amount).toBe(36_000)
+    expect(preview.pfondFonder).toEqual([
+      { cohort_year: 2021, balance: 30_000, latest_return_year: 2027, status: 'optional' },
+    ])
+  })
+
+  it('changes nothing without earlier funds', async () => {
+    const { supabase } = makeSupabase('enskild_firma')
+
+    const preview = await computeEfDeclarationPreview(supabase, 'co-1', 'fp-1')
+
+    expect(ateforingOf(preview.items)).toBeUndefined()
+    expect(avsattningOf(preview.items)?.amount).toBe(36_000)
+    expect(preview.pfondFonder).toEqual([])
+  })
+
+  it('puts every fund that cannot wait in one R32 line naming the years', async () => {
+    const { supabase } = makeSupabase('enskild_firma')
+
+    const preview = await computeEfDeclarationPreview(supabase, 'co-1', 'fp-1', {
+      pfondExistingFonder: [
+        { cohort_year: 2019, balance: 20_000 },
+        { cohort_year: 2018, balance: 10_000 },
+      ],
+    })
+
+    const ateforing = ateforingOf(preview.items)
+    expect(preview.items.filter((i) => i.kind === 'periodiseringsfond_ateforing')).toHaveLength(1)
+    expect(ateforing?.amount).toBe(30_000)
+    expect(ateforing?.label).toBe('Periodiseringsfonder 2018 och 2019: återföring')
+    expect(ateforing?.warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining('senast i 2024 års deklaration')]),
+    )
+  })
+})

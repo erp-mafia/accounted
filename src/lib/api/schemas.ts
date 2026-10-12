@@ -3634,6 +3634,28 @@ export const BehandlingshistorikQuerySchema = z.object({
  * (coercing '' would read it as 0); amounts that can only be zero or more
  * are refused when negative.
  */
+/**
+ * Earlier years' EF periodiseringsfonder as "år:belopp" pairs separated by
+ * commas ("2019:50000,2021:30000"), one per avsättningsår.
+ */
+const efPfondFonderParam = z
+  .string()
+  .regex(
+    /^\d{4}:\d+(\.\d{1,2})?(,\d{4}:\d+(\.\d{1,2})?)*$/,
+    'Ange periodiseringsfonderna som år:belopp, till exempel 2019:50000,2021:30000',
+  )
+  .transform((value) =>
+    value.split(',').map((pair) => {
+      const [year, balance] = pair.split(':')
+      return { cohort_year: Number(year), balance: Number(balance) }
+    }),
+  )
+  .refine((fonder) => fonder.length <= 10, 'Högst 10 periodiseringsfonder')
+  .refine(
+    (fonder) => new Set(fonder.map((fond) => fond.cohort_year)).size === fonder.length,
+    'Varje avsättningsår får bara finnas en gång',
+  )
+
 export const EfDeclarationPreviewQuerySchema = z.object({
   category: z.enum(['full', 'pensioner', 'passive']).optional(),
   kapitalunderlag: emptyStringAsUndefined(z.coerce.number()),
@@ -3641,6 +3663,7 @@ export const EfDeclarationPreviewQuerySchema = z.object({
   priorYearSchablonavdrag: emptyStringAsUndefined(z.coerce.number().nonnegative()),
   priorYearActualCharged: emptyStringAsUndefined(z.coerce.number().nonnegative()),
   pfondDesiredAmount: emptyStringAsUndefined(z.coerce.number().nonnegative()),
+  pfondExistingFonder: emptyStringAsUndefined(efPfondFonderParam),
   expansionsfondExistingBalance: emptyStringAsUndefined(z.coerce.number().nonnegative()),
   expansionsfondDesiredChange: emptyStringAsUndefined(z.coerce.number()),
 })

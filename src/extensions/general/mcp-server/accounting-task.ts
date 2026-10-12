@@ -1,6 +1,5 @@
 import { z } from 'zod'
-import { ACCOUNTING_TASKS, ACCOUNTING_TASK_INSTRUCTIONS, type AccountingTaskKind } from '@/lib/ai-handoff/tasks'
-import { MAX_HANDOFF_RECORDS } from '@/lib/ai-handoff/prompt'
+import { ACCOUNTING_TASKS, ACCOUNTING_TASK_INSTRUCTIONS, MAX_HANDOFF_RECORDS, type AccountingTaskKind } from '@/lib/ai-handoff/tasks'
 import { codedError, resolveMcpCompanyContext } from './company-routing'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { loadSkillCatalog, loadCatalogSkill } from '@/lib/agent-skills/catalog'

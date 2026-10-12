@@ -338,7 +338,6 @@ describe('stripe POST /backfill', () => {
       fetched: 6,
       imported: 9,
       duplicates: 0,
-      linked: 1,
       errors: 0,
     })
     const res = await findRoute('POST', '/backfill').handler(

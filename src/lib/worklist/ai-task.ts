@@ -1,16 +1,14 @@
 import type { WorklistCategory, WorklistCounts } from './types'
 
 /**
- * The things on Att göra that a connected AI client can do over MCP.
- *
- * Every row here carries a "Gör i Claude" (or ChatGPT, Grok) pill on Hem
- * and in the books act's Klart step, in the section's band order (Bokför,
- * Betala, Granska, Bevaka), skipping rows no agent can clear: staged
+ * The things on Att göra that a connected AI client can do over MCP, listed
+ * on Hem and in the books act's Klart step in the section's band order
+ * (Bokför, Betala, Granska, Bevaka), skipping rows no agent can clear: staged
  * operations wait for a human approval, and the two Betala rows are bank
- * transfers a person makes. Each category keys a prompt in messages
- * (dashboard.ai_task_<category>) that names the count and the MCP tools
- * behind it, a row label (dashboard.row_*) and the page the row opens.
- * Pure: the components only render the copy.
+ * transfers a person makes. Each category has a row label (dashboard.row_*)
+ * and the page the row opens. Only "Verifikat utan underlag" carries an AI
+ * action (Kvittojakten, see components/dashboard/AiTaskAction). Pure: the
+ * components only render the copy.
  */
 export type AiTaskCategory = Extract<
   WorklistCategory,

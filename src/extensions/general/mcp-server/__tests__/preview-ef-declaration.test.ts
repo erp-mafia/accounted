@@ -86,4 +86,34 @@ describe('gnubok_preview_ef_declaration: legal-form gate', () => {
     expect(exp?.computation).toMatchObject({ kapitalunderlag: 400_000 })
     expect(exp?.amount).toBe(300_000)
   })
+
+  it('returns the fund in its last year in R32 and lists the rest with their last year', async () => {
+    const result = (await tool.execute(
+      {
+        fiscal_period_id: 'fp-1',
+        pfond_existing_fonder: [
+          { cohort_year: 2019, balance: 50_000 },
+          { cohort_year: 2022, balance: 10_000 },
+        ],
+      },
+      'company-1',
+      'user-1',
+      makeSupabase('enskild_firma') as never,
+      { type: 'api_key' } as never,
+    )) as {
+      items: Array<{ kind: string; amount: number; ne_ruta: string; computation: Record<string, unknown> }>
+      pfondFonder: Array<{ cohort_year: number; status: string; latest_return_year: number }>
+    }
+
+    const ateforing = result.items.find((i) => i.kind === 'periodiseringsfond_ateforing')
+    expect(ateforing).toMatchObject({ amount: 50_000, ne_ruta: 'R32' })
+    expect(result.items.find((i) => i.kind === 'periodiseringsfond_avsattning')?.computation).toMatchObject({
+      surplus: 170_000,
+    })
+    expect(result.pfondFonder.map((f) => [f.cohort_year, f.status, f.latest_return_year])).toEqual([
+      [2019, 'mandatory', 2025],
+      [2022, 'optional', 2028],
+    ])
+  })
 })
+

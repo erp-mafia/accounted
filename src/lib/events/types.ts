@@ -7,7 +7,6 @@ import type {
   Article,
   FiscalPeriod,
   DocumentAttachment,
-  Receipt,
   CreditNote,
   ReconciliationMethod,
   InvoiceInboxItem,
@@ -178,22 +177,6 @@ export type CoreEvent =
   | { type: 'article.deleted'; payload: { articleId: string; userId: string; companyId: string } }
   // Suppliers
   | { type: 'supplier.created'; payload: { supplier: Supplier; userId: string; companyId: string } }
-  // Receipts
-  | { type: 'receipt.extracted'; payload: {
-      receipt: Receipt;
-      documentId: string | null;
-      confidence: number;
-      userId: string;
-      companyId: string;
-    }}
-  | { type: 'receipt.matched'; payload: {
-      receipt: Receipt;
-      transaction: Transaction;
-      confidence: number;
-      autoMatched: boolean;
-      userId: string;
-      companyId: string;
-    }}
   // Supplier Invoice Lifecycle
   | { type: 'supplier_invoice.registered'; payload: { supplierInvoice: SupplierInvoice; userId: string; companyId: string } }
   | { type: 'supplier_invoice.approved'; payload: { supplierInvoice: SupplierInvoice; userId: string; companyId: string } }

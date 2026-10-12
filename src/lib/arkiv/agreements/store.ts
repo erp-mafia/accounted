@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Payload } from '@/lib/documents/extract/fields'
-import { humanAgent, recordActivity, softwareAgent } from '@/lib/documents/provenance'
+import { recordActivity, softwareAgent } from '@/lib/documents/provenance'
 import { addDays, addMonths, daysBetween, todayIso } from './dates'
 import { resolveCounterparty } from './counterparty'
 import { agreementKindFor, deriveAgreement, HORIZON, type AgreementDraft, type DeadlineDraft, type Derivation, type ObligationDraft } from './derive'
@@ -175,46 +175,6 @@ export async function withdrawDerivedAgreement(supabase: SupabaseClient, documen
   } catch (err) {
     return { status: 'error', reason: (err instanceof Error ? err.message : String(err)).slice(0, 300) }
   }
-}
-
-/** A person links a document to a party, an agreement or an asset. */
-export async function linkByPerson(
-  supabase: SupabaseClient,
-  input: {
-    companyId: string
-    documentId: string
-    userId: string
-    targetKind: 'party' | 'agreement' | 'asset'
-    targetId: string
-  },
-): Promise<{ id: string } | { conflict: true }> {
-  const { data, error } = await supabase
-    .from('document_links')
-    .insert({
-      company_id: input.companyId,
-      document_id: input.documentId,
-      target_kind: input.targetKind,
-      party_id: input.targetKind === 'party' ? input.targetId : null,
-      agreement_id: input.targetKind === 'agreement' ? input.targetId : null,
-      asset_id: input.targetKind === 'asset' ? input.targetId : null,
-      basis: 'proven',
-      method: 'person',
-      confidence: 1,
-      created_by_user_id: input.userId,
-      activity_id: await recordActivity(supabase, {
-        companyId: input.companyId,
-        documentId: input.documentId,
-        agentId: await humanAgent(supabase, input.userId),
-        kind: 'review',
-        outcome: 'settled',
-        detail: { link: input.targetKind, target_id: input.targetId },
-      }),
-    })
-    .select('id')
-    .single()
-  if (error?.code === '23505') return { conflict: true }
-  if (error) throw new Error(`link insert failed: ${error.message}`)
-  return { id: (data as { id: string }).id }
 }
 
 async function loadDocument(supabase: SupabaseClient, documentId: string): Promise<DocumentRow | null> {

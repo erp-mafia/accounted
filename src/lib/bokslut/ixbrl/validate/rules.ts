@@ -56,7 +56,7 @@ const RULES: Rule[] = [
       ? issue('1020', 'error', 'Företagsnamnet saknas i årsredovisningen.')
       : null,
   // Shared rule (lib/invariants/org-number.ts), so this validator agrees with
-  // the AGI, KU10 and SRU export paths about what a valid org number is. The
+  // the AGI and SRU export paths about what a valid org number is. The
   // previous local regex rejected the 12-digit form outright and skipped the
   // check digit, so a company stored in 12-digit form could file AGI all year
   // and then fail here with a message that did not say why.

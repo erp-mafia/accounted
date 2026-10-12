@@ -254,22 +254,3 @@ export function descriptionsBridge(
   if (x === '' || y === '') return x === y
   return x.startsWith(y) || y.startsWith(x)
 }
-
-/**
- * Shift an ISO `YYYY-MM-DD` date by a whole number of days, returning a new
- * `YYYY-MM-DD` string. Deterministic and INPUT-ONLY: it does the arithmetic
- * with `Date.UTC` on the parsed components and `new Date(ms)`, never the wall
- * clock (`Date.now()` / argless `new Date()`), so it is safe in dedup code that
- * must not depend on the current time. Correctly crosses month, year and
- * leap-day boundaries via UTC epoch math.
- *
- * Used to enumerate the adjacent date buckets the date-drift dedup shadow
- * inspects: a booking date that drifts a day between syncs lands its twin in
- * `contentBucketKey(shiftIsoDate(date, ±1), amount)`, which the exact-date
- * content bridge cannot see.
- */
-export function shiftIsoDate(date: string, deltaDays: number): string {
-  const [y, m, d] = date.split('-').map(Number)
-  const ms = Date.UTC(y, m - 1, d) + deltaDays * 86_400_000
-  return new Date(ms).toISOString().slice(0, 10)
-}

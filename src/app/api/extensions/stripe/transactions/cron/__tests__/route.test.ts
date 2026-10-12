@@ -64,7 +64,6 @@ beforeEach(() => {
     fetched: 3,
     imported: 2,
     duplicates: 1,
-    linked: 1,
     errors: 0,
   })
 })
@@ -118,10 +117,9 @@ describe('GET /api/extensions/stripe/transactions/cron', () => {
     expect(vi.mocked(syncStripeBalanceTransactions)).toHaveBeenCalledTimes(2)
     expect(json.processed).toBe(2)
     expect(json.imported).toBe(4)
-    expect(json.linked).toBe(2)
     expect(json.results).toEqual([
-      { connectionId: 'conn-1', imported: 2, duplicates: 1, linked: 1, status: 'synced' },
-      { connectionId: 'conn-2', imported: 2, duplicates: 1, linked: 1, status: 'synced' },
+      { connectionId: 'conn-1', imported: 2, duplicates: 1, status: 'synced' },
+      { connectionId: 'conn-2', imported: 2, duplicates: 1, status: 'synced' },
     ])
   })
 
@@ -149,7 +147,7 @@ describe('GET /api/extensions/stripe/transactions/cron', () => {
     ]
     vi.mocked(syncStripeBalanceTransactions)
       .mockRejectedValueOnce(new Error('stripe boom'))
-      .mockResolvedValueOnce({ fetched: 1, imported: 1, duplicates: 0, linked: 0, errors: 0 })
+      .mockResolvedValueOnce({ fetched: 1, imported: 1, duplicates: 0, errors: 0 })
 
     const response = await GET(createCronRequest('/api/extensions/stripe/transactions/cron'))
     const json = await response.json()
@@ -157,8 +155,8 @@ describe('GET /api/extensions/stripe/transactions/cron', () => {
     expect(response.status).toBe(200)
     expect(json.processed).toBe(2)
     expect(json.results).toEqual([
-      { connectionId: 'conn-1', imported: 0, duplicates: 0, linked: 0, status: 'error' },
-      { connectionId: 'conn-2', imported: 1, duplicates: 0, linked: 0, status: 'synced' },
+      { connectionId: 'conn-1', imported: 0, duplicates: 0, status: 'error' },
+      { connectionId: 'conn-2', imported: 1, duplicates: 0, status: 'synced' },
     ])
   })
 })
