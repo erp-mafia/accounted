@@ -15,6 +15,7 @@ vi.mock('@/lib/bookkeeping/engine', async () => {
   return {
     ...actual,
     createJournalEntry: vi.fn(),
+    createDraftEntry: vi.fn(),
     findFiscalPeriod: vi.fn(),
     reverseEntry: vi.fn(),
   }
@@ -42,7 +43,7 @@ vi.mock('@/lib/core/documents/document-service', async () => {
 
 import { commitPendingOperation } from '../commit'
 import { getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
-import { createJournalEntry, findFiscalPeriod, reverseEntry } from '@/lib/bookkeeping/engine'
+import { createDraftEntry, createJournalEntry, findFiscalPeriod, reverseEntry } from '@/lib/bookkeeping/engine'
 import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 
@@ -720,6 +721,84 @@ describe('commitPendingOperation: create_voucher', () => {
     // Confirm no `from('invoice_inbox_items')` call was issued.
     const fromCalls = (supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((args) => args[0])
     expect(fromCalls).not.toContain('invoice_inbox_items')
+  })
+
+  // ── asDraft: review-first approval ──
+  const draftParams = {
+    entry_date: '2026-08-17',
+    description: 'Inbetalt aktiekapital',
+    fiscal_period_id: 'fp-1',
+    lines: [
+      { account_number: '1930', debit_amount: 25000, credit_amount: 0 },
+      { account_number: '2081', debit_amount: 0, credit_amount: 25000 },
+    ],
+  }
+
+  it('asDraft: creates an unnumbered draft and never posts', async () => {
+    vi.mocked(createDraftEntry).mockResolvedValueOnce(
+      makeJournalEntry({ id: 'je-draft', status: 'draft', voucher_number: 0, voucher_series: 'A' })
+    )
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ id: 'op-1', params: draftParams }),
+      { asDraft: true }
+    )
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ journal_entry_id: 'je-draft', status: 'draft', fiscal_period_id: 'fp-1' })
+    expect(result.data).not.toHaveProperty('voucher_number')
+    expect(createJournalEntry).not.toHaveBeenCalled()
+    expect(createDraftEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      // source_id links the draft to its op so the stuck-committing sweep can
+      // recover a failed finalize as committed (recover-stuck-committing.ts).
+      expect.objectContaining({
+        entry_date: '2026-08-17',
+        source_type: 'manual',
+        fiscal_period_id: 'fp-1',
+        source_id: 'op-1',
+      })
+    )
+  })
+
+  it('asDraft: refuses an inbox-linked proposal before claiming it (op stays pending)', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ params: { ...draftParams, inbox_item_id: 'inbox-1' } }),
+      { asDraft: true }
+    )
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(409)
+    expect(result.operation_status).toBe('pending')
+    expect(supabase.from).not.toHaveBeenCalled()
+    expect(createDraftEntry).not.toHaveBeenCalled()
+    expect(createJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('asDraft: refuses any other operation type before claiming it', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ operation_type: 'reverse_entry', params: { entry_id: 'je-1' } }),
+      { asDraft: true }
+    )
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(400)
+    expect(supabase.from).not.toHaveBeenCalled()
+    expect(reverseEntry).not.toHaveBeenCalled()
   })
 })
 

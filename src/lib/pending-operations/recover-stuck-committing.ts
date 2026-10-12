@@ -76,6 +76,7 @@ export type PostedEvidence =
   | 'transaction_booked'
   | 'transaction_linked_to_target_entry'
   | 'invoice_payment_recorded'
+  | 'voucher_linked_to_operation'
 
 export interface RecoverySummary {
   scanned: number
@@ -107,9 +108,14 @@ export interface RecoverySummary {
  *  - match_transaction_invoice: an invoice_payments row exists for the exact
  *    (transaction, invoice) pair from params (unique index guarantees the
  *    pair is only ever written by a match).
+ *  - create_voucher: a live (draft or posted) manual/opening_balance entry
+ *    carries this operation's id as source_id. Only the approve-as-draft
+ *    path writes that link today, so a plain posted create_voucher still
+ *    has no probe; a draft the user already discarded (cancelled) is not
+ *    evidence.
  *
- * Everything else returns null by design: create_* ops don't know the id of
- * the row they would have created, and state-flag types (period locks,
+ * Everything else returns null by design: other create_* ops don't know the
+ * id of the row they would have created, and state-flag types (period locks,
  * invoice statuses) can't be distinguished from a user doing the same thing
  * manually while the row sat stuck. Be conservative: no evidence, no
  * 'committed'.
@@ -173,6 +179,19 @@ export async function findPostedEvidence(
         .maybeSingle()
       if (error) throw new Error(`invoice_payments probe failed: ${error.message}`)
       return data ? 'invoice_payment_recorded' : null
+    }
+
+    case 'create_voucher': {
+      const { data, error } = await supabase
+        .from('journal_entries')
+        .select('id')
+        .eq('company_id', row.company_id)
+        .eq('source_id', row.id)
+        .in('source_type', ['manual', 'opening_balance'])
+        .in('status', ['draft', 'posted'])
+        .limit(1)
+      if (error) throw new Error(`journal_entries probe failed: ${error.message}`)
+      return data && data.length > 0 ? 'voucher_linked_to_operation' : null
     }
 
     default:

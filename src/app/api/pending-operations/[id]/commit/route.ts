@@ -10,8 +10,49 @@ ensureInitialized()
 
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'pending_operation.commit',
-  async (_request, { supabase, user, companyId, log }, { params }) => {
+  async (request, { supabase, user, companyId, log }, { params }) => {
     const { id } = await params
+    // Optional body { as_draft: true }: approve a create_voucher op into an
+    // editable, unnumbered draft instead of posting it. An empty body is the
+    // plain approval. A body we cannot read is a caller bug and gets a 400:
+    // falling back to the plain approval would post an immutable verifikat
+    // when the caller asked for a draft.
+    let asDraft = false
+    const rawText = await request.text()
+    if (rawText.trim()) {
+      let body: unknown
+      try {
+        body = JSON.parse(rawText)
+      } catch {
+        return NextResponse.json(
+          {
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: 'Ogiltig JSON i förfrågan.',
+              message_en: 'Body is not valid JSON.',
+            },
+          },
+          { status: 400 },
+        )
+      }
+      const flag =
+        body !== null && typeof body === 'object' && !Array.isArray(body)
+          ? (body as { as_draft?: unknown }).as_draft
+          : null
+      if (flag !== undefined && typeof flag !== 'boolean') {
+        return NextResponse.json(
+          {
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: 'Ogiltigt fält i förfrågan.',
+              message_en: 'Body must be an object; as_draft must be a boolean.',
+            },
+          },
+          { status: 400 },
+        )
+      }
+      asDraft = flag === true
+    }
 
     const { data: op, error: fetchError } = await supabase
       .from('pending_operations')
@@ -33,6 +74,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         {
           userEmail: user.email,
           commitMethod: 'user_accept',
+          asDraft,
           actor: { type: 'user', ...(user.email ? { label: user.email } : {}) },
         }
       )

@@ -47,6 +47,7 @@ import {
   AlertTriangle,
   X,
   ArrowDownUp,
+  FilePen,
 } from 'lucide-react'
 import type {
   PendingOperation,
@@ -110,10 +111,12 @@ function getPeriodStatus(op: PendingOperation): PeriodStatusShape | null {
 // The tint is sanctioned here by the concept spec: approve reads sage,
 // reject terracotta. Details has no pill: the whole row opens them.
 const GACT_CLASS =
-  'inline-flex items-center gap-1.5 rounded-full border px-3.5 py-[5px] text-xs transition-colors duration-150 disabled:pointer-events-none disabled:opacity-50'
+  'inline-flex items-center gap-1.5 rounded-full border px-3.5 py-[5px] text-xs pointer-coarse:min-h-10 transition-colors duration-150 disabled:pointer-events-none disabled:opacity-50'
 const GACT_OK_CLASS = 'border-success/40 text-success hover:bg-success/10'
 const SORT_ORDER_STORAGE_KEY = 'pending.sortOrder'
 const GACT_NO_CLASS = 'border-destructive/40 text-destructive hover:bg-destructive/10'
+// Neutral: approving into a draft posts nothing, so it is neither ok nor no.
+const GACT_DRAFT_CLASS = 'border-border text-muted-foreground hover:bg-secondary/60 hover:text-foreground'
 
 /**
  * Human origin line for a staged operation. Many reviewers never used the AI
@@ -428,16 +431,45 @@ export default function PendingOperationsPage() {
   // risk and offers Detaljer, so for low/medium the pill IS the deliberate
   // approval; only high risk keeps the dialog, whose warning sentence carries
   // information the row does not.
-  async function commitOp(op: PendingOperation) {
+  async function commitOp(op: PendingOperation, asDraft = false) {
     setIsCommitting(true)
     try {
-      const res = await fetch(`/api/pending-operations/${op.id}/commit`, { method: 'POST' })
+      const res = await fetch(
+        `/api/pending-operations/${op.id}/commit`,
+        asDraft
+          ? {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ as_draft: true }),
+            }
+          : { method: 'POST' },
+      )
       const json = await res.json().catch(() => ({}))
       // getErrorMessage handles both `{ error: string }` and the structured
       // `{ error: { code, message } }` envelope (the latter would otherwise
       // toast "[object Object]") and never surfaces raw English.
       if (!res.ok) throw new Error(getErrorMessage(json, { statusCode: res.status }))
-      toast({ title: 'Godkänd', description: op.title })
+      const draftId = asDraft ? (json.data?.journal_entry_id as string | undefined) : undefined
+      toast(
+        asDraft
+          ? {
+              title: t('approved_as_draft_title'),
+              description: t('approved_as_draft_description', { title: op.title }),
+              ...(draftId
+                ? {
+                    action: (
+                      <ToastAction
+                        altText={t('open_draft')}
+                        onClick={() => router.push(`/bookkeeping/${draftId}`)}
+                      >
+                        {t('open_draft')}
+                      </ToastAction>
+                    ),
+                  }
+                : {}),
+            }
+          : { title: 'Godkänd', description: op.title },
+      )
       setShowCommitDialog(false)
       setSelectedOp(null)
       // Drop the committed op from the bulk selection: the row leaves the
@@ -458,6 +490,13 @@ export default function PendingOperationsPage() {
       })
     }
     setIsCommitting(false)
+  }
+
+  // Review-first approval: a voucher proposal can land as an editable,
+  // unnumbered draft. Nothing is posted, so it skips the high-risk dialog.
+  // Inbox-linked proposals are refused server-side, so the button is hidden.
+  function canApproveAsDraft(op: PendingOperation): boolean {
+    return op.operation_type === 'create_voucher' && !op.params?.inbox_item_id
   }
 
   async function handleCommit() {
@@ -1082,6 +1121,28 @@ export default function PendingOperationsPage() {
                         <Check className="h-3.5 w-3.5" />
                         {t('approve')}
                       </button>
+                      {canApproveAsDraft(op) && (
+                        <button
+                          type="button"
+                          className={cn(GACT_CLASS, GACT_DRAFT_CLASS)}
+                          disabled={periodLocked || isCommitting || isBulkCommitting}
+                          title={
+                            periodLocked
+                              ? 'Perioden är låst'
+                              : t('approve_as_draft_hint')
+                          }
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            if (periodLocked) return
+                            // No dialog even at high risk: a draft posts
+                            // nothing and can be discarded without a gap.
+                            void commitOp(op, true)
+                          }}
+                        >
+                          <FilePen className="h-3.5 w-3.5" />
+                          {t('approve_as_draft_short')}
+                        </button>
+                      )}
                       <button
                         type="button"
                         className={cn(GACT_CLASS, GACT_NO_CLASS)}
@@ -1196,6 +1257,16 @@ export default function PendingOperationsPage() {
                     >
                       {t('reject')}
                     </Button>
+                    {canApproveAsDraft(detailOp) && (
+                      <Button
+                        variant="outline"
+                        disabled={detailPeriodLocked || isCommitting}
+                        title={t('approve_as_draft_hint')}
+                        onClick={() => void commitOp(detailOp, true)}
+                      >
+                        {t('approve_as_draft')}
+                      </Button>
+                    )}
                     <Button
                       disabled={detailPeriodLocked || isCommitting}
                       title={detailPeriodLocked ? 'Perioden är låst' : undefined}

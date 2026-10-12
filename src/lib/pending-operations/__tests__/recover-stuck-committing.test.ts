@@ -48,7 +48,7 @@ function createCapturingSupabase() {
         }
         return chain
       }
-    for (const method of ['select', 'update', 'eq', 'lt', 'order', 'range', 'maybeSingle']) {
+    for (const method of ['select', 'update', 'eq', 'in', 'lt', 'order', 'range', 'limit', 'maybeSingle']) {
       chain[method] = vi.fn(record(method))
     }
     chain.then = (resolve: (v: unknown) => unknown) => Promise.resolve(result).then(resolve)
@@ -229,10 +229,41 @@ describe('findPostedEvidence', () => {
     expect(captures[0].target).toBe('invoice_payments')
   })
 
+  it('create_voucher: a live entry carrying the op id as source_id is evidence', async () => {
+    const { supabase, captures, enqueue } = createCapturingSupabase()
+    enqueue({ data: [{ id: 'je-draft-1' }] })
+
+    const row = makeRow({ operation_type: 'create_voucher', params: { description: 'x' } })
+    const evidence = await findPostedEvidence(supabase, row)
+
+    expect(evidence).toBe('voucher_linked_to_operation')
+    expect(captures[0].target).toBe('journal_entries')
+    expect(captures[0].filters).toEqual(
+      expect.arrayContaining([
+        { method: 'eq', args: ['company_id', row.company_id] },
+        { method: 'eq', args: ['source_id', row.id] },
+        { method: 'in', args: ['source_type', ['manual', 'opening_balance']] },
+        { method: 'in', args: ['status', ['draft', 'posted']] },
+      ]),
+    )
+  })
+
+  it('create_voucher: no linked live entry means no evidence', async () => {
+    const { supabase, enqueue } = createCapturingSupabase()
+    enqueue({ data: [] })
+
+    const evidence = await findPostedEvidence(
+      supabase,
+      makeRow({ operation_type: 'create_voucher', params: { description: 'x' } }),
+    )
+
+    expect(evidence).toBeNull()
+  })
+
   it('types without a reliable probe return null without touching the database', async () => {
     const { supabase, captures } = createCapturingSupabase()
 
-    for (const operationType of ['create_customer', 'send_invoice', 'lock_period', 'create_voucher']) {
+    for (const operationType of ['create_customer', 'send_invoice', 'lock_period']) {
       const evidence = await findPostedEvidence(
         supabase,
         makeRow({ operation_type: operationType, params: { transaction_id: 'tx-1' } }),
