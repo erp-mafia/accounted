@@ -219,10 +219,19 @@ export const normalizedBankTransactionSchema = z.object({
   description: z.string(),
   counterparty_name: z.string().nullable(),
   counterparty_account: z.string().nullable(),
+  /** The structured payment reference (OCR), when the bank sends one. */
   reference: z.string().nullable(),
   merchant_category_code: z.string().nullable(),
   bank_transaction_code: z.string().nullable(),
   proprietary_bank_transaction_code: z.string().nullable(),
+  // Optional: a service older than these fields does not send them, and a
+  // required field would refuse its whole sync.
+  /** The date the money moved, when the bank sends one. */
+  value_date: z.iso.date().nullable().optional(),
+  /** The bank's own id for the transaction (entry reference, else transaction id). */
+  provider_transaction_id: z.string().nullable().optional(),
+  /** Index into `raw_pages` of the page this row arrived in. */
+  raw_page_index: z.number().int().min(0).nullable().optional(),
 })
 export type NormalizedBankTransaction = z.infer<typeof normalizedBankTransactionSchema>
 

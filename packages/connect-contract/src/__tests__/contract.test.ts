@@ -174,6 +174,21 @@ describe('bank sync operation', () => {
       }).success,
     ).toBe(true)
   })
+
+  it('takes the value date, the bank id and the raw page index, and still takes a row without them', () => {
+    const row = { booking_date: '2026-09-01', amount: -12.5, currency: 'SEK', description: 'x', counterparty_name: null, counterparty_account: null, reference: '1001000000017', merchant_category_code: null, bank_transaction_code: null, proprietary_bank_transaction_code: null }
+    const response = (extra: Record<string, unknown>) => ({
+      transactions: [{ ...row, ...extra }],
+      raw_pages: ['{}'], skipped_pending: 0, returned_min_booking_date: '2026-09-01', returned_max_booking_date: '2026-09-01', effective_date_from: null, pages: 1,
+    })
+    const full = bankSyncResponseSchema.safeParse(response({ value_date: '2026-09-02', provider_transaction_id: 'ENTRY-1', raw_page_index: 0 }))
+    expect(full.success && full.data.transactions[0]).toMatchObject({ value_date: '2026-09-02', provider_transaction_id: 'ENTRY-1', raw_page_index: 0 })
+    expect(bankSyncResponseSchema.safeParse(response({})).success).toBe(true)
+    expect(bankSyncResponseSchema.safeParse(response({ value_date: null, provider_transaction_id: null, raw_page_index: null })).success).toBe(true)
+    expect(bankSyncResponseSchema.safeParse(response({ value_date: '2026-09-31' })).success).toBe(false)
+    expect(bankSyncResponseSchema.safeParse(response({ raw_page_index: -1 })).success).toBe(false)
+    expect(bankSyncResponseSchema.safeParse(response({ raw_page_index: 0.5 })).success).toBe(false)
+  })
 })
 
 describe('payments family', () => {

@@ -14,6 +14,8 @@ vi.mock('../lib/api-client', async () => {
 import { syncAccountTransactions } from '../lib/sync'
 import { SessionExpiredError, ConnectorSyncError, AspspUnavailableError } from '../lib/api-client'
 import { buildStableExternalIds } from '@/lib/transactions/external-id'
+import type { NormalizedBankTransaction } from '@accounted/connect-contract'
+import type { RawTransaction } from '@/types'
 import type { StoredAccount } from '../types'
 
 const fetchMock = vi.fn()
@@ -78,9 +80,56 @@ describe('syncAccountTransactions in connector mode', () => {
     expect(raw.map((r) => r.external_id)).toEqual(expectedIds)
     expect(raw[0]).toMatchObject({ date: '2026-09-01', amount: -125.5, counterparty_iban: 'SE4550000000058398257466', counterparty_account: null, import_source: 'enable_banking', bank_connection_id: 'conn-1' })
     expect(raw[1]).toMatchObject({ counterparty_iban: null, counterparty_account: '123456789' })
+    // A service that predates the optional fields: the rows sync without them.
+    expect(raw[0]).toMatchObject({ reference: null, value_date: null, provider_transaction_id: null, raw_document_id: null })
     expect(account.dedup_scope).toBe('SE4550000000058398257466')
     expect(h.upload).toHaveBeenCalledTimes(2)
     expect(result).toMatchObject({ imported: 2, returnedMinBookingDate: '2026-09-01', returnedMaxBookingDate: '2026-09-01' })
+  })
+
+  it('carries every contract field to ingest and links each row to the raw page it came in', async () => {
+    // Required<> makes a new contract field fail the type check until it is
+    // set here, and `lands` until it names the ingest field it must reach.
+    const row: Required<NormalizedBankTransaction> = {
+      booking_date: '2026-09-02',
+      amount: 1250,
+      currency: 'SEK',
+      description: 'Faktura 1001',
+      counterparty_name: 'Kund AB',
+      counterparty_account: 'SE4550000000058398257466',
+      reference: '1001000000017',
+      merchant_category_code: '5411',
+      bank_transaction_code: 'PMNT/RCDT',
+      proprietary_bank_transaction_code: 'BG',
+      value_date: '2026-09-03',
+      provider_transaction_id: 'ENTRY-1',
+      raw_page_index: 1,
+    }
+    const lands: Record<keyof NormalizedBankTransaction, Partial<RawTransaction>> = {
+      booking_date: { date: '2026-09-02' },
+      amount: { amount: 1250 },
+      currency: { currency: 'SEK' },
+      description: { description: 'Faktura 1001' },
+      counterparty_name: { merchant_name: 'Kund AB' },
+      counterparty_account: { counterparty_iban: 'SE4550000000058398257466' },
+      reference: { reference: '1001000000017' },
+      merchant_category_code: { mcc_code: 5411 },
+      bank_transaction_code: { bank_transaction_code: 'PMNT/RCDT' },
+      proprietary_bank_transaction_code: { proprietary_bank_transaction_code: 'BG' },
+      value_date: { value_date: '2026-09-03' },
+      provider_transaction_id: { provider_transaction_id: 'ENTRY-1' },
+      raw_page_index: { raw_document_id: 'doc-p2' },
+    }
+    h.upload.mockResolvedValueOnce({ id: 'doc-p1' }).mockResolvedValueOnce({ id: 'doc-p2' })
+    const outOfRange = { ...row, booking_date: '2026-09-04', raw_page_index: 2 }
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ...remote, transactions: [row, outOfRange] }), { status: 200 }))
+    const ingest = vi.fn().mockResolvedValue({ imported: 2, duplicates: 0, errors: 0, reconciled: 0, auto_categorized: 0, auto_matched_invoices: 0, transaction_ids: [] })
+    await syncAccountTransactions(supabase, 'company-1', 'user-1', 'conn-1', account, '2026-08-01', '2026-09-04', ingest)
+
+    const raw = ingest.mock.calls[0][3] as RawTransaction[]
+    expect(raw[0]).toMatchObject(Object.assign({}, ...Object.values(lands)))
+    // An index past the archived pages links nothing rather than a wrong page.
+    expect(raw[1].raw_document_id).toBeNull()
   })
 
   it('maps the connector 410 onto SessionExpiredError so callers flip the connection to expired', async () => {

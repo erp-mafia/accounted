@@ -240,8 +240,8 @@ export async function syncAccountTransactions(
   // the connector produces byte-identical stored keys.
   const connector = bankConnectorMode(companyId)
   let rawPages: string[]
-  // page: index into rawPages, when known (the direct path; the connector does
-  // not report it yet).
+  // page: index into rawPages, when known (the direct path rebuilds it from the
+  // pages; the connector reports it, unless the service predates the field).
   let bookedEntries: Array<{ tx: BookedTransactionFields; bookingDate: string; page?: number }>
   let totalFetched: number
   let effectiveFromDate: string | undefined
@@ -266,11 +266,14 @@ export async function syncAccountTransactions(
         counterparty_name: tx.counterparty_name ?? undefined,
         counterparty_account: tx.counterparty_account ?? undefined,
         reference: tx.reference ?? undefined,
+        value_date: tx.value_date ?? undefined,
+        provider_transaction_id: tx.provider_transaction_id ?? undefined,
         merchant_category_code: tx.merchant_category_code ?? undefined,
         bank_transaction_code: tx.bank_transaction_code ?? undefined,
         proprietary_bank_transaction_code: tx.proprietary_bank_transaction_code ?? undefined,
       },
       bookingDate: tx.booking_date,
+      page: tx.raw_page_index ?? undefined,
     }))
   } else {
     const fetched = await getAllTransactionsWithRaw(
