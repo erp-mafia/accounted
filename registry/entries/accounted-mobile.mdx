@@ -1,0 +1,126 @@
+---
+title: "Accounted Mobile"
+description: "iPhone-app för Accounted. Fota kvittot direkt efter köpet, låt servern läsa det och få det kontrollerat mot bankbetalningen innan det kopplas. Visar betalningar som saknar underlag, kassa och resultat, och låter dig godkänna det som Claude och andra agenter har förberett. Pratar bara med din egen Accounted-server via det publika API:t."
+slug: "accounted-mobile"
+kind: "app"
+author: "deus-labs"
+status: "beta"
+lang: "sv"
+personas: ["founder", "finance"]
+publishedAt: "2026-10-11"
+updatedAt: "2026-10-12"
+repoUrl: "https://github.com/Amir-HM/accounted-mobile"
+version: "0.1.0"
+oauthScopes:
+  - "companies:read"
+  - "documents:read"
+  - "documents:write"
+  - "transactions:read"
+  - "transactions:write"
+  - "reports:read"
+  - "invoices:read"
+  - "suppliers:read"
+  - "suppliers:write"
+  - "bookkeeping:write"
+  - "pending_operations:read"
+  - "pending_operations:approve"
+gnubokTools:
+  - "gnubok_create_document_upload"
+  - "gnubok_complete_document_upload"
+  - "gnubok_suggest_categories"
+  - "gnubok_list_pending_operations"
+  - "gnubok_approve_pending_operation"
+  - "gnubok_reject_pending_operation"
+  - "gnubok_create_expense_claim"
+requiresWriteScope: true
+related: ["gnubok-mcp", "leverantorsfaktura-fran-inbox"]
+ogImageEyebrow: "iPhone-app"
+faq:
+  - q: "Bokför appen något på egen hand?"
+    a: "Nej. Bokföring från telefonen är avstängd som standard och slås på under Inställningar. När den är på visar appen först de riktiga verifikationsraderna från en provkörning (dry run), och ingenting bokförs förrän du själv trycker Bokför. Det som agenter har förberett godkänns eller avvisas av dig i appen, som stagade operationer."
+  - q: "Hur fungerar utlägg?"
+    a: "Ett kvitto som betalats privat blir ett utlägg via gnubok_create_expense_claim, som stagar operationen. Verifikatet bokförs först när någon godkänner det under Godkännanden, och funktionen ligger bakom samma brytare som bokföringen."
+  - q: "Finns appen på svenska?"
+    a: "Ja, svenska är standard och engelska går att välja under Inställningar. Begreppen är hämtade från webbappens egna översättningar."
+  - q: "Kan ett kvitto försvinna på vägen?"
+    a: "Varje bild kopieras in i appen och SHA-256-hashas innan något skickas. Uppladdningen är idempotent, serverns hash måste stämma med den lokala, och kön överlever omstart och nätavbrott. Stämmer inte hashen syns det som ett fel i stället för att tyst försvinna."
+  - q: "Vilken server pratar den med?"
+    a: "Bara din egen Accounted, via REST-API:t under /api/v1 och några MCP-verktyg över HTTP med samma nyckel. Ingen kod från Accounted är kopierad, så appen kan vara MIT-licensierad."
+  - q: "Hur installerar jag den?"
+    a: "Den finns inte i App Store än. Bygg den själv från repot med Expo (en utvecklingsbuild eller Expo Go). TestFlight kommer när utvecklarkontot är godkänt."
+---
+
+## Vad den gör
+
+En följeslagare till Accounted på webben, inte en ersättning. Appen tar hand om
+det som händer i telefonen: kvittot i handen, notisen efter ett kortköp och ett
+snabbt ja eller nej på något som väntar.
+
+- **Kvitton som saknas.** Listan över betalningar utan underlag. Svep för att
+  fota kvittot, eller markera "inget underlag krävs" med ett skäl. På en
+  bokförd betalning sätts Accounteds egen markering på verifikatet.
+- **Fånga.** iOS dokumentskanner (flera sidor blir en PDF), de senaste bilderna
+  och skärmdumparna, eller Filer.
+- **Läsning och kontroll.** Servern arkiverar och läser kvittot (leverantör,
+  datum, belopp, moms). Appen kontrollerar sedan läsningen: att summorna går
+  ihop, att momsen är en svensk sats, att organisationsnumret klarar
+  kontrollsiffran och att belopp och datum stämmer med bankbetalningen. Ett
+  kvitto utan betalning får den troliga betalningen föreslagen.
+- **Fakturor, moms och banker.** Vad kunderna är skyldiga (förfallna först),
+  momsdeklarationen för perioden ruta för ruta och om den är inlämnad, och
+  bankkopplingarnas status med samtyckets slutdatum och Synka nu. Allt läsande.
+- **Leverantörsfakturor.** Attestera från telefonen. Attesten bokför inget.
+- **Utlägg.** Ett kvitto som betalats privat blir ett utlägg som väntar under
+  Godkännanden.
+- **Godkännanden.** Operationer som Claude, andra agenter eller kvittojakten
+  har stagat. Godkänn eller avvisa; hög risk kräver en extra bekräftelse.
+- **Översikt.** Att göra, kassa med runway, årets resultat, moms, intäkter och
+  kostnader, resultat per månad och bankkonton med sina transaktioner.
+- **Notiser.** "Fota kvittot" strax efter en kortbetalning, och en påminnelse
+  när något väntar på godkännande.
+- **Säkerhet.** Logga in med Accounted (OAuth med PKCE) eller med en API-nyckel
+  i nyckelringen. Valfritt Face ID-lås, och beloppen döljs i appväxlaren.
+
+## Vad den skriver
+
+| Vad | Hur |
+|---|---|
+| Kvitton | Arkiveras via inkorgen (`gnubok_create_document_upload`) och kopplas till transaktionen |
+| "Inget underlag krävs" | Accounteds egen markering på verifikatet, med skäl och ångra |
+| Godkännanden | `gnubok_approve_pending_operation` och `gnubok_reject_pending_operation` på stagade operationer, alltid med bekräftelse som visar vad som bokförs; det som bokför är låst så länge bokföring från telefonen är avstängd |
+| Attest av leverantörsfaktura | `POST .../supplier-invoices/{id}/approve`, bokför inget |
+| Utlägg | `gnubok_create_expense_claim`, stagas och bokförs först vid godkännande |
+| Bokföring (avstängd som standard) | `POST .../transactions/{id}/categorize`, först som dry run som visar verifikationsraderna, sedan bara efter att du trycker Bokför |
+
+Bokföringen från telefonen är ett manuellt steg av en människa, samma sak som
+att bokföra i webbappen, inte en agent som skriver. Använder du ett annat system
+som huvudbok och importerar till Accounted ska den vara avstängd, vilket den är
+från början.
+
+## Vad den inte gör
+
+- Ingen Android-version.
+- Ingen fakturering, lön eller momsdeklaration. Det gör du på webben.
+- Ingen egen läsning av kvitton på telefonen. Läsningen görs av servern med
+  den AI-konfiguration som din Accounted har.
+
+## Kom igång
+
+1. Klona [repot](https://github.com/Amir-HM/accounted-mobile) och kör
+   `npm install`.
+2. Sätt `defaultServer` i `app.json` till din Accounted. För inloggning med
+   Accounted behövs dessutom en liten https-returadress (`infra/oauth-bounce`,
+   registrerad som OAuth-klient under Inställningar). Annars räcker en
+   API-nyckel med scopes ovan.
+3. `npx expo run:ios` för en utvecklingsbuild på din iPhone.
+
+Notiserna kräver en liten relä-tjänst (`infra/push-relay`) med en nyckel som
+bara har `transactions:read` och `pending_operations:read`. Båda tjänsterna
+kör på Cloudflare Workers gratisnivå.
+
+## En ärlig begränsning
+
+I dag behövs två små hjälptjänster: en returadress för inloggningen, eftersom
+Accounted bara redirectar till https, och en relä som pollar efter nya
+transaktioner var tionde minut. Båda försvinner om Accounted accepterar en
+nativ redirect (#3497) och publicerar `transaction.synced` som webhook (#3498).
