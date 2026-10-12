@@ -1,12 +1,9 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { eventBus } from '@/lib/events'
 import { effectiveNetPayout } from '@/lib/salary/payment/effective-net'
 import { employeeBankDetailsRemark } from '@/lib/salary/payment/bank-account'
 import { refreshRunYtd } from '@/lib/salary/ytd'
-
-ensureInitialized()
 
 /** review → approved (authorization recorded, with pre-approve validation).
  *  ?force=true bypasses the overridable "bank details missing or invalid" guard: approval

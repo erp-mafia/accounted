@@ -1,12 +1,9 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { declaredDocumentType, uploadDocument, validateDocumentFile } from '@/lib/core/documents/document-service'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { DocumentUploadSource } from '@/types'
-
-ensureInitialized()
 
 /**
  * POST /api/documents: upload a document to the WORM archive.

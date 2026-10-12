@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
-import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateArticleSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -9,8 +8,6 @@ import { AccountsNotInChartError, accountsNotInChartResponse } from '@/lib/bookk
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Article } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized()
 
 export const GET = withRouteContext(
   'article.get',

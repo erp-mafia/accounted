@@ -1,10 +1,7 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { cancelQuoteOrProforma } from '@/lib/invoices/cancel-quote-or-proforma'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
-
-ensureInitialized() // Module-level: wires the event-log handler for invoice.cancelled.
 
 /**
  * POST /api/invoices/[id]/cancel

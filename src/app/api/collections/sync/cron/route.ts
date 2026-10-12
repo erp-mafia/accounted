@@ -2,11 +2,7 @@ import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { runCollectionsSync } from '@/lib/collections/sync'
 import { errorResponse } from '@/lib/errors/get-structured-error'
-import { ensureInitialized } from '@/lib/init'
 import { createServiceClient } from '@/lib/supabase/server'
-
-// The sync run grows into case updates that emit events (build spec 1.6).
-ensureInitialized()
 
 /** A handover retry may wait 130 s for Connect; the run budget (SYNC_RUN_BUDGET_MS) keeps inside this. */
 export const maxDuration = 300

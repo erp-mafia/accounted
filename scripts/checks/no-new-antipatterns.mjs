@@ -138,16 +138,15 @@
  *      migrations written before that relied on the old default and are
  *      grandfathered as a file set that never grows. Implementation and
  *      rationale in table-without-grant.mjs.
- *   15. uninitialized-event-route: a server entry point (app/api route,
- *      page, layout, other App Router entry, or 'use server' module) whose
- *      runtime import closure reaches `eventBus.emit` or a read of what the
- *      extensions register, but that never calls ensureInitialized() at
- *      module scope (in the entry file or a module it imports), so its
- *      events are dropped by the bus and its registry reads come back empty.
- *      Neither withRouteContext nor the root layout wires the bus, by
- *      design: lib/init stays out of the cold start of everything that does
- *      not need it. Implementation and rationale in event-route-init.mjs.
- *      Allowlisted file-set, may only shrink.
+ *   15. static-init-import: a server entry point (App Router route, page,
+ *      layout or other file convention, 'use server' module, or the root
+ *      instrumentation/middleware/proxy file) whose static import graph
+ *      reaches lib/init or the extension list it loads, or a 'use client'
+ *      module that reaches lib/initialized.ts (the event bus's way in). lib/init
+ *      loads on first use (from eventBus.emit() and the registry getters); a
+ *      static import puts every extension back into that entry's cold start,
+ *      or into the browser build. Implementation and rationale in
+ *      static-init-import.mjs. No allowlist.
  *   16. limit-above-page: a PostgREST `.limit(N)` with N above 1000. max-rows
  *      answers it with 1000 rows and no error, so the written cap is a silent
  *      1000 (the Arkiv graph, facts and lint, the counterparty resolver and the
@@ -197,6 +196,7 @@ import { findRawReferenceFetches } from './raw-reference-fetch.mjs'
 import { findUtcTodaySites, UTC_TODAY_ALLOWED } from './utc-today.mjs'
 import { findLiteralLegalForms } from './literal-legal-form.mjs'
 import { findClientNodeBuiltins } from './client-node-builtin.mjs'
+import { findClientServerOnlyReachers } from './client-server-only.mjs'
 import { findAmbiguousEmbeds } from './ambiguous-embed.mjs'
 import { findUiUniformityFindings, UI_UNIFORMITY_HINTS } from './ui-uniformity.mjs'
 import { findTablesWithoutGrant, grandfatheredFiles, grantHint } from './table-without-grant.mjs'
@@ -205,10 +205,7 @@ import {
   findExtensionRouteFindings,
   UNGATED_EXTENSION_ROUTES,
 } from './extension-route-guards.mjs'
-import {
-  findUninitializedEmittingRoutes,
-  UNINITIALIZED_EMITTING_ROUTES,
-} from './event-route-init.mjs'
+import { findStaticInitImports } from './static-init-import.mjs'
 import { findLimitsAbovePage, LIMIT_ABOVE_PAGE_ALLOWED } from './limit-above-page.mjs'
 import { findLocalTestMocks, LOCAL_SUPABASE_CHAIN_ALLOWED } from './local-test-mock.mjs'
 import {
@@ -1181,13 +1178,14 @@ const current = {
   rawUserErrors: findRawUserErrors(),
   sekLabelledAmounts: findSekLabelledFxAmounts(SOURCE_ROOT),
   extensionRoutes: findExtensionRouteFindings(SOURCE_ROOT),
-  eventRouteInit: findUninitializedEmittingRoutes(SOURCE_ROOT),
+  staticInitImports: findStaticInitImports(SOURCE_ROOT),
   offLadderRadii: findOffLadderRadii(),
   foldedPublicFlags: findFoldedPublicFlags(),
   dialogOverflowRisk: findDialogOverflowRisks(),
   directAiClients: findDirectAiClients(),
   rawReferenceFetch: findRawReferenceFetches(SOURCE_ROOT),
   clientNodeBuiltins: findClientNodeBuiltins(SOURCE_ROOT),
+  clientServerOnly: findClientServerOnlyReachers(SOURCE_ROOT),
   ambiguousEmbeds: findAmbiguousEmbeds(ROOT, SOURCE_ROOT),
   literalLegalForm: findLiteralLegalForms(SOURCE_ROOT),
   uiUniformity: findUiUniformityFindings(SOURCE_ROOT),
@@ -1324,6 +1322,26 @@ if (current.clientNodeBuiltins.length) {
       '    (see lib/auth/bankid-flags.ts, lib/import/bank-file/formats.ts, lib/salary/personnummer-format.ts,\n' +
       '    lib/auth/api-key-scopes.ts) and import that from the client. scripts/perf/client-import-closure.mjs\n' +
       '    prints the full chain for any module.',
+  )
+}
+
+// 1b3b. client-server-only: a 'use client' module whose static import closure
+// reaches the bookkeeping engine or the BAS reference data ships server-only
+// code (and the whole kontoplan) to the browser. No baseline: 0 today.
+if (current.clientServerOnly.length) {
+  failed = true
+  console.error(
+    `\n✗ client-server-only: ${current.clientServerOnly.length} client import chain(s) reach the bookkeeping ` +
+      `engine or the BAS reference data through static imports:`,
+  )
+  current.clientServerOnly.forEach((f) =>
+    console.error(`    ${f.file} -> ${f.target}\n        ${f.chain.join('\n        > ')}`),
+  )
+  console.error(
+    '  → move the pure part the client needs into a sibling module and import that from the client\n' +
+      '    (see lib/bookkeeping/booking-mode.ts, lib/invoices/rot-rut-refused-shares.ts,\n' +
+      '    lib/cash-accounts/invoice-payee-rules.ts); account names come from the company chart\n' +
+      '    (lib/reference-data) or the server. Rationale in scripts/checks/client-server-only.mjs.',
   )
 }
 
@@ -1546,7 +1564,7 @@ if (newUngatedRoutes.length) {
   )
   newUngatedRoutes.forEach((f) => console.error(`    ${f}`))
   console.error(
-    "  → call loadExtensions() and refuse (503 EXTENSION_DISABLED) when extensionRegistry.get('<id>')\n" +
+    "  → refuse (503 EXTENSION_DISABLED) when await extensionRegistry.get('<id>')\n" +
       '    is undefined, like app/api/extensions/push-notifications/cron/route.ts.',
   )
 }
@@ -1571,26 +1589,23 @@ if (newLimitsAbovePage.length) {
   )
 }
 
-// 1h. uninitialized-event-route: allowlist lives in event-route-init.mjs
-// (UNINITIALIZED_EMITTING_ROUTES) and may only shrink. The bus drops an event
-// that has no handler, so a route that can emit must have run
-// ensureInitialized() at module scope; withRouteContext does not do it.
-const newUninitializedRoutes = current.eventRouteInit.uninitialized.filter(
-  (f) => !UNINITIALIZED_EMITTING_ROUTES.has(f),
-)
-const initializedSinceBaseline = [...UNINITIALIZED_EMITTING_ROUTES].filter(
-  (f) => !current.eventRouteInit.uninitialized.includes(f),
-)
-if (newUninitializedRoutes.length) {
+// 1h. static-init-import: no allowlist. lib/init loads on first use
+// (lib/initialized.ts); a static import from an entry loads every extension
+// on that entry's cold start again, and from a client module it pulls them
+// into the browser build.
+if (current.staticInitImports.length) {
   failed = true
   console.error(
-    `\n✗ uninitialized-event-route: ${newUninitializedRoutes.length} entry point(s) can emit events or read ` +
-      'extension registries but never run ensureInitialized(), so events are silently dropped and reads come back empty:',
+    `\n✗ static-init-import: ${current.staticInitImports.length} module(s) reach lib/init statically: a server ` +
+      'entry would load every extension on its cold start, a client module would pull them into the browser build:',
   )
-  newUninitializedRoutes.forEach((f) => console.error(`    ${f}`))
+  current.staticInitImports.forEach(({ kind, entry, chain }) =>
+    console.error(`    ${entry} (${kind})\n      via ${chain.join(' -> ')}`),
+  )
   console.error(
-    "  → import { ensureInitialized } from '@/lib/init' and call ensureInitialized() at module\n" +
-      '    scope in the entry file (neither withRouteContext nor the root layout wires the bus).',
+    '  → server: drop the import; eventBus.emit() and the registry getters (await extensionRegistry.get(),\n' +
+      '    await getEmailService(), ...) load lib/init on first use.\n' +
+      '  → client: import the pure helper from a module of its own, not from a server module that emits.',
   )
 }
 
@@ -1879,18 +1894,10 @@ if (sharedSinceBaseline.length) {
   sharedSinceBaseline.forEach((f) => console.log(`    ${f}`))
 }
 
-if (initializedSinceBaseline.length) {
-  console.log(
-    `\n✓ uninitialized-event-route progress: ${initializedSinceBaseline.length} allowlisted route(s) now wire the bus or no longer emit.` +
-      ' Remove them from UNINITIALIZED_EMITTING_ROUTES in scripts/checks/event-route-init.mjs to lock it in:',
-  )
-  initializedSinceBaseline.forEach((f) => console.log(`    ${f}`))
-}
-
 if (failed) {
   console.error('\nAntipattern guard failed: see above.')
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, uninitialized-event-route: ${current.eventRouteInit.uninitialized.length}/${UNINITIALIZED_EMITTING_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), unsigned-provider-names: ${current.unsignedProviderNames.skipped ? 'skipped' : current.unsignedProviderNames.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), functiondef-patch: ${functiondefPatchFiles.length}/${functiondefPatchBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s)).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, static-init-import: 0, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, client-server-only: ${current.clientServerOnly.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), unsigned-provider-names: ${current.unsignedProviderNames.skipped ? 'skipped' : current.unsignedProviderNames.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), functiondef-patch: ${functiondefPatchFiles.length}/${functiondefPatchBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s)).`,
 )

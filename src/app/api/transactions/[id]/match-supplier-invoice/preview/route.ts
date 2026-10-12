@@ -17,9 +17,6 @@ import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { planSupplierBankMatch } from '@/lib/invoices/apply-supplier-payment'
 import type { SupplierInvoice } from '@/types'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 type PreviewLine = {
   account_number: string

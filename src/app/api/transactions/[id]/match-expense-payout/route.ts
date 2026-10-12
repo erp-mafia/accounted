@@ -4,9 +4,6 @@ import { validateBody } from '@/lib/api/validate'
 import { MatchExpensePayoutSchema } from '@/lib/api/schemas'
 import { matchExpensePayout } from '@/lib/expenses/expense-claim-actions'
 import { sessionFailureResponse } from '@/lib/operations/session'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 /**
  * POST /api/transactions/[id]/match-expense-payout

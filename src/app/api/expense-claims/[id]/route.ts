@@ -1,10 +1,7 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { removeExpenseClaim } from '@/lib/expenses/expense-claim-actions'
 import { sessionFailureResponse } from '@/lib/operations/session'
-
-ensureInitialized()
 
 /**
  * DELETE /api/expense-claims/[id]: remove an unpaid utlägg. Its verifikat is

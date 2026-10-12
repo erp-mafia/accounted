@@ -23,7 +23,6 @@ import { PaletteProvider } from "@/components/providers/PaletteProvider";
 import { NonceProvider } from "@/components/providers/NonceProvider";
 import { SWRProvider } from "@/components/providers/SWRProvider";
 import { ScrollbarReveal } from "@/components/ScrollbarReveal";
-import { ensureObservability } from "@/lib/analytics/ensure-observability";
 import { isSelfHosted } from "@/lib/env/public-flags";
 import { getBranding } from "@/lib/branding/service";
 import { resolveRequestBrand } from "@/lib/branding/request-brand";
@@ -31,15 +30,15 @@ import { getBrandFontPair } from "@/lib/branding/fonts";
 import { BrandProvider } from "@/lib/branding/brand-context";
 import { toPublicBrand } from "@/lib/branding/public-brand";
 import { APP_TIME_ZONE } from "@/i18n/config";
+import { ROOT_CLIENT_NAMESPACES, pickNamespaces } from "@/i18n/root-client-namespaces";
 import { CSP_NONCE_HEADER } from "@/lib/security/csp";
 // A fork's branding extension calls registerBrandingService() at module load,
-// so it must run before metadata, viewport or the layout read getBranding().
-// The generated list imports only the enabled extensions whose manifest
-// declares "branding": true (none on hosted), never every extension: the
-// layout used to call ensureInitialized() for this, which made every page
-// render, public ones included, load every extension. Pages that need
-// extensions call ensureInitialized() themselves (npm run check:guards).
-import "@/lib/extensions/_generated/branding-list";
+// so it must run before metadata, viewport or the layout read getBranding();
+// server-render errors logged through createLogger() reach PostHog Error
+// Tracking (gated on the token). lib/server-baseline does both without
+// loading an extension; extensions load on the first event or registry read
+// (lib/initialized.ts), never on a page render that needs neither.
+import "@/lib/server-baseline";
 import "./globals.css";
 
 // Brand resolution (WL-12: the lookup runs in the root layout, not
@@ -47,10 +46,6 @@ import "./globals.css";
 // other server component so the BRAND_DEV_DOMAIN dev override applies
 // uniformly. The layout used to carry a private copy of the function, which
 // silently skipped that override.
-
-// Server-render errors logged through createLogger() reach PostHog Error
-// Tracking (gated on the token; a no-op on self-hosted and in CI).
-ensureObservability();
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -163,7 +158,11 @@ export default async function RootLayout({
   const branding = getBranding();
   const brand = await resolveRequestBrand();
   const locale = await getLocale();
-  const messages = await getMessages();
+  // Client components under this provider get only the public and auth
+  // namespaces: every page inlines them into its HTML, and the full catalog
+  // is about 0.8 MB per locale. The dashboard, onboarding and other app
+  // layouts restore the full set with AllMessagesProvider.
+  const messages = pickNamespaces(await getMessages(), ROOT_CLIENT_NAMESPACES);
   // Per-request CSP nonce from the proxy (src/proxy.ts, lib/security/csp.ts).
   // Next.js stamps it on its own scripts; the scripts this layout renders
   // (next-themes' and the palette's no-flash scripts, the service-worker

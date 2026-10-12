@@ -49,10 +49,10 @@
  *   })
  */
 
+import '@/lib/server-baseline'
 import { type SupabaseClient } from '@supabase/supabase-js'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { truncateIp } from '@/lib/api/ip'
 import {
   type ApiKeyMode,
@@ -66,14 +66,6 @@ import {
 } from '@/lib/auth/api-keys'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import { withSIEExternalReport } from '@/lib/import/sie-period-read'
-
-// Per CLAUDE.md: any route that emits events via eventBus must call
-// ensureInitialized() at module level to wire extension event handlers
-// (email, cloud-backup, push-notifications, etc.). Calling it here in the
-// wrapper guarantees every v1 route gets the init at import time: a single
-// source of truth so future routes can't forget. The function itself is
-// idempotent (guarded by a module-level boolean).
-ensureInitialized()
 import { resolveRequiredScope, type V1RequiredScope } from '@/lib/auth/scopes'
 import { getMultiUserState, isMembershipDormant } from '@/lib/entitlements/multi-user'
 import { getEndpointByConcretePath } from './registry'

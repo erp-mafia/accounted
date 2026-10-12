@@ -1,10 +1,9 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import dynamic from 'next/dynamic'
 import { useLocale } from 'next-intl'
 import { ChevronDown, GraduationCap, Loader2 } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
 import { AttnLine } from '@/components/ui/attn-line'
 import { EmptyState } from '@/components/ui/empty-state'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -15,6 +14,18 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 
 import type { AtomTier as Tier } from '@/lib/agent-context/agent-competence'
 import { atomLabel } from '@/lib/agent-context/atom-labels'
+
+// The markdown parser (react-markdown + remark-gfm) loads when an area is
+// first opened, not with the settings page. Until the chunk lands the line
+// reads as the same "Läser in…" the body fetch shows.
+const AgentSkillMarkdown = dynamic(() => import('./AgentSkillMarkdown'), {
+  loading: () => (
+    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+      Läser in…
+    </div>
+  ),
+})
 
 interface AtomMeta {
   id: string
@@ -272,7 +283,7 @@ export function AgentSkillsPanel() {
                         )}
                         {!isLoading && body !== undefined && body.length > 0 && (
                           <div className={cn(PROSE, 'max-w-[760px]')}>
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>
+                            <AgentSkillMarkdown body={body} />
                           </div>
                         )}
                         {!isLoading && body !== undefined && body.length === 0 && (

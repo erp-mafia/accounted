@@ -1,10 +1,7 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { getCompanyPaymentVerification, startCompanyPaymentVerification } from '@/lib/payments/orders/availability'
-
-ensureInitialized()
 
 /** GET /api/payments/verification: has the payment provider verified the company (know your customer). */
 export const GET = withRouteContext('payments.verification_status', async (_request, { supabase, companyId, user, log, requestId }) => {

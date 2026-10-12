@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
@@ -9,9 +8,6 @@ import { recordHumanClassification } from '@/lib/documents/classify/classify'
 import { enqueueDocumentJob } from '@/lib/documents/jobs/queue'
 import { isDocType } from '@/lib/documents/classify/taxonomy'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-
-// Classification emits document.classified; the inbox extension's handler must be wired to route it.
-ensureInitialized()
 
 /**
  * POST /api/documents/[id]/admission  { decision: 'admit' | 'discard', reason? }

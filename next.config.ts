@@ -91,6 +91,17 @@ const nextConfig: NextConfig = {
   // which makes Turbopack infer the wrong workspace root. Pin it explicitly.
   turbopack: {
     root: projectRoot,
+    // Browser bundles get a copy of the error registry without the
+    // agent-facing remediation texts; server code, tests and tsc read the
+    // real module. Rationale in the loader. The leading **/ is needed: a
+    // project-relative glob did not match in Next 16.3 (checked on a build).
+    rules: {
+      '**/src/lib/errors/structured-errors.ts': {
+        condition: { all: ['browser', { not: 'foreign' }] },
+        loaders: [path.join(projectRoot, 'scripts/build/structured-errors-browser-loader.js')],
+        as: '*.js',
+      },
+    },
   },
   // PostHog sends trailing-slash API requests; without this Next 308s them
   // and the events are lost. Required by the reverse proxy below.

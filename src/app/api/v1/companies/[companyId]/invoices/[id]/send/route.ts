@@ -234,7 +234,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     if (capBlocked) return capBlocked
 
     // Step 1: email service configured?
-    const emailService = getEmailService()
+    const emailService = await getEmailService()
     if (!emailService.isConfigured()) {
       return v1ErrorResponseFromCode('INVOICE_SEND_EMAIL_NOT_CONFIGURED', ctx.log, {
         requestId: ctx.requestId,

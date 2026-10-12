@@ -19,6 +19,7 @@
  *   })
  */
 
+import '@/lib/server-baseline'
 import { NextResponse } from 'next/server'
 import { verifyCronSecret } from '@/lib/auth/cron'
 import { createLogger, type Logger } from '@/lib/logger'

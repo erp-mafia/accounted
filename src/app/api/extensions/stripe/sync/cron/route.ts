@@ -1,17 +1,11 @@
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { syncStripeConnection } from '@/extensions/general/stripe/lib/sync'
 import type { StripeConnection } from '@/extensions/general/stripe/types'
-
-// settleInvoicePayment emits invoice.paid; the Stripe extension's own
-// link-deactivation handler (and webhook fan-out) must be wired before the
-// first emit on a cold instance.
-ensureInitialized()
 
 export const maxDuration = 300
 

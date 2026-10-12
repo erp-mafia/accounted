@@ -126,12 +126,6 @@ export async function sweepBankRowsAfterSIEImport(
       if (!count) {
         receipt = emptyReceipt('no_unlinked_bank_rows', year)
       } else {
-        // The matcher emits transaction.reconciled per link; without the bus
-        // wired those events (webhooks, event log) silently go nowhere. Loaded
-        // lazily so the worker's import graph stays free of the extension
-        // registry for every import that never reaches this line.
-        const { ensureInitialized } = await import('@/lib/init')
-        ensureInitialized()
         const result = await runUnattendedReconciliationSweep(
           supabase,
           job.company_id,

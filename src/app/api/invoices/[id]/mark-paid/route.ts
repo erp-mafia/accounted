@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { MarkInvoicePaidSchema } from '@/lib/api/schemas'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { deriveCustomerSettlementAmount } from '@/lib/invoices/apply-invoice-payment'
@@ -10,8 +9,6 @@ import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
 import { resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
 import { roundOre } from '@/lib/money'
 import type { EntityType, Invoice } from '@/types'
-
-ensureInitialized()
 
 /**
  * POST /api/invoices/[id]/mark-paid

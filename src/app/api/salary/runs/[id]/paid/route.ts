@@ -1,8 +1,5 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
-
-ensureInitialized()
 
 /** approved → paid (payment confirmation) */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(

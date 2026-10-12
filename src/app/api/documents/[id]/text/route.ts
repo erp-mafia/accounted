@@ -3,9 +3,6 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { createServiceClient } from '@/lib/supabase/server'
 import { ensureDocumentRead } from '@/lib/documents/read/on-demand'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 /**
  * GET /api/documents/[id]/text

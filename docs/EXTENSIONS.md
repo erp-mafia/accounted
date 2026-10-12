@@ -48,7 +48,7 @@ src/lib/extensions/_generated/                         written by npm run setup:
 | `workspace-map.tsx` | `WORKSPACES` | A `next/dynamic` import for each manifest with a `workspace`, keyed `<sector>/<id>`. |
 | `sector-definitions.ts` | `EXTENSION_DEFINITIONS` | Marketplace metadata from each manifest's `definition`, grouped by sector. |
 | `enabled-extensions.ts` | `ENABLED_EXTENSION_IDS` | The set of enabled ids, for conditional UI such as `ENABLED_EXTENSION_IDS.has('skatteverket')`. |
-| `branding-list.ts` | nothing | Side-effect imports of the enabled manifests with `"branding": true`. The root layout and `src/app/manifest.ts` import it so a fork's `registerBrandingService()` runs before `getBranding()` is read, without loading every extension. Empty when no such extension is enabled. |
+| `branding-list.ts` | nothing | Side-effect imports of the enabled manifests with `"branding": true`. `src/lib/server-baseline.ts` (imported by the root layout and the route wrappers) and `src/app/manifest.ts` import it so a fork's `registerBrandingService()` runs before `getBranding()` is read, without loading every extension. Empty when no such extension is enabled. |
 
 Validation is limited to what the generator itself checks:
 
@@ -123,7 +123,7 @@ Abridged from `src/extensions/general/enable-banking/manifest.json`:
 |---------|---------|
 | `eventHandlers` | `extensionRegistry.register()`, which subscribes each handler to the event bus |
 | `apiRoutes` | The dispatcher at `src/app/api/extensions/ext/[...path]/route.ts` |
-| `services` | Core callers through `extensionRegistry.get(id)?.services` or `extensionRegistry.getAll()` |
+| `services` | Core callers through `(await extensionRegistry.get(id))?.services` or `await extensionRegistry.getAll()` |
 
 A minimal event-handler extension, abridged from `src/extensions/general/example-logger/index.ts`:
 
@@ -175,7 +175,7 @@ interface ExtensionContext {
 - **Delivery:** the bus (`src/lib/events/bus.ts`) runs all handlers for an event concurrently with `Promise.allSettled`. A rejected handler is logged and never fails the emitter.
 - **Payload types:** event names and payloads live in `src/lib/events/types.ts`. Type payloads with `EventPayload<'<event>'>`.
 - **ctx may be missing:** the registry builds `ctx` when the event fires, from `createClient()` and the payload's `userId` and `companyId`. When that fails (no `userId`, or no request scope), the handler receives `ctx === undefined`, so always handle that case. An event emitted from a cron job or webhook may also carry a client without a signed-in user.
-- **Initialization:** handlers are subscribed only after `ensureInitialized()` (`src/lib/init.ts`) has run in the process, since that function calls `loadExtensions()`. Any route, page or server action that emits events, or that looks up extensions in the registry, must call `ensureInitialized()` at module level; neither `withRouteContext` nor the root layout does it for you. Otherwise events go nowhere and `extensionRegistry.get()` returns `undefined`. `npm run check:guards` (uninitialized-event-route) fails a new entry point that can reach `eventBus.emit` or a registry read without the call.
+- **Initialization:** handlers are subscribed when `src/lib/init.ts` runs `loadExtensions()`. It loads on first use (`src/lib/initialized.ts`): `eventBus.emit()` awaits it before the first event of a process is dispatched, and the registry reads (`await extensionRegistry.get()`, `getAll()`) await it before answering. Nothing calls `ensureInitialized()` at module level; `npm run check:guards` (static-init-import) fails an entry point that imports `@/lib/init` statically, since that loads every extension on its cold start.
 
 ## API routes
 
@@ -217,7 +217,7 @@ The dispatcher processes a request in this order:
 
 Every response gets an `X-Request-Id` header. JSON error bodies shaped `{ error: { code } }` also get `error.requestId` injected. The route sets `maxDuration = 300`.
 
-**Physical route files.** Vercel cron targets (`vercel.json`) and some OAuth callbacks are concrete files under `src/app/api/extensions/<id>/`. That directory may import only its own extension. Its files compile into every build, even when the extension is disabled, so a new route must check `extensionRegistry.get('<id>')` after `ensureInitialized()` and refuse when the extension is absent. `npm run check:guards` enforces both rules through `scripts/checks/extension-route-guards.mjs`.
+**Physical route files.** Vercel cron targets (`vercel.json`) and some OAuth callbacks are concrete files under `src/app/api/extensions/<id>/`. That directory may import only its own extension. Its files compile into every build, even when the extension is disabled, so a new route must check `await extensionRegistry.get('<id>')` and refuse when the extension is absent. `npm run check:guards` enforces both rules through `scripts/checks/extension-route-guards.mjs`.
 
 **Generic data routes.** `src/app/api/extensions/[sector]/[slug]/data/route.ts` (GET, POST, DELETE) and `.../settings/route.ts` (GET, PATCH) store rows under `extension_id` `<sector>/<slug>` (for example `general/tic`). That is a different row set from `ctx.settings`, which uses the bare id. The client hook `src/lib/extensions/use-extension-data.ts` calls the data route. For new work, prefer `ctx.settings` behind your own `apiRoutes`.
 
@@ -239,7 +239,7 @@ export const enableBankingExtension: Extension = {
 }
 
 // src/app/api/v1/companies/[companyId]/bank-connections/[connectionId]/sync/route.ts (core): the caller
-const services = extensionRegistry.get('enable-banking')?.services as
+const services = (await extensionRegistry.get('enable-banking'))?.services as
   | Partial<EnableBankingServices>
   | undefined
 if (!services?.triggerConnectionSync) {
@@ -250,7 +250,7 @@ const result = await services.triggerConnectionSync(ctx.supabase, { companyId, u
 
 Other callers follow the same pattern:
 
-- `src/lib/extensions/payment-links.ts` scans `extensionRegistry.getAll()` for a `createInvoicePaymentLink` service (provided by `stripe`).
+- `src/lib/extensions/payment-links.ts` scans `await extensionRegistry.getAll()` for a `createInvoicePaymentLink` service (provided by `stripe`).
 - `src/lib/skatteverket/declaration-status.ts` resolves a `skatteverket` service.
 
 A related variant is to register an implementation into a core registry when the module loads. The `email` extension calls `registerEmailService()` from `src/lib/email/service.ts`, whose default is a no-op service; `_example-branding` calls `registerBrandingService()` from `src/lib/branding/service.ts`.
@@ -297,7 +297,7 @@ Tests live in `src/extensions/general/<id>/__tests__/`. Run them with `npx vites
 3. **Importing `@/extensions/` from core.** This includes `src/lib/`, `src/app/api/` outside `src/app/api/extensions/`, `src/components/` outside `src/components/extensions/`, and `src/types/index.ts`.
 4. **Assuming `ctx` exists.** It can be undefined in event handlers, and it is always undefined for `skipAuth` and `skipCompanyContext` routes.
 5. **Calling `settings.set(key, null)`.** Use `settings.clear(key)`.
-6. **Forgetting `ensureInitialized()`.** Routes, pages and server actions that emit events or read the registry need it at module level; the root layout does not load extensions.
+6. **Importing `@/lib/init` or calling `ensureInitialized()`.** `eventBus.emit()` and the registry reads load it on first use; `await` them instead.
 7. **Scaffolding with a sector other than `general`**, or following steps 4 and 5 of the `create-extension` output.
 8. **Adding a file under `src/app/api/extensions/<id>/` without the registry gate**, or importing another extension from it.
 9. **Writing journal entries directly** instead of through `src/lib/bookkeeping/engine.ts`.

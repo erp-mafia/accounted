@@ -1,6 +1,6 @@
 'use client'
 
-import { SIEJobFailedError, uploadSIEFile, waitForSIEJob } from '@/lib/import/sie-job-client'
+import { SIEJobFailedError, waitForSIEJob } from '@/lib/import/sie-job-client'
 import InvoiceCompletionRecovery from './InvoiceCompletionRecovery'
 import { describeImportResponseFailure, formatImportFailure } from '@/lib/import/import-failure'
 import { useState, useCallback, useEffect, useReducer, useRef } from 'react'
@@ -291,7 +291,7 @@ import {
   enrichAccountMappingsWithVat,
 } from '@/lib/import/account-vat-treatment'
 import type { TheaterModel } from '@/lib/import/theater-model'
-import type { AccountMapping, ImportResult, ParsedSIEFile } from '@/lib/import/types'
+import type { AccountMapping, ImportResult } from '@/lib/import/types'
 import type { AccountVatTreatment } from '@/lib/vat/account-vat-treatment'
 import type { BASAccount } from '@/types'
 
@@ -387,6 +387,12 @@ interface PreviewData {
 
 interface SIEFileStatus {
   fiscalYear: number
+  // Where /sie-data archived this year's file: the import is posted this
+  // path, never the content (a body over 4.5 MB never reached the server).
+  storagePath: string
+  filename: string
+  bytes: number
+  voucherCount: number
   // Legacy field for older builds: read previousImport instead.
   alreadyImported: boolean
   importedAt: string | null
@@ -402,10 +408,12 @@ interface SIEFileStatus {
 }
 
 interface SIEData {
-  parsed: ParsedSIEFile
+  // Built on the server from every selected year: the parse it comes from
+  // is as large as the files and stays there with them.
+  theater: TheaterModel
   mappings: AccountMapping[]
   mappingStats: { total: number; mapped: number; unmapped: number }
-  rawContent: string[]
+  // One entry per fetched file, oldest first.
   fileStatuses: SIEFileStatus[]
   allImported: boolean
   newFileCount: number
@@ -3729,32 +3737,20 @@ export default function ArcimMigrationWorkspace({
     setError(null)
     dispatchDocumentImport({ type: 'reset' })
 
-    // Build the theater from the parsed SIE the client already holds.
-    // Best-effort: any failure just leaves the plain progress card.
-    if (sieData?.parsed) {
-      try {
-        const { buildTheaterModel } = await import('@/lib/import/theater-model')
-        setTheaterModel(buildTheaterModel(sieData.parsed))
-      } catch {
-        setTheaterModel(null)
-      }
-    } else {
-      setTheaterModel(null)
-    }
+    // The theater /sie-data built over every selected year. Without one
+    // the plain progress card stays.
+    setTheaterModel(sieData?.theater ?? null)
 
     try {
       // ── Phase 1: SIE import ──────────────────────────────────
-      if (migrationOptions.importSIEData && sieData && sieData.rawContent.length > 0) {
+      if (migrationOptions.importSIEData && sieData && sieData.fileStatuses.length > 0) {
         setMigrationStep('Importerar bokföringsdata (SIE)...')
         setMigrationProgress(10)
         setSieImportResults([])
 
         // Complete fiscal years chronologically. Replacement is pinned to
         // the execution reviewed in the preview, including on retries.
-        const filesToImport = sieData.rawContent.map((content, i) => ({
-          content,
-          status: sieData.fileStatuses?.[i],
-        })).sort((a,b) => (a.status?.fiscalYear ?? 0)-(b.status?.fiscalYear ?? 0))
+        const filesToImport = [...sieData.fileStatuses].sort((a,b) => a.fiscalYear-b.fiscalYear)
 
         for (let i = 0; i < filesToImport.length; i++) {
           const progress = 10 + Math.round((i / filesToImport.length) * 40)
@@ -3765,11 +3761,9 @@ export default function ArcimMigrationWorkspace({
           // that dies on ONE year must say which, or the user cannot act on
           // it (issue #1667: the current year re-imported, the prior year
           // refused, and the error never said so).
-          const fiscalYear = filesToImport[i].status?.fiscalYear
+          const { fiscalYear, storagePath, filename } = filesToImport[i]
           const yearLabel = fiscalYear ? `Räkenskapsår ${fiscalYear}: ` : ''
 
-          const filename = 'migration-sie-'+(fiscalYear ?? i)+'.se'
-          const storagePath = await uploadSIEFile(new File([filesToImport[i].content],filename,{type:'text/plain'}))
           const res = await fetch('/api/extensions/ext/arcim-migration/import-sie', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -3781,7 +3775,7 @@ export default function ArcimMigrationWorkspace({
                 importOpeningBalances: true,
                 importTransactions: true,
                 voucherSeries: migrationOptions.voucherSeries,
-                supersedesImportId:filesToImport[i].status?.previousImport?.id,
+                supersedesImportId:filesToImport[i].previousImport?.id,
               },
             }),
           })

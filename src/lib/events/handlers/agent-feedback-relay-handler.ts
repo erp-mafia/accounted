@@ -83,7 +83,7 @@ export function registerAgentFeedbackRelayHandler(): () => void {
   return eventBus.on('agent.feedback', async (feedback) => {
     const to = agentFeedbackRecipient()
     if (!to || !isRelayWorthy(feedback)) return
-    const email = getEmailService()
+    const email = await getEmailService()
     if (!email.isConfigured()) return
     try {
       const service = createServiceClientNoCookies()

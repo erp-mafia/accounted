@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { UpdateRecurringScheduleSchema } from '@/lib/api/schemas'
@@ -12,8 +11,6 @@ import {
   getStockholmDateHour,
 } from '@/lib/invoices/recurring-schedule-service'
 import { runDateMatchesDayOfMonth } from '@/lib/invoices/recurring-run-date'
-
-ensureInitialized()
 
 export const GET = withRouteContext(
   'recurring_invoice.get',

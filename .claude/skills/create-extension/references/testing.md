@@ -9,10 +9,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { eventBus } from '@/lib/events/bus'
 
 vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn() }))
-vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 
 beforeEach(() => { vi.clearAllMocks(); eventBus.clear() })
 ```
+
+`lib/init` is stubbed for every unit test (`tests/unit/setup.ts`), so the first `eventBus.emit()` or registry read loads no real extension: a test sees only the handlers it registers.
 
 ## Mock Context
 

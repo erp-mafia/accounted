@@ -1,6 +1,5 @@
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { verifyCronSecret } from '@/lib/auth/cron'
 import { getCompanyIdsWithCapability } from '@/lib/entitlements/has-capability'
 import { orderByStalestSync } from '@/lib/skatteverket/sync-order'
@@ -15,8 +14,6 @@ import { listVerifiedCompanies, markGrantRevoked } from '@/extensions/general/sk
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { currentSkvEnvironment, hasVerifiedGrant } from '@/extensions/general/skatteverket/lib/resolve-auth'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-
-ensureInitialized()
 
 export const maxDuration = 60
 

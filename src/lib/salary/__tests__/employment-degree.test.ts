@@ -125,8 +125,8 @@ describe('source pins: no consumer reads monthly_salary raw as money', () => {
   const semesterberedning = source('lib/salary/semesterberedning.ts')
 
   it('the absence derivation is fed the degree-adjusted salary', () => {
-    const call = runCalculation.match(/loadAndDeriveAbsence\(\{[\s\S]*?\n\s*\}\)/)
-    expect(call, 'loadAndDeriveAbsence call not found').not.toBeNull()
+    const call = runCalculation.match(/deriveEmployeeAbsence\(\{[\s\S]*?\n\s*\}\)/)
+    expect(call, 'deriveEmployeeAbsence call not found').not.toBeNull()
     expect(call![0]).toContain(
       'monthlySalary: degreeAdjustedMonthlySalary(sre.monthly_salary, emp.employment_degree)',
     )

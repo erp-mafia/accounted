@@ -57,6 +57,17 @@ export class SIEJobValidationError extends Error {
   }
 }
 
+/**
+ * A path that is not `<companyId>/sie-intake/<id>.se` for the ACTIVE company
+ * (readSIEIntakeFile): another company's file, a traversal attempt or a
+ * made-up key. Never read. Still a SIEJobValidationError, so a caller that
+ * only knows the parent answers exactly as before.
+ */
+export class SIEIntakePathError extends SIEJobValidationError {}
+
+/** A well-formed intake path with no readable file behind it. */
+export class SIEIntakeNotFoundError extends SIEJobValidationError {}
+
 /** Accounted's financial reports classify targets by BAS classes 1-8. */
 export function assertSIEReportingAccounts(accounts: Iterable<string>): void {
   const unsupported = [...new Set(accounts)].filter(account => !isValidBASRange(account))

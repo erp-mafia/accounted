@@ -16,18 +16,13 @@ import {
   getDashboardCompanyId,
   getDashboardSettings,
   getDashboardTeamMemberships,
+  getDashboardUserProfile,
   getResolvedDashboardAgentProfile,
 } from './request-context'
 import { HemChecklistSection, HemNoticesSection, HemPanesSection } from './hem-sections'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { getTranslations } from 'next-intl/server'
-import { ensureInitialized } from '@/lib/init'
-
-// Hem reads the skatteverket extension's ombud services through the
-// extension registry (lib/skatteverket/ombud-access.ts), which only
-// ensureInitialized() fills. The root layout no longer loads extensions.
-ensureInitialized()
 
 export const dynamic = 'force-dynamic'
 
@@ -105,8 +100,9 @@ export default async function DashboardPage() {
   ] =
     await Promise.all([
       getDashboardSettings(),
-      // First name for the greeting.
-      supabase.from('profiles').select('full_name').eq('id', user.id).maybeSingle(),
+      // First name for the greeting (request-cached: the layout reads the
+      // same row for the account popover).
+      getDashboardUserProfile(),
       getResolvedDashboardAgentProfile(),
       // The Skatteverket promo below the panes needs this flag in the shell;
       // the checklist section reads it again for its own step (cheap head count).

@@ -33,10 +33,9 @@ import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { CreateCashAccountSchema, UpdateCashAccountFieldsSchema } from '@/lib/api/schemas'
 import { UUID_RE } from '@/lib/invariants/uuid'
 import { hasOpenTransactions, setEnabled, setVoucherSeries } from '@/lib/cash-accounts/service'
+import { isBankCashAccount, isUsableInvoicePayee } from '@/lib/cash-accounts/invoice-payee-rules'
 import {
   insertManualBankAccount,
-  isBankCashAccount,
-  isUsableInvoicePayee,
   loadInvoicePayeeState,
   planManualBankAccount,
   setInvoicePayeeDefault,

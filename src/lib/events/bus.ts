@@ -1,5 +1,6 @@
 import type { CoreEvent, CoreEventType, EventHandler } from './types'
 import { createLogger } from '@/lib/logger'
+import { whenInitialized } from '@/lib/initialized'
 
 // Internal handler type: loose enough for the Map, but type-safe at the public API
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -11,6 +12,10 @@ const log = createLogger('event-bus')
  * In-process event bus.
  *
  * - Handlers run concurrently via Promise.allSettled (failing handler never crashes emitter)
+ * - emit() resolves only after every handler has settled: await it, so the
+ *   handlers (event_log, webhooks, extensions) finish before the request does
+ * - The handlers are wired by lib/init, which emit() loads on the first event
+ *   (lib/initialized.ts). No caller has to initialise anything first.
  * - Module-level singleton (persists across requests in same process)
  * - One-way: core services emit, extensions subscribe
  * - Rejected handlers are logged with structured fields so they're greppable
@@ -40,6 +45,20 @@ class EventBus {
   }
 
   async emit(event: CoreEvent): Promise<void> {
+    try {
+      await whenInitialized()
+    } catch (err) {
+      // Same contract as a failing handler: logged, never thrown at the
+      // emitter, whose write has already happened. The next emit retries the
+      // load. Whatever was registered before the failure still runs below.
+      const payload = event.payload as Record<string, unknown>
+      log.error('initialisation failed before dispatch', err, {
+        eventType: event.type,
+        companyId: typeof payload.companyId === 'string' ? payload.companyId : undefined,
+        userId: typeof payload.userId === 'string' ? payload.userId : undefined,
+      })
+    }
+
     const handlerSet = this.handlers.get(event.type)
     if (!handlerSet || handlerSet.size === 0) return
 

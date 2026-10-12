@@ -25,12 +25,12 @@ function makeExtension(overrides: Partial<Extension> = {}): Extension {
 }
 
 describe('ExtensionRegistry', () => {
-  it('register() stores extension, queryable via get() and getAll()', () => {
+  it('register() stores extension, queryable via get() and getAll()', async () => {
     const ext = makeExtension()
     extensionRegistry.register(ext)
 
-    expect(extensionRegistry.get('test-ext')).toBe(ext)
-    expect(extensionRegistry.getAll()).toEqual([ext])
+    expect(await extensionRegistry.get('test-ext')).toBe(ext)
+    expect(await extensionRegistry.getAll()).toEqual([ext])
   })
 
   it('register() wires event handlers to the bus', async () => {
@@ -51,7 +51,7 @@ describe('ExtensionRegistry', () => {
     expect(handler.mock.calls[0][0]).toEqual({ entry: { id: 'e1' }, userId: 'u1', companyId: 'company-1' })
   })
 
-  it('register() skips duplicate registration (same id)', () => {
+  it('register() skips duplicate registration (same id)', async () => {
     const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const ext1 = makeExtension()
     const ext2 = makeExtension({ name: 'Duplicate' })
@@ -60,8 +60,8 @@ describe('ExtensionRegistry', () => {
     extensionRegistry.register(ext2)
 
     // Original is kept
-    expect(extensionRegistry.get('test-ext')!.name).toBe('Test Extension')
-    expect(extensionRegistry.getAll()).toHaveLength(1)
+    expect((await extensionRegistry.get('test-ext'))!.name).toBe('Test Extension')
+    expect(await extensionRegistry.getAll()).toHaveLength(1)
 
     consoleSpy.mockRestore()
   })
@@ -76,7 +76,7 @@ describe('ExtensionRegistry', () => {
     extensionRegistry.register(ext)
     extensionRegistry.unregister('removable')
 
-    expect(extensionRegistry.get('removable')).toBeUndefined()
+    expect(await extensionRegistry.get('removable')).toBeUndefined()
 
     await eventBus.emit({
       type: 'journal_entry.committed',
@@ -105,7 +105,7 @@ describe('ExtensionRegistry', () => {
 
     extensionRegistry.clear()
 
-    expect(extensionRegistry.getAll()).toHaveLength(0)
+    expect(await extensionRegistry.getAll()).toHaveLength(0)
 
     await eventBus.emit({
       type: 'journal_entry.committed',

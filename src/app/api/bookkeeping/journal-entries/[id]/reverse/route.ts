@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 
 const ReverseJournalEntrySchema = z
@@ -9,8 +8,6 @@ const ReverseJournalEntrySchema = z
     allow_deep_chain: z.boolean().optional(),
   })
   .strict()
-
-ensureInitialized()
 
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'bookkeeping.journal-entry.reverse',

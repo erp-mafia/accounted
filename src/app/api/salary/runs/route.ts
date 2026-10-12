@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
 import { CreateSalaryRunWithDefaultsSchema } from '@/lib/api/schemas'
 import { eventBus } from '@/lib/events'
@@ -11,8 +10,6 @@ import { SalaryDeviationPeriodError } from '@/lib/salary/deviation-period'
 import { defaultRunPaymentDate, formatRunPeriod, nextRunPeriod } from '@/lib/salary/next-run-period'
 import { runSalaryCalculation } from '@/lib/salary/run-calculation'
 import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
-
-ensureInitialized()
 
 export const GET = withRouteContext(
   'salary_run.list',

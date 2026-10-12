@@ -3,6 +3,7 @@ import type { PayrollConfig } from './payroll-config'
 import { daysBetweenIso } from '@/lib/dates/iso'
 import type { SalaryCalculationPolicy } from './calculation-policy'
 import { calendarLeaveDeduction } from './calendar-leave'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 /**
  * Derive payroll line items from per-day absence records.
@@ -690,14 +691,146 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
   }
 }
 
+/** One employee's absence rows, as a salary calculation reads them. */
+export interface EmployeeAbsenceRows {
+  /** Rows inside the deviation window, by date. */
+  periodDays: AbsenceDay[]
+  /** Rows within a month either side of the window (calendar convention only). */
+  contextDays: AbsenceDay[]
+  /** Sick rows in the 365 days before the window. */
+  lookbackSickDays: AbsenceDay[]
+  /** VAB dates from 1 January to the window start. */
+  vabDaysYtd: number
+  /** Parental leave dates from 1 January to the window start. */
+  parentalDaysPregnancyYtd: number
+}
+
+const NO_ABSENCE: EmployeeAbsenceRows = {
+  periodDays: [],
+  contextDays: [],
+  lookbackSickDays: [],
+  vabDaysYtd: 0,
+  parentalDaysPregnancyYtd: 0,
+}
+
+/** The fields derivation reads; the queries also carry employee_id to group by. */
+function absenceDay(row: AbsenceDay): AbsenceDay {
+  return { absence_date: row.absence_date, absence_type: row.absence_type, hours: row.hours }
+}
+
 /**
- * Convenience: load all DB inputs and derive in one call. Used by the
- * salary calculate route.
+ * Load the absence rows of every employee on a salary run in three reads,
+ * whatever the roster size: the deviation window (widened by a month either
+ * side under the calendar convention, which reads those rows as context),
+ * the 365-day sick lookback, and this year's VAB and parental dates before
+ * the window. Paginated: a roster's year of sick days passes PostgREST's
+ * 1000-row cap long before an employer is large.
+ *
+ * A failed window or lookback read throws: a calculation without them would
+ * pay sick leave as if none was registered. A failed year-to-date read counts
+ * as no earlier dates, as it always has.
  */
-export async function loadAndDeriveAbsence(params: {
-  supabase: SupabaseClient
-  companyId: string
-  employeeId: string
+export async function loadRunAbsence(
+  supabase: SupabaseClient,
+  params: {
+    companyId: string
+    employeeIds: string[]
+    periodStart: string
+    periodEnd: string
+    /** Read the surrounding month too (long_leave = calendar_after_five_workdays). */
+    withContext: boolean
+  },
+): Promise<Map<string, EmployeeAbsenceRows>> {
+  const { companyId, employeeIds, periodStart, periodEnd, withContext } = params
+  const byEmployee = new Map<string, EmployeeAbsenceRows>()
+  if (employeeIds.length === 0) return byEmployee
+  const forEmployee = (employeeId: string) => {
+    let rows = byEmployee.get(employeeId)
+    if (!rows) {
+      rows = { periodDays: [], contextDays: [], lookbackSickDays: [], vabDaysYtd: 0, parentalDaysPregnancyYtd: 0 }
+      byEmployee.set(employeeId, rows)
+    }
+    return rows
+  }
+  type EmployeeAbsenceDay = AbsenceDay & { employee_id: string }
+  // Every read orders by (employee_id, absence_date, absence_type), which is
+  // unique: a total order for paging, and date order within an employee.
+  const read = (
+    label: string,
+    query: (range: { from: number; to: number }) => PromiseLike<{
+      data: EmployeeAbsenceDay[] | null
+      error: { message: string } | null
+    }>,
+  ) =>
+    fetchAllRows(query).catch((err: unknown) => {
+      throw new Error(`${label}: ${err instanceof Error ? err.message : String(err)}`)
+    })
+
+  const yearStart = `${periodStart.slice(0, 4)}-01-01`
+  const [windowRows, lookbackRows, ytdRows] = await Promise.all([
+    read('Failed to load absence days', ({ from, to }) =>
+      supabase
+        .from('salary_absence_days')
+        .select('employee_id, absence_date, absence_type, hours')
+        .eq('company_id', companyId)
+        .in('employee_id', employeeIds)
+        .gte('absence_date', withContext ? addDays(periodStart, -31) : periodStart)
+        .lte('absence_date', withContext ? addDays(periodEnd, 31) : periodEnd)
+        .order('employee_id')
+        .order('absence_date')
+        .order('absence_type')
+        .range(from, to),
+    ),
+    read('Failed to load absence lookback', ({ from, to }) =>
+      supabase
+        .from('salary_absence_days')
+        .select('employee_id, absence_date, absence_type, hours')
+        .eq('company_id', companyId)
+        .in('employee_id', employeeIds)
+        .eq('absence_type', 'sick')
+        .gte('absence_date', addDays(periodStart, -365))
+        .lt('absence_date', periodStart)
+        .order('employee_id')
+        .order('absence_date')
+        .order('absence_type')
+        .range(from, to),
+    ),
+    read('Failed to load absence year to date', ({ from, to }) =>
+      supabase
+        .from('salary_absence_days')
+        .select('employee_id, absence_date, absence_type, hours')
+        .eq('company_id', companyId)
+        .in('employee_id', employeeIds)
+        .in('absence_type', ['vab', 'parental'])
+        .gte('absence_date', yearStart)
+        .lt('absence_date', periodStart)
+        .order('employee_id')
+        .order('absence_date')
+        .order('absence_type')
+        .range(from, to),
+    ).catch(() => [] as EmployeeAbsenceDay[]),
+  ])
+
+  for (const row of windowRows) {
+    const rows = forEmployee(row.employee_id)
+    if (row.absence_date < periodStart || row.absence_date > periodEnd) rows.contextDays.push(absenceDay(row))
+    else rows.periodDays.push(absenceDay(row))
+  }
+  for (const row of lookbackRows) forEmployee(row.employee_id).lookbackSickDays.push(absenceDay(row))
+  for (const row of ytdRows) {
+    const rows = forEmployee(row.employee_id)
+    if (row.absence_type === 'vab') rows.vabDaysYtd += 1
+    else rows.parentalDaysPregnancyYtd += 1
+  }
+  return byEmployee
+}
+
+/**
+ * Derive one employee's absence lines from the rows loadRunAbsence read.
+ * An employee without rows derives nothing.
+ */
+export function deriveEmployeeAbsence(params: {
+  rows: EmployeeAbsenceRows | undefined
   monthlySalary: number
   payrollConfig: PayrollConfig
   periodStart: string
@@ -714,88 +847,24 @@ export async function loadAndDeriveAbsence(params: {
   workdaysPerWeek?: number
   /** See DeriveInput.calculationPolicy. */
   calculationPolicy?: SalaryCalculationPolicy
-}): Promise<DeriveResult> {
-  const { supabase, companyId, employeeId, periodStart, periodEnd } = params
-
-  const { data: periodRows, error: periodErr } = await supabase
-    .from('salary_absence_days')
-    .select('absence_date, absence_type, hours')
-    .eq('company_id', companyId)
-    .eq('employee_id', employeeId)
-    .gte('absence_date', periodStart)
-    .lte('absence_date', periodEnd)
-    .order('absence_date', { ascending: true })
-  if (periodErr) throw new Error(`Failed to load absence days: ${periodErr.message}`)
-  const periodDays = (periodRows ?? []) as AbsenceDay[]
-
-  // Surrounding month on each side, only under the calendar convention: it
-  // decides whether an episode that touches the window edge is longer than
-  // five working days. Rows inside the window are already in periodDays.
-  let contextDays: AbsenceDay[] = []
-  if (params.calculationPolicy?.long_leave === 'calendar_after_five_workdays') {
-    const { data: contextRows, error: contextErr } = await supabase
-      .from('salary_absence_days')
-      .select('absence_date, absence_type, hours')
-      .eq('company_id', companyId)
-      .eq('employee_id', employeeId)
-      .gte('absence_date', addDays(periodStart, -31))
-      .lte('absence_date', addDays(periodEnd, 31))
-    if (contextErr) throw new Error(`Failed to load absence context: ${contextErr.message}`)
-    contextDays = ((contextRows ?? []) as AbsenceDay[]).filter(
-      d => d.absence_date < periodStart || d.absence_date > periodEnd,
-    )
-  }
-
-  const lookbackStart = addDays(periodStart, -365)
-  const { data: lookbackRows, error: lookbackErr } = await supabase
-    .from('salary_absence_days')
-    .select('absence_date, absence_type, hours')
-    .eq('company_id', companyId)
-    .eq('employee_id', employeeId)
-    .eq('absence_type', 'sick')
-    .gte('absence_date', lookbackStart)
-    .lt('absence_date', periodStart)
-  if (lookbackErr) throw new Error(`Failed to load absence lookback: ${lookbackErr.message}`)
-  const lookbackSickDays = (lookbackRows ?? []) as AbsenceDay[]
-  const lookbackSickDates = lookbackSickDays.map(r => r.absence_date)
-
-  const yearStart = `${periodStart.slice(0, 4)}-01-01`
-  const { data: vabYtd } = await supabase
-    .from('salary_absence_days')
-    .select('absence_date')
-    .eq('company_id', companyId)
-    .eq('employee_id', employeeId)
-    .eq('absence_type', 'vab')
-    .gte('absence_date', yearStart)
-    .lt('absence_date', periodStart)
-  const vabDaysYtd = vabYtd?.length ?? 0
-
-  const { data: parentalYtd } = await supabase
-    .from('salary_absence_days')
-    .select('absence_date')
-    .eq('company_id', companyId)
-    .eq('employee_id', employeeId)
-    .eq('absence_type', 'parental')
-    .gte('absence_date', yearStart)
-    .lt('absence_date', periodStart)
-  const parentalDaysPregnancyYtd = parentalYtd?.length ?? 0
-
+}): DeriveResult {
+  const rows = params.rows ?? NO_ABSENCE
   return deriveAbsenceLineItems({
     monthlySalary: params.monthlySalary,
     payrollConfig: params.payrollConfig,
-    periodDays,
-    lookbackSickDates,
-    lookbackSickDays,
-    vabDaysYtd,
-    parentalDaysPregnancyYtd,
+    periodDays: rows.periodDays,
+    lookbackSickDates: rows.lookbackSickDays.map(r => r.absence_date),
+    lookbackSickDays: rows.lookbackSickDays,
+    vabDaysYtd: rows.vabDaysYtd,
+    parentalDaysPregnancyYtd: rows.parentalDaysPregnancyYtd,
     karensPeriodsAdjustment: params.karensPeriodsAdjustment,
     dailyDivisor: params.dailyDivisor,
     hoursPerDay: params.hoursPerDay,
     hoursPerWeek: params.hoursPerWeek,
     workdaysPerWeek: params.workdaysPerWeek,
     calculationPolicy: params.calculationPolicy,
-    periodStart,
-    periodEnd,
-    contextDays,
+    periodStart: params.periodStart,
+    periodEnd: params.periodEnd,
+    contextDays: rows.contextDays,
   })
 }

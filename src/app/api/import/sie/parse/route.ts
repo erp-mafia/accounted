@@ -26,9 +26,6 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 import { readSIERequestFile } from '@/lib/import/sie-intake'
 import { resolveSIEFiscalYear } from '@/lib/import/sie-jobs'
 import { checkSIEOrgNumber } from '@/lib/import/sie-org-number'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 /**
  * POST /api/import/sie/parse

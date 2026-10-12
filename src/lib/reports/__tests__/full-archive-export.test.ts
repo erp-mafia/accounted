@@ -10,6 +10,7 @@ import {
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { getAuditLog } from '@/lib/core/audit/audit-service'
 import { generateTrialBalance } from '../trial-balance'
+import { balanceSheetFromTrialBalance } from '../balance-sheet'
 import { generateSIEExport } from '../sie-export'
 import { generateJournalRegister } from '../journal-register'
 import { generateSystemdokumentation } from '../systemdokumentation'
@@ -35,7 +36,7 @@ vi.mock('../income-statement', () => ({
 }))
 
 vi.mock('../balance-sheet', () => ({
-  generateBalanceSheet: vi.fn().mockResolvedValue({
+  balanceSheetFromTrialBalance: vi.fn().mockResolvedValue({
     asset_sections: [], equity_liability_sections: [],
     total_assets: 0, total_equity_liabilities: 0,
     period: { start: '2024-01-01', end: '2024-12-31' },
@@ -202,6 +203,18 @@ describe('generateFullArchive', () => {
       expect(generateSystemdokumentation).toHaveBeenCalledWith(supabase, 'company-1', PERIOD_2024.id, expect.any(Object))
       const documentation = JSON.parse(await zip.file('revision/systemdokumentation.json')!.async('text'))
       expect(documentation.fullstandig_dokumentation.arkiverad_kopia).toContain('revision/systemdokumentation/')
+    })
+
+    it("builds the balance sheet from the period's trial balance instead of a second one", async () => {
+      enqueueMany([{ data: COMPANY_ROW }, { data: PERIOD_2024 }])
+      const rows = [{ account_number: '1930', account_name: 'Bank', account_class: 1 }]
+      vi.mocked(generateTrialBalance).mockResolvedValueOnce({ rows, totalDebit: 0, totalCredit: 0, isBalanced: true } as never)
+      await generateFullArchive(supabase as any, 'company-1', {
+        scope: 'period', period_id: PERIOD_2024.id, include_documents: false,
+      })
+      expect(generateTrialBalance).toHaveBeenCalledTimes(1)
+      expect(generateTrialBalance).toHaveBeenCalledWith(supabase, 'company-1', PERIOD_2024.id, { closingEntry: 'include' })
+      expect(balanceSheetFromTrialBalance).toHaveBeenCalledWith(supabase, 'company-1', PERIOD_2024.id, rows)
     })
 
     it('marks a systemdokumentation snapshot that could not be generated instead of leaving it missing', async () => {

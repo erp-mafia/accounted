@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { verifyCronSecret } from '@/lib/auth/cron'
-import { loadExtensions } from '@/lib/extensions/loader'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { getSystemAuthMode, isSystemAuthConfigured } from '@/extensions/general/skatteverket/lib/system-auth/config'
 import { currentSkvEnvironment } from '@/extensions/general/skatteverket/lib/resolve-auth'
@@ -21,8 +19,6 @@ import {
   type HuvudmanGrantSummary,
 } from '@/extensions/general/skatteverket/lib/ombud-client'
 import type { SkvBehorighet } from '@/extensions/general/skatteverket/lib/connection-store'
-
-ensureInitialized()
 
 export const maxDuration = 60
 
@@ -88,8 +84,7 @@ export async function GET(request: Request) {
   // Physical routes under app/api/extensions/<id>/ compile into every build,
   // including core-with-zero-extensions: the registry is what switches the
   // extension on, so a disabled extension must refuse visibly (503).
-  loadExtensions()
-  if (!extensionRegistry.get('skatteverket')) {
+  if (!(await extensionRegistry.get('skatteverket'))) {
     return NextResponse.json(
       { error: 'Skatteverket extension is not enabled', code: 'EXTENSION_DISABLED' },
       { status: 503 }

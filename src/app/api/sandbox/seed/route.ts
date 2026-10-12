@@ -1,6 +1,5 @@
 import crypto from 'crypto'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
-import { ensureInitialized } from '@/lib/init'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse } from 'next/server'
@@ -40,7 +39,6 @@ import {
 // covers retries; an attacker has to rotate /24s to scale abuse.
 // The database lease outlives this function's maximum runtime.
 export const maxDuration = 300
-ensureInitialized()
 
 const RATE_LIMIT = { maxRequests: 5, windowMs: 60 * 60 * 1000 }
 

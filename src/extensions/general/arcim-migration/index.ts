@@ -1,6 +1,7 @@
 import { migrationJobRoutes } from './lib/migration-job-routes'
 import { invoiceCompletionRoutes } from './lib/invoice-completion-routes'
-import { readSIEIntakeFile } from '@/lib/import/sie-intake'
+import { archiveSIEIntakeText, readSIEIntakeFile } from '@/lib/import/sie-intake'
+import { buildTheaterModel } from '@/lib/import/theater-model'
 import { submitSIEJob } from '@/lib/import/sie-jobs'
 import { runSIEWorker } from '@/lib/import/sie-job-worker'
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
@@ -66,7 +67,7 @@ import {
   getBjornLundenActivationKey,
 } from '@/lib/providers/bjornlunden/activation'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { SIEJobDatabaseError, SIEJobValidationError } from '@/lib/import/sie-jobs'
+import { SIEIntakeNotFoundError, SIEIntakePathError, SIEJobDatabaseError, SIEJobValidationError } from '@/lib/import/sie-jobs'
 import { sieJobValidationResponse } from '@/lib/import/sie-job-validation-response'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import {
@@ -1368,13 +1369,26 @@ export const arcimMigrationExtension: Extension = {
           // no chart can hold) are named, as the upload's preview names them.
           preview.archivedOnlyAccounts = decided.archivedOnlyAccounts
 
+          // Each file is archived here, on the server, and the wizard gets
+          // its path, never its text: the text in the response and again in
+          // the /import-sie request body hit the hosting gateway's 4.5 MB
+          // body limit, so a large company's import could not start. The
+          // archive is the intake a browser upload writes; /import-sie reads
+          // it back only for the active company.
+          const archived = await Promise.all(
+            parsedFiles.map(({ file }) => archiveSIEIntakeText(supabase, companyId, file.rawContent)),
+          )
+
           // Detect prior imports by *fiscal period overlap*, not file hash.
           // Providers embed the export-time #GEN date in every SIE export so
           // the hash always changes between syncs; only the period stays
           // stable. A re-sync replaces the prior import for the same period.
           const fileStatuses: {
             fiscalYear: number
-            rawContent: string
+            storagePath: string
+            filename: string
+            bytes: number
+            voucherCount: number
             previousImport: {
               id: string
               importedAt: string | null
@@ -1382,7 +1396,7 @@ export const arcimMigrationExtension: Extension = {
               fiscalYearEnd: string | null
             } | null
           }[] = []
-          for (const { file, parsed: fileParsed } of parsedFiles) {
+          for (const [index, { file, parsed: fileParsed }] of parsedFiles.entries()) {
             const fyStart = fileParsed.stats.fiscalYearStart
             const fyEnd = fileParsed.stats.fiscalYearEnd
 
@@ -1409,7 +1423,10 @@ export const arcimMigrationExtension: Extension = {
 
             fileStatuses.push({
               fiscalYear: file.fiscalYear,
-              rawContent: file.rawContent,
+              storagePath: archived[index].path,
+              filename: `migration-sie-${file.fiscalYear}.se`,
+              bytes: archived[index].bytes,
+              voucherCount: fileParsed.stats.totalVouchers,
               previousImport: priorImport
                 ? {
                     id: priorImport.id,
@@ -1424,17 +1441,24 @@ export const arcimMigrationExtension: Extension = {
           const replacedFileCount = fileStatuses.filter(f => f.previousImport).length
 
           return NextResponse.json({
-            // The merged whole-dataset parse: SIEData.parsed feeds the
-            // migration theater (buildTheaterModel), which must see every
-            // fiscal year, not just the newest file.
-            parsed: merged,
+            // The merged dataset's accounts and its theater, built here: the
+            // whole parse (every voucher of every year) is as large as the
+            // files and stays on the server with them. The theater must see
+            // every fiscal year, not just the newest file.
+            accounts: merged.accounts,
+            theater: buildTheaterModel(merged),
             mappings,
             mappingStats,
             preview,
             validation,
-            rawContent: fileStatuses.map(f => f.rawContent),
+            // One entry per fetched file, oldest first: the path the import
+            // reads it from, never its content.
             fileStatuses: fileStatuses.map(f => ({
               fiscalYear: f.fiscalYear,
+              storagePath: f.storagePath,
+              filename: f.filename,
+              bytes: f.bytes,
+              voucherCount: f.voucherCount,
               previousImport: f.previousImport,
               // Back-compat for older wizard builds: an `alreadyImported`
               // boolean. The new wizard reads `previousImport` directly.
@@ -1453,6 +1477,8 @@ export const arcimMigrationExtension: Extension = {
             basAccounts: mappingTargets,
           })
         } catch (error) {
+          // A file the archive refuses (over 50 MB) names itself.
+          if (error instanceof SIEJobValidationError) return sieJobValidationResponse(error, moduleLog, ctx?.requestId)
           log.error('arcim sie-data fetch failed', error as Error)
           return providerFailureResponse(error, 'PROVIDER_SIE_FETCH_FAILED')
         }
@@ -1474,12 +1500,14 @@ export const arcimMigrationExtension: Extension = {
 
         const companyId = ctx?.companyId ?? user.id
 
-        const { rawContent: inlineContent, storagePath, filename, mappings, options } = await request.json() as {
-          storagePath?:string
-          filename?:string
-          rawContent: string
-          mappings: import('@/lib/import/types').AccountMapping[]
-          options: {
+        // The file travels by path, never as content: /sie-data archived it
+        // on the server, and a body carrying the text hit the hosting
+        // gateway's 4.5 MB limit. No caller posts content any more.
+        const body = await request.json().catch(() => null) as {
+          storagePath?: unknown
+          filename?: unknown
+          mappings?: import('@/lib/import/types').AccountMapping[]
+          options?: {
             createFiscalPeriod: boolean
             importOpeningBalances: boolean
             importTransactions: boolean
@@ -1487,23 +1515,53 @@ export const arcimMigrationExtension: Extension = {
             updateAccountNames?: boolean
             supersedesImportId?: string
           }
+        } | null
+        const { storagePath, filename = 'migration.se', mappings, options } = body ?? {}
+        if (typeof storagePath !== 'string' || !storagePath || typeof filename !== 'string' || !Array.isArray(mappings) || !options) {
+          return errorResponseFromCode('VALIDATION_ERROR', moduleLog, {
+            requestId: ctx?.requestId,
+            details: { fields: ['storagePath', 'mappings', 'options'], reason: 'required' },
+          })
         }
 
-        const originalFile = storagePath ? await readSIEIntakeFile(supabase,companyId,storagePath,filename ?? 'migration.se') : undefined
-        const rawContent = originalFile ? await originalFile.text() : inlineContent
-        if (!rawContent || !mappings) {
-          return NextResponse.json({ error: 'rawContent and mappings are required' }, { status: 400 })
+        // Only the active company's own intake is read: another company's
+        // path (even one this user is a member of), a traversal or a made-up
+        // key is refused before storage is asked, a missing file is a 404.
+        let originalFile: File
+        try {
+          originalFile = await readSIEIntakeFile(supabase, companyId, storagePath, filename)
+        } catch (error) {
+          if (error instanceof SIEIntakePathError) {
+            return errorResponseFromCode('FORBIDDEN', moduleLog, {
+              requestId: ctx?.requestId,
+              messageSv: 'SIE-filen hör inte till det här företaget.',
+              messageEn: 'The SIE file does not belong to this company.',
+              details: { field: 'storagePath' },
+            })
+          }
+          if (error instanceof SIEIntakeNotFoundError) {
+            return errorResponseFromCode('NOT_FOUND', moduleLog, {
+              requestId: ctx?.requestId,
+              messageSv: 'SIE-filen hittades inte. Hämta bokföringsdatan från leverantören igen.',
+              messageEn: 'The SIE file was not found. Fetch the accounting data from the provider again.',
+              details: { field: 'storagePath' },
+            })
+          }
+          if (error instanceof SIEJobValidationError) return sieJobValidationResponse(error, moduleLog, ctx?.requestId)
+          throw error
         }
+        const rawContent = await originalFile.text()
 
         try {
           const parsed = parseSIEFile(rawContent)
 
-          // Mojibake tripwire (warn, never block). This handler receives SIE
-          // as an ALREADY-DECODED string, so an upstream that decoded CP437
-          // bytes as windows-1252 has baked the corruption in before we ever
-          // see it (the retired Arcim Sync gateway did exactly that on
-          // 2026-03-17). Flag the signature so it can never again land
-          // silently in posted entries; the import itself proceeds untouched.
+          // Mojibake tripwire (warn, never block). The archived file holds
+          // the ALREADY-DECODED text /sie-data fetched, so an upstream that
+          // decoded CP437 bytes as windows-1252 has baked the corruption in
+          // before we ever see it (the retired Arcim Sync gateway did
+          // exactly that on 2026-03-17). Flag the signature so it can never
+          // again land silently in posted entries; the import itself
+          // proceeds untouched.
           const artifactScan = scanSieForCp1252Artifacts(parsed)
           if (artifactScan.flagged) {
             log.warn('import-sie: CP1252 mojibake artifacts in SIE text', {

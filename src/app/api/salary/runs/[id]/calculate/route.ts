@@ -1,10 +1,7 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { runSalaryCalculation } from '@/lib/salary/run-calculation'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-
-ensureInitialized()
 
 /**
  * POST /api/salary/runs/{id}/calculate

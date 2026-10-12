@@ -182,7 +182,7 @@ export async function sendPayslips(
     }
   }
 
-  const emailService = getEmailService()
+  const emailService = await getEmailService()
   // Brand mail (WL-13): payslip links and the sender identity follow the
   // company's brand; no brand = canonical URL and platform sender as before.
   const sender = await getSenderForCompany(companyId)

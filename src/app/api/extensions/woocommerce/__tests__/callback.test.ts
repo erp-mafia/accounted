@@ -5,7 +5,6 @@ vi.mock('@/lib/supabase/server', () => ({
 }))
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 vi.mock('@/lib/events/bus', () => ({ eventBus: { emit: vi.fn() } }))
-vi.mock('@/lib/extensions/loader', () => ({ loadExtensions: vi.fn() }))
 vi.mock('@/lib/extensions/registry', () => ({ extensionRegistry: { get: vi.fn() } }))
 vi.mock('@/extensions/general/woocommerce/lib/api-client', async (importOriginal) => {
   const actual =
@@ -67,8 +66,8 @@ describe('POST /api/extensions/woocommerce/callback', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.stubEnv('WOOCOMMERCE_CREDENTIALS_ENCRYPTION_KEY', 'test-key')
-    vi.mocked(extensionRegistry.get).mockReturnValue(
-      { id: 'woocommerce' } as ReturnType<typeof extensionRegistry.get>,
+    vi.mocked(extensionRegistry.get).mockResolvedValue(
+      { id: 'woocommerce' } as Awaited<ReturnType<typeof extensionRegistry.get>>,
     )
   })
 
@@ -77,7 +76,7 @@ describe('POST /api/extensions/woocommerce/callback', () => {
   })
 
   it('refuses with 503 when the extension is disabled', async () => {
-    vi.mocked(extensionRegistry.get).mockReturnValue(undefined)
+    vi.mocked(extensionRegistry.get).mockResolvedValue(undefined)
     const res = await POST(makeCallbackRequest(VALID_BODY))
     expect(res.status).toBe(503)
     const body = await res.json()

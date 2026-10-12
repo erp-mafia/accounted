@@ -2,7 +2,6 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
-import { ensureInitialized } from '@/lib/init'
 import { buildMappingResultFromCategory } from '@/lib/bookkeeping/category-mapping'
 import { reconcileRcBasisWithChart } from '@/lib/bookkeeping/rc-basis-reconcile'
 import { chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
@@ -33,8 +32,6 @@ import type { Logger } from '@/lib/logger'
 import { validateBody } from '@/lib/api/validate'
 import { CategorizeTransactionSchema } from '@/lib/api/schemas'
 import type { JournalEntry, Transaction, TransactionCategory, EntityType } from '@/types'
-
-ensureInitialized()
 
 /**
  * Ensure a fiscal period exists for the given date, create one if needed.

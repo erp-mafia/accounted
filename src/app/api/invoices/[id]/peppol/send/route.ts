@@ -3,14 +3,9 @@ import { z } from 'zod'
 import { privateNoStore } from '@/lib/api/private-no-store'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { ensureInitialized } from '@/lib/init'
 import type { PeppolDeliverySummary } from '@/lib/invoices/peppol-delivery'
 import { peppolSendFailureMessageEn, sendInvoiceViaPeppol } from '@/lib/invoices/peppol-send-service'
 import { createServiceClient } from '@/lib/supabase/server'
-
-// Registers the configured Access Point adapter and wires the event bus that
-// issueAndBookInvoice() emits on.
-ensureInitialized()
 
 // The connector transport waits up to 25 s for the lookup and 50 s for the
 // submit (lib/invoices/transports/connector.ts), so the send gets 90 s.

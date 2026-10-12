@@ -8,10 +8,6 @@ import { caseView, loadCaseEvents } from '@/lib/collections/case'
 import { caseRefusalResponse, webCaseServiceDeps } from '@/lib/collections/case-routes'
 import { readCollectionsEnv } from '@/lib/collections/flags'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { ensureInitialized } from '@/lib/init'
-
-// Actions emit collection.case_updated and collection.case_closed.
-ensureInitialized()
 
 export const maxDuration = 60
 

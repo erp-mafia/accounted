@@ -164,7 +164,7 @@ export async function sendReminder(
     ...surcharges,
   }
 
-  const result = await getEmailService().sendEmail({
+  const result = await (await getEmailService()).sendEmail({
     to: customer.email,
     subject: generateReminderEmailSubject(emailData),
     html: generateReminderEmailHtml(emailData),

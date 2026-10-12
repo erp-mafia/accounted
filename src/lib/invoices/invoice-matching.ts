@@ -11,7 +11,7 @@
  *
  * That guard is silent by design, which is its own problem: the user never
  * learns why the EUR invoice that obviously matches is missing from the
- * suggestions. `findInvoiceMatchCandidates()` therefore returns the dropped
+ * suggestions. `matchInvoiceCandidates()` therefore returns the dropped
  * invoices alongside the matches (same shape as `unconverted_fx_count` in
  * lib/reports/supplier-ledger.ts), so a caller can name them and point at the
  * repair: POST /api/invoices/{id}/refresh-exchange-rate.
@@ -23,6 +23,10 @@
  *
  * The supplier-side twin is lib/invoices/supplier-invoice-matching.ts. Keep the
  * two guards in step.
+ *
+ * Reading and scoring are separate: `loadInvoiceMatchPool()` reads the open
+ * invoices once for a batch of bank rows, and the scorers below are pure, so
+ * a batch never re-reads the same invoices for every row.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -262,42 +266,36 @@ function emptyResult(): InvoiceMatchResult {
   return { matches: [], unconvertedFxCount: 0, unconvertedFxInvoices: [] }
 }
 
+/** An open customer invoice as the matcher reads it: the row with its customer. */
+export type MatchableInvoice = Invoice & { customer?: Customer }
+
 /**
- * Find invoices that potentially match a bank transaction
+ * The open customer invoices a batch of bank rows is matched against. Read
+ * once per batch by `loadInvoiceMatchPool()`, then scored row by row by the
+ * pure `matchInvoiceCandidates()`, so a batch of N income rows costs the same
+ * two reads as one row instead of 2N.
  *
- * Only matches income transactions (amount > 0) against unpaid invoices
- * Returns matches sorted by confidence, filtered to >= 50% confidence
- *
- * Thin wrapper over `findInvoiceMatchCandidates()` that drops the exclusion
- * diagnostics. Use the candidates function when the caller can tell the user
- * why an invoice was withheld.
+ * Already narrowed to what may be offered: fakturor only (no quote, proforma
+ * or delivery note), no credit note, no invoice a live credit note covers, and
+ * no sent/overdue invoice whose payment voucher already exists. Ordered by id.
  */
-export async function findMatchingInvoices(
-  supabase: SupabaseClient,
-  companyId: string,
-  transaction: Transaction
-): Promise<InvoiceMatch[]> {
-  const { matches } = await findInvoiceMatchCandidates(supabase, companyId, transaction)
-  return matches
+export interface InvoiceMatchPool {
+  readonly invoices: readonly MatchableInvoice[]
 }
 
 /**
- * `findMatchingInvoices()` plus the invoices that were dropped before scoring
- * because they carried no comparable amount.
+ * Read the open, payable customer invoices of a company once, for a whole
+ * batch of bank rows. A failed invoice read yields an empty pool (no match,
+ * never a failed import); a failed payment-voucher read throws, because
+ * without it a status-leaked paid invoice would be offered again.
  */
-export async function findInvoiceMatchCandidates(
+export async function loadInvoiceMatchPool(
   supabase: SupabaseClient,
   companyId: string,
-  transaction: Transaction
-): Promise<InvoiceMatchResult> {
-  // Only match income transactions
-  if (transaction.amount <= 0) {
-    return emptyResult()
-  }
-
-  // Query unpaid invoices (sent or overdue) with customer info. Proformas,
-  // delivery notes and quotes are never receivables, so a sent quote is never
-  // proposed as a payment candidate.
+): Promise<InvoiceMatchPool> {
+  // Unpaid invoices (sent or overdue) with customer info. Proformas, delivery
+  // notes and quotes are never receivables, so a sent quote is never proposed
+  // as a payment candidate.
   let invoices: Array<Invoice & { customer?: { name?: string | null } | null }>
   try {
     invoices = await fetchAllRows(({ from, to }) =>
@@ -312,8 +310,7 @@ export async function findInvoiceMatchCandidates(
         .range(from, to),
     )
   } catch {
-    // Failed to fetch invoices: return empty matches
-    return emptyResult()
+    return { invoices: [] }
   }
 
   // Defensive filter: exclude invoices that already have a payment voucher
@@ -346,13 +343,30 @@ export async function findInvoiceMatchCandidates(
         .range(from, to),
     )
     for (const row of paymentRows) {
-      paidIds.add((row as { invoice_id: string }).invoice_id)
+      paidIds.add(row.invoice_id)
     }
   }
-  const filteredInvoices = payableInvoices.filter((inv) => !paidIds.has(inv.id as string))
-  if (filteredInvoices.length === 0) {
+  return {
+    invoices: payableInvoices.filter((inv) => !paidIds.has(inv.id as string)) as MatchableInvoice[],
+  }
+}
+
+/**
+ * Score one bank row against a loaded pool: the matches (sorted by confidence,
+ * >= 50 %) plus the invoices dropped before scoring because they carried no
+ * comparable amount. Pure: no reads, so a caller scores a whole batch against
+ * one `loadInvoiceMatchPool()`.
+ *
+ * Only income rows (amount > 0) match.
+ */
+export function matchInvoiceCandidates(
+  transaction: Transaction,
+  pool: InvoiceMatchPool,
+): InvoiceMatchResult {
+  if (transaction.amount <= 0 || pool.invoices.length === 0) {
     return emptyResult()
   }
+  const filteredInvoices = pool.invoices
 
   const matches: InvoiceMatch[] = []
   const unconvertedFxInvoices: InvoiceMatchExclusion[] = []
@@ -368,7 +382,7 @@ export async function findInvoiceMatchCandidates(
     for (const invoice of filteredInvoices) {
       if (matchesNormalizedReference(invoice.invoice_number, normalizedRef)) {
         matches.push({
-          invoice: invoice as Invoice & { customer?: Customer },
+          invoice,
           confidence: CONFIDENCE.OCR_REFERENCE_MATCH,
           matchReason: `OCR-referens matchar fakturanummer ${invoice.invoice_number}`,
         })
@@ -409,8 +423,8 @@ export async function findInvoiceMatchCandidates(
       }
     }
   }
-  const inTextMatch = (invoice: Invoice): InvoiceMatch => ({
-    invoice: invoice as Invoice & { customer?: Customer },
+  const inTextMatch = (invoice: MatchableInvoice): InvoiceMatch => ({
+    invoice,
     confidence: CONFIDENCE.OCR_REFERENCE_IN_TEXT,
     matchReason: `OCR-referens för faktura ${invoice.invoice_number} förekommer i banktexten`,
   })
@@ -458,27 +472,18 @@ export async function findInvoiceMatchCandidates(
       continue
     }
 
-    // Calculate score
-    const invoiceWithAdjustedTotal = {
+    // Score against the comparable amount; the pool's row is left untouched.
+    const { confidence, matchReason } = calculateMatchScore(transaction, {
       ...invoice,
-      total: compareAmount, // Use the comparable amount
-    }
-
-    const { confidence, matchReason } = calculateMatchScore(
-      transaction,
-      invoiceWithAdjustedTotal as Invoice & { customer?: Customer }
-    )
+      total: compareAmount,
+    })
 
     // The reference reason and the amount reason are two readings of the same
     // invoice, so the invoice is offered once, under the stronger of the two.
     if (referenceInText && CONFIDENCE.OCR_REFERENCE_IN_TEXT > confidence) {
       matches.push(inTextMatch(invoice))
     } else if (confidence >= CONFIDENCE.MIN_THRESHOLD) {
-      matches.push({
-        invoice: invoice as Invoice & { customer?: Customer },
-        confidence,
-        matchReason,
-      })
+      matches.push({ invoice, confidence, matchReason })
     }
   }
 
@@ -499,27 +504,23 @@ export async function findInvoiceMatchCandidates(
 }
 
 /**
- * Get the best matching invoice for a transaction
- * Returns the highest confidence match if it meets the threshold
+ * The highest-confidence match for one bank row when it meets
+ * `minConfidence`, else null. Pure, like `matchInvoiceCandidates()`.
  *
  * `InvoiceMatch | null` has nowhere to carry a reason, so an invoice withheld
  * for a missing exchange rate is invisible on this path. Callers that can show
- * the user something should use `findInvoiceMatchCandidates()` and read
- * `unconvertedFxInvoices`; widening this signature is left to whoever has a
- * surface to render it on.
+ * the user something should use `matchInvoiceCandidates()` and read
+ * `unconvertedFxInvoices`.
  */
-export async function getBestInvoiceMatch(
-  supabase: SupabaseClient,
-  companyId: string,
+export function bestInvoiceMatch(
   transaction: Transaction,
-  minConfidence: number = 0.80
-): Promise<InvoiceMatch | null> {
-  const matches = await findMatchingInvoices(supabase, companyId, transaction)
-
+  pool: InvoiceMatchPool,
+  minConfidence: number = 0.80,
+): InvoiceMatch | null {
+  const { matches } = matchInvoiceCandidates(transaction, pool)
   if (matches.length > 0 && matches[0].confidence >= minConfidence) {
     return matches[0]
   }
-
   return null
 }
 

@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
@@ -9,8 +8,6 @@ import {
   resolveUnsettledStatus,
 } from '@/lib/supplier-invoices/lifecycle'
 import type { SupplierInvoice } from '@/types'
-
-ensureInitialized()
 
 export const POST = withRouteContext(
   'supplier_invoice.approve',

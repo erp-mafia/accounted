@@ -49,7 +49,7 @@ export async function sendKvittensNotification(
 ): Promise<{ sent: boolean; reason?: string }> {
   const referenceUuid = toReferenceUuid(input.referenceId)
   try {
-    const email = getEmailService()
+    const email = await getEmailService()
     if (!email.isConfigured()) return { sent: false, reason: 'email_not_configured' }
 
     // Dedup fast path: cheap read that skips the work below on re-observed

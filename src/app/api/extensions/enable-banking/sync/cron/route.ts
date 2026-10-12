@@ -16,7 +16,6 @@ import {
   REAUTH_REQUIRED_MESSAGE,
   SYNC_FAILED_MESSAGE,
 } from '@/extensions/general/enable-banking/lib/api-client'
-import { ensureInitialized } from '@/lib/init'
 import { getCompanyIdsWithCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { withCronContext } from '@/lib/api/with-cron-context'
@@ -40,8 +39,6 @@ import { planBankSyncRun } from '@/extensions/general/enable-banking/lib/cron-pl
 import { applyRateLimitCooldown, claimSyncLease } from '@/extensions/general/enable-banking/lib/sync-lease'
 import { sendConsentExpiryNotification } from '@/extensions/general/enable-banking/lib/consent-expiry-notification'
 import { mapWithConcurrency } from '@/lib/concurrency'
-
-ensureInitialized()
 
 // Without this export the route runs under the platform default (60s), which
 // is why the sync loop used to self-limit to 50s and starve the queue: ~17

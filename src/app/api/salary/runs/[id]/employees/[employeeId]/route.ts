@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { SalaryEmployeeOverrideSchema } from '@/lib/api/schemas'
@@ -8,8 +7,6 @@ import { removeEmployeeFromRun, setRunEmployeeSalary } from '@/lib/salary/run-em
 import { refreshRunTotals, type OverrideAffectedTotals } from '@/lib/salary/refresh-run-totals'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized()
 
 /** Fetch one employee's pay spec within a salary run, with employee + line items. */
 export const GET = withRouteContext<{ params: Promise<{ id: string; employeeId: string }> }>(

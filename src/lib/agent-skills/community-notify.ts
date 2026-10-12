@@ -37,7 +37,7 @@ async function userEmail(service: SupabaseClient, userId: string): Promise<strin
  */
 export async function notifyPublishedAuthors(service: SupabaseClient, fetchImpl: Fetch = fetch): Promise<PublishedNotifyResult> {
   const result: PublishedNotifyResult = { notified: [], waiting: [], failed: [] }
-  const email = getEmailService()
+  const email = await getEmailService()
   if (!email.isConfigured()) return result
   const { data, error } = await service.from('company_skills')
     .select('id, name, author_handle, created_by, published_atom_id')
@@ -84,7 +84,7 @@ export async function notifyReviewersOfSubmission(
   reviewUrl: string,
 ): Promise<void> {
   try {
-    const email = getEmailService()
+    const email = await getEmailService()
     const ids = communityReviewerIds()
     if (!email.isConfigured() || ids.length === 0) return
     const to = (await Promise.all(ids.map((id) => userEmail(service, id)))).filter((address): address is string => !!address)

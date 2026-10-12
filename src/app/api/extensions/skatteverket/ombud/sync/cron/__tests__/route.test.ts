@@ -2,7 +2,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
-vi.mock('@/lib/extensions/loader', () => ({ loadExtensions: vi.fn() }))
 const mockRegistryGet = vi.fn((_id: string): unknown => ({ id: 'skatteverket' }))
 vi.mock('@/lib/extensions/registry', () => ({
   extensionRegistry: { get: (id: string) => mockRegistryGet(id) },

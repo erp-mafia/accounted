@@ -4,9 +4,9 @@ import {
   amountsMatchFuzzy,
   customerNameMatches,
   calculateMatchScore,
-  findMatchingInvoices,
-  findInvoiceMatchCandidates,
-  getBestInvoiceMatch,
+  bestInvoiceMatch,
+  loadInvoiceMatchPool,
+  matchInvoiceCandidates,
 } from '../invoice-matching'
 import { generateOcrReference } from '@/lib/bankgiro/luhn'
 import type { Transaction, Invoice, Customer } from '@/types'
@@ -17,6 +17,19 @@ import {
   createMockSupabase,
   createQueuedMockSupabase,
 } from '@/tests/helpers'
+
+/** The batch path for a batch of one: load the pool from the mock, score the row. */
+async function candidatesFor(supabase: unknown, tx: Transaction) {
+  return matchInvoiceCandidates(tx, await loadInvoiceMatchPool(supabase as never, 'company-1'))
+}
+
+async function matchesFor(supabase: unknown, tx: Transaction) {
+  return (await candidatesFor(supabase, tx)).matches
+}
+
+async function bestFor(supabase: unknown, tx: Transaction, minConfidence?: number) {
+  return bestInvoiceMatch(tx, await loadInvoiceMatchPool(supabase as never, 'company-1'), minConfidence)
+}
 
 // ============================================================
 // amountsMatchExact
@@ -148,26 +161,28 @@ describe('calculateMatchScore', () => {
 })
 
 // ============================================================
-// findMatchingInvoices (integration: mock Supabase)
+// loadInvoiceMatchPool + matchInvoiceCandidates (mock Supabase)
 // ============================================================
 
-describe('findMatchingInvoices', () => {
+describe('matchInvoiceCandidates', () => {
   const { supabase, mockResult } = createMockSupabase()
 
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('returns empty for expense transactions (amount <= 0)', async () => {
-    const tx = makeTransaction({ amount: -1000 })
-    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
-    expect(result).toEqual([])
+  it('returns empty for expense transactions (amount <= 0)', () => {
+    const tx = makeTransaction({ amount: -1000, reference: 'F-2024001' })
+    const pool = {
+      invoices: [makeInvoice({ invoice_number: 'F-2024001', total: 1000, status: 'sent', remaining_amount: 1000 })],
+    }
+    expect(matchInvoiceCandidates(tx, pool).matches).toEqual([])
   })
 
   it('returns empty when Supabase query errors', async () => {
     mockResult({ data: null, error: { message: 'db error' } })
     const tx = makeTransaction({ amount: 12500 })
-    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+    const result = await matchesFor(supabase, tx)
     expect(result).toEqual([])
   })
 
@@ -176,7 +191,7 @@ describe('findMatchingInvoices', () => {
     queued.enqueue({ data: [], error: null })
     const tx = makeTransaction({ amount: 12500 })
 
-    await findMatchingInvoices(queued.supabase as never, 'company-1', tx)
+    await matchesFor(queued.supabase, tx)
 
     expect(queued.findCalls('invoices', 'eq')).toContainEqual(['document_type', 'invoice'])
   })
@@ -192,7 +207,7 @@ describe('findMatchingInvoices', () => {
       error: null,
     })
 
-    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+    const result = await matchesFor(supabase, tx)
     expect(result).toHaveLength(2)
     // Same score for both (exact amount, no customer name): scores untouched.
     expect(result[0].confidence).toBe(result[1].confidence)
@@ -208,7 +223,7 @@ describe('findMatchingInvoices', () => {
       error: null,
     })
 
-    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+    const result = await matchesFor(supabase, tx)
     expect(result).toHaveLength(1)
     expect(result[0].confidence).toBe(0.99)
     expect(result[0].matchReason).toContain('OCR-referens')
@@ -226,7 +241,7 @@ describe('findMatchingInvoices', () => {
       error: null,
     })
 
-    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+    const result = await matchesFor(supabase, tx)
     expect(result).toHaveLength(1)
     expect(result[0].confidence).toBe(0.99)
     expect(result[0].matchReason).toContain('OCR-referens')
@@ -241,7 +256,7 @@ describe('findMatchingInvoices', () => {
       error: null,
     })
 
-    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+    const result = await matchesFor(supabase, tx)
     expect(result).toHaveLength(1)
     expect(result[0].confidence).toBe(0.99)
   })
@@ -257,7 +272,7 @@ describe('findMatchingInvoices', () => {
       error: null,
     })
 
-    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+    const result = await matchesFor(supabase, tx)
     expect(result).toHaveLength(1)
     expect(result[0].confidence).toBe(0.80)
     expect(result[0].matchReason).not.toContain('OCR-referens')
@@ -281,7 +296,7 @@ describe('findMatchingInvoices', () => {
       error: null,
     })
 
-    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+    const result = await matchesFor(supabase, tx)
     expect(result).toHaveLength(2)
     expect(result[0].invoice.id).toBe('inv-ocr')
     expect(result[0].confidence).toBe(0.85)
@@ -300,7 +315,7 @@ describe('findMatchingInvoices', () => {
       error: null,
     })
 
-    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+    const result = await matchesFor(supabase, tx)
     expect(result).toEqual([])
   })
 
@@ -318,7 +333,7 @@ describe('findMatchingInvoices', () => {
       error: null,
     })
 
-    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+    const result = await matchesFor(supabase, tx)
 
     expect(result).toEqual([])
   })
@@ -337,7 +352,7 @@ describe('findMatchingInvoices', () => {
       error: null,
     })
 
-    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+    const result = await matchesFor(supabase, tx)
 
     expect(result).toEqual([])
   })
@@ -356,7 +371,7 @@ describe('findMatchingInvoices', () => {
       error: null,
     })
 
-    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+    const result = await matchesFor(supabase, tx)
     // Only the OCR match should be returned
     expect(result).toHaveLength(1)
     expect(result[0].confidence).toBe(0.99)
@@ -372,7 +387,7 @@ describe('findMatchingInvoices', () => {
       error: null,
     })
 
-    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+    const result = await matchesFor(supabase, tx)
     expect(result).toHaveLength(1)
     expect(result[0].confidence).toBe(0.95)
   })
@@ -387,7 +402,7 @@ describe('findMatchingInvoices', () => {
       error: null,
     })
 
-    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+    const result = await matchesFor(supabase, tx)
     expect(result).toHaveLength(1)
     expect(result[0].confidence).toBe(0.80)
   })
@@ -410,7 +425,7 @@ describe('findMatchingInvoices', () => {
       error: null,
     })
 
-    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+    const result = await matchesFor(supabase, tx)
     expect(result).toHaveLength(2)
     expect(result[0].confidence).toBe(0.95)
     expect(result[1].confidence).toBe(0.80)
@@ -426,7 +441,7 @@ describe('findMatchingInvoices', () => {
       error: null,
     })
 
-    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+    const result = await matchesFor(supabase, tx)
     expect(result).toEqual([])
   })
 
@@ -440,7 +455,7 @@ describe('findMatchingInvoices', () => {
       error: null,
     })
 
-    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+    const result = await matchesFor(supabase, tx)
     expect(result).toHaveLength(1)
     expect(result[0].confidence).toBe(0.80) // exact amount match
   })
@@ -455,17 +470,17 @@ describe('findMatchingInvoices', () => {
       error: null,
     })
 
-    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
+    const result = await matchesFor(supabase, tx)
     // EUR invoice with no total_sek → currency mismatch → skipped
     expect(result).toEqual([])
   })
 })
 
 // ============================================================
-// findMatchingInvoices: a reference in the bank text is a whole number
+// matchInvoiceCandidates: a reference in the bank text is a whole number
 // ============================================================
 
-describe('findMatchingInvoices: reference in bank text', () => {
+describe('matchInvoiceCandidates: reference in bank text', () => {
   const { supabase, mockResult } = createMockSupabase()
 
   beforeEach(() => {
@@ -482,7 +497,7 @@ describe('findMatchingInvoices: reference in bank text', () => {
       ],
       error: null,
     })
-    return findMatchingInvoices(supabase as never, 'company-1', tx)
+    return matchesFor(supabase, tx)
   }
 
   it.each([
@@ -518,10 +533,10 @@ describe('findMatchingInvoices: reference in bank text', () => {
 })
 
 // ============================================================
-// getBestInvoiceMatch
+// bestInvoiceMatch
 // ============================================================
 
-describe('getBestInvoiceMatch', () => {
+describe('bestInvoiceMatch', () => {
   const { supabase, mockResult } = createMockSupabase()
 
   beforeEach(() => {
@@ -538,7 +553,7 @@ describe('getBestInvoiceMatch', () => {
       error: null,
     })
 
-    const result = await getBestInvoiceMatch(supabase as never, 'company-1', tx)
+    const result = await bestFor(supabase, tx)
     expect(result).not.toBeNull()
     expect(result!.confidence).toBe(0.80)
   })
@@ -554,7 +569,7 @@ describe('getBestInvoiceMatch', () => {
     })
 
     // minConfidence 0.90 → 0.80 match rejected
-    const result = await getBestInvoiceMatch(supabase as never, 'company-1', tx, 0.90)
+    const result = await bestFor(supabase, tx, 0.90)
     expect(result).toBeNull()
   })
 
@@ -569,13 +584,13 @@ describe('getBestInvoiceMatch', () => {
     })
 
     // Exact amount only → 0.80, meets default threshold
-    const result = await getBestInvoiceMatch(supabase as never, 'company-1', tx)
+    const result = await bestFor(supabase, tx)
     expect(result).not.toBeNull()
   })
 })
 
 // ============================================================
-// findMatchingInvoices: paid-voucher status-leak guard
+// loadInvoiceMatchPool: paid-voucher status-leak guard
 // ============================================================
 //
 // Defensive filter added because manual verifikationer (booked outside the
@@ -588,7 +603,7 @@ describe('getBestInvoiceMatch', () => {
 //     more payments legitimately)
 //   - invoices without payment rows still pass through unchanged
 
-describe('findMatchingInvoices: status-leak guard', () => {
+describe('loadInvoiceMatchPool: status-leak guard', () => {
   it('excludes a sent invoice that already has a payment voucher', async () => {
     const { supabase: queuedSupabase, enqueue } = createQueuedMockSupabase()
     const inv = {
@@ -605,7 +620,7 @@ describe('findMatchingInvoices: status-leak guard', () => {
     enqueue({ data: [{ invoice_id: 'inv-leaked' }], error: null })
 
     const tx = makeTransaction({ amount: 1000, description: 'Acme payment', reference: null })
-    const result = await findMatchingInvoices(queuedSupabase as never, 'company-1', tx)
+    const result = await matchesFor(queuedSupabase, tx)
     expect(result).toEqual([])
   })
 
@@ -626,7 +641,7 @@ describe('findMatchingInvoices: status-leak guard', () => {
     // partially_paid invoices skip the second query, so no enqueue needed.
 
     const tx = makeTransaction({ amount: 400, description: 'Acme partial', reference: null })
-    const result = await findMatchingInvoices(queuedSupabase as never, 'company-1', tx)
+    const result = await matchesFor(queuedSupabase, tx)
     expect(result).toHaveLength(1)
     expect(result[0].invoice.id).toBe('inv-partial')
   })
@@ -647,14 +662,14 @@ describe('findMatchingInvoices: status-leak guard', () => {
     enqueue({ data: [], error: null })
 
     const tx = makeTransaction({ amount: 1000, description: 'Acme payment', reference: null })
-    const result = await findMatchingInvoices(queuedSupabase as never, 'company-1', tx)
+    const result = await matchesFor(queuedSupabase, tx)
     expect(result).toHaveLength(1)
     expect(result[0].invoice.id).toBe('inv-clean')
   })
 })
 
 // ============================================================
-// findInvoiceMatchCandidates: unconverted foreign-currency invoices
+// matchInvoiceCandidates: unconverted foreign-currency invoices
 // ============================================================
 //
 // A foreign-currency invoice with no stored SEK conversion is not comparable
@@ -664,7 +679,7 @@ describe('findMatchingInvoices: status-leak guard', () => {
 // reported so a caller can point at the repair,
 // POST /api/invoices/{id}/refresh-exchange-rate.
 
-describe('findInvoiceMatchCandidates: unconverted FX exclusions', () => {
+describe('matchInvoiceCandidates: unconverted FX exclusions', () => {
   function enqueueSingleInvoice(inv: unknown) {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [inv], error: null })
@@ -680,7 +695,7 @@ describe('findInvoiceMatchCandidates: unconverted FX exclusions', () => {
     })
 
     const tx = makeTransaction({ amount: 12500, description: 'Unrelated', merchant_name: null, reference: null })
-    const result = await findInvoiceMatchCandidates(supabase as never, 'company-1', tx)
+    const result = await candidatesFor(supabase, tx)
 
     expect(result.matches).toHaveLength(1)
     expect(result.matches[0].confidence).toBe(0.80)
@@ -703,7 +718,7 @@ describe('findInvoiceMatchCandidates: unconverted FX exclusions', () => {
     })
 
     const tx = makeTransaction({ amount: 12500, currency: 'SEK', description: 'Unrelated', merchant_name: null, reference: null })
-    const result = await findInvoiceMatchCandidates(supabase as never, 'company-1', tx)
+    const result = await candidatesFor(supabase, tx)
 
     expect(result.matches).toHaveLength(1)
     expect(result.matches[0].confidence).toBe(0.80)
@@ -726,7 +741,7 @@ describe('findInvoiceMatchCandidates: unconverted FX exclusions', () => {
     })
 
     const tx = makeTransaction({ amount: 12500, currency: 'SEK', description: 'Unrelated', merchant_name: null, reference: null })
-    const result = await findInvoiceMatchCandidates(supabase as never, 'company-1', tx)
+    const result = await candidatesFor(supabase, tx)
 
     expect(result.matches).toEqual([])
     expect(result.unconvertedFxCount).toBe(1)
@@ -749,7 +764,7 @@ describe('findInvoiceMatchCandidates: unconverted FX exclusions', () => {
     })
 
     const tx = makeTransaction({ amount: 12500, currency: 'EUR', description: 'Unrelated', merchant_name: null, reference: null })
-    const result = await findInvoiceMatchCandidates(supabase as never, 'company-1', tx)
+    const result = await candidatesFor(supabase, tx)
 
     expect(result.matches).toEqual([])
     expect(result.unconvertedFxCount).toBe(0)
@@ -776,7 +791,7 @@ describe('findInvoiceMatchCandidates: unconverted FX exclusions', () => {
   it('never matches the raw foreign total when the stored conversion is zero', async () => {
     const supabase = enqueueSingleInvoice(zeroConversionInvoice())
 
-    const result = await findMatchingInvoices(supabase as never, 'company-1', zeroConversionTx())
+    const result = await matchesFor(supabase, zeroConversionTx())
 
     expect(result).toEqual([])
   })
@@ -784,28 +799,15 @@ describe('findInvoiceMatchCandidates: unconverted FX exclusions', () => {
   it('reports the zero-conversion invoice as an unconverted FX exclusion', async () => {
     const supabase = enqueueSingleInvoice(zeroConversionInvoice())
 
-    const result = await findInvoiceMatchCandidates(supabase as never, 'company-1', zeroConversionTx())
+    const result = await candidatesFor(supabase, zeroConversionTx())
 
     expect(result.unconvertedFxCount).toBe(1)
     expect(result.unconvertedFxInvoices[0].invoiceId).toBe('inv-eur-zero-sek')
   })
-
-  it('keeps the array-returning wrapper working for existing callers', async () => {
-    const supabase = enqueueSingleInvoice({
-      ...makeInvoice({ total: 12500, status: 'sent', remaining_amount: 12500, currency: 'SEK' }),
-      customer: makeCustomer({ name: 'Different' }),
-    })
-
-    const tx = makeTransaction({ amount: 12500, description: 'Unrelated', merchant_name: null, reference: null })
-    const result = await findMatchingInvoices(supabase as never, 'company-1', tx)
-
-    expect(Array.isArray(result)).toBe(true)
-    expect(result).toHaveLength(1)
-  })
 })
 
 // ============================================================
-// findInvoiceMatchCandidates: currency normalization
+// matchInvoiceCandidates: currency normalization
 // ============================================================
 //
 // `invoices.currency` and `transactions.currency` are both nullable with
@@ -816,7 +818,7 @@ describe('findInvoiceMatchCandidates: unconverted FX exclusions', () => {
 // exclusion report either (isUnconvertedForeignInvoice required a truthy
 // currency). Both helpers now normalize through normalizeCurrencyCode.
 
-describe('findInvoiceMatchCandidates: currency normalization', () => {
+describe('matchInvoiceCandidates: currency normalization', () => {
   function enqueueSingleInvoice(inv: unknown) {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [inv], error: null })
@@ -838,7 +840,7 @@ describe('findInvoiceMatchCandidates: currency normalization', () => {
     })
 
     const tx = makeTransaction({ amount: 12500, currency: 'SEK', description: 'Unrelated', merchant_name: null, reference: null })
-    const result = await findInvoiceMatchCandidates(supabase as never, 'company-1', tx)
+    const result = await candidatesFor(supabase, tx)
 
     expect(result.matches).toHaveLength(1)
     expect(result.matches[0].confidence).toBe(0.80)
@@ -859,7 +861,7 @@ describe('findInvoiceMatchCandidates: currency normalization', () => {
     })
 
     const tx = makeTransaction({ amount: 12500, currency: 'SEK', description: 'Unrelated', merchant_name: null, reference: null })
-    const result = await findInvoiceMatchCandidates(supabase as never, 'company-1', tx)
+    const result = await candidatesFor(supabase, tx)
 
     expect(result.matches).toHaveLength(1)
     expect(result.unconvertedFxCount).toBe(0)
@@ -880,7 +882,7 @@ describe('findInvoiceMatchCandidates: currency normalization', () => {
     })
 
     const tx = makeTransaction({ amount: 12500, currency: 'SEK', description: 'Unrelated', merchant_name: null, reference: null })
-    const result = await findInvoiceMatchCandidates(supabase as never, 'company-1', tx)
+    const result = await candidatesFor(supabase, tx)
 
     expect(result.matches).toEqual([])
     expect(result.unconvertedFxCount).toBe(0)
@@ -904,7 +906,7 @@ describe('findInvoiceMatchCandidates: currency normalization', () => {
     })
 
     const tx = makeTransaction({ amount: 11500, currency: 'SEK', description: 'Unrelated', merchant_name: null, reference: null })
-    const result = await findInvoiceMatchCandidates(supabase as never, 'company-1', tx)
+    const result = await candidatesFor(supabase, tx)
 
     expect(result.matches).toHaveLength(1)
     expect(result.matches[0].confidence).toBe(0.80)

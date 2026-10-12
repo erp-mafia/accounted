@@ -34,7 +34,7 @@ export interface PaymentsAvailability {
 
 export async function getPaymentsAvailability(ctx: OperationContext): Promise<PaymentsAvailability> {
   const unavailable = (reason: PaymentsUnavailableReason): PaymentsAvailability => ({ available: false, reason, provider: null, accounts: [], signer_known: false })
-  if (!getPaymentInitiationProvider(ctx.companyId)) return unavailable('no_provider')
+  if (!(await getPaymentInitiationProvider(ctx.companyId))) return unavailable('no_provider')
   // Sandbox before the plan: a demo visitor is refused, never upsold.
   if (await isSandboxCompany(ctx.supabase, ctx.companyId)) return unavailable('sandbox')
   const door = await openPaymentsDoor(ctx)

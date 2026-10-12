@@ -28,7 +28,7 @@ services: {
 },
 
 // Core caller: app/api/v1/companies/[companyId]/bank-connections/[connectionId]/sync/route.ts
-const services = extensionRegistry.get('enable-banking')?.services as
+const services = (await extensionRegistry.get('enable-banking'))?.services as
   | Partial<EnableBankingServices>
   | undefined
 if (!services?.triggerConnectionSync) {

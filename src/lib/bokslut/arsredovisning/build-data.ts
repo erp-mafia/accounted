@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import { fetchTrialBalanceChart, generateTrialBalance } from '@/lib/reports/trial-balance'
 import { generateKassaflodesanalys } from '@/lib/reports/kassaflodesanalys'
 import { CashFlowTaxAllocationError } from '@/lib/reports/cash-flow-tax'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -8,7 +8,9 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { LATENT_TAX_DEFAULT_RATE } from '@/lib/bokslut/tax-provision/latent-tax-calculator'
 import { roundOre } from '@/lib/money'
 import {
+  k2LegalFormOf,
   mapTrialBalancesToK2,
+  type K2LegalForm,
   type K2MappingResult,
   type TrialBalancePair,
 } from '@/lib/bokslut/ixbrl/k2-mapper'
@@ -60,6 +62,28 @@ export function k3ContentsNotice(hasCashFlow: boolean): string {
 }
 
 /**
+ * The statements an annual report was built from, handed on so the iXBRL
+ * input reuses them instead of building its own trial balances and mapping
+ * (buildIxbrlInput). Not part of ArsredovisningData: the data is versioned
+ * and hashed, the statements are only how it was computed.
+ */
+export interface AnnualReportStatements {
+  /** The K2 mapping of the current year against the comparison year. */
+  mapping: K2MappingResult
+  /**
+   * The comparison year (the period's previous_period_id), null when there
+   * is none. `loaded` is false when its trial balances could not be built:
+   * the statements then carry no comparison column.
+   */
+  comparison: { id: string; period_start: string; period_end: string; loaded: boolean } | null
+}
+
+export interface ArsredovisningBuild {
+  data: ArsredovisningData
+  statements: AnnualReportStatements
+}
+
+/**
  * Pre-populate the K2 årsredovisning data for a fiscal period. Loads:
  *   - Income statement + balance sheet for the current period
  *   - Up to 3 prior periods for the flerårsöversikt
@@ -78,6 +102,20 @@ export async function buildArsredovisningData(
   fiscalPeriodId: string,
   overrides: Partial<ArsredovisningData['forvaltningsberattelse']> = {},
 ): Promise<ArsredovisningData> {
+  return (await buildArsredovisningReport(supabase, companyId, fiscalPeriodId, overrides)).data
+}
+
+/**
+ * buildArsredovisningData plus the statements it was computed from. Every
+ * trial balance is built once per period and variant, all of them on one
+ * read of the chart of accounts.
+ */
+export async function buildArsredovisningReport(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+  overrides: Partial<ArsredovisningData['forvaltningsberattelse']> = {},
+): Promise<ArsredovisningBuild> {
   // The RR/BR are rendered at ÅRL post level from the same K2 risbs mapping
   // that drives the iXBRL filing, never from per-account report rows.
   // Bolagsverket rejects balans-/resultaträkningar med kontonummer, so the
@@ -85,6 +123,9 @@ export async function buildArsredovisningData(
   // variants per year (see TrialBalancePair): the FULL trial balance drives
   // the BR (2099 booked), the PRE-CLOSING one drives the RR (class 3-8
   // still open).
+  // One chart read for every trial balance below; the read runs alongside
+  // the first wave, as each balance's own read did.
+  const chart = fetchTrialBalanceChart(supabase, companyId)
   const [periodResult, settingsResult, companyResult, periodList, tbFull, tbPreClosing, narrative] = await Promise.all([
     supabase
       .from('fiscal_periods')
@@ -113,8 +154,8 @@ export async function buildArsredovisningData(
         .order('period_start', { ascending: false })
         .range(from, to),
     ),
-    generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'include' }),
-    generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'exclude-final' }),
+    generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'include', chart }),
+    generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'exclude-final', chart }),
     // Load persisted narrative overrides: replaces the URL-query-param
     // carry from earlier phases. Caller-supplied overrides (passed in via
     // the second arg) still win, so the API can layer per-request edits on
@@ -193,8 +234,8 @@ export async function buildArsredovisningData(
     [...tbTargets.values()].map(async (p) => {
       try {
         const [full, preClosing] = await Promise.all([
-          generateTrialBalance(supabase, companyId, p.id, { closingEntry: 'include' }),
-          generateTrialBalance(supabase, companyId, p.id, { closingEntry: 'exclude-final' }),
+          generateTrialBalance(supabase, companyId, p.id, { closingEntry: 'include', chart }),
+          generateTrialBalance(supabase, companyId, p.id, { closingEntry: 'exclude-final', chart }),
         ])
         tbPairs.set(p.id, { full: full.rows, preClosing: preClosing.rows })
       } catch {
@@ -227,10 +268,13 @@ export async function buildArsredovisningData(
     )
   }
   const isForening = entityType === 'ekonomisk_forening'
+  // One equity table for every year the document presents (ÅRL 3 kap.
+  // 10 a-10 b §§): the flerårsöversikt maps its earlier years with it too.
+  const legalForm = k2LegalFormOf(entityType)
   const mapping = mapTrialBalancesToK2(
     { full: tbFull.rows, preClosing: tbPreClosing.rows },
     previousTb,
-    { legalForm: isForening ? 'ekonomisk_forening' : 'aktiebolag' },
+    { legalForm },
   )
   const previousPeriod =
     prevPeriodRow && previousTb
@@ -248,7 +292,7 @@ export async function buildArsredovisningData(
   const persistedRd = narrative?.resultatdisposition ?? undefined
   const persistedAgmDate = narrative?.agm_date ?? null
 
-  const flerarsoversikt = buildFlerarsoversikt(overviewSlice, fiscalPeriodId, mapping, tbPairs)
+  const flerarsoversikt = buildFlerarsoversikt(overviewSlice, fiscalPeriodId, mapping, tbPairs, legalForm)
 
   const egen_kapital_changes = buildEquityChanges(mapping)
   const memberDisclosures = isForening ? memberDisclosuresFrom(narrative) : null
@@ -440,7 +484,7 @@ export async function buildArsredovisningData(
     }
   }
 
-  return {
+  const data: ArsredovisningData = {
     company: {
       name: companyName,
       org_number: orgNumber,
@@ -524,6 +568,20 @@ export async function buildArsredovisningData(
       },
     },
   }
+  return {
+    data,
+    statements: {
+      mapping,
+      comparison: prevPeriodRow
+        ? {
+            id: prevPeriodRow.id,
+            period_start: prevPeriodRow.period_start,
+            period_end: prevPeriodRow.period_end,
+            loaded: previousTb !== null,
+          }
+        : null,
+    },
+  }
 }
 
 interface PeriodRow {
@@ -599,6 +657,7 @@ function buildFlerarsoversikt(
   currentPeriodId: string,
   currentMapping: K2MappingResult,
   tbPairs: Map<string, TrialBalancePair | null>,
+  legalForm: K2LegalForm,
 ): FlerarsoversiktRow[] {
   const rows: FlerarsoversiktRow[] = []
   for (const p of overviewSlice) {
@@ -610,7 +669,10 @@ function buildFlerarsoversikt(
         // A prior year that was never closed in these books has its result
         // derived, as in the balance sheet's comparison column: soliditet
         // would otherwise be computed on equity without that year's result.
-        mapping = mapTrialBalancesToK2(pair, null, { currentIsPriorYear: true })
+        // Same equity table as the current year: an ekonomisk förening's
+        // soliditet is read from medlemsinsatser and förlagsinsatser every
+        // year, never from the aktiebolag table.
+        mapping = mapTrialBalancesToK2(pair, null, { currentIsPriorYear: true, legalForm })
       }
       const netRevenue = mapping.rr['Nettoomsattning']?.current ?? 0
       const resultAfterFinancial = mapping.totals.resultatEfterFinansiellaPoster.current

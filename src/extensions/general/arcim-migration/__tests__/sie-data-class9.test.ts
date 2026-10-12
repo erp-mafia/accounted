@@ -6,7 +6,8 @@
  *
  * The step's whole chain, as it runs in the browser: GET /sie-data, the
  * step's own completion of blank targets (resolveOnboardingMappings), then
- * POST /import-sie, whose job admission runs the real validator. Each way a
+ * POST /import-sie with the path /sie-data archived the year under, whose
+ * job admission runs the real validator. Each way a
  * 9xxx target used to reach the job is covered: a stored mapping from the
  * earlier year's import, the company chart's own 9xxx row, and a blank
  * target the step mapped onto itself.
@@ -61,7 +62,8 @@ import { buildMappingTargets } from '../lib/mapping-targets'
 import { submitSIEJob } from '@/lib/import/sie-jobs'
 import { resolveOnboardingMappings } from '@/lib/onboarding-books/mappings'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
-import type { AccountMapping } from '@/lib/import/types'
+import type { AccountMapping, SIEAccount } from '@/lib/import/types'
+import { memoryIntakeStorage } from './intake-storage'
 
 type RouteHandler = (request: Request, ctx?: ExtensionContext) => Promise<Response>
 const route = (method: string, path: string) =>
@@ -111,6 +113,7 @@ function buildCtx(stored: unknown[]): ExtensionContext {
   const supabase = {
     from: vi.fn((table: string) => chain(table)),
     auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }) },
+    storage: memoryIntakeStorage().storage,
   }
   return { supabase, companyId: 'company-1', requestId: 'req-1', log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } } as unknown as ExtensionContext
 }
@@ -119,7 +122,11 @@ async function fetchSieData(ctx: ExtensionContext) {
   const res = await sieData(createMockRequest('http://localhost/api/extensions/ext/arcim-migration/sie-data', {
     searchParams: { consentId: 'consent-1', years: '2025,2026' },
   }), ctx)
-  const { status, body } = await parseJsonResponse<{ mappings: AccountMapping[]; parsed: { accounts: { number: string; name: string }[] } }>(res)
+  const { status, body } = await parseJsonResponse<{
+    mappings: AccountMapping[]
+    accounts: SIEAccount[]
+    fileStatuses: { fiscalYear: number; storagePath: string; filename: string }[]
+  }>(res)
   expect(status).toBe(200)
   return body
 }
@@ -168,28 +175,33 @@ describe('#3312: the onboarding provider step on a year with class 9 amounts', (
     }
 
     // The step creates no class 9 account and maps nothing onto a 9xxx number.
-    const resolved = resolveOnboardingMappings(data.mappings, data.parsed.accounts)
+    const resolved = resolveOnboardingMappings(data.mappings, data.accounts)
     expect(resolved.unresolved).toEqual([])
     expect(resolved.create).toEqual([])
     expect(resolved.mappings.some((m) => /^9\d{3}$/.test(m.targetAccount))).toBe(false)
 
-    // FY2025 is already imported (#3279 skips it); FY2026 is the retry.
+    // FY2025 is already imported (#3279 skips it); FY2026 is the retry,
+    // posted as the path /sie-data archived it under.
+    const fy2026 = data.fileStatuses.find((f) => f.fiscalYear === 2026)!
     const res = await importSie(createMockRequest('http://localhost/api/extensions/ext/arcim-migration/import-sie', {
       method: 'POST',
-      body: { rawContent: FY2026, mappings: resolved.mappings, options: { createFiscalPeriod: true, importOpeningBalances: true, importTransactions: true } },
+      body: { storagePath: fy2026.storagePath, filename: fy2026.filename, mappings: resolved.mappings, options: { createFiscalPeriod: true, importOpeningBalances: true, importTransactions: true } },
     }), ctx)
     const { status, body } = await parseJsonResponse<{ importId?: string; error?: { code: string } }>(res)
     expect(body.error?.code).toBeUndefined()
     expect(status).toBe(202)
     expect(body.importId).toBe('job-1')
+    expect((submitSIEJob as Mock).mock.calls[0][3]).toBe(FY2026)
   })
 
   it('still refuses a class 9 target someone chose, naming it without sending the user out of the flow', async () => {
-    const data = await fetchSieData(buildCtx([]))
+    const ctx = buildCtx([])
+    const data = await fetchSieData(ctx)
     const chosen = data.mappings.map((m) => (m.sourceAccount === '9999' ? { ...m, targetAccount: '9998', targetName: 'Eget' } : m))
+    const fy2026 = data.fileStatuses.find((f) => f.fiscalYear === 2026)!
     const res = await importSie(createMockRequest('http://localhost/api/extensions/ext/arcim-migration/import-sie', {
-      method: 'POST', body: { rawContent: FY2026, mappings: chosen, options: {} },
-    }), buildCtx([]))
+      method: 'POST', body: { storagePath: fy2026.storagePath, filename: fy2026.filename, mappings: chosen, options: {} },
+    }), ctx)
     const { status, body } = await parseJsonResponse<{ error: { code: string; message: string; details: unknown } }>(res)
     expect(status).toBe(400)
     expect(body.error.code).toBe('SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS')

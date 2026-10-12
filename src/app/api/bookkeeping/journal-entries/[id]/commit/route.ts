@@ -1,9 +1,6 @@
 import { NextResponse } from 'next/server'
 import { commitEntry } from '@/lib/bookkeeping/engine'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
-
-ensureInitialized()
 
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'bookkeeping.journal-entry.commit',

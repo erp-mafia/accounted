@@ -557,7 +557,7 @@ async function sendInvoiceFromSchedule(
   userId: string,
   invoice: Invoice & { customer: Customer; items: InvoiceItem[] },
 ): Promise<AutoSendOutcome> {
-  const emailService = getEmailService()
+  const emailService = await getEmailService()
   if (!emailService.isConfigured()) {
     log.warn('email service not configured; recurring schedule cannot auto-send', {
       invoiceId: invoice.id,

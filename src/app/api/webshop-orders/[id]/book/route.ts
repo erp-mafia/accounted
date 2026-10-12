@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { validateBody } from '@/lib/api/validate'
@@ -12,8 +11,6 @@ import {
   resolveOrderFx,
 } from '@/lib/webshop-orders/book-order'
 import type { WebshopOrder } from '@/types'
-
-ensureInitialized()
 
 /**
  * Book one webshop order/refund row as a verifikat. The dialog sends the

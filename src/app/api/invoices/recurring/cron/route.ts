@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceClient } from '@/lib/supabase/server'
 import {
@@ -15,8 +14,6 @@ import type {
   RecurringInvoiceScheduleItem,
 } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized()
 
 type DueSchedule = RecurringInvoiceSchedule & { items: RecurringInvoiceScheduleItem[] }
 

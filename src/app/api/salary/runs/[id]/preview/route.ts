@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { resolvePrimaryBankAccount } from '@/lib/bookkeeping/settlement-account'
 import {
@@ -12,8 +11,6 @@ import {
 import { roundOre } from '@/lib/money'
 import { loadPostedSalaryRunEntries, PostedSalaryEntriesReadError } from '@/lib/salary/posted-run-entries'
 import type { CreateJournalEntryLineInput } from '@/types'
-
-ensureInitialized()
 
 /**
  * Preview the journal entries that would be created when booking this salary run.

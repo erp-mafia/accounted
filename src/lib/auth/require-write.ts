@@ -33,9 +33,11 @@ type WritePermissionResult =
  * `companyId` skips the `resolve_active_company` round trip that
  * `getActiveCompanyId` would otherwise repeat (withRouteContext resolves it
  * two awaits earlier for every route); passing `role` skips the membership
- * select as well. Only ever pass values that came from `getActiveCompanyId`
- * / `company_members` for the same user in the same request: this is a
- * dedupe, not a trust boundary.
+ * select as well (withRouteContext hands over the role the resolver RPC
+ * returned; an undefined role means not known, and the select runs). Only
+ * ever pass values that came from `getActiveCompanyId` / `company_members`
+ * for the same user in the same request: this is a dedupe, not a trust
+ * boundary.
  */
 export interface KnownRouteContext {
   companyId: string
@@ -154,7 +156,7 @@ export type CompanyRoleResult =
 export async function getCompanyRole(
   supabase: SupabaseClient,
   userId: string,
-  known?: Pick<KnownRouteContext, 'companyId'>,
+  known?: KnownRouteContext,
 ): Promise<CompanyRoleResult> {
   const companyId = known?.companyId ?? (await getActiveCompanyId(supabase, userId))
 
@@ -168,7 +170,7 @@ export async function getCompanyRole(
     }
   }
 
-  const role = await selectRole(supabase, companyId, userId)
+  const role = known?.role ?? (await selectRole(supabase, companyId, userId))
 
   if (!role) {
     return {

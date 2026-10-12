@@ -1,16 +1,10 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { createServiceClient } from '@/lib/supabase/server'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { huntCompany } from '@/lib/receipt-hunt/hunt'
 import { checkRateLimit, getRedis } from '@/lib/auth/rate-limit-http'
-
-// The hunt uploads documents, and uploading emits document.uploaded, which is
-// what makes the extraction extension read the amount out of a fetched PDF.
-// Without this the receipts land with no amount and can never be paired.
-ensureInitialized()
 
 /**
  * A run of the hunt that a person asked for.

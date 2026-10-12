@@ -13,14 +13,11 @@
  * Dimensions sorted by sort_order, values by code.
  */
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateDimensionSchema } from '@/lib/api/schemas'
 import { createDimension, listDimensions } from '@/lib/dimensions/registry-service'
 import { sessionFailureResponse } from '@/lib/operations/session'
-
-ensureInitialized()
 
 export const GET = withRouteContext(
   'dimension.list',

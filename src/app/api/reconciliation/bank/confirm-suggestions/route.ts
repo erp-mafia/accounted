@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { ConfirmJeSuggestionsSchema } from '@/lib/api/schemas'
@@ -7,8 +6,6 @@ import {
   confirmJournalEntrySuggestions,
   rejectJournalEntrySuggestions,
 } from '@/lib/reconciliation/suggestions'
-
-ensureInitialized()
 
 // A full 500-item batch runs sequentially with several queries per pair
 // (revalidation is the point), which can exceed the platform's default

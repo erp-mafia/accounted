@@ -1,13 +1,10 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { executeRecurringSchedule } from '@/lib/invoices/recurring-schedule-service'
 import { advancePeriodStart } from '@/lib/invoices/recurring-placeholders'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import type { RecurringInvoiceSchedule, RecurringInvoiceScheduleItem } from '@/types'
-
-ensureInitialized()
 
 /**
  * POST /api/invoices/recurring/[id]/run: manually generate (and, when the

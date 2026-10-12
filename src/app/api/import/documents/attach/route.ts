@@ -1,14 +1,11 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { uploadDocument, validateDocumentFile } from '@/lib/core/documents/document-service'
 import { planPermitsAttach } from '@/lib/documents/underlag-import'
 import { uploadedFileBaseName } from '@/lib/documents/upload-file-name'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-
-ensureInitialized()
 
 const AttachFieldsSchema = z.object({
   journal_entry_id: z.string().uuid(),

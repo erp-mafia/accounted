@@ -1,6 +1,5 @@
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
-import { loadExtensions } from '@/lib/extensions/loader'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import {
   sendTaxDeadlineNotifications,
@@ -20,7 +19,6 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
  */
 export const GET = withCronContext('cron.push_notifications', async (_request, ctx) => {
   // Load the registry so it reflects extensions.config.json.
-  loadExtensions()
 
   // Physical routes under app/api/extensions/<id>/ compile into EVERY build,
   // including the core-with-zero-extensions one: the registry (generated from
@@ -28,7 +26,7 @@ export const GET = withCronContext('cron.push_notifications', async (_request, c
   // the ext/[...path] dispatcher: a disabled extension must not expose a live
   // send/query surface, and a scheduled-but-disabled cron must fail visibly
   // (503) instead of quietly doing the work anyway.
-  if (!extensionRegistry.get('push-notifications')) {
+  if (!(await extensionRegistry.get('push-notifications'))) {
     ctx.log.warn('push-notifications extension is not enabled; cron refused')
     return NextResponse.json(
       { error: 'Push notifications extension is not enabled', code: 'EXTENSION_DISABLED' },

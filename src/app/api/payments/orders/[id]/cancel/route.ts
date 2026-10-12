@@ -1,13 +1,10 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { cancelPaymentOrder } from '@/lib/payments/orders/lifecycle'
 import { signerFromRequest } from '@/lib/payments/orders/request-signer'
-
-ensureInitialized()
 
 /** Nothing to send yet: the body is an empty JSON object. */
 const CancelSchema = z.object({})

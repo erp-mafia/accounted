@@ -65,7 +65,7 @@ export async function sendBackupFailureAlert(
   input: BackupAlertInput
 ): Promise<{ sent: boolean; reason?: string }> {
   try {
-    const email = getEmailService()
+    const email = await getEmailService()
     if (!email.isConfigured()) return { sent: false, reason: 'email_not_configured' }
 
     const recipient = await resolveMemberEmail(supabase, input.companyId, input.userId)

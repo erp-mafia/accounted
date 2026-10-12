@@ -5,6 +5,7 @@
  * implementation (Resend). Without the extension, a no-op service
  * is used: email-dependent features degrade gracefully.
  */
+import { whenInitialized } from '@/lib/initialized'
 
 export interface SendEmailOptions {
   to: string | string[]
@@ -59,7 +60,9 @@ class NoopEmailService implements EmailService {
 
 let emailService: EmailService = new NoopEmailService()
 
-export function getEmailService(): EmailService {
+/** The registered service, after the extensions have loaded (lib/initialized.ts). */
+export async function getEmailService(): Promise<EmailService> {
+  await whenInitialized()
   return emailService
 }
 

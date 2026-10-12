@@ -15,15 +15,11 @@
  * operations dimension-rules.* and their MCP tools.
  */
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody, validateQuery } from '@/lib/api/validate'
 import { CreateAccountDimensionRuleSchema, ListDimensionRulesQuerySchema } from '@/lib/api/schemas'
 import { createAccountDimensionRule, listAccountDimensionRules } from '@/lib/dimensions/rules-service'
 import { sessionFailureResponse } from '@/lib/operations/session'
-
-ensureInitialized()
-
 
 export const GET = withRouteContext(
   'dimension.rules.list',

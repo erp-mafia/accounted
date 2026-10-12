@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CashAccount } from '@/types'
-import { isBankCashAccount } from '@/lib/cash-accounts/invoice-payee'
+import { isBankCashAccount } from '@/lib/cash-accounts/invoice-payee-rules'
 
 /**
  * Why an account cannot be made the company's primary by hand, in the order

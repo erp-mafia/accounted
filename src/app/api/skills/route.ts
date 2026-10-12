@@ -5,9 +5,6 @@ import { validateBody, validateQuery } from '@/lib/api/validate'
 import { loadCatalogSkill, loadSkillCatalog } from '@/lib/agent-skills/catalog'
 import { attachCommunityMeta } from '@/lib/agent-skills/community'
 import { CreateCompanySkillSchema } from '@/lib/agent-skills/validation'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 const QuerySchema = z.object({ slug: z.string().min(1).max(250).optional() }).strict()
 

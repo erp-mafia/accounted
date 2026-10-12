@@ -5,7 +5,7 @@ import { useLocale, useTranslations } from 'next-intl'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { SIEJobFailedError } from '@/lib/import/sie-job-client'
 import { formatImportFailure } from '@/lib/import/import-failure'
-import { countSieVouchers, importProviderYears, planProviderYears, providerYearsComplete, type ProviderYearsOutcome } from '@/lib/onboarding-books/provider-years'
+import { importProviderYears, planProviderYears, providerYearsComplete, type ProviderYearsOutcome } from '@/lib/onboarding-books/provider-years'
 import { resolveOnboardingMappings } from '@/lib/onboarding-books/mappings'
 import { obsAccountsOf } from '@/lib/import/sie-preview-mappings'
 import { previewCountsForSelection } from '@/lib/providers/preview-counts'
@@ -13,7 +13,6 @@ import { jobProgress, type JobPhase } from '../lib/job-progress'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import { BRANCH_PROVIDERS } from '@/lib/onboarding-journey/branch'
-import type { ParsedSIEFile } from '@/lib/import/types'
 import { InkText } from '@/components/onboarding/journey/ink'
 import type { TheaterApi } from '../engines/theater-engine'
 import { Theater, type TheaterLine, type TheaterModelInput } from '../ui/Theater'
@@ -258,26 +257,22 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
       let voucherTotal = 0
       if (preview?.sieAvailable !== false) {
         data = await providerSieData(consentId, years)
-        try {
-          const { buildTheaterModel } = await import('@/lib/import/theater-model')
-          const m = buildTheaterModel(data.parsed as unknown as ParsedSIEFile)
-          setModel({
-            company: m.companyName || companyName,
-            accounts: m.accounts.map((a) => ({ number: a.number, name: a.name, weight: a.weight })),
-            counterparties: m.counterparties.map((c) => ({ name: c.name, account: c.account, weight: c.weight })),
-          })
-          voucherTotal = m.totalVouchers
-          setTotal(voucherTotal)
-        } catch {
-          setModel({ company: companyName, accounts: [], counterparties: [] })
-        }
+        // Built on the server: the parse behind it stays there with the files.
+        const m = data.theater
+        setModel({
+          company: m.companyName || companyName,
+          accounts: m.accounts.map((a) => ({ number: a.number, name: a.name, weight: a.weight })),
+          counterparties: m.counterparties.map((c) => ({ name: c.name, account: c.account, weight: c.weight })),
+        })
+        voucherTotal = m.totalVouchers
+        setTotal(voucherTotal)
         setAccountsN(data.mappingStats.total)
         setShown(2)
         at(200, () => apiRef.current?.spawnAccounts())
         // The server decided every target it can (class 9 amounts to 2999).
         // A blank left over that no chart can hold stops here, before any
         // write: mapped onto itself it was refused one call later (#3312).
-        const resolved = resolveOnboardingMappings(data.mappings, data.parsed.accounts)
+        const resolved = resolveOnboardingMappings(data.mappings, data.accounts)
         if (resolved.unresolved.length > 0) {
           throw new Error(t('accounts_outside_bas', { count: resolved.unresolved.length, accounts: resolved.unresolved.join(', ') }))
         }
@@ -297,8 +292,8 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
         const plan = planProviderYears(data)
         setKeptYears(plan.alreadyImported)
         if (plan.alreadyImported.length > 0) {
-          const files = data.rawContent
-          voucherTotal = plan.pending.reduce((n, f) => n + countSieVouchers(files[f.index]), 0)
+          const files = data.fileStatuses
+          voucherTotal = plan.pending.reduce((n, f) => n + files[f.index].voucherCount, 0)
           setTotal(voucherTotal)
         }
         // The feed runs for as long as the job does; the count is held at
@@ -307,12 +302,12 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
         apiRef.current?.feedVouchers(15 * 60_000, Math.max(1, voucherTotal))
         apiRef.current?.setFeedCap(0)
         setJobPhase('preparing')
-        const importedAccounts: string[] = data.parsed.accounts.map((a) => a.number)
+        const importedAccounts: string[] = data.accounts.map((a) => a.number)
         let writtenBefore = 0
-        const outcome = await importProviderYears(data, async (rawContent) => {
+        const outcome = await importProviderYears(data, async (file) => {
           setJobPhase('preparing')
           setPrepared(0)
-          const result = await providerImportSie(rawContent, mappings, voucherSeries, (job) => {
+          const result = await providerImportSie(file, mappings, voucherSeries, (job) => {
             const { written, phase } = jobProgress(job)
             setJobPhase(phase)
             setPrepared(job.prepared_through ?? 0)

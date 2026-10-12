@@ -11,7 +11,6 @@ import {
   issueAndBookInvoice,
   type IssuePartialFailure,
 } from '@/lib/invoices/issue-and-book-invoice'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { parseCustomIssuanceLines } from '@/lib/invoices/issuance-custom-lines'
 import { recordManualInvoiceDelivery } from '@/lib/invoices/invoice-deliveries'
@@ -25,8 +24,6 @@ import type {
   Invoice,
 } from '@/types'
 import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
-
-ensureInitialized()
 
 /**
  * POST /api/invoices/[id]/mark-sent

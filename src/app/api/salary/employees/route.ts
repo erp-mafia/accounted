@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateEmployeeSchema } from '@/lib/api/schemas'
@@ -7,8 +6,6 @@ import { getCompanyEntityType } from '@/lib/company/context'
 import { encryptPersonnummer, extractLast4, maskEmployeeForResponse, maskPersonnummer, validatePersonnummer } from '@/lib/salary/personnummer'
 import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/lib/salary/employment-rules'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized()
 
 export const GET = withRouteContext('salary.employees.list', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)

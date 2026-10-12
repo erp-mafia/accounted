@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceClient } from '@/lib/supabase/server'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -7,8 +6,6 @@ import { postDueInstallments } from '@/lib/bookkeeping/accruals/service'
 import { firstOfMonth } from '@/lib/bookkeeping/accruals/compute'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
-
-ensureInitialized()
 
 /**
  * GET /api/bookkeeping/accruals/post-due/cron, daily 05:15 UTC.

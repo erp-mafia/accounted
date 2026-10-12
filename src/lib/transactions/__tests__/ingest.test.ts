@@ -25,10 +25,14 @@ vi.mock('@/lib/bookkeeping/transaction-entries', () => ({
     mockCreateTransactionJournalEntry(...args),
 }))
 
-const mockGetBestInvoiceMatch = vi.fn()
+const mockLoadInvoiceMatchPool = vi.fn()
+const mockBestInvoiceMatch = vi.fn()
 vi.mock('@/lib/invoices/invoice-matching', () => ({
-  getBestInvoiceMatch: (...args: unknown[]) => mockGetBestInvoiceMatch(...args),
+  loadInvoiceMatchPool: (...args: unknown[]) => mockLoadInvoiceMatchPool(...args),
+  bestInvoiceMatch: (...args: unknown[]) => mockBestInvoiceMatch(...args),
 }))
+// Default: no open invoices. Survives vi.clearAllMocks like the pool below.
+mockLoadInvoiceMatchPool.mockResolvedValue({ invoices: [] })
 
 const mockFetchExchangeRate = vi.fn()
 vi.mock('@/lib/currency/riksbanken', () => ({
@@ -1092,7 +1096,7 @@ describe('ingestTransactions', () => {
 
     expect(result.imported).toBe(1)
     expect(result.duplicates).toBe(0)
-    expect(mockGetBestInvoiceMatch).toHaveBeenCalled() // income path still runs
+    expect(mockBestInvoiceMatch).toHaveBeenCalled() // income path still runs
   })
 
   it('respects the cash-account guard on the booked-hand-entered mirror path', async () => {
@@ -1952,7 +1956,7 @@ describe('ingestTransactions', () => {
     // Mapping rules auto-categorization update (if triggered)
     enqueue({ data: null, error: null })
 
-    mockGetBestInvoiceMatch.mockResolvedValue({
+    mockBestInvoiceMatch.mockReturnValue({
       invoice: { id: 'inv-1' },
       confidence: 0.95,
       matchReason: 'OCR reference match',
@@ -1962,12 +1966,71 @@ describe('ingestTransactions', () => {
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
 
     expect(result.auto_matched_invoices).toBe(1)
-    expect(mockGetBestInvoiceMatch).toHaveBeenCalledWith(
+    expect(mockLoadInvoiceMatchPool).toHaveBeenCalledWith(
       expect.anything(), // supabase client
       COMPANY_ID,
+    )
+    expect(mockBestInvoiceMatch).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'tx-income' }),
+      { invoices: [] },
       0.50
     )
+  })
+
+  it('reads the open invoices once for a batch, not once per income row', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const raws = [
+      makeRaw({ amount: 1000, description: 'Inbetalning ett' }),
+      makeRaw({ amount: -50, description: 'Avgift' }),
+      makeRaw({ amount: 2000, description: 'Inbetalning två' }),
+      makeRaw({ amount: 3000, description: 'Inbetalning tre' }),
+    ]
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({ data: [], error: null }) // unbooked bank-synced map
+    enqueue({ data: [], error: null }) // supplier invoices pool
+    enqueue({ data: [], error: null }) // external_id dedup
+    raws.forEach((raw, i) =>
+      enqueue({ data: makeTransaction({ id: `tx-${i}`, amount: raw.amount, external_id: raw.external_id }), error: null }),
+    )
+    const pool = { invoices: [] }
+    mockLoadInvoiceMatchPool.mockResolvedValueOnce(pool)
+    mockBestInvoiceMatch.mockReturnValue(null)
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, raws)
+
+    expect(result.imported).toBe(4)
+    expect(mockLoadInvoiceMatchPool).toHaveBeenCalledTimes(1)
+    // Every income row is scored, each against the one pool.
+    expect(mockBestInvoiceMatch).toHaveBeenCalledTimes(3)
+    for (const call of mockBestInvoiceMatch.mock.calls) expect(call[1]).toBe(pool)
+  })
+
+  it('reads the open invoices again on the next income row when a read fails', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const raws = [
+      makeRaw({ amount: 1000, description: 'Inbetalning ett' }),
+      makeRaw({ amount: 2000, description: 'Inbetalning två' }),
+    ]
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({ data: [], error: null }) // unbooked bank-synced map
+    enqueue({ data: [], error: null }) // supplier invoices pool
+    enqueue({ data: [], error: null }) // external_id dedup
+    raws.forEach((raw, i) =>
+      enqueue({ data: makeTransaction({ id: `tx-${i}`, amount: raw.amount, external_id: raw.external_id }), error: null }),
+    )
+    mockLoadInvoiceMatchPool
+      .mockRejectedValueOnce(new Error('Network error'))
+      .mockResolvedValueOnce({ invoices: [] })
+    mockBestInvoiceMatch.mockReturnValue(null)
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, raws)
+
+    expect(result.imported).toBe(2)
+    expect(result.errors).toBe(0)
+    expect(mockLoadInvoiceMatchPool).toHaveBeenCalledTimes(2)
+    expect(mockBestInvoiceMatch).toHaveBeenCalledTimes(1)
   })
 
   // -----------------------------------------------------------------------
@@ -1996,7 +2059,7 @@ describe('ingestTransactions', () => {
         settlement_journal_entry_id: null,
       },
     ])
-    mockGetBestInvoiceMatch.mockResolvedValue(null)
+    mockBestInvoiceMatch.mockReturnValue(null)
 
     enqueue({ data: [], error: null }) // booked map
     enqueue({ data: [], error: null }) // unbooked bank-synced map
@@ -2044,7 +2107,7 @@ describe('ingestTransactions', () => {
       request('rr-1', 'ROT 2026-07', 3000),
       request('rr-2', 'ROT 2026-08', 2250),
     ])
-    mockGetBestInvoiceMatch.mockResolvedValue(null)
+    mockBestInvoiceMatch.mockReturnValue(null)
 
     enqueue({ data: [], error: null }) // booked map
     enqueue({ data: [], error: null }) // unbooked bank-synced map
@@ -2143,7 +2206,8 @@ describe('ingestTransactions', () => {
 
     expect(result.imported).toBe(1)
     expect(result.auto_matched_invoices).toBe(0)
-    expect(mockGetBestInvoiceMatch).not.toHaveBeenCalled()
+    expect(mockLoadInvoiceMatchPool).not.toHaveBeenCalled()
+    expect(mockBestInvoiceMatch).not.toHaveBeenCalled()
   })
 
   // -----------------------------------------------------------------------
@@ -2327,7 +2391,7 @@ describe('ingestTransactions', () => {
     enqueue({ data: null, error: { message: 'Insert failed' } })
 
     // Income transaction gets an invoice match
-    mockGetBestInvoiceMatch.mockResolvedValue({
+    mockBestInvoiceMatch.mockReturnValue({
       invoice: { id: 'inv-match' },
       confidence: 0.95,
       matchReason: 'Exact amount match',
@@ -2396,7 +2460,9 @@ describe('ingestTransactions', () => {
     enqueue({ data: [], error: null })
     enqueue({ data: inserted, error: null })
 
-    mockGetBestInvoiceMatch.mockRejectedValue(new Error('Network error'))
+    mockLoadInvoiceMatchPool.mockRejectedValueOnce(new Error('Network error'))
+    // Leaves no match behind for the tests below.
+    mockBestInvoiceMatch.mockReturnValue(null)
     mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
@@ -2501,7 +2567,8 @@ describe('ingestTransactions', () => {
     expect(result.auto_categorized).toBe(0)
     expect(result.auto_matched_invoices).toBe(0)
     // Should NOT have attempted any post-insert operations
-    expect(mockGetBestInvoiceMatch).not.toHaveBeenCalled()
+    expect(mockLoadInvoiceMatchPool).not.toHaveBeenCalled()
+    expect(mockBestInvoiceMatch).not.toHaveBeenCalled()
     expect(mockEvaluateMappingRules).not.toHaveBeenCalled()
   })
 

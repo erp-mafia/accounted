@@ -35,7 +35,7 @@ export async function sendConsentExpiryNotification(
       if (hoursSinceNotified < 48) return
     }
 
-    const emailService = getEmailService()
+    const emailService = await getEmailService()
     if (!emailService.isConfigured()) return
 
     const userId = connection.user_id as string

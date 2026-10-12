@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
-import { ensureInitialized } from '@/lib/init'
 import {
   reprocessInboundPeppolDocuments,
   syncInboundPeppolDocuments,
@@ -11,8 +10,6 @@ import {
   getPeppolTransport,
   getPeppolTransportAvailability,
 } from '@/lib/invoices/peppol-transport'
-
-ensureInitialized()
 
 export const maxDuration = 300
 
@@ -36,8 +33,8 @@ export const maxDuration = 300
  * Truthful no-op when no access point is switched on in this environment.
  */
 export const GET = withCronContext('cron.peppol_inbound', async (_request, ctx) => {
-  const availability = getPeppolTransportAvailability()
-  const transport = availability.available ? getPeppolTransport(availability.provider) : null
+  const availability = await getPeppolTransportAvailability()
+  const transport = availability.available ? await getPeppolTransport(availability.provider) : null
   if (!transport) {
     return NextResponse.json({ data: { skipped: true, reason: availability.available ? 'provider_adapter_unavailable' : availability.reason } })
   }

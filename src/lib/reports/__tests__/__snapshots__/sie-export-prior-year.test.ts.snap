@@ -1,0 +1,1586 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`generateSIEExport: previous-year records over a ledger > aktiebolag, fallback-ib, exclude_year_end_closing=false: the file is unchanged 1`] = `
+"#FLAGGA 0
+#FORMAT PC8
+#SIETYP 4
+#PROGRAM "Accounted" "1.0"
+#GEN 20260201
+#ORGNR 556677-8899
+#FNAMN "Bokföringsexempel"
+#RAR 0 20250101 20251231
+#RAR -1 20240101 20241231
+#KONTO 1220 "Inventarier och verktyg"
+#KONTO 1229 "Ackumulerade avskrivningar på inventarier och verktyg"
+#KONTO 1510 "Kundfordringar"
+#KONTO 1630 "Avräkning för skatter och avgifter (skattekonto)"
+#KONTO 1930 "Företagskonto / affärskonto"
+#KONTO 2010 "Eget kapital"
+#KONTO 2013 "Övriga egna uttag"
+#KONTO 2081 "Aktiekapital"
+#KONTO 2083 "Medlemsinsatser"
+#KONTO 2084 "Förlagsinsatser"
+#KONTO 2091 "Balanserad vinst eller förlust"
+#KONTO 2098 "Vinst eller förlust från föregående år"
+#KONTO 2099 "Årets resultat"
+#KONTO 2611 "Utgående moms på försäljning inom Sverige, 25 %"
+#KONTO 2641 "Debiterad ingående moms"
+#KONTO 2650 "Redovisningskonto för moms"
+#KONTO 3001 "Försäljning inom Sverige, 25 % moms"
+#SRU 3001 7410
+#KONTO 5010 "Lokalhyra"
+#KONTO 6110 "Kontorsmateriel"
+#KONTO 6570 "Bankkostnader"
+#KONTO 7832 "Avskrivningar på inventarier och verktyg"
+#IB 0 2650 -6000.00
+#IB 0 2098 -21752.50
+#IB 0 2081 -25000.00
+#IB 0 1930 49752.50
+#IB 0 1229 -2000.00
+#IB 0 1220 5000.00
+#IB -1 1220 5000.00
+#IB -1 1229 -1000.00
+#IB -1 1930 28626.25
+#IB -1 2081 -25000.00
+#IB -1 2099 -5876.25
+#IB -1 2650 -1750.00
+#UB 0 1220 5000.00
+#UB 0 1229 -3000.00
+#UB 0 1510 0.00
+#UB 0 1930 83378.75
+#UB 0 2081 -25000.00
+#UB 0 2098 -21752.50
+#UB 0 2099 -25876.25
+#UB 0 2611 0.00
+#UB 0 2641 0.00
+#UB 0 2650 -12750.00
+#UB -1 1220 5000.00
+#UB -1 1229 -2000.00
+#UB -1 1510 0.00
+#UB -1 1930 49752.50
+#UB -1 2081 -25000.00
+#UB -1 2099 -21752.50
+#UB -1 2611 0.00
+#UB -1 2641 0.00
+#UB -1 2650 -6000.00
+#RES 0 3001 0.00
+#RES 0 5010 0.00
+#RES 0 6110 0.00
+#RES 0 6570 0.00
+#RES 0 7832 0.00
+#RES -1 3001 -20000.00
+#RES -1 5010 3000.00
+#RES -1 6110 0.00
+#RES -1 6570 123.75
+#RES -1 7832 1000.00
+#VER "A" 27 20250210 "Försäljning"
+{
+	#TRANS 1510 {} 37500.00 20250210
+	#TRANS 3001 {} -30000.00 20250210
+	#TRANS 2611 {} -7500.00 20250210
+}
+#VER "A" 28 20250310 "Inbetalning"
+{
+	#TRANS 1930 {} 37500.00 20250310
+	#TRANS 1510 {} -37500.00 20250310
+}
+#VER "A" 29 20250401 "Hyra"
+{
+	#TRANS 5010 {} 3000.00 20250401
+	#TRANS 2641 {} 750.00 20250401
+	#TRANS 1930 {} -3750.00 20250401
+}
+#VER "A" 30 20250402 "Bankavgift"
+{
+	#TRANS 6570 {} 0.10 20250402
+	#TRANS 1930 {} -0.10 20250402
+}
+#VER "A" 31 20250403 "Bankavgift"
+{
+	#TRANS 6570 {} 0.20 20250403
+	#TRANS 1930 {} -0.20 20250403
+}
+#VER "A" 32 20250505 "Bankavgift"
+{
+	#TRANS 6570 {} 123.45 20250505
+	#TRANS 1930 {} -123.45 20250505
+}
+#VER "A" 33 20250801 "Kontorsmateriel"
+{
+	#TRANS 6110 {} 200.00 20250801
+	#TRANS 1930 {} -200.00 20250801
+}
+#VER "A" 34 20250802 "Makulering"
+{
+	#TRANS 1930 {} 200.00 20250802
+	#TRANS 6110 {} -200.00 20250802
+}
+#VER "A" 35 20250912 "Momsredovisning"
+{
+	#TRANS 2611 {} 7500.00 20250912
+	#TRANS 2641 {} -750.00 20250912
+	#TRANS 2650 {} -6750.00 20250912
+}
+#VER "A" 36 20251231 "Avskrivning"
+{
+	#TRANS 7832 {} 1000.00 20251231
+	#TRANS 1229 {} -1000.00 20251231
+}
+#VER "A" 37 20251231 "Årsbokslut 2025"
+{
+	#TRANS 3001 {} 30000.00 20251231
+	#TRANS 5010 {} -3000.00 20251231
+	#TRANS 6570 {} -123.75 20251231
+	#TRANS 7832 {} -1000.00 20251231
+	#TRANS 2099 {} -25876.25 20251231
+}
+"
+`;
+
+exports[`generateSIEExport: previous-year records over a ledger > aktiebolag, fallback-ib, exclude_year_end_closing=true: the file is unchanged 1`] = `
+"#FLAGGA 0
+#FORMAT PC8
+#SIETYP 4
+#PROGRAM "Accounted" "1.0"
+#GEN 20260201
+#ORGNR 556677-8899
+#FNAMN "Bokföringsexempel"
+#RAR 0 20250101 20251231
+#RAR -1 20240101 20241231
+#KONTO 1220 "Inventarier och verktyg"
+#KONTO 1229 "Ackumulerade avskrivningar på inventarier och verktyg"
+#KONTO 1510 "Kundfordringar"
+#KONTO 1630 "Avräkning för skatter och avgifter (skattekonto)"
+#KONTO 1930 "Företagskonto / affärskonto"
+#KONTO 2010 "Eget kapital"
+#KONTO 2013 "Övriga egna uttag"
+#KONTO 2081 "Aktiekapital"
+#KONTO 2083 "Medlemsinsatser"
+#KONTO 2084 "Förlagsinsatser"
+#KONTO 2091 "Balanserad vinst eller förlust"
+#KONTO 2098 "Vinst eller förlust från föregående år"
+#KONTO 2099 "Årets resultat"
+#KONTO 2611 "Utgående moms på försäljning inom Sverige, 25 %"
+#KONTO 2641 "Debiterad ingående moms"
+#KONTO 2650 "Redovisningskonto för moms"
+#KONTO 3001 "Försäljning inom Sverige, 25 % moms"
+#SRU 3001 7410
+#KONTO 5010 "Lokalhyra"
+#KONTO 6110 "Kontorsmateriel"
+#KONTO 6570 "Bankkostnader"
+#KONTO 7832 "Avskrivningar på inventarier och verktyg"
+#IB 0 2650 -6000.00
+#IB 0 2098 -21752.50
+#IB 0 2081 -25000.00
+#IB 0 1930 49752.50
+#IB 0 1229 -2000.00
+#IB 0 1220 5000.00
+#IB -1 1220 5000.00
+#IB -1 1229 -1000.00
+#IB -1 1930 28626.25
+#IB -1 2081 -25000.00
+#IB -1 2099 -5876.25
+#IB -1 2650 -1750.00
+#UB 0 1220 5000.00
+#UB 0 1229 -2000.00
+#UB 0 1510 0.00
+#UB 0 1930 83378.75
+#UB 0 2081 -25000.00
+#UB 0 2098 -21752.50
+#UB 0 2611 0.00
+#UB 0 2641 0.00
+#UB 0 2650 -12750.00
+#UB -1 1220 5000.00
+#UB -1 1229 -2000.00
+#UB -1 1510 0.00
+#UB -1 1930 49752.50
+#UB -1 2081 -25000.00
+#UB -1 2099 -21752.50
+#UB -1 2611 0.00
+#UB -1 2641 0.00
+#UB -1 2650 -6000.00
+#RES 0 3001 -30000.00
+#RES 0 5010 3000.00
+#RES 0 6110 0.00
+#RES 0 6570 123.75
+#RES -1 3001 -20000.00
+#RES -1 5010 3000.00
+#RES -1 6110 0.00
+#RES -1 6570 123.75
+#RES -1 7832 1000.00
+#VER "A" 27 20250210 "Försäljning"
+{
+	#TRANS 1510 {} 37500.00 20250210
+	#TRANS 3001 {} -30000.00 20250210
+	#TRANS 2611 {} -7500.00 20250210
+}
+#VER "A" 28 20250310 "Inbetalning"
+{
+	#TRANS 1930 {} 37500.00 20250310
+	#TRANS 1510 {} -37500.00 20250310
+}
+#VER "A" 29 20250401 "Hyra"
+{
+	#TRANS 5010 {} 3000.00 20250401
+	#TRANS 2641 {} 750.00 20250401
+	#TRANS 1930 {} -3750.00 20250401
+}
+#VER "A" 30 20250402 "Bankavgift"
+{
+	#TRANS 6570 {} 0.10 20250402
+	#TRANS 1930 {} -0.10 20250402
+}
+#VER "A" 31 20250403 "Bankavgift"
+{
+	#TRANS 6570 {} 0.20 20250403
+	#TRANS 1930 {} -0.20 20250403
+}
+#VER "A" 32 20250505 "Bankavgift"
+{
+	#TRANS 6570 {} 123.45 20250505
+	#TRANS 1930 {} -123.45 20250505
+}
+#VER "A" 33 20250801 "Kontorsmateriel"
+{
+	#TRANS 6110 {} 200.00 20250801
+	#TRANS 1930 {} -200.00 20250801
+}
+#VER "A" 34 20250802 "Makulering"
+{
+	#TRANS 1930 {} 200.00 20250802
+	#TRANS 6110 {} -200.00 20250802
+}
+#VER "A" 35 20250912 "Momsredovisning"
+{
+	#TRANS 2611 {} 7500.00 20250912
+	#TRANS 2641 {} -750.00 20250912
+	#TRANS 2650 {} -6750.00 20250912
+}
+"
+`;
+
+exports[`generateSIEExport: previous-year records over a ledger > aktiebolag, linked, exclude_year_end_closing=false: the file is unchanged 1`] = `
+"#FLAGGA 0
+#FORMAT PC8
+#SIETYP 4
+#PROGRAM "Accounted" "1.0"
+#GEN 20260201
+#ORGNR 556677-8899
+#FNAMN "Bokföringsexempel"
+#RAR 0 20250101 20251231
+#RAR -1 20240101 20241231
+#KONTO 1220 "Inventarier och verktyg"
+#KONTO 1229 "Ackumulerade avskrivningar på inventarier och verktyg"
+#KONTO 1510 "Kundfordringar"
+#KONTO 1630 "Avräkning för skatter och avgifter (skattekonto)"
+#KONTO 1930 "Företagskonto / affärskonto"
+#KONTO 2010 "Eget kapital"
+#KONTO 2013 "Övriga egna uttag"
+#KONTO 2081 "Aktiekapital"
+#KONTO 2083 "Medlemsinsatser"
+#KONTO 2084 "Förlagsinsatser"
+#KONTO 2091 "Balanserad vinst eller förlust"
+#KONTO 2098 "Vinst eller förlust från föregående år"
+#KONTO 2099 "Årets resultat"
+#KONTO 2611 "Utgående moms på försäljning inom Sverige, 25 %"
+#KONTO 2641 "Debiterad ingående moms"
+#KONTO 2650 "Redovisningskonto för moms"
+#KONTO 3001 "Försäljning inom Sverige, 25 % moms"
+#SRU 3001 7410
+#KONTO 5010 "Lokalhyra"
+#KONTO 6110 "Kontorsmateriel"
+#KONTO 6570 "Bankkostnader"
+#KONTO 7832 "Avskrivningar på inventarier och verktyg"
+#IB 0 2650 -6000.00
+#IB 0 2098 -21752.50
+#IB 0 2081 -25000.00
+#IB 0 1930 49752.50
+#IB 0 1229 -2000.00
+#IB 0 1220 5000.00
+#IB -1 2650 -1750.00
+#IB -1 2098 -5876.25
+#IB -1 2081 -25000.00
+#IB -1 1930 28626.25
+#IB -1 1229 -1000.00
+#IB -1 1220 5000.00
+#UB 0 1220 5000.00
+#UB 0 1229 -3000.00
+#UB 0 1510 0.00
+#UB 0 1930 83378.75
+#UB 0 2081 -25000.00
+#UB 0 2098 -21752.50
+#UB 0 2099 -25876.25
+#UB 0 2611 0.00
+#UB 0 2641 0.00
+#UB 0 2650 -12750.00
+#UB -1 1220 5000.00
+#UB -1 1229 -2000.00
+#UB -1 1510 0.00
+#UB -1 1930 49752.50
+#UB -1 2081 -25000.00
+#UB -1 2098 -5876.25
+#UB -1 2099 -15876.25
+#UB -1 2611 0.00
+#UB -1 2641 0.00
+#UB -1 2650 -6000.00
+#RES 0 3001 0.00
+#RES 0 5010 0.00
+#RES 0 6110 0.00
+#RES 0 6570 0.00
+#RES 0 7832 0.00
+#RES -1 3001 -20000.00
+#RES -1 5010 3000.00
+#RES -1 6110 0.00
+#RES -1 6570 123.75
+#RES -1 7832 1000.00
+#VER "A" 27 20250210 "Försäljning"
+{
+	#TRANS 1510 {} 37500.00 20250210
+	#TRANS 3001 {} -30000.00 20250210
+	#TRANS 2611 {} -7500.00 20250210
+}
+#VER "A" 28 20250310 "Inbetalning"
+{
+	#TRANS 1930 {} 37500.00 20250310
+	#TRANS 1510 {} -37500.00 20250310
+}
+#VER "A" 29 20250401 "Hyra"
+{
+	#TRANS 5010 {} 3000.00 20250401
+	#TRANS 2641 {} 750.00 20250401
+	#TRANS 1930 {} -3750.00 20250401
+}
+#VER "A" 30 20250402 "Bankavgift"
+{
+	#TRANS 6570 {} 0.10 20250402
+	#TRANS 1930 {} -0.10 20250402
+}
+#VER "A" 31 20250403 "Bankavgift"
+{
+	#TRANS 6570 {} 0.20 20250403
+	#TRANS 1930 {} -0.20 20250403
+}
+#VER "A" 32 20250505 "Bankavgift"
+{
+	#TRANS 6570 {} 123.45 20250505
+	#TRANS 1930 {} -123.45 20250505
+}
+#VER "A" 33 20250801 "Kontorsmateriel"
+{
+	#TRANS 6110 {} 200.00 20250801
+	#TRANS 1930 {} -200.00 20250801
+}
+#VER "A" 34 20250802 "Makulering"
+{
+	#TRANS 1930 {} 200.00 20250802
+	#TRANS 6110 {} -200.00 20250802
+}
+#VER "A" 35 20250912 "Momsredovisning"
+{
+	#TRANS 2611 {} 7500.00 20250912
+	#TRANS 2641 {} -750.00 20250912
+	#TRANS 2650 {} -6750.00 20250912
+}
+#VER "A" 36 20251231 "Avskrivning"
+{
+	#TRANS 7832 {} 1000.00 20251231
+	#TRANS 1229 {} -1000.00 20251231
+}
+#VER "A" 37 20251231 "Årsbokslut 2025"
+{
+	#TRANS 3001 {} 30000.00 20251231
+	#TRANS 5010 {} -3000.00 20251231
+	#TRANS 6570 {} -123.75 20251231
+	#TRANS 7832 {} -1000.00 20251231
+	#TRANS 2099 {} -25876.25 20251231
+}
+"
+`;
+
+exports[`generateSIEExport: previous-year records over a ledger > aktiebolag, linked, exclude_year_end_closing=true: the file is unchanged 1`] = `
+"#FLAGGA 0
+#FORMAT PC8
+#SIETYP 4
+#PROGRAM "Accounted" "1.0"
+#GEN 20260201
+#ORGNR 556677-8899
+#FNAMN "Bokföringsexempel"
+#RAR 0 20250101 20251231
+#RAR -1 20240101 20241231
+#KONTO 1220 "Inventarier och verktyg"
+#KONTO 1229 "Ackumulerade avskrivningar på inventarier och verktyg"
+#KONTO 1510 "Kundfordringar"
+#KONTO 1630 "Avräkning för skatter och avgifter (skattekonto)"
+#KONTO 1930 "Företagskonto / affärskonto"
+#KONTO 2010 "Eget kapital"
+#KONTO 2013 "Övriga egna uttag"
+#KONTO 2081 "Aktiekapital"
+#KONTO 2083 "Medlemsinsatser"
+#KONTO 2084 "Förlagsinsatser"
+#KONTO 2091 "Balanserad vinst eller förlust"
+#KONTO 2098 "Vinst eller förlust från föregående år"
+#KONTO 2099 "Årets resultat"
+#KONTO 2611 "Utgående moms på försäljning inom Sverige, 25 %"
+#KONTO 2641 "Debiterad ingående moms"
+#KONTO 2650 "Redovisningskonto för moms"
+#KONTO 3001 "Försäljning inom Sverige, 25 % moms"
+#SRU 3001 7410
+#KONTO 5010 "Lokalhyra"
+#KONTO 6110 "Kontorsmateriel"
+#KONTO 6570 "Bankkostnader"
+#KONTO 7832 "Avskrivningar på inventarier och verktyg"
+#IB 0 2650 -6000.00
+#IB 0 2098 -21752.50
+#IB 0 2081 -25000.00
+#IB 0 1930 49752.50
+#IB 0 1229 -2000.00
+#IB 0 1220 5000.00
+#IB -1 2650 -1750.00
+#IB -1 2098 -5876.25
+#IB -1 2081 -25000.00
+#IB -1 1930 28626.25
+#IB -1 1229 -1000.00
+#IB -1 1220 5000.00
+#UB 0 1220 5000.00
+#UB 0 1229 -2000.00
+#UB 0 1510 0.00
+#UB 0 1930 83378.75
+#UB 0 2081 -25000.00
+#UB 0 2098 -21752.50
+#UB 0 2611 0.00
+#UB 0 2641 0.00
+#UB 0 2650 -12750.00
+#UB -1 1220 5000.00
+#UB -1 1229 -2000.00
+#UB -1 1510 0.00
+#UB -1 1930 49752.50
+#UB -1 2081 -25000.00
+#UB -1 2098 -5876.25
+#UB -1 2099 -15876.25
+#UB -1 2611 0.00
+#UB -1 2641 0.00
+#UB -1 2650 -6000.00
+#RES 0 3001 -30000.00
+#RES 0 5010 3000.00
+#RES 0 6110 0.00
+#RES 0 6570 123.75
+#RES -1 3001 -20000.00
+#RES -1 5010 3000.00
+#RES -1 6110 0.00
+#RES -1 6570 123.75
+#RES -1 7832 1000.00
+#VER "A" 27 20250210 "Försäljning"
+{
+	#TRANS 1510 {} 37500.00 20250210
+	#TRANS 3001 {} -30000.00 20250210
+	#TRANS 2611 {} -7500.00 20250210
+}
+#VER "A" 28 20250310 "Inbetalning"
+{
+	#TRANS 1930 {} 37500.00 20250310
+	#TRANS 1510 {} -37500.00 20250310
+}
+#VER "A" 29 20250401 "Hyra"
+{
+	#TRANS 5010 {} 3000.00 20250401
+	#TRANS 2641 {} 750.00 20250401
+	#TRANS 1930 {} -3750.00 20250401
+}
+#VER "A" 30 20250402 "Bankavgift"
+{
+	#TRANS 6570 {} 0.10 20250402
+	#TRANS 1930 {} -0.10 20250402
+}
+#VER "A" 31 20250403 "Bankavgift"
+{
+	#TRANS 6570 {} 0.20 20250403
+	#TRANS 1930 {} -0.20 20250403
+}
+#VER "A" 32 20250505 "Bankavgift"
+{
+	#TRANS 6570 {} 123.45 20250505
+	#TRANS 1930 {} -123.45 20250505
+}
+#VER "A" 33 20250801 "Kontorsmateriel"
+{
+	#TRANS 6110 {} 200.00 20250801
+	#TRANS 1930 {} -200.00 20250801
+}
+#VER "A" 34 20250802 "Makulering"
+{
+	#TRANS 1930 {} 200.00 20250802
+	#TRANS 6110 {} -200.00 20250802
+}
+#VER "A" 35 20250912 "Momsredovisning"
+{
+	#TRANS 2611 {} 7500.00 20250912
+	#TRANS 2641 {} -750.00 20250912
+	#TRANS 2650 {} -6750.00 20250912
+}
+"
+`;
+
+exports[`generateSIEExport: previous-year records over a ledger > aktiebolag, unlinked-closing, exclude_year_end_closing=false: the file is unchanged 1`] = `
+"#FLAGGA 0
+#FORMAT PC8
+#SIETYP 4
+#PROGRAM "Accounted" "1.0"
+#GEN 20260201
+#ORGNR 556677-8899
+#FNAMN "Bokföringsexempel"
+#RAR 0 20250101 20251231
+#RAR -1 20240101 20241231
+#KONTO 1220 "Inventarier och verktyg"
+#KONTO 1229 "Ackumulerade avskrivningar på inventarier och verktyg"
+#KONTO 1510 "Kundfordringar"
+#KONTO 1630 "Avräkning för skatter och avgifter (skattekonto)"
+#KONTO 1930 "Företagskonto / affärskonto"
+#KONTO 2010 "Eget kapital"
+#KONTO 2013 "Övriga egna uttag"
+#KONTO 2081 "Aktiekapital"
+#KONTO 2083 "Medlemsinsatser"
+#KONTO 2084 "Förlagsinsatser"
+#KONTO 2091 "Balanserad vinst eller förlust"
+#KONTO 2098 "Vinst eller förlust från föregående år"
+#KONTO 2099 "Årets resultat"
+#KONTO 2611 "Utgående moms på försäljning inom Sverige, 25 %"
+#KONTO 2641 "Debiterad ingående moms"
+#KONTO 2650 "Redovisningskonto för moms"
+#KONTO 3001 "Försäljning inom Sverige, 25 % moms"
+#SRU 3001 7410
+#KONTO 5010 "Lokalhyra"
+#KONTO 6110 "Kontorsmateriel"
+#KONTO 6570 "Bankkostnader"
+#KONTO 7832 "Avskrivningar på inventarier och verktyg"
+#IB 0 2650 -6000.00
+#IB 0 2098 -21752.50
+#IB 0 2081 -25000.00
+#IB 0 1930 49752.50
+#IB 0 1229 -2000.00
+#IB 0 1220 5000.00
+#IB -1 2650 -1750.00
+#IB -1 2098 -5876.25
+#IB -1 2081 -25000.00
+#IB -1 1930 28626.25
+#IB -1 1229 -1000.00
+#IB -1 1220 5000.00
+#UB 0 1220 5000.00
+#UB 0 1229 -3000.00
+#UB 0 1510 0.00
+#UB 0 1930 83378.75
+#UB 0 2081 -25000.00
+#UB 0 2098 -21752.50
+#UB 0 2099 -25876.25
+#UB 0 2611 0.00
+#UB 0 2641 0.00
+#UB 0 2650 -12750.00
+#UB -1 1220 5000.00
+#UB -1 1229 -2000.00
+#UB -1 1510 0.00
+#UB -1 1930 49752.50
+#UB -1 2081 -25000.00
+#UB -1 2098 -5876.25
+#UB -1 2099 -15876.25
+#UB -1 2611 0.00
+#UB -1 2641 0.00
+#UB -1 2650 -6000.00
+#RES 0 3001 0.00
+#RES 0 5010 0.00
+#RES 0 6110 0.00
+#RES 0 6570 0.00
+#RES 0 7832 0.00
+#RES -1 3001 -20000.00
+#RES -1 5010 3000.00
+#RES -1 6110 0.00
+#RES -1 6570 123.75
+#RES -1 7832 1000.00
+#VER "A" 27 20250210 "Försäljning"
+{
+	#TRANS 1510 {} 37500.00 20250210
+	#TRANS 3001 {} -30000.00 20250210
+	#TRANS 2611 {} -7500.00 20250210
+}
+#VER "A" 28 20250310 "Inbetalning"
+{
+	#TRANS 1930 {} 37500.00 20250310
+	#TRANS 1510 {} -37500.00 20250310
+}
+#VER "A" 29 20250401 "Hyra"
+{
+	#TRANS 5010 {} 3000.00 20250401
+	#TRANS 2641 {} 750.00 20250401
+	#TRANS 1930 {} -3750.00 20250401
+}
+#VER "A" 30 20250402 "Bankavgift"
+{
+	#TRANS 6570 {} 0.10 20250402
+	#TRANS 1930 {} -0.10 20250402
+}
+#VER "A" 31 20250403 "Bankavgift"
+{
+	#TRANS 6570 {} 0.20 20250403
+	#TRANS 1930 {} -0.20 20250403
+}
+#VER "A" 32 20250505 "Bankavgift"
+{
+	#TRANS 6570 {} 123.45 20250505
+	#TRANS 1930 {} -123.45 20250505
+}
+#VER "A" 33 20250801 "Kontorsmateriel"
+{
+	#TRANS 6110 {} 200.00 20250801
+	#TRANS 1930 {} -200.00 20250801
+}
+#VER "A" 34 20250802 "Makulering"
+{
+	#TRANS 1930 {} 200.00 20250802
+	#TRANS 6110 {} -200.00 20250802
+}
+#VER "A" 35 20250912 "Momsredovisning"
+{
+	#TRANS 2611 {} 7500.00 20250912
+	#TRANS 2641 {} -750.00 20250912
+	#TRANS 2650 {} -6750.00 20250912
+}
+#VER "A" 36 20251231 "Avskrivning"
+{
+	#TRANS 7832 {} 1000.00 20251231
+	#TRANS 1229 {} -1000.00 20251231
+}
+#VER "A" 37 20251231 "Årsbokslut 2025"
+{
+	#TRANS 3001 {} 30000.00 20251231
+	#TRANS 5010 {} -3000.00 20251231
+	#TRANS 6570 {} -123.75 20251231
+	#TRANS 7832 {} -1000.00 20251231
+	#TRANS 2099 {} -25876.25 20251231
+}
+"
+`;
+
+exports[`generateSIEExport: previous-year records over a ledger > aktiebolag, unlinked-closing, exclude_year_end_closing=true: the file is unchanged 1`] = `
+"#FLAGGA 0
+#FORMAT PC8
+#SIETYP 4
+#PROGRAM "Accounted" "1.0"
+#GEN 20260201
+#ORGNR 556677-8899
+#FNAMN "Bokföringsexempel"
+#RAR 0 20250101 20251231
+#RAR -1 20240101 20241231
+#KONTO 1220 "Inventarier och verktyg"
+#KONTO 1229 "Ackumulerade avskrivningar på inventarier och verktyg"
+#KONTO 1510 "Kundfordringar"
+#KONTO 1630 "Avräkning för skatter och avgifter (skattekonto)"
+#KONTO 1930 "Företagskonto / affärskonto"
+#KONTO 2010 "Eget kapital"
+#KONTO 2013 "Övriga egna uttag"
+#KONTO 2081 "Aktiekapital"
+#KONTO 2083 "Medlemsinsatser"
+#KONTO 2084 "Förlagsinsatser"
+#KONTO 2091 "Balanserad vinst eller förlust"
+#KONTO 2098 "Vinst eller förlust från föregående år"
+#KONTO 2099 "Årets resultat"
+#KONTO 2611 "Utgående moms på försäljning inom Sverige, 25 %"
+#KONTO 2641 "Debiterad ingående moms"
+#KONTO 2650 "Redovisningskonto för moms"
+#KONTO 3001 "Försäljning inom Sverige, 25 % moms"
+#SRU 3001 7410
+#KONTO 5010 "Lokalhyra"
+#KONTO 6110 "Kontorsmateriel"
+#KONTO 6570 "Bankkostnader"
+#KONTO 7832 "Avskrivningar på inventarier och verktyg"
+#IB 0 2650 -6000.00
+#IB 0 2098 -21752.50
+#IB 0 2081 -25000.00
+#IB 0 1930 49752.50
+#IB 0 1229 -2000.00
+#IB 0 1220 5000.00
+#IB -1 2650 -1750.00
+#IB -1 2098 -5876.25
+#IB -1 2081 -25000.00
+#IB -1 1930 28626.25
+#IB -1 1229 -1000.00
+#IB -1 1220 5000.00
+#UB 0 1220 5000.00
+#UB 0 1229 -2000.00
+#UB 0 1510 0.00
+#UB 0 1930 83378.75
+#UB 0 2081 -25000.00
+#UB 0 2098 -21752.50
+#UB 0 2611 0.00
+#UB 0 2641 0.00
+#UB 0 2650 -12750.00
+#UB -1 1220 5000.00
+#UB -1 1229 -2000.00
+#UB -1 1510 0.00
+#UB -1 1930 49752.50
+#UB -1 2081 -25000.00
+#UB -1 2098 -5876.25
+#UB -1 2099 -15876.25
+#UB -1 2611 0.00
+#UB -1 2641 0.00
+#UB -1 2650 -6000.00
+#RES 0 3001 -30000.00
+#RES 0 5010 3000.00
+#RES 0 6110 0.00
+#RES 0 6570 123.75
+#RES -1 3001 -20000.00
+#RES -1 5010 3000.00
+#RES -1 6110 0.00
+#RES -1 6570 123.75
+#RES -1 7832 1000.00
+#VER "A" 27 20250210 "Försäljning"
+{
+	#TRANS 1510 {} 37500.00 20250210
+	#TRANS 3001 {} -30000.00 20250210
+	#TRANS 2611 {} -7500.00 20250210
+}
+#VER "A" 28 20250310 "Inbetalning"
+{
+	#TRANS 1930 {} 37500.00 20250310
+	#TRANS 1510 {} -37500.00 20250310
+}
+#VER "A" 29 20250401 "Hyra"
+{
+	#TRANS 5010 {} 3000.00 20250401
+	#TRANS 2641 {} 750.00 20250401
+	#TRANS 1930 {} -3750.00 20250401
+}
+#VER "A" 30 20250402 "Bankavgift"
+{
+	#TRANS 6570 {} 0.10 20250402
+	#TRANS 1930 {} -0.10 20250402
+}
+#VER "A" 31 20250403 "Bankavgift"
+{
+	#TRANS 6570 {} 0.20 20250403
+	#TRANS 1930 {} -0.20 20250403
+}
+#VER "A" 32 20250505 "Bankavgift"
+{
+	#TRANS 6570 {} 123.45 20250505
+	#TRANS 1930 {} -123.45 20250505
+}
+#VER "A" 33 20250801 "Kontorsmateriel"
+{
+	#TRANS 6110 {} 200.00 20250801
+	#TRANS 1930 {} -200.00 20250801
+}
+#VER "A" 34 20250802 "Makulering"
+{
+	#TRANS 1930 {} 200.00 20250802
+	#TRANS 6110 {} -200.00 20250802
+}
+#VER "A" 35 20250912 "Momsredovisning"
+{
+	#TRANS 2611 {} 7500.00 20250912
+	#TRANS 2641 {} -750.00 20250912
+	#TRANS 2650 {} -6750.00 20250912
+}
+"
+`;
+
+exports[`generateSIEExport: previous-year records over a ledger > enskild_firma, fallback-ib, exclude_year_end_closing=false: the file is unchanged 1`] = `
+"#FLAGGA 0
+#FORMAT PC8
+#SIETYP 4
+#PROGRAM "Accounted" "1.0"
+#GEN 20260201
+#ORGNR 556677-8899
+#FNAMN "Bokföringsexempel"
+#RAR 0 20250101 20251231
+#RAR -1 20240101 20241231
+#KONTO 1220 "Inventarier och verktyg"
+#KONTO 1229 "Ackumulerade avskrivningar på inventarier och verktyg"
+#KONTO 1510 "Kundfordringar"
+#KONTO 1630 "Avräkning för skatter och avgifter (skattekonto)"
+#KONTO 1930 "Företagskonto / affärskonto"
+#KONTO 2010 "Eget kapital"
+#KONTO 2013 "Övriga egna uttag"
+#KONTO 2081 "Aktiekapital"
+#KONTO 2083 "Medlemsinsatser"
+#KONTO 2084 "Förlagsinsatser"
+#KONTO 2091 "Balanserad vinst eller förlust"
+#KONTO 2098 "Vinst eller förlust från föregående år"
+#KONTO 2099 "Årets resultat"
+#KONTO 2611 "Utgående moms på försäljning inom Sverige, 25 %"
+#KONTO 2641 "Debiterad ingående moms"
+#KONTO 2650 "Redovisningskonto för moms"
+#KONTO 3001 "Försäljning inom Sverige, 25 % moms"
+#SRU 3001 7410
+#KONTO 5010 "Lokalhyra"
+#KONTO 6110 "Kontorsmateriel"
+#KONTO 6570 "Bankkostnader"
+#KONTO 7832 "Avskrivningar på inventarier och verktyg"
+#IB 0 2650 -6000.00
+#IB 0 2013 2000.00
+#IB 0 2010 -46752.50
+#IB 0 1930 47752.50
+#IB 0 1229 -2000.00
+#IB 0 1220 5000.00
+#IB -1 1220 5000.00
+#IB -1 1229 -1000.00
+#IB -1 1930 27626.25
+#IB -1 2010 -30876.25
+#IB -1 2013 1000.00
+#IB -1 2650 -1750.00
+#UB 0 1220 5000.00
+#UB 0 1229 -3000.00
+#UB 0 1510 0.00
+#UB 0 1930 80378.75
+#UB 0 2010 -72628.75
+#UB 0 2013 3000.00
+#UB 0 2611 0.00
+#UB 0 2641 0.00
+#UB 0 2650 -12750.00
+#UB -1 1220 5000.00
+#UB -1 1229 -2000.00
+#UB -1 1510 0.00
+#UB -1 1930 47752.50
+#UB -1 2010 -46752.50
+#UB -1 2013 2000.00
+#UB -1 2611 0.00
+#UB -1 2641 0.00
+#UB -1 2650 -6000.00
+#RES 0 3001 0.00
+#RES 0 5010 0.00
+#RES 0 6110 0.00
+#RES 0 6570 0.00
+#RES 0 7832 0.00
+#RES -1 3001 -20000.00
+#RES -1 5010 3000.00
+#RES -1 6110 0.00
+#RES -1 6570 123.75
+#RES -1 7832 1000.00
+#VER "A" 29 20250210 "Försäljning"
+{
+	#TRANS 1510 {} 37500.00 20250210
+	#TRANS 3001 {} -30000.00 20250210
+	#TRANS 2611 {} -7500.00 20250210
+}
+#VER "A" 30 20250310 "Inbetalning"
+{
+	#TRANS 1930 {} 37500.00 20250310
+	#TRANS 1510 {} -37500.00 20250310
+}
+#VER "A" 31 20250401 "Hyra"
+{
+	#TRANS 5010 {} 3000.00 20250401
+	#TRANS 2641 {} 750.00 20250401
+	#TRANS 1930 {} -3750.00 20250401
+}
+#VER "A" 32 20250402 "Bankavgift"
+{
+	#TRANS 6570 {} 0.10 20250402
+	#TRANS 1930 {} -0.10 20250402
+}
+#VER "A" 33 20250403 "Bankavgift"
+{
+	#TRANS 6570 {} 0.20 20250403
+	#TRANS 1930 {} -0.20 20250403
+}
+#VER "A" 34 20250505 "Bankavgift"
+{
+	#TRANS 6570 {} 123.45 20250505
+	#TRANS 1930 {} -123.45 20250505
+}
+#VER "A" 35 20250701 "Eget uttag"
+{
+	#TRANS 2013 {} 1000.00 20250701
+	#TRANS 1930 {} -1000.00 20250701
+}
+#VER "A" 36 20250801 "Kontorsmateriel"
+{
+	#TRANS 6110 {} 200.00 20250801
+	#TRANS 1930 {} -200.00 20250801
+}
+#VER "A" 37 20250802 "Makulering"
+{
+	#TRANS 1930 {} 200.00 20250802
+	#TRANS 6110 {} -200.00 20250802
+}
+#VER "A" 38 20250912 "Momsredovisning"
+{
+	#TRANS 2611 {} 7500.00 20250912
+	#TRANS 2641 {} -750.00 20250912
+	#TRANS 2650 {} -6750.00 20250912
+}
+#VER "A" 39 20251231 "Avskrivning"
+{
+	#TRANS 7832 {} 1000.00 20251231
+	#TRANS 1229 {} -1000.00 20251231
+}
+#VER "A" 40 20251231 "Årsbokslut 2025"
+{
+	#TRANS 3001 {} 30000.00 20251231
+	#TRANS 5010 {} -3000.00 20251231
+	#TRANS 6570 {} -123.75 20251231
+	#TRANS 7832 {} -1000.00 20251231
+	#TRANS 2010 {} -25876.25 20251231
+}
+"
+`;
+
+exports[`generateSIEExport: previous-year records over a ledger > enskild_firma, fallback-ib, exclude_year_end_closing=true: the file is unchanged 1`] = `
+"#FLAGGA 0
+#FORMAT PC8
+#SIETYP 4
+#PROGRAM "Accounted" "1.0"
+#GEN 20260201
+#ORGNR 556677-8899
+#FNAMN "Bokföringsexempel"
+#RAR 0 20250101 20251231
+#RAR -1 20240101 20241231
+#KONTO 1220 "Inventarier och verktyg"
+#KONTO 1229 "Ackumulerade avskrivningar på inventarier och verktyg"
+#KONTO 1510 "Kundfordringar"
+#KONTO 1630 "Avräkning för skatter och avgifter (skattekonto)"
+#KONTO 1930 "Företagskonto / affärskonto"
+#KONTO 2010 "Eget kapital"
+#KONTO 2013 "Övriga egna uttag"
+#KONTO 2081 "Aktiekapital"
+#KONTO 2083 "Medlemsinsatser"
+#KONTO 2084 "Förlagsinsatser"
+#KONTO 2091 "Balanserad vinst eller förlust"
+#KONTO 2098 "Vinst eller förlust från föregående år"
+#KONTO 2099 "Årets resultat"
+#KONTO 2611 "Utgående moms på försäljning inom Sverige, 25 %"
+#KONTO 2641 "Debiterad ingående moms"
+#KONTO 2650 "Redovisningskonto för moms"
+#KONTO 3001 "Försäljning inom Sverige, 25 % moms"
+#SRU 3001 7410
+#KONTO 5010 "Lokalhyra"
+#KONTO 6110 "Kontorsmateriel"
+#KONTO 6570 "Bankkostnader"
+#KONTO 7832 "Avskrivningar på inventarier och verktyg"
+#IB 0 2650 -6000.00
+#IB 0 2013 2000.00
+#IB 0 2010 -46752.50
+#IB 0 1930 47752.50
+#IB 0 1229 -2000.00
+#IB 0 1220 5000.00
+#IB -1 1220 5000.00
+#IB -1 1229 -1000.00
+#IB -1 1930 27626.25
+#IB -1 2010 -30876.25
+#IB -1 2013 1000.00
+#IB -1 2650 -1750.00
+#UB 0 1220 5000.00
+#UB 0 1229 -2000.00
+#UB 0 1510 0.00
+#UB 0 1930 80378.75
+#UB 0 2010 -46752.50
+#UB 0 2013 3000.00
+#UB 0 2611 0.00
+#UB 0 2641 0.00
+#UB 0 2650 -12750.00
+#UB -1 1220 5000.00
+#UB -1 1229 -2000.00
+#UB -1 1510 0.00
+#UB -1 1930 47752.50
+#UB -1 2010 -46752.50
+#UB -1 2013 2000.00
+#UB -1 2611 0.00
+#UB -1 2641 0.00
+#UB -1 2650 -6000.00
+#RES 0 3001 -30000.00
+#RES 0 5010 3000.00
+#RES 0 6110 0.00
+#RES 0 6570 123.75
+#RES -1 3001 -20000.00
+#RES -1 5010 3000.00
+#RES -1 6110 0.00
+#RES -1 6570 123.75
+#RES -1 7832 1000.00
+#VER "A" 29 20250210 "Försäljning"
+{
+	#TRANS 1510 {} 37500.00 20250210
+	#TRANS 3001 {} -30000.00 20250210
+	#TRANS 2611 {} -7500.00 20250210
+}
+#VER "A" 30 20250310 "Inbetalning"
+{
+	#TRANS 1930 {} 37500.00 20250310
+	#TRANS 1510 {} -37500.00 20250310
+}
+#VER "A" 31 20250401 "Hyra"
+{
+	#TRANS 5010 {} 3000.00 20250401
+	#TRANS 2641 {} 750.00 20250401
+	#TRANS 1930 {} -3750.00 20250401
+}
+#VER "A" 32 20250402 "Bankavgift"
+{
+	#TRANS 6570 {} 0.10 20250402
+	#TRANS 1930 {} -0.10 20250402
+}
+#VER "A" 33 20250403 "Bankavgift"
+{
+	#TRANS 6570 {} 0.20 20250403
+	#TRANS 1930 {} -0.20 20250403
+}
+#VER "A" 34 20250505 "Bankavgift"
+{
+	#TRANS 6570 {} 123.45 20250505
+	#TRANS 1930 {} -123.45 20250505
+}
+#VER "A" 35 20250701 "Eget uttag"
+{
+	#TRANS 2013 {} 1000.00 20250701
+	#TRANS 1930 {} -1000.00 20250701
+}
+#VER "A" 36 20250801 "Kontorsmateriel"
+{
+	#TRANS 6110 {} 200.00 20250801
+	#TRANS 1930 {} -200.00 20250801
+}
+#VER "A" 37 20250802 "Makulering"
+{
+	#TRANS 1930 {} 200.00 20250802
+	#TRANS 6110 {} -200.00 20250802
+}
+#VER "A" 38 20250912 "Momsredovisning"
+{
+	#TRANS 2611 {} 7500.00 20250912
+	#TRANS 2641 {} -750.00 20250912
+	#TRANS 2650 {} -6750.00 20250912
+}
+"
+`;
+
+exports[`generateSIEExport: previous-year records over a ledger > enskild_firma, linked, exclude_year_end_closing=false: the file is unchanged 1`] = `
+"#FLAGGA 0
+#FORMAT PC8
+#SIETYP 4
+#PROGRAM "Accounted" "1.0"
+#GEN 20260201
+#ORGNR 556677-8899
+#FNAMN "Bokföringsexempel"
+#RAR 0 20250101 20251231
+#RAR -1 20240101 20241231
+#KONTO 1220 "Inventarier och verktyg"
+#KONTO 1229 "Ackumulerade avskrivningar på inventarier och verktyg"
+#KONTO 1510 "Kundfordringar"
+#KONTO 1630 "Avräkning för skatter och avgifter (skattekonto)"
+#KONTO 1930 "Företagskonto / affärskonto"
+#KONTO 2010 "Eget kapital"
+#KONTO 2013 "Övriga egna uttag"
+#KONTO 2081 "Aktiekapital"
+#KONTO 2083 "Medlemsinsatser"
+#KONTO 2084 "Förlagsinsatser"
+#KONTO 2091 "Balanserad vinst eller förlust"
+#KONTO 2098 "Vinst eller förlust från föregående år"
+#KONTO 2099 "Årets resultat"
+#KONTO 2611 "Utgående moms på försäljning inom Sverige, 25 %"
+#KONTO 2641 "Debiterad ingående moms"
+#KONTO 2650 "Redovisningskonto för moms"
+#KONTO 3001 "Försäljning inom Sverige, 25 % moms"
+#SRU 3001 7410
+#KONTO 5010 "Lokalhyra"
+#KONTO 6110 "Kontorsmateriel"
+#KONTO 6570 "Bankkostnader"
+#KONTO 7832 "Avskrivningar på inventarier och verktyg"
+#IB 0 2650 -6000.00
+#IB 0 2013 2000.00
+#IB 0 2010 -46752.50
+#IB 0 1930 47752.50
+#IB 0 1229 -2000.00
+#IB 0 1220 5000.00
+#IB -1 2650 -1750.00
+#IB -1 2013 1000.00
+#IB -1 2010 -30876.25
+#IB -1 1930 27626.25
+#IB -1 1229 -1000.00
+#IB -1 1220 5000.00
+#UB 0 1220 5000.00
+#UB 0 1229 -3000.00
+#UB 0 1510 0.00
+#UB 0 1930 80378.75
+#UB 0 2010 -72628.75
+#UB 0 2013 3000.00
+#UB 0 2611 0.00
+#UB 0 2641 0.00
+#UB 0 2650 -12750.00
+#UB -1 1220 5000.00
+#UB -1 1229 -2000.00
+#UB -1 1510 0.00
+#UB -1 1930 47752.50
+#UB -1 2010 -46752.50
+#UB -1 2013 2000.00
+#UB -1 2611 0.00
+#UB -1 2641 0.00
+#UB -1 2650 -6000.00
+#RES 0 3001 0.00
+#RES 0 5010 0.00
+#RES 0 6110 0.00
+#RES 0 6570 0.00
+#RES 0 7832 0.00
+#RES -1 3001 -20000.00
+#RES -1 5010 3000.00
+#RES -1 6110 0.00
+#RES -1 6570 123.75
+#RES -1 7832 1000.00
+#VER "A" 29 20250210 "Försäljning"
+{
+	#TRANS 1510 {} 37500.00 20250210
+	#TRANS 3001 {} -30000.00 20250210
+	#TRANS 2611 {} -7500.00 20250210
+}
+#VER "A" 30 20250310 "Inbetalning"
+{
+	#TRANS 1930 {} 37500.00 20250310
+	#TRANS 1510 {} -37500.00 20250310
+}
+#VER "A" 31 20250401 "Hyra"
+{
+	#TRANS 5010 {} 3000.00 20250401
+	#TRANS 2641 {} 750.00 20250401
+	#TRANS 1930 {} -3750.00 20250401
+}
+#VER "A" 32 20250402 "Bankavgift"
+{
+	#TRANS 6570 {} 0.10 20250402
+	#TRANS 1930 {} -0.10 20250402
+}
+#VER "A" 33 20250403 "Bankavgift"
+{
+	#TRANS 6570 {} 0.20 20250403
+	#TRANS 1930 {} -0.20 20250403
+}
+#VER "A" 34 20250505 "Bankavgift"
+{
+	#TRANS 6570 {} 123.45 20250505
+	#TRANS 1930 {} -123.45 20250505
+}
+#VER "A" 35 20250701 "Eget uttag"
+{
+	#TRANS 2013 {} 1000.00 20250701
+	#TRANS 1930 {} -1000.00 20250701
+}
+#VER "A" 36 20250801 "Kontorsmateriel"
+{
+	#TRANS 6110 {} 200.00 20250801
+	#TRANS 1930 {} -200.00 20250801
+}
+#VER "A" 37 20250802 "Makulering"
+{
+	#TRANS 1930 {} 200.00 20250802
+	#TRANS 6110 {} -200.00 20250802
+}
+#VER "A" 38 20250912 "Momsredovisning"
+{
+	#TRANS 2611 {} 7500.00 20250912
+	#TRANS 2641 {} -750.00 20250912
+	#TRANS 2650 {} -6750.00 20250912
+}
+#VER "A" 39 20251231 "Avskrivning"
+{
+	#TRANS 7832 {} 1000.00 20251231
+	#TRANS 1229 {} -1000.00 20251231
+}
+#VER "A" 40 20251231 "Årsbokslut 2025"
+{
+	#TRANS 3001 {} 30000.00 20251231
+	#TRANS 5010 {} -3000.00 20251231
+	#TRANS 6570 {} -123.75 20251231
+	#TRANS 7832 {} -1000.00 20251231
+	#TRANS 2010 {} -25876.25 20251231
+}
+"
+`;
+
+exports[`generateSIEExport: previous-year records over a ledger > enskild_firma, linked, exclude_year_end_closing=true: the file is unchanged 1`] = `
+"#FLAGGA 0
+#FORMAT PC8
+#SIETYP 4
+#PROGRAM "Accounted" "1.0"
+#GEN 20260201
+#ORGNR 556677-8899
+#FNAMN "Bokföringsexempel"
+#RAR 0 20250101 20251231
+#RAR -1 20240101 20241231
+#KONTO 1220 "Inventarier och verktyg"
+#KONTO 1229 "Ackumulerade avskrivningar på inventarier och verktyg"
+#KONTO 1510 "Kundfordringar"
+#KONTO 1630 "Avräkning för skatter och avgifter (skattekonto)"
+#KONTO 1930 "Företagskonto / affärskonto"
+#KONTO 2010 "Eget kapital"
+#KONTO 2013 "Övriga egna uttag"
+#KONTO 2081 "Aktiekapital"
+#KONTO 2083 "Medlemsinsatser"
+#KONTO 2084 "Förlagsinsatser"
+#KONTO 2091 "Balanserad vinst eller förlust"
+#KONTO 2098 "Vinst eller förlust från föregående år"
+#KONTO 2099 "Årets resultat"
+#KONTO 2611 "Utgående moms på försäljning inom Sverige, 25 %"
+#KONTO 2641 "Debiterad ingående moms"
+#KONTO 2650 "Redovisningskonto för moms"
+#KONTO 3001 "Försäljning inom Sverige, 25 % moms"
+#SRU 3001 7410
+#KONTO 5010 "Lokalhyra"
+#KONTO 6110 "Kontorsmateriel"
+#KONTO 6570 "Bankkostnader"
+#KONTO 7832 "Avskrivningar på inventarier och verktyg"
+#IB 0 2650 -6000.00
+#IB 0 2013 2000.00
+#IB 0 2010 -46752.50
+#IB 0 1930 47752.50
+#IB 0 1229 -2000.00
+#IB 0 1220 5000.00
+#IB -1 2650 -1750.00
+#IB -1 2013 1000.00
+#IB -1 2010 -30876.25
+#IB -1 1930 27626.25
+#IB -1 1229 -1000.00
+#IB -1 1220 5000.00
+#UB 0 1220 5000.00
+#UB 0 1229 -2000.00
+#UB 0 1510 0.00
+#UB 0 1930 80378.75
+#UB 0 2010 -46752.50
+#UB 0 2013 3000.00
+#UB 0 2611 0.00
+#UB 0 2641 0.00
+#UB 0 2650 -12750.00
+#UB -1 1220 5000.00
+#UB -1 1229 -2000.00
+#UB -1 1510 0.00
+#UB -1 1930 47752.50
+#UB -1 2010 -46752.50
+#UB -1 2013 2000.00
+#UB -1 2611 0.00
+#UB -1 2641 0.00
+#UB -1 2650 -6000.00
+#RES 0 3001 -30000.00
+#RES 0 5010 3000.00
+#RES 0 6110 0.00
+#RES 0 6570 123.75
+#RES -1 3001 -20000.00
+#RES -1 5010 3000.00
+#RES -1 6110 0.00
+#RES -1 6570 123.75
+#RES -1 7832 1000.00
+#VER "A" 29 20250210 "Försäljning"
+{
+	#TRANS 1510 {} 37500.00 20250210
+	#TRANS 3001 {} -30000.00 20250210
+	#TRANS 2611 {} -7500.00 20250210
+}
+#VER "A" 30 20250310 "Inbetalning"
+{
+	#TRANS 1930 {} 37500.00 20250310
+	#TRANS 1510 {} -37500.00 20250310
+}
+#VER "A" 31 20250401 "Hyra"
+{
+	#TRANS 5010 {} 3000.00 20250401
+	#TRANS 2641 {} 750.00 20250401
+	#TRANS 1930 {} -3750.00 20250401
+}
+#VER "A" 32 20250402 "Bankavgift"
+{
+	#TRANS 6570 {} 0.10 20250402
+	#TRANS 1930 {} -0.10 20250402
+}
+#VER "A" 33 20250403 "Bankavgift"
+{
+	#TRANS 6570 {} 0.20 20250403
+	#TRANS 1930 {} -0.20 20250403
+}
+#VER "A" 34 20250505 "Bankavgift"
+{
+	#TRANS 6570 {} 123.45 20250505
+	#TRANS 1930 {} -123.45 20250505
+}
+#VER "A" 35 20250701 "Eget uttag"
+{
+	#TRANS 2013 {} 1000.00 20250701
+	#TRANS 1930 {} -1000.00 20250701
+}
+#VER "A" 36 20250801 "Kontorsmateriel"
+{
+	#TRANS 6110 {} 200.00 20250801
+	#TRANS 1930 {} -200.00 20250801
+}
+#VER "A" 37 20250802 "Makulering"
+{
+	#TRANS 1930 {} 200.00 20250802
+	#TRANS 6110 {} -200.00 20250802
+}
+#VER "A" 38 20250912 "Momsredovisning"
+{
+	#TRANS 2611 {} 7500.00 20250912
+	#TRANS 2641 {} -750.00 20250912
+	#TRANS 2650 {} -6750.00 20250912
+}
+"
+`;
+
+exports[`generateSIEExport: previous-year records over a ledger > enskild_firma, unlinked-closing, exclude_year_end_closing=false: the file is unchanged 1`] = `
+"#FLAGGA 0
+#FORMAT PC8
+#SIETYP 4
+#PROGRAM "Accounted" "1.0"
+#GEN 20260201
+#ORGNR 556677-8899
+#FNAMN "Bokföringsexempel"
+#RAR 0 20250101 20251231
+#RAR -1 20240101 20241231
+#KONTO 1220 "Inventarier och verktyg"
+#KONTO 1229 "Ackumulerade avskrivningar på inventarier och verktyg"
+#KONTO 1510 "Kundfordringar"
+#KONTO 1630 "Avräkning för skatter och avgifter (skattekonto)"
+#KONTO 1930 "Företagskonto / affärskonto"
+#KONTO 2010 "Eget kapital"
+#KONTO 2013 "Övriga egna uttag"
+#KONTO 2081 "Aktiekapital"
+#KONTO 2083 "Medlemsinsatser"
+#KONTO 2084 "Förlagsinsatser"
+#KONTO 2091 "Balanserad vinst eller förlust"
+#KONTO 2098 "Vinst eller förlust från föregående år"
+#KONTO 2099 "Årets resultat"
+#KONTO 2611 "Utgående moms på försäljning inom Sverige, 25 %"
+#KONTO 2641 "Debiterad ingående moms"
+#KONTO 2650 "Redovisningskonto för moms"
+#KONTO 3001 "Försäljning inom Sverige, 25 % moms"
+#SRU 3001 7410
+#KONTO 5010 "Lokalhyra"
+#KONTO 6110 "Kontorsmateriel"
+#KONTO 6570 "Bankkostnader"
+#KONTO 7832 "Avskrivningar på inventarier och verktyg"
+#IB 0 2650 -6000.00
+#IB 0 2013 2000.00
+#IB 0 2010 -46752.50
+#IB 0 1930 47752.50
+#IB 0 1229 -2000.00
+#IB 0 1220 5000.00
+#IB -1 2650 -1750.00
+#IB -1 2013 1000.00
+#IB -1 2010 -30876.25
+#IB -1 1930 27626.25
+#IB -1 1229 -1000.00
+#IB -1 1220 5000.00
+#UB 0 1220 5000.00
+#UB 0 1229 -3000.00
+#UB 0 1510 0.00
+#UB 0 1930 80378.75
+#UB 0 2010 -72628.75
+#UB 0 2013 3000.00
+#UB 0 2611 0.00
+#UB 0 2641 0.00
+#UB 0 2650 -12750.00
+#UB -1 1220 5000.00
+#UB -1 1229 -2000.00
+#UB -1 1510 0.00
+#UB -1 1930 47752.50
+#UB -1 2010 -46752.50
+#UB -1 2013 2000.00
+#UB -1 2611 0.00
+#UB -1 2641 0.00
+#UB -1 2650 -6000.00
+#RES 0 3001 0.00
+#RES 0 5010 0.00
+#RES 0 6110 0.00
+#RES 0 6570 0.00
+#RES 0 7832 0.00
+#RES -1 3001 0.00
+#RES -1 5010 0.00
+#RES -1 6110 0.00
+#RES -1 6570 0.00
+#RES -1 7832 0.00
+#VER "A" 29 20250210 "Försäljning"
+{
+	#TRANS 1510 {} 37500.00 20250210
+	#TRANS 3001 {} -30000.00 20250210
+	#TRANS 2611 {} -7500.00 20250210
+}
+#VER "A" 30 20250310 "Inbetalning"
+{
+	#TRANS 1930 {} 37500.00 20250310
+	#TRANS 1510 {} -37500.00 20250310
+}
+#VER "A" 31 20250401 "Hyra"
+{
+	#TRANS 5010 {} 3000.00 20250401
+	#TRANS 2641 {} 750.00 20250401
+	#TRANS 1930 {} -3750.00 20250401
+}
+#VER "A" 32 20250402 "Bankavgift"
+{
+	#TRANS 6570 {} 0.10 20250402
+	#TRANS 1930 {} -0.10 20250402
+}
+#VER "A" 33 20250403 "Bankavgift"
+{
+	#TRANS 6570 {} 0.20 20250403
+	#TRANS 1930 {} -0.20 20250403
+}
+#VER "A" 34 20250505 "Bankavgift"
+{
+	#TRANS 6570 {} 123.45 20250505
+	#TRANS 1930 {} -123.45 20250505
+}
+#VER "A" 35 20250701 "Eget uttag"
+{
+	#TRANS 2013 {} 1000.00 20250701
+	#TRANS 1930 {} -1000.00 20250701
+}
+#VER "A" 36 20250801 "Kontorsmateriel"
+{
+	#TRANS 6110 {} 200.00 20250801
+	#TRANS 1930 {} -200.00 20250801
+}
+#VER "A" 37 20250802 "Makulering"
+{
+	#TRANS 1930 {} 200.00 20250802
+	#TRANS 6110 {} -200.00 20250802
+}
+#VER "A" 38 20250912 "Momsredovisning"
+{
+	#TRANS 2611 {} 7500.00 20250912
+	#TRANS 2641 {} -750.00 20250912
+	#TRANS 2650 {} -6750.00 20250912
+}
+#VER "A" 39 20251231 "Avskrivning"
+{
+	#TRANS 7832 {} 1000.00 20251231
+	#TRANS 1229 {} -1000.00 20251231
+}
+#VER "A" 40 20251231 "Årsbokslut 2025"
+{
+	#TRANS 3001 {} 30000.00 20251231
+	#TRANS 5010 {} -3000.00 20251231
+	#TRANS 6570 {} -123.75 20251231
+	#TRANS 7832 {} -1000.00 20251231
+	#TRANS 2010 {} -25876.25 20251231
+}
+"
+`;
+
+exports[`generateSIEExport: previous-year records over a ledger > enskild_firma, unlinked-closing, exclude_year_end_closing=true: the file is unchanged 1`] = `
+"#FLAGGA 0
+#FORMAT PC8
+#SIETYP 4
+#PROGRAM "Accounted" "1.0"
+#GEN 20260201
+#ORGNR 556677-8899
+#FNAMN "Bokföringsexempel"
+#RAR 0 20250101 20251231
+#RAR -1 20240101 20241231
+#KONTO 1220 "Inventarier och verktyg"
+#KONTO 1229 "Ackumulerade avskrivningar på inventarier och verktyg"
+#KONTO 1510 "Kundfordringar"
+#KONTO 1630 "Avräkning för skatter och avgifter (skattekonto)"
+#KONTO 1930 "Företagskonto / affärskonto"
+#KONTO 2010 "Eget kapital"
+#KONTO 2013 "Övriga egna uttag"
+#KONTO 2081 "Aktiekapital"
+#KONTO 2083 "Medlemsinsatser"
+#KONTO 2084 "Förlagsinsatser"
+#KONTO 2091 "Balanserad vinst eller förlust"
+#KONTO 2098 "Vinst eller förlust från föregående år"
+#KONTO 2099 "Årets resultat"
+#KONTO 2611 "Utgående moms på försäljning inom Sverige, 25 %"
+#KONTO 2641 "Debiterad ingående moms"
+#KONTO 2650 "Redovisningskonto för moms"
+#KONTO 3001 "Försäljning inom Sverige, 25 % moms"
+#SRU 3001 7410
+#KONTO 5010 "Lokalhyra"
+#KONTO 6110 "Kontorsmateriel"
+#KONTO 6570 "Bankkostnader"
+#KONTO 7832 "Avskrivningar på inventarier och verktyg"
+#IB 0 2650 -6000.00
+#IB 0 2013 2000.00
+#IB 0 2010 -46752.50
+#IB 0 1930 47752.50
+#IB 0 1229 -2000.00
+#IB 0 1220 5000.00
+#IB -1 2650 -1750.00
+#IB -1 2013 1000.00
+#IB -1 2010 -30876.25
+#IB -1 1930 27626.25
+#IB -1 1229 -1000.00
+#IB -1 1220 5000.00
+#UB 0 1220 5000.00
+#UB 0 1229 -2000.00
+#UB 0 1510 0.00
+#UB 0 1930 80378.75
+#UB 0 2010 -46752.50
+#UB 0 2013 3000.00
+#UB 0 2611 0.00
+#UB 0 2641 0.00
+#UB 0 2650 -12750.00
+#UB -1 1220 5000.00
+#UB -1 1229 -2000.00
+#UB -1 1510 0.00
+#UB -1 1930 47752.50
+#UB -1 2010 -46752.50
+#UB -1 2013 2000.00
+#UB -1 2611 0.00
+#UB -1 2641 0.00
+#UB -1 2650 -6000.00
+#RES 0 3001 -30000.00
+#RES 0 5010 3000.00
+#RES 0 6110 0.00
+#RES 0 6570 123.75
+#RES -1 3001 0.00
+#RES -1 5010 0.00
+#RES -1 6110 0.00
+#RES -1 6570 0.00
+#RES -1 7832 0.00
+#VER "A" 29 20250210 "Försäljning"
+{
+	#TRANS 1510 {} 37500.00 20250210
+	#TRANS 3001 {} -30000.00 20250210
+	#TRANS 2611 {} -7500.00 20250210
+}
+#VER "A" 30 20250310 "Inbetalning"
+{
+	#TRANS 1930 {} 37500.00 20250310
+	#TRANS 1510 {} -37500.00 20250310
+}
+#VER "A" 31 20250401 "Hyra"
+{
+	#TRANS 5010 {} 3000.00 20250401
+	#TRANS 2641 {} 750.00 20250401
+	#TRANS 1930 {} -3750.00 20250401
+}
+#VER "A" 32 20250402 "Bankavgift"
+{
+	#TRANS 6570 {} 0.10 20250402
+	#TRANS 1930 {} -0.10 20250402
+}
+#VER "A" 33 20250403 "Bankavgift"
+{
+	#TRANS 6570 {} 0.20 20250403
+	#TRANS 1930 {} -0.20 20250403
+}
+#VER "A" 34 20250505 "Bankavgift"
+{
+	#TRANS 6570 {} 123.45 20250505
+	#TRANS 1930 {} -123.45 20250505
+}
+#VER "A" 35 20250701 "Eget uttag"
+{
+	#TRANS 2013 {} 1000.00 20250701
+	#TRANS 1930 {} -1000.00 20250701
+}
+#VER "A" 36 20250801 "Kontorsmateriel"
+{
+	#TRANS 6110 {} 200.00 20250801
+	#TRANS 1930 {} -200.00 20250801
+}
+#VER "A" 37 20250802 "Makulering"
+{
+	#TRANS 1930 {} 200.00 20250802
+	#TRANS 6110 {} -200.00 20250802
+}
+#VER "A" 38 20250912 "Momsredovisning"
+{
+	#TRANS 2611 {} 7500.00 20250912
+	#TRANS 2641 {} -750.00 20250912
+	#TRANS 2650 {} -6750.00 20250912
+}
+"
+`;

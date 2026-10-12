@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateEmployeeSchema } from '@/lib/api/schemas'
@@ -9,8 +8,6 @@ import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/l
 import { validateEmployeeUpdate } from '@/lib/salary/employee-update-rules'
 import { jamkningIssueFromDbError, type JamkningFields } from '@/lib/salary/jamkning-rules'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized()
 
 // Response shaping lives in the shared maskEmployeeForResponse: it drops the
 // ciphertext AND personnummer_last4 (mask + last4 reassembles the full

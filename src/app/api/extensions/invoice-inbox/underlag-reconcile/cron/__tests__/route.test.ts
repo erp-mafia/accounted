@@ -1,10 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 
-vi.mock('@/lib/extensions/loader', () => ({
-  loadExtensions: vi.fn(),
-}))
-
 vi.mock('@/lib/extensions/registry', () => ({
   extensionRegistry: {
     get: vi.fn(),
@@ -25,7 +21,6 @@ vi.mock('@/lib/auth/cron', () => ({
 
 import { GET } from '../route'
 import { extensionRegistry } from '@/lib/extensions/registry'
-import { loadExtensions } from '@/lib/extensions/loader'
 import { reconcileStrandedInboxUnderlag } from '@/lib/transactions/inbox-underlag-reconcile'
 import { verifyCronSecret } from '@/lib/auth/cron'
 
@@ -76,7 +71,7 @@ describe('GET /api/extensions/invoice-inbox/underlag-reconcile/cron', () => {
     // Physical extension routes deploy in every build; the registry, generated
     // from extensions.config.json, is what turns them on. Disabled must mean
     // no reconciling AND a visible failure if the cron is scheduled anyway.
-    mockRegistryGet.mockReturnValue(undefined)
+    mockRegistryGet.mockResolvedValue(undefined)
 
     const response = await GET(makeRequest())
     const body = await response.json()
@@ -87,13 +82,12 @@ describe('GET /api/extensions/invoice-inbox/underlag-reconcile/cron', () => {
   })
 
   it('runs the reconciliation in execute mode and returns its summary when enabled', async () => {
-    mockRegistryGet.mockReturnValue({ id: 'invoice-inbox' } as never)
+    mockRegistryGet.mockResolvedValue({ id: 'invoice-inbox' } as never)
     mockReconcile.mockResolvedValue(SUMMARY)
 
     const response = await GET(makeRequest())
     const body = await response.json()
 
-    expect(loadExtensions).toHaveBeenCalled()
     expect(mockRegistryGet).toHaveBeenCalledWith('invoice-inbox')
     expect(mockReconcile).toHaveBeenCalledWith(
       expect.anything(),

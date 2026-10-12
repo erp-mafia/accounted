@@ -1,11 +1,8 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { WebshopStoreSettingsUpdateSchema } from '@/lib/api/schemas'
 import { errorResponse } from '@/lib/errors/get-structured-error'
-
-ensureInitialized()
 
 /**
  * Per-store payment-method -> account mapping (webshop_store_settings).

@@ -9,7 +9,7 @@ import {
  * matching Skatteverkets utbetalning against a bank row.
  *
  * Own module so import-time callers (bank ingest, the batch re-suggest route)
- * can be unit-tested with the pool mocked, the same way getBestInvoiceMatch
+ * can be unit-tested with the pool mocked, the same way loadInvoiceMatchPool
  * is. Non-fatal: any error yields an empty pool and matching is skipped.
  */
 export async function loadOpenRotRutPayoutRequests(

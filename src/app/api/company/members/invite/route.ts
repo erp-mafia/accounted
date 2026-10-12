@@ -1,7 +1,6 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { generateInviteToken, getInviteExpiry } from '@/lib/auth/invite-tokens'
@@ -10,12 +9,6 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getMultiUserState } from '@/lib/entitlements/multi-user'
 import { sendCompanyInviteMail } from '@/lib/email/send-company-invite'
 import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
-
-// Loads the email extension so getEmailService() returns the Resend
-// implementation instead of the noop default. Without this, the invite email
-// is silently skipped in dev whenever this route is hit before any other
-// init'd route in the process.
-ensureInitialized()
 
 const InviteSchema = z.object({
   email: z.string().trim().toLowerCase().pipe(z.string().email('Ogiltig e-postadress.')),

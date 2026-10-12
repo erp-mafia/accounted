@@ -73,7 +73,7 @@ beforeEach(() => {
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
     }),
   )
-  mockRegistryGet.mockReturnValue({
+  mockRegistryGet.mockResolvedValue({
     id: 'skatteverket',
     services: { fetchVatDeclarationStatus: mockFetchStatus },
   })
@@ -142,7 +142,7 @@ describe('GET /api/v1/companies/:companyId/skatteverket/vat-declarations', () =>
   })
 
   it('returns 503 EXTENSION_DISABLED when the extension is not registered', async () => {
-    mockRegistryGet.mockReturnValue(undefined)
+    mockRegistryGet.mockResolvedValue(undefined)
     const res = await GET(
       makeRequest(`${BASE}?period_type=quarterly&year=2026&period=1`),
       params,

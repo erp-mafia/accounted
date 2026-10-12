@@ -1,10 +1,11 @@
 import type { AgentTool } from './types'
+import { whenInitialized } from '@/lib/initialized'
 
 // Process-singleton registry the chat agent reads from. Extensions register a
 // tool loader at module load (lib/init.ts → extensionRegistry.register →
 // side-effect of mcp-server/index.ts calling registerAgentToolLoader). The
-// loader runs on the first lookup, so a route that never asks for a tool
-// never loads the module graph behind it.
+// first lookup loads lib/init (lib/initialized.ts) and then runs the loaders,
+// so a route that never asks for a tool loads neither.
 //
 // Why a singleton: same lifetime story as the event bus and extension
 // registry: there's exactly one chat loop per process, it must see the same
@@ -52,8 +53,9 @@ class AgentToolRegistry {
     this.loading = null
   }
 
-  private ensureLoaded(): Promise<void> {
-    if (this.loaders.size === 0) return Promise.resolve()
+  private async ensureLoaded(): Promise<void> {
+    await whenInitialized()
+    if (this.loaders.size === 0) return
     this.loading ??= this.runLoaders().finally(() => {
       this.loading = null
     })

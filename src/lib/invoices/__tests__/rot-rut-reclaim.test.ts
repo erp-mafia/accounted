@@ -7,7 +7,8 @@ vi.mock('@/lib/bookkeeping/rot-rut-entries', () => ({
   createRotRutReclaimEntry: (...args: unknown[]) => mockCreateReclaimEntry(...args),
 }))
 
-import { computeRefusedShares, reclaimRotRutRefusal } from '../rot-rut-reclaim'
+import { reclaimRotRutRefusal } from '../rot-rut-reclaim'
+import { computeRefusedShares } from '../rot-rut-refused-shares'
 
 const { supabase: mockSupabase, enqueue, reset, findCall, findCalls } = createQueuedMockSupabase()
 const supabase = mockSupabase as unknown as SupabaseClient

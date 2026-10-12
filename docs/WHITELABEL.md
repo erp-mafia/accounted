@@ -15,8 +15,9 @@ git remote add upstream https://github.com/erp-mafia/accounted
 cp -r src/extensions/general/_example-branding src/extensions/general/your-brand
 # Edit src/extensions/general/your-brand/index.ts with your brand values
 # Keep "branding": true in its manifest.json: setup:extensions then lists it in
-# src/lib/extensions/_generated/branding-list.ts, which the root layout and the
-# web manifest import, so your values apply on every page.
+# src/lib/extensions/_generated/branding-list.ts, which lib/server-baseline.ts
+# (root layout, route wrappers) and the web manifest import, so your values
+# apply on every page and API route.
 
 # 4. (Optional) Set env vars instead of / in addition to the extension. See "Env vars" below.
 

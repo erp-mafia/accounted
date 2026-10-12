@@ -32,10 +32,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
 import { LinkTransactionJournalEntrySchema } from '@/lib/api/schemas'
-import { ensureInitialized } from '@/lib/init'
 import { linkTransactionToJournalEntry } from '@/lib/transactions/link-journal-entry'
-
-ensureInitialized()
 
 export const POST = withRouteContext(
   'transaction.link_journal_entry',

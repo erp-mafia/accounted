@@ -1,14 +1,11 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { readSIEFileOpeningBalance } from '@/lib/import/opening-balance/sie-file'
 import { setOpeningBalances } from '@/lib/import/opening-balance/service'
 import { sessionFailureResponse } from '@/lib/operations/session'
-
-ensureInitialized()
 
 type Params = { params: Promise<{ id: string }> }
 const BookSchema = z.object({ reviewToken: z.uuid() }).strict()

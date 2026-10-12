@@ -1,11 +1,8 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceClient } from '@/lib/supabase/server'
 import { getAiStatus } from '@/lib/ai'
 import { planAssistantReads, readTransaction, storeRead } from '@/lib/agent/categorize/read'
-
-ensureInitialized()
 
 const PER_RUN = Number(process.env.ASSISTANT_READS_PER_RUN ?? 25)
 const PER_COMPANY = Number(process.env.ASSISTANT_READS_PER_COMPANY ?? 8)

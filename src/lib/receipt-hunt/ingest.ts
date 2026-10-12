@@ -129,7 +129,7 @@ export async function ingestMailCandidate(
 ): Promise<IngestedReceipt | null> {
   if (candidate.attachmentIds.length === 0) return null
 
-  const service = getMailSearchService()
+  const service = await getMailSearchService()
 
   for (const [index, attachmentId] of candidate.attachmentIds.entries()) {
     // Per attachment, not per message: the check has to name the file it is

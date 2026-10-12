@@ -27,6 +27,7 @@
  */
 
 import type { PaymentOrderStatus } from '@/lib/payments/orders/status'
+import { whenInitialized } from '@/lib/initialized'
 
 export type PaymentProviderId = 'open_payments'
 
@@ -212,20 +213,45 @@ export function registerPaymentInitiationProvider(provider: PaymentInitiationPro
   providers.set(provider.id, provider)
 }
 
-/** The provider for a company, or null when paying through the bank is unavailable. */
-export function getPaymentInitiationProvider(companyId: string): PaymentInitiationProvider | null {
+/**
+ * Registration-time idempotency for lib/init: register what `create` builds
+ * unless `id` already has a provider (a test's fake, an earlier init).
+ * Returns whether it registered one. Reads the map directly because it runs
+ * inside init, where the async getters below would wait on the init that is
+ * calling them.
+ */
+export function registerPaymentInitiationProviderIfAbsent(
+  id: PaymentProviderId,
+  create: () => PaymentInitiationProvider | null,
+): boolean {
+  if (providers.has(id)) return false
+  const provider = create()
+  if (!provider) return false
+  registerPaymentInitiationProvider(provider)
+  return true
+}
+
+/**
+ * The provider for a company, or null when paying through the bank is
+ * unavailable. Like every getter here it waits for lib/init, which registers
+ * the providers (lib/initialized.ts).
+ */
+export async function getPaymentInitiationProvider(companyId: string): Promise<PaymentInitiationProvider | null> {
+  await whenInitialized()
   for (const provider of providers.values()) {
     if (provider.isAvailableFor(companyId)) return provider
   }
   return null
 }
 
-export function getPaymentInitiationProviderById(id: PaymentProviderId): PaymentInitiationProvider | null {
+export async function getPaymentInitiationProviderById(id: PaymentProviderId): Promise<PaymentInitiationProvider | null> {
+  await whenInitialized()
   return providers.get(id) ?? null
 }
 
 /** Whether this installation has any payments provider at all; false means every payments door is dark. */
-export function hasPaymentInitiationProviders(): boolean {
+export async function hasPaymentInitiationProviders(): Promise<boolean> {
+  await whenInitialized()
   return providers.size > 0
 }
 

@@ -1,17 +1,10 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse, type NextRequest } from 'next/server'
 import { z } from 'zod'
-import { ensureInitialized } from '@/lib/init'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { validateBody } from '@/lib/api/validate'
 import { generateInviteToken, getInviteExpiry } from '@/lib/auth/invite-tokens'
 import { sendTeamInviteMail } from '@/lib/email/send-team-invite'
-
-// Loads the email extension so getEmailService() returns the Resend
-// implementation instead of the noop default (same reason as the company
-// invite route: without this the invite mail silently no-ops in a fresh
-// process).
-ensureInitialized()
 
 /**
  * Kept verbatim from the pre-unfreeze hardcoded 403: personal teams remain

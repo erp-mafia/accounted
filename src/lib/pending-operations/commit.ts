@@ -2874,7 +2874,7 @@ async function commitSendInvoice(
 ): Promise<ExecutorResult> {
   const invoiceId = params.invoice_id as string
 
-  const emailService = getEmailService()
+  const emailService = await getEmailService()
   if (!emailService.isConfigured()) {
     return { error: 'Email service not configured', status: 500 }
   }
@@ -6741,8 +6741,8 @@ async function commitVacationYearClose(
  * to be wired. Extension absent or not wired is recoverable: the op is left
  * pending so a re-enable + re-approve works without re-staging.
  */
-function requireSkatteverketServices<T extends object>(keys: ReadonlyArray<keyof T>): T {
-  const services = extensionRegistry.get('skatteverket')?.services as Partial<T> | undefined
+async function requireSkatteverketServices<T extends object>(keys: ReadonlyArray<keyof T>): Promise<T> {
+  const services = (await extensionRegistry.get('skatteverket'))?.services as Partial<T> | undefined
   if (!services || keys.some((key) => !services[key])) {
     throw new SkatteverketRecoverableError(
       'Skatteverket-integrationen är inte tillgänglig.',
@@ -6753,7 +6753,7 @@ function requireSkatteverketServices<T extends object>(keys: ReadonlyArray<keyof
   return services as T
 }
 
-function getSkatteverketServices(): SkatteverketCommitServices {
+function getSkatteverketServices(): Promise<SkatteverketCommitServices> {
   return requireSkatteverketServices<SkatteverketCommitServices>(['commitSubmitVatDeclaration', 'commitSubmitAgi'])
 }
 
@@ -6791,7 +6791,7 @@ async function commitSubmitVatDeclaration(
   if (!params.period_type || !params.year || !params.period) {
     return { error: 'period_type, year och period krävs', status: 400 }
   }
-  const services = getSkatteverketServices()
+  const services = await getSkatteverketServices()
   const result = await services.commitSubmitVatDeclaration(supabase, userId, companyId, params)
   return handleSkvSubmitResult(result)
 }
@@ -6805,7 +6805,7 @@ async function commitSubmitAgi(
   if (!params.salary_run_id) {
     return { error: 'salary_run_id krävs', status: 400 }
   }
-  const services = getSkatteverketServices()
+  const services = await getSkatteverketServices()
   const result = await services.commitSubmitAgi(supabase, userId, companyId, params)
   return handleSkvSubmitResult(result)
 }
@@ -6819,7 +6819,7 @@ async function commitSubmitAgi(
 // like the filing handlers above. Separate getter: the booking service must
 // work (or fail recoverable) independently of the SKV filing services.
 
-function getSkattekontoBookingService(): SkattekontoBookingCommitService {
+function getSkattekontoBookingService(): Promise<SkattekontoBookingCommitService> {
   return requireSkatteverketServices<SkattekontoBookingCommitService>(['commitBookSkattekontoRows'])
 }
 
@@ -6848,7 +6848,7 @@ async function commitBookSkattekontoRows(
       ? ids
       : []
 
-  const services = getSkattekontoBookingService()
+  const services = await getSkattekontoBookingService()
   const result = await services.commitBookSkattekontoRows(supabase, userId, companyId, {
     ids,
     ...(allowDuplicateIds.length > 0 ? { allow_duplicate_ids: allowDuplicateIds } : {}),

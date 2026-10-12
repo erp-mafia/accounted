@@ -148,7 +148,7 @@ describe('registerConfiguredPeppolTransports', () => {
     expect(registerConfiguredPeppolTransports({})).toEqual([])
   })
 
-  it('registers the Qvalia adapter once when configured', () => {
+  it('registers the Qvalia adapter once when configured', async () => {
     const env = {
       QVALIA_API_KEY: 'k',
       QVALIA_PARTNER_REG_NO: 'SE1',
@@ -156,7 +156,7 @@ describe('registerConfiguredPeppolTransports', () => {
     }
     const first = registerConfiguredPeppolTransports(env)
     expect(first.map((t) => t.provider)).toEqual(['qvalia'])
-    expect(getPeppolTransport('qvalia')).toBe(first[0])
+    expect(await getPeppolTransport('qvalia')).toBe(first[0])
     expect(registerConfiguredPeppolTransports(env)).toEqual([])
   })
 })

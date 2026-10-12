@@ -7,17 +7,13 @@ import {
   filterClientRows,
   type ClientOverviewRow,
 } from '../aggregate'
+import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 
+// Same calendar the code under test counts on: the Swedish day, plus whole
+// calendar days, so neither the runner's time zone nor a DST change in the
+// window can shift the expected day.
 function isoDaysFromNow(days: number): string {
-  const d = new Date()
-  d.setHours(0, 0, 0, 0)
-  d.setDate(d.getDate() + days)
-  // Local date parts, not toISOString(): UTC conversion would shift the day
-  // in timezones ahead of UTC and skew the day math under test.
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
+  return addDaysIso(todayIsoStockholm(), days)
 }
 
 function makeRow(overrides: Partial<ClientOverviewRow> = {}): ClientOverviewRow {

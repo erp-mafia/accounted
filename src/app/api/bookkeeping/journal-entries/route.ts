@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createDraftEntry, createJournalEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateDashboardJournalEntrySchema } from '@/lib/api/schemas'
@@ -14,8 +13,6 @@ import {
   type MissingUnderlagEntry,
 } from '@/lib/bookkeeping/missing-underlag'
 import { MAX_ROWS_PER_REQUEST } from '@/lib/lists/collect-pages'
-
-ensureInitialized()
 
 // Query params are hand-parsed with per-param clamping/regex validation (see
 // each param's comment) rather than a Zod schema; response shapes are legacy

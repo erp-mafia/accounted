@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
-import { ensureInitialized } from '@/lib/init'
 import { eventBus } from '@/lib/events/bus'
-import { loadExtensions } from '@/lib/extensions/loader'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { createLogger } from '@/lib/logger'
 import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
@@ -15,11 +13,6 @@ import {
   HANDSHAKE_EXPIRED_MESSAGE,
   isHandshakeExpired,
 } from '@/extensions/general/woocommerce/lib/connect'
-
-// This route can be the leg that activates the row and emits
-// woocommerce.connected; the event_log handler must be wired before the first
-// emit on a cold instance.
-ensureInitialized()
 
 const log = createLogger('woocommerce/return')
 
@@ -51,8 +44,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * that needs a proof of store control from the initiator (follow-up).
  */
 export async function GET(request: Request) {
-  loadExtensions()
-  if (!extensionRegistry.get('woocommerce')) {
+  if (!(await extensionRegistry.get('woocommerce'))) {
     return NextResponse.json(
       { error: 'WooCommerce extension is not enabled', code: 'EXTENSION_DISABLED' },
       { status: 503 },

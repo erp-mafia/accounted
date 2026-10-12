@@ -24,15 +24,12 @@
  * credit_amount, dimensions }] }.
  */
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
 import { DimensionTaggingLinesQuerySchema } from '@/lib/api/schemas'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { fetchLinesByEntryIds } from '@/lib/bookkeeping/entry-lines'
 import { escapeLikePattern } from '@/lib/invoices/duplicate-payment-guard'
-
-ensureInitialized()
 
 interface RawEntry {
   id: string

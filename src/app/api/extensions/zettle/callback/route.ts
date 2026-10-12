@@ -1,7 +1,5 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
-import { loadExtensions } from '@/lib/extensions/loader'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { eventBus } from '@/lib/events/bus'
 import { hashAuthCode } from '@/lib/auth/oauth-codes'
@@ -16,11 +14,6 @@ import {
   fetchUserSelf,
 } from '@/extensions/general/zettle/lib/oauth'
 
-// This route emits zettle.connected (audit trail). ensureInitialized() must
-// run at module load so the event_log handler has subscribed before the first
-// emit on a cold instance.
-ensureInitialized()
-
 /**
  * GET /api/extensions/zettle/callback
  *
@@ -31,8 +24,7 @@ ensureInitialized()
 export async function GET(request: Request) {
   // Physical route: refuse (503) when the extension is not enabled instead
   // of quietly activating connections for a feature the deployment turned off.
-  loadExtensions()
-  if (!extensionRegistry.get('zettle')) {
+  if (!(await extensionRegistry.get('zettle'))) {
     return NextResponse.json(
       { error: 'Zettle extension is not enabled', code: 'EXTENSION_DISABLED' },
       { status: 503 },

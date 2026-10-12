@@ -1,13 +1,10 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { generateKU10Xml } from '@/lib/salary/ku/ku10-generator'
 import type { KU10EmployeeData, KU10CompanyData } from '@/lib/salary/ku/ku10-generator'
 import { resolveTaxableBenefits, staleBenefitTotalRefusal } from '@/lib/salary/benefit-payments'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized()
 
 /**
  * Generate KU10 (Kontrolluppgift) XML for a calendar year.

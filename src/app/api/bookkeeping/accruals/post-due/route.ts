@@ -1,9 +1,6 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { postDueInstallments } from '@/lib/bookkeeping/accruals/service'
-
-ensureInitialized()
 
 /**
  * POST /api/bookkeeping/accruals/post-due

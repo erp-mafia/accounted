@@ -16,8 +16,11 @@ vi.mock('@/lib/company/context', () => ({
   getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
 
+// getRedis: the provider rate limiter reached through the routes calls it when
+// its module loads; null means the in-memory fallback, as with no Upstash.
 vi.mock('@/lib/auth/rate-limit-http', () => ({
   checkRateLimit: vi.fn().mockResolvedValue({ ok: true }),
+  getRedis: vi.fn(() => null),
 }))
 
 // The rules are unit-tested in lib/pos-sales; here the routes' envelopes:

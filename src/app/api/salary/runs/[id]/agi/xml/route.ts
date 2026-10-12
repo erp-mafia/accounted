@@ -1,9 +1,6 @@
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { generateAgiDeclaration } from '@/lib/salary/agi/generate-declaration'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-
-ensureInitialized()
 
 /**
  * GET /api/salary/runs/{id}/agi/xml

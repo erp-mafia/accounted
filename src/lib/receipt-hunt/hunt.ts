@@ -429,7 +429,7 @@ export async function huntCompany(
       // Cached messages carry their bodies. A body is read to extract fields
       // and must not outlive the run that read it, including when the run
       // fails partway.
-      getMailSearchService().releaseCache?.()
+      ;(await getMailSearchService()).releaseCache?.()
     }
   }
 
@@ -622,7 +622,7 @@ async function harvestReceiptsFromMail(
   maxReceipts: number,
   maxMails: number,
 ): Promise<MailHuntSummary> {
-  const service = getMailSearchService()
+  const service = await getMailSearchService()
   const summary: MailHuntSummary = {
     searchable: 0,
     searched: 0,

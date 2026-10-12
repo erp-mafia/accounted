@@ -12,14 +12,11 @@
  * shared with the v1 route and the gnubok_create_dimension_value commit.
  */
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
 import { CreateDimensionValueSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { createDimensionValue } from '@/lib/dimensions/registry-service'
 import { sessionFailureResponse } from '@/lib/operations/session'
-
-ensureInitialized()
 
 export const POST = withRouteContext(
   'dimension.value.create',

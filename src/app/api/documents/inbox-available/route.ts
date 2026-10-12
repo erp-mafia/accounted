@@ -1,10 +1,7 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import type { InvoiceExtractionResult } from '@/types'
-
-ensureInitialized()
 
 /**
  * GET /api/documents/inbox-available: list invoice-inbox documents that are

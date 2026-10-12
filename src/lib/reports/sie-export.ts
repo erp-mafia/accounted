@@ -1,12 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { fetchLinesByEntryIds } from '@/lib/bookkeeping/entry-lines'
+import { fetchEntryLines, fetchLinesByEntryIds, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { getBranding } from '@/lib/branding/service'
 import { formatOrgNumber } from '@/lib/utils'
 import { createLogger } from '@/lib/logger'
+import { roundOre } from '@/lib/money'
 import { getOpeningBalances } from './opening-balances'
-import { excludeYearEndChain, fetchReversedYearEndEntryIds } from './trial-balance'
+import { excludeYearEndChain, fetchReversedYearEndEntryIds, generateTrialBalance } from './trial-balance'
 import type { SIEExportOptions, JournalEntry, JournalEntryLine, BASAccount } from '@/types'
 
 const log = createLogger('reports:sie-export')
@@ -258,7 +259,7 @@ async function generateSIEExportSnapshot(supabase: SupabaseClient,companyId: str
   // receiver that closes that year itself, while year -1 is already closed and
   // its closing is part of #IB 0. See computePriorYearBalances for the rules.
   const priorYear = prevPeriod
-    ? await computePriorYearBalances(supabase, companyId, prevPeriod)
+    ? await computePriorYearBalances(supabase, companyId, prevPeriod, (accounts as BASAccount[]) || [])
     : null
   if (priorYear) {
     for (const [accountNumber, amount] of priorYear.openingBalances) {
@@ -363,33 +364,45 @@ async function generateSIEExportSnapshot(supabase: SupabaseClient,companyId: str
  *
  * - openingBalances: non-zero IB per account, from getOpeningBalances (the
  *   year's IB entry, or the compute_prior_opening_balances fallback), as for
- *   year 0.
- * - movements: every posted or reversed entry of the year except its IB
- *   entry, closing included. #UB -1 = IB + these, which is exactly what the
- *   next year opened from, so #UB -1 equals #IB 0 when the years are
- *   continuous.
+ *   year 0 and in the same order: the IB entry's line order.
+ * - movements: the 'include' trial balance's period activity, which is every
+ *   posted or reversed entry of the year except its IB entry, closing
+ *   included. #UB -1 = IB + these, which is exactly what the next year opened
+ *   from, so #UB -1 equals #IB 0 when the years are continuous.
  * - resultMovements: the same without the resultatavslut, as resolved by
  *   result_closing_entry_ids (the linked closing_entry_id plus any closing
  *   booked by hand or in a previous system). That is the statutory
  *   pre-closing result the 'exclude-final' trial balance reads: depreciation,
  *   tax and appropriations (also source_type 'year_end') stay in, and a
- *   closed year's #RES -1 is not zeroed by the transfer to 2099.
+ *   closed year's #RES -1 is not zeroed by the transfer to 2099. It is the
+ *   trial balance less the resultatavslut's own lines, not an 'exclude-final'
+ *   balance: that one refuses a closed year without the closing link, which
+ *   this export has always written.
  *
- * Every read paginates, so a large prior year is never truncated.
+ * Only the IB entry and the resultatavslut are read line by line; the year's
+ * other vouchers arrive as one sum per account.
  */
 async function computePriorYearBalances(
   supabase: SupabaseClient,
   companyId: string,
   prevPeriod: { id: string; period_start: string; opening_balance_entry_id: string | null },
+  chart: BASAccount[],
 ): Promise<{
   openingBalances: Map<string, number>
   movements: Map<string, number>
   resultMovements: Map<string, number>
 }> {
-  const { balances, obEntryId } = await getOpeningBalances(supabase, companyId, {
-    period_start: prevPeriod.period_start,
-    opening_balance_entry_id: prevPeriod.opening_balance_entry_id ?? null,
-  })
+  const [{ balances }, { rows }, closing] = await Promise.all([
+    getOpeningBalances(supabase, companyId, {
+      period_start: prevPeriod.period_start,
+      opening_balance_entry_id: prevPeriod.opening_balance_entry_id ?? null,
+    }),
+    // The #KONTO chart already read: it only labels the rows, and these
+    // records read nothing but account numbers and amounts (an inactive
+    // account's row is labelled "Konto nnnn", never written).
+    generateTrialBalance(supabase, companyId, prevPeriod.id, { closingEntry: 'include', chart }),
+    resultClosingMovements(supabase, companyId, prevPeriod),
+  ])
   const openingBalances = new Map<string, number>()
   for (const [accountNumber, { debit, credit }] of balances) {
     const amount = Math.round(((Number(debit) || 0) - (Number(credit) || 0)) * 100) / 100
@@ -397,53 +410,56 @@ async function computePriorYearBalances(
     openingBalances.set(accountNumber, amount)
   }
 
-  const entries = await fetchAllRows<{ id: string }>(({ from, to }) =>
-    supabase
-      .from('journal_entries')
-      .select('id')
-      .eq('company_id', companyId)
-      .eq('fiscal_period_id', prevPeriod.id)
-      .in('status', ['posted', 'reversed'])
-      .order('id', { ascending: true })
-      .range(from, to),
-    { dedupeBy: (r) => r.id },
-  )
+  const movements = new Map<string, number>()
+  const resultMovements = new Map<string, number>()
+  for (const row of rows) {
+    // An account with no activity in the year carries only its IB.
+    if (row.period_debit === 0 && row.period_credit === 0) continue
+    const movement = roundOre(row.period_debit - row.period_credit)
+    movements.set(row.account_number, movement)
+    resultMovements.set(row.account_number, roundOre(movement - (closing.get(row.account_number) ?? 0)))
+  }
 
+  return { openingBalances, movements, resultMovements }
+}
+
+/**
+ * Net (debit - credit) per account of the year's resultatavslut: the entries
+ * of result_closing_entry_ids among those the 'include' trial balance sums
+ * (the year's posted and reversed entries except its IB entry).
+ */
+async function resultClosingMovements(
+  supabase: SupabaseClient,
+  companyId: string,
+  prevPeriod: { id: string; opening_balance_entry_id: string | null },
+): Promise<Map<string, number>> {
   const { data: closingIds, error: closingIdsError } = await supabase.rpc('result_closing_entry_ids', {
     p_company_id: companyId,
     p_fiscal_period_id: prevPeriod.id,
   })
   if (closingIdsError) throw new Error(closingIdsError.message)
-  const resultClosingEntryIds = new Set(Array.isArray(closingIds) ? (closingIds as string[]) : [])
-
-  const entryLines = await fetchLinesByEntryIds<{
-    id: string
-    journal_entry_id: string
-    account_number: string
-    debit_amount: number
-    credit_amount: number
-  }>(
-    supabase,
-    entries.map((e) => e.id).filter((id) => id !== obEntryId),
-    'id, journal_entry_id, account_number, debit_amount, credit_amount',
+  const ids = (Array.isArray(closingIds) ? (closingIds as string[]) : []).filter(
+    (id) => id !== prevPeriod.opening_balance_entry_id,
   )
 
-  const movements = new Map<string, number>()
-  const resultMovements = new Map<string, number>()
-  for (const line of entryLines) {
-    const netAmount = (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0)
-    movements.set(
-      line.account_number,
-      Math.round(((movements.get(line.account_number) || 0) + netAmount) * 100) / 100,
-    )
-    if (resultClosingEntryIds.has(line.journal_entry_id)) continue
-    resultMovements.set(
-      line.account_number,
-      Math.round(((resultMovements.get(line.account_number) || 0) + netAmount) * 100) / 100,
-    )
+  const net = new Map<string, number>()
+  if (ids.length === 0) return net
+  const lines = await fetchEntryLines<{ account_number: string; debit_amount: number; credit_amount: number }>({
+    supabase,
+    lineColumns: 'account_number, debit_amount, credit_amount',
+    filterEntries: (q: EntryLinesQuery) =>
+      q
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', prevPeriod.id)
+        .in('status', ['posted', 'reversed'])
+        .in('id', ids),
+    attachEntriesAs: null,
+  })
+  for (const line of lines) {
+    const amount = (Number(line.debit_amount) || 0) - (Number(line.credit_amount) || 0)
+    net.set(line.account_number, roundOre((net.get(line.account_number) || 0) + amount))
   }
-
-  return { openingBalances, movements, resultMovements }
+  return net
 }
 
 /**

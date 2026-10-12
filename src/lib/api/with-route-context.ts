@@ -25,6 +25,7 @@
  *   })
  */
 
+import '@/lib/server-baseline'
 import type { SupabaseClient, User } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth/require-auth'
@@ -34,6 +35,8 @@ import {
   requireWritePermission,
 } from '@/lib/auth/require-write'
 import { getActiveCompanyId } from '@/lib/company/context'
+import type { ActiveCompanyFacts } from '@/lib/company/active-company'
+import type { CompanyRole } from '@/types'
 import { createLogger, type Logger } from '@/lib/logger'
 import { shouldExposeTimingHeaders } from '@/lib/observability/timing-headers'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -64,6 +67,14 @@ export interface RouteContext {
    * role via `requireWrite: true`. ASVS V8.2.1 / SOC 2 CC6.3.
    */
   companyId: string
+  /**
+   * The caller's role in `companyId` when the resolution already read it
+   * (the resolver RPC returns it with the company). Undefined means NOT
+   * KNOWN (query fallback path, or a database without the role column), never
+   * "no role": hand it to getCompanyRole / requireWritePermission as a known
+   * value and they read company_members only when it is missing.
+   */
+  role?: CompanyRole
 }
 
 interface RouteContextOptions {
@@ -144,9 +155,12 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
       errLog = userLog
 
       let companyId: string | null = null
+      // The resolver RPC also reports the caller's role in that company, so
+      // the write guard below needs no company_members read of its own.
+      const resolved: ActiveCompanyFacts = {}
       const companyStart = Date.now()
       try {
-        companyId = await getActiveCompanyId(supabase, user.id)
+        companyId = await getActiveCompanyId(supabase, user.id, resolved)
       } catch (err) {
         userLog.error('failed to resolve active company', err as Error)
       }
@@ -164,10 +178,14 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
         // Delegate to the existing helper so tests that already mock it
         // continue to work. The helper returns its own 403 NextResponse;
         // we wrap it in our request-id header for traceability. The
-        // company id resolved above is handed over so the helper does not
-        // repeat the resolve_active_company round trip (measured ~40 ms p50
-        // on prod) on every write route.
-        const writeCheck = await requireWritePermission(supabase, user.id, { companyId })
+        // company id and role resolved above are handed over so the helper
+        // repeats neither the resolve_active_company round trip (measured
+        // ~40 ms p50 on prod) nor the company_members role read; it reads
+        // the role itself only when the resolution could not report it.
+        const writeCheck = await requireWritePermission(supabase, user.id, {
+          companyId,
+          role: resolved.role,
+        })
         if (!writeCheck.ok) {
           userLog.warn('write permission denied')
           if (!writeCheck.response.headers.get('X-Request-Id')) {
@@ -183,6 +201,7 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
         user,
         supabase,
         companyId,
+        role: resolved.role,
       }
       errLog = ctx.log
 

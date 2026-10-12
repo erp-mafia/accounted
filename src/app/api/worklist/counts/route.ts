@@ -1,9 +1,6 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getWorklistCounts } from '@/lib/worklist'
-
-ensureInitialized()
 
 /**
  * GET /api/worklist/counts: all pending-work counts for the active company.

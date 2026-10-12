@@ -1,12 +1,9 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { unapprovePaymentOrders } from '@/lib/payments/orders/lifecycle'
-
-ensureInitialized()
 
 const UnapproveSchema = z.object({ order_ids: z.array(z.uuid()).min(1).max(100) })
 

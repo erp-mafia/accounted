@@ -17,7 +17,7 @@
 import type { ConceptAmount, ConceptAmounts } from './types'
 import type { EntityType } from '@/types'
 import { equalOre, isZeroOre, roundOre, sumOre } from '@/lib/money'
-import { supportsMemberCapital } from '@/lib/company/entity-type'
+import { isEntityType, supportsMemberCapital } from '@/lib/company/entity-type'
 import {
   SIGN_RECLASSIFICATION_RULES,
   type SignReclassificationId,
@@ -673,6 +673,18 @@ function brMappingsFor(legalForm: K2LegalForm): PostMapping[] {
  */
 export function k2LegalFormFor(entityType: EntityType): K2LegalForm {
   return supportsMemberCapital(entityType) ? 'ekonomisk_forening' : 'aktiebolag'
+}
+
+/**
+ * k2LegalFormFor over the entity_type the annual report carries, which is
+ * 'unknown' for a company whose form is not set: that company is mapped with
+ * the share-capital table, as every form without member capital is. Every
+ * mapping of one report (the statements, each flerårsöversikt year, the
+ * iXBRL input and its cross-check) reads its table here, so they cannot
+ * disagree.
+ */
+export function k2LegalFormOf(entityType: string): K2LegalForm {
+  return isEntityType(entityType) ? k2LegalFormFor(entityType) : 'aktiebolag'
 }
 
 /**

@@ -1,14 +1,11 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { preparePaymentOrders } from '@/lib/payments/orders/prepare'
 import { PAYMENT_ORDER_STATUSES } from '@/lib/payments/orders/status'
 import { todayIsoStockholm } from '@/lib/dates/iso'
-
-ensureInitialized()
 
 const PrepareSchema = z.object({
   supplier_invoice_ids: z.array(z.uuid()).min(1).max(100),

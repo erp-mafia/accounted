@@ -2,7 +2,6 @@ import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { bankBookingContext, booksBankLineInBankDirection } from '@/lib/bookkeeping/bank-booking-context'
 import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { resolveCashAccountVoucherSeries } from '@/lib/bookkeeping/cash-account-voucher-series'
@@ -20,8 +19,6 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { formatCurrency } from '@/lib/utils'
 import type { Transaction } from '@/types'
-
-ensureInitialized()
 
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'transaction.book',

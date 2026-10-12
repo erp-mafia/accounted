@@ -13,15 +13,12 @@
  * dispatcher uses for the SKV commit services.
  */
 import { z } from 'zod'
-import { ensureInitialized } from '@/lib/init'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import type { SkatteverketReadServices } from '@/lib/skatteverket/declaration-status'
 import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
-
-ensureInitialized()
 
 const Query = z
   .object({
@@ -113,7 +110,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // The skatteverket extension is opt-in (extensions.config.json) and the
     // registry is the runtime source of truth: absent registration means the
     // deployment does not offer the integration at all.
-    const services = extensionRegistry.get('skatteverket')?.services as
+    const services = (await extensionRegistry.get('skatteverket'))?.services as
       | Partial<SkatteverketReadServices>
       | undefined
     if (!services?.fetchVatDeclarationStatus) {

@@ -402,12 +402,17 @@ import {
 import { generateSupplierLedger } from '@/lib/reports/supplier-ledger'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
-import { findMatchingInvoices } from '@/lib/invoices/invoice-matching'
+import {
+  loadInvoiceMatchPool,
+  matchInvoiceCandidates,
+  type InvoiceMatchPool,
+  type MatchableInvoice,
+} from '@/lib/invoices/invoice-matching'
 import { sanitizeDeliveryRecipientStatuses } from '@/lib/invoices/delivery-recipient-statuses'
 import { listRotRutCandidates, createRotRutPayoutRequest } from '@/lib/invoices/rot-rut-service'
 import { getPayoutOreRounding } from '@/lib/invoices/rot-rut-receivable'
 import { importRotRutBeslutFile } from '@/lib/invoices/rot-rut-beslut-import'
-import { computeRefusedShares } from '@/lib/invoices/rot-rut-reclaim'
+import { computeRefusedShares } from '@/lib/invoices/rot-rut-refused-shares'
 import {
   expectedRotRutPayoutAmount,
   isMatchableRotRutPayoutRequest,
@@ -555,8 +560,6 @@ import { commitPendingOperation } from '@/lib/pending-operations/commit'
 import { buildStagedInvoice, describeInvoiceBuildRefusal } from '@/lib/pending-operations/build-staged-invoice'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { getUserCompanies } from '@/lib/company/context'
-// ensureInitialized() is called by the extension router (ext/[...path]/route.ts)
-// which dispatches to this handler: no duplicate call needed here.
 import { CURRENCIES, INVOICE_QR_MODES } from '@/types'
 import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, InvoiceQrMode, Currency, CompanySettings, Customer, InvoiceItem, PendingOperation, VatPeriodType, VatDeclarationRutor, VatRevenueAccountWithoutRuta, YearEndBlockerCode, SalesOrder, SalesOrderItem, SalesOrderStatus } from '@/types'
 
@@ -10857,7 +10860,7 @@ export const tools: McpTool[] = [
       const invoiceId = args.invoice_id as string
       if (!invoiceId) throw new Error('invoice_id is required')
 
-      const emailService = getEmailService()
+      const emailService = await getEmailService()
       if (!emailService.isConfigured()) {
         throw new Error('Email service not configured. Ensure RESEND_API_KEY and RESEND_FROM_EMAIL are set (or SMTP_HOST and SMTP_FROM_EMAIL with EMAIL_PROVIDER=smtp).')
       }
@@ -15031,7 +15034,7 @@ export const tools: McpTool[] = [
       const maxTransactions = Math.min(Math.max(1, Number(args.max_transactions) || 100), 500)
 
       // Fetch unmatched income transactions in window. We require positive
-      // amount because findMatchingInvoices only matches income; expenses are
+      // amount because matchInvoiceCandidates only matches income; expenses are
       // out of scope for this tool.
       const { data: transactions, error: txError } = await supabase
         .from('transactions')
@@ -15069,17 +15072,19 @@ export const tools: McpTool[] = [
       // The rows behind each proposal, for the stage-time payment plan below.
       const proposalSources = new Map<
         string,
-        { tx: (typeof txList)[number]; invoice: Awaited<ReturnType<typeof findMatchingInvoices>>[number]['invoice'] }
+        { tx: (typeof txList)[number]; invoice: MatchableInvoice }
       >()
       let belowThreshold = 0
       let noMatchFound = 0
 
+      // The open invoices are read once for the whole period (on the first
+      // transaction), then every transaction is scored against them: nothing
+      // is written until the staging pass below, so each row sees what it
+      // would have read itself.
+      let invoicePool: InvoiceMatchPool | null = null
       for (const tx of txList) {
-        const matches = await findMatchingInvoices(
-          supabase,
-          companyId,
-          tx as never,
-        )
+        invoicePool ??= await loadInvoiceMatchPool(supabase, companyId)
+        const { matches } = matchInvoiceCandidates(tx as never, invoicePool)
         if (matches.length === 0) {
           noMatchFound++
           continue

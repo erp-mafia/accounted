@@ -1,13 +1,9 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { bookPosSalesDay } from '@/lib/pos-sales/book-day'
 import { PosBookBodySchema } from '@/lib/pos-sales/schemas'
-
-// The engine emits journal_entry.committed: wire the handlers first.
-ensureInitialized()
 
 /**
  * Book one POS day as its daily takings voucher, with the day report as

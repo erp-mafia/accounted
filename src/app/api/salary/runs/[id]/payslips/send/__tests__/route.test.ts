@@ -70,7 +70,7 @@ function authed(supabase: unknown) {
 
 function mockEmail(result: { success: boolean; messageId?: string; error?: string }) {
   const sendEmail = vi.fn().mockResolvedValue(result)
-  vi.mocked(getEmailService).mockReturnValue({
+  vi.mocked(getEmailService).mockResolvedValue({
     sendEmail,
     isConfigured: () => true,
   })

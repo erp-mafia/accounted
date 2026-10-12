@@ -14,6 +14,7 @@
 
 import { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import { daysBetweenIso, todayIsoStockholm } from '@/lib/dates/iso'
 
 const log = createLogger('deadline-status')
 
@@ -23,14 +24,12 @@ const log = createLogger('deadline-status')
 export const ACTION_NEEDED_THRESHOLD_DAYS = 14
 
 /**
- * Calculate days until a deadline
+ * Whole calendar days from today (the Swedish calendar day) to a deadline.
+ * Counted on dates, not clock time: a millisecond difference rounded up
+ * counted 14 days as 15 when the autumn DST change fell in between.
  */
-export function daysUntilDeadline(dueDate: string): number {
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const deadline = new Date(dueDate)
-  deadline.setHours(0, 0, 0, 0)
-  return Math.ceil((deadline.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+export function daysUntilDeadline(dueDate: string, now: Date = new Date()): number {
+  return daysBetweenIso(todayIsoStockholm(now), dueDate.slice(0, 10))
 }
 
 /**

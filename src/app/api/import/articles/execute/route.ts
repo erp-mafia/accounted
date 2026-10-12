@@ -1,6 +1,5 @@
 import { normalizeNameKey as nameKey } from '@/lib/import/shared/column-utils'
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { eventBus } from '@/lib/events'
 import { validateBody } from '@/lib/api/validate'
 import { ArticleImportExecuteSchema } from '@/lib/api/schemas'
@@ -14,8 +13,6 @@ import type { Article } from '@/types'
 import type { ArticleImportExecuteResult } from '@/lib/import/articles/types'
 import { makeNotice, type ImportNotice } from '@/lib/import/notices'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized()
 
 interface ExistingArticle {
   id: string

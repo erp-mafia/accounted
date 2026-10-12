@@ -1,14 +1,11 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { firstOfMonth } from '@/lib/bookkeeping/accruals/compute'
 import type { AccrualSchedule, AccrualScheduleInstallment } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
-
-ensureInitialized()
 
 const ListQuerySchema = z.object({
   status: z.enum(['active', 'completed', 'cancelled', 'all']).default('active'),

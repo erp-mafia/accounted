@@ -21,7 +21,7 @@ import {
   type SearchableAccount,
 } from '@/lib/bookkeeping/account-search'
 import { formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
-import { isCounterpartyTemplateId } from '@/lib/bookkeeping/counterparty-templates'
+import { isCounterpartyTemplateId } from '@/lib/bookkeeping/counterparty-template-format'
 import { convertLibraryToBookingTemplate, LIBRARY_TEMPLATE_PREFIX, isLibraryTemplateId } from '@/lib/bookkeeping/template-library'
 import { GROUP_LABEL_KEYS, GROUP_ORDER, libraryTemplateGroup } from '@/lib/bookkeeping/template-groups'
 import { getAccountName } from '@/lib/bookkeeping/client-account-names'

@@ -495,7 +495,7 @@ export async function linkTransactionToJournalEntry(
       remaining_amount: newRemaining,
     } as Invoice
     try {
-      eventBus.emit({
+      await eventBus.emit({
         type: 'invoice.match_confirmed',
         payload: {
           invoice: settledInvoice,

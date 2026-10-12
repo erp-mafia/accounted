@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { createLogger } from '@/lib/logger'
 import { getEmailService } from '@/lib/email/service'
 import { getBranding } from '@/lib/branding/service'
@@ -12,10 +11,6 @@ import {
   getCanonicalAppOrigin,
   resolveTrustedAppOrigin,
 } from '@/lib/domains/trusted-app-origin'
-
-// Loads the email extension so getEmailService() returns the Resend
-// implementation instead of the noop default.
-ensureInitialized()
 
 const log = createLogger('auth-email-hook')
 
@@ -249,7 +244,7 @@ export async function POST(request: Request) {
     })
   }
 
-  const emailService = getEmailService()
+  const emailService = await getEmailService()
   for (const mail of mails) {
     const built = buildAuthEmail({
       actionType: mail.actionType,

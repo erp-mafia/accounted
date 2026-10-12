@@ -16,12 +16,9 @@
  * Response: 200 { created: number } (count of dimension_values created).
  */
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { importExistingDimensionCodes } from '@/lib/dimensions/import-existing'
 import { sessionFailureResponse } from '@/lib/operations/session'
-
-ensureInitialized()
 
 export const POST = withRouteContext(
   'dimension.import_existing',

@@ -6,6 +6,9 @@ import type { RefObject } from 'react'
 import { useOAuthPopup } from '@/lib/hooks/use-oauth-popup'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { ProviderPreviewCounts } from '@/lib/providers/preview-counts'
+import type { TheaterModel } from '@/lib/import/theater-model'
+import type { SIEAccount } from '@/lib/import/types'
+import type { ProviderFileStatus } from '@/lib/onboarding-books/provider-years'
 
 /**
  * The provider migration routes as the books act calls them. Same
@@ -53,12 +56,14 @@ export interface ProviderMapping {
 }
 
 export interface ProviderSieData {
-  parsed: { accounts: { number: string; name: string }[]; header?: { companyName?: string | null } }
+  /** Every account across the selected years. */
+  accounts: SIEAccount[]
+  /** Built on the server over every selected year. */
+  theater: TheaterModel
   mappings: ProviderMapping[]
   mappingStats: { total: number; mapped: number; unmapped: number }
-  rawContent: string[]
-  /** Index-aligned with rawContent. previousImport: a completed import already holds that year. */
-  fileStatuses?: { fiscalYear: number; previousImport?: { id: string; importedAt: string | null } | null }[]
+  /** One per fetched file, oldest first: where /sie-data archived it. previousImport: a completed import already holds that year. */
+  fileStatuses: ProviderFileStatus[]
   /** Selected years the provider did not hand over. */
   failedYears?: { year: number; error: string }[]
   allImported: boolean
@@ -130,12 +135,14 @@ export interface SieImportOutcome {
   warnings: string[]
 }
 
-export async function providerImportSie(rawContent: string, mappings: ProviderMapping[], voucherSeries: string | null, onProgress?: (job: SIEJob) => void): Promise<SieImportOutcome> {
+/** The file goes by the path /sie-data archived it under, never as content. */
+export async function providerImportSie(file: Pick<ProviderFileStatus, 'storagePath' | 'filename'>, mappings: ProviderMapping[], voucherSeries: string | null, onProgress?: (job: SIEJob) => void): Promise<SieImportOutcome> {
   const res = await fetch(`${ARCIM}/import-sie`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      rawContent,
+      storagePath: file.storagePath,
+      filename: file.filename,
       mappings,
       options: { createFiscalPeriod: true, importOpeningBalances: true, importTransactions: true, voucherSeries: voucherSeries ?? undefined, updateAccountNames: true },
     }),

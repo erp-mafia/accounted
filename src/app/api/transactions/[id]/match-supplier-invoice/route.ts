@@ -17,11 +17,8 @@ import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-inv
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { emitSupplierInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { eventBus } from '@/lib/events/bus'
-import { ensureInitialized } from '@/lib/init'
 import type { SupplierInvoice, Transaction } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized()
 
 /**
  * POST /api/transactions/[id]/match-supplier-invoice
@@ -345,7 +342,7 @@ export const POST = withRouteContext(
       transaction_id: transactionId,
     } as SupplierInvoice
     try {
-      eventBus.emit({
+      await eventBus.emit({
         type: 'supplier_invoice.match_confirmed',
         payload: {
           supplierInvoice: settledInvoice,

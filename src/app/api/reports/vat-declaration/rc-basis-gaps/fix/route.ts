@@ -27,9 +27,6 @@ import {
 import { roundOre } from '@/lib/money'
 import type { CreateJournalEntryLineInput, JournalEntryLine } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 /**
  * POST /api/reports/vat-declaration/rc-basis-gaps/fix

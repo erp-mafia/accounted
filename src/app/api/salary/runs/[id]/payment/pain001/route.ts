@@ -1,12 +1,9 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import {
   buildSalaryPaymentFile,
   type SalaryPaymentFileError,
 } from '@/lib/salary/payment/build-payment-file'
-
-ensureInitialized()
 
 /**
  * Generate pain.001 (ISO 20022) payment file for a salary run.

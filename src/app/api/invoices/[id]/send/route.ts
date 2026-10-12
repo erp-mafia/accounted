@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { eventBus } from '@/lib/events'
-import { ensureInitialized } from '@/lib/init'
 import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import { getEmailService } from '@/lib/email/service'
@@ -63,8 +62,6 @@ import type {
 } from '@/types'
 import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
 
-ensureInitialized()
-
 export const POST = withRouteContext(
   'invoice.send',
   async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
@@ -95,7 +92,7 @@ export const POST = withRouteContext(
     const capBlocked = await requireCapability(supabase, companyId, CAPABILITY.email_send)
     if (capBlocked) return capBlocked
 
-    const emailService = getEmailService()
+    const emailService = await getEmailService()
     if (!emailService.isConfigured()) {
       return errorResponseFromCode('INVOICE_SEND_EMAIL_NOT_CONFIGURED', opLog, { requestId })
     }

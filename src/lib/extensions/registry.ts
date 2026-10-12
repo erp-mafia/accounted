@@ -1,4 +1,5 @@
 import { eventBus } from '@/lib/events/bus'
+import { whenInitialized } from '@/lib/initialized'
 import type { CoreEventType } from '@/lib/events/types'
 import type { Extension, ExtensionContext } from './types'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -27,7 +28,9 @@ export function setContextFactory(factory: ContextFactory): void {
  *
  * - register() stores extension and wires event handlers to the bus
  * - unregister() unhooks handlers and removes extension
- * - getAll(), get() for querying
+ * - getAll(), get() for querying; async because they load the extensions on
+ *   first use (lib/initialized.ts), so a read can never see the registry
+ *   before lib/init has filled it
  */
 class ExtensionRegistry {
   private extensions = new Map<string, Extension>()
@@ -92,12 +95,14 @@ class ExtensionRegistry {
   }
 
   /** Get all registered extensions. */
-  getAll(): Extension[] {
+  async getAll(): Promise<Extension[]> {
+    await whenInitialized()
     return [...this.extensions.values()]
   }
 
   /** Get a specific extension by ID. */
-  get(id: string): Extension | undefined {
+  async get(id: string): Promise<Extension | undefined> {
+    await whenInitialized()
     return this.extensions.get(id)
   }
 

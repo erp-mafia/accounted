@@ -679,7 +679,7 @@ export async function runReconciliation(
           },
         })
         try {
-          eventBus.emit({
+          await eventBus.emit({
             type: 'transaction.reconciled',
             payload: {
               transaction: match.transaction,
@@ -1475,7 +1475,7 @@ export async function manualLink(
   }
 
   try {
-    eventBus.emit({
+    await eventBus.emit({
       type: 'transaction.reconciled',
       payload: {
         transaction: tx as unknown as Transaction,
@@ -1854,7 +1854,7 @@ export async function linkTransactionToVouchers(
   })
   for (const a of resolved) {
     try {
-      eventBus.emit({
+      await eventBus.emit({
         type: 'transaction.reconciled',
         payload: {
           transaction: tx as unknown as Transaction,

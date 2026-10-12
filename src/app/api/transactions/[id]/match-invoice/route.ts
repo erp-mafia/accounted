@@ -28,10 +28,7 @@ import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { roundOre } from '@/lib/money'
 import { eventBus } from '@/lib/events/bus'
-import { ensureInitialized } from '@/lib/init'
 import type { CreateJournalEntryLineInput, Currency, Invoice, Transaction } from '@/types'
-
-ensureInitialized()
 
 /**
  * POST /api/transactions/[id]/match-invoice
@@ -870,7 +867,7 @@ export const POST = withRouteContext(
       remaining_amount: newRemaining,
     } as Invoice
     try {
-      eventBus.emit({
+      await eventBus.emit({
         type: 'invoice.match_confirmed',
         payload: {
           invoice: settledInvoice,

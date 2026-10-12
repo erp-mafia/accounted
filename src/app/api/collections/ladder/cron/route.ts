@@ -2,10 +2,7 @@ import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { runLadderCron } from '@/lib/collections/autopilot'
 import { errorResponse } from '@/lib/errors/get-structured-error'
-import { ensureInitialized } from '@/lib/init'
 import { createServiceClient } from '@/lib/supabase/server'
-
-ensureInitialized()
 
 /** One bank check per overdue invoice of every company on the ladder. */
 export const maxDuration = 300

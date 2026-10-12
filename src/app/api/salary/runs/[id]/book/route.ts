@@ -1,13 +1,10 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { bookPaidSalaryRun } from '@/lib/salary/book-run'
 import { SalaryRunPartiallyBookedError } from '@/lib/salary/salary-entries'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized()
 
 /** paid → booked (creates immutable journal entries). The booking core lives
  * in lib/salary/book-run.ts, shared with the book_salary_run pending-operation

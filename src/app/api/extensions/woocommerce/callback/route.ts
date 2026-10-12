@@ -1,9 +1,7 @@
 import { UUID_RE } from '@/lib/invariants/uuid'
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
-import { ensureInitialized } from '@/lib/init'
 import { eventBus } from '@/lib/events/bus'
-import { loadExtensions } from '@/lib/extensions/loader'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { createLogger } from '@/lib/logger'
 import {
@@ -12,11 +10,6 @@ import {
 } from '@/extensions/general/woocommerce/lib/credentials'
 import { testConnectionAndFetchStoreInfo } from '@/extensions/general/woocommerce/lib/api-client'
 import { activateIfComplete } from '@/extensions/general/woocommerce/lib/connect'
-
-// This route emits woocommerce.connected (audit trail). ensureInitialized()
-// must run at module load so the event_log handler has subscribed before the
-// first emit on a cold instance.
-ensureInitialized()
 
 const log = createLogger('woocommerce/callback')
 
@@ -48,8 +41,7 @@ export const maxDuration = 60
  * what is left; a stale pending row cannot flip and never syncs.
  */
 export async function POST(request: Request) {
-  loadExtensions()
-  if (!extensionRegistry.get('woocommerce')) {
+  if (!(await extensionRegistry.get('woocommerce'))) {
     return NextResponse.json(
       { error: 'WooCommerce extension is not enabled', code: 'EXTENSION_DISABLED' },
       { status: 503 },

@@ -63,7 +63,7 @@ export function paymentsPilot(env: PaymentsEnv = process.env): PaymentsPilot {
  * company is refused for a different reason and never gets an upsell.
  */
 export async function openPaymentsDoor(ctx: Pick<OperationContext, 'supabase' | 'companyId'>): Promise<PaymentsDoor> {
-  const provider = getPaymentInitiationProvider(ctx.companyId)
+  const provider = await getPaymentInitiationProvider(ctx.companyId)
   if (!provider) return { ok: false, reason: 'no_provider' }
   const pilot = paymentsPilot()
   if (pilot === 'all') return { ok: true, provider }

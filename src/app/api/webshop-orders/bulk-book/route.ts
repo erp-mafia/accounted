@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { BulkBookWebshopOrdersSchema } from '@/lib/api/schemas'
@@ -28,8 +27,6 @@ import {
   resolveOrderFx,
 } from '@/lib/webshop-orders/book-order'
 import type { WebshopOrder, WebshopStoreSettings } from '@/types'
-
-ensureInitialized()
 
 // Up to 50 sequential draft -> claim -> commit round trips against the
 // engine; the default function window is not guaranteed to fit them, and a

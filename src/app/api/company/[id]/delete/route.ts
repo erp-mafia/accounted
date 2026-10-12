@@ -1,7 +1,6 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { ensureInitialized } from '@/lib/init'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { validateBody } from '@/lib/api/validate'
 import { eventBus } from '@/lib/events'
@@ -10,8 +9,6 @@ import { getMailSearchService } from '@/lib/mail-search/service'
 import { getActiveCompanyId } from '@/lib/company/active-company'
 
 const log = createLogger('api/company/delete')
-
-ensureInitialized()
 
 const DeleteCompanySchema = z.object({
   confirm_name: z.string().min(1),
@@ -255,7 +252,7 @@ export async function POST(
   // seam, since core never imports the extension; best effort toward
   // Google, and the archive above stands whatever happens here.
   try {
-    await getMailSearchService().endCompanyGrants?.(companyId, user.id)
+    await (await getMailSearchService()).endCompanyGrants?.(companyId, user.id)
   } catch (err) {
     log.error('Failed to end mailbox grants on company archive', { companyId, err })
   }

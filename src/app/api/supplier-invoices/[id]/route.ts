@@ -13,9 +13,6 @@ import {
 } from '@/lib/supplier-invoices/lifecycle'
 import { deleteSupplierInvoice } from '@/lib/supplier-invoices/manage'
 import { sessionFailureResponse } from '@/lib/operations/session'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'supplier_invoice.get',

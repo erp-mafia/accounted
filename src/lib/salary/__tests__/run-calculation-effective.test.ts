@@ -21,7 +21,8 @@ vi.mock('../tax-tables', async (importOriginal) => {
   return { ...actual, fetchAllTaxTableRatesForRun: vi.fn().mockResolvedValue({ rates: [], source: 'api' }) }
 })
 vi.mock('../derive-absence-line-items', () => ({
-  loadAndDeriveAbsence: vi.fn().mockResolvedValue({
+  loadRunAbsence: vi.fn().mockResolvedValue(new Map()),
+  deriveEmployeeAbsence: vi.fn().mockReturnValue({
     lineItems: [],
     aggregated: { sickDays: 0, vabDays: 0, parentalDays: 0 },
     flagLakarintyg: false,
@@ -146,6 +147,11 @@ function runTotalsWrite(mock: ReturnType<typeof createTableMockSupabase>) {
   return mock.findCall('salary_runs', 'update')?.[0] as Record<string, unknown>
 }
 
+/** The calculated roster row: the last update of the roster table. */
+function rosterWrite(mock: ReturnType<typeof createTableMockSupabase>) {
+  return mock.findCalls('salary_run_employees', 'update').at(-1)?.[0] as Record<string, unknown>
+}
+
 describe('runSalaryCalculation: run totals use the effective figures', () => {
   beforeEach(() => {
     vi.mocked(calculateSalary).mockReset()
@@ -167,8 +173,7 @@ describe('runSalaryCalculation: run totals use the effective figures', () => {
       total_employer_cost: 42731.12, // 30 000 + 8 000 + 3 600 + 1 131,12
     })
     // The row keeps the engine's raw figures (the calculation trace).
-    const rowWrite = mock.findCalls('salary_run_employees', 'update').at(-1)?.[0] as Record<string, unknown>
-    expect(rowWrite).toMatchObject({ tax_withheld: 7000, net_salary: 23000, avgifter_amount: 9426 })
+    expect(rosterWrite(mock)).toMatchObject({ tax_withheld: 7000, net_salary: 23000, avgifter_amount: 9426 })
   })
 
   it('ignores an avgifter override on an F-skatt row, as the AGI and the booking do', async () => {
@@ -227,13 +232,14 @@ describe('runSalaryCalculation: a stale salary_type snapshot (agent feedback seq
       )
       .map((c) => `${c.table}.${c.method}`)
     // New Grundlön first, then the stale Timlön goes, then the snapshot,
-    // then the monthly branch prices the new line.
+    // then the monthly branch prices the new line; the calculated row last.
     expect(order.slice(0, 4)).toEqual([
       'salary_line_items.insert',
       'salary_line_items.delete',
       'salary_run_employees.update',
       'salary_line_items.update',
     ])
+    expect(order.at(-1)).toBe('salary_run_employees.update')
     expect(mock.findCall('salary_line_items', 'insert')?.[0]).toMatchObject({
       item_type: 'monthly_salary',
       description: 'Grundlön',
@@ -244,8 +250,7 @@ describe('runSalaryCalculation: a stale salary_type snapshot (agent feedback seq
     // The engine priced the live pay type, and the row write keeps the
     // snapshot in line with it.
     expect(vi.mocked(calculateSalary).mock.calls[0][0]).toMatchObject({ salaryType: 'monthly', monthlySalary: 30000 })
-    const rowWrite = mock.findCalls('salary_run_employees', 'update').at(-1)?.[0] as Record<string, unknown>
-    expect(rowWrite.salary_type).toBe('monthly')
+    expect(rosterWrite(mock).salary_type).toBe('monthly')
   })
 
   it('leaves the base line alone when the snapshot matches the employee', async () => {

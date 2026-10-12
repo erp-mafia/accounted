@@ -1,8 +1,5 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
-
-ensureInitialized()
 
 /**
  * Get tax payment status for an AGI period.

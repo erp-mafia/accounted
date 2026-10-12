@@ -20,10 +20,11 @@
  *      build; disabling an extension in extensions.config.json only removes
  *      it from the runtime registry, never from the filesystem. So a route
  *      that executes extension code must first check
- *      `extensionRegistry.get('<id>')` (after loadExtensions()) and refuse
- *      when the extension is not registered: otherwise a disabled extension
- *      still exposes a live, invokable surface (this is exactly how the
- *      disabled push-notifications extension shipped an always-armed cron).
+ *      `await extensionRegistry.get('<id>')` (which loads the extensions on
+ *      first use) and refuse when the extension is not registered: otherwise
+ *      a disabled extension still exposes a live, invokable surface (this is
+ *      exactly how the disabled push-notifications extension shipped an
+ *      always-armed cron).
  *      Pre-existing routes are allowlisted below; the set may only shrink as
  *      gates are added. A NEW route must ship with the gate.
  */

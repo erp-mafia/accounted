@@ -125,7 +125,7 @@ interface CandidateContext {
  *
  * The query is intentionally generous on filtering: we let the validator
  * make the final call at commit time. Ranking mirrors
- * `findMatchingInvoices()`: exact amount + customer match wins, then exact,
+ * `matchInvoiceCandidates()`: exact amount + customer match wins, then exact,
  * then fuzzy (±1% capped at 500 SEK), with a small bump for date proximity
  * to the invoice's due_date.
  */

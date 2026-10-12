@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { CreateSelfBillingInvoiceSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -9,8 +8,6 @@ import {
   type SelfBilledSaleFailure,
 } from '@/lib/invoices/self-billed-sale'
 import type { Logger } from '@/lib/logger'
-
-ensureInitialized()
 
 /**
  * POST /api/invoices/self-billed

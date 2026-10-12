@@ -9,9 +9,6 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 
-vi.mock('@/lib/reports/trial-balance', () => ({
-  generateTrialBalance: vi.fn(),
-}))
 vi.mock('@/lib/bokslut/arsredovisning/narrative-service', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/bokslut/arsredovisning/narrative-service')>()),
   getMedelantalOverride: vi.fn().mockResolvedValue(null),
@@ -20,9 +17,8 @@ vi.mock('@/lib/bokslut/arsredovisning/narrative-service', async (importOriginal)
 import { buildIxbrlInput } from '../build-input'
 import { generateK2IxbrlDocument } from '../document/k2-document'
 import { runPreflightChecks } from '../validate/rules'
-import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import type { ArsredovisningData } from '@/lib/bokslut/arsredovisning/types'
-import type { TrialBalancePair } from '../k2-mapper'
+import { mapTrialBalancesToK2, type TrialBalancePair } from '../k2-mapper'
 import { CURRENT, PREVIOUS } from './fixtures'
 
 const PERIODS = [
@@ -80,14 +76,16 @@ const REPORT = {
   warnings: [],
 } as unknown as ArsredovisningData
 
+/** The report's statements: the two years mapped as buildArsredovisningReport maps them. */
 async function build(previous: TrialBalancePair) {
-  vi.mocked(generateTrialBalance).mockImplementation(async (_client, _companyId, periodId, opts) => {
-    const pair = periodId === 'fp0' ? previous : CURRENT
-    const rows = opts.closingEntry === 'include' ? pair.full : pair.preClosing
-    return { rows: rows as never, totalDebit: 0, totalCredit: 0, isBalanced: true }
-  })
   return buildIxbrlInput(makeSupabase() as never, 'co1', 'fp1', {
-    reportData: REPORT,
+    report: {
+      data: REPORT,
+      statements: {
+        mapping: mapTrialBalancesToK2(CURRENT, previous),
+        comparison: { id: 'fp0', period_start: '2024-01-01', period_end: '2024-12-31', loaded: true },
+      },
+    },
     signatureRequests: [],
     todayIso: '2026-03-20',
   })

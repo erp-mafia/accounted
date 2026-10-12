@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
 import { createServiceClient } from '@/lib/supabase/server'
@@ -9,9 +8,6 @@ import { documentTitle } from '@/lib/arkiv/documents/title'
 import { runDocumentJobFor } from '@/lib/documents/jobs/queue'
 import type { Payload } from '@/lib/documents/extract/fields'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-
-// Advancing a step classifies, which emits document.classified for the inbox extension's handler.
-ensureInitialized()
 
 /**
  * GET /api/documents/[id]/pipeline?advance=1

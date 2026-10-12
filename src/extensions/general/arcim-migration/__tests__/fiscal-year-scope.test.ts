@@ -409,7 +409,7 @@ describe('GET /sie-data: the ticked years are fetched, the rest are named (#2211
   })
 })
 
-describe('GET /sie-data: previousImport per fetched file, index-aligned with rawContent', () => {
+describe('GET /sie-data: previousImport per fetched file, on the entry that carries its path', () => {
   // The books act's provider step skips a file whose status carries
   // previousImport (lib/onboarding-books/provider-years). Without the field
   // it imports every file again, and a retry dies on the year already in.
@@ -440,13 +440,17 @@ describe('GET /sie-data: previousImport per fetched file, index-aligned with raw
       buildCtx(),
     )
     const { status, body } = await parseJsonResponse<{
-      rawContent: string[]
-      fileStatuses: { fiscalYear: number; previousImport: { id: string } | null }[]
+      fileStatuses: { fiscalYear: number; storagePath: string; previousImport: { id: string } | null }[]
     }>(res)
 
     expect(status).toBe(200)
-    expect(body.rawContent).toEqual([previousYear, SIE_IN_WINDOW])
+    expect(body).not.toHaveProperty('rawContent')
     expect(body.fileStatuses.map((f) => f.fiscalYear)).toEqual([CY - 1, CY])
+    expect(body.fileStatuses.map((f) => f.storagePath)).toEqual([
+      expect.stringMatching(/^company-1\/sie-intake\/[a-f0-9-]{36}\.se$/),
+      expect.stringMatching(/^company-1\/sie-intake\/[a-f0-9-]{36}\.se$/),
+    ])
+    expect(body.fileStatuses[0].storagePath).not.toBe(body.fileStatuses[1].storagePath)
     expect(body.fileStatuses[0].previousImport).toMatchObject({ id: 'import-1' })
     expect(body.fileStatuses[1].previousImport).toBeNull()
   })

@@ -1,12 +1,9 @@
 import { NextResponse } from 'next/server'
 import { redateJournalEntry } from '@/lib/core/bookkeeping/journal-entry-corrections'
-import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
 import { RecordateJournalEntrySchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { sessionFailureResponse } from '@/lib/operations/session'
-
-ensureInitialized()
 
 /**
  * POST /api/bookkeeping/journal-entries/[id]/recordate

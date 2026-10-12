@@ -7,10 +7,7 @@
  * (src/lib/skatteverket/extension-actions.ts), so the extension registry is
  * initialized first.
  */
-import { ensureInitialized } from '@/lib/init'
 import { v1OperationHandler } from '@/lib/operations/v1'
 import { skatteverketAgiValidateIndividuppgift } from '@/lib/operations/skatteverket-helpers'
-
-ensureInitialized()
 
 export const POST = v1OperationHandler(skatteverketAgiValidateIndividuppgift)

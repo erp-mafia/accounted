@@ -122,7 +122,7 @@ async function settleAbandonedSignings(
     if (ordersError) throw ordersError
     const orders = (orderData ?? []) as PaymentOrderRow[]
 
-    const provider = getPaymentInitiationProvider(batch.company_id)
+    const provider = await getPaymentInitiationProvider(batch.company_id)
     if (provider && !orgNumbers.has(batch.company_id)) orgNumbers.set(batch.company_id, await orgNumberFor(writer, batch.company_id))
     const orgNumber = orgNumbers.get(batch.company_id) ?? null
     // Not knowing is not the same as abandoned: without a bank to ask, the
@@ -264,7 +264,7 @@ export async function syncPaymentOrderStatuses(writer: SupabaseClient, log: Logg
   }
 
   // Dark installation: nothing below can be done without asking a bank.
-  if (!hasPaymentInitiationProviders()) return { ...result, noProvider: true }
+  if (!(await hasPaymentInitiationProviders())) return { ...result, noProvider: true }
 
   const orgNumbers = new Map<string, string | null>()
   await settleAbandonedSignings(writer, log, result, orgNumbers)
@@ -285,7 +285,7 @@ export async function syncPaymentOrderStatuses(writer: SupabaseClient, log: Logg
   const asked = await closedInvoiceCancelsAsked(writer, unsigned.filter((o) => unpayable.has(o.id)))
 
   for (const order of orders) {
-    const provider = getPaymentInitiationProvider(order.company_id)
+    const provider = await getPaymentInitiationProvider(order.company_id)
     if (!provider || !order.provider_payment_id) continue
     if (!orgNumbers.has(order.company_id)) orgNumbers.set(order.company_id, await orgNumberFor(writer, order.company_id))
     const orgNumber = orgNumbers.get(order.company_id)

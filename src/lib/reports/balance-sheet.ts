@@ -27,7 +27,23 @@ export async function generateBalanceSheet(
     fromDate: options?.fromDate,
     toDate: options?.toDate,
   })
+  return balanceSheetFromTrialBalance(supabase, companyId, fiscalPeriodId, rows)
+}
 
+/**
+ * The balance sheet from trial balance rows the caller already holds, so a
+ * report that built the period's trial balance does not build it again.
+ * The rows must come from generateTrialBalance with closingEntry 'include'
+ * over the same period and range: 2099 has to carry årets resultat. The
+ * imbalance diagnosis still reads the ledger, and only when the sheet does
+ * not balance.
+ */
+export async function balanceSheetFromTrialBalance(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+  rows: TrialBalanceRow[],
+): Promise<BalanceSheetReport> {
   // Filter to balance sheet accounts (class 1-2)
   const balanceRows = rows.filter(
     (r) => r.account_class >= 1 && r.account_class <= 2

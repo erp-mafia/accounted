@@ -185,6 +185,33 @@ export function excludeYearEndChain(
   return q
 }
 
+/** The chart columns a trial balance labels its rows with. */
+export interface TrialBalanceChartAccount {
+  account_number: string
+  account_name: string
+  account_class: number
+}
+
+/**
+ * The company's chart as generateTrialBalance reads it for row labels. A
+ * report that builds several trial balances reads it once with this and
+ * passes it as `chart` (the read itself, still in flight, is fine), instead
+ * of every balance reading the whole chart again.
+ */
+export function fetchTrialBalanceChart(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<TrialBalanceChartAccount[]> {
+  return fetchAllRows<TrialBalanceChartAccount>(({ from, to }) =>
+    supabase
+      .from('chart_of_accounts')
+      .select('account_number, account_name, account_class')
+      .eq('company_id', companyId)
+      .order('account_number', { ascending: true })
+      .range(from, to)
+  )
+}
+
 export async function generateTrialBalance(
   supabase: SupabaseClient,
   companyId: string,
@@ -194,6 +221,12 @@ export async function generateTrialBalance(
     fromDate?: string
     toDate?: string
     dimensions?: Record<string, string>
+    /**
+     * The company's chart, already read (fetchTrialBalanceChart). Omitted,
+     * the balance reads it itself. Only labels the rows: the amounts never
+     * depend on it.
+     */
+    chart?: ReadonlyArray<TrialBalanceChartAccount> | Promise<ReadonlyArray<TrialBalanceChartAccount>>
   }
 ): Promise<{
   rows: TrialBalanceRow[]
@@ -213,6 +246,7 @@ export async function generateTrialBalance(
   // accounts list is also fetched for reports that turn out empty or fail
   // the closed-period guard below; that occasional extra read-only query is
   // the price of a short critical path, and the returned data is unchanged.
+  // A caller that passes the chart skips the read.
   const [periodResult, accounts] = await Promise.all([
     supabase
       .from('fiscal_periods')
@@ -221,18 +255,7 @@ export async function generateTrialBalance(
       .eq('company_id', companyId)
       .single(),
     // Account names for row labelling.
-    fetchAllRows<{
-      account_number: string
-      account_name: string
-      account_class: number
-    }>(({ from, to }) =>
-      supabase
-        .from('chart_of_accounts')
-        .select('account_number, account_name, account_class')
-        .eq('company_id', companyId)
-        .order('account_number', { ascending: true })
-        .range(from, to)
-    ),
+    options.chart ?? fetchTrialBalanceChart(supabase, companyId),
   ])
   const { data: period } = periodResult
 

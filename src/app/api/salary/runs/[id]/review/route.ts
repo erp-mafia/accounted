@@ -1,10 +1,7 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { rosterRowsWithoutCalculation, runCalculationState } from '@/lib/salary/calculation-state'
-
-ensureInitialized()
 
 function notDraftResponse() {
   return NextResponse.json({ error: 'Lönekörningen måste vara i utkaststatus' }, { status: 400 })

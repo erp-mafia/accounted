@@ -41,6 +41,7 @@ function makeClient() {
 }
 
 import { generateSIEExport } from '../sie-export'
+import { createLedgerFakeDb } from '@/tests/ledger-fake-db'
 
 let supabase: ReturnType<typeof makeClient>
 
@@ -918,71 +919,67 @@ describe('generateSIEExport', () => {
 // #RES -1, so an importing årsredovisning program read an empty prior year.
 describe('generateSIEExport: previous year balances (#IB -1, #UB -1, #RES -1)', () => {
   // 2024 opens from the compute_prior_opening_balances fallback (no IB
-  // pointer). It sells 500 on 3001, books 100 of planenlig avskrivning
-  // (source_type year_end, NOT the closing) and is closed by the resultatavslut
-  // e-close, which zeroes 3001 and 7832 into 2099. 2025 opens from the IB
-  // entry that close created, and has one sale of its own.
-  const prevEntries = [{ id: 'e-sale' }, { id: 'e-dep' }, { id: 'e-close' }]
-  const prevLines = [
-    { id: 'p1', journal_entry_id: 'e-sale', account_number: '1930', debit_amount: 500, credit_amount: 0 },
-    { id: 'p2', journal_entry_id: 'e-sale', account_number: '3001', debit_amount: 0, credit_amount: 500 },
-    { id: 'p3', journal_entry_id: 'e-dep', account_number: '7832', debit_amount: 100, credit_amount: 0 },
-    { id: 'p4', journal_entry_id: 'e-dep', account_number: '1229', debit_amount: 0, credit_amount: 100 },
-    { id: 'p5', journal_entry_id: 'e-close', account_number: '3001', debit_amount: 500, credit_amount: 0 },
-    { id: 'p6', journal_entry_id: 'e-close', account_number: '7832', debit_amount: 0, credit_amount: 100 },
-    { id: 'p7', journal_entry_id: 'e-close', account_number: '2099', debit_amount: 0, credit_amount: 400 },
-  ]
-
-  function twoYearQueue(excludeClosing = false) {
-    return [
-      { data: { id: 'period-2', period_start: '2025-01-01', period_end: '2025-12-31', opening_balance_entry_id: 'ob-2025' }, error: null },
-      { data: { id: 'period-1', period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null }, error: null }, // prevPeriod
-      { data: [], error: null }, // accounts
-      // reversed year_end entries (fetchReversedYearEndEntryIds), read only
-      // when the flag excludes the year-end chain
-      ...(excludeClosing ? [{ data: [], error: null }] : []),
-      // journal_entries, year 0: one sale
-      { data: [{ id: 'e-2025', entry_date: '2025-02-01', voucher_number: 1, voucher_series: 'A', description: 'Sale 2025', status: 'posted' }], error: null },
-      {
-        data: [
-          { id: 'y1', journal_entry_id: 'e-2025', account_number: '1930', debit_amount: 200, credit_amount: 0, line_description: null, dimensions: {} },
-          { id: 'y2', journal_entry_id: 'e-2025', account_number: '3001', debit_amount: 0, credit_amount: 200, line_description: null, dimensions: {} },
+  // pointer) over 2023's one voucher. It sells 500 on 3001, books 100 of
+  // planenlig avskrivning (source_type year_end, NOT the closing) and is
+  // closed by the resultatavslut e-close, which zeroes 3001 and 7832 into
+  // 2099. 2025 opens from the IB entry that close created, and has one sale
+  // of its own. The year -1 read goes through the trial balance in parallel
+  // with other reads, so these books live in the in-memory ledger rather
+  // than in an ordered result queue.
+  const COMPANY = 'company-1'
+  const entry = (id: string, period: string, date: string, extra: Record<string, unknown> = {}) => ({
+    id, company_id: COMPANY, fiscal_period_id: period, entry_date: date, description: id,
+    voucher_series: 'A', voucher_number: Number(id.replace(/\D/g, '')) || 1, status: 'posted',
+    source_type: 'manual', reverses_id: null, correction_of_id: null, ...extra,
+  })
+  const line = (id: string, entryId: string, account: string, debit: number, credit: number) => ({
+    id, journal_entry_id: entryId, account_number: account, debit_amount: debit, credit_amount: credit,
+    line_description: null, dimensions: {},
+  })
+  function twoYearLedger() {
+    return createLedgerFakeDb({
+      companyId: COMPANY,
+      tables: {
+        fiscal_periods: [
+          { id: 'period-0', company_id: COMPANY, period_start: '2023-01-01', period_end: '2023-12-31', opening_balance_entry_id: null, closing_entry_id: null, is_closed: false },
+          { id: 'period-1', company_id: COMPANY, period_start: '2024-01-01', period_end: '2024-12-31', opening_balance_entry_id: null, closing_entry_id: 'e-close', is_closed: true },
+          { id: 'period-2', company_id: COMPANY, period_start: '2025-01-01', period_end: '2025-12-31', opening_balance_entry_id: 'ob-2025', closing_entry_id: null, is_closed: false },
         ],
-        error: null,
-      },
-      { data: [], error: null }, // dimensions
-      { data: [], error: null }, // dimension_values
-      // getOpeningBalances(year 0): the IB entry, then its lines
-      { data: [{ id: 'ob-2025' }], error: null },
-      {
-        data: [
-          { account_number: '1930', debit_amount: 1500, credit_amount: 0 },
-          { account_number: '2081', debit_amount: 0, credit_amount: 1000 },
-          { account_number: '1229', debit_amount: 0, credit_amount: 100 },
-          { account_number: '2099', debit_amount: 0, credit_amount: 400 },
+        journal_entries: [
+          entry('e-2023', 'period-0', '2023-06-01'),
+          entry('e-sale', 'period-1', '2024-03-01'),
+          entry('e-dep', 'period-1', '2024-12-31', { source_type: 'year_end' }),
+          entry('e-close', 'period-1', '2024-12-31', { source_type: 'year_end' }),
+          entry('ob-2025', 'period-2', '2025-01-01', { source_type: 'opening_balance' }),
+          entry('e-2025', 'period-2', '2025-02-01', { description: 'Sale 2025' }),
         ],
-        error: null,
-      },
-      // getOpeningBalances(year -1): RPC fallback
-      {
-        data: [
-          { account_number: '1930', debit: 1000, credit: 0 },
-          { account_number: '2081', debit: 0, credit: 1000 },
+        journal_entry_lines: [
+          line('a1', 'e-2023', '1930', 1000, 0),
+          line('a2', 'e-2023', '2081', 0, 1000),
+          line('p1', 'e-sale', '1930', 500, 0),
+          line('p2', 'e-sale', '3001', 0, 500),
+          line('p3', 'e-dep', '7832', 100, 0),
+          line('p4', 'e-dep', '1229', 0, 100),
+          line('p5', 'e-close', '3001', 500, 0),
+          line('p6', 'e-close', '7832', 0, 100),
+          line('p7', 'e-close', '2099', 0, 400),
+          line('o1', 'ob-2025', '1930', 1500, 0),
+          line('o2', 'ob-2025', '2081', 0, 1000),
+          line('o3', 'ob-2025', '1229', 0, 100),
+          line('o4', 'ob-2025', '2099', 0, 400),
+          line('y1', 'e-2025', '1930', 200, 0),
+          line('y2', 'e-2025', '3001', 0, 200),
         ],
-        error: null,
       },
-      { data: prevEntries, error: null }, // journal_entries, year -1
-      { data: ['e-close'], error: null }, // result_closing_entry_ids, year -1
-      { data: prevLines, error: null }, // journal_entry_lines, year -1
-    ]
+    })
   }
 
   it.each([false, true])(
     'with exclude_year_end_closing=%s: #UB -1 equals #IB 0 for every balance account and #RES -1 keeps the depreciation',
     async (excludeClosing) => {
-      results = twoYearQueue(excludeClosing)
+      const ledger = twoYearLedger()
 
-      const output = await generateSIEExport(supabase, 'company-1', {
+      const output = await generateSIEExport(ledger.supabase as never, COMPANY, {
         ...baseOptions,
         fiscal_period_id: 'period-2',
         exclude_year_end_closing: excludeClosing,
@@ -1008,24 +1005,24 @@ describe('generateSIEExport: previous year balances (#IB -1, #UB -1, #RES -1)', 
       expect(records).toContain('#RES -1 3001 -500.00')
       expect(records).toContain('#RES -1 7832 100.00')
 
-      // The year -1 entry read is never narrowed by the flag.
-      const fromMock = supabase.from as ReturnType<typeof vi.fn>
-      const entryBuilders = fromMock.mock.calls
-        .map((call, i) => ({ table: call[0] as string, builder: fromMock.mock.results[i].value }))
-        .filter((c) => c.table === 'journal_entries')
-      const priorEntryRead = entryBuilders[entryBuilders.length - 1].builder
-      expect(priorEntryRead.neq).not.toHaveBeenCalled()
-      expect(supabase.rpc).toHaveBeenCalledWith('result_closing_entry_ids', {
-        p_company_id: 'company-1',
+      // The year -1 read is never narrowed by the flag: its trial balance
+      // keeps every entry, and only the resultatavslut is taken out of #RES.
+      const priorYearReads = ledger.supabase.rpc.mock.calls
+        .filter(([name, args]) => name === 'get_trial_balance_aggregates' && args?.p_fiscal_period_id === 'period-1')
+        .map(([, args]) => args?.p_closing_mode)
+      expect(priorYearReads).toEqual(['include'])
+      expect(ledger.supabase.rpc).toHaveBeenCalledWith('result_closing_entry_ids', {
+        p_company_id: COMPANY,
         p_fiscal_period_id: 'period-1',
       })
     },
   )
 
   it('writes every balance item before the first #VER (SIE 4 record order)', async () => {
-    results = twoYearQueue()
-
-    const output = await generateSIEExport(supabase, 'company-1', { ...baseOptions, fiscal_period_id: 'period-2' })
+    const output = await generateSIEExport(twoYearLedger().supabase as never, COMPANY, {
+      ...baseOptions,
+      fiscal_period_id: 'period-2',
+    })
     const records = output.split('\r\n')
 
     const firstVer = records.findIndex((r) => r.startsWith('#VER '))

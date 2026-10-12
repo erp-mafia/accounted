@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
@@ -10,9 +9,6 @@ import { withdrawDerivedAgreement } from '@/lib/arkiv/agreements/store'
 import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
 import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-
-// Classification emits document.classified; the inbox extension's handler must be wired to route it.
-ensureInitialized()
 
 /**
  * POST /api/documents/[id]/classification  { doc_type }

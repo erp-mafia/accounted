@@ -2,6 +2,7 @@ import yaml from 'js-yaml'
 import { z } from 'zod'
 import type { CommunityKind } from './community'
 import { SkillBodySchema } from './validation'
+import { COMMUNITY_REPO } from './community-repo-name'
 
 /**
  * Community instructions live in the public, MIT-licensed repository
@@ -11,7 +12,6 @@ import { SkillBodySchema } from './validation'
  * brings merged items into every company's catalogue. This module is the
  * format both ways: an own item written out for review, and a file read back.
  */
-export const COMMUNITY_REPO = 'erp-mafia/accounted-skills'
 export const COMMUNITY_DIR = 'community'
 
 /** The repository says "knowledge"; the app calls the same kind "rules". */

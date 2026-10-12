@@ -10,7 +10,6 @@ vi.mock('@/lib/auth/cron', () => ({
 }))
 
 const registryGet = vi.fn()
-vi.mock('@/lib/extensions/loader', () => ({ loadExtensions: vi.fn() }))
 vi.mock('@/lib/extensions/registry', () => ({
   extensionRegistry: { get: (...args: unknown[]) => registryGet(...args) },
 }))

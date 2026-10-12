@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   buildArsredovisningData,
+  buildArsredovisningReport,
   K3_CASH_FLOW_FAILED_WARNING,
   K3_CASH_FLOW_TAX_ALLOCATION_WARNING,
   k3ContentsNotice,
@@ -137,8 +138,8 @@ export async function buildCanonicalAnnualReport(
   fiscalPeriodId: string,
   options: BuildCanonicalAnnualReportOptions = {},
 ): Promise<CanonicalAnnualReport> {
-  const [report, profile, signatures, employeesResult] = await Promise.all([
-    buildArsredovisningData(supabase, companyId, fiscalPeriodId),
+  const [built, profile, signatures, employeesResult] = await Promise.all([
+    buildArsredovisningReport(supabase, companyId, fiscalPeriodId),
     getAnnualReportProfile(supabase, companyId, fiscalPeriodId),
     listSignatureRequests(supabase, companyId, fiscalPeriodId),
     supabase
@@ -147,6 +148,7 @@ export async function buildCanonicalAnnualReport(
       .eq('company_id', companyId),
   ])
 
+  const report = built.data
   if (employeesResult.error) {
     throw new Error(`Failed to load annual report employee metrics: ${employeesResult.error.message}`)
   }
@@ -193,7 +195,9 @@ export async function buildCanonicalAnnualReport(
       undertecknare: options.undertecknare,
       proposedDividend: options.proposedDividend,
       todayIso: options.todayIso,
-      reportData: report,
+      // The report as amended above, with the statements it was built from:
+      // the iXBRL input builds no trial balance of its own.
+      report: built,
       signatureRequests: activeSignatures,
     })
   }

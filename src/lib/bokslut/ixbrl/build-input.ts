@@ -1,20 +1,22 @@
 /**
  * Assemble IxbrlArsredovisningInput for a fiscal period.
  *
- * Reuses the same sources as the PDF builder (buildArsredovisningData) for
- * narrative texts, noter and flerårsöversikt, and adds what iXBRL needs on
- * top: trial balances for BOTH years mapped to risbs concepts
- * (jämförelsesiffror: kontrollera 3006/3007), per-signer dates from the
- * signature flow, and the fastställelseintyg undertecknare.
+ * Reuses the PDF builder's report (buildArsredovisningReport): its
+ * narrative texts, noter and flerårsöversikt, and the K2 mapping of BOTH
+ * years to risbs concepts (jämförelsesiffror: kontrollera 3006/3007) it was
+ * built from, so the two documents read one set of trial balances. Adds what
+ * iXBRL needs on top: per-signer dates from the signature flow and the
+ * fastställelseintyg undertecknare.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { generateTrialBalance } from '@/lib/reports/trial-balance'
-import { buildArsredovisningData } from '@/lib/bokslut/arsredovisning/build-data'
+import {
+  buildArsredovisningReport,
+  type ArsredovisningBuild,
+} from '@/lib/bokslut/arsredovisning/build-data'
 import { listSignatureRequests } from '@/lib/bokslut/arsredovisning/signature-service'
 import { resolveMedelantalAnstallda } from '@/lib/salary/medelantal'
 import { getMedelantalOverride } from '@/lib/bokslut/arsredovisning/narrative-service'
-import { mapTrialBalancesToK2, type TrialBalancePair } from './k2-mapper'
 import { resolveEntryPoint } from './taxonomy/entry-points'
 import type {
   EgetKapitalForandring,
@@ -23,7 +25,6 @@ import type {
   IxbrlSigner,
   Resultatdisposition,
 } from './types'
-import type { ArsredovisningData } from '@/lib/bokslut/arsredovisning/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /** TA §4.3.4-4.3.5: "<leverantör> - <produkt>", version "<huvud>.<revision>". */
@@ -38,8 +39,11 @@ export interface BuildIxbrlOptions {
   proposedDividend?: number
   /** Override "today" for deterministic tests (ISO date). */
   todayIso?: string
-  /** Reuse a canonical report instance so PDF and iXBRL cannot diverge. */
-  reportData?: ArsredovisningData
+  /**
+   * Reuse a canonical report instance, and the statements it was built
+   * from, so PDF and iXBRL cannot diverge and no trial balance is built twice.
+   */
+  report?: ArsredovisningBuild
   /** Reuse the version-bound signer roster when a canonical model is built. */
   signatureRequests?: Awaited<ReturnType<typeof listSignatureRequests>>
 }
@@ -58,25 +62,21 @@ export async function buildIxbrlInput(
 ): Promise<IxbrlArsredovisningInput> {
   const warnings: string[] = []
 
-  // Two TB variants per year (see TrialBalancePair): the FULL trial balance
-  // (year-end closing included → 2099 booked, class 3-8 zeroed) drives the
-  // BR; the PRE-CLOSING trial balance (excludeFinalClosingEntry) drives the
-  // RR while retaining tax and appropriations. A single TB can
-  // never serve both: with bokslut booked every RR concept would map to 0,
-  // without it the BR would not tie.
-  const [pdfData, periodRow, currentTbFull, currentTbPreClosing, signatureRequests] =
-    await Promise.all([
-      options.reportData ?? buildArsredovisningData(supabase, companyId, fiscalPeriodId),
-      supabase
-        .from('fiscal_periods')
-        .select('id, period_start, period_end, previous_period_id')
-        .eq('id', fiscalPeriodId)
-        .eq('company_id', companyId)
-        .single(),
-      generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'include' }),
-      generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'exclude-final' }),
-      options.signatureRequests ?? listSignatureRequests(supabase, companyId, fiscalPeriodId),
-    ])
+  // The statements come from the report: its TrialBalancePair per year (the
+  // FULL trial balance drives the BR, the PRE-CLOSING one the RR) mapped once
+  // with the company's equity table, previous year included.
+  const [built, periodRow, signatureRequests] = await Promise.all([
+    options.report ?? buildArsredovisningReport(supabase, companyId, fiscalPeriodId),
+    supabase
+      .from('fiscal_periods')
+      .select('id, period_start, period_end')
+      .eq('id', fiscalPeriodId)
+      .eq('company_id', companyId)
+      .single(),
+    options.signatureRequests ?? listSignatureRequests(supabase, companyId, fiscalPeriodId),
+  ])
+  const pdfData = built.data
+  const { mapping, comparison } = built.statements
 
   if (periodRow.error || !periodRow.data) throw new Error('Fiscal period not found')
   const period = periodRow.data
@@ -88,40 +88,20 @@ export async function buildIxbrlInput(
   }
   const entryPoint = resolveEntryPoint('k2')
 
-  // Previous period: trial balances for jämförelsesiffror (same full/
-  // pre-closing split as the current year).
+  // Previous period: jämförelsesiffror, when its trial balances loaded.
   let previousPeriod: { start: string; end: string } | null = null
   let previousPeriodId: string | null = null
-  let previousTb: TrialBalancePair | null = null
-  if (period.previous_period_id) {
-    const { data: prev } = await supabase
-      .from('fiscal_periods')
-      .select('id, period_start, period_end')
-      .eq('id', period.previous_period_id)
-      .eq('company_id', companyId)
-      .maybeSingle()
-    if (prev) {
-      previousPeriod = { start: prev.period_start, end: prev.period_end }
-      previousPeriodId = prev.id
-      try {
-        const [prevFull, prevPreClosing] = await Promise.all([
-          generateTrialBalance(supabase, companyId, prev.id, { closingEntry: 'include' }),
-          generateTrialBalance(supabase, companyId, prev.id, { closingEntry: 'exclude-final' }),
-        ])
-        previousTb = { full: prevFull.rows, preClosing: prevPreClosing.rows }
-      } catch {
-        warnings.push(
-          'Jämförelsesiffror kunde inte hämtas för föregående räkenskapsår: balans- och resultaträkning visas utan jämförelseår (kontrollera-kod 3006/3007 kan utlösas).',
-        )
-        previousPeriod = null
-      }
+  if (comparison) {
+    previousPeriodId = comparison.id
+    if (comparison.loaded) {
+      previousPeriod = { start: comparison.period_start, end: comparison.period_end }
+    } else {
+      warnings.push(
+        'Jämförelsesiffror kunde inte hämtas för föregående räkenskapsår: balans- och resultaträkning visas utan jämförelseår (kontrollera-kod 3006/3007 kan utlösas).',
+      )
     }
   }
 
-  const mapping = mapTrialBalancesToK2(
-    { full: currentTbFull.rows, preClosing: currentTbPreClosing.rows },
-    previousTb,
-  )
   warnings.push(...mapping.warnings)
 
   // ---- flerårsöversikt (reuse PDF rows; whole SEK) -------------------------
@@ -172,11 +152,11 @@ export async function buildIxbrlInput(
   // Nettoomsattning / ResultatEfterFinansiellaPoster in the same contexts
   // (period0/period1) as the RR, and repeated facts must be value-identical
   // or Bolagsverket rejects the filing. The PDF rows already come from
-  // mapTrialBalancesToK2 per year (buildFlerarsoversikt, since #1116), but
-  // from the årsredovisning build's own mapping, not this document's: so the
-  // current and previous year columns are overridden with this mapping's
-  // outputs, which makes the repeated facts identical by construction. Older
-  // years have no RR facts and keep the PDF values.
+  // mapTrialBalancesToK2 per year (buildFlerarsoversikt, since #1116), and
+  // the report pins its current and previous year to the very mapping this
+  // document tags; the columns are still overridden from that mapping here,
+  // so the repeated facts are identical by construction whatever the PDF
+  // rows matched. Older years have no RR facts and keep the PDF values.
   if (flerarsoversikt.length > 0) {
     flerarsoversikt[0] = {
       ...flerarsoversikt[0],
@@ -431,8 +411,8 @@ export async function buildIxbrlInput(
     },
     programvara: { namn: PROGRAMVARA_NAMN, version: PROGRAMVARA_VERSION },
     entryPointId: entryPoint.id,
-    // Dedupe: buildArsredovisningData now runs the same K2 mapping for the
-    // PDF statements, so its warnings overlap with the ones produced here.
+    // Dedupe: the PDF statements come from the same K2 mapping, so its
+    // warnings overlap with the ones pushed here.
     warnings: Array.from(new Set([...pdfData.warnings, ...warnings])),
   }
 }

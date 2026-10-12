@@ -3,14 +3,11 @@ import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { extensionRegistry } from '@/lib/extensions/registry'
-import { ensureInitialized } from '@/lib/init'
 import {
   probeSessionHealth,
   REAUTH_REQUIRED_MESSAGE,
 } from '@/extensions/general/enable-banking/lib/api-client'
 import { sendConsentExpiryNotification } from '@/extensions/general/enable-banking/lib/consent-expiry-notification'
-
-ensureInitialized()
 
 export const maxDuration = 300
 
@@ -35,7 +32,7 @@ const PROVEN_ALIVE_MS = 24 * 60 * 60 * 1000
  * the probes (and the expiry mail a dead session sends) are a daily job.
  */
 export const GET = withCronContext('cron.bank_session_probe', async (_request, ctx) => {
-  if (!extensionRegistry.get('enable-banking')) {
+  if (!(await extensionRegistry.get('enable-banking'))) {
     ctx.log.warn('enable-banking extension is not enabled; cron refused')
     return NextResponse.json(
       { error: 'Enable Banking extension is not enabled', code: 'EXTENSION_DISABLED' },

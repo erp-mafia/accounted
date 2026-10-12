@@ -1,13 +1,10 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { sparsePatchBody } from '@/lib/api/sparse-patch'
 import { UpdateSalaryLineItemSchema } from '@/lib/api/schemas'
 import { updatePayslipLine, deletePayslipLine } from '@/lib/salary/payslip-lines'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
-
-ensureInitialized()
 
 function errorResponse(code: string, details?: Record<string, unknown>): NextResponse {
   const entry = getErrorEntry(code)

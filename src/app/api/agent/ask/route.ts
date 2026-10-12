@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { ensureInitialized } from '@/lib/init'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { checkAgentRateLimit, agentRateLimitResponseBody } from '@/lib/rate-limits/agent'
@@ -19,12 +18,6 @@ import {
 } from '@/lib/agent/ask/persist'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { SUPPORTED_LOCALES } from '@/i18n/config'
-
-// The assistant answers over the read-only MCP tools, which are registered
-// into the agent tool registry by the mcp-server extension at load. Without
-// this the registry is empty and the assistant falls back to snapshot-only,
-// so a hosted deploy would silently lose its ledger tools.
-ensureInitialized()
 
 const log = createLogger('api.agent.ask')
 

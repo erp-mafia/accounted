@@ -23,7 +23,7 @@ export const GET = withCronContext('cron.invoice_reminders', async (_request, ct
     return NextResponse.json({ disabled: true }, { status: 503 })
   }
 
-  if (!getEmailService().isConfigured()) {
+  if (!(await getEmailService()).isConfigured()) {
     ctx.log.error('email service not configured; skipping reminder run')
     return errorResponseFromCode('INVOICE_SEND_EMAIL_NOT_CONFIGURED', ctx.log, {
       requestId: ctx.requestId,

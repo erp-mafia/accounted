@@ -18,9 +18,6 @@ import { AccountKeySchema } from '@/lib/reconciliation/schemas'
 import { bookResidualAndLink, ReconciliationResidualError, RESIDUAL_MAX_AMOUNT } from '@/lib/reconciliation/residual'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { ISO_DATE_RE } from '@/lib/invariants'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 const ResidualRequest = z.object({
   external_ids: z.array(z.string().uuid()).min(1).max(50),

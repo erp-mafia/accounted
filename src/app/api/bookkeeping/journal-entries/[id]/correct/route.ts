@@ -1,11 +1,8 @@
 import { NextResponse } from 'next/server'
 import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
-import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
 import { CorrectJournalEntrySchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
-
-ensureInitialized()
 
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'bookkeeping.journal-entry.correct',

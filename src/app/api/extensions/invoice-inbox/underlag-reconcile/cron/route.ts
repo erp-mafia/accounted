@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { loadExtensions } from '@/lib/extensions/loader'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
@@ -27,14 +26,13 @@ export const maxDuration = 300
 
 export const GET = withCronContext('cron.invoice_inbox_underlag_reconcile', async (_request, ctx) => {
   // Load the registry so it reflects extensions.config.json.
-  loadExtensions()
 
   // Physical routes under app/api/extensions/<id>/ compile into EVERY build,
   // including the core-with-zero-extensions one: the registry (generated from
   // extensions.config.json) is what actually switches an extension on. A
   // scheduled-but-disabled cron must fail visibly (503) instead of quietly
   // doing the work anyway.
-  if (!extensionRegistry.get('invoice-inbox')) {
+  if (!(await extensionRegistry.get('invoice-inbox'))) {
     ctx.log.warn('invoice-inbox extension is not enabled; cron refused')
     return NextResponse.json(
       { error: 'Invoice inbox extension is not enabled', code: 'EXTENSION_DISABLED' },

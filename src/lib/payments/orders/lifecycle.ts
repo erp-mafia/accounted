@@ -267,7 +267,7 @@ export async function cancelPaymentOrder(
     return { ok: false, code: 'PAYMENT_ORDERS_WRONG_STATUS', details: { status: order.status } }
   }
 
-  const provider = getPaymentInitiationProvider(ctx.companyId)
+  const provider = await getPaymentInitiationProvider(ctx.companyId)
   if (!provider) return { ok: false, code: 'PAYMENTS_UNAVAILABLE' }
   if (input.dryRun) {
     // The bank is asked only on the real run: a preview never cancels anything.
@@ -335,7 +335,7 @@ export async function resolvePaymentOrder(
 
   let bankAnswer: 'not_found' | 'no_provider' | null = null
   if (input.resolution === 'not_at_bank' && order.provider_payment_id) {
-    const provider = getPaymentInitiationProvider(ctx.companyId)
+    const provider = await getPaymentInitiationProvider(ctx.companyId)
     if (!provider) {
       bankAnswer = 'no_provider'
     } else {

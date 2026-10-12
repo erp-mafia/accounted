@@ -24,6 +24,7 @@ import { resolveDormantCompanyIds } from '@/lib/company/active-company'
 import { getExtensionNavItems } from '@/lib/extensions/sectors'
 import { CompanyProvider, type ByraTeamRef } from '@/contexts/CompanyContext'
 import { ReferenceDataSeed } from '@/components/providers/ReferenceDataSeed'
+import { AllMessagesProvider } from '@/components/providers/AllMessagesProvider'
 import OnboardingBackdrop from '@/components/onboarding/OnboardingBackdrop'
 import { getCompanyEntitlements } from '@/lib/entitlements/has-capability'
 import { getAiStatus } from '@/lib/ai'
@@ -45,8 +46,10 @@ import { parseEntityType } from '@/lib/company/entity-type'
 import {
   getDashboardAuthContext,
   getDashboardCompanyId,
+  getDashboardFiscalPeriods,
   getDashboardSettings,
   getDashboardTeamMemberships,
+  getDashboardUserProfile,
   getResolvedDashboardAgentProfile,
 } from './request-context'
 
@@ -64,6 +67,9 @@ const MAIN_PANEL_CLASS =
   'md:overflow-y-auto md:rounded-xl md:border md:border-border ' +
   'md:transition-[margin-left,margin-right] md:duration-300 md:ease-drawer'
 
+// Every branch renders inside AllMessagesProvider: the root layout hands
+// client components only the public and auth namespaces
+// (src/i18n/root-client-namespaces.ts), the dashboard needs the full catalog.
 export default async function DashboardLayout({
   children,
 }: {
@@ -106,8 +112,9 @@ export default async function DashboardLayout({
     getDashboardTeamMemberships(),
     // The signed-in user's profile, shown in the bottom-left account
     // popover (full_name + initial) so it's clear which user is logged
-    // in, distinct from the active company shown at the top.
-    supabase.from('profiles').select('full_name').eq('id', user.id).maybeSingle(),
+    // in, distinct from the active company shown at the top. Request-cached:
+    // Hem reads the same row for its greeting.
+    getDashboardUserProfile(),
     // Per-user UI state (assistant panel geometry, trial acknowledgement),
     // server-rendered so both are right on first paint, plus the
     // hide-assistant-FAB preference (Inställningar → Assistenten).
@@ -197,6 +204,7 @@ export default async function DashboardLayout({
     }
 
     return (
+      <AllMessagesProvider>
       <CompanyProvider
         value={{
           company: null,
@@ -242,6 +250,7 @@ export default async function DashboardLayout({
           </div>
         </AgentSheetProvider>
       </CompanyProvider>
+      </AllMessagesProvider>
     )
   }
 
@@ -291,12 +300,9 @@ export default async function DashboardLayout({
     // user opens renders populated with zero client round trips. Same
     // ordering as period.list and listForCompany so the seed and the client
     // refetch agree. The chart of accounts is deliberately NOT seeded: it
-    // can be hundreds of KB for large companies.
-    supabase
-      .from('fiscal_periods')
-      .select('*')
-      .eq('company_id', companyId)
-      .order('period_start', { ascending: false }),
+    // can be hundreds of KB for large companies. The periods are
+    // request-cached: the report and reconciliation pages reuse them.
+    getDashboardFiscalPeriods(),
     // The embed carries each account's bank for the Konto label; same select
     // as fetchCashAccounts (lib/cash-accounts/labels.ts CashAccountWithBank).
     supabase
@@ -378,6 +384,7 @@ export default async function DashboardLayout({
     }
 
     return (
+      <AllMessagesProvider>
       <CompanyProvider value={companyContextValue}>
         <SessionTimeoutController />
         <BrowserSessionGuard />
@@ -400,6 +407,7 @@ export default async function DashboardLayout({
           </div>
         </AgentSheetProvider>
       </CompanyProvider>
+      </AllMessagesProvider>
     )
   }
 
@@ -524,6 +532,7 @@ export default async function DashboardLayout({
     !SIGNPOST_ALLOWED_PATHS.some((p) => pathname.startsWith(p))
 
   return (
+    <AllMessagesProvider>
     <CompanyProvider value={companyContextValue}>
       <ReferenceDataSeed
         companyId={companyId}
@@ -651,5 +660,6 @@ export default async function DashboardLayout({
       </DashboardRouteShell>
       </ReferenceDataSeed>
     </CompanyProvider>
+    </AllMessagesProvider>
   )
 }

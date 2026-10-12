@@ -1,6 +1,5 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { eventBus } from '@/lib/events/bus'
 import { hashAuthCode } from '@/lib/auth/oauth-codes'
 import {
@@ -11,11 +10,6 @@ import {
   exchangeCodeForAccount,
   fetchAccountDisplayName,
 } from '@/extensions/general/stripe/lib/connect'
-
-// This route emits stripe.connected (audit trail). ensureInitialized() must
-// run at module load so the event_log handler has subscribed before the first
-// emit on a cold instance.
-ensureInitialized()
 
 /**
  * GET /api/extensions/stripe/callback

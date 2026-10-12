@@ -9,6 +9,7 @@
  * Mirrors lib/email/service.ts: core must never import from @/extensions, and
  * a CI build with zero extensions has to compile.
  */
+import { whenInitialized } from '@/lib/initialized'
 
 /** What the hunt knows about the purchase it is trying to find a receipt for. */
 export interface MailSearchQuery {
@@ -166,7 +167,9 @@ class NoopMailSearchService implements MailSearchService {
 
 let mailSearchService: MailSearchService = new NoopMailSearchService()
 
-export function getMailSearchService(): MailSearchService {
+/** The registered service, after the extensions have loaded (lib/initialized.ts). */
+export async function getMailSearchService(): Promise<MailSearchService> {
+  await whenInitialized()
   return mailSearchService
 }
 

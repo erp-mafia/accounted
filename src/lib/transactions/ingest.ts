@@ -4,7 +4,11 @@ import { evaluateMappingRules } from '@/lib/bookkeeping/mapping-engine'
 import { chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import { createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { upsertCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
-import { getBestInvoiceMatch } from '@/lib/invoices/invoice-matching'
+import {
+  bestInvoiceMatch,
+  loadInvoiceMatchPool,
+  type InvoiceMatchPool,
+} from '@/lib/invoices/invoice-matching'
 import { findSupplierInvoiceMatch } from '@/lib/invoices/supplier-invoice-matching'
 import {
   findRotRutPayoutMatch,
@@ -937,6 +941,7 @@ export async function ingestTransactions(
         .eq('company_id', companyId)
         .in('status', ['registered', 'approved'])
         .gt('remaining_amount', 0)
+        .order('id', { ascending: true })
         .range(from, to)
     )
   } catch {
@@ -1110,6 +1115,12 @@ export async function ingestTransactions(
   // Track already-matched invoice IDs within this ingestion batch
   // to prevent suggesting the same invoice for multiple transactions
   const matchedInvoiceIds = new Set<string>()
+  // Open customer invoices for income matching: read once for the batch, on
+  // the first income row (an all-expense batch never reads them), instead of
+  // once per row. Nothing in this loop changes an invoice or its payments, so
+  // every row scores against what it would have read itself. A failed read is
+  // not kept: the next income row tries again, as each row used to.
+  let invoiceMatchPool: InvoiceMatchPool | null = null
   /** Inserted inbound rows, for the collections payment-candidate sweep. */
   const inboundIds: string[] = []
   const matchedSupplierInvoiceIds = new Set<string>()
@@ -1464,14 +1475,9 @@ export async function ingestTransactions(
     // 3. For income transactions, try invoice matching
     if (newTransaction.amount > 0) {
       try {
-        // OCR/reference matching is handled inside getBestInvoiceMatch
-        // (which calls findMatchingInvoices, which now checks references)
-        const bestMatch = await getBestInvoiceMatch(
-          supabase,
-          companyId,
-          newTransaction as Transaction,
-          0.50
-        )
+        // OCR/reference matching is part of the scoring (matchInvoiceCandidates)
+        invoiceMatchPool ??= await loadInvoiceMatchPool(supabase, companyId)
+        const bestMatch = bestInvoiceMatch(newTransaction as Transaction, invoiceMatchPool, 0.50)
 
         if (bestMatch && !matchedInvoiceIds.has(bestMatch.invoice.id)) {
           await supabase

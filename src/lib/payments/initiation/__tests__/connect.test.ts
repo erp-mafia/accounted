@@ -99,27 +99,27 @@ describe('isAvailableFor', () => {
 })
 
 describe('registerConnectPaymentsProvider', () => {
-  it('registers nothing without a connector key', () => {
+  it('registers nothing without a connector key', async () => {
     vi.stubEnv('GNUBOK_CONNECTOR_KEY', '')
     expect(registerConnectPaymentsProvider()).toBe(false)
-    expect(getPaymentInitiationProviderById('open_payments')).toBeNull()
+    expect(await getPaymentInitiationProviderById('open_payments')).toBeNull()
   })
 
-  it('registers the adapter from the connector configuration, once', () => {
+  it('registers the adapter from the connector configuration, once', async () => {
     vi.stubEnv('GNUBOK_CONNECTOR_KEY', 'gnubok_ck_x')
     vi.stubEnv('GNUBOK_CONNECT_URL', 'https://connect.example.se')
     expect(registerConnectPaymentsProvider()).toBe(true)
     expect(registerConnectPaymentsProvider()).toBe(false)
-    expect(getPaymentInitiationProviderById('open_payments')?.id).toBe('open_payments')
-    expect(getPaymentInitiationProvider('co-1')?.id).toBe('open_payments')
-    expect(getPaymentInitiationProvider('co-2')?.id).toBe('open_payments')
+    expect((await getPaymentInitiationProviderById('open_payments'))?.id).toBe('open_payments')
+    expect((await getPaymentInitiationProvider('co-1'))?.id).toBe('open_payments')
+    expect((await getPaymentInitiationProvider('co-2'))?.id).toBe('open_payments')
   })
 
-  it('keeps a provider registered earlier under the same id', () => {
+  it('keeps a provider registered earlier under the same id', async () => {
     const fake = { id: 'open_payments' } as unknown as PaymentInitiationProvider
     registerPaymentInitiationProvider(fake)
     expect(registerConnectPaymentsProvider({ upstream: UPSTREAM })).toBe(false)
-    expect(getPaymentInitiationProviderById('open_payments')).toBe(fake)
+    expect(await getPaymentInitiationProviderById('open_payments')).toBe(fake)
   })
 
   it('takes an explicit upstream (and refuses an explicit null)', () => {

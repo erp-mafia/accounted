@@ -1,13 +1,10 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { signerFromRequest } from '@/lib/payments/orders/request-signer'
 import { pollPaymentSigning } from '@/lib/payments/orders/signing'
-
-ensureInitialized()
 
 // One bank call per payment (up to 100), a basket and BankID: set the limit
 // explicitly. A function cut off mid-signing leaves its orders in payment with

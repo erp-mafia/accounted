@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { loadExtensions } from '@/lib/extensions/loader'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
@@ -13,8 +12,7 @@ export const GET = withCronContext('cron.arcim_migration_complete_invoice_lines'
   // Include discovery, credential refresh, provider reads, persistence and
   // reporting in one absolute window, with headroom below the platform limit.
   const deadline = Date.now() + RUN_BUDGET_MS
-  loadExtensions()
-  if (!extensionRegistry.get('arcim-migration')) {
+  if (!(await extensionRegistry.get('arcim-migration'))) {
     return NextResponse.json(
       { error: 'Migration extension is not enabled', code: 'EXTENSION_DISABLED' }, { status: 503 },
     )

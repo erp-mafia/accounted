@@ -1,6 +1,5 @@
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { verifyCronSecret } from '@/lib/auth/cron'
 import { skvRequestWithAuth, SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
 import { auditUserIdFor } from '@/extensions/general/skatteverket/lib/audit'
@@ -14,8 +13,6 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { SkatteverketInlamnatResponse } from '@/extensions/general/skatteverket/types'
 import type { VatPeriodType } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized()
 
 export const maxDuration = 60
 

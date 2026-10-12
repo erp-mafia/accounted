@@ -1,7 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { ensureInitialized } from '@/lib/init'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { getIntent } from '@/lib/agent/intents/registry'
@@ -12,10 +11,6 @@ import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-// Make sure extensions are loaded: the chat loop dispatches against the
-// agent tool registry which is populated by the mcp-server extension at load.
-ensureInitialized()
 
 // Deep turns (thinking at high/xhigh effort, up to 12 tool iterations, a
 // 15-27k-token prompt prefix) can outlive the plan default duration cap; a

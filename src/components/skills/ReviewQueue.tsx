@@ -8,7 +8,7 @@ import { ArrowLeft, ArrowUpRight, ShieldAlert } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import type { PendingItem, ReviewSubmission, WithdrawnItem } from '@/lib/agent-skills/community-review'
-import { COMMUNITY_REPO } from '@/lib/agent-skills/community-repo'
+import { COMMUNITY_REPO } from '@/lib/agent-skills/community-repo-name'
 import styles from './skills.module.css'
 
 type ReviewData = { submissions: ReviewSubmission[]; pending: PendingItem[]; withdrawn: WithdrawnItem[] }

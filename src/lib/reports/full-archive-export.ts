@@ -5,7 +5,7 @@ import type JSZip from 'jszip'
 import { generateSIEExport } from './sie-export'
 import { generateTrialBalance } from './trial-balance'
 import { generateIncomeStatement } from './income-statement'
-import { generateBalanceSheet } from './balance-sheet'
+import { balanceSheetFromTrialBalance } from './balance-sheet'
 import { generateGeneralLedger } from './general-ledger'
 import { generateJournalRegister } from './journal-register'
 import { calculateVatDeclaration } from './vat-declaration'
@@ -420,14 +420,15 @@ async function generatePeriodReports(
   companyId: string,
   period: FiscalPeriodRow
 ): Promise<PeriodReports> {
-  const [trialBalance, incomeStatement, balanceSheet, generalLedger, journalRegister] =
+  const [trialBalance, incomeStatement, generalLedger, journalRegister] =
     await Promise.all([
       generateTrialBalance(supabase, companyId, period.id, { closingEntry: 'include' }),
       generateIncomeStatement(supabase, companyId, period.id),
-      generateBalanceSheet(supabase, companyId, period.id),
       generateGeneralLedger(supabase, companyId, period.id),
       generateJournalRegister(supabase, companyId, period.id),
     ])
+  // The balance sheet reads the same 'include' trial balance: built from it.
+  const balanceSheet = await balanceSheetFromTrialBalance(supabase, companyId, period.id, trialBalance.rows)
 
   let vatDeclaration: unknown = null
   try {

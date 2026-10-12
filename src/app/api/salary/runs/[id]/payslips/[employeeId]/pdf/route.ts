@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getCompanyDisplayName } from '@/lib/company/context'
 import {
@@ -13,8 +12,6 @@ import { requireWritePermission } from '@/lib/auth/require-write'
 import { contentDisposition } from '@/lib/api/content-disposition'
 import { dbError } from '@/lib/errors/db-error'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-
-ensureInitialized()
 
 /**
  * Generate pay slip PDF for a specific employee in a salary run.
@@ -125,7 +122,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string; employeeId: 
       // Only a member who may write the run issues it, through the caller's
       // own RLS-scoped client (the same write gate and client as the payslip
       // send). A viewer renders from the run as stored and writes nothing.
-      const writeCheck = await requireWritePermission(supabase, ctx.user.id, { companyId })
+      const writeCheck = await requireWritePermission(supabase, ctx.user.id, { companyId, role: ctx.role })
       if (writeCheck.ok) {
         const issued = await issuePayslipSections(supabase, { companyId, run, settings: sectionSettings })
         if (!issued.ok) {

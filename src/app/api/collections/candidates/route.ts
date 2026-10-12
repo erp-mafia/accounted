@@ -8,11 +8,7 @@ import { loadLiveConnection } from '@/lib/collections/connection'
 import { readCollectionsEnv } from '@/lib/collections/flags'
 import { collectionsRouteGate } from '@/lib/collections/settings-routes'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { ensureInitialized } from '@/lib/init'
 import { createServiceClient } from '@/lib/supabase/server'
-
-// The case modules this route reads through can emit collection events: wire the bus.
-ensureInitialized()
 
 const QuerySchema = z.object({
   /** "1" lists the invoices that cannot go too, with the checks they fail. */

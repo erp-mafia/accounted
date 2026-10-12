@@ -1,13 +1,10 @@
 import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
-import { ensureInitialized } from '@/lib/init'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { Invoice } from '@/types'
-
-ensureInitialized() // Module-level: loads extensions so invoice.created handlers are wired.
 
 /**
  * POST /api/invoices/[id]/finalize: "Granska och skapa".

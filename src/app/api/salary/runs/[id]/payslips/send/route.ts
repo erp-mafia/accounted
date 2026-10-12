@@ -1,13 +1,10 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { sendPayslips } from '@/lib/salary/payslips/send'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { capabilityBlockedResponse } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { sandboxBlockedResponse } from '@/lib/sandbox/guard'
-
-ensureInitialized()
 
 /**
  * Send payslips to all employees with email addresses: as secure LINKS,

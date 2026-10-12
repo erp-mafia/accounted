@@ -2,12 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
-const { sweep, init } = vi.hoisted(() => ({ sweep: vi.fn(), init: vi.fn() }))
+const { sweep } = vi.hoisted(() => ({ sweep: vi.fn() }))
 vi.mock('@/lib/reconciliation/unattended-sweep', async (load) => ({
   ...(await load<typeof import('@/lib/reconciliation/unattended-sweep')>()),
   runUnattendedReconciliationSweep: sweep,
 }))
-vi.mock('@/lib/init', () => ({ ensureInitialized: init }))
 vi.mock('@/lib/auth/api-keys', () => ({ createServiceClientNoCookies: vi.fn() }))
 
 import {
@@ -70,7 +69,6 @@ describe('sweepBankRowsAfterSIEImport', () => {
       p_company_id: COMPANY,
       p_import_id: IMPORT,
     })
-    expect(init).toHaveBeenCalledTimes(1)
     expect(sweep).toHaveBeenCalledWith(supabase, COMPANY, ACTOR, {
       dateFrom: '2026-01-01',
       dateTo: '2026-12-31',
@@ -111,7 +109,6 @@ describe('sweepBankRowsAfterSIEImport', () => {
     const receipt = await sweepBankRowsAfterSIEImport(supabase, job())
 
     expect(sweep).not.toHaveBeenCalled()
-    expect(init).not.toHaveBeenCalled()
     expect(receipt).toMatchObject({ skipped: 'no_unlinked_bank_rows', auto_linked: 0, suggested: 0 })
     expect(mock.supabase.rpc).toHaveBeenLastCalledWith(
       'record_sie_import_bank_sweep',

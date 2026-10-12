@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { emitSupplierInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
-import { ensureInitialized } from '@/lib/init'
 import {
   createSupplierInvoicePaymentEntry,
   createSupplierInvoiceCashEntry,
@@ -26,8 +25,6 @@ import { recordSupplierInvoiceDuplicateGuardBypass } from '@/lib/invoices/duplic
 import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
-
-ensureInitialized()
 
 export const POST = withRouteContext(
   'supplier_invoice.mark_paid',

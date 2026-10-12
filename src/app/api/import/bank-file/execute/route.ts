@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
-import { ensureInitialized } from '@/lib/init'
 import { ingestTransactions } from '@/lib/transactions/ingest'
 import { toRawTransaction } from '@/lib/import/bank-file/parser'
 import type { IngestOptions } from '@/types'
@@ -15,8 +14,6 @@ import {
   runUnattendedReconciliationSweep,
   toSweepSummary,
 } from '@/lib/reconciliation/unattended-sweep'
-
-ensureInitialized()
 
 // Bank-file imports run a sequential, per-row ingest (insert + invoice/supplier
 // matching + FX lookup). A full-year file (300+ rows) takes ~85s of server time,
@@ -65,8 +62,10 @@ export const POST = withRouteContext(
     const { user, supabase, log, requestId } = ctx
 
     // We still call getCompanyRole because viewers are allowed through with
-    // rawInsertOnly behavior: `requireWrite: true` would block them.
-    const roleCheck = await getCompanyRole(supabase, user.id)
+    // rawInsertOnly behavior: `requireWrite: true` would block them. The
+    // wrapper already resolved the company (and usually the role), so the
+    // helper repeats neither read.
+    const roleCheck = await getCompanyRole(supabase, user.id, { companyId: ctx.companyId, role: ctx.role })
     if (!roleCheck.ok) {
       // Inject the request id for traceability and pass through.
       if (!roleCheck.response.headers.get('X-Request-Id')) {

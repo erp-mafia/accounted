@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
-import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
 import { CreateCustomerSchema } from '@/lib/api/schemas'
 import { validateVatNumber } from '@/lib/vat/vies-client'
@@ -11,8 +10,6 @@ import { encryptCustomerPersonalNumber, maskCustomerRow } from '@/lib/customers/
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { resolveDefaultPaymentTerms } from '@/lib/customers/default-payment-terms'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized()
 
 export const GET = withRouteContext(
   'customer.list',

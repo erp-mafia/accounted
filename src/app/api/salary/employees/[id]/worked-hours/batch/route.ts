@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { BatchUpsertWorkedDaysSchema } from '@/lib/api/schemas'
@@ -7,8 +6,6 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { findRunLockingDates } from '@/lib/salary/register-locks'
 import { assertWorkedDaysEmployee, mapWorkedDaysWriteError } from '@/lib/salary/worked-days'
-
-ensureInitialized()
 
 interface BatchConflict {
   date: string

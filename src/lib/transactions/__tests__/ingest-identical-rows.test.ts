@@ -33,7 +33,8 @@ vi.mock('@/lib/bookkeeping/transaction-entries', () => ({
   createTransactionJournalEntry: vi.fn(),
 }))
 vi.mock('@/lib/invoices/invoice-matching', () => ({
-  getBestInvoiceMatch: vi.fn().mockResolvedValue(null),
+  loadInvoiceMatchPool: vi.fn().mockResolvedValue({ invoices: [] }),
+  bestInvoiceMatch: vi.fn().mockReturnValue(null),
 }))
 vi.mock('@/lib/currency/riksbanken', () => ({
   fetchExchangeRate: vi.fn().mockResolvedValue(null),

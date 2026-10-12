@@ -203,22 +203,6 @@ const MIN_SINGLE_TOKEN_OCCURRENCES = 3
 
 // ── Confidence ─────────────────────────────────────────────────
 
-// ── Display ───────────────────────────────────────────────────
-
-/** Swedish company suffixes that should be uppercased */
-const UPPER_SUFFIXES = new Set(['ab', 'hb', 'kb', 'ek', 'ef', 'uf'])
-
-/**
- * Capitalize a normalized counterparty name for display.
- * "telia sverige ab" → "Telia Sverige AB"
- */
-export function formatCounterpartyName(name: string): string {
-  return name
-    .split(' ')
-    .map(w => UPPER_SUFFIXES.has(w) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1))
-    .join(' ')
-}
-
 /**
  * Logarithmic confidence formula.
  * Starts low, grows slowly, caps at 0.95. Early corrections are cheap,
@@ -250,12 +234,15 @@ export function resolveSource(
   return SOURCE_PRIORITY[incoming] >= SOURCE_PRIORITY[existing] ? incoming : existing
 }
 
-// ── Counterparty Template ID Convention ──────────────────────
+// ── Display and Counterparty Template ID Convention ──────────
 
-export const COUNTERPARTY_PREFIX = 'counterparty:'
-export function isCounterpartyTemplateId(id: string): boolean { return id.startsWith(COUNTERPARTY_PREFIX) }
-export function extractCounterpartyId(id: string): string { return id.slice(COUNTERPARTY_PREFIX.length) }
-export function toCounterpartyTemplateId(id: string): string { return COUNTERPARTY_PREFIX + id }
+export {
+  COUNTERPARTY_PREFIX,
+  extractCounterpartyId,
+  formatCounterpartyName,
+  isCounterpartyTemplateId,
+  toCounterpartyTemplateId,
+} from './counterparty-template-format'
 
 // ── VAT Account Mapping ──────────────────────────────────────
 

@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateSalesOrderSchema } from '@/lib/api/schemas'
@@ -8,8 +7,6 @@ import { hasOpenInvoices, updateSalesOrder } from '@/lib/sales-orders/write'
 import { serviceFailureResponse } from '@/lib/sales-orders/respond'
 import { codeFromPgError } from '@/lib/sales-orders/result'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
-
-ensureInitialized()
 
 type Ctx = { params: Promise<{ id: string }> }
 

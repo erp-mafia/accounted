@@ -1,6 +1,5 @@
 import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import { requireCompanyId } from '@/lib/company/context'
@@ -64,8 +63,6 @@ async function decorateResponse(response: Response, requestId: string): Promise<
 
   return response
 }
-
-ensureInitialized()
 
 // Heavy extension routes (SIE import, entity migration) hold one request
 // open for the whole job. 800 s is the Pro-plan ceiling with Fluid compute
@@ -157,7 +154,7 @@ async function handleRequest(
   const log = dispatcherLog.child({ requestId, extensionId, routePath, method })
 
   // Look up extension
-  const extension = extensionRegistry.get(extensionId)
+  const extension = await extensionRegistry.get(extensionId)
   if (!extension || !extension.apiRoutes || extension.apiRoutes.length === 0) {
     log.warn('extension not found')
     return decorateResponse(

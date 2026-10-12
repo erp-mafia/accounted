@@ -1,15 +1,12 @@
 import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
-import { ensureInitialized } from '@/lib/init'
 import { pollOpenPeppolDeliveries } from '@/lib/invoices/peppol-delivery-sync'
 import { runPeppolHealthCheck, type PeppolHealthSummary } from '@/lib/invoices/peppol-health'
 import {
   getPeppolTransport,
   getPeppolTransportAvailability,
 } from '@/lib/invoices/peppol-transport'
-
-ensureInitialized()
 
 export const maxDuration = 300
 
@@ -28,8 +25,8 @@ export const maxDuration = 300
  * alert must never fail the poll.
  */
 export const GET = withCronContext('cron.peppol_outbound_status', async (_request, ctx) => {
-  const availability = getPeppolTransportAvailability()
-  const transport = availability.available ? getPeppolTransport(availability.provider) : null
+  const availability = await getPeppolTransportAvailability()
+  const transport = availability.available ? await getPeppolTransport(availability.provider) : null
   if (!transport) {
     return NextResponse.json({ data: { skipped: true, reason: availability.available ? 'provider_adapter_unavailable' : availability.reason } })
   }

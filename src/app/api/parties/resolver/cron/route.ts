@@ -1,11 +1,8 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceClient } from '@/lib/supabase/server'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { resolveCompanyCounterparts, resolverMode, type RunSummary } from '@/lib/parties/resolver/run'
-
-ensureInitialized()
 
 /**
  * GET /api/parties/resolver/cron, daily 05:45 UTC.

@@ -19,6 +19,7 @@ vi.mock('@/lib/reports/balance-sheet', () => ({
 }))
 vi.mock('@/lib/reports/trial-balance', () => ({
   generateTrialBalance: vi.fn(),
+  fetchTrialBalanceChart: vi.fn(async () => []),
 }))
 vi.mock('@/lib/reports/kassaflodesanalys', () => ({
   generateKassaflodesanalys: vi.fn(),
@@ -736,13 +737,13 @@ describe('buildArsredovisningData: K2 byte-equivalence', () => {
       expect.anything(),
       'co1',
       'fp1',
-      { closingEntry: 'exclude-final' },
+      expect.objectContaining({ closingEntry: 'exclude-final' }),
     )
     expect(mockedTrialBalance).not.toHaveBeenCalledWith(
       expect.anything(),
       'co1',
       'fp1',
-      { closingEntry: 'exclude-all-year-end' },
+      expect.objectContaining({ closingEntry: 'exclude-all-year-end' }),
     )
   })
 

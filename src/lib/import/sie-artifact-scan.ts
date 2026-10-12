@@ -3,7 +3,7 @@
  *
  * Every in-repo SIE byte path decodes correctly (detectEncoding/decodeBuffer in
  * sie-parser.ts), but some import surfaces receive an ALREADY-DECODED string
- * (the provider-migration /import-sie handler takes rawContent as JSON). If an
+ * (the provider-migration /import-sie handler reads text /sie-data decoded). If an
  * upstream system decoded CP437 bytes as windows-1252 before handing us the
  * string, the damage is already baked in: CP437 diacritics become C1 specials
  * (o-umlaut 0x94 -> U+201D, a-umlaut 0x84 -> U+201E, A-umlaut 0x8E -> U+017D),

@@ -12,9 +12,6 @@ import { SIE_LIMITS } from '@/lib/import/sie-job-contract'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { SIEAccountMappingRecord } from '@/lib/import/types'
 import { readSIERequestFile } from '@/lib/import/sie-intake'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 export const maxDuration = 300
 

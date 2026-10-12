@@ -1,6 +1,5 @@
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { createLogger } from '@/lib/logger'
 import { verifyCronSecret } from '@/lib/auth/cron'
 import { SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
@@ -12,8 +11,6 @@ import { formatRedovisningsperiod } from '@/lib/skatteverket/format'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized()
 
 export const maxDuration = 60
 

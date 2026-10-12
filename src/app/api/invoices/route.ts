@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
-import { ensureInitialized } from '@/lib/init'
 import { CreateInvoiceSchema, CreateCreditNoteSchema } from '@/lib/api/schemas'
 import type { Invoice, InvoiceDocumentType, InvoiceItem } from '@/types'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
@@ -23,8 +22,6 @@ import {
   NO_INVOICE_REGISTER_COVERAGE,
 } from '@/lib/invoices/invoice-register-coverage'
 import { todayIsoStockholm } from '@/lib/dates/iso'
-
-ensureInitialized()
 
 export const GET = withRouteContext(
   'invoice.list',

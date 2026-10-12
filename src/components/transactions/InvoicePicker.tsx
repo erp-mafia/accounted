@@ -105,7 +105,7 @@ export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPay
         // Status-leak guard: if an invoice still says 'sent'/'overdue' but
         // already has a payment voucher attached (manual or system), hide it.
         // Partially-paid invoices intentionally pass through: they may take
-        // more payments. Mirrors the server-side filter in findMatchingInvoices.
+        // more payments. Mirrors the server-side filter in loadInvoiceMatchPool.
         const fullIds = all
           .filter((inv) => inv.status === 'sent' || inv.status === 'overdue')
           .map((inv) => inv.id)

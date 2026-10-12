@@ -1,11 +1,8 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { linkTransactionToVouchers, manualLink } from '@/lib/reconciliation/bank-reconciliation'
 import { validateBody } from '@/lib/api/validate'
 import { BankLinkSchema } from '@/lib/api/schemas'
-
-ensureInitialized()
 
 export const POST = withRouteContext(
   'reconciliation.bank.link',

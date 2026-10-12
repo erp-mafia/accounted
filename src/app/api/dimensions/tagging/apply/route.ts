@@ -21,14 +21,11 @@
  * each line's resulting map, so this door retags as a replace.
  */
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { DimensionTaggingApplySchema } from '@/lib/api/schemas'
 import { retagLines } from '@/lib/dimensions/retag-service'
 import { sessionFailureResponse } from '@/lib/operations/session'
-
-ensureInitialized()
 
 export const POST = withRouteContext(
   'dimensions.tagging.apply',

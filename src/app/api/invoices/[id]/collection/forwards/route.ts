@@ -6,11 +6,7 @@ import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
 import { actOnForwardIssue } from '@/lib/collections/forwarding'
 import { loadInvoiceCase } from '@/lib/collections/invoice-collection'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { ensureInitialized } from '@/lib/init'
 import { createServiceClient } from '@/lib/supabase/server'
-
-// Reading the case can reach the case services that emit collection events.
-ensureInitialized()
 
 const ParamsSchema = z.object({ id: z.uuid() })
 

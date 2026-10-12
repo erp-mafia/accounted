@@ -2,11 +2,8 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { MatchBatchSchema } from '@/lib/api/schemas'
-import { ensureInitialized } from '@/lib/init'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { matchTransactionBatch } from '@/lib/transactions/match-batch'
-
-ensureInitialized()
 
 /**
  * POST /api/transactions/[id]/match-batch

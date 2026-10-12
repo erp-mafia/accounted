@@ -25,6 +25,7 @@ vi.mock('@/lib/import/sie-job-worker', () => ({ runSIEWorker: vi.fn() }))
 import { arcimMigrationExtension } from '../index'
 import { createClient } from '@/lib/supabase/server'
 import { submitSIEJob, jobDatabaseError } from '@/lib/import/sie-jobs'
+import { memoryIntakeStorage, intakePath } from './intake-storage'
 
 type RouteHandler = (request: Request, ctx?: ExtensionContext) => Promise<Response>
 const handler = (arcimMigrationExtension.apiRoutes ?? []).find(
@@ -40,13 +41,15 @@ const MAPPINGS = [
   { sourceAccount: '1930', sourceName: 'Företagskonto', targetAccount: '1930' },
   { sourceAccount: '3001', sourceName: 'Försäljning', targetAccount: '3001' },
 ]
-const BODY = { rawContent: SIE, mappings: MAPPINGS, options: { createFiscalPeriod: true, importOpeningBalances: true, importTransactions: true } }
+const PATH = intakePath('company-1')
+const BODY = { storagePath: PATH, filename: 'migration-sie-2026.se', mappings: MAPPINGS, options: { createFiscalPeriod: true, importOpeningBalances: true, importTransactions: true } }
 
 type Envelope = { error: { code: string; message: string; message_en: string; requestId?: string } }
 
 function signIn(userId: string | null) {
   ;(createClient as Mock).mockResolvedValue({
     auth: { getUser: vi.fn().mockResolvedValue({ data: { user: userId ? { id: userId } : null } }) },
+    storage: memoryIntakeStorage({ [PATH]: SIE }).storage,
   })
 }
 
@@ -68,7 +71,7 @@ describe('POST /import-sie: job refusals', () => {
     expect(submitSIEJob).not.toHaveBeenCalled()
   })
 
-  it('400 without the SIE content or mappings', async () => {
+  it('400 without the storage path or mappings', async () => {
     const response = await post({ options: {} })
     expect(response.status).toBe(400)
     expect(submitSIEJob).not.toHaveBeenCalled()
@@ -126,6 +129,6 @@ describe('POST /import-sie: job refusals', () => {
     expect(status).toBe(202)
     expect(body).toMatchObject({ importId: 'import-1', state: 'queued', statusUrl: '/api/import/sie/import-1' })
     expect(submitSIEJob).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', SIE, MAPPINGS,
-      expect.objectContaining({ onExistingPeriod: 'block' }), undefined)
+      expect.objectContaining({ onExistingPeriod: 'block' }), expect.any(File))
   })
 })

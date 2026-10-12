@@ -7,8 +7,8 @@
  * immediately (see dispatch-kick.ts); the per-minute cron stays as the retry
  * and sweep path.
  *
- * Wired from lib/init.ts via registerWebhookHandler() so every API route
- * that calls ensureInitialized() gets the subscription wired exactly once.
+ * Wired from lib/init.ts via registerWebhookHandler(), which the bus loads
+ * before the first event of a process (lib/initialized.ts), exactly once.
  *
  * Design notes:
  *   - We do NOT block the emitting route on delivery insert: the handler

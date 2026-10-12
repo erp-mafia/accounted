@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { OpeningBalanceCorrectInlineSchema } from '@/lib/api/schemas'
@@ -11,8 +10,6 @@ import {
 } from '@/lib/import/opening-balance/cascade'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized()
 
 /**
  * POST /api/import/opening-balance/correct-inline

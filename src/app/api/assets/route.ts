@@ -13,9 +13,6 @@ import {
   findK2ExcludedAccount,
   k2ExcludedAccountMessages,
 } from '@/lib/bokslut/assets/k2-account-guard'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 export const GET = withRouteContext('assets.list', async (request, ctx) => {
   const { supabase, companyId, log, requestId } = ctx

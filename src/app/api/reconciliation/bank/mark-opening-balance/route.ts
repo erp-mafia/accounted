@@ -1,10 +1,7 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { MarkOpeningBalanceSchema } from '@/lib/api/schemas'
-
-ensureInitialized()
 
 /**
  * Re-tag a posted manual/import voucher on a bank account as an opening balance

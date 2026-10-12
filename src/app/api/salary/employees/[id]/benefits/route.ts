@@ -1,12 +1,9 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateEmployeeBenefitSchema } from '@/lib/api/schemas'
 import { createEmployeeBenefit, listEmployeeBenefits } from '@/lib/salary/employee-benefits'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-
-ensureInitialized()
 
 /**
  * Render a shared-module failure as this route's legacy `{ error }` envelope.

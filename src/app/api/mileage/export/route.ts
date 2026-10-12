@@ -1,11 +1,8 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { ISO_DATE_RE } from '@/lib/invariants'
 import { listTrips } from '@/lib/mileage/mileage-service'
 import { mileageTripsToCsv } from '@/lib/mileage/csv-export'
-
-ensureInitialized()
 
 /** Körjournal CSV export (Skatteverket audit underlag). */
 export const GET = withRouteContext('mileage.export', async (request, { supabase, companyId }) => {

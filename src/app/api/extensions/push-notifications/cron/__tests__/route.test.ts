@@ -5,10 +5,6 @@ vi.mock('@supabase/supabase-js', () => ({
   createClient: vi.fn().mockReturnValue({}),
 }))
 
-vi.mock('@/lib/extensions/loader', () => ({
-  loadExtensions: vi.fn(),
-}))
-
 vi.mock('@/lib/extensions/registry', () => ({
   extensionRegistry: {
     get: vi.fn(),
@@ -27,7 +23,6 @@ vi.mock('@/lib/auth/cron', () => ({
 
 import { GET } from '../route'
 import { extensionRegistry } from '@/lib/extensions/registry'
-import { loadExtensions } from '@/lib/extensions/loader'
 import {
   sendTaxDeadlineNotifications,
   sendInvoiceNotifications,
@@ -70,7 +65,7 @@ describe('GET /api/extensions/push-notifications/cron', () => {
     // Physical extension routes deploy in every build; the registry, generated
     // from extensions.config.json, is what turns them on. Disabled must mean
     // no sends AND a visible failure if the cron is ever scheduled anyway.
-    mockRegistryGet.mockReturnValue(undefined)
+    mockRegistryGet.mockResolvedValue(undefined)
 
     const response = await GET(makeRequest())
     const body = await response.json()
@@ -83,7 +78,7 @@ describe('GET /api/extensions/push-notifications/cron', () => {
   })
 
   it('runs all three schedulers and sums the totals when enabled', async () => {
-    mockRegistryGet.mockReturnValue({ id: 'push-notifications' } as never)
+    mockRegistryGet.mockResolvedValue({ id: 'push-notifications' } as never)
     mockTax.mockResolvedValue({ sent: 2, skipped: 1 })
     mockInvoice.mockResolvedValue({ sent: 3, skipped: 0 })
     mockUnderlag.mockResolvedValue({ sent: 1, skipped: 4 })
@@ -91,7 +86,6 @@ describe('GET /api/extensions/push-notifications/cron', () => {
     const response = await GET(makeRequest())
     const body = await response.json()
 
-    expect(loadExtensions).toHaveBeenCalled()
     expect(mockRegistryGet).toHaveBeenCalledWith('push-notifications')
     expect(response.status).toBe(200)
     expect(body.success).toBe(true)
@@ -101,7 +95,7 @@ describe('GET /api/extensions/push-notifications/cron', () => {
   })
 
   it('returns the error envelope when Supabase configuration is missing', async () => {
-    mockRegistryGet.mockReturnValue({ id: 'push-notifications' } as never)
+    mockRegistryGet.mockResolvedValue({ id: 'push-notifications' } as never)
     delete process.env.NEXT_PUBLIC_SUPABASE_URL
 
     const response = await GET(makeRequest())

@@ -1,13 +1,10 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { formatRedovisare } from '@/lib/skatteverket/format'
 import { maskEmployeeForResponse } from '@/lib/salary/personnummer'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { ISO_DATE_RE } from '@/lib/invariants'
 import { deleteDraftSalaryRun } from '@/lib/salary/delete-run'
-
-ensureInitialized()
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'salary.runs.get',

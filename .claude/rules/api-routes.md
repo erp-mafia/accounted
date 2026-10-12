@@ -9,12 +9,9 @@ paths:
 
 ```typescript
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { MySchema } from '@/lib/api/schemas'
-
-ensureInitialized()  // Module-level: loads extensions for event emission
 
 // Dynamic route: pass the params type as the generic.
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
@@ -37,7 +34,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 - Dynamic route params: `{ params }: { params: Promise<{ id: string }> }` (Next.js 16, params are async). With `withRouteContext`, pass that shape as the generic and destructure `params` from the 3rd handler arg.
 - Response shapes: `{ data }` for success; failures are the canonical `{ error: { code, message, message_en?, requestId? } }` envelope (thrown errors → `errorResponse`). Don't hand-build `{ error: 'string' }`.
 - Zod schemas in `lib/api/schemas.ts`: 100+ schemas with shared primitives (uuid, isoDate, accountNumber, nonNegativeAmount).
-- Events: every route that can reach `eventBus.emit` (directly or through a service it imports) calls `ensureInitialized()` at module scope, as the template does. `withRouteContext` does not wire the bus: that keeps lib/init and the extension registry out of the cold start of routes that never emit. `withApiV1` routes are covered by the wrapper's own module-level call. `npm run check:guards` (uninitialized-event-route) fails a new route that can emit without it.
+- Events: `await eventBus.emit(...)` (or the service that emits) before returning, so the handlers (event_log, webhooks, extensions) finish inside the request. A route initialises nothing itself: emit loads lib/init on the first event, and the registry getters (`await extensionRegistry.get(id)`, `await getEmailService()`, ...) on the first read. Never import `@/lib/init` in a route: `npm run check:guards` (static-init-import) fails it.
 - Opt out of `withRouteContext` only when the route genuinely can't guarantee a company context (e.g. onboarding): then call `requireAuth()` directly so MFA is still enforced.
 - API-key auth (`/api/v1/*`) uses `createServiceClientNoCookies()` + `v1ErrorResponse`; every query still filters by `company_id`.
 - Journal entries a route creates: when the entry IS the accounting record (mark paid, mark sent under kontantmetoden, payout settle), a failed commit fails the request, otherwise AP/AR diverges from the ledger. When the entry is a side effect of the primary action (e.g. categorizing a transaction), log the failure with `log` and let the primary action succeed.

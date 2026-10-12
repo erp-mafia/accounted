@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const { enabled, worker } = vi.hoisted(() => ({ enabled: vi.fn(), worker: vi.fn() }))
-vi.mock('@/lib/extensions/loader', () => ({ loadExtensions: vi.fn() }))
 vi.mock('@/lib/extensions/registry', () => ({ extensionRegistry: { get: enabled } }))
 vi.mock('@/extensions/general/arcim-migration/lib/migration-job-worker', () => ({ runProviderMigrationWorker: worker }))
 import { GET } from '../route'

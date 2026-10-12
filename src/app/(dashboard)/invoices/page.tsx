@@ -438,8 +438,8 @@ export default function InvoicesPage() {
     if (invoices.length === 0) setIsLoading(true)
     const [invoicesResult, peppolFailedResult, collectionsResult, collectionAttentionResult] = await Promise.allSettled([
       fetchAllRows<Invoice>(
-        ({ from, to }) =>
-          supabase
+        ({ from, to }) => {
+          const query = supabase
             .from('invoices')
             // The begäran embed feeds the ROT/RUT column and filter; the
             // items index on invoice_id keeps the reverse join cheap. The
@@ -450,10 +450,17 @@ export default function InvoicesPage() {
               '*, customer:customers(name), rot_rut_items:rot_rut_payout_request_items(request:rot_rut_payout_requests(id, status, created_at)), deduction_lines:invoice_items(deduction_type)',
             )
             .eq('company_id', company.id)
+          // /quotes asks the database for quotes only instead of paging
+          // through every invoice to keep a handful (document_type is NOT
+          // NULL, default 'invoice'). The invoice list still loads every
+          // kind: its start card shows only for a company with no rows at
+          // all, and a filter here would show it to a quotes-only company.
+          return (isQuotesList ? query.eq('document_type', 'quote') : query)
             .not('deduction_lines.deduction_type', 'is', null)
             .order('invoice_date', { ascending: false })
             .order('id', { ascending: false })
-            .range(from, to),
+            .range(from, to)
+        },
         { dedupeBy: (invoice) => invoice.id },
       ),
       // The chip's ids: the same definition as the Att göra row

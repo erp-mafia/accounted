@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { COMMUNITY_DIR, COMMUNITY_REPO, communityRepoUrl, parseCommunitySkillMd, type ParsedCommunitySkill } from './community-repo'
+import { COMMUNITY_DIR, communityRepoUrl, parseCommunitySkillMd, type ParsedCommunitySkill } from './community-repo'
+import { COMMUNITY_REPO } from './community-repo-name'
 import { communityBodySha } from './community-approval'
 
 /**

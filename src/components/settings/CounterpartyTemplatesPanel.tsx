@@ -10,7 +10,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { SettingsGroup } from '@/components/settings/SettingsRows'
 import { Trash2, Users, ChevronDown, Pencil } from 'lucide-react'
 import { formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
-import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
+import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-template-format'
 import type { CategorizationTemplate } from '@/types'
 
 function formatDate(iso: string | null) {

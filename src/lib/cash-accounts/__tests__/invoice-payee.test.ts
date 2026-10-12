@@ -2,14 +2,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { CashAccount } from '@/types'
 import {
-  cashAccountPayee,
   insertManualBankAccount,
-  isBankCashAccount,
-  isUsableInvoicePayee,
   planManualBankAccount,
   propagateLegacyPayeeWrite,
   updateCashAccountPayee,
 } from '../invoice-payee'
+import { cashAccountPayee, isBankCashAccount, isUsableInvoicePayee } from '../invoice-payee-rules'
 
 vi.mock('@/lib/import/account-sync', () => ({
   syncMappedAccounts: vi.fn().mockResolvedValue({ error: null }),

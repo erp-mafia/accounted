@@ -26,14 +26,11 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-import { ensureInitialized } from '@/lib/init'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import {
   SYNC_COOLDOWN_MS,
   type EnableBankingServices,
 } from '@/lib/bank-sync/trigger-sync-contract'
-
-ensureInitialized()
 
 const SyncResponse = z.object({
   connection_id: z.string().uuid(),
@@ -124,7 +121,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; connectionI
     // The enable-banking extension is opt-in (extensions.config.json) and the
     // registry is the runtime source of truth: absent registration means the
     // deployment does not offer PSD2 sync at all.
-    const services = extensionRegistry.get('enable-banking')?.services as
+    const services = (await extensionRegistry.get('enable-banking'))?.services as
       | Partial<EnableBankingServices>
       | undefined
     if (!services?.triggerConnectionSync) {

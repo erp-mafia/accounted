@@ -3,6 +3,7 @@
  * contracted Access Point. Core code must not infer network delivery from an
  * HTTP response: submissions, asynchronous events, and evidence are distinct.
  */
+import { whenInitialized } from '@/lib/initialized'
 
 export type PeppolDeliveryStatus =
   | 'staged'
@@ -272,7 +273,27 @@ export function registerPeppolTransport(transport: PeppolTransport): () => void 
   }
 }
 
-export function getPeppolTransport(provider: string): PeppolTransport | null {
+/**
+ * Registration-time idempotency for lib/init: register what `create` builds
+ * unless `provider` already has a transport (a test's fake, an earlier init).
+ * Returns the transport it registered, or null. Reads the map directly
+ * because it runs inside init, where the async getters below would wait on
+ * the init that is calling them.
+ */
+export function registerPeppolTransportIfAbsent(
+  provider: string,
+  create: () => PeppolTransport | null,
+): PeppolTransport | null {
+  if (transports.has(provider.trim().toLowerCase())) return null
+  const transport = create()
+  if (!transport) return null
+  registerPeppolTransport(transport)
+  return transport
+}
+
+/** The registered transport, after lib/init has registered them (lib/initialized.ts). */
+export async function getPeppolTransport(provider: string): Promise<PeppolTransport | null> {
+  await whenInitialized()
   return transports.get(provider.trim().toLowerCase()) ?? null
 }
 
@@ -284,7 +305,8 @@ export type PeppolTransportAvailability =
       reason: 'provider_selection_required' | 'provider_adapter_unavailable'
     }
 
-export function getPeppolTransportAvailability(): PeppolTransportAvailability {
+export async function getPeppolTransportAvailability(): Promise<PeppolTransportAvailability> {
+  await whenInitialized()
   const configuredProvider = process.env.PEPPOL_TRANSPORT_PROVIDER?.trim().toLowerCase()
   if (!configuredProvider) {
     // A self-hosted instance in connector mode has exactly one possible

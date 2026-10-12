@@ -5,11 +5,8 @@
  *
  * Contract, docs and rules live in src/lib/operations/peppol.ts.
  */
-import { ensureInitialized } from '@/lib/init'
 import { v1OperationHandler } from '@/lib/operations/v1'
 import { peppolGetRegistration, peppolRegister } from '@/lib/operations/peppol'
-
-ensureInitialized()
 
 // The connector transport waits up to 50 s for a registration call; the
 // platform default would cut the registration off mid-call and leave a

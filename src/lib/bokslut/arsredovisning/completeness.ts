@@ -1,6 +1,7 @@
 import type { ArsredovisningData } from './types'
 import type { IxbrlArsredovisningInput } from '@/lib/bokslut/ixbrl/types'
 import { buildBrRows, buildRrRows } from './statement-rows'
+import { k2LegalFormOf } from '@/lib/bokslut/ixbrl/k2-mapper'
 import type {
   AnnualReportComplianceIssue,
   AnnualReportDisclosureState,
@@ -134,7 +135,15 @@ export function validateStatementIntegrity(
   }
 
   if (ixbrl) {
-    const ixbrlMapping = { rr: ixbrl.rr, br: ixbrl.br, totals: ixbrl.totals }
+    // Rendered in the company's equity layout, as the PDF rows were: the
+    // aktiebolag layout would put an Aktiekapital row against a förening's
+    // Medlemsinsatser and fail every K2 förening.
+    const ixbrlMapping = {
+      rr: ixbrl.rr,
+      br: ixbrl.br,
+      totals: ixbrl.totals,
+      legalForm: k2LegalFormOf(report.company.entity_type),
+    }
     const ixbrlIncomeRows = buildRrRows(ixbrlMapping)
     const ixbrlBalanceRows = buildBrRows(ixbrlMapping)
     if (

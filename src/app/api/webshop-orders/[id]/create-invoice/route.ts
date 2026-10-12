@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateInvoiceFromWebshopOrderSchema } from '@/lib/api/schemas'
@@ -27,8 +26,6 @@ function customerTypeFromOrder(order: WebshopOrder): CustomerType {
   if (!country || country === 'SE') return 'swedish_business'
   return EU_COUNTRY_CODES.has(country) ? 'eu_business' : 'non_eu_business'
 }
-
-ensureInitialized()
 
 /**
  * Convert one webshop order into a pre-filled DRAFT kundfaktura. Manual,

@@ -80,10 +80,13 @@ function validateEnvironment(): void {
 /**
  * Ensure the system is initialized (extensions loaded, context factory wired,
  * core event handlers registered).
- * Called at module scope by every entry point that can emit events or read
- * what extensions register (API routes, and the few pages that need it); the
- * root layout deliberately does not, so public pages never load extensions.
- * `npm run check:guards` (uninitialized-event-route) enforces this.
+ * Never imported statically by an entry point: lib/initialized.ts loads this
+ * module on first use, from eventBus.emit() and from every getter of a
+ * registry filled here, so a request that does neither loads no extension.
+ * `npm run check:guards` (static-init-import) keeps it out of every entry's
+ * static import graph. validateEnvironment() runs first, before anything
+ * subscribes to the bus, so a failed first init leaves nothing behind and the
+ * next caller retries cleanly.
  * Idempotent: safe to call multiple times.
  */
 export function ensureInitialized(): void {
@@ -91,16 +94,17 @@ export function ensureInitialized(): void {
 
   validateEnvironment()
   setContextFactory(createExtensionContext)
-  // PostHog Error Tracking, gated on the token; the root layout calls the
-  // same function so page renders get it without this whole init.
+  // PostHog Error Tracking, gated on the token; lib/server-baseline.ts calls
+  // the same function for the route wrappers and the root layout, so entries
+  // get it without this init.
   ensureObservability()
   registerSupplierInvoiceHandler()
   registerEventLogHandler()
   registerDocumentReadHandler()
   registerAgentFeedbackRelayHandler()
   registerWebhookHandler()
-  // Peppol Access Point adapters are registered from the environment here so
-  // every route that reports transport availability sees the same answer.
+  // Peppol Access Point adapters are registered from the environment here;
+  // every reader goes through the async getters, which load this init first.
   registerConfiguredPeppolTransports()
   // Bank payments reach the payment initiation provider only through Accounted
   // Connect, hosted and self-hosted alike: the adapter registers when this

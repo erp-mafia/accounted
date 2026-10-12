@@ -471,7 +471,7 @@ export async function runPeppolHealthCheck(
   const log = options.log ?? createLogger('peppol-health')
   const summary = emptySummary()
 
-  const email = getEmailService()
+  const email = await getEmailService()
   if (!email.isConfigured()) {
     log.info('peppol health check skipped: no e-mail service configured, nothing claimed')
     summary.skipped = 'email_not_configured'

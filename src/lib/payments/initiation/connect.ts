@@ -30,8 +30,7 @@ import { paymentsConnectorMode, type ConnectorUpstream } from '@/lib/connect/ins
 import {
   PAYMENT_NOT_FOUND,
   PaymentProviderError,
-  getPaymentInitiationProviderById,
-  registerPaymentInitiationProvider,
+  registerPaymentInitiationProviderIfAbsent,
   type PaymentInitiationProvider,
   type PaymentPartyContext,
   type SigningChallenge,
@@ -250,9 +249,8 @@ export function createConnectPaymentsProvider(upstream: ConnectorUpstream, deps:
  * Returns whether this call registered one.
  */
 export function registerConnectPaymentsProvider(deps: ConnectPaymentsProviderDeps & { upstream?: ConnectorUpstream | null } = {}): boolean {
-  if (getPaymentInitiationProviderById('open_payments')) return false
-  const upstream = deps.upstream === undefined ? paymentsConnectorMode() : deps.upstream
-  if (!upstream) return false
-  registerPaymentInitiationProvider(createConnectPaymentsProvider(upstream, deps))
-  return true
+  return registerPaymentInitiationProviderIfAbsent('open_payments', () => {
+    const upstream = deps.upstream === undefined ? paymentsConnectorMode() : deps.upstream
+    return upstream ? createConnectPaymentsProvider(upstream, deps) : null
+  })
 }

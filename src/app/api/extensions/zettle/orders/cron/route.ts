@@ -4,7 +4,6 @@ import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-import { loadExtensions } from '@/lib/extensions/loader'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { isZettleConfigured } from '@/extensions/general/zettle/lib/credentials'
 import { syncZettlePurchases } from '@/extensions/general/zettle/lib/order-sync'
@@ -29,8 +28,7 @@ const MAX_CANDIDATES_SCANNED = 2000
  * so a front of non-entitled rows cannot starve eligible connections behind them.
  */
 export const GET = withCronContext('cron.zettle_order_sync', async (_request, ctx) => {
-  loadExtensions()
-  if (!extensionRegistry.get('zettle')) {
+  if (!(await extensionRegistry.get('zettle'))) {
     ctx.log.warn('zettle extension is not enabled; cron refused')
     return NextResponse.json(
       { error: 'Zettle extension is not enabled', code: 'EXTENSION_DISABLED' },

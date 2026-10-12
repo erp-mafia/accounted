@@ -63,8 +63,7 @@ export async function maybeCreatePaymentLinkForInvoice(
   if (invoice.document_type && invoice.document_type !== 'invoice') return null
   if (invoice.credited_invoice_id) return null
 
-  const provider = extensionRegistry
-    .getAll()
+  const provider = (await extensionRegistry.getAll())
     .find((ext) => typeof ext.services?.[CREATE_INVOICE_PAYMENT_LINK_SERVICE] === 'function')
   if (!provider) return null
 

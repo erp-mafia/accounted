@@ -240,9 +240,9 @@ function sendEvent(args: {
   }
 }
 
-function resolveTransport(): { availability: PeppolTransportAvailability; transport: PeppolTransport | null } {
-  const availability = getPeppolTransportAvailability()
-  const transport = availability.available ? getPeppolTransport(availability.provider) : null
+async function resolveTransport(): Promise<{ availability: PeppolTransportAvailability; transport: PeppolTransport | null }> {
+  const availability = await getPeppolTransportAvailability()
+  const transport = availability.available ? await getPeppolTransport(availability.provider) : null
   return { availability, transport }
 }
 
@@ -307,7 +307,7 @@ export async function sendInvoiceViaPeppol(
     return { ok: false, code, ...rest }
   }
 
-  const { availability, transport } = resolveTransport()
+  const { availability, transport } = await resolveTransport()
   if (!availability.available || !transport) {
     return refuse('PEPPOL_TRANSPORT_UNAVAILABLE', {
       details: { reason: availability.available ? 'provider_adapter_unavailable' : availability.reason },
@@ -815,7 +815,7 @@ export async function getInvoicePeppolReadiness(
   const { invoice, company } = records
   const blockers: PeppolReadinessBlocker[] = []
 
-  const { availability } = resolveTransport()
+  const { availability } = await resolveTransport()
   if (!availability.available) {
     blockers.push(blocker('PEPPOL_TRANSPORT_UNAVAILABLE', { field: availability.reason }))
   }
@@ -923,7 +923,7 @@ export async function listInvoicePeppolDeliveries(
   try {
     const deliveries = await listPeppolDeliveriesForInvoice({ service, companyId, invoiceId })
     const access = await getPeppolAccessSummary({ supabase, service, companyId })
-    return { ok: true, data: { deliveries, transport: getPeppolTransportAvailability(), access } }
+    return { ok: true, data: { deliveries, transport: await getPeppolTransportAvailability(), access } }
   } catch (err) {
     return { ok: false, code: 'INTERNAL_ERROR', error: err }
   }

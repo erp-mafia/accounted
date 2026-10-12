@@ -1,7 +1,6 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { requestCspNonce } from '@/lib/security/csp'
 import { NextResponse, after } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { createLogger } from '@/lib/logger'
 import { createSession, extractBban, type AccountInfo } from '@/extensions/general/enable-banking/lib/api-client'
 import type { StoredAccount } from '@/extensions/general/enable-banking/types'
@@ -27,13 +26,6 @@ import {
   requireFlowInitiator,
   FLOW_INITIATOR_MISMATCH_MESSAGE,
 } from '@/lib/auth/oauth-flow-binding'
-
-// This route emits bank_connection.consent_granted / .finalize_failed
-// (ASVS V16 / GDPR Art.30 audit events). ensureInitialized() must run at module
-// load so registerEventLogHandler() has subscribed before the first emit();
-// otherwise the audit row is silently dropped on a cold instance where this
-// redirect route is the first event-emitting code path to execute.
-ensureInitialized()
 
 // Structured logger for audit-trail failures (ISO 27001 A.8.15): a failed
 // audit-event emission must be visible to log-based alerting, not just a raw

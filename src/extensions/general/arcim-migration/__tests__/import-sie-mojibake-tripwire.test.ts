@@ -1,8 +1,8 @@
 /**
  * Tests for the CP1252-mojibake tripwire on POST /import-sie.
  *
- * This handler receives SIE as an ALREADY-DECODED string (rawContent in JSON),
- * so an upstream that decoded CP437 bytes as windows-1252 has baked the
+ * This handler reads SIE as an ALREADY-DECODED string (the text /sie-data
+ * fetched and archived), so an upstream that decoded CP437 bytes as windows-1252 has baked the
  * corruption in before the repo's own encoding detection could run: exactly
  * what the retired Arcim Sync gateway did on 2026-03-17, landing mojibake
  * ("L”neutbetalning", "BANKTJŽNSTER") in posted entries with no warning.
@@ -28,6 +28,7 @@ vi.mock('@/lib/import/sie-job-worker', () => ({runSIEWorker:vi.fn()}))
 
 import { arcimMigrationExtension } from '../index'
 import { submitSIEJob } from '@/lib/import/sie-jobs'
+import { memoryIntakeStorage, intakePath } from './intake-storage'
 
 const importSieRoute = (arcimMigrationExtension.apiRoutes ?? []).find(
   (r) => r.method === 'POST' && r.path === '/import-sie',
@@ -60,12 +61,16 @@ const MAPPINGS = [
   { sourceAccount: '4056', sourceName: 'Inköp tjänster inom EU', targetAccount: '4056' },
 ]
 
+const CLEAN_PATH = intakePath('company-1', '00000000-0000-0000-0000-00000000c1ea')
+const MOJIBAKE_PATH = intakePath('company-1', '00000000-0000-0000-0000-0000000000b0')
+
 function buildCtx(userId: string | null) {
   const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
   const supabase = {
     auth: {
       getUser: vi.fn().mockResolvedValue({ data: { user: userId ? { id: userId } : null } }),
     },
+    storage: memoryIntakeStorage({ [CLEAN_PATH]: CLEAN_SIE, [MOJIBAKE_PATH]: MOJIBAKE_SIE }).storage,
   }
   const ctx = { supabase, companyId: 'company-1', log } as unknown as ExtensionContext
   return { ctx, log }
@@ -93,14 +98,14 @@ describe('POST /import-sie: mojibake tripwire', () => {
   it('returns 401 when unauthenticated', async () => {
     const { ctx } = buildCtx(null)
     const response = await handler(
-      importRequest({ rawContent: CLEAN_SIE, mappings: MAPPINGS, options: {} }),
+      importRequest({ storagePath: CLEAN_PATH, mappings: MAPPINGS, options: {} }),
       ctx,
     )
     expect(response.status).toBe(401)
     expect(submitSIEJob).not.toHaveBeenCalled()
   })
 
-  it('returns 400 when rawContent is missing', async () => {
+  it('returns 400 when storagePath is missing', async () => {
     const { ctx } = buildCtx('user-1')
     const response = await handler(importRequest({ mappings: MAPPINGS, options: {} }), ctx)
     expect(response.status).toBe(400)
@@ -110,7 +115,7 @@ describe('POST /import-sie: mojibake tripwire', () => {
   it('surfaces a Swedish warning on mojibaked content WITHOUT blocking the import', async () => {
     const { ctx, log } = buildCtx('user-1')
     const response = await handler(
-      importRequest({ rawContent: MOJIBAKE_SIE, mappings: MAPPINGS, options: {} }),
+      importRequest({ storagePath: MOJIBAKE_PATH, mappings: MAPPINGS, options: {} }),
       ctx,
     )
     const { status, body } = await parseJsonResponse<{ warnings: string[] }>(response)
@@ -137,7 +142,7 @@ describe('POST /import-sie: mojibake tripwire', () => {
   it('adds no warning for clean content', async () => {
     const { ctx, log } = buildCtx('user-1')
     const response = await handler(
-      importRequest({ rawContent: CLEAN_SIE, mappings: MAPPINGS, options: {} }),
+      importRequest({ storagePath: CLEAN_PATH, mappings: MAPPINGS, options: {} }),
       ctx,
     )
     const { status, body } = await parseJsonResponse<{ warnings: string[] }>(response)

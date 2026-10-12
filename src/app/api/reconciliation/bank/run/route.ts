@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import {
   runReconciliation,
@@ -8,8 +7,6 @@ import {
 import { runUnattendedReconciliationSweep } from '@/lib/reconciliation/unattended-sweep'
 import { validateBody } from '@/lib/api/validate'
 import { RunReconciliationSchema } from '@/lib/api/schemas'
-
-ensureInitialized()
 
 export const POST = withRouteContext(
   'reconciliation.bank.run',

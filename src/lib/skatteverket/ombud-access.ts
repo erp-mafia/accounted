@@ -23,13 +23,13 @@ export interface SkatteverketOmbudServices {
   hasOmbudReadAccess: (companyId: string) => Promise<boolean>
 }
 
-function services(): Partial<SkatteverketOmbudServices> | undefined {
-  return extensionRegistry.get('skatteverket')?.services as Partial<SkatteverketOmbudServices> | undefined
+async function services(): Promise<Partial<SkatteverketOmbudServices> | undefined> {
+  return (await extensionRegistry.get('skatteverket'))?.services as Partial<SkatteverketOmbudServices> | undefined
 }
 
 /** True when companies should be offered "Utse Accounted som ombud" instead of a BankID login. */
 export async function isSkatteverketOmbudEnabled(): Promise<boolean> {
-  const check = services()?.isOmbudEnabled
+  const check = (await services())?.isOmbudEnabled
   if (!check) return false
   try {
     return await check()
@@ -44,7 +44,7 @@ export async function isSkatteverketOmbudEnabled(): Promise<boolean> {
  * prompts behave as they did before ombud existed.
  */
 export async function hasSkatteverketOmbudReadAccess(companyId: string): Promise<boolean> {
-  const check = services()?.hasOmbudReadAccess
+  const check = (await services())?.hasOmbudReadAccess
   if (!check) return false
   try {
     return await check(companyId)

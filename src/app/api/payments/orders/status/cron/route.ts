@@ -1,10 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
-import { ensureInitialized } from '@/lib/init'
 import { syncPaymentOrderStatuses } from '@/lib/payments/orders/sync'
-
-ensureInitialized()
 
 export const maxDuration = 300
 

@@ -11,11 +11,7 @@ import { readCollectionsEnv } from '@/lib/collections/flags'
 import { withdrawFeeInfo } from '@/lib/collections/stages'
 import { loadCaseEscalationCheck, loadInvoiceCase, loadInvoiceReadiness } from '@/lib/collections/invoice-collection'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { ensureInitialized } from '@/lib/init'
 import { createServiceClient } from '@/lib/supabase/server'
-
-// A handover emits collection.case_opened.
-ensureInitialized()
 
 /** Connect gives openCase 120 s and the adapter waits 130 s for it. */
 export const maxDuration = 150

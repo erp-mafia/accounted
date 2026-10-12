@@ -4,7 +4,6 @@ import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-import { loadExtensions } from '@/lib/extensions/loader'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { isWooCommerceConfigured } from '@/extensions/general/woocommerce/lib/credentials'
 import { syncWooCommerceOrders } from '@/extensions/general/woocommerce/lib/order-sync'
@@ -22,7 +21,7 @@ export const maxDuration = 300
  * Read-only against the stores, and it never posts to the journal: rows land
  * unbooked; booking stays a human decision on the Orders page. Idempotent via
  * the (company_id, external_id) unique index; overlap re-polls become status
- * updates. Emits no events, so no ensureInitialized() is needed.
+ * updates. Emits no events.
  */
 export const GET = withCronContext('cron.woocommerce_order_sync', async (_request, ctx) => {
   // Physical routes under app/api/extensions/<id>/ compile into EVERY build,
@@ -30,8 +29,7 @@ export const GET = withCronContext('cron.woocommerce_order_sync', async (_reques
   // extensions.config.json) is what actually switches an extension on. A
   // scheduled-but-disabled cron must fail visibly (503) instead of quietly
   // doing the work anyway.
-  loadExtensions()
-  if (!extensionRegistry.get('woocommerce')) {
+  if (!(await extensionRegistry.get('woocommerce'))) {
     ctx.log.warn('woocommerce extension is not enabled; cron refused')
     return NextResponse.json(
       { error: 'WooCommerce extension is not enabled', code: 'EXTENSION_DISABLED' },

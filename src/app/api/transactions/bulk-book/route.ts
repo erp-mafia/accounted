@@ -2,11 +2,8 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { BulkBookSchema } from '@/lib/api/schemas'
-import { ensureInitialized } from '@/lib/init'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { bulkBookTransactions } from '@/lib/transactions/bulk-book'
-
-ensureInitialized()
 
 /**
  * POST /api/transactions/bulk-book

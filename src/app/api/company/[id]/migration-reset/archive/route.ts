@@ -8,9 +8,6 @@ import {
   generateFullArchive,
 } from '@/lib/reports/full-archive-export'
 import { createServiceClient } from '@/lib/supabase/server'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 export const runtime = 'nodejs'
 export const maxDuration = 300

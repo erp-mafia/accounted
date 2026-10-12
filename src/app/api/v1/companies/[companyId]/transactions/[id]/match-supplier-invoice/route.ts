@@ -511,7 +511,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       transaction_id: txId,
     } as SupplierInvoice
     try {
-      eventBus.emit({
+      await eventBus.emit({
         type: 'supplier_invoice.match_confirmed',
         payload: {
           supplierInvoice: settledInvoice,

@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase/server'
 import { claimsPinned, userFromClaims } from '@/lib/auth/claims'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
-import type { Team } from '@/types'
+import type { FiscalPeriod, Team } from '@/types'
 
 /**
  * Request-local dashboard auth context. React cache shares the Supabase client
@@ -76,6 +76,40 @@ export const getDashboardTeamMemberships = cache(
     return (data ?? []) as unknown as DashboardTeamMembership[]
   },
 )
+
+/**
+ * Request-local profile of the signed-in user (full_name). The layout shows
+ * it in the account popover and Hem greets with the first name: one read per
+ * request instead of one per server component.
+ */
+export const getDashboardUserProfile = cache(async () => {
+  const { supabase, user } = await getDashboardAuthContext()
+  if (!user) return { data: null, error: null }
+
+  return supabase.from('profiles').select('full_name').eq('id', user.id).maybeSingle()
+})
+
+/**
+ * Request-local fiscal periods of the active company, newest first. The
+ * layout seeds the client reference-data cache with them and the focused
+ * report and reconciliation pages hand the same list to their period
+ * pickers, so a hard load of those pages reads fiscal_periods once, not
+ * twice. Same select and order as period.list, so the seed and the client
+ * refetch agree.
+ */
+export const getDashboardFiscalPeriods = cache(async () => {
+  const [{ supabase }, companyId] = await Promise.all([
+    getDashboardAuthContext(),
+    getDashboardCompanyId(),
+  ])
+  if (!companyId) return { data: [] as FiscalPeriod[], error: null }
+
+  return supabase
+    .from('fiscal_periods')
+    .select('*')
+    .eq('company_id', companyId)
+    .order('period_start', { ascending: false })
+})
 
 export const getDashboardSettings = cache(async () => {
   const [{ supabase }, companyId] = await Promise.all([

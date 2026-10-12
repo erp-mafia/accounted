@@ -727,7 +727,7 @@ export async function restartPaymentSigning(
   ctx: OperationContext,
   input: { batchId: string; method: SigningMethod; signer: SignerInput },
 ): Promise<OperationOutcome<SigningView>> {
-  const provider = getPaymentInitiationProvider(ctx.companyId)
+  const provider = await getPaymentInitiationProvider(ctx.companyId)
   if (!provider) return { ok: false, code: 'PAYMENTS_UNAVAILABLE' }
   const writer = createServiceClient()
   const loaded = await loadBatch(writer, ctx.companyId, input.batchId)
@@ -798,7 +798,7 @@ export async function pollPaymentSigning(
   ctx: OperationContext,
   input: { batchId: string; signer: SignerInput },
 ): Promise<OperationOutcome<SigningView>> {
-  const provider = getPaymentInitiationProvider(ctx.companyId)
+  const provider = await getPaymentInitiationProvider(ctx.companyId)
   if (!provider) return { ok: false, code: 'PAYMENTS_UNAVAILABLE' }
   const writer = createServiceClient()
   const loaded = await loadBatch(writer, ctx.companyId, input.batchId)

@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextResponse } from 'next/server'
-vi.mock('@/lib/extensions/loader', () => ({ loadExtensions: vi.fn() }))
 vi.mock('@/lib/extensions/registry', () => ({ extensionRegistry: { get: vi.fn() } }))
 vi.mock('@/lib/auth/cron', () => ({ verifyCronSecret: vi.fn().mockReturnValue(null) }))
 vi.mock('@/lib/auth/api-keys', () => ({ createServiceClientNoCookies: vi.fn(() => ({})) }))
@@ -8,7 +7,6 @@ vi.mock('@/extensions/general/arcim-migration/lib/invoice-completion-worker', ()
 vi.mock('@/extensions/general/arcim-migration/lib/complete-bokio-supplier-invoices', () => ({ runBokioSupplierCompletion: vi.fn().mockResolvedValue([]) }))
 import { runBokioSupplierCompletion } from '@/extensions/general/arcim-migration/lib/complete-bokio-supplier-invoices'
 import { GET, maxDuration } from '../route'
-import { loadExtensions } from '@/lib/extensions/loader'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { verifyCronSecret } from '@/lib/auth/cron'
 import { runInvoiceCompletion } from '@/extensions/general/arcim-migration/lib/invoice-completion-worker'
@@ -17,7 +15,7 @@ beforeEach(() => {
   vi.resetAllMocks()
   vi.mocked(runBokioSupplierCompletion).mockResolvedValue([])
   vi.mocked(verifyCronSecret).mockReturnValue(null)
-  vi.mocked(extensionRegistry.get).mockReturnValue({ id: 'arcim-migration' } as never)
+  vi.mocked(extensionRegistry.get).mockResolvedValue({ id: 'arcim-migration' } as never)
 })
 afterEach(() => vi.useRealTimers())
 describe('invoice completion cron', () => {
@@ -27,14 +25,17 @@ describe('invoice completion cron', () => {
     expect(runInvoiceCompletion).not.toHaveBeenCalled()
   })
   it('refuses a disabled extension', async () => {
-    vi.mocked(extensionRegistry.get).mockReturnValue(undefined)
+    vi.mocked(extensionRegistry.get).mockResolvedValue(undefined)
     expect((await GET(request())).status).toBe(503)
     expect(runInvoiceCompletion).not.toHaveBeenCalled()
   })
   it('starts the absolute deadline before initialization and returns partial counts unchanged', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const start = Date.now()
-    vi.mocked(loadExtensions).mockImplementation(() => { vi.setSystemTime(start + 30_000) })
+    vi.mocked(extensionRegistry.get).mockImplementation(async () => {
+      vi.setSystemTime(start + 30_000)
+      return { id: 'arcim-migration' } as never
+    })
     const summary = { completed: 4, deferred: 2, uncertain: 1, budgetReachedAt: 'provider-listing', backlogComplete: null }
     vi.mocked(runInvoiceCompletion).mockResolvedValue(summary as never)
     const response = await GET(request())

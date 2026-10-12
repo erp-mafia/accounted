@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateEmployeeRecurringLineSchema } from '@/lib/api/schemas'
@@ -9,8 +8,6 @@ import {
   updateEmployeeRecurringLine,
   type RecurringLineFailure,
 } from '@/lib/salary/employee-recurring-lines'
-
-ensureInitialized()
 
 /**
  * Map a module failure to the dashboard's `{ error: string }` envelope. A

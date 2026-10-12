@@ -3,12 +3,6 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { loadBooksFindings } from '@/lib/onboarding/findings'
-import { ensureInitialized } from '@/lib/init'
-
-// The findings read the skatteverket ombud services through the extension
-// registry (lib/skatteverket/ombud-access.ts), which only ensureInitialized()
-// fills.
-ensureInitialized()
 
 /**
  * GET /api/onboarding/findings

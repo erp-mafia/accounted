@@ -4,14 +4,9 @@ import { contentDisposition } from '@/lib/api/content-disposition'
 import { privateNoStore } from '@/lib/api/private-no-store'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { ensureInitialized } from '@/lib/init'
 import { isFiscalPeriodMissingError, stagePeppolDelivery } from '@/lib/invoices/peppol-delivery'
 import { loadPeppolDocument } from '@/lib/invoices/peppol-document'
 import { getPeppolTransportAvailability } from '@/lib/invoices/peppol-transport'
-
-// Registers the configured Access Point adapter so `transport` below reports
-// the truth for this process, not just "nothing registered yet".
-ensureInitialized()
 
 const paramsSchema = z.object({ id: z.uuid() })
 
@@ -79,7 +74,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
           status: delivery.status,
           created_at: delivery.created_at,
           network_submitted: false,
-          transport: getPeppolTransportAvailability(),
+          transport: await getPeppolTransportAvailability(),
         },
       }, { status: 201 }))
     } catch (err) {

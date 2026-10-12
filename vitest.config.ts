@@ -36,6 +36,7 @@ const unitProject = {
       '**/.claude/**',
       '**/.next/**',
     ],
+    setupFiles: ['tests/unit/setup.ts'],
   },
 }
 

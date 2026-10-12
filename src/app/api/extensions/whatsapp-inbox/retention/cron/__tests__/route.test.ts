@@ -1,10 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 
-vi.mock('@/lib/extensions/loader', () => ({
-  loadExtensions: vi.fn(),
-}))
-
 vi.mock('@/lib/extensions/registry', () => ({
   extensionRegistry: {
     get: vi.fn(),
@@ -25,7 +21,6 @@ vi.mock('@/lib/auth/cron', () => ({
 
 import { GET } from '../route'
 import { extensionRegistry } from '@/lib/extensions/registry'
-import { loadExtensions } from '@/lib/extensions/loader'
 import { runRetention } from '@/extensions/general/whatsapp-inbox/lib/retention'
 import { verifyCronSecret } from '@/lib/auth/cron'
 
@@ -60,7 +55,7 @@ describe('GET /api/extensions/whatsapp-inbox/retention/cron', () => {
     // Physical extension routes deploy in every build; the registry, generated
     // from extensions.config.json, is what turns them on. Disabled must mean
     // no purging AND a visible failure if the cron is scheduled anyway.
-    mockRegistryGet.mockReturnValue(undefined)
+    mockRegistryGet.mockResolvedValue(undefined)
 
     const response = await GET(makeRequest())
     const body = await response.json()
@@ -71,7 +66,7 @@ describe('GET /api/extensions/whatsapp-inbox/retention/cron', () => {
   })
 
   it('runs the retention pass and returns its summary when enabled', async () => {
-    mockRegistryGet.mockReturnValue({ id: 'whatsapp-inbox' } as never)
+    mockRegistryGet.mockResolvedValue({ id: 'whatsapp-inbox' } as never)
     mockRunRetention.mockResolvedValue({
       purgedTranscripts: 12,
       deletedUnknownSenderMessages: 4,
@@ -83,7 +78,6 @@ describe('GET /api/extensions/whatsapp-inbox/retention/cron', () => {
     const response = await GET(makeRequest())
     const body = await response.json()
 
-    expect(loadExtensions).toHaveBeenCalled()
     expect(mockRegistryGet).toHaveBeenCalledWith('whatsapp-inbox')
     expect(response.status).toBe(200)
     expect(body.data).toEqual({

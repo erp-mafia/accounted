@@ -5,12 +5,6 @@ import { isSkatteverketOmbudEnabled } from '@/lib/skatteverket/ombud-access'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { resolveBooksResume, type LatestImportJob } from '@/lib/onboarding-books/resume'
 import BooksJourney from '@/components/onboarding/books/BooksJourney'
-import { ensureInitialized } from '@/lib/init'
-
-// The Skatteverket station asks the skatteverket extension whether ombud is
-// on (lib/skatteverket/ombud-access.ts), through the extension registry that
-// only ensureInitialized() fills. The root layout no longer loads extensions.
-ensureInitialized()
 
 export const dynamic = 'force-dynamic'
 

@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -10,8 +9,6 @@ import {
   ACCRUAL_SCHEDULE_NOT_FOUND,
   isAccrualError,
 } from '@/lib/bookkeeping/accruals/errors'
-
-ensureInitialized()
 
 /**
  * POST /api/bookkeeping/accruals/[id]/dissolve

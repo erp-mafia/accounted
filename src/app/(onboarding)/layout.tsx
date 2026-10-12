@@ -4,6 +4,7 @@ import { createClient, createServiceClient } from '@/lib/supabase/server'
 import OnboardingBackdrop from '@/components/onboarding/OnboardingBackdrop'
 import { SessionTimeoutController } from '@/components/auth/SessionTimeoutController'
 import { Button } from '@/components/ui/button'
+import { AllMessagesProvider } from '@/components/providers/AllMessagesProvider'
 import { ACCOUNT_DELETION_HREF } from '@/lib/company/no-company-routes'
 
 type MembershipCompany = { archived_at: string | null }
@@ -43,7 +44,10 @@ export default async function OnboardingLayout({
 
   const t = onlyArchivedCompanies ? await getTranslations('onboarding') : null
 
+  // The onboarding journey reads most of the catalog; the root layout hands
+  // client components only the public and auth namespaces.
   return (
+    <AllMessagesProvider>
     <div className="min-h-dvh bg-background flex items-center justify-center">
       {user && <SessionTimeoutController />}
       <OnboardingBackdrop />
@@ -69,5 +73,6 @@ export default async function OnboardingLayout({
       )}
 
     </div>
+    </AllMessagesProvider>
   )
 }

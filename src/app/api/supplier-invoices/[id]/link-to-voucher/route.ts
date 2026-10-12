@@ -4,9 +4,6 @@ import { validateBody } from '@/lib/api/validate'
 import { LinkSupplierInvoiceToVoucherSchema } from '@/lib/api/schemas'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { linkSupplierInvoiceToVoucher } from '@/lib/invoices/supplier-voucher-matching'
-import { ensureInitialized } from '@/lib/init'
-
-ensureInitialized()
 
 /**
  * POST /api/supplier-invoices/[id]/link-to-voucher

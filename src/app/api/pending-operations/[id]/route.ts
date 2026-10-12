@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { z } from 'zod'
-import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { buildMappingResultFromCategory, getCategoryAccountMapping } from '@/lib/bookkeeping/category-mapping'
 import { applySettlementAccount } from '@/lib/bookkeeping/mapping-engine'
@@ -24,8 +23,6 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 //
 // Other operation types return 400. As specialized editors land (e.g. edit
 // invoice line items before send) they extend this dispatcher.
-
-ensureInitialized()
 
 const CATEGORIES = [
   'income_services', 'income_products', 'income_other',

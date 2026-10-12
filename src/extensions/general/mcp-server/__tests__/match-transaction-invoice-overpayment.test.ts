@@ -18,16 +18,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { getStructuredError } from '@/lib/errors/get-structured-error'
 
-const { mockDetectCandidate, mockFindMatchingInvoices } = vi.hoisted(() => ({
+const { mockDetectCandidate, mockMatchInvoiceCandidates } = vi.hoisted(() => ({
   mockDetectCandidate: vi.fn(),
-  mockFindMatchingInvoices: vi.fn(),
+  mockMatchInvoiceCandidates: vi.fn(),
 }))
 vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
   detectDuplicatePaymentVoucher: mockDetectCandidate,
   detectExplainingVoucherSetForTransaction: vi.fn(async () => null),
 }))
 vi.mock('@/lib/invoices/invoice-matching', () => ({
-  findMatchingInvoices: mockFindMatchingInvoices,
+  loadInvoiceMatchPool: vi.fn(async () => ({ invoices: [] })),
+  matchInvoiceCandidates: mockMatchInvoiceCandidates,
 }))
 
 import { tools } from '../server'
@@ -322,9 +323,14 @@ describe('gnubok_auto_match_period: the same guard when staging proposals', () =
       error: null,
     })
     enqueue({ data: { id: 'op-auto-1' }, error: null }) // pending_operations insert for t-exact
-    mockFindMatchingInvoices
-      .mockResolvedValueOnce([{ invoice: { ...invoiceRow(), id: 'i-over' }, confidence: 0.95, matchReason: 'OCR' }])
-      .mockResolvedValueOnce([{ invoice: { ...invoiceRow(), id: 'i-exact' }, confidence: 0.95, matchReason: 'OCR' }])
+    const found = (invoice: unknown) => ({
+      matches: [{ invoice, confidence: 0.95, matchReason: 'OCR' }],
+      unconvertedFxCount: 0,
+      unconvertedFxInvoices: [],
+    })
+    mockMatchInvoiceCandidates
+      .mockReturnValueOnce(found({ ...invoiceRow(), id: 'i-over' }))
+      .mockReturnValueOnce(found({ ...invoiceRow(), id: 'i-exact' }))
 
     const result = (await autoMatch.execute(
       { date_from: '2026-09-01', date_to: '2026-09-30', dry_run: false },
