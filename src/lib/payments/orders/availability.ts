@@ -42,7 +42,7 @@ export async function getPaymentsAvailability(ctx: OperationContext): Promise<Pa
   const provider = door.provider
   const { data, error } = await ctx.supabase
     .from('cash_accounts')
-    .select('id, name, ledger_account, iban, currency, enabled, bank_connection:bank_connections(bank_name)')
+    .select('id, name, ledger_account, iban, currency, enabled, bank_connection:bank_connections(bank_name, affiliated_aspsp_id, psu_type)')
     .eq('company_id', ctx.companyId)
     .order('ledger_account', { ascending: true })
   if (error) throw error
@@ -53,9 +53,9 @@ export async function getPaymentsAvailability(ctx: OperationContext): Promise<Pa
     iban: string | null
     currency: string
     enabled: boolean
-    bank_connection: { bank_name: string | null } | null
+    bank_connection: { bank_name: string | null; affiliated_aspsp_id: string | null; psu_type: string | null } | null
   }>).map((a) => {
-    const debtor = resolveDebtor(a, a.bank_connection?.bank_name ?? null)
+    const debtor = resolveDebtor(a, a.bank_connection)
     return {
       id: a.id,
       name: a.name,
@@ -82,6 +82,7 @@ async function companyParty(ctx: OperationContext): Promise<PaymentPartyContext 
     companyOrgNumber: orgNumber,
     accountContext: 'corporate',
     debtorBic: '',
+    affiliatedAspspId: null,
     signerPersonalNumber: null,
     psuIpAddress: null,
     psuUserAgent: null,

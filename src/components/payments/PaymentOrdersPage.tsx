@@ -1,7 +1,8 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { Landmark } from 'lucide-react'
 import { PageHeader } from '@/components/ui/page-header'
@@ -21,6 +22,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { parsePaymentSigningReturn, stripPaymentSigningReturn, type PaymentSigningReturn } from '@/lib/payments/orders/return-url'
 import { ApprovePaymentOrdersDialog } from './ApprovePaymentOrdersDialog'
 import { ResolvePaymentOrderDialog } from './ResolvePaymentOrderDialog'
 import { SignPaymentOrdersDialog } from './SignPaymentOrdersDialog'
@@ -65,6 +67,8 @@ export function PaymentOrdersPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [approving, setApproving] = useState<PaymentOrder[] | null>(null)
   const [signing, setSigning] = useState<PaymentOrder[] | null>(null)
+  /** Set when the signing dialog was reopened by a return from the bank's own page. */
+  const [resume, setResume] = useState<PaymentSigningReturn | null>(null)
   const [resolving, setResolving] = useState<PaymentOrder | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
 
@@ -94,6 +98,24 @@ export function PaymentOrdersPage() {
       cancelled = true
     }
   }, [load])
+
+  // Back from a bank that signs on its own page (?signing=<batch>&result=ok|error&code=):
+  // reopen the signing dialog at its poll for the batch's orders, once, and drop the
+  // parameters. The URL carries a flag, never the outcome; the poll tells the truth.
+  const searchParams = useSearchParams()
+  const returnHandled = useRef(false)
+  useEffect(() => {
+    if (returnHandled.current || orders === null || availability === null) return
+    const parsed = parsePaymentSigningReturn(searchParams)
+    if (!parsed) return
+    returnHandled.current = true
+    const inBatch = orders.filter((o) => o.batch_id === parsed.batchId)
+    if (inBatch.length > 0) {
+      setResume(parsed)
+      setSigning(inBatch)
+    }
+    window.history.replaceState(window.history.state, '', stripPaymentSigningReturn(window.location.href))
+  }, [orders, availability, searchParams])
 
   const refresh = useCallback(() => {
     setSelected(new Set())
@@ -420,8 +442,13 @@ export function PaymentOrdersPage() {
         <SignPaymentOrdersDialog
           orders={signing}
           signerKnown={availability.signer_known}
+          bankName={availability.accounts.find((a) => a.id === signing[0]?.cash_account_id)?.bank_name ?? null}
+          resume={resume}
           onOpenChange={(open) => {
-            if (!open) setSigning(null)
+            if (!open) {
+              setSigning(null)
+              setResume(null)
+            }
           }}
           onDone={refresh}
         />

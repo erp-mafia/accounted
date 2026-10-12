@@ -36,10 +36,14 @@ export interface PaymentPartyContext {
   companyId: string
   /** The company's organisationsnummer (10 digits). */
   companyOrgNumber: string
-  /** Business account (corporate) or personal account (private) at the bank. */
+  /** Business account (corporate) or personal account (private) at the bank: from the connection's psu_type. */
   accountContext: 'corporate' | 'private'
   /** BIC of the bank the money leaves from. */
   debtorBic: string
+  /** The sparbank (or Ölands Bank) behind a shared BIC, from the paying account's connection; null for every other bank. */
+  affiliatedAspspId: string | null
+  /** Ask the bank for its own page over decoupled BankID when it offers both; set when the bank signs only there. */
+  redirectPreferred?: boolean
   /** The signer's personnummer (12 digits), when known. Banks use it to address the BankID. */
   signerPersonalNumber: string | null
   /** The signer's IP address and user agent, forwarded to the bank for its fraud checks. */
@@ -56,6 +60,13 @@ export type PayeeInstruction =
 export interface PaymentInstruction {
   /** Our id for the payment at the bank; the debit on the statement carries it. */
   endToEndId: string
+  /**
+   * Which create of this order this is: 1 (or absent) for the first, one more
+   * after every confirmed cancel of a payment created for it. The adapter
+   * keys the create by the end-to-end id and this number, so a new payment
+   * is made instead of the cancelled one being answered again.
+   */
+  attempt?: number
   amount: number
   currency: string
   /** YYYY-MM-DD. */
@@ -118,7 +129,18 @@ export type SigningTarget =
 
 export interface StartedSigning extends SigningProgress {
   providerAuthorisationId: string
+  /** The method the bank actually offered: it may impose its own page (redirect) on a decoupled start. */
   method: 'same_device' | 'qr' | 'redirect'
+}
+
+/**
+ * Where a signing on the bank's own page comes back: the installation's page
+ * (https, on its own origin) and an opaque state echoed back as `state`.
+ * Required with method 'redirect', absent otherwise.
+ */
+export interface SigningRedirectReturn {
+  returnUrl: string
+  returnState: string
 }
 
 /**
@@ -128,7 +150,7 @@ export interface StartedSigning extends SigningProgress {
 export interface BankSigningCapabilities {
   /** BankID in our app: a QR code, or the app on this device. */
   decoupled: boolean
-  /** Signing on the bank's own page. Not supported here yet. */
+  /** Signing on the bank's own page: the browser goes there and comes back to the return URL. */
   redirect: boolean
   /** Several payments under one BankID, and how many at most (null = no stated limit). */
   basket: { supported: boolean; maxPayments: number | null }
@@ -168,7 +190,8 @@ export interface PaymentInitiationProvider {
   getPaymentState(ctx: PaymentPartyContext, providerPaymentId: string, product: string): Promise<ProviderPaymentState>
   /** One BankID for several payments. Only for providers/banks that support baskets. */
   createSigningBasket(ctx: PaymentPartyContext, providerPaymentIds: string[]): Promise<{ providerBasketId: string }>
-  startSigning(ctx: PaymentPartyContext, target: SigningTarget, method: 'same_device' | 'qr'): Promise<StartedSigning>
+  /** Start BankID: in our screen (same_device, qr) or on the bank's own page (redirect, with where to come back). */
+  startSigning(ctx: PaymentPartyContext, target: SigningTarget, method: 'same_device' | 'qr' | 'redirect', redirect?: SigningRedirectReturn | null): Promise<StartedSigning>
   pollSigning(
     ctx: PaymentPartyContext,
     target: SigningTarget,

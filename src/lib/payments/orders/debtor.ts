@@ -20,6 +20,15 @@ export interface DebtorAccountSource {
   enabled: boolean
 }
 
+/** What the paying account's bank connection knows about the bank behind it; null for an account with no connection. */
+export interface DebtorConnectionSource {
+  bank_name: string | null
+  /** The sparbank (or Ölands Bank) behind a shared BIC, as the Open Payments connection stores it; null elsewhere. */
+  affiliated_aspsp_id?: string | null
+  /** 'business' or 'personal': the account context chosen when the bank was connected. */
+  psu_type?: string | null
+}
+
 export interface DebtorSnapshot {
   iban: string
   bban: string | null
@@ -27,6 +36,21 @@ export interface DebtorSnapshot {
   name: string | null
   currency: string
   bank_name: string | null
+  /** Sent as X-AffiliatedASPSP-ID on every payment call; absent on snapshots taken before 2026-10-14. */
+  affiliated_aspsp_id?: string | null
+  /** Decides the account context of every payment call (personal: private, else corporate); absent on older snapshots. */
+  psu_type?: string | null
+}
+
+/**
+ * The account context of a payment call from the connection's psu_type: an
+ * enskild firma whose bank agreement is the owner's private one connected as
+ * 'personal' pays as 'private'; everything else, unknown included, as
+ * 'corporate'. Mirrors accountContextOf in lib/bank-feed/party.ts so a
+ * payment and the reads of the same account tell the bank the same thing.
+ */
+export function paymentAccountContext(psuType: string | null | undefined): 'corporate' | 'private' {
+  return psuType === 'personal' ? 'private' : 'corporate'
 }
 
 export type DebtorResolution =
@@ -41,15 +65,26 @@ export function bicFromSwedishIban(iban: string): string | null {
   return lookupBicByClearing(`${bankCode}0`)
 }
 
-export function resolveDebtor(account: DebtorAccountSource, bankName: string | null): DebtorResolution {
+export function resolveDebtor(account: DebtorAccountSource, connection: DebtorConnectionSource | null): DebtorResolution {
   if (!account.enabled) return { ok: false, reason: 'account_disabled' }
   if ((account.currency ?? '').toUpperCase() !== 'SEK') return { ok: false, reason: 'not_sek' }
   if (!account.iban || !isValidIban(account.iban)) return { ok: false, reason: 'iban_missing' }
   const iban = normalizeIban(account.iban) as string
+  const bankName = connection?.bank_name ?? null
   const bic = bicFromSwedishIban(iban) ?? lookupBicByBankName(bankName)
   if (!bic) return { ok: false, reason: 'bank_unknown' }
   return {
     ok: true,
-    debtor: { iban, bban: null, bic, name: account.name, currency: 'SEK', bank_name: bankName },
+    debtor: {
+      iban,
+      bban: null,
+      bic,
+      name: account.name,
+      currency: 'SEK',
+      bank_name: bankName,
+      // Enable Banking connections store no affiliate: null, nothing is derived.
+      affiliated_aspsp_id: connection?.affiliated_aspsp_id ?? null,
+      psu_type: connection?.psu_type ?? null,
+    },
   }
 }

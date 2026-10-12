@@ -215,7 +215,7 @@ describe('payments family', () => {
     expect(PAYMENTS_SCOPE).toBe('payments')
     expect(CONNECTOR_HEADERS.contractVersion).toBe('X-Connect-Contract-Version')
     expect(CONNECTOR_HEADERS.connection).toBe('X-Connector-Connection')
-    expect(CONTRACT_VERSION).toBe('2026-10-13')
+    expect(CONTRACT_VERSION).toBe('2026-10-14')
   })
 
   it('lists every operation as a company POST with schemas, and the writes among them', () => {
@@ -242,6 +242,11 @@ describe('payments family', () => {
     expect(paymentsPartySchema.safeParse({ ...party, signerPersonalNumber: '19900101-1239' }).success).toBe(false)
     expect(paymentsPartySchema.safeParse({ ...party, debtorBic: 'swedsess' }).success).toBe(false)
     expect(paymentsPartySchema.safeParse({ ...party, accountContext: 'business' }).success).toBe(false)
+    // 2026-10-14: the savings bank behind a shared BIC, and a preference for the bank's own page.
+    expect(paymentsPartySchema.safeParse({ ...party, affiliatedAspspId: '08999', redirectPreferred: true }).success).toBe(true)
+    expect(paymentsPartySchema.safeParse({ ...party, affiliatedAspspId: null }).success).toBe(true)
+    expect(paymentsPartySchema.safeParse({ ...party, affiliatedAspspId: '' }).success).toBe(false)
+    expect(paymentsPartySchema.safeParse({ ...party, redirectPreferred: 'yes' }).success).toBe(false)
   })
 
   it('validates a create request and refuses a bad payee, amount or date', () => {

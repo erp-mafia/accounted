@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bicFromSwedishIban, resolveDebtor } from '../debtor'
+import { bicFromSwedishIban, paymentAccountContext, resolveDebtor } from '../debtor'
 import { normalizeSignerPersonalNumber } from '@/lib/auth/bankid-signer'
 import { resolveOrderPayee } from '../payee'
 
@@ -53,14 +53,31 @@ describe('resolveDebtor', () => {
     expect(bicFromSwedishIban('SE6860000000000123456789')).toBe('HANDSESS')
     expect(resolveDebtor(account, null)).toEqual({
       ok: true,
-      debtor: { iban: 'SE3550000000054910000003', bban: null, bic: 'ESSESESS', name: 'Företagskonto', currency: 'SEK', bank_name: null },
+      debtor: { iban: 'SE3550000000054910000003', bban: null, bic: 'ESSESESS', name: 'Företagskonto', currency: 'SEK', bank_name: null, affiliated_aspsp_id: null, psu_type: null },
     })
+  })
+
+  it('keeps the sparbank behind a shared BIC and the account context of the connection on the snapshot', () => {
+    const sparbank = { ...account, iban: 'SE7280000810340009783242' }
+    expect(resolveDebtor(sparbank, { bank_name: 'Sparbanken Skåne', affiliated_aspsp_id: '08999', psu_type: 'personal' })).toEqual({
+      ok: true,
+      debtor: expect.objectContaining({ bic: 'SWEDSESS', bank_name: 'Sparbanken Skåne', affiliated_aspsp_id: '08999', psu_type: 'personal' }),
+    })
+    // An Enable Banking connection stores no affiliate: nothing is derived from the name.
+    expect(resolveDebtor(sparbank, { bank_name: 'Sparbanken Skåne' })).toMatchObject({ ok: true, debtor: { affiliated_aspsp_id: null, psu_type: null } })
+  })
+
+  it('pays as private only for a connection made in the personal context', () => {
+    expect(paymentAccountContext('personal')).toBe('private')
+    expect(paymentAccountContext('business')).toBe('corporate')
+    expect(paymentAccountContext(null)).toBe('corporate')
+    expect(paymentAccountContext(undefined)).toBe('corporate')
   })
 
   it('falls back to the connection bank name for a code outside the clearing table', () => {
     // 9020: Länsförsäkringar, outside the clearing ranges the payment file trusts.
     const lf = { ...account, iban: 'SE5490200000090212345678' }
-    expect(resolveDebtor(lf, 'Länsförsäkringar Bank')).toMatchObject({ ok: true, debtor: { bic: 'ELLFSESS' } })
+    expect(resolveDebtor(lf, { bank_name: 'Länsförsäkringar Bank' })).toMatchObject({ ok: true, debtor: { bic: 'ELLFSESS' } })
     // Neither the code nor a bank name identifies the bank: never guess a BIC.
     expect(resolveDebtor(lf, null)).toEqual({ ok: false, reason: 'bank_unknown' })
   })

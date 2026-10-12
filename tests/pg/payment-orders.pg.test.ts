@@ -675,6 +675,24 @@ describe('payment order batches (one signing)', () => {
     await expect(insertBatch(ctx.companyId, ctx.userId, 'payment', 1)).resolves.toBeTruthy()
   })
 
+  it('records a payment recreated after an expired signing, and still refuses an event type it does not know', async () => {
+    const ctx = await seedCompany()
+    const id = await insertBatch(ctx.companyId, ctx.userId, 'basket', 2)
+    const insert = (type: string) =>
+      getPool().query(
+        `INSERT INTO public.payment_order_events (company_id, batch_id, event_type, detail)
+         VALUES ($1, $2, $3, '{"previous_batch_id": "00000000-0000-0000-0000-000000000000", "previous_provider_payment_id": "op-pay-1"}'::jsonb)`,
+        [ctx.companyId, id, type],
+      )
+    await expect(insert('recreated_after_expired_signing')).resolves.toBeTruthy()
+    await expect(insert('recreated')).rejects.toThrow(/payment_order_events_event_type_check/)
+    const { rows } = await getPool().query(
+      `SELECT detail ->> 'previous_provider_payment_id' AS previous FROM public.payment_order_events WHERE batch_id = $1 AND event_type = 'recreated_after_expired_signing'`,
+      [id],
+    )
+    expect(rows).toEqual([{ previous: 'op-pay-1' }])
+  })
+
   it('lets an abandoned signing start again, writes the basket id once, and ends in final statuses', async () => {
     const ctx = await seedCompany()
     const id = await insertBatch(ctx.companyId, ctx.userId, 'basket', 2)

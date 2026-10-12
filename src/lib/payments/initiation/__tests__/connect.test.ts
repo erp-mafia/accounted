@@ -17,6 +17,7 @@ import {
   PAYMENT_REFUSED,
   PAYMENTS_CONNECT_TIMEOUT_MS,
   basketIdempotencyKey,
+  paymentIdempotencyKey,
   createConnectPaymentsProvider,
   registerConnectPaymentsProvider,
   toConnectorParty,
@@ -30,6 +31,7 @@ const CTX: PaymentPartyContext = {
   companyOrgNumber: '559538-6219',
   accountContext: 'corporate',
   debtorBic: 'SWEDSESS',
+  affiliatedAspspId: null,
   signerPersonalNumber: '199001011239',
   psuIpAddress: '203.0.113.10',
   psuUserAgent: 'UA',
@@ -137,6 +139,7 @@ describe('toConnectorParty', () => {
       signerPersonalNumber: '199001011239',
       psuIpAddress: '203.0.113.10',
       psuUserAgent: 'UA',
+      affiliatedAspspId: null,
     })
     expect(toConnectorParty({ ...CTX, signerPersonalNumber: '19900101-1239' }).signerPersonalNumber).toBe('199001011239')
     expect(toConnectorParty({ ...CTX, signerPersonalNumber: null, psuIpAddress: null, psuUserAgent: null })).toMatchObject({
@@ -144,6 +147,31 @@ describe('toConnectorParty', () => {
       psuIpAddress: null,
       psuUserAgent: null,
     })
+  })
+})
+
+describe('toConnectorParty: the affiliated bank', () => {
+  it('carries the sparbank behind a shared BIC, the account context and a redirect preference', () => {
+    const party = toConnectorParty({ ...CTX, accountContext: 'private', affiliatedAspspId: '08999', redirectPreferred: true })
+    expect(party).toMatchObject({ debtorBic: 'SWEDSESS', affiliatedAspspId: '08999', accountContext: 'private', redirectPreferred: true })
+    expect(toConnectorParty(CTX)).not.toHaveProperty('redirectPreferred')
+  })
+
+  it('sends the affiliated bank on every operation that carries a party', async () => {
+    const affiliated = { ...CTX, affiliatedAspspId: '08999' }
+    const calls: Array<[string, (p: PaymentInitiationProvider) => Promise<unknown>, unknown]> = [
+      ['createPayment', (p) => p.createPayment(affiliated, INSTRUCTION), { providerPaymentId: 'pay-1', product: 'swedish-giro', sentPayeeName: null, ...STATE }],
+      ['getPaymentState', (p) => p.getPaymentState(affiliated, 'pay-1', 'swedish-giro'), STATE],
+      ['createSigningBasket', (p) => p.createSigningBasket(affiliated, ['pay-1', 'pay-2']), { providerBasketId: 'bask-1' }],
+      ['startSigning', (p) => p.startSigning(affiliated, { kind: 'basket', providerBasketId: 'bask-1' }, 'qr'), { state: 'pending', challenge: CHALLENGE, failureCode: null, providerAuthorisationId: 'auth-1', method: 'qr' }],
+      ['pollSigning', (p) => p.pollSigning(affiliated, { kind: 'basket', providerBasketId: 'bask-1' }, 'auth-1', 'qr'), { state: 'pending', challenge: CHALLENGE, failureCode: null }],
+      ['cancelPayment', (p) => p.cancelPayment(affiliated, 'pay-1', 'swedish-giro'), { outcome: 'cancelled', providerStatus: 'CANC' }],
+    ]
+    for (const [name, run, answer] of calls) {
+      const fetchMock = fetchAnswering(200, answer)
+      await run(provider(fetchMock))
+      expect((sentBody(fetchMock).party as { affiliatedAspspId: string | null }).affiliatedAspspId, name).toBe('08999')
+    }
   })
 })
 
@@ -170,6 +198,18 @@ describe('the operations', () => {
       'Content-Type': 'application/json',
     })
     expect(sentBody(fetchMock)).toEqual({ idempotencyKey: 'pay:E2E-1', party: toConnectorParty(CTX), instruction: INSTRUCTION })
+  })
+
+  it('keys a create by the end-to-end id, and by the attempt once a payment for the order was cancelled', async () => {
+    expect(paymentIdempotencyKey({ endToEndId: 'E2E-1' })).toBe('pay:E2E-1')
+    expect(paymentIdempotencyKey({ endToEndId: 'E2E-1', attempt: 1 })).toBe('pay:E2E-1')
+    expect(paymentIdempotencyKey({ endToEndId: 'E2E-1', attempt: 2 })).toBe('pay:E2E-1:2')
+    const fetchMock = fetchAnswering(200, { ...STATE, providerPaymentId: 'pay-2', product: 'swedish-giro', sentPayeeName: null })
+    await provider(fetchMock).createPayment(CTX, { ...INSTRUCTION, attempt: 3 })
+    const body = sentBody(fetchMock)
+    expect(body.idempotencyKey).toBe('pay:E2E-1:3')
+    // The attempt is ours; the wire instruction is the contract's alone.
+    expect(body.instruction).toEqual(INSTRUCTION)
   })
 
   it('getPaymentState asks for the status by payment id and product', async () => {
@@ -210,6 +250,26 @@ describe('the operations', () => {
     await provider(second).startSigning(CTX, { kind: 'payment', providerPaymentId: 'pay-1', product: 'domestic' }, 'same_device')
     expect(sentBody(second).idempotencyKey).toMatch(/^sign:pay-1:same_device:/)
     expect(sentBody(second).idempotencyKey).not.toBe(body.idempotencyKey)
+  })
+
+  it("startSigning on the bank's own page sends where to come back, and never for a decoupled start", async () => {
+    const redirect = { approach: 'redirect', autostartToken: null, qrData: null, qrImage: null, redirectUrl: 'https://bank.example.se/sign' }
+    const answer = { state: 'pending', challenge: redirect, failureCode: null, providerAuthorisationId: 'auth-2', method: 'redirect' }
+    const fetchMock = fetchAnswering(200, answer)
+    const started = await provider(fetchMock).startSigning(CTX, { kind: 'payment', providerPaymentId: 'pay-1', product: 'domestic' }, 'redirect', {
+      returnUrl: 'https://app.accounted.se/payments?signing=batch-1',
+      returnState: 'batch-1',
+    })
+    expect(started).toMatchObject({ method: 'redirect', challenge: { approach: 'redirect', redirectUrl: 'https://bank.example.se/sign' } })
+    expect(sentBody(fetchMock)).toMatchObject({ method: 'redirect', returnUrl: 'https://app.accounted.se/payments?signing=batch-1', returnState: 'batch-1' })
+
+    const decoupled = fetchAnswering(200, { ...answer, method: 'qr', challenge: CHALLENGE })
+    await provider(decoupled).startSigning(CTX, { kind: 'payment', providerPaymentId: 'pay-1', product: 'domestic' }, 'qr', { returnUrl: 'https://app.accounted.se/payments', returnState: 'x' })
+    expect(sentBody(decoupled)).not.toHaveProperty('returnUrl')
+    // The contract refuses a redirect start without a way back before anything is sent.
+    const never = fetchAnswering(200, answer)
+    await expect(provider(never).startSigning(CTX, { kind: 'payment', providerPaymentId: 'pay-1', product: 'domestic' }, 'redirect')).rejects.toBeInstanceOf(PaymentProviderError)
+    expect(never).not.toHaveBeenCalled()
   })
 
   it('pollSigning passes the authorisation and method and maps a finished signing', async () => {
@@ -353,6 +413,16 @@ describe('toPaymentProviderError', () => {
       expect(error.retryable, code).toBe(true)
       expect(error.outcomeUnknown, code).toBe(false)
       expect(providerWriteOutcome(error)).toBe('not_sent')
+    }
+  })
+
+  it('retries after a short wait when the bank throttles, a write included: nothing reached the bank', () => {
+    for (const operation of ['createPayment', 'paymentStatus', 'startSigning', 'cancelPayment'] as const) {
+      const error = toPaymentProviderError(call('CONNECTOR_BANK_THROTTLED', { status: 429, retryable: true }), operation)
+      expect(error.code, operation).toBe('CONNECTOR_BANK_THROTTLED')
+      expect(error.retryable, operation).toBe(true)
+      expect(error.outcomeUnknown, operation).toBe(false)
+      expect(providerWriteOutcome(error), operation).toBe('not_sent')
     }
   })
 

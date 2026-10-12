@@ -15,6 +15,11 @@
  *            still waits through rebatch_payment_orders_for_signing, which
  *            re-checks every invoice under lock: the same signing when
  *            nothing dropped out, a new one over the same payments otherwise.
+ *            A payment whose earlier BankID the bank let expire cannot be
+ *            signed again at Open Payments (a second authorisation answers
+ *            FORMAT_ERROR): it is cancelled at the bank, its order claimed
+ *            again, and a new payment created under a new idempotency key
+ *            (recreateAfterExpiredSigning).
  *
  * What may never happen, and how (the payment_orders migration, rules 1, 2, 5):
  *   - A second payment for one order. Payment APIs may have no idempotency
@@ -46,10 +51,12 @@ import {
   type PaymentPartyContext,
   type ProviderWriteOutcome,
   type SigningChallenge,
+  type SigningRedirectReturn,
   type SigningStep,
   type SigningTarget,
 } from '@/lib/payments/initiation/provider'
 import { openPaymentsDoor } from './switched-on'
+import { paymentSigningReturnUrl } from './return-url'
 import { normalizeSignerPersonalNumber, rememberSignerPersonalNumber } from '@/lib/auth/bankid-signer'
 import { bankDayFor } from './lifecycle'
 import type { PaymentOrderEvent } from './types'
@@ -60,7 +67,19 @@ import { buildPartyContext, type SignerInput } from './party'
 import { cancelAndRelease, cancelForClosedInvoice, releasePaymentOrder, unpayableOrders } from './release'
 import { logPaymentOrderEvents, sanitizedProviderMessage, type PaymentOrderBatchRow, type PaymentOrderRow } from './types'
 
-export type SigningMethod = 'same_device' | 'qr'
+/** BankID in our screen (same_device, qr) or on the bank's own page (redirect). */
+export type SigningMethod = 'same_device' | 'qr' | 'redirect'
+
+/**
+ * Where a signing on the bank's own page comes back: the app origin the
+ * request came to (the route resolves it to a trusted one). The page is
+ * always Betalningar, with the batch named (return-url.ts).
+ */
+export interface SigningReturnOrigin {
+  origin: string
+}
+
+const RETURN_ORIGIN_REQUIRED: OperationOutcome<never> = { ok: false, code: 'VALIDATION_ERROR', details: { field: 'return_origin', reason: 'required_for_redirect' } }
 
 export interface SigningView {
   batch_id: string
@@ -74,12 +93,24 @@ export interface SigningView {
 }
 
 /**
- * Codes after which signing again cannot help: the person lacks the rights,
- * the bank refused for good, or the bank only signs on its own page. Signing
- * on the bank's page (the redirect approach) is not supported yet: it needs
- * the connection callback that milestone 1 adds with the Connect adapter.
+ * Codes after which signing again cannot help: the person lacks the rights
+ * or an agreement at the bank, the bank refused for good, or the way out is
+ * in the online bank (the provider's documented action). Mirrored in
+ * components/payments/payment-order-status.ts.
  */
-const PERMANENT_SIGNING_FAILURES = new Set(['PSU_RIGHTS_MISSING', 'BANKID_NOT_ACTIVATED', 'TPP_KYC_INVALID', 'SCA_REDIRECT_UNSUPPORTED'])
+export const PERMANENT_SIGNING_FAILURES: ReadonlySet<string> = new Set([
+  'PSU_RIGHTS_MISSING',
+  'PSU_CREDENTIALS_INVALID',
+  'PSU_OPEN_BANKING_RIGHTS_MISSING',
+  'BANK_AGREEMENT_MISSING',
+  'PAYMENT_PRODUCT_AGREEMENT_MISSING',
+  'BANKID_NOT_ACTIVATED',
+  'BANKID_EXTENDED_USE_REQUIRED',
+  'KYC_INVALID',
+  'TPP_KYC_INVALID',
+  'AMOUNT_LIMITATION_CONTROL_FAILED',
+  'SCA_REDIRECT_UNSUPPORTED',
+])
 
 const CLAIM_CODES: Record<string, string> = {
   not_found: 'PAYMENT_ORDER_NOT_FOUND',
@@ -98,7 +129,7 @@ const REBATCH_CODES: Record<string, string> = {
   ineligible: 'PAYMENT_ORDERS_INELIGIBLE',
 }
 
-function instructionFor(order: PaymentOrderRow): PaymentInstruction {
+function instructionFor(order: PaymentOrderRow, attempt: number): PaymentInstruction {
   const payee = (() => {
     switch (order.payee_type) {
       case 'bankgiro':
@@ -113,6 +144,7 @@ function instructionFor(order: PaymentOrderRow): PaymentInstruction {
   })()
   return {
     endToEndId: order.end_to_end_id,
+    attempt,
     amount: Number(order.amount),
     currency: order.currency,
     requestedExecutionDate: order.requested_execution_date,
@@ -122,8 +154,35 @@ function instructionFor(order: PaymentOrderRow): PaymentInstruction {
   }
 }
 
+/**
+ * Which create of each order this is: one more than the payments the bank
+ * confirmed cancelled for it (every confirmed cancel is a provider_cancelled
+ * event naming the payment). The number goes into the create's idempotency
+ * key, so a replay of the first key never answers a cancelled payment. A
+ * read that fails throws: the claim then waits for the stale-claim sweep,
+ * which releases a claim whose create never started.
+ */
+async function createAttempts(writer: SupabaseClient, companyId: string, orders: PaymentOrderRow[]): Promise<Map<string, number>> {
+  const { data, error } = await writer
+    .from('payment_order_events')
+    .select('payment_order_id')
+    .eq('company_id', companyId)
+    .eq('event_type', 'provider_cancelled')
+    .in('payment_order_id', orders.map((o) => o.id))
+  if (error) throw error
+  const cancelled = new Map<string, number>()
+  for (const row of (data ?? []) as Array<{ payment_order_id: string | null }>) {
+    if (row.payment_order_id) cancelled.set(row.payment_order_id, (cancelled.get(row.payment_order_id) ?? 0) + 1)
+  }
+  return new Map(orders.map((o) => [o.id, (cancelled.get(o.id) ?? 0) + 1]))
+}
+
 function errorCodeOf(error: unknown): string {
   return error instanceof PaymentProviderError ? error.code : 'UNEXPECTED_ERROR'
+}
+
+function httpStatusOf(error: unknown): number | null {
+  return error instanceof PaymentProviderError ? error.httpStatus : null
 }
 
 /** The answer for a call that read or asked the bank and failed: nothing was created by it. */
@@ -195,29 +254,43 @@ function view(
 }
 
 /**
- * Refuse up front what this bank cannot sign, before any payment exists: a
- * bank that signs only on its own page, or a basket it does not take.
+ * How this bank will sign, decided up front, before any payment exists: a
+ * bank that signs only on its own page signs by redirect whatever was asked
+ * (and the party says it prefers that page), a bank that signs only in our
+ * screen takes the decoupled method asked for (or QR when its page was
+ * asked for), a bank that does neither is refused, and so is a basket it
+ * does not take.
  */
-async function checkSigningCapabilities(
+type SigningPlan = { ok: true; method: SigningMethod; redirectOnly: boolean } | { ok: false; outcome: OperationOutcome<never> }
+
+async function planSigning(
   provider: PaymentInitiationProvider,
   party: PaymentPartyContext,
   orderCount: number,
-): Promise<OperationOutcome<never> | null> {
+  requested: SigningMethod,
+): Promise<SigningPlan> {
   let capabilities
   try {
     capabilities = await provider.getBankCapabilities(party)
   } catch (error) {
-    return { ok: false, code: readFailure(error), details: { provider_code: errorCodeOf(error) } }
+    return { ok: false, outcome: { ok: false, code: readFailure(error), details: { provider_code: errorCodeOf(error) } } }
   }
-  if (!capabilities.decoupled) return { ok: false, code: 'PAYMENT_SIGNING_REDIRECT_UNSUPPORTED' }
+  if (!capabilities.decoupled && !capabilities.redirect) return { ok: false, outcome: { ok: false, code: 'PAYMENT_SIGNING_REDIRECT_UNSUPPORTED' } }
   if (orderCount > 1 && !capabilities.basket.supported) {
-    return { ok: false, code: 'PAYMENT_SIGNING_BASKET_UNSUPPORTED', details: { max: 1 } }
+    return { ok: false, outcome: { ok: false, code: 'PAYMENT_SIGNING_BASKET_UNSUPPORTED', details: { max: 1 } } }
   }
   const max = capabilities.basket.maxPayments
   if (orderCount > 1 && max !== null && orderCount > max) {
-    return { ok: false, code: 'PAYMENT_SIGNING_BASKET_TOO_LARGE', details: { max } }
+    return { ok: false, outcome: { ok: false, code: 'PAYMENT_SIGNING_BASKET_TOO_LARGE', details: { max } } }
   }
-  return null
+  const redirectOnly = !capabilities.decoupled
+  const method: SigningMethod = redirectOnly ? 'redirect' : requested === 'redirect' && !capabilities.redirect ? 'qr' : requested
+  return { ok: true, method, redirectOnly }
+}
+
+/** The plan applied to the party: a bank that signs only on its own page is asked for that page from the first call. */
+function planParty(party: PaymentPartyContext, plan: Extract<SigningPlan, { ok: true }>): PaymentPartyContext {
+  return plan.redirectOnly ? { ...party, redirectPreferred: true } : party
 }
 
 // ---------------------------------------------------------------------------
@@ -379,6 +452,13 @@ async function cancelOrphan(
  * An order with a create in flight, an unknown outcome, or one already
  * handled by the caller is left alone. The signing batch ends as failed.
  */
+interface StoppedSigning {
+  /** Orders back to approved after the bank confirmed the cancel of their payment, with that payment's id. */
+  released: Array<{ order: PaymentOrderRow; providerPaymentId: string }>
+  /** Orders whose cancel the bank did not confirm: still submitted with their payment id, for a person. */
+  kept: string[]
+}
+
 async function stopSigning(
   ctx: OperationContext,
   provider: PaymentInitiationProvider,
@@ -386,7 +466,7 @@ async function stopSigning(
   batch: PaymentOrderBatchRow,
   reason: string,
   handled: ReadonlySet<string> = new Set(),
-): Promise<void> {
+): Promise<StoppedSigning> {
   const writer = createServiceClient()
   let orders: PaymentOrderRow[] = []
   try {
@@ -395,10 +475,13 @@ async function stopSigning(
     ctx.log.error('stopped signing could not read its orders', error, { batchId: batch.id, reason })
   }
   const actor = { companyId: ctx.companyId, userId: ctx.userId, log: ctx.log }
+  const stopped: StoppedSigning = { released: [], kept: [] }
   for (const order of orders) {
     if (handled.has(order.id) || order.create_started_at || order.outcome_unknown_at) continue
     if (order.provider_payment_id && (order.status === 'submitted' || order.status === 'awaiting_signature')) {
-      await cancelAndRelease(writer, actor, provider, party, batch.id, order, reason)
+      const result = await cancelAndRelease(writer, actor, provider, party, batch.id, order, reason)
+      if (result === 'released') stopped.released.push({ order, providerPaymentId: order.provider_payment_id })
+      else if (result === 'kept') stopped.kept.push(order.id)
     } else if (!order.provider_payment_id && order.status === 'submitted') {
       await releasePaymentOrder(writer, actor, {
         companyId: ctx.companyId,
@@ -416,6 +499,7 @@ async function stopSigning(
     .eq('id', batch.id)
     .eq('company_id', ctx.companyId)
     .in('status', ['created', 'awaiting_signature'])
+  return stopped
 }
 
 // ---------------------------------------------------------------------------
@@ -428,7 +512,12 @@ async function beginSca(
   party: PaymentPartyContext,
   batch: PaymentOrderBatchRow,
   method: SigningMethod,
+  ret: SigningReturnOrigin | null,
 ): Promise<OperationOutcome<SigningView>> {
+  // The bank's own page needs a way back: Betalningar on the app origin, the
+  // batch named, the batch id as the state the bank echoes.
+  if (method === 'redirect' && !ret) return RETURN_ORIGIN_REQUIRED
+  const redirect: SigningRedirectReturn | null = method === 'redirect' && ret ? { returnUrl: paymentSigningReturnUrl(ret.origin, batch.id), returnState: batch.id } : null
   const writer = createServiceClient()
   // Every order of this signing must still be waiting at the bank in it: a
   // late answer must never start BankID over an order that moved on.
@@ -446,7 +535,7 @@ async function beginSca(
 
   let started
   try {
-    started = await provider.startSigning(party, target, method)
+    started = await provider.startSigning(party, target, method, redirect)
   } catch (error) {
     const code = errorCodeOf(error)
     ctx.log.warn('payment signing did not start', { batchId: batch.id, code })
@@ -455,13 +544,15 @@ async function beginSca(
       // undone, and the status poll reads what the bank decides.
       return { ok: false, code: 'PAYMENT_PROVIDER_UNAVAILABLE', details: { provider_code: code, outcome_unknown: true } }
     }
-    if (PERMANENT_SIGNING_FAILURES.has(code)) {
+    const permanent = PERMANENT_SIGNING_FAILURES.has(code)
+    if (permanent) {
       // Signing again cannot help: the payments are cancelled at the bank and
       // the orders go back to approved, to be paid another way or by another signer.
       await stopSigning(ctx, provider, party, current, code)
     }
     const answer = code === 'SCA_REDIRECT_UNSUPPORTED' ? 'PAYMENT_SIGNING_REDIRECT_UNSUPPORTED' : readFailure(error)
-    return { ok: false, code: answer, details: { provider_code: code } }
+    // signing_start_refused: the bank refused to start, nothing else moved (restart reads it to decide on a recreate).
+    return { ok: false, code: answer, details: { provider_code: code, http_status: httpStatusOf(error), signing_start_refused: !permanent && !(error instanceof PaymentProviderError && error.retryable) } }
   }
 
   const now = new Date().toISOString()
@@ -578,9 +669,96 @@ async function reattestWithBankDay(ctx: OperationContext, orders: PaymentOrderRo
   return { ok: true, data: null }
 }
 
+/**
+ * Every payment of a claimed signing created at the bank once (the marker,
+ * the create, the id stored), a basket over them when there are several, and
+ * BankID started. Shared by the first signing and a recreate after an
+ * expired one.
+ */
+async function sendAndSign(
+  ctx: OperationContext,
+  provider: PaymentInitiationProvider,
+  party: PaymentPartyContext,
+  claimed: { batch: PaymentOrderBatchRow; orders: PaymentOrderRow[] },
+  method: SigningMethod,
+  ret: SigningReturnOrigin | null,
+): Promise<OperationOutcome<SigningView>> {
+  const writer = createServiceClient()
+  let batch = claimed.batch
+  const orders = claimed.orders
+  const attempts = await createAttempts(writer, ctx.companyId, orders)
+  for (const order of orders) {
+    if (!(await beginCreate(writer, ctx, batch.id, order))) {
+      // The order moved since the claim (the stale-claim sweep let it go):
+      // nothing is sent for it, and the payments already created are cancelled.
+      ctx.log.warn('payment order moved before its create', { orderId: order.id, batchId: batch.id })
+      await stopSigning(ctx, provider, party, batch, 'ORDER_MOVED')
+      return { ok: false, code: 'PAYMENT_SIGNING_NOT_ACTIVE', details: { payment_order_id: order.id } }
+    }
+    let created: CreatedPayment
+    try {
+      created = await provider.createPayment(party, instructionFor(order, attempts.get(order.id) ?? 1))
+    } catch (error) {
+      const outcome = providerWriteOutcome(error)
+      const code = errorCodeOf(error)
+      ctx.log.warn('payment creation at the bank failed', { orderId: order.id, code, outcome })
+      if (outcome === 'unknown') await holdOutcomeUnknown(writer, ctx, batch.id, order, code)
+      else if (outcome === 'refused') await failOrder(writer, ctx, batch.id, order, code, sanitizedProviderMessage(error))
+      else {
+        await releasePaymentOrder(writer, ctx, {
+          companyId: ctx.companyId,
+          orderId: order.id,
+          batchId: batch.id,
+          providerPaymentId: null,
+          providerStatus: null,
+          reason: 'CREATE_NOT_SENT',
+          errorCode: code,
+        })
+      }
+      await stopSigning(ctx, provider, party, batch, 'SIGNING_STOPPED', new Set([order.id]))
+      return { ok: false, code: createFailure(outcome), details: { provider_code: code, payment_order_id: order.id } }
+    }
+    if (!(await storeProviderPayment(writer, ctx, batch.id, order, created))) {
+      ctx.log.error('bank payment created but its id could not be stored', undefined, {
+        orderId: order.id,
+        batchId: batch.id,
+        providerPaymentId: created.providerPaymentId,
+      })
+      const orphanCancelled = await cancelOrphan(writer, ctx, provider, party, batch.id, order, created)
+      const released = orphanCancelled
+        ? await releasePaymentOrder(writer, ctx, {
+            companyId: ctx.companyId,
+            orderId: order.id,
+            batchId: batch.id,
+            providerPaymentId: null,
+            providerStatus: null,
+            reason: 'PROVIDER_ID_NOT_STORED',
+            errorCode: 'PROVIDER_ID_NOT_STORED',
+          })
+        : null
+      if (released !== 'approved' && released !== 'cancelled') await holdOutcomeUnknown(writer, ctx, batch.id, order, 'PROVIDER_ID_NOT_STORED')
+      await stopSigning(ctx, provider, party, batch, 'SIGNING_STOPPED', new Set([order.id]))
+      return released === 'approved' || released === 'cancelled'
+        ? { ok: false, code: 'PAYMENT_PROVIDER_UNAVAILABLE', details: { payment_order_id: order.id } }
+        : { ok: false, code: 'PAYMENT_ORDERS_OUTCOME_UNKNOWN', details: { payment_order_id: order.id } }
+    }
+    order.provider_payment_id = created.providerPaymentId
+    order.provider_payment_product = created.product
+    order.provider_status = created.providerStatus
+  }
+
+  if (batch.signing_target === 'basket') {
+    const withBasket = await createBasket(ctx, provider, party, batch, orders)
+    if (!withBasket.ok) return withBasket.outcome
+    batch = withBasket.batch
+  }
+
+  return beginSca(ctx, provider, party, batch, method, ret)
+}
+
 export async function startPaymentSigning(
   ctx: OperationContext,
-  input: { orderIds: string[]; method: SigningMethod; signer: SignerInput; today?: string },
+  input: { orderIds: string[]; method: SigningMethod; signer: SignerInput; returnOrigin?: string | null; today?: string },
 ): Promise<OperationOutcome<SigningView>> {
   const ids = [...new Set(input.orderIds)]
   if (ids.length === 0) return { ok: false, code: 'PAYMENT_ORDERS_EMPTY_SELECTION' }
@@ -602,18 +780,28 @@ export async function startPaymentSigning(
   const reattested = await reattestWithBankDay(ctx, previewOrders, input.today ?? todayIsoStockholm())
   if (!reattested.ok) return reattested
 
-  const party = await buildPartyContext(ctx, previewOrders[0]!, input.signer, { requireSigner: true })
-  if (!party.ok) return party.outcome
+  const built = await buildPartyContext(ctx, previewOrders[0]!, input.signer, { requireSigner: true })
+  if (!built.ok) return built.outcome
 
-  // Before anything is claimed: what this bank cannot sign, and a company the
-  // provider has not verified (every payment would be refused, TPP_KYC_INVALID).
-  const refusal = await checkSigningCapabilities(provider, party.ctx, ids.length)
-  if (refusal) return refusal
-  try {
-    const verification = await provider.getCompanyVerification(party.ctx)
-    if (verification.status !== 'valid') return { ok: false, code: 'PAYMENT_COMPANY_VERIFICATION_REQUIRED' }
-  } catch (error) {
-    return { ok: false, code: readFailure(error), details: { provider_code: errorCodeOf(error) } }
+  // Before anything is claimed: how this bank signs (or that it cannot), and
+  // a company the provider has not verified (every payment would be refused,
+  // TPP_KYC_INVALID). The verification is the company's, so it is asked for
+  // in the corporate context only; whether a private-context payment (an
+  // enskild firma on the owner's agreement) needs one is the provider's open
+  // question (DECISIONS.md 2026-10-12), and until it is answered such a
+  // payment is tried, and the bank's own TPP_KYC_INVALID is shown if it comes.
+  const plan = await planSigning(provider, built.ctx, ids.length, input.method)
+  if (!plan.ok) return plan.outcome
+  const ret: SigningReturnOrigin | null = input.returnOrigin ? { origin: input.returnOrigin } : null
+  if (plan.method === 'redirect' && !ret) return RETURN_ORIGIN_REQUIRED
+  const party = { ...built, ctx: planParty(built.ctx, plan) }
+  if (party.ctx.accountContext === 'corporate') {
+    try {
+      const verification = await provider.getCompanyVerification(party.ctx)
+      if (verification.status !== 'valid') return { ok: false, code: 'PAYMENT_COMPANY_VERIFICATION_REQUIRED' }
+    } catch (error) {
+      return { ok: false, code: readFailure(error), details: { provider_code: errorCodeOf(error) } }
+    }
   }
 
   // The claim runs as the service role: only server code may move orders
@@ -635,75 +823,7 @@ export async function startPaymentSigning(
     }
   }
 
-  let batch = claimed.batch
-  const orders = claimed.orders
-  for (const order of orders) {
-    if (!(await beginCreate(writer, ctx, batch.id, order))) {
-      // The order moved since the claim (the stale-claim sweep let it go):
-      // nothing is sent for it, and the payments already created are cancelled.
-      ctx.log.warn('payment order moved before its create', { orderId: order.id, batchId: batch.id })
-      await stopSigning(ctx, provider, party.ctx, batch, 'ORDER_MOVED')
-      return { ok: false, code: 'PAYMENT_SIGNING_NOT_ACTIVE', details: { payment_order_id: order.id } }
-    }
-    let created: CreatedPayment
-    try {
-      created = await provider.createPayment(party.ctx, instructionFor(order))
-    } catch (error) {
-      const outcome = providerWriteOutcome(error)
-      const code = errorCodeOf(error)
-      ctx.log.warn('payment creation at the bank failed', { orderId: order.id, code, outcome })
-      if (outcome === 'unknown') await holdOutcomeUnknown(writer, ctx, batch.id, order, code)
-      else if (outcome === 'refused') await failOrder(writer, ctx, batch.id, order, code, sanitizedProviderMessage(error))
-      else {
-        await releasePaymentOrder(writer, ctx, {
-          companyId: ctx.companyId,
-          orderId: order.id,
-          batchId: batch.id,
-          providerPaymentId: null,
-          providerStatus: null,
-          reason: 'CREATE_NOT_SENT',
-          errorCode: code,
-        })
-      }
-      await stopSigning(ctx, provider, party.ctx, batch, 'SIGNING_STOPPED', new Set([order.id]))
-      return { ok: false, code: createFailure(outcome), details: { provider_code: code, payment_order_id: order.id } }
-    }
-    if (!(await storeProviderPayment(writer, ctx, batch.id, order, created))) {
-      ctx.log.error('bank payment created but its id could not be stored', undefined, {
-        orderId: order.id,
-        batchId: batch.id,
-        providerPaymentId: created.providerPaymentId,
-      })
-      const orphanCancelled = await cancelOrphan(writer, ctx, provider, party.ctx, batch.id, order, created)
-      const released = orphanCancelled
-        ? await releasePaymentOrder(writer, ctx, {
-            companyId: ctx.companyId,
-            orderId: order.id,
-            batchId: batch.id,
-            providerPaymentId: null,
-            providerStatus: null,
-            reason: 'PROVIDER_ID_NOT_STORED',
-            errorCode: 'PROVIDER_ID_NOT_STORED',
-          })
-        : null
-      if (released !== 'approved' && released !== 'cancelled') await holdOutcomeUnknown(writer, ctx, batch.id, order, 'PROVIDER_ID_NOT_STORED')
-      await stopSigning(ctx, provider, party.ctx, batch, 'SIGNING_STOPPED', new Set([order.id]))
-      return released === 'approved' || released === 'cancelled'
-        ? { ok: false, code: 'PAYMENT_PROVIDER_UNAVAILABLE', details: { payment_order_id: order.id } }
-        : { ok: false, code: 'PAYMENT_ORDERS_OUTCOME_UNKNOWN', details: { payment_order_id: order.id } }
-    }
-    order.provider_payment_id = created.providerPaymentId
-    order.provider_payment_product = created.product
-    order.provider_status = created.providerStatus
-  }
-
-  if (batch.signing_target === 'basket') {
-    const withBasket = await createBasket(ctx, provider, party.ctx, batch, orders)
-    if (!withBasket.ok) return withBasket.outcome
-    batch = withBasket.batch
-  }
-
-  const started = await beginSca(ctx, provider, party.ctx, batch, input.method)
+  const started = await sendAndSign(ctx, provider, party.ctx, { batch: claimed.batch, orders: claimed.orders }, plan.method, ret)
   if (started.ok) await rememberTypedSigner(ctx, input.signer)
   return started
 }
@@ -735,7 +855,7 @@ async function rememberTypedSigner(ctx: OperationContext, signer: SignerInput): 
  */
 export async function restartPaymentSigning(
   ctx: OperationContext,
-  input: { batchId: string; method: SigningMethod; signer: SignerInput },
+  input: { batchId: string; method: SigningMethod; signer: SignerInput; returnOrigin?: string | null },
 ): Promise<OperationOutcome<SigningView>> {
   const provider = await getPaymentInitiationProvider(ctx.companyId)
   if (!provider) return { ok: false, code: 'PAYMENTS_UNAVAILABLE' }
@@ -749,8 +869,15 @@ export async function restartPaymentSigning(
   const waiting = orders.filter(isWaiting)
   if (waiting.length === 0) return { ok: false, code: 'PAYMENT_SIGNING_NOTHING_TO_SIGN' }
 
-  const party = await buildPartyContext(ctx, waiting[0]!, input.signer, { requireSigner: true })
-  if (!party.ok) return party.outcome
+  const built = await buildPartyContext(ctx, waiting[0]!, input.signer, { requireSigner: true })
+  if (!built.ok) return built.outcome
+  // The plan first: the bank's own page needs the origin to come back to
+  // before anything is read or moved.
+  let plan = await planSigning(provider, built.ctx, waiting.length, input.method)
+  if (!plan.ok) return plan.outcome
+  const ret: SigningReturnOrigin | null = input.returnOrigin ? { origin: input.returnOrigin } : null
+  if (plan.method === 'redirect' && !ret) return RETURN_ORIGIN_REQUIRED
+  const party = { ...built, ctx: planParty(built.ctx, plan) }
 
   const unpayable = await unpayableOrders(writer, waiting)
   for (const order of waiting) {
@@ -779,8 +906,11 @@ export async function restartPaymentSigning(
 
   const still = ((await loadBatch(writer, ctx.companyId, batch.id))?.orders ?? []).filter(isWaiting)
   if (still.length === 0) return { ok: false, code: 'PAYMENT_SIGNING_NOTHING_TO_SIGN' }
-  const refusal = await checkSigningCapabilities(provider, party.ctx, still.length)
-  if (refusal) return refusal
+  if (still.length !== waiting.length) {
+    // Fewer payments than planned for: the basket rules are checked again for what is left.
+    plan = await planSigning(provider, party.ctx, still.length, input.method)
+    if (!plan.ok) return plan.outcome
+  }
   const { data: rebatch, error } = await writer.rpc('rebatch_payment_orders_for_signing', {
     p_company_id: ctx.companyId,
     p_batch_id: batch.id,
@@ -801,7 +931,88 @@ export async function restartPaymentSigning(
     if (!withBasket.ok) return withBasket.outcome
     next = withBasket.batch
   }
-  return beginSca(ctx, provider, party.ctx, next, input.method)
+  const started = await beginSca(ctx, provider, party.ctx, next, plan.method, ret)
+  // The payments had an authorisation before (this signing started once) and
+  // the bank refuses to start another on them: they are recreated.
+  if (started.ok || !batch.provider_authorisation_id || !isStaleAuthorisationRefusal(started)) return started
+  return recreateAfterExpiredSigning(ctx, provider, party.ctx, next, plan.method, ret, started)
+}
+
+/**
+ * A signing start the bank refused outright (FORMAT_ERROR, or any 400) on
+ * payments that already had an authorisation: Open Payments does not start a
+ * second authorisation on a payment whose first one expired or was cancelled.
+ * Not a retryable failure, not one signing can never fix (those cancelled the
+ * payments already), not an unknown outcome.
+ */
+function isStaleAuthorisationRefusal(outcome: OperationOutcome<SigningView>): boolean {
+  if (outcome.ok) return false
+  const details = outcome.details ?? {}
+  if (details.signing_start_refused !== true) return false
+  const code = typeof details.provider_code === 'string' ? details.provider_code : ''
+  return code === 'FORMAT_ERROR' || details.http_status === 400
+}
+
+/**
+ * Sign again after the bank let a BankID expire: a new authorisation on the
+ * same payment is refused, so each payment still waiting is cancelled at the
+ * bank and its order released (a confirmed cancel only, as everywhere), the
+ * released orders are claimed again under a new signing, and new payments
+ * are created for them under new idempotency keys (createAttempts) and
+ * signed. A cancel the bank does not confirm holds its order for a person,
+ * as today; nothing is then recreated, and the person sees the refusal. The
+ * recreate is on the record: one event per order in the new signing, naming
+ * the previous signing and payment.
+ */
+async function recreateAfterExpiredSigning(
+  ctx: OperationContext,
+  provider: PaymentInitiationProvider,
+  party: PaymentPartyContext,
+  expired: PaymentOrderBatchRow,
+  method: SigningMethod,
+  ret: SigningReturnOrigin | null,
+  refusal: OperationOutcome<SigningView>,
+): Promise<OperationOutcome<SigningView>> {
+  const providerCode = !refusal.ok ? refusal.details?.provider_code : null
+  ctx.log.warn('bank refused a new authorisation on signed-before payments; recreating them', { batchId: expired.id, code: providerCode })
+  const stopped = await stopSigning(ctx, provider, party, expired, 'SIGNING_EXPIRED')
+  if (stopped.kept.length > 0 || stopped.released.length === 0) {
+    // The bank did not confirm every cancel: those orders wait for a person, nothing new is made.
+    return refusal.ok ? refusal : { ...refusal, details: { ...(refusal.details ?? {}), held_for_person: stopped.kept, recreated: false } }
+  }
+
+  const writer = createServiceClient()
+  const { data: claim, error: claimError } = await writer.rpc('claim_payment_orders_for_signing', {
+    p_company_id: ctx.companyId,
+    p_order_ids: stopped.released.map((r) => r.order.id),
+    p_provider: provider.id,
+    p_user_id: ctx.userId,
+  })
+  if (claimError) throw claimError
+  const claimed = claim as { ok: boolean; code?: string; details?: unknown; batch?: PaymentOrderBatchRow; orders?: PaymentOrderRow[] }
+  if (!claimed.ok || !claimed.batch || !claimed.orders) {
+    return {
+      ok: false,
+      code: CLAIM_CODES[claimed.code ?? ''] ?? 'PAYMENT_ORDERS_WRONG_STATUS',
+      details: { claim_code: claimed.code, claim_details: claimed.details as Record<string, unknown> | undefined, recreated: false },
+    }
+  }
+  const previous = new Map(stopped.released.map((r) => [r.order.id, r.providerPaymentId]))
+  await logPaymentOrderEvents(
+    writer,
+    claimed.orders.map((order) => ({
+      company_id: ctx.companyId,
+      payment_order_id: order.id,
+      batch_id: claimed.batch!.id,
+      event_type: 'recreated_after_expired_signing' as const,
+      from_status: 'approved',
+      to_status: 'submitted',
+      actor_user_id: ctx.userId,
+      detail: { previous_batch_id: expired.id, previous_provider_payment_id: previous.get(order.id) ?? null, provider_code: providerCode ?? null },
+    })),
+    ctx.log,
+  )
+  return sendAndSign(ctx, provider, party, { batch: claimed.batch, orders: claimed.orders }, method, ret)
 }
 
 export async function pollPaymentSigning(

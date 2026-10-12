@@ -27,8 +27,8 @@ const party = {
 }
 
 describe('AIS family', () => {
-  it('is the 2026-10-13 contract under /api/connect/ais with the bank_sync scope', () => {
-    expect(CONTRACT_VERSION).toBe('2026-10-13')
+  it('is the 2026-10-14 contract under /api/connect/ais with the bank_sync scope', () => {
+    expect(CONTRACT_VERSION).toBe('2026-10-14')
     expect(AIS_BASE_PATH).toBe('/api/connect/ais')
     expect(AIS_SCOPE).toBe('bank_sync')
   })
@@ -60,6 +60,8 @@ describe('AIS family', () => {
     expect(aisPartySchema.safeParse(party).success).toBe(true)
     expect(aisPartySchema.safeParse({ ...party, affiliatedAspspId: '08999' }).success).toBe(true)
     expect(aisPartySchema.safeParse({ ...party, affiliatedAspspId: null }).success).toBe(true)
+    expect(aisPartySchema.safeParse({ ...party, redirectPreferred: true }).success).toBe(true)
+    expect(aisPartySchema.safeParse({ ...party, redirectPreferred: 'yes' }).success).toBe(false)
     expect(aisPartySchema.safeParse({ ...party, orgNumber: '559538-6219' }).success).toBe(false)
     expect(aisPartySchema.safeParse({ ...party, personalNumber: '9001011239' }).success).toBe(false)
     expect(aisCreateConsentRequestSchema.safeParse({ party, accounts: [{ iban: 'SE8050000000052131234567' }] }).success).toBe(true)

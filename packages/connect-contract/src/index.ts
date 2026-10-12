@@ -28,7 +28,7 @@ import { z } from 'zod'
  * copy of `src/` pinned to a commit, so it must stay self-contained.
  */
 
-export const CONTRACT_VERSION = '2026-10-13'
+export const CONTRACT_VERSION = '2026-10-14'
 
 // ---------------------------------------------------------------------------
 // Keys, headers and paths
@@ -826,6 +826,15 @@ export type PaymentsAccountContext = z.infer<typeof paymentsAccountContextSchema
  * forwarded to the provider as PSU headers; the service never stores it.
  * `signerPersonalNumber` is the signer's personnummer (12 digits) when the
  * installation knows it; banks use it to address the BankID.
+ * `affiliatedAspspId` names the savings bank behind a shared BIC (Swedbank's
+ * sparbanker, Ölands Bank), as the AIS `bank` operation lists them in
+ * `affiliates`; without it a person with accounts in several of them is
+ * refused (PSU_ACCOUNT_MULTIPLE_AFFILIATED_BANKS). Sent as
+ * X-AffiliatedASPSP-ID on every payment, basket, status, cancel and signing
+ * call. `redirectPreferred` (default false) asks the bank for redirect-based
+ * SCA (its own page) over decoupled BankID when it offers both: sent as
+ * TPP-Redirect-Preferred when the payment or basket is created; the signing
+ * calls take it from the chosen method instead.
  */
 export const paymentsPartySchema = z.object({
   orgNumber: paymentsOrgNumberSchema,
@@ -834,6 +843,8 @@ export const paymentsPartySchema = z.object({
   signerPersonalNumber: z.string().regex(/^\d{12}$/, 'personnummer: 12 digits').nullable(),
   psuIpAddress: z.string().max(64).nullable(),
   psuUserAgent: z.string().max(300).nullable(),
+  affiliatedAspspId: z.string().trim().min(1).max(64).nullable().optional(),
+  redirectPreferred: z.boolean().optional(),
 })
 export type PaymentsParty = z.infer<typeof paymentsPartySchema>
 
@@ -1199,7 +1210,11 @@ const aisIbanSchema = z.string().trim().min(1).max(34)
  * installation knows it. `psuIpAddress` set means a person is present: the
  * read is not counted against the consent's daily budget. `affiliatedAspspId`
  * names the savings bank behind a shared BIC (Swedbank's sparbanker, Ölands
- * Bank); the `bank` operation lists them as `affiliates`.
+ * Bank); the `bank` operation lists them as `affiliates`. `redirectPreferred`
+ * (default false) asks the bank for redirect-based SCA (its own page) over
+ * decoupled BankID when it offers both: sent as TPP-Redirect-Preferred when
+ * the consent is created; the signing calls take it from the chosen method
+ * instead.
  */
 export const aisPartySchema = z.object({
   orgNumber: aisOrgNumberSchema,
@@ -1209,6 +1224,7 @@ export const aisPartySchema = z.object({
   psuIpAddress: z.string().max(64).nullable(),
   psuUserAgent: z.string().max(300).nullable(),
   affiliatedAspspId: z.string().trim().min(1).max(64).nullable().optional(),
+  redirectPreferred: z.boolean().optional(),
 })
 export type AisParty = z.infer<typeof aisPartySchema>
 

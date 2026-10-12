@@ -132,7 +132,7 @@ export async function preparePaymentOrders(
 
   const { data: account } = await supabase
     .from('cash_accounts')
-    .select('id, iban, currency, name, enabled, bank_connection:bank_connections(bank_name)')
+    .select('id, iban, currency, name, enabled, bank_connection:bank_connections(bank_name, affiliated_aspsp_id, psu_type)')
     .eq('id', input.cashAccountId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -142,9 +142,9 @@ export async function preparePaymentOrders(
     currency: string
     name: string | null
     enabled: boolean
-    bank_connection: { bank_name: string | null } | null
+    bank_connection: { bank_name: string | null; affiliated_aspsp_id: string | null; psu_type: string | null } | null
   }
-  const debtor = resolveDebtor(acct, acct.bank_connection?.bank_name ?? null)
+  const debtor = resolveDebtor(acct, acct.bank_connection)
   if (!debtor.ok) return { ok: false, code: 'PAYMENT_ORDERS_ACCOUNT_NOT_PAYABLE', details: { reason: debtor.reason } }
 
   const { data: invoiceData, error: invoiceError } = await supabase

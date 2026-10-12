@@ -108,6 +108,8 @@ export type PaymentOrderEventType =
   | 'released'
   | 'rebatched'
   | 'invoice_closed'
+  /** A payment made anew after the bank refused a second BankID on the first (migration 20261012170000). */
+  | 'recreated_after_expired_signing'
 
 export interface PaymentOrderEvent {
   company_id: string

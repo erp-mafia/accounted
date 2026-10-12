@@ -28,6 +28,7 @@ import {
   type PaymentPartyContext,
 } from '@/lib/payments/initiation/provider'
 import { applyProviderState } from './apply-state'
+import { paymentAccountContext } from './debtor'
 import { cancelForClosedInvoice, unpayableOrders } from './release'
 import type { PaymentOrderStatus } from './status'
 import { logPaymentOrderEvents, type PaymentOrderBatchRow, type PaymentOrderBatchStatus, type PaymentOrderRow } from './types'
@@ -78,8 +79,9 @@ function statusParty(order: PaymentOrderRow, orgNumber: string): PaymentPartyCon
   return {
     companyId: order.company_id,
     companyOrgNumber: orgNumber,
-    accountContext: 'corporate',
+    accountContext: paymentAccountContext(order.debtor_snapshot.psu_type),
     debtorBic: order.debtor_snapshot.bic,
+    affiliatedAspspId: order.debtor_snapshot.affiliated_aspsp_id ?? null,
     signerPersonalNumber: null,
     psuIpAddress: null,
     psuUserAgent: null,

@@ -77,6 +77,21 @@ const UNPAID = { company_id: COMPANY, status: 'approved', is_credit_note: false,
 const PAID = { company_id: COMPANY, status: 'paid', is_credit_note: false, remaining_amount: 0 }
 
 describe('syncPaymentOrderStatuses', () => {
+  it('reads a status with the sparbank and the account context the paying account was connected with', async () => {
+    const getPaymentState = vi.fn().mockResolvedValue({ providerStatus: 'RCVD', status: 'submitted', messages: [] })
+    registerPaymentInitiationProvider(provider(getPaymentState))
+    const sparbank = { ...order('o1').debtor_snapshot, bic: 'SWEDSESS', affiliated_aspsp_id: '08999', psu_type: 'personal' }
+    db.setTable('payment_orders', [{ data: [order('o1', { status: 'submitted', debtor_snapshot: sparbank })] }, { data: [{ id: 'o1' }] }])
+
+    await run()
+
+    expect(getPaymentState).toHaveBeenCalledWith(
+      expect.objectContaining({ debtorBic: 'SWEDSESS', affiliatedAspspId: '08999', accountContext: 'private', signerPersonalNumber: null }),
+      'pay-o1',
+      'swedish-giro',
+    )
+  })
+
   it('sweeps claims nobody finished in one database call, before anything else and even with no provider registered', async () => {
     db.setTable('rpc:sweep_stale_payment_order_claims', { data: { marked_unknown: 1, released: 2 } })
 
@@ -214,7 +229,11 @@ describe('syncPaymentOrderStatuses', () => {
 
     expect(result).toMatchObject({ cancelledForClosedInvoice: 1, heldForPerson: 0 })
     expect(cancelPayment).toHaveBeenCalledTimes(1)
-    expect(cancelPayment).toHaveBeenCalledWith(expect.objectContaining({ signerPersonalNumber: null }), 'pay-o1', 'swedish-giro')
+    expect(cancelPayment).toHaveBeenCalledWith(
+      expect.objectContaining({ signerPersonalNumber: null, accountContext: 'corporate', affiliatedAspspId: null }),
+      'pay-o1',
+      'swedish-giro',
+    )
     expect(db.findCalls('rpc:release_payment_order', 'rpc')).toEqual([
       [expect.objectContaining({ p_order_id: 'o1', p_provider_payment_id: 'pay-o1', p_provider_status: 'CANC', p_reason: 'INVOICE_CLOSED', p_user_id: null })],
     ])

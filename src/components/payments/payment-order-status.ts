@@ -68,10 +68,21 @@ export function canCancel(order: { status: PaymentOrderStatus; outcome_unknown_a
   return order.status === 'awaiting_signature' || order.status === 'awaiting_second_signer' || order.status === 'accepted'
 }
 
-/** Codes after which signing again cannot help; mirrors PERMANENT_SIGNING_FAILURES in lib/payments/orders/signing.ts. */
+/**
+ * Codes after which signing again cannot help (the fix is in the online bank
+ * or at the provider); mirrors PERMANENT_SIGNING_FAILURES in
+ * lib/payments/orders/signing.ts, which is server-only.
+ */
 export const PERMANENT_SIGNING_FAILURES: ReadonlySet<string> = new Set([
   'PSU_RIGHTS_MISSING',
+  'PSU_CREDENTIALS_INVALID',
+  'PSU_OPEN_BANKING_RIGHTS_MISSING',
+  'BANK_AGREEMENT_MISSING',
+  'PAYMENT_PRODUCT_AGREEMENT_MISSING',
   'BANKID_NOT_ACTIVATED',
+  'BANKID_EXTENDED_USE_REQUIRED',
+  'KYC_INVALID',
   'TPP_KYC_INVALID',
+  'AMOUNT_LIMITATION_CONTROL_FAILED',
   'SCA_REDIRECT_UNSUPPORTED',
 ])

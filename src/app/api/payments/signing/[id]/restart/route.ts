@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
+import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { signerFromRequest } from '@/lib/payments/orders/request-signer'
 import { restartPaymentSigning } from '@/lib/payments/orders/signing'
@@ -12,7 +13,8 @@ import { restartPaymentSigning } from '@/lib/payments/orders/signing'
 export const maxDuration = 300
 
 const RestartSchema = z.object({
-  method: z.enum(['same_device', 'qr']),
+  /** BankID in our screen (same_device, qr) or on the bank's own page (redirect); a bank that signs only there gets redirect whatever is asked. */
+  method: z.enum(['same_device', 'qr', 'redirect']),
   personal_number: z.string().max(20).nullish(),
 })
 
@@ -25,7 +27,12 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     if (!validation.success) return validation.response
     const outcome = await restartPaymentSigning(
       { supabase, companyId, userId: user.id, log },
-      { batchId: id, method: validation.data.method, signer: signerFromRequest(request, validation.data.personal_number) },
+      {
+        batchId: id,
+        method: validation.data.method,
+        signer: signerFromRequest(request, validation.data.personal_number),
+        returnOrigin: await resolveRequestAppOrigin(request, { onLookupFailure: 'canonical' }),
+      },
     )
     if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
     if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })

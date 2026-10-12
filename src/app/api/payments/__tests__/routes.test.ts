@@ -92,9 +92,12 @@ describe('payments routes validate their bodies', () => {
     expect(response.status).toBe(400)
   })
 
-  it('POST /api/payments/signing accepts only the decoupled BankID methods', async () => {
-    const response = await startSigning(post('/api/payments/signing', { order_ids: [ORDER], method: 'redirect' }), { params: Promise.resolve({}) })
-    expect(response.status).toBe(400)
+  it('POST /api/payments/signing accepts the BankID methods and the bank page, nothing else', async () => {
+    const refused = await startSigning(post('/api/payments/signing', { order_ids: [ORDER], method: 'phone' }), { params: Promise.resolve({}) })
+    expect(refused.status).toBe(400)
+    // 'redirect' passes validation; the dark installation then answers 403, never 400.
+    const redirect = await startSigning(post('/api/payments/signing', { order_ids: [ORDER], method: 'redirect' }), { params: Promise.resolve({}) })
+    expect(redirect.status).toBe(403)
   })
 
   it('POST /api/payments/orders/:id/resolve needs a resolution, and paid needs the payment row', async () => {

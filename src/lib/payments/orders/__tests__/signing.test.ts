@@ -12,7 +12,8 @@ import { batch, claimedOrder, COMPANY, fakeProvider, invoiceFor, order, SIGNER, 
 const mock = vi.hoisted(() => ({ supabase: null as unknown }))
 vi.mock('@/lib/supabase/server', () => ({ createServiceClient: () => mock.supabase }))
 
-import { pollPaymentSigning, restartPaymentSigning, startPaymentSigning } from '../signing'
+import { PERMANENT_SIGNING_FAILURES, pollPaymentSigning, restartPaymentSigning, startPaymentSigning } from '../signing'
+import { PERMANENT_SIGNING_FAILURES as CLIENT_PERMANENT_SIGNING_FAILURES } from '@/components/payments/payment-order-status'
 
 let db: ReturnType<typeof createTableMockSupabase>
 let ctx: OperationContext
@@ -89,13 +90,45 @@ describe('startPaymentSigning', () => {
     expect(db.findCalls('payment_orders', 'is')).toEqual(expect.arrayContaining([['create_started_at', null], ['outcome_unknown_at', null], ['provider_payment_id', null]]))
     expect(provider.createSigningBasket).toHaveBeenCalledWith(expect.anything(), ['pay-1', 'pay-2'])
     expect(provider.startSigning).toHaveBeenCalledWith(
-      expect.objectContaining({ signerPersonalNumber: '199001011239', debtorBic: 'ESSESESS', companyOrgNumber: '556677-8899' }),
+      expect.objectContaining({ signerPersonalNumber: '199001011239', debtorBic: 'ESSESESS', companyOrgNumber: '556677-8899', accountContext: 'corporate', affiliatedAspspId: null }),
       { kind: 'basket', providerBasketId: 'basket-at-bank' },
       'qr',
+      null,
     )
     const instruction = (provider.createPayment as ReturnType<typeof vi.fn>).mock.calls[0]![1]
-    expect(instruction).toMatchObject({ amount: 737.5, payee: { type: 'bankgiro', bankgiro: '50501055' }, reference: { type: 'ocr', value: '4400112233' } })
+    expect(instruction).toMatchObject({ amount: 737.5, attempt: 1, payee: { type: 'bankgiro', bankgiro: '50501055' }, reference: { type: 'ocr', value: '4400112233' } })
     expect(db.supabase.rpc).toHaveBeenCalledWith('claim_payment_orders_for_signing', expect.objectContaining({ p_company_id: COMPANY, p_user_id: USER }))
+  })
+
+  it('numbers a create after the payments the bank confirmed cancelled for the order, so a new key makes a new payment', async () => {
+    const provider = fakeProvider()
+    registerPaymentInitiationProvider(provider)
+    // o1 had two payments cancelled at the bank before (two provider_cancelled events); o2 none.
+    db.setTable('payment_order_events', { data: [{ payment_order_id: 'o1' }, { payment_order_id: 'o1' }] })
+    db.setTable('payment_orders', [
+      { data: [order('o1'), order('o2')] },
+      { data: [{ id: 'o1' }] },
+      { data: [{ id: 'o1' }] },
+      { data: [{ id: 'o2' }] },
+      { data: [{ id: 'o2' }] },
+      { data: [waitingOrder('o1', 1), waitingOrder('o2', 2)] },
+      { data: null },
+      { data: [waitingOrder('o1', 1, { status: 'awaiting_signature' }), waitingOrder('o2', 2, { status: 'awaiting_signature' })] },
+    ])
+    db.setTable('rpc:claim_payment_orders_for_signing', { data: { ok: true, batch: batch(), orders: [claimedOrder('o1'), claimedOrder('o2')] } })
+    db.setTable('payment_order_batches', [
+      { data: batch({ provider_batch_id: 'basket-at-bank' }) },
+      { data: batch({ provider_batch_id: 'basket-at-bank' }) },
+      { data: batch({ provider_batch_id: 'basket-at-bank', status: 'awaiting_signature', provider_authorisation_id: 'auth-1' }) },
+      { data: batch({ status: 'awaiting_signature' }) },
+    ])
+
+    const result = await startPaymentSigning(ctx, { orderIds: ['o1', 'o2'], method: 'qr', signer: SIGNER })
+
+    expect(result.ok).toBe(true)
+    const attempts = (provider.createPayment as ReturnType<typeof vi.fn>).mock.calls.map(([, instruction]) => (instruction as { endToEndId: string; attempt: number }).attempt)
+    expect(attempts).toEqual([3, 1])
+    expect(db.findCalls('payment_order_events', 'eq')).toContainEqual(['event_type', 'provider_cancelled'])
   })
 
   it('re-attests an approved order whose day is no banking day before the bank is asked', async () => {
@@ -169,8 +202,23 @@ describe('startPaymentSigning', () => {
     expect(unverified.createPayment).not.toHaveBeenCalled()
   })
 
+  it('asks for the company verification in the corporate context only (DECISIONS.md 2026-10-12)', async () => {
+    const unverified = fakeProvider({ getCompanyVerification: vi.fn().mockResolvedValue({ status: 'invalid', validUntil: null }) })
+    registerPaymentInitiationProvider(unverified)
+    const personal = { ...order('o1').debtor_snapshot, bic: 'SWEDSESS', affiliated_aspsp_id: '08999', psu_type: 'personal' }
+    db.setTable('payment_orders', { data: [order('o1', { debtor_snapshot: personal })] })
+    db.setTable('rpc:claim_payment_orders_for_signing', { data: { ok: false, code: 'not_approved' } })
+
+    const result = await startPaymentSigning(ctx, { orderIds: ['o1'], method: 'qr', signer: SIGNER })
+
+    // Past the gate: the claim was reached (and refused by the fixture), the verification never asked for.
+    expect(result).toMatchObject({ ok: false, code: 'PAYMENT_ORDERS_WRONG_STATUS' })
+    expect(unverified.getCompanyVerification).not.toHaveBeenCalled()
+    expect(unverified.getBankCapabilities).toHaveBeenCalledWith(expect.objectContaining({ accountContext: 'private', affiliatedAspspId: '08999', debtorBic: 'SWEDSESS' }))
+  })
+
   it.each([
-    ['a bank that signs only on its own page', { decoupled: false, redirect: true, basket: { supported: true, maxPayments: 100 } }, 2, 'PAYMENT_SIGNING_REDIRECT_UNSUPPORTED', undefined],
+    ['a bank that signs neither in our screen nor on its own page', { decoupled: false, redirect: false, basket: { supported: true, maxPayments: 100 } }, 2, 'PAYMENT_SIGNING_REDIRECT_UNSUPPORTED', undefined],
     ['a bank without baskets, for several payments', { decoupled: true, redirect: false, basket: { supported: false, maxPayments: null } }, 2, 'PAYMENT_SIGNING_BASKET_UNSUPPORTED', { max: 1 }],
     ["a basket above the bank's maximum", { decoupled: true, redirect: false, basket: { supported: true, maxPayments: 2 } }, 3, 'PAYMENT_SIGNING_BASKET_TOO_LARGE', { max: 2 }],
   ])('refuses %s before anything is created', async (_name, capabilities, count, code, details) => {
@@ -184,6 +232,81 @@ describe('startPaymentSigning', () => {
     expect(result).toMatchObject({ ok: false, code, ...(details ? { details } : {}) })
     expect(db.supabase.rpc).not.toHaveBeenCalled()
     expect(provider.createPayment).not.toHaveBeenCalled()
+  })
+
+  describe("a bank that signs only on its own page", () => {
+    const REDIRECT_ONLY = { decoupled: false, redirect: true, basket: { supported: true, maxPayments: 100 } }
+    const single = batch({ signing_target: 'payment', order_count: 1 })
+    const redirectChallenge = { approach: 'decoupled' as const, autostartToken: null, qrData: null, qrImage: null, redirectUrl: 'https://bank.example.se/sign/1' }
+
+    function sendsOne(provider: ReturnType<typeof fakeProvider>) {
+      db.setTable('payment_orders', [
+        { data: [order('o1')] },
+        { data: [{ id: 'o1' }] },
+        { data: [{ id: 'o1' }] },
+        { data: [waitingOrder('o1', 1)] },
+        { data: null },
+        { data: [waitingOrder('o1', 1, { status: 'awaiting_signature' })] },
+      ])
+      db.setTable('rpc:claim_payment_orders_for_signing', { data: { ok: true, batch: single, orders: [claimedOrder('o1')] } })
+      db.setTable('payment_order_batches', [{ data: single }, { data: { ...single, status: 'awaiting_signature', provider_authorisation_id: 'auth-1' } }, { data: single }])
+      registerPaymentInitiationProvider(provider)
+    }
+
+    it('signs by redirect whatever was asked, tells the bank it prefers its page, and names Betalningar as the way back', async () => {
+      const provider = fakeProvider({
+        getBankCapabilities: vi.fn().mockResolvedValue(REDIRECT_ONLY),
+        startSigning: vi.fn().mockResolvedValue({ providerAuthorisationId: 'auth-1', method: 'redirect', state: 'pending', challenge: { ...redirectChallenge, approach: 'redirect' }, failureCode: null }),
+      })
+      sendsOne(provider)
+
+      const result = await startPaymentSigning(ctx, { orderIds: ['o1'], method: 'qr', signer: SIGNER, returnOrigin: 'https://app.accounted.se' })
+
+      expect(result).toMatchObject({ ok: true, data: { challenge: { approach: 'redirect', redirectUrl: 'https://bank.example.se/sign/1' } } })
+      expect(provider.createPayment).toHaveBeenCalledWith(expect.objectContaining({ redirectPreferred: true }), expect.anything())
+      expect(provider.startSigning).toHaveBeenCalledWith(
+        expect.objectContaining({ redirectPreferred: true }),
+        { kind: 'payment', providerPaymentId: 'pay-1', product: 'swedish-giro' },
+        'redirect',
+        { returnUrl: 'https://app.accounted.se/payments?signing=batch-1', returnState: 'batch-1' },
+      )
+      expect(db.findCalls('payment_order_batches', 'update')).toContainEqual([expect.objectContaining({ signing_method: 'redirect' })])
+    })
+
+    it('refuses before anything is claimed when no origin to come back to is known', async () => {
+      const provider = fakeProvider({ getBankCapabilities: vi.fn().mockResolvedValue(REDIRECT_ONLY) })
+      registerPaymentInitiationProvider(provider)
+      db.setTable('payment_orders', { data: [order('o1')] })
+
+      const result = await startPaymentSigning(ctx, { orderIds: ['o1'], method: 'qr', signer: SIGNER })
+
+      expect(result).toMatchObject({ ok: false, code: 'VALIDATION_ERROR', details: { field: 'return_origin' } })
+      expect(db.supabase.rpc).not.toHaveBeenCalled()
+      expect(provider.createPayment).not.toHaveBeenCalled()
+    })
+
+    it('does not ask a bank that signs in our screen for its page, and takes QR when its page was asked for but it has none', async () => {
+      const provider = fakeProvider({ getBankCapabilities: vi.fn().mockResolvedValue({ decoupled: true, redirect: false, basket: { supported: true, maxPayments: 100 } }) })
+      sendsOne(provider)
+
+      await startPaymentSigning(ctx, { orderIds: ['o1'], method: 'redirect', signer: SIGNER, returnOrigin: 'https://app.accounted.se' })
+
+      expect(provider.createPayment).toHaveBeenCalledWith(expect.not.objectContaining({ redirectPreferred: true }), expect.anything())
+      expect(provider.startSigning).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'qr', null)
+    })
+
+    it('lets a person choose the bank page at a bank that offers both', async () => {
+      const provider = fakeProvider({
+        startSigning: vi.fn().mockResolvedValue({ providerAuthorisationId: 'auth-1', method: 'redirect', state: 'pending', challenge: { ...redirectChallenge, approach: 'redirect' }, failureCode: null }),
+      })
+      sendsOne(provider)
+
+      await startPaymentSigning(ctx, { orderIds: ['o1'], method: 'redirect', signer: SIGNER, returnOrigin: 'https://app.accounted.se' })
+
+      expect(provider.startSigning).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'redirect', { returnUrl: 'https://app.accounted.se/payments?signing=batch-1', returnState: 'batch-1' })
+      // Only a bank that signs nowhere else is told to prefer its page.
+      expect(provider.createPayment).toHaveBeenCalledWith(expect.not.objectContaining({ redirectPreferred: true }), expect.anything())
+    })
   })
 
   it('on a definitive refusal mid-basket, cancels the payments already created at the bank, then releases them', async () => {
@@ -479,7 +602,7 @@ describe('restartPaymentSigning', () => {
     expect(result).toMatchObject({ ok: true, data: { batch_id: 'batch-1' } })
     expect(db.supabase.rpc).toHaveBeenCalledWith('rebatch_payment_orders_for_signing', { p_company_id: COMPANY, p_batch_id: 'batch-1', p_user_id: USER })
     expect(provider.createSigningBasket).not.toHaveBeenCalled()
-    expect(provider.startSigning).toHaveBeenCalledWith(expect.anything(), { kind: 'basket', providerBasketId: 'basket-old' }, 'qr')
+    expect(provider.startSigning).toHaveBeenCalledWith(expect.anything(), { kind: 'basket', providerBasketId: 'basket-old' }, 'qr', null)
   })
 
   it('never signs the same signing again for an invoice paid meanwhile', async () => {
@@ -519,7 +642,7 @@ describe('restartPaymentSigning', () => {
     const result = await restart()
 
     expect(result).toMatchObject({ ok: true, data: { batch_id: 'batch-2' } })
-    expect(provider.startSigning).toHaveBeenCalledWith(expect.anything(), { kind: 'payment', providerPaymentId: 'pay-1', product: 'swedish-giro' }, 'qr')
+    expect(provider.startSigning).toHaveBeenCalledWith(expect.anything(), { kind: 'payment', providerPaymentId: 'pay-1', product: 'swedish-giro' }, 'qr', null)
     expect(provider.createPayment).not.toHaveBeenCalled()
     expect(provider.createSigningBasket).not.toHaveBeenCalled()
   })
@@ -573,6 +696,22 @@ describe('restartPaymentSigning', () => {
     expect(provider.startSigning).not.toHaveBeenCalled()
   })
 
+  it("tells the bank which sparbank and which account context the paying account's connection has", async () => {
+    const provider = fakeProvider({ getPaymentState: vi.fn().mockRejectedValue(new PaymentProviderError('timeout', 'TIMEOUT', false, null, true)) })
+    registerPaymentInitiationProvider(provider)
+    db.setTable('payment_order_batches', { data: batch({ provider_batch_id: 'basket-old' }) })
+    const sparbank = { ...waitingOrder('o1', 1).debtor_snapshot, bic: 'SWEDSESS', bank_name: 'Sparbanken Skåne', affiliated_aspsp_id: '08999', psu_type: 'personal' }
+    db.setTable('payment_orders', { data: [waitingOrder('o1', 1, { debtor_snapshot: sparbank })] })
+
+    await restart()
+
+    expect(provider.getPaymentState).toHaveBeenCalledWith(
+      expect.objectContaining({ debtorBic: 'SWEDSESS', affiliatedAspspId: '08999', accountContext: 'private' }),
+      'pay-1',
+      'swedish-giro',
+    )
+  })
+
   it('cancels at the bank a waiting payment whose invoice no longer needs paying, and signs the rest', async () => {
     const provider = fakeProvider()
     registerPaymentInitiationProvider(provider)
@@ -601,7 +740,127 @@ describe('restartPaymentSigning', () => {
     expect(result).toMatchObject({ ok: true, data: { batch_id: 'batch-2' } })
     expect(provider.cancelPayment).toHaveBeenCalledWith(expect.anything(), 'pay-2', 'swedish-giro')
     expect(releases()).toEqual([expect.objectContaining({ p_order_id: 'o2', p_provider_payment_id: 'pay-2', p_reason: 'INVOICE_CLOSED' })])
-    expect(provider.startSigning).toHaveBeenCalledWith(expect.anything(), { kind: 'payment', providerPaymentId: 'pay-1', product: 'swedish-giro' }, 'qr')
+    expect(provider.startSigning).toHaveBeenCalledWith(expect.anything(), { kind: 'payment', providerPaymentId: 'pay-1', product: 'swedish-giro' }, 'qr', null)
+  })
+
+  describe('after the bank let the BankID expire', () => {
+    const signedOnce = batch({ signing_target: 'payment', order_count: 1, provider_authorisation_id: 'auth-old' })
+    const fresh = batch({ id: 'batch-2', signing_target: 'payment', order_count: 1 })
+    const refused = new PaymentProviderError('format', 'FORMAT_ERROR', false, 400)
+
+    it('cancels the payment, claims the order again, creates a new payment under a new key and signs it', async () => {
+      const provider = fakeProvider({
+        startSigning: vi
+          .fn()
+          .mockRejectedValueOnce(refused)
+          .mockResolvedValueOnce({ providerAuthorisationId: 'auth-2', method: 'qr', state: 'pending', challenge: { approach: 'decoupled', autostartToken: null, qrData: 'bankid.qr.new', qrImage: null, redirectUrl: null }, failureCode: null }),
+      })
+      registerPaymentInitiationProvider(provider)
+      db.setTable('payment_order_events', { data: [{ payment_order_id: 'o1' }] }) // the cancel just confirmed
+      db.setTable('payment_order_batches', [
+        { data: signedOnce }, // restart loads the signing
+        { data: signedOnce }, // what still waits
+        { data: signedOnce }, // beginSca
+        { data: signedOnce }, // stopSigning reads the signing
+        { data: null }, // -> failed
+        { data: fresh }, // beginSca on the new signing
+        { data: { ...fresh, status: 'awaiting_signature', provider_authorisation_id: 'auth-2' } },
+        { data: { ...fresh, status: 'awaiting_signature', provider_authorisation_id: 'auth-2' } },
+      ])
+      db.setTable('payment_orders', [
+        { data: [waitingOrder('o1', 1)] },
+        { data: [waitingOrder('o1', 1)] },
+        { data: [waitingOrder('o1', 1)] },
+        { data: [waitingOrder('o1', 1)] }, // stopSigning
+        { data: { id: 'o1', status: 'submitted', outcome_unknown_at: null } }, // cancelAndRelease reads it again
+        { data: [{ id: 'o1' }] }, // new create started
+        { data: [{ id: 'o1' }] }, // new id stored
+        { data: [waitingOrder('o1', 2, { batch_id: 'batch-2' })] }, // beginSca on the new signing
+        { data: null }, // -> awaiting_signature
+        { data: [waitingOrder('o1', 2, { batch_id: 'batch-2', status: 'awaiting_signature' })] },
+      ])
+      db.setTable('rpc:rebatch_payment_orders_for_signing', { data: { ok: true, same: true, batch: signedOnce, orders: [waitingOrder('o1', 1)] } })
+      db.setTable('rpc:claim_payment_orders_for_signing', { data: { ok: true, batch: fresh, orders: [claimedOrder('o1', { batch_id: 'batch-2' })] } })
+
+      const result = await restart()
+
+      expect(result).toMatchObject({ ok: true, data: { batch_id: 'batch-2', status: 'awaiting_signature', challenge: { qrData: 'bankid.qr.new' } } })
+      // The expired payment is cancelled at the bank, confirmed, and its order released before anything new.
+      expect(provider.cancelPayment).toHaveBeenCalledWith(expect.anything(), 'pay-1', 'swedish-giro')
+      expect(releases()).toEqual([expect.objectContaining({ p_order_id: 'o1', p_provider_payment_id: 'pay-1', p_reason: 'SIGNING_EXPIRED' })])
+      expect(db.findCalls('payment_order_batches', 'update')).toContainEqual([{ status: 'failed' }])
+      // Claimed again, created again under the second key, signed on the new payment.
+      expect(db.findCalls('rpc:claim_payment_orders_for_signing', 'rpc')).toEqual([[expect.objectContaining({ p_order_ids: ['o1'] })]])
+      const instruction = (provider.createPayment as ReturnType<typeof vi.fn>).mock.calls[0]![1] as { endToEndId: string; attempt: number }
+      expect(instruction).toMatchObject({ endToEndId: waitingOrder('o1', 1).end_to_end_id, attempt: 2 })
+      expect(provider.startSigning).toHaveBeenLastCalledWith(expect.anything(), { kind: 'payment', providerPaymentId: 'pay-2', product: 'swedish-giro' }, 'qr', null)
+      expect(events()).toContainEqual(
+        expect.objectContaining({
+          payment_order_id: 'o1',
+          batch_id: 'batch-2',
+          event_type: 'recreated_after_expired_signing',
+          detail: { previous_batch_id: 'batch-1', previous_provider_payment_id: 'pay-1', provider_code: 'FORMAT_ERROR' },
+        }),
+      )
+    })
+
+    it('holds the order for a person when the bank does not confirm the cancel, and recreates nothing', async () => {
+      const provider = fakeProvider({
+        startSigning: vi.fn().mockRejectedValue(refused),
+        cancelPayment: vi.fn().mockResolvedValue({ outcome: 'needs_authorisation', providerStatus: 'RCVD' }),
+      })
+      registerPaymentInitiationProvider(provider)
+      db.setTable('payment_order_batches', [{ data: signedOnce }, { data: signedOnce }, { data: signedOnce }, { data: signedOnce }, { data: null }])
+      db.setTable('payment_orders', [
+        { data: [waitingOrder('o1', 1)] },
+        { data: [waitingOrder('o1', 1)] },
+        { data: [waitingOrder('o1', 1)] },
+        { data: [waitingOrder('o1', 1)] },
+        { data: { id: 'o1', status: 'submitted', outcome_unknown_at: null } },
+      ])
+      db.setTable('rpc:rebatch_payment_orders_for_signing', { data: { ok: true, same: true, batch: signedOnce, orders: [waitingOrder('o1', 1)] } })
+
+      const result = await restart()
+
+      expect(result).toMatchObject({ ok: false, code: 'PAYMENT_PROVIDER_REFUSED', details: { provider_code: 'FORMAT_ERROR', held_for_person: ['o1'], recreated: false } })
+      expect(releases()).toEqual([])
+      expect(db.findCalls('rpc:claim_payment_orders_for_signing', 'rpc')).toEqual([])
+      expect(provider.createPayment).not.toHaveBeenCalled()
+      expect(events()).toContainEqual(expect.objectContaining({ payment_order_id: 'o1', detail: expect.objectContaining({ code: 'BANK_CANCEL_NOT_CONFIRMED', reason: 'SIGNING_EXPIRED' }) }))
+    })
+
+    it('never recreates on a refusal of a first start, or on a refusal signing can never fix', async () => {
+      // No earlier authorisation: a FORMAT_ERROR is the plain refusal it always was.
+      const first = fakeProvider({ startSigning: vi.fn().mockRejectedValue(refused) })
+      registerPaymentInitiationProvider(first)
+      const neverSigned = batch({ signing_target: 'payment', order_count: 1 })
+      db.setTable('payment_order_batches', { data: neverSigned })
+      db.setTable('payment_orders', { data: [waitingOrder('o1', 1)] })
+      db.setTable('rpc:rebatch_payment_orders_for_signing', { data: { ok: true, same: true, batch: neverSigned, orders: [waitingOrder('o1', 1)] } })
+
+      expect(await restart()).toMatchObject({ ok: false, code: 'PAYMENT_PROVIDER_REFUSED', details: { provider_code: 'FORMAT_ERROR' } })
+      expect(first.cancelPayment).not.toHaveBeenCalled()
+      expect(first.createPayment).not.toHaveBeenCalled()
+
+      // Signed before, but the person lacks the rights: stopped for good, never made anew.
+      resetPaymentInitiationProviders()
+      const rights = fakeProvider({ startSigning: vi.fn().mockRejectedValue(new PaymentProviderError('rights', 'PSU_RIGHTS_MISSING', false, 400)) })
+      registerPaymentInitiationProvider(rights)
+      db.setTable('payment_order_batches', [{ data: signedOnce }, { data: signedOnce }, { data: signedOnce }, { data: signedOnce }, { data: null }])
+      db.setTable('payment_orders', [
+        { data: [waitingOrder('o1', 1)] },
+        { data: [waitingOrder('o1', 1)] },
+        { data: [waitingOrder('o1', 1)] },
+        { data: [waitingOrder('o1', 1)] },
+        { data: { id: 'o1', status: 'submitted', outcome_unknown_at: null } },
+      ])
+      db.setTable('rpc:rebatch_payment_orders_for_signing', { data: { ok: true, same: true, batch: signedOnce, orders: [waitingOrder('o1', 1)] } })
+
+      expect(await restart()).toMatchObject({ ok: false, code: 'PAYMENT_PROVIDER_REFUSED', details: { provider_code: 'PSU_RIGHTS_MISSING' } })
+      expect(rights.cancelPayment).toHaveBeenCalledTimes(1)
+      expect(rights.createPayment).not.toHaveBeenCalled()
+      expect(db.findCalls('rpc:claim_payment_orders_for_signing', 'rpc')).toEqual([])
+    })
   })
 
   it('refuses a signing that is still active, and one with nothing left to sign', async () => {
@@ -678,6 +937,36 @@ describe('pollPaymentSigning', () => {
     expect(provider.cancelPayment).toHaveBeenCalledTimes(2)
     expect(releases().map((r) => [r.p_order_id, r.p_provider_payment_id])).toEqual([['o1', 'pay-1'], ['o2', 'pay-2']])
     expect(orderPatches().some((p) => p.status === 'failed')).toBe(false)
+  })
+
+  it.each(['BANK_AGREEMENT_MISSING', 'PSU_OPEN_BANKING_RIGHTS_MISSING', 'PAYMENT_PRODUCT_AGREEMENT_MISSING', 'KYC_INVALID', 'BANKID_EXTENDED_USE_REQUIRED', 'AMOUNT_LIMITATION_CONTROL_FAILED', 'PSU_CREDENTIALS_INVALID'])(
+    'ends the signing for good on %s: the fix is in the online bank, so the payments are cancelled and the orders released',
+    async (code) => {
+      const provider = fakeProvider({ pollSigning: vi.fn().mockResolvedValue({ state: 'failed', challenge: null, failureCode: code }) })
+      registerPaymentInitiationProvider(provider)
+      db.setTable('payment_order_batches', { data: signing })
+      db.setTable('payment_orders', [
+        { data: inSigning },
+        { data: inSigning },
+        { data: { id: 'o1', status: 'awaiting_signature', outcome_unknown_at: null } },
+        { data: null },
+        { data: { id: 'o2', status: 'awaiting_signature', outcome_unknown_at: null } },
+        { data: null },
+        { data: inSigning },
+      ])
+
+      const result = await pollPaymentSigning(ctx, { batchId: 'batch-1', signer: SIGNER })
+
+      expect(result).toMatchObject({ ok: true, data: { failure_code: code } })
+      expect(provider.cancelPayment).toHaveBeenCalledTimes(2)
+      expect(releases().map((r) => r.p_order_id)).toEqual(['o1', 'o2'])
+      // Never reset to 'created' for another try: the batch ends failed.
+      expect(db.findCalls('payment_order_batches', 'update')).not.toContainEqual([{ status: 'created' }])
+    },
+  )
+
+  it('agrees with the browser on which failures are permanent', () => {
+    expect([...PERMANENT_SIGNING_FAILURES].sort()).toEqual([...CLIENT_PERMANENT_SIGNING_FAILURES].sort())
   })
 
   it('never cancels a payment that moved on since the signing failed', async () => {

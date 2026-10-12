@@ -7,7 +7,7 @@
 import { normalizeSignerPersonalNumber, signerPersonalNumberOnFile } from '@/lib/auth/bankid-signer'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { PaymentPartyContext } from '@/lib/payments/initiation/provider'
-import type { DebtorSnapshot } from './debtor'
+import { paymentAccountContext, type DebtorSnapshot } from './debtor'
 
 export interface SignerInput {
   /** Typed in the signing dialog; used when the person has no BankID login on file. */
@@ -48,8 +48,9 @@ export async function buildPartyContext(
     ctx: {
       companyId: ctx.companyId,
       companyOrgNumber: orgNumber,
-      accountContext: 'corporate',
+      accountContext: paymentAccountContext(order.debtor_snapshot.psu_type),
       debtorBic: order.debtor_snapshot.bic,
+      affiliatedAspspId: order.debtor_snapshot.affiliated_aspsp_id ?? null,
       signerPersonalNumber: personalNumber,
       psuIpAddress: signer.ipAddress,
       psuUserAgent: signer.userAgent,

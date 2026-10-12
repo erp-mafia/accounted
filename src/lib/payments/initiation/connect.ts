@@ -32,6 +32,7 @@ import {
   PaymentProviderError,
   registerPaymentInitiationProviderIfAbsent,
   type PaymentInitiationProvider,
+  type PaymentInstruction,
   type PaymentPartyContext,
   type SigningChallenge,
   type SigningTarget, type SigningStep } from './provider'
@@ -49,7 +50,12 @@ export interface ConnectPaymentsProviderDeps {
   timeoutMs?: number
 }
 
-/** The port's party as the contract carries it: digits only for the organisationsnummer and the personnummer. */
+/**
+ * The port's party as the contract carries it: digits only for the
+ * organisationsnummer and the personnummer. Every operation sends it, so the
+ * affiliated bank reaches every payment, basket, status, cancel and signing
+ * call (X-AffiliatedASPSP-ID at the provider) from this one place.
+ */
 export function toConnectorParty(ctx: PaymentPartyContext): PaymentsParty {
   return {
     orgNumber: ctx.companyOrgNumber.replace(/\D/g, ''),
@@ -58,7 +64,19 @@ export function toConnectorParty(ctx: PaymentPartyContext): PaymentsParty {
     signerPersonalNumber: ctx.signerPersonalNumber ? ctx.signerPersonalNumber.replace(/\D/g, '') : null,
     psuIpAddress: ctx.psuIpAddress,
     psuUserAgent: ctx.psuUserAgent,
+    affiliatedAspspId: ctx.affiliatedAspspId ?? null,
+    ...(ctx.redirectPreferred ? { redirectPreferred: true } : {}),
   }
+}
+
+/**
+ * The idempotency key of a create: the end-to-end id, and the attempt number
+ * once a payment created for the order was cancelled at the bank (a replay of
+ * the first key would answer the cancelled payment, not make a new one).
+ */
+export function paymentIdempotencyKey(instruction: Pick<PaymentInstruction, 'endToEndId' | 'attempt'>): string {
+  const attempt = instruction.attempt ?? 1
+  return attempt > 1 ? `pay:${instruction.endToEndId}:${attempt}` : `pay:${instruction.endToEndId}`
 }
 
 /** The idempotency key of a basket: the sorted payment ids, hashed, so the same set always names the same basket. */
@@ -101,6 +119,12 @@ export function toPaymentProviderError(error: unknown, operation: PaymentsOperat
       return new PaymentProviderError(error.message, error.providerCode ?? PAYMENT_REFUSED, false, status, false)
     case 'CONNECTOR_PAYMENTS_PROVIDER_FAILED':
     case 'CONNECTOR_RATE_LIMITED':
+      return new PaymentProviderError(error.message, error.code, true, status, false)
+    case 'CONNECTOR_BANK_THROTTLED':
+      // The bank's own 429 (BANK_REQUEST_LIMIT_EXCEEDED): it refused the
+      // request before doing anything with it, write or read, and asks for a
+      // short wait. Retried on the next status run; the person is told the
+      // bank is busy.
       return new PaymentProviderError(error.message, error.code, true, status, false)
     default:
       break
@@ -174,10 +198,12 @@ export function createConnectPaymentsProvider(upstream: ConnectorUpstream, deps:
     },
 
     async createPayment(ctx, instruction) {
+      // The attempt number keys the create; the wire instruction is the contract's alone.
+      const { attempt: _attempt, ...wire } = instruction
       const created = await call('createPayment', ctx.companyId, {
-        idempotencyKey: `pay:${instruction.endToEndId}`,
+        idempotencyKey: paymentIdempotencyKey(instruction),
         party: toConnectorParty(ctx),
-        instruction,
+        instruction: wire,
       })
       return {
         providerPaymentId: created.providerPaymentId,
@@ -202,12 +228,14 @@ export function createConnectPaymentsProvider(upstream: ConnectorUpstream, deps:
       return { providerBasketId: basket.providerBasketId }
     },
 
-    async startSigning(ctx, target, method) {
+    async startSigning(ctx, target, method, redirect = null) {
       const started = await call('startSigning', ctx.companyId, {
         idempotencyKey: `sign:${signingTargetId(target)}:${method}:${randomUUID()}`,
         party: toConnectorParty(ctx),
         target,
         method,
+        // Required by the contract with method 'redirect', absent otherwise.
+        ...(method === 'redirect' && redirect ? { returnUrl: redirect.returnUrl, returnState: redirect.returnState } : {}),
       })
       return {
         providerAuthorisationId: started.providerAuthorisationId,

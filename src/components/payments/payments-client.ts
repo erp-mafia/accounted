@@ -159,7 +159,8 @@ export interface SigningView {
   orders: Array<{ id: string; status: string; provider_status: string | null; outcome_unknown: boolean }>
 }
 
-export type SigningMethod = 'same_device' | 'qr'
+/** BankID in our screen (qr, same_device) or on the bank's own page (redirect); a bank that signs only there gets redirect whatever is asked. */
+export type SigningMethod = 'same_device' | 'qr' | 'redirect'
 
 /** A supplier_invoice_payments row, as the invoice detail lists them (the resolve dialog picks one). */
 export interface SupplierInvoicePaymentRow {

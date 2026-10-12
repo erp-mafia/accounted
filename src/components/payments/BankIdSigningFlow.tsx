@@ -11,7 +11,9 @@ import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency } from '@/lib/utils'
 import { BankIdChallengeQr } from './BankIdChallengeQr'
+import { BankIdMark } from '@/components/bankid/BankIdMark'
 import { BankMark } from '@/components/banks/BankMark'
+import type { PaymentSigningReturn } from '@/lib/payments/orders/return-url'
 import { PAYMENT_ORDER_STATUS_BADGE, PERMANENT_SIGNING_FAILURES } from './payment-order-status'
 import {
   bankIdAutostartHref,
@@ -65,6 +67,12 @@ interface BankIdSigningFlowProps {
   autoStart?: boolean
   /** The bank the payments leave from, named with its mark on the signing step. */
   bankName?: string | null
+  /**
+   * Back from the bank's own page (the redirect method): the signing to pick
+   * up at its poll. ok waits for the bank's answer; error shows the bank's
+   * code while the poll settles, then offers to try again.
+   */
+  resume?: PaymentSigningReturn | null
 }
 
 /** The signing is over, one way or the other: show where each payment stands. */
@@ -78,25 +86,35 @@ export function signingFinished(view: SigningView): boolean {
   )
 }
 
+/** The view a return from the bank's page starts from: the signing waits, and the first poll tells the truth. */
+function resumedView(batchId: string): SigningView {
+  return { batch_id: batchId, status: 'awaiting_signature', challenge: null, failure_code: null, step: null, orders: [] }
+}
+
 /**
  * Signera: one BankID for the selected payments. Three stages:
  *   method:  choose QR or this device (and type a personnummer when none is on file)
- *   signing: the challenge, polled every second; an abandoned signing offers to start again
+ *   signing: the challenge, polled every second; an abandoned signing offers to start again.
+ *            A bank that signs on its own page gets one line and one button,
+ *            Fortsätt till {bank}; coming back from it (resume), the stage
+ *            waits for the bank's answer without a QR.
  *   done:    where each payment stands at the bank
  * The flow never approves anything: it only signs orders that are already
  * approved (Godkänn and Signera are never one button).
  */
-export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBank, onStageChange, autoStart = false, bankName = null }: BankIdSigningFlowProps) {
+export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBank, onStageChange, autoStart = false, bankName = null, resume = null }: BankIdSigningFlowProps) {
   const t = useTranslations('bank_payments')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
 
-  const [stage, setStageState] = useState<SigningFlowStage>('method')
-  const [method, setMethod] = useState<SigningMethod>('qr')
+  const [stage, setStageState] = useState<SigningFlowStage>(resume ? 'signing' : 'method')
+  const [method, setMethod] = useState<SigningMethod>(resume ? 'redirect' : 'qr')
   const [personalNumber, setPersonalNumber] = useState('')
   const [busy, setBusy] = useState(false)
-  const [signing, setSigning] = useState<SigningView | null>(null)
+  const [signing, setSigning] = useState<SigningView | null>(resume ? resumedView(resume.batchId) : null)
   const [refusal, setRefusal] = useState<'verification' | 'redirect' | null>(null)
+  /** Set while the flow was reopened by a return from the bank's own page; cleared by the next start. */
+  const [returned, setReturned] = useState<PaymentSigningReturn | null>(resume)
   const sentToBank = useRef(false)
   // The bank's step, when it signs in several: which one, since when, and
   // which ones this signing has been through (a new one means a new QR).
@@ -111,6 +129,14 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
     },
     [onStageChange],
   )
+
+  // A resumed flow opens on the signing stage: the parent's title follows.
+  const announcedResume = useRef(false)
+  useEffect(() => {
+    if (!resume || announcedResume.current) return
+    announcedResume.current = true
+    onStageChange?.('signing')
+  }, [resume, onStageChange])
 
   const total = useMemo(() => orders.reduce((sum, o) => sum + Number(o.amount), 0), [orders])
   const currency = orders[0]?.currency ?? 'SEK'
@@ -144,9 +170,15 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
     setStepsSeen([])
   }
 
+  /** The server decides for a bank that signs only on its own page: the challenge's approach, not the method asked for, is what is on screen. */
+  function adoptMethod(chosen: SigningMethod, view: SigningView) {
+    setMethod(view.challenge?.approach === 'redirect' ? 'redirect' : chosen)
+  }
+
   async function begin(chosen: SigningMethod) {
     setMethod(chosen)
     setRefusal(null)
+    setReturned(null)
     resetSteps()
     setBusy(true)
     try {
@@ -156,6 +188,7 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
         onSentToBank?.()
       }
       setSigning(view)
+      adoptMethod(chosen, view)
       setStage(signingFinished(view) ? 'done' : 'signing')
     } catch (error) {
       const code = error instanceof PaymentsClientError ? error.code : null
@@ -176,10 +209,13 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
   async function restart(chosen: SigningMethod) {
     if (!signing) return
     setMethod(chosen)
+    setReturned(null)
     resetSteps()
     setBusy(true)
     try {
-      applyView(await restartSigning({ batchId: signing.batch_id, method: chosen, personalNumber: typedNumber }))
+      const view = await restartSigning({ batchId: signing.batch_id, method: chosen, personalNumber: typedNumber })
+      adoptMethod(chosen, view)
+      applyView(view)
     } catch (error) {
       fail(t('signing_start_failed_title'), error)
     } finally {
@@ -196,6 +232,13 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
     void begin('qr')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoStart, signerKnown])
+
+  // The bank's own page replaces this one: the top window goes there (a popup
+  // would lose the person on a phone and be blocked on a desktop), and the
+  // bank sends it back to Betalningar with the signing named.
+  function continueToBank(url: string) {
+    window.location.assign(url)
+  }
 
   async function openVerification() {
     setBusy(true)
@@ -262,6 +305,7 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
   }, [counting])
   const secondsLeft = stepSince === null ? null : Math.max(0, QR_LIFETIME_S - Math.floor((now - stepSince) / 1000))
   const payeeLabel = orders.length === 1 ? orders[0]!.payee_name : t('several_payees', { count: orders.length })
+  const bankLabel = bankName ?? t('bank_fallback_name')
 
   const statusLabel = (status: string) => {
     const key = `status_${status}`
@@ -317,6 +361,11 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
     const permanent = failure ? PERMANENT_SIGNING_FAILURES.has(failure) : false
     const waiting = signing.status === 'awaiting_signature'
     const anotherStep = step !== null && stepsSeen.length > 1
+    // The bank's own page: the method asked for, or the approach the bank imposed.
+    const redirect = method === 'redirect' || signing.challenge?.approach === 'redirect'
+    const redirectUrl = signing.challenge?.approach === 'redirect' ? signing.challenge.redirectUrl : null
+    // Back from the bank's page, or still waiting for its link: nothing to click, the poll decides.
+    const redirectWaiting = redirect && (returned !== null || !redirectUrl)
     const qrFooter = (
       <>
         <p className="text-[13px] text-muted-foreground">{t('signing_qr_hint')}</p>
@@ -330,7 +379,16 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
     return (
       <div className="space-y-4 text-center">
         {waiting && bankLine}
-        {waiting && step && (
+        {waiting && redirect && (
+          <div className="space-y-3">
+            <BankIdMark className="mx-auto" size={24} />
+            <p className={redirectWaiting ? 'text-[13px] text-muted-foreground' : 'text-[13px] leading-relaxed'}>
+              {redirectWaiting ? t('redirect_waiting', { bank: bankLabel }) : t('redirect_intro', { bank: bankLabel })}
+            </p>
+            {returned?.result === 'error' && <AttnLine className="text-center">{providerCodeText(t, returned.code) ?? t('signing_returned_error')}</AttnLine>}
+          </div>
+        )}
+        {waiting && !redirect && step && (
           <div className="space-y-1">
             <p className="text-[13px] text-muted-foreground">{t('steps_intro')}</p>
             <p className="text-[13px] font-medium">
@@ -339,13 +397,13 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
             {anotherStep && <AttnLine>{t('step_new_qr')}</AttnLine>}
           </div>
         )}
-        {waiting && signing.challenge?.qrData && (
+        {waiting && !redirect && signing.challenge?.qrData && (
           <>
             <BankIdChallengeQr data={signing.challenge.qrData} label={t('qr_label')} />
             {qrFooter}
           </>
         )}
-        {waiting && !signing.challenge?.qrData && signing.challenge?.qrImage && (
+        {waiting && !redirect && !signing.challenge?.qrData && signing.challenge?.qrImage && (
           <>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
@@ -356,7 +414,7 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
             {qrFooter}
           </>
         )}
-        {waiting && !signing.challenge?.qrData && !signing.challenge?.qrImage && signing.challenge?.autostartToken && (
+        {waiting && !redirect && !signing.challenge?.qrData && !signing.challenge?.qrImage && signing.challenge?.autostartToken && (
           <>
             <p className="text-[13px] text-muted-foreground">{t('signing_same_device_hint')}</p>
             <Button asChild>
@@ -364,19 +422,22 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
             </Button>
           </>
         )}
-        {waiting && !signing.challenge?.qrData && !signing.challenge?.qrImage && !signing.challenge?.autostartToken && (
+        {waiting && !redirect && !signing.challenge?.qrData && !signing.challenge?.qrImage && !signing.challenge?.autostartToken && (
           <p className="text-[13px] text-muted-foreground">{t('signing_waiting')}</p>
         )}
         {!waiting && failure && (
           <div className="space-y-3">
             <AttnLine>
-              {failure === 'SCA_REDIRECT_UNSUPPORTED'
-                ? t('signing_redirect_unsupported')
-                : permanent
-                  ? (providerCodeText(t, failure) ?? t('signing_failed_permanent', { code: failure }))
-                  : t('signing_failed')}
+              {permanent ? (providerCodeText(t, failure) ?? t('signing_failed_permanent', { code: failure })) : (providerCodeText(t, failure) ?? t('signing_failed'))}
             </AttnLine>
-            {!permanent && signing.status === 'created' && (
+            {!permanent && signing.status === 'created' && redirect && (
+              <div className="flex justify-center">
+                <Button onClick={() => restart('redirect')} loading={busy} disabled={busy}>
+                  {t('try_again')}
+                </Button>
+              </div>
+            )}
+            {!permanent && signing.status === 'created' && !redirect && (
               <div className="flex flex-wrap justify-center gap-2">
                 <Button variant="secondary" onClick={() => restart('same_device')} loading={busy && method === 'same_device'} disabled={busy}>
                   {t('method_same_device')}
@@ -388,8 +449,11 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
             )}
           </div>
         )}
-        {!waiting && !failure && <p className="text-[13px] text-muted-foreground">{t('signing_waiting')}</p>}
-        <DialogFooter>{closeButton}</DialogFooter>
+        {!waiting && !failure && <p className="text-[13px] text-muted-foreground">{redirect ? t('redirect_waiting', { bank: bankLabel }) : t('signing_waiting')}</p>}
+        <DialogFooter>
+          {closeButton}
+          {waiting && redirect && !redirectWaiting && redirectUrl && <Button onClick={() => continueToBank(redirectUrl)}>{t('redirect_continue', { bank: bankLabel })}</Button>}
+        </DialogFooter>
       </div>
     )
   }
@@ -400,11 +464,7 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
   )
   return (
     <div className="space-y-4">
-      {doneFailure && (
-        <AttnLine>
-          {doneFailure === 'SCA_REDIRECT_UNSUPPORTED' ? t('signing_redirect_unsupported') : (providerCodeText(t, doneFailure) ?? t('signing_failed_permanent', { code: doneFailure }))}
-        </AttnLine>
-      )}
+      {doneFailure && <AttnLine>{providerCodeText(t, doneFailure) ?? t('signing_failed_permanent', { code: doneFailure })}</AttnLine>}
       <ul className="space-y-2 text-[13px]">
         {(signing?.orders ?? []).map((o) => {
           const order = orders.find((p) => p.id === o.id)

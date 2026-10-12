@@ -18,7 +18,14 @@ import { preparePaymentOrders } from '../prepare'
 import { approvePaymentOrders } from '../lifecycle'
 
 const COMPANY = 'company-1'
-const ACCOUNT = { id: 'acct-1', iban: 'SE3550000000054910000003', currency: 'SEK', name: 'Företagskonto', enabled: true, bank_connection: { bank_name: 'SEB' } }
+const ACCOUNT = {
+  id: 'acct-1',
+  iban: 'SE3550000000054910000003',
+  currency: 'SEK',
+  name: 'Företagskonto',
+  enabled: true,
+  bank_connection: { bank_name: 'SEB', affiliated_aspsp_id: null, psu_type: 'business' },
+}
 
 function invoice(id: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -84,7 +91,7 @@ describe('preparePaymentOrders', () => {
       supplier_invoice_id: 'a',
       amount: 737.5,
       requested_execution_date: '2026-10-20',
-      debtor_snapshot: { iban: 'SE3550000000054910000003', bic: 'ESSESESS' },
+      debtor_snapshot: { iban: 'SE3550000000054910000003', bic: 'ESSESESS', bank_name: 'SEB', affiliated_aspsp_id: null, psu_type: 'business' },
       payee_type: 'bankgiro',
       payee_bankgiro: '50501055',
       payee_source: 'supplier',
