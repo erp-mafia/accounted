@@ -113,8 +113,8 @@ export async function stagePeppolDeliveryAsActor(args: {
 /**
  * The deliveries of one invoice, newest first, read with a service-role
  * client (peppol_deliveries is not granted to authenticated). The caller has
- * already established membership; the company filter is explicit. Same
- * columns as list_peppol_delivery_summaries: never the XML payload.
+ * already established membership; the company filter is explicit. Never
+ * the XML payload.
  */
 export async function listPeppolDeliveriesForInvoice(args: {
   service: SupabaseClient
@@ -172,21 +172,6 @@ export async function findReplaceableSubmission(args: {
   return latest?.provider_submission_id && SUPERSEDED_DELIVERY_STATUSES.has(latest.status)
     ? latest.provider_submission_id
     : null
-}
-
-export async function listPeppolDeliverySummaries(args: {
-  supabase: SupabaseClient
-  companyId: string
-  invoiceId: string
-}): Promise<PeppolDeliverySummary[]> {
-  const { data, error } = await args.supabase.rpc('list_peppol_delivery_summaries', {
-    p_company_id: args.companyId,
-    p_invoice_id: args.invoiceId,
-  })
-  if (error) {
-    throw new Error(`Failed to list Peppol deliveries: ${error.message}`)
-  }
-  return (data ?? []) as PeppolDeliverySummary[]
 }
 
 export async function persistVerifiedPeppolEvent(args: {

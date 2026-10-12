@@ -19,5 +19,4 @@ SELECT clock_timestamp() captured_at,queryid,calls,total_exec_time,mean_exec_tim
   left(query,200) query_shape
 FROM extensions.pg_stat_statements
 WHERE query ILIKE '%import_sie_chunk%' OR query ILIKE '%undo_sie_import_chunk%'
-  OR query ILIKE '%import_sie_journal_entries%'
 ORDER BY wal_bytes DESC;

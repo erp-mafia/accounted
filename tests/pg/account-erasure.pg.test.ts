@@ -39,7 +39,6 @@ const ERASED = new Set([
   // Personal settings and per-user operational state
   'agent_rate_counters.user_id',
   'email_change_requests.user_id',
-  'extension_toggles.user_id',
   'idempotency_keys.user_id',
   'mcp_tasks.user_id',
   'notice_dismissals.user_id',
@@ -187,7 +186,6 @@ const RETAINED = new Set([
   'company_invitations.invited_by',
   'company_members.invited_by',
   'company_settings.user_id',
-  'cost_centers.user_id',
   'counterparty_aliases.user_id',
   'deadlines.user_id',
   'extension_data.user_id',
@@ -196,7 +194,6 @@ const RETAINED = new Set([
   'party_decisions.user_id',
   'party_facts.user_id',
   'party_identities.user_id',
-  'projects.user_id',
   'team_invitations.invited_by',
   'teams.created_by',
   // Collections connection: who consented to the provider's terms, accepted
@@ -243,7 +240,6 @@ const DELETED_FOR_USER = [
   'chat_sessions',
   'company_members',
   'email_change_requests',
-  'extension_toggles',
   'idempotency_keys',
   'mcp_tasks',
   'notice_dismissals',
@@ -445,10 +441,6 @@ describe('account erasure (pg)', () => {
         companyId,
         userId,
       ])
-      await client.query(
-        `INSERT INTO public.extension_toggles (user_id, sector_slug, extension_slug) VALUES ($1, 'general', 'tic')`,
-        [userId],
-      )
       await client.query(`INSERT INTO public.sandbox_seed_attempts (user_id, status) VALUES ($1, 'complete')`, [
         userId,
       ])

@@ -169,6 +169,11 @@
  *      CI checkout), it is skipped with a note; the provider-names workflow
  *      runs it with full history and also over the PR text. Implementation
  *      and rationale in unsigned-provider-names.mjs.
+ *   19. functiondef-patch: a migration that calls pg_get_functiondef(), the
+ *      read half of patching a function body with replace() instead of
+ *      stating it. 19 migrations did, and 24 functions ended up in no file.
+ *      Grandfathered as a file set that never grows. Implementation and
+ *      rationale in functiondef-patch.mjs.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -195,6 +200,7 @@ import { findClientNodeBuiltins } from './client-node-builtin.mjs'
 import { findAmbiguousEmbeds } from './ambiguous-embed.mjs'
 import { findUiUniformityFindings, UI_UNIFORMITY_HINTS } from './ui-uniformity.mjs'
 import { findTablesWithoutGrant, grandfatheredFiles, grantHint } from './table-without-grant.mjs'
+import { findFunctiondefPatches, FUNCTIONDEF_PATCH_HINT } from './functiondef-patch.mjs'
 import {
   findExtensionRouteFindings,
   UNGATED_EXTENSION_ROUTES,
@@ -1190,10 +1196,12 @@ const current = {
   localTestMocks: findLocalTestMocks(ROOT),
   utcToday: findUtcTodaySites(SOURCE_ROOT),
   unsignedProviderNames: checkUnsignedProviderNames(),
+  functiondefPatch: findFunctiondefPatches(ROOT),
 }
 
 const dialogOverflowFiles = [...new Set(current.dialogOverflowRisk.map((f) => f.file))].sort()
 const tableWithoutGrantFiles = [...new Set(current.tableWithoutGrant.map((f) => f.file))].sort()
+const functiondefPatchFiles = [...new Set(current.functiondefPatch.map((f) => f.file))].sort()
 
 const isUpdate = process.argv.includes('--update')
 
@@ -1201,10 +1209,11 @@ if (isUpdate) {
   // table-without-grant is a frozen set, not a ratchet: --update is run to lock
   // in some other count going down, and must never grandfather a migration
   // added since (see grandfatheredFiles).
-  const frozenGrantFiles = fs.existsSync(BASELINE_PATH)
-    ? JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf8')).tableWithoutGrant?.files
-    : undefined
+  // functiondef-patch is frozen the same way.
+  const frozenBaseline = fs.existsSync(BASELINE_PATH) ? JSON.parse(fs.readFileSync(BASELINE_PATH, 'utf8')) : {}
+  const frozenGrantFiles = frozenBaseline.tableWithoutGrant?.files
   const grandfatheredGrantFiles = grandfatheredFiles(frozenGrantFiles, tableWithoutGrantFiles)
+  const grandfatheredPatchFiles = grandfatheredFiles(frozenBaseline.functiondefPatch?.files, functiondefPatchFiles)
   const baseline = {
     _comment:
       'Ratchet baseline for scripts/checks/no-new-antipatterns.mjs. These counts may only decrease. Re-run with --update after a migration lowers them. Goal: both reach 0 (A1 route-auth campaign, D1 rounding codemod).',
@@ -1231,6 +1240,10 @@ if (isUpdate) {
     tableWithoutGrant: {
       count: grandfatheredGrantFiles.length,
       files: grandfatheredGrantFiles,
+    },
+    functiondefPatch: {
+      count: grandfatheredPatchFiles.length,
+      files: grandfatheredPatchFiles,
     },
   }
   fs.writeFileSync(BASELINE_PATH, JSON.stringify(baseline, null, 2) + '\n')
@@ -1753,6 +1766,20 @@ if (newTableWithoutGrant.length) {
   )
 }
 
+// 1e5. functiondef-patch: the migrations that patched function bodies through
+// pg_get_functiondef are grandfathered as a file set; any other migration
+// that calls it fails, whatever its timestamp.
+const functiondefPatchBaseline = new Set(baseline.functiondefPatch?.files ?? [])
+const newFunctiondefPatch = current.functiondefPatch.filter((f) => !functiondefPatchBaseline.has(f.file))
+if (newFunctiondefPatch.length) {
+  failed = true
+  console.error(
+    `\n✗ functiondef-patch: ${newFunctiondefPatch.length} pg_get_functiondef() call(s) in new migrations:`,
+  )
+  newFunctiondefPatch.forEach((f) => console.error(`    ${f.file}:${f.line}`))
+  FUNCTIONDEF_PATCH_HINT.forEach((l, i) => console.error(`  ${i === 0 ? '→' : ' '} ${l}`))
+}
+
 // 1e. literal-legal-form: count may not increase. A legal form named as a
 // string at a call site (see literal-legal-form.mjs) sends every later form
 // down the branch it was not written for; docs/LEGAL-FORMS.md has the
@@ -1865,5 +1892,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, uninitialized-event-route: ${current.eventRouteInit.uninitialized.length}/${UNINITIALIZED_EMITTING_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), unsigned-provider-names: ${current.unsignedProviderNames.skipped ? 'skipped' : current.unsignedProviderNames.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s)).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, uninitialized-event-route: ${current.eventRouteInit.uninitialized.length}/${UNINITIALIZED_EMITTING_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), unsigned-provider-names: ${current.unsignedProviderNames.skipped ? 'skipped' : current.unsignedProviderNames.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), functiondef-patch: ${functiondefPatchFiles.length}/${functiondefPatchBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s)).`,
 )

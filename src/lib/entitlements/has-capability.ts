@@ -404,8 +404,8 @@ type GrantRow = {
  * (see connectorGrantsOnly()). Shared by hasCapability and
  * getCompanyEntitlements.
  *
- * Read through company_capability_grant_rows (SECURITY DEFINER, the same
- * tenant guard as company_has_capability): the capability_grants SELECT
+ * Read through company_capability_grant_rows (SECURITY DEFINER, answers
+ * members of the company only): the capability_grants SELECT
  * policy shows team rows only to TEAM members, so a byrå client company read
  * through its own user's client never saw the team grant that covers it.
  * The direct read below runs only when the function does not exist yet

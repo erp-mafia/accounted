@@ -20,10 +20,9 @@ import { getPool, runAsServiceRole, withUserContext } from '@/tests/pg/setup'
  *
  * Deliberately NOT exercised: undo_sie_import and replace_sie_import. They
  * stranded most of the rows measured on prod, but since 20260911140532 no
- * network role can execute them (the SIE job pipeline stornos the batch and
- * releases its bank rows itself). lib/import/__tests__/
- * sie-import.replace.pg.test.ts pins that closure; calling them here as a
- * superuser would test a path production cannot reach.
+ * network role could execute them (the SIE job pipeline stornos the batch and
+ * releases its bank rows itself), and 20261012100200 dropped them.
+ * lib/import/__tests__/sie-import.replace.pg.test.ts pins that they are gone.
  *
  * Also pinned, because each is a way this could go wrong:
  *  - a row still anchored elsewhere is NOT released;

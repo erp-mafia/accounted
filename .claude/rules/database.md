@@ -33,8 +33,8 @@ Use the `/supabase-migration` skill for new migrations.
 - **Reconciliation**: `account_reconciliations`, `account_reconciliation_attachments`
 - **Documents**: `document_attachments` (WORM), `receipts`, `receipt_line_items`
 - **Settings**: `company_settings`, `mapping_rules`, `categorization_templates`, `booking_template_library`, `extension_data`
-- **Dimensions**: `cost_centers`, `projects`
-- **Tax/Deadlines**: `tax_table_rates`, `deadlines`, `calendar_feeds`, `skatteverket_tokens`
+- **Dimensions**: `dimensions`, `dimension_values`, `account_dimension_rules`
+- **Tax/Deadlines**: `tax_rates`, `deadlines`, `calendar_feeds`, `skatteverket_tokens`
 - **Skattekonto**: `skattekonto_transactions`, `skattekonto_file_imports`, `skattekonto_rules`, `tax_assessment_notices`
 - **API/Auth**: `api_keys`, `oauth_used_codes`, `bankid_identities`
 - **Audit/Ops**: `audit_log` (immutable), `event_log` (30d TTL), `pending_operations`, `processing_history`, `webhooks`, `webhook_deliveries`, `company_migration_resets`

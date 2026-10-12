@@ -136,10 +136,11 @@ describe('trial suppression for byrå-team companies', () => {
       [byraTeam],
     )
 
-    const { rows } = await getPool().query<{ ok: boolean }>(
-      `SELECT public.company_has_capability($1, 'ai') AS ok`,
+    // The capability gate's read (company_capability_grant_rows) cascades it.
+    const { rows } = await getPool().query<{ source: string; team_id: string | null; expires_at: Date | null }>(
+      `SELECT source, team_id, expires_at FROM public.company_capability_grant_rows($1, ARRAY['ai'], false)`,
       [companyId],
     )
-    expect(rows[0]!.ok).toBe(true)
+    expect(rows).toEqual([{ source: 'manual', team_id: byraTeam, expires_at: null }])
   })
 })

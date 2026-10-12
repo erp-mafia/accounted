@@ -215,5 +215,29 @@
       "supabase/migrations/20260919105035_salary_payment_files.sql",
       "supabase/migrations/20260925155521_ai_usage_events.sql"
     ]
+  },
+  "functiondefPatch": {
+    "count": 19,
+    "files": [
+      "supabase/migrations/20260703180000_null_safe_tenant_guards.sql",
+      "supabase/migrations/20260921174642_return_cash_booking_conflicts_without_retry.sql",
+      "supabase/migrations/20260921174830_return_bank_routing_conflicts_without_retry.sql",
+      "supabase/migrations/20260921180432_coordinate_atomic_bank_booking_writers.sql",
+      "supabase/migrations/20260921180555_validate_bulk_bank_totals_by_account.sql",
+      "supabase/migrations/20260921180820_normalize_legacy_bank_booking_currency.sql",
+      "supabase/migrations/20260921181008_coordinate_cash_history_entry_points.sql",
+      "supabase/migrations/20260921183218_guard_cash_transaction_anchors.sql",
+      "supabase/migrations/20260921184538_preserve_explicit_stale_bank_relinks.sql",
+      "supabase/migrations/20260922081830_guard_inline_correction_bank_origins.sql",
+      "supabase/migrations/20260922090239_coordinate_latest_cash_history_writers.sql",
+      "supabase/migrations/20260922090639_preserve_supplier_attachment_refusal_contract.sql",
+      "supabase/migrations/20260922095736_authorize_cash_journal_commit_explicitly.sql",
+      "supabase/migrations/20260922100345_preserve_authorized_bank_consent_erasure.sql",
+      "supabase/migrations/20260922100455_tolerate_missing_private_erasure_prerequisite.sql",
+      "supabase/migrations/20260922102109_allow_concurrent_cash_history_observers.sql",
+      "supabase/migrations/20260922122425_coordinate_bank_balance_observations_with_posting.sql",
+      "supabase/migrations/20261010200000_bulk_book_transactions_cash_account_ledger.sql",
+      "supabase/migrations/20261011140000_bulk_book_transactions_commit_attribution.sql"
+    ]
   }
 }

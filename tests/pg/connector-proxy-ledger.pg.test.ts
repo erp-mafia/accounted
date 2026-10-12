@@ -114,32 +114,12 @@ describe('connector_connections ledger', () => {
   })
 })
 
-describe('connector_peppol_submissions (migration 20260902190000)', () => {
-  it('is unique per provider submission, cascades with the key, and is invisible to authenticated', async () => {
+describe('connector_keys.peppol_participants (migration 20260902191000)', () => {
+  it('defaults the participant allowlist to empty', async () => {
+    // A fresh key may publish nothing beyond its own org number until Arcim
+    // records participants.
     const { id: keyId } = await insertKey()
-    const submissionId = `int-${randomBytes(6).toString('hex')}`
-    await getPool().query(
-      `INSERT INTO public.connector_peppol_submissions (connector_key_id, company_ref, provider_submission_id, idempotency_key)
-       VALUES ($1, 'c1', $2, 'idem-1')`,
-      [keyId, submissionId],
-    )
-    await expect(
-      getPool().query(
-        `INSERT INTO public.connector_peppol_submissions (connector_key_id, company_ref, provider_submission_id) VALUES ($1, 'c2', $2)`,
-        [keyId, submissionId],
-      ),
-    ).rejects.toThrow(/connector_peppol_submissions_provider_submission_unique|duplicate key/)
-    const userId = await insertAuthUser()
-    await withUserContext(userId, async (client) => {
-      const r = await client.query(`SELECT id FROM public.connector_peppol_submissions`)
-      expect(r.rows).toEqual([])
-    })
-    // The participant allowlist (20260902191000) defaults to empty: a fresh key may
-    // publish nothing beyond its own org number until Arcim records participants.
-    const { rows: keyRows } = await getPool().query(`SELECT peppol_participants FROM public.connector_keys WHERE id = $1`, [keyId])
-    expect(keyRows[0].peppol_participants).toEqual([])
-    await getPool().query(`DELETE FROM public.connector_keys WHERE id = $1`, [keyId])
-    const { rows } = await getPool().query(`SELECT count(*)::int AS n FROM public.connector_peppol_submissions WHERE connector_key_id = $1`, [keyId])
-    expect(rows[0].n).toBe(0)
+    const { rows } = await getPool().query(`SELECT peppol_participants FROM public.connector_keys WHERE id = $1`, [keyId])
+    expect(rows[0].peppol_participants).toEqual([])
   })
 })

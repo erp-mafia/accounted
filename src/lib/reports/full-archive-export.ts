@@ -1274,8 +1274,6 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // Dimensions
   { name: 'dimensions', file: 'dimensions.json', orderBy: 'created_at' },
   { name: 'dimension_values', file: 'dimension_values.json', orderBy: 'created_at' },
-  { name: 'cost_centers', file: 'cost_centers.json', orderBy: 'created_at' },
-  { name: 'projects', file: 'projects.json', orderBy: 'created_at' },
   { name: 'account_dimension_rules', file: 'account_dimension_rules.json' },
   // Compliance records
   { name: 'voucher_gap_explanations', file: 'voucher_gap_explanations.json', orderBy: 'created_at' },
@@ -1423,7 +1421,6 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   migration_jobs: 'provider worker leases and cursors tied to nonportable provider consents',
   migration_job_chunks: 'encrypted provider replay snapshots and worker receipts; imported documents are archived in their registers',
   mcp_tasks: 'MCP task handles: transient tool-call state with a 1-hour TTL',
-  metered_events: 'billing telemetry',
   notice_dismissals: 'per-user UI notice dismissal state, not räkenskapsinformation',
   oauth_flows:
     'in-flight browser OAuth flow state (migration 20260907120000): state, origin, encrypted PKCE verifier and handoff; consumed by the callback, not räkenskapsinformation',

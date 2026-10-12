@@ -2,9 +2,12 @@
  * pg-real test for the SECURITY DEFINER write-RPC tenant guards
  * (20260619130100_securitydefiner_write_rpc_tenant_guards.sql).
  *
- * Four SECURITY DEFINER write RPCs are EXECUTE-able by `authenticated` and so,
+ * Four SECURITY DEFINER write RPCs were EXECUTE-able by `authenticated` and so,
  * without an in-function tenant guard, an authenticated user could call them via
- * PostgREST with ANOTHER company's p_company_id. The migration adds the canonical
+ * PostgREST with ANOTHER company's p_company_id. Two of them,
+ * reserve/release_voucher_range, had no caller left and were dropped in
+ * 20261012100300 (tests/pg/drop-dead-callable-functions.pg.test.ts); the two
+ * covered here remain. The migration adds the canonical
  * claims-based guard (mirrors 20260615120000_link_voucher_rpcs_tenant_guard.sql):
  * for anon/authenticated callers, membership of p_company_id is required, else
  * RAISE 42501; service_role / no-claims callers bypass BY DESIGN (MCP / API-key /
@@ -18,18 +21,10 @@
  * What each case asserts:
  *   - cross-tenant (userA's session, companyB's id) → RAISE with SQLSTATE 42501.
  *   - own company (userA's session, companyA's id) → the guard does NOT fire;
- *     the call either succeeds or fails with a NON-42501 domain error. For
- *     rotate_company_inbox the own-company call fully succeeds; for the others a
- *     non-guard outcome is sufficient and is documented inline.
+ *     the call either succeeds or fails with a NON-42501 domain error; for both
+ *     RPCs here the own-company call fully succeeds.
  *   - no-claims bare-pool cross-tenant → guard bypassed (no 42501), proving the
  *     MCP / service-role paths are unaffected.
- *
- * reserve/release_voucher_range lost EXECUTE for `authenticated` in
- * 20261011125200_revoke_voucher_range_rpcs_from_authenticated.sql: nothing in
- * the app has called them since the atomic SIE import (#860), and a session
- * could otherwise push its own voucher sequence forward and burn numbers. Their
- * cases below assert that refusal, own company included; the in-function guards
- * still apply to the service-role paths that keep EXECUTE.
  *
  * The role-claim simulation technique (set request.jwt.claims + SET LOCAL ROLE)
  * follows tests/pg/gl_lines_rpc_tenant_guard.pg.test.ts.
@@ -37,7 +32,7 @@
 import { describe, it, expect } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { getPool } from './setup'
-import { insertDraftJournalEntry, seedCompany } from './fixtures'
+import { seedCompany } from './fixtures'
 
 interface PgError extends Error {
   code?: string
@@ -118,8 +113,6 @@ async function insertPostedManualIb(params: {
 }
 
 const MARK_OB = `SELECT public.mark_entry_as_opening_balance($1, $2)`
-const RESERVE = `SELECT public.reserve_voucher_range($1, $2, $3, $4)`
-const RELEASE = `SELECT public.release_voucher_range($1, $2, $3, $4, $5)`
 const ROTATE = `SELECT public.rotate_company_inbox($1)`
 
 describe('SECURITY DEFINER write RPCs: tenant-isolation guard', () => {
@@ -147,52 +140,6 @@ describe('SECURITY DEFINER write RPCs: tenant-isolation guard', () => {
     expect(bare?.code).not.toBe('42501')
   })
 
-  it('reserve_voucher_range: authenticated cannot execute it, not even for its own company', async () => {
-    const a = await seedCompany()
-    const b = await seedCompany()
-
-    const { rows } = await getPool().query(
-      `SELECT has_function_privilege('authenticated', 'public.reserve_voucher_range(uuid, uuid, text, integer)', 'EXECUTE') AS authenticated,
-              has_function_privilege('service_role', 'public.reserve_voucher_range(uuid, uuid, text, integer)', 'EXECUTE') AS service_role`,
-    )
-    expect(rows[0]).toEqual({ authenticated: false, service_role: true })
-
-    const own = await callAsUser(a.userId, RESERVE, [a.companyId, a.fiscalPeriodId, 'A', 10])
-    expect(own?.code).toBe('42501')
-    expect(own?.message).toMatch(/permission denied for function reserve_voucher_range/i)
-
-    const cross = await callAsUser(a.userId, RESERVE, [b.companyId, b.fiscalPeriodId, 'A', 10])
-    expect(cross?.message).toMatch(/permission denied for function reserve_voucher_range/i)
-
-    // No-claims bare pool cross-tenant → the tenant guard is bypassed. (The
-    // INSERT then writes auth.uid()=NULL into voucher_sequences.user_id, which is
-    // NOT NULL, so a 23502 surfaces: pre-existing behaviour for a true no-session
-    // caller; the point here is only that it is NOT the 42501 tenant guard.)
-    const bare = await callBare(RESERVE, [b.companyId, b.fiscalPeriodId, 'A', 10])
-    expect(bare?.code).not.toBe('42501')
-  })
-
-  it('release_voucher_range: authenticated cannot execute it, not even for its own company', async () => {
-    const a = await seedCompany()
-    const b = await seedCompany()
-
-    const { rows } = await getPool().query(
-      `SELECT has_function_privilege('authenticated', 'public.release_voucher_range(uuid, uuid, text, integer, integer)', 'EXECUTE') AS authenticated,
-              has_function_privilege('service_role', 'public.release_voucher_range(uuid, uuid, text, integer, integer)', 'EXECUTE') AS service_role`,
-    )
-    expect(rows[0]).toEqual({ authenticated: false, service_role: true })
-
-    const own = await callAsUser(a.userId, RELEASE, [a.companyId, a.fiscalPeriodId, 'A', 5, 10])
-    expect(own?.code).toBe('42501')
-    expect(own?.message).toMatch(/permission denied for function release_voucher_range/i)
-
-    const cross = await callAsUser(a.userId, RELEASE, [b.companyId, b.fiscalPeriodId, 'A', 5, 10])
-    expect(cross?.message).toMatch(/permission denied for function release_voucher_range/i)
-
-    const bare = await callBare(RELEASE, [b.companyId, b.fiscalPeriodId, 'A', 5, 10])
-    expect(bare).toBeNull()
-  })
-
   it('rotate_company_inbox: blocks cross-company, passes own, bypasses for no-claims', async () => {
     const a = await seedCompany()
     const b = await seedCompany()
@@ -212,62 +159,5 @@ describe('SECURITY DEFINER write RPCs: tenant-isolation guard', () => {
     // message: the bypass is proven by the new guard's message NOT appearing.
     const bare = await callBare(ROTATE, [b.companyId])
     expect(bare?.message ?? '').not.toMatch(/caller is not a member of company/i)
-  })
-})
-
-describe('voucher-range RPCs: period-lock + sequence-integrity guards (BFL 5 kap)', () => {
-  it('reserve_voucher_range refuses a closed fiscal period', async () => {
-    const a = await seedCompany({ isClosed: true })
-    const err = await callBare(RESERVE, [a.companyId, a.fiscalPeriodId, 'A', 10])
-    expect(err?.message).toMatch(/closed\/locked fiscal period/i)
-  })
-
-  it('reserve_voucher_range refuses a locked fiscal period', async () => {
-    const a = await seedCompany()
-    await getPool().query(`UPDATE public.fiscal_periods SET locked_at = now() WHERE id = $1`, [
-      a.fiscalPeriodId,
-    ])
-    const err = await callBare(RESERVE, [a.companyId, a.fiscalPeriodId, 'A', 10])
-    expect(err?.message).toMatch(/closed\/locked fiscal period/i)
-  })
-
-  it('release_voucher_range refuses when verifikat exist in the released range', async () => {
-    const a = await seedCompany()
-    await insertDraftJournalEntry({
-      userId: a.userId,
-      companyId: a.companyId,
-      fiscalPeriodId: a.fiscalPeriodId,
-      status: 'posted',
-      voucherNumber: 5, // inside (3, 10]: rolling back to 3 would orphan it
-    })
-    const err = await callBare(RELEASE, [a.companyId, a.fiscalPeriodId, 'A', 3, 10])
-    expect(err?.message).toMatch(/verifikat exist in the released range/i)
-  })
-
-  it('release_voucher_range succeeds when the released range is empty (legit SIE-import path)', async () => {
-    const a = await seedCompany()
-    await getPool().query(
-      `INSERT INTO public.voucher_sequences (company_id, user_id, fiscal_period_id, voucher_series, last_number)
-       VALUES ($1, $2, $3, 'A', 10)`,
-      [a.companyId, a.userId, a.fiscalPeriodId],
-    )
-    // Highest inserted verifikat is 3: numbers (3, 10] were reserved but unused.
-    await insertDraftJournalEntry({
-      userId: a.userId,
-      companyId: a.companyId,
-      fiscalPeriodId: a.fiscalPeriodId,
-      status: 'posted',
-      voucherNumber: 3,
-    })
-    // Direct pool call (NOT callBare, which wraps in BEGIN…ROLLBACK and would
-    // undo the release before the assertion below reads the sequence).
-    await getPool().query(RELEASE, [a.companyId, a.fiscalPeriodId, 'A', 3, 10])
-
-    const { rows } = await getPool().query(
-      `SELECT last_number FROM public.voucher_sequences
-       WHERE company_id = $1 AND fiscal_period_id = $2 AND voucher_series = 'A'`,
-      [a.companyId, a.fiscalPeriodId],
-    )
-    expect(rows[0]?.last_number).toBe(3)
   })
 })

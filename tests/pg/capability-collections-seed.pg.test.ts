@@ -28,12 +28,22 @@ async function grantKeys(companyId: string, source?: string): Promise<string[]> 
   return rows.map((r) => r.capability_key)
 }
 
+// The capability gate's rule (lib/entitlements/has-capability.ts): an
+// unexpired company or team grant from company_capability_grant_rows, and no
+// company_capability_config row switching the key off.
 async function hasCapability(client: PoolClient | null, companyId: string, key: string): Promise<boolean> {
   const runner = client ?? getPool()
-  const { rows } = await runner.query<{ ok: boolean }>(`SELECT public.company_has_capability($1, $2) AS ok`, [
-    companyId,
-    key,
-  ])
+  const { rows } = await runner.query<{ ok: boolean }>(
+    `SELECT EXISTS (
+              SELECT 1 FROM public.company_capability_grant_rows($1, ARRAY[$2]::text[], false) g
+              WHERE g.expires_at IS NULL OR g.expires_at > now()
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM public.company_capability_config c
+              WHERE c.company_id = $1 AND c.capability_key = $2 AND c.enabled = false
+            ) AS ok`,
+    [companyId, key],
+  )
   return rows[0].ok
 }
 
