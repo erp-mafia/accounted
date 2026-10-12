@@ -36,7 +36,7 @@
     },
     {
       "path": "/api/bank/open-payments/sync/cron",
-      "schedule": "20 * * * *"
+      "schedule": "*/10 * * * *"
     },
     {
       "path": "/api/extensions/stripe/transactions/cron",

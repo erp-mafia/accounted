@@ -1,6 +1,7 @@
 /**
  * The unattended side of connections made through Open Payments: there are
- * no webhooks, so an hourly cron polls (vercel.json, 20 past the hour).
+ * no webhooks, so a cron polls every ten minutes (vercel.json and the
+ * self-hosted crontab).
  *
  * Each run, in order:
  *   1. removes consent attempts nobody finished: a pending row whose attempt
@@ -10,13 +11,21 @@
  *      persist_bank_sync_failure for synced rows) and sends the existing
  *      consent expiry mail, which is what the bank notices read to ask for a
  *      renewal;
- *   3. syncs the connections that are due: synced more than SYNC_DUE_AFTER_MS
- *      (11 hours) ago or never, lease free, of a company the pilot admits
- *      (listed, or every company holding bank_sync when the switch is *),
- *      four at a time within the time budget.
+ *   3. syncs the connections whose turn it is: the day is cut into 144
+ *      ten-minute windows and every connection owns two of them, twelve hours
+ *      apart, chosen from its id (syncSlotOf), so the fetching is spread over
+ *      the day instead of every connection being read in one burst. A
+ *      connection is synced when its window comes round, it was last synced
+ *      more than SYNC_DUE_AFTER_MS (11 hours) ago or never, its lease is
+ *      free, and its company is admitted (listed, or holding bank_sync when
+ *      the switch is *). One that missed its window (budget, lease, an
+ *      outage) is caught up once it is CATCHUP_AFTER_MS old, a few per run,
+ *      so a recovery never turns into a burst either. Banks run in parallel
+ *      but one connection at a time per bank.
  *
- * Banks allow four unattended reads per consent and day; at every 11 hours
- * the cron spends two and leaves room for "Synka nu".
+ * Open Payments allows four unattended reads per account and day and asks
+ * that they are spread out; two windows a day leave room for "Synka nu" and
+ * the first import.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -34,9 +43,46 @@ import { CONSENT_EXPIRED_MESSAGE, runOpenPaymentsSync } from './feed'
 import { SYNC_DUE_AFTER_MS } from './lease'
 
 export const STALE_ATTEMPT_MS = 60 * 60 * 1000
+/** Banks synced in parallel; within one bank the connections go one at a time. */
 export const CRON_CONCURRENCY = 4
-/** No sync starts past this; what is left is due again next hour. */
+/** No sync starts past this; what is left is caught up in a later window. */
 export const CRON_TIME_BUDGET_MS = 230_000
+/** The day in ten-minute windows: 144, of which a connection owns two, twelve hours apart. */
+export const SYNC_WINDOW_MS = 10 * 60 * 1000
+export const WINDOWS_PER_DAY = 144
+export const SYNC_SLOTS = WINDOWS_PER_DAY / 2
+/** A connection this long without a sync is taken even outside its window. */
+export const CATCHUP_AFTER_MS = 14 * 60 * 60 * 1000
+/** At most this many catch-ups per run, so a recovery stays spread too. */
+export const CATCHUP_PER_RUN = 5
+
+/** The slot (0 to 71) a connection owns, from its id alone, so it never moves. */
+export function syncSlotOf(connectionId: string): number {
+  let hash = 0
+  for (let i = 0; i < connectionId.length; i++) hash = (hash * 31 + connectionId.charCodeAt(i)) >>> 0
+  return hash % SYNC_SLOTS
+}
+
+/** The ten-minute window (0 to 143) of a moment, in UTC: spreading needs no local clock. */
+export function syncWindowOf(now: number): number {
+  const sinceMidnight = ((now % 86_400_000) + 86_400_000) % 86_400_000
+  return Math.floor(sinceMidnight / SYNC_WINDOW_MS)
+}
+
+/** Whether this moment falls in one of the connection's two windows. */
+export function isScheduledNow(connectionId: string, now: number): boolean {
+  return syncWindowOf(now) % SYNC_SLOTS === syncSlotOf(connectionId)
+}
+
+/** The first moment at or after `from` inside one of the connection's windows (tests and operators). */
+export function nextScheduledTime(connectionId: string, from: number): number {
+  const windowStart = from - (((from % SYNC_WINDOW_MS) + SYNC_WINDOW_MS) % SYNC_WINDOW_MS)
+  for (let i = 0; i < SYNC_SLOTS; i++) {
+    const candidate = windowStart + i * SYNC_WINDOW_MS
+    if (isScheduledNow(connectionId, candidate)) return Math.max(candidate, from)
+  }
+  return from
+}
 
 interface CronConnection {
   id: string
@@ -61,7 +107,9 @@ export interface OpenPaymentsCronResult {
   due: number
   synced: number
   failed: number
-  skipped: { notAdmitted: number; notEntitled: number; noAccounts: number; fresh: number; leased: number; budget: number }
+  skipped: { notAdmitted: number; notEntitled: number; noAccounts: number; fresh: number; leased: number; notScheduled: number; budget: number }
+  /** Connections taken outside their window because they had waited CATCHUP_AFTER_MS. */
+  caughtUp: number
 }
 
 export async function runOpenPaymentsCron(
@@ -73,7 +121,8 @@ export async function runOpenPaymentsCron(
   const baseUrl = options.baseUrl ?? process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'
   const result: OpenPaymentsCronResult = {
     connector: false, staleAttemptsRemoved: 0, expired: 0, due: 0, synced: 0, failed: 0,
-    skipped: { notAdmitted: 0, notEntitled: 0, noAccounts: 0, fresh: 0, leased: 0, budget: 0 },
+    skipped: { notAdmitted: 0, notEntitled: 0, noAccounts: 0, fresh: 0, leased: 0, notScheduled: 0, budget: 0 },
+    caughtUp: 0,
   }
 
   // 1. Abandoned attempts. Nothing points at their consent; the bank lets it lapse.
@@ -147,6 +196,7 @@ export async function runOpenPaymentsCron(
   const syncable = live.filter((c) => c.status === 'active' || c.status === 'error')
   const entitled = await getCompanyIdsWithCapability(supabase, syncable.map((c) => c.company_id), CAPABILITY.bank_sync)
   const due: CronConnection[] = []
+  const catchUp: CronConnection[] = []
   for (const connection of syncable) {
     const admitted = bankFeedPilotAdmits(connection.company_id)
     if (admitted === 'no') { result.skipped.notAdmitted++; continue }
@@ -156,31 +206,46 @@ export async function runOpenPaymentsCron(
     if (synced !== null && now - synced < SYNC_DUE_AFTER_MS) { result.skipped.fresh++; continue }
     const lease = connection.sync_lease_until ? new Date(connection.sync_lease_until).getTime() : 0
     if (lease > now) { result.skipped.leased++; continue }
-    due.push(connection)
+    if (isScheduledNow(connection.id, now)) { due.push(connection); continue }
+    // Outside its window: taken only when it has waited long enough to count
+    // as missed, and only a few per run. The rows arrive oldest sync first.
+    if ((synced === null || now - synced >= CATCHUP_AFTER_MS) && catchUp.length < CATCHUP_PER_RUN) { catchUp.push(connection); continue }
+    result.skipped.notScheduled++
   }
+  result.caughtUp = catchUp.length
+  due.push(...catchUp)
   result.due = due.length
 
+  // Banks in parallel, one connection at a time per bank: a burst at one bank
+  // is what trips its rate limit, not the total.
+  const byBank = new Map<string, CronConnection[]>()
+  for (const connection of due) {
+    const key = connection.bank_name ?? 'unknown'
+    byBank.set(key, [...(byBank.get(key) ?? []), connection])
+  }
   const startedRun = Date.now()
-  await mapWithConcurrency(due, CRON_CONCURRENCY, async (connection) => {
-    if (Date.now() - startedRun > CRON_TIME_BUDGET_MS) {
-      result.skipped.budget++
-      return
-    }
-    try {
-      const outcome = await runOpenPaymentsSync(supabase, {
-        companyId: connection.company_id,
-        userId: connection.user_id,
-        connectionId: connection.id,
-        log,
-        trigger: 'cron',
-        unattended: true,
-        connect,
-      })
-      if (outcome.ok) result.synced++
-      else result.failed++
-    } catch (error) {
-      result.failed++
-      log.error('open payments cron sync threw', { connectionId: connection.id, message: error instanceof Error ? error.message : String(error) })
+  await mapWithConcurrency([...byBank.values()], CRON_CONCURRENCY, async (group) => {
+    for (const connection of group) {
+      if (Date.now() - startedRun > CRON_TIME_BUDGET_MS) {
+        result.skipped.budget++
+        continue
+      }
+      try {
+        const outcome = await runOpenPaymentsSync(supabase, {
+          companyId: connection.company_id,
+          userId: connection.user_id,
+          connectionId: connection.id,
+          log,
+          trigger: 'cron',
+          unattended: true,
+          connect,
+        })
+        if (outcome.ok) result.synced++
+        else result.failed++
+      } catch (error) {
+        result.failed++
+        log.error('open payments cron sync threw', { connectionId: connection.id, message: error instanceof Error ? error.message : String(error) })
+      }
     }
   })
   return result
