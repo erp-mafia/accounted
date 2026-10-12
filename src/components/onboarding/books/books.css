@@ -145,6 +145,24 @@
 .th-line.is-err .sub { color: hsl(var(--destructive)); white-space: pre-line; }
 .th-hold { grid-column: 1 / -1; margin-top: 2px; text-align: center; font-size: 12.5px; color: hsl(var(--muted-foreground)); font-variant-numeric: tabular-nums; }
 @media (max-width: 640px) { .th-lines { grid-template-columns: repeat(2, minmax(0, 1fr)); } .th-stage { min-height: 320px; } }
+/* While the theater is on, the act is one window tall and the stage takes the
+   height the rail, title, progress, lines and actions leave over: up to its
+   490px, down to 280px, so the run reads without scrolling on a laptop. The
+   engine scales the graph to its box every frame, so nothing else changes.
+   Flex items do not collapse margins, so the title block's last margin is
+   dropped to keep its 18px to the stage, and they shrink to fit beside an
+   auto margin, so each block is held at full width (.tokfields keeps its
+   360px column). Phones keep the scrolling page. */
+@media (min-width: 641px) {
+  .bks:has(.th-stage) { height: 100dvh; min-height: 0; display: flex; flex-direction: column; }
+  .bks:has(.th-stage) .bks-center,
+  .bks:has(.th-stage) .bks-qarea,
+  .bks-host:has(> .theater) { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  .bks-host:has(> .theater) > * { width: 100%; }
+  .bks-host:has(> .theater) > .jny-qstep > :last-child { margin-bottom: 0; }
+  .bks-host > .theater { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  .bks-host > .theater > .th-stage { flex: 1 1 490px; height: auto; min-height: 280px; max-height: 490px; }
+}
 
 /* ── waiting ──────────────────────────────────────────────────────── */
 .bank-wait { display: flex; height: 128px; flex-direction: column; align-items: center; justify-content: center; gap: 12px; font-size: 13px; color: hsl(var(--muted-foreground)); }
