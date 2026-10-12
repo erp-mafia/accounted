@@ -77,9 +77,10 @@ export function parseBankFile(
   } else {
     format = detectFileFormat(content, filename) || undefined
     if (!format) {
-      // Build diagnostic message listing which formats were tried
-      const tried = getAllFormats()
-        .filter(f => f.id !== 'generic_csv')
+      // Say what IS supported, so a user holding a camt.053 statement or a
+      // bank CSV knows the file, not the import, is the problem (crm#1160).
+      const csvFormats = getAllFormats()
+        .filter(f => f.id !== 'generic_csv' && f.id !== 'camt053')
         .map(f => f.name)
       const firstLine = content.split('\n')[0]?.substring(0, 80) || ''
       return {
@@ -90,7 +91,7 @@ export function parseBankFile(
         date_to: null,
         issues: [{
           row: 0,
-          message: `Kunde inte identifiera bankformat. Testade: ${tried.join(', ')}. Första raden: "${firstLine}". Välj bank manuellt eller använd "Annan CSV".`,
+          message: `Kunde inte identifiera bankformatet. Stödda format: CSV-exporter från ${csvFormats.join(', ')} samt kontoutdrag i ISO 20022 camt.053 (XML, oavsett filändelse). Första raden: "${firstLine}". Välj bank manuellt eller använd "Annan CSV".`,
           severity: 'error',
         }],
         stats: { total_rows: 0, parsed_rows: 0, skipped_rows: 0, total_income: 0, total_expenses: 0 },

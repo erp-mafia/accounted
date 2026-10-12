@@ -334,7 +334,7 @@ describe('POST /api/v1/companies/:companyId/imports/bank', () => {
 
     const [incoming, outgoing] = ingestedRows()
     expect(incoming).toMatchObject({
-      external_id: 'camt053_NTRY-1',
+      external_id: 'camt053_2025-03-10_ACSR-1_NTRY-1',
       import_source: 'camt053',
       reference: '1001000000017',
       merchant_name: 'Kund AB',

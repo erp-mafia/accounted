@@ -10,7 +10,7 @@ import { detectFileFormat, parseBankFile, generateExternalId, generateFileHash, 
 import type { ParsedBankTransaction, BankFileFormatId } from '../types'
 import { parseGenericCSV, normalizeMinusSign } from '../formats/generic-csv'
 import { parseCSVLine } from '../formats/nordea'
-import { CAMT053_PRETTY_WITH_REFS } from '@/tests/fixtures/camt053'
+import { CAMT053_PRETTY_WITH_REFS, CAMT053_V08_PREFIXED_MULTI_STMT, camt053ManyEntries } from '@/tests/fixtures/camt053'
 
 // ---------------------------------------------------------------------------
 // Test data: realistic CSV/XML content for each Swedish bank format
@@ -388,15 +388,16 @@ describe('detectFileFormat', () => {
     expect(format!.id).toBe('camt053')
   })
 
-  it('does not detect camt.053 without .xml extension', () => {
-    // camt053 detection requires .xml extension
-    const format = detectFileFormat(CAMT053_XML, 'statement.csv')
-    // It should not match camt053 since extension is .csv
-    // But it could match something else if the content resembles a CSV header
-    // The important check is that it does NOT return camt053
-    if (format) {
-      expect(format.id).not.toBe('camt053')
-    }
+  it.each(['statement.txt', 'statement.csv', 'statement.053', 'statement'])(
+    'detects camt.053 by content whatever the extension: %s (crm#1160)',
+    (filename) => {
+      expect(detectFileFormat(CAMT053_XML, filename)?.id).toBe('camt053')
+    },
+  )
+
+  it('does not claim a CSV that mentions camt.053 in a description', () => {
+    const csv = 'Bokföringsdatum;Valutadatum;Verifikationsnummer;Text/mottagare;Belopp;Saldo\n2024-01-15;2024-01-15;123;camt.053 BkToCstmrStmt;-99,00;100,00'
+    expect(detectFileFormat(csv, 'export.csv')?.id).toBe('seb')
   })
 
   it('detects Länsförsäkringar CSV from header with "typ" keyword', () => {
@@ -1496,7 +1497,7 @@ describe('parseBankFile: camt.053 XML format', () => {
     const result = parseBankFile(CAMT053_XML, 'statement.xml')
 
     const debit = result.transactions[0]
-    expect(debit.raw_line).toBe('REF001')
+    expect(debit.raw_line).toBe('2024-01-15_REF001')
   })
 
   it('extracts OCR reference from structured remittance info', () => {
@@ -1524,8 +1525,8 @@ describe('parseBankFile: camt.053 XML format', () => {
       counterparty: 'Kund AB',
       counterparty_iban: 'SE4550000000058398257466',
       bank_transaction_code: 'PMNT-RCDT-DMCT',
-      // The external_id input is unchanged: NtryRef first.
-      raw_line: 'NTRY-1',
+      // The external_id input: booking date plus both references.
+      raw_line: '2025-03-10_ACSR-1_NTRY-1',
     })
     expect(outgoing).toMatchObject({
       counterparty: 'Leverantör AB',
@@ -1561,7 +1562,105 @@ describe('parseBankFile: camt.053 XML format', () => {
     expect(result.format).toBe('camt053')
     expect(result.transactions).toHaveLength(0)
     expect(result.issues.length).toBeGreaterThan(0)
-    expect(result.issues[0].message).toContain('No <Ntry> elements')
+    expect(result.issues[0].message).toContain('Inga transaktioner (<Ntry>)')
+  })
+})
+
+describe('parseBankFile: camt.053 as other systems save it (crm#1160)', () => {
+  const parse = () => parseBankFile(CAMT053_V08_PREFIXED_MULTI_STMT, 'kontoutdrag-2026-01.txt')
+
+  it('detects a BOM-prefixed, ns2-prefixed camt.053.001.08 file saved as .txt', () => {
+    expect(detectFileFormat(CAMT053_V08_PREFIXED_MULTI_STMT, 'kontoutdrag-2026-01.txt')?.id).toBe('camt053')
+    expect(parse().format).toBe('camt053')
+  })
+
+  it('reads every booked entry across both statements and skips the pending one', () => {
+    const result = parse()
+    expect(result.transactions.map((t) => t.provider_transaction_id)).toEqual([
+      'ACSR-0001',
+      'ACSR-0002',
+      'ACSR-0004',
+      'ACSR-0005',
+    ])
+    expect(result.stats).toMatchObject({ total_rows: 5, parsed_rows: 4, skipped_rows: 1 })
+    expect(result.issues).toEqual([expect.objectContaining({ row: 3, severity: 'info' })])
+    expect(result.issues[0].message).toContain('PDNG')
+  })
+
+  it('reads the date part of a DtTm booking date and of a Dt with a zone offset', () => {
+    const [ocr, , card] = parse().transactions
+    expect(ocr.date).toBe('2026-01-02')
+    expect(ocr.value_date).toBe('2026-01-02')
+    expect(card.date).toBe('2026-01-05')
+  })
+
+  it('reads amounts, signs, currencies and payment details under the prefix', () => {
+    const [ocr, , card, eur] = parse().transactions
+    expect(ocr).toMatchObject({
+      amount: 1500,
+      currency: 'SEK',
+      description: 'Inbetalning faktura 2001',
+      reference: '2001000000013',
+      end_to_end_id: 'E2E-0001',
+      counterparty: 'Kund & Partner AB',
+      counterparty_iban: 'SE0000000000000000000002',
+      bank_transaction_code: 'PMNT-RCDT-DMCT',
+    })
+    expect(card).toMatchObject({ amount: -249.5, description: 'Kortköp Kontorsvaror', reference: null })
+    expect(eur).toMatchObject({
+      amount: -100,
+      currency: 'EUR',
+      description: 'Licens januari',
+      counterparty: 'Leverantör GmbH',
+      counterparty_iban: 'DE00000000000000000004',
+    })
+  })
+
+  it('keeps a deposit batch with several TxDtls as one row without one payer or OCR', () => {
+    const batch = parse().transactions[1]
+    expect(batch).toMatchObject({
+      date: '2026-01-03',
+      amount: 3000,
+      description: 'Samlingspost, 3 betalningar',
+      reference: null,
+      counterparty: null,
+      end_to_end_id: null,
+      counterparty_iban: null,
+    })
+    expect(parse().stats.total_income).toBe(4500)
+  })
+
+  it('gives each entry a stable external id from its bank reference', () => {
+    const [ocr] = parse().transactions
+    expect(generateExternalId(ocr, 'camt053', 0)).toBe('camt053_2026-01-02_ACSR-0001')
+  })
+
+  it('keeps per-statement entry numbers of two monthly files apart', () => {
+    const month = (date: string, amount: string) => `<?xml version="1.0"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.053.001.02"><BkToCstmrStmt><Stmt>
+<Ntry><NtryRef>1</NtryRef><Amt Ccy="SEK">${amount}</Amt><CdtDbtInd>DBIT</CdtDbtInd><Sts>BOOK</Sts><BookgDt><Dt>${date}</Dt></BookgDt></Ntry>
+</Stmt></BkToCstmrStmt></Document>`
+    const [january] = parseBankFile(month('2026-01-31', '99.00'), 'jan.xml').transactions
+    const [february] = parseBankFile(month('2026-02-28', '99.00'), 'feb.xml').transactions
+    const ids = [january, february].map((tx) => generateExternalId(tx, 'camt053', 0))
+    expect(ids).toEqual(['camt053_2026-01-31_1', 'camt053_2026-02-28_1'])
+    // The same statement imported twice keeps its id, so a re-import dedups.
+    const [again] = parseBankFile(month('2026-01-31', '99.00'), 'jan-copy.xml').transactions
+    expect(generateExternalId(again, 'camt053', 0)).toBe(ids[0])
+  })
+
+  it('reads a long statement with many entries', () => {
+    const result = parseBankFile(camt053ManyEntries(194), 'statement.xml')
+    expect(result.transactions).toHaveLength(194)
+    expect(result.issues).toEqual([])
+    expect(result.transactions[1]).toMatchObject({ amount: -101.25, raw_line: '2026-01-02_REF-1' })
+    expect(result.date_from).toBe('2026-01-01')
+  })
+
+  it('strips a mojibake BOM left by a Latin-1 decode', () => {
+    const result = parseBankFile('ï»¿' + camt053ManyEntries(2), 'statement')
+    expect(result.format).toBe('camt053')
+    expect(result.transactions).toHaveLength(2)
   })
 })
 
@@ -1600,6 +1699,14 @@ describe('parseBankFile: explicit format override', () => {
     expect(result.transactions).toHaveLength(0)
     expect(result.issues).toHaveLength(1)
     expect(result.issues[0].message).toContain('Kunde inte identifiera bankformat')
+  })
+
+  it('names the supported formats, camt.053 included, when nothing matches (crm#1160)', () => {
+    const { message } = parseBankFile(UNKNOWN_CSV, 'unknown.csv').issues[0]
+    expect(message).toContain('Stödda format')
+    expect(message).toContain('SEB')
+    expect(message).toContain('ISO 20022 camt.053 (XML, oavsett filändelse)')
+    expect(message).not.toContain('CSV (manuell mappning)')
   })
 
   it('can force generic_csv format by explicit ID', () => {

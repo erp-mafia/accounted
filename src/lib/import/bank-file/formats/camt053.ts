@@ -6,16 +6,28 @@
  *
  * Key elements:
  * - <BkToCstmrStmt>: root container
- * - <Stmt>: one statement per account
+ * - <Stmt>: one statement per account (a file may carry several)
  * - <Ntry>: individual transaction entries
- * - <NtryRef> / <AcctSvcrRef>: unique entry reference (external_id)
+ * - <NtryRef> / <AcctSvcrRef>: entry references; with the booking date they
+ *   form the entry's external_id (see entryKey)
  * - <CdtDbtInd>: CRDT/DBIT indicator
+ * - <Sts>: BOOK (booked), PDNG (pending) or INFO; .001.02 writes the code as
+ *   text, .001.08 and later wrap it in <Cd>
+ * - <BookgDt>/<ValDt>: <Dt> (ISODate) or <DtTm> (ISODateTime)
  * - <RmtInf><Strd><CdtrRefInf>: structured remittance (OCR/Bankgiro reference)
+ *
+ * One parsed row per <Ntry>: the amount that hit the account, which is what
+ * the statement balance and the bank feed carry. An entry with several
+ * <TxDtls> (a Bankgiro deposit batch) stays one row, and no single payment's
+ * payer or OCR is attributed to the whole batch.
  */
 
 import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFileParseIssue } from '../types'
 import { prepareContent } from '../../shared/encoding'
 import { ISO_DATE_RE } from '@/lib/invariants'
+
+/** Markers of a camt.053 statement: its namespace, root element or long name. */
+const CAMT053_MARKERS = ['camt.053', 'bktocstmrstmt', 'banktocustomerstatement']
 
 export const camt053Format: BankFileFormat = {
   id: 'camt053',
@@ -24,20 +36,19 @@ export const camt053Format: BankFileFormat = {
   fileExtensions: ['.xml'],
 
   detect(content: string, filename: string): boolean {
-    // Check for XML with camt.053 namespace
-    if (filename.toLowerCase().endsWith('.xml')) {
-      const lower = content.toLowerCase()
-      return (
-        lower.includes('camt.053') ||
-        lower.includes('bktocstmrstmt') ||
-        lower.includes('banktoCustomerstatement'.toLowerCase())
-      )
-    }
-    return false
+    // By content, whatever the extension (crm#1160): statements saved from a
+    // bank's file service or another accounting system's archive arrive as
+    // .txt, .053 or with no extension at all. The XML check keeps a CSV that
+    // happens to mention "camt.053" in a description from being claimed.
+    const lower = prepareContent(content).trimStart().toLowerCase()
+    const looksLikeXml = lower.startsWith('<') || filename.toLowerCase().endsWith('.xml')
+    return looksLikeXml && CAMT053_MARKERS.some((marker) => lower.includes(marker))
   },
 
   parse(content: string): BankFileParseResult {
-    const prepared = prepareContent(content)
+    // Prefixed namespaces (<ns2:Ntry>, written by many XML serializers) read
+    // as the bare element names below.
+    const prepared = stripNamespacePrefixes(prepareContent(content))
 
     const transactions: ParsedBankTransaction[] = []
     const issues: BankFileParseIssue[] = []
@@ -49,7 +60,7 @@ export const camt053Format: BankFileFormat = {
     if (entries.length === 0) {
       issues.push({
         row: 0,
-        message: 'No <Ntry> elements found in camt.053 file',
+        message: 'Inga transaktioner (<Ntry>) hittades i camt.053-filen.',
         severity: 'error',
       })
     }
@@ -61,32 +72,39 @@ export const camt053Format: BankFileFormat = {
       const entry = entries[i]
 
       try {
-        // Date: <BookgDt><Dt> or <ValDt><Dt>
-        const bookingDate = extractTextContent(entry, 'BookgDt>.*?<Dt') ||
-          extractNestedText(entry, 'BookgDt', 'Dt')
-        const valueDate = extractTextContent(entry, 'ValDt>.*?<Dt') ||
-          extractNestedText(entry, 'ValDt', 'Dt')
-        const date = bookingDate || valueDate
-
-        if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-          issues.push({ row: i + 1, message: `Invalid or missing date in entry ${i}`, severity: 'warning' })
+        // A pending or informational entry is not a booking: the booked
+        // version arrives in a later statement, so importing it would double.
+        const status = (extractNestedText(entry, 'Sts', 'Cd') || extractTextContent(entry, 'Sts'))?.toUpperCase()
+        if (status === 'PDNG' || status === 'INFO') {
+          issues.push({ row: i + 1, message: `Post ${i + 1} är inte bokförd (${status}) och hoppas över.`, severity: 'info' })
           continue
         }
 
-        // Amount: <Amt Ccy="SEK">1234.56</Amt>
-        const amountMatch = entry.match(/<Amt[^>]*>([^<]+)<\/Amt>/i)
+        // Date: <BookgDt> or <ValDt>, each as <Dt> or <DtTm>
+        const bookingDate = extractEntryDate(entry, 'BookgDt')
+        const valueDate = extractEntryDate(entry, 'ValDt')
+        const date = bookingDate || valueDate
+
+        if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+          issues.push({ row: i + 1, message: `Ogiltigt eller saknat datum i post ${i + 1}`, severity: 'warning' })
+          continue
+        }
+
+        // Amount: <Amt Ccy="SEK">1234.56</Amt>. The entry's own <Amt> comes
+        // before <AmtDtls> and the per-payment amounts in <NtryDtls>.
+        const amountMatch = entry.match(/<Amt(?:\s[^>]*)?>([^<]+)<\/Amt>/i)
         const amountStr = amountMatch?.[1]
-        const currencyMatch = entry.match(/<Amt[^>]*Ccy="([^"]+)"[^>]*>/i)
+        const currencyMatch = entry.match(/<Amt\s[^>]*Ccy=["']([^"']+)["'][^>]*>/i)
         const currency = currencyMatch?.[1] || stmtCcy
 
         if (!amountStr) {
-          issues.push({ row: i + 1, message: `Missing amount in entry ${i}`, severity: 'warning' })
+          issues.push({ row: i + 1, message: `Belopp saknas i post ${i + 1}`, severity: 'warning' })
           continue
         }
 
         let amount = parseFloat(amountStr)
         if (isNaN(amount)) {
-          issues.push({ row: i + 1, message: `Invalid amount: ${amountStr}`, severity: 'warning' })
+          issues.push({ row: i + 1, message: `Ogiltigt belopp: ${amountStr}`, severity: 'warning' })
           continue
         }
 
@@ -98,28 +116,39 @@ export const camt053Format: BankFileFormat = {
           amount = Math.abs(amount)
         }
 
+        // Per-payment details live in <TxDtls>. With several of them the entry
+        // is a batch: its payers, OCRs and end-to-end ids belong to the parts,
+        // not to the booked total, so none of them is read for the row.
+        const details = extractElements(entry, 'TxDtls')
+        const payment = details.length <= 1 ? entry : null
+
         // Description: <AddtlNtryInf> or <RmtInf><Ustrd>
         const additionalInfo = extractTextContent(entry, 'AddtlNtryInf')
-        const unstructuredRemittance = extractTextContent(entry, 'Ustrd')
-        const description = additionalInfo || unstructuredRemittance || 'Unknown'
+        const unstructuredRemittance = payment ? extractTextContent(payment, 'Ustrd') : null
+        const batchLabel = payment ? null : `Samlingspost, ${details.length} betalningar`
+        const description = additionalInfo || unstructuredRemittance || batchLabel || 'Unknown'
 
         // OCR / structured creditor reference: only <Ref> inside <CdtrRefInf>.
         // A bare <Ref> search also hits <Refs>, which comes first in the entry.
-        const reference = extractNestedText(entry, 'CdtrRefInf', 'Ref')
+        const reference = payment ? extractNestedText(payment, 'CdtrRefInf', 'Ref') : null
         const entryRef = extractTextContent(entry, 'NtryRef')
         const acctSvcrRef = extractTextContent(entry, 'AcctSvcrRef')
         // NOTPROVIDED is the ISO 20022 placeholder for "no id", not an id.
-        const endToEndId = extractTextContent(entry, 'EndToEndId')
+        const endToEndId = payment ? extractTextContent(payment, 'EndToEndId') : null
 
         // Counterparty
-        const creditorName = extractTextContent(entry, 'CdtrNm') ||
-          extractNestedText(entry, 'Cdtr', 'Nm')
-        const debtorName = extractTextContent(entry, 'DbtrNm') ||
-          extractNestedText(entry, 'Dbtr', 'Nm')
+        const creditorName = payment
+          ? extractTextContent(payment, 'CdtrNm') || extractNestedText(payment, 'Cdtr', 'Nm')
+          : null
+        const debtorName = payment
+          ? extractTextContent(payment, 'DbtrNm') || extractNestedText(payment, 'Dbtr', 'Nm')
+          : null
         const counterparty = cdtDbtInd === 'DBIT' ? creditorName : debtorName
-        const counterpartyIban = cdtDbtInd === 'DBIT'
-          ? extractNestedText(entry, 'CdtrAcct', 'IBAN')
-          : extractNestedText(entry, 'DbtrAcct', 'IBAN')
+        const counterpartyIban = !payment
+          ? null
+          : cdtDbtInd === 'DBIT'
+            ? extractNestedText(payment, 'CdtrAcct', 'IBAN')
+            : extractNestedText(payment, 'DbtrAcct', 'IBAN')
 
         // Bank transaction code, in the PSD2 form ingest classifies (PMNT-RCDT-ESCT)
         const bankTransactionCode = [
@@ -141,7 +170,7 @@ export const camt053Format: BankFileFormat = {
           balance: balance !== null && !isNaN(balance) ? balance : null,
           reference,
           counterparty: counterparty?.trim() || null,
-          raw_line: entryRef || acctSvcrRef || `camt053_entry_${i}`,
+          raw_line: entryKey(date, acctSvcrRef, entryRef) ?? `camt053_entry_${i}`,
           value_date: valueDate && ISO_DATE_RE.test(valueDate) ? valueDate : null,
           end_to_end_id: endToEndId && endToEndId.toUpperCase() !== 'NOTPROVIDED' ? endToEndId : null,
           provider_transaction_id: acctSvcrRef || entryRef || null,
@@ -151,7 +180,7 @@ export const camt053Format: BankFileFormat = {
       } catch (err) {
         issues.push({
           row: i + 1,
-          message: `Error parsing entry ${i}: ${err instanceof Error ? err.message : 'Unknown'}`,
+          message: `Kunde inte tolka post ${i + 1}: ${err instanceof Error ? err.message : 'okänt fel'}`,
           severity: 'warning',
         })
       }
@@ -175,6 +204,54 @@ export const camt053Format: BankFileFormat = {
       },
     }
   },
+}
+
+/**
+ * The entry's identity across files, the input of its external_id. Neither
+ * reference is safe alone: banks may number <NtryRef> per statement (1, 2, 3
+ * in every monthly file) and may repeat an <AcctSvcrRef>, and a reused key
+ * makes ingest skip a later month's entry as an already-imported one. The
+ * booking date plus both references stays the same when the same statement
+ * is imported again, so a re-import still deduplicates exactly.
+ */
+function entryKey(date: string, acctSvcrRef: string | null, entryRef: string | null): string | null {
+  if (!acctSvcrRef && !entryRef) return null
+  return [date, acctSvcrRef, entryRef].filter(Boolean).join('_')
+}
+
+/**
+ * Drop namespace prefixes from element names (<ns2:Ntry> becomes <Ntry>,
+ * </ns2:Ntry> becomes </Ntry>). Attributes such as xmlns:ns2 are left alone;
+ * nothing reads them.
+ */
+function stripNamespacePrefixes(xml: string): string {
+  return xml.replace(/<(\/?)[A-Za-z_][\w.-]*:(?=[A-Za-z_])/g, '<$1')
+}
+
+/**
+ * The calendar date of <BookgDt> or <ValDt>: an ISODate in <Dt>, or the date
+ * part of an ISODateTime in <DtTm>. The date is read as written; banks state
+ * booking times in local time.
+ */
+function extractEntryDate(entry: string, parentTag: string): string | null {
+  const raw = extractNestedText(entry, parentTag, 'Dt') || extractNestedText(entry, parentTag, 'DtTm')
+  return raw?.match(/^(\d{4}-\d{2}-\d{2})/)?.[1] ?? null
+}
+
+const NAMED_XML_ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }
+
+/** The five predefined XML entities plus numeric character references. */
+function decodeXmlEntities(text: string): string {
+  return text.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (match, entity: string) => {
+    const lower = entity.toLowerCase()
+    const codePoint = lower.startsWith('#x')
+      ? parseInt(lower.slice(2), 16)
+      : lower.startsWith('#')
+        ? parseInt(lower.slice(1), 10)
+        : null
+    if (codePoint === null) return NAMED_XML_ENTITIES[lower] ?? match
+    return codePoint > 0 && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : match
+  })
 }
 
 /**
@@ -204,23 +281,23 @@ function extractElements(xml: string, tagName: string): string[] {
 }
 
 /**
- * Extract text content of the first occurrence of a tag
+ * Extract text content of the first occurrence of a tag. The name matches
+ * exactly: <Dt> never reads <DtTm>, <Cdtr> never reads <CdtrAcct>.
  */
 function extractTextContent(xml: string, tagName: string): string | null {
-  const regex = new RegExp(`<${tagName}[^>]*>([^<]+)<`, 'i')
+  const regex = new RegExp(`<${tagName}(?:\\s[^>]*)?>([^<]+)<`, 'i')
   const match = xml.match(regex)
-  return match?.[1]?.trim() || null
+  const text = match?.[1]?.trim()
+  return text ? decodeXmlEntities(text) : null
 }
 
 /**
  * Extract text content of a nested tag within a parent tag
  */
 function extractNestedText(xml: string, parentTag: string, childTag: string): string | null {
-  const parentRegex = new RegExp(`<${parentTag}[^>]*>([\\s\\S]*?)<\\/${parentTag}>`, 'i')
+  const parentRegex = new RegExp(`<${parentTag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${parentTag}>`, 'i')
   const parentMatch = xml.match(parentRegex)
   if (!parentMatch) return null
 
-  const childRegex = new RegExp(`<${childTag}[^>]*>([^<]+)<`, 'i')
-  const childMatch = parentMatch[1].match(childRegex)
-  return childMatch?.[1]?.trim() || null
+  return extractTextContent(parentMatch[1], childTag)
 }
