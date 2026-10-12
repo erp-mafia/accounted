@@ -12667,7 +12667,7 @@
     "try_again": "Försök igen",
     "start_failed_title": "Kunde inte starta bankkopplingen",
     "restart_failed_title": "Kunde inte starta om BankID",
-    "accounts_intro": "Välj vilka konton som ska in i bokföringen. Historiken hämtas och nya transaktioner kommer automatiskt.",
+    "accounts_intro": "Välj vilka konton som ska in i bokföringen.",
     "account_generic": "Bankkonto",
     "account_private": "Privat konto",
     "ledger_same": "Samma som förut: {ledger}",
@@ -12702,7 +12702,11 @@
     "abort_description_bankid": "BankID-signeringen avbryts och inget sparas. Du kan börja om när som helst.",
     "abort_description_accounts": "Kontovalet sparas inte och inget hämtas. Du kan börja om när som helst.",
     "abort_confirm": "Avbryt kopplingen",
-    "abort_keep": "Fortsätt koppla"
+    "abort_keep": "Fortsätt koppla",
+    "title_bankid": "Signering med BankID hos {bank}",
+    "help_accounts": "Historiken hämtas och nya transaktioner kommer automatiskt. Ett konto som redan bokförs behåller sitt bokföringskonto. Privata konton är avmarkerade och hämtas bara om du väljer dem.",
+    "help_payments_mechanics": "Verifiera nu öppnar betalningsleverantörens formulär i en ny flik; länken gäller 24 timmar och statusen uppdateras här när den är klar. Skicka till firmatecknare lägger länken i ett mejl.",
+    "guide_link": "Så går det till hos {bank}, 1 min film"
   },
   "bank_payments": {
     "title": "Betala via banken",

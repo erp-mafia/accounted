@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { AttnLine } from '@/components/ui/attn-line'
 import { cn } from '@/lib/utils'
 import { BankIdChallengeQr } from './BankIdChallengeQr'
+import { BankIdMark } from './BankIdMark'
 import { bankIdAutostartHref } from './autostart'
 
 export interface BankIdChallengeShape {
@@ -63,12 +64,14 @@ export function BankIdChallengeView({ challenge, stepHeading = null, newQr = fal
       )}
       {challenge?.qrData && (
         <>
+          <BankIdMark className="mx-auto" />
           <BankIdChallengeQr data={challenge.qrData} label={texts.qrLabel} />
           {qrFooter}
         </>
       )}
       {!challenge?.qrData && challenge?.qrImage && (
         <>
+          <BankIdMark className="mx-auto" />
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={challenge.qrImage}
@@ -82,7 +85,10 @@ export function BankIdChallengeView({ challenge, stepHeading = null, newQr = fal
         <>
           <p className="text-[13px] text-muted-foreground">{texts.sameDeviceHint}</p>
           <Button asChild>
-            <a href={bankIdAutostartHref(challenge.autostartToken)}>{texts.openBankId}</a>
+            <a href={bankIdAutostartHref(challenge.autostartToken)} className="gap-2">
+              <BankIdMark size={16} className="invert dark:invert-0" />
+              {texts.openBankId}
+            </a>
           </Button>
         </>
       )}

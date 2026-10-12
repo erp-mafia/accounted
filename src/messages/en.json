@@ -12667,7 +12667,7 @@
     "try_again": "Try again",
     "start_failed_title": "Could not start the bank connection",
     "restart_failed_title": "Could not restart BankID",
-    "accounts_intro": "Choose which accounts go into the books. The history is fetched and new transactions arrive automatically.",
+    "accounts_intro": "Choose which accounts go into the books.",
     "account_generic": "Bank account",
     "account_private": "Private account",
     "ledger_same": "Same as before: {ledger}",
@@ -12702,7 +12702,11 @@
     "abort_description_bankid": "The BankID signing is cancelled and nothing is saved. You can start over at any time.",
     "abort_description_accounts": "The account choice is not saved and nothing is fetched. You can start over at any time.",
     "abort_confirm": "Cancel the connection",
-    "abort_keep": "Keep connecting"
+    "abort_keep": "Keep connecting",
+    "title_bankid": "Signing with BankID at {bank}",
+    "help_accounts": "The history is fetched and new transactions arrive automatically. An account already in the books keeps its ledger account. Private accounts start unticked and are fetched only if you choose them.",
+    "help_payments_mechanics": "Verify now opens the payment provider's form in a new tab; the link is valid for 24 hours and the status updates here once it is done. Send to a signatory puts the link in an email.",
+    "guide_link": "How it works at {bank}, 1 min video"
   },
   "bank_payments": {
     "title": "Pay through the bank",

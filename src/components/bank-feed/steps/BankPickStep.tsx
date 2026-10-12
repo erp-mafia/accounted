@@ -2,10 +2,11 @@
 
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { AttnLine } from '@/components/ui/attn-line'
 import { DialogFooter } from '@/components/ui/dialog'
 import { SettingsSeg } from '@/components/settings/SettingsRows'
 import { BankList, OpenPaymentsBankMark } from '../BankList'
-import { bankHelpKey } from '../bank-help'
+import { bankGuideUrl, bankPrerequisiteKey } from '../bank-help'
 import type { FlowAction, FlowState } from '../connect-flow-reducer'
 import type { AccountContext, OpenPaymentsBank } from '../open-payments-client'
 
@@ -22,16 +23,21 @@ interface BankPickStepProps {
 
 /**
  * Step 1, Bank: the searchable list (or the locked bank of the connection
- * being replaced), the account-type toggle for an enskild firma, and what to
- * expect at this bank before the BankID starts. The banks route lists no
- * affiliates, so the sparbank picker waits for a bank-details read; a
- * Swedbank consent reaches the sparbanker through the bank's own prompt.
+ * being replaced) and the account-type toggle for an enskild firma. The
+ * explanations (how it goes at the bank, who should hold the phone, the
+ * provider) sit behind the title's "?"; the one thing left in the flow is the
+ * prerequisite that prevents a failed BankID at the chosen bank, as the
+ * step's attention line, plus the bank's one-minute film when we have one.
+ * The banks route lists no affiliates, so the sparbank picker waits for a
+ * bank-details read; a Swedbank consent reaches the sparbanker through the
+ * bank's own prompt.
  */
 export function BankPickStep({ state, dispatch, banks, banksFailed, soleTrader, onContinue, closeButton }: BankPickStepProps) {
   const t = useTranslations('bank_connect')
   const chosen = state.bank ? (banks?.find((b) => b.bic === state.bank?.bic) ?? null) : null
   const bankName = state.bank?.name ?? chosen?.name ?? ''
-  const helpKey = state.bank ? bankHelpKey({ name: bankName, bic: state.bank.bic }) : null
+  const prerequisite = state.bank ? bankPrerequisiteKey({ name: bankName, bic: state.bank.bic }) : null
+  const guideUrl = state.bank ? bankGuideUrl(state.bank) : null
   const canContinue = state.bank !== null && state.bank.bic !== ''
 
   return (
@@ -39,12 +45,7 @@ export function BankPickStep({ state, dispatch, banks, banksFailed, soleTrader, 
       {state.bankLocked && state.bank ? (
         <div className="flex items-center gap-3 border-y border-border px-1 py-3">
           <OpenPaymentsBankMark bank={{ name: state.bank.name, logo_url: chosen?.logo_url ?? null }} />
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-[13px]">{state.bank.name}</span>
-            <span className="block text-[12.5px] text-muted-foreground">
-              {t(state.mode === 'renew' ? 'bank_locked_renew' : 'bank_locked_switch', { bank: state.bank.name })}
-            </span>
-          </span>
+          <span className="min-w-0 flex-1 truncate text-[13px]">{state.bank.name}</span>
         </div>
       ) : banksFailed ? (
         <p role="alert" className="px-1 text-[12.5px] leading-relaxed text-destructive">
@@ -69,14 +70,15 @@ export function BankPickStep({ state, dispatch, banks, banksFailed, soleTrader, 
         </div>
       )}
 
-      {state.bank && (
-        <div className="space-y-1 px-1 text-[12.5px] leading-relaxed text-muted-foreground">
-          <p>{t('help_generic', { bank: bankName })}</p>
-          {helpKey && <p>{t(`help_${helpKey}`)}</p>}
-        </div>
-      )}
+      {prerequisite && <AttnLine className="px-1">{t(`help_${prerequisite}`)}</AttnLine>}
 
-      {state.mode !== 'switch' && <p className="px-1 text-[12.5px] leading-relaxed text-muted-foreground">{t('provider_line')}</p>}
+      {guideUrl && (
+        <p className="px-1 text-[12.5px]">
+          <a href={guideUrl} target="_blank" rel="noopener noreferrer" className="text-muted-foreground underline underline-offset-2 transition-colors duration-150 hover:text-foreground">
+            {t('guide_link', { bank: bankName })}
+          </a>
+        </p>
+      )}
 
       <DialogFooter>
         {closeButton}

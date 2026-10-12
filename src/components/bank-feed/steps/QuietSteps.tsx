@@ -6,7 +6,7 @@ import { DialogFooter } from '@/components/ui/dialog'
 import { useFormat } from '@/lib/hooks/use-format'
 import type { FlowState } from '../connect-flow-reducer'
 
-/** Step 0 (switch only): what changes, in three lines, and the one sentence naming the provider. */
+/** Step 0 (switch only): what changes, in three lines (the provider is named behind the title's "?"). */
 export function IntroStep({ deadline, onContinue, closeButton }: { deadline: string | null; onContinue: () => void; closeButton: React.ReactNode }) {
   const t = useTranslations('bank_connect')
   const { formatDateLong } = useFormat()
@@ -18,7 +18,6 @@ export function IntroStep({ deadline, onContinue, closeButton }: { deadline: str
         <li>{t('intro_line_3')}</li>
       </ul>
       {deadline && <p className="text-[13px]">{t('intro_deadline', { date: formatDateLong(deadline) })}</p>}
-      <p className="text-[12.5px] leading-relaxed text-muted-foreground">{t('provider_line')}</p>
       <DialogFooter>
         {closeButton}
         <Button onClick={onContinue}>{t('continue')}</Button>
@@ -45,7 +44,8 @@ interface PaymentsStepProps {
 /**
  * Step 4, Betalningar: the one offer after the consent, never forced. Verify
  * now opens the provider's form in a new tab and the dialog polls the status
- * while open; Skicka till firmatecknare hands the link over by mail.
+ * while open; Skicka till firmatecknare hands the link over by mail. What
+ * the verification is and how the buttons work sits behind the title's "?".
  */
 export function PaymentsStep({ state, busy, onVerifyNow, onSendToSignatory, onSkip }: PaymentsStepProps) {
   const t = useTranslations('bank_connect')
@@ -57,7 +57,6 @@ export function PaymentsStep({ state, busy, onVerifyNow, onSendToSignatory, onSk
       {syncLine && <p className="text-[12.5px] text-muted-foreground">{syncLine}</p>}
       <div className="space-y-2 rounded-lg border border-border p-6">
         <p className="text-[13px] leading-relaxed">{t('payments_title')}</p>
-        <p className="text-[12.5px] leading-relaxed text-muted-foreground">{t('payments_body')}</p>
         {verified ? (
           <p className="text-[12.5px]">{state.verificationUntil ? t('verification_valid', { date: formatDateLong(state.verificationUntil) }) : t('verification_valid_no_date')}</p>
         ) : state.verificationUrl ? (

@@ -5,10 +5,11 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { AttnLine } from '@/components/ui/attn-line'
 import { DialogFooter } from '@/components/ui/dialog'
-import { BankMark } from '@/components/banks/BankMark'
 import { BankIdChallengeView } from '@/components/bankid/BankIdChallengeView'
+import { BankIdMark } from '@/components/bankid/BankIdMark'
 import type { FlowAction, FlowState } from '../connect-flow-reducer'
 import type { ConnectMethod } from '../open-payments-client'
+import { useBankFeedFailureText } from '../use-bank-feed-failure-text'
 
 interface BankIdStepProps {
   state: FlowState
@@ -25,40 +26,23 @@ interface BankIdStepProps {
 }
 
 /**
- * Step 2, BankID: before the start, what to expect and (when unknown) the
- * personnummer of the person signing, then the bank's challenge: the
- * animated QR or the same-device button, the bank's step, the new-QR
- * attention line and the 30 s countdown. A refusal shows the bank's text
- * and offers a restart; a consent waiting for a second signatory says so
- * and hands over a link to copy.
+ * Step 2, BankID: before the start, the BankID mark and (when unknown) the
+ * personnummer of the person signing (what to expect sits behind the title's
+ * "?"; the title row names the bank with its mark), then the bank's
+ * challenge: the animated QR or the same-device button, the bank's step, the
+ * new-QR attention line and the 30 s countdown. A refusal shows the bank's
+ * text and offers a restart; a consent waiting for a second signatory says
+ * so and hands over a link to copy.
  */
 export function BankIdStep({ state, dispatch, signerKnown, personalNumberInvalid, secondsLeft, onStart, onRestart, onCopyReminder, closeButton }: BankIdStepProps) {
   const t = useTranslations('bank_connect')
-  // The bank feed's own failure texts (messages bankFeed.*, shipped with the
-  // routes): the bank's text first, then the text for its code, then the
-  // generic line; this flow's own line only until that namespace is present.
-  const tFeed = useTranslations('bankFeed')
-  const failureText = (() => {
-    if (state.failure?.text) return state.failure.text
-    const code = state.failure?.code
-    if (code && tFeed.has(`failure.${code}`)) return tFeed(`failure.${code}`)
-    return tFeed.has('failure_generic') ? tFeed('failure_generic') : t('failed_default')
-  })()
-  const bankName = state.bank?.name ?? null
-  const bankLine = bankName ? (
-    <p className="flex items-center justify-center gap-2 text-[13px] text-muted-foreground">
-      <BankMark bankName={bankName} />
-      <span>{bankName}</span>
-    </p>
-  ) : null
-
+  const failureText = useBankFeedFailureText(state.failure, t('failed_default'))
   // Before the start (never for a resumed connection: the bank already holds it).
   if (state.attempt === null && state.mode !== 'resume') {
     const disabled = state.starting || (!signerKnown && state.personalNumber.trim().length === 0)
     return (
       <div className="space-y-4">
-        {bankLine}
-        <p className="text-[13px] leading-relaxed text-muted-foreground">{t('bankid_intro')}</p>
+        <BankIdMark className="mx-auto" size={24} />
         {!signerKnown && (
           <label className="block space-y-2 text-[13px]">
             <span className="text-muted-foreground">{t('personal_number_label')}</span>
@@ -104,11 +88,10 @@ export function BankIdStep({ state, dispatch, signerKnown, personalNumberInvalid
 
   return (
     <div className="space-y-4">
-      {bankLine}
       {failed ? (
         <div className="space-y-3 text-center">
-          <AttnLine className="text-center">{failureText}</AttnLine>
-          {state.startError && <AttnLine className="text-center">{state.startError}</AttnLine>}
+          {/* One attention line: a restart that failed replaces the bank's earlier refusal. */}
+          <AttnLine className="text-center">{state.startError ?? failureText}</AttnLine>
           <Button onClick={onRestart} loading={state.starting}>
             {t('try_again')}
           </Button>

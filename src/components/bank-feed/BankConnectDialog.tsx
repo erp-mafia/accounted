@@ -5,7 +5,9 @@ import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { useToast } from '@/components/ui/use-toast'
+import { BankMark } from '@/components/banks/BankMark'
 import { useQrCountdown } from '@/components/bankid/use-qr-countdown'
 import { fetchCompanyVerification, fetchPaymentsAvailability, PaymentsClientError, startCompanyVerification } from '@/components/payments/payments-client'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
@@ -13,6 +15,7 @@ import { usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { notifyBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
+import { bankHelpKey, isTwoStepBank } from './bank-help'
 import { flowReducer, openFlow, pollingActive } from './connect-flow-reducer'
 import { dismissPolicy, stepPosition } from './flow-steps'
 import {
@@ -349,7 +352,58 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
   }
 
   const position = stepPosition(state.step, state.mode, state.paymentsOffered)
-  const title = state.step === 'intro' ? t('title_intro') : state.step === 'done' ? t('title_done') : t(`title_${state.mode}`)
+  const titleBank = state.bank?.name ?? state.connection?.bank_name ?? null
+  // From the BankID step on, the title row carries the bank's mark: the
+  // person sees whose BankID they are about to answer.
+  const titleMark = titleBank !== null && (state.step === 'bankid' || state.step === 'accounts' || state.step === 'payments' || state.step === 'done')
+  const title =
+    state.step === 'intro'
+      ? t('title_intro')
+      : state.step === 'done'
+        ? t('title_done')
+        : state.step === 'bankid' && titleBank
+          ? t('title_bankid', { bank: titleBank })
+          : t(`title_${state.mode}`)
+  // Every explanation lives behind the title's "?" (design convention 7),
+  // so the steps themselves carry only the controls, one attention line at
+  // most, and the state.
+  const bankHelp = state.bank ? bankHelpKey(state.bank) : null
+  const twoStep = state.bank ? isTwoStepBank(state.bank) : false
+  const help = (() => {
+    switch (state.step) {
+      case 'intro':
+        return <p>{t('provider_line')}</p>
+      case 'bank':
+        return (
+          <div className="space-y-2">
+            {state.bank && <p>{t('help_generic', { bank: state.bank.name })}</p>}
+            {state.bank && bankHelp && !twoStep && <p>{t(`help_${bankHelp}`)}</p>}
+            {twoStep && <p>{t('help_svea')}</p>}
+            {state.bankLocked && state.bank && <p>{t(state.mode === 'renew' ? 'bank_locked_renew' : 'bank_locked_switch', { bank: state.bank.name })}</p>}
+            <p>{t('bankid_intro')}</p>
+            <p>{t('provider_line')}</p>
+          </div>
+        )
+      case 'bankid':
+        return (
+          <div className="space-y-2">
+            <p>{t('bankid_intro')}</p>
+            {twoStep && <p>{t('help_svea')}</p>}
+          </div>
+        )
+      case 'accounts':
+        return <p>{t('help_accounts')}</p>
+      case 'payments':
+        return (
+          <div className="space-y-2">
+            <p>{t('payments_body')}</p>
+            <p>{t('help_payments_mechanics')}</p>
+          </div>
+        )
+      default:
+        return null
+    }
+  })()
   const cancelButton = (
     <Button variant="secondary" onClick={requestClose}>
       {t('cancel')}
@@ -366,7 +420,11 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
                 {t('step_of', { n: position.n, total: position.total })}
               </p>
             )}
-            <DialogTitle>{title}</DialogTitle>
+            <div className="flex items-center justify-center gap-2 sm:justify-start">
+              {titleMark && <BankMark bankName={titleBank} size={24} />}
+              <DialogTitle data-ph-mask={titleMark ? '' : undefined}>{title}</DialogTitle>
+              {help && <HelpPopover className="shrink-0">{help}</HelpPopover>}
+            </div>
             <DialogDescription className="sr-only">{title}</DialogDescription>
           </DialogHeader>
 
