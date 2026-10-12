@@ -387,6 +387,7 @@ import { generateGeneralLedger } from '@/lib/reports/general-ledger'
 import { getAccountStatus } from '@/lib/reconciliation/service'
 import { listAccountItems } from '@/lib/reconciliation/items'
 import { matchPairs } from '@/lib/reconciliation/actions'
+import { describeMatchPairs, type MatchPairsPreview } from '@/lib/reconciliation/pair-preview'
 import { signOffAccount } from '@/lib/reconciliation/signoff'
 import { bookResidualAndLink, RESIDUAL_MAX_AMOUNT } from '@/lib/reconciliation/residual'
 import {
@@ -1914,7 +1915,8 @@ function skattekontoLedgerTwinRefusal(
 ): Error {
   const ids = twins.map((t) => t.journal_entry_id)
   // A combined twin settles the verifikat only together with other open rows
-  // of the same day: the link must carry all of them, or it is refused.
+  // (of the same day or the days around it): the link must carry all of
+  // them, or it is refused.
   const companionIds = (twins[0]?.combined_with ?? []).map((c) => c.id)
   const lead = rowCount > 1 ? `Alla ${rowCount} rader finns redan i bokföringen. Första raden: ` : ''
   return codedRefusal('SKATTEKONTO_BOOK_LEDGER_TWIN_EXISTS', `${lead}${ledgerTwinMessage(twins)}`, {
@@ -1922,7 +1924,7 @@ function skattekontoLedgerTwinRefusal(
       ids.length > 1
         ? `Ask the user which of the named verifikat is the ledger side of this event and link the row to it with gnubok_reconcile_match (account_key "skattekonto"). ${SKATTEKONTO_TWIN_TAIL}`
         : companionIds.length > 0
-          ? `Link the row, together with the ${companionIds.length} other open row(s) of the same day that the verifikat also carries, to the named verifikat instead of booking it: gnubok_reconcile_match with account_key "skattekonto" and one pair { external_ids: [row id, ...companion ids], journal_entry_ids: [verifikat id] } (see args). ${SKATTEKONTO_TWIN_TAIL}`
+          ? `Link the row, together with the ${companionIds.length} other open row(s) that the verifikat also carries, to the named verifikat instead of booking it: gnubok_reconcile_match with account_key "skattekonto" and one pair { external_ids: [row id, ...companion ids], journal_entry_ids: [verifikat id] } (see args). ${SKATTEKONTO_TWIN_TAIL}`
           : `Link the row to the named verifikat instead of booking it: gnubok_reconcile_match with account_key "skattekonto" and pairs [{ external_ids: [row id], journal_entry_ids: [verifikat id] }]. ${SKATTEKONTO_TWIN_TAIL}`,
     tool: 'gnubok_reconcile_match',
     args: {
@@ -15355,6 +15357,25 @@ export const tools: McpTool[] = [
           : codedRefusal(sharedCode ?? 'VALIDATION_ERROR', message)
       }
 
+      // What the reviewer reads before approving: every pair's outside rows
+      // (date, text, amount) and its verifikat, with what the verifikat
+      // holds on the account, so "do these rows belong to this verifikat"
+      // can be answered from the card (crm#1147: it showed a pair count).
+      // Display only: a failed read stages the operation without it and the
+      // card falls back to the counts.
+      let pairPreview: MatchPairsPreview | null = null
+      try {
+        pairPreview = await describeMatchPairs(supabase, companyId, accountKey, resolvedPairs, {
+          remainders: remainderByEntry,
+        })
+      } catch (err) {
+        log.warn('describeMatchPairs failed', {
+          companyId,
+          accountKey,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+
       return stagePendingOperation(
         supabase,
         companyId,
@@ -15368,6 +15389,15 @@ export const tools: McpTool[] = [
           account_key: accountKey,
           pair_count: resolvedPairs.length,
           pairs: resolvedPairs,
+          ...(pairPreview
+            ? {
+                ledger_account: pairPreview.ledger_account,
+                pair_details: pairPreview.pair_details,
+                ...(pairPreview.pair_details_omitted > 0
+                  ? { pair_details_omitted: pairPreview.pair_details_omitted }
+                  : {}),
+              }
+            : {}),
           // What each verifikat keeps on 1630 beyond the rows linked to it:
           // it stays in unmatched_ledger with this amount.
           ...(remainders.length > 0 ? { remainders } : {}),

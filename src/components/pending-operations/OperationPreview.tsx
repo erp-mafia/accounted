@@ -22,6 +22,7 @@ import { isRegisterBookedInvoiceParams } from '@/lib/invoices/register-booked-in
 import { AttachDocumentPreview } from '@/components/bookkeeping/AttachDocumentPreview'
 import { MatchTransactionInvoicePreview } from '@/components/bookkeeping/MatchTransactionInvoicePreview'
 import { LinkDocumentsPreview } from './LinkDocumentsPreview'
+import { ReconciliationMatchPreview, hasReconciliationMatchDetails } from './ReconciliationMatchPreview'
 import { DocumentViewButton } from '@/components/bookkeeping/DocumentViewButton'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
@@ -1140,6 +1141,12 @@ export function OperationPreview({ op, detail = false }: { op: OperationPreviewI
         return <LinkDocumentsPreview data={op.preview_data} />
       case 'link_document_to_voucher':
         return <LinkDocumentToVoucherPreview data={op.preview_data} params={op.params ?? {}} detail={detail} />
+      case 'reconciliation_match':
+        // An operation staged before the pairs were described (crm#1147)
+        // carries ids only: it keeps the generic preview.
+        return hasReconciliationMatchDetails(op.preview_data)
+          ? <ReconciliationMatchPreview data={op.preview_data} detail={detail} />
+          : <GenericPreview data={op.preview_data} detail={detail} />
       default:
         return <GenericPreview data={op.preview_data} detail={detail} />
     }

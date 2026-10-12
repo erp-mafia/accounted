@@ -132,9 +132,21 @@ export function isAccountVatTreatment(value: unknown): value is AccountVatTreatm
  * OUTSIDE_UNION must be tested before UNION everywhere, since "utanför EU"
  * also satisfies UNION. Its trailing \b keeps "utanför Europa" from reading
  * as a sale outside the union.
+ *
+ * A negated union name says the same thing as "utanför": "IT-tjänster
+ * utlandet (ej EU)", "icke-EU", "exkl. EG" (crm#1146). Such a label used to
+ * miss OUTSIDE_UNION, hit UNION on the bare word and file a purchase from
+ * outside the union in ruta 21 instead of ruta 22. The negation has to sit
+ * directly in front of the union word, separated only by a space or a hyphen:
+ * "Inköp tjänster EU, ej avdragsgill moms" negates the deduction, not the
+ * union, and stays an EU label. So does "exkl. EU-moms", where the union
+ * word is half of a compound and it is the moms that is excluded. The
+ * lookbehind is the word boundary on the left, spelled with the Swedish
+ * letters \b does not know, so "Canon EU" does not read as "non EU".
  */
 const UNION = /\b(?:eu|eg)\b/
-const OUTSIDE_UNION = /utanför\s+(?:eu|eg)\b/
+const OUTSIDE_UNION =
+  /utanför\s+(?:eu|eg)\b|(?<![a-zåäö])(?:(?:ej|inte|icke|utom|non|exklusive|exkl)[\s-]+|exkl\.\s*)(?:eu|eg)\b(?!-moms)/
 
 export interface SuggestedVatTreatment {
   treatment: AccountVatTreatment

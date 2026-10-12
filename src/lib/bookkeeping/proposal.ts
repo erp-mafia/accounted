@@ -176,27 +176,66 @@ function kindFor(
 }
 
 /**
- * The same proposal with the account or VAT the person changed in the review.
+ * The booking after the person set its account or VAT in the review: one
+ * account against the bank, and theirs from here on (source 'manual': Din
+ * kontering, Vald av dig). What the proposal it replaces said about itself
+ * (its why, its confidence, the rule or read behind it) does not describe
+ * this booking and is left behind: the header kept naming the machine's
+ * pick over an account the person had changed, and nothing could tell the
+ * two apart when the review closed (PostHog 170). `label` names the account
+ * the person picked; a VAT change alone keeps the name.
  * A reverse charge that stays one keeps its basis box across an account
  * change; a treatment the person picks anew is the plain one the VAT list
  * offers.
  */
-export function withAccount(p: BookingProposal, account: string, vat_treatment: VatTreatment, amount: number): BookingProposal {
-  const category = p.booking.kind === 'counterparty' ? categoryFallback(amount) : p.booking.category
+export function withAccount(
+  p: BookingProposal,
+  account: string,
+  vat_treatment: VatTreatment,
+  amount: number,
+  label?: string,
+): BookingProposal {
+  const category =
+    p.booking.kind === 'counterparty' ? categoryFallback(amount) : carriedCategory(p.booking.category, account, amount)
   const kept =
     p.booking.kind === 'account' && p.booking.vat_treatment === 'reverse_charge' ? p.booking.reverse_charge_kind : undefined
   return {
-    ...p,
+    template_id: `account:${account}`,
+    source: 'manual',
     booking: { kind: 'account', account, vat_treatment, category, ...kindFor(vat_treatment, kept) },
+    name_sv: label ?? p.name_sv,
+    name_en: label ?? p.name_en,
+    group: 'account',
     debit_account: amount < 0 ? account : '1930',
     credit_account: amount < 0 ? '1930' : account,
+    confidence: 1,
+    description_sv: '',
+    risk_level: 'LOW',
+    requires_review: false,
     vat_treatment,
-    line_pattern: null,
+    default_dimensions: p.default_dimensions,
   }
 }
 
 function categoryFallback(amount: number): TransactionCategory {
   return amount < 0 ? 'expense_other' : 'income_other'
+}
+
+/**
+ * The category a booking keeps when someone names another account for it:
+ * the person in the review, or the assistant's pick taken over the proposal
+ * shown. An expense or income category carries over, it only says which way
+ * the row books. 'private' (and 'uncategorized') does not, unless the new
+ * account is a balance-sheet one: the category path books those without a
+ * moms line whatever VAT treatment rides along (getCategoryAccountMapping),
+ * in the preview and on the server alike. A cost account set by hand over
+ * the assistant's "private" pick was therefore booked without the moms its
+ * underlag states, while the review said 25 % (PostHog 170).
+ */
+export function carriedCategory(category: TransactionCategory, account: string, amount: number): TransactionCategory {
+  const booksMoms = category.startsWith('expense_') || category.startsWith('income_')
+  if (booksMoms || account.startsWith('2')) return category
+  return categoryFallback(amount)
 }
 
 /** The body POST /api/transactions/[id]/categorize books this proposal with. */

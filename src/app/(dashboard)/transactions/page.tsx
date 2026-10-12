@@ -111,6 +111,7 @@ import { mutate as globalMutate } from 'swr'
 import { rowProposal, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { readIsFresh, type AssistantRead } from '@/lib/agent/categorize/read-shape'
 import { booksWithoutReview } from '@/lib/transactions/direct-booking'
+import { activationFor, isPersonChoice, rememberReviewChoice, reviewChoiceFor, type ReviewChoice, type ReviewChoices } from '@/lib/transactions/review-choice'
 
 /**
  * Tell the drawer and the review to re-read a row's underlag. They read it
@@ -591,6 +592,14 @@ export default function TransactionsPage() {
   // Quick review dialog (suggestion review before booking)
   const [quickReviewOpen, setQuickReviewOpen] = useState(false)
   const [quickReview, setQuickReview] = useState<QuickReviewState | null>(null)
+  // The bookings people set in the review, by row: an account or moms they
+  // changed, a template they picked. Closing the review used to forget it
+  // and the row came back with the machine's proposal (PostHog 170). Kept
+  // for the visit only (lib/transactions/review-choice.ts): nothing is stored.
+  const [reviewChoices, setReviewChoices] = useState<ReviewChoices>({})
+  const handleReviewProposalChange = useCallback((transactionId: string, held: ReviewChoice) => {
+    setReviewChoices((prev) => rememberReviewChoice(prev, transactionId, held))
+  }, [])
 
   // Prong B: prompt to match against an open supplier invoice instead of
   // categorizing direct to 2440. Triggered by a 409 TX_CATEGORIZE_SUGGEST_SI_MATCH.
@@ -791,11 +800,15 @@ export default function TransactionsPage() {
   // stands in the Kategori cell so the person sees what Bokför will do
   // before clicking anything. Suggestions arrive with the list
   // (fetchCategorySuggestions), so nothing is computed on click.
+  // The booking the person set in the review, while it stands, comes before
+  // every proposal: the row wears it and Bokför opens the review on it.
+  const rowProposalFor = (tx: TransactionWithInvoice): SuggestedTemplate | undefined =>
+    reviewChoiceFor(reviewChoices, tx) ?? rowProposal(templateSuggestions[tx.id])
   const proposalFor = (tx: TransactionWithInvoice): RowProposal | null => {
     if (tx.journal_entry_id || tx.is_business !== null) return null
-    const s = rowProposal(templateSuggestions[tx.id])
+    const s = rowProposalFor(tx)
     if (!s) return null
-    return { label: s.name_sv, hue: proposalHue(s), confidence: s.confidence, why: whyFor(s) }
+    return { label: s.name_sv, hue: proposalHue(s), confidence: s.confidence, why: whyFor(s), own: isPersonChoice(s) }
   }
   const categoryLabelFor = (tx: TransactionWithInvoice): string | null => {
     if (tx.potential_invoice && !tx.invoice_id)
@@ -4106,7 +4119,7 @@ export default function TransactionsPage() {
   // Bokför on a row that carries a proposal goes straight to the
   // review with that template set; no picker in between.
   function bookProposal(transaction: TransactionWithInvoice) {
-    const s = rowProposal(templateSuggestions[transaction.id])
+    const s = rowProposalFor(transaction)
     if (!s) return openCategoryDialog(transaction)
     // A decision the company already made (a rule, a settled counterpart, a
     // sure read of a receipt) books from the row; Ångra sits on the toast.
@@ -4957,6 +4970,8 @@ export default function TransactionsPage() {
           assistantRead={quickReview ? (assistantReadsRef.current[quickReview.transaction.id] ?? null) : null}
           onEditLines={handleEditProposedLines}
           onUnderlagChange={handleUnderlagChanged}
+          onProposalChange={handleReviewProposalChange}
+          activateOnBooking={quickReview ? activationFor(reviewChoices, quickReview.transaction.id, quickReview.proposal) : null}
         />
       )}
 

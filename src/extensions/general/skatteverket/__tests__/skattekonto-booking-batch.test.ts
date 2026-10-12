@@ -836,7 +836,7 @@ describe('ledger twin guard (an SIE-imported or manual verifikat already carries
     ).catch((e: unknown) => e)) as SkattekontoBookingError
 
     expect(err.code).toBe('LEDGER_TWIN_EXISTS')
-    expect(err.message).toContain('Koppla raden till det tillsammans med en annan rad från samma dag')
+    expect(err.message).toContain('Koppla raden till det tillsammans med en annan rad på skattekontot')
     expect(err.ledgerTwins?.[0].combined_with?.map((c) => c.id)).toEqual(['row-agavg'])
   })
 

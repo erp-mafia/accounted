@@ -8,6 +8,7 @@ import {
   makeTransaction,
 } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { recordInboxDecision } from '@/lib/suggestion-log/inbox'
 import { recordDecisions } from '@/lib/suggestion-log/record'
 
@@ -691,6 +692,289 @@ describe('POST /items/:id/book-direct', () => {
         bank_booking_context: [expect.objectContaining({ transaction_id: TX_UUID,
           cash_account_id: null, amount: -99, currency: 'SEK', settlement_account: '1930' })],
       }),
+    )
+  })
+
+  // ── Foreign-currency underlag (crm#1146) ────────────────────
+  // The lines are bare numbers the engine stores as SEK. A receipt read as
+  // 100 EUR used to be booked from the dialog's prefill as 100 kr. Kronor
+  // typed by hand are a real booking, with or without a bank row, so the
+  // route refuses only the bug's own signature: a line that carries the
+  // document's foreign total as its kronor amount.
+
+  // The stored extraction (InvoiceExtractionResult), as the jsonb column holds it.
+  function extraction(currency: string | undefined, total: number | null = 100): Record<string, unknown> {
+    return {
+      supplier: { name: 'Example Inc', orgNumber: null, vatNumber: null, address: null, bankgiro: null, plusgiro: null },
+      invoice: { invoiceNumber: 'R-1', invoiceDate: '2026-05-14', dueDate: null, paymentReference: null, currency },
+      lineItems: [],
+      totals: { subtotal: null, vatAmount: 0, total },
+      vatBreakdown: [],
+      confidence: 1,
+    }
+  }
+
+  // The document total in the kronor columns. The first is the shape that
+  // was reported: no cost line, the bank credited with no bank row behind it.
+  const FACE_OWNER_AND_BANK = [
+    { account_number: '2893', debit_amount: 100, credit_amount: 0 },
+    { account_number: '1930', debit_amount: 0, credit_amount: 100 },
+  ]
+  const FACE_COST_AND_BANK = [
+    { account_number: '6540', debit_amount: 100, credit_amount: 0 },
+    { account_number: '1930', debit_amount: 0, credit_amount: 100 },
+  ]
+  // Reverse charge worked out on the foreign figure: the total sits on the
+  // cost line and on the owner's account.
+  const FACE_WITH_REVERSE_CHARGE = [
+    { account_number: '6540', debit_amount: 100, credit_amount: 0 },
+    { account_number: '2645', debit_amount: 25, credit_amount: 0 },
+    { account_number: '2614', debit_amount: 0, credit_amount: 25 },
+    { account_number: '2893', debit_amount: 0, credit_amount: 100 },
+  ]
+  // Kronor typed by hand.
+  const SEK_PRIVATE_OUTLAY = [
+    { account_number: '6540', debit_amount: 1150, credit_amount: 0 },
+    { account_number: '2645', debit_amount: 287.5, credit_amount: 0 },
+    { account_number: '2614', debit_amount: 0, credit_amount: 287.5 },
+    { account_number: '2893', debit_amount: 0, credit_amount: 1150 },
+  ]
+  const SEK_AGAINST_BANK = [
+    { account_number: '6540', debit_amount: 1150, credit_amount: 0 },
+    { account_number: '1930', debit_amount: 0, credit_amount: 1150 },
+  ]
+
+  function bookRequest(body: Record<string, unknown>) {
+    return createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body,
+      searchParams: { _id: 'item-1' },
+    })
+  }
+
+  it.each([
+    ['the owner account against the bank, no cost line', FACE_OWNER_AND_BANK],
+    ['cost against the bank', FACE_COST_AND_BANK],
+    ['cost against the owner account, with reverse charge on the foreign figure', FACE_WITH_REVERSE_CHARGE],
+  ])('refuses the document total of a foreign underlag booked as kronor: %s', async (_label, lines) => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1', extracted_data: extraction('EUR') }) })
+
+    const res = await route.handler(bookRequest({ ...VALID_BODY, lines }), buildCtx(supabase))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string; details: unknown } }>(res)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INBOX_BOOK_DIRECT_FX_FACE_AMOUNT')
+    expect(body.error.details).toEqual({ currency: 'EUR' })
+    // Swedish, names the currency and says what to do next. The dialog's
+    // toast reads it through getErrorMessage, which must not swap it for a
+    // generic 400 or for the registry's sentence without the currency.
+    expect(body.error.message).toContain('underlagets belopp i EUR, inte kronor')
+    expect(body.error.message).toContain('Ange beloppen i kronor')
+    expect(body.error.message).toContain('banktransaktionen')
+    expect(getErrorMessage(body, { context: 'journal_entry', statusCode: status })).toBe(body.error.message)
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
+    expect(linkToJournalEntryMock).not.toHaveBeenCalled()
+    expect(findCalls('invoice_inbox_items', 'update')).toHaveLength(0)
+    expect(vi.mocked(recordInboxDecision)).not.toHaveBeenCalled()
+  })
+
+  it.each(['usd', ' eur '])('reads the currency %j of the underlag whatever its case and padding', async (currency) => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ extracted_data: extraction(currency) }) })
+
+    const res = await route.handler(bookRequest({ ...VALID_BODY, lines: FACE_OWNER_AND_BANK }), buildCtx(supabase))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: unknown } }>(res)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INBOX_BOOK_DIRECT_FX_FACE_AMOUNT')
+    expect(body.error.details).toEqual({ currency: currency.trim().toUpperCase() })
+  })
+
+  // A bank row does not turn the receipt's figure into kronor: hand-typed and
+  // template rows are not tied to the row that is picked afterwards.
+  it('refuses the document total booked as kronor beside a bank row with another amount', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1', extracted_data: extraction('EUR') }) })
+    enqueue({ data: { ...makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -1150 }), transaction_voucher_links: [] } })
+
+    const res = await route.handler(
+      bookRequest({ ...VALID_BODY, lines: FACE_COST_AND_BANK, transaction_id: TX_UUID }),
+      buildCtx(supabase),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('INBOX_BOOK_DIRECT_FX_FACE_AMOUNT')
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
+    expect(findCalls('transactions', 'update')).toHaveLength(0)
+    expect(findCalls('invoice_inbox_items', 'update')).toHaveLength(0)
+  })
+
+  // The way a receipt somebody paid privately is booked: no bank row, the
+  // owner's account credited, reverse charge on the kronor amount. Most of
+  // the standalone foreign bookings in production look like this.
+  it('books kronor typed by hand against 2893 with reverse-charge lines, with no bank row', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1', extracted_data: extraction('EUR') }) })
+    enqueue({ data: null }) // inbox item update
+
+    const res = await route.handler(bookRequest({ ...VALID_BODY, lines: SEK_PRIVATE_OUTLAY }), buildCtx(supabase))
+    const { status, body } = await parseJsonResponse(res)
+
+    expect(status).toBe(200)
+    expect(body).toMatchObject({ data: { journal_entry: { id: 'je-1' }, transaction_id: null } })
+    const input = createJournalEntryMock.mock.calls[0][3] as {
+      source_type: string
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }
+    expect(input.source_type).toBe('inbox_item')
+    expect(input.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['6540', 1150, 0],
+      ['2645', 287.5, 0],
+      ['2614', 0, 287.5],
+      ['2893', 0, 1150],
+    ])
+    expect(linkToJournalEntryMock).toHaveBeenCalledWith(expect.anything(), 'company-1', 'doc-1', 'je-1')
+  })
+
+  it('books kronor typed by hand against 1930, with no bank row', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ extracted_data: extraction('EUR') }) })
+    enqueue({ data: null }) // inbox item update
+
+    const res = await route.handler(bookRequest({ ...VALID_BODY, lines: SEK_AGAINST_BANK }), buildCtx(supabase))
+
+    expect(res.status).toBe(200)
+    expect(createJournalEntryMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ source_type: 'inbox_item' }),
+    )
+  })
+
+  it('books a foreign underlag against its bank row at the bank row amount', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1', extracted_data: extraction('EUR') }) })
+    enqueue({ data: { ...makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -1150 }), transaction_voucher_links: [] } })
+    enqueue({ data: [{ ledger_account: '1930' }] }) // settlement account
+    enqueue({ data: [{ id: TX_UUID }] }) // transaction link
+    enqueue({ data: null }) // inbox item update
+
+    const res = await route.handler(
+      bookRequest({ ...VALID_BODY, lines: SEK_AGAINST_BANK, transaction_id: TX_UUID }),
+      buildCtx(supabase),
+    )
+    const { status } = await parseJsonResponse(res)
+
+    expect(status).toBe(200)
+    const input = createJournalEntryMock.mock.calls[0][3] as { source_type: string; bank_booking_context: unknown[] }
+    expect(input.source_type).toBe('bank_transaction')
+    expect(input.bank_booking_context).toEqual([
+      expect.objectContaining({ transaction_id: TX_UUID, amount: -1150, currency: 'SEK', settlement_account: '1930' }),
+    ])
+  })
+
+  // The bank drew exactly the figure on the receipt: the currency was read
+  // wrongly, or the rate was one. With the bank row saying so, it is kronor.
+  it('books the document total when the bank row it is booked against has that kronor amount', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ extracted_data: extraction('EUR') }) })
+    enqueue({ data: { ...makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -100 }), transaction_voucher_links: [] } })
+    enqueue({ data: [{ ledger_account: '1930' }] }) // settlement account
+    enqueue({ data: [{ id: TX_UUID }] }) // transaction link
+    enqueue({ data: null }) // inbox item update
+
+    const res = await route.handler(
+      bookRequest({ ...VALID_BODY, lines: FACE_COST_AND_BANK, transaction_id: TX_UUID }),
+      buildCtx(supabase),
+    )
+
+    expect(res.status).toBe(200)
+    expect(createJournalEntryMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not compare when no total was read from a foreign underlag', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ extracted_data: extraction('EUR', null) }) })
+    enqueue({ data: null }) // inbox item update
+
+    const res = await route.handler(bookRequest({ ...VALID_BODY, lines: FACE_COST_AND_BANK }), buildCtx(supabase))
+
+    expect(res.status).toBe(200)
+  })
+
+  it('refuses a foreign underlag whose bank row has no kronor amount', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ extracted_data: extraction('EUR') }) })
+    enqueue({
+      data: {
+        ...makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -100, currency: 'EUR', amount_sek: null, exchange_rate: null }),
+        transaction_voucher_links: [],
+      },
+    })
+
+    const res = await route.handler(
+      bookRequest({ ...VALID_BODY, lines: SEK_AGAINST_BANK, transaction_id: TX_UUID }),
+      buildCtx(supabase),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: unknown } }>(res)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('TX_MISSING_SEK_VALUE')
+    expect(body.error.details).toEqual({ currency: 'EUR', transaction_id: TX_UUID })
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
+  })
+
+  it('books a foreign underlag against a foreign-currency bank row that stores its kronor amount', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ extracted_data: extraction('EUR') }) })
+    enqueue({
+      data: {
+        ...makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -100, currency: 'EUR', amount_sek: -1150, exchange_rate: 11.5 }),
+        transaction_voucher_links: [],
+      },
+    })
+    enqueue({ data: [{ ledger_account: '1931' }] }) // settlement account
+    enqueue({ data: [{ id: TX_UUID }] }) // transaction link
+    enqueue({ data: null }) // inbox item update
+
+    const res = await route.handler(
+      bookRequest({
+        ...VALID_BODY,
+        lines: [
+          { account_number: '6540', debit_amount: 1150, credit_amount: 0 },
+          { account_number: '1931', debit_amount: 0, credit_amount: 1150 },
+        ],
+        transaction_id: TX_UUID,
+      }),
+      buildCtx(supabase),
+    )
+
+    expect(res.status).toBe(200)
+  })
+
+  // A SEK underlag's own total is kronor: VALID_BODY credits the bank with
+  // exactly the document total, and nothing about that changes.
+  it.each([
+    ['SEK', 'SEK'],
+    ['lower-case sek', 'sek'],
+    ['no currency read from the document', undefined],
+  ])('still books a standalone verifikat for a SEK underlag at its own total (%s)', async (_label, currency) => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1', extracted_data: extraction(currency, 99) }) })
+    enqueue({ data: null }) // inbox item update
+
+    const res = await route.handler(bookRequest(VALID_BODY), buildCtx(supabase))
+    const { status } = await parseJsonResponse(res)
+
+    expect(status).toBe(200)
+    expect(createJournalEntryMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ source_type: 'inbox_item' }),
     )
   })
 

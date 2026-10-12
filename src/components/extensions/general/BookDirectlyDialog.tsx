@@ -21,6 +21,9 @@ import { cn, formatCurrency, formatAmount } from '@/lib/utils'
 import { roundOre, formatAmountInput } from '@/lib/money'
 import {
   applyCostAccountSuggestion,
+  bankRowSekAmount,
+  bookDirectDocumentCurrency,
+  bookDirectFxRefusal,
   buildBookDirectPrefillLines,
   manualBookDirectLines,
   reconcileBookDirectLines,
@@ -124,9 +127,12 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
   const { company } = useCompany()
 
   // Underlag total + currency. Booking happens in SEK, so a foreign total needs
-  // an FX rate to rank/compare against the (SEK) bank transactions.
+  // an FX rate to rank/compare against the (SEK) bank transactions. That rate
+  // only ranks, it is never a booking amount: the kronor of a foreign underlag
+  // come from the bank row, or the person types them
+  // (lib/bookkeeping/book-direct-prefill.ts).
   const targetAmount = item.extracted_data?.totals?.total ?? null
-  const targetCurrency = (item.extracted_data?.invoice?.currency ?? 'SEK').toUpperCase()
+  const targetCurrency = bookDirectDocumentCurrency(item.extracted_data)
   // SEK per unit of the underlag currency (e.g. ~9.8 for USD). null = SEK,
   // pending, or unsupported.
   const [fxRate, setFxRate] = useState<number | null>(null)
@@ -150,6 +156,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
   // below applies the loaded value by role.
   const vatRegistered = companySettings?.vat_registered
   const tJournal = useTranslations('journal_form')
+  const tInbox = useTranslations('inbox_workspace')
   // Full BAS catalogue (static reference data, fetched once per session). Lets
   // the account picker surface standard accounts the company hasn't activated
   // yet; picking one activates it at commit via the existing
@@ -297,19 +304,41 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
     return null
   }, [targetAmount, targetCurrency, fxRate])
 
+  // The picked bank row, once the list has loaded it.
+  const selectedTransaction = useMemo(
+    () => (selectedTransactionId ? transactions.find((t) => t.id === selectedTransactionId) ?? null : null),
+    [selectedTransactionId, transactions],
+  )
+
   // When the user picks a transaction (or the toggle changes), re-derive
   // the prefilled amounts so foreign-currency invoices follow the SEK
   // figure on the actual bank movement. Normalised to SEK: a foreign bank
-  // row is booked at its SEK value, never its face amount.
-  const selectedTransactionAmount = useMemo(() => {
-    if (!selectedTransactionId) return null
-    const tx = transactions.find((t) => t.id === selectedTransactionId)
-    if (!tx) return null
-    const cur = (tx.currency ?? 'SEK').toUpperCase()
-    return cur === 'SEK'
-      ? tx.amount
-      : resolveSekAmount(tx.amount, tx.amount_sek ?? null, tx.currency, tx.exchange_rate ?? null)
-  }, [selectedTransactionId, transactions])
+  // row is booked at its SEK value, never its face amount. A foreign row
+  // with neither a stored SEK value nor a rate has no kronor amount at all
+  // (null): the lenient resolveSekAmount would hand back its face amount,
+  // which is the 100 EUR booked as 100 kr this dialog must not prefill.
+  const selectedTransactionAmount = useMemo(
+    () => (selectedTransaction ? bankRowSekAmount(selectedTransaction) : null),
+    [selectedTransaction],
+  )
+  // What the prefill is told. A row that is picked but has no kronor amount
+  // is the prefill's "chosen, but unusable" (NaN): the legs stay unresolved
+  // and do not fall back to the document total.
+  const prefillTransactionAmount =
+    selectedTransaction && selectedTransactionAmount === null ? Number.NaN : selectedTransactionAmount
+
+  // What the route would refuse for a foreign-currency underlag: its own
+  // rule, so nothing is offered here that the server refuses. Two things
+  // block, a picked bank row without a kronor amount and a row that carries
+  // the document's foreign total as kronor. Typing kronor without a bank row
+  // does not: that is how a receipt somebody paid privately is booked. A
+  // picked row the list has not loaded is unknown here and left to the server.
+  const fxRefusal = useMemo(
+    () => (selectedTransactionId && !selectedTransaction
+      ? null
+      : bookDirectFxRefusal(item.extracted_data, selectedTransaction, lines.map(toBookDirectPayloadLine))),
+    [item.extracted_data, selectedTransactionId, selectedTransaction, lines],
+  )
 
   // The settlement currency to resolve against:
   // - When a transaction is selected, use that transaction's currency.
@@ -344,12 +373,12 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
     // roles the user deleted are not generated again.
     const next = buildBookDirectPrefillLines(
       item.extracted_data,
-      selectedTransactionAmount,
+      prefillTransactionAmount,
       bankAccount ?? '1930',
       { vatRegistered, suppressedRoles: suppressedRolesRef.current },
     )
     setLines((current) => reconcileBookDirectLines(current, next))
-  }, [open, item, selectedTransactionAmount, bankAccount, vatRegistered])
+  }, [open, item, prefillTransactionAmount, bankAccount, vatRegistered])
 
   // Load the static BAS catalogue on first open (periods and accounts come
   // from the session cache above).
@@ -552,6 +581,10 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
 
   const disabledReason = useMemo(() => {
     if (isSubmitting) return null
+    // First: both are what the route refuses for a foreign underlag, and a
+    // foreign figure in the kronor columns matters more than a missing field.
+    if (fxRefusal === 'bank_row_without_sek') return tInbox('book_direct_fx_transaction_no_sek')
+    if (fxRefusal === 'face_amount') return tInbox('book_direct_fx_face_amount', { currency: targetCurrency })
     if (!entryDate) return 'Välj datum'
     if (!periodId) return 'Datumet matchar ingen öppen räkenskapsperiod'
     if (derivedPeriodBlocked) return 'Räkenskapsperioden är låst eller stängd'
@@ -559,7 +592,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
     if (lines.some((l) => l.account_number.trim().length === 0)) return 'Alla rader behöver ett konto'
     if (!totals.balanced) return 'Debet och kredit måste vara lika'
     return null
-  }, [isSubmitting, entryDate, periodId, derivedPeriodBlocked, description, lines, totals.balanced])
+  }, [isSubmitting, fxRefusal, tInbox, targetCurrency, entryDate, periodId, derivedPeriodBlocked, description, lines, totals.balanced])
 
   const canSubmit = !isSubmitting && disabledReason === null
 
@@ -825,6 +858,13 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                 )}
               </div>
             </div>
+            {/* A hint, not a stop: without a bank row the kronor are typed. */}
+            {targetCurrency !== 'SEK' && !selectedTransactionId && (
+              <AttnLine>{tInbox('book_direct_fx_hint', { currency: targetCurrency })}</AttnLine>
+            )}
+            {fxRefusal === 'bank_row_without_sek' && (
+              <AttnLine>{tInbox('book_direct_fx_bank_row_without_sek', { currency: targetCurrency })}</AttnLine>
+            )}
             {targetCurrency !== 'SEK' && selectedTransactionAmount != null && (
               <p className="text-[11px] text-muted-foreground">
                 Underlaget är i {targetCurrency}. Bokföringen sker i SEK enligt
@@ -994,10 +1034,15 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                   onApply={handleTemplateApply}
                   entityType={company?.entity_type}
                   disabled={isSubmitting}
+                  // A foreign underlag has no amount to offer before a bank
+                  // row is picked: targetSek is then a Riksbank estimate for
+                  // ranking, not what the bank drew.
                   defaultAmount={
                     selectedTransactionAmount != null
                       ? Math.abs(selectedTransactionAmount)
-                      : targetSek ?? undefined
+                      : targetCurrency === 'SEK'
+                        ? targetSek ?? undefined
+                        : undefined
                   }
                 />
                 <Button

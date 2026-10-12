@@ -273,6 +273,111 @@ describe('reconciliation MCP tools', () => {
     ])
   })
 
+  it('reconcile_match stages what the reviewer reads: each pair\'s rows and its verifikat with amounts (crm#1147)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const row2 = '77777777-7777-4777-8777-777777777777'
+    // Two Skatteverket rows of different days against one voucher that books
+    // the payment and the debitering it paid (1630 debit and credit).
+    matchMock.mockResolvedValue({
+      dry_run: true,
+      considered: 1,
+      applied: [
+        { external_id: ROW, journal_entry_id: ENTRY, via: 'lines' },
+        { external_id: row2, journal_entry_id: ENTRY, via: 'lines' },
+      ],
+      skipped: [],
+    })
+    // describeMatchPairs: the rows, the verifikat with its lines, the rows already linked to it.
+    enqueue({
+      data: [
+        { id: ROW, transaktionsdatum: '2026-09-14', transaktionstext: 'Avdragen skatt augusti 2026', belopp_skatteverket: -4521 },
+        { id: row2, transaktionsdatum: '2026-09-16', transaktionstext: 'Arbetsgivaravgift augusti 2026', belopp_skatteverket: -7704 },
+      ],
+    })
+    enqueue({
+      data: [
+        {
+          id: ENTRY,
+          voucher_series: 'A',
+          voucher_number: 412,
+          entry_date: '2026-09-14',
+          description: 'Skattekonto september',
+          lines: [
+            { account_number: '1630', debit_amount: 12225, credit_amount: 0 },
+            { account_number: '1630', debit_amount: 0, credit_amount: 12225 },
+            { account_number: '1930', debit_amount: 0, credit_amount: 12225 },
+          ],
+        },
+      ],
+    })
+    enqueue({ data: [{ id: 'payment-row', journal_entry_id: ENTRY, belopp_skatteverket: 12225 }] })
+
+    const out = (await tool('gnubok_reconcile_match').execute(
+      { account_key: 'skattekonto', pairs: [{ external_ids: [ROW, row2], journal_entry_ids: [ENTRY] }], dry_run: true },
+      COMPANY,
+      USER,
+      supabase as never,
+      { type: 'api_key', id: 'key-1' } as never,
+    )) as Record<string, unknown>
+
+    const preview = out.preview as Record<string, unknown>
+    // The staged pairs stay ids only: they are what the executor re-validates.
+    expect(preview.pairs).toEqual([{ external_ids: [ROW, row2], journal_entry_ids: [ENTRY] }])
+    expect(preview.ledger_account).toBe('1630')
+    expect(preview.pair_details).toEqual([
+      {
+        rows: [
+          { external_id: ROW, date: '2026-09-14', text: 'Avdragen skatt augusti 2026', amount: -4521 },
+          { external_id: row2, date: '2026-09-16', text: 'Arbetsgivaravgift augusti 2026', amount: -7704 },
+        ],
+        row_count: 2,
+        rows_total: -12225,
+        entries: [
+          {
+            journal_entry_id: ENTRY,
+            voucher_series: 'A',
+            voucher_number: 412,
+            entry_date: '2026-09-14',
+            description: 'Skattekonto september',
+            account_debit: 12225,
+            account_credit: 12225,
+          },
+        ],
+        already_linked_count: 1,
+        already_linked_total: 12225,
+        // The dry run reported no remainder: the rows explain the verifikat.
+        remainder_amount: 0,
+      },
+    ])
+    expect(preview).not.toHaveProperty('pair_details_omitted')
+  })
+
+  it('reconcile_match still stages when the reviewer\'s details cannot be read (crm#1147)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    matchMock.mockResolvedValue({
+      dry_run: true,
+      considered: 1,
+      applied: [{ external_id: ROW, journal_entry_id: ENTRY, via: 'line' }],
+      skipped: [],
+    })
+    enqueue({ data: null, error: { message: 'statement timeout' } })
+
+    const out = (await tool('gnubok_reconcile_match').execute(
+      { account_key: 'skattekonto', pairs: [{ external_ids: [ROW], journal_entry_ids: [ENTRY] }], dry_run: true },
+      COMPANY,
+      USER,
+      supabase as never,
+      { type: 'api_key', id: 'key-1' } as never,
+    )) as Record<string, unknown>
+
+    expect(out).toMatchObject({ staged: false, dry_run: true })
+    const preview = out.preview as Record<string, unknown>
+    expect(preview).toMatchObject({ account_key: 'skattekonto', pair_count: 1 })
+    expect(preview.pairs).toEqual([{ external_ids: [ROW], journal_entry_ids: [ENTRY] }])
+    expect(preview).not.toHaveProperty('pair_details')
+    expect(preview).not.toHaveProperty('ledger_account')
+  })
+
   it('reconcile_match carries allow_remainder through staging and shows the reviewer what stays on the verifikat (crm#1043)', async () => {
     const { supabase } = createQueuedMockSupabase()
     const row2 = '77777777-7777-4777-8777-777777777777'

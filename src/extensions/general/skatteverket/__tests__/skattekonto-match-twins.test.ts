@@ -141,40 +141,42 @@ describe('findLedgerTwinCandidates', () => {
     expect(findCalls('journal_entries', 'neq')).toEqual([])
   })
 
-  it('keeps a batch window per row: rows two months apart each get only their own twin and same-day companions', async () => {
+  it('keeps a batch window per row: rows three months apart each get only their own twin and same-day companions', async () => {
     const jan: E = { id: 'imp-jan', voucher: 201, date: '2026-01-05', lines: [['1630', 0, 1], ['8423', 1, 0]] }
-    const mar: E = { id: 'imp-mar', voucher: 202, date: '2026-03-06', lines: [['1630', 0, 1], ['8423', 1, 0]] }
-    // Carries the March row together with a second open March row (1 + 2 kr).
-    const marBoth: E = { id: 'imp-mar-both', voucher: 203, date: '2026-03-06', lines: [['1630', 0, 3], ['8423', 3, 0]] }
+    const apr: E = { id: 'imp-apr', voucher: 202, date: '2026-04-06', lines: [['1630', 0, 1], ['8423', 1, 0]] }
+    // Carries the April row together with a second open April row (1 + 2 kr).
+    const aprBoth: E = { id: 'imp-apr-both', voucher: 203, date: '2026-04-06', lines: [['1630', 0, 3], ['8423', 3, 0]] }
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     // January's window read ...
     enqueueCandidateLines(enqueue, [jan])
     enqueue({ data: [] }) // none linked
     enqueue({ data: [{ ...skv('p-jan', -1, '2026-01-05'), status: 'booked' }] }) // open rows that day
     enqueueCancellationRead(enqueue, [jan])
-    // ... then March's.
-    enqueueCandidateLines(enqueue, [mar, marBoth])
+    // ... then April's.
+    enqueueCandidateLines(enqueue, [apr, aprBoth])
     enqueue({ data: [] })
     enqueue({
       data: [
-        { ...skv('p-mar', -1, '2026-03-06'), status: 'booked' },
-        { ...skv('c-mar', -2, '2026-03-06', 'Förseningsavgift'), status: 'booked' },
+        { ...skv('p-apr', -1, '2026-04-06'), status: 'booked' },
+        { ...skv('c-apr', -2, '2026-04-06', 'Förseningsavgift'), status: 'booked' },
       ],
     })
-    enqueueCancellationRead(enqueue, [mar, marBoth])
+    enqueueCancellationRead(enqueue, [apr, aprBoth])
 
     const out = await findLedgerTwinCandidates(supabase as never, COMPANY, [
-      skv('p-mar', -1, '2026-03-06'),
+      skv('p-apr', -1, '2026-04-06'),
       skv('p-jan', -1, '2026-01-05'),
     ])
 
-    // Each month reads its own window; nothing in between is read.
+    // Each month reads its own window (28 days back: a row's group may hold
+    // a row 14 days earlier, whose verifikat may lie 14 days before that);
+    // nothing in between is read.
     const candidateReads = findCalls('journal_entries', 'gte').filter((_, i) => i % 2 === 0)
-    expect(candidateReads).toEqual([['entry_date', '2025-12-22'], ['entry_date', '2026-02-20']])
+    expect(candidateReads).toEqual([['entry_date', '2025-12-08'], ['entry_date', '2026-03-09']])
     expect(out.get('p-jan')?.map((c) => c.journal_entry_id)).toEqual(['imp-jan'])
-    expect(out.get('p-mar')?.map((c) => c.journal_entry_id).sort()).toEqual(['imp-mar', 'imp-mar-both'])
-    const combined = out.get('p-mar')?.find((c) => c.journal_entry_id === 'imp-mar-both')
-    expect(combined?.combined_with?.map((c) => c.id)).toEqual(['c-mar'])
+    expect(out.get('p-apr')?.map((c) => c.journal_entry_id).sort()).toEqual(['imp-apr', 'imp-apr-both'])
+    const combined = out.get('p-apr')?.find((c) => c.journal_entry_id === 'imp-apr-both')
+    expect(combined?.combined_with?.map((c) => c.id)).toEqual(['c-apr'])
   })
 
   it('never reads the span between rows years apart: work follows the rows, not the batch span', async () => {
@@ -188,8 +190,8 @@ describe('findLedgerTwinCandidates', () => {
     ])
 
     expect(out).toEqual(new Map([['old', []], ['new', []]]))
-    expect(findCalls('journal_entries', 'gte')).toEqual([['entry_date', '2022-12-27'], ['entry_date', '2025-12-27']])
-    expect(findCalls('journal_entries', 'lte')).toEqual([['entry_date', '2023-01-24'], ['entry_date', '2026-01-24']])
+    expect(findCalls('journal_entries', 'gte')).toEqual([['entry_date', '2022-12-13'], ['entry_date', '2025-12-13']])
+    expect(findCalls('journal_entries', 'lte')).toEqual([['entry_date', '2023-02-07'], ['entry_date', '2026-02-07']])
   })
 
   it('does not let opposite-sign rows of the day crowd a same-sign companion out of the combined pool', async () => {
@@ -254,7 +256,7 @@ describe('clusterProbesByWindow', () => {
     const clusters = clusterProbesByWindow([
       skv('mar', -1, '2026-03-06'),
       skv('jan', -1, '2026-01-05'),
-      skv('feb', -1, '2026-02-15'), // window from 2026-02-01: within a month of January's (to 2026-01-19)
+      skv('feb', -1, '2026-02-15'), // window from 2026-01-18: overlaps January's (to 2026-02-02)
       skv('old', -1, '2023-06-01'),
     ])
     expect(clusters.map((c) => c.map((p) => p.id))).toEqual([['old'], ['jan', 'feb', 'mar']])

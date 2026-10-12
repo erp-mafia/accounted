@@ -257,6 +257,91 @@ describe('suggestVatTreatment', () => {
   })
 })
 
+// crm#1146: a custom account named "... (ej EU)" missed the outside-union
+// matcher, hit the union matcher on the bare word and was suggested as an EU
+// reverse charge (ruta 21) when the label says the opposite (ruta 22).
+describe('a negated union name reads as outside the union', () => {
+  const NON_EU_SERVICES = { treatment: 'reverse_charge_non_eu_services', rate: 0.25 }
+
+  it.each([
+    ['6541', 'IT-tjänster utlandet (ej EU)'],
+    ['6542', 'Inköp tjänster ej EU'],
+    ['6543', 'Inköp tjänster inte EU'],
+    ['6544', 'Inköp tjänster icke EU'],
+    ['6545', 'Inköp tjänster icke-EU'],
+    ['6546', 'Inköp tjänster utom EU'],
+    ['6547', 'Inköp tjänster exkl EU'],
+    ['6548', 'Inköp tjänster exkl. EU'],
+    ['6549', 'Inköp tjänster exklusive EU'],
+    ['4531', 'Inköp tjänster non-EU'],
+    ['4532', 'Inköp tjänster (ej EG)'],
+    ['4533', 'Inköp tjänster icke-EG'],
+    ['5611', 'Tjänster utlandet, EJ EU-land'],
+  ])('purchase of services %s "%s" is ruta 22, not ruta 21', (accountNumber, accountName) => {
+    expect(suggestVatTreatment(accountNumber, accountName)).toEqual(NON_EU_SERVICES)
+  })
+
+  it('still takes the rate the label names', () => {
+    expect(suggestVatTreatment('6541', 'IT-tjänster utlandet (ej EU) 12%')).toEqual({
+      treatment: 'reverse_charge_non_eu_services', rate: 0.12,
+    })
+  })
+
+  // Goods from outside the union are an import, which has no supported
+  // purchase treatment: the row is left for review, exactly like its
+  // "utanför EU" spelling, instead of falling through to ruta 20.
+  it.each([
+    ['4541', 'Inköp varor utlandet (ej EU)'],
+    ['4542', 'Inköp varor icke-EU 25%'],
+    ['4543', 'Inköp varor exkl. EG'],
+    ['4544', 'Inköp varor utom EU'],
+  ])('purchase of goods %s "%s" is not an EU acquisition', (accountNumber, accountName) => {
+    expect(suggestVatTreatment(accountNumber, accountName)).toBeNull()
+  })
+
+  it.each([
+    ['3055', 'Försäljning varor (ej EU)', 'export_goods'],
+    ['3056', 'Försäljn varor icke-EG momsfri', 'export_goods'],
+    ['3057', 'Försäljning varor utom EU', 'export_goods'],
+    ['3045', 'Försäljning tjänster ej EU', 'export_services'],
+    ['3046', 'Försäljn tjänst exkl. EG momsfri', 'export_services'],
+    ['3047', 'Försäljning tjänster inte EU 25%', 'export_services'],
+  ])('sale %s "%s" is %s, not an EU supply', (accountNumber, accountName, treatment) => {
+    expect(suggestVatTreatment(accountNumber, accountName)).toEqual({ treatment, rate: 0 })
+  })
+
+  // The negation has to sit directly in front of the union word. Every label
+  // here carries both a negation and the union name, and none of them says
+  // the trade is outside the union.
+  it.each([
+    ['6540', 'IT-tjänster EU, ej avdragsgill moms', 'reverse_charge_eu_services'],
+    ['4535', 'Ej avdragsgill moms, inköp tjänster EU', 'reverse_charge_eu_services'],
+    ['4536', 'Inköp tjänster EU (ej Sverige)', 'reverse_charge_eu_services'],
+    ['4537', 'Inköp tjänster inom EU, inte Norge', 'reverse_charge_eu_services'],
+    ['4515', 'Inköp varor EU exkl moms', 'reverse_charge_eu_goods'],
+    ['4516', 'Inköp varor exkl. frakt EU', 'reverse_charge_eu_goods'],
+    ['4517', 'Inköp varor Canon EU', 'reverse_charge_eu_goods'],
+    // The moms is what is excluded here, not the union.
+    ['4538', 'Inköp tjänster exkl. EU-moms', 'reverse_charge_eu_services'],
+    ['4539', 'Inköp tjänster ej EU-moms', 'reverse_charge_eu_services'],
+  ])('purchase %s "%s" stays %s', (accountNumber, accountName, treatment) => {
+    expect(suggestVatTreatment(accountNumber, accountName)).toEqual({ treatment, rate: 0.25 })
+  })
+
+  it.each([
+    ['3308', 'Försäljning tjänster EU, ej momspliktig', 'reverse_charge_eu_services'],
+    ['3108', 'Försäljning varor EU exkl frakt', 'reverse_charge_eu_goods'],
+  ])('sale %s "%s" stays %s', (accountNumber, accountName, treatment) => {
+    expect(suggestVatTreatment(accountNumber, accountName)).toEqual({ treatment, rate: 0 })
+  })
+
+  it('does not read a negated wider place name as outside the union', () => {
+    // Same word boundary that keeps "utanför Europa" out.
+    expect(suggestVatTreatment('3055', 'Försäljning varor (ej Europa)')).toBeNull()
+    expect(suggestVatTreatment('6541', 'Inköp tjänster icke-europeiska')).toBeNull()
+  })
+})
+
 describe('a label that names a Swedish sats', () => {
   it('reads a fee account with a rate as a domestic sale at that rate', () => {
     // Company-numbered 35xx accounts: in no static ruta map, so without a

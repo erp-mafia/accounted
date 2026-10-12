@@ -56,6 +56,7 @@ import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-e
 import { assertTransactionBookable } from '@/lib/transactions/is-booked'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { roundOre } from '@/lib/money'
+import { bookDirectDocumentCurrency, bookDirectFxRefusal } from '@/lib/bookkeeping/book-direct-prefill'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
 import { CreateSupplierInvoiceSchema, BookInboxItemDirectlySchema, BulkBookInboxSchema } from '@/lib/api/schemas'
@@ -2060,12 +2061,12 @@ export const invoiceInboxExtension: Extension = {
         }
 
         // If a transaction is provided, validate it before booking.
-        let transaction: Pick<Transaction, 'id' | 'journal_entry_id' | 'cash_account_id' | 'date' | 'amount' | 'currency'> | null = null
+        let transaction: Pick<Transaction, 'id' | 'journal_entry_id' | 'cash_account_id' | 'date' | 'amount' | 'currency' | 'amount_sek' | 'exchange_rate'> | null = null
         const sourceTransactionId = body.transaction_id ?? item.matched_transaction_id
         if (sourceTransactionId) {
           const { data: tx, error: txError } = await ctx.supabase
             .from('transactions')
-            .select('id, journal_entry_id, cash_account_id, date, amount, currency, transaction_voucher_links(journal_entry_id, role)')
+            .select('id, journal_entry_id, cash_account_id, date, amount, currency, amount_sek, exchange_rate, transaction_voucher_links(journal_entry_id, role)')
             .eq('id', sourceTransactionId)
             .eq('company_id', ctx.companyId)
             .maybeSingle()
@@ -2084,6 +2085,30 @@ export const invoiceInboxExtension: Extension = {
             })
           }
           transaction = tx
+        }
+
+        // A foreign-currency underlag has no kronor amount of its own, and the
+        // lines arrive as bare numbers the engine stores as SEK: a receipt for
+        // 100 EUR used to post as 100 kr (crm#1146). Kronor typed by hand are a
+        // real booking (a receipt somebody paid privately has no bank row), so
+        // only that signature is refused: a line carrying the document's
+        // foreign total as its kronor amount. Same rule the dialog reads, from
+        // the same module; nothing is converted here.
+        const documentCurrency = bookDirectDocumentCurrency(item.extracted_data)
+        const fxRefusal = bookDirectFxRefusal(item.extracted_data, transaction, body.lines)
+        if (fxRefusal === 'bank_row_without_sek') {
+          return errorResponseFromCode('TX_MISSING_SEK_VALUE', ctx.log, {
+            requestId: ctx.requestId,
+            details: { currency: documentCurrency, transaction_id: transaction?.id ?? null },
+          })
+        }
+        if (fxRefusal === 'face_amount') {
+          return errorResponseFromCode('INBOX_BOOK_DIRECT_FX_FACE_AMOUNT', ctx.log, {
+            requestId: ctx.requestId,
+            details: { currency: documentCurrency },
+            messageSv: `Beloppen är underlagets belopp i ${documentCurrency}, inte kronor. Ange beloppen i kronor, eller välj banktransaktionen som betalade underlaget. Är valutan fel rättar du den på underlaget.`,
+            messageEn: `The amounts are the document's amounts in ${documentCurrency}, not SEK. Enter the amounts in SEK, or pick the bank transaction that paid the document. If the currency is wrong, correct it on the document.`,
+          })
         }
 
         // WhatsApp-sourced items: when the request carries NO notes field at

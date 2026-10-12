@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   accountProposal,
   businessAccount,
+  carriedCategory,
   categorizeArgsFor,
   categorizeBodyFor,
   previewInputFor,
@@ -13,7 +14,9 @@ import {
   type BookingProposal,
 } from '../proposal'
 import { getTemplateById } from '../booking-templates'
+import { buildMappingResultFromCategory } from '../category-mapping'
 import { computeProposalLines } from '../proposal-lines'
+import type { Transaction } from '@/types'
 
 const mobile = getTemplateById('telecom_mobile')!
 const stripe = getTemplateById('payment_fees_eu')!
@@ -45,6 +48,115 @@ describe('withAccount', () => {
     const p = withAccount(proposalFromTemplate(mobile, 'rule'), '6230', 'standard_25', -100)
     expect(p.booking).toEqual({ kind: 'account', account: '6230', vat_treatment: 'standard_25', category: mobile.fallback_category })
     expect(p.debit_account).toBe('6230')
+  })
+
+  // PostHog 170: the review kept naming the machine's pick over an account
+  // the person had changed, and nothing told the two apart when it closed.
+  it('makes the booking the person\'s own, named by the account they picked', () => {
+    const assistant = accountProposal({
+      id: 'assistant:t1', source: 'assistant', account: '6991', label: 'Övriga kostnader',
+      category: 'expense_other', vat_treatment: 'standard_25', amount: -100,
+      confidence: 0.5, description: 'Ser ut som en övrig kostnad.', has_underlag: true,
+    })
+    const p = withAccount({ ...assistant, default_dimensions: { '1': 'KS01' } }, '7699', 'standard_25', -100, 'Övriga personalkostnader')
+    expect(p).toEqual({
+      template_id: 'account:7699',
+      source: 'manual',
+      booking: { kind: 'account', account: '7699', vat_treatment: 'standard_25', category: 'expense_other' },
+      name_sv: 'Övriga personalkostnader',
+      name_en: 'Övriga personalkostnader',
+      group: 'account',
+      debit_account: '7699',
+      credit_account: '1930',
+      confidence: 1,
+      description_sv: '',
+      risk_level: 'LOW',
+      requires_review: false,
+      vat_treatment: 'standard_25',
+      default_dimensions: { '1': 'KS01' },
+    })
+    expect(whyKeyFor(p)).toEqual({ key: 'rec_why_manual' })
+  })
+
+  it('keeps the name when only the VAT changes', () => {
+    const assistant = accountProposal({
+      id: 'assistant:t1', source: 'assistant', account: '5410', label: 'Förbrukningsinventarier',
+      category: 'expense_equipment', vat_treatment: 'standard_25', amount: -100,
+    })
+    const p = withAccount(assistant, '5410', 'reduced_12', -100)
+    expect(p).toMatchObject({ source: 'manual', name_sv: 'Förbrukningsinventarier', vat_treatment: 'reduced_12' })
+    expect(p.booking).toEqual({ kind: 'account', account: '5410', vat_treatment: 'reduced_12', category: 'expense_equipment' })
+  })
+
+  it('leaves a counterpart rule\'s lines and evidence behind', () => {
+    const cp: BookingProposal = {
+      template_id: 'cp:abc', source: 'counterparty', booking: { kind: 'counterparty', counterparty_template_id: 'abc' },
+      name_sv: 'Telia', name_en: 'Telia', group: 'counterparty', debit_account: '6211', credit_account: '1930', confidence: 0.9,
+      description_sv: '', risk_level: 'NONE', requires_review: false, seen_count: 4, rule_mode: 'auto',
+      line_pattern: [{ account: '6211', type: 'business', share: 1 } as never],
+    }
+    const p = withAccount(cp, '6230', 'standard_25', -100, 'Datakommunikation')
+    expect(p.booking).toEqual({ kind: 'account', account: '6230', vat_treatment: 'standard_25', category: 'expense_other' })
+    expect(p).not.toHaveProperty('line_pattern')
+    expect(p).not.toHaveProperty('seen_count')
+    expect(p).not.toHaveProperty('rule_mode')
+  })
+
+  // PostHog 170: the assistant read an invoice with 25 % moms as a private
+  // cost (2893 in an aktiebolag, category 'private'). The person set a cost
+  // account instead and the review said 25 %, but the category stayed
+  // 'private', which books no moms line on any account.
+  describe('over the assistant\'s private pick', () => {
+    const privatePick = accountProposal({
+      id: 'assistant:t1', source: 'assistant', account: '2893', label: 'Skuld till ägare',
+      category: 'private', vat_treatment: 'exempt', amount: -1000,
+    })
+
+    it('books a cost account set by hand as a cost, with the moms the review shows', () => {
+      const p = withAccount(privatePick, '7699', 'standard_25', -1000)
+      expect(p.booking).toEqual({ kind: 'account', account: '7699', vat_treatment: 'standard_25', category: 'expense_other' })
+      expect(categorizeBodyFor(p)).toMatchObject({ category: 'expense_other', account_override: '7699', vat_treatment: 'standard_25' })
+
+      const lines = computeProposalLines(previewInputFor(p, { amount: -1000, amountSek: -1000, entityType: 'aktiebolag' }))
+      expect(lines).toEqual([
+        { side: 'debet', account: '7699', amount: 800 },
+        { side: 'debet', account: '2641', amount: 200 },
+        { side: 'kredit', account: '1930', amount: 1000, settlement: true },
+      ])
+    })
+
+    it('sends a category the server books moms for (the private one booked none)', () => {
+      const tx = { id: 't1', amount: -1000, currency: 'SEK', amount_sek: null, exchange_rate: null } as unknown as Transaction
+      const carried = buildMappingResultFromCategory('private', tx, true, 'aktiebolag', 'standard_25', null, true)
+      expect(carried.vat_lines).toEqual([])
+
+      const { category, vat_treatment } = categorizeBodyFor(withAccount(privatePick, '7699', 'standard_25', -1000))
+      const booked = buildMappingResultFromCategory(category!, tx, true, 'aktiebolag', vat_treatment, null, true)
+      expect(booked.vat_lines).toEqual([
+        expect.objectContaining({ account_number: '2641', debit_amount: 200, credit_amount: 0 }),
+      ])
+    })
+
+    it('stays private while the person keeps it on a balance-sheet account', () => {
+      const p = withAccount(privatePick, '2898', 'exempt', -1000)
+      expect(p.booking).toEqual({ kind: 'account', account: '2898', vat_treatment: 'exempt', category: 'private' })
+    })
+  })
+})
+
+describe('carriedCategory', () => {
+  it('carries an expense or income category over to the new account', () => {
+    expect(carriedCategory('expense_representation', '6072', -100)).toBe('expense_representation')
+    expect(carriedCategory('income_services', '3002', 100)).toBe('income_services')
+  })
+  it('does not carry a category that books no moms onto a cost or revenue account', () => {
+    expect(carriedCategory('private', '7699', -100)).toBe('expense_other')
+    expect(carriedCategory('private', '3001', 100)).toBe('income_other')
+    expect(carriedCategory('uncategorized', '5410', -100)).toBe('expense_other')
+  })
+  it('keeps it on a balance-sheet account, which carries no moms either way', () => {
+    expect(carriedCategory('private', '2893', -100)).toBe('private')
+    expect(carriedCategory('private', '2018', 100)).toBe('private')
   })
   it('keeps the basis box of a reverse charge across an account change, and drops it when the person picks the VAT anew', () => {
     const nonEu = accountProposal({ id: 'a', source: 'assistant', account: '5420', label: 'x', category: 'expense_software', vat_treatment: 'reverse_charge', reverse_charge_kind: 'non_eu_services', amount: -200 })

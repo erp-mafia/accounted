@@ -42,6 +42,8 @@ interface TransactionDrawerProps {
   categoryLabel: string | null
   /** Why the category chip says what it says, when it is a recommendation. */
   proposalWhy?: string | null
+  /** The chip is the booking the person set in the review: its why stands alone, it is no recommendation. */
+  proposalOwn?: boolean
   primaryLabel: string
   onPrimary: (anchor: HTMLElement) => void
   onOpenCategory: (anchor: HTMLElement) => void
@@ -64,6 +66,7 @@ export function TransactionDrawer({
   accountLogo = null,
   categoryLabel,
   proposalWhy,
+  proposalOwn = false,
   primaryLabel,
   onPrimary,
   onOpenCategory,
@@ -161,7 +164,9 @@ export function TransactionDrawer({
               <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-60" />
             </button>
             {categoryLabel && proposalWhy && (
-              <p className="mt-1.5 text-[11px] text-muted-foreground">{t('drawer_rec', { why: proposalWhy })}</p>
+              <p className="mt-1.5 text-[11px] text-muted-foreground">
+                {proposalOwn ? proposalWhy : t('drawer_rec', { why: proposalWhy })}
+              </p>
             )}
           </div>
         )}

@@ -111,7 +111,8 @@ export interface SkattekontoLedgerTwin {
   status: 'draft' | 'posted' | 'reversed'
   /**
    * Present when the verifikat carries the event together with these other
-   * open same-day rows (a combined candidate): linking links all of them.
+   * open rows, of the same day or the days around it (a combined candidate):
+   * linking links all of them.
    */
   combined_with?: Array<{
     id: string

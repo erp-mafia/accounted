@@ -22,7 +22,7 @@ import { ArrowUpRight, ArrowDownRight, Check, Paperclip, ChevronDown, ChevronUp,
 import { computeProposalLines, resolveTemplateAccountsForEntity } from '@/lib/bookkeeping/proposal-lines'
 import { chartVatTreatmentsOf } from '@/lib/bookkeeping/vat-entries'
 import type { ProposalLine, ProposalLinesInput } from '@/lib/bookkeeping/proposal-lines'
-import { accountProposal, businessAccount, previewInputFor, templateBehind, withAccount, type BookingProposal } from '@/lib/bookkeeping/proposal'
+import { accountProposal, businessAccount, carriedCategory, previewInputFor, templateBehind, withAccount, type BookingProposal } from '@/lib/bookkeeping/proposal'
 import { useProposalWhy } from './proposal-why'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import JournalEntryPreview from './JournalEntryPreview'
@@ -40,6 +40,8 @@ import UnderlagFileRow from './UnderlagFileRow'
 import VatTreatmentSelect from './VatTreatmentSelect'
 import AiCategorizeProposal, { AiStatusLine, pickFromRead, proposalMetaFromRead, type AiProposalMeta, type AssistantPick } from './AiCategorizeProposal'
 import { readIsFresh, type AssistantRead } from '@/lib/agent/categorize/read-shape'
+import { isPersonChoice, type ReviewChoice } from '@/lib/transactions/review-choice'
+import { getAccountName } from '@/lib/bookkeeping/client-account-names'
 import { useDocumentExtraction } from '@/lib/hooks/use-document-extraction'
 import { VAT_TREATMENT_OPTIONS } from './transaction-types'
 import type { TransactionWithInvoice } from './transaction-types'
@@ -82,6 +84,19 @@ interface QuickReviewDialogProps {
   onEditLines?: (lines: ProposalLine[], transaction: TransactionWithInvoice) => void
   /** The row's own underlag was pinned here, or taken off (null): the page keeps its rows in step. */
   onUnderlagChange?: (transactionId: string, documentId: string | null) => void
+  /**
+   * What the review holds, on open and after every change: its booking, the
+   * document the row pins and the account it will activate at booking. The
+   * page keeps a booking the person set (lib/transactions/review-choice.ts)
+   * for the row and the next open.
+   */
+  onProposalChange?: (transactionId: string, held: ReviewChoice) => void
+  /**
+   * The account the person picked from the catalogue in the review this one
+   * continues, which that review was going to activate at booking: this one
+   * still does. Read when the review opens.
+   */
+  activateOnBooking?: string | null
 }
 
 export default function QuickReviewDialog({
@@ -97,6 +112,8 @@ export default function QuickReviewDialog({
   assistantRead = null,
   onEditLines,
   onUnderlagChange,
+  onProposalChange,
+  activateOnBooking = null,
 }: QuickReviewDialogProps) {
   const t = useTranslations('tx_quick_review')
   const tCat = useTranslations('tx_categories')
@@ -210,6 +227,12 @@ export default function QuickReviewDialog({
   // read for the assistant only, never for the moms (PostHog PH 118).
   const docFacts = underlag?.facts ?? inDialogExtraction.facts
   const [docReading, setDocReading] = useState(false)
+  // The assistant's read with the document attached here, once its pick was
+  // taken into the review. It is not stored (the effect below), so the
+  // review keeps it: when the person then sets another account, the
+  // assistant's line names this read as the alternative, not the stored one
+  // from before the document.
+  const [docRead, setDocRead] = useState<AssistantRead | null>(null)
   // The whole dialog takes a dropped file, not only the dashed box: the box
   // is folded away until asked for, so the first drag also unfolds it.
   const dropSurfaceRef = useRef<HTMLDivElement>(null)
@@ -235,10 +258,18 @@ export default function QuickReviewDialog({
   // (the assistant's pick, the one the review opened with) is never
   // activated here: one the company deactivated is refused by the
   // categorize route, whose toast offers "Aktivera och bokför".
-  const [pickedToActivate, setPickedToActivate] = useState<string | null>(null)
+  // A review reopened on the booking the person set starts with the pick
+  // they made then (activateOnBooking).
+  const [pickedToActivate, setPickedToActivate] = useState<string | null>(activateOnBooking)
   const handleAccountChange = useCallback((account: string) => {
     if (!account) return
     setPickedToActivate(pickNeedsActivation(account, accounts, basCatalog) ? account : null)
+    // The booking is the person's from here on (withAccount), named by the
+    // account they picked: the company's own name for it, else the catalogue's.
+    const label =
+      accounts.find((a) => a.account_number === account)?.account_name ??
+      basCatalog.find((a) => a.account_number === account)?.account_name ??
+      getAccountName(account)
     setProposal((p) => {
       const current = p.booking.kind === 'account' ? p.booking.vat_treatment : (p.vat_treatment ?? 'exempt')
       const vat = vatTreatmentAfterAccountChange({
@@ -248,7 +279,7 @@ export default function QuickReviewDialog({
         chosenByHand: !useDocVat,
         vatRegistered,
       })
-      return withAccount(p, account, vat, amountForLegs)
+      return withAccount(p, account, vat, amountForLegs, label)
     })
   }, [accounts, basCatalog, amountForLegs, underlagVatRate, useDocVat, vatRegistered])
   // The assistant's pick, taken into this review: the proposal becomes the
@@ -263,7 +294,13 @@ export default function QuickReviewDialog({
         source: 'assistant',
         account: pick.account,
         label: pick.label,
-        category: pick.category ?? (p.booking.kind === 'counterparty' ? (amountForLegs < 0 ? 'expense_other' : 'income_other') : p.booking.category),
+        // A candidate pick names no category and takes the one the review
+        // held, unless that one books no moms (carriedCategory).
+        category:
+          pick.category ??
+          (p.booking.kind === 'counterparty'
+            ? (amountForLegs < 0 ? 'expense_other' : 'income_other')
+            : carriedCategory(p.booking.category, pick.account, amountForLegs)),
         vat_treatment: pick.account.startsWith('2') || pick.vat === 'none' ? 'exempt' : pick.vat,
         reverse_charge_kind: pick.reverseChargeKind,
         amount: amountForLegs,
@@ -297,6 +334,10 @@ export default function QuickReviewDialog({
         // A low guess off the document is no better than the row's: the
         // proposal already shown stands.
         if (read && pick && read.confidence >= 0.5) {
+          // Kept in the same update that takes the pick: the assistant's
+          // line is off while the review is its pick, so the read it opens
+          // with never changes under it.
+          setDocRead(read)
           setAiProposal(proposalMetaFromRead(read, pick))
           takeAssistantPick(pick, { auto: false, fromDocument: true })
         }
@@ -318,6 +359,17 @@ export default function QuickReviewDialog({
     setUseDocVat(false)
     setProposal((p) => withAccount(p, p.booking.kind === 'account' ? p.booking.account : businessAccount(p), v === 'none' ? 'exempt' : v, amountForLegs))
   }, [amountForLegs])
+
+  // The page is told what this review holds whenever that changes, so a
+  // booking the person set is still there after the review closes (PostHog
+  // 170). It goes with the row's own pin as the review knows it, the key the
+  // assistant's stored read is fresh by (one attached here counts, an inkorg
+  // match does not move it), and with the account picked for activation.
+  const reviewedId = transaction?.id ?? null
+  const rowUnderlagKey = underlagState.source === 'pinned' ? documentId : null
+  useEffect(() => {
+    if (reviewedId) onProposalChange?.(reviewedId, { proposal, underlag_key: rowUnderlagKey, activate: pickedToActivate })
+  }, [reviewedId, proposal, rowUnderlagKey, pickedToActivate, onProposalChange])
 
   // Reset local mirror whenever the underlying transaction changes (the parent
   // reuses the dialog instance across rows).
@@ -860,9 +912,13 @@ export default function QuickReviewDialog({
               transactionId={tx.id}
               open={open}
               hasUnderlag={!!documentId}
-              initial={assistantRead && readIsFresh(assistantRead, tx) ? assistantRead : null}
+              initial={docRead ?? (assistantRead && readIsFresh(assistantRead, tx) ? assistantRead : null)}
               currentAccount={currentAccount}
-              autoApply={!isTemplateBooking}
+              // The pick fills an account booking nobody chose. One the
+              // person set or picked stands, and so does the proposal they
+              // went back to after the document's read was taken once: the
+              // line offers the pick instead of taking it over theirs.
+              autoApply={!isTemplateBooking && !isPersonChoice(proposal) && !docRead}
               onProposal={setAiProposal}
               onTake={takeAssistantPick}
             />

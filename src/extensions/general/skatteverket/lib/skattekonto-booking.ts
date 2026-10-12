@@ -611,7 +611,8 @@ export async function findSkattekontoLedgerTwins(
  * Swedish refusal naming the twins (up to three) and the way out. A row
  * Skatteverket has not settled yet cannot be linked (linkSkattekontoRow
  * refuses it), so for `settled: false` the way out is to wait and link then.
- * A combined twin names how many other rows of the day it links together.
+ * A combined twin names how many other rows it links together (rows of the
+ * same day or of the days around it, so the text names no day).
  */
 export function ledgerTwinMessage(
   twins: SkattekontoLedgerTwin[],
@@ -634,9 +635,9 @@ export function ledgerTwinMessage(
     twins.length > 1
       ? 'rätt verifikat'
       : companions === 1
-        ? 'det tillsammans med en annan rad från samma dag'
+        ? 'det tillsammans med en annan rad på skattekontot'
         : companions > 1
-          ? `det tillsammans med ${companions} andra rader från samma dag`
+          ? `det tillsammans med ${companions} andra rader på skattekontot`
           : 'det'
   const wayOut =
     opts.settled === false

@@ -6,6 +6,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
 import { loadCancelledEntryIds } from '@/lib/skatteverket/skattekonto-cancelled-entries'
 import {
+  evaluateSkattekontoLink,
   groupSettlesEntry,
   linkSkattekontoRows,
   SkattekontoLinkError,
@@ -35,10 +36,16 @@ import {
  */
 
 const DATE_WINDOW_DAYS = 14
-/** Most same-day events combined against one verifikat (tax + avgift + a correction or two). */
+/** Most events combined against one verifikat (tax + avgift + a correction or two). */
 const MAX_COMBINED_EVENTS = 4
-/** Same-day open events considered in one combination search; bounds the subset search. */
+/** Open events considered in one combination search; bounds the subset search. */
 const MAX_COMBINED_POOL = 10
+/**
+ * How far from a row's own date another open row may lie and still be tried
+ * together with it by the single-row search (crm#1147). A ticked selection
+ * (findGroupMatchCandidates) has no such bound: its rows are the user's own.
+ */
+const COMPANION_WINDOW_DAYS = DATE_WINDOW_DAYS
 /**
  * Only a live verifikat carries an event: a reversed one is gone and a
  * cancelled draft (an abandoned or failed booking keeps its lines) never
@@ -85,8 +92,9 @@ export interface SkattekontoMatchCandidate {
   matched_via_entry_total?: boolean
   /**
    * Present when this row settles the verifikat only TOGETHER with these
-   * other open Skatteverket rows of the same day, their amounts summing
-   * exactly to the 1630 movement: rows of one sign (crm#128), or rows of
+   * other open Skatteverket rows, their amounts summing exactly to the 1630
+   * movement: rows of one sign, of the same day (crm#128) or, from the
+   * single-row search, up to 14 days away (crm#1147), or same-day rows of
    * both signs whose net it is, under the stricter mixed-group rules
    * (crm#1004, see unambiguousCombinedMatches). Linking links all of them.
    */
@@ -101,7 +109,9 @@ export interface SkattekontoMatchCandidate {
   /**
    * Present when the verifikat already carries links to this many other rows
    * and adding this row keeps the group settling it (crm#104: a payment and
-   * a debit booked in one voucher).
+   * a debit booked in one voucher). Together with combined_with: the rows
+   * already linked, this row and the combined rows explain the verifikat's
+   * whole 1630 movement (crm#1147).
    */
   joins_linked_count?: number
 }
@@ -381,6 +391,25 @@ export function combinedMatchWindow(
   return {
     from: periodStart && periodStart < base ? periodStart : base,
     to: addDays(eventDate, DATE_WINDOW_DAYS),
+  }
+}
+
+/**
+ * The entry dates a GROUP of rows can settle, whatever the rows' dates: from
+ * combinedMatchWindow's start for the earliest row (widened to a declaration
+ * month every row names) to 14 days after the latest. For rows of one day it
+ * is combinedMatchWindow itself. One definition for a ticked selection
+ * (findGroupMatchCandidates) and for the groups the single-row search builds
+ * around a row (searchLedgerTwinWindow), so the same rows are never judged by
+ * two date rules (crm#1147).
+ */
+export function groupMatchWindow(
+  rows: Array<{ transaktionsdatum: string; transaktionstext?: string | null }>,
+): { from: string; to: string } {
+  const dates = rows.map(r => r.transaktionsdatum).sort()
+  return {
+    from: combinedMatchWindow(dates[0], rows).from,
+    to: addDays(dates[dates.length - 1], DATE_WINDOW_DAYS),
   }
 }
 
@@ -830,8 +859,13 @@ function expectedSide(beloppSkatteverket: number): 'debit' | 'credit' {
  *     open same-day, same-sign rows (combinedMatchWindow; crm#128), or,
  *     when no such group does, together with open same-day rows of both
  *     signs whose net it is, under the mixed-group rules of
- *     findMatchSuggestionsBulk (crm#1004). The candidate names those rows in
- *     `combined_with` and linking it links all of them.
+ *     findMatchSuggestionsBulk (crm#1004), or, when neither does, together
+ *     with open same-sign rows up to 14 days away, in the window a ticked
+ *     selection of the same rows gets (groupMatchWindow; crm#1147). The
+ *     candidate names those rows in `combined_with` and linking it links
+ *     all of them.
+ *     A verifikat that already carries links takes such a group only when
+ *     the linked rows and the group explain its whole 1630 movement.
  * Cancelled verifikat (storno pairs) are never listed.
  *
  * Returns up to 25 candidates ordered by AGI-period match, then date proximity
@@ -886,9 +920,10 @@ type GroupRow = {
  * 1630 movement the whole selection settles, together with any rows already
  * linked to the entry (groupSettlesEntry, exact to the öre).
  *
- * The automatic combined candidates stop at same-day groups of
- * MAX_COMBINED_EVENTS rows; a selection is the user's own, so its rows may
- * have either sign and different dates. The window runs from
+ * The automatic combined candidates stop at groups of MAX_COMBINED_EVENTS
+ * rows near each other (same-day, or same-sign rows within 14 days of the
+ * row searched); a selection is the user's own, so its rows may have either
+ * sign and any dates. The window is groupMatchWindow: from
  * combinedMatchWindow's start for the earliest row (widened to a declaration
  * month every row names) to 14 days after the latest. Cancelled verifikat
  * (storno pairs) are never listed. Linking goes through
@@ -945,10 +980,8 @@ export async function findGroupMatchCandidates(
 
   const belopps = rows.map(r => Number(r.belopp_skatteverket))
   const total = roundOre(belopps.reduce((s, b) => s + b, 0))
-  const dates = rows.map(r => r.transaktionsdatum).sort()
-  const earliest = dates[0]
-  const from = combinedMatchWindow(earliest, rows).from
-  const to = addDays(dates[dates.length - 1], DATE_WINDOW_DAYS)
+  const earliest = rows.map(r => r.transaktionsdatum).sort()[0]
+  const { from, to } = groupMatchWindow(rows)
 
   let lines: LineRow[]
   try {
@@ -1055,6 +1088,14 @@ type CompanionRow = {
   belopp_skatteverket: number | string
 }
 
+/** Open rows tried together with one searched row: the verifikat dates and amounts the group stands for. */
+type CompanionGroup = {
+  rows: CompanionRow[]
+  window: { from: string; to: string }
+  /** The searched row's amount first, then the rows'. */
+  amounts: number[]
+}
+
 const SEARCH_FAILED_PREFIX = 'Kunde inte söka kandidater'
 
 function searchFailed(err: unknown): Error {
@@ -1068,10 +1109,11 @@ const LINKED_ID_CHUNK = 100
  * Every candidate verifikat for each of `probes`: the ledger entries that
  * already carry the row's event, by the definition documented on
  * findMatchCandidates (exact to the öre on 1630, alone, joined to rows
- * already linked, or combined with other open same-day rows; storno pairs
- * never count). The window data (1630 entries, links, AGI entries, same-day
- * open rows, storno pairs) is read once per cluster of rows whose windows lie
- * close together (clusterProbesByWindow), so a batch of rows in one month
+ * already linked, or combined with other open rows of the day or the days
+ * around it; storno pairs never count). The window data (1630 entries,
+ * links, AGI entries, nearby open rows, storno pairs) is read once per
+ * cluster of rows whose windows lie close together
+ * (clusterProbesByWindow), so a batch of rows in one month
  * costs the same handful of queries as one row, and a batch spread over
  * years reads only the rows' own windows, not everything in between.
  *
@@ -1111,11 +1153,19 @@ export async function findLedgerTwinCandidates(
  */
 const TWIN_WINDOW_MERGE_GAP_DAYS = 31
 
-/** The entry dates a row's candidates can have: [combined window start, date + 14 days]. */
+/**
+ * The entry dates a row's candidates can have. Alone or with rows of its own
+ * day: [combined window start, date + 14 days]. Grouped with an open row up
+ * to COMPANION_WINDOW_DAYS away (crm#1147) the group's window applies
+ * (groupMatchWindow): it starts 14 days before the earlier row and ends 14
+ * days after the later one, so the reach is that much wider on both sides.
+ */
 function probeWindow(p: LedgerTwinProbe): { from: string; to: string } {
+  const own = combinedMatchWindow(p.transaktionsdatum, [p]).from
+  const grouped = addDays(p.transaktionsdatum, -(COMPANION_WINDOW_DAYS + DATE_WINDOW_DAYS))
   return {
-    from: combinedMatchWindow(p.transaktionsdatum, [p]).from,
-    to: addDays(p.transaktionsdatum, DATE_WINDOW_DAYS),
+    from: own < grouped ? own : grouped,
+    to: addDays(p.transaktionsdatum, COMPANION_WINDOW_DAYS + DATE_WINDOW_DAYS),
   }
 }
 
@@ -1197,15 +1247,15 @@ async function searchLedgerTwinWindow(
   const out = new Map<string, SkattekontoMatchCandidate[]>()
   for (const p of probes) out.set(p.id, [])
 
-  // Widest window any probe's candidate can use (a combined candidate may
-  // reach back to its AGI period start); per-row windows are applied below.
+  // Widest window any probe's candidate can use (probeWindow: a combined
+  // candidate may reach back to its AGI period start, or follow a companion
+  // row of another day); per-row and per-group windows are applied below.
   let from = ''
   let to = ''
   for (const p of probes) {
-    const pFrom = combinedMatchWindow(p.transaktionsdatum, [p]).from
-    const pTo = addDays(p.transaktionsdatum, DATE_WINDOW_DAYS)
-    if (!from || pFrom < from) from = pFrom
-    if (!to || pTo > to) to = pTo
+    const reach = probeWindow(p)
+    if (!from || reach.from < from) from = reach.from
+    if (!to || reach.to > to) to = reach.to
   }
 
   // Every 1630 line of the entries in the window; the amount test runs in
@@ -1259,8 +1309,12 @@ async function searchLedgerTwinWindow(
     ? await loadAgiEntryIndex(supabase, companyId, periods)
     : new Map<string, AgiEntryLookup>()
 
-  // Open rows on the probes' dates: the pool a combined candidate draws from.
-  const dates = Array.from(new Set(probes.map(p => p.transaktionsdatum)))
+  // Open rows on the probes' dates and up to COMPANION_WINDOW_DAYS around
+  // them: the pool a combined candidate draws from. Read as one range; which
+  // rows a probe may use is decided per probe below.
+  const probeDates = probes.map(p => p.transaktionsdatum).sort()
+  const companionsFrom = addDays(probeDates[0], -COMPANION_WINDOW_DAYS)
+  const companionsTo = addDays(probeDates[probeDates.length - 1], COMPANION_WINDOW_DAYS)
   let companionData: CompanionRow[]
   try {
     companionData = await fetchAllRows<CompanionRow>(
@@ -1269,7 +1323,8 @@ async function searchLedgerTwinWindow(
           .from('skattekonto_transactions')
           .select('id, transaktionsdatum, transaktionstext, belopp_skatteverket')
           .eq('company_id', companyId)
-          .in('transaktionsdatum', dates)
+          .gte('transaktionsdatum', companionsFrom)
+          .lte('transaktionsdatum', companionsTo)
           .eq('status', 'booked')
           .eq('is_ignored', false)
           .is('journal_entry_id', null)
@@ -1303,9 +1358,9 @@ async function searchLedgerTwinWindow(
     const side = expectedSide(belopp)
     const singleFrom = addDays(p.transaktionsdatum, -DATE_WINDOW_DAYS)
     const singleTo = addDays(p.transaktionsdatum, DATE_WINDOW_DAYS)
-    // The widest window any of this row's candidates can use: a combined
-    // group only reaches back to the period start this row names itself.
-    const probeFrom = combinedMatchWindow(p.transaktionsdatum, [p]).from
+    // The widest window any of this row's candidates can use; each kind of
+    // candidate applies its own window inside it.
+    const reach = probeWindow(p)
     const pKey = periodKeyByProbe.get(p.id)
     const periodEntryIds = pKey ? agiIndex.get(pKey)?.entryIds ?? null : null
 
@@ -1313,17 +1368,44 @@ async function searchLedgerTwinWindow(
     // with this one: the first MAX_COMBINED_POOL other open same-sign rows of
     // the day (an opposite-sign row joins a group only through the stricter
     // mixed-group search, mixedCompanions, so it must not take a slot here).
-    const companions = (openByDate.get(p.transaktionsdatum) ?? [])
-      .filter(c => c.id !== p.id)
-      .filter(c => Math.sign(Number(c.belopp_skatteverket)) === Math.sign(belopp) && belopp !== 0)
-      .slice(0, MAX_COMBINED_POOL)
-    const companionSubsets = subsets(companions, 1, MAX_COMBINED_EVENTS - 1)
+    const sameSign = (c: CompanionRow) =>
+      c.id !== p.id && belopp !== 0 && Math.sign(Number(c.belopp_skatteverket)) === Math.sign(belopp)
+    const companions = (openByDate.get(p.transaktionsdatum) ?? []).filter(sameSign).slice(0, MAX_COMBINED_POOL)
+    // A group as the search tries it: its window and amounts are the same
+    // for every verifikat, so they are worked out once per row.
+    const asGroup = (subset: CompanionRow[]): CompanionGroup => ({
+      rows: subset,
+      window: groupMatchWindow([p, ...subset]),
+      amounts: [belopp, ...subset.map(c => Number(c.belopp_skatteverket))],
+    })
+    const sameDayGroups = subsets(companions, 1, MAX_COMBINED_EVENTS - 1).map(asGroup)
+    // crm#1147: Skatteverket does not always post the events of one
+    // verifikat on one day, so open same-sign rows up to
+    // COMPANION_WINDOW_DAYS away may join too. The day's own rows keep their
+    // slots, then the nearest day first (the earlier one on a tie), in id
+    // order within a day, so the pool does not depend on how the rows were
+    // read. Only the groups that borrow a row from another day are new here.
+    const otherDays: CompanionRow[] = []
+    for (let offset = 1; offset <= COMPANION_WINDOW_DAYS; offset++) {
+      for (const date of [addDays(p.transaktionsdatum, -offset), addDays(p.transaktionsdatum, offset)]) {
+        otherDays.push(
+          ...(openByDate.get(date) ?? []).filter(sameSign).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
+        )
+      }
+    }
+    const widePool = [...companions, ...otherDays].slice(0, MAX_COMBINED_POOL)
+    const crossDateGroups =
+      widePool.length > companions.length
+        ? subsets(widePool, 1, MAX_COMBINED_EVENTS - 1)
+            .filter(subset => subset.some(c => c.transaktionsdatum !== p.transaktionsdatum))
+            .map(asGroup)
+        : []
 
     const candidates: SkattekontoMatchCandidate[] = []
     for (const view of views.values()) {
       const e = view.entry
       // A batch reads one window for all rows; skip what this row cannot reach.
-      if (e.entry_date < probeFrom || e.entry_date > singleTo) continue
+      if (e.entry_date < reach.from || e.entry_date > reach.to) continue
       const base = {
         journal_entry_id: e.id,
         voucher_number: e.voucher_number,
@@ -1347,15 +1429,27 @@ async function searchLedgerTwinWindow(
           continue
         }
       }
-      if (view.linked.length > 0) continue
-      // Smallest same-sign group first, else the day's mixed-sign group
-      // (crm#1004); one proposal per verifikat.
+      // Does this row settle the verifikat together with the group, inside
+      // the group's window? An unlinked verifikat by the plain group rule. A
+      // verifikat that already carries links (crm#1147: the payment row of a
+      // voucher that also books the debitering it paid) only when the linked
+      // rows and the group explain its WHOLE 1630 movement. The sum rule
+      // alone is not enough there: with fixed salaries, last month's fully
+      // linked voucher plus this month's identical rows also sum to one of
+      // its lines, and that voucher has nothing left for them.
+      const groupSettles = (g: CompanionGroup): boolean => {
+        if (e.entry_date < g.window.from || e.entry_date > g.window.to) return false
+        if (view.linked.length === 0) return groupSettlesEntry(view.lines, g.amounts).ok
+        const joined = evaluateSkattekontoLink(view.lines, view.linked, g.amounts)
+        return joined.ok && joined.remainder === 0
+      }
+      // Smallest same-sign group of the day first, else the day's mixed-sign
+      // group (crm#1004, unlinked verifikat only), else the smallest group
+      // that borrows a row from another day; one proposal per verifikat.
       const group: LedgerTwinProbe[] | undefined =
-        companionSubsets.find(subset => {
-          const window = combinedMatchWindow(p.transaktionsdatum, [p, ...subset])
-          if (e.entry_date < window.from || e.entry_date > window.to) return false
-          return groupSettlesEntry(view.lines, [belopp, ...subset.map(c => Number(c.belopp_skatteverket))]).ok
-        }) ?? mixedCompanions.get(`${p.id}|${e.id}`)
+        sameDayGroups.find(groupSettles)?.rows ??
+        mixedCompanions.get(`${p.id}|${e.id}`) ??
+        crossDateGroups.find(groupSettles)?.rows
       if (!group) continue
       const amounts = [belopp, ...group.map(c => Number(c.belopp_skatteverket))]
       candidates.push({
@@ -1367,6 +1461,7 @@ async function searchLedgerTwinWindow(
           belopp_skatteverket: Number(c.belopp_skatteverket),
         })),
         combined_total: Math.abs(roundOre(amounts.reduce((s, a) => s + a, 0))),
+        ...(view.linked.length > 0 ? { joins_linked_count: view.linked.length } : {}),
       })
     }
 

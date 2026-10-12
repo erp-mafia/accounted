@@ -48,6 +48,8 @@ export interface RowProposal {
   confidence: number
   /** One line on why, the same words the review header uses. */
   why: string
+  /** The person set it in the review (lib/transactions/review-choice.ts): theirs, not a recommendation. */
+  own?: boolean
 }
 
 // True when the AI tier is active: gates user-facing strings that promise
@@ -454,7 +456,13 @@ export default function TransactionInboxCard({
               )}
               onClick={(e) => onOpenCategoryDialog(transaction, e.currentTarget)}
               disabled={isProcessing || isDisabled}
-              title={!categoryLabel && proposal ? t('proposal_title', { label: proposal.label, percent: Math.round(proposal.confidence * 100) }) : undefined}
+              title={
+                !categoryLabel && proposal
+                  ? proposal.own
+                    ? proposal.why
+                    : t('proposal_title', { label: proposal.label, percent: Math.round(proposal.confidence * 100) })
+                  : undefined
+              }
             >
               {!categoryLabel && proposal && (
                 <span className={cn('h-2 w-2 shrink-0 rounded-full', HUE_DOT_CLASS[proposal.hue])} aria-hidden />
@@ -557,6 +565,7 @@ export default function TransactionInboxCard({
             accountLabel={accountLabel}
             categoryLabel={categoryLabel ?? proposal?.label ?? null}
             proposalWhy={!categoryLabel && proposal ? proposal.why : null}
+            proposalOwn={!categoryLabel && !!proposal?.own}
             accountLogo={accountLogo}
             primaryLabel={primaryLabel}
             onPrimary={(anchor) => runPrimary(anchor)}

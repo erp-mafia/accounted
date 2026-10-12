@@ -364,7 +364,7 @@ describe('book skattekonto tools: ledger twin guard', () => {
     expect(mockBokforSingle).not.toHaveBeenCalled()
   })
 
-  it('row: a combined twin links the row together with its same-day companions, not alone', async () => {
+  it('row: a combined twin links the row together with its companions, not alone', async () => {
     const companion = { id: 'row-agavg', transaktionsdatum: '2026-03-12', transaktionstext: 'Arbetsgivaravgift', belopp_skatteverket: -4000 }
     mockTwins.mockImplementation(async (_supabase, _companyId, rows: Array<{ id: string }>) =>
       new Map(rows.map((r) => [r.id, [{ ...TWIN, combined_with: [companion] }]])),
@@ -380,7 +380,7 @@ describe('book skattekonto tools: ledger twin guard', () => {
     }
 
     expect(err.code).toBe('SKATTEKONTO_BOOK_LEDGER_TWIN_EXISTS')
-    expect(err.message).toContain('tillsammans med en annan rad från samma dag')
+    expect(err.message).toContain('tillsammans med en annan rad på skattekontot')
     expect(err.remediation?.args?.pairs).toEqual([
       { external_ids: [ROW.id, 'row-agavg'], journal_entry_ids: ['je-imported-185'] },
     ])

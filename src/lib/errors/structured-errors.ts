@@ -4374,6 +4374,25 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Posten är bokförd och kan inte tas bort.',
     message_en: 'The inbox item is booked and cannot be deleted.',
   },
+  // Book-direct on a foreign-currency underlag (crm#1146). The lines arrive as
+  // bare numbers that are stored as SEK, so a receipt for 100 EUR used to post
+  // as 100 kr. Refused only when a line carries the document's foreign total
+  // as its kronor amount: kronor typed by hand are a real booking, with or
+  // without a bank row. The route composes the sentence with the currency;
+  // this is the fallback for an envelope without one.
+  INBOX_BOOK_DIRECT_FX_FACE_AMOUNT: {
+    httpStatus: 400,
+    message_sv:
+      'Beloppen är underlagets belopp i utländsk valuta, inte kronor. Ange beloppen i kronor, eller välj banktransaktionen som betalade underlaget. Är valutan fel rättar du den på underlaget.',
+    message_en:
+      "The amounts are the document's amounts in its foreign currency, not SEK. Enter the amounts in SEK, or pick the bank transaction that paid the document. If the currency is wrong, correct it on the document.",
+    remediation: {
+      description:
+        'details.currency is the currency read from the document. A submitted line has the document total (extracted_data.totals.total) as its debit or credit amount, and journal lines are always SEK. Resubmit with amounts in SEK, or book the item against the bank transaction that paid it (transaction_id), whose SEK amount is then the figure to use. If the extracted currency is wrong, correct invoice.currency on the inbox item and retry.',
+    },
+    retryable: false,
+    thrown_message_sv: true,
+  },
 }
 
 // Invoice-inbox manual upload and attach-document (extension REST routes).
@@ -6420,7 +6439,7 @@ const SKATTEVERKET: Record<string, StructuredErrorEntry> = {
     retryable: false,
     remediation: {
       description:
-        'Link the row to the verifikat the message names with gnubok_reconcile_match (account_key "skattekonto", pairs [{ external_ids: [row id, plus any same-day rows the verifikat carries with it], journal_entry_ids: [verifikat id] }]). Book it anyway (allow_duplicate / allow_duplicate_ids) only when the user confirms the event really happened twice.',
+        'Link the row to the verifikat the message names with gnubok_reconcile_match (account_key "skattekonto", pairs [{ external_ids: [row id, plus any other open rows the verifikat carries with it], journal_entry_ids: [verifikat id] }]). Book it anyway (allow_duplicate / allow_duplicate_ids) only when the user confirms the event really happened twice.',
       tool: 'gnubok_reconcile_match',
     },
     thrown_message_sv: true,
