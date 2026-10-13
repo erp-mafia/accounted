@@ -158,7 +158,7 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
   return (
     <>
       <Dialog open onOpenChange={(next) => !next && requestClose()}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-xl">
           <DialogHeader>
             {position && (
               <p className="text-[12.5px] tabular-nums text-muted-foreground" data-ph-unmask="">

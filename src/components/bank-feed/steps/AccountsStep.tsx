@@ -56,7 +56,10 @@ export function AccountsStep({ state, dispatch, onActivate, closeButton }: Accou
                 </span>
               </label>
               {enabled && (
-                <div className="basis-full pl-8 sm:basis-auto sm:pl-0">
+                // The locked ledger line is a sentence: it takes its own line under
+                // the account rather than squeezing the name into "Företa...". The
+                // picker is compact and stays at the right from sm up.
+                <div className={ledgerLocked(account) && choice?.ledger ? 'basis-full pl-8' : 'basis-full pl-8 sm:basis-auto sm:pl-0'}>
                   {ledgerLocked(account) && choice?.ledger ? (
                     <span className="text-[12.5px] text-muted-foreground">{t('ledger_same', { ledger: ledgerLabel(choice.ledger, chart, fallbackName) })}</span>
                   ) : (

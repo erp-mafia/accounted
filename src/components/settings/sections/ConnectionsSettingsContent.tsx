@@ -4,8 +4,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { HandCoins, Landmark, Store } from 'lucide-react'
+import { HandCoins, Landmark, MoreHorizontal, Store } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { BankConnectDialog } from '@/components/bank-feed/BankConnectDialog'
 import { OpenPaymentsConnectionRow } from '@/components/bank-feed/OpenPaymentsConnectionRows'
 import { SignatoryLinkDialog, useSignatoryLinkFlow } from '@/components/bank-feed/SignatoryLinkDialog'
@@ -290,14 +291,21 @@ export function ConnectionsSettingsContent() {
                 <Link href="/settings/banking">{t('open')}</Link>
               </Button>
             )}
-            {canInvite && (
-              <Button variant="outline" size="sm" onClick={() => signatoryLink.open()}>
-                {t('send_signatory_link')}
-              </Button>
-            )}
             <Button size="sm" onClick={() => bankFlow.open('new')}>
               {t('connect_bank')}
             </Button>
+            {canInvite && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="icon-sm" aria-label={t('more_actions')}>
+                    <MoreHorizontal className="h-[15px] w-[15px]" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onSelect={() => signatoryLink.open()}>{t('send_signatory_link')}</DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
           </>
         ),
       })
@@ -326,17 +334,27 @@ export function ConnectionsSettingsContent() {
                     <Button variant="outline" size="sm" asChild>
                       <Link href="/settings/banking">{t('manage')}</Link>
                     </Button>
-                    {canInvite && (
-                      <Button variant="outline" size="sm" onClick={() => signatoryLink.open({ bank: { bic: null, name: connection.bank_name }, replaceConnectionId: connection.id })}>
-                        {t('send_signatory_link')}
-                      </Button>
-                    )}
                     <Button
                       size="sm"
                       onClick={() => bankFlow.open('switch', { bank: { bic: '', name: connection.bank_name ?? '' }, replaceConnectionId: connection.id, deadline: switchDeadline })}
                     >
                       {t('switch_connection')}
                     </Button>
+                    {/* The signatory link is the byrå's path; it sits behind the row's menu so three buttons never clip the primary one. */}
+                    {canInvite && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="outline" size="icon-sm" aria-label={t('more_actions')}>
+                            <MoreHorizontal className="h-[15px] w-[15px]" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onSelect={() => signatoryLink.open({ bank: { bic: null, name: connection.bank_name }, replaceConnectionId: connection.id })}>
+                            {t('send_signatory_link')}
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
                   </>
                 ),
               })}

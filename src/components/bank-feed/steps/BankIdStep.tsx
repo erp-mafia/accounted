@@ -115,7 +115,8 @@ export function BankIdStep({
         <BankIdMark className="mx-auto" size={24} />
         {personalNumberField}
         {state.startError && <AttnLine>{state.startError}</AttnLine>}
-        <DialogFooter>
+        {/* Three ways in can outgrow one line: let the footer wrap instead of clipping the first button. */}
+        <DialogFooter className="sm:flex-wrap">
           {closeButton}
           <Button variant="secondary" onClick={() => onStart('same_device')} loading={state.starting && state.method === 'same_device'} disabled={disabled}>
             {t('method_same_device')}
