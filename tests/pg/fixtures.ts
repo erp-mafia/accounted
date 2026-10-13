@@ -121,7 +121,7 @@ export async function insertCashAccount(params: {
   externalUid?: string | null
   isPrimary?: boolean
   enabled?: boolean
-  source?: 'enable_banking' | 'manual' | 'sie_import'
+  source?: 'enable_banking' | 'open_payments' | 'manual' | 'sie_import'
   bankConnectionId?: string | null
 }): Promise<string> {
   const id = randomUUID()

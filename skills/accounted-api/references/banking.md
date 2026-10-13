@@ -162,7 +162,7 @@ Response `200`:
 ```ts
 {
   data: {
-    cash_accounts: { cash_account_id: string, ledger_account: string, name: string | null, currency: string, iban: string | null, is_primary: boolean, enabled: boolean, source: "enable_banking" | "manual" | "sie_import", balance: number | null, available_balance: number | null, balance_updated_at: string | null }[]
+    cash_accounts: { cash_account_id: string, ledger_account: string, name: string | null, currency: string, iban: string | null, is_primary: boolean, enabled: boolean, source: "enable_banking" | "open_payments" | "manual" | "sie_import", balance: number | null, available_balance: number | null, balance_updated_at: string | null }[]
   },
   meta: {
     request_id: string,
@@ -270,7 +270,7 @@ Response `200`:
     name: string | null,
     currency: string,
     iban: string | null,
-    source: "enable_banking" | "manual" | "sie_import",
+    source: "enable_banking" | "open_payments" | "manual" | "sie_import",
     bank_connected: boolean,
     enabled: boolean,
     is_primary: boolean,
@@ -387,7 +387,7 @@ Response `200`:
     name: string | null,
     currency: string,
     iban: string | null,
-    source: "enable_banking" | "manual" | "sie_import",
+    source: "enable_banking" | "open_payments" | "manual" | "sie_import",
     bank_connected: boolean,
     enabled: boolean,
     is_primary: boolean,
@@ -474,7 +474,7 @@ Response `200`:
     name: string | null,
     currency: string,
     iban: string | null,
-    source: "enable_banking" | "manual" | "sie_import",
+    source: "enable_banking" | "open_payments" | "manual" | "sie_import",
     bank_connected: boolean,
     enabled: boolean,
     is_primary: boolean,

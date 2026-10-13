@@ -732,7 +732,7 @@ export interface BankAccount {
 // Backed by the cash_accounts table; bank_connections.accounts_data remains
 // the source for PSD2 sync metadata + UI display until a follow-up migration
 // drops it 30 days after this PR.
-export type CashAccountSource = 'enable_banking' | 'manual' | 'sie_import'
+export type CashAccountSource = 'enable_banking' | 'open_payments' | 'manual' | 'sie_import'
 
 /**
  * What a customer pays to. Lives on cash_accounts (migration 20260904010000)

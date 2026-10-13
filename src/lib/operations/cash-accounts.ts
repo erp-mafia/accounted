@@ -45,7 +45,7 @@ const CashAccountOut = z.object({
   name: z.string().nullable(),
   currency: z.string(),
   iban: z.string().nullable().describe('The bank identity IBAN (written by the bank sync).'),
-  source: z.enum(['enable_banking', 'manual', 'sie_import']),
+  source: z.enum(['enable_banking', 'open_payments', 'manual', 'sie_import']),
   bank_connected: z.boolean().describe('True when a bank connection holds the account.'),
   enabled: z.boolean(),
   is_primary: z.boolean(),

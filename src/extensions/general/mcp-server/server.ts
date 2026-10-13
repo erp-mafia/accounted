@@ -13880,7 +13880,7 @@ export const tools: McpTool[] = [
               iban: { type: ['string', 'null'] },
               is_primary: { type: 'boolean' },
               enabled: { type: 'boolean' },
-              source: { type: 'string', enum: ['enable_banking', 'manual', 'sie_import'] },
+              source: { type: 'string', enum: ['enable_banking', 'open_payments', 'manual', 'sie_import'] },
               balance: {
                 type: ['number', 'null'],
                 description: 'Bank-reported booked balance as of balance_updated_at; null for manual accounts or before the first sync. NOT the bookkept 19xx balance.',
