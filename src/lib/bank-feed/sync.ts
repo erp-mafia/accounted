@@ -9,11 +9,17 @@
  *   map      'eb' external ids with the same scope rule as Enable Banking
  *            (dedup_scope, else the normalised IBAN, else the account uid),
  *            import_source 'open_payments', value date, end-to-end id, the
- *            bank's own id and the counterparty IBAN;
+ *            bank's own id, the counterparty IBAN, and what the bank's daily
+ *            enrichment adds (organisationsnummer, the instructed amount of
+ *            a foreign purchase, the balance after, the enriched flag);
  *   archive  every raw page as räkenskapsinformation (BFL 7 kap), each row
  *            linked to the page it arrived in;
  *   ingest   lib/transactions/ingest.ts with the route, so every row goes
- *            through insert_bank_transaction and its dedupe layers;
+ *            through insert_bank_transaction and its dedupe layers, and a
+ *            re-read row that arrives richer updates its stored row;
+ *   enrich   the sync response's enrichment (the account's last enrichment
+ *            time and whether the window carries it) is handed back for the
+ *            connection row and the sync log;
  *   balance  refreshed when the stored one is older than BALANCE_MAX_AGE_MS.
  *
  * The Enable Banking sync (extensions/general/enable-banking/lib/sync.ts)
@@ -23,7 +29,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { AisParty, NormalizedBankTransaction } from '@accounted/connect-contract'
+import type { AisParty, BankSyncEnrichment, NormalizedBankTransaction } from '@accounted/connect-contract'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { ingestTransactions as defaultIngest } from '@/lib/transactions/ingest'
 import { buildStableExternalIds, FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
@@ -72,6 +78,13 @@ export interface BankFeedAccountSyncInput {
   party: AisParty
   ingest?: BankFeedIngestFn
   options?: Pick<IngestOptions, 'skipAutoCategorization' | 'rawInsertOnly'>
+  /**
+   * Ask the service for the account's enrichment facts (one extra details
+   * read at the bank). The runner sets it on an unattended sync whose stored
+   * last_enriched_at is missing or older than today; a sync a person
+   * triggered never asks.
+   */
+  includeEnrichment?: boolean
   connect?: BankFeedConnect
   now?: number
 }
@@ -88,6 +101,10 @@ export interface BankFeedAccountSyncResult {
   historyNarrowed: boolean
   /** The service hit its page cap before the bank ran out of pages: the window is incomplete. */
   truncated: boolean
+  /** What the account details said about the bank's enrichment; null when the bank or an older service reports nothing. */
+  enrichment: { lastEnrichedAt: string | null; windowEnriched: boolean } | null
+  /** Stored rows the re-read updated with richer data (IngestResult.enriched_updated). */
+  enrichedUpdated: number
 }
 
 export function normalizeIban(value: string | null | undefined): string | null {
@@ -120,12 +137,19 @@ export function mapBankFeedRows(input: {
   const ids = buildStableExternalIds('eb', scope, input.rows.map((tx) => ({ date: tx.booking_date, amount: tx.amount })))
   let minBookingDate: string | undefined
   let maxBookingDate: string | undefined
+  const accountCurrency = input.account.currency.toUpperCase()
   const rows = input.rows.map((tx, i): RawTransaction => {
     if (!minBookingDate || tx.booking_date < minBookingDate) minBookingDate = tx.booking_date
     if (!maxBookingDate || tx.booking_date > maxBookingDate) maxBookingDate = tx.booking_date
     const cpAccount = tx.counterparty_account ?? null
     const cpIban = normalizeIban(tx.counterparty_iban) ?? (looksLikeIban(cpAccount) ? normalizeIban(cpAccount) : null)
     const page = tx.raw_page_index ?? undefined
+    const rowCurrency = (tx.currency || accountCurrency).toUpperCase()
+    const instructedCurrency = tx.instructed_currency?.toUpperCase() || null
+    const foreignPurchase = tx.instructed_amount != null && instructedCurrency !== null && instructedCurrency !== rowCurrency
+    // tx.parts (the Bankgirot split) is parsed through the contract and not
+    // carried into the row yet: the parts table and the multi-invoice
+    // matching of the split land in the following MR, which stores it.
     return {
       date: tx.booking_date,
       description: tx.description || tx.counterparty_name || FALLBACK_DESCRIPTION,
@@ -145,9 +169,25 @@ export function mapBankFeedRows(input: {
       counterparty_account: cpAccount && !looksLikeIban(cpAccount) ? cpAccount : null,
       bank_transaction_code: tx.bank_transaction_code || null,
       proprietary_bank_transaction_code: tx.proprietary_bank_transaction_code || null,
+      counterparty_org_number: tx.counterparty_org_number || null,
+      instructed_amount: foreignPurchase ? tx.instructed_amount : null,
+      instructed_currency: foreignPurchase ? instructedCurrency : null,
+      // The bank's rate only where the row's own amount is already SEK: on a
+      // foreign-currency account exchange_rate is the Riksbanken SEK rate
+      // ingest fetches, and the bank's rate into that currency must not
+      // take its place.
+      exchange_rate: foreignPurchase && rowCurrency === 'SEK' ? tx.exchange_rate ?? null : null,
+      balance_after: tx.balance_after ?? null,
+      is_enriched: tx.is_enriched ?? null,
     }
   })
   return { rows, scope, minBookingDate, maxBookingDate }
+}
+
+/** The sync response's enrichment in the result's shape; null when the service reported nothing. */
+export function enrichmentOf(enrichment: BankSyncEnrichment | null | undefined): BankFeedAccountSyncResult['enrichment'] {
+  if (!enrichment) return null
+  return { lastEnrichedAt: enrichment.last_enriched_at ?? null, windowEnriched: enrichment.window_enriched === true }
 }
 
 export async function syncOpenPaymentsAccount(supabase: SupabaseClient, input: BankFeedAccountSyncInput): Promise<BankFeedAccountSyncResult> {
@@ -165,6 +205,7 @@ export async function syncOpenPaymentsAccount(supabase: SupabaseClient, input: B
     ...(account.usage ? { accountUsage: account.usage } : {}),
     dateFrom: fromDate,
     dateTo: toDate,
+    ...(input.includeEnrichment ? { include_enrichment: true } : {}),
   })
 
   // The bank's answer is räkenskapsinformation (BFL 7 kap): archived before
@@ -227,5 +268,7 @@ export async function syncOpenPaymentsAccount(supabase: SupabaseClient, input: B
     effectiveFromDate: remote.effective_date_from ?? undefined,
     historyNarrowed: Boolean(remote.effective_date_from && remote.effective_date_from > fromDate),
     truncated: remote.truncated === true,
+    enrichment: enrichmentOf(remote.enrichment),
+    enrichedUpdated: result.enriched_updated ?? 0,
   }
 }

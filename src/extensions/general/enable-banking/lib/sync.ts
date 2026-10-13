@@ -97,6 +97,13 @@ interface BookedTransactionFields {
   merchant_category_code?: string
   bank_transaction_code?: string
   proprietary_bank_transaction_code?: string
+  /** The enrichment fields of contract 2026-10-15, when the service sends them; the direct path never does. */
+  counterparty_org_number?: string
+  instructed_amount?: number
+  instructed_currency?: string
+  exchange_rate?: number
+  balance_after?: number
+  is_enriched?: boolean
 }
 
 const CONNECTOR_SYNC_TIMEOUT_MS = 120_000
@@ -297,6 +304,14 @@ export async function syncAccountTransactions(
         merchant_category_code: tx.merchant_category_code ?? undefined,
         bank_transaction_code: tx.bank_transaction_code ?? undefined,
         proprietary_bank_transaction_code: tx.proprietary_bank_transaction_code ?? undefined,
+        counterparty_org_number: tx.counterparty_org_number ?? undefined,
+        instructed_amount: tx.instructed_amount ?? undefined,
+        instructed_currency: tx.instructed_currency ?? undefined,
+        exchange_rate: tx.exchange_rate ?? undefined,
+        balance_after: tx.balance_after ?? undefined,
+        is_enriched: tx.is_enriched ?? undefined,
+        // tx.parts (the Bankgirot split) is parsed and dropped here: the parts
+        // MR stores it.
       },
       bookingDate: tx.booking_date,
       page: tx.raw_page_index ?? undefined,
@@ -441,6 +456,9 @@ export async function syncAccountTransactions(
   const rawTransactions: RawTransaction[] = bookedEntries.map(({ tx, bookingDate, page }, i) => {
     const cpAccount = tx.counterparty_account ?? null
     const looksLikeIban = cpAccount && /^[A-Z]{2}\d/.test(cpAccount.replace(/\s+/g, ''))
+    const rowCurrency = (tx.currency || account.currency).toUpperCase()
+    const instructedCurrency = tx.instructed_currency?.toUpperCase() || null
+    const foreignPurchase = tx.instructed_amount != null && instructedCurrency !== null && instructedCurrency !== rowCurrency
     return {
       // The booked date is both the stable dedup anchor (see bookedEntries) and
       // the accounting-correct ledger date; keep it identical to the value the
@@ -465,6 +483,15 @@ export async function syncAccountTransactions(
       import_source: 'enable_banking',
       counterparty_iban: tx.counterparty_iban?.replace(/\s+/g, '').toUpperCase() || (looksLikeIban ? cpAccount!.replace(/\s+/g, '') : null),
       counterparty_account: !looksLikeIban ? cpAccount : null,
+      // The enrichment fields (contract 2026-10-15), the same way the Open
+      // Payments mapper carries them (lib/bank-feed/sync.ts): the bank's rate
+      // only on a SEK account, where exchange_rate has no Riksbanken meaning.
+      counterparty_org_number: tx.counterparty_org_number || null,
+      instructed_amount: foreignPurchase ? tx.instructed_amount ?? null : null,
+      instructed_currency: foreignPurchase ? instructedCurrency : null,
+      exchange_rate: foreignPurchase && rowCurrency === 'SEK' ? tx.exchange_rate ?? null : null,
+      balance_after: tx.balance_after ?? null,
+      is_enriched: tx.is_enriched ?? null,
       // Verbatim transaction-type codes: the ingest boundary classifies them
       // into transaction_method and persists them as evidence columns.
       bank_transaction_code: tx.bank_transaction_code || null,

@@ -112,6 +112,8 @@ const SyncOut = z.object({
   from_date: z.string(),
   to_date: z.string(),
   last_synced_at: z.string(),
+  enriched_updated: z.number().int().nonnegative().optional().describe('Stored rows this read updated with the bank\'s daily enrichment (a payer, an organisationsnummer, an OCR reference) instead of only skipping them as duplicates.'),
+  window_enriched: z.boolean().nullable().optional().describe('True when the window carried the bank\'s enrichment of today, false when not yet (the next read updates the rows), null when the bank says nothing.'),
 })
 
 const signerOf = (input: { personal_number?: string | null; ip_address?: string | null; user_agent?: string | null }): BankFeedSignerInput => ({

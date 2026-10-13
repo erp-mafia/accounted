@@ -42,6 +42,17 @@ const SyncResponse = z.object({
   from_date: z.string(),
   to_date: z.string(),
   last_synced_at: z.string(),
+  enriched_updated: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe('Open Payments only: stored rows this read updated with the bank\'s daily enrichment (a payer, an organisationsnummer, an OCR reference) instead of only skipping them as duplicates.'),
+  window_enriched: z
+    .boolean()
+    .nullable()
+    .optional()
+    .describe('Open Payments only: true when the window carried the bank\'s enrichment of today, false when the bank had not yet enriched it (the next read updates the rows), null when the bank says nothing.'),
 })
 
 registerEndpoint({

@@ -130,6 +130,10 @@ export interface OpenPaymentsCronResult {
   skipped: { notAdmitted: number; notEntitled: number; noAccounts: number; fresh: number; leased: number; notScheduled: number; budget: number }
   /** Connections taken outside their window because they had waited CATCHUP_AFTER_MS. */
   caughtUp: number
+  /** Stored rows the re-reads updated with the bank's daily enrichment, over every synced connection. */
+  enrichedUpdated: number
+  /** Synced connections whose window carried today's enrichment, did not, or whose bank said nothing. */
+  windowEnriched: { yes: number; no: number; unknown: number }
 }
 
 export async function runOpenPaymentsCron(
@@ -143,6 +147,8 @@ export async function runOpenPaymentsCron(
     connector: false, staleAttemptsRemoved: 0, expired: 0, renewalNoticed: 0, due: 0, synced: 0, failed: 0,
     skipped: { notAdmitted: 0, notEntitled: 0, noAccounts: 0, fresh: 0, leased: 0, notScheduled: 0, budget: 0 },
     caughtUp: 0,
+    enrichedUpdated: 0,
+    windowEnriched: { yes: 0, no: 0, unknown: 0 },
   }
 
   // 1. Abandoned attempts. Nothing points at their consent; the bank lets it lapse.
@@ -292,8 +298,15 @@ export async function runOpenPaymentsCron(
           unattended: true,
           connect,
         })
-        if (outcome.ok) result.synced++
-        else result.failed++
+        if (outcome.ok) {
+          result.synced++
+          result.enrichedUpdated += outcome.enriched_updated ?? 0
+          if (outcome.window_enriched === true) result.windowEnriched.yes++
+          else if (outcome.window_enriched === false) result.windowEnriched.no++
+          else result.windowEnriched.unknown++
+        } else {
+          result.failed++
+        }
       } catch (error) {
         result.failed++
         log.error('open payments cron sync threw', { connectionId: connection.id, message: error instanceof Error ? error.message : String(error) })

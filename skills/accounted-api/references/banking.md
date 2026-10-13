@@ -104,7 +104,9 @@ Response `200`:
     duplicates: number,
     from_date: string,
     to_date: string,
-    last_synced_at: string
+    last_synced_at: string,
+    enriched_updated?: number,
+    window_enriched?: boolean | null
   },
   meta: {
     request_id: string,
@@ -3306,6 +3308,11 @@ Response `200`:
     reference: string | null,
     merchant_name: string | null,
     counterparty_account: string | null,
+    counterparty_org_number?: string | null,
+    instructed_amount?: number | null,
+    instructed_currency?: string | null,
+    balance_after?: number | null,
+    is_enriched?: boolean | null,
     journal_entry_id: string | null,
     invoice_id: string | null,
     supplier_invoice_id: string | null,

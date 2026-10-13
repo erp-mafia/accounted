@@ -28,7 +28,7 @@ import { z } from 'zod'
  * copy of `src/` pinned to a commit, so it must stay self-contained.
  */
 
-export const CONTRACT_VERSION = '2026-10-14'
+export const CONTRACT_VERSION = '2026-10-15'
 
 // ---------------------------------------------------------------------------
 // Keys, headers and paths
@@ -221,6 +221,34 @@ export const bankSyncRequestSchema = z.object({
 })
 export type BankSyncRequest = z.infer<typeof bankSyncRequestSchema>
 
+/**
+ * One alias row of a Bankgirot split (added 2026-10-15): the bank books one
+ * aggregate deposit or payout and lists the payments behind it as alias rows
+ * (isAliasPayin, isAliasPayout) whose aggregateTransactionId names the
+ * aggregate. The alias rows are never rows of their own; they travel here, on
+ * the aggregate, in the order the bank listed them.
+ */
+export const bankTransactionPartSchema = z.object({
+  /** Signed like the parent: a deposit's parts are positive. */
+  amount: z.number(),
+  currency: z.string(),
+  /** debtorName on a payin, creditorName on a payout. */
+  counterparty_name: z.string().nullable(),
+  /** Digits only (10-digit organisationsnummer; a 12-digit form drops the 16 prefix). */
+  counterparty_org_number: z.string().nullable(),
+  /** Bankgiro, plusgiro, BBAN or IBAN, as the row's counterparty account is given. */
+  counterparty_account: z.string().nullable(),
+  /** The structured reference (OCR first), when the part carries one. */
+  reference: z.string().nullable(),
+  /** referredDocumentInformation[].number, deduped; [] when none. */
+  invoice_numbers: z.array(z.string()),
+  /** The unstructured remittance information, joined. */
+  message: z.string().nullable(),
+  /** The alias row's transactionId or entryReference. */
+  provider_part_id: z.string().nullable(),
+})
+export type BankTransactionPart = z.infer<typeof bankTransactionPartSchema>
+
 export const normalizedBankTransactionSchema = z.object({
   /** A real calendar date: the installation's stored keys and ledger date derive from it. */
   booking_date: z.iso.date(),
@@ -248,6 +276,24 @@ export const normalizedBankTransactionSchema = z.object({
   end_to_end_id: z.string().nullable().optional(),
   /** The counterparty's IBAN on its own, when the bank gave one. */
   counterparty_iban: z.string().nullable().optional(),
+  // Added 2026-10-15 with Open Payments' daily enrichment (ISO/Bankgirot:
+  // payer names, organisation numbers, OCR references, the split). Every
+  // field is optional and nullable: an older producer leaves them out and
+  // nothing refuses its sync.
+  /** Digits only (10-digit organisationsnummer; a 12-digit form drops the 16 prefix): debtorOrganisationId on a deposit, the creditor's on a payout when the bank sends one. */
+  counterparty_org_number: z.string().nullable().optional(),
+  /** The amount in the currency the payment was made in, when it differs from the account currency (currencyExchange / instructedAmount). Null for a row in the account currency. */
+  instructed_amount: z.number().nullable().optional(),
+  /** The currency of instructed_amount. */
+  instructed_currency: z.string().nullable().optional(),
+  /** The bank's rate from instructed_currency into the account currency. Null for a row in the account currency. */
+  exchange_rate: z.number().nullable().optional(),
+  /** balanceAfterTransaction, for accounts whose usage is not PRIV only; a personal account's balances are never passed on. */
+  balance_after: z.number().nullable().optional(),
+  /** The row's isEnriched flag; null when the bank sends none. */
+  is_enriched: z.boolean().nullable().optional(),
+  /** The Bankgirot split behind this row (bankTransactionPartSchema), in the bank's order. Null when the bank sent no split; an empty array is never sent. */
+  parts: z.array(bankTransactionPartSchema).nullable().optional(),
 })
 export type NormalizedBankTransaction = z.infer<typeof normalizedBankTransactionSchema>
 
@@ -314,8 +360,22 @@ export const bankSyncResponseSchema = z.object({
   duplicates: z.number().int().min(0).optional(),
   /** Rows kept although their id was already used by a row with another date or amount. */
   conflicts: z.number().int().min(0).optional(),
+  // Added 2026-10-15: what Get Account Details says about the bank's daily
+  // enrichment of this account, so the ledger knows whether a re-read of the
+  // window carries today's enrichment. Null when the bank reports nothing.
+  enrichment: z
+    .object({
+      /** The account's lastTransactionEnrichmentDateTimeUtc (else lastTransactionEnrichmentDateTime). */
+      last_enriched_at: z.string().nullable(),
+      /** True when last_enriched_at falls on or after the window's toDate: today's enrichment has run. */
+      window_enriched: z.boolean(),
+    })
+    .nullable()
+    .optional(),
 })
 export type BankSyncResponse = z.infer<typeof bankSyncResponseSchema>
+/** The enrichment facts of one sync (bankSyncResponseSchema.enrichment). */
+export type BankSyncEnrichment = NonNullable<BankSyncResponse['enrichment']>
 
 /**
  * Error codes specific to the bank sync operation. Two BANK 429s (neither is
@@ -1405,6 +1465,16 @@ export const aisSyncTransactionsRequestSchema = z.object({
   dateFrom: z.iso.date(),
   /** Default today. */
   dateTo: z.iso.date().optional(),
+  /**
+   * Added 2026-10-15. True: the service reads the account details once and
+   * answers `enrichment` (the bank's last enrichment time and whether the
+   * window carries it). False or absent: `enrichment` is null and no extra
+   * provider call is made. The ledger asks only when its stored
+   * last_enriched_at is missing or older than today's UTC date, and never
+   * for a sync a person triggered, so an account costs at most one details
+   * read a day on top of its transaction reads.
+   */
+  include_enrichment: z.boolean().optional(),
 })
 export type AisSyncTransactionsRequest = z.infer<typeof aisSyncTransactionsRequestSchema>
 

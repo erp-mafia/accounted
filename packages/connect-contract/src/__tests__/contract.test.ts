@@ -215,7 +215,7 @@ describe('payments family', () => {
     expect(PAYMENTS_SCOPE).toBe('payments')
     expect(CONNECTOR_HEADERS.contractVersion).toBe('X-Connect-Contract-Version')
     expect(CONNECTOR_HEADERS.connection).toBe('X-Connector-Connection')
-    expect(CONTRACT_VERSION).toBe('2026-10-14')
+    expect(CONTRACT_VERSION).toBe('2026-10-15')
   })
 
   it('lists every operation as a company POST with schemas, and the writes among them', () => {

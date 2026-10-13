@@ -9,7 +9,7 @@ import { ChevronDown, X, type LucideIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
-import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, formatOrgNumber } from '@/lib/utils'
 import { embeddedVoucherLabel, getLinkedJournalEntryIds } from '@/lib/transactions/is-booked'
 import type { TransactionWithInvoice } from '@/components/transactions/transaction-types'
 import type { TransactionUnderlag } from '@/lib/transactions/underlag-read'
@@ -109,6 +109,25 @@ export function TransactionDrawer({
   }, [onClose])
 
   if (typeof document === 'undefined') return null
+
+  // What the bank's enrichment added (Open Payments): the counterparty's
+  // organisationsnummer, the amount a foreign purchase was made in with the
+  // rate (the bank's own on a SEK account, else the amounts' ratio: there
+  // exchange_rate is the Riksbanken SEK rate), and the balance after.
+  const orgNumber = transaction.counterparty_org_number ? formatOrgNumber(transaction.counterparty_org_number) : null
+  const instructed =
+    transaction.instructed_amount != null && transaction.instructed_currency && transaction.instructed_currency !== transaction.currency
+      ? { amount: transaction.instructed_amount, currency: transaction.instructed_currency }
+      : null
+  const instructedRate = instructed
+    ? transaction.currency === 'SEK' && transaction.exchange_rate != null && transaction.exchange_rate > 0
+      ? transaction.exchange_rate
+      : instructed.amount !== 0
+        ? Math.abs(transaction.amount / instructed.amount)
+        : null
+    : null
+  const rateText = instructedRate != null ? new Intl.NumberFormat('sv-SE', { maximumFractionDigits: 4 }).format(instructedRate) : null
+  const balanceAfter = transaction.balance_after != null ? formatCurrency(transaction.balance_after, transaction.currency) : null
 
   const fact = (label: string, value: ReactNode) =>
     value == null || value === '' ? null : (
@@ -258,7 +277,7 @@ export function TransactionDrawer({
 
         {/* Only when there is a fact to show: a heading over nothing reads as
             something missing. */}
-        {(accountLabel || originalName || transaction.original_description || methodLabel || booked || skvCounterpartDate || isPreMigration || extra || (transaction.currency !== 'SEK' && transaction.amount_sek != null)) && (
+        {(accountLabel || originalName || transaction.original_description || methodLabel || booked || skvCounterpartDate || isPreMigration || extra || orgNumber || instructed || balanceAfter || (transaction.currency !== 'SEK' && transaction.amount_sek != null)) && (
         <div className="px-5 py-3">
           <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{t('drawer_details')}</p>
           <dl className="grid grid-cols-[110px_1fr] gap-x-3 gap-y-1.5 text-[12.5px]">
@@ -279,6 +298,17 @@ export function TransactionDrawer({
             {transaction.currency !== 'SEK' && transaction.amount_sek != null
               ? fact(t('drawer_amount_fx'), <span className="tabular-nums">{formatCurrency(transaction.amount_sek)}</span>)
               : null}
+            {fact(t('drawer_org_number'), orgNumber)}
+            {instructed
+              ? fact(
+                  t('drawer_instructed_amount'),
+                  <span className="tabular-nums">
+                    {formatCurrency(instructed.amount, instructed.currency)}
+                    {rateText ? ` · ${t('drawer_instructed_rate', { rate: rateText })}` : ''}
+                  </span>,
+                )
+              : null}
+            {fact(t('drawer_balance_after'), balanceAfter ? <span className="tabular-nums">{balanceAfter}</span> : null)}
             {booked
               ? fact(
                   t('drawer_voucher'),

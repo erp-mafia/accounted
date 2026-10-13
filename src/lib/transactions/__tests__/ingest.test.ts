@@ -5,7 +5,7 @@
  * and result aggregation.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { ingestTransactions } from '../ingest'
+import { enrichmentPatch, ingestTransactions } from '../ingest'
 import type { RawTransaction } from '@/types'
 import { makeJournalEntry, makeTransaction } from '@/tests/helpers'
 import { fullRawTransaction } from '@/tests/fixtures/full-raw-transaction'
@@ -2305,6 +2305,7 @@ describe('ingestTransactions', () => {
       auto_matched_invoices: 0,
       errors: 0,
       transaction_ids: [],
+      enriched_updated: 0,
     })
   })
 
@@ -2904,6 +2905,182 @@ describe('ingestTransactions', () => {
 
       expect(result.duplicates).toBe(0)
       expect(result.imported).toBe(1)
+    })
+  })
+
+  // -----------------------------------------------------------------------
+  // Open Payments re-read: the bank enriches once a day, the sync re-reads a
+  // 7-day window, so a stored row comes back richer and is UPDATED instead of
+  // only skipped (gap 2 of the Open Payments granularity work).
+  // -----------------------------------------------------------------------
+  describe('update on re-read (Open Payments enrichment)', () => {
+    const NOW = '2026-10-13T05:00:00.000Z'
+    const storedIncome = (overrides: Partial<ReturnType<typeof makeTransaction>> = {}) =>
+      makeTransaction({
+        id: 'tx-stored', external_id: 'eb_SE1_2026-10-12_125000_0', date: '2026-10-12', amount: 1250, currency: 'SEK',
+        description: 'Bg-inbetalning', original_description: 'Bg-inbetalning', merchant_name: null, reference: null,
+        import_source: 'open_payments', bank_connection_id: 'conn-1', is_enriched: false, ...overrides,
+      })
+    const rereadIncome = (overrides: Partial<RawTransaction> = {}) =>
+      makeRaw({
+        external_id: 'eb_SE1_2026-10-12_125000_0', date: '2026-10-12', amount: 1250, description: 'Bg-inbetalning', import_source: 'open_payments',
+        bank_connection_id: 'conn-1', reference: '1001000000017', merchant_name: 'Kund AB', counterparty_account: '5050-1055',
+        counterparty_org_number: '5560160680', balance_after: 20500.5, is_enriched: true, ...overrides,
+      })
+
+    describe('enrichmentPatch', () => {
+      it('takes the reference when it differs, the counterparty and end-to-end id only where the row has none, and never the identity or booking fields', () => {
+        const stored = storedIncome({ counterparty_account: 'kept-account', journal_entry_id: 'je-1', title_edited_at: '2026-10-12T10:00:00Z' })
+        const { patch, keysChanged } = enrichmentPatch(stored, rereadIncome({ amount: 999, date: '2026-10-11', description: 'Other', end_to_end_id: 'E2E-1', mcc_code: 5411 }), NOW)
+        expect(patch).toEqual({
+          reference: '1001000000017', merchant_name: 'Kund AB', counterparty_org_number: '5560160680', end_to_end_id: 'E2E-1', mcc_code: 5411,
+          balance_after: 20500.5, is_enriched: true, enriched_at: NOW,
+        })
+        expect(keysChanged).toBe(true)
+        for (const never of ['amount', 'date', 'description', 'original_description', 'title_edited_at', 'journal_entry_id', 'invoice_id', 'supplier_invoice_id', 'is_ignored', 'category', 'counterparty_account']) {
+          expect(patch).not.toHaveProperty(never)
+        }
+      })
+
+      it('is null when the re-read brings nothing richer, and a flag or balance alone changes no matching key', () => {
+        const stored = storedIncome({ reference: '1001000000017', merchant_name: 'Kund AB', counterparty_account: '5050-1055', counterparty_org_number: '5560160680', balance_after: 20500.5, is_enriched: true, enriched_at: '2026-10-12T04:00:00Z' })
+        expect(enrichmentPatch(stored, rereadIncome(), NOW)).toEqual({ patch: null, keysChanged: false })
+        // The same reference with a blank incoming one, or the same amounts as PostgREST numeric strings: nothing to say.
+        expect(enrichmentPatch({ ...stored, balance_after: '20500.50' as unknown as number }, rereadIncome({ reference: '  ' }), NOW).patch).toBeNull()
+        const flagOnly = enrichmentPatch(storedIncome({ reference: '1001000000017', merchant_name: 'Kund AB', counterparty_account: '5050-1055', counterparty_org_number: '5560160680' }), rereadIncome(), NOW)
+        expect(flagOnly).toEqual({ patch: { balance_after: 20500.5, is_enriched: true, enriched_at: NOW }, keysChanged: false })
+        // An enriched row never becomes unenriched again.
+        expect(enrichmentPatch(storedIncome({ is_enriched: true, reference: '1001000000017', merchant_name: 'Kund AB', counterparty_account: '5050-1055', counterparty_org_number: '5560160680', balance_after: 20500.5 }), rereadIncome({ is_enriched: false }), NOW).patch).toBeNull()
+      })
+
+      it('stores a foreign purchase\'s instructed amount and currency, and the bank\'s rate only on a SEK account', () => {
+        const sek = makeTransaction({ id: 'tx-sek', currency: 'SEK', amount: -125.5, exchange_rate: null, import_source: 'open_payments' })
+        const purchase = makeRaw({ currency: 'SEK', amount: -125.5, import_source: 'open_payments', instructed_amount: -11.9, instructed_currency: 'eur', exchange_rate: 11.26 })
+        expect(enrichmentPatch(sek, purchase, NOW)).toEqual({ patch: { instructed_amount: -11.9, instructed_currency: 'EUR', exchange_rate: 11.26 }, keysChanged: false })
+        // The row in the account currency: no instructed amount, whatever the bank attached.
+        expect(enrichmentPatch(sek, makeRaw({ currency: 'SEK', amount: -125.5, import_source: 'open_payments', instructed_amount: -125.5, instructed_currency: 'SEK', exchange_rate: 1 }), NOW).patch).toBeNull()
+        // A foreign-currency account keeps the Riksbanken SEK rate in exchange_rate.
+        const eur = makeTransaction({ id: 'tx-eur', currency: 'EUR', amount: -40, exchange_rate: 11.3, amount_sek: -452, import_source: 'open_payments' })
+        expect(enrichmentPatch(eur, makeRaw({ currency: 'EUR', amount: -40, import_source: 'open_payments', instructed_amount: -44.1, instructed_currency: 'USD', exchange_rate: 0.907 }), NOW)).toEqual({ patch: { instructed_amount: -44.1, instructed_currency: 'USD' }, keysChanged: false })
+      })
+    })
+
+    it('updates a stored unbooked row with the new reference and payer, counts it, and runs the customer invoice pass on it', async () => {
+      const { supabase, enqueue, updates, inserts } = createQueueMockSupabase()
+      const raw = rereadIncome()
+      const stored = storedIncome()
+      mockBestInvoiceMatch.mockReturnValueOnce({ invoice: { id: 'inv-1001' }, confidence: 0.99, matchReason: 'OCR-referens matchar fakturanummer 1001' })
+      enqueue({ data: [] }, { data: [] }) // booked map, unbooked map
+      enqueue({ data: [] }) // supplier invoices
+      enqueue({ data: [{ id: stored.id, external_id: raw.external_id }] }) // external_id dedup: stored
+      enqueue({ data: [stored] }) // the stored rows of the Open Payments re-read
+      enqueue({ data: null }) // the enrichment update
+      enqueue({ data: null }, { data: null }) // suggestion update, match log
+
+      const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+      expect(result).toMatchObject({ imported: 0, duplicates: 1, errors: 0, enriched_updated: 1, auto_matched_invoices: 1 })
+      expect(result.skipped).toEqual([{ external_id: raw.external_id, reason: 'external_id_match', matched_external_id: raw.external_id, matched_transaction_id: 'tx-stored' }])
+      expect(updates['transactions']).toEqual([
+        { reference: '1001000000017', merchant_name: 'Kund AB', counterparty_account: '5050-1055', counterparty_org_number: '5560160680', balance_after: 20500.5, is_enriched: true, enriched_at: expect.any(String) },
+        { potential_invoice_id: 'inv-1001' },
+      ])
+      // The pass scored the stored row as it now reads: with the reference.
+      expect(mockBestInvoiceMatch.mock.calls[0][0]).toMatchObject({ id: 'tx-stored', reference: '1001000000017', amount: 1250 })
+      expect(inserts['payment_match_log']).toEqual([expect.objectContaining({ action: 'auto_suggested', invoice_id: 'inv-1001', match_confidence: 0.99 })])
+      expect(mockEvaluateMappingRules).not.toHaveBeenCalled()
+    })
+
+    it('keeps the hint a row already carries unless the re-read brings a reference match', async () => {
+      const { supabase, enqueue, updates } = createQueueMockSupabase()
+      const stored = storedIncome({ potential_invoice_id: 'inv-old' })
+      mockBestInvoiceMatch.mockReturnValueOnce({ invoice: { id: 'inv-other' }, confidence: 0.8, matchReason: 'Exakt belopp' })
+      enqueue({ data: [] }, { data: [] }, { data: [] }, { data: [{ id: stored.id, external_id: stored.external_id }] }, { data: [stored] }, { data: null })
+      const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [rereadIncome()])
+      expect(result).toMatchObject({ enriched_updated: 1, auto_matched_invoices: 0 })
+      expect(updates['transactions']).toHaveLength(1)
+      expect(updates['transactions'][0]).not.toHaveProperty('potential_invoice_id')
+    })
+
+    it('gives a booked row only the enrichable fields: never its amount, text or journal link, and no suggestion pass', async () => {
+      const { supabase, enqueue, updates } = createQueueMockSupabase()
+      const raw = rereadIncome({ amount: 1250 })
+      const stored = storedIncome({ journal_entry_id: 'je-1', title_edited_at: '2026-10-12T10:00:00Z', description: 'Min titel' })
+      enqueue({ data: [] }, { data: [] }, { data: [] }, { data: [{ id: stored.id, external_id: raw.external_id }] }, { data: [stored] }, { data: null })
+
+      const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+      expect(result).toMatchObject({ duplicates: 1, enriched_updated: 1, auto_matched_invoices: 0 })
+      expect(updates['transactions']).toEqual([
+        { reference: '1001000000017', merchant_name: 'Kund AB', counterparty_account: '5050-1055', counterparty_org_number: '5560160680', balance_after: 20500.5, is_enriched: true, enriched_at: expect.any(String) },
+      ])
+      expect(mockLoadInvoiceMatchPool).not.toHaveBeenCalled()
+      expect(mockBestInvoiceMatch).not.toHaveBeenCalled()
+    })
+
+    it('books the debit of an executed payment order once the re-read brings the end-to-end id', async () => {
+      const { supabase, enqueue, updates } = createQueueMockSupabase()
+      const stored = arcimDebit({ external_id: 'eb_SE1_2026-10-13_-1000_0', potential_supplier_invoice_id: null, reference: null })
+      const raw = makeRaw({
+        external_id: 'eb_SE1_2026-10-13_-1000_0', date: '2026-10-13', amount: -10, description: 'MATTSSON SYSTEMS BG 0000052386828',
+        import_source: 'open_payments', end_to_end_id: ARCIM.endToEndId, is_enriched: true,
+      })
+      mockLoadOpenPaymentOrders.mockResolvedValueOnce([arcimOrder()])
+      mockSettleOrderWithDebit.mockResolvedValueOnce({ ok: true, journalEntryId: 'je-1', orderLinked: true, linkedBy: 'trigger' })
+      enqueue({ data: [] }, { data: [] }, { data: [] }, { data: [{ id: stored.id, external_id: raw.external_id }] }, { data: [stored] }, { data: null })
+
+      const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+      expect(updates['transactions']).toEqual([{ end_to_end_id: ARCIM.endToEndId, is_enriched: true, enriched_at: expect.any(String) }])
+      expect(mockSettleOrderWithDebit).toHaveBeenCalledTimes(1)
+      expect(mockSettleOrderWithDebit.mock.calls[0][1]).toMatchObject({ order: { id: ARCIM.orderId }, transaction: { id: ARCIM.transactionId }, basis: 'end_to_end_id' })
+      expect(result).toMatchObject({ imported: 0, duplicates: 1, enriched_updated: 1, auto_matched_invoices: 1 })
+    })
+
+    it('leaves an Enable Banking duplicate exactly as before: no read of the stored row, no update', async () => {
+      const { supabase, enqueue, updates } = createQueueMockSupabase()
+      const raw = rereadIncome({ import_source: 'enable_banking' })
+      enqueue({ data: [] }, { data: [] }, { data: [] }, { data: [{ id: 'tx-stored', external_id: raw.external_id }] })
+      enqueue({ data: [storedIncome()] }) // a sentinel nothing should consume
+
+      const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+      expect(result).toMatchObject({ imported: 0, duplicates: 1, enriched_updated: 0 })
+      expect(updates['transactions']).toBeUndefined()
+      // booked map, unbooked map, supplier invoices, external_id dedup: nothing more.
+      expect(supabase.from).toHaveBeenCalledTimes(4)
+    })
+
+    it('writes nothing when the re-read brings nothing richer, and a viewer\'s raw import updates without the passes', async () => {
+      const same = createQueueMockSupabase()
+      const stored = storedIncome({ reference: '1001000000017', merchant_name: 'Kund AB', counterparty_account: '5050-1055', counterparty_org_number: '5560160680', balance_after: 20500.5, is_enriched: true })
+      same.enqueue({ data: [] }, { data: [] }, { data: [] }, { data: [{ id: stored.id, external_id: stored.external_id }] }, { data: [stored] })
+      const unchanged = await ingestTransactions(same.supabase as never, COMPANY_ID, USER_ID, [rereadIncome()])
+      expect(unchanged).toMatchObject({ duplicates: 1, enriched_updated: 0 })
+      expect(same.updates['transactions']).toBeUndefined()
+
+      const viewer = createQueueMockSupabase()
+      viewer.enqueue({ data: [] }, { data: [] }, { data: [{ id: 'tx-stored', external_id: 'eb_SE1_2026-10-12_125000_0' }] }, { data: [storedIncome()] }, { data: null })
+      const raw = await ingestTransactions(viewer.supabase as never, COMPANY_ID, USER_ID, [rereadIncome()], { rawInsertOnly: true })
+      expect(raw).toMatchObject({ duplicates: 1, enriched_updated: 1 })
+      expect(viewer.updates['transactions']).toHaveLength(1)
+      expect(mockBestInvoiceMatch).not.toHaveBeenCalled()
+    })
+
+    it('never fails the batch on an update that is refused: the row stays as it was, the next row is unaffected', async () => {
+      const { supabase, enqueue, updates } = createQueueMockSupabase()
+      const stored = storedIncome()
+      const fresh = makeRaw({ import_source: 'open_payments', amount: -80, external_id: 'eb_SE1_2026-10-12_-8000_0', date: '2026-10-12' })
+      enqueue({ data: [] }, { data: [] }, { data: [] }, { data: [{ id: stored.id, external_id: stored.external_id }] }, { data: [stored] })
+      enqueue({ error: { message: 'row locked' } }) // the enrichment update refused
+      enqueue({ data: makeTransaction({ id: 'tx-new', external_id: fresh.external_id, amount: -80 }) }) // the fresh row inserts
+      mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+      const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [rereadIncome(), fresh])
+
+      expect(result).toMatchObject({ imported: 1, duplicates: 1, errors: 0, enriched_updated: 0, transaction_ids: ['tx-new'] })
+      expect(updates['transactions']).toHaveLength(1)
+      expect(mockBestInvoiceMatch).not.toHaveBeenCalled()
     })
   })
 })

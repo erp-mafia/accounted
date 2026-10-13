@@ -8,7 +8,7 @@ vi.mock('@/lib/core/documents/document-service', () => ({ uploadDocument: (...a:
 vi.mock('@/lib/transactions/ingest', () => ({ ingestTransactions: (...a: unknown[]) => mocks.ingest(...a) }))
 
 import { ConsentOverError, type BankFeedConnect } from '../connect'
-import { accountDedupScope, mapBankFeedRows, syncOpenPaymentsAccount, type BankFeedAccount } from '../sync'
+import { accountDedupScope, enrichmentOf, mapBankFeedRows, syncOpenPaymentsAccount, type BankFeedAccount } from '../sync'
 
 const PARTY = { orgNumber: '5595386219', accountContext: 'corporate' as const, bic: 'SWEDSESS', personalNumber: null, psuIpAddress: null, psuUserAgent: null, affiliatedAspspId: null }
 const ROUTE: BankIngestRoute = { connectionId: 'conn-1', sessionId: 'consent-1', accountUid: 'ACC003', cashAccountId: 'cash-1', ledgerAccount: '1930', currency: 'SEK', token: 't', aggregator: 'open_payments', bic: 'SWEDSESS' }
@@ -63,6 +63,30 @@ describe('mapBankFeedRows', () => {
       counterparty_iban: 'SE4550000000058398257466', counterparty_account: '123456789', raw_document_id: 'doc-1', reference: '4711000000009',
       mcc_code: 5411, merchant_name: 'ICA Maxi', bank_transaction_code: 'PMNT/CCRD', currency: 'SEK',
     })
+  })
+
+  it('carries the daily enrichment: organisationsnummer, the instructed amount and currency of a foreign purchase with the bank\'s rate on a SEK account, the balance after, the enriched flag', () => {
+    const [enriched, plain] = mapBankFeedRows({
+      rows: [
+        row({ counterparty_org_number: '5560160680', instructed_amount: -11.9, instructed_currency: 'eur', exchange_rate: 11.26, balance_after: 20500.5, is_enriched: true, parts: [{ amount: -125.5, currency: 'SEK', counterparty_name: 'ICA Maxi', counterparty_org_number: null, counterparty_account: null, reference: null, invoice_numbers: [], message: null, provider_part_id: 'P1' }] }),
+        row({ instructed_amount: -125.5, instructed_currency: 'SEK', exchange_rate: 1 }),
+      ],
+      account, connectionId: 'conn-1', archivedPageIds: ['doc-1'],
+    }).rows
+    expect(enriched).toMatchObject({ counterparty_org_number: '5560160680', instructed_amount: -11.9, instructed_currency: 'EUR', exchange_rate: 11.26, balance_after: 20500.5, is_enriched: true })
+    expect('parts' in enriched).toBe(false)
+    // In the account currency: no instructed amount, no rate.
+    expect(plain).toMatchObject({ counterparty_org_number: null, instructed_amount: null, instructed_currency: null, exchange_rate: null, balance_after: null, is_enriched: null })
+    // A row an older service sends without the fields maps to nulls.
+    expect(mapBankFeedRows({ rows: [row()], account, connectionId: 'conn-1', archivedPageIds: [] }).rows[0]).toMatchObject({ counterparty_org_number: null, instructed_amount: null, is_enriched: null })
+  })
+
+  it('keeps exchange_rate for the Riksbanken SEK rate on a foreign-currency account: the bank\'s rate into EUR is not stored there', () => {
+    const [mapped] = mapBankFeedRows({
+      rows: [row({ currency: 'EUR', amount: -40, instructed_amount: -44.1, instructed_currency: 'USD', exchange_rate: 0.907 })],
+      account: { uid: 'EUR1', currency: 'EUR', iban: null }, connectionId: 'conn-1', archivedPageIds: [],
+    }).rows
+    expect(mapped).toMatchObject({ currency: 'EUR', instructed_amount: -44.1, instructed_currency: 'USD', exchange_rate: null })
   })
 
   it('reads an IBAN-shaped counterparty account as the IBAN, and links no page when the index is unknown', () => {
@@ -133,6 +157,24 @@ describe('syncOpenPaymentsAccount', () => {
     const acc = account()
     await expect(syncOpenPaymentsAccount({} as never, { companyId: 'co-1', userId: 'user-1', connectionId: 'conn-1', account: acc, fromDate: '2026-09-01', toDate: '2026-10-12', bankRoute: ROUTE, party: PARTY, connect: flaky })).resolves.toMatchObject({ imported: 1 })
     expect(acc.balance).toBeUndefined()
+  })
+
+  it('hands back what the service says about the bank\'s enrichment, and how many stored rows the re-read updated', async () => {
+    const connect = fakeConnect({ syncTransactions: vi.fn().mockResolvedValue(page([row()], { enrichment: { last_enriched_at: '2026-10-12T04:05:00Z', window_enriched: true } })) })
+    mocks.ingest.mockResolvedValueOnce({ imported: 0, duplicates: 1, errors: 0, reconciled: 0, auto_categorized: 0, auto_matched_invoices: 0, transaction_ids: [], enriched_updated: 1 })
+    const result = await syncOpenPaymentsAccount({} as never, { companyId: 'co-1', userId: 'user-1', connectionId: 'conn-1', account: account(), fromDate: '2026-10-05', toDate: '2026-10-12', bankRoute: ROUTE, party: PARTY, connect })
+    expect(result).toMatchObject({ duplicates: 1, enrichedUpdated: 1, enrichment: { lastEnrichedAt: '2026-10-12T04:05:00Z', windowEnriched: true } })
+    // The request did not ask: the facts came anyway and are kept. Asking is the runner's call (feed.ts), forwarded as the contract's include_enrichment.
+    expect((connect.syncTransactions as ReturnType<typeof vi.fn>).mock.calls[0][1]).not.toHaveProperty('include_enrichment')
+    const asking = fakeConnect()
+    await syncOpenPaymentsAccount({} as never, { companyId: 'co-1', userId: 'user-1', connectionId: 'conn-1', account: account(), fromDate: '2026-10-05', toDate: '2026-10-12', bankRoute: ROUTE, party: PARTY, connect: asking, includeEnrichment: true })
+    expect(asking.syncTransactions).toHaveBeenCalledWith('co-1', expect.objectContaining({ accountUid: 'ACC003', include_enrichment: true }))
+    expect(enrichmentOf({ last_enriched_at: null, window_enriched: false })).toEqual({ lastEnrichedAt: null, windowEnriched: false })
+    expect(enrichmentOf(null)).toBeNull()
+    expect(enrichmentOf(undefined)).toBeNull()
+    // An older service (no enrichment, no counter): null and zero.
+    const older = await syncOpenPaymentsAccount({} as never, { companyId: 'co-1', userId: 'user-1', connectionId: 'conn-1', account: account(), fromDate: '2026-10-05', toDate: '2026-10-12', bankRoute: ROUTE, party: PARTY, connect: fakeConnect() })
+    expect(older).toMatchObject({ enrichment: null, enrichedUpdated: 0 })
   })
 
   it('propagates the typed errors of the transactions read untouched', async () => {

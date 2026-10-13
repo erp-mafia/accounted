@@ -47,6 +47,7 @@ import {
   incrementalWindow,
   initialWindow,
   runOpenPaymentsSync,
+  shouldAskForEnrichment,
   SYNC_FAILED_MESSAGE,
 } from '../feed'
 
@@ -138,6 +139,44 @@ describe('runOpenPaymentsSync', () => {
     expect(await run(none.supabase)).toMatchObject({ ok: false, code: 'BANK_SYNC_NO_ACCOUNTS' })
   })
 
+  it('asks an unattended sync for the enrichment facts while the stamp is missing or older than today, stamps the latest time on the connection and reports the window\'s enrichment and the rows the re-read updated', async () => {
+    const { supabase, calls } = stub({
+      bank_connections: [{ data: row({ last_enriched_at: '2026-10-11T04:05:00+00:00', accounts_data: [{ uid: 'A', currency: 'SEK', enabled: true, ledger_account: '1930' }, { uid: 'B', currency: 'SEK', enabled: true, ledger_account: '1930' }] }), error: null }],
+      company_members: [{ data: { role: 'member' }, error: null }],
+      sie_imports: [{ data: null, error: null }],
+      transactions: [{ data: [], error: null }],
+    })
+    mocks.syncAccount
+      .mockResolvedValueOnce({ imported: 0, duplicates: 3, errors: 0, transactionIds: [], requestedFromDate: '2026-10-05', historyNarrowed: false, truncated: false, enrichedUpdated: 2, enrichment: { lastEnrichedAt: '2026-10-12T04:05:00Z', windowEnriched: true } })
+      .mockResolvedValueOnce({ imported: 0, duplicates: 1, errors: 0, transactionIds: [], requestedFromDate: '2026-10-05', historyNarrowed: false, truncated: false, enrichedUpdated: 1, enrichment: { lastEnrichedAt: '2026-10-12T04:09:00Z', windowEnriched: false } })
+    const result = await run(supabase, { trigger: 'cron', unattended: true })
+    expect(result).toMatchObject({ ok: true, duplicates: 4, enriched_updated: 3, window_enriched: false })
+    expect(mocks.syncAccount).toHaveBeenCalledTimes(2)
+    for (const call of mocks.syncAccount.mock.calls) expect(call[1]).toMatchObject({ includeEnrichment: true })
+    const stamp = calls.find((c) => c.table === 'bank_connections' && c.method === 'update')
+    expect(stamp?.args).toEqual([{ last_enriched_at: '2026-10-12T04:09:00Z' }])
+    expect(log.info).toHaveBeenCalledWith('open payments sync completed', expect.objectContaining({ enrichedUpdated: 3, windowEnriched: false, lastEnrichedAt: '2026-10-12T04:09:00Z' }))
+  })
+
+  it('does not ask for the enrichment facts when today\'s stamp is already on the connection, nor on a sync a person triggered', async () => {
+    const today = stub({ bank_connections: [{ data: row({ last_enriched_at: '2026-10-12T03:00:00+00:00' }), error: null }], sie_imports: [{ data: null, error: null }], transactions: [{ data: [], error: null }] })
+    await expect(run(today.supabase, { trigger: 'cron', unattended: true })).resolves.toMatchObject({ ok: true, window_enriched: null })
+    expect(mocks.syncAccount.mock.calls[0][1]).not.toHaveProperty('includeEnrichment')
+    expect(today.calls.filter((c) => c.table === 'bank_connections' && c.method === 'update')).toEqual([])
+
+    mocks.syncAccount.mockClear()
+    const manual = stub({ bank_connections: [{ data: row({ last_enriched_at: null }), error: null }], company_members: [{ data: { role: 'owner' }, error: null }], sie_imports: [{ data: null, error: null }], transactions: [{ data: [], error: null }] })
+    await expect(run(manual.supabase, { trigger: 'manual' })).resolves.toMatchObject({ ok: true })
+    expect(mocks.syncAccount.mock.calls[0][1]).not.toHaveProperty('includeEnrichment')
+
+    // The rule on its own: missing or older than today's UTC date asks; today's does not; a person never.
+    expect(shouldAskForEnrichment({ last_enriched_at: null }, true, NOW)).toBe(true)
+    expect(shouldAskForEnrichment({ last_enriched_at: '2026-10-11T23:59:59+00:00' }, true, NOW)).toBe(true)
+    expect(shouldAskForEnrichment({ last_enriched_at: '2026-10-12T00:00:01+00:00' }, true, NOW)).toBe(false)
+    expect(shouldAskForEnrichment({ last_enriched_at: '2026-10-12T02:00:00+02:00' }, true, NOW)).toBe(false)
+    expect(shouldAskForEnrichment({ last_enriched_at: null }, false, NOW)).toBe(false)
+  })
+
   it('reads every enabled account through the route, persists, emits and answers the window', async () => {
     const { supabase, calls } = stub({
       bank_connections: [{ data: row(), error: null }],
@@ -146,8 +185,10 @@ describe('runOpenPaymentsSync', () => {
       transactions: [{ data: [{ id: 't1' }, { id: 't2' }], error: null }],
     })
     const result = await run(supabase, { trigger: 'manual', signer: { personalNumber: null, ipAddress: '203.0.113.1', userAgent: 'UA' } })
-    expect(result).toEqual({ ok: true, connection_id: 'conn-1', bank: 'Swedbank', imported: 2, duplicates: 1, from_date: '2026-10-05', to_date: '2026-10-12', last_synced_at: expect.any(String) })
+    expect(result).toEqual({ ok: true, connection_id: 'conn-1', bank: 'Swedbank', imported: 2, duplicates: 1, from_date: '2026-10-05', to_date: '2026-10-12', last_synced_at: expect.any(String), enriched_updated: 0, window_enriched: null })
     expect(calls).toContainEqual({ table: 'bank_connections', method: 'eq', args: ['aggregator', 'open_payments'] })
+    // No enrichment reported: the connection's last_enriched_at is left alone.
+    expect(calls.filter((c) => c.table === 'bank_connections' && c.method === 'update')).toEqual([])
     expect(mocks.claimLease).toHaveBeenCalledWith(supabase, 'conn-1', NOW)
     // The PSU is the connection's owner, whoever pressed Synka nu.
     expect(mocks.party).toHaveBeenCalledWith(supabase, expect.objectContaining({ bic: 'SWEDSESS', affiliatedAspspId: null, psuType: 'business', userId: 'owner-1', signer: { personalNumber: null, ipAddress: '203.0.113.1', userAgent: 'UA' } }))

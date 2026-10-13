@@ -66,13 +66,30 @@ export interface FeedConnection {
   last_synced_at: string | null
   initial_sync_completed_at: string | null
   sync_lease_until: string | null
+  /** The bank's enrichment time the last sync's account details reported; decides whether this sync asks for it again. */
+  last_enriched_at?: string | null
   /** When the row (and so its first consent) was created: the extended history window counts from here. */
   created_at?: string | null
   consent_attempt: { extended_history_days?: number | null; selection?: { extended_history_days?: number | null } } | null
 }
 
 export const FEED_CONNECTION_COLUMNS =
-  'id, company_id, user_id, bank_name, session_id, status, bic, affiliated_aspsp_id, psu_type, accounts_data, last_synced_at, initial_sync_completed_at, sync_lease_until, created_at, consent_attempt'
+  'id, company_id, user_id, bank_name, session_id, status, bic, affiliated_aspsp_id, psu_type, accounts_data, last_synced_at, initial_sync_completed_at, sync_lease_until, last_enriched_at, created_at, consent_attempt'
+
+/**
+ * Whether an unattended sync asks the service for the account's enrichment
+ * facts (one details read at the bank per account): only while the stored
+ * last_enriched_at is missing or older than today's UTC date, so a day costs
+ * at most one such read on top of the two transaction reads. A sync a person
+ * triggered never asks: the cron picks the facts up on its next run.
+ */
+export function shouldAskForEnrichment(connection: Pick<FeedConnection, 'last_enriched_at'>, unattended: boolean, now: number): boolean {
+  if (!unattended) return false
+  if (!connection.last_enriched_at) return true
+  const stamped = new Date(connection.last_enriched_at).getTime()
+  if (!Number.isFinite(stamped)) return true
+  return isoDay(stamped) < isoDay(now)
+}
 
 /** When the bank does not say how far back it serves right after a consent, a year is asked for. */
 export const DEFAULT_EXTENDED_HISTORY_DAYS = 365
@@ -295,9 +312,16 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
   try {
     let imported = 0
     let duplicates = 0
+    let enrichedUpdated = 0
+    // The bank's enrichment time is per account (Get Account Details): the
+    // connection keeps the latest, and the window counts as enriched only
+    // when every account that reports says so. Null when none reports.
+    let lastEnrichedAt: string | null = null
+    let windowEnriched: boolean | null = null
     let returnedMin: string | null = null
     let returnedMax: string | null = null
     const transactionIds: string[] = []
+    const includeEnrichment = shouldAskForEnrichment(connection, input.unattended === true, now)
     for (const account of accounts) {
       const bankRoute = await resolveBankIngestRoute(supabase, companyId, connectionId, account.uid, account.currency)
       if (account.ledger_account && account.ledger_account !== bankRoute.ledgerAccount) {
@@ -307,9 +331,17 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
         companyId, userId, connectionId, account, bankRoute, party: party.party as AisParty,
         fromDate: window.fromDate, toDate: window.toDate, ingest: input.ingest, connect, now,
         options: { ...(rawInsertOnly ? { rawInsertOnly: true } : {}), ...(sieOverlap ? { skipAutoCategorization: true } : {}) },
+        ...(includeEnrichment ? { includeEnrichment: true } : {}),
       })
       imported += result.imported
       duplicates += result.duplicates
+      enrichedUpdated += result.enrichedUpdated ?? 0
+      if (result.enrichment) {
+        windowEnriched = (windowEnriched ?? true) && result.enrichment.windowEnriched
+        if (result.enrichment.lastEnrichedAt && (!lastEnrichedAt || result.enrichment.lastEnrichedAt > lastEnrichedAt)) {
+          lastEnrichedAt = result.enrichment.lastEnrichedAt
+        }
+      }
       transactionIds.push(...result.transactionIds)
       if (result.returnedMinBookingDate && (!returnedMin || result.returnedMinBookingDate < returnedMin)) returnedMin = result.returnedMinBookingDate
       if (result.returnedMaxBookingDate && (!returnedMax || result.returnedMaxBookingDate > returnedMax)) returnedMax = result.returnedMaxBookingDate
@@ -332,13 +364,27 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
       })),
       initialSync: initial ? { requestedFrom: window.fromDate, returnedMin, returnedMax, lookbackDays } : undefined,
     })
+    // An observation, not configuration: the writer guard lets it through
+    // like error_message (persistBankRouteNeedsConfiguration), and a failed
+    // stamp never fails a sync whose rows are already stored.
+    if (lastEnrichedAt) {
+      const { error: enrichedError } = await supabase
+        .from('bank_connections')
+        .update({ last_enriched_at: lastEnrichedAt })
+        .eq('id', connectionId)
+        .eq('company_id', companyId)
+      if (enrichedError) log.warn('open payments sync: last_enriched_at not stored', { connectionId, message: enrichedError.message })
+    }
     if (transactionIds.length > 0 && !rawInsertOnly) {
       const { data: synced } = await supabase.from('transactions').select('*').eq('company_id', companyId).in('id', transactionIds)
       if (synced && synced.length > 0) {
         await eventBus.emit({ type: 'transaction.synced', payload: { transactions: synced as Transaction[], userId, companyId } })
       }
     }
-    log.info('open payments sync completed', { connectionId, trigger, imported, duplicates, from: window.fromDate, to: window.toDate, ...(historyWindow ? { historyWindow } : {}) })
+    log.info('open payments sync completed', {
+      connectionId, trigger, imported, duplicates, enrichedUpdated, windowEnriched, lastEnrichedAt,
+      from: window.fromDate, to: window.toDate, ...(historyWindow ? { historyWindow } : {}),
+    })
     return {
       ok: true,
       connection_id: connectionId,
@@ -349,6 +395,8 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
       to_date: window.toDate,
       last_synced_at: completedAt,
       ...(historyWindow ? { history_window: historyWindow } : {}),
+      enriched_updated: enrichedUpdated,
+      window_enriched: windowEnriched,
     }
   } catch (error) {
     if (error instanceof BankSyncResultObsoleteError) {

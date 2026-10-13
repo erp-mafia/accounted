@@ -185,10 +185,15 @@ describe('runOpenPaymentsCron', () => {
       connection({ id: 'never', last_synced_at: null, status: 'error' }, now),
     ]
     const { supabase } = stub({ bank_connections: [{ data: [], error: null }, { data: rows, error: null }] })
+    // The summary tallies what the re-reads updated and whether each window carried the bank's enrichment.
+    mocks.run
+      .mockResolvedValueOnce({ ok: true, enriched_updated: 2, window_enriched: true })
+      .mockResolvedValueOnce({ ok: true, enriched_updated: 1, window_enriched: false })
     const result = await runOpenPaymentsCron(supabase, log, { now })
     expect(result).toMatchObject({
       connector: true, due: 3, synced: 3, failed: 0, caughtUp: 2,
       skipped: { notAdmitted: 1, notEntitled: 0, noAccounts: 1, fresh: 1, leased: 1, notScheduled: 1, budget: 0 },
+      enrichedUpdated: 3, windowEnriched: { yes: 1, no: 1, unknown: 1 },
     })
     expect(mocks.run.mock.calls.map((c) => (c[1] as { connectionId: string }).connectionId).sort()).toEqual(['due', 'listed-no-plan', 'never'])
     expect(mocks.run).toHaveBeenCalledWith(supabase, expect.objectContaining({ trigger: 'cron', unattended: true, userId: 'owner-1' }))

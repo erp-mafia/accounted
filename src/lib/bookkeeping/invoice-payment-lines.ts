@@ -31,7 +31,10 @@
  *
  *   tx.currency      : currency of the bank tx (almost always SEK)
  *   tx.amount        : amount in tx.currency
- *   tx.exchange_rate : populated at ingest only when tx.currency != SEK
+ *   tx.exchange_rate : the Riksbanken SEK rate when tx.currency != SEK; on a
+ *                      SEK row it may carry the bank's rate of a purchase made
+ *                      in another currency (tx.instructed_currency), which
+ *                      resolveSekAmount never reads (SEK short-circuits first)
  *   tx.amount_sek    : pre-computed SEK at ingest for non-SEK tx
  *   invoice.currency : currency the invoice was issued in
  *   invoice.exchange_rate: the rate at which AR was originally booked on 1510.

@@ -22,6 +22,11 @@ const TransactionDetail = z.object({
   reference: z.string().nullable(),
   merchant_name: z.string().nullable(),
   counterparty_account: z.string().nullable(),
+  counterparty_org_number: z.string().nullable().optional().describe('The counterparty\'s organisationsnummer, digits only, when the bank\'s enrichment names it.'),
+  instructed_amount: z.number().nullable().optional().describe('The amount in the currency the payment was made in, when that differs from the account currency (a card purchase abroad).'),
+  instructed_currency: z.string().nullable().optional().describe('The currency of instructed_amount.'),
+  balance_after: z.number().nullable().optional().describe('The account balance after this transaction as the bank reports it; null for personal accounts and feeds that send none.'),
+  is_enriched: z.boolean().nullable().optional().describe('Open Payments: the row has been through the bank\'s daily enrichment (payer name, organisationsnummer, OCR reference). Null when the bank sends no flag.'),
   journal_entry_id: z.string().uuid().nullable(),
   invoice_id: z.string().uuid().nullable(),
   supplier_invoice_id: z.string().uuid().nullable(),
@@ -42,7 +47,8 @@ const TransactionDetail = z.object({
 // request for the full row. Verbose by design: list endpoint stays minimal.
 const TRANSACTION_DETAIL_COLUMNS =
   'id, date, description, amount, currency, amount_sek, reference, merchant_name, ' +
-  'counterparty_account, journal_entry_id, invoice_id, supplier_invoice_id, ' +
+  'counterparty_account, counterparty_org_number, instructed_amount, instructed_currency, ' +
+  'balance_after, is_enriched, journal_entry_id, invoice_id, supplier_invoice_id, ' +
   'potential_invoice_id, is_business, category, receipt_id, document_id, ' +
   'external_id, import_source, reconciliation_method, cash_account_id, created_at, updated_at'
 

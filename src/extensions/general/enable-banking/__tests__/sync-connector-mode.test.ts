@@ -106,6 +106,13 @@ describe('syncAccountTransactions in connector mode', () => {
       end_to_end_id: 'ACC0F3A2026',
       counterparty_iban: 'SE4550000000058398257466',
       raw_page_index: 1,
+      counterparty_org_number: '5560160680',
+      instructed_amount: 112.5,
+      instructed_currency: 'EUR',
+      exchange_rate: 11.11,
+      balance_after: 20500.5,
+      is_enriched: true,
+      parts: [{ amount: 1250, currency: 'SEK', counterparty_name: 'Kund AB', counterparty_org_number: '5560160680', counterparty_account: null, reference: '1001000000017', invoice_numbers: ['1001'], message: null, provider_part_id: 'P1' }],
     }
     const lands: Record<keyof NormalizedBankTransaction, Partial<RawTransaction>> = {
       booking_date: { date: '2026-09-02' },
@@ -123,6 +130,15 @@ describe('syncAccountTransactions in connector mode', () => {
       end_to_end_id: { end_to_end_id: 'ACC0F3A2026' },
       counterparty_iban: { counterparty_iban: 'SE4550000000058398257466' },
       raw_page_index: { raw_document_id: 'doc-p2' },
+      counterparty_org_number: { counterparty_org_number: '5560160680' },
+      instructed_amount: { instructed_amount: 112.5 },
+      instructed_currency: { instructed_currency: 'EUR' },
+      // A SEK account: the bank's rate rides exchange_rate (see RawTransaction.exchange_rate).
+      exchange_rate: { exchange_rate: 11.11 },
+      balance_after: { balance_after: 20500.5 },
+      is_enriched: { is_enriched: true },
+      // The Bankgirot split lands nowhere yet: the parts MR stores it.
+      parts: {},
     }
     h.upload.mockResolvedValueOnce({ id: 'doc-p1' }).mockResolvedValueOnce({ id: 'doc-p2' })
     const outOfRange = { ...row, booking_date: '2026-09-04', raw_page_index: 2 }

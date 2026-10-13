@@ -12,7 +12,9 @@ import {
   aisConsentSigningProgressSchema,
   aisCreateConsentRequestSchema,
   aisPartySchema,
+  aisSyncTransactionsRequestSchema,
   bankSyncResponseSchema,
+  bankTransactionPartSchema,
   normalizedBankTransactionSchema,
   signingReturnQuerySchema,
 } from '../index'
@@ -27,8 +29,8 @@ const party = {
 }
 
 describe('AIS family', () => {
-  it('is the 2026-10-14 contract under /api/connect/ais with the bank_sync scope', () => {
-    expect(CONTRACT_VERSION).toBe('2026-10-14')
+  it('is the 2026-10-15 contract under /api/connect/ais with the bank_sync scope', () => {
+    expect(CONTRACT_VERSION).toBe('2026-10-15')
     expect(AIS_BASE_PATH).toBe('/api/connect/ais')
     expect(AIS_SCOPE).toBe('bank_sync')
   })
@@ -113,5 +115,34 @@ describe('AIS family', () => {
     expect(bankSyncResponseSchema.safeParse(page).success).toBe(true)
     expect(bankSyncResponseSchema.safeParse({ ...page, truncated: true, pagingLoop: false, duplicates: 2, conflicts: 0 }).success).toBe(true)
     expect(bankSyncResponseSchema.safeParse({ ...page, duplicates: -1 }).success).toBe(false)
+  })
+
+  it('carries the 2026-10-15 enrichment fields as optional nullable additions: an older producer leaves them out', () => {
+    const row = {
+      booking_date: '2026-10-01', amount: 1250, currency: 'SEK', description: 'Bg-inbetalning', counterparty_name: 'Kund AB', counterparty_account: '5050-1055',
+      reference: '1001000000017', merchant_category_code: null, bank_transaction_code: null, proprietary_bank_transaction_code: null,
+    }
+    const part = {
+      amount: 500, currency: 'SEK', counterparty_name: 'Kund AB', counterparty_org_number: '5560160680', counterparty_account: '5050-1055',
+      reference: '1001000000017', invoice_numbers: ['1001'], message: null, provider_part_id: 'ALIAS-1',
+    }
+    expect(bankTransactionPartSchema.safeParse(part).success).toBe(true)
+    expect(bankTransactionPartSchema.safeParse({ ...part, invoice_numbers: undefined }).success).toBe(false)
+    expect(normalizedBankTransactionSchema.safeParse({
+      ...row, counterparty_org_number: '5560160680', instructed_amount: -2.22, instructed_currency: 'EUR', exchange_rate: 11.26,
+      balance_after: 12345.67, is_enriched: true, parts: [part, { ...part, amount: 750, invoice_numbers: [] }],
+    }).success).toBe(true)
+    expect(normalizedBankTransactionSchema.safeParse({ ...row, counterparty_org_number: null, instructed_amount: null, instructed_currency: null, exchange_rate: null, balance_after: null, is_enriched: null, parts: null }).success).toBe(true)
+    expect(normalizedBankTransactionSchema.safeParse({ ...row, is_enriched: 'yes' }).success).toBe(false)
+    expect(normalizedBankTransactionSchema.safeParse({ ...row, parts: [{ amount: 1 }] }).success).toBe(false)
+    const page = { transactions: [row], raw_pages: [], skipped_pending: 0, returned_min_booking_date: null, returned_max_booking_date: null, effective_date_from: null, pages: 0 }
+    expect(bankSyncResponseSchema.safeParse({ ...page, enrichment: { last_enriched_at: '2026-10-13T04:10:00Z', window_enriched: true } }).success).toBe(true)
+    expect(bankSyncResponseSchema.safeParse({ ...page, enrichment: { last_enriched_at: null, window_enriched: false } }).success).toBe(true)
+    expect(bankSyncResponseSchema.safeParse({ ...page, enrichment: null }).success).toBe(true)
+    expect(bankSyncResponseSchema.safeParse({ ...page, enrichment: { window_enriched: true } }).success).toBe(false)
+    const request = { party, consentId: 'c1', accountUid: 'ACC003', accountCurrency: 'SEK', dateFrom: '2026-10-05' }
+    expect(aisSyncTransactionsRequestSchema.safeParse(request).success).toBe(true)
+    expect(aisSyncTransactionsRequestSchema.safeParse({ ...request, include_enrichment: true }).success).toBe(true)
+    expect(aisSyncTransactionsRequestSchema.safeParse({ ...request, include_enrichment: 'yes' }).success).toBe(false)
   })
 })

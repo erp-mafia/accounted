@@ -56,6 +56,14 @@ export type TriggerSyncResult =
        * before the import ran (lib/bank-feed/feed.ts).
        */
       history_window?: 'extended' | 'ordinary'
+      /**
+       * Open Payments only: stored rows the re-read updated with the bank's
+       * daily enrichment (a reference, a payer, an organisationsnummer), and
+       * whether the window carried today's enrichment (null when the bank
+       * reports nothing about it).
+       */
+      enriched_updated?: number
+      window_enriched?: boolean | null
     }
   | {
       ok: false

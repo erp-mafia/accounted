@@ -6430,10 +6430,15 @@ export const tools: McpTool[] = [
       if (pageIds.length > 0) {
         // The unbooked predicate is repeated on the page read so a row booked
         // between the two reads drops out instead of coming back as work.
+        // The enrichment columns (organisationsnummer, the instructed amount of
+        // a foreign purchase, the balance after, the enriched flag) ride the
+        // rows undeclared: the tools/list catalog sits at its token ceiling
+        // (payload-size.bench.test.ts), and output schemas are open.
         let listQuery = supabase
           .from('transactions')
           .select(
-            'id, date, description, amount, currency, merchant_name, reference, is_business, category, cash_account_id'
+            'id, date, description, amount, currency, merchant_name, reference, is_business, category, cash_account_id, ' +
+            'counterparty_org_number, instructed_amount, instructed_currency, balance_after, is_enriched'
           )
           .eq('company_id', companyId)
           .in('id', pageIds)

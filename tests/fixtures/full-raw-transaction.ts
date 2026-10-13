@@ -12,7 +12,9 @@ import type { RawTransaction } from '@/types'
  *   every field of that payload and returns it.
  *
  * Every key is the transactions column of the same name, except `description`,
- * which ingest also keeps as original_description.
+ * which ingest also keeps as original_description. The row is a SEK account's
+ * card purchase in EUR: on a SEK account exchange_rate is the bank's rate
+ * (see RawTransaction.exchange_rate), so the payload carries it unchanged.
  */
 export function fullRawTransaction(overrides: Partial<RawTransaction> = {}): Required<RawTransaction> {
   const full: Required<RawTransaction> = {
@@ -35,6 +37,12 @@ export function fullRawTransaction(overrides: Partial<RawTransaction> = {}): Req
     end_to_end_id: 'E2E-FULL-1',
     provider_transaction_id: 'ENTRY-FULL-1',
     raw_document_id: '00000000-0000-4000-8000-000000000001',
+    counterparty_org_number: '5560160680',
+    instructed_amount: -2.22,
+    instructed_currency: 'EUR',
+    exchange_rate: 11.26,
+    balance_after: 12345.67,
+    is_enriched: true,
   }
   return { ...full, ...overrides }
 }

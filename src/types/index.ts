@@ -943,6 +943,19 @@ export interface Transaction {
   // The archived raw bank response this row arrived in; document_id is the receipt.
   raw_document_id?: string | null
 
+  // What Open Payments' daily enrichment adds (migration 20261013190000):
+  // the counterparty's organisationsnummer (digits only), the amount and
+  // currency a foreign card purchase was made in (exchange_rate then holds
+  // the bank's rate on a SEK account), the account balance after the row,
+  // and whether the bank has enriched the row (enriched_at: when it last
+  // took an enriched version). Optional like the other late-added columns.
+  counterparty_org_number?: string | null
+  instructed_amount?: number | null
+  instructed_currency?: string | null
+  balance_after?: number | null
+  is_enriched?: boolean | null
+  enriched_at?: string | null
+
   // Notes
   notes: string | null
 
@@ -3924,6 +3937,23 @@ export interface RawTransaction {
   provider_transaction_id?: string | null
   /** The archived raw bank response (document_attachments) this row arrived in. */
   raw_document_id?: string | null
+  /** The counterparty's organisationsnummer, digits only, when the bank's enrichment names it. */
+  counterparty_org_number?: string | null
+  /** The amount in the currency the payment was made in, when that differs from the account currency. */
+  instructed_amount?: number | null
+  /** The currency of instructed_amount. */
+  instructed_currency?: string | null
+  /**
+   * The bank's rate from instructed_currency into the account currency. Stored
+   * on a SEK account only (the row's own amount is already SEK); a
+   * foreign-currency account keeps the Riksbanken SEK rate ingest fetches,
+   * which is what transactions.exchange_rate means there.
+   */
+  exchange_rate?: number | null
+  /** The account balance after this row, when the bank reports it (never for a personal account). */
+  balance_after?: number | null
+  /** The bank's isEnriched flag: the row has been through its daily enrichment. Null when the bank sends none. */
+  is_enriched?: boolean | null
 }
 
 /** Internal bank-fetch context. Its token is revalidated within each database write. */
@@ -4023,6 +4053,12 @@ export interface IngestResult {
   auto_matched_invoices: number
   errors: number
   transaction_ids: string[]
+  /**
+   * Stored rows an Open Payments re-read updated with richer data (a
+   * reference, a payer, an organisationsnummer, the enriched flag) instead of
+   * only skipping them as duplicates. Optional: only that feed produces it.
+   */
+  enriched_updated?: number
   /** First insert error encountered, surfaced for debugging. Optional. */
   first_error?: { message: string; code?: string | null; details?: string | null; hint?: string | null }
 }
