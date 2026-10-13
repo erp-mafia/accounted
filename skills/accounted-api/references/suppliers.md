@@ -2281,6 +2281,7 @@ Creates a payment batch: an immutable snapshot of one credit transfer per invoic
 - An invoice already in an active batch answers 409 SI_BATCH_DUPLICATE_INVOICE with details.invoices; resend with confirm_already_batched true only when paying it twice is intended, otherwise cancel the old batch.
 - Incomplete company bank details answer 400 SI_BATCH_DEBTOR_INCOMPLETE; details.missing is iban, bic, org_number or swedbank_ids (company settings; swedbank_ids means a Swedbank company lacks swedbank_signer_id or swedbank_corporate_pay_id).
 - An ineligible invoice fails the whole request with 400 SI_BATCH_INELIGIBLE_INVOICE and a reason per invoice; amount above the remaining amount answers 400 SI_BATCH_AMOUNT_EXCEEDS_REMAINING.
+- A Swedbank company (swedbank_signer_id set, or swedbank_ids missing) can only pay bank accounts in a file: a bankgiro or plusgiro payee is ineligible with reason swedbank_iso2_giro_payee. Leave those invoices out (the preview already does) and create the batch with the rest.
 - A payment_date in the past is moved to today (banks reject passed execution dates). Only SEK invoices; at most 100 per batch.
 - Between two requests (dry run, then create) a supplier's bank details can change: pass expected_payees from the dry run's items (payee.fingerprint, amount) and create answers 409 SI_BATCH_PAYEE_CHANGED instead of paying a changed account. A staged MCP create is pinned this way automatically.
 
@@ -2618,7 +2619,7 @@ Evaluates the given supplier invoices exactly as create will: eligible lines wit
 **Do not use for:** Creating the batch (POST /supplier-payment-batches) or listing unpaid supplier invoices (GET /supplier-invoices).
 
 **Pitfalls:**
-- Excluded reasons: not_payable (draft, paid, credited...), nothing_remaining, credit_note, foreign_currency (only SEK), payee_missing / payee_invalid (fix the supplier's bankgiro, plusgiro or clearing + account number), reference_missing (no valid OCR and no supplier invoice number: add one of them to the invoice), not_found.
+- Excluded reasons: not_payable (draft, paid, credited...), nothing_remaining, credit_note, foreign_currency (only SEK), payee_missing / payee_invalid (fix the supplier's bankgiro, plusgiro or clearing + account number), reference_missing (no valid OCR and no supplier invoice number: add one of them to the invoice), not_found, in_bank_payment, swedbank_iso2_giro_payee (the company pays through Swedbank, whose ISO 2.0 file agreement pays to bank accounts only: a supplier with a bankgiro or plusgiro is left out; pay those invoices with a bank payment or in the internet bank).
 - debtor_ok false means create will refuse with SI_BATCH_DEBTOR_INCOMPLETE: debtor_missing names the company setting to fill in (iban, bic, org_number, or swedbank_ids: a Swedbank company's swedbank_signer_id and swedbank_corporate_pay_id, which Swedbank assigns and refuses a file without).
 - already_batched is a warning here but a refusal at create unless confirm_already_batched is true: paying the same invoice twice is the risk.
 - Only SEK invoices; at most 100 per call.
@@ -2646,7 +2647,7 @@ Response `200`:
 {
   data: {
     eligible: { supplier_invoice_id: string, supplier_name: string, supplier_invoice_number: string | null, amount: number, payment_date: string, payee: { type: "bankgiro" | "plusgiro" | "bank_account", label: string }, reference: { type: "ocr" | "invoice_number", value: string }, warnings: ("unattested" | "already_batched" | "ocr_invalid" | "payee_city_missing")[], active_supplier_payment_batch_id: string | null }[],
-    excluded: { supplier_invoice_id: string, reason: "not_payable" | "nothing_remaining" | "credit_note" | "foreign_currency" | "payee_missing" | "payee_invalid" | "reference_missing" | "not_found" | "in_bank_payment" }[],
+    excluded: { supplier_invoice_id: string, reason: "not_payable" | "nothing_remaining" | "credit_note" | "foreign_currency" | "payee_missing" | "payee_invalid" | "reference_missing" | "not_found" | "in_bank_payment" | "swedbank_iso2_giro_payee" }[],
     total_amount: number,
     currency: "SEK",
     debtor_ok: boolean,

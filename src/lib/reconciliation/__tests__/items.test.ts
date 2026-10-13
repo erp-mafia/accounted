@@ -82,6 +82,48 @@ describe('listAccountItems', () => {
     expect(skvStatusMock).toHaveBeenLastCalledWith(supabase, COMPANY, { today: undefined, windowFrom: null, windowTo: null })
   })
 
+  it('lists skattekonto rows before the history only by name, and says how many there are on every skattekonto listing (crm#1153)', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    skvStatusMock.mockResolvedValue({
+      older_unmatched_count: 0,
+      skattekonto: { history_start: '2026-01-01', before_history_count: 2, before_history_total: 400 },
+      items: {
+        proposed: [],
+        unmatched_external: [item('u1', 'unmatched_external')],
+        unmatched_ledger: [],
+        matched: [item('m1', 'matched')],
+        ignored: [],
+        upcoming: [],
+        before_history: [item('b1', 'before_history'), item('b2', 'before_history')],
+      },
+    })
+    const summary = { count: 2, total: 400, history_start: '2026-01-01' }
+
+    // The default listing (the page, v1) is the bridge's rows only, as before.
+    const all = await listAccountItems(supabase as never, COMPANY, 'skattekonto')
+    expect(all?.items.map((i) => i.item_id)).toEqual(['u1', 'm1'])
+    expect(all).toMatchObject({ total_count: 2, has_more: false, before_history: summary })
+
+    const open = await listAccountItems(supabase as never, COMPANY, 'skattekonto', { bucket: 'unmatched_external' })
+    expect(open?.items.map((i) => i.item_id)).toEqual(['u1'])
+    expect(open?.before_history).toEqual(summary)
+
+    const before = await listAccountItems(supabase as never, COMPANY, 'skattekonto', { bucket: 'before_history' })
+    expect(before?.items.map((i) => i.item_id)).toEqual(['b1', 'b2'])
+    expect(before).toMatchObject({ total_count: 2, before_history: summary })
+  })
+
+  it('carries no before_history block when no row is before the history', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    skvStatusMock.mockResolvedValue({
+      older_unmatched_count: 0,
+      skattekonto: { history_start: '2026-01-01', before_history_count: 0, before_history_total: 0 },
+      items: { proposed: [], unmatched_external: [], unmatched_ledger: [], matched: [], ignored: [], upcoming: [], before_history: [] },
+    })
+    const all = await listAccountItems(supabase as never, COMPANY, 'skattekonto')
+    expect(all).not.toHaveProperty('before_history')
+  })
+
   it('buckets bank transactions by ignored / linked / proposed / open and nets unlinked ledger lines per entry', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: CASH, ledger_account: '1930', currency: 'SEK', is_primary: true } })

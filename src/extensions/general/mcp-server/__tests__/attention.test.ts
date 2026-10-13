@@ -50,7 +50,7 @@ const ctx = (supabase: ReturnType<typeof createQueuedMockSupabase>['supabase']) 
 })
 
 /**
- * Enqueues 14 baseline empty results in the order the resource consumes them.
+ * Enqueues 15 baseline empty results in the order the resource consumes them.
  * Tests can override individual slots before invoking by enqueueing in advance.
  */
 function enqueueEmpty(enqueue: (r: { data?: unknown; error?: unknown; count?: number | null }) => void) {
@@ -61,6 +61,8 @@ function enqueueEmpty(enqueue: (r: { data?: unknown; error?: unknown; count?: nu
   enqueue({ data: [] })
   // 4. pendingSupplierHead
   enqueue({ count: 0 })
+  // 4b. the company's accounting method, read beside that count
+  enqueue({ data: null })
   // 5. pendingSupplierSamples
   enqueue({ data: [] })
   // 6. pendingOpsHead
@@ -112,6 +114,23 @@ describe('Accounted://attention', () => {
     ])
   })
 
+  it('sends no agent to attest under kontantmetoden: the company has no attest step (crm#1156)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const today = new Date().toISOString().slice(0, 10)
+    enqueue({ data: [] })                                                  // unbookedSamples
+    enqueue({ data: [] })                                                  // overdueRows
+    enqueue({ count: 2 })                                                  // pendingSupplierHead
+    enqueue({ data: { accounting_method: 'cash' } })                       // accounting method
+    enqueue({ data: [{ id: 'si-1', supplier_invoice_number: 'L-1', supplier_id: 's-1', total: 1000, currency: 'SEK', due_date: today }] })
+    for (let i = 6; i <= 14; i += 1) enqueue({ data: i === 13 || i === 14 ? null : [], count: 0 })
+    enqueue({ data: [] })                                                  // unlinked-document candidates
+
+    const result = (await attentionResource.read(ctx(supabase))) as AttentionResponse
+
+    expect(result.categories.find((c) => c.key === 'pending_supplier_invoices')).toBeUndefined()
+    expect(result.summary.total_items).toBe(0)
+  })
+
   it('only lists overdue fakturor: proformas, delivery notes and quotes are never receivables', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueueEmpty(enqueue)
@@ -133,6 +152,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: txns })          // unbookedSamples
     enqueue({ data: [] })            // overdueRows
     enqueue({ count: 0 })            // pendingSupplierHead
+    enqueue({ data: null })          // accounting method
     enqueue({ data: [] })            // pendingSupplierSamples
     enqueue({ count: 0 })            // pendingOpsHead
     enqueue({ data: [] })            // pendingOpsSamples
@@ -170,7 +190,10 @@ describe('Accounted://attention', () => {
     // cannot, so the resource drops anchored ids from the samples itself.
     setUnbooked(1, ['t-split'])
     enqueue({ data: txns })                            // 2. unbookedSamples
-    for (let i = 3; i <= 14; i += 1) enqueue({ data: i === 13 || i === 14 ? null : [], count: 0 })
+    enqueue({ data: [] })                              // 3. overdueRows
+    enqueue({ count: 0 })                              // 4. pendingSupplierHead
+    enqueue({ data: null })                            // 4b. accounting method
+    for (let i = 5; i <= 14; i += 1) enqueue({ data: i === 13 || i === 14 ? null : [], count: 0 })
     enqueue({ data: [] })                              // 15. unlinked-document candidates
 
     const result = (await attentionResource.read(ctx(supabase))) as AttentionResponse
@@ -187,7 +210,10 @@ describe('Accounted://attention', () => {
     const today = new Date().toISOString().slice(0, 10)
     countUnbooked.mockRejectedValue(new Error('untriaged transaction count failed: timeout'))
     enqueue({ data: [{ id: 't-1', date: today, amount: -100, currency: 'SEK', description: 'X', merchant_name: null }] })
-    for (let i = 3; i <= 14; i += 1) enqueue({ data: i === 13 || i === 14 ? null : [], count: 0 })
+    enqueue({ data: [] })                              // 3. overdueRows
+    enqueue({ count: 0 })                              // 4. pendingSupplierHead
+    enqueue({ data: null })                            // 4b. accounting method
+    for (let i = 5; i <= 14; i += 1) enqueue({ data: i === 13 || i === 14 ? null : [], count: 0 })
     enqueue({ data: [] })                              // 15. unlinked-document candidates
 
     const result = (await attentionResource.read(ctx(supabase))) as AttentionResponse
@@ -205,7 +231,10 @@ describe('Accounted://attention', () => {
     setUnbooked(1)
     fetchAnchored.mockRejectedValue(new Error('invoice_payments anchor lookup failed: timeout'))
     enqueue({ data: [{ id: 't-1', date: today, amount: -100, currency: 'SEK', description: 'X', merchant_name: null }] })
-    for (let i = 3; i <= 14; i += 1) enqueue({ data: i === 13 || i === 14 ? null : [], count: 0 })
+    enqueue({ data: [] })                              // 3. overdueRows
+    enqueue({ count: 0 })                              // 4. pendingSupplierHead
+    enqueue({ data: null })                            // 4b. accounting method
+    for (let i = 5; i <= 14; i += 1) enqueue({ data: i === 13 || i === 14 ? null : [], count: 0 })
     enqueue({ data: [] })                              // 15. unlinked-document candidates
 
     const result = (await attentionResource.read(ctx(supabase))) as AttentionResponse
@@ -226,6 +255,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: txns })
     enqueue({ data: [] })
     enqueue({ count: 0 })
+    enqueue({ data: null })                   // accounting method
     enqueue({ data: [] })
     enqueue({ count: 0 })
     enqueue({ data: [] })
@@ -254,6 +284,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: [] })
     enqueue({ data: overdue })
     enqueue({ count: 0 })
+    enqueue({ data: null })                   // accounting method
     enqueue({ data: [] })
     enqueue({ count: 0 })
     enqueue({ data: [] })
@@ -281,6 +312,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: [] })
     enqueue({ data: [] })
     enqueue({ count: 0 })
+    enqueue({ data: null })                   // accounting method
     enqueue({ data: [] })
     enqueue({ count: 2 })
     enqueue({ data: ops })
@@ -303,7 +335,8 @@ describe('Accounted://attention', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     // Slots 1-14 empty, then this test's own candidate set in slot 15 and the
     // eight reference lookups behind it.
-    for (let i = 0; i < 13; i += 1) enqueue({ data: i === 11 || i === 12 ? null : [], count: 0 })
+    // (14 slots: the supplier count reads the accounting method beside it.)
+    for (let i = 0; i < 14; i += 1) enqueue({ data: i === 12 || i === 13 ? null : [], count: 0 })
     enqueue({
       data: [
         { id: 'doc-new', file_name: 'kvitto.pdf', mime_type: 'application/pdf', file_size_bytes: 900, upload_source: 'api', created_at: '2026-08-20T00:00:00.000Z' },
@@ -325,7 +358,8 @@ describe('Accounted://attention', () => {
 
   it('omits the unlinked-documents category when every candidate is claimed', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    for (let i = 0; i < 13; i += 1) enqueue({ data: i === 11 || i === 12 ? null : [], count: 0 })
+    // (14 slots: the supplier count reads the accounting method beside it.)
+    for (let i = 0; i < 14; i += 1) enqueue({ data: i === 12 || i === 13 ? null : [], count: 0 })
     enqueue({
       data: [
         { id: 'doc-1', file_name: 'kvitto.pdf', mime_type: 'application/pdf', file_size_bytes: 900, upload_source: 'api', created_at: '2026-08-20T00:00:00.000Z' },
@@ -347,6 +381,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: [] })
     enqueue({ data: [] })
     enqueue({ count: 0 })
+    enqueue({ data: null })                   // accounting method
     enqueue({ data: [] })
     enqueue({ count: 0 })
     enqueue({ data: [] })
@@ -382,6 +417,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: [] })
     enqueue({ data: [] })
     enqueue({ count: 0 })
+    enqueue({ data: null })                   // accounting method
     enqueue({ data: [] })
     enqueue({ count: 0 })
     enqueue({ data: [] })
@@ -411,6 +447,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: [] })
     enqueue({ data: [] })
     enqueue({ count: 0 })
+    enqueue({ data: null })                   // accounting method
     enqueue({ data: [] })
     enqueue({ count: 0 })
     enqueue({ data: [] })
@@ -435,6 +472,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: [] })
     enqueue({ data: [] })
     enqueue({ count: 0 })
+    enqueue({ data: null })                   // accounting method
     enqueue({ data: [] })
     enqueue({ count: 0 })
     enqueue({ data: [] })
@@ -460,6 +498,7 @@ describe('Accounted://attention', () => {
     enqueue({ data: [{ id: 't-1', date: today, amount: -50, currency: 'SEK', description: 'X', merchant_name: null }] })
     enqueue({ data: [] })                                                  // overdueRows
     enqueue({ count: 1 })                                                  // pendingSupplierHead
+    enqueue({ data: { accounting_method: 'accrual' } })                    // accounting method
     enqueue({ data: [{ id: 'si-1', supplier_invoice_number: 'L-1', supplier_id: 's-1', total: 1000, currency: 'SEK', due_date: today }] })
     enqueue({ count: 0 })                                                  // pendingOpsHead
     enqueue({ data: [] })

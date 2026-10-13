@@ -125,6 +125,13 @@ const SETTINGS = {
   error: null,
 }
 
+/** A Swedbank company with the two ids Swedbank assigns: its files take the ISO 2.0 form. */
+const SWEDBANK_ISO2 = {
+  bic: 'SWEDSESS',
+  swedbank_signer_id: '123456789ORI0001',
+  swedbank_corporate_pay_id: '123456789CPO0001',
+}
+
 function invoiceRow(overrides: Record<string, unknown> = {}) {
   return {
     id: INVOICE_A,
@@ -277,6 +284,22 @@ describe('POST /supplier-payment-batches/preview', () => {
     const body = await (await post({ supplier_invoice_ids: [INVOICE_A] })).json()
     expect(body.data).toMatchObject({ debtor_ok: false, debtor_missing: 'iban' })
   })
+
+  it('leaves a bankgiro payee out of a Swedbank ISO 2.0 file (crm#1156)', async () => {
+    mockServiceClient.mockReturnValue(
+      makeClient({
+        company_members: MEMBER,
+        supplier_invoices: { data: [invoiceRow()], error: null },
+        supplier_payment_batch_items: { data: [], error: null },
+        companies: COMPANY,
+        company_settings: { data: { ...SETTINGS.data, ...SWEDBANK_ISO2 }, error: null },
+      }),
+    )
+    const body = await (await post({ supplier_invoice_ids: [INVOICE_A] })).json()
+    expect(body.data.eligible).toEqual([])
+    expect(body.data.excluded).toEqual([{ supplier_invoice_id: INVOICE_A, reason: 'swedbank_iso2_giro_payee' }])
+    expect(body.data).toMatchObject({ debtor_ok: true, debtor_missing: null })
+  })
 })
 
 // ─────────────────────────────────────────────────────────────────
@@ -395,6 +418,19 @@ describe('POST /supplier-payment-batches', () => {
       { id: INVOICE_A, reason: 'not_payable' },
       { id: INVOICE_B, reason: 'not_found' },
     ])
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('400 SI_BATCH_INELIGIBLE_INVOICE for a bankgiro payee in a Swedbank ISO 2.0 file, saying what to do instead', async () => {
+    const client = eligibleClient({ company_settings: { data: { ...SETTINGS.data, ...SWEDBANK_ISO2 }, error: null } })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ items: [{ supplier_invoice_id: INVOICE_A }] })
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('SI_BATCH_INELIGIBLE_INVOICE')
+    expect(body.error.details.invoices).toEqual([{ id: INVOICE_A, reason: 'swedbank_iso2_giro_payee' }])
+    expect(body.error.details.reason).toContain('Swedbanks ISO 2.0-avtal betalar bara till bankkonton')
+    expect(body.error.details.reason).toContain('ISO 1.0-avtal för leverantörsbetalningar')
     expect(wrote(client)).toBe(false)
   })
 

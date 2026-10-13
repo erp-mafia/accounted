@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   canApproveSupplierInvoice,
   canMarkSupplierInvoiceBankEntered,
+  companyAttestsSupplierInvoices,
   findChangedVerifikatFields,
   findLockedVerifikatFields,
   isOverduePayable,
@@ -102,6 +103,18 @@ describe('canApproveSupplierInvoice', () => {
   it('refuses settled statuses', () => {
     expect(canApproveSupplierInvoice({ status: 'paid' })).toBe(false)
     expect(canApproveSupplierInvoice({ status: 'credited' })).toBe(false)
+  })
+})
+
+describe('companyAttestsSupplierInvoices', () => {
+  it('has no attest step under kontantmetoden (crm#1156)', () => {
+    expect(companyAttestsSupplierInvoices('cash')).toBe(false)
+  })
+
+  it('attests under faktureringsmetoden, and when the setting is missing', () => {
+    expect(companyAttestsSupplierInvoices('accrual')).toBe(true)
+    expect(companyAttestsSupplierInvoices(null)).toBe(true)
+    expect(companyAttestsSupplierInvoices(undefined)).toBe(true)
   })
 })
 

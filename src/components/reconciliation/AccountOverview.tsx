@@ -601,6 +601,8 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         return t('bucket_ignored')
       case 'upcoming':
         return t('bucket_upcoming')
+      case 'before_history':
+        return t('bucket_before_history')
     }
   }
 

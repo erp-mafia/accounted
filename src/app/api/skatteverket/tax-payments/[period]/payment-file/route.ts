@@ -3,7 +3,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { generateBankgiroPaymentBgLb } from '@/lib/salary/payment/bg-lb-generator'
 import { generateSupplierPain001 } from '@/lib/payments/pain001-supplier'
-import { resolveBatchDebtor } from '@/lib/payments/batch-service'
+import { paysThroughSwedbankIso2, resolveBatchDebtor } from '@/lib/payments/batch-service'
 import { resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
 import { roundOre } from '@/lib/money'
@@ -130,6 +130,18 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
     // bankgiro riding along so the BG payee is debited BGNR-to-BGNR where
     // the bank's MIG demands it (Swedbank Validex rule 219).
     const debtorResolution = await resolveBatchDebtor(supabase, companyId)
+    // A Swedbank company's file takes Swedbank's ISO 2.0 form, which pays to
+    // bank accounts only, and Skatteverket is paid on its bankgiro: no file
+    // Swedbank would accept, with or without the ids saved (crm#1156).
+    if (paysThroughSwedbankIso2(debtorResolution)) {
+      return NextResponse.json(
+        {
+          error:
+            'Swedbanks ISO 2.0-avtal betalar bara till bankkonton, och Skatteverket tar bara emot betalningar på bankgiro. Betala skatten i internetbanken.',
+        },
+        { status: 400 },
+      )
+    }
     if (!debtorResolution.ok) {
       const message = {
         iban: 'Företagets IBAN saknas i företagsinställningar. Fyll i det under Inställningar → Fakturering för att skapa betalfil (ISO 20022).',

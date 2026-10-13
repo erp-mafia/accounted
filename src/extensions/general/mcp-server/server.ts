@@ -142,7 +142,7 @@ import { formatVoucherLabel, hasLiveJournalEntryLink } from '@/lib/transactions/
 import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
 import { PERSON_REJECTION_CATEGORIES } from '@/lib/pending-operations/rejection-categories'
-import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
+import { canApproveSupplierInvoice, companyAttestsSupplierInvoices } from '@/lib/supplier-invoices/lifecycle'
 import { planSupplierPaymentBackfill, type SupplierPaymentColumns, type SupplierPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
 import { eventBus } from '@/lib/events/bus'
 import {
@@ -1898,6 +1898,27 @@ function skattekontoEntryPreview(
       ...(suggestion.ore_rounding ? { oreRounding: suggestion.ore_rounding } : {}),
     }),
   )
+}
+
+/**
+ * Open skattekonto rows dated before history_start: the 1630 IB carries
+ * them, so no bridge line, count or opening difference holds them, while Att
+ * göra still counts them as unbooked (crm#1153, crm#1155). Both
+ * reconciliation reads say so with the same block, so an agent that sees 0
+ * open rows on the bridge learns where the rest are and what to do.
+ */
+function skattekontoBeforeHistoryBlock(summary: {
+  count: number
+  total: number
+  history_start: string | null
+}): { count: number; total: number; history_start: string | null; note: string } {
+  return {
+    ...summary,
+    note:
+      `${summary.count} open Skatteverket row(s) are dated before history_start ${summary.history_start ?? ''}: the ingående balans on 1630 carries that time, so they are in no bridge line, count or opening difference, while Att göra (Bokför skattekontohändelser) still counts them as unbooked. ` +
+      'List them with gnubok_list_reconciliation_items, account_key "skattekonto", bucket "before_history". ' +
+      'When skattekonto.opening_difference is 0 the ledger already agrees with Skatteverket through that date, so do not book them: link each row to the imported verifikat on 1630 that holds it (the proposal on the row, when there is one) with gnubok_reconcile_match (allow_remainder for a summarised verifikat), or the user ignores it (Transaktioner, Ignorera).',
+  }
 }
 
 const SKATTEKONTO_TWIN_TAIL =
@@ -15111,7 +15132,17 @@ export const tools: McpTool[] = [
         // bridge. Items live in gnubok_list_reconciliation_items.
         const { items: _items, ...rest } = status as typeof status & { items?: unknown }
         void _items
-        return rest
+        const beforeHistoryCount = rest.skattekonto?.before_history_count ?? 0
+        return beforeHistoryCount > 0
+          ? {
+              ...rest,
+              before_history: skattekontoBeforeHistoryBlock({
+                count: beforeHistoryCount,
+                total: rest.skattekonto?.before_history_total ?? 0,
+                history_start: rest.skattekonto?.history_start ?? null,
+              }),
+            }
+          : rest
       }
 
       // Passed through as-is, undefined included: an omitted account_number is
@@ -15145,7 +15176,8 @@ export const tools: McpTool[] = [
         account_key: { type: 'string', description: '"skattekonto" or "bank:<cash_account_id>".' },
         bucket: {
           type: 'string',
-          enum: ['proposed', 'unmatched_external', 'unmatched_ledger', 'matched', 'ignored', 'upcoming'],
+          enum: ['proposed', 'unmatched_external', 'unmatched_ledger', 'matched', 'ignored', 'upcoming', 'before_history'],
+          description: 'before_history (skattekonto): open rows before history_start, listed only by name',
         },
         date_from: { type: 'string', description: 'YYYY-MM-DD; scopes lists, never counts' },
         date_to: { type: 'string', description: 'YYYY-MM-DD' },
@@ -15178,7 +15210,9 @@ export const tools: McpTool[] = [
         offset: args.offset as number | undefined,
       })
       if (!result) throw await unknownAccountKeyError(supabase, companyId, accountKey)
-      return result
+      return result.before_history
+        ? { ...result, before_history: skattekontoBeforeHistoryBlock(result.before_history) }
+        : result
     },
   },
 
@@ -17304,7 +17338,11 @@ export const tools: McpTool[] = [
         previewData,
         actor,
         {
-          description: 'After approval, attest via gnubok_approve_supplier_invoice and pay via the bank flow.',
+          // Kontantmetoden has no attest step: pointing its agent at the
+          // attest tool sent it after a step the app never shows (crm#1156).
+          description: companyAttestsSupplierInvoices(companySettings?.accounting_method)
+            ? 'After approval, attest via gnubok_approve_supplier_invoice and pay via the bank flow.'
+            : 'After approval, pay it via the bank flow: kontantmetoden has no attest step, and the purchase is booked when the outgoing bank transaction is matched to the invoice.',
           tool: 'gnubok_get_inbox_item',
           args: { inbox_item_id: inboxItemId },
         },
@@ -27037,7 +27075,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
               : '• Categorize transactions: gnubok_list_uncategorized_transactions → gnubok_suggest_categories → gnubok_categorize_transaction (stages) → the user approves the proposals in Accounted under Att göra › Agentförslag.',
             '• Applying income to invoices: pick by what you have: a specific bank transaction + a known invoice → gnubok_match_transaction_to_invoice; an invoice you know is paid but no specific bank line → gnubok_mark_invoice_as_paid; a whole period of unmatched income to reconcile → gnubok_auto_match_period (dry_run first). All stage for approval. Unsure which match/link tool fits, or whether to credit 1510 (faktureringsmetoden) vs debit 19xx (kontantmetoden)? gnubok_load_skill("bank-reconciliation") has the full decision tree; gnubok_get_agent_briefing returns the company\'s accounting_method.',
             '• Invoicing: gnubok_list_customers (or gnubok_create_customer) → gnubok_create_invoice → gnubok_send_invoice or gnubok_mark_invoice_as_sent → gnubok_mark_invoice_as_paid. Refund via gnubok_credit_invoice.',
-            '• Suppliers: gnubok_list_suppliers (or gnubok_create_supplier) → gnubok_create_supplier_invoice_from_inbox → gnubok_approve_supplier_invoice. Refund via gnubok_credit_supplier_invoice.',
+            '• Suppliers: gnubok_list_suppliers (or gnubok_create_supplier) → gnubok_create_supplier_invoice_from_inbox → gnubok_approve_supplier_invoice (faktureringsmetoden only: kontantmetoden has no attest step, the invoice is booked when its payment is matched). Refund via gnubok_credit_supplier_invoice.',
             '• VAT: gnubok_get_vat_report(period_type, year, period). Ruta49 = VAT to pay (positive) or refund (negative). Pass render_ui=true to open the momsdeklaration review widget (claude.ai / Desktop). gnubok_vat_close_check reports filing-readiness blockers.',
             '• Reporting: gnubok_get_trial_balance / _income_statement / _balance_sheet / _kpi_report, plus _ar_ledger / _supplier_ledger through gnubok_call_tool: all default to the most recent fiscal period. For account roll-ups use gnubok_get_general_ledger; for ad-hoc line queries (free-text, amount/date/source filters) use gnubok_query_journal.',
             '• Trust in figures: gnubok_get_trial_balance, _income_statement, _balance_sheet, _kpi_report and _general_ledger return data_status (company-wide for the range, also on filtered reports). When data_status.preliminary is true, say the figures are preliminary and mention the caveats that bear on the question; do not recite them all. When data_status.unavailable is true, say the completeness of the figures could not be checked.',

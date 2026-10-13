@@ -75,6 +75,10 @@
  *    debtor account and has no BGNR form, so MIG 1.0's rule 219 is gone.
  *  - Dbtr/PstlAdr always (Ctry SE, TwnNm when known); DbtrAgt is BIC
  *    SWEDSESS, the one value MIG 2.0 allows, plus PstlAdr/Ctry SE.
+ *  - Swedbank's 2.0 service pays to bank accounts only today, so the batch
+ *    and tax-account callers never hand this form a bankgiro or plusgiro
+ *    payee (swedbankIso2PaysPayee, crm#1156). The alias form below is the
+ *    one MIG 2.0 describes, kept for when Swedbank offers it.
  *  - Plusgiro payees use SchmeNm/Prtry PGNR. An account whose clearing
  *    starts with 8 is MmbId 8CCCC and a 15-digit BBAN (lib/payments/swedbank).
  *  - An OCR rides Strd only to a bankgiro or plusgiro payee, and without

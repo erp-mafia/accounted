@@ -36,7 +36,12 @@ import {
 export const DEFAULT_ITEMS_LIMIT = 50
 export const MAX_ITEMS_LIMIT = 200
 
-/** Bucket order when no bucket is requested: what to do first, first. */
+/**
+ * Bucket order when no bucket is requested: what to do first, first.
+ * before_history is not in it: those rows are outside the bridge and are
+ * listed only when asked for by name (the result's before_history says how
+ * many there are).
+ */
 export const BUCKET_ORDER: readonly ReconciliationItemBucket[] = [
   'proposed',
   'unmatched_external',
@@ -63,6 +68,11 @@ export interface ListItemsResult {
   next_offset?: number
   /** Unmatched rows dated before windowFrom (never hidden, only counted). */
   older_unmatched_count: number
+  /**
+   * Skattekonto only, when any: open rows dated before history_start, which
+   * no default listing shows (bucket before_history lists them), crm#1153.
+   */
+  before_history?: { count: number; total: number; history_start: string | null }
 }
 
 interface CashAccountRow {
@@ -324,7 +334,20 @@ export async function listAccountItems(
       ? status.items[options.bucket]
       : BUCKET_ORDER.flatMap((b) => status.items[b])
     await attachEntries(supabase, companyId, all)
-    return { ...page(all, limit, offset), older_unmatched_count: status.older_unmatched_count }
+    const beforeHistoryCount = status.skattekonto?.before_history_count ?? 0
+    return {
+      ...page(all, limit, offset),
+      older_unmatched_count: status.older_unmatched_count,
+      ...(beforeHistoryCount > 0
+        ? {
+            before_history: {
+              count: beforeHistoryCount,
+              total: status.skattekonto?.before_history_total ?? 0,
+              history_start: status.skattekonto?.history_start ?? null,
+            },
+          }
+        : {}),
+    }
   }
 
   if (parsed.kind === 'bank') {

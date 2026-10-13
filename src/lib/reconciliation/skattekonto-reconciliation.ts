@@ -96,6 +96,8 @@ export interface SkattekontoReconciliationItems {
   matched: ReconciliationItem[]
   ignored: ReconciliationItem[]
   upcoming: ReconciliationItem[]
+  /** Open rows dated before history_start: outside the bridge (see the engine doc). */
+  before_history: ReconciliationItem[]
 }
 
 export interface SkattekontoReconciliationResult extends ReconciliationStatus {
@@ -448,7 +450,12 @@ function inWindow(date: string, from: string | null | undefined, to: string | nu
  * older: earlier rows and verifikat belong to the prior year's
  * reconciliation, whose outcome the IB carries into opening_difference. The
  * IB itself is the opening balance, never a row to match. Without an IB both
- * sums run over all history, as before.
+ * sums run over all history, as before. Open rows from before history_start
+ * (a migrated company's last year, already in its imported books) are still
+ * listed in `before_history`, outside every sum and count: Att göra counts
+ * them as unbooked, and an agent needs their ids to link or ignore them
+ * (crm#1153). Ignoring one, or linking it to a verifikat dated before
+ * history_start, moves no figure of the bridge.
  *
  * A storno pair settles itself: in-app (reversed original + storno) and
  * imported (two posted verifikat that mirror each other, "Annullering av
@@ -499,10 +506,11 @@ export async function getSkattekontoReconciliationStatus(
   const inHistory = (r: SkattekontoRow) => !historyStart || r.transaktionsdatum >= historyStart
 
   // Linked and suggested entries: one chunked read gives link liveness and
-  // the voucher facts the proposals carry. A row before the history only
-  // needs its link (see `booked`).
+  // the voucher facts the proposals carry. A row before the history needs
+  // its link (see `booked`), or, while open, its proposal (before_history).
+  const openRow = (r: SkattekontoRow) => !r.journal_entry_id && !r.is_ignored
   const referencedIds = bookedToCutoff.flatMap((r) =>
-    (inHistory(r) ? [r.journal_entry_id, r.suggested_journal_entry_id] : [r.journal_entry_id]).filter(
+    (inHistory(r) || openRow(r) ? [r.journal_entry_id, r.suggested_journal_entry_id] : [r.journal_entry_id]).filter(
       (x): x is string => !!x,
     ),
   )
@@ -517,6 +525,13 @@ export async function getSkattekontoReconciliationStatus(
     const head = !r.is_ignored && r.journal_entry_id ? heads.get(r.journal_entry_id) : undefined
     return head?.status === 'posted' && head.entry_date >= historyStart && head.entry_date <= cutoffDate
   })
+  // The open rows the line above leaves out: before the history, no link,
+  // not ignored. The IB carries them, so they stay out of every sum below;
+  // they are only listed, because Att göra counts them as unbooked and an
+  // agent needs their ids to link or ignore them (crm#1153).
+  const beforeHistory = historyStart
+    ? bookedToCutoff.filter((r) => r.transaktionsdatum < historyStart && openRow(r))
+    : []
 
   // Ledger side. Both reads may fail independently of the row reads; a
   // failed balance read yields null balances and a null residual rather than
@@ -606,6 +621,7 @@ export async function getSkattekontoReconciliationStatus(
     matched: [],
     ignored: [],
     upcoming: [],
+    before_history: [],
   }
   let unlinkedExternalTotal = 0
   let ignoredTotal = 0
@@ -820,6 +836,43 @@ export async function getSkattekontoReconciliationStatus(
     })
   }
 
+  // Listed only: no total, count or cover below reads them. A standing
+  // proposal (often the imported verifikat that holds the event) rides
+  // along so the row can be linked to it; a verifikat some row already links
+  // to is not offered.
+  const linkedEntryIds = new Set(bookedToCutoff.flatMap((r) => (r.journal_entry_id ? [r.journal_entry_id] : [])))
+  const beforeHistoryBySuggestion = new Map<string, string[]>()
+  for (const row of beforeHistory) {
+    if (!row.suggested_journal_entry_id) continue
+    const list = beforeHistoryBySuggestion.get(row.suggested_journal_entry_id) ?? []
+    list.push(row.id)
+    beforeHistoryBySuggestion.set(row.suggested_journal_entry_id, list)
+  }
+  let beforeHistoryTotal = 0
+  for (const row of beforeHistory) {
+    const amount = roundOre(Number(row.belopp_skatteverket))
+    beforeHistoryTotal = roundOre(beforeHistoryTotal + amount)
+    if (!visible(row.transaktionsdatum)) continue
+    const suggestedHead = row.suggested_journal_entry_id ? heads.get(row.suggested_journal_entry_id) : undefined
+    pushCapped('before_history', {
+      item_id: row.id,
+      item_type: 'skattekonto_transaction',
+      side: 'external',
+      bucket: 'before_history',
+      date: row.transaktionsdatum,
+      description: row.transaktionstext,
+      amount,
+      currency: 'SEK',
+      linked_journal_entry_id: null,
+      proposal:
+        suggestedHead && suggestedHead.status !== 'reversed' && !linkedEntryIds.has(suggestedHead.id)
+          ? proposalFrom(suggestedHead, row, beforeHistoryBySuggestion.get(suggestedHead.id) ?? [row.id])
+          : null,
+      before_history: true,
+      actions: ['match', 'ignore'],
+    })
+  }
+
   // Totals and the identity.
   const allBookedTotal = booked.reduce((s, r) => roundOre(s + Number(r.belopp_skatteverket)), 0)
   const saldo = snapshot?.saldo ?? null
@@ -965,6 +1018,8 @@ export async function getSkattekontoReconciliationStatus(
       upcoming_count: upcoming.length,
       upcoming_total: upcomingTotal,
       ledger_balance_before_start: ledgerBefore,
+      before_history_count: beforeHistory.length,
+      before_history_total: beforeHistoryTotal,
       covered: cover
         ? {
             through_date: cover.through_date,

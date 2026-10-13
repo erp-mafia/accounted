@@ -44,6 +44,7 @@ import { supplierInvoiceDisplayFigures } from '@/lib/supplier-invoices/display-f
 import {
   canApproveSupplierInvoice,
   canMarkSupplierInvoiceBankEntered,
+  companyAttestsSupplierInvoices,
   isUnsettledSupplierInvoiceStatus,
 } from '@/lib/supplier-invoices/lifecycle'
 import { DetailPager } from '@/components/common/DetailPager'
@@ -501,8 +502,11 @@ export default function SupplierInvoiceDetailPage() {
   // unbooked invoices to 'overdue' just by aging, and gating on 'registered'
   // alone left them with no way through attest (#1206).
   // Kontantmetod companies never attest: the debt is not booked before payment.
+  // The same rule keeps them out of the Att göra attest count (crm#1156).
   const canApprove =
-    canApproveSupplierInvoice(invoice) && !invoice.is_credit_note && companySettings?.accounting_method !== 'cash'
+    canApproveSupplierInvoice(invoice) &&
+    !invoice.is_credit_note &&
+    companyAttestsSupplierInvoices(companySettings?.accounting_method)
   const stripText = (s: SupplierInvoiceLadderStage, state: 'done' | 'now' | 'todo'): string => {
     if (state === 'todo') return t(`strip_pending_${s}`)
     switch (s) {

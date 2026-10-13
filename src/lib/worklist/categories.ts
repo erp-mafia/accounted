@@ -32,6 +32,7 @@ import { COLLECTIONS_BATCH_TYPE } from '@/lib/collections/batch'
 import { resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
 import { listPeppolFailedInvoiceIds } from '@/lib/invoices/peppol-failed-invoices'
 import { switchStateFor } from '@/lib/bank-feed/switch-campaign'
+import { companyAttestsSupplierInvoices } from '@/lib/supplier-invoices/lifecycle'
 import type { BankSwitchDue, ExpensePayoutDue, SkattekontoPaymentDue, SuggestedMatch } from './types'
 
 // Canonical home is lib/worklist/types.ts (dependency-free, client-safe);
@@ -198,24 +199,40 @@ export async function countSuggestedMatches(
   return matches.length
 }
 
-/** Supplier invoices awaiting approval ("attestera"). */
+/**
+ * Supplier invoices awaiting approval ("attestera"). Zero for a company on
+ * kontantmetoden: it has no attest step (companyAttestsSupplierInvoices, the
+ * rule the detail page and the list read), so every invoice counted here was
+ * an item nobody could clear (crm#1156). Every surface reads this count: the
+ * Att göra row and total, the AI task list and the MCP attention resource.
+ */
 export async function countSupplierInvoicesAwaitingApproval(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<number> {
-  const { count, error } = await supabase
-    .from('supplier_invoices')
-    .select('id', { count: 'exact', head: true })
-    .eq('company_id', companyId)
-    .eq('status', 'registered')
-    // A credit note is a reversal, never a payable: there is nothing to
-    // attest on it and the detail page offers no attest button, so counting
-    // one here made an item nobody could clear. The CHECK
-    // supplier_invoices_credit_note_not_payable keeps credit notes out of
-    // 'registered' since 20260904190000; the predicate states the rule where
-    // the count is defined.
-    .eq('is_credit_note', false)
+  const [{ count, error }, { data: settings, error: settingsError }] = await Promise.all([
+    supabase
+      .from('supplier_invoices')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+      .eq('status', 'registered')
+      // A credit note is a reversal, never a payable: there is nothing to
+      // attest on it and the detail page offers no attest button, so counting
+      // one here made an item nobody could clear. The CHECK
+      // supplier_invoices_credit_note_not_payable keeps credit notes out of
+      // 'registered' since 20260904190000; the predicate states the rule where
+      // the count is defined.
+      .eq('is_credit_note', false),
+    supabase
+      .from('company_settings')
+      .select('accounting_method')
+      .eq('company_id', companyId)
+      .maybeSingle(),
+  ])
   if (error) return logAndZero('supplier_invoice_approval', companyId, error)
+  if (settingsError) return logAndZero('supplier_invoice_approval', companyId, settingsError)
+  const accountingMethod = (settings as { accounting_method?: string | null } | null)?.accounting_method
+  if (!companyAttestsSupplierInvoices(accountingMethod)) return 0
   return count ?? 0
 }
 

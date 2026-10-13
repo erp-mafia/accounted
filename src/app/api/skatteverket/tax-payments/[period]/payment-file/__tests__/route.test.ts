@@ -36,7 +36,10 @@ vi.mock('@/lib/payments/pain001-supplier', () => ({
 }))
 
 const mockResolveBatchDebtor = vi.fn()
-vi.mock('@/lib/payments/batch-service', () => ({
+vi.mock('@/lib/payments/batch-service', async (importOriginal) => ({
+  // The real ISO 2.0 rule; only the settings read is mocked.
+  paysThroughSwedbankIso2: (await importOriginal<typeof import('@/lib/payments/batch-service')>())
+    .paysThroughSwedbankIso2,
   resolveBatchDebtor: (...args: unknown[]) => mockResolveBatchDebtor(...args),
 }))
 
@@ -254,41 +257,29 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     expect(xml).toContain('<BIC>ESSESESS</BIC>')
   })
 
-  it('writes a Swedbank tax payment in Swedbank\'s ISO 2.0 form, naming sender and agreement by its ids', async () => {
-    mockResolveBatchDebtor.mockResolvedValue({
-      ok: true,
-      debtor: {
-        name: 'Test AB',
-        org_number: '5566778899',
-        iban: 'SE3580000832790000012345',
-        bic: 'SWEDSESS',
-        bankgiro: '1234567',
-        city: 'Stockholm',
-        swedbank_signer_id: '123456789ORI0001',
-        swedbank_corporate_pay_id: '123456789CPO0001',
+  // Swedbank's ISO 2.0 file service pays to bank accounts only, and
+  // Skatteverket is paid on its bankgiro (crm#1156): no file, whether the
+  // company saved its Swedbank ids or not.
+  it.each([
+    [
+      'with its Swedbank ids',
+      {
+        ok: true,
+        debtor: {
+          name: 'Test AB',
+          org_number: '5566778899',
+          iban: 'SE3580000832790000012345',
+          bic: 'SWEDSESS',
+          bankgiro: '1234567',
+          city: 'Stockholm',
+          swedbank_signer_id: '123456789ORI0001',
+          swedbank_corporate_pay_id: '123456789CPO0001',
+        },
       },
-    })
-
-    const flat = (await pain001ThroughRealGenerator()).replace(/\s+/g, '')
-
-    expect(mockGeneratePain001.mock.calls[0][0]).toMatchObject({
-      swedbank: { signerId: '123456789ORI0001', corporatePayId: '123456789CPO0001' },
-    })
-    expect(flat.match(/<InitgPty>.*?<\/InitgPty>/)![0]).toContain(
-      '<Othr><Id>123456789ORI0001</Id><SchmeNm><Cd>BANK</Cd></SchmeNm></Othr>',
-    )
-    expect(flat.match(/<Dbtr>.*?<\/Dbtr>/)![0]).toContain(
-      '<Othr><Id>123456789CPO0001</Id><SchmeNm><Cd>BANK</Cd></SchmeNm></Othr>',
-    )
-    // MIG 2.0 has no bankgiro debit: Skatteverket's bankgiro is paid from the IBAN.
-    const debtorAccounts = flat.match(/<DbtrAcct>.*?<\/DbtrAcct>/g) ?? []
-    expect(debtorAccounts).toEqual(['<DbtrAcct><Id><IBAN>SE3580000832790000012345</IBAN></Id><Ccy>SEK</Ccy></DbtrAcct>'])
-    expect(flat).toContain('<CtgyPurp><Cd>SUPP</Cd></CtgyPurp>')
-    expect(flat).toContain('<Ref>1655954700217</Ref>')
-  })
-
-  it('returns 400 asking a Swedbank company for the ids Swedbank assigns', async () => {
-    mockResolveBatchDebtor.mockResolvedValue({ ok: false, missing: 'swedbank_ids' })
+    ],
+    ['without them', { ok: false, missing: 'swedbank_ids' }],
+  ])('returns 400 for a Swedbank company %s: ISO 2.0 does not pay to a bankgiro', async (_case, resolution) => {
+    mockResolveBatchDebtor.mockResolvedValue(resolution)
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
 
@@ -301,8 +292,9 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
 
     expect(response.status).toBe(400)
     const body = await response.json()
-    expect(JSON.stringify(body)).toContain('SignerID')
-    expect(JSON.stringify(body)).toContain('Corporate Pay')
+    expect(body.error).toBe(
+      'Swedbanks ISO 2.0-avtal betalar bara till bankkonton, och Skatteverket tar bara emot betalningar på bankgiro. Betala skatten i internetbanken.',
+    )
     expect(mockGeneratePain001).not.toHaveBeenCalled()
   })
 

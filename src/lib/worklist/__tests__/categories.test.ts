@@ -103,6 +103,39 @@ describe('countSupplierInvoicesAwaitingApproval', () => {
     expect(eqCalls).toContainEqual(['status', 'registered'])
     expect(eqCalls).toContainEqual(['is_credit_note', false])
   })
+
+  it('counts nothing for a company on kontantmetoden: it has no attest step (crm#1156)', async () => {
+    // The detail page and the list never offer Attestera under
+    // kontantmetoden, so a registered invoice counted here was an Att göra
+    // item nobody could clear.
+    enqueue({ count: 2 })
+    enqueue({ data: { accounting_method: 'cash' } })
+    await expect(countSupplierInvoicesAwaitingApproval(supabase, COMPANY)).resolves.toBe(0)
+    expect(findCall('company_settings', 'select')).toEqual(['accounting_method'])
+    expect(findCalls('company_settings', 'eq')).toContainEqual(['company_id', COMPANY])
+  })
+
+  it('keeps counting under faktureringsmetoden, and for a company with no setting', async () => {
+    enqueue({ count: 2 })
+    enqueue({ data: { accounting_method: 'accrual' } })
+    await expect(countSupplierInvoicesAwaitingApproval(supabase, COMPANY)).resolves.toBe(2)
+    // The credit-note exclusion is unchanged by the method gate.
+    expect(findCalls('supplier_invoices', 'eq')).toContainEqual(['is_credit_note', false])
+    reset()
+    enqueue({ count: 2 })
+    enqueue({ data: null })
+    await expect(countSupplierInvoicesAwaitingApproval(supabase, COMPANY)).resolves.toBe(2)
+  })
+
+  it('soft-fails to 0 when either read fails', async () => {
+    enqueue({ error: { message: 'boom' } })
+    enqueue({ data: { accounting_method: 'accrual' } })
+    await expect(countSupplierInvoicesAwaitingApproval(supabase, COMPANY)).resolves.toBe(0)
+    reset()
+    enqueue({ count: 2 })
+    enqueue({ error: { message: 'settings boom' } })
+    await expect(countSupplierInvoicesAwaitingApproval(supabase, COMPANY)).resolves.toBe(0)
+  })
 })
 
 describe('countUnbookedSkattekontoRows', () => {

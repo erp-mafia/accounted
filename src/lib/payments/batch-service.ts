@@ -40,7 +40,7 @@ import {
 import { formatPayeeLabel, type SupplierPayee, type SupplierPayeeSource } from './supplier-payee'
 import { isOpenPaymentOrder, OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES } from './orders/status'
 import { generateSupplierPain001, type SupplierPain001Payment } from './pain001-supplier'
-import { resolveSwedbankFileIds } from './swedbank'
+import { resolveSwedbankFileIds, swedbankIso2PaysPayee } from './swedbank'
 import type { SupplierPaymentBatch, SupplierPaymentBatchItem } from '@/types'
 
 const log = createLogger('payments/batch-service')
@@ -82,6 +82,20 @@ export type DebtorMissing = 'iban' | 'bic' | 'org_number' | 'swedbank_ids'
 export type DebtorResolution =
   | { ok: true; debtor: BatchDebtor }
   | { ok: false; missing: DebtorMissing }
+
+/**
+ * Whether a new file for this debtor takes Swedbank's ISO 2.0 form: a
+ * Swedbank debtor with both ids, or one that lacks them (it can get no other
+ * form; resolveSwedbankFileIds). Such a file pays to bank accounts only
+ * (swedbankIso2PaysPayee, crm#1156).
+ */
+export function paysThroughSwedbankIso2(resolution: DebtorResolution): boolean {
+  if (!resolution.ok) return resolution.missing === 'swedbank_ids'
+  return Boolean(resolution.debtor.swedbank_signer_id && resolution.debtor.swedbank_corporate_pay_id)
+}
+
+/** Why an invoice is left out because the debtor's Swedbank ISO 2.0 agreement does not pay to its payee. */
+export const SWEDBANK_ISO2_GIRO_PAYEE = 'swedbank_iso2_giro_payee' as const
 
 /**
  * Resolve the paying company (pain.001 debtor) from settings, mirroring the
@@ -216,7 +230,10 @@ export interface BatchPreviewLine {
 
 export interface BatchPreview {
   eligible: BatchPreviewLine[]
-  excluded: Array<{ id: string; reason: BatchExclusionReason | 'not_found' | 'in_bank_payment' }>
+  excluded: Array<{
+    id: string
+    reason: BatchExclusionReason | 'not_found' | 'in_bank_payment' | typeof SWEDBANK_ISO2_GIRO_PAYEE
+  }>
   total: number
   debtor_ok: boolean
   debtor_missing?: DebtorMissing
@@ -245,6 +262,7 @@ export async function previewSupplierPaymentBatch(
 
   const rows = (invoices ?? []) as unknown as InvoiceRow[]
   const byId = new Map(rows.map((row) => [row.id, row]))
+  const swedbankIso2 = paysThroughSwedbankIso2(debtorResolution)
 
   const eligible: BatchPreviewLine[] = []
   const excluded: BatchPreview['excluded'] = []
@@ -265,6 +283,11 @@ export async function previewSupplierPaymentBatch(
     })
     if (!evaluation.eligible) {
       excluded.push({ id, reason: evaluation.reason })
+      continue
+    }
+    // Left out, not refused: the bank-account payees still make a file.
+    if (swedbankIso2 && !swedbankIso2PaysPayee(evaluation.payee.type)) {
+      excluded.push({ id, reason: SWEDBANK_ISO2_GIRO_PAYEE })
       continue
     }
     eligible.push({
@@ -390,6 +413,7 @@ export async function planSupplierPaymentBatch(
     return { ok: false, code: 'debtor_incomplete', missing: debtorResolution.missing }
   }
   const { debtor } = debtorResolution
+  const swedbankIso2 = paysThroughSwedbankIso2(debtorResolution)
 
   const [{ data: invoices }, activeBatchIdByInvoice, inBankPayment] = await Promise.all([
     supabase
@@ -428,6 +452,13 @@ export async function planSupplierPaymentBatch(
     })
     if (!evaluation.eligible) {
       ineligible.push({ id: invoice.id, reason: evaluation.reason })
+      continue
+    }
+    // Swedbank refuses a bankgiro or plusgiro payee in an ISO 2.0 file
+    // (crm#1156); the preview leaves such a line out, a create naming it is
+    // refused like any other ineligible line.
+    if (swedbankIso2 && !swedbankIso2PaysPayee(evaluation.payee.type)) {
+      ineligible.push({ id: invoice.id, reason: SWEDBANK_ISO2_GIRO_PAYEE })
       continue
     }
     if (evaluation.activeBatchId && !input.confirm_already_batched) {

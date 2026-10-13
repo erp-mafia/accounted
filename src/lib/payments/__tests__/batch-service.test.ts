@@ -74,6 +74,20 @@ function invoiceRow(overrides: Record<string, unknown> = {}) {
   }
 }
 
+/** The default supplier with its bankgiro swapped for another payee field. */
+function supplierPaying(payee: Record<string, unknown>) {
+  return { ...invoiceRow().supplier, bankgiro: null, ...payee }
+}
+
+/** An invoice per payee type: bankgiro (the default), plusgiro, bank account. */
+function invoicesToEveryPayeeType() {
+  return [
+    invoiceRow({ id: 'inv-bg' }),
+    invoiceRow({ id: 'inv-pg', supplier: supplierPaying({ plusgiro: '123456-6' }) }),
+    invoiceRow({ id: 'inv-acct', supplier: supplierPaying({ clearing_number: '6000', account_number: '123456789' }) }),
+  ]
+}
+
 function batchRow(overrides: Record<string, unknown> = {}): SupplierPaymentBatch {
   return {
     id: 'b0000000-0000-0000-0000-000000000001',
@@ -216,7 +230,7 @@ describe('previewSupplierPaymentBatch', () => {
   it('asks a Swedbank company for the ids Swedbank assigns without blocking the preview', async () => {
     const mock = createQueuedMockSupabase()
     mock.enqueueMany([
-      { data: [invoiceRow()] },
+      { data: invoicesToEveryPayeeType() },
       { data: [] },
       { data: companyRow },
       { data: { ...settingsRow, bic: 'SWEDSESS' } },
@@ -225,12 +239,58 @@ describe('previewSupplierPaymentBatch', () => {
     const preview = await previewSupplierPaymentBatch(
       mock.supabase as unknown as SupabaseClient,
       COMPANY_ID,
-      { ids: ['inv-1'] },
+      { ids: ['inv-bg', 'inv-pg', 'inv-acct'] },
     )
 
     expect(preview.debtor_ok).toBe(false)
     expect(preview.debtor_missing).toBe('swedbank_ids')
-    expect(preview.eligible).toHaveLength(1)
+    // The ids lead to an ISO 2.0 file only, so the giro payees are left out already.
+    expect(preview.eligible.map((line) => line.id)).toEqual(['inv-acct'])
+  })
+
+  // crm#1156: Swedbank's ISO 2.0 service pays to bank accounts only.
+  it('leaves bankgiro and plusgiro payees out of a Swedbank ISO 2.0 file and keeps the bank-account payee', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: invoicesToEveryPayeeType() },
+      { data: [] },
+      { data: companyRow },
+      { data: { ...settingsRow, bic: 'SWEDSESS', ...SWEDBANK_IDS } },
+    ])
+
+    const preview = await previewSupplierPaymentBatch(
+      mock.supabase as unknown as SupabaseClient,
+      COMPANY_ID,
+      { ids: ['inv-bg', 'inv-pg', 'inv-acct'] },
+    )
+
+    expect(preview.debtor_ok).toBe(true)
+    expect(preview.eligible.map((line) => [line.id, line.payee.type])).toEqual([['inv-acct', 'bank_account']])
+    expect(preview.excluded).toEqual([
+      { id: 'inv-bg', reason: 'swedbank_iso2_giro_payee' },
+      { id: 'inv-pg', reason: 'swedbank_iso2_giro_payee' },
+    ])
+    expect(preview.total).toBe(737.5)
+  })
+
+  it('keeps every payee type at any other bank, Swedbank ids still saved or not', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: invoicesToEveryPayeeType() },
+      { data: [] },
+      { data: companyRow },
+      { data: { ...settingsRow, ...SWEDBANK_IDS } }, // ESSESESS
+    ])
+
+    const preview = await previewSupplierPaymentBatch(
+      mock.supabase as unknown as SupabaseClient,
+      COMPANY_ID,
+      { ids: ['inv-bg', 'inv-pg', 'inv-acct'] },
+    )
+
+    expect(preview.debtor_ok).toBe(true)
+    expect(preview.eligible.map((line) => line.payee.type)).toEqual(['bankgiro', 'plusgiro', 'bank_account'])
+    expect(preview.excluded).toEqual([])
   })
 })
 
@@ -907,7 +967,7 @@ describe('createSupplierPaymentBatch', () => {
     mock.enqueueMany([
       { data: companyRow },
       { data: { ...settingsRow, bic: 'SWEDSESS', ...SWEDBANK_IDS } },
-      { data: [invoiceRow()] },
+      { data: [invoiceRow({ supplier: supplierPaying({ clearing_number: '6000', account_number: '123456789' }) })] },
       { data: [] },
       { data: [] }, // open bank payment orders: none
       { data: { ok: true, batch: batchRow() } },
@@ -928,7 +988,15 @@ describe('createSupplierPaymentBatch', () => {
 
     const file = renderSupplierPaymentBatchFile(
       batchRow({ debtor_snapshot: args.p_debtor_snapshot }),
-      [storedBankgiroItem()],
+      [
+        {
+          ...storedBankgiroItem(),
+          payee_type: 'bank_account',
+          payee_bankgiro: null,
+          payee_clearing: '6000',
+          payee_account: '123456789',
+        },
+      ],
     )
     const flat = file.content.replace(/\s+/g, '')
     const initiator = flat.match(/<InitgPty>.*?<\/InitgPty>/)![0]
@@ -937,6 +1005,36 @@ describe('createSupplierPaymentBatch', () => {
     const debtor = flat.match(/<Dbtr>.*?<\/Dbtr>/)![0]
     expect(debtor).toContain('<Othr><Id>123456789CPO0001</Id><SchmeNm><Cd>BANK</Cd></SchmeNm></Othr>')
     expect(debtor).not.toContain('5566778899')
+  })
+
+  it.each([
+    ['a bankgiro payee alone', ['inv-bg']],
+    ['a batch mixing it with a bank-account payee', ['inv-acct', 'inv-bg', 'inv-pg']],
+  ])('refuses %s in a Swedbank ISO 2.0 file before calling the RPC (crm#1156)', async (_case, ids) => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: companyRow },
+      { data: { ...settingsRow, bic: 'SWEDSESS', ...SWEDBANK_IDS } },
+      { data: invoicesToEveryPayeeType() },
+      { data: [] },
+      { data: [] }, // open bank payment orders: none
+    ])
+
+    const result = await createSupplierPaymentBatch(
+      mock.supabase as unknown as SupabaseClient,
+      COMPANY_ID,
+      USER_ID,
+      { format: 'pain001', items: ids.map((id) => ({ supplier_invoice_id: id })) },
+    )
+
+    expect(result).toEqual({
+      ok: false,
+      code: 'ineligible',
+      details: ids
+        .filter((id) => id !== 'inv-acct')
+        .map((id) => ({ id, reason: 'swedbank_iso2_giro_payee' })),
+    })
+    expect(mock.supabase.rpc).not.toHaveBeenCalled()
   })
 
   it('leaves the Swedbank ids out of another bank\'s snapshot, even when they are still saved', async () => {

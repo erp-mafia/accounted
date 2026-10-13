@@ -28,6 +28,7 @@ import {
   payeeFingerprint,
   planSupplierPaymentBatch,
   renderSupplierPaymentBatchFile,
+  SWEDBANK_ISO2_GIRO_PAYEE,
   type CreateBatchInput,
   type CreateBatchResult,
   type SupplierPaymentBatchPlan,
@@ -42,6 +43,19 @@ function createFailure(result: Exclude<CreateBatchResult, { ok: true }>): Failur
     case 'debtor_incomplete':
       return { ok: false, code: 'SI_BATCH_DEBTOR_INCOMPLETE', details: { missing: result.missing } }
     case 'ineligible':
+      // Only the Swedbank ISO 2.0 refusal says what to do instead; any other
+      // reason keeps the registry sentence that points at the details.
+      if (result.details.every((line) => line.reason === SWEDBANK_ISO2_GIRO_PAYEE)) {
+        return {
+          ok: false,
+          code: 'SI_BATCH_INELIGIBLE_INVOICE',
+          messageSv:
+            'Swedbanks ISO 2.0-avtal betalar bara till bankkonton, inte till bankgiro eller plusgiro. ' +
+            'Betalningar dit kräver Swedbanks ISO 1.0-avtal för leverantörsbetalningar, och betalfiler för det avtalet kan inte skapas här ännu. ' +
+            'Ta bort de fakturorna ur betalfilen och betala dem med Betala via banken eller i internetbanken.',
+          details: { invoices: result.details },
+        }
+      }
       return { ok: false, code: 'SI_BATCH_INELIGIBLE_INVOICE', details: { invoices: result.details } }
     case 'invalid_amount':
       return { ok: false, code: 'SI_BATCH_INVALID_AMOUNT', details: { invoices: result.details } }

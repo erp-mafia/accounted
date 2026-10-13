@@ -201,6 +201,15 @@ export const ReconciliationItemBucketSchema = z.enum([
   'matched',
   'ignored',
   'upcoming',
+  /**
+   * Skattekonto only, and only when asked for by name: open rows (not
+   * linked, not ignored) dated before skattekonto.history_start. The 1630
+   * ingående balans carries that time, so these rows are outside the bridge,
+   * its counts and the opening difference (crm#1153). Listed so an agent can
+   * link them to the imported verifikat (a standing proposal rides along) or
+   * ignore them.
+   */
+  'before_history',
 ])
 export type ReconciliationItemBucket = z.infer<typeof ReconciliationItemBucketSchema>
 
@@ -340,6 +349,13 @@ export const ReconciliationItemSchema = z.object({
    * Link it; booking it would record it a second time.
    */
   covered_by_ledger: z.boolean().optional(),
+  /**
+   * Skattekonto outside rows only (bucket before_history): the row is dated
+   * before skattekonto.history_start, so the ingående balans on 1630 carries
+   * it and it counts in no bridge line. Link it to the verifikat that holds
+   * it, or ignore it.
+   */
+  before_history: z.boolean().optional(),
   /** Bank ledger rows only: the settlement the verifikat is part of, when any. */
   settlement: ReconciliationSettlementSchema.nullable().optional(),
   actions: z.array(ReconciliationItemActionSchema),
@@ -357,6 +373,14 @@ export const SkattekontoStatusBlockSchema = z.object({
   upcoming_count: z.number().int(),
   upcoming_total: z.number(),
   ledger_balance_before_start: z.number().nullable(),
+  /**
+   * Open Skatteverket rows (not linked, not ignored) dated before
+   * history_start: what the item bucket before_history lists. Outside every
+   * bridge line and count, although Att göra counts them as unbooked
+   * (crm#1153). Set by the skattekonto engine on every status.
+   */
+  before_history_count: z.number().int().optional(),
+  before_history_total: z.number().optional(),
   /**
    * Set when unbooked Skatteverket rows are already in the ledger through
    * verifikat on 1630 that no row is linked to: every open row dated on or

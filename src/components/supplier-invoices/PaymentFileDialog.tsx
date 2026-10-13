@@ -328,6 +328,11 @@ export default function PaymentFileDialog({
                     {t(`excluded_reason_${row.reason}`)}
                   </p>
                 ))}
+                {/* What to do instead, said once for every giro payee a
+                    Swedbank ISO 2.0 file cannot carry (crm#1156). */}
+                {preview.excluded.some((row) => row.reason === 'swedbank_iso2_giro_payee') && (
+                  <p className="pt-1">{t('swedbank_iso2_giro_note')}</p>
+                )}
               </div>
             )}
 

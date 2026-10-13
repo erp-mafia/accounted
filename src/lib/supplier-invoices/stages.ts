@@ -10,6 +10,8 @@
  * step swaps its evidence, not its place.
  */
 
+import { companyAttestsSupplierInvoices } from './lifecycle'
+
 export const SUPPLIER_INVOICE_STAGES = [
   'incoming',
   'registered',
@@ -61,9 +63,9 @@ export function stageIndex(stage: SupplierInvoiceStage): number {
  * never booked before payment), so their ladder skips Attesterad.
  */
 export function stagesFor(accountingMethod: 'accrual' | 'cash' | null | undefined): readonly SupplierInvoiceLadderStage[] {
-  return accountingMethod === 'cash'
-    ? SUPPLIER_INVOICE_STAGES.filter((s) => s !== 'approved')
-    : SUPPLIER_INVOICE_STAGES
+  return companyAttestsSupplierInvoices(accountingMethod)
+    ? SUPPLIER_INVOICE_STAGES
+    : SUPPLIER_INVOICE_STAGES.filter((s) => s !== 'approved')
 }
 
 export interface InvoiceLifecycle {

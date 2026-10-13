@@ -2130,7 +2130,7 @@ describe('gnubok_create_supplier_invoice_from_inbox: the preview says whether a 
     vi.clearAllMocks()
   })
 
-  async function preview(companySettings?: Record<string, unknown>) {
+  async function stageDry(companySettings?: Record<string, unknown>) {
     const supabase = makeMock({
       inbox: {
         id: 'inbox-will',
@@ -2143,11 +2143,14 @@ describe('gnubok_create_supplier_invoice_from_inbox: the preview says whether a 
       ...(companySettings ? { companySettings } : {}),
     })
     const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
-    const result = (await tool.execute(
+    return (await tool.execute(
       { inbox_item_id: 'inbox-will', dry_run: true },
       'company-1', 'user-1', supabase,
-    )) as { preview: { will: string; will_post_journal_entry: boolean } }
-    return result.preview
+    )) as { preview: { will: string; will_post_journal_entry: boolean }; next?: { description: string } }
+  }
+
+  async function preview(companySettings?: Record<string, unknown>) {
+    return (await stageDry(companySettings)).preview
   }
 
   it('promises the registration verifikat under faktureringsmetoden', async () => {
@@ -2168,5 +2171,13 @@ describe('gnubok_create_supplier_invoice_from_inbox: the preview says whether a 
     const p = await preview({ accounting_method: 'cash' })
     expect(p.will_post_journal_entry).toBe(false)
     expect(p.will).toMatch(/kontantmetoden/)
+  })
+
+  it('sends a kontantmetoden agent to payment, never to an attest step the company does not have (crm#1156)', async () => {
+    const cash = await stageDry({ accounting_method: 'cash' })
+    expect(cash.next?.description).toMatch(/kontantmetoden has no attest step/)
+    expect(cash.next?.description).not.toMatch(/gnubok_approve_supplier_invoice/)
+    const accrual = await stageDry({ accounting_method: 'accrual', defer_invoice_booking: false })
+    expect(accrual.next?.description).toMatch(/attest via gnubok_approve_supplier_invoice/)
   })
 })

@@ -35,6 +35,7 @@ import { supplierInvoiceDisplayFigures } from '@/lib/supplier-invoices/display-f
 import {
   canApproveSupplierInvoice,
   canMarkSupplierInvoiceBankEntered,
+  companyAttestsSupplierInvoices,
 } from '@/lib/supplier-invoices/lifecycle'
 import {
   sortSupplierInvoiceList,
@@ -805,7 +806,7 @@ export default function SupplierInvoicesPage() {
                       className={cn(TD_CLASS, 'whitespace-nowrap text-right')}
                       onClick={(e) => e.stopPropagation()}
                     >
-                      {canApprove && companySettings?.accounting_method !== 'cash' && (
+                      {canApprove && companyAttestsSupplierInvoices(companySettings?.accounting_method) && (
                         <button
                           type="button"
                           className={cn(

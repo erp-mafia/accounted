@@ -141,6 +141,66 @@ describe('reconciliation MCP tools', () => {
     expect(out).toMatchObject({ count: 0, total_count: 0, has_more: false })
   })
 
+  describe('skattekonto rows before the history start (crm#1153, crm#1155)', () => {
+    const summary = { count: 34, total: -1234.5, history_start: '2026-01-01' }
+
+    it('items: the bucket is in the schema, and every skattekonto listing says where the rows are and what to do', async () => {
+      const bucket = (tool('gnubok_list_reconciliation_items').inputSchema.properties as Record<string, { enum?: string[] }>).bucket
+      expect(bucket.enum).toContain('before_history')
+      const { supabase } = createQueuedMockSupabase()
+      itemsMock.mockResolvedValue({
+        items: [], count: 0, total_count: 0, has_more: false, older_unmatched_count: 0, before_history: summary,
+      })
+      const out = (await tool('gnubok_list_reconciliation_items').execute(
+        { account_key: 'skattekonto', bucket: 'unmatched_external' },
+        COMPANY,
+        USER,
+        supabase as never,
+      )) as { before_history: Record<string, unknown> & { note: string } }
+      expect(out.before_history).toMatchObject(summary)
+      expect(out.before_history.note).toMatch(/^34 open Skatteverket row\(s\) are dated before history_start 2026-01-01/)
+      expect(out.before_history.note).toContain('Att göra')
+      expect(out.before_history.note).toContain('bucket "before_history"')
+      expect(out.before_history.note).toContain('gnubok_reconcile_match')
+      expect(out.before_history.note).toContain('do not book them')
+    })
+
+    it('items: no block when no row is before the history', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      itemsMock.mockResolvedValue({ items: [], count: 0, total_count: 0, has_more: false, older_unmatched_count: 0 })
+      const out = await tool('gnubok_list_reconciliation_items').execute(
+        { account_key: 'skattekonto' }, COMPANY, USER, supabase as never,
+      )
+      expect(out).not.toHaveProperty('before_history')
+    })
+
+    it('status: the same block next to the bridge, which is passed through untouched', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      const bridge = [{ key: 'external_balance', amount: 100 }]
+      statusMock.mockResolvedValue({
+        account_key: 'skattekonto',
+        bridge,
+        counts: { proposed: 0, unmatched_external: 0, unmatched_ledger: 0, matched: 3, ignored: 0 },
+        skattekonto: { history_start: '2026-01-01', opening_difference: 0, before_history_count: 34, before_history_total: -1234.5 },
+        items: { before_history: [] },
+      })
+      const out = (await tool('gnubok_get_reconciliation_status').execute(
+        { account_key: 'skattekonto' }, COMPANY, USER, supabase as never,
+      )) as Record<string, unknown> & { before_history: { note: string } }
+      expect(out.items).toBeUndefined()
+      expect(out.bridge).toBe(bridge)
+      expect(out.counts).toEqual({ proposed: 0, unmatched_external: 0, unmatched_ledger: 0, matched: 3, ignored: 0 })
+      expect(out.before_history).toMatchObject(summary)
+      expect(out.before_history.note).toContain('bucket "before_history"')
+
+      statusMock.mockResolvedValue({ account_key: 'skattekonto', bridge, skattekonto: { before_history_count: 0 } })
+      const none = await tool('gnubok_get_reconciliation_status').execute(
+        { account_key: 'skattekonto' }, COMPANY, USER, supabase as never,
+      )
+      expect(none).not.toHaveProperty('before_history')
+    })
+  })
+
   it('reconcile_match resolves pairs through a dry-run preview and stages them (dry_run returns staged: false)', async () => {
     const { supabase } = createQueuedMockSupabase()
     matchMock.mockResolvedValue({

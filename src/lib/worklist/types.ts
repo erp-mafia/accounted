@@ -60,7 +60,9 @@ export const WORKLIST_CATEGORIES = [
   /**
    * Supplier invoices awaiting approval ("attestera").
    * Pending:  supplier_invoices.status = 'registered' and not a credit note
-   *           (a credit note is a reversal, never a payable).
+   *           (a credit note is a reversal, never a payable), in a company
+   *           that attests at all: never under kontantmetoden, which has no
+   *           attest step (companyAttestsSupplierInvoices).
    * Done:     status moves to approved/paid/credited/….
    */
   'supplier_invoice_approval',

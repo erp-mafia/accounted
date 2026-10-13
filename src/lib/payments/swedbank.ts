@@ -11,7 +11,8 @@
  * (2026-04-23) and the ISO 2.0 example files (transfer, salary), all on
  * swedbank.se under Betala via fil, MIG. The older MIG 1.0 service (agreement
  * id 06<orgnr>Bnnn, bankgiro debit) is not produced: one file cannot satisfy
- * both, and the uploads customers make go to 2.0 (crm#1117).
+ * both, and the uploads customers make go to 2.0 (crm#1117). 2.0 pays to
+ * bank accounts only (swedbankIso2PaysPayee, crm#1156).
  */
 
 import { luhnCheckDigit } from '@/lib/bankgiro/luhn'
@@ -89,6 +90,25 @@ export function resolveSwedbankFileIds(
   const corporatePayId = settings?.swedbank_corporate_pay_id?.trim()
   if (!signerId || !corporatePayId) return { ok: false }
   return { ok: true, ids: { signerId, corporatePayId } }
+}
+
+/**
+ * Whether Swedbank's ISO 2.0 file service pays to a payee of this type: a
+ * bank account only, never a bankgiro or plusgiro number (crm#1156).
+ *
+ * Swedbank's MIG page (swedbank.se, Betala via fil, MIG) lists what each
+ * service offers. 2.0: "Överföringar mellan egna konton eller till andra
+ * konton" and "Löneutbetalningar". 1.0: "Leverantörsbetalningar" and
+ * "Bank/Plusgiro betalningar". Swedbank's support, on a supplier payment file
+ * a customer uploaded under an ISO 2.0 agreement for utbetalningar: payments
+ * to bankgiro are not allowed in that ISO 2.0 utbetalning, "only BBAN to BBAN
+ * or IBAN to IBAN". The preliminary MIG 2.0 and its Appendix v2.1.0 already
+ * describe alias payees (BGNR, PGNR) and supplier payments for a later
+ * iteration of the service; the file generator keeps that form, and this is
+ * the one place to open when Swedbank lists them under 2.0.
+ */
+export function swedbankIso2PaysPayee(payeeType: 'bankgiro' | 'plusgiro' | 'bank_account'): boolean {
+  return payeeType === 'bank_account'
 }
 
 /**

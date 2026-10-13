@@ -8,6 +8,7 @@ import {
   SWEDBANK_CORPORATE_PAY_ID_PATTERN,
   SWEDBANK_SIGNER_ID_PATTERN,
   swedbankCreditorAccount,
+  swedbankIso2PaysPayee,
 } from '../swedbank'
 
 describe('isSwedbankBic', () => {
@@ -109,5 +110,14 @@ describe('swedbankCreditorAccount', () => {
 
   it('refuses an account no file can carry, naming the payee', () => {
     expect(() => swedbankCreditorAccount('Eva', '12', '1')).toThrow(PayeeAccountError)
+  })
+})
+
+describe('swedbankIso2PaysPayee', () => {
+  // crm#1156: Swedbank's ISO 2.0 service pays bank account to bank account only.
+  it('pays to a bank account and to no bankgiro or plusgiro number', () => {
+    expect(swedbankIso2PaysPayee('bank_account')).toBe(true)
+    expect(swedbankIso2PaysPayee('bankgiro')).toBe(false)
+    expect(swedbankIso2PaysPayee('plusgiro')).toBe(false)
   })
 })

@@ -85,6 +85,22 @@ export function resolveUnsettledStatus(
 }
 
 /**
+ * True when the company has an attest step for supplier invoices at all.
+ * Kontantmetoden companies never attest: the debt is not booked before
+ * payment, so their ladder skips Attesterad (stages.ts) and no page offers the
+ * button. One rule for the pages and the Att göra count
+ * (lib/worklist countSupplierInvoicesAwaitingApproval): while the count kept
+ * its own population, cash-method companies got an attest item nobody could
+ * clear (crm#1156). A company without a setting reads as faktureringsmetoden,
+ * as it always has on the pages.
+ */
+export function companyAttestsSupplierInvoices(
+  accountingMethod: string | null | undefined,
+): boolean {
+  return accountingMethod !== 'cash'
+}
+
+/**
  * True when the invoice can still be attested. 'overdue' is included because
  * the cron puts unbooked invoices there just by aging; approved_at (not the
  * status) is what makes approval idempotent.

@@ -857,6 +857,182 @@ describe('getSkattekontoReconciliationStatus', () => {
   })
 })
 
+// crm#1153 / crm#1155. A company migrated by SIE: last year is in the ledger
+// as imported verifikat, this year opens with an IB on 1630, and the
+// Skatteverket rows from last year were never linked. The IB carries them, so
+// they belong to no bridge figure, but Att göra counts them as unbooked and an
+// agent needs their ids. All figures here are made up.
+describe('open rows before the history start (crm#1153)', () => {
+  const Z1 = head('Z1', IB_DATE, { source_type: 'opening_balance', voucher_series: 'Z' })
+  // Last year's events, imported by SIE as detail before the IB.
+  const V1 = head('V1', '2025-03-12', { source_type: 'import' })
+  const V2 = head('V2', '2025-06-12', { source_type: 'import' })
+  const V3 = head('V3', '2025-09-12', { source_type: 'import' })
+  const A1 = head('A1', '2026-02-12')
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    fetchEntryLinesMock.mockReset()
+    sumAccountBalanceMock.mockReset()
+    findOpeningBalanceFloorMock.mockReset()
+    findOpeningBalanceFloorMock.mockResolvedValue({ date: IB_DATE, amount: 4000, entryIds: ['Z1'] })
+    loadImportedStornoPairsMock.mockReset()
+    loadImportedStornoPairsMock.mockResolvedValue([])
+  })
+
+  type Variant = 'open' | 'ignored' | 'linked'
+
+  /**
+   * The same company three ways: last year's rows open, ignored, or linked
+   * to the imported verifikat that hold them. Saldo 3 750 against a 1630
+   * balance of 3 000: one unbooked row this year (500) and an opening
+   * difference of 250 explain it.
+   */
+  async function statusFor(
+    variant: Variant,
+    options: { windowFrom?: string; windowTo?: string; suggested?: boolean } = {},
+  ) {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { suggested, ...window } = options
+    const prior = (id: string, date: string, amount: number, entry: string) =>
+      row(id, date, amount, {
+        ...(variant === 'ignored' ? { is_ignored: true } : {}),
+        ...(variant === 'linked' ? { journal_entry_id: entry } : {}),
+        // What the sync's matcher leaves on an open row: the imported twin.
+        ...(suggested && variant === 'open' ? { suggested_journal_entry_id: entry } : {}),
+      })
+    enqueueBase(enqueue, {
+      saldo: 3750,
+      rows: [
+        prior('p1', '2025-03-12', 1200, 'V1'),
+        prior('p2', '2025-06-12', -800, 'V2'),
+        prior('p3', '2025-09-12', 300, 'V3'),
+        row('r1', '2026-02-12', -1000, { journal_entry_id: 'A1' }),
+        row('r2', '2026-03-12', 500),
+      ],
+      heads: variant === 'linked' || suggested ? [V1, V2, V3, A1] : [A1],
+    })
+    wholeLedger([
+      ledgerLine(V1, 1200), ledgerLine(V2, -800), ledgerLine(V3, 300),
+      ledgerLine(Z1, 4000), ledgerLine(A1, -1000),
+    ])
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY, ...window })
+    if (!s) throw new Error('expected status')
+    return s
+  }
+
+  /** Everything the page and the bridge read: all of the status but the new listing. */
+  function bridgeFigures(s: NonNullable<Awaited<ReturnType<typeof getSkattekontoReconciliationStatus>>>) {
+    const { items, skattekonto, ...rest } = s
+    const { before_history: _listed, ...otherBuckets } = items
+    void _listed
+    const { before_history_count: _count, before_history_total: _total, ...block } = skattekonto ?? {}
+    void _count
+    void _total
+    return { ...rest, items: otherBuckets, skattekonto: block }
+  }
+
+  it('lists them with the flag, outside every count, and the bridge reads as before', async () => {
+    const s = await statusFor('open')
+    expect(s.items.before_history.map((i) => i.item_id)).toEqual(['p1', 'p2', 'p3'])
+    expect(s.items.before_history[0]).toMatchObject({
+      item_type: 'skattekonto_transaction',
+      side: 'external',
+      bucket: 'before_history',
+      date: '2025-03-12',
+      amount: 1200,
+      before_history: true,
+      linked_journal_entry_id: null,
+      actions: ['match', 'ignore'],
+    })
+    expect(s.skattekonto?.before_history_count).toBe(3)
+    expect(s.skattekonto?.before_history_total).toBe(700)
+
+    // The figures the bridge and the page show, stated outright.
+    expect(s.skattekonto?.history_start).toBe(IB_DATE)
+    expect(s.ledger_balance).toBe(3000)
+    expect(s.difference).toBe(750)
+    expect(s.skattekonto?.ledger_balance_before_start).toBe(4000)
+    expect(s.skattekonto?.opening_difference).toBe(250)
+    expect(s.unexplained_difference).toBe(0)
+    expect(s.counts).toEqual({ proposed: 0, unmatched_external: 1, unmatched_ledger: 0, matched: 1, ignored: 0 })
+    expect(s.items.unmatched_external.map((i) => i.item_id)).toEqual(['r2'])
+    expect(s.items.ignored).toEqual([])
+    expect(s.older_unmatched_count).toBe(0)
+    expect(s.bridge.map((b) => [b.key, b.amount, b.count])).toEqual([
+      ['external_balance', 3750, null],
+      ['unmatched_external', -500, 1],
+      ['unmatched_ledger', 0, 0],
+      ['opening_difference', -250, null],
+      ['ledger_balance', 3000, null],
+    ])
+    expect(s.is_reconciled).toBe(false)
+    expect(s.cover).toBeNull()
+  })
+
+  it('ignoring them, or linking them to the imported verifikat, moves no figure: only the listing empties', async () => {
+    const open = await statusFor('open')
+    for (const variant of ['ignored', 'linked'] as const) {
+      const s = await statusFor(variant)
+      expect(s.items.before_history).toEqual([])
+      expect(s.skattekonto?.before_history_count).toBe(0)
+      expect(s.skattekonto?.before_history_total).toBe(0)
+      expect(bridgeFigures(s)).toEqual(bridgeFigures(open))
+    }
+  })
+
+  it('carries the standing proposal, the imported verifikat that holds the event, so it can be linked', async () => {
+    const s = await statusFor('open', { suggested: true })
+    expect(s.items.before_history.map((i) => [i.item_id, i.proposal?.journal_entry_id])).toEqual([
+      ['p1', 'V1'],
+      ['p2', 'V2'],
+      ['p3', 'V3'],
+    ])
+    expect(s.items.before_history[0].proposal).toMatchObject({ entry_date: '2025-03-12', entry_status: 'posted' })
+    // Display only: the bridge is the one without proposals.
+    expect(bridgeFigures(s)).toEqual(bridgeFigures(await statusFor('open')))
+  })
+
+  it('does not offer a verifikat another row already links to', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueBase(enqueue, {
+      saldo: 3000,
+      rows: [
+        row('p1', '2025-03-12', 1200, { journal_entry_id: 'V1' }),
+        row('p1b', '2025-03-13', 1200, { suggested_journal_entry_id: 'V1' }),
+        row('r1', '2026-02-12', -1000, { journal_entry_id: 'A1' }),
+      ],
+      heads: [V1, A1],
+    })
+    wholeLedger([ledgerLine(V1, 1200), ledgerLine(Z1, 4000), ledgerLine(A1, -1000)])
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
+    if (!s) throw new Error('expected status')
+    expect(s.items.before_history.map((i) => [i.item_id, i.proposal])).toEqual([['p1b', null]])
+  })
+
+  it('a window scopes the listing, never the count, and adds nothing to older_unmatched_count', async () => {
+    const s = await statusFor('open', { windowFrom: '2026-01-01', windowTo: '2026-12-31' })
+    expect(s.items.before_history).toEqual([])
+    expect(s.skattekonto?.before_history_count).toBe(3)
+    expect(s.skattekonto?.before_history_total).toBe(700)
+    expect(s.older_unmatched_count).toBe(0)
+    expect(s.counts.unmatched_external).toBe(1)
+  })
+
+  it('without an IB the history starts at the first row, so nothing is before it', async () => {
+    findOpeningBalanceFloorMock.mockResolvedValue(null)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueBase(enqueue, { saldo: 700, rows: [row('p1', '2025-03-12', 1200), row('p2', '2025-06-12', -500)] })
+    wholeLedger([])
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
+    if (!s) throw new Error('expected status')
+    expect(s.skattekonto?.history_start).toBe('2025-03-12')
+    expect(s.items.before_history).toEqual([])
+    expect(s.skattekonto?.before_history_count).toBe(0)
+    expect(s.counts.unmatched_external).toBe(2)
+  })
+})
+
 // crm#1043. The fetched history starts mid-year (Skatteverket returns a
 // limited window), and the whole year's skattekonto is booked as ONE
 // summarised year-end verifikat dated 31 December: one line per counter
