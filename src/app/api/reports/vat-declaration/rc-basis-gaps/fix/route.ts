@@ -2,11 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
-import {
-  errorResponse,
-  errorResponseFromCode,
-  extractBookkeepingDetails,
-} from '@/lib/errors/get-structured-error'
+import { errorResponse, errorResponseFromCode, extractBookkeepingDetails, isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 import {
   BookkeepingDatabaseError,
   CannotCorrectNonPostedError,
@@ -100,13 +96,6 @@ function pickBasisAccount(
         : service ? 'domestic_services' : 'domestic_goods'
   return kind ? vatBasisAccount(kind, OUTPUT_ACCOUNT_RATE[outputAccount]) : null
 }
-
-/**
- * The database's refusals of a write behind a lock, in the triggers' own
- * words: a locked or closed period (enforce_period_lock) and the company's
- * lock date (enforce_company_lock_date). The user's state, not a server fault.
- */
-const LOCK_REFUSAL = /locked\/closed fiscal period|Bokföringen är låst/i
 
 /** "25 %", or "25 % och 12 %" for a verifikat with fiktiv moms at two sats. */
 function satsLabel(rates: RcBasisAtRate[]): string {
@@ -328,7 +317,7 @@ export const POST = withRouteContext(
       // database error: answer it as the lock it is, with its own sentence.
       // The English stays the registry's for PERIOD_LOCKED: the error's own
       // English is the database failure's, not the lock's.
-      if (err instanceof Error && LOCK_REFUSAL.test(err.message)) {
+      if (isPeriodLockRefusal(err)) {
         return errorResponseFromCode('PERIOD_LOCKED', log, {
           requestId,
           messageSv: getUserErrorMessage(err),

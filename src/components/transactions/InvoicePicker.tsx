@@ -10,7 +10,7 @@ import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import { Search, FileText, Loader2, Landmark } from 'lucide-react'
 import { useCompany } from '@/contexts/CompanyContext'
-import type { Invoice, Customer, DeductionType, SupplierInvoice, Supplier } from '@/types'
+import type { Invoice, Customer, SupplierInvoice, Supplier } from '@/types'
 import { DEDUCTION_TYPE_LABEL_KEYS } from '@/lib/invoices/rot-rut-rules'
 import type { PotentialRotRutPayoutRequest, TransactionWithInvoice } from './transaction-types'
 import {
@@ -18,10 +18,8 @@ import {
   normalizeCurrency,
   rankInvoicesByAmountProximity,
 } from './invoice-candidate-ranking'
-import {
-  expectedRotRutPayoutAmount,
-  OPEN_ROT_RUT_PAYOUT_STATUSES,
-} from '@/lib/invoices/rot-rut-payout-matching'
+import { expectedRotRutPayoutAmount } from '@/lib/invoices/rot-rut-payout-matching'
+import { loadOpenRotRutPayoutRequests } from '@/lib/invoices/open-rot-rut-payout-requests'
 import { PICKER_LIMIT, loadOpenInvoicesForMatch } from '@/lib/invoices/open-invoice-search'
 import { invoiceStatusDisplay } from '@/lib/invoices/status-display'
 import { supplierInvoiceStatusDisplay } from '@/lib/supplier-invoices/status-display'
@@ -67,20 +65,6 @@ function rowNumber(row: PickerRow): string | null {
 
 function rowCounterparty(row: PickerRow): string | null {
   return 'supplier_invoice_number' in row ? (row.supplier?.name ?? null) : (row.customer?.name ?? null)
-}
-
-type RotRutRequestRow = {
-  id: string
-  name: string
-  deduction_type: DeductionType
-  status: string
-  requested_total: number | string
-  decided_total: number | string | null
-  settlement_journal_entry_id: string | null
-  items?: Array<{
-    requested_amount: number | string
-    invoice?: { invoice_number: string | null } | { invoice_number: string | null }[] | null
-  }> | null
 }
 
 export default function InvoicePicker(props: InvoicePickerProps) {
@@ -168,31 +152,9 @@ export default function InvoicePicker(props: InvoicePickerProps) {
     const companyId = company.id
     let cancelled = false
     async function loadRotRutRequests() {
-      const { data: requests } = await supabase
-        .from('rot_rut_payout_requests')
-        .select(
-          'id, name, deduction_type, status, requested_total, decided_total, settlement_journal_entry_id, items:rot_rut_payout_request_items(requested_amount, invoice:invoices(invoice_number))',
-        )
-        .eq('company_id', companyId)
-        .in('status', [...OPEN_ROT_RUT_PAYOUT_STATUSES])
-        .is('settlement_journal_entry_id', null)
-        .order('created_at', { ascending: false })
+      const { requests } = await loadOpenRotRutPayoutRequests(supabase, companyId)
       if (cancelled) return
-      setRotRutRequests(
-        ((requests as RotRutRequestRow[] | null) ?? []).map((req) => ({
-          id: req.id,
-          name: req.name,
-          deduction_type: req.deduction_type,
-          status: req.status,
-          requested_total: req.requested_total,
-          decided_total: req.decided_total,
-          settlement_journal_entry_id: req.settlement_journal_entry_id,
-          invoices: (req.items ?? []).map((item) => {
-            const inv = Array.isArray(item.invoice) ? item.invoice[0] : item.invoice
-            return { invoice_number: inv?.invoice_number ?? null, requested_amount: item.requested_amount }
-          }),
-        })),
-      )
+      setRotRutRequests(requests)
     }
     loadRotRutRequests()
     return () => {

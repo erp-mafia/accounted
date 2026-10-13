@@ -115,7 +115,7 @@ describe('gnubok_update_customer: validation and staging', () => {
         'user-1',
         supabase as never,
       ),
-    ).rejects.toThrow(/not found/i)
+    ).rejects.toMatchObject({ code: 'CUSTOMER_NOT_FOUND' })
   })
 
   it('returns a merged dry-run preview without staging', async () => {
@@ -334,7 +334,7 @@ describe('gnubok_update_customer: personal_number', () => {
         'user-1',
         supabase as never,
       ),
-    ).rejects.toThrow(/individual/)
+    ).rejects.toMatchObject({ code: 'CUSTOMER_PERSONAL_NUMBER_NOT_ALLOWED' })
     expect(supabase.from).toHaveBeenCalledTimes(1)
   })
 
@@ -353,7 +353,7 @@ describe('gnubok_update_customer: personal_number', () => {
         'user-1',
         supabase as never,
       ),
-    ).rejects.toThrow(/individual/)
+    ).rejects.toMatchObject({ code: 'CUSTOMER_PERSONAL_NUMBER_NOT_ALLOWED' })
   })
 
   it('rejects a malformed personal_number before querying the database', async () => {
@@ -366,7 +366,7 @@ describe('gnubok_update_customer: personal_number', () => {
         'user-1',
         supabase as never,
       ),
-    ).rejects.toThrow(/personnummer/)
+    ).rejects.toThrow(/personal_number/)
     expect(supabase.from).not.toHaveBeenCalled()
   })
 
@@ -480,7 +480,7 @@ describe('gnubok_update_customer: org_number on an individual', () => {
         'user-1',
         supabase as never,
       ),
-    ).rejects.toThrow(/no org number/)
+    ).rejects.toMatchObject({ code: 'CUSTOMER_ORG_NUMBER_ON_INDIVIDUAL' })
     expect(supabase.from).toHaveBeenCalledTimes(1)
   })
 
@@ -495,6 +495,6 @@ describe('gnubok_update_customer: org_number on an individual', () => {
         'user-1',
         supabase as never,
       ),
-    ).rejects.toThrow(/no org number/)
+    ).rejects.toMatchObject({ code: 'CUSTOMER_ORG_NUMBER_ON_INDIVIDUAL' })
   })
 })

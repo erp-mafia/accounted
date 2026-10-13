@@ -30,6 +30,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { deauthorizeAccount } from '../lib/connect'
 import { syncStripeBalanceTransactions } from '../lib/transaction-sync'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
 function findRoute(method: string, path: string) {
@@ -65,6 +66,17 @@ function makeContext(supabase: unknown): ExtensionContext {
 }
 
 const USER = { id: 'user-1', is_anonymous: false }
+
+/**
+ * The next service client the route creates, answering `results` in order:
+ * the shared feed routes look the connection up on the service role.
+ */
+function serviceReturning(...results: Array<{ data?: unknown; error?: unknown }>) {
+  const service = createQueuedMockSupabase()
+  for (const result of results) service.enqueue(result)
+  vi.mocked(createServiceClientNoCookies).mockReturnValueOnce(service.supabase as never)
+  return service
+}
 
 describe('stripe extension routes', () => {
   beforeEach(() => {
@@ -286,9 +298,9 @@ describe('stripe POST /backfill', () => {
   })
 
   it('returns 404 without an active connection', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { supabase } = createQueuedMockSupabase()
     supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
-    enqueue({ data: null })
+    serviceReturning({ data: [] })
     const res = await findRoute('POST', '/backfill').handler(
       makeRequest('POST', { from: '2026-01-01' }),
       makeContext(supabase),
@@ -300,8 +312,8 @@ describe('stripe POST /backfill', () => {
   it('moves the cursor to the chosen date and syncs from there', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
-    enqueue({ data: ACTIVE })
-    enqueue({ data: [] }) // cursor update
+    const service = serviceReturning({ data: [ACTIVE] })
+    enqueue({ data: [] }) // cursor update (session client)
     vi.mocked(syncStripeBalanceTransactions).mockResolvedValue({
       fetched: 6,
       imported: 9,
@@ -317,10 +329,14 @@ describe('stripe POST /backfill', () => {
     expect(body.from).toBe('2026-01-01T00:00:00.000Z')
     expect(body.transactions.imported).toBe(9)
     const updates = findCalls('stripe_connections', 'update')
-    expect(updates[0][0]).toEqual({ last_balance_txn_synced_at: '2026-01-01T00:00:00.000Z' })
+    // The backfill clears the last sync error like every other feed's does.
+    expect(updates[0][0]).toEqual({
+      last_balance_txn_synced_at: '2026-01-01T00:00:00.000Z',
+      error_message: null,
+    })
     // The sync must see the moved cursor, not the stored one, and run on the
     // service client like the manual sync.
-    expect(vi.mocked(syncStripeBalanceTransactions).mock.calls[0][0]).toEqual({ service: true })
+    expect(vi.mocked(syncStripeBalanceTransactions).mock.calls[0][0]).toBe(service.supabase)
     expect(vi.mocked(syncStripeBalanceTransactions).mock.calls[0][1].last_balance_txn_synced_at).toBe(
       '2026-01-01T00:00:00.000Z',
     )

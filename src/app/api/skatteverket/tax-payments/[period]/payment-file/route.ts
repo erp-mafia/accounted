@@ -7,6 +7,7 @@ import { paysThroughSwedbankIso2, resolveBatchDebtor } from '@/lib/payments/batc
 import { resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
 import { roundOre } from '@/lib/money'
+import { fileResponse } from '@/lib/api/file-response'
 
 /**
  * Generate the payment file for paying skatt + arbetsgivaravgifter for a
@@ -253,12 +254,7 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
 
   // Buffer is not assignable to BodyInit under the strict build tsconfig
   // (Buffer<ArrayBufferLike>); the repo convention is a Uint8Array view.
-  return new Response(new Uint8Array(fileContent), {
-    headers: {
-      'Content-Type': contentType,
-      'Content-Disposition': `attachment; filename="${filename}"`,
-    },
-  })
+  return fileResponse(new Uint8Array(fileContent), { filename: filename, contentType: contentType })
   },
   { requireWrite: true },
 )

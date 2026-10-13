@@ -5,35 +5,48 @@ import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { guardSandbox, sandboxBlockedResponse } from '@/lib/sandbox/guard'
-import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { resolveOAuthOrigin } from '@/lib/auth/oauth-flows'
-import { isZettleConfigured } from './lib/credentials'
+import { feedConnectorRoutes, type FeedConnectorSpec } from '@/lib/feed-sync/connector-routes'
+import { isZettleConfigured, refreshTokenOf } from './lib/credentials'
 import { buildAuthorizeUrl, disconnectApplication, refreshAccessToken } from './lib/oauth'
-import { refreshTokenOf } from './lib/credentials'
-import { parseBackfillFrom, syncZettlePurchases } from './lib/order-sync'
-import type { BackfillDateError } from './lib/order-sync'
+import { syncZettlePurchases, type ZettleSyncSummary } from './lib/order-sync'
 import { MAX_BACKFILL_YEARS } from './types'
-import type { ZettleConnection, ZettleStatusResponse } from './types'
+import type { ZettleConnection } from './types'
 
 const RATE_LIMIT_CONNECT = { maxRequests: 10, windowMs: 60_000 }
-const RATE_LIMIT_DISCONNECT = { maxRequests: 10, windowMs: 60_000 }
-const RATE_LIMIT_SYNC = { maxRequests: 10, windowMs: 60_000 }
-const RATE_LIMIT_BACKFILL = { maxRequests: 5, windowMs: 60_000 }
-
-/** Wall clock a single manual run may spend before it stops and resumes later. */
-const MANUAL_SYNC_BUDGET_MS = 240_000
-
-const BACKFILL_DATE_ERRORS: Record<BackfillDateError, string> = {
-  invalid: 'Ange ett giltigt startdatum (ÅÅÅÅ-MM-DD).',
-  future: 'Startdatumet kan inte ligga i framtiden.',
-  too_old: `Startdatumet kan vara högst ${MAX_BACKFILL_YEARS} år tillbaka.`,
-}
 
 const NOT_CONFIGURED_MESSAGE =
   'Zettle-integrationen är inte konfigurerad på den här installationen.'
 
-const STATUS_COLUMNS =
-  'id, status, organization_uuid, organization_name, currency, error_message, connected_at, transaction_sync_enabled, last_order_synced_at'
+/**
+ * Status, sync, backfill, the nightly toggle and disconnect: the shared feed
+ * routes (lib/feed-sync/connector-routes). Disconnect revokes the app at
+ * Zettle first, which needs the encrypted refresh token: the lookup runs on
+ * the service role.
+ */
+export const zettleFeed: FeedConnectorSpec<ZettleConnection, ZettleSyncSummary> = {
+  extensionId: 'zettle',
+  table: 'zettle_connections',
+  capability: CAPABILITY.zettle_sync,
+  cursorColumn: 'last_order_synced_at',
+  maxBackfillYears: MAX_BACKFILL_YEARS,
+  notConnectedMessage: 'Inget anslutet Zettle-konto.',
+  statusColumns:
+    'id, status, organization_uuid, organization_name, currency, error_message, connected_at, transaction_sync_enabled, last_order_synced_at',
+  isConfigured: isZettleConfigured,
+  sync: (supabase, connection, deadlineMs) => syncZettlePurchases(supabase, connection, undefined, deadlineMs),
+  disconnect: {
+    columns: 'organization_uuid, refresh_token_encrypted',
+    lookupWithServiceRole: true,
+    revokeRemote: async (connection) => {
+      if (!connection.refresh_token_encrypted) return
+      const tokens = await refreshAccessToken(refreshTokenOf(connection as Pick<ZettleConnection, 'refresh_token_encrypted'>))
+      await disconnectApplication(tokens.access_token)
+    },
+    clearColumns: ['refresh_token_encrypted', 'oauth_state'],
+    eventIdentity: (connection) => ({ organizationUuid: (connection.organization_uuid as string | null) ?? null }),
+  },
+}
 
 async function guardConnectPreconditions(ctx: ExtensionContext): Promise<NextResponse | null> {
   if (ctx.isAnonymous) return sandboxBlockedResponse()
@@ -43,25 +56,6 @@ async function guardConnectPreconditions(ctx: ExtensionContext): Promise<NextRes
 }
 
 export const zettleApiRoutes: ApiRouteDefinition[] = [
-  {
-    method: 'GET',
-    path: '/status',
-    handler: async (_request: Request, ctx: ExtensionContext) => {
-      const { data: rows } = await ctx.supabase
-        .from('zettle_connections')
-        .select(STATUS_COLUMNS)
-        .eq('company_id', ctx.companyId)
-        .order('created_at', { ascending: false })
-        .limit(10)
-
-      const connection = rows?.find((r) => r.status === 'active') ?? rows?.[0] ?? null
-      const payload: ZettleStatusResponse = {
-        configured: isZettleConfigured(),
-        connection,
-      }
-      return NextResponse.json(payload)
-    },
-  },
   {
     method: 'POST',
     path: '/connect',
@@ -139,293 +133,5 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
       }
     },
   },
-  {
-    method: 'POST',
-    path: '/sync',
-    handler: async (_request: Request, ctx: ExtensionContext) => {
-      const log = ctx.log
-      const capabilityBlocked = await requireCapability(
-        ctx.supabase,
-        ctx.companyId,
-        CAPABILITY.zettle_sync,
-      )
-      if (capabilityBlocked) return capabilityBlocked
-
-      const rl = await checkRateLimit({
-        prefix: 'zettle:sync',
-        identifier: ctx.userId,
-        ...RATE_LIMIT_SYNC,
-      })
-      if (!rl.ok) return rl.response!
-
-      // The sync decrypts the stored refresh token, which end-user roles
-      // cannot read, so the lookup runs on the service role, scoped to the
-      // caller's active company (the dispatcher resolved it from their
-      // membership). The sync itself runs there too.
-      const serviceClient = createServiceClientNoCookies()
-      const { data: connection } = await serviceClient
-        .from('zettle_connections')
-        .select('*')
-        .eq('company_id', ctx.companyId)
-        .eq('status', 'active')
-        .maybeSingle()
-
-      if (!connection) {
-        return NextResponse.json({ error: 'Inget anslutet Zettle-konto.' }, { status: 404 })
-      }
-
-      try {
-        const summary = await syncZettlePurchases(
-          serviceClient,
-          connection as ZettleConnection,
-          undefined,
-          Date.now() + MANUAL_SYNC_BUDGET_MS,
-        )
-        if (summary.locked) {
-          return NextResponse.json(
-            { error: 'En synkronisering pågår redan. Försök igen om en stund.' },
-            { status: 409 },
-          )
-        }
-        return NextResponse.json({ success: true, transactions: summary })
-      } catch (error) {
-        log.error('[zettle] Manual sync failed', {
-          message: error instanceof Error ? error.message : String(error),
-          connection_id: connection.id,
-        })
-        return NextResponse.json(
-          { error: 'Synkroniseringen misslyckades. Försök igen.' },
-          { status: 502 },
-        )
-      }
-    },
-  },
-  {
-    method: 'POST',
-    path: '/backfill',
-    handler: async (request: Request, ctx: ExtensionContext) => {
-      const log = ctx.log
-      const capabilityBlocked = await requireCapability(
-        ctx.supabase,
-        ctx.companyId,
-        CAPABILITY.zettle_sync,
-      )
-      if (capabilityBlocked) return capabilityBlocked
-
-      const rl = await checkRateLimit({
-        prefix: 'zettle:backfill',
-        identifier: ctx.userId,
-        ...RATE_LIMIT_BACKFILL,
-      })
-      if (!rl.ok) return rl.response!
-
-      const body = (await request.json().catch(() => ({}))) as { from?: unknown }
-      const parsed = parseBackfillFrom(body.from)
-      if ('error' in parsed) {
-        return NextResponse.json(
-          { error: BACKFILL_DATE_ERRORS[parsed.error] },
-          { status: 400 },
-        )
-      }
-
-      // Service role for the same reason as /sync: the run needs the
-      // encrypted refresh token, which end-user roles cannot read.
-      const serviceClient = createServiceClientNoCookies()
-      const { data: connection } = await serviceClient
-        .from('zettle_connections')
-        .select('*')
-        .eq('company_id', ctx.companyId)
-        .eq('status', 'active')
-        .maybeSingle()
-
-      if (!connection) {
-        return NextResponse.json({ error: 'Inget anslutet Zettle-konto.' }, { status: 404 })
-      }
-
-      // The cursor is the start date, so a backfill is just the cursor moved
-      // back: no second column that could disagree with it. The run pushes it
-      // forward to now again once the window is exhausted, and the ingest
-      // upserts by external_id, so re-reading an already imported range
-      // changes nothing.
-      const previousCursor = (connection as ZettleConnection).last_order_synced_at
-      const { error: cursorError } = await ctx.supabase
-        .from('zettle_connections')
-        .update({ last_order_synced_at: parsed.iso, error_message: null })
-        .eq('id', connection.id)
-        .eq('company_id', ctx.companyId)
-        .eq('status', 'active')
-      if (cursorError) {
-        log.error('[zettle] Failed to move purchase cursor for backfill', {
-          message: cursorError.message,
-          connection_id: connection.id,
-        })
-        return NextResponse.json(
-          { error: 'Kunde inte spara startdatumet. Försök igen.' },
-          { status: 500 },
-        )
-      }
-
-      try {
-        const summary = await syncZettlePurchases(
-          serviceClient,
-          { ...(connection as ZettleConnection), last_order_synced_at: parsed.iso },
-          undefined,
-          Date.now() + MANUAL_SYNC_BUDGET_MS,
-        )
-        if (summary.locked) {
-          // Nothing ran, and the concurrent run holds its own cursor in
-          // memory: leaving the date in place would let it overwrite the
-          // backfill silently. Put the cursor back and let the user retry.
-          await ctx.supabase
-            .from('zettle_connections')
-            .update({ last_order_synced_at: previousCursor })
-            .eq('id', connection.id)
-            .eq('company_id', ctx.companyId)
-          return NextResponse.json(
-            { error: 'En synkronisering pågår redan. Försök igen om en stund.' },
-            { status: 409 },
-          )
-        }
-        return NextResponse.json({ success: true, from: parsed.iso, transactions: summary })
-      } catch (error) {
-        // The cursor stays at the chosen date on purpose: the next run
-        // resumes the backfill from where this one failed.
-        log.error('[zettle] Backfill sync failed', {
-          message: error instanceof Error ? error.message : String(error),
-          connection_id: connection.id,
-        })
-        return NextResponse.json(
-          { error: 'Synkroniseringen misslyckades. Försök igen.' },
-          { status: 502 },
-        )
-      }
-    },
-  },
-  {
-    method: 'POST',
-    path: '/transaction-sync',
-    handler: async (request: Request, ctx: ExtensionContext) => {
-      const capabilityBlocked = await requireCapability(
-        ctx.supabase,
-        ctx.companyId,
-        CAPABILITY.zettle_sync,
-      )
-      if (capabilityBlocked) return capabilityBlocked
-
-      const rl = await checkRateLimit({
-        prefix: 'zettle:transaction-sync-toggle',
-        identifier: ctx.userId,
-        ...RATE_LIMIT_SYNC,
-      })
-      if (!rl.ok) return rl.response!
-
-      const body = (await request.json().catch(() => ({}))) as { enabled?: unknown }
-      if (typeof body.enabled !== 'boolean') {
-        return NextResponse.json({ error: 'enabled (boolean) krävs.' }, { status: 400 })
-      }
-
-      const { data: updated, error: updateError } = await ctx.supabase
-        .from('zettle_connections')
-        .update({ transaction_sync_enabled: body.enabled })
-        .eq('company_id', ctx.companyId)
-        .eq('status', 'active')
-        .select('id')
-
-      if (updateError) {
-        return NextResponse.json(
-          { error: 'Kunde inte spara inställningen. Försök igen.' },
-          { status: 500 },
-        )
-      }
-      if (!updated || updated.length === 0) {
-        return NextResponse.json({ error: 'Inget anslutet Zettle-konto.' }, { status: 404 })
-      }
-      return NextResponse.json({ success: true, enabled: body.enabled })
-    },
-  },
-  {
-    method: 'DELETE',
-    path: '/disconnect',
-    handler: async (request: Request, ctx: ExtensionContext) => {
-      const log = ctx.log
-      const rl = await checkRateLimit({
-        prefix: 'zettle:disconnect',
-        identifier: ctx.userId,
-        ...RATE_LIMIT_DISCONNECT,
-      })
-      if (!rl.ok) return rl.response!
-
-      // The remote revoke needs the encrypted refresh token, which end-user
-      // roles cannot read: look the row up on the service role, scoped to the
-      // caller's active company. The local revoke below stays on the session
-      // client, so RLS and the writer-role trigger still gate it.
-      const body = (await request.json().catch(() => ({}))) as { connection_id?: string }
-      const base = createServiceClientNoCookies()
-        .from('zettle_connections')
-        .select('id, status, organization_uuid, refresh_token_encrypted')
-        .eq('company_id', ctx.companyId)
-      const query = body.connection_id
-        ? base.eq('id', body.connection_id).limit(1)
-        : base.neq('status', 'revoked').order('created_at', { ascending: false }).limit(1)
-      const { data: rows, error: findError } = await query
-      const connection = rows?.[0]
-
-      if (findError || !connection) {
-        return NextResponse.json({ error: 'Connection not found' }, { status: 404 })
-      }
-
-      if (connection.refresh_token_encrypted) {
-        try {
-          const tokens = await refreshAccessToken(refreshTokenOf(connection))
-          await disconnectApplication(tokens.access_token)
-        } catch (err) {
-          log.warn('[zettle] Remote disconnect failed; continuing local revoke', {
-            message: err instanceof Error ? err.message : String(err),
-            connection_id: connection.id,
-          })
-        }
-      }
-
-      const { error: updateError } = await ctx.supabase
-        .from('zettle_connections')
-        .update({
-          status: 'revoked',
-          refresh_token_encrypted: null,
-          oauth_state: null,
-          disconnected_at: new Date().toISOString(),
-        })
-        .eq('id', connection.id)
-        .eq('company_id', ctx.companyId)
-
-      if (updateError) {
-        log.error('[zettle] Failed to mark connection revoked', {
-          message: updateError.message,
-          connection_id: connection.id,
-        })
-        return NextResponse.json(
-          { error: 'Kunde inte koppla från. Försök igen.' },
-          { status: 500 },
-        )
-      }
-
-      if (ctx.emit) {
-        try {
-          await ctx.emit({
-            type: 'zettle.disconnected',
-            payload: {
-              connectionId: connection.id,
-              organizationUuid: connection.organization_uuid ?? null,
-              reason: 'user',
-              userId: ctx.userId,
-              companyId: ctx.companyId,
-            },
-          })
-        } catch {
-          // Audit event failure must not block disconnect.
-        }
-      }
-
-      return NextResponse.json({ success: true })
-    },
-  },
+  ...feedConnectorRoutes(zettleFeed),
 ]

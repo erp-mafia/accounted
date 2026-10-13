@@ -182,24 +182,16 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { expandParty } from '@/lib/parties/party-api'
 import { listForCompany as listCashAccountsForCompany } from '@/lib/cash-accounts/service'
 import {
-  isOrgNumberRefusedOnIndividual,
-  isPersonalNumberOrgNumberDisallowed,
   normalizeReroutedPersonalNumber,
   orgNumberHoldsPersonalNumber,
   orgNumberIsPersonalIdentifier,
-  personalNumberDigits,
 } from '@/lib/customers/personal-number-shape'
-import {
-  PERSONAL_NUMBER_PLAINTEXT_RE,
-  isMaskedPersonalNumber,
-  maskCustomerPersonalNumber,
-} from '@/lib/customers/mask-personal-number'
+import { isMaskedPersonalNumber, maskCustomerPersonalNumber } from '@/lib/customers/mask-personal-number'
 import {
   encryptCustomerPersonalNumber,
   maskStoredCustomerPersonalNumber,
 } from '@/lib/customers/protect-personal-number'
-import { resolveDefaultPaymentTerms } from '@/lib/customers/default-payment-terms'
-import { CustomerRecordSchema, readCustomerRecord } from '@/lib/customers/customer-record'
+import { CustomerRecordSchema, readCustomerRecord, toCustomerRecord } from '@/lib/customers/customer-record'
 import { SupplierRecordSchema, readSupplierRecord } from '@/lib/suppliers/supplier-record'
 import { fetchEntryLines, fetchLinesByEntryIds, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { generateARLedger } from '@/lib/reports/ar-ledger'
@@ -251,12 +243,6 @@ import {
   normalizeVatRateToFraction,
   treatmentDeductsInputVat,
 } from '@/lib/vat/supplier-invoice-line-checks'
-import {
-  COUNTRY_CONSISTENCY_MESSAGES,
-  checkCountryConsistency,
-  defaultCountryForParty,
-  normalizeCountryCode,
-} from '@/lib/vat/country-codes'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { CreateDimensionValueParamsSchema } from '@/lib/pending-operations/schemas/dimension-value'
 import { RetagLineDimensionsParamsSchema, RETAG_MAX_LINES } from '@/lib/pending-operations/schemas/retag-line-dimensions'
@@ -266,7 +252,7 @@ import {
   sameDimensions,
   storedDimensions,
 } from '@/lib/dimensions/retag-service'
-import { UpdateCustomerParamsSchema } from '@/lib/pending-operations/schemas/customer'
+import { createCustomer, updateCustomer } from '@/lib/customers/customer-commands'
 import {
   CreateRecurringScheduleParamsSchema,
   UpdateRecurringScheduleParamsSchema,
@@ -415,6 +401,7 @@ import {
 } from '@/lib/invoices/rot-rut-payout-matching'
 import {
   CreateArticleSchema,
+  CreateCustomerSchema,
   CreateInvoiceFromSalesOrderSchema,
   CreateSupplierSchema,
   CreateSalesOrderSchema,
@@ -423,6 +410,7 @@ import {
   SalesOrderTransitionSchema,
   VoucherLineVatCodeSchema,
   UpdateArticleSchema,
+  UpdateCustomerSchema,
 } from '@/lib/api/schemas'
 import { decorate as decorateSalesOrder, fetchInvoicedQuantities, loadSalesOrder } from '@/lib/sales-orders/load'
 import { normalizeSalesOrderLines } from '@/lib/sales-orders/lines'
@@ -1825,6 +1813,30 @@ interface StageRequest extends StageOptions {
  */
 function stage({ supabase, companyId, userId, type, title, params, preview, actor, next, ...options }: StageRequest) {
   return stagePendingOperation(supabase, companyId, userId, type, title, params, preview, actor, next, options)
+}
+
+/** The customer tools' wire names for the schema fields they map onto. */
+const CUSTOMER_WIRE_FIELDS: Record<string, string> = { address_line1: 'address', default_payment_terms: 'payment_terms' }
+
+function wireCustomerFields<T extends { field: string }>(issues: T[]): T[] {
+  return issues.map((issue) => ({ ...issue, field: CUSTOMER_WIRE_FIELDS[issue.field] ?? issue.field }))
+}
+
+/**
+ * A customer row for a staged preview: the record's fields
+ * (lib/customers/customer-record.ts) with the personnummer under its masked
+ * key, which staging-pii-guard allows; the row's id as customer_id.
+ */
+function stagedCustomerPreview(row: Record<string, unknown>): Record<string, unknown> {
+  const { id, personal_number: personalNumber, party_id: _partyId, archived_at: _archivedAt, created_at: _createdAt, updated_at: _updatedAt, ...rest } =
+    toCustomerRecord(row)
+  return { ...(id ? { customer_id: id } : {}), ...rest, personal_number_masked: personalNumber ?? null }
+}
+
+/** A staged update's changed fields, the personnummer under its masked key. */
+function stagedCustomerChanges(changes: Record<string, unknown>): Record<string, unknown> {
+  const { personal_number: personalNumber, ...rest } = changes
+  return personalNumber === undefined ? rest : { ...rest, personal_number_masked: personalNumber }
 }
 
 /** The dry_run and idempotency_key arguments (STAGING_ARGS_PROPERTIES) as staging options. */
@@ -7270,154 +7282,49 @@ export const tools: McpTool[] = [
       openWorldHint: false,
     },
     async execute(args, companyId, userId, supabase, actor) {
-      const name = args.name as string
-      const customerType = args.customer_type as string
+      // The register's one rule set (CreateCustomerSchema, shared with the
+      // dashboard, v1 and the approval) and the approval's own checks on the
+      // dry run. The wire keeps its names: address and payment_terms.
+      const { dry_run: _dryRun, idempotency_key: _idempotencyKey, address, payment_terms: paymentTerms, ...rest } = args
+      const customerArgs: Record<string, unknown> = { ...rest }
+      if (address !== undefined) customerArgs.address_line1 = address
+      if (paymentTerms !== undefined) customerArgs.default_payment_terms = paymentTerms
+      const parsed = CreateCustomerSchema.safeParse(customerArgs)
+      if (!parsed.success) {
+        throw fieldValidationError('Invalid arguments', wireCustomerFields(zodFieldIssues(parsed.error, customerArgs)))
+      }
+      const preview = await createCustomer({ supabase, companyId, userId, log }, parsed.data, { dryRun: true })
+      if (!preview.ok) throwOutcomeFailure(preview)
+      if (!preview.dryRun) throw new Error('create_customer: preview failed')
 
-      if (!name?.trim()) throw badArgument('name', 'Customer name is required.')
-      if (!['individual', 'swedish_business', 'eu_business', 'non_eu_business'].includes(customerType)) {
-        throw badArgument('customer_type', 'Invalid customer_type. Must be: individual, swedish_business, eu_business, non_eu_business')
-      }
-
-      // Runtime guard (hosts don't always enforce inputSchema maxLength).
-      const customerNumberArg = args.customer_number
-      if (customerNumberArg != null && typeof customerNumberArg !== 'string') {
-        throw badArgument('customer_number', 'customer_number must be a string.')
-      }
-      const customerNumber = typeof customerNumberArg === 'string' ? customerNumberArg.trim() : ''
-      if (customerNumber.length > 32) {
-        throw badArgument('customer_number', 'customer_number must be at most 32 characters.')
-      }
-
-      // Identifiers. A Swedish enskild firma's org number IS its owner's
-      // personnummer, so swedish_business accepts one (the list tool masks
-      // it); only a foreign business, which cannot have one, refuses it, the
-      // same predicate CreateCustomerSchema uses. A personnummer-shaped
-      // org_number on an individual is the personnummer submitted in the wrong
-      // field, which is all an agent COULD do before this tool had a
-      // personal_number input, so it is moved rather than refused. Everything
-      // is checked here, at staging, so the user never approves an operation
-      // that then fails at commit.
-      const orgNumberArg = typeof args.org_number === 'string' ? args.org_number.trim() : ''
-      const personalNumberArg = typeof args.personal_number === 'string' ? args.personal_number.trim() : ''
-      if (isPersonalNumberOrgNumberDisallowed(customerType, orgNumberArg)) {
-        throw badArgument(
-          'org_number',
-          'org_number looks like a Swedish personal identity number (personnummer), which a foreign business '
-          + 'cannot have. Use customer_type "swedish_business" for a Swedish enskild firma, or "individual" with '
-          + 'the number passed as personal_number for a private person.',
-        )
-      }
-      if (isOrgNumberRefusedOnIndividual(customerType, orgNumberArg)) {
-        throw badArgument(
-          'org_number',
-          'An individual customer has no org number: org_number must be empty or the person\'s personnummer. '
-          + 'Use customer_type "swedish_business" for a business.',
-        )
-      }
-      if (personalNumberArg && customerType !== 'individual') {
-        throw new Error('personal_number is only allowed for customer_type "individual".')
-      }
-      let orgNumber: string | null = orgNumberArg || null
-      let personalNumber: string | null = personalNumberArg || null
-      if (orgNumberHoldsPersonalNumber(customerType, orgNumber)) {
-        const rerouted = normalizeReroutedPersonalNumber(orgNumber!)
-        if (personalNumber && personalNumberDigits(personalNumber) !== personalNumberDigits(rerouted)) {
-          throw badArgument(
-            'org_number',
-            'org_number looks like a personnummer and differs from personal_number. An individual customer keeps '
-            + 'its personnummer in personal_number; leave org_number empty.',
-          )
-        }
-        personalNumber = personalNumber ?? rerouted
-        orgNumber = null
-      }
-      if (personalNumber && !PERSONAL_NUMBER_PLAINTEXT_RE.test(personalNumber)) {
-        throw badArgument('personal_number', 'personal_number must be a Swedish personnummer: YYYYMMDD-XXXX, YYMMDD-XXXX or the digits alone.')
-      }
-
-      // Country: stored as ISO 3166-1 alpha-2 (a name is accepted and
-      // normalised), and it must agree with the customer type and the VAT
-      // prefix. An EU customer saved with country SE used to get reverse
-      // charge with nothing objecting until the periodisk sammanställning
-      // (#2025). Checked at staging so the user never approves an operation
-      // that then fails at commit.
-      const countryArg = typeof args.country === 'string' ? args.country.trim() : ''
-      const vatNumberArg = typeof args.vat_number === 'string' ? args.vat_number : null
-      const country = countryArg
-        ? normalizeCountryCode(countryArg)
-        : defaultCountryForParty(customerType, vatNumberArg)
-      if (!country) {
-        throw badArgument(
-          'country',
-          countryArg
-            ? `country "${countryArg}" is not an ISO 3166-1 alpha-2 code or a known country name. Use a code such as SE, DE or NO.`
-            : customerType === 'eu_business'
-              ? 'country is required for an EU business unless vat_number carries an EU country prefix (e.g. DE811234567).'
-              : 'country is required for a non-EU business.',
-        )
-      }
-      const countryIssue = checkCountryConsistency({
-        partyType: customerType,
-        country,
-        vatNumber: vatNumberArg,
-      })
-      if (countryIssue) {
-        throw badArgument('country', `country: ${COUNTRY_CONSISTENCY_MESSAGES[countryIssue].en}`, COUNTRY_CONSISTENCY_MESSAGES[countryIssue].sv)
-      }
-
-      // Resolved at staging, not at commit, so the approval preview shows the
-      // terms the row will actually get: the caller's value, else the
-      // company's invoice_default_days, else 30. (Staging `|| 30` here is why
-      // #1708's fix never reached the MCP path.)
-      const paymentTermsArg = Number(args.payment_terms)
-      const paymentTerms = await resolveDefaultPaymentTerms(
-        supabase,
-        companyId,
-        Number.isFinite(paymentTermsArg) && paymentTermsArg > 0 ? paymentTermsArg : undefined,
-      )
-
-      const preview: Record<string, unknown> = {
-        name: name.trim(),
-        customer_type: customerType,
-        customer_number: customerNumber || null,
-        email: (args.email as string) || null,
-        org_number: orgNumber,
-        vat_number: (args.vat_number as string) || null,
-        payment_terms: paymentTerms,
-        address: (args.address as string) || null,
-        postal_code: (args.postal_code as string) || null,
-        city: (args.city as string) || null,
-        country,
-        // The preview (and the approval UI that renders it) only ever sees
-        // the masked form.
-        personal_number_masked: personalNumber ? maskCustomerPersonalNumber(personalNumber) : null,
-      }
-      // PII rule (staging-pii-guard): pending_operations.params never holds
-      // a plaintext personnummer. Encrypted here, same as create_employee;
-      // the executor stores the ciphertext as-is.
-      const { personal_number_masked: _masked, ...paramsBase } = preview
+      // The personnummer is staged encrypted (staging-pii-guard), and the
+      // preview carries only its masked form.
+      // The payment terms the preview resolved are the ones approval stores.
+      const { personal_number: personalNumber, ...input } = parsed.data
       const params: Record<string, unknown> = {
-        ...paramsBase,
-        personal_number_encrypted: personalNumber ? encryptCustomerPersonalNumber(personalNumber) : null,
+        ...input,
+        default_payment_terms: preview.preview.default_payment_terms,
+        personal_number_encrypted: encryptCustomerPersonalNumber(personalNumber),
       }
+      const stagedPreview = stagedCustomerPreview(preview.preview)
 
       return stage({
         supabase,
         companyId,
         userId,
         type: 'create_customer',
-        title: `Ny kund: ${preview.name as string}`,
+        title: `Ny kund: ${parsed.data.name}`,
         params,
-        preview,
+        preview: stagedPreview,
         actor,
         next: {
           description: 'Once approved, you can invoice this customer with gnubok_create_invoice using the returned customer_id.',
           tool: 'gnubok_create_invoice',
         },
         ...stagingOptions(args),
-        // The ciphertext has a random IV, so params differ on every call;
-        // the masked preview is the stable identity of the request.
-        idempotencyParams: preview,
+        // The ciphertext has a random IV, so params differ on every retry when
+        // a personnummer is staged: hash the masked preview instead.
+        idempotencyParams: stagedPreview,
       })
     },
   },
@@ -7463,186 +7370,79 @@ export const tools: McpTool[] = [
     },
     annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
-      const changes: Record<string, unknown> = {}
-      for (const key of [
-        'name',
-        'customer_type',
-        'customer_number',
-        'email',
-        'phone',
-        'address_line1',
-        'address_line2',
-        'postal_code',
-        'city',
-        'country',
-        'org_number',
-        'vat_number',
-        'language',
-        'default_payment_terms',
-        'notes',
-      ]) {
-        if (args[key] !== undefined) changes[key] = args[key]
+      const { dry_run: _dryRun, idempotency_key: _idempotencyKey, customer_id: customerId, ...fields } = args
+      if (typeof customerId !== 'string' || !UUID_RE.test(customerId)) {
+        throw fieldValidationError('Invalid arguments', [
+          { field: 'customer_id', en: 'Expected the customer UUID.', sv: 'Ange kundens id (UUID).' },
+        ])
       }
-
-      // personal_number never enters `changes` in plaintext: staging-pii-guard
-      // forbids that key in staged payloads. REST PATCH semantics
-      // (app/api/customers/[id]/route.ts): a masked echo of a read
-      // ('********-1234' or '********-????') carries no new value and is
-      // dropped; explicit null clears; a plaintext personnummer is validated
-      // here and staged as AES-256-GCM ciphertext, so the approval preview
-      // only ever sees the masked form.
-      const personalNumberArg = args.personal_number
-      let personalNumber: string | null = null
-      if (personalNumberArg !== undefined) {
-        if (personalNumberArg !== null && typeof personalNumberArg !== 'string') {
-          throw badArgument('personal_number', 'personal_number must be a string or null.')
-        }
-        const trimmed = personalNumberArg === null ? null : personalNumberArg.trim()
-        if (trimmed === null) {
-          changes.personal_number_encrypted = null
-        } else if (isMaskedPersonalNumber(trimmed)) {
-          // Echo of a read: leave the stored personnummer alone.
-        } else if (!PERSONAL_NUMBER_PLAINTEXT_RE.test(trimmed)) {
-          throw badArgument(
-            'personal_number',
-            'personal_number must be a Swedish personnummer: YYYYMMDD-XXXX, YYMMDD-XXXX or the digits alone. '
-            + 'Null clears the stored value; a masked value leaves it unchanged.',
-          )
-        } else {
-          personalNumber = trimmed
-          changes.personal_number_encrypted = encryptCustomerPersonalNumber(trimmed)
-        }
+      // The register's one rule set (UpdateCustomerSchema, shared with the
+      // dashboard, v1 and the approval) and the approval's own checks on the
+      // dry run. A masked personal_number (********-1234) means unchanged.
+      const parsed = UpdateCustomerSchema.safeParse(fields)
+      if (!parsed.success) throw fieldValidationError('Invalid customer update', zodFieldIssues(parsed.error, fields))
+      const preview = await updateCustomer({ supabase, companyId, userId, log }, customerId, parsed.data, { dryRun: true })
+      if (!preview.ok && preview.code === 'VALIDATION_ERROR') {
+        throw fieldValidationError('Invalid customer update', [
+          { field: 'changes', en: 'At least one customer field must be supplied', sv: preview.messageSv ?? 'Ange minst ett fält att ändra.' },
+        ])
       }
+      if (!preview.ok) throwOutcomeFailure(preview)
+      if (!preview.dryRun) throw new Error('update_customer: preview failed')
 
-      const update = { customer_id: args.customer_id, changes }
-      const parsed = UpdateCustomerParamsSchema.safeParse(update)
-      if (!parsed.success) {
-        throw fieldValidationError('Invalid customer update', zodFieldIssues(parsed.error, update))
+      // Staged as sent, with the personnummer only as ciphertext
+      // (staging-pii-guard): null clears it, a mask leaves it alone. A
+      // personnummer sent as an individual's org_number is staged the way the
+      // update stores it, encrypted, so no plaintext lands in params.
+      const { personal_number: personalNumber, ...changes } = parsed.data
+      const stagedChanges: Record<string, unknown> = { ...changes }
+      if (personalNumber === null) stagedChanges.personal_number_encrypted = null
+      else if (personalNumber !== undefined && !isMaskedPersonalNumber(personalNumber)) {
+        stagedChanges.personal_number_encrypted = encryptCustomerPersonalNumber(personalNumber)
       }
-
-      const { data: current, error } = await supabase
-        .from('customers')
-        .select('id, name, customer_type, customer_number, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, language, default_payment_terms, notes, personal_number')
-        .eq('id', parsed.data.customer_id)
-        .eq('company_id', companyId)
-        .maybeSingle()
-
-      if (error) throw dbError(error)
-      if (!current) throw new Error('Customer not found.')
-
-      // Same guard as gnubok_create_customer and the REST PATCH route: the
-      // personal_number column exists for privatpersoner only (a business
-      // keeps its identifier in org_number, an enskild firma included).
-      // Checked against the type the row will END UP with, so a simultaneous
-      // type change cannot smuggle one through.
-      const effectiveCustomerType = (parsed.data.changes.customer_type ?? current.customer_type) as string
-      if (personalNumber && effectiveCustomerType !== 'individual') {
-        throw new Error('personal_number is only allowed for customer_type "individual".')
+      const { changes: changed, ...proposed } = preview.preview as Record<string, unknown> & {
+        changes: Record<string, { from: unknown; to: unknown }>
       }
-
-      // An individual has no org number, same rules as the REST PATCH route:
-      // judged on the org number the row will END UP with, only when
-      // org_number or customer_type is in the update. A personnummer there is
-      // moved into personal_number; anything else is refused.
-      const individualOrgNumber =
-        parsed.data.changes.org_number !== undefined || parsed.data.changes.customer_type !== undefined
-          ? (parsed.data.changes.org_number ?? current.org_number)
-          : undefined
-      if (isOrgNumberRefusedOnIndividual(effectiveCustomerType, individualOrgNumber)) {
-        throw badArgument(
-          'org_number',
-          'An individual customer has no org number: org_number must be empty or the person\'s personnummer. '
-          + 'Send org_number "" to clear it, or use customer_type "swedish_business" for a business.',
+      if (changes.org_number && orgNumberHoldsPersonalNumber(proposed.customer_type as string, changes.org_number)) {
+        stagedChanges.org_number = ''
+        stagedChanges.personal_number_encrypted ??= encryptCustomerPersonalNumber(
+          normalizeReroutedPersonalNumber(changes.org_number),
         )
       }
-      if (orgNumberHoldsPersonalNumber(effectiveCustomerType, individualOrgNumber)) {
-        const rerouted = normalizeReroutedPersonalNumber(individualOrgNumber!)
-        if (personalNumber && personalNumberDigits(personalNumber) !== personalNumberDigits(rerouted)) {
-          throw badArgument(
-            'org_number',
-            'org_number looks like a personnummer and differs from personal_number. An individual customer keeps '
-            + 'its personnummer in personal_number; leave org_number empty.',
-          )
-        }
-        if (!personalNumber) {
-          personalNumber = rerouted
-          parsed.data.changes.personal_number_encrypted = encryptCustomerPersonalNumber(rerouted)
-        }
-        parsed.data.changes.org_number = ''
-      }
 
-      // Country vs type vs VAT prefix, judged on the row as it will END UP:
-      // a type change alone can make a stored country wrong, and a country
-      // change alone can contradict the stored VAT number (#2025). Judged
-      // only when one of the three is in the update: a legacy row that is
-      // already contradictory must still be able to change its email.
-      const { customer_type: newType, country: newCountry, vat_number: newVat } = parsed.data.changes
-      const countryIssue =
-        newType !== undefined || newCountry !== undefined || newVat !== undefined
-          ? checkCountryConsistency({
-              partyType: effectiveCustomerType,
-              country: newCountry ?? current.country,
-              vatNumber: newVat ?? current.vat_number,
-            })
-          : null
-      if (countryIssue) {
-        throw badArgument('country', `country: ${COUNTRY_CONSISTENCY_MESSAGES[countryIssue].en}`, COUNTRY_CONSISTENCY_MESSAGES[countryIssue].sv)
+      const current = { ...proposed }
+      const previewChanges: Record<string, unknown> = {}
+      for (const [key, change] of Object.entries(changed)) {
+        current[key] = change.from
+        previewChanges[key] = change.to
       }
-
-      const currentPreview = {
-        customer_id: current.id,
-        name: current.name,
-        customer_type: current.customer_type,
-        customer_number: current.customer_number ?? null,
-        email: current.email ?? null,
-        phone: current.phone ?? null,
-        address_line1: current.address_line1 ?? null,
-        address_line2: current.address_line2 ?? null,
-        postal_code: current.postal_code ?? null,
-        city: current.city ?? null,
-        country: current.country,
-        org_number: current.org_number ?? null,
-        vat_number: current.vat_number ?? null,
-        vat_number_validated: current.vat_number_validated ?? false,
-        language: current.language ?? 'sv',
-        default_payment_terms: current.default_payment_terms,
-        notes: current.notes ?? null,
-        // The stored value is ciphertext; the preview (and the approval UI
-        // that renders it) only ever sees the masked form.
-        personal_number_masked: maskStoredCustomerPersonalNumber(current.personal_number),
+      // A staged personnummer shows even when it equals the stored one.
+      if (stagedChanges.personal_number_encrypted !== undefined && !('personal_number' in previewChanges)) {
+        previewChanges.personal_number = proposed.personal_number ?? null
       }
-
-      // The preview never carries the ciphertext either: a personal_number
-      // change is shown as its masked form (or null when clearing).
-      const { personal_number_encrypted: _stagedCiphertext, ...visibleChanges } = parsed.data.changes
-      const previewChanges: Record<string, unknown> = { ...visibleChanges }
-      if (parsed.data.changes.personal_number_encrypted !== undefined) {
-        previewChanges.personal_number_masked = personalNumber
-          ? maskCustomerPersonalNumber(personalNumber)
-          : null
-      }
+      const currentPreview = stagedCustomerPreview(current)
+      const changesPreview = stagedCustomerChanges(previewChanges)
 
       return stage({
         supabase,
         companyId,
         userId,
         type: 'update_customer',
-        title: `Uppdatera kund: ${current.name}`,
-        params: parsed.data,
+        title: `Uppdatera kund: ${String(current.name ?? '')}`.trim(),
+        params: { customer_id: customerId, changes: stagedChanges },
         preview: {
           current: currentPreview,
-          changes: previewChanges,
-          proposed: { ...currentPreview, ...previewChanges },
+          changes: changesPreview,
+          proposed: stagedCustomerPreview(proposed),
         },
         actor,
         ...stagingOptions(args),
-        // The ciphertext in params has a random IV, so params differ on
-        // every retry when a personnummer is staged; hash the masked
-        // preview instead (same reasoning as gnubok_create_customer). Only
-        // set for personnummer-bearing updates so every other update keeps
-        // its previous hash identity.
-        ...(parsed.data.changes.personal_number_encrypted !== undefined
-          ? { idempotencyParams: { customer_id: parsed.data.customer_id, changes: previewChanges } }
+        // The ciphertext in params has a random IV, so params differ on every
+        // retry when a personnummer is staged; hash the masked preview
+        // instead. Only set for personnummer-bearing updates so every other
+        // update keeps its previous hash identity.
+        ...(stagedChanges.personal_number_encrypted !== undefined
+          ? { idempotencyParams: { customer_id: customerId, changes: changesPreview } }
           : {}),
       })
     },
@@ -12418,7 +12218,7 @@ export const tools: McpTool[] = [
       const { data: invoice, error } = await supabase
         .from('invoices')
         .select(
-          'id, invoice_number, status, document_type, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, customer_id, customer:customers(id, name)'
+          'id, invoice_number, status, document_type, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, journal_entry_id, customer_id, customer:customers(id, name)'
         )
         .eq('id', invoiceId)
         .eq('company_id', companyId)

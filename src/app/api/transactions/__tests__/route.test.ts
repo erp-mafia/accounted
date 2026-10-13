@@ -161,6 +161,36 @@ describe('GET /api/transactions', () => {
     expect(String(selectArgs?.[0])).toContain('transaction_voucher_links(journal_entry_id, role)')
   })
 
+  it('searches description and merchant across every row when q is given', async () => {
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/transactions?unmatched=true&q=Acme')
+    await GET(request, createMockRouteParams({}))
+
+    expect(findCall('transactions', 'or')).toEqual(['description.ilike.%Acme%,merchant_name.ilike.%Acme%'])
+    expect(String(findCall('transactions', 'select')?.[0])).toContain('merchant_name')
+  })
+
+  it('ignores a q shorter than two characters', async () => {
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/transactions?unmatched=true&q=A')
+    await GET(request, createMockRouteParams({}))
+
+    expect(findCall('transactions', 'or')).toBeUndefined()
+  })
+
+  it('strips the filter-DSL characters from q, so a term cannot add a clause', async () => {
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest(`/api/transactions?unmatched=true&q=${encodeURIComponent('Acme,company_id.neq.x(%)')}`)
+    await GET(request, createMockRouteParams({}))
+
+    expect(findCall('transactions', 'or')).toEqual([
+      'description.ilike.%Acme company_id.neq.x%,merchant_name.ilike.%Acme company_id.neq.x%',
+    ])
+  })
+
   it('filters by reconciled=true', async () => {
     const fromSpy = vi.fn(() => {
       const chain: Record<string, unknown> = {}

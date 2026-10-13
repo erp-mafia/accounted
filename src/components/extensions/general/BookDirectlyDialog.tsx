@@ -53,8 +53,10 @@ import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
 import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
 import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-template-format'
 import { AttnLine } from '@/components/ui/attn-line'
-import { FOREIGN_CURRENCIES, type BookingTemplateLibrary, type CashAccount, type InboxChannelContext, type InvoiceExtractionResult } from '@/types'
+import type { BookingTemplateLibrary, CashAccount, InboxChannelContext, InvoiceExtractionResult } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import type { UnbookedBankRow } from '@/lib/documents/underlag-bank-candidates'
+import { useUnderlagBankCandidates } from '@/components/inbox/use-underlag-bank-candidates'
 
 interface InboxItem {
   id: string
@@ -67,15 +69,7 @@ interface InboxItem {
   channel_context?: InboxChannelContext | null
 }
 
-interface PickerTransaction {
-  id: string
-  date: string
-  description: string
-  amount: number
-  currency: string | null
-  amount_sek?: number | null
-  exchange_rate?: number | null
-}
+type PickerTransaction = UnbookedBankRow
 
 // SEK magnitude of a (usually-SEK) bank transaction. Foreign rows are
 // normalised via their stored amount_sek/exchange_rate so ranking against the
@@ -109,19 +103,6 @@ interface Props {
   onSuccess: () => void | Promise<void>
 }
 
-// Rank candidates by closeness to the underlag's SEK value. `targetSek` is the
-// document total already converted to SEK (the bank charge for a 216 USD
-// receipt is ~2 109 kr, not 216): ranking against the raw foreign total used
-// to bury the real match far down the list. Null target → leave order intact.
-function rankBySekCloseness(
-  rows: PickerTransaction[],
-  targetSek: number | null
-): PickerTransaction[] {
-  if (targetSek == null) return rows
-  const abs = Math.abs(targetSek)
-  return [...rows].sort((a, b) => Math.abs(txSekAmount(a) - abs) - Math.abs(txSekAmount(b) - abs))
-}
-
 export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = null, docMime = null, onSuccess }: Props) {
   const { toast } = useToast()
   const { company } = useCompany()
@@ -133,9 +114,6 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
   // (lib/bookkeeping/book-direct-prefill.ts).
   const targetAmount = item.extracted_data?.totals?.total ?? null
   const targetCurrency = bookDirectDocumentCurrency(item.extracted_data)
-  // SEK per unit of the underlag currency (e.g. ~9.8 for USD). null = SEK,
-  // pending, or unsupported.
-  const [fxRate, setFxRate] = useState<number | null>(null)
 
   // Session-cached reference data (lib/reference-data), seeded by the
   // dashboard layout: the settlement account, the period and the account
@@ -192,9 +170,17 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
   const [selectedTransactionId, setSelectedTransactionId] = useState<string | null>(
     item.matched_transaction_id
   )
-  const [transactions, setTransactions] = useState<PickerTransaction[]>([])
-  const [isLoadingTransactions, setIsLoadingTransactions] = useState(false)
   const [txSearch, setTxSearch] = useState('')
+  // The unbooked bank rows, the underlag's SEK rate (e.g. ~9.8 for USD; null
+  // for SEK, pending or unsupported) and the ranking: the one hook the
+  // inbox match picker uses too. A search goes to the database, and a picked
+  // row stays readable (rowById) after a search stops listing it.
+  const {
+    ranked: rankedCandidates,
+    rowById,
+    loading: isLoadingTransactions,
+    fxRate,
+  } = useUnderlagBankCandidates({ open, extractedData: item.extracted_data, search: txSearch })
 
   const [isSubmitting, setIsSubmitting] = useState(false)
 
@@ -272,31 +258,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
     return () => { cancelled = true }
   }, [open, item.id, item.extracted_data?.supplier?.name])
 
-  // Fetch the underlag's SEK rate for a foreign-currency document so candidate
-  // transactions can be ranked against the SEK-equivalent total (and not the
-  // raw foreign number). SEK / unsupported currencies skip the fetch.
-  useEffect(() => {
-    if (!open) return
-    setFxRate(null)
-    if (targetCurrency === 'SEK' || !(FOREIGN_CURRENCIES as readonly string[]).includes(targetCurrency)) {
-      return
-    }
-    let cancelled = false
-    const invoiceDate = item.extracted_data?.invoice?.invoiceDate
-    const dateParam = invoiceDate ? `&date=${invoiceDate}` : ''
-    fetch(`/api/currency/rate?currency=${targetCurrency}${dateParam}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((body) => {
-        if (cancelled) return
-        const rate = body?.data?.rate
-        if (typeof rate === 'number' && rate > 0) setFxRate(rate)
-      })
-      .catch(() => { /* leave null: ranking falls back to face amounts */ })
-    return () => { cancelled = true }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, targetCurrency, item.id])
-
-  // SEK-equivalent of the underlag total: the anchor for ranking candidates.
+  // SEK-equivalent of the underlag total: the estimate shown before a bank row is picked.
   const targetSek = useMemo(() => {
     if (targetAmount == null) return null
     if (targetCurrency === 'SEK') return targetAmount
@@ -304,10 +266,10 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
     return null
   }, [targetAmount, targetCurrency, fxRate])
 
-  // The picked bank row, once the list has loaded it.
+  // The picked bank row, once a list has loaded it.
   const selectedTransaction = useMemo(
-    () => (selectedTransactionId ? transactions.find((t) => t.id === selectedTransactionId) ?? null : null),
-    [selectedTransactionId, transactions],
+    () => (selectedTransactionId ? rowById.get(selectedTransactionId) ?? null : null),
+    [selectedTransactionId, rowById],
   )
 
   // When the user picks a transaction (or the toggle changes), re-derive
@@ -344,12 +306,9 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
   // - When a transaction is selected, use that transaction's currency.
   // - Otherwise, use the document's currency (falls back to SEK).
   const settlementCurrency = useMemo(() => {
-    if (selectedTransactionId) {
-      const tx = transactions.find((t) => t.id === selectedTransactionId)
-      if (tx) return (tx.currency ?? 'SEK').toUpperCase()
-    }
+    if (selectedTransaction) return (selectedTransaction.currency ?? 'SEK').toUpperCase()
     return targetCurrency
-  }, [selectedTransactionId, transactions, targetCurrency])
+  }, [selectedTransaction, targetCurrency])
 
   // Resolved bank account: null while the cash-accounts fetch is in flight.
   // Derived from the cash accounts list; falls back to '1930' if the list is
@@ -404,49 +363,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
     setPeriodId(match ? match.id : '')
   }, [entryDate, periods])
 
-  // Fetch unmatched transactions whenever the dialog opens: the picker
-  // is always visible now (selection is optional).
-  useEffect(() => {
-    if (!open) return
-    let cancelled = false
-    setIsLoadingTransactions(true)
-    ;(async () => {
-      try {
-        const res = await fetch('/api/transactions?unmatched=true')
-        const json = await res.json()
-        if (cancelled) return
-        const rows: PickerTransaction[] = (Array.isArray(json.data) ? json.data : [])
-          .map((t: PickerTransaction) => ({
-            id: t.id,
-            date: t.date,
-            description: t.description,
-            amount: t.amount,
-            currency: t.currency || 'SEK',
-            amount_sek: t.amount_sek ?? null,
-            exchange_rate: t.exchange_rate ?? null,
-          }))
-        // Ranking happens in a memo (it depends on the async FX rate).
-        setTransactions(rows)
-      } catch (err) {
-        console.error('[book-direct] fetch transactions failed:', err)
-      } finally {
-        if (!cancelled) setIsLoadingTransactions(false)
-      }
-    })()
-    return () => { cancelled = true }
-  }, [open])
-
-  // FX-aware ranking by closeness to the underlag's SEK value.
-  const rankedTransactions = useMemo(
-    () => rankBySekCloseness(transactions, targetSek),
-    [transactions, targetSek],
-  )
-
-  const filteredTransactions = useMemo(() => {
-    const term = txSearch.trim().toLowerCase()
-    if (!term) return rankedTransactions
-    return rankedTransactions.filter((t) => (t.description || '').toLowerCase().includes(term))
-  }, [rankedTransactions, txSearch])
+  const filteredTransactions = useMemo(() => rankedCandidates.map((c) => c.row), [rankedCandidates])
 
   // Pin the already-selected/matched transaction to the top so it's always
   // visible: otherwise a correct match that ranks past the rendered cap looks

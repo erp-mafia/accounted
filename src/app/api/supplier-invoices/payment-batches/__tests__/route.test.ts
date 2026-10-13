@@ -424,7 +424,7 @@ describe('GET /api/supplier-invoices/payment-batches/[id]/file', () => {
     expect(response.status).toBe(200)
     expect(response.headers.get('Content-Type')).toBe('application/xml; charset=utf-8')
     expect(response.headers.get('Content-Disposition')).toBe(
-      'attachment; filename="betalfil_20260810_b1111111.xml"',
+      `attachment; filename="betalfil_20260810_b1111111.xml"; filename*=UTF-8''betalfil_20260810_b1111111.xml`,
     )
     const xml = await response.text()
     expect(xml).toContain('<MsgId>ACCOUNTED-5566778899-BB1111111</MsgId>')

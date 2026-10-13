@@ -54,7 +54,6 @@ function syncPayload(
       fetched: 0,
       imported: 0,
       duplicates: 0,
-      linked: 0,
       errors: 0,
       ...transactions,
     },
@@ -253,7 +252,7 @@ describe('syncSummary', () => {
     // With errors > 0 it means the opposite: the rows are missing from the inbox.
     expect(syncSummary(syncPayload({ fetched: 200, imported: 0, errors: 200 }))).toEqual({
       reason: 'errors',
-      values: { fetched: 200, imported: 0, linked: 0, errors: 200 },
+      values: { fetched: 200, imported: 0, errors: 200 },
     })
   })
 
@@ -271,8 +270,11 @@ describe('syncSummary', () => {
   })
 
   it('reports the counts of a healthy run', () => {
-    expect(
-      syncSummary(syncPayload({ fetched: 12, imported: 9, duplicates: 3, linked: 4 })),
-    ).toEqual({ reason: 'feed', values: { fetched: 12, imported: 9, linked: 4 } })
+    // The feed links nothing to vouchers since the payout linking went
+    // (44bdefc86): the sentence no longer names a linked count.
+    expect(syncSummary(syncPayload({ fetched: 12, imported: 9, duplicates: 3 }))).toEqual({
+      reason: 'feed',
+      values: { fetched: 12, imported: 9 },
+    })
   })
 })

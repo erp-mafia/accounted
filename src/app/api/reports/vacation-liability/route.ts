@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
 import { VacationLiabilityQuerySchema } from '@/lib/api/schemas'
-import { contentDisposition } from '@/lib/api/content-disposition'
 import { privateNoStore } from '@/lib/api/private-no-store'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { generateVacationLiability, vacationLiabilityCheck } from '@/lib/reports/vacation-liability'
@@ -15,6 +14,7 @@ import {
   textColumn,
   xlsxFilename,
 } from '@/lib/reports/xlsx-export'
+import { fileResponse } from '@/lib/api/file-response'
 
 /**
  * GET /api/reports/vacation-liability
@@ -82,12 +82,10 @@ export const GET = withRouteContext('report.vacation_liability', async (request,
       ])
       const pdf = await renderToBuffer(SemesterskuldPDF({ report, check, company: companyInfo }))
       const filename = `semesterskuld-${slugifyCompanyName(companyInfo.name)}-${asOfDate.replace(/-/g, '')}.pdf`
-      return new NextResponse(new Uint8Array(pdf), {
-        headers: {
-          'Content-Type': 'application/pdf',
-          'Content-Disposition': contentDisposition('attachment', filename),
-          'Cache-Control': 'private, no-store',
-        },
+      return fileResponse(new Uint8Array(pdf), {
+        filename: filename,
+        contentType: 'application/pdf',
+        cacheControl: 'private, no-store',
       })
     }
 
@@ -123,12 +121,10 @@ export const GET = withRouteContext('report.vacation_liability', async (request,
         ],
       },
     ])
-    return new NextResponse(new Uint8Array(buffer), {
-      headers: {
-        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'Content-Disposition': contentDisposition('attachment', xlsxFilename('semesterskuld', companyInfo.name, asOfDate)),
-        'Cache-Control': 'private, no-store',
-      },
+    return fileResponse(new Uint8Array(buffer), {
+      filename: xlsxFilename('semesterskuld', companyInfo.name, asOfDate),
+      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      cacheControl: 'private, no-store',
     })
   } catch (err) {
     // Raw message stays server-side: it can carry table names / SQL.

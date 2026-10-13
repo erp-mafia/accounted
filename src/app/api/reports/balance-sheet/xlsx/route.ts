@@ -9,6 +9,7 @@ import {
   xlsxFilename,
 } from '@/lib/reports/xlsx-export'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { fileResponse } from '@/lib/api/file-response'
 
 interface FlatRow {
   section: string
@@ -137,12 +138,7 @@ export const GET = withRouteContext('report.balance_sheet.xlsx', async (request,
     ])
 
     const filename = xlsxFilename('balansrakning', companyRow?.company_name ?? '', effectiveEnd)
-    return new NextResponse(new Uint8Array(buffer), {
-      headers: {
-        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-      },
-    })
+    return fileResponse(new Uint8Array(buffer), { filename: filename, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera balansräkning' },

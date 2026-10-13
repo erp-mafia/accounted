@@ -5,6 +5,7 @@ import { parseReportDateRange } from '@/lib/reports/date-range'
 import type { CompanySettings } from '@/types'
 import { parseDimensionFilterParams, dimensionFilterDisclosure, dimensionFilterFileSuffix } from '@/lib/reports/dimension-filter'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { fileResponse } from '@/lib/api/file-response'
 
 export const GET = withRouteContext('report.resultatrapport.pdf', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
@@ -72,12 +73,7 @@ export const GET = withRouteContext('report.resultatrapport.pdf', async (request
 
     const filename = `resultatrapport${dimensionFilterFileSuffix(dimFilter.dimensions)}-${report.period.start}--${report.period.end}.pdf`
 
-    return new Response(new Uint8Array(pdfBuffer), {
-      headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-      },
-    })
+    return fileResponse(new Uint8Array(pdfBuffer), { filename: filename, contentType: 'application/pdf' })
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera resultatrapport' },

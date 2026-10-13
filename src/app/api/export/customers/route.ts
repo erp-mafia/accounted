@@ -1,4 +1,3 @@
-import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -8,6 +7,7 @@ import { maskStoredCustomerPersonalNumber } from '@/lib/customers/protect-person
 import { maskCustomerPersonalNumber } from '@/lib/customers/mask-personal-number'
 import { orgNumberIsPersonalIdentifier } from '@/lib/customers/personal-number-shape'
 import type { Customer } from '@/types'
+import { fileResponse } from '@/lib/api/file-response'
 
 /**
  * GET /api/export/customers[?format=csv]
@@ -100,13 +100,7 @@ export const GET = withRouteContext(
 
       log.info('register exported', { entity: 'customers', format, rowCount: customers.length })
 
-      return new NextResponse(new Uint8Array(buffer), {
-        headers: {
-          'Content-Type': contentType,
-          'Content-Disposition': `attachment; filename="${filename}"`,
-          'Cache-Control': 'no-store',
-        },
-      })
+      return fileResponse(new Uint8Array(buffer), { filename: filename, contentType: contentType, cacheControl: 'no-store' })
     } catch (err) {
       log.error('customer export failed', err as Error)
       return errorResponse(err, log, { requestId })

@@ -15,18 +15,13 @@ import {
   handleCreditNoteCreated,
   handleInvoicePaid,
 } from './lib/payment-links'
-import { syncStripeBalanceTransactions } from './lib/transaction-sync'
-import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
-import { backfillDateErrorMessage, parseBackfillFrom } from '@/lib/feed-sync/cursor-window'
+import { syncStripeBalanceTransactions, type StripeTransactionSyncSummary } from './lib/transaction-sync'
+import { feedConnectorRoutes, type FeedConnectorSpec } from '@/lib/feed-sync/connector-routes'
 import { MAX_BACKFILL_YEARS } from './types'
-import type { StripeConnection, StripeStatusResponse } from './types'
+import type { StripeConnection } from './types'
 
-// Per-user limits: connect/disconnect are outward-facing OAuth operations,
-// sync hits the Stripe API.
+// Per-user limit: connect is an outward-facing OAuth operation.
 const RATE_LIMIT_CONNECT = { maxRequests: 10, windowMs: 60_000 }
-const RATE_LIMIT_DISCONNECT = { maxRequests: 10, windowMs: 60_000 }
-const RATE_LIMIT_SYNC = { maxRequests: 10, windowMs: 60_000 }
-const RATE_LIMIT_BACKFILL = { maxRequests: 5, windowMs: 60_000 }
 
 // A pending row younger than this blocks a second connect attempt so a
 // double-click cannot start two OAuth round-trips (only one state would
@@ -35,6 +30,41 @@ const PENDING_FRESH_MS = 60_000
 
 const NOT_CONFIGURED_MESSAGE =
   'Stripe-integrationen är inte konfigurerad på den här installationen.'
+
+/**
+ * Status, sync, backfill, the nightly toggle and disconnect: the shared feed
+ * routes (lib/feed-sync/connector-routes). Feed-only (2026-07-24): the sync
+ * imports balance transactions into the inbox and books nothing. The manual
+ * run takes no time budget: the cursor persists per ingest chunk, so a run
+ * cut off at the dispatcher ceiling resumes where it stopped (see the panel's
+ * STRIPE_SYNC_TIMEOUT_MS).
+ */
+export const stripeFeed: FeedConnectorSpec<StripeConnection, StripeTransactionSyncSummary> = {
+  extensionId: 'stripe',
+  table: 'stripe_connections',
+  capability: CAPABILITY.stripe_payments,
+  cursorColumn: 'last_balance_txn_synced_at',
+  maxBackfillYears: MAX_BACKFILL_YEARS,
+  notConnectedMessage: 'Inget anslutet Stripe-konto.',
+  statusColumns:
+    'id, status, stripe_account_id, livemode, display_name, error_message, connected_at, last_event_created_at, transaction_sync_enabled, last_balance_txn_synced_at',
+  isConfigured: isStripeConnectConfigured,
+  sync: (supabase, connection, deadlineMs) =>
+    syncStripeBalanceTransactions(supabase, connection, undefined, deadlineMs),
+  manualSyncBudgetMs: null,
+  disconnect: {
+    columns: 'stripe_account_id',
+    // Best effort: an already-severed connection throws at Stripe, which is
+    // fine (the goal state is reached either way).
+    revokeRemote: async (connection) => {
+      if (connection.status === 'active' && typeof connection.stripe_account_id === 'string') {
+        await deauthorizeAccount(connection.stripe_account_id)
+      }
+    },
+    clearColumns: ['oauth_state'],
+    eventIdentity: (connection) => ({ stripeAccountId: (connection.stripe_account_id as string | null) ?? null }),
+  },
+}
 
 /**
  * Stripe Connect extension
@@ -68,228 +98,7 @@ export const stripeExtension: Extension = {
   ],
 
   apiRoutes: [
-    {
-      method: 'GET',
-      path: '/status',
-      handler: async (_request: Request, ctx: ExtensionContext) => {
-        const supabase = ctx.supabase
-
-        // Prefer the active connection; otherwise surface the most recent row
-        // so the panel can show pending/error/revoked states.
-        const { data: rows } = await supabase
-          .from('stripe_connections')
-          .select(
-            'id, status, stripe_account_id, livemode, display_name, error_message, connected_at, last_event_created_at, transaction_sync_enabled, last_balance_txn_synced_at',
-          )
-          .eq('company_id', ctx.companyId)
-          .order('created_at', { ascending: false })
-          .limit(10)
-
-        const connection =
-          rows?.find((r) => r.status === 'active') ?? rows?.[0] ?? null
-
-        const payload: StripeStatusResponse = {
-          configured: isStripeConnectConfigured(),
-          connection,
-        }
-        return NextResponse.json(payload)
-      },
-    },
-    {
-      method: 'POST',
-      path: '/sync',
-      handler: async (_request: Request, ctx: ExtensionContext) => {
-        const log = ctx.log
-        const supabase = ctx.supabase
-        const companyId = ctx.companyId
-
-        const capabilityBlocked = await requireCapability(
-          supabase,
-          companyId,
-          CAPABILITY.stripe_payments,
-        )
-        if (capabilityBlocked) return capabilityBlocked
-
-        const rl = await checkRateLimit({
-          prefix: 'stripe:sync',
-          identifier: ctx.userId,
-          ...RATE_LIMIT_SYNC,
-        })
-        if (!rl.ok) return rl.response!
-
-        // Membership-scoped lookup via the user client; the sync itself runs
-        // on the service client because the event ledger is service-write-only.
-        const { data: connection } = await supabase
-          .from('stripe_connections')
-          .select('*')
-          .eq('company_id', companyId)
-          .eq('status', 'active')
-          .maybeSingle()
-
-        if (!connection) {
-          return NextResponse.json({ error: 'Inget anslutet Stripe-konto.' }, { status: 404 })
-        }
-
-        try {
-          const serviceClient = createServiceClientNoCookies()
-          const typedConnection = connection as StripeConnection
-          // Feed-only (2026-07-24): Stripe sync imports balance transactions
-          // into the inbox, nothing more: booking is a user decision in the
-          // inbox, like any bank feed. The manual button ignores
-          // transaction_sync_enabled (that flag gates the nightly cron):
-          // pressing it IS the opt-in.
-          const transactions = await syncStripeBalanceTransactions(serviceClient, typedConnection)
-          return NextResponse.json({ success: true, transactions })
-        } catch (error) {
-          log.error('[stripe] Manual sync failed', {
-            message: error instanceof Error ? error.message : String(error),
-            connection_id: connection.id,
-          })
-          return NextResponse.json(
-            { error: 'Synkroniseringen misslyckades. Försök igen.' },
-            { status: 502 },
-          )
-        }
-      },
-    },
-    {
-      method: 'POST',
-      path: '/backfill',
-      handler: async (request: Request, ctx: ExtensionContext) => {
-        const log = ctx.log
-        const supabase = ctx.supabase
-        const companyId = ctx.companyId
-
-        const capabilityBlocked = await requireCapability(
-          supabase,
-          companyId,
-          CAPABILITY.stripe_payments,
-        )
-        if (capabilityBlocked) return capabilityBlocked
-
-        const rl = await checkRateLimit({
-          prefix: 'stripe:backfill',
-          identifier: ctx.userId,
-          ...RATE_LIMIT_BACKFILL,
-        })
-        if (!rl.ok) return rl.response!
-
-        const body = (await request.json().catch(() => ({}))) as { from?: unknown }
-        const parsed = parseBackfillFrom(body.from, MAX_BACKFILL_YEARS)
-        if ('error' in parsed) {
-          return NextResponse.json(
-            { error: backfillDateErrorMessage(parsed.error, MAX_BACKFILL_YEARS) },
-            { status: 400 },
-          )
-        }
-
-        const { data: connection } = await supabase
-          .from('stripe_connections')
-          .select('*')
-          .eq('company_id', companyId)
-          .eq('status', 'active')
-          .maybeSingle()
-
-        if (!connection) {
-          return NextResponse.json({ error: 'Inget anslutet Stripe-konto.' }, { status: 404 })
-        }
-
-        // The cursor is the start date, so a backfill is just the cursor moved
-        // back: no second column that could disagree with it. The run advances
-        // it to the newest processed transaction again, and the ingest dedups
-        // on external_id, so re-reading an already imported range changes
-        // nothing. The sync itself still floors the window at the company
-        // lock date: rows behind the lock can never be booked.
-        const { error: cursorError } = await supabase
-          .from('stripe_connections')
-          .update({ last_balance_txn_synced_at: parsed.iso })
-          .eq('id', connection.id)
-          .eq('company_id', companyId)
-          .eq('status', 'active')
-        if (cursorError) {
-          log.error('[stripe] Failed to move balance-transaction cursor for backfill', {
-            message: cursorError.message,
-            connection_id: connection.id,
-          })
-          return NextResponse.json(
-            { error: 'Kunde inte spara startdatumet. Försök igen.' },
-            { status: 500 },
-          )
-        }
-
-        try {
-          const serviceClient = createServiceClientNoCookies()
-          // Same shape as /sync: no time budget (see the settings panel's
-          // STRIPE_SYNC_TIMEOUT_MS), and the cursor persists per ingest chunk,
-          // so a run cut off at the dispatcher ceiling resumes where it stopped.
-          const transactions = await syncStripeBalanceTransactions(serviceClient, {
-            ...(connection as StripeConnection),
-            last_balance_txn_synced_at: parsed.iso,
-          })
-          return NextResponse.json({ success: true, from: parsed.iso, transactions })
-        } catch (error) {
-          // The cursor stays at the chosen date on purpose: the next run
-          // resumes the backfill from where this one failed.
-          log.error('[stripe] Backfill sync failed', {
-            message: error instanceof Error ? error.message : String(error),
-            connection_id: connection.id,
-          })
-          return NextResponse.json(
-            { error: 'Synkroniseringen misslyckades. Försök igen.' },
-            { status: 502 },
-          )
-        }
-      },
-    },
-    {
-      method: 'POST',
-      path: '/transaction-sync',
-      handler: async (request: Request, ctx: ExtensionContext) => {
-        const supabase = ctx.supabase
-        const companyId = ctx.companyId
-
-        const capabilityBlocked = await requireCapability(
-          supabase,
-          companyId,
-          CAPABILITY.stripe_payments,
-        )
-        if (capabilityBlocked) return capabilityBlocked
-
-        const rl = await checkRateLimit({
-          prefix: 'stripe:transaction-sync-toggle',
-          identifier: ctx.userId,
-          ...RATE_LIMIT_SYNC,
-        })
-        if (!rl.ok) return rl.response!
-
-        const body = (await request.json().catch(() => ({}))) as { enabled?: unknown }
-        if (typeof body.enabled !== 'boolean') {
-          return NextResponse.json(
-            { error: 'enabled (boolean) krävs.' },
-            { status: 400 },
-          )
-        }
-
-        const { data: updated, error: updateError } = await supabase
-          .from('stripe_connections')
-          .update({ transaction_sync_enabled: body.enabled })
-          .eq('company_id', companyId)
-          .eq('status', 'active')
-          .select('id')
-
-        if (updateError) {
-          return NextResponse.json(
-            { error: 'Kunde inte spara inställningen. Försök igen.' },
-            { status: 500 },
-          )
-        }
-        if (!updated || updated.length === 0) {
-          return NextResponse.json({ error: 'Inget anslutet Stripe-konto.' }, { status: 404 })
-        }
-
-        return NextResponse.json({ success: true, enabled: body.enabled })
-      },
-    },
+    ...feedConnectorRoutes(stripeFeed),
     {
       method: 'POST',
       path: '/connect',
@@ -396,94 +205,6 @@ export const stripeExtension: Extension = {
         })
 
         return NextResponse.json({ url: buildAuthorizeUrl(oauthState) })
-      },
-    },
-    {
-      method: 'DELETE',
-      path: '/disconnect',
-      handler: async (request: Request, ctx: ExtensionContext) => {
-        const log = ctx.log
-        const supabase = ctx.supabase
-        const companyId = ctx.companyId
-
-        const rl = await checkRateLimit({
-          prefix: 'stripe:disconnect',
-          identifier: ctx.userId,
-          ...RATE_LIMIT_DISCONNECT,
-        })
-        if (!rl.ok) return rl.response!
-
-        const body = (await request.json().catch(() => ({}))) as { connection_id?: string }
-
-        const base = supabase
-          .from('stripe_connections')
-          .select('id, status, stripe_account_id')
-          .eq('company_id', companyId)
-        const query = body.connection_id
-          ? base.eq('id', body.connection_id).limit(1)
-          : base.neq('status', 'revoked').order('created_at', { ascending: false }).limit(1)
-        const { data: rows, error: findError } = await query
-        const connection = rows?.[0] as
-          | Pick<StripeConnection, 'id' | 'status' | 'stripe_account_id'>
-          | undefined
-
-        if (findError || !connection) {
-          return NextResponse.json({ error: 'Connection not found' }, { status: 404 })
-        }
-
-        // Best-effort revoke at Stripe: an already-severed connection throws,
-        // which is fine (the goal state is reached either way). Logged at WARN
-        // so a systematic revoke failure stays visible to monitoring.
-        if (connection.status === 'active' && connection.stripe_account_id) {
-          try {
-            await deauthorizeAccount(connection.stripe_account_id)
-          } catch (revokeError) {
-            log.warn('[stripe] Deauthorize skipped (likely already revoked)', {
-              message: revokeError instanceof Error ? revokeError.message : String(revokeError),
-              connection_id: connection.id,
-            })
-          }
-        }
-
-        const { error: updateError } = await supabase
-          .from('stripe_connections')
-          .update({
-            status: 'revoked',
-            oauth_state: null,
-            disconnected_at: new Date().toISOString(),
-          })
-          .eq('id', connection.id)
-          .eq('company_id', companyId)
-
-        if (updateError) {
-          log.error('[stripe] Failed to mark connection revoked', {
-            message: updateError.message,
-            connection_id: connection.id,
-          })
-          return NextResponse.json(
-            { error: 'Kunde inte koppla från. Försök igen.' },
-            { status: 500 },
-          )
-        }
-
-        if (ctx.emit) {
-          try {
-            await ctx.emit({
-              type: 'stripe.disconnected',
-              payload: {
-                connectionId: connection.id,
-                stripeAccountId: connection.stripe_account_id,
-                reason: 'user',
-                userId: ctx.userId,
-                companyId,
-              },
-            })
-          } catch {
-            // Audit event failure must not block the disconnect itself.
-          }
-        }
-
-        return NextResponse.json({ success: true })
       },
     },
   ],

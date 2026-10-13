@@ -11,6 +11,7 @@ import {
 } from '@/lib/reports/xlsx-export'
 import type { DimensionPnlReport } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { fileResponse } from '@/lib/api/file-response'
 
 // One row per account; the dimension values are dynamic columns, exactly as
 // the on-screen matrix renders. Column labels stay Swedish (report surface).
@@ -128,12 +129,7 @@ export const GET = withRouteContext(
         report.period.end,
       )
 
-      return new NextResponse(new Uint8Array(workbook), {
-        headers: {
-          'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          'Content-Disposition': `attachment; filename="${filename}"`,
-        },
-      })
+      return fileResponse(new Uint8Array(workbook), { filename: filename, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
     } catch (err) {
       log.error('dimension pnl xlsx failed', err as Error, { periodId, dimNo })
       return errorResponseFromCode('REPORT_GENERATION_FAILED', log, {

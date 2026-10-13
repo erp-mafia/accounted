@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { AccountNumber } from '@/components/ui/account-number'
+import { VoucherLinesTable, type VoucherTableLine } from '@/components/bookkeeping/VoucherLinesTable'
 import { Textarea } from '@/components/ui/textarea'
 import {
   ArrowLeft,
@@ -32,10 +33,9 @@ import {
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { formatCurrency, formatDate, cn } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
-import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { AttnLine } from '@/components/ui/attn-line'
 import { HelpPopover } from '@/components/ui/help-popover'
 import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttachments'
@@ -412,7 +412,6 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
     .sort((a, b) => a.sort_order - b.sort_order)
 
   const totalDebit = lines.reduce((sum, l) => sum + (Number(l.debit_amount) || 0), 0)
-  const totalCredit = lines.reduce((sum, l) => sum + (Number(l.credit_amount) || 0), 0)
 
   const foreignLines = lines.filter(l => l.currency && l.currency !== 'SEK' && l.amount_in_currency != null)
   const hasForeignCurrency = foreignLines.length > 0
@@ -838,160 +837,41 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           </span>
         }
       >
-        <table className="hidden w-full border-collapse text-[13px] sm:table">
-          <thead>
-            <tr>
-              <th className={cn(TH_CLASS, 'pl-0')}>{t('col_account')}</th>
-              <th className={TH_CLASS}>{t('col_description')}</th>
-              <th className={cn(TH_CLASS, 'text-right')}>{t('col_debit')}</th>
-              <th className={cn(TH_CLASS, 'pr-0 text-right')}>{t('col_credit')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {displayRows.map((row) => {
-              if (row.kind === 'struck') {
-                const s = row.line
-                return (
-                  <tr key={`struck-${s.id}`} className="text-muted-foreground">
-                    <td className={cn(TD_CLASS, 'pl-0 whitespace-nowrap line-through decoration-muted-foreground/70')}>
-                      <AccountNumber number={s.account_number} showName />
-                    </td>
-                    <td className={TD_CLASS}>
-                      <span className="line-through decoration-muted-foreground/70">
-                        {s.line_description || ''}
-                      </span>
-                      <span data-ph-mask="" className="ml-2 text-xs">{struckMarker(s)}</span>
-                    </td>
-                    <td className={cn(TD_CLASS, 'text-right tabular-nums whitespace-nowrap line-through decoration-muted-foreground/70')}>
-                      {Number(s.debit_amount) > 0 && fmtAmount(s.debit_amount)}
-                    </td>
-                    <td className={cn(TD_CLASS, 'pr-0 text-right tabular-nums whitespace-nowrap line-through decoration-muted-foreground/70')}>
-                      {Number(s.credit_amount) > 0 && fmtAmount(s.credit_amount)}
-                    </td>
-                  </tr>
-                )
-              }
-              const line = row.line
-              const lineHasForeignCurrency = line.currency && line.currency !== 'SEK' && line.amount_in_currency != null
-              return (
-                <tr key={line.id}>
-                  <td className={cn(TD_CLASS, 'pl-0 whitespace-nowrap')}>
-                    <AccountNumber number={line.account_number} showName />
-                  </td>
-                  <td className={cn(TD_CLASS, 'text-muted-foreground')}>
-                    <span className="inline-flex items-center gap-1">
-                      {line.line_description || ''}
-                      {retagButton(line)}
-                    </span>
-                    {renderDimensions(line)}
-                  </td>
-                  <td className={cn(TD_CLASS, 'text-right tabular-nums whitespace-nowrap')}>
-                    {Number(line.debit_amount) > 0 && (
-                      <>
-                        {fmtAmount(line.debit_amount)}
-                        {lineHasForeignCurrency && (
-                          <span className="block text-xs text-muted-foreground">
-                            {fmtAmount(line.amount_in_currency!)} {line.currency}
-                          </span>
-                        )}
-                      </>
-                    )}
-                  </td>
-                  <td className={cn(TD_CLASS, 'pr-0 text-right tabular-nums whitespace-nowrap')}>
-                    {Number(line.credit_amount) > 0 && (
-                      <>
-                        {fmtAmount(line.credit_amount)}
-                        {lineHasForeignCurrency && (
-                          <span className="block text-xs text-muted-foreground">
-                            {fmtAmount(line.amount_in_currency!)} {line.currency}
-                          </span>
-                        )}
-                      </>
-                    )}
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-          <tfoot>
-            <tr className="font-medium">
-              <td colSpan={2} className="pl-0 pr-4 pt-3">{t('sum')}</td>
-              <td className="px-4 pt-3 text-right tabular-nums">{fmtAmount(totalDebit)}</td>
-              <td className="pl-4 pr-0 pt-3 text-right tabular-nums">{fmtAmount(totalCredit)}</td>
-            </tr>
-          </tfoot>
-        </table>
-
-        {/* Mobile: one flat row per line, no numeric columns to cram. */}
-        <div className="divide-y divide-border text-sm sm:hidden">
-          {displayRows.map((row) => {
+        <VoucherLinesTable
+          swedish
+          showTotals
+          className="text-[13px]"
+          lines={displayRows.map((row): VoucherTableLine => {
             if (row.kind === 'struck') {
               const s = row.line
-              return (
-                <div key={`struck-${s.id}`} className="flex items-start justify-between gap-4 py-3 text-muted-foreground">
-                  <div className="min-w-0 flex-1">
-                    <div className="line-through decoration-muted-foreground/70">
-                      <AccountNumber number={s.account_number} showName />
-                    </div>
-                    {s.line_description && (
-                      <p className="truncate text-xs line-through decoration-muted-foreground/70">{s.line_description}</p>
-                    )}
-                    <p data-ph-mask="" className="text-xs">{struckMarker(s)}</p>
-                  </div>
-                  <div className="shrink-0 text-right tabular-nums line-through decoration-muted-foreground/70">
-                    {Number(s.debit_amount) > 0 && <p>{fmtAmount(s.debit_amount)} D</p>}
-                    {Number(s.credit_amount) > 0 && <p>{fmtAmount(s.credit_amount)} K</p>}
-                  </div>
-                </div>
-              )
+              return {
+                key: `struck-${s.id}`,
+                account_number: s.account_number,
+                description: s.line_description,
+                debit_amount: s.debit_amount,
+                credit_amount: s.credit_amount,
+                struck: true,
+                extra: <span data-ph-mask="" className="text-xs">{struckMarker(s)}</span>,
+              }
             }
             const line = row.line
             const lineHasForeignCurrency = line.currency && line.currency !== 'SEK' && line.amount_in_currency != null
-            return (
-              <div key={line.id} className="flex items-start justify-between gap-4 py-3">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1">
-                    <AccountNumber number={line.account_number} showName />
-                    {retagButton(line)}
-                  </div>
-                  {line.line_description && (
-                    <p className="truncate text-xs text-muted-foreground">{line.line_description}</p>
-                  )}
+            return {
+              key: line.id,
+              account_number: line.account_number,
+              description: line.line_description,
+              debit_amount: line.debit_amount,
+              credit_amount: line.credit_amount,
+              foreignAmount: lineHasForeignCurrency ? `${fmtAmount(line.amount_in_currency!)} ${line.currency}` : null,
+              extra: (
+                <>
+                  {retagButton(line)}
                   {renderDimensions(line)}
-                </div>
-                <div className="shrink-0 text-right tabular-nums">
-                  {Number(line.debit_amount) > 0 && (
-                    <p>
-                      {fmtAmount(line.debit_amount)} D
-                      {lineHasForeignCurrency && (
-                        <span className="block text-xs text-muted-foreground">
-                          {fmtAmount(line.amount_in_currency!)} {line.currency}
-                        </span>
-                      )}
-                    </p>
-                  )}
-                  {Number(line.credit_amount) > 0 && (
-                    <p>
-                      {fmtAmount(line.credit_amount)} K
-                      {lineHasForeignCurrency && (
-                        <span className="block text-xs text-muted-foreground">
-                          {fmtAmount(line.amount_in_currency!)} {line.currency}
-                        </span>
-                      )}
-                    </p>
-                  )}
-                </div>
-              </div>
-            )
+                </>
+              ),
+            }
           })}
-          <div className="flex items-start justify-between gap-4 py-3 font-medium">
-            <span>{t('sum')}</span>
-            <div className="text-right tabular-nums">
-              <p>{t('summary_debit')} {fmtAmount(totalDebit)}</p>
-              <p>{t('summary_credit')} {fmtAmount(totalCredit)}</p>
-            </div>
-          </div>
-        </div>
+        />
       </DetailSection>
 
       {/* Underlag: linked invoices and lönekörningar as rows, then the

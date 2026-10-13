@@ -4,6 +4,7 @@ import {
   buildSalaryPaymentFile,
   type SalaryPaymentFileError,
 } from '@/lib/salary/payment/build-payment-file'
+import { fileResponse } from '@/lib/api/file-response'
 
 /**
  * Generate Bankgirot LB-fil for a salary run.
@@ -87,12 +88,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     // ISO 8859-1 encoding: re-encode the JS string to Latin-1 bytes.
     const buffer = Buffer.from(result.content, 'latin1')
 
-    return new Response(buffer, {
-      headers: {
-        'Content-Type': 'text/plain; charset=iso-8859-1',
-        'Content-Disposition': `attachment; filename="${result.filename}"`,
-      },
-    })
+    return fileResponse(buffer, { filename: result.filename, contentType: 'text/plain; charset=iso-8859-1' })
   },
   { requireWrite: true },
 )

@@ -97,6 +97,8 @@ import { shrinkImageForUpload } from '@/lib/documents/shrink-image'
 import { uploadViaSignedUrl } from '@/lib/documents/direct-upload'
 import { INBOX_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { documentPreviewKind } from '@/lib/documents/preview-kind'
+import { DocumentPreview as DocumentPreviewBody } from '@/components/bookkeeping/DocumentPreview'
 import { parseAmountInput } from '@/lib/money'
 
 /**
@@ -2467,35 +2469,34 @@ export function DocumentPreview({
       </div>
     )
   }
+  // Anything that is neither a photo nor mail HTML is shown as the PDF the
+  // inbox stores (an upload without a recorded type included).
+  const kind = documentPreviewKind(docMime) ?? 'pdf'
+  const preview = (className: string, imageClassName?: string) => (
+    <DocumentPreviewBody
+      src={docUrl}
+      kind={kind}
+      label="Underlag"
+      className={className}
+      imageClassName={imageClassName}
+      fallback={
+        <a href={docUrl} target="_blank" rel="noopener noreferrer" className="block p-4 text-sm text-muted-foreground underline">
+          {t('open_in_new_tab')}
+        </a>
+      }
+    />
+  )
   return (
     <div className="h-full w-full p-4 flex items-start justify-center overflow-hidden">
-      {docMime?.startsWith('image/') ? (
+      {kind === 'image' ? (
         // Image: frame hugs the image, capped at the parent's visible box.
         <div className="max-h-full max-w-3xl bg-background rounded-lg border overflow-hidden flex">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={docUrl}
-            alt="Underlag"
-            className="block max-h-[calc(100vh-9rem)] max-w-full w-auto h-auto object-contain"
-          />
-        </div>
-      ) : docMime === 'text/html' ? (
-        // HTML mail underlag: arbitrary sender-controlled markup. sandbox
-        // with no tokens = opaque origin, no scripts, no forms, no popups.
-        // bg-white because mail HTML assumes a white canvas and would render
-        // transparent (unreadable in dark mode) otherwise.
-        <div className="h-full w-full max-w-3xl bg-background rounded-lg border overflow-hidden">
-          <iframe
-            src={docUrl}
-            sandbox=""
-            className="w-full h-full border-0 bg-white"
-            title="Underlag"
-          />
+          {preview('', 'block max-h-[calc(100vh-9rem)] max-w-full w-auto h-auto object-contain')}
         </div>
       ) : (
-        // PDF: iframe needs explicit height, frame fills the available pane.
+        // PDF and mail HTML: the frame needs an explicit height and fills the pane.
         <div className="h-full w-full max-w-3xl bg-background rounded-lg border overflow-hidden">
-          <embed src={docUrl} type="application/pdf" className="w-full h-full border-0" title="Underlag" />
+          {preview('w-full h-full border-0')}
         </div>
       )}
     </div>

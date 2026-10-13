@@ -4,11 +4,9 @@
  * table, cursor, capability and sync function it runs; what a run is lives
  * here once:
  *
- *   - a disabled extension answers 200 skipped (extensionDisabledSkip, which
- *     each route calls after its own extensionRegistry.get('<id>') gate, the
- *     check:guards contract): physical routes under app/api/extensions/<id>/
- *     compile into every build, and a scheduled cron for an extension this
- *     installation does not run is not a failure;
+ *   - a disabled extension answers 200 skipped: each route runs on
+ *     withServiceCronContext with requireExtension, whose gate answers before
+ *     this runner is reached, and whose service client arrives as ctx.supabase;
  *   - candidates are the active, opted-in connections, oldest cursor first,
  *     snapshotted page by page before any sync moves a cursor;
  *   - a connection whose company is not entitled is skipped without using
@@ -25,8 +23,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { NextResponse } from 'next/server'
-import { createServiceRoleClient } from '@/lib/supabase/service-client'
-import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { errorResponse } from '@/lib/errors/get-structured-error'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import type { CapabilityKey } from '@/lib/entitlements/keys'
 import type { Logger } from '@/lib/logger'
@@ -69,9 +66,11 @@ export interface WebshopOrderCronSpec<C extends { id: string; company_id: string
   beforeSync?: (supabase: SupabaseClient, log: Logger) => Promise<void>
 }
 
-export interface CronContext {
+/** What the runner needs of withServiceCronContext's context. */
+export interface WebshopCronContext {
   requestId: string
   log: Logger
+  supabase: SupabaseClient
 }
 
 type ConnectionResult = {
@@ -81,18 +80,9 @@ type ConnectionResult = {
   status: 'synced' | 'revoked' | 'locked' | 'error'
 }
 
-/**
- * The answer of a cron whose extension this installation does not run: a
- * skip, not an outage. Nothing is read or written.
- */
-export function extensionDisabledSkip(ctx: CronContext, extensionId: string): Response {
-  ctx.log.info(`${extensionId} extension is not enabled; cron skipped`)
-  return NextResponse.json({ skipped: true, reason: 'extension_disabled', processed: 0 })
-}
-
-/** One nightly run. The route has checked that the extension is enabled. */
+/** One nightly run. The route's wrapper has checked that the extension is enabled. */
 export async function runWebshopOrderCron<C extends { id: string; company_id: string }>(
-  ctx: CronContext,
+  ctx: WebshopCronContext,
   spec: WebshopOrderCronSpec<C>,
   now: () => number = Date.now,
 ): Promise<Response> {
@@ -100,19 +90,11 @@ export async function runWebshopOrderCron<C extends { id: string; company_id: st
   // wall-clock for the route, so the deadline is fixed before any await.
   const deadlineMs = now() + TIME_BUDGET_MS
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!supabaseUrl || !supabaseServiceKey) {
-    return errorResponseFromCode('INTERNAL_ERROR', ctx.log, {
-      requestId: ctx.requestId,
-      details: { reason: 'Missing Supabase configuration' },
-    })
-  }
   if (!spec.isConfigured()) {
     return NextResponse.json({ message: `${spec.label} not configured`, processed: 0 })
   }
 
-  const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
+  const supabase = ctx.supabase
   if (spec.beforeSync) await spec.beforeSync(supabase, ctx.log)
 
   // Snapshot the candidate list BEFORE syncing any of it. Each sync moves its

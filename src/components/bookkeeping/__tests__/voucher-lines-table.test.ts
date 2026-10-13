@@ -43,10 +43,17 @@ describe('surfaces on the shared voucher lines table', () => {
     'components/suppliers/SupplierInvoiceReviewContent.tsx',
     'components/transactions/JournalEntryPreview.tsx',
     'components/bookkeeping/year-end/PreviewStep.tsx',
+    'app/(dashboard)/bookkeeping/[id]/page.tsx',
   ])('%s', (rel) => {
     const src = fs.readFileSync(path.join(root, rel), 'utf8')
     expect(src).toContain('<VoucherLinesTable')
     expect(src).not.toMatch(/sm:hidden space-y-1\.5/)
+    expect(src).not.toMatch(/divide-y divide-border text-sm sm:hidden/)
+  })
+
+  it('the verifikat page keeps Swedish heads in both locales', () => {
+    const src = fs.readFileSync(path.join(root, 'app/(dashboard)/bookkeeping/[id]/page.tsx'), 'utf8')
+    expect(src).toMatch(/<VoucherLinesTable[\s\S]*?\bswedish\b/)
   })
 
   it('the year-end preview keeps Swedish heads in both locales', () => {

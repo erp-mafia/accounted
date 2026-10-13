@@ -1,7 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { ENTITY_TYPE_LABELS_SV, isEntityType } from '@/lib/company/entity-type'
 import { redirect } from 'next/navigation'
-import { headers } from 'next/headers'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -41,7 +40,6 @@ export default async function AgentOnboardingPage() {
     { data: existingProfile },
     { data: atomRows },
     activeEmployees,
-    hdrs,
   ] = await Promise.all([
     supabase
       .from('company_settings')
@@ -64,7 +62,6 @@ export default async function AgentOnboardingPage() {
     // The only source that actually knows the headcount. Cheap: a head-only
     // count served by idx_employees_active, and it rides the same batch.
     loadActiveEmployeeCount(supabase, companyId).catch(() => null),
-    headers(),
   ])
 
   // Sandbox companies ship with a pre-built verified agent_profile: the
@@ -79,15 +76,11 @@ export default async function AgentOnboardingPage() {
   // streaming endpoint; this just lets the initial Phase B render show the
   // SNI/verksamhetsbeskrivning when the user returns to the page after
   // stream completion.
-  const cookieHeader = hdrs.get('cookie') ?? ''
-  const host = hdrs.get('host') ?? 'localhost:3000'
-  const proto = hdrs.get('x-forwarded-proto') ?? (host.startsWith('localhost') ? 'http' : 'https')
-  const origin = `${proto}://${host}`
   // upgradeV1: this is the one place the v2-only sections (statuses,
   // beneficialOwners, payrolls, …) materially drive the composer, and it's
   // a deliberate once-per-company action: safe to spend the TIC calls to
   // bring a pre-v2 snapshot up to date.
-  await ensureTicSnapshot({ supabase, companyId, cookieHeader, origin, upgradeV1: true })
+  await ensureTicSnapshot({ supabase, companyId, upgradeV1: true })
 
   // Fetch the small handful of fields we render directly into Phase B so the
   // user sees real values (not "Laddar…") the moment the stream finishes.

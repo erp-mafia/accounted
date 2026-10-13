@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { errorResponse, errorResponseFromCode, isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
 import { resolveCompanyEntityType, supportsCorporateTaxDispositions } from '@/lib/company/entity-type'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
@@ -150,7 +150,7 @@ export const PUT = withRouteContext(
       const data = await buildDispositionsProposal(supabase, companyId, id)
       return NextResponse.json({ data })
     } catch (err) {
-      if (err instanceof Error && /locked for tax adjustments/i.test(err.message)) {
+      if (isPeriodLockRefusal(err)) {
         return errorResponseFromCode('PERIOD_LOCKED', opLog, { requestId })
       }
       opLog.error('bokslutsdispositioner adjustments failed', err as Error)

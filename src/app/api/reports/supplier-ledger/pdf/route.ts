@@ -5,6 +5,7 @@ import { slugifyCompanyName } from '@/lib/reports/xlsx-export'
 import type { CompanySettings } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { fileResponse } from '@/lib/api/file-response'
 
 export const GET = withRouteContext('report.supplier_ledger.pdf', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
@@ -66,12 +67,7 @@ export const GET = withRouteContext('report.supplier_ledger.pdf', async (request
     const parts = ['leverantorsreskontra', companySlug, asOfDate.replace(/-/g, '')].filter(Boolean)
     const filename = `${parts.join('-')}.pdf`
 
-    return new Response(new Uint8Array(pdfBuffer), {
-      headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-      },
-    })
+    return fileResponse(new Uint8Array(pdfBuffer), { filename: filename, contentType: 'application/pdf' })
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera leverantörsreskontra' },

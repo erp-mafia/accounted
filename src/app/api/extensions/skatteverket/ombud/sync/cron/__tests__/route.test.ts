@@ -115,11 +115,11 @@ describe('GET /api/extensions/skatteverket/ombud/sync/cron', () => {
     expect(mockListOmbudGrants).not.toHaveBeenCalled()
   })
 
-  it('503 EXTENSION_DISABLED when the skatteverket extension is not in the registry', async () => {
+  it('answers 200 skipped when the skatteverket extension is not in the registry', async () => {
     mockRegistryGet.mockReturnValueOnce(undefined)
     const res = await GET(request())
-    expect(res.status).toBe(503)
-    expect(await res.json()).toMatchObject({ code: 'EXTENSION_DISABLED' })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ skipped: true, reason: 'extension_disabled', processed: 0 })
     expect(mockListOmbudGrants).not.toHaveBeenCalled()
   })
 

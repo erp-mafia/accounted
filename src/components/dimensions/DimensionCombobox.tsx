@@ -11,6 +11,7 @@ import {
   type DimensionValueDto,
 } from '@/components/dimensions/types'
 import { useDimensions } from '@/lib/reference-data/hooks'
+import { useComboboxNavigation } from '@/lib/hooks/use-combobox-navigation'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { Badge } from '@/components/ui/badge'
 
@@ -70,7 +71,6 @@ export default function DimensionCombobox({
 }: DimensionComboboxProps) {
   const [search, setSearch] = useState(value ?? '')
   const [isOpen, setIsOpen] = useState(false)
-  const [highlightedIndex, setHighlightedIndex] = useState(0)
   // Registry from the session cache (lib/reference-data): every combobox on
   // the page shares one entry, so opening a picker costs no request.
   const { dimensions, isLoading: registryLoading, error: registryError } = useDimensions()
@@ -143,30 +143,6 @@ export default function DimensionCombobox({
   // Keyboard list: matching values first, the create affordance last.
   const optionCount = filteredValues.length + (createCandidate ? 1 : 0)
 
-  useEffect(() => {
-    setHighlightedIndex(0)
-  }, [filteredValues, createCandidate])
-
-  useEffect(() => {
-    if (!isOpen || !listRef.current) return
-    const highlighted = listRef.current.querySelector('[data-highlighted="true"]')
-    if (highlighted) highlighted.scrollIntoView({ block: 'nearest' })
-  }, [highlightedIndex, isOpen])
-
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent | TouchEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
-        setIsOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    document.addEventListener('touchstart', handleClickOutside)
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside)
-      document.removeEventListener('touchstart', handleClickOutside)
-    }
-  }, [])
-
   const selectValue = useCallback(
     (code: string) => {
       onChange(code)
@@ -221,34 +197,23 @@ export default function DimensionCombobox({
     [filteredValues, createCandidate, selectValue, createValue],
   )
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (!isOpen) {
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-        openDropdown()
-        e.preventDefault()
-      }
-      return
-    }
+  const close = useCallback(() => setIsOpen(false), [])
+  const insideRefs = useMemo(() => [containerRef], [])
+  const { highlightedIndex, setHighlightedIndex, handleKeyDown } = useComboboxNavigation({
+    count: optionCount,
+    isOpen,
+    open: openDropdown,
+    close,
+    activate: (index) => {
+      if (optionCount > 0) activateOption(index)
+    },
+    listRef,
+    insideRefs,
+  })
 
-    switch (e.key) {
-      case 'ArrowDown':
-        e.preventDefault()
-        setHighlightedIndex((prev) => Math.min(prev + 1, optionCount - 1))
-        break
-      case 'ArrowUp':
-        e.preventDefault()
-        setHighlightedIndex((prev) => Math.max(prev - 1, 0))
-        break
-      case 'Enter':
-        e.preventDefault()
-        if (optionCount > 0) activateOption(highlightedIndex)
-        break
-      case 'Escape':
-        e.preventDefault()
-        setIsOpen(false)
-        break
-    }
-  }
+  useEffect(() => {
+    setHighlightedIndex(0)
+  }, [filteredValues, createCandidate, setHighlightedIndex])
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSearch(e.target.value)

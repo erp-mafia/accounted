@@ -15,6 +15,8 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import { cn } from '@/lib/utils'
 import { openDeferredTab } from '@/lib/browser/deferred-tab'
+import { DocumentPreview } from '@/components/bookkeeping/DocumentPreview'
+import { documentPreviewKind } from '@/lib/documents/preview-kind'
 import { prepareForMultipartUpload } from '@/lib/documents/shrink-image'
 import {
   FileText,
@@ -64,18 +66,6 @@ function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
-
-function isImageType(type: string | null): boolean {
-  return type?.startsWith('image/') ?? false
-}
-
-function isPdfType(type: string | null): boolean {
-  return type === 'application/pdf'
-}
-
-function isPreviewable(type: string | null): boolean {
-  return isImageType(type) || isPdfType(type)
 }
 
 export default function JournalEntryAttachments({
@@ -361,10 +351,12 @@ export default function JournalEntryAttachments({
         <div className="space-y-1">
           {documents.map((doc) => {
             const isReplacing = replacingDocId === doc.id
+            const kind = documentPreviewKind(doc.mime_type, doc.file_name)
+            const previewable = kind === 'pdf' || kind === 'image'
             return (
               <div key={doc.id}>
                 <div className="flex items-center gap-2 text-sm py-1.5 px-2 rounded-sm bg-muted/50">
-                  {isPreviewable(doc.mime_type) ? (
+                  {previewable ? (
                     <button
                       onClick={() => handlePreviewToggle(doc)}
                       className="shrink-0 hover:text-primary transition-colors"
@@ -379,8 +371,8 @@ export default function JournalEntryAttachments({
                     <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
                   )}
 
-                  {isPreviewable(doc.mime_type) && expandedDoc !== doc.id && (
-                    isImageType(doc.mime_type) ? (
+                  {previewable && expandedDoc !== doc.id && (
+                    kind === 'image' ? (
                       <ImageIcon className="h-4 w-4 text-muted-foreground shrink-0" />
                     ) : (
                       <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -436,37 +428,25 @@ export default function JournalEntryAttachments({
                   </Button>
                 </div>
 
-                {expandedDoc === doc.id && doc.download_url && isImageType(doc.mime_type) && (
+                {expandedDoc === doc.id && doc.download_url && previewable && (
                   <div className="px-2 py-2">
-                    <img
+                    <DocumentPreview
                       src={`/api/documents/${doc.id}/inline`}
-                      alt={doc.file_name}
-                      className="max-h-48 rounded-lg object-contain"
+                      kind={kind}
+                      label={doc.file_name}
+                      className="h-[60vh] w-full rounded-lg border"
+                      imageClassName="max-h-48 rounded-lg object-contain"
+                      fallback={
+                        <a
+                          href={doc.download_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="block px-4 py-2 text-sm text-muted-foreground underline"
+                        >
+                          {t('download')}
+                        </a>
+                      }
                     />
-                  </div>
-                )}
-
-                {expandedDoc === doc.id && doc.download_url && isPdfType(doc.mime_type) && (
-                  <div className="px-2 py-2">
-                    {/* <object> + type="application/pdf" invokes Chrome's PDF
-                        plugin directly. <iframe> intermittently surfaced
-                        "Det här innehållet har blockerats" in Chrome even
-                        with a permissive CSP. See crbug.com/271452. */}
-                    <object
-                      data={`/api/documents/${doc.id}/inline`}
-                      type="application/pdf"
-                      aria-label={doc.file_name}
-                      className="w-full h-[60vh] rounded-lg border"
-                    >
-                      <a
-                        href={doc.download_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="block px-4 py-2 text-sm text-muted-foreground underline"
-                      >
-                        {t('download')}
-                      </a>
-                    </object>
                   </div>
                 )}
               </div>

@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { FileDropzone } from '@/components/ui/file-dropzone'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, Upload, Trash2 } from 'lucide-react'
 import {
@@ -11,6 +12,9 @@ import {
 } from '@/components/settings/SettingsRows'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { LOGO_UPLOAD_MAX_BYTES } from '@/lib/invoices/branding-constants'
+
+const LOGO_TYPES = ['image/png', 'image/jpeg', 'image/webp']
+const LOGO_ACCEPT = LOGO_TYPES.join(',')
 
 interface LogoUploadProps {
   logoUrl: string | null
@@ -23,13 +27,10 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
   const [isUploading, setIsUploading] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [preview, setPreview] = useState<string | null>(logoUrl)
-  const [isDragging, setIsDragging] = useState(false)
-  const inputRef = useRef<HTMLInputElement>(null)
 
-  const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/webp']
 
   function validateAndUpload(file: File) {
-    if (!ALLOWED_TYPES.includes(file.type)) {
+    if (!LOGO_TYPES.includes(file.type)) {
       toast({ title: t('logo_disallowed_type_title'), description: t('logo_disallowed_type_description'), variant: 'destructive' })
       return
     }
@@ -80,7 +81,6 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
 
       setPreview(null)
       onUpdate(null)
-      if (inputRef.current) inputRef.current.value = ''
     } catch {
       toast({ title: t('logo_delete_failed'), variant: 'destructive' })
     }
@@ -88,51 +88,29 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
     setIsDeleting(false)
   }
 
-  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    validateAndUpload(file)
-  }
-
-  function handleDrop(e: React.DragEvent<HTMLButtonElement>) {
-    e.preventDefault()
-    setIsDragging(false)
-    const file = e.dataTransfer.files?.[0]
-    if (file) validateAndUpload(file)
-  }
-
-  function handleDragOver(e: React.DragEvent<HTMLButtonElement>) {
-    e.preventDefault()
-    setIsDragging(true)
-  }
-
-  function handleDragLeave(e: React.DragEvent<HTMLButtonElement>) {
-    e.preventDefault()
-    setIsDragging(false)
-  }
-
   return (
     <SettingsGroup>
       <SettingsRow label={t('logo_heading')} help={t('logo_help')}>
         {preview ? (
           <>
-            <span className="inline-flex rounded-lg border border-border bg-muted/30 p-2">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={preview}
-                alt={t('logo_alt')}
-                className="max-h-10 max-w-32 object-contain"
-              />
-            </span>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => inputRef.current?.click()}
-              loading={isUploading}
-              className="text-muted-foreground hover:text-foreground"
+            {/* The logo itself is the change control: click it, or drop a new one on it. */}
+            <FileDropzone
+              onFile={validateAndUpload}
+              accept={LOGO_ACCEPT}
+              disabled={isUploading}
+              label={t('logo_change')}
+              className="inline-flex items-center gap-2 border p-2 text-sm text-muted-foreground"
             >
-              {t('logo_change')}
-            </Button>
+              <span className="inline-flex rounded-sm bg-muted/30">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={preview}
+                  alt={t('logo_alt')}
+                  className="max-h-10 max-w-32 object-contain"
+                />
+              </span>
+              {isUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <span className="px-1">{t('logo_change')}</span>}
+            </FileDropzone>
             <Button
               variant="outline"
               size="sm"
@@ -145,17 +123,12 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
             </Button>
           </>
         ) : (
-          <button
-            type="button"
-            onClick={() => inputRef.current?.click()}
-            onDrop={handleDrop}
-            onDragOver={handleDragOver}
-            onDragEnter={handleDragOver}
-            onDragLeave={handleDragLeave}
+          <FileDropzone
+            onFile={validateAndUpload}
+            accept={LOGO_ACCEPT}
             disabled={isUploading}
-            className={`inline-flex min-h-10 items-center gap-2 rounded-lg border border-dashed px-4 py-2 text-sm text-muted-foreground transition-colors duration-150 disabled:opacity-50 ${
-              isDragging ? 'border-foreground bg-muted/40' : 'border-border hover:bg-secondary/60'
-            }`}
+            label={t('logo_pick_or_drop')}
+            className="inline-flex min-h-10 items-center gap-2 border px-4 py-2 text-sm text-muted-foreground"
           >
             {isUploading ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -163,17 +136,9 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
               <Upload className="h-4 w-4 text-muted-foreground/60" />
             )}
             {isUploading ? t('logo_uploading') : t('logo_pick_or_drop')}
-          </button>
+          </FileDropzone>
         )}
       </SettingsRow>
-
-      <input
-        ref={inputRef}
-        type="file"
-        accept="image/png,image/jpeg,image/webp"
-        className="hidden"
-        onChange={handleFileChange}
-      />
     </SettingsGroup>
   )
 }

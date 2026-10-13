@@ -1,7 +1,6 @@
-import { withCronContext } from '@/lib/api/with-cron-context'
+import { withServiceCronContext } from '@/lib/api/with-cron-context'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-import { extensionRegistry } from '@/lib/extensions/registry'
-import { extensionDisabledSkip, runWebshopOrderCron } from '@/lib/webshop-orders/order-cron'
+import { runWebshopOrderCron } from '@/lib/webshop-orders/order-cron'
 import { isWooCommerceConfigured } from '@/extensions/general/woocommerce/lib/credentials'
 import { syncWooCommerceOrders } from '@/extensions/general/woocommerce/lib/order-sync'
 import { expireStaleHandshakes } from '@/extensions/general/woocommerce/lib/connect'
@@ -15,8 +14,7 @@ export const maxDuration = 300
  * upserts each connected store's orders and refunds into webshop_orders
  * (the Orders page). The run itself is runWebshopOrderCron.
  */
-export const GET = withCronContext('cron.woocommerce_order_sync', async (_request, ctx) => {
-  if (!(await extensionRegistry.get('woocommerce'))) return extensionDisabledSkip(ctx, 'woocommerce')
+export const GET = withServiceCronContext('cron.woocommerce_order_sync', async (_request, ctx) => {
   return runWebshopOrderCron<WooCommerceConnection>(ctx, {
     extensionId: 'woocommerce',
     label: 'WooCommerce',
@@ -39,4 +37,4 @@ export const GET = withCronContext('cron.woocommerce_order_sync', async (_reques
       }
     },
   })
-})
+}, { requireExtension: 'woocommerce' })

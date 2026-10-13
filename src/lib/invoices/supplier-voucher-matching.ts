@@ -33,20 +33,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { emitSupplierInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { createLogger } from '@/lib/logger'
-import {
-  CONFIDENCE,
-  amountsMatchExact,
-  amountsMatchFuzzy,
-  customerNameMatches,
-  descriptionMentionsReference,
-} from './invoice-matching'
 import { autoReconcileTransactionForLinkedVoucher } from '@/lib/reconciliation/bank-reconciliation'
 import { clearSettledInvoiceSuggestions } from './clear-settled-invoice-suggestions'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { documentCurrency, ledgerLineSideAmountIn } from '@/lib/bookkeeping/ledger-line-amount'
 import { commitSupplierInvoiceVoucherLink } from '@/lib/bookkeeping/engine'
 import type { SupplierInvoice, Supplier } from '@/types'
-import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import {
   resolveSupplierSettlementSide,
   type SupplierSettlementSide,
@@ -54,17 +46,19 @@ import {
 } from './supplier-settlement-side'
 import {
   AMOUNT_TOLERANCE,
-  DATE_PROXIMITY_BUMP,
   DEFAULT_DATE_WINDOW_DAYS,
   EXCLUDED_SOURCE_TYPES,
-  candidateAmountBand,
-  isDateWithinDays,
+  collectSettlementVouchers,
+  lockedPeriodIds,
+  rankVoucherCandidates,
   round2,
-  type FiscalPeriodRow,
-  type VoucherMatchLineRow as JournalEntryLine,
+  scoreVoucherCandidate,
+  sekBookedReason,
+  sekBookedSettlement,
+  type SettlementSideLine,
   type VoucherRow,
+  type VoucherScoreContext,
 } from './voucher-matching-shared'
-import { formatAmount as formatNumber } from '@/lib/utils'
 
 const log = createLogger('supplier-voucher-matching')
 
@@ -115,42 +109,6 @@ export interface SupplierVoucherCandidate {
   link_amount?: number
 }
 
-interface CandidateContext {
-  invoice: SupplierInvoice & { supplier?: Supplier }
-  remainingAmount: number
-  /** Offer a voucher that has more left than the invoice needs although
-   *  nothing else ties it to the invoice (see `includeShared`). */
-  includeShared: boolean
-  /** Half-width of the search window in days, around the due date. */
-  windowDays: number
-}
-
-/**
- * Confidence of a voucher offered only because it has more left than the
- * invoice needs (a payment of several debts). The amount says nothing about
- * WHICH debts, so it ranks under every amount match and far under the
- * unattended auto-link bar; the supplier's name in the voucher text lifts it
- * one step, still a "weak match" to the picker.
- *
- * Within the class the date is the only thing that tells the vouchers apart,
- * and a company that pays its suppliers every week has a dozen larger payment
- * runs inside the window. So the closer to the due date, the higher: up to
- * SHARED_VOUCHER_PROXIMITY_SPAN at the due date, nothing at the window's edge.
- * Without it the list would show the OLDEST runs first (the general tie-break
- * is the entry date) and cut the one that paid the invoice. The ceiling, with
- * the name and the 7-day bump, is 0.64: still under "likely match" (0.7).
- */
-const SHARED_VOUCHER_CONFIDENCE = 0.4
-const SHARED_VOUCHER_SUPPLIER_CONFIDENCE = 0.5
-const SHARED_VOUCHER_PROXIMITY_SPAN = 0.09
-
-/** 1 at the due date, 0 at the edge of the window or when a date is unreadable. */
-function dueDateCloseness(entryDate: string, dueDate: string, windowDays: number): number {
-  const days = Math.abs(new Date(entryDate).getTime() - new Date(dueDate).getTime()) / (24 * 3600 * 1000)
-  if (!Number.isFinite(days) || windowDays <= 0) return 0
-  return Math.max(0, 1 - days / windowDays)
-}
-
 /**
  * Find posted journal entries that carry the invoice's settlement side (244x
  * debit, or 19xx credit: see the module header) and could plausibly be the
@@ -186,150 +144,30 @@ export async function findMatchingVouchersForSupplierInvoice(
   const settlement =
     options.settlementSide ??
     (await resolveSupplierSettlementSide(supabase, companyId, invoice.id))
-  const onBankCredit = settlement.side === 'bank_credit'
-  const amountColumn = settlement.entrySide === 'credit' ? 'credit_amount' : 'debit_amount'
-
-  const dueDate = new Date(invoice.due_date)
-  const dateFrom = new Date(dueDate)
-  dateFrom.setDate(dateFrom.getDate() - windowDays)
-  const dateTo = new Date(dueDate)
-  dateTo.setDate(dateTo.getDate() + windowDays)
-
-  // Driven from the journal_entries side (lib/bookkeeping/entry-lines.ts):
-  // the scope filters used to sit on a `journal_entries!inner` embed, which
-  // PostgREST compiles into a correlated LATERAL join that walks the ENTIRE
-  // journal_entry_lines table across all tenants. The old `.limit(limit * 10)`
-  // went with the embed: the match set is one company's AP debits inside a
-  // date window around the due date, and an arbitrary cap could drop the
-  // exact-amount voucher the ranking below is looking for.
-  // `amount_in_currency` is part of the column list on purpose: on a foreign
-  // invoice it is the ONLY column quoted in the invoice's currency (debit_amount
-  // is always SEK). Dropping it here would make every FX line unconvertible and
-  // this matcher would silently return no candidates.
-  // `documentCurrency()` and not `invoice.currency` directly: a NULL code would
-  // test `!== 'SEK'` and send a plain domestic invoice down the FX path where
-  // nothing is convertible. The label guard in scoreCandidate still compares
-  // the RAW `invoice.currency`, so such a row behaves as it did before.
   const invoiceCurrency = documentCurrency(invoice.currency)
-  const isForeignInvoice = invoiceCurrency !== 'SEK'
-  let lines: Array<JournalEntryLine & { journal_entries: VoucherRow }>
-  try {
-    lines = await fetchEntryLines({
-      supabase,
-      entryColumns:
-        'id, voucher_series, voucher_number, entry_date, description, status, source_type, fiscal_period_id, company_id',
-      lineColumns:
-        'id, journal_entry_id, account_number, debit_amount, credit_amount, currency, amount_in_currency',
-      filterEntries: (q: EntryLinesQuery) =>
-        q
-          .eq('company_id', companyId)
-          .eq('status', 'posted')
-          .gte('entry_date', dateFrom.toISOString().slice(0, 10))
-          .lte('entry_date', dateTo.toISOString().slice(0, 10)),
-      filterLines: (q: EntryLinesQuery) => {
-        const scoped = q
-          .like('account_number', `${settlement.accountPrefix}%`)
-          .gt(amountColumn, 0)
-        // A foreign invoice on the 244x side reads every AP debit in the
-        // window, whatever its label, exactly the set a SEK invoice reads: a
-        // payment voucher that carries its 2440 debit in SEK only (an SIE
-        // import, a manual verifikat) settles the invoice through the
-        // SEK-booked fallback below, and the link validator accepts it
-        // (feedback seq 930807). On the 19xx side the SEK set would be the
-        // company's whole bank history in the window, so only lines labelled
-        // with the invoice's currency are read there: they are the only ones
-        // expressible in it. No-op on a SEK invoice.
-        if (isForeignInvoice && onBankCredit) return scoped.eq('currency', invoiceCurrency)
-        if (isForeignInvoice) return scoped
-        // Every payout a kontantmetod company makes credits 19xx, so the
-        // unbanded set is its whole bank history in the window. Band the
-        // kronor column around the invoice (candidateAmountBand). A 244x debit
-        // is rare enough to stay unbanded, exactly as before.
-        if (!onBankCredit) return scoped
-        const band = candidateAmountBand(remainingAmount, invoice.total)
-        return scoped.gte(amountColumn, band.floor).lte(amountColumn, band.ceil)
-      },
-    })
-  } catch {
-    // Unchanged posture: a candidate-search failure returns no candidates
-    // rather than breaking the reconciliation screen.
-    return []
-  }
+  const logContext = { companyId, supplierInvoiceId: invoice.id }
 
-  // Sum the settlement side per voucher across its lines (a samlings-
-  // verifikation paying several supplier invoices in one shot will have one
-  // 2440 row per supplier; BAS 2026 reserves 2440-2449 for leverantörsskulder,
-  // and a voucher paying mixed SEK + EUR suppliers debits both 2440 and 2441).
-  const byEntry = new Map<
-    string,
-    {
-      entry: VoucherRow
-      apDebitTotal: number
-      lineCurrency: string | null
-      /** Every settlement-side line, for the SEK-booked fallback. */
-      sideLines: SettlementSideLine[]
-      /** A settlement-side line carries no figure in the invoice's currency. */
-      unconvertible: boolean
-      converted: boolean
-      /** Set when the voucher settles through the SEK-booked fallback. */
-      sekBooked?: { sekTotal: number }
-    }
-  >()
-
-  for (const line of lines) {
-    const entry = line.journal_entries
-    if (!entry) continue
-    if (EXCLUDED_SOURCE_TYPES.includes(entry.source_type ?? '')) continue
-
-    // The settlement side quoted in the INVOICE's currency. On SEK this reads
-    // the ledger column exactly as before; on a foreign invoice it reads
-    // amount_in_currency and returns null for a line that carries no figure
-    // in that currency.
-    // Nothing on the settlement side (a converted amount is only ever
-    // positive where the SEK column is).
-    const rawSide = Number(settlement.entrySide === 'credit' ? line.credit_amount : line.debit_amount) || 0
-    if (rawSide <= 0) continue
-    const debit = ledgerLineSideAmountIn(line, invoiceCurrency, settlement.entrySide)
-    const unconvertible = debit === null
-
-    let candidate = byEntry.get(entry.id)
-    if (!candidate) {
-      candidate = { entry, apDebitTotal: 0, lineCurrency: null, sideLines: [], unconvertible: false, converted: false }
-      byEntry.set(entry.id, candidate)
-    }
-    candidate.sideLines.push({ currency: line.currency, amount_in_currency: line.amount_in_currency, sideSek: rawSide })
-    if (unconvertible) {
-      candidate.unconvertible = true
-      continue
-    }
-    if (debit === null || debit <= 0) continue
-    candidate.apDebitTotal += debit
-    if (!candidate.converted) {
-      candidate.lineCurrency = line.currency
-      candidate.converted = true
-    }
-  }
-
-  // A voucher with a settlement-side line the invoice's currency cannot read
-  // is judged as the link validator judges it (sekBookedSettlement): settled
-  // through the SEK-booked fallback, scored on its SEK total at the invoice's
-  // rate, or not a candidate at all, since the link would refuse it.
-  const fxRate = Number(invoice.exchange_rate)
-  for (const [entryId, candidate] of byEntry) {
-    if (candidate.unconvertible) {
-      const fallback = sekBookedSettlement(candidate.sideLines, invoiceCurrency, invoice.exchange_rate, remainingAmount)
-      if (!fallback.eligible) {
-        byEntry.delete(entryId)
-        continue
-      }
-      candidate.apDebitTotal = round2(fallback.sekTotal / fxRate)
-      candidate.lineCurrency = null
-      candidate.sekBooked = { sekTotal: fallback.sekTotal }
-    } else if (candidate.apDebitTotal <= 0) {
-      byEntry.delete(entryId)
-    }
-  }
-
+  // The shared voucher-link matcher (voucher-matching-shared.ts), the same
+  // search the customer side runs. A foreign invoice on the 244x side reads
+  // every AP debit in the window, whatever its label: a payment voucher that
+  // carries its 2440 debit in SEK only (an SIE import, a manual verifikat)
+  // settles the invoice through the SEK-booked fallback, which the link
+  // validator accepts too (feedback seq 930807).
+  const byEntry = await collectSettlementVouchers({
+    supabase,
+    companyId,
+    invoice,
+    remainingAmount,
+    side: {
+      accountPrefix: settlement.accountPrefix,
+      entrySide: settlement.entrySide,
+      bankSide: settlement.side === 'bank_credit',
+    },
+    windowDays,
+    sekBookedAllowed: true,
+    log,
+    logContext,
+  })
   if (byEntry.size === 0) return []
 
   // Every payment row on a voucher counts, whichever invoice it belongs to,
@@ -339,207 +177,68 @@ export async function findMatchingVouchersForSupplierInvoice(
   // bank", not "this supplier was paid"); on the 244x side it is what lets one
   // verifikat pay several invoices without paying any of them twice. A voucher
   // already linked to this invoice, or with nothing left, is not a candidate.
-  const candidateEntryIds = Array.from(byEntry.keys())
-  const rows = await fetchVoucherPaymentRows(supabase, companyId, candidateEntryIds)
-  for (const [entryId, candidate] of byEntry) {
+  const rows = await fetchVoucherPaymentRows(supabase, companyId, Array.from(byEntry.keys()))
+  for (const [entryId, voucher] of byEntry) {
     const voucherRows = rows.filter((r) => r.journal_entry_id === entryId)
     // The SEK-booked fallback reads the kronor voucher as the payment of this
     // invoice's whole remainder: it cannot also carry another invoice's row.
     const capacity =
-      candidate.sekBooked && voucherRows.some((r) => r.supplier_invoice_id !== invoice.id)
+      voucher.sekBooked && voucherRows.some((r) => r.supplier_invoice_id !== invoice.id)
         ? null
-        : voucherCapacity(candidate.apDebitTotal, voucherRows, invoice.id, invoiceCurrency)
+        : voucherCapacity(voucher.amount, voucherRows, invoice.id, invoiceCurrency)
     if (capacity === null) byEntry.delete(entryId)
-    else candidate.apDebitTotal = capacity
+    else voucher.amount = capacity
   }
   if (byEntry.size === 0) return []
 
-  // Period-lock flags (informational, linking is allowed in locked periods
-  // because no JE is mutated).
-  const periodIds = Array.from(
-    new Set(Array.from(byEntry.values()).map((v) => v.entry.fiscal_period_id)),
-  )
-  const { data: periods, error: periodsError } = await supabase
-    .from('fiscal_periods')
-    .select('id, is_closed, locked_at')
-    .in('id', periodIds)
-
-  // Fail closed when the period state cannot be read: the flag is advisory
-  // (linking mutates no journal entry), so over-flagging costs a badge, while
-  // claiming "open" would tell the user a period is writable right before the
-  // enforce_period_lock trigger refuses the write.
-  const periodStateUnknown = !!periodsError || !periods
-  if (periodStateUnknown) {
-    log.warn('fiscal period lock state unavailable, flagging candidates as locked', {
-      companyId,
-      supplierInvoiceId: invoice.id,
-      reason: periodsError?.message,
-    })
-  }
-  const lockedPeriods = new Set(
-    periodStateUnknown
-      ? periodIds
-      : (periods as FiscalPeriodRow[])
-          .filter((p) => Boolean(p.is_closed) || Boolean(p.locked_at))
-          .map((p) => p.id),
+  const lockedPeriods = await lockedPeriodIds(
+    supabase,
+    Array.from(new Set(Array.from(byEntry.values()).map((v) => v.entry.fiscal_period_id))),
+    log,
+    logContext,
   )
 
-  const ctx: CandidateContext = {
-    invoice,
+  const scoreContext: VoucherScoreContext = {
+    currency: invoice.currency,
     remainingAmount,
-    includeShared: options.includeShared === true,
+    total: invoice.total,
+    dueDate: invoice.due_date,
     windowDays,
+    // The ankomstnummer is Accounted's own sequence (1, 2, 3, ...): no bank or
+    // source system writes it on a payment, so it counts only when the amount
+    // corroborates it. All 31 arrival-number auto-links in prod on 2026-09-16
+    // were of the kind "14" inside "(1814)" with an unrelated amount (desk crm#64).
+    references: [
+      { label: 'Fakturanummer', value: invoice.supplier_invoice_number, countsWithoutAmount: true },
+      { label: 'Ankomstnummer', value: invoice.arrival_number, countsWithoutAmount: false },
+    ],
+    counterparty: { name: invoice.supplier?.name, label: 'leverantörsnamn' },
+    includeShared: options.includeShared === true,
   }
   const candidates: SupplierVoucherCandidate[] = []
-  for (const { entry, apDebitTotal, lineCurrency, sekBooked } of byEntry.values()) {
+  for (const { entry, amount, lineCurrency, sekBooked } of byEntry.values()) {
     // A share is not on offer through the SEK-booked fallback: the validator
     // and the RPC refuse one there (the kursdifferens would be a guess).
-    const scored = scoreCandidate(entry, apDebitTotal, lineCurrency, ctx, !sekBooked)
+    const scored = scoreVoucherCandidate(entry, amount, lineCurrency, scoreContext, !sekBooked)
     if (!scored) continue
-    const hasMoreThanNeeded = !sekBooked && apDebitTotal > remainingAmount + AMOUNT_TOLERANCE
+    const hasMoreThanNeeded = !sekBooked && amount > remainingAmount + AMOUNT_TOLERANCE
     candidates.push({
       journal_entry_id: entry.id,
       voucher_series: entry.voucher_series,
       voucher_number: entry.voucher_number,
       entry_date: entry.entry_date,
       description: entry.description,
-      ap_debit_amount: round2(apDebitTotal),
+      ap_debit_amount: round2(amount),
       settlement_side: settlement.side,
       currency: invoice.currency,
       ap_line_currency: lineCurrency,
       period_locked: lockedPeriods.has(entry.fiscal_period_id),
       confidence: scored.confidence,
-      match_reason: sekBooked
-        ? `${scored.match_reason}; betalningen är bokförd i SEK (${formatNumber(sekBooked.sekTotal)} kr) och omräknad med fakturans kurs`
-        : scored.match_reason,
+      match_reason: sekBooked ? sekBookedReason(scored.match_reason, sekBooked.sekTotal) : scored.match_reason,
       ...(hasMoreThanNeeded ? { link_amount: round2(remainingAmount) } : {}),
     })
   }
-
-  candidates.sort(
-    (a, b) => b.confidence - a.confidence || a.entry_date.localeCompare(b.entry_date),
-  )
-  return candidates.slice(0, limit)
-}
-
-function scoreCandidate(
-  entry: VoucherRow,
-  apDebitTotal: number,
-  lineCurrency: string | null,
-  ctx: CandidateContext,
-  /** False where the voucher cannot take a share (SEK-booked fallback). */
-  shareable = true,
-): { confidence: number; match_reason: string } | null {
-  // Reference in the voucher text: the supplier's invoice number, or our own
-  // ankomstnummer, as a whole number (descriptionMentionsReference). A
-  // reference alone does not prove THIS payment: a bank text naming the
-  // invoice can still be a partial payment, and short numbers recur in dates
-  // and inside other invoices' numbers. Only together with an amount that
-  // settles the invoice (the remainder, or the total) does it earn 0.99. An
-  // invoice number with another amount stays a strong hint for a person
-  // (0.90), below the unattended auto-link bar. The ankomstnummer is
-  // Accounted's own sequence (1, 2, 3, ...): no bank or source system writes
-  // it on a payment, so it counts only when the amount corroborates it. All
-  // 31 arrival-number auto-links in prod on 2026-09-16 were of the kind "14"
-  // inside "(1814)" with an unrelated amount (desk crm#64).
-  const invoiceNumberHit = descriptionMentionsReference(
-    entry.description,
-    ctx.invoice.supplier_invoice_number,
-  )
-  const arrivalHit = descriptionMentionsReference(entry.description, ctx.invoice.arrival_number)
-  const settlesInvoice =
-    amountsMatchExact(apDebitTotal, ctx.remainingAmount) ||
-    amountsMatchExact(apDebitTotal, ctx.invoice.total)
-  if (invoiceNumberHit && settlesInvoice) {
-    return {
-      confidence: CONFIDENCE.OCR_REFERENCE_MATCH,
-      match_reason: `Fakturanummer ${ctx.invoice.supplier_invoice_number} omnämnt i verifikatets beskrivning och beloppet stämmer`,
-    }
-  }
-  if (arrivalHit && settlesInvoice) {
-    return {
-      confidence: CONFIDENCE.OCR_REFERENCE_MATCH,
-      match_reason: `Ankomstnummer ${ctx.invoice.arrival_number} omnämnt i verifikatets beskrivning och beloppet stämmer`,
-    }
-  }
-  if (invoiceNumberHit) {
-    return {
-      confidence: CONFIDENCE.REFERENCE_AMOUNT_MISMATCH,
-      match_reason: `Fakturanummer ${ctx.invoice.supplier_invoice_number} omnämnt i verifikatets beskrivning, men beloppet (${formatNumber(apDebitTotal)} ${ctx.invoice.currency}) avviker från fakturans`,
-    }
-  }
-
-  // Label guard, unchanged in shape. It is no longer what makes the amounts
-  // comparable (that used to be the bug: `lineCurrency ?? invoice.currency`
-  // passes on exactly the FX rows it existed to catch, and the SEK
-  // debit_amount was then compared against a foreign remainder).
-  // `apDebitTotal` already arrives expressed in ctx.invoice.currency, and any
-  // line that could not be expressed there was dropped before summing. What
-  // survives here is the counterparty discriminator: a 244x debit stamped with
-  // another document's currency belongs to another supplier invoice.
-  const lineCurrencyEffective = lineCurrency ?? ctx.invoice.currency
-  if (lineCurrencyEffective !== ctx.invoice.currency) {
-    return null
-  }
-
-  const exactRemaining = amountsMatchExact(apDebitTotal, ctx.remainingAmount)
-  const exactTotal =
-    !exactRemaining && amountsMatchExact(apDebitTotal, ctx.invoice.total)
-  const fuzzyRemaining =
-    !exactRemaining &&
-    !exactTotal &&
-    amountsMatchFuzzy(apDebitTotal, ctx.remainingAmount)
-
-  // Supplier name in description: reuse customer-side helper since the logic
-  // (significant tokens of the counterparty name appearing in free text) is
-  // identical regardless of AR vs AP.
-  const supplierMatch = customerNameMatches(
-    ctx.invoice.supplier?.name,
-    entry.description,
-    null,
-  )
-
-  let confidence = 0
-  let reason = ''
-  if (exactRemaining && supplierMatch) {
-    confidence = CONFIDENCE.EXACT_AMOUNT_CUSTOMER
-    reason = `Exakt belopp (${formatNumber(apDebitTotal)} ${ctx.invoice.currency}) och leverantörsnamn matchar`
-  } else if (exactRemaining) {
-    confidence = CONFIDENCE.EXACT_AMOUNT_ONLY
-    reason = `Exakt belopp (${formatNumber(apDebitTotal)} ${ctx.invoice.currency})`
-  } else if (exactTotal && supplierMatch) {
-    confidence = CONFIDENCE.FUZZY_AMOUNT_CUSTOMER
-    reason = `Fakturans totalbelopp och leverantörsnamn matchar`
-  } else if (exactTotal) {
-    confidence = CONFIDENCE.FUZZY_AMOUNT_ONLY + 0.05
-    reason = `Fakturans totalbelopp matchar`
-  } else if (fuzzyRemaining && supplierMatch) {
-    confidence = CONFIDENCE.FUZZY_AMOUNT_CUSTOMER
-    reason = `Belopp nära (±1%) och leverantörsnamn matchar`
-  } else if (fuzzyRemaining) {
-    confidence = CONFIDENCE.FUZZY_AMOUNT_ONLY
-    reason = `Belopp nära (±1%)`
-  } else if (
-    ctx.includeShared &&
-    shareable &&
-    apDebitTotal > ctx.remainingAmount + AMOUNT_TOLERANCE
-  ) {
-    // A payment of several debts: the voucher has more left than this invoice
-    // needs. Nothing but the person picking says it is this invoice's payment,
-    // so it ranks under every amount match (see SHARED_VOUCHER_CONFIDENCE).
-    const base = supplierMatch ? SHARED_VOUCHER_SUPPLIER_CONFIDENCE : SHARED_VOUCHER_CONFIDENCE
-    const closeness = dueDateCloseness(entry.entry_date, ctx.invoice.due_date, ctx.windowDays)
-    confidence = Math.round((base + SHARED_VOUCHER_PROXIMITY_SPAN * closeness) * 1000) / 1000
-    reason = `Verifikationen har ${formatNumber(apDebitTotal)} ${ctx.invoice.currency} kvar, mer än fakturans belopp: betalar den flera skulder länkas fakturans del${supplierMatch ? '; leverantörsnamn matchar' : ''}`
-  } else {
-    return null
-  }
-
-  if (isDateWithinDays(entry.entry_date, ctx.invoice.due_date, 7)) {
-    confidence = Math.min(CONFIDENCE.OCR_REFERENCE_MATCH - 0.001, confidence + DATE_PROXIMITY_BUMP)
-  }
-
-  return { confidence, match_reason: reason }
+  return rankVoucherCandidates(candidates, limit)
 }
 
 export type SupplierVoucherLinkErrorCode =
@@ -1081,70 +780,6 @@ function voucherCapacity(
   const used = round2(voucherRows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0))
   const left = round2(sideTotal - used)
   return left > AMOUNT_TOLERANCE ? left : null
-}
-
-/** A settlement-side line (244x debit or 19xx credit) as the SEK-booked fallback reads it. */
-export interface SettlementSideLine {
-  currency: string | null
-  amount_in_currency: number | string | null
-  /** The SEK ledger amount on the settlement side of the line. */
-  sideSek: number
-}
-
-export type SekBookedSettlement =
-  | { eligible: true; sekTotal: number; bookedSek: number }
-  | { eligible: false; reason: 'not_eligible' }
-  | { eligible: false; reason: 'fx_deviation_too_large'; sekTotal: number; bookedSek: number }
-
-/**
- * The RPC's SEK-booked settlement gate (migration 20260830140000) for a
- * foreign-currency invoice, as ONE predicate for the link validator and the
- * candidate finder, so the finder never offers a voucher the link refuses and
- * never hides one it accepts (feedback seq 930807: a USD invoice paid by an
- * SIE-imported voucher with its 2440 debit in SEK linked fine by hand, yet no
- * candidate was ever proposed).
- *
- * Counted per LINE exactly as the RPC does: zero lines readable in the
- * invoice's currency (a line labelled with it whose amount_in_currency is 0
- * still counts as readable, because its real SEK movement is not in the SEK
- * total), zero lines labelled with a third currency, a positive SEK total, a
- * sane exchange_rate, and that SEK total within 10 % of remaining x rate.
- */
-export function sekBookedSettlement(
-  sideLines: readonly SettlementSideLine[],
-  invoiceCurrency: string,
-  exchangeRate: unknown,
-  remainingAmount: number,
-): SekBookedSettlement {
-  let readableCount = 0
-  let sekSideTotal = 0
-  let foreignLabelCount = 0
-  for (const line of sideLines) {
-    if (!(line.sideSek > 0)) continue
-    if (line.currency === invoiceCurrency && line.amount_in_currency != null) {
-      readableCount += 1
-    } else if ((line.currency ?? 'SEK') === 'SEK') {
-      sekSideTotal += line.sideSek
-    } else {
-      foreignLabelCount += 1
-    }
-  }
-  const rate = Number(exchangeRate)
-  const eligible =
-    invoiceCurrency !== 'SEK' &&
-    readableCount === 0 &&
-    foreignLabelCount === 0 &&
-    sekSideTotal > 0 &&
-    Number.isFinite(rate) &&
-    rate > 0 &&
-    rate < 100000
-  if (!eligible) return { eligible: false, reason: 'not_eligible' }
-  const sekTotal = round2(sekSideTotal)
-  const bookedSek = round2(remainingAmount * rate)
-  if (Math.abs(sekTotal - bookedSek) > bookedSek * 0.1) {
-    return { eligible: false, reason: 'fx_deviation_too_large', sekTotal, bookedSek }
-  }
-  return { eligible: true, sekTotal, bookedSek }
 }
 
 function computeRemaining(invoice: SupplierInvoice): number {

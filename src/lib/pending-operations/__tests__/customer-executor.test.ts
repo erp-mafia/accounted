@@ -436,7 +436,7 @@ describe('commitPendingOperation: update_customer personal_number', () => {
 
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(400)
-    expect(result.error).toMatch(/individual/)
+    expect(result.error).toMatch(/Personnummer/)
     expect(findCall('customers', 'update')).toBeUndefined()
   })
 
@@ -457,7 +457,7 @@ describe('commitPendingOperation: update_customer personal_number', () => {
 
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(400)
-    expect(result.error).toMatch(/unrecognized key/i)
+    expect(result.error).toMatch(/personal_number/)
     expect(findCall('customers', 'update')).toBeUndefined()
   })
 

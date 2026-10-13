@@ -19,10 +19,10 @@ import {
   ReportPeriodQueryShape,
   ReportDateRangeQueryShape,
 } from '@/lib/api/v1/report-period'
-import { contentDisposition } from '@/lib/api/content-disposition'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { buildIncomeStatementPdfModel } from '@/lib/reports/financial-statement-pdf'
 import type { CompanySettings } from '@/types'
+import { fileResponse } from '@/lib/api/file-response'
 
 const ALLOWED_PARAMS = ['period_id', 'from_date', 'to_date'] as const
 
@@ -141,13 +141,12 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // leaves the client: complements the in-document ÅRL 2:7 disclaimer.
     const filename = `resultatrakning-${report.period.start}--${report.period.end}-utkast.pdf`
 
-    return new Response(new Uint8Array(pdfBuffer), {
-      status: 200,
+    return fileResponse(new Uint8Array(pdfBuffer), {
+      filename: filename,
+      contentType: 'application/pdf',
+      cacheControl: 'private, no-store',
       headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': contentDisposition('attachment', filename),
         'Content-Length': String(pdfBuffer.length),
-        'Cache-Control': 'private, no-store',
         'X-Request-Id': ctx.requestId,
       },
     })

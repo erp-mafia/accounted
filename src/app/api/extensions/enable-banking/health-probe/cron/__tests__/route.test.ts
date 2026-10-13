@@ -109,12 +109,13 @@ afterEach(() => {
 })
 
 describe('GET /api/extensions/enable-banking/health-probe/cron', () => {
-  it('refuses to run when the extension is not enabled', async () => {
+  it('answers 200 skipped when the extension is not enabled', async () => {
     mocks.registryGet.mockReturnValue(undefined)
 
     const response = await GET(createCronRequest('/api/extensions/enable-banking/health-probe/cron'))
 
-    expect(response.status).toBe(503)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ skipped: true, reason: 'extension_disabled', processed: 0 })
     expect(mocks.probeSessionHealth).not.toHaveBeenCalled()
   })
 

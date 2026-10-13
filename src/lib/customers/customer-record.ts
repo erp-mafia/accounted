@@ -12,6 +12,7 @@
 import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { maskCustomerRow } from '@/lib/customers/protect-personal-number'
+import type { OperationOutcome } from '@/lib/operations/types'
 
 export const CustomerRecordSchema = z.object({
   id: z.string().uuid(),
@@ -75,4 +76,25 @@ export async function readCustomerRecord(
   if (!data) return { data: null, error: null }
   // The stored personal_number is ciphertext; it never leaves unmasked.
   return { data: maskCustomerRow(data as unknown as CustomerRecord), error: null }
+}
+
+const CUSTOMER_RECORD_KEYS = CUSTOMER_RECORD_COLUMNS.split(', ')
+
+/**
+ * A row the customer commands answered (lib/customers/customer-commands.ts),
+ * already masked, cut to the record's fields: what every v1 customer write
+ * returns. A field the row lacks (a dry run has no id or timestamps) is null.
+ */
+export function toCustomerRecord(row: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(CUSTOMER_RECORD_KEYS.map((key) => [key, row[key] ?? null]))
+}
+
+/** A customer command's outcome with its row (or dry-run preview) cut to the record. */
+export function customerRecordOutcome<T>(outcome: OperationOutcome<T>): OperationOutcome<Record<string, unknown>> {
+  if (!outcome.ok) return outcome
+  if (outcome.dryRun) {
+    const { changes, ...row } = outcome.preview
+    return { ...outcome, preview: { ...toCustomerRecord(row), ...(changes === undefined ? {} : { changes }) } }
+  }
+  return { ...outcome, data: toCustomerRecord(outcome.data as Record<string, unknown>) }
 }

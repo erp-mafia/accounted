@@ -4,6 +4,7 @@ import {
   buildSalaryPaymentFile,
   type SalaryPaymentFileError,
 } from '@/lib/salary/payment/build-payment-file'
+import { fileResponse } from '@/lib/api/file-response'
 
 /**
  * Generate pain.001 (ISO 20022) payment file for a salary run.
@@ -83,12 +84,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     })
     if (!result.ok) return legacyError(result)
 
-    return new Response(result.content, {
-      headers: {
-        'Content-Type': 'application/xml; charset=utf-8',
-        'Content-Disposition': `attachment; filename="${result.filename}"`,
-      },
-    })
+    return fileResponse(result.content, { filename: result.filename, contentType: 'application/xml; charset=utf-8' })
   },
   { requireWrite: true },
 )

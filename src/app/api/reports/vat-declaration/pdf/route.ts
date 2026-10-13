@@ -6,6 +6,7 @@ import {
 } from '@/lib/reports/vat-declaration'
 import { buildManualFilingRows } from '@/lib/reports/vat-manual-filing'
 import type { VatPeriodType, CompanySettings } from '@/types'
+import { fileResponse } from '@/lib/api/file-response'
 
 /**
  * Momsdeklaration PDF for manual filing at skatteverket.se. The declaration is
@@ -75,10 +76,5 @@ export const GET = withRouteContext(
     )
 
     const filename = `momsdeklaration-${declaration.period.start}--${declaration.period.end}.pdf`
-    return new Response(new Uint8Array(pdfBuffer), {
-      headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-      },
-    })
+    return fileResponse(new Uint8Array(pdfBuffer), { filename: filename, contentType: 'application/pdf' })
   }, { requireCompleteLedger: true })

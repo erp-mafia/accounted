@@ -24,9 +24,11 @@ describe('invoice completion cron', () => {
     expect((await GET(request())).status).toBe(401)
     expect(runInvoiceCompletion).not.toHaveBeenCalled()
   })
-  it('refuses a disabled extension', async () => {
+  it('answers 200 skipped for a disabled extension', async () => {
     vi.mocked(extensionRegistry.get).mockResolvedValue(undefined)
-    expect((await GET(request())).status).toBe(503)
+    const response = await GET(request())
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ skipped: true, reason: 'extension_disabled', processed: 0 })
     expect(runInvoiceCompletion).not.toHaveBeenCalled()
   })
   it('starts the absolute deadline before initialization and returns partial counts unchanged', async () => {

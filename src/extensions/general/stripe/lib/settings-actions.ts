@@ -27,6 +27,7 @@ import {
   type PanelRequestOptions,
   type PanelRequestResult,
 } from '@/lib/browser/panel-request'
+import { feedSyncOutcome, type FeedSyncOutcome } from '@/lib/feed-sync/sync-outcome'
 
 /**
  * Deadline for the panel's quick calls: the status read, the connect handshake,
@@ -71,7 +72,6 @@ export interface StripeSyncPayload {
     fetched?: number
     imported?: number
     duplicates?: number
-    linked?: number
     errors?: number
     revoked?: boolean
     /**
@@ -82,54 +82,10 @@ export interface StripeSyncPayload {
   }
 }
 
-/**
- * A type alias, not an interface: next-intl's `t(key, values)` takes a
- * `Record<string, string | number | Date>`, and only anonymous object types get
- * the implicit index signature that makes them assignable to it.
- */
-type SyncCounts = {
-  fetched: number
-  imported: number
-  linked: number
-}
+/** The shared ladder (lib/feed-sync/sync-outcome), with this connector's counts. */
+export type StripeSyncSummary = FeedSyncOutcome
 
-export type StripeSyncSummary =
-  /**
-   * Stripe revoked the connection upstream. A 200, but not a completed sync:
-   * `syncStripeBalanceTransactions` returns `{ revoked: true }` with every count
-   * at zero, which the panel used to report as a finished sync that "returned no
-   * transactions for the period", sending the user to check the wrong thing.
-   */
-  | { reason: 'revoked' }
-  /** The window genuinely held nothing. A real answer, not a silent success. */
-  | { reason: 'empty' }
-  /** Rows landed, and some rows did not. Both halves get said. */
-  | { reason: 'errors'; values: SyncCounts & { errors: number } }
-  /** Rows landed. */
-  | { reason: 'feed'; values: SyncCounts }
-  /**
-   * 2xx whose body could not be read. The sync ran (the server had already
-   * committed by the time it flushed headers), but the counts are unknown, so
-   * the panel says the sync finished and stops there rather than reporting the
-   * missing numbers as zero and calling the run empty.
-   */
-  | { reason: 'unknown' }
-
-/**
- * Turn the sync route's success body into the single sentence the user gets.
- */
+/** Turn the sync route's success body into the single sentence the user gets. */
 export function syncSummary(payload: StripeSyncPayload | null): StripeSyncSummary {
-  const summary = payload?.transactions
-  if (!summary) return { reason: 'unknown' }
-  if (summary.revoked === true) return { reason: 'revoked' }
-  if (typeof summary.fetched !== 'number') return { reason: 'unknown' }
-
-  const fetched = summary.fetched
-  const imported = typeof summary.imported === 'number' ? summary.imported : 0
-  const linked = typeof summary.linked === 'number' ? summary.linked : 0
-  const errors = typeof summary.errors === 'number' ? summary.errors : 0
-
-  if (fetched === 0) return { reason: 'empty' }
-  if (errors > 0) return { reason: 'errors', values: { fetched, imported, linked, errors } }
-  return { reason: 'feed', values: { fetched, imported, linked } }
+  return feedSyncOutcome(payload, { importedField: 'imported' })
 }

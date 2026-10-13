@@ -4,6 +4,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateTransactionSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { transactionTextSearchFilter } from '@/lib/transactions/text-search'
 
 const MAX_ROWS = 500
 
@@ -27,6 +28,9 @@ export const GET = withRouteContext('transaction.list', async (request, { supaba
   // surface a "Visa ignorerade" undo list. The default (no param) behaviour
   // continues to exclude ignored rows from unmatched results.
   const onlyIgnored = searchParams.get('only_ignored') === 'true'
+  // Free text over description and merchant: the bank-row pickers search here
+  // across every row instead of filtering a capped list in the browser.
+  const textFilter = transactionTextSearchFilter(searchParams.get('q') ?? '')
   // account_number selects which cash account to scope to. We resolve it to a
   // cash_accounts.id (ledger_account is unique per company) and scope
   // transactions by that id, falling back to currency for legacy rows whose
@@ -59,7 +63,7 @@ export const GET = withRouteContext('transaction.list', async (request, { supaba
     // The junction rides along in every mode so a caller can tell a row split
     // over several verifikat (journal_entry_id NULL, #1553) from an unbooked
     // one with lib/transactions/is-booked.ts getLinkedJournalEntryIds (crm#48).
-    .select('id, date, description, amount, currency, amount_sek, exchange_rate, reference, journal_entry_id, reconciliation_method, is_ignored, cash_account_id, transaction_voucher_links(journal_entry_id, role)')
+    .select('id, date, description, merchant_name, amount, currency, amount_sek, exchange_rate, reference, journal_entry_id, reconciliation_method, is_ignored, cash_account_id, transaction_voucher_links(journal_entry_id, role)')
     .eq('company_id', companyId)
 
   // unmatched and reconciled are mutually exclusive: unmatched wins if both set
@@ -86,6 +90,7 @@ export const GET = withRouteContext('transaction.list', async (request, { supaba
   }
   if (dateFrom) query = query.gte('date', dateFrom)
   if (dateTo) query = query.lte('date', dateTo)
+  if (textFilter) query = query.or(textFilter)
 
   // Fetch one extra row so we can tell the caller whether the result was truncated.
   query = query.order('date', { ascending: false }).limit(MAX_ROWS + 1)

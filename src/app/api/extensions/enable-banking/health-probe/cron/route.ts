@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { withServiceCronContext } from '@/lib/api/with-cron-context'
-import { extensionRegistry } from '@/lib/extensions/registry'
 import {
   probeSessionHealth,
   REAUTH_REQUIRED_MESSAGE,
@@ -31,14 +30,6 @@ const PROVEN_ALIVE_MS = 24 * 60 * 60 * 1000
  * the probes (and the expiry mail a dead session sends) are a daily job.
  */
 export const GET = withServiceCronContext('cron.bank_session_probe', async (_request, ctx) => {
-  if (!(await extensionRegistry.get('enable-banking'))) {
-    ctx.log.warn('enable-banking extension is not enabled; cron refused')
-    return NextResponse.json(
-      { error: 'Enable Banking extension is not enabled', code: 'EXTENSION_DISABLED' },
-      { status: 503 },
-    )
-  }
-
   const supabase = ctx.supabase
   const startTime = Date.now()
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
@@ -147,4 +138,4 @@ export const GET = withServiceCronContext('cron.bank_session_probe', async (_req
     probedDead: probeResults.length,
     probeResults,
   })
-})
+}, { requireExtension: 'enable-banking' })

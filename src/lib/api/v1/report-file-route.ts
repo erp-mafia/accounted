@@ -16,7 +16,7 @@ import { z } from 'zod'
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
-import { contentDisposition } from '@/lib/api/content-disposition'
+import { fileResponse } from '@/lib/api/file-response'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { ReportFile } from '@/lib/reports/filing-report-service'
 
@@ -90,13 +90,12 @@ export function v1ReportFileHandler<Q extends z.ZodTypeAny>(spec: ReportFileRout
         return v1ErrorResponseFromCode('INTERNAL_ERROR', ctx.log, { requestId: ctx.requestId })
       }
       const file = outcome.data
-      return new Response(new Uint8Array(file.bytes), {
-        status: 200,
+      return fileResponse(new Uint8Array(file.bytes), {
+        filename: file.filename,
+        contentType: file.contentType,
+        cacheControl: 'private, no-store',
         headers: {
-          'Content-Type': file.contentType,
-          'Content-Disposition': contentDisposition('attachment', file.filename),
           'Content-Length': String(file.bytes.byteLength),
-          'Cache-Control': 'private, no-store',
           'X-Request-Id': ctx.requestId,
         },
       })

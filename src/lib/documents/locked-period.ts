@@ -17,8 +17,11 @@ const log = createLogger('documents/locked-period')
  * same in SQL (arkiv_effective_doc_type), so a folder and its rows agree.
  */
 
-/** The trigger's own words: the one refusal that is not an error for a read stamp or a type. */
-export const isPeriodLockRefusal = (message: string | null | undefined): boolean => !!message && message.includes('locked/closed fiscal period')
+/**
+ * The lock refusal: the one that is not an error for a read stamp or a type.
+ * Read from the database's own refusal table (lib/errors/get-structured-error.ts).
+ */
+export { isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 
 export const isBookedRow = (d: { journal_entry_id?: string | null; journal_entry_line_id?: string | null }): boolean => !!(d.journal_entry_id || d.journal_entry_line_id)
 

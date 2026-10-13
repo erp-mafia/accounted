@@ -11,6 +11,7 @@ import {
 import { formatLatestVouchers, LATEST_VOUCHERS_LABEL } from '@/lib/reports/latest-vouchers-format'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import type { BalansrapportSection } from '@/types'
+import { fileResponse } from '@/lib/api/file-response'
 
 interface FlatRow {
   group: string
@@ -149,12 +150,7 @@ export const GET = withRouteContext('report.balansrapport.xlsx', async (request,
       companyRow?.company_name ?? '',
       report.period.end,
     )
-    return new NextResponse(new Uint8Array(buffer), {
-      headers: {
-        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-      },
-    })
+    return fileResponse(new Uint8Array(buffer), { filename: filename, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte generera balansrapport' },

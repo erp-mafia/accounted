@@ -160,18 +160,42 @@ function extractCode(error: unknown): string | null {
 
 /**
  * Refusals the database raises as plain text (RAISE EXCEPTION with no code of
- * ours): the period-lock trigger (migration 017) and the company lock date.
- * Triggers are never edited, so their two sentences are read here, once, for
- * every door. Application code throws a code instead (codedRefusal,
- * userFacing): a sentence is never how the app tells a door what failed.
+ * ours): the period-lock trigger (migration 017), the company lock date, and
+ * the locked period's tax adjustment and tax depreciation election triggers.
+ * Triggers are never edited, so their sentences are read here, once, for
+ * every door: routes and services ask isPeriodLockRefusal/isLockDateRefusal
+ * instead of matching them. Application code throws a code instead
+ * (codedRefusal, userFacing): a sentence is never how the app tells a door
+ * what failed.
  */
-const DATABASE_REFUSALS: ReadonlyArray<readonly [RegExp, string]> = [
-  [/locked\/closed fiscal period/i, 'PERIOD_LOCKED'],
-  [/Bokföringen är låst/, 'PERIOD_LOCKED'],
+const DATABASE_REFUSALS: ReadonlyArray<{ pattern: RegExp; code: string; lockDate?: true }> = [
+  { pattern: /locked\/closed fiscal period/i, code: 'PERIOD_LOCKED' },
+  { pattern: /Bokföringen är låst/, code: 'PERIOD_LOCKED', lockDate: true },
+  { pattern: /Fiscal period is locked for tax (adjustments|depreciation elections)/i, code: 'PERIOD_LOCKED' },
 ]
 
+function databaseRefusal(message: string) {
+  return DATABASE_REFUSALS.find(({ pattern }) => pattern.test(message)) ?? null
+}
+
 function databaseRefusalCode(message: string): string | null {
-  return DATABASE_REFUSALS.find(([pattern]) => pattern.test(message))?.[1] ?? null
+  return databaseRefusal(message)?.code ?? null
+}
+
+/**
+ * The database refused a write behind a lock: a locked or closed period, the
+ * company lock date, or a locked period's tax figures. Takes the thrown value
+ * or its message.
+ */
+export function isPeriodLockRefusal(error: unknown): boolean {
+  if (error === null || error === undefined) return false
+  return databaseRefusal(extractEnglishMessage(error))?.code === 'PERIOD_LOCKED'
+}
+
+/** The company lock date (enforce_company_lock_date) refused it, not a period's own lock. */
+export function isLockDateRefusal(error: unknown): boolean {
+  if (error === null || error === undefined) return false
+  return databaseRefusal(extractEnglishMessage(error))?.lockDate === true
 }
 
 /**

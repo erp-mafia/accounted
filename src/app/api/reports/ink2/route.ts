@@ -8,6 +8,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { buildSruZip } from '@/lib/reports/filing-report-service'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { fileResponse } from '@/lib/api/file-response'
 
 /**
  * GET /api/reports/ink2
@@ -40,13 +41,10 @@ export const GET = withRouteContext(
         const zipBytes = await buildSruZip(generateSRUSubmission(declaration))
         const filename = getZipFilename(declaration)
 
-        return new NextResponse(new Uint8Array(zipBytes), {
-          status: 200,
-          headers: {
-            'Content-Type': 'application/zip',
-            'Content-Disposition': `attachment; filename="${filename}"`,
-            'X-Request-Id': requestId,
-          },
+        return fileResponse(new Uint8Array(zipBytes), {
+          filename,
+          contentType: 'application/zip',
+          headers: { 'X-Request-Id': requestId },
         })
       }
 

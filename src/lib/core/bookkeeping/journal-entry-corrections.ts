@@ -44,6 +44,8 @@ import {
 } from '@/lib/bookkeeping/errors'
 import type { JournalEntry } from '@/types'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
+import type { z } from 'zod'
+import type { StrikeLinesSchema } from '@/lib/api/schemas'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -282,10 +284,8 @@ export interface InlineRattelseLine {
   dimensions?: Record<string, string>
 }
 
-export interface StrikeLinesInput {
-  strike_line_ids: string[]
-  lines: InlineRattelseLine[]
-}
+/** The request every door validates (StrikeLinesSchema). */
+export type StrikeLinesInput = z.output<typeof StrikeLinesSchema>
 
 export async function strikeJournalEntryLines(
   ctx: OperationContext,

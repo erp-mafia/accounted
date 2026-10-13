@@ -22,30 +22,15 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { UpdateCustomerSchema } from '@/lib/api/schemas'
-import { validateVatNumber, vatValidationColumns } from '@/lib/vat/vies-client'
-import { syncDraftVatHeadersForCustomer } from '@/lib/invoices/sync-draft-vat-headers'
-import { COUNTRY_CONSISTENCY_MESSAGES, checkCountryConsistency } from '@/lib/vat/country-codes'
-import { CUSTOMER_RECORD_COLUMNS, CustomerRecordSchema, readCustomerRecord } from '@/lib/customers/customer-record'
-
-/** The stored fields the country-vs-type rule and the personnummer guards read. */
-interface ExistingCountryRow {
-  customer_type?: string
-  country?: string | null
-  vat_number?: string | null
-  org_number?: string | null
-}
 import {
-  encryptCustomerPersonalNumber,
-  maskCustomerRow,
-} from '@/lib/customers/protect-personal-number'
-import { isMaskedPersonalNumber } from '@/lib/customers/mask-personal-number'
-import {
-  isOrgNumberRefusedOnIndividual,
-  isPersonalNumberOrgNumberDisallowed,
-  normalizeReroutedPersonalNumber,
-  orgNumberHoldsPersonalNumber,
-  personalNumberDigits,
-} from '@/lib/customers/personal-number-shape'
+  CUSTOMER_RECORD_COLUMNS,
+  CustomerRecordSchema,
+  customerRecordOutcome,
+  readCustomerRecord,
+} from '@/lib/customers/customer-record'
+import { updateCustomer } from '@/lib/customers/customer-commands'
+import { maskCustomerRow } from '@/lib/customers/protect-personal-number'
+import { v1OutcomeResponse } from '@/lib/operations/v1'
 
 // v1-only extension: allow PATCH to set archived_at back to null to
 // un-archive a customer. Restricted to literal `null` so the caller can't
@@ -228,13 +213,14 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/customers/:id',
   summary: 'Partially update a customer.',
   description:
-    'Patches the customer with the supplied fields. All fields optional. Idempotent (mandatory Idempotency-Key). Dry-runnable. When vat_number changes on an eu_business customer, VIES re-validation runs on commit (best-effort).',
+    'Patches the customer with the supplied fields. All fields optional. Idempotent (mandatory Idempotency-Key). Dry-runnable: the dry run answers the would-be record with `changes` (each changed field, from and to). When vat_number changes on an eu_business customer, VIES re-validation runs on commit (best-effort).',
   useWhen:
     'You need to change a customer\'s contact details, payment terms, address, or VAT registration. Use dry-run first to confirm the merged record before committing.',
   doNotUseFor:
     'Archiving a customer (use DELETE: sets archived_at). Replacing the entire record (no PUT verb is exposed; PATCH is partial).',
   pitfalls: [
     'Idempotency-Key is mandatory; calls without it return 400.',
+    'An empty body returns 400 VALIDATION_ERROR; an unknown id returns 404 CUSTOMER_NOT_FOUND.',
     'org_number uniqueness is enforced at DB level: 23505 → 409 CUSTOMER_DUPLICATE_ORG_NUMBER.',
     'VIES re-validation is best-effort and runs only on commit. A VIES timeout does not fail the update.',
     'personal_number: a plaintext value is stored encrypted (individual customers only); the masked form a read returned (********-1234) means "leave unchanged" and is never stored; null clears it. Changing customer_type away from individual clears any stored personal_number.',
@@ -262,8 +248,6 @@ registerEndpoint({
   response: { success: dataEnvelope(CustomerDetail) },
 })
 
-const CUSTOMER_UPDATE_RESPONSE_COLUMNS = CUSTOMER_DETAIL_COLUMNS
-
 export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string }> }>(
   'customers.update',
   async (request, ctx, params) => {
@@ -276,294 +260,27 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
         details: { field: 'id', message: 'Customer id must be a UUID.' },
       })
     }
-    const customerId = idParse.data
 
     const rawBodyResult = await readV1JsonBody(request, ctx)
     if (!rawBodyResult.ok) return rawBodyResult.response
-    const rawBody = rawBodyResult.body
 
-    const parsed = V1PatchCustomerSchema.safeParse(rawBody)
+    const parsed = V1PatchCustomerSchema.safeParse(rawBodyResult.body)
     if (!parsed.success) return v1ValidationError(ctx, parsed.error)
-    const body = parsed.data
 
-    // Mirrors the internal PATCH route: every read path returns the masked
-    // form ('********-1234', or '********-????' when undecryptable), so a
-    // client PATCHing back what it read carries no new value. A mask must
-    // not be validated, stored, or treated as a clear.
-    const personalNumberSubmitted =
-      body.personal_number !== undefined && !isMaskedPersonalNumber(body.personal_number)
-
-    // The individual-only rule for personal_number, the personnummer guard
-    // on org_number and the country-vs-type check all depend on the row as
-    // it will be after the update; read the stored values when the body
-    // touches any of the fields involved.
-    let effectiveType: string | undefined = body.customer_type
-    let existing: ExistingCountryRow | null = null
-    if (
-      (personalNumberSubmitted && body.personal_number)
-      || body.org_number
-      || body.customer_type !== undefined
-      || body.country !== undefined
-      || body.vat_number !== undefined
-    ) {
-      const { data } = await ctx.supabase
-        .from('customers')
-        .select('customer_type, country, vat_number, org_number')
-        .eq('company_id', ctx.companyId!)
-        .eq('id', customerId)
-        .maybeSingle()
-      existing = data as ExistingCountryRow | null
-      effectiveType ??= existing?.customer_type
-    }
-
-    // Country vs type vs VAT prefix on the row as it will END UP (#2025): a
-    // type change alone can make the stored country wrong, and a country
-    // change alone can contradict the stored VAT number. Judged only when one
-    // of the three is in the body, so a contradictory legacy row can still
-    // change its email.
-    const countryRuleTouched =
-      body.customer_type !== undefined || body.country !== undefined || body.vat_number !== undefined
-    if (countryRuleTouched && existing && effectiveType) {
-      const countryIssue = checkCountryConsistency({
-        partyType: effectiveType,
-        country: body.country ?? existing.country,
-        vatNumber: body.vat_number ?? existing.vat_number,
-      })
-      if (countryIssue) {
-        return v1ErrorResponseFromCode('CUSTOMER_COUNTRY_MISMATCH', ctx.log, {
-          requestId: ctx.requestId,
-          details: {
-            field: 'country',
-            issue: countryIssue,
-            message_sv: COUNTRY_CONSISTENCY_MESSAGES[countryIssue].sv,
-            message_en: COUNTRY_CONSISTENCY_MESSAGES[countryIssue].en,
-          },
-        })
-      }
-    }
-
-    if (personalNumberSubmitted && body.personal_number && effectiveType !== 'individual') {
-      return v1ErrorResponseFromCode('CUSTOMER_PERSONAL_NUMBER_NOT_ALLOWED', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'personal_number' },
-      })
-    }
-
-    // A Swedish enskild firma's org number IS its owner's personnummer, so
-    // swedish_business accepts one and the lists mask it. Only the foreign
-    // business types, which cannot have one, still refuse it.
-    //
-    // Judged on the org number the row will END UP with, like the country
-    // rule below: a type change alone, with no org_number in the body, would
-    // otherwise move a stored personnummer onto a foreign business type,
-    // which is the one place the list surfaces do not mask it. '' is a clear
-    // and stays a clear: only `undefined` falls back to the stored value.
-    const effectiveOrgNumber = body.org_number ?? existing?.org_number
-    if (isPersonalNumberOrgNumberDisallowed(effectiveType, effectiveOrgNumber)) {
-      return v1ErrorResponseFromCode('CUSTOMER_ORG_NUMBER_IS_PERSONAL', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'org_number' },
-      })
-    }
-
-    // An individual has no org number. Judged on the same end state, but
-    // only when org_number or customer_type is in the body: a legacy row must
-    // still be able to change its email.
-    const individualOrgNumber =
-      body.org_number !== undefined || body.customer_type !== undefined ? effectiveOrgNumber : undefined
-    if (isOrgNumberRefusedOnIndividual(effectiveType, individualOrgNumber)) {
-      return v1ErrorResponseFromCode('CUSTOMER_ORG_NUMBER_ON_INDIVIDUAL', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'org_number' },
-      })
-    }
-
-    // The mirror image for individuals: a personnummer submitted as
-    // org_number is the personnummer in the wrong field. It is stored
-    // encrypted in personal_number and org_number is cleared, same as
-    // CreateCustomerSchema does on create. A type change to individual
-    // moves a stored one the same way (an enskild firma becoming a
-    // privatperson). Next to a DIFFERENT plaintext personal_number in the
-    // same body the two conflict.
-    const reroutedPersonalNumber = orgNumberHoldsPersonalNumber(effectiveType, individualOrgNumber)
-      ? normalizeReroutedPersonalNumber(individualOrgNumber!)
-      : null
-    if (
-      reroutedPersonalNumber
-      && personalNumberSubmitted
-      && body.personal_number
-      && personalNumberDigits(body.personal_number) !== personalNumberDigits(reroutedPersonalNumber)
-    ) {
-      return v1ErrorResponseFromCode('CUSTOMER_PERSONAL_NUMBER_CONFLICT', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'org_number' },
-      })
-    }
-
-    // Build the partial update set. Fields explicitly set to undefined in
-    // the body are not in the resulting object (Zod strips undefined). null
-    // IS allowed and means "clear the field" (or, for archived_at, "un-archive").
-    const updateData: Record<string, unknown> = {}
-    for (const key of [
-      'name',
-      'customer_type',
-      'contact_person',
-      'email',
-      'phone',
-      'invoice_email_cc_addresses',
-      'invoice_email_bcc_addresses',
-      'address_line1',
-      'address_line2',
-      'postal_code',
-      'city',
-      'country',
-      'org_number',
-      'vat_number',
-      'language',
-      'default_payment_terms',
-      'notes',
-      'archived_at',
-    ] as const) {
-      if (body[key] !== undefined) updateData[key] = body[key]
-    }
-    // Empty string clears the customer number, same as an explicit null
-    // (matches the internal /api/customers route).
-    if (body.customer_number !== undefined) {
-      updateData.customer_number = body.customer_number || null
-    }
-    if (reroutedPersonalNumber) updateData.org_number = null
-    if (reroutedPersonalNumber && !(personalNumberSubmitted && body.personal_number)) {
-      updateData.personal_number = encryptCustomerPersonalNumber(reroutedPersonalNumber)
-    } else if (personalNumberSubmitted) {
-      // Stored as ciphertext; customers_personal_number_check accepts that
-      // shape only (20260726110000).
-      updateData.personal_number = encryptCustomerPersonalNumber(body.personal_number)
-    } else if (body.customer_type !== undefined && body.customer_type !== 'individual') {
-      // The row is becoming a business customer: a personnummer may not
-      // remain stored on it (matches the internal PATCH route).
-      updateData.personal_number = null
-    }
-
-    if (Object.keys(updateData).length === 0) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: { field: 'body', message: 'At least one field must be supplied for update.' },
-      })
-    }
-
-    // Dry-run: fetch the current record, merge with the proposed changes,
-    // return the merged preview. No DB write.
-    if (ctx.dryRun) {
-      const { data: current, error: fetchErr } = await ctx.supabase
-        .from('customers')
-        .select(CUSTOMER_DETAIL_COLUMNS)
-        .eq('company_id', ctx.companyId!)
-        .eq('id', customerId)
-        .maybeSingle()
-
-      if (fetchErr) {
-        return v1ErrorResponse(fetchErr, ctx.log, { requestId: ctx.requestId })
-      }
-      if (!current) {
-        ctx.log.warn('customers.update dry-run: not found', { customerId, companyId: ctx.companyId })
-        return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
-          requestId: ctx.requestId,
-          details: { resource: 'customer' },
-        })
-      }
-
-      return dryRunPreview(maskCustomerRow({ ...(current as Record<string, unknown> & { personal_number?: string | null }), ...updateData }), { requestId: ctx.requestId, log: ctx.log })
-    }
-
-    // Best-effort VIES re-validation if vat_number is changing on an
-    // eu_business customer. Resolve BEFORE the update so the result lands
-    // atomically with the rest of the change: the API response is then
-    // guaranteed to reflect committed DB state, not a stale value from a
-    // separate fire-and-forget update.
-    if (body.vat_number !== undefined) {
-      const wouldBeType =
-        body.customer_type ??
-        // Need the existing type if the caller didn't change it.
-        (
-          await ctx.supabase
-            .from('customers')
-            .select('customer_type')
-            .eq('company_id', ctx.companyId!)
-            .eq('id', customerId)
-            .maybeSingle()
-        ).data?.customer_type
-      if (wouldBeType === 'eu_business') {
-        if (body.vat_number) {
-          try {
-            const vatResult = await validateVatNumber(body.vat_number)
-            // Only an unavailable VIES needs the stored number: an outage
-            // must not wipe an earlier check of the same number.
-            const previousVatNumber = vatResult.unavailable
-              ? (
-                  await ctx.supabase
-                    .from('customers')
-                    .select('vat_number')
-                    .eq('company_id', ctx.companyId!)
-                    .eq('id', customerId)
-                    .maybeSingle()
-                ).data?.vat_number
-              : null
-            const columns = vatValidationColumns(vatResult, previousVatNumber, body.vat_number)
-            if (columns) {
-              updateData.vat_number_validated = columns.vat_number_validated
-              updateData.vat_number_validated_at = columns.vat_number_validated_at
-            }
-          } catch (err) {
-            ctx.log.warn('auto-VIES re-validation failed on customer update', err as Error)
-            updateData.vat_number_validated = false
-            updateData.vat_number_validated_at = null
-          }
-        } else {
-          // vat_number cleared
-          updateData.vat_number_validated = false
-          updateData.vat_number_validated_at = null
-        }
-      }
-    }
-
-    const { data, error } = await ctx.supabase
-      .from('customers')
-      .update(updateData)
-      .eq('company_id', ctx.companyId!)
-      .eq('id', customerId)
-      .select(CUSTOMER_UPDATE_RESPONSE_COLUMNS)
-      .maybeSingle()
-
-    if (error) {
-      if (error.code === '23505') {
-        // GDPR Art.5(1)(c): do NOT echo body.org_number: for
-        // customer_type='individual' it IS the personnummer.
-        return v1ErrorResponseFromCode('CUSTOMER_DUPLICATE_ORG_NUMBER', ctx.log, {
-          requestId: ctx.requestId,
-          details: { field: 'org_number' },
-        })
-      }
-      return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!data) {
-      ctx.log.warn('customers.update: not found', { customerId, companyId: ctx.companyId })
-      return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
-        requestId: ctx.requestId,
-        details: { resource: 'customer' },
-      })
-    }
-
-    // Open drafts to this customer re-derive their VAT header from it.
-    await syncDraftVatHeadersForCustomer(ctx.supabase, ctx.companyId!, customerId)
-
-    return ok(maskCustomerRow(data as Record<string, unknown> & { personal_number?: string | null }), { requestId: ctx.requestId })
+    // One update and one rule set with the dashboard and the agent's approval
+    // (lib/customers/customer-commands.ts). The dry run answers the would-be
+    // record and `changes`; VIES runs only on the real update.
+    const outcome = await updateCustomer(
+      { supabase: ctx.supabase, companyId: ctx.companyId!, userId: ctx.userId, log: ctx.log },
+      idParse.data,
+      parsed.data,
+      { dryRun: ctx.dryRun },
+    )
+    return v1OutcomeResponse(customerRecordOutcome(outcome), ctx)
   },
   { requireIdempotencyKey: true },
 )
 
-// ──────────────────────────────────────────────────────────────────
-// DELETE: soft-delete (sets archived_at)
-// ──────────────────────────────────────────────────────────────────
 
 registerEndpoint({
   operation: 'customers.delete',

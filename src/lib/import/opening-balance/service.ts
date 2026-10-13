@@ -48,6 +48,7 @@ import {
   validateOpeningBalanceLines,
   type OpeningBalanceLine,
 } from './execute-helpers'
+import { isLockDateRefusal } from '@/lib/errors/get-structured-error'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -474,8 +475,7 @@ export async function correctOpeningBalances(
   } catch (err) {
     // The lock date moved between the pre-flight and the write: the same
     // actionable code instead of a generic retryable database error.
-    const message = err instanceof Error ? err.message : ''
-    if (/Bokföringen är låst/i.test(message)) {
+    if (isLockDateRefusal(err)) {
       return { ok: false, code: 'OB_COMPANY_LOCK_DATE', details: { reason: getUserErrorMessage(err) } }
     }
     if (isBookkeepingError(err)) return { ok: false, code: 'OB_CORRECT_FAILED', error: err }

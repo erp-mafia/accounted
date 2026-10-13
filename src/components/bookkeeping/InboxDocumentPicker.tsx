@@ -15,6 +15,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Input } from '@/components/ui/input'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { DocumentPreview } from '@/components/bookkeeping/DocumentPreview'
+import { documentPreviewKind } from '@/lib/documents/preview-kind'
 import { FileText, ImageIcon, Loader2, Search, Inbox } from 'lucide-react'
 
 // InboxDocumentPicker
@@ -63,16 +65,14 @@ interface Props {
   onSelect?: (doc: AvailableInboxDoc) => void
 }
 
-function isImageType(type: string | null): boolean {
-  return type?.startsWith('image/') ?? false
+/** The picker previews files only; a mail body opens from the inbox itself. */
+function pickerPreviewKind(mime: string | null, fileName: string) {
+  const kind = documentPreviewKind(mime, fileName)
+  return kind === 'html' ? null : kind
 }
 
-function isPdfType(type: string | null): boolean {
-  return type === 'application/pdf'
-}
-
-function DocIcon({ mime }: { mime: string | null }) {
-  if (isImageType(mime)) {
+function DocIcon({ mime, fileName }: { mime: string | null; fileName: string }) {
+  if (documentPreviewKind(mime, fileName) === 'image') {
     return <ImageIcon className="h-4 w-4 text-muted-foreground shrink-0" />
   }
   return <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -221,7 +221,7 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
                         linkingId && !isLinking && 'opacity-50',
                       )}
                     >
-                      <DocIcon mime={it.mime_type} />
+                      <DocIcon mime={it.mime_type} fileName={it.file_name} />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 min-w-0">
                           <span className="text-sm font-medium truncate">
@@ -282,41 +282,23 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
 
           {previewItem && previewSrc && (
             <div className="py-1">
-              {isImageType(previewItem.mime_type) ? (
-                <img
-                  src={previewSrc}
-                  alt={previewItem.file_name}
-                  className="max-h-[70vh] w-full rounded-lg border object-contain"
-                />
-              ) : isPdfType(previewItem.mime_type) ? (
-                // <object> + type="application/pdf" invokes Chrome's PDF plugin
-                // directly; <iframe> intermittently shows a blocked-content
-                // notice even with a permissive CSP. Mirrors JournalEntryAttachments.
-                <object
-                  data={previewSrc}
-                  type="application/pdf"
-                  aria-label={previewItem.file_name}
-                  className="w-full h-[70vh] rounded-lg border"
-                >
+              <DocumentPreview
+                src={previewSrc}
+                kind={pickerPreviewKind(previewItem.mime_type, previewItem.file_name)}
+                label={previewItem.file_name}
+                className="h-[70vh] w-full rounded-lg border"
+                imageClassName="max-h-[70vh] w-full rounded-lg border object-contain"
+                fallback={
                   <a
                     href={previewSrc}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="block px-4 py-2 text-sm text-muted-foreground underline"
+                    className="block px-4 py-6 text-center text-sm text-muted-foreground underline"
                   >
                     {t('picker_preview_unavailable')}
                   </a>
-                </object>
-              ) : (
-                <a
-                  href={previewSrc}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="block px-4 py-6 text-sm text-muted-foreground underline text-center"
-                >
-                  {t('picker_preview_unavailable')}
-                </a>
-              )}
+                }
+              />
             </div>
           )}
 

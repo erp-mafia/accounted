@@ -1,8 +1,6 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
-import { createClient } from '@/lib/supabase/client'
-import { useCompany } from '@/contexts/CompanyContext'
 import {
   Dialog,
   DialogContent,
@@ -16,48 +14,27 @@ import { useToast } from '@/components/ui/use-toast'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { Loader2, Search } from 'lucide-react'
 import { Input } from '@/components/ui/input'
-import {
-  FALLBACK_CONFIDENCE_FACTOR,
-  amountVarianceForMatch,
-  bestProminentAmountVariance,
-  calculateMatchConfidence,
-  calculateMerchantSimilarity,
-} from '@/lib/documents/core-receipt-matcher'
-import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
-import { roundOre } from '@/lib/money'
-import { FOREIGN_CURRENCIES, type InvoiceExtractionResult } from '@/types'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import type { InvoiceExtractionResult } from '@/types'
+import { useUnderlagBankCandidates } from './use-underlag-bank-candidates'
 
 // TransactionMatchPicker
 //
 // Opens from the InvoiceInboxWorkspace FieldsRail when the user clicks
 // "Matcha mot transaktion" on an inbox item whose matched_transaction_id is
-// null. Lists *uncategorised* transactions only: matching points an underlag
-// at the bank payment you're about to book, so already-booked rows are out of
-// scope (and surfacing them would invite a double-booking via "Bokför
-// manuellt"). Two modes:
-//   • Suggested (no search): every uncategorised company transaction, scored
-//     via lib/documents/core-receipt-matcher and sorted best-first. No date
-//     window: over-fetching is cheap for a manual picker and a hard window
-//     silently dropped late payments out of the candidate set.
-//   • Search (≥2 chars): the same uncategorised set across ALL dates, narrowed
-//     server-side by description/merchant. This is the fix for "not all
-//     transactions come up to search for": the old client-only filter could
-//     only see the windowed rows already fetched.
-// Amounts are compared currency-aware (see scoring memo): same-currency raw,
-// otherwise normalised to SEK via the underlag's FX rate. User picks one →
+// null. Lists *unbooked* transactions only: matching points an underlag at
+// the bank payment you're about to book, so booked rows are out of scope
+// (and surfacing them would invite a double-booking via "Bokför manuellt").
+// That is the /api/transactions?unmatched=true set: no verifikat, not
+// ignored, not booked through a samlingsverifikat or a split. Two modes:
+//   • Suggested (no search): the newest unbooked rows, ranked best-first. No
+//     date window: a hard window silently dropped late payments.
+//   • Search (≥2 chars): the same unbooked set across ALL dates, narrowed in
+//     the database by description/merchant, so a search finds rows outside
+//     the suggested list.
+// Rows, the underlag's FX rate and the ranking come from
+// useUnderlagBankCandidates, the hook Bokför direkt uses too. Amounts compare
+// currency-aware (lib/documents/underlag-bank-candidates). User picks one →
 // POST /items/:id/match-transaction → onMatched callback.
-
-interface RawTransaction {
-  id: string
-  date: string
-  description: string | null
-  merchant_name: string | null
-  amount: number
-  currency: string | null
-  amount_sek: number | null
-  exchange_rate: number | null
-}
 
 interface CandidateTransaction {
   id: string
@@ -80,23 +57,6 @@ interface Props {
   onMatched: (transactionId: string) => void
 }
 
-// Currencies the /api/currency/rate endpoint (Riksbanken) can resolve. Used
-// to normalise a foreign-currency underlag total into SEK so it can be
-// compared against SEK bank charges.
-const SUPPORTED_FX: readonly string[] = FOREIGN_CURRENCIES
-
-// Date tolerance used only for *ranking* candidates (not for filtering, there
-// is no longer a date window). Far wider than the receipt matcher's tight ±3d
-// default so a payment landing weeks or months after the invoice still earns
-// partial date credit and the true match floats to the top, instead of every
-// candidate collapsing to "Svag match".
-const MATCH_DATE_TOLERANCE_DAYS = 120
-
-// Minimum characters before a keystroke flips the picker into server-side
-// search mode. Below this we stay on the scored suggestions and just narrow
-// them client-side for instant feedback.
-const SEARCH_MIN_CHARS = 2
-
 export default function TransactionMatchPicker({
   open,
   onClose,
@@ -104,230 +64,52 @@ export default function TransactionMatchPicker({
   extractedData,
   onMatched,
 }: Props) {
-  const supabase = useMemo(() => createClient(), [])
-  const { company } = useCompany()
   const { toast } = useToast()
-
-  // Starts true so the first paint after opening shows skeletons, not a flash
-  // of the empty state before the fetch effect runs.
-  const [loading, setLoading] = useState(true)
-  const [rawRows, setRawRows] = useState<RawTransaction[]>([])
   const [search, setSearch] = useState('')
-  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [matchingId, setMatchingId] = useState<string | null>(null)
-  // SEK per unit of the underlag currency (e.g. ~11.5 for EUR). null = SEK
-  // underlag, fetch pending, or unsupported/failed: amount matching then
-  // falls back to same-currency-only.
-  const [fxRate, setFxRate] = useState<number | null>(null)
 
-  // ── Underlag (receipt) facts pulled from extracted_data ──────
-  const rawInvoiceDate = extractedData?.invoice?.invoiceDate ?? null
-  const hasInvoiceDate = useMemo(() => {
-    if (!rawInvoiceDate) return false
-    return !Number.isNaN(new Date(rawInvoiceDate).getTime())
-  }, [rawInvoiceDate])
-  // Default to today if no date was extracted so scoring still has an anchor.
-  const invoiceDate = useMemo(() => {
-    if (!rawInvoiceDate) return new Date()
-    const parsed = new Date(rawInvoiceDate)
-    return Number.isNaN(parsed.getTime()) ? new Date() : parsed
-  }, [rawInvoiceDate])
-  // A total promoted from the document's single prominent amount (totalSource
-  // 'prominent') is fallback-grade evidence, not an invoice total: demote it
-  // here so it is scored through the discounted fallback path below. A
-  // user-edited total has the stamp cleared and counts at full weight.
-  const total =
-    extractedData?.totalSource === 'prominent' ? null : (extractedData?.totals?.total ?? null)
-  const receiptCurrency = (extractedData?.invoice?.currency ?? 'SEK').toUpperCase()
-  const supplier = extractedData?.supplier?.name ?? null
-  // Non-invoice documents (bankintyg, avtal) have no total but often show the
-  // money amount anyway; those feed a discounted amount fallback below.
-  const prominentAmounts = useMemo(
-    () =>
-      total == null
-        ? (extractedData?.prominentAmounts ?? []).filter(
-            (a) => Number.isFinite(a.amount) && a.amount !== 0,
-          )
-        : [],
-    [extractedData, total],
-  )
+  // Rows, FX rate and ranking: the one hook both inbox surfaces use.
+  const {
+    facts,
+    ranked,
+    loading,
+    error: loadError,
+    totalSek: receiptSek,
+    amountMatchUnavailable,
+  } = useUnderlagBankCandidates({ open, extractedData, search })
+  const { total, currency: receiptCurrency, supplier, prominentAmounts } = facts
+  const rawInvoiceDate = facts.invoiceDate
+  const hasInvoiceDate = rawInvoiceDate != null
 
-  // SEK value of the underlag total. For a SEK underlag that's the total
-  // itself; for a foreign one it needs the fetched FX rate.
-  const receiptSek = useMemo(() => {
-    if (total == null) return null
-    if (receiptCurrency === 'SEK') return total
-    if (fxRate != null) return Math.round(total * fxRate * 100) / 100
-    return null
-  }, [total, receiptCurrency, fxRate])
-
-  // True when the underlag is in a foreign currency we can't price right now:
-  // amount matching is unavailable, so we say so instead of mis-ranking.
-  const amountMatchUnavailable =
-    total != null && receiptCurrency !== 'SEK' && receiptSek == null
-
-  // ── Reset transient state each time the dialog opens ─────────
+  // ── Reset the search each time the dialog opens ──────────────
   useEffect(() => {
-    if (!open) return
-    setSearch('')
-    setDebouncedSearch('')
-    setRawRows([])
-    setLoading(true)
+    if (open) setSearch('')
   }, [open])
 
-  // ── Debounce the search term feeding the server query ────────
   useEffect(() => {
-    const t = setTimeout(() => setDebouncedSearch(search), 300)
-    return () => clearTimeout(t)
-  }, [search])
-
-  // ── Fetch the underlag's FX rate (foreign currency only) ─────
-  useEffect(() => {
-    if (!open) return
-    setFxRate(null)
-    if (receiptCurrency === 'SEK' || !SUPPORTED_FX.includes(receiptCurrency)) return
-    let cancelled = false
-    const dateParam = hasInvoiceDate && rawInvoiceDate ? `&date=${rawInvoiceDate}` : ''
-    fetch(`/api/currency/rate?currency=${receiptCurrency}${dateParam}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((body) => {
-        if (cancelled) return
-        const rate = body?.data?.rate
-        if (typeof rate === 'number' && rate > 0) setFxRate(rate)
-      })
-      .catch(() => {
-        /* leave null: cross-currency amount signal simply drops out */
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [open, receiptCurrency, hasInvoiceDate, rawInvoiceDate])
-
-  // ── Fetch candidate rows (suggested vs search mode) ──────────
-  useEffect(() => {
-    if (!open) return
-    if (!company) return // provider still hydrating
-    let cancelled = false
-    setLoading(true)
-    ;(async () => {
-      // Strip PostgREST filter-DSL structural chars before interpolating into
-      // `.or()`. Commas separate OR-conditions and parentheses group nested
-      // filters, so leaving them in would let a search term inject a synthetic
-      // clause (e.g. "Acme,company_id.neq.…"). `%` and `\` are LIKE wildcards/
-      // escapes we also drop. `.` is safe: it stays inside the ilike value.
-      const safe = debouncedSearch.trim().replace(/[%,()\\]/g, ' ').trim()
-      const searchMode = safe.length >= SEARCH_MIN_CHARS
-
-      // Defense-in-depth: RLS only narrows to "any company the user belongs
-      // to". Multi-tenant users (consultants) would otherwise see other
-      // companies' transactions. Filter to the active company explicitly.
-      // Uncategorised only (journal_entry_id IS NULL) in both modes: see the
-      // component header. The search just adds a server-side name filter so
-      // matches outside the suggested set still surface.
-      let query = supabase
-        .from('transactions')
-        .select(
-          'id, date, description, merchant_name, amount, currency, amount_sek, exchange_rate',
-        )
-        .eq('company_id', company.id)
-        .is('journal_entry_id', null)
-
-      if (searchMode) {
-        query = query
-          .or(`description.ilike.%${safe}%,merchant_name.ilike.%${safe}%`)
-          .order('date', { ascending: false })
-          .limit(100)
-      } else {
-        // Recent first; scoring floats the best match up regardless of date.
-        query = query.order('date', { ascending: false }).limit(300)
-      }
-
-      const { data, error } = await query
-      if (cancelled) return
-      if (error) {
-        toast({
-          title: 'Kunde inte hämta transaktioner',
-          description: getUserErrorMessage(error),
-          variant: 'destructive',
-        })
-        setRawRows([])
-        setLoading(false)
-        return
-      }
-      setRawRows((data ?? []) as RawTransaction[])
-      setLoading(false)
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [open, supabase, company, debouncedSearch, toast])
-
-  // ── Score + sort (currency-aware) ────────────────────────────
-  const candidates = useMemo<CandidateTransaction[]>(() => {
-    const scored = rawRows.map((tx) => {
-      const txCurrency = (tx.currency ?? 'SEK').toUpperCase()
-      const txSek =
-        txCurrency === 'SEK'
-          ? tx.amount
-          : resolveSekAmount(tx.amount, tx.amount_sek, tx.currency, tx.exchange_rate)
-
-      // Currency-aware variance: null when uncomparable, which makes the
-      // matcher drop the amount signal instead of matching 750 EUR to 750 SEK.
-      let amountVariance = amountVarianceForMatch(
-        total,
-        receiptCurrency,
-        receiptSek,
-        tx.amount,
-        txCurrency,
-        txSek,
-      )
-
-      // No total (bankintyg, avtal): fall back to the closest prominent
-      // amount, discounted below so a printed figure never presents as the
-      // certainty a real total gives.
-      const fallbackMatch =
-        total == null && prominentAmounts.length > 0
-          ? bestProminentAmountVariance(
-              prominentAmounts,
-              receiptCurrency,
-              tx.amount,
-              txCurrency,
-              txSek,
-            )
-          : null
-      if (fallbackMatch) amountVariance = fallbackMatch.variance
-
-      const dateVariance = Math.abs(
-        (new Date(tx.date).getTime() - invoiceDate.getTime()) / (1000 * 60 * 60 * 24),
-      )
-      const merchant = tx.merchant_name || tx.description || ''
-      const similarity = supplier ? calculateMerchantSimilarity(supplier, merchant) : 0
-      const scoredMatch = calculateMatchConfidence(
-        dateVariance,
-        amountVariance,
-        similarity,
-        MATCH_DATE_TOLERANCE_DAYS,
-      )
-      const matchReasons = scoredMatch.matchReasons
-      const confidence = fallbackMatch
-        ? roundOre(scoredMatch.confidence * FALLBACK_CONFIDENCE_FACTOR)
-        : scoredMatch.confidence
-
-      return {
-        id: tx.id,
-        date: tx.date,
-        description: tx.description ?? null,
-        merchant_name: tx.merchant_name ?? null,
-        amount: tx.amount,
-        currency: txCurrency,
-        amountSek: txCurrency === 'SEK' ? null : Math.round(txSek * 100) / 100,
-        confidence,
-        reasons: matchReasons,
-      }
+    if (!loadError) return
+    toast({
+      title: 'Kunde inte hämta transaktioner',
+      description: loadError,
+      variant: 'destructive',
     })
-    scored.sort((a, b) => b.confidence - a.confidence)
-    return scored
-  }, [rawRows, invoiceDate, total, prominentAmounts, receiptCurrency, receiptSek, supplier])
+  }, [loadError, toast])
+
+  const candidates = useMemo<CandidateTransaction[]>(
+    () =>
+      ranked.map((r) => ({
+        id: r.row.id,
+        date: r.row.date,
+        description: r.row.description ?? null,
+        merchant_name: r.row.merchant_name ?? null,
+        amount: r.row.amount,
+        currency: r.currency,
+        amountSek: r.amountSek,
+        confidence: r.confidence,
+        reasons: r.reasons,
+      })),
+    [ranked],
+  )
 
   // Instant client-side narrowing while the debounced server query catches up.
   const filtered = useMemo(() => {

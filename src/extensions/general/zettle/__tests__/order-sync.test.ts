@@ -4,7 +4,6 @@ import {
   fromMinor,
   mapLineItems,
   mapPurchaseToWebshopRows,
-  parseBackfillFrom,
   purchaseQualifiesAsPaidSale,
   purchaseQualifiesAsRefund,
   resolveWindowStartIso,
@@ -12,6 +11,7 @@ import {
   zettlePurchaseExternalId,
   zettleStoreScope,
 } from '../lib/order-sync'
+import { parseBackfillFrom } from '@/lib/feed-sync/cursor-window'
 import { MAX_BACKFILL_YEARS } from '../types'
 import type { ZettleConnection, ZettlePurchase } from '../types'
 
@@ -272,26 +272,27 @@ describe('zettle sync window', () => {
   })
 })
 
+// Zettle's backfill bound through the shared parser (its private copy is gone).
 describe('parseBackfillFrom', () => {
   const now = new Date('2026-09-14T12:00:00.000Z')
 
   it('accepts a plain date and pins it to midnight UTC', () => {
-    expect(parseBackfillFrom('2026-01-01', now)).toEqual({ iso: '2026-01-01T00:00:00.000Z' })
+    expect(parseBackfillFrom('2026-01-01', MAX_BACKFILL_YEARS, now)).toEqual({ iso: '2026-01-01T00:00:00.000Z' })
   })
 
   it('rejects anything that is not a YYYY-MM-DD string', () => {
-    expect(parseBackfillFrom(undefined, now)).toEqual({ error: 'invalid' })
-    expect(parseBackfillFrom('2026-1-1', now)).toEqual({ error: 'invalid' })
-    expect(parseBackfillFrom(20260101, now)).toEqual({ error: 'invalid' })
+    expect(parseBackfillFrom(undefined, MAX_BACKFILL_YEARS, now)).toEqual({ error: 'invalid' })
+    expect(parseBackfillFrom('2026-1-1', MAX_BACKFILL_YEARS, now)).toEqual({ error: 'invalid' })
+    expect(parseBackfillFrom(20260101, MAX_BACKFILL_YEARS, now)).toEqual({ error: 'invalid' })
   })
 
   it('rejects a day that does not exist instead of rolling it over', () => {
     // Date.parse turns 2026-02-31T00:00:00Z into 3 March.
-    expect(parseBackfillFrom('2026-02-31', now)).toEqual({ error: 'invalid' })
+    expect(parseBackfillFrom('2026-02-31', MAX_BACKFILL_YEARS, now)).toEqual({ error: 'invalid' })
   })
 
   it('rejects a future start date', () => {
-    expect(parseBackfillFrom('2026-09-15', now)).toEqual({ error: 'future' })
+    expect(parseBackfillFrom('2026-09-15', MAX_BACKFILL_YEARS, now)).toEqual({ error: 'future' })
   })
 
   it('caps how far back a backfill may reach', () => {
@@ -299,7 +300,7 @@ describe('parseBackfillFrom', () => {
     floor.setUTCFullYear(floor.getUTCFullYear() - MAX_BACKFILL_YEARS)
     const justInside = new Date(floor.getTime() + 86_400_000).toISOString().slice(0, 10)
     const tooOld = new Date(floor.getTime() - 2 * 86_400_000).toISOString().slice(0, 10)
-    expect(parseBackfillFrom(justInside, now)).toHaveProperty('iso')
-    expect(parseBackfillFrom(tooOld, now)).toEqual({ error: 'too_old' })
+    expect(parseBackfillFrom(justInside, MAX_BACKFILL_YEARS, now)).toHaveProperty('iso')
+    expect(parseBackfillFrom(tooOld, MAX_BACKFILL_YEARS, now)).toEqual({ error: 'too_old' })
   })
 })

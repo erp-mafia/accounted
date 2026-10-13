@@ -10,6 +10,7 @@ import { utcDateStamp } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { createServiceClient } from '@/lib/supabase/server'
+import { fileResponse } from '@/lib/api/file-response'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -145,14 +146,7 @@ export const GET = withRouteContext('report.full_archive', async (request, ctx) 
       sizeBytes: zipBuffer.byteLength,
     })
 
-    return new NextResponse(zipBuffer, {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/zip',
-        'Content-Disposition': `attachment; filename="${filename}"`,
-        'Cache-Control': 'private, no-store',
-      },
-    })
+    return fileResponse(zipBuffer, { filename: filename, contentType: 'application/zip', cacheControl: 'private, no-store' })
   } catch (err) {
     log.error('full archive generation failed', err as Error, {
       userId: user.id,

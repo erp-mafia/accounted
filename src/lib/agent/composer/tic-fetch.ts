@@ -3,17 +3,18 @@ import { createLogger } from '@/lib/logger'
 
 const log = createLogger('agent.composer.tic-fetch')
 
-// Live-fetch the TIC company profile via the existing extension HTTP route
-// and cache it on `companies.tic_snapshot`. Used by the agent onboarding
-// stream (Phase A step 1) and the /onboarding/agent server component so the
-// review card has SNI, verksamhetsbeskrivning, address, and recent financials
-// without requiring the user to have visited the TIC workspace beforehand.
+// Live-fetch the TIC company profile and cache it on `companies.tic_snapshot`.
+// Used by the agent onboarding stream (Phase A step 1) and the
+// /onboarding/agent server component so the review card has SNI,
+// verksamhetsbeskrivning, address, and recent financials without requiring
+// the user to have visited the TIC workspace beforehand.
 //
-// Why HTTP self-fetch rather than a direct import: core-build CI forbids
-// imports from @/extensions/ in lib/agent/*. Going through the extension's
-// public HTTP surface keeps the boundary intact and works the same in dev
-// and on Vercel. The TIC handler already accepts cookie-auth, so we just
-// forward the user's session cookie.
+// Core never imports @/extensions/, so the profile comes from the TIC
+// extension's `fetchCompanyProfile` service, resolved through the extension
+// registry. It used to be an HTTP call back to this server's own /profile
+// route, which needed the caller's cookie and origin, cost a second
+// serverless invocation, and depended on guessing the right origin. With
+// TIC disabled there is no provider and the cache is all there is.
 //
 // Stale-cache policy: anything cached within the last 7 days is reused
 // verbatim. TIC data is slow-changing (sniCodes, registration, address
@@ -27,6 +28,9 @@ const log = createLogger('agent.composer.tic-fetch')
 // just the agent-onboarding paths, a deliberate once-per-company action).
 
 const STALE_AFTER_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
+
+/** The TIC extension's profile service (services.fetchCompanyProfile). */
+export const FETCH_COMPANY_PROFILE_SERVICE = 'fetchCompanyProfile'
 // Default fetch timeout. The agent-onboarding callers override with a longer
 // budget (10s) since the user is on a wait-screen with visible progress and
 // the prior 5s default killed every signup-time fetch in May (~530 wasted
@@ -50,14 +54,6 @@ function isV1Snapshot(snapshot: Record<string, unknown> | null): boolean {
 export async function ensureTicSnapshot(opts: {
   supabase: SupabaseClient
   companyId: string
-  cookieHeader: string
-  // Origin to use for the internal self-fetch. The caller derives this from
-  // the incoming request's host header so dev (localhost:3000), preview
-  // (vercel.app), and production all reach their own instance of the TIC
-  // route. Falls back to NEXT_PUBLIC_APP_URL when not supplied: fine for
-  // background jobs but wrong for request-scoped paths because that env var
-  // is the production canonical URL even in dev.
-  origin?: string
   // When true, a cached snapshot still inside the 7-day window is
   // re-fetched if it's a pre-v2 (v1) shape. Gated to deliberate, bounded
   // callers (agent onboarding) so the v1→v2 upgrade doesn't fan out across
@@ -69,14 +65,7 @@ export async function ensureTicSnapshot(opts: {
   // which was the root cause of the May 2026 quota-burn incident.
   timeoutMs?: number
 }): Promise<TicSnapshotResult> {
-  const {
-    supabase,
-    companyId,
-    cookieHeader,
-    origin,
-    upgradeV1 = false,
-    timeoutMs = FETCH_TIMEOUT_MS,
-  } = opts
+  const { supabase, companyId, upgradeV1 = false, timeoutMs = FETCH_TIMEOUT_MS } = opts
 
   const { data: companyRow } = await supabase
     .from('companies')
@@ -116,7 +105,7 @@ export async function ensureTicSnapshot(opts: {
     return { snapshot: (companyRow.tic_snapshot as Record<string, unknown> | null) ?? null, source: 'fallback' }
   }
 
-  const profile = await fetchTicProfile(orgNumber, cookieHeader, origin, timeoutMs)
+  const profile = await fetchTicProfile(orgNumber, timeoutMs)
   if (!profile) {
     // Fall through with whatever (possibly stale) snapshot we already have.
     return {
@@ -153,32 +142,40 @@ function isStale(fetchedAt: string | null): boolean {
 
 async function fetchTicProfile(
   orgNumber: string,
-  cookieHeader: string,
-  origin: string | undefined,
   timeoutMs: number,
 ): Promise<Record<string, unknown> | null> {
-  const baseUrl = origin || process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
-  const url = `${baseUrl}/api/extensions/ext/tic/profile?org_number=${encodeURIComponent(orgNumber)}`
+  // Loaded on use, not statically: the settings panel's refresh action reaches
+  // this module from a client component, and a static registry import would
+  // pull lib/init toward the browser build (check:guards static-init-import).
+  const { extensionRegistry } = await import('@/lib/extensions/registry')
+  const provider = (await extensionRegistry.getAll()).find(
+    (ext) => typeof ext.services?.[FETCH_COMPANY_PROFILE_SERVICE] === 'function',
+  )
+  if (!provider) return null
 
+  let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    const res = await fetch(url, {
-      headers: cookieHeader ? { cookie: cookieHeader } : undefined,
-      signal: AbortSignal.timeout(timeoutMs),
+    // The Lens calls behind the profile keep running past the deadline (and
+    // count against quota), exactly as an aborted HTTP fetch did; the caller
+    // just stops waiting for them.
+    const timeout = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), timeoutMs)
     })
-    if (!res.ok) {
-      log.warn('tic profile non-ok', { url, status: res.status })
+    const result = await Promise.race([
+      provider.services![FETCH_COMPANY_PROFILE_SERVICE](orgNumber) as Promise<Record<string, unknown> | null>,
+      timeout,
+    ])
+    if (result === 'timeout') {
+      log.warn('tic profile timed out', { timeoutMs })
       return null
     }
-    const body = (await res.json()) as { data?: Record<string, unknown> }
-    return body.data ?? null
+    return result ?? null
   } catch (err) {
-    // Network error, timeout, TIC extension disabled, TIC API misconfigured.
-    // Any of these is a normal fallback: return null so the caller can
-    // degrade gracefully.
-    log.warn('tic profile fetch failed', {
-      url,
-      error: err instanceof Error ? err.message : String(err),
-    })
+    // TIC not configured, quota hit, upstream outage: a normal fallback, so
+    // the caller degrades to whatever snapshot it already has.
+    log.warn('tic profile fetch failed', { error: err instanceof Error ? err.message : String(err) })
     return null
+  } finally {
+    clearTimeout(timer)
   }
 }

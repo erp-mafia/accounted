@@ -21,13 +21,6 @@ import { parseEntityType, resolveCompanyEntityType } from '@/lib/company/entity-
 import { eventBus } from '@/lib/events'
 import { bulkBookMatchedInboxItems, categorizeMatchedTransaction } from '@/lib/transactions/categorize-core'
 import { stampInboxItemsForLinkedDocument } from '@/lib/transactions/inbox-underlag'
-import { syncDraftVatHeadersForCustomer } from '@/lib/invoices/sync-draft-vat-headers'
-import {
-  COUNTRY_CONSISTENCY_MESSAGES,
-  checkCountryConsistency,
-  defaultCountryForParty,
-  normalizeCountryCode,
-} from '@/lib/vat/country-codes'
 import { fetchExchangeRate, isExchangeRateTemporarilyUnavailable } from '@/lib/currency/riksbanken'
 import {
   resolveSupplierInvoiceExchangeRate,
@@ -45,18 +38,7 @@ import { bookResidualAndLink, ReconciliationResidualError } from '@/lib/reconcil
 import { SKATTEKONTO_ACCOUNT_KEY } from '@/lib/reconciliation/schemas'
 import { SkattekontoLinkError } from '@/lib/skatteverket/skattekonto-link'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { validateVatNumber, vatValidationColumns } from '@/lib/vat/vies-client'
-import {
-  isOrgNumberRefusedOnIndividual,
-  isPersonalNumberOrgNumberDisallowed,
-  normalizeReroutedPersonalNumber,
-  orgNumberHoldsPersonalNumber,
-} from '@/lib/customers/personal-number-shape'
-import {
-  encryptCustomerPersonalNumber,
-  maskStoredCustomerPersonalNumber,
-} from '@/lib/customers/protect-personal-number'
-import { resolveDefaultPaymentTerms } from '@/lib/customers/default-payment-terms'
+import { createCustomer, PERSONAL_NUMBER_CIPHERTEXT_RE, updateCustomer } from '@/lib/customers/customer-commands'
 import {
   normalizeVatRateToDecimal,
   treatmentDeductsInputVat,
@@ -164,7 +146,7 @@ import {
   type DocumentLinkHolder,
 } from '@/lib/documents/link-holder'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
-import { classifyError } from '@/lib/errors/get-structured-error'
+import { classifyError, isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 import { requiresWebApproval } from '@/lib/pending-operations/risk-tiers'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { createDimensionValue } from '@/lib/dimensions/registry-service'
@@ -240,7 +222,6 @@ import { registerSalesOrderDelivery } from '@/lib/sales-orders/register-delivery
 import { createInvoiceFromSalesOrder } from '@/lib/sales-orders/create-invoice-from-order'
 import { convertToSalesOrder } from '@/lib/sales-orders/convert-to-sales-order'
 import type { ServiceFailure } from '@/lib/sales-orders/result'
-import { UpdateCustomerParamsSchema } from '@/lib/pending-operations/schemas/customer'
 import {
   CreateRecurringScheduleParamsSchema,
   UpdateRecurringScheduleParamsSchema,
@@ -268,9 +249,11 @@ import { periodPlaceholderProblem } from '@/lib/invoices/recurring-placeholders'
 import {
   BulkBookInboxSchema,
   CreateArticleSchema,
+  CreateCustomerSchema,
   CreateSupplierSchema,
   OpeningBalancesBulkSchema,
   UpdateArticleSchema,
+  UpdateCustomerSchema,
 } from '@/lib/api/schemas'
 import { z } from 'zod'
 import { operationForPendingType } from '@/lib/operations/registry'
@@ -701,9 +684,34 @@ async function commitCategorizeTransaction(
   })
 }
 
-const INDIVIDUAL_ORG_NUMBER_ERROR_SV =
-  'En privatperson har inget organisationsnummer: org_number ska vara tomt eller personens personnummer. '
-  + 'Välj kundtypen svenskt företag (customer_type=swedish_business) för ett företag.'
+/**
+ * A staged create_customer's params in the shape CreateCustomerSchema reads.
+ * Operations staged before the tool shared the dashboard's schema carry
+ * `address` and `payment_terms`, and null for every unset field; the schema
+ * reads absent fields as unset. The personnummer travels only as ciphertext.
+ */
+function upgradeStagedCustomerCreate(params: Record<string, unknown>): {
+  input: Record<string, unknown>
+  personalNumberCiphertext: unknown
+} {
+  const { personal_number_encrypted: personalNumberCiphertext, address, payment_terms: paymentTerms, ...rest } = params
+  const input: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(rest)) {
+    if (value !== null) input[key] = value
+  }
+  if (input.address_line1 === undefined && typeof address === 'string' && address) input.address_line1 = address
+  if (input.default_payment_terms === undefined && typeof paymentTerms === 'number') {
+    input.default_payment_terms = paymentTerms
+  }
+  return { input, personalNumberCiphertext }
+}
+
+/** A staged ciphertext: absent, null (a clear) or the stored shape, nothing else. */
+function stagedCiphertext(value: unknown): { ok: true; value: string | null | undefined } | { ok: false; result: ExecutorResult } {
+  if (value === undefined || value === null) return { ok: true, value: value as null | undefined }
+  if (typeof value === 'string' && PERSONAL_NUMBER_CIPHERTEXT_RE.test(value)) return { ok: true, value }
+  return { ok: false, result: { error: 'Invalid personal_number_encrypted: Invalid encrypted personal number', status: 400 } }
+}
 
 async function commitCreateCustomer(
   supabase: SupabaseClient,
@@ -711,253 +719,52 @@ async function commitCreateCustomer(
   companyId: string,
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
-  // Same 32-char invariant the web/v1 create routes and commitUpdateCustomer
-  // enforce; MCP hosts don't reliably enforce inputSchema maxLength.
-  const customerNumber = params.customer_number
-  if (customerNumber != null && (typeof customerNumber !== 'string' || customerNumber.length > 32)) {
-    return { error: 'customer_number must be a string of at most 32 characters', status: 400 }
-  }
+  // Re-validated at the commit boundary with the dashboard's rule set, so a
+  // tampered pending_operations row is refused with the same rules (ASVS V4.5).
+  const { input, personalNumberCiphertext } = upgradeStagedCustomerCreate(params)
+  const ciphertext = stagedCiphertext(personalNumberCiphertext)
+  if (!ciphertext.ok) return ciphertext.result
+  const parsed = parseRegisterParams(CreateCustomerSchema, input)
+  if (!parsed.ok) return parsed.result
 
-  // Same guard as CreateCustomerSchema: a Swedish enskild firma's org number
-  // IS its owner's personnummer, so swedish_business accepts one (the lists
-  // mask it); only a foreign business, which cannot have one, refuses it.
-  let orgNumber = (params.org_number as string) || null
-  if (isPersonalNumberOrgNumberDisallowed(params.customer_type as string, orgNumber)) {
-    return {
-      error:
-        'org_number ser ut som ett personnummer, vilket ett utländskt företag inte kan ha. '
-        + 'Välj kundtypen svenskt företag (customer_type=swedish_business) för en enskild firma, '
-        + 'eller privatperson (customer_type=individual) och skicka numret som personal_number.',
-      status: 400,
-    }
-  }
-  // Staging refuses this too; repeated here as the tamper gate.
-  if (isOrgNumberRefusedOnIndividual(params.customer_type as string, orgNumber)) {
-    return { error: INDIVIDUAL_ORG_NUMBER_ERROR_SV, status: 400 }
-  }
-
-  // The personnummer arrives from staging already encrypted
-  // (personal_number_encrypted; params never hold the plaintext). An
-  // operation staged before gnubok_create_customer had a personal_number
-  // input may still carry the personnummer in org_number on an individual:
-  // it is stored encrypted in personal_number and org_number is cleared,
-  // same as every other write path.
-  let personalNumberEncrypted =
-    typeof params.personal_number_encrypted === 'string' && params.personal_number_encrypted
-      ? params.personal_number_encrypted
-      : null
-  if (orgNumberHoldsPersonalNumber(params.customer_type as string, orgNumber)) {
-    personalNumberEncrypted ??= encryptCustomerPersonalNumber(normalizeReroutedPersonalNumber(orgNumber!))
-    orgNumber = null
-  }
-
-  // Unset payment terms follow the company's own default, not a hardcoded 30.
-  const defaultPaymentTerms = await resolveDefaultPaymentTerms(
-    supabase,
-    companyId,
-    typeof params.payment_terms === 'number' ? params.payment_terms : undefined,
-  )
-
-  // Country: ISO 3166-1 alpha-2, consistent with the type and VAT prefix.
-  // Staging already checked this; re-checked here so a tampered or
-  // pre-2026-09 pending_operations row cannot write a name or a
-  // contradiction (#2025, #2028).
-  const countryParam = typeof params.country === 'string' ? params.country.trim() : ''
-  const country = countryParam
-    ? normalizeCountryCode(countryParam)
-    : defaultCountryForParty(params.customer_type as string, (params.vat_number as string) || null)
-  if (!country) {
-    return {
-      error: countryParam
-        ? `country "${countryParam}" is not an ISO 3166-1 alpha-2 code or a known country name`
-        : 'country is required for this customer type',
-      status: 400,
-    }
-  }
-  const countryIssue = checkCountryConsistency({
-    partyType: params.customer_type as string,
-    country,
-    vatNumber: (params.vat_number as string) || null,
+  // The insert the dashboard makes (lib/customers/customer-commands.ts).
+  const outcome = await createCustomer({ supabase, companyId, userId, log }, parsed.data, {
+    personalNumberCiphertext: ciphertext.value,
   })
-  if (countryIssue) {
-    return { error: COUNTRY_CONSISTENCY_MESSAGES[countryIssue].sv, status: 400 }
-  }
-
-  const { data, error } = await supabase
-    .from('customers')
-    .insert({
-      user_id: userId,
-      company_id: companyId,
-      name: params.name as string,
-      customer_type: params.customer_type as string,
-      customer_number: customerNumber || null,
-      email: (params.email as string) || null,
-      org_number: orgNumber,
-      vat_number: (params.vat_number as string) || null,
-      personal_number: personalNumberEncrypted,
-      default_payment_terms: defaultPaymentTerms,
-      address_line1: (params.address as string) || null,
-      postal_code: (params.postal_code as string) || null,
-      city: (params.city as string) || null,
-      country,
-    })
-    .select()
-    .single()
-
-  if (error) return { error: error.message, status: 500 }
-
-  if (params.customer_type === 'eu_business' && params.vat_number) {
-    try {
-      const vatResult = await validateVatNumber(params.vat_number as string)
-      if (vatResult.valid) {
-        await supabase
-          .from('customers')
-          .update({ vat_number_validated: true, vat_number_validated_at: new Date().toISOString() })
-          .eq('id', data.id)
-          .eq('company_id', companyId)
-      }
-    } catch (err) {
-      log.warn('Auto-VIES validation failed:', err)
-    }
-  }
-
-  await eventBus.emit({ type: 'customer.created', payload: { customer: data as Customer, userId, companyId } })
-
-  return { data: { customer_id: data.id } }
+  if (!outcome.ok) return registerCommandFailure(outcome)
+  if (outcome.dryRun) throw new Error('create_customer: unexpected dry-run outcome')
+  return { data: { customer_id: outcome.data.id } }
 }
 
 async function commitUpdateCustomer(
   supabase: SupabaseClient,
+  userId: string,
   companyId: string,
   params: Record<string, unknown>,
 ): Promise<ExecutorResult> {
-  let validated
-  try {
-    validated = UpdateCustomerParamsSchema.parse(params)
-  } catch (err) {
-    if (err instanceof z.ZodError) {
-      const issue = err.issues[0]
-      return {
-        error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`,
-        status: 400,
-      }
-    }
-    throw err
+  const { customer_id: customerId, changes } = params
+  if (typeof customerId !== 'string' || !UUID_RE.test(customerId)) {
+    return { error: 'Invalid customer_id: expected a UUID', status: 400 }
   }
-
-  const { customer_id: customerId, changes } = validated
-  const { data: current, error: currentError } = await supabase
-    .from('customers')
-    .select('customer_type, country, vat_number, org_number')
-    .eq('id', customerId)
-    .eq('company_id', companyId)
-    .maybeSingle()
-
-  if (currentError) return { error: currentError.message, status: 500 }
-  if (!current) return { error: 'Customer not found', status: 404 }
-
-  // Country vs type vs VAT prefix on the row as it will end up (same check
-  // as staging; repeated here as the tamper gate), only when one of the
-  // three is part of the update.
-  const countryRuleTouched =
-    changes.customer_type !== undefined || changes.country !== undefined || changes.vat_number !== undefined
-  const countryIssue = countryRuleTouched
-    ? checkCountryConsistency({
-        partyType: changes.customer_type ?? current.customer_type,
-        country: changes.country ?? current.country,
-        vatNumber: changes.vat_number ?? current.vat_number,
-      })
-    : null
-  if (countryIssue) {
-    return { error: COUNTRY_CONSISTENCY_MESSAGES[countryIssue].sv, status: 400 }
+  if (!changes || typeof changes !== 'object' || Array.isArray(changes)) {
+    return { error: 'Invalid changes: expected an object', status: 400 }
   }
+  const { personal_number_encrypted: personalNumberCiphertext, ...fields } = changes as Record<string, unknown>
+  const ciphertext = stagedCiphertext(personalNumberCiphertext)
+  if (!ciphertext.ok) return ciphertext.result
+  // The staged changes never hold a plaintext personnummer (staging-pii-guard).
+  if ('personal_number' in fields) return { error: 'Invalid changes.personal_number: not accepted here', status: 400 }
+  // Strict: a staged change carries only the register's own fields (ASVS V4.5).
+  const parsed = parseRegisterParams(UpdateCustomerSchema.strict(), fields)
+  if (!parsed.ok) return parsed.result
 
-  // personal_number never travels in plaintext: staging validated the input
-  // and stored AES-256-GCM ciphertext under personal_number_encrypted (see
-  // CustomerChangesSchema). Map it onto the customers.personal_number column
-  // with the REST PATCH semantics: ciphertext sets the value, explicit null
-  // clears it, absent leaves the stored value untouched (a masked echo was
-  // already dropped at staging and never reaches this executor).
-  const { personal_number_encrypted: personalNumberEncrypted, ...columnChanges } = changes
-  const updateData: Record<string, unknown> = { ...columnChanges }
-  if (changes.customer_number !== undefined) {
-    updateData.customer_number = changes.customer_number || null
-  }
-  const effectiveType = changes.customer_type ?? current.customer_type
-  if (personalNumberEncrypted !== undefined) {
-    // Same guard as staging and the REST PATCH route: only individual rows
-    // get their identifiers masked on read (GDPR art. 5.1 c), so a
-    // personnummer on a business customer is refused, not stored. Re-checked
-    // here so a tampered pending_operations row cannot slip past it.
-    if (personalNumberEncrypted !== null && effectiveType !== 'individual') {
-      return {
-        error: 'personal_number is only allowed for customer_type "individual"',
-        status: 400,
-      }
-    }
-    updateData.personal_number = personalNumberEncrypted
-  }
-  if (changes.customer_type !== undefined && effectiveType !== 'individual') {
-    updateData.personal_number = null
-  }
-  // An individual has no org number (same rule as staging, repeated as the
-  // tamper gate). An operation staged before staging moved a personnummer
-  // out of org_number gets it moved here, as commitCreateCustomer does.
-  const individualOrgNumber =
-    changes.org_number !== undefined || changes.customer_type !== undefined
-      ? (changes.org_number ?? current.org_number)
-      : undefined
-  if (isOrgNumberRefusedOnIndividual(effectiveType, individualOrgNumber)) {
-    return { error: INDIVIDUAL_ORG_NUMBER_ERROR_SV, status: 400 }
-  }
-  if (orgNumberHoldsPersonalNumber(effectiveType, individualOrgNumber)) {
-    updateData.org_number = null
-    if (!personalNumberEncrypted) {
-      updateData.personal_number = encryptCustomerPersonalNumber(normalizeReroutedPersonalNumber(individualOrgNumber!))
-    }
-  }
-
-  if (changes.vat_number !== undefined) {
-    if (effectiveType === 'eu_business') {
-      if (changes.vat_number) {
-        try {
-          const vatResult = await validateVatNumber(changes.vat_number)
-          const columns = vatValidationColumns(vatResult, current.vat_number, changes.vat_number)
-          if (columns) {
-            updateData.vat_number_validated = columns.vat_number_validated
-            updateData.vat_number_validated_at = columns.vat_number_validated_at
-          }
-        } catch (err) {
-          log.warn('Auto-VIES validation failed on staged customer update:', err)
-          updateData.vat_number_validated = false
-          updateData.vat_number_validated_at = null
-        }
-      } else {
-        updateData.vat_number_validated = false
-        updateData.vat_number_validated_at = null
-      }
-    }
-  }
-
-  const { data, error } = await supabase
-    .from('customers')
-    .update(updateData)
-    .eq('id', customerId)
-    .eq('company_id', companyId)
-    .select('id, name, customer_type, customer_number, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, language, default_payment_terms, notes, personal_number')
-    .maybeSingle()
-
-  if (error) {
-    if (error.code === '23505') {
-      return { error: 'A customer with this organization number already exists', status: 409 }
-    }
-    return { error: error.message, status: 500 }
-  }
-  if (!data) return { error: 'Customer not found', status: 404 }
-
-  // Open drafts to this customer re-derive their VAT header from it.
-  await syncDraftVatHeadersForCustomer(supabase, companyId, customerId)
-
+  // The update the dashboard makes (lib/customers/customer-commands.ts).
+  const outcome = await updateCustomer({ supabase, companyId, userId, log }, customerId, parsed.data, {
+    personalNumberCiphertext: ciphertext.value,
+  })
+  if (!outcome.ok) return registerCommandFailure(outcome)
+  if (outcome.dryRun) throw new Error('update_customer: unexpected dry-run outcome')
+  const data = outcome.data
   return {
     data: {
       customer_id: data.id,
@@ -978,8 +785,9 @@ async function commitUpdateCustomer(
       default_payment_terms: data.default_payment_terms,
       notes: data.notes ?? null,
       // Never the stored ciphertext, and never plaintext: result_data is
-      // persisted on the pending operation and rendered in approval UIs.
-      personal_number_masked: maskStoredCustomerPersonalNumber(data.personal_number),
+      // persisted on the pending operation and rendered in approval UIs. The
+      // command's row is already masked.
+      personal_number_masked: data.personal_number ?? null,
     },
   }
 }
@@ -1301,10 +1109,10 @@ async function commitUpdateRecurringSchedule(
 }
 
 /**
- * An article command's refusal as the approval's failure, in the register's
- * own codes (lib/articles/article-commands.ts).
+ * A register command's refusal as the approval's failure, in the register's
+ * own codes (lib/articles/article-commands.ts, lib/customers/customer-commands.ts).
  */
-function articleCommandFailure(outcome: Extract<OperationOutcome<unknown>, { ok: false }>): ExecutorResult {
+function registerCommandFailure(outcome: Extract<OperationOutcome<unknown>, { ok: false }>): ExecutorResult {
   // A posting account that is merely not activated is the recoverable case:
   // thrown, so the op stays pending and the approver can activate and retry.
   if (outcome.code === ACCOUNTS_NOT_IN_CHART) {
@@ -1318,8 +1126,8 @@ function articleCommandFailure(outcome: Extract<OperationOutcome<unknown>, { ok:
   }
 }
 
-/** A staged article row re-parsed with the register's one rule set (ASVS V4.5). */
-function parseArticleParams<S extends z.ZodTypeAny>(
+/** A staged register row re-parsed with the register's one rule set (ASVS V4.5). */
+function parseRegisterParams<S extends z.ZodTypeAny>(
   schema: S,
   params: Record<string, unknown>,
 ): { ok: true; data: z.output<S> } | { ok: false; result: ExecutorResult } {
@@ -1339,12 +1147,12 @@ async function commitCreateArticle(
   // Defense in depth: re-validate the staged params at the commit boundary so a
   // tampered pending_operations row cannot inject unexpected fields (ASVS V4.5),
   // with the rule set the dashboard uses.
-  const parsed = parseArticleParams(CreateArticleSchema, params)
+  const parsed = parseRegisterParams(CreateArticleSchema, params)
   if (!parsed.ok) return parsed.result
 
   // The insert the dashboard makes (lib/articles/article-commands.ts).
   const outcome = await createArticle({ supabase, companyId, userId, log }, parsed.data)
-  if (!outcome.ok) return articleCommandFailure(outcome)
+  if (!outcome.ok) return registerCommandFailure(outcome)
   if (outcome.dryRun) throw new Error('create_article: unexpected dry-run outcome')
   return { data: { article_id: outcome.data.id, article_number: outcome.data.article_number } }
 }
@@ -1359,12 +1167,12 @@ async function commitUpdateArticle(
   if (typeof articleId !== 'string' || !UUID_RE.test(articleId)) {
     return { error: 'Invalid article_id: expected a UUID', status: 400 }
   }
-  const parsed = parseArticleParams(UpdateArticleSchema, changes)
+  const parsed = parseRegisterParams(UpdateArticleSchema, changes)
   if (!parsed.ok) return parsed.result
 
   // The update the dashboard makes (lib/articles/article-commands.ts).
   const outcome = await updateArticle({ supabase, companyId, userId, log }, articleId, parsed.data)
-  if (!outcome.ok) return articleCommandFailure(outcome)
+  if (!outcome.ok) return registerCommandFailure(outcome)
   if (outcome.dryRun) throw new Error('update_article: unexpected dry-run outcome')
   return { data: { article_id: outcome.data.id } }
 }
@@ -3940,8 +3748,7 @@ function isDocumentLinkConflict(err: unknown): boolean {
  * through getErrorMessage so nothing reaches the Granskning panel untranslated.
  */
 function documentLinkFailureMessage(err: unknown): string {
-  const msg = err instanceof Error ? err.message : String(err ?? '')
-  if (/locked\/closed fiscal period|Bokföringen är låst/i.test(msg)) {
+  if (isPeriodLockRefusal(err)) {
     return 'Verifikationens period är låst: bilagan kan inte länkas.'
   }
   // The precheck names the holder; this is the race it cannot see (a link
@@ -7197,7 +7004,7 @@ async function commitPendingOperationInner(
         result = await commitCreateCustomer(supabase, userId, companyId, pendingOp.params)
         break
       case 'update_customer':
-        result = await commitUpdateCustomer(supabase, companyId, pendingOp.params)
+        result = await commitUpdateCustomer(supabase, userId, companyId, pendingOp.params)
         break
       case 'update_invoice':
         result = await commitUpdateInvoice(supabase, companyId, pendingOp.params)

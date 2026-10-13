@@ -134,22 +134,10 @@ export async function POST(request: Request) {
 
       try {
         // Step 1: TIC: read companies.tic_snapshot; if missing or stale,
-        // live-fetch from the TIC extension (cookies forwarded from the
-        // incoming request) and persist. Falls through gracefully when TIC is
-        // disabled, the company has no org_number, or the request times out.
+        // live-fetch through the TIC extension's profile service and persist.
+        // Falls through gracefully when TIC is disabled, the company has no
+        // org_number, or the fetch times out.
         send({ step: 'tic', status: 'in_progress' })
-        const cookieHeader = request.headers.get('cookie') ?? ''
-        // SSRF guard: derive origin from NEXT_PUBLIC_APP_URL (a required env
-        // var per CLAUDE.md) instead of request.headers.host. On self-hosted
-        // Docker the Host header can be attacker-controlled and would
-        // otherwise let an attacker redirect the cookie-bearing TIC fetch to
-        // a host they control.
-        const appUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/+$/, '') ?? ''
-        const fallbackHost = request.headers.get('host') ?? 'localhost:3000'
-        const fallbackProto =
-          request.headers.get('x-forwarded-proto') ??
-          (fallbackHost.startsWith('localhost') ? 'http' : 'https')
-        const origin = appUrl || `${fallbackProto}://${fallbackHost}`
         const ticResult = await withTimeout(
           // upgradeV1: agent build is the consumer of the v2-only sections;
           // bounded to companies actively creating an agent, so the TIC
@@ -160,8 +148,6 @@ export async function POST(request: Request) {
           ensureTicSnapshot({
             supabase,
             companyId,
-            cookieHeader,
-            origin,
             upgradeV1: true,
             timeoutMs: TIC_BUDGET_MS,
           }),

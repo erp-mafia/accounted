@@ -23,6 +23,8 @@
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
+import type { z } from 'zod'
+import type { CreateDimensionSchema, CreateDimensionValueSchema, UpdateDimensionSchema } from '@/lib/api/schemas'
 
 export interface DimensionRow {
   id: string
@@ -127,12 +129,8 @@ export async function listDimensions(
   return { ok: true, data: { dimensions } }
 }
 
-export interface CreateDimensionInput {
-  name: string
-  sie_dim_no?: number
-  resets_annually?: boolean
-  parent_sie_dim_no?: number | null
-}
+/** The request every door validates (CreateDimensionSchema). */
+export type CreateDimensionInput = z.output<typeof CreateDimensionSchema>
 
 export async function createDimension(
   ctx: OperationContext,
@@ -243,14 +241,8 @@ export async function createDimension(
   return { ok: true, data: { dimension: dimension as DimensionRow }, created: true }
 }
 
-export interface CreateDimensionValueInput {
-  code: string
-  name: string
-  /** Omitted = true; false creates the value archived in one write. */
-  is_active?: boolean
-  start_date?: string | null
-  end_date?: string | null
-}
+/** The request every door validates (CreateDimensionValueSchema). */
+export type CreateDimensionValueInput = z.output<typeof CreateDimensionValueSchema>
 
 export type CreatedDimensionValue = DimensionValueEntry & { dimension_id: string; created_at: string | null }
 
@@ -325,11 +317,8 @@ export async function createDimensionValue(
   return { ok: true, data: data as CreatedDimensionValue, created: true }
 }
 
-export interface UpdateDimensionInput {
-  name?: string
-  is_active?: boolean
-  sort_order?: number
-}
+/** The request every door validates (UpdateDimensionSchema). */
+export type UpdateDimensionInput = z.output<typeof UpdateDimensionSchema>
 
 export async function updateDimension(
   ctx: OperationContext,

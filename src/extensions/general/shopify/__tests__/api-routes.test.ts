@@ -253,7 +253,7 @@ describe('shopify extension routes', () => {
     it('runs the sync on the service client and returns the summary', async () => {
       const { supabase, findCall } = createQueuedMockSupabase()
       supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
-      const service = serviceReturning({ data: { id: 'conn-1', status: 'active' } })
+      const service = serviceReturning({ data: [{ id: 'conn-1', status: 'active' }] })
       vi.mocked(syncShopifyOrders).mockResolvedValue({
         fetched: 3,
         refundsFetched: 1,
@@ -308,7 +308,7 @@ describe('shopify extension routes', () => {
       const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
       supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
       const service = serviceReturning({
-        data: { id: 'conn-1', status: 'active', last_order_synced_at: '2026-09-14T00:00:00.000Z' },
+        data: [{ id: 'conn-1', status: 'active', last_order_synced_at: '2026-09-14T00:00:00.000Z' }],
       })
       enqueue({ data: [] }) // cursor update (session client)
       vi.mocked(syncShopifyOrders).mockResolvedValue({

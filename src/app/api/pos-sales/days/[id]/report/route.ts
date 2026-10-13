@@ -6,6 +6,7 @@ import { posDayReportFilename, renderPosDayReport } from '@/lib/pos-sales/day-re
 import { resolvePosSalesSettings } from '@/lib/pos-sales/settings'
 import { normalizeDaySummary, type PosSalesDayRow } from '@/lib/pos-sales/types'
 import type { CreateJournalEntryLineInput } from '@/types'
+import { fileResponse } from '@/lib/api/file-response'
 
 /**
  * The day report (Dagsrapport kassa) as a PDF, rendered on demand: the
@@ -89,12 +90,11 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       generatedAt: todayIsoStockholm(),
     })
     const filename = posDayReportFilename(day.day, conn.venue_name)
-    return new Response(new Uint8Array(pdf), {
-      headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': `inline; filename="${filename.replace(/[^\x20-\x7e]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
-        'Cache-Control': 'private, no-store',
-      },
+    return fileResponse(new Uint8Array(pdf), {
+      filename,
+      contentType: 'application/pdf',
+      disposition: 'inline',
+      cacheControl: 'private, no-store',
     })
   },
 )

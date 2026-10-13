@@ -186,7 +186,7 @@ describe('GET /api/reports/kassaflodesanalys/pdf', () => {
     // already holds. Both sides read period_start from the same generator
     // output, so this literal is the contract between them.
     expect(res.headers.get('Content-Disposition')).toBe(
-      'attachment; filename="kassaflodesanalys-2025-01-01.pdf"',
+      `attachment; filename="kassaflodesanalys-2025-01-01.pdf"; filename*=UTF-8''kassaflodesanalys-2025-01-01.pdf`,
     )
     expect(generateKassaflodesanalys).toHaveBeenCalledWith(mockSupabase, 'company-1', 'period-1')
   })

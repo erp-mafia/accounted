@@ -1,11 +1,25 @@
 /**
- * Row shapes, tolerances and helpers shared by the customer-side
- * (voucher-matching.ts) and supplier-side (supplier-voucher-matching.ts)
- * "link an existing verifikat as the payment" flows. Both files read the same
- * journal tables and rank candidates the same way; only the settlement side
- * (customer: 151x credit, or 19xx debit on kontantmetoden; supplier: 244x
- * debit, or 19xx credit on kontantmetoden) and the invoice type differ.
+ * The one voucher-link matcher behind the customer-side (voucher-matching.ts)
+ * and supplier-side (supplier-voucher-matching.ts) "link an existing verifikat
+ * as the payment" flows: row shapes, tolerances, the candidate search
+ * (collectSettlementVouchers), the SEK-booked settlement gate, the period-lock
+ * flags and the scorer. Only the settlement side (customer: 151x credit, or
+ * 19xx debit on kontantmetoden; supplier: 244x debit, or 19xx credit on
+ * kontantmetoden), which payment rows already use a voucher, and the invoice's
+ * own references differ, and each side passes those in.
  */
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { documentCurrency, ledgerLineSideAmountIn } from '@/lib/bookkeeping/ledger-line-amount'
+import type { Logger } from '@/lib/logger'
+import { formatAmount as formatNumber } from '@/lib/utils'
+import {
+  CONFIDENCE,
+  amountsMatchExact,
+  amountsMatchFuzzy,
+  customerNameMatches,
+  descriptionMentionsReference,
+} from './invoice-matching'
 
 /** ±90 days from the invoice's due_date as the default search window. */
 export const DEFAULT_DATE_WINDOW_DAYS = 90
@@ -78,4 +92,416 @@ export function isDateWithinDays(a: string, b: string, days: number): boolean {
   const bd = new Date(b).getTime()
   if (Number.isNaN(ad) || Number.isNaN(bd)) return false
   return Math.abs(ad - bd) <= days * 24 * 3600 * 1000
+}
+
+/** A settlement-side line as the SEK-booked fallback reads it. */
+export interface SettlementSideLine {
+  currency: string | null
+  amount_in_currency: number | string | null
+  /** The SEK ledger amount on the settlement side of the line. */
+  sideSek: number
+}
+
+export type SekBookedSettlement =
+  | { eligible: true; sekTotal: number; bookedSek: number }
+  | { eligible: false; reason: 'not_eligible' }
+  | { eligible: false; reason: 'fx_deviation_too_large'; sekTotal: number; bookedSek: number }
+
+/**
+ * The RPCs' SEK-booked settlement gate (migration 20260830140000, both
+ * link_invoice_to_voucher and link_supplier_invoice_to_voucher) for a
+ * foreign-currency invoice, as ONE predicate for both link validators and the
+ * candidate search, so the search never offers a voucher the link refuses and
+ * never hides one it accepts (feedback seq 930807: a USD invoice paid by an
+ * SIE-imported voucher with its 2440 debit in SEK linked fine by hand, yet no
+ * candidate was ever proposed).
+ *
+ * Counted per LINE exactly as the RPC does: zero lines readable in the
+ * invoice's currency (a line labelled with it whose amount_in_currency is 0
+ * still counts as readable, because its real SEK movement is not in the SEK
+ * total), zero lines labelled with a third currency, a positive SEK total, a
+ * sane exchange_rate, and that SEK total within 10 % of remaining x rate.
+ */
+export function sekBookedSettlement(
+  sideLines: readonly SettlementSideLine[],
+  invoiceCurrency: string,
+  exchangeRate: unknown,
+  remainingAmount: number,
+): SekBookedSettlement {
+  let readableCount = 0
+  let sekSideTotal = 0
+  let foreignLabelCount = 0
+  for (const line of sideLines) {
+    if (!(line.sideSek > 0)) continue
+    if (line.currency === invoiceCurrency && line.amount_in_currency != null) {
+      readableCount += 1
+    } else if ((line.currency ?? 'SEK') === 'SEK') {
+      sekSideTotal += line.sideSek
+    } else {
+      foreignLabelCount += 1
+    }
+  }
+  const rate = Number(exchangeRate)
+  const eligible =
+    invoiceCurrency !== 'SEK' &&
+    readableCount === 0 &&
+    foreignLabelCount === 0 &&
+    sekSideTotal > 0 &&
+    Number.isFinite(rate) &&
+    rate > 0 &&
+    rate < 100000
+  if (!eligible) return { eligible: false, reason: 'not_eligible' }
+  const sekTotal = round2(sekSideTotal)
+  const bookedSek = round2(remainingAmount * rate)
+  if (Math.abs(sekTotal - bookedSek) > bookedSek * 0.1) {
+    return { eligible: false, reason: 'fx_deviation_too_large', sekTotal, bookedSek }
+  }
+  return { eligible: true, sekTotal, bookedSek }
+}
+
+/** Which line of a voucher settles the invoice. */
+export interface SettlementSearchSide {
+  /** Account prefix of the settlement line: 151, 244 or 19. */
+  accountPrefix: string
+  /** The side of that line that settles the invoice. */
+  entrySide: 'debit' | 'credit'
+  /**
+   * The 19xx side. Every receipt or payout moves it, so the unfiltered set is
+   * the company's whole bank history in the window: a SEK search is banded
+   * around the invoice (candidateAmountBand) and a foreign one reads only the
+   * lines labelled with the invoice's currency, the only ones expressible in
+   * it. A 151x credit or 244x debit is rare enough to read unbanded.
+   */
+  bankSide: boolean
+}
+
+/** One voucher that carries the settlement side, summed in the invoice's currency. */
+export interface SettlementVoucher {
+  entry: VoucherRow
+  /** The settlement side over the whole voucher, in the invoice's currency. */
+  amount: number
+  /** Currency of the first readable settlement line; null on the SEK-booked fallback. */
+  lineCurrency: string | null
+  /** Set when the voucher settles through the SEK-booked fallback. */
+  sekBooked?: { sekTotal: number }
+}
+
+export interface SettlementVoucherSearch {
+  supabase: SupabaseClient
+  companyId: string
+  invoice: { currency: string | null; exchange_rate?: unknown; total: number; due_date: string }
+  remainingAmount: number
+  side: SettlementSearchSide
+  windowDays: number
+  /** False where the link refuses the SEK-booked fallback for this invoice. */
+  sekBookedAllowed: boolean
+  log: Logger
+  logContext: Record<string, unknown>
+}
+
+/**
+ * Every posted voucher inside +-windowDays of the due date that carries the
+ * invoice's settlement side, summed per voucher in the invoice's currency
+ * (a samlingsverifikation can carry several settlement lines). A voucher whose
+ * settlement side the invoice's currency cannot read is kept only through the
+ * SEK-booked fallback, valued at the invoice's rate, exactly as the link
+ * validator and the RPC judge it.
+ *
+ * Driven from journal_entries (fetchEntryLines) and read in full: no row cap.
+ * A cap on an unordered query drops vouchers before scoring ever sees them,
+ * and the exact-amount one is as likely to go as any other. A failed read
+ * answers no vouchers, logged, rather than breaking the dialog.
+ */
+export async function collectSettlementVouchers(
+  search: SettlementVoucherSearch,
+): Promise<Map<string, SettlementVoucher>> {
+  const { invoice, side, remainingAmount } = search
+  const byEntry = new Map<string, SettlementVoucher>()
+
+  const dueDate = new Date(invoice.due_date)
+  const dateFrom = new Date(dueDate)
+  dateFrom.setDate(dateFrom.getDate() - search.windowDays)
+  const dateTo = new Date(dueDate)
+  dateTo.setDate(dateTo.getDate() + search.windowDays)
+
+  // `documentCurrency()` and not `invoice.currency` directly: a NULL code
+  // would test `!== 'SEK'` and send a plain domestic invoice down the FX path
+  // where nothing is convertible. The label guard in the scorer still compares
+  // the RAW `invoice.currency`, so such a row behaves as it always did.
+  const invoiceCurrency = documentCurrency(invoice.currency)
+  const isForeignInvoice = invoiceCurrency !== 'SEK'
+  const amountColumn = side.entrySide === 'credit' ? 'credit_amount' : 'debit_amount'
+
+  // `amount_in_currency` is in the column list on purpose: on a foreign
+  // invoice it is the ONLY column quoted in the invoice's currency (debit and
+  // credit are always SEK). Without it every FX line would be unconvertible.
+  let lines: Array<VoucherMatchLineRow & { journal_entries: VoucherRow }>
+  try {
+    lines = await fetchEntryLines({
+      supabase: search.supabase,
+      entryColumns:
+        'id, voucher_series, voucher_number, entry_date, description, status, source_type, fiscal_period_id, company_id',
+      lineColumns:
+        'id, journal_entry_id, account_number, debit_amount, credit_amount, currency, amount_in_currency',
+      filterEntries: (q: EntryLinesQuery) =>
+        q
+          .eq('company_id', search.companyId)
+          .eq('status', 'posted')
+          .gte('entry_date', dateFrom.toISOString().slice(0, 10))
+          .lte('entry_date', dateTo.toISOString().slice(0, 10)),
+      filterLines: (q: EntryLinesQuery) => {
+        const scoped = q.like('account_number', `${side.accountPrefix}%`).gt(amountColumn, 0)
+        if (!side.bankSide) return scoped
+        if (isForeignInvoice) return scoped.eq('currency', invoiceCurrency)
+        const band = candidateAmountBand(remainingAmount, invoice.total)
+        return scoped.gte(amountColumn, band.floor).lte(amountColumn, band.ceil)
+      },
+    })
+  } catch (error) {
+    search.log.warn('voucher candidate query failed', {
+      ...search.logContext,
+      message: error instanceof Error ? error.message : String(error),
+    })
+    return byEntry
+  }
+
+  const pending = new Map<
+    string,
+    { entry: VoucherRow; amount: number; lineCurrency: string | null; sideLines: SettlementSideLine[]; unconvertible: boolean }
+  >()
+  for (const line of lines) {
+    const entry = line.journal_entries
+    if (!entry) continue
+    if (EXCLUDED_SOURCE_TYPES.includes(entry.source_type ?? '')) continue
+    const rawSide = Number(side.entrySide === 'credit' ? line.credit_amount : line.debit_amount) || 0
+    if (rawSide <= 0) continue
+    let voucher = pending.get(entry.id)
+    if (!voucher) {
+      voucher = { entry, amount: 0, lineCurrency: null, sideLines: [], unconvertible: false }
+      pending.set(entry.id, voucher)
+    }
+    voucher.sideLines.push({ currency: line.currency, amount_in_currency: line.amount_in_currency, sideSek: rawSide })
+    // The settlement side quoted in the INVOICE's currency: the SEK column on
+    // a SEK invoice, amount_in_currency on a foreign one, null for a line that
+    // carries no figure in that currency.
+    const amount = ledgerLineSideAmountIn(line, invoiceCurrency, side.entrySide)
+    if (amount === null) {
+      voucher.unconvertible = true
+      continue
+    }
+    if (amount <= 0) continue
+    if (voucher.amount === 0) voucher.lineCurrency = line.currency
+    voucher.amount += amount
+  }
+
+  const fxRate = Number(invoice.exchange_rate)
+  for (const [entryId, voucher] of pending) {
+    if (voucher.unconvertible) {
+      const fallback = search.sekBookedAllowed
+        ? sekBookedSettlement(voucher.sideLines, invoiceCurrency, invoice.exchange_rate, remainingAmount)
+        : null
+      if (!fallback?.eligible) continue
+      byEntry.set(entryId, {
+        entry: voucher.entry,
+        amount: round2(fallback.sekTotal / fxRate),
+        lineCurrency: null,
+        sekBooked: { sekTotal: fallback.sekTotal },
+      })
+    } else if (voucher.amount > 0) {
+      byEntry.set(entryId, { entry: voucher.entry, amount: voucher.amount, lineCurrency: voucher.lineCurrency })
+    }
+  }
+  return byEntry
+}
+
+/**
+ * The fiscal periods among `periodIds` that are closed (`is_closed`) or
+ * locked (`locked_at`): `fiscal_periods` has no status column. Linking is
+ * allowed in a locked period (no journal entry is mutated), so the flag is
+ * advisory, and it fails CLOSED: when the state cannot be read every period
+ * counts as locked, since an over-cautious badge costs nothing while a
+ * wrongly absent one tells the user a period is writable.
+ */
+export async function lockedPeriodIds(
+  supabase: SupabaseClient,
+  periodIds: string[],
+  log: Logger,
+  logContext: Record<string, unknown>,
+): Promise<Set<string>> {
+  if (periodIds.length === 0) return new Set()
+  const { data: periods, error } = await supabase
+    .from('fiscal_periods')
+    .select('id, is_closed, locked_at')
+    .in('id', periodIds)
+  if (error || !periods) {
+    log.warn('fiscal period lock state unavailable, flagging candidates as locked', {
+      ...logContext,
+      reason: error?.message,
+    })
+    return new Set(periodIds)
+  }
+  return new Set(
+    (periods as FiscalPeriodRow[])
+      .filter((p) => p.is_closed === true || p.locked_at != null)
+      .map((p) => p.id),
+  )
+}
+
+/** A reference the invoice can be named by in a voucher text. */
+export interface VoucherReference {
+  /** How the reason names it: 'Fakturanummer', 'Ankomstnummer'. */
+  label: string
+  value: string | number | null | undefined
+  /**
+   * Whether the reference alone, with an amount that does not settle the
+   * invoice, is still a strong hint (0.90). True for an invoice number; false
+   * for our own ankomstnummer (1, 2, 3, ...), which no bank or source system
+   * writes on a payment, so it counts only with a settling amount (desk crm#64).
+   */
+  countsWithoutAmount: boolean
+}
+
+export interface VoucherScoreContext {
+  /** The invoice's own currency code, raw: the label guard compares it. */
+  currency: string
+  remainingAmount: number
+  total: number
+  dueDate: string
+  windowDays: number
+  references: VoucherReference[]
+  counterparty: { name: string | undefined; label: 'kundnamn' | 'leverantörsnamn' }
+  /**
+   * Offer a voucher with more left than the invoice needs although nothing
+   * else ties it to the invoice: a payment of several debts, linkable with a
+   * stated share. Only the supplier side's person-facing surfaces set it.
+   */
+  includeShared: boolean
+}
+
+/**
+ * Confidence of a voucher offered only because it has more left than the
+ * invoice needs (a payment of several debts). The amount says nothing about
+ * WHICH debts, so it ranks under every amount match and far under the
+ * unattended auto-link bar; the counterparty's name in the voucher text lifts
+ * it one step, still a "weak match" to the picker.
+ *
+ * Within the class the date is the only thing that tells the vouchers apart,
+ * and a company that pays its suppliers every week has a dozen larger payment
+ * runs inside the window. So the closer to the due date, the higher: up to
+ * SHARED_VOUCHER_PROXIMITY_SPAN at the due date, nothing at the window's edge.
+ * The ceiling, with the name and the 7-day bump, is 0.64: still under "likely
+ * match" (0.7).
+ */
+const SHARED_VOUCHER_CONFIDENCE = 0.4
+const SHARED_VOUCHER_COUNTERPARTY_CONFIDENCE = 0.5
+const SHARED_VOUCHER_PROXIMITY_SPAN = 0.09
+
+/** 1 at the due date, 0 at the edge of the window or when a date is unreadable. */
+function dueDateCloseness(entryDate: string, dueDate: string, windowDays: number): number {
+  const days = Math.abs(new Date(entryDate).getTime() - new Date(dueDate).getTime()) / (24 * 3600 * 1000)
+  if (!Number.isFinite(days) || windowDays <= 0) return 0
+  return Math.max(0, 1 - days / windowDays)
+}
+
+/**
+ * Score one voucher against the invoice, or null when it is no candidate.
+ *
+ * A reference in the voucher text (descriptionMentionsReference: a whole
+ * number, never "14" inside "(1814)") earns 0.99 only with an amount that
+ * settles the invoice (its remainder or its total); an invoice number with
+ * another amount stays a 0.90 hint for a person, since a text naming the
+ * invoice can still be a partial payment. Then the amount ladder: exact
+ * remainder, exact total, fuzzy remainder (+-1 % capped at 500), each lifted
+ * by the counterparty's name, plus a bump within 7 days of the due date.
+ *
+ * `shareable` is false where the voucher cannot take a share (the SEK-booked
+ * fallback: the kursdifferens would be a guess).
+ */
+export function scoreVoucherCandidate(
+  entry: VoucherRow,
+  amount: number,
+  lineCurrency: string | null,
+  ctx: VoucherScoreContext,
+  shareable = true,
+): { confidence: number; match_reason: string } | null {
+  const settlesInvoice =
+    amountsMatchExact(amount, ctx.remainingAmount) || amountsMatchExact(amount, ctx.total)
+  const hits = ctx.references.filter((ref) => descriptionMentionsReference(entry.description, ref.value))
+  if (settlesInvoice && hits.length > 0) {
+    return {
+      confidence: CONFIDENCE.OCR_REFERENCE_MATCH,
+      match_reason: `${hits[0].label} ${hits[0].value} omnämnt i verifikatets beskrivning och beloppet stämmer`,
+    }
+  }
+  const hint = hits.find((ref) => ref.countsWithoutAmount)
+  if (hint) {
+    return {
+      confidence: CONFIDENCE.REFERENCE_AMOUNT_MISMATCH,
+      match_reason: `${hint.label} ${hint.value} omnämnt i verifikatets beskrivning, men beloppet (${formatNumber(amount)} ${ctx.currency}) avviker från fakturans`,
+    }
+  }
+
+  // Label guard. It is not what makes the amounts comparable (`amount`
+  // already arrives in the invoice's currency, and a line that could not be
+  // expressed there was dropped or went through the SEK-booked fallback); it
+  // is a counterparty discriminator: a settlement line stamped with another
+  // document's currency belongs to another invoice.
+  if ((lineCurrency ?? ctx.currency) !== ctx.currency) return null
+
+  const exactRemaining = amountsMatchExact(amount, ctx.remainingAmount)
+  const exactTotal = !exactRemaining && amountsMatchExact(amount, ctx.total)
+  const fuzzyRemaining = !exactRemaining && !exactTotal && amountsMatchFuzzy(amount, ctx.remainingAmount)
+  const nameMatch = customerNameMatches(ctx.counterparty.name, entry.description, null)
+  const name = ctx.counterparty.label
+
+  let confidence: number
+  let reason: string
+  if (exactRemaining && nameMatch) {
+    confidence = CONFIDENCE.EXACT_AMOUNT_CUSTOMER
+    reason = `Exakt belopp (${formatNumber(amount)} ${ctx.currency}) och ${name} matchar`
+  } else if (exactRemaining) {
+    confidence = CONFIDENCE.EXACT_AMOUNT_ONLY
+    reason = `Exakt belopp (${formatNumber(amount)} ${ctx.currency})`
+  } else if (exactTotal && nameMatch) {
+    confidence = CONFIDENCE.FUZZY_AMOUNT_CUSTOMER
+    reason = `Fakturans totalbelopp och ${name} matchar`
+  } else if (exactTotal) {
+    confidence = CONFIDENCE.FUZZY_AMOUNT_ONLY + 0.05
+    reason = `Fakturans totalbelopp matchar`
+  } else if (fuzzyRemaining && nameMatch) {
+    confidence = CONFIDENCE.FUZZY_AMOUNT_CUSTOMER
+    reason = `Belopp nära (±1%) och ${name} matchar`
+  } else if (fuzzyRemaining) {
+    confidence = CONFIDENCE.FUZZY_AMOUNT_ONLY
+    reason = `Belopp nära (±1%)`
+  } else if (ctx.includeShared && shareable && amount > ctx.remainingAmount + AMOUNT_TOLERANCE) {
+    // A payment of several debts: the voucher has more left than this invoice
+    // needs, and nothing but the person picking says it is this invoice's.
+    const base = nameMatch ? SHARED_VOUCHER_COUNTERPARTY_CONFIDENCE : SHARED_VOUCHER_CONFIDENCE
+    const closeness = dueDateCloseness(entry.entry_date, ctx.dueDate, ctx.windowDays)
+    confidence = Math.round((base + SHARED_VOUCHER_PROXIMITY_SPAN * closeness) * 1000) / 1000
+    reason = `Verifikationen har ${formatNumber(amount)} ${ctx.currency} kvar, mer än fakturans belopp: betalar den flera skulder länkas fakturans del${nameMatch ? `; ${name} matchar` : ''}`
+  } else {
+    return null
+  }
+
+  if (isDateWithinDays(entry.entry_date, ctx.dueDate, 7)) {
+    confidence = Math.min(CONFIDENCE.OCR_REFERENCE_MATCH - 0.001, confidence + DATE_PROXIMITY_BUMP)
+  }
+  return { confidence, match_reason: reason }
+}
+
+/** The reason suffix of a voucher that settles through the SEK-booked fallback. */
+export function sekBookedReason(reason: string, sekTotal: number): string {
+  return `${reason}; betalningen är bokförd i SEK (${formatNumber(sekTotal)} kr) och omräknad med fakturans kurs`
+}
+
+/** Highest confidence first, then the earliest voucher; at most `limit`. */
+export function rankVoucherCandidates<T extends { confidence: number; entry_date: string }>(
+  candidates: T[],
+  limit: number,
+): T[] {
+  return [...candidates]
+    .sort((a, b) => b.confidence - a.confidence || a.entry_date.localeCompare(b.entry_date))
+    .slice(0, limit)
 }

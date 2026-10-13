@@ -3,7 +3,9 @@
 import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { ExternalLink, FileText } from 'lucide-react'
+import { DocumentPreview } from '@/components/bookkeeping/DocumentPreview'
 import { Skeleton } from '@/components/ui/skeleton'
+import { documentPreviewKind } from '@/lib/documents/preview-kind'
 import { cn } from '@/lib/utils'
 
 /**
@@ -11,32 +13,11 @@ import { cn } from '@/lib/utils'
  * read the figures off a receipt/invoice while filling in the journal entry.
  *
  * Renders by document id through the same-origin inline proxy
- * (/api/documents/:id/inline). PDFs use <object type="application/pdf"> rather
- * than <iframe>: Chrome intermittently blocks PDFs in a frame even with a
- * permissive CSP (see the note in AttachmentPreviewSheet), and <object>
- * invokes the PDF plugin directly. Images use <img>.
+ * (/api/documents/:id/inline), with the shared DocumentPreview body.
  *
  * Unlike AttachmentPreviewSheet this is keyed off a document id, not a
  * journal_entry_id: during manual booking the entry does not exist yet.
  */
-
-function isImageType(type: string | null, fileName?: string | null): boolean {
-  if (type?.startsWith('image/')) return true
-  // Legacy uploads sometimes leave mime_type null or application/octet-stream:
-  // fall back to the filename extension.
-  if (type === null || type === 'application/octet-stream') {
-    return /\.(jpe?g|png|gif|webp|svg|heic|heif)$/i.test(fileName ?? '')
-  }
-  return false
-}
-
-function isPdfType(type: string | null, fileName?: string | null): boolean {
-  if (type === 'application/pdf') return true
-  if (type === null || type === 'application/octet-stream') {
-    return fileName?.toLowerCase().endsWith('.pdf') ?? false
-  }
-  return false
-}
 
 interface DocumentViewerPaneProps {
   /** Document id. Bytes are served via the same-origin inline proxy. */
@@ -116,8 +97,8 @@ export default function DocumentViewerPane({
   const inlineSrc = `/api/documents/${documentId}/inline${page && page > 1 ? `#page=${page}` : ''}`
   // The pane shows a sized preview of a photo; a new tab opens the file itself, from the same origin.
   const newTabHref = downloadUrl ?? `/api/documents/${documentId}/inline?original=1`
-  const showAsImage = isImageType(mime, fileName)
-  const showAsPdf = isPdfType(mime, fileName)
+  const kind = documentPreviewKind(mime, fileName)
+  const label = fileName ?? t('header_label')
 
   return (
     <div
@@ -146,32 +127,27 @@ export default function DocumentViewerPane({
           <div className="p-3">
             <Skeleton className="h-full min-h-[40vh] w-full" />
           </div>
-        ) : showAsPdf ? (
-          <object
-            data={inlineSrc}
-            type="application/pdf"
-            aria-label={fileName ?? t('header_label')}
-            className="h-full w-full"
-          >
-            <div className="flex h-full w-full items-center justify-center p-4 text-center text-sm text-muted-foreground">
-              {t('not_previewable')}
-              {': '}
-              <a
-                href={newTabHref}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="ml-1 underline"
-              >
-                {t('open_in_new_tab')}
-              </a>
-            </div>
-          </object>
-        ) : showAsImage ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
+        ) : kind === 'pdf' || kind === 'image' ? (
+          <DocumentPreview
             src={inlineSrc}
-            alt={fileName ?? t('header_label')}
-            className="mx-auto max-w-full object-contain"
+            kind={kind}
+            label={label}
+            className="h-full w-full"
+            imageClassName="mx-auto max-w-full object-contain"
+            fallback={
+              <div className="flex h-full w-full items-center justify-center p-4 text-center text-sm text-muted-foreground">
+                {t('not_previewable')}
+                {': '}
+                <a
+                  href={newTabHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="ml-1 underline"
+                >
+                  {t('open_in_new_tab')}
+                </a>
+              </div>
+            }
           />
         ) : (
           <div className="flex h-full w-full flex-col items-center justify-center gap-2 p-4 text-center text-sm text-muted-foreground">

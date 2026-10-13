@@ -1,13 +1,11 @@
 import type { Transaction, TransactionCategory, Invoice, Customer, SupplierInvoice, VatTreatment } from '@/types'
-import type { RotRutPayoutRequestCandidate } from '@/lib/invoices/rot-rut-payout-matching'
+import type { OpenRotRutPayoutRequest } from '@/lib/invoices/open-rot-rut-payout-requests'
 import type { ExpensePayoutDue } from '@/lib/worklist/types'
 import type { EmbeddedVoucherLink } from '@/lib/transactions/is-booked'
 
 /** An open ROT/RUT begäran offered to an income row, with the invoices it
  *  covers (so the user sees which fakturor the payout settles). */
-export interface PotentialRotRutPayoutRequest extends RotRutPayoutRequestCandidate {
-  invoices: Array<{ invoice_number: string | null; requested_amount: number | string }>
-}
+export type PotentialRotRutPayoutRequest = OpenRotRutPayoutRequest
 
 /** The ROT/RUT match suggestion hung onto an income row: the begäran
  *  Skatteverkets utbetalning settles. One for a persisted 1:1 hint or a

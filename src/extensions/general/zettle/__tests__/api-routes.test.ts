@@ -214,7 +214,7 @@ describe('zettle extension routes', () => {
     const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
     supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
     const service = serviceReturning({
-      data: {
+      data: [{
         id: 'c1',
         status: 'active',
         company_id: 'company-1',
@@ -222,7 +222,7 @@ describe('zettle extension routes', () => {
         organization_uuid: 'org-1',
         refresh_token_encrypted: 'enc',
         last_order_synced_at: '2026-09-14T00:00:00.000Z',
-      },
+      }],
     })
     enqueue({ data: [] }) // cursor update (session client)
     const res = await findRoute('POST', '/backfill').handler(
@@ -260,7 +260,7 @@ describe('zettle extension routes', () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
     serviceReturning({
-      data: {
+      data: [{
         id: 'c1',
         status: 'active',
         company_id: 'company-1',
@@ -268,7 +268,7 @@ describe('zettle extension routes', () => {
         organization_uuid: 'org-1',
         refresh_token_encrypted: 'enc',
         last_order_synced_at: '2026-09-14T00:00:00.000Z',
-      },
+      }],
     })
     enqueue({ data: [] }) // cursor update (session client)
     enqueue({ data: [] }) // cursor restore (session client)
@@ -297,14 +297,14 @@ describe('zettle extension routes', () => {
     const { supabase, findCall } = createQueuedMockSupabase()
     supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
     const service = serviceReturning({
-      data: {
+      data: [{
         id: 'c1',
         status: 'active',
         company_id: 'company-1',
         user_id: 'user-1',
         organization_uuid: 'org-1',
         refresh_token_encrypted: 'enc',
-      },
+      }],
     })
     const res = await findRoute('POST', '/sync').handler(makeRequest('POST'), makeContext(supabase))
     expect(res.status).toBe(200)

@@ -5,17 +5,13 @@
  * (product rows need a description and a positive quantity) and the spawn
  * (text rows never book) agree on what a text row is.
  */
+import type { z } from 'zod'
+import type { RecurringScheduleItemSchema } from '@/lib/api/schemas'
+
 export type RecurringScheduleLineType = 'product' | 'text'
 
-export interface RecurringScheduleItemInput {
-  line_type?: RecurringScheduleLineType
-  description: string
-  quantity: number
-  unit: string
-  unit_price: number
-  vat_rate?: number | null
-  dimensions?: Record<string, string>
-}
+/** The request every door validates (RecurringScheduleItemSchema). */
+export type RecurringScheduleItemInput = z.output<typeof RecurringScheduleItemSchema>
 
 export interface RecurringScheduleItemRow {
   schedule_id: string

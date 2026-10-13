@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
-import { verifyCronSecret } from '@/lib/auth/cron'
-import { extensionRegistry } from '@/lib/extensions/registry'
+import { withCronContext } from '@/lib/api/with-cron-context'
 import { getSystemAuthMode, isSystemAuthConfigured } from '@/extensions/general/skatteverket/lib/system-auth/config'
 import { currentSkvEnvironment } from '@/extensions/general/skatteverket/lib/resolve-auth'
 import {
@@ -78,20 +77,7 @@ export const MASS_DOWNGRADE_MAX_SHARE = 0.5
  * or partial-response problem surfaces in the logs instead of in every
  * company's settings.
  */
-export async function GET(request: Request) {
-  const authError = verifyCronSecret(request)
-  if (authError) return authError
-
-  // Physical routes under app/api/extensions/<id>/ compile into every build,
-  // including core-with-zero-extensions: the registry is what switches the
-  // extension on, so a disabled extension must refuse visibly (503).
-  if (!(await extensionRegistry.get('skatteverket'))) {
-    return NextResponse.json(
-      { error: 'Skatteverket extension is not enabled', code: 'EXTENSION_DISABLED' },
-      { status: 503 }
-    )
-  }
-
+export const GET = withCronContext('cron.skatteverket_ombud_sync', async () => {
   if (!isSkatteverketEnabled()) {
     return NextResponse.json({ message: 'Skatteverket extension disabled', processed: 0 })
   }
@@ -195,7 +181,7 @@ export async function GET(request: Request) {
     guardReason: emptyRegisterGuard ? 'empty_register' : massDowngradeGuard ? 'mass_downgrade' : null,
     durationMs: Date.now() - startedAt,
   })
-}
+}, { requireExtension: 'skatteverket' })
 
 function reasonFor(
   decision: { predatesOptIn?: SkvBehorighet[] },

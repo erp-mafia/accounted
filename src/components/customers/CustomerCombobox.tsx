@@ -6,6 +6,7 @@ import { useTranslations } from 'next-intl'
 import { Plus } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
+import { useComboboxNavigation } from '@/lib/hooks/use-combobox-navigation'
 import {
   POPOVER_SURFACE_CLASS,
   POPOVER_ENTER_CLASS,
@@ -110,7 +111,6 @@ export default function CustomerCombobox<T extends SearchableCustomer>({
   const [typed, setTyped] = useState('')
   const [queryActive, setQueryActive] = useState(false)
   const [isOpen, setIsOpen] = useState(false)
-  const [highlightedIndex, setHighlightedIndex] = useState(0)
   const containerRef = useRef<HTMLDivElement>(null)
   // The portaled dropdown panel. It is not a DOM descendant of containerRef,
   // so outside-click detection must check it separately.
@@ -141,23 +141,6 @@ export default function CustomerCombobox<T extends SearchableCustomer>({
   const showNoneRow = Boolean(noneLabel) && !queryActive
   // Keyboard order: the optional "no customer" row first, then the matches.
   const rowCount = items.length + (showNoneRow ? 1 : 0)
-
-  // Reset the highlight when the rows change: onto the current selection when
-  // browsing (so it scrolls into view), onto the best match when searching.
-  useEffect(() => {
-    if (queryActive) {
-      setHighlightedIndex(0)
-      return
-    }
-    const selectedAt = items.findIndex((c) => c.id === value)
-    setHighlightedIndex(selectedAt >= 0 ? selectedAt + (showNoneRow ? 1 : 0) : 0)
-  }, [items, value, queryActive, showNoneRow])
-
-  useEffect(() => {
-    if (!isOpen || !portalPanelRef.current) return
-    const highlighted = portalPanelRef.current.querySelector('[data-highlighted="true"]')
-    if (highlighted) highlighted.scrollIntoView({ block: 'nearest' })
-  }, [highlightedIndex, isOpen])
 
   // Keep the portaled dropdown glued to the trigger: measure off containerRef
   // when it opens and re-measure while anything scrolls or the window resizes
@@ -206,27 +189,6 @@ export default function CustomerCombobox<T extends SearchableCustomer>({
     }
   }, [])
 
-  // Close when clicking/tapping outside both the trigger and the portaled panel.
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent | TouchEvent) {
-      const target = e.target as Node
-      if (
-        containerRef.current &&
-        !containerRef.current.contains(target) &&
-        !(portalPanelRef.current && portalPanelRef.current.contains(target))
-      ) {
-        setIsOpen(false)
-        setQueryActive(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    document.addEventListener('touchstart', handleClickOutside)
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside)
-      document.removeEventListener('touchstart', handleClickOutside)
-    }
-  }, [])
-
   // Closing also abandons the query, so the field shows the selection again.
   const close = useCallback(() => {
     setIsOpen(false)
@@ -250,49 +212,42 @@ export default function CustomerCombobox<T extends SearchableCustomer>({
     return items[position]?.id ?? null
   }
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (!isOpen) {
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-        e.preventDefault()
-        hasInteractedRef.current = true
-        setIsOpen(true)
-      } else if (e.key === 'Enter') {
-        // A text input inside a form submits on Enter; the Select this
-        // replaces opened its list instead. Keep that.
-        e.preventDefault()
-        setIsOpen(true)
-      }
+  const insideRefs = useMemo(() => [containerRef, portalPanelRef], [])
+  const { highlightedIndex, setHighlightedIndex, handleKeyDown } = useComboboxNavigation({
+    count: rowCount,
+    isOpen,
+    // A text input inside a form submits on Enter; the Select this replaces
+    // opened its list instead. Only an arrow counts as choosing a row.
+    openKeys: ['ArrowDown', 'ArrowUp', 'Enter'],
+    open: (key) => {
+      if (key !== 'Enter') hasInteractedRef.current = true
+      setIsOpen(true)
+    },
+    close,
+    activate: (position) => {
+      const rowId = hasInteractedRef.current ? rowIdAt(position) : null
+      if (rowId === NONE_ROW) select('')
+      else if (rowId) select(rowId)
+      else close()
+    },
+    onNavigate: () => {
+      hasInteractedRef.current = true
+    },
+    listRef: portalPanelRef,
+    insideRefs,
+    closeOnTab: true,
+  })
+
+  // Reset the highlight when the rows change: onto the current selection when
+  // browsing (so it scrolls into view), onto the best match when searching.
+  useEffect(() => {
+    if (queryActive) {
+      setHighlightedIndex(0)
       return
     }
-
-    switch (e.key) {
-      case 'ArrowDown':
-        e.preventDefault()
-        hasInteractedRef.current = true
-        setHighlightedIndex((prev) => Math.min(prev + 1, Math.max(rowCount - 1, 0)))
-        break
-      case 'ArrowUp':
-        e.preventDefault()
-        hasInteractedRef.current = true
-        setHighlightedIndex((prev) => Math.max(prev - 1, 0))
-        break
-      case 'Enter': {
-        e.preventDefault()
-        const rowId = hasInteractedRef.current ? rowIdAt(highlightedIndex) : null
-        if (rowId === NONE_ROW) select('')
-        else if (rowId) select(rowId)
-        else close()
-        break
-      }
-      case 'Escape':
-        e.preventDefault()
-        close()
-        break
-      case 'Tab':
-        close()
-        break
-    }
-  }
+    const selectedAt = items.findIndex((c) => c.id === value)
+    setHighlightedIndex(selectedAt >= 0 ? selectedAt + (showNoneRow ? 1 : 0) : 0)
+  }, [items, value, queryActive, showNoneRow, setHighlightedIndex])
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     hasInteractedRef.current = true

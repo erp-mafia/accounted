@@ -12,6 +12,7 @@ import {
   type TaxDepreciationResult,
   type TaxDepreciationRule,
 } from './tax-depreciation'
+import { isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 
 export interface TaxPeriodRow {
   id: string
@@ -312,7 +313,7 @@ export async function saveTaxDepreciationElection(
     .select('id')
     .maybeSingle()
   if (saveError) {
-    if (/locked for tax depreciation/i.test(saveError.message)) {
+    if (isPeriodLockRefusal(saveError)) {
       throw new TaxDepreciationPeriodLockedError('Fiscal period is locked')
     }
     if (

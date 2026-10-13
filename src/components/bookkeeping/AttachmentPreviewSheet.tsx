@@ -23,6 +23,8 @@ import {
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { Skeleton } from '@/components/ui/skeleton'
+import { DocumentPreview } from '@/components/bookkeeping/DocumentPreview'
+import { documentPreviewKind } from '@/lib/documents/preview-kind'
 import { prepareForMultipartUpload } from '@/lib/documents/shrink-image'
 import { DOCUMENT_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 
@@ -50,24 +52,6 @@ interface AttachmentPreviewSheetProps {
 // a session.
 type IntegrityState = 'valid' | 'invalid' | 'error'
 const integrityCache = new Map<string, IntegrityState>()
-
-function isImageType(type: string | null, fileName?: string): boolean {
-  if (type?.startsWith('image/')) return true
-  // Legacy uploads and browsers that fail to sniff sometimes leave mime_type
-  // null or set it to application/octet-stream: fall back to filename.
-  if (type === null || type === 'application/octet-stream') {
-    return /\.(jpe?g|png|gif|webp|svg)$/i.test(fileName ?? '')
-  }
-  return false
-}
-
-function isPdfType(type: string | null, fileName?: string): boolean {
-  if (type === 'application/pdf') return true
-  if (type === null || type === 'application/octet-stream') {
-    return fileName?.toLowerCase().endsWith('.pdf') ?? false
-  }
-  return false
-}
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -263,15 +247,14 @@ export default function AttachmentPreviewSheet({
           <div className="space-y-6">
             {documents.map((doc) => {
               const inlineSrc = `/api/documents/${doc.id}/inline`
-              const previewable =
-                isImageType(doc.mime_type, doc.file_name) ||
-                isPdfType(doc.mime_type, doc.file_name)
+              const kind = documentPreviewKind(doc.mime_type, doc.file_name)
+              const previewable = kind === 'pdf' || kind === 'image'
               const isReplacing = replacingDocId === doc.id
               return (
                 <div key={doc.id} className="space-y-2">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex min-w-0 items-start gap-2">
-                      {isImageType(doc.mime_type, doc.file_name) ? (
+                      {kind === 'image' ? (
                         <ImageIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                       ) : (
                         <FileText className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
@@ -319,7 +302,7 @@ export default function AttachmentPreviewSheet({
                     </div>
                   </div>
 
-                  {isPdfType(doc.mime_type, doc.file_name) && integrity[doc.id] === 'invalid' && (
+                  {kind === 'pdf' && integrity[doc.id] === 'invalid' && (
                     <div className="flex h-[70vh] w-full flex-col items-center justify-center gap-4 rounded-lg border border-border bg-muted/30 p-6 text-center">
                       <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted">
                         <AlertTriangle className="h-5 w-5 text-attn" />
@@ -341,13 +324,7 @@ export default function AttachmentPreviewSheet({
                     </div>
                   )}
 
-                  {isPdfType(doc.mime_type, doc.file_name) && integrity[doc.id] !== 'invalid' && (
-                    // <object> + type="application/pdf" invokes Chrome's PDF
-                    // plugin directly. <iframe> went through Chrome's frame
-                    // pipeline first and intermittently surfaced
-                    // "Det här innehållet har blockerats" even with a
-                    // permissive CSP. Firefox/Edge handled both fine; Chrome
-                    // is the odd one. See crbug.com/271452.
+                  {kind === 'pdf' && integrity[doc.id] !== 'invalid' && (
                     <>
                       {integrity[doc.id] === 'error' && (
                         // Non-blocking indicator when the integrity probe
@@ -361,38 +338,41 @@ export default function AttachmentPreviewSheet({
                           {t('integrity_unknown')}
                         </p>
                       )}
-                      <object
-                        data={inlineSrc}
-                        type="application/pdf"
-                        aria-label={doc.file_name}
+                      <DocumentPreview
+                        src={inlineSrc}
+                        kind="pdf"
+                        label={doc.file_name}
                         className="h-[70vh] w-full rounded-lg border border-border"
-                      >
-                        <div className="flex h-[70vh] w-full items-center justify-center rounded-lg border border-border bg-muted/30 p-4 text-center text-sm text-muted-foreground">
-                          {t('not_previewable')}
-                          {doc.download_url && (
-                            <>
-                              {': '}
-                              <a
-                                href={doc.download_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="underline"
-                              >
-                                {t('open_in_new_tab')}
-                              </a>
-                            </>
-                          )}
-                        </div>
-                      </object>
+                        fallback={
+                          <div className="flex h-[70vh] w-full items-center justify-center rounded-lg border border-border bg-muted/30 p-4 text-center text-sm text-muted-foreground">
+                            {t('not_previewable')}
+                            {doc.download_url && (
+                              <>
+                                {': '}
+                                <a
+                                  href={doc.download_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="underline"
+                                >
+                                  {t('open_in_new_tab')}
+                                </a>
+                              </>
+                            )}
+                          </div>
+                        }
+                      />
                     </>
                   )}
 
-                  {isImageType(doc.mime_type, doc.file_name) && (
+                  {kind === 'image' && (
                     <div className="overflow-hidden rounded-lg border border-border bg-muted/30">
-                      <img
+                      <DocumentPreview
                         src={inlineSrc}
-                        alt={doc.file_name}
+                        kind="image"
+                        label={doc.file_name}
                         className="mx-auto max-h-[70vh] w-full object-contain"
+                        fallback={null}
                       />
                     </div>
                   )}

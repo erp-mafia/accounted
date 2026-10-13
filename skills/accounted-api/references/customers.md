@@ -230,8 +230,10 @@ Response `200`:
     vat_number: string | null,
     vat_number_validated: boolean,
     personal_number: string | null,
+    language: "sv" | "en",
     default_payment_terms: number,
     notes: string | null,
+    party_id: string | null,
     archived_at: string | null,
     created_at: string | null,
     updated_at: string | null
@@ -367,13 +369,14 @@ Example response `200`:
 **Partially update a customer.**
 `scope:customers:write · risk:low · idempotent · dry-run · reversible`
 
-Patches the customer with the supplied fields. All fields optional. Idempotent (mandatory Idempotency-Key). Dry-runnable. When vat_number changes on an eu_business customer, VIES re-validation runs on commit (best-effort).
+Patches the customer with the supplied fields. All fields optional. Idempotent (mandatory Idempotency-Key). Dry-runnable: the dry run answers the would-be record with `changes` (each changed field, from and to). When vat_number changes on an eu_business customer, VIES re-validation runs on commit (best-effort).
 
 **Use when:** You need to change a customer's contact details, payment terms, address, or VAT registration. Use dry-run first to confirm the merged record before committing.
 **Do not use for:** Archiving a customer (use DELETE: sets archived_at). Replacing the entire record (no PUT verb is exposed; PATCH is partial).
 
 **Pitfalls:**
 - Idempotency-Key is mandatory; calls without it return 400.
+- An empty body returns 400 VALIDATION_ERROR; an unknown id returns 404 CUSTOMER_NOT_FOUND.
 - org_number uniqueness is enforced at DB level: 23505 → 409 CUSTOMER_DUPLICATE_ORG_NUMBER.
 - VIES re-validation is best-effort and runs only on commit. A VIES timeout does not fail the update.
 - personal_number: a plaintext value is stored encrypted (individual customers only); the masked form a read returned (********-1234) means "leave unchanged" and is never stored; null clears it. Changing customer_type away from individual clears any stored personal_number.

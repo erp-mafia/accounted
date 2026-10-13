@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { extensionRegistry } from '@/lib/extensions/registry'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { reconcileStrandedInboxUnderlag } from '@/lib/transactions/inbox-underlag-reconcile'
@@ -25,21 +24,6 @@ import { reconcileStrandedInboxUnderlag } from '@/lib/transactions/inbox-underla
 export const maxDuration = 300
 
 export const GET = withCronContext('cron.invoice_inbox_underlag_reconcile', async (_request, ctx) => {
-  // Load the registry so it reflects extensions.config.json.
-
-  // Physical routes under app/api/extensions/<id>/ compile into EVERY build,
-  // including the core-with-zero-extensions one: the registry (generated from
-  // extensions.config.json) is what actually switches an extension on. A
-  // scheduled-but-disabled cron must fail visibly (503) instead of quietly
-  // doing the work anyway.
-  if (!(await extensionRegistry.get('invoice-inbox'))) {
-    ctx.log.warn('invoice-inbox extension is not enabled; cron refused')
-    return NextResponse.json(
-      { error: 'Invoice inbox extension is not enabled', code: 'EXTENSION_DISABLED' },
-      { status: 503 },
-    )
-  }
-
   const supabase = createServiceClientNoCookies()
   const summary = await reconcileStrandedInboxUnderlag(supabase, {
     execute: true,
@@ -50,4 +34,4 @@ export const GET = withCronContext('cron.invoice_inbox_underlag_reconcile', asyn
   ctx.log.info('invoice inbox underlag reconcile complete', { ...summary })
 
   return NextResponse.json({ data: summary })
-})
+}, { requireExtension: 'invoice-inbox' })

@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { extensionRegistry } from '@/lib/extensions/registry'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { runRetention } from '@/extensions/general/whatsapp-inbox/lib/retention'
@@ -21,26 +20,10 @@ import { runRetention } from '@/extensions/general/whatsapp-inbox/lib/retention'
 export const maxDuration = 300
 
 export const GET = withCronContext('cron.whatsapp_retention', async (_request, ctx) => {
-  // Load the registry so it reflects extensions.config.json.
-
-  // Physical routes under app/api/extensions/<id>/ compile into EVERY build,
-  // including the core-with-zero-extensions one: the registry (generated from
-  // extensions.config.json) is what actually switches an extension on. Mirror
-  // the ext/[...path] dispatcher: a disabled extension must not expose a live
-  // surface, and a scheduled-but-disabled cron must fail visibly (503)
-  // instead of quietly doing the work anyway.
-  if (!(await extensionRegistry.get('whatsapp-inbox'))) {
-    ctx.log.warn('whatsapp-inbox extension is not enabled; cron refused')
-    return NextResponse.json(
-      { error: 'WhatsApp inbox extension is not enabled', code: 'EXTENSION_DISABLED' },
-      { status: 503 },
-    )
-  }
-
   const supabase = createServiceClientNoCookies()
   const summary = await runRetention(supabase)
 
   ctx.log.info('whatsapp retention complete', { ...summary })
 
   return NextResponse.json({ data: summary })
-})
+}, { requireExtension: 'whatsapp-inbox' })

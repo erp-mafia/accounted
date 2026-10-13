@@ -51,6 +51,14 @@ const read = (file: string) => {
 const isClient = (file: string) =>
   /^\s*(?:\/\/[^\n]*\n\s*|\/\*[\s\S]*?\*\/\s*)*['"]use client['"]/.test(read(file))
 
+/**
+ * A 'use server' module never reaches the browser: a client file that imports
+ * one gets a reference to the server action, not its code, so the walk stops
+ * there as the bundler does.
+ */
+const isServerAction = (file: string) =>
+  /^\s*(?:\/\/[^\n]*\n\s*|\/\*[\s\S]*?\*\/\s*)*['"]use server['"]/.test(read(file))
+
 function resolveSpecifier(from: string, specifier: string): string | null {
   let base: string
   if (specifier.startsWith('@/')) base = join(SRC, specifier.slice(2))
@@ -103,7 +111,7 @@ function forbiddenChains(): string[] {
           found = { file, target: rel ?? specifier }
           break
         }
-        if (target && !parent.has(target)) {
+        if (target && !parent.has(target) && !isServerAction(target)) {
           parent.set(target, file)
           queue.push(target)
         }

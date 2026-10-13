@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { declaredDocumentType, uploadDocument, validateDocumentFile } from '@/lib/core/documents/document-service'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { errorResponse, errorResponseFromCode, isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 import type { DocumentUploadSource } from '@/types'
 
 /**
@@ -80,7 +80,7 @@ export const POST = withRouteContext(
       const message = err instanceof Error ? err.message : 'unknown'
       // DB trigger rejects inserts whose journal_entry_id points at an entry
       // in a closed/locked period. Surface as 400 with the real reason.
-      if (/locked\/closed fiscal period|Bokföringen är låst/i.test(message)) {
+      if (isPeriodLockRefusal(err)) {
         return errorResponseFromCode('DOC_UPLOAD_PERIOD_LOCKED', opLog, {
           requestId,
           details: { reason: getErrorMessage(err) },

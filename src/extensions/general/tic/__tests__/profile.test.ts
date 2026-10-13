@@ -235,6 +235,25 @@ describe('TIC profile route', () => {
     expect(data.fetchedAt).toBeDefined()
   })
 
+  it('serves the same profile to core through the fetchCompanyProfile service', async () => {
+    // Parity: the agent onboarding snapshot used to call /profile over HTTP;
+    // it now reads the service, which must answer exactly what the route does.
+    mockSearch.mockResolvedValue(mockDoc)
+    mockKeptSupplementary()
+    const { data: fromRoute } = await (await profileHandler(makeRequest('556036-0793'))).json()
+
+    mockSearch.mockResolvedValue(mockDoc)
+    mockKeptSupplementary()
+    const fromService = await ticExtension.services!.fetchCompanyProfile('556036-0793')
+
+    expect({ ...fromService, fetchedAt: 'x' }).toEqual({ ...fromRoute, fetchedAt: 'x' })
+  })
+
+  it('answers null from the service when TIC has no such company', async () => {
+    mockSearch.mockResolvedValue(null)
+    expect(await ticExtension.services!.fetchCompanyProfile('000000-0000')).toBeNull()
+  })
+
   it('maps activityStatus to "ceased" when isCeased is true', async () => {
     mockSearch.mockResolvedValue({ ...mockDoc, isCeased: true, activityStatus: 'isNoLongerActive' })
     mockKeptSupplementary()

@@ -10,12 +10,13 @@ import path from 'node:path'
 const root = path.resolve(__dirname, '../../../')
 const read = (rel: string) => fs.readFileSync(path.join(root, rel), 'utf8')
 
-describe('dialogs on the shared kontering editor', () => {
+describe('editors on the shared kontering editor', () => {
   it.each([
     'components/invoices/SendInvoiceDialog.tsx',
     'components/invoices/PaymentBookingDialog.tsx',
     'components/bookkeeping/CorrectionEntryDialog.tsx',
     'components/bookkeeping/StrikeLinesDialog.tsx',
+    'components/bookkeeping/JournalEntryForm.tsx',
   ])('%s', (rel) => {
     const src = read(rel)
     expect(src).toContain('<KonteringLinesEditor')

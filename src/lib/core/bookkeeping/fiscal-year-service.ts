@@ -46,6 +46,8 @@ import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { userFacingCode } from '@/lib/errors/user-facing'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
 import type { FiscalPeriod } from '@/types'
+import type { z } from 'zod'
+import type { CreateFiscalPeriodSchema } from '@/lib/api/schemas'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -89,11 +91,8 @@ function overlapFailure(overlapping: { id: string; name: string }): Failure {
   }
 }
 
-export interface CreateFiscalPeriodInput {
-  name: string
-  period_start: string
-  period_end: string
-}
+/** The request every door validates (CreateFiscalPeriodSchema). */
+export type CreateFiscalPeriodInput = z.output<typeof CreateFiscalPeriodSchema>
 
 export async function createFiscalPeriod(
   ctx: OperationContext,

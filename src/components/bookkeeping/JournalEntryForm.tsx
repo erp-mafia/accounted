@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations, useLocale } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -13,15 +13,14 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { AttnLine } from '@/components/ui/attn-line'
-import { Plus, Trash2, AlertTriangle, Loader2, Lock, CalendarPlus, Eraser, Tags, BookmarkPlus } from 'lucide-react'
+import { AlertTriangle, Loader2, Lock, CalendarPlus, Eraser, Tags, BookmarkPlus } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { JournalEntryReviewContent } from '@/components/bookkeeping/JournalEntryReviewContent'
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
-import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import { KonteringLinesEditor } from '@/components/bookkeeping/KonteringLinesEditor'
 import { LineVatCodeBadge, LineVatCodeMenu } from '@/components/bookkeeping/LineVatCodeMenu'
-import { AccountNumber } from '@/components/ui/account-number'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
 import TemplateApplyButton from '@/components/bookkeeping/TemplateApplyButton'
@@ -46,7 +45,7 @@ import {
   formatFailedDocumentNames,
   type DocumentLinkFailure,
 } from '@/lib/documents/link-documents'
-import { cn, formatAmount, formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency } from '@/lib/utils'
 import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 import { roundOre, formatAmountInput } from '@/lib/money'
 import { buildVoucherSeriesOptions, formatVoucher, resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
@@ -195,7 +194,7 @@ export default function JournalEntryForm({
   // `lines` are the ONE source of truth: this state only drives the header
   // comboboxes; setHeaderDimension writes the default through to the rows.
   const [headerDims, setHeaderDims] = useState<Record<string, string>>({})
-  // Which row's dimension popover is open (desktop table), and its container
+  // Which row's dimension popover is open, and its container
   // for the outside-click close.
   const [dimPopoverRow, setDimPopoverRow] = useState<number | null>(null)
   const dimPopoverRef = useRef<HTMLDivElement | null>(null)
@@ -291,15 +290,10 @@ export default function JournalEntryForm({
   const [creatingAccountForLine, setCreatingAccountForLine] = useState<number | null>(null)
   const [createAccountPrefill, setCreateAccountPrefill] = useState<string>('')
   // Per-row refs to the account/debit/credit inputs so the keyboard flow can
-  // advance focus with Enter: konto → debet → kredit → nästa rads konto. Two
-  // layouts render simultaneously (mobile cards + desktop table); we focus
-  // whichever one is actually visible.
-  const desktopAccountRefs = useRef<(HTMLInputElement | null)[]>([])
-  const mobileAccountRefs = useRef<(HTMLInputElement | null)[]>([])
-  const desktopDebitRefs = useRef<(HTMLInputElement | null)[]>([])
-  const mobileDebitRefs = useRef<(HTMLInputElement | null)[]>([])
-  const desktopCreditRefs = useRef<(HTMLInputElement | null)[]>([])
-  const mobileCreditRefs = useRef<(HTMLInputElement | null)[]>([])
+  // advance focus with Enter: konto → debet → kredit → nästa rads konto.
+  const accountRefs = useRef<(HTMLInputElement | null)[]>([])
+  const debitRefs = useRef<(HTMLInputElement | null)[]>([])
+  const creditRefs = useRef<(HTMLInputElement | null)[]>([])
   // Confirm button in the inline (bare) review, focused on open so Enter posts.
   const bareConfirmRef = useRef<HTMLButtonElement>(null)
 
@@ -741,36 +735,20 @@ export default function JournalEntryForm({
     }
 
   // Move focus to a row's input. Deferred a frame so it runs after any
-  // re-render (e.g. the auto-appended trailing row). offsetParent is null for
-  // display:none elements, so this picks whichever layout is currently visible.
+  // re-render (e.g. the auto-appended trailing row).
   const focusRowInput = useCallback(
-    (
-      desktop: React.RefObject<(HTMLInputElement | null)[]>,
-      mobile: React.RefObject<(HTMLInputElement | null)[]>,
-      index: number
-    ) => {
+    (refs: React.RefObject<(HTMLInputElement | null)[]>, index: number) => {
       requestAnimationFrame(() => {
-        const d = desktop.current?.[index]
-        const m = mobile.current?.[index]
-        const target = d && d.offsetParent !== null ? d : m && m.offsetParent !== null ? m : (d ?? m)
+        const target = refs.current?.[index]
         target?.focus()
         target?.select?.()
       })
     },
     []
   )
-  const focusAccount = useCallback(
-    (index: number) => focusRowInput(desktopAccountRefs, mobileAccountRefs, index),
-    [focusRowInput]
-  )
-  const focusDebit = useCallback(
-    (index: number) => focusRowInput(desktopDebitRefs, mobileDebitRefs, index),
-    [focusRowInput]
-  )
-  const focusCredit = useCallback(
-    (index: number) => focusRowInput(desktopCreditRefs, mobileCreditRefs, index),
-    [focusRowInput]
-  )
+  const focusAccount = useCallback((index: number) => focusRowInput(accountRefs, index), [focusRowInput])
+  const focusDebit = useCallback((index: number) => focusRowInput(debitRefs, index), [focusRowInput])
+  const focusCredit = useCallback((index: number) => focusRowInput(creditRefs, index), [focusRowInput])
 
   // Keep exactly one trailing blank row so the user never has to click "Lägg
   // till rad": once the last row is started (account or amount), append a fresh
@@ -1010,13 +988,10 @@ export default function JournalEntryForm({
     else focusCredit(action.row)
   }
 
-  // Which konteringsrad's account input (desktop or mobile) an element is,
-  // or -1. The account combobox takes no onKeyDown, so the form-level handler
-  // recognises it by its ref.
-  const accountRowOf = (el: EventTarget) => {
-    const d = desktopAccountRefs.current.indexOf(el as HTMLInputElement)
-    return d !== -1 ? d : mobileAccountRefs.current.indexOf(el as HTMLInputElement)
-  }
+  // Which konteringsrad's account input an element is, or -1. The account
+  // combobox takes no onKeyDown, so the form-level handler recognises it by
+  // its ref.
+  const accountRowOf = (el: EventTarget) => accountRefs.current.indexOf(el as HTMLInputElement)
 
   // Form-level Enter. Inside the konteringsrader Enter moves forward and only
   // an empty row's empty account field opens the review; any other control
@@ -1721,434 +1696,178 @@ export default function JournalEntryForm({
         )}
       </div>
 
-      {/* Entry lines: mobile cards */}
-      <div className="sm:hidden space-y-3">
-        {lines.map((line, index) => {
+      {/* Konteringsrader: one editor on every width. */}
+      <KonteringLinesEditor
+        lines={lines}
+        accounts={accounts}
+        catalog={catalog}
+        notActivatedLabel={t('account_not_activated')}
+        onAccountChange={(index, num) => updateLine(index, 'account_number', num)}
+        onAccountCommit={focusDebit}
+        accountInputRef={(index, el) => { accountRefs.current[index] = el }}
+        onCreateAccount={handleOpenCreateAccount}
+        onAdd={addLine}
+        onRemove={removeLine}
+        onAmountChange={(index, field, value) => updateLine(index, field, value)}
+        amountInputRef={(index, field, el) => {
+          const refs = field === 'debit_amount' ? debitRefs : creditRefs
+          refs.current[index] = el
+        }}
+        amountInputProps={(index, field) => {
+          const side = field === 'debit_amount' ? 'debit' : 'credit'
+          return {
+            onKeyDown: handleAmountKeyDown(index, side),
+            onFocus: handleAmountFocus(index, side),
+            onDoubleClick: () => handleFillBalance(index, side),
+            title: t('fill_balance_tooltip'),
+          }
+        }}
+        onDescriptionChange={(index, value) => updateLine(index, 'line_description', value)}
+        onDescriptionKeyDown={handleLineDescKeyDown}
+        renderDescriptionExtra={(index) => {
+          const line = lines[index]
           const vatGroup = lineGroups[index]
           return (
-          <div key={index} className="rounded-lg border bg-card p-3 space-y-2">
-            <div className="flex items-start gap-2">
-              <div className="flex-1">
-                <AccountCombobox
-                  value={line.account_number}
-                  accounts={accounts}
-                  catalog={catalog}
-                  notActivatedLabel={t('account_not_activated')}
-                  onChange={(num) => updateLine(index, 'account_number', num)}
-                  onCommit={() => focusDebit(index)}
-                  onCreateAccount={(prefill) => handleOpenCreateAccount(index, prefill)}
-                  inputRef={(el) => { mobileAccountRefs.current[index] = el }}
-                />
-              </div>
-              {vatGroup && vatGroup.rule.mode !== 'none' && (
-                <div className="shrink-0 -mt-1">
-                  <LineVatCodeMenu
-                    rule={vatGroup.rule}
-                    code={vatGroup.code}
-                    onChange={(code) => updateLineVatCode(index, code)}
-                  />
+            <>
+              {vatGroup?.code && vatGroup.rule.mode !== 'none' && (
+                <LineVatCodeBadge rule={vatGroup.rule} code={vatGroup.code} />
+              )}
+              {line.dimensions &&
+                Object.keys(line.dimensions).length > 0 &&
+                (line.account_number || line.debit_amount || line.credit_amount) && (
+                  <Badge data-ph-mask="" variant="outline" className="font-mono text-[11px] font-normal">
+                    {compactDims(line.dimensions)}
+                  </Badge>
+                )}
+            </>
+          )
+        }}
+        extraColumn={{
+          label: t('col_saldo'),
+          render: (index) => {
+            const accountNumber = lines[index].account_number
+            if (!/^\d{4}$/.test(accountNumber)) return null
+            const bal = accountBalances[accountNumber]
+            if (bal === null || bal === undefined) {
+              return <Skeleton className="ml-auto h-4 w-20" />
+            }
+            const delta = draftDeltas[accountNumber]
+            if (!delta) return formatCurrency(bal)
+            const after = roundOre(bal + delta)
+            return (
+              <span className="inline-flex flex-col items-end leading-tight">
+                <span className="text-[11px]">{formatCurrency(bal)}</span>
+                <span className="text-foreground">→ {formatCurrency(after)}</span>
+              </span>
+            )
+          },
+        }}
+        renderRowActions={(index) => {
+          const line = lines[index]
+          const vatGroup = lineGroups[index]
+          return (
+            <>
+              {dimensionsEnabled && (
+                <div
+                  className="relative"
+                  ref={dimPopoverRow === index ? dimPopoverRef : undefined}
+                >
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => setDimPopoverRow(dimPopoverRow === index ? null : index)}
+                    className={
+                      line.dimensions && Object.keys(line.dimensions).length > 0
+                        ? 'text-foreground'
+                        : 'text-muted-foreground'
+                    }
+                    aria-label={t('row_dimensions_aria')}
+                    aria-expanded={dimPopoverRow === index}
+                    title={t('row_dimensions_aria')}
+                  >
+                    <Tags className="h-3.5 w-3.5" />
+                  </Button>
+                  {dimPopoverRow === index && (
+                    <div
+                      className={cn(
+                        'absolute right-0 top-full z-50 mt-1 w-64 p-3',
+                        POPOVER_SURFACE_CLASS,
+                        POPOVER_ENTER_CLASS,
+                      )}
+                      onKeyDown={(e) => {
+                        // The comboboxes preventDefault their own Escape
+                        // (closing their dropdown): only an unhandled
+                        // Escape closes the popover.
+                        if (e.key === 'Escape' && !e.defaultPrevented) {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          setDimPopoverRow(null)
+                        }
+                      }}
+                    >
+                      <LineDimensionFields
+                        stacked
+                        dimensions={line.dimensions}
+                        onChange={(dimNo, code) => updateLineDimension(index, dimNo, code)}
+                        inputClassName="h-8"
+                      />
+                    </div>
+                  )}
                 </div>
               )}
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => removeLine(index)}
-                disabled={lines.length <= 2}
-                className="shrink-0 -mr-1 -mt-1"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-            <Input
-              value={line.line_description}
-              onChange={(e) => updateLine(index, 'line_description', e.target.value)}
-              onKeyDown={handleLineDescKeyDown(index)}
-              placeholder={t('line_description_placeholder')}
-            />
-            {vatGroup?.code && vatGroup.rule.mode !== 'none' && (
-              <div>
-                <LineVatCodeBadge rule={vatGroup.rule} code={vatGroup.code} />
-              </div>
-            )}
-            <div className="grid grid-cols-2 gap-2">
-              <div className="space-y-1">
-                <Label className="text-xs text-muted-foreground">{t('col_debit')}</Label>
-                <Input
-                  ref={(el) => { mobileDebitRefs.current[index] = el }}
-                  type="number"
-                  value={line.debit_amount}
-                  onChange={(e) => updateLine(index, 'debit_amount', e.target.value)}
-                  onKeyDown={handleAmountKeyDown(index, 'debit')}
-                  onFocus={handleAmountFocus(index, 'debit')}
-                  onDoubleClick={() => handleFillBalance(index, 'debit')}
-                  title={t('fill_balance_tooltip')}
-                  placeholder="0,00"
-                  className="text-right"
-                  inputMode="decimal"
-                  min="0"
-                  step="0.01"
+              {vatGroup && vatGroup.rule.mode !== 'none' && (
+                <LineVatCodeMenu
+                  rule={vatGroup.rule}
+                  code={vatGroup.code}
+                  onChange={(code) => updateLineVatCode(index, code)}
                 />
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs text-muted-foreground">{t('col_credit')}</Label>
-                <Input
-                  ref={(el) => { mobileCreditRefs.current[index] = el }}
-                  type="number"
-                  value={line.credit_amount}
-                  onChange={(e) => updateLine(index, 'credit_amount', e.target.value)}
-                  onKeyDown={handleAmountKeyDown(index, 'credit')}
-                  onFocus={handleAmountFocus(index, 'credit')}
-                  onDoubleClick={() => handleFillBalance(index, 'credit')}
-                  title={t('fill_balance_tooltip')}
-                  placeholder="0,00"
-                  className="text-right"
-                  inputMode="decimal"
-                  min="0"
-                  step="0.01"
-                />
-              </div>
-            </div>
-            {dimensionsEnabled && (
-              <LineDimensionFields
-                dimensions={line.dimensions}
-                onChange={(dimNo, code) => updateLineDimension(index, dimNo, code)}
-              />
-            )}
-            {/^\d{4}$/.test(line.account_number) && (
-              <div className="flex justify-end text-xs text-muted-foreground tabular-nums pt-0.5">
-                {accountBalances[line.account_number] === null || accountBalances[line.account_number] === undefined ? (
-                  <Skeleton className="h-3 w-20" />
-                ) : (
-                  (() => {
-                    const bal = accountBalances[line.account_number] as number
-                    const delta = draftDeltas[line.account_number]
-                    if (!delta) {
-                      return (
-                        <span>
-                          {t('saldo_label')} {formatCurrency(bal)}
-                        </span>
-                      )
-                    }
-                    const after = roundOre(bal + delta)
-                    return (
-                      <span>
-                        {t('saldo_label')} {formatCurrency(bal)}{' '}
-                        <span className="text-foreground">→ {formatCurrency(after)}</span>
-                      </span>
-                    )
-                  })()
-                )}
-              </div>
-            )}
-            {/* What the line's momskod generates: read-only, follows the line. */}
-            {vatGroup && vatGroup.generated.length > 0 && (
-              <div className="space-y-1 border-t pt-2 text-xs text-muted-foreground">
-                <p>{t('vat_code_generated_title', { account: line.account_number })}</p>
-                {vatGroup.generated.map((generated, gi) => (
-                  <div key={gi} className="flex items-center justify-between gap-2">
-                    <span className="min-w-0 truncate">
-                      <AccountNumber number={generated.account_number} size="sm" />{' '}
-                      {generated.line_description}
-                    </span>
-                    <span className="shrink-0 tabular-nums">
-                      {generated.debit_amount
-                        ? t('sum_d', { amount: formatAmount(parseFloat(generated.debit_amount)) })
-                        : t('sum_k', { amount: formatAmount(parseFloat(generated.credit_amount)) })}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+              )}
+            </>
           )
-        })}
-
-        {/* Mobile totals */}
-        <div className="flex justify-between items-center px-1 pt-2 font-semibold text-sm">
-          <span>{t('sum')}</span>
-          <div className="flex gap-4">
-            <span className={isBalanced ? 'text-success' : 'text-destructive'}>
-              {t('sum_d', { amount: bookedTotalDebit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) })}
-            </span>
-            <span className={isBalanced ? 'text-success' : 'text-destructive'}>
-              {t('sum_k', { amount: bookedTotalCredit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) })}
-            </span>
-          </div>
-        </div>
-
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={addLine}
-            className="flex-1"
-          >
-            <Plus className="h-3 w-3 mr-1" />
-            {t('add_line')}
-          </Button>
-          <TemplateApplyButton
-            onApply={handleTemplateApply}
-            entityType={company?.entity_type}
-          />
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowSaveTemplate(true)}
-            disabled={derivedTemplateLines.length < 2}
-            title={derivedTemplateLines.length < 2 ? t('save_template_disabled_hint') : undefined}
-          >
-            <BookmarkPlus className="h-3 w-3 mr-1" />
-            {t('save_as_template')}
-          </Button>
-        </div>
-      </div>
-
-      {/* Entry lines: desktop table */}
-      <div className="hidden sm:block">
-        <table className="w-full text-sm">
-          <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
-            <tr className="border-b text-left">
-              <th className="py-2 w-28">{t('col_account')}</th>
-              <th className="py-2 px-1">{t('col_description')}</th>
-              <th className="py-2 w-32 px-1 text-right">{t('col_debit')}</th>
-              <th className="py-2 w-32 px-1 text-right">{t('col_credit')}</th>
-              <th className="py-2 w-28 px-1 text-right">{t('col_saldo')}</th>
-              <th className="py-2 w-10"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {lines.map((line, index) => {
-              const vatGroup = lineGroups[index]
-              return (
-              <Fragment key={index}>
-              {/* A line with generated rows hands its bottom rule to the last of them. */}
-              <tr className={vatGroup && vatGroup.generated.length > 0 ? undefined : 'border-b'}>
-                <td className="py-1.5">
-                  <AccountCombobox
-                    value={line.account_number}
-                    accounts={accounts}
-                    catalog={catalog}
-                    notActivatedLabel={t('account_not_activated')}
-                    onChange={(num) => updateLine(index, 'account_number', num)}
-                    onCommit={() => focusDebit(index)}
-                    onCreateAccount={(prefill) => handleOpenCreateAccount(index, prefill)}
-                    inputRef={(el) => { desktopAccountRefs.current[index] = el }}
-                    className="h-8"
-                  />
-                </td>
-                <td className="py-1.5 px-1">
-                  <Input
-                    value={line.line_description}
-                    onChange={(e) => updateLine(index, 'line_description', e.target.value)}
-                    onKeyDown={handleLineDescKeyDown(index)}
-                    placeholder={t('line_description_placeholder')}
-                    className="h-8"
-                  />
-                  {vatGroup?.code && vatGroup.rule.mode !== 'none' && (
-                    <LineVatCodeBadge rule={vatGroup.rule} code={vatGroup.code} />
-                  )}
-                  {line.dimensions &&
-                    Object.keys(line.dimensions).length > 0 &&
-                    (line.account_number || line.debit_amount || line.credit_amount) && (
-                      <Badge data-ph-mask="" variant="outline" className="mt-1 font-mono text-[11px] font-normal">
-                        {compactDims(line.dimensions)}
-                      </Badge>
-                    )}
-                </td>
-                <td className="py-1.5 px-1">
-                  <Input
-                    ref={(el) => { desktopDebitRefs.current[index] = el }}
-                    type="number"
-                    value={line.debit_amount}
-                    onChange={(e) => updateLine(index, 'debit_amount', e.target.value)}
-                    onKeyDown={handleAmountKeyDown(index, 'debit')}
-                    onFocus={handleAmountFocus(index, 'debit')}
-                    onDoubleClick={() => handleFillBalance(index, 'debit')}
-                    title={t('fill_balance_tooltip')}
-                    placeholder="0,00"
-                    className="text-right h-8"
-                    inputMode="decimal"
-                    min="0"
-                    step="0.01"
-                  />
-                </td>
-                <td className="py-1.5 px-1">
-                  <Input
-                    ref={(el) => { desktopCreditRefs.current[index] = el }}
-                    type="number"
-                    value={line.credit_amount}
-                    onChange={(e) => updateLine(index, 'credit_amount', e.target.value)}
-                    onKeyDown={handleAmountKeyDown(index, 'credit')}
-                    onFocus={handleAmountFocus(index, 'credit')}
-                    onDoubleClick={() => handleFillBalance(index, 'credit')}
-                    title={t('fill_balance_tooltip')}
-                    placeholder="0,00"
-                    className="text-right h-8"
-                    inputMode="decimal"
-                    min="0"
-                    step="0.01"
-                  />
-                </td>
-                <td className="py-1.5 px-1 text-right tabular-nums text-muted-foreground">
-                  {(() => {
-                    if (!/^\d{4}$/.test(line.account_number)) return null
-                    const bal = accountBalances[line.account_number]
-                    if (bal === null || bal === undefined) {
-                      return <Skeleton className="h-4 w-20 ml-auto" />
-                    }
-                    const delta = draftDeltas[line.account_number]
-                    if (!delta) return formatCurrency(bal)
-                    const after = roundOre(bal + delta)
-                    return (
-                      <span className="inline-flex flex-col items-end leading-tight">
-                        <span className="text-[11px]">{formatCurrency(bal)}</span>
-                        <span className="text-foreground">→ {formatCurrency(after)}</span>
-                      </span>
-                    )
-                  })()}
-                </td>
-                <td className="py-1.5">
-                  <div className="flex items-center justify-end">
-                    {dimensionsEnabled && (
-                      <div
-                        className="relative"
-                        ref={dimPopoverRow === index ? dimPopoverRef : undefined}
-                      >
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          onClick={() => setDimPopoverRow(dimPopoverRow === index ? null : index)}
-                          className={
-                            line.dimensions && Object.keys(line.dimensions).length > 0
-                              ? 'text-foreground'
-                              : 'text-muted-foreground'
-                          }
-                          aria-label={t('row_dimensions_aria')}
-                          aria-expanded={dimPopoverRow === index}
-                          title={t('row_dimensions_aria')}
-                        >
-                          <Tags className="h-3.5 w-3.5" />
-                        </Button>
-                        {dimPopoverRow === index && (
-                          <div
-                            className={cn(
-                              'absolute right-0 top-full z-50 mt-1 w-64 p-3',
-                              POPOVER_SURFACE_CLASS,
-                              POPOVER_ENTER_CLASS,
-                            )}
-                            onKeyDown={(e) => {
-                              // The comboboxes preventDefault their own Escape
-                              // (closing their dropdown): only an unhandled
-                              // Escape closes the popover.
-                              if (e.key === 'Escape' && !e.defaultPrevented) {
-                                e.preventDefault()
-                                e.stopPropagation()
-                                setDimPopoverRow(null)
-                              }
-                            }}
-                          >
-                            <LineDimensionFields
-                              stacked
-                              dimensions={line.dimensions}
-                              onChange={(dimNo, code) => updateLineDimension(index, dimNo, code)}
-                              inputClassName="h-8"
-                            />
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    {vatGroup && vatGroup.rule.mode !== 'none' && (
-                      <LineVatCodeMenu
-                        rule={vatGroup.rule}
-                        code={vatGroup.code}
-                        onChange={(code) => updateLineVatCode(index, code)}
-                      />
-                    )}
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => removeLine(index)}
-                      disabled={lines.length <= 2}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                </td>
-              </tr>
-              {/* What the line's momskod generates: read-only, follows the line. */}
-              {(vatGroup?.generated ?? []).map((generated, gi, all) => (
-                <tr
-                  key={`vat-${gi}`}
-                  className={cn('text-muted-foreground', gi === all.length - 1 && 'border-b')}
-                  title={t('vat_code_generated_title', { account: line.account_number })}
-                >
-                  <td className="py-1 pl-3">
-                    <AccountNumber number={generated.account_number} size="sm" />
-                  </td>
-                  <td className="py-1 px-1 text-xs">{generated.line_description}</td>
-                  <td className="py-1 px-1 text-right text-xs tabular-nums">
-                    {generated.debit_amount ? formatAmount(parseFloat(generated.debit_amount)) : ''}
-                  </td>
-                  <td className="py-1 px-1 text-right text-xs tabular-nums">
-                    {generated.credit_amount ? formatAmount(parseFloat(generated.credit_amount)) : ''}
-                  </td>
-                  <td colSpan={2}></td>
-                </tr>
-              ))}
-              </Fragment>
-              )
-            })}
-          </tbody>
-          <tfoot>
-            <tr className="font-semibold">
-              <td colSpan={2} className="py-2 px-1">
-                {t('sum')}
-              </td>
-              <td
-                className={`py-2 px-1 text-right ${
-                  isBalanced ? 'text-success' : 'text-destructive'
-                }`}
-              >
-                {bookedTotalDebit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
-              </td>
-              <td
-                className={`py-2 px-1 text-right ${
-                  isBalanced ? 'text-success' : 'text-destructive'
-                }`}
-              >
-                {bookedTotalCredit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
-              </td>
-              <td></td>
-              <td></td>
-            </tr>
-          </tfoot>
-        </table>
-
-        <div className="flex gap-2 mt-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={addLine}
-          >
-            <Plus className="h-3 w-3 mr-1" />
-            {t('add_line')}
-          </Button>
-          <TemplateApplyButton
-            onApply={handleTemplateApply}
-            entityType={company?.entity_type}
-          />
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowSaveTemplate(true)}
-            disabled={derivedTemplateLines.length < 2}
-            title={derivedTemplateLines.length < 2 ? t('save_template_disabled_hint') : undefined}
-          >
-            <BookmarkPlus className="h-3 w-3 mr-1" />
-            {t('save_as_template')}
-          </Button>
-        </div>
-      </div>
+        }}
+        readOnlyLines={(index) => {
+          // What the line's momskod generates: read-only, follows the line.
+          const vatGroup = lineGroups[index]
+          if (!vatGroup || vatGroup.generated.length === 0) return undefined
+          return {
+            title: t('vat_code_generated_title', { account: lines[index].account_number }),
+            lines: vatGroup.generated,
+          }
+        }}
+        totals={{
+          label: t('sum'),
+          debit: bookedTotalDebit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }),
+          credit: bookedTotalCredit.toLocaleString('sv-SE', { minimumFractionDigits: 2 }),
+          amountClassName: isBalanced ? 'text-success' : 'text-destructive',
+        }}
+        toolbar={
+          <>
+            <TemplateApplyButton
+              onApply={handleTemplateApply}
+              entityType={company?.entity_type}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowSaveTemplate(true)}
+              disabled={derivedTemplateLines.length < 2}
+              title={derivedTemplateLines.length < 2 ? t('save_template_disabled_hint') : undefined}
+            >
+              <BookmarkPlus className="h-3 w-3 mr-1" />
+              {t('save_as_template')}
+            </Button>
+          </>
+        }
+        labels={{
+          account: t('col_account'),
+          description: t('col_description'),
+          descriptionPlaceholder: t('line_description_placeholder'),
+          debit: t('col_debit'),
+          credit: t('col_credit'),
+          addRow: t('add_line'),
+          removeRow: t('remove_line'),
+        }}
+      />
 
       {/* Document attachments: hidden when editing a draft; underlag is
           managed from the verifikat detail page (JournalEntryAttachments). */}

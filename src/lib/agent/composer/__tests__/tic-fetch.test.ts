@@ -1,20 +1,33 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+// The TIC extension's profile service, as the registry hands it to core.
+const { profileService, registryExtensions } = vi.hoisted(() => {
+  const profileService = vi.fn()
+  return {
+    profileService,
+    registryExtensions: { list: [{ id: 'tic', services: { fetchCompanyProfile: profileService } }] as unknown[] },
+  }
+})
+vi.mock('@/lib/extensions/registry', () => ({
+  extensionRegistry: { getAll: vi.fn(async () => registryExtensions.list) },
+}))
+
 import { ensureTicSnapshot } from '../tic-fetch'
 
 // `ensureTicSnapshot` is the single chokepoint between the agent build path
-// and the TIC /profile endpoint. Every TIC call from agent onboarding goes
+// and the TIC extension's profile service. Every TIC call from agent onboarding goes
 // through here, and the 3000/mo Lens budget makes the cache / fallback
 // branches load-bearing. These tests cover:
 //
-//   - cache hit (fresh): no /profile call
-//   - cache miss (no snapshot): /profile fetched + persisted
+//   - cache hit (fresh): no profile call
+//   - cache miss (no snapshot): profile fetched + persisted
 //   - cache hit but stale (>7d): refetch + persist
 //   - cache hit but v1 shape + upgradeV1=true: refetch + persist
 //   - cache hit but v1 shape + upgradeV1=false: stays v1 (budget protection)
-//   - /profile fetch fails: returns existing snapshot (degraded, doesn't crash)
+//   - profile fetch fails: returns existing snapshot (degraded, doesn't crash)
+//   - TIC disabled (no provider): returns the cache, never throws
 //   - company has no org_number anywhere: returns fallback null
 
-const ORIGIN = 'http://localhost:3000'
 const COMPANY_ID = 'company-uuid'
 
 function buildSupabase(
@@ -58,7 +71,8 @@ function buildSupabase(
 }
 
 beforeEach(() => {
-  vi.stubGlobal('fetch', vi.fn())
+  profileService.mockReset()
+  registryExtensions.list = [{ id: 'tic', services: { fetchCompanyProfile: profileService } }]
 })
 
 afterEach(() => {
@@ -77,13 +91,11 @@ describe('ensureTicSnapshot: cache hit', () => {
     const result = await ensureTicSnapshot({
       supabase,
       companyId: COMPANY_ID,
-      cookieHeader: '',
-      origin: ORIGIN,
     })
 
     expect(result.source).toBe('cached')
     expect(result.snapshot).toEqual(cached)
-    expect(fetch).not.toHaveBeenCalled()
+    expect(profileService).not.toHaveBeenCalled()
     // Only the companies SELECT should have run: no profile fetch, no update.
     expect(fromCalls).toEqual(['companies'])
   })
@@ -101,23 +113,19 @@ describe('ensureTicSnapshot: cache hit', () => {
     const result = await ensureTicSnapshot({
       supabase,
       companyId: COMPANY_ID,
-      cookieHeader: '',
-      origin: ORIGIN,
       // upgradeV1 omitted -> defaults to false
     })
 
     expect(result.source).toBe('cached')
     expect(result.snapshot).toEqual(v1Snapshot)
-    expect(fetch).not.toHaveBeenCalled()
+    expect(profileService).not.toHaveBeenCalled()
   })
 })
 
 describe('ensureTicSnapshot: cache miss & refetch', () => {
   it('fetches /profile and persists when no snapshot exists', async () => {
     const profile = { statuses: [], companyName: 'Fresh AB' }
-    vi.mocked(fetch).mockResolvedValue(
-      new Response(JSON.stringify({ data: profile }), { status: 200 }),
-    )
+    profileService.mockResolvedValue(profile)
 
     const { supabase, updateCalls } = buildSupabase({
       data: { org_number: '5560125790', tic_snapshot: null, tic_snapshot_fetched_at: null },
@@ -127,17 +135,13 @@ describe('ensureTicSnapshot: cache miss & refetch', () => {
     const result = await ensureTicSnapshot({
       supabase,
       companyId: COMPANY_ID,
-      cookieHeader: 'sb-auth=abc',
-      origin: ORIGIN,
     })
 
     expect(result.source).toBe('fetched')
     expect(result.snapshot).toEqual(profile)
-    // Hit the /profile endpoint with cookie forwarded
-    expect(fetch).toHaveBeenCalledTimes(1)
-    const fetchUrl = vi.mocked(fetch).mock.calls[0][0] as string
-    expect(fetchUrl).toContain('/api/extensions/ext/tic/profile')
-    expect(fetchUrl).toContain('org_number=5560125790')
+    // Asked the TIC extension's profile service for the company's org number
+    expect(profileService).toHaveBeenCalledTimes(1)
+    expect(profileService).toHaveBeenCalledWith('5560125790')
     // Persisted via UPDATE
     expect(updateCalls).toHaveLength(1)
     const persisted = updateCalls[0][0] as Record<string, unknown>
@@ -149,9 +153,7 @@ describe('ensureTicSnapshot: cache miss & refetch', () => {
     const eightDaysAgo = new Date(Date.now() - 8 * 24 * 3600_000).toISOString()
     const oldSnapshot = { statuses: [], companyName: 'Old AB' }
     const freshProfile = { statuses: [], companyName: 'Fresh AB' }
-    vi.mocked(fetch).mockResolvedValue(
-      new Response(JSON.stringify({ data: freshProfile }), { status: 200 }),
-    )
+    profileService.mockResolvedValue(freshProfile)
 
     const { supabase } = buildSupabase({
       data: {
@@ -165,21 +167,17 @@ describe('ensureTicSnapshot: cache miss & refetch', () => {
     const result = await ensureTicSnapshot({
       supabase,
       companyId: COMPANY_ID,
-      cookieHeader: '',
-      origin: ORIGIN,
     })
 
     expect(result.source).toBe('fetched')
     expect(result.snapshot).toEqual(freshProfile)
-    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(profileService).toHaveBeenCalledTimes(1)
   })
 
   it('refetches v1 snapshot when upgradeV1=true, even if still fresh', async () => {
     const v1Snapshot = { companyName: 'V1 AB' /* no statuses */ }
     const v2Profile = { statuses: [], companyName: 'V2 AB' }
-    vi.mocked(fetch).mockResolvedValue(
-      new Response(JSON.stringify({ data: v2Profile }), { status: 200 }),
-    )
+    profileService.mockResolvedValue(v2Profile)
 
     const { supabase } = buildSupabase({
       data: {
@@ -193,14 +191,12 @@ describe('ensureTicSnapshot: cache miss & refetch', () => {
     const result = await ensureTicSnapshot({
       supabase,
       companyId: COMPANY_ID,
-      cookieHeader: '',
-      origin: ORIGIN,
       upgradeV1: true,
     })
 
     expect(result.source).toBe('fetched')
     expect(result.snapshot).toEqual(v2Profile)
-    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(profileService).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -211,20 +207,16 @@ describe('ensureTicSnapshot: degraded paths', () => {
     const result = await ensureTicSnapshot({
       supabase,
       companyId: COMPANY_ID,
-      cookieHeader: '',
-      origin: ORIGIN,
     })
 
     expect(result.source).toBe('fallback')
     expect(result.snapshot).toBeNull()
-    expect(fetch).not.toHaveBeenCalled()
+    expect(profileService).not.toHaveBeenCalled()
   })
 
   it('falls back to company_settings.org_number when companies.org_number is null', async () => {
     const profile = { statuses: [], companyName: 'EF Person' }
-    vi.mocked(fetch).mockResolvedValue(
-      new Response(JSON.stringify({ data: profile }), { status: 200 }),
-    )
+    profileService.mockResolvedValue(profile)
 
     const { supabase } = buildSupabase(
       { data: { org_number: null, tic_snapshot: null, tic_snapshot_fetched_at: null }, error: null },
@@ -234,14 +226,11 @@ describe('ensureTicSnapshot: degraded paths', () => {
     const result = await ensureTicSnapshot({
       supabase,
       companyId: COMPANY_ID,
-      cookieHeader: '',
-      origin: ORIGIN,
     })
 
     expect(result.source).toBe('fetched')
-    // Org number from company_settings flowed into the profile URL
-    const fetchUrl = vi.mocked(fetch).mock.calls[0][0] as string
-    expect(fetchUrl).toContain('org_number=8001011231')
+    // Org number from company_settings flowed into the profile call
+    expect(profileService).toHaveBeenCalledWith('8001011231')
   })
 
   it('returns fallback null when no org_number is available anywhere', async () => {
@@ -253,18 +242,16 @@ describe('ensureTicSnapshot: degraded paths', () => {
     const result = await ensureTicSnapshot({
       supabase,
       companyId: COMPANY_ID,
-      cookieHeader: '',
-      origin: ORIGIN,
     })
 
     expect(result.source).toBe('fallback')
     expect(result.snapshot).toBeNull()
-    expect(fetch).not.toHaveBeenCalled()
+    expect(profileService).not.toHaveBeenCalled()
   })
 
-  it('returns existing (stale) snapshot when /profile fetch fails', async () => {
+  it('returns existing (stale) snapshot when TIC has no such company', async () => {
     const staleSnapshot = { companyName: 'Stale AB' }
-    vi.mocked(fetch).mockResolvedValue(new Response('upstream down', { status: 502 }))
+    profileService.mockResolvedValue(null)
 
     const { supabase } = buildSupabase({
       data: {
@@ -278,8 +265,6 @@ describe('ensureTicSnapshot: degraded paths', () => {
     const result = await ensureTicSnapshot({
       supabase,
       companyId: COMPANY_ID,
-      cookieHeader: '',
-      origin: ORIGIN,
     })
 
     expect(result.source).toBe('fallback')
@@ -288,9 +273,9 @@ describe('ensureTicSnapshot: degraded paths', () => {
     expect(result.snapshot).toEqual(staleSnapshot)
   })
 
-  it('returns existing snapshot when /profile fetch throws (network error / timeout)', async () => {
+  it('returns existing snapshot when the profile fetch throws (TIC outage, quota)', async () => {
     const staleSnapshot = { companyName: 'Stale AB' }
-    vi.mocked(fetch).mockRejectedValue(new Error('ECONNREFUSED'))
+    profileService.mockRejectedValue(new Error('ECONNREFUSED'))
 
     const { supabase } = buildSupabase({
       data: {
@@ -304,11 +289,41 @@ describe('ensureTicSnapshot: degraded paths', () => {
     const result = await ensureTicSnapshot({
       supabase,
       companyId: COMPANY_ID,
-      cookieHeader: '',
-      origin: ORIGIN,
     })
 
     expect(result.source).toBe('fallback')
     expect(result.snapshot).toEqual(staleSnapshot)
+  })
+})
+
+describe('ensureTicSnapshot: no TIC provider', () => {
+  it('returns the cached snapshot when the TIC extension is not enabled', async () => {
+    registryExtensions.list = []
+    const staleSnapshot = { companyName: 'Stale AB' }
+    const { supabase, updateCalls } = buildSupabase({
+      data: {
+        org_number: '5560125790',
+        tic_snapshot: staleSnapshot,
+        tic_snapshot_fetched_at: new Date(Date.now() - 8 * 24 * 3600_000).toISOString(),
+      },
+      error: null,
+    })
+
+    const result = await ensureTicSnapshot({ supabase, companyId: COMPANY_ID })
+
+    expect(result).toEqual({ snapshot: staleSnapshot, source: 'fallback' })
+    expect(updateCalls).toHaveLength(0)
+  })
+
+  it('stops waiting at the timeout and keeps the cache', async () => {
+    profileService.mockReturnValue(new Promise(() => {}))
+    const { supabase } = buildSupabase({
+      data: { org_number: '5560125790', tic_snapshot: null, tic_snapshot_fetched_at: null },
+      error: null,
+    })
+
+    const result = await ensureTicSnapshot({ supabase, companyId: COMPANY_ID, timeoutMs: 10 })
+
+    expect(result).toEqual({ snapshot: null, source: 'fallback' })
   })
 })

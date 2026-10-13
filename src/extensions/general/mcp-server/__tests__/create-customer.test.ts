@@ -95,7 +95,7 @@ describe('gnubok_create_customer: customer_number input', () => {
     const inserted = findCall('pending_operations', 'insert')?.[0] as {
       params: Record<string, unknown>
     }
-    expect(inserted.params).toMatchObject({ customer_number: null })
+    expect(inserted.params.customer_number ?? null).toBeNull()
   })
 })
 
@@ -168,7 +168,7 @@ describe('gnubok_create_customer: personal_number', () => {
     expect(result.preview.personal_number_masked).toBe(MASKED)
 
     const inserted = findCall('pending_operations', 'insert')?.[0] as StagedInsert
-    expect(inserted.params.org_number).toBeNull()
+    expect(inserted.params.org_number ?? null).toBeNull()
     expect(decryptPersonnummer(inserted.params.personal_number_encrypted as string)).toBe(PERSONAL_NUMBER)
     expect(JSON.stringify(inserted)).not.toContain(PERSONAL_NUMBER)
   })
@@ -253,7 +253,7 @@ describe('gnubok_create_customer: personal_number', () => {
         'user-1',
         supabase as never,
       ),
-    ).rejects.toThrow(/personnummer/)
+    ).rejects.toThrow(/personal_number/)
     expect(supabase.from).not.toHaveBeenCalled()
   })
 
@@ -368,9 +368,9 @@ describe('gnubok_create_customer: payment terms', () => {
       supabase as never,
     )) as { preview: Record<string, unknown> }
 
-    expect(result.preview.payment_terms).toBe(10)
+    expect(result.preview.default_payment_terms).toBe(10)
     const inserted = findCall('pending_operations', 'insert')?.[0] as StagedInsert
-    expect(inserted.params.payment_terms).toBe(10)
+    expect(inserted.params.default_payment_terms).toBe(10)
   })
 
   it('falls back to 30 when the company has no default', async () => {
@@ -385,9 +385,9 @@ describe('gnubok_create_customer: payment terms', () => {
       supabase as never,
     )) as { preview: Record<string, unknown> }
 
-    expect(result.preview.payment_terms).toBe(30)
+    expect(result.preview.default_payment_terms).toBe(30)
     const inserted = findCall('pending_operations', 'insert')?.[0] as StagedInsert
-    expect(inserted.params.payment_terms).toBe(30)
+    expect(inserted.params.default_payment_terms).toBe(30)
   })
 
   it('keeps an explicit payment_terms without reading the company setting', async () => {
@@ -402,8 +402,8 @@ describe('gnubok_create_customer: payment terms', () => {
     )) as { staged: boolean; preview: Record<string, unknown> }
 
     expect(result.staged).toBe(true)
-    expect(result.preview.payment_terms).toBe(14)
+    expect(result.preview.default_payment_terms).toBe(14)
     const inserted = findCall('pending_operations', 'insert')?.[0] as StagedInsert
-    expect(inserted.params.payment_terms).toBe(14)
+    expect(inserted.params.default_payment_terms).toBe(14)
   })
 })

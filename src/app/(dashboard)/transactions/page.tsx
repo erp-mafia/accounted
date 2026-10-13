@@ -69,7 +69,7 @@ import type {
   PotentialRotRutPayoutRequest,
 } from '@/components/transactions/transaction-types'
 import type { BatchAllocationPrefill } from '@/lib/transactions/parts-read'
-import { OPEN_ROT_RUT_PAYOUT_STATUSES } from '@/lib/invoices/rot-rut-payout-matching'
+import { loadOpenRotRutPayoutRequests } from '@/lib/invoices/open-rot-rut-payout-requests'
 import { matchTransactionsToRotRutPayoutSets } from '@/lib/invoices/rot-rut-payout-set-matching'
 import {
   groupExpenseClaimsByPerson,
@@ -106,7 +106,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { resolveDetachErrorMessage } from '@/components/transactions/detach-underlag'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
-import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, BookingTemplateLibrary, DeductionType } from '@/types'
+import type { TransactionCategory, CreateTransactionInput, Invoice, Customer, SupplierInvoice, Supplier, VatTreatment, EntityType, BookingTemplateLibrary } from '@/types'
 import type { ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 import { mutate as globalMutate } from 'swr'
 import { rowProposal, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
@@ -380,15 +380,8 @@ async function fetchPotentialMatches(
     // together with other beslut (#2239). Items ride along so the dialog can
     // list the covered invoices. A handful of rows per company.
     companyId
-      ? supabase
-          .from('rot_rut_payout_requests')
-          .select(
-            'id, name, deduction_type, status, requested_total, decided_total, settlement_journal_entry_id, items:rot_rut_payout_request_items(requested_amount, invoice:invoices(invoice_number))',
-          )
-          .eq('company_id', companyId)
-          .in('status', [...OPEN_ROT_RUT_PAYOUT_STATUSES])
-          .is('settlement_journal_entry_id', null)
-      : Promise.resolve({ data: null, error: null }),
+      ? loadOpenRotRutPayoutRequests(supabase, companyId)
+      : Promise.resolve({ requests: [], error: null }),
   ])
 
   // Non-fatal: the transaction list still renders without match hints, but
@@ -406,31 +399,7 @@ async function fetchPotentialMatches(
     console.error('[fetchPotentialMatches] rot_rut_payout_requests query failed', rotRutResult.error)
   }
 
-  const rotRutRequests: PotentialRotRutPayoutRequest[] = ((rotRutResult.data ?? []) as Array<{
-    id: string
-    name: string
-    deduction_type: DeductionType
-    status: string
-    requested_total: number | string
-    decided_total: number | string | null
-    settlement_journal_entry_id: string | null
-    items?: Array<{
-      requested_amount: number | string
-      invoice?: { invoice_number: string | null } | { invoice_number: string | null }[] | null
-    }> | null
-  }>).map((req) => ({
-    id: req.id,
-    name: req.name,
-    deduction_type: req.deduction_type,
-    status: req.status,
-    requested_total: req.requested_total,
-    decided_total: req.decided_total,
-    settlement_journal_entry_id: req.settlement_journal_entry_id,
-    invoices: (req.items ?? []).map((item) => {
-      const inv = Array.isArray(item.invoice) ? item.invoice[0] : item.invoice
-      return { invoice_number: inv?.invoice_number ?? null, requested_amount: item.requested_amount }
-    }),
-  }))
+  const rotRutRequests: PotentialRotRutPayoutRequest[] = rotRutResult.requests
   const rotRutById = new Map(rotRutRequests.map((req) => [req.id, req] as const))
   // Per row: the persisted 1:1 hint when its begäran is still open, else the
   // exact covering set over the open pool (several begäran in one transfer).

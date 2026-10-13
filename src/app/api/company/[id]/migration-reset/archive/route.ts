@@ -8,6 +8,7 @@ import {
   generateFullArchive,
 } from '@/lib/reports/full-archive-export'
 import { createServiceClient } from '@/lib/supabase/server'
+import { fileResponse } from '@/lib/api/file-response'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -168,14 +169,7 @@ export const GET = withRouteContext<Params>(
         sizeBytes: zipBuffer.byteLength,
       })
 
-      return new NextResponse(zipBuffer, {
-        status: 200,
-        headers: {
-          'Content-Type': 'application/zip',
-          'Content-Disposition': `attachment; filename="${filename}"`,
-          'Cache-Control': 'private, no-store',
-        },
-      })
+      return fileResponse(zipBuffer, { filename: filename, contentType: 'application/zip', cacheControl: 'private, no-store' })
     } catch (error) {
       log.error('migration reset source archive generation failed', error as Error, {
         userId: user.id,

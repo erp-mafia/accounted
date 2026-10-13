@@ -51,17 +51,17 @@ describe('GET /api/extensions/whatsapp-inbox/retention/cron', () => {
     expect(mockRunRetention).not.toHaveBeenCalled()
   })
 
-  it('returns 503 EXTENSION_DISABLED when the extension is not in the registry', async () => {
+  it('answers 200 skipped when the extension is not in the registry', async () => {
     // Physical extension routes deploy in every build; the registry, generated
-    // from extensions.config.json, is what turns them on. Disabled must mean
-    // no purging AND a visible failure if the cron is scheduled anyway.
+    // from extensions.config.json, is what turns them on. Disabled means no
+    // purging, and a skip (not a failure) for the crontab that calls it anyway.
     mockRegistryGet.mockResolvedValue(undefined)
 
     const response = await GET(makeRequest())
     const body = await response.json()
 
-    expect(response.status).toBe(503)
-    expect(body.code).toBe('EXTENSION_DISABLED')
+    expect(response.status).toBe(200)
+    expect(body).toEqual({ skipped: true, reason: 'extension_disabled', processed: 0 })
     expect(mockRunRetention).not.toHaveBeenCalled()
   })
 

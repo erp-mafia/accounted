@@ -1,9 +1,11 @@
 'use client'
 
+import type { ComponentProps, ReactNode } from 'react'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import { AccountNumber } from '@/components/ui/account-number'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { cn } from '@/lib/utils'
+import { cn, formatAmount } from '@/lib/utils'
 import { Plus, Trash2 } from 'lucide-react'
 import type { BASAccount } from '@/types'
 import type { SearchableAccount } from '@/lib/bookkeeping/account-search'
@@ -20,10 +22,28 @@ export interface KonteringEditorLabels {
   account: string
   /** Present when the editor shows a description column. */
   description?: string
+  /** The description input's placeholder; defaults to the column name. */
+  descriptionPlaceholder?: string
   debit: string
   credit: string
   addRow: string
   removeRow: string
+}
+
+export type KonteringAmountField = 'debit_amount' | 'credit_amount'
+
+/** What a caller may add to an amount input: its keyboard and fill-in flow. */
+export type KonteringAmountInputExtras = Pick<
+  ComponentProps<typeof Input>,
+  'onKeyDown' | 'onFocus' | 'onDoubleClick' | 'title'
+>
+
+/** A row a line generates (e.g. its momskod's moms rows): shown, never edited. */
+export interface KonteringReadOnlyLine {
+  account_number: string
+  line_description: string
+  debit_amount: string
+  credit_amount: string
 }
 
 interface KonteringLinesEditorProps {
@@ -52,6 +72,43 @@ interface KonteringLinesEditorProps {
    */
   header?: boolean
   labels: KonteringEditorLabels
+  /** The account picker's input per row, for the caller's focus flow. */
+  accountInputRef?: (index: number, el: HTMLInputElement | null) => void
+  /** A full account number was committed in the row's picker. */
+  onAccountCommit?: (index: number) => void
+  /** The amount inputs per row, for the caller's focus flow. */
+  amountInputRef?: (index: number, field: KonteringAmountField, el: HTMLInputElement | null) => void
+  amountInputProps?: (index: number, field: KonteringAmountField) => KonteringAmountInputExtras
+  onDescriptionKeyDown?: (index: number) => ComponentProps<typeof Input>['onKeyDown']
+  /** Under the description input: badges that belong to the row. */
+  renderDescriptionExtra?: (index: number) => ReactNode
+  /** One read-only column after the amounts, e.g. the account's saldo. */
+  extraColumn?: { label: string; render: (index: number) => ReactNode }
+  /** Row controls placed before the remove button. */
+  renderRowActions?: (index: number) => ReactNode
+  /** Rows a line generates, listed under it in the same columns. */
+  readOnlyLines?: (index: number) => { title?: string; lines: readonly KonteringReadOnlyLine[] } | undefined
+  /** The sum row under the lines. */
+  totals?: { label: string; debit: ReactNode; credit: ReactNode; amountClassName?: string }
+  /** Buttons beside "add row". */
+  toolbar?: ReactNode
+}
+
+// Literal class names: Tailwind only generates the classes it finds in source.
+const GRID_COLUMNS = {
+  plain: 'sm:grid-cols-[minmax(0,1fr)_120px_120px_32px]',
+  plainActions: 'sm:grid-cols-[minmax(0,1fr)_120px_120px_auto]',
+  plainExtra: 'sm:grid-cols-[minmax(0,1fr)_120px_120px_112px_32px]',
+  plainExtraActions: 'sm:grid-cols-[minmax(0,1fr)_120px_120px_112px_auto]',
+  described: 'sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_120px_32px]',
+  describedActions: 'sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_120px_auto]',
+  describedExtra: 'sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_120px_112px_32px]',
+  describedExtraActions: 'sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_120px_112px_auto]',
+} as const
+
+function gridColumns(described: boolean, extra: boolean, actions: boolean): string {
+  const key = `${described ? 'described' : 'plain'}${extra ? 'Extra' : ''}${actions ? 'Actions' : ''}`
+  return GRID_COLUMNS[key as keyof typeof GRID_COLUMNS]
 }
 
 /**
@@ -81,13 +138,24 @@ export function KonteringLinesEditor({
   accountsDisabled = false,
   header = true,
   labels,
+  accountInputRef,
+  onAccountCommit,
+  amountInputRef,
+  amountInputProps,
+  onDescriptionKeyDown,
+  renderDescriptionExtra,
+  extraColumn,
+  renderRowActions,
+  readOnlyLines,
+  totals,
+  toolbar,
 }: KonteringLinesEditorProps) {
   const withDescription = onDescriptionChange !== undefined
-  const columns = withDescription
-    ? 'sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_120px_32px]'
-    : 'sm:grid-cols-[minmax(0,1fr)_120px_120px_32px]'
+  const columns = gridColumns(withDescription, extraColumn !== undefined, renderRowActions !== undefined)
+  // The cells a sum or a generated row leaves empty after the amounts.
+  const trailingCells = (extraColumn ? 1 : 0) + 1
 
-  const amountInput = (index: number, field: 'debit_amount' | 'credit_amount', label: string) => (
+  const amountInput = (index: number, field: KonteringAmountField, label: string) => (
     <div className="min-w-0 space-y-1 sm:space-y-0">
       {header && (
         <label htmlFor={`kontering-${index}-${field}`} className="block text-xs text-muted-foreground sm:hidden">
@@ -105,9 +173,43 @@ export function KonteringLinesEditor({
         value={lines[index][field]}
         onChange={(e) => onAmountChange(index, field, e.target.value)}
         className="tabular-nums text-right"
+        ref={amountInputRef ? (el) => amountInputRef(index, field, el) : undefined}
+        {...amountInputProps?.(index, field)}
       />
     </div>
   )
+
+  const readOnlyRows = (index: number) => {
+    const generated = readOnlyLines?.(index)
+    if (!generated || generated.lines.length === 0) return null
+    return (
+      <div className="col-span-2 space-y-1 text-xs text-muted-foreground sm:col-span-full" title={generated.title}>
+        {generated.lines.map((line, gi) => (
+          <div key={gi} className={cn('grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:items-center', columns)}>
+            <span className="min-w-0 truncate sm:pl-3">
+              <AccountNumber number={line.account_number} size="sm" />
+              <span className="sm:hidden"> {line.line_description}</span>
+            </span>
+            {withDescription && <span className="hidden min-w-0 truncate sm:block">{line.line_description}</span>}
+            <span className="text-right tabular-nums sm:hidden">
+              {line.debit_amount
+                ? `${labels.debit} ${formatAmount(parseFloat(line.debit_amount))}`
+                : `${labels.credit} ${formatAmount(parseFloat(line.credit_amount))}`}
+            </span>
+            <span className="hidden text-right tabular-nums sm:block">
+              {line.debit_amount ? formatAmount(parseFloat(line.debit_amount)) : ''}
+            </span>
+            <span className="hidden text-right tabular-nums sm:block">
+              {line.credit_amount ? formatAmount(parseFloat(line.credit_amount)) : ''}
+            </span>
+            {Array.from({ length: trailingCells }, (_, i) => (
+              <span key={i} className="hidden sm:block" />
+            ))}
+          </div>
+        ))}
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-2">
@@ -120,6 +222,7 @@ export function KonteringLinesEditor({
           {withDescription && <span>{labels.description}</span>}
           <span className="text-right">{labels.debit}</span>
           <span className="text-right">{labels.credit}</span>
+          {extraColumn && <span className="text-right">{extraColumn.label}</span>}
           <span />
         </div>
       )}
@@ -142,41 +245,81 @@ export function KonteringLinesEditor({
               notActivatedLabel={notActivatedLabel}
               onChange={(value) => onAccountChange(index, value)}
               onCreateAccount={onCreateAccount ? (prefill) => onCreateAccount(index, prefill) : undefined}
+              onCommit={onAccountCommit ? () => onAccountCommit(index) : undefined}
+              inputRef={accountInputRef ? (el) => accountInputRef(index, el) : undefined}
               selectedName={accountName?.(line.account_number)}
               disabled={accountsDisabled}
             />
           </div>
           {withDescription && (
-            <Input
-              value={line.line_description ?? ''}
-              onChange={(e) => onDescriptionChange(index, e.target.value)}
-              placeholder={labels.description}
-              aria-label={labels.description}
-              className="col-span-2 sm:col-span-1"
-            />
+            <div className="col-span-2 min-w-0 space-y-1 sm:col-span-1">
+              <Input
+                value={line.line_description ?? ''}
+                onChange={(e) => onDescriptionChange(index, e.target.value)}
+                onKeyDown={onDescriptionKeyDown?.(index)}
+                placeholder={labels.descriptionPlaceholder ?? labels.description}
+                aria-label={labels.description}
+              />
+              {renderDescriptionExtra?.(index)}
+            </div>
           )}
           <div className="col-span-2 grid grid-cols-2 gap-2 sm:contents">
             {amountInput(index, 'debit_amount', labels.debit)}
             {amountInput(index, 'credit_amount', labels.credit)}
           </div>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            className="col-start-2 row-start-1 text-muted-foreground hover:text-destructive sm:col-start-auto sm:row-start-auto"
-            onClick={() => onRemove(index)}
-            disabled={lines.length <= minLines}
-            aria-label={labels.removeRow}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </Button>
+          {extraColumn && (
+            <div className="col-span-2 flex items-baseline justify-end gap-1 text-xs tabular-nums text-muted-foreground sm:col-span-1 sm:block sm:self-center sm:text-right sm:text-sm">
+              {header && <span className="sm:hidden">{extraColumn.label}</span>}
+              {extraColumn.render(index)}
+            </div>
+          )}
+          <div className="col-start-2 row-start-1 flex items-center justify-end sm:col-start-auto sm:row-start-auto">
+            {renderRowActions?.(index)}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className="text-muted-foreground hover:text-destructive"
+              onClick={() => onRemove(index)}
+              disabled={lines.length <= minLines}
+              aria-label={labels.removeRow}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+          {readOnlyRows(index)}
         </div>
       ))}
 
-      <Button type="button" variant="outline" size="sm" onClick={onAdd} className="w-full sm:w-auto">
-        <Plus className="mr-1 h-3.5 w-3.5" />
-        {labels.addRow}
-      </Button>
+      {totals && (
+        <div
+          className={cn(
+            'grid grid-cols-[minmax(0,1fr)_auto_auto] gap-4 px-1 pt-2 text-sm font-semibold tabular-nums sm:gap-2',
+            columns,
+          )}
+        >
+          <span className={cn(withDescription && 'sm:col-span-2')}>{totals.label}</span>
+          <span className={cn('text-right', totals.amountClassName)}>
+            <span className="sm:hidden">{labels.debit} </span>
+            {totals.debit}
+          </span>
+          <span className={cn('text-right', totals.amountClassName)}>
+            <span className="sm:hidden">{labels.credit} </span>
+            {totals.credit}
+          </span>
+          {Array.from({ length: trailingCells }, (_, i) => (
+            <span key={i} className="hidden sm:block" />
+          ))}
+        </div>
+      )}
+
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" variant="outline" size="sm" onClick={onAdd} className={cn(!toolbar && 'w-full sm:w-auto')}>
+          <Plus className="mr-1 h-3.5 w-3.5" />
+          {labels.addRow}
+        </Button>
+        {toolbar}
+      </div>
     </div>
   )
 }

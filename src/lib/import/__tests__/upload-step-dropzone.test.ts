@@ -31,3 +31,12 @@ describe('import steps on the shared dropzone', () => {
     expect(zone).not.toContain('accept=')
   })
 })
+
+describe('the logo upload on the shared dropzone', () => {
+  it('takes the logo through FileDropzone, empty or filled', () => {
+    const src = fs.readFileSync(path.join(root, 'components/settings/LogoUpload.tsx'), 'utf8')
+    expect(src.match(/<FileDropzone/g)).toHaveLength(2)
+    expect(src).not.toContain('onDrop=')
+    expect(src).not.toContain('type="file"')
+  })
+})

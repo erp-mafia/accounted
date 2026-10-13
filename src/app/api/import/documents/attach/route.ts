@@ -5,7 +5,7 @@ import { uploadDocument, validateDocumentFile } from '@/lib/core/documents/docum
 import { planPermitsAttach } from '@/lib/documents/underlag-import'
 import { uploadedFileBaseName } from '@/lib/documents/upload-file-name'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { errorResponseFromCode, isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 
 const AttachFieldsSchema = z.object({
   journal_entry_id: z.string().uuid(),
@@ -209,7 +209,7 @@ export const POST = withRouteContext(
 
       // enforce_period_lock_documents: a migrated year is often closed by the
       // time the receipts arrive, and the trigger blocks the link outright.
-      if (/locked\/closed fiscal period|Bokföringen är låst/i.test(message)) {
+      if (isPeriodLockRefusal(err)) {
         return errorResponseFromCode('DOC_UPLOAD_PERIOD_LOCKED', opLog, {
           requestId,
           details: { reason: getErrorMessage(err) },

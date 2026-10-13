@@ -1,6 +1,5 @@
 'use server'
 
-import { cookies, headers } from 'next/headers'
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
@@ -27,7 +26,7 @@ export interface RefreshCompanyProfileResult {
  *
  * We persist the (normalized) number and clear `tic_snapshot_fetched_at` to
  * force `ensureTicSnapshot` past its 7-day cache, then let it do the live
- * /profile fetch + write. All writes are RLS-scoped to the caller's company.
+ * profile fetch + write. All writes are RLS-scoped to the caller's company.
  */
 export async function refreshCompanyProfileAction(
   companyId: string,
@@ -57,20 +56,9 @@ export async function refreshCompanyProfileAction(
     .update({ org_number: cleaned })
     .eq('company_id', companyId)
 
-  // Self-fetch needs the caller's session cookie and the current origin so it
-  // reaches this same instance (dev / preview / prod); see ensureTicSnapshot.
-  const cookieStore = await cookies()
-  const cookieHeader = cookieStore.getAll().map((c) => `${c.name}=${c.value}`).join('; ')
-  const hdrs = await headers()
-  const host = hdrs.get('host')
-  const proto = hdrs.get('x-forwarded-proto') ?? 'https'
-  const origin = host ? `${proto}://${host}` : undefined
-
   const { snapshot, source } = await ensureTicSnapshot({
     supabase,
     companyId,
-    cookieHeader,
-    origin,
     // The user is watching a spinner; give the ~7-13 call Lens fan-out room to
     // finish (the 5s default aborted every fetch during the May quota incident).
     timeoutMs: 10_000,

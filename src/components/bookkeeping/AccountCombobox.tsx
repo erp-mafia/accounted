@@ -10,6 +10,7 @@ import {
   POPOVER_SURFACE_CLASS,
 } from '@/components/ui/popover-surface'
 import { cn } from '@/lib/utils'
+import { useComboboxNavigation } from '@/lib/hooks/use-combobox-navigation'
 import { getAccountClassName } from '@/lib/bookkeeping/account-descriptions'
 import {
   buildAccountIndex,
@@ -73,7 +74,6 @@ interface AccountComboboxProps {
 export default function AccountCombobox({ value, accounts, onChange, onCommit, onCreateAccount, catalog, notActivatedLabel = 'Aktiveras vid bokföring', className, inputRef, disabled = false, selectedName, flat = false }: AccountComboboxProps) {
   const [search, setSearch] = useState(value)
   const [isOpen, setIsOpen] = useState(false)
-  const [highlightedIndex, setHighlightedIndex] = useState(0)
   const containerRef = useRef<HTMLDivElement>(null)
   const internalInputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement | null>(null)
@@ -136,20 +136,6 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
   // Flat list for keyboard navigation
   const flatList = useMemo(() => filteredAccounts, [filteredAccounts])
 
-  // Reset highlight when filtered results change
-  useEffect(() => {
-    setHighlightedIndex(0)
-  }, [filteredAccounts])
-
-  // Scroll highlighted item into view
-  useEffect(() => {
-    if (!isOpen || !listRef.current) return
-    const highlighted = listRef.current.querySelector('[data-highlighted="true"]')
-    if (highlighted) {
-      highlighted.scrollIntoView({ block: 'nearest' })
-    }
-  }, [highlightedIndex, isOpen])
-
   // Keep the portaled (non-flat) dropdown glued to the trigger: measure off
   // containerRef when it opens, and re-measure while anything scrolls or the
   // window resizes underneath it. The capture-phase scroll listener also
@@ -207,28 +193,6 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
     attachPortalPanel(el)
   }, [attachPortalPanel])
 
-  // Close dropdown when clicking/tapping outside
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent | TouchEvent) {
-      const target = e.target as Node
-      // The non-flat dropdown is portaled to document.body, so it is not a
-      // DOM descendant of containerRef: check the portaled panel too.
-      if (
-        containerRef.current &&
-        !containerRef.current.contains(target) &&
-        !(portalPanelRef.current && portalPanelRef.current.contains(target))
-      ) {
-        setIsOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    document.addEventListener('touchstart', handleClickOutside)
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside)
-      document.removeEventListener('touchstart', handleClickOutside)
-    }
-  }, [])
-
   const selectAccount = useCallback(
     (accountNumber: string) => {
       onChange(accountNumber)
@@ -239,53 +203,57 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
     [onChange, onCommit]
   )
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (!isOpen) {
-      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-        hasInteractedRef.current = true
-        setIsOpen(true)
-        e.preventDefault()
-      } else if (e.key === 'Enter' && /^\d{4}$/.test(search)) {
-        // Dropdown closed but a full account number sits in the field: treat
-        // Enter as a re-commit so focus advances to the amount field.
-        e.preventDefault()
-        onCommit?.(search)
+  const close = useCallback(() => setIsOpen(false), [])
+  // The non-flat dropdown is portaled to document.body, so it is not a DOM
+  // descendant of containerRef: a press inside the panel is inside too.
+  const insideRefs = useMemo(() => [containerRef, portalPanelRef], [])
+  const navigation = useComboboxNavigation({
+    count: flatList.length,
+    isOpen,
+    open: () => {
+      hasInteractedRef.current = true
+      setIsOpen(true)
+    },
+    close,
+    activate: (index) => {
+      if (hasInteractedRef.current && flatList[index]) {
+        selectAccount(flatList[index].account_number)
+        return
       }
+      if (/^\d{4}$/.test(search)) {
+        // Committed number, no new interaction: advance without re-selecting.
+        setIsOpen(false)
+        onCommit?.(search)
+        return
+      }
+      // Nothing actively chosen: close the list and let the event bubble so
+      // the host form decides (the verifikat form opens the review from an
+      // empty row's empty account field).
+      setIsOpen(false)
+      return false
+    },
+    onNavigate: () => {
+      hasInteractedRef.current = true
+    },
+    listRef,
+    insideRefs,
+  })
+  const { highlightedIndex, setHighlightedIndex } = navigation
+
+  // Reset highlight when filtered results change
+  useEffect(() => {
+    setHighlightedIndex(0)
+  }, [filteredAccounts, setHighlightedIndex])
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (!isOpen && e.key === 'Enter' && /^\d{4}$/.test(search)) {
+      // Dropdown closed but a full account number sits in the field: treat
+      // Enter as a re-commit so focus advances to the amount field.
+      e.preventDefault()
+      onCommit?.(search)
       return
     }
-
-    switch (e.key) {
-      case 'ArrowDown':
-        e.preventDefault()
-        hasInteractedRef.current = true
-        setHighlightedIndex((prev) => Math.min(prev + 1, flatList.length - 1))
-        break
-      case 'ArrowUp':
-        e.preventDefault()
-        hasInteractedRef.current = true
-        setHighlightedIndex((prev) => Math.max(prev - 1, 0))
-        break
-      case 'Enter':
-        if (hasInteractedRef.current && flatList[highlightedIndex]) {
-          e.preventDefault()
-          selectAccount(flatList[highlightedIndex].account_number)
-        } else if (/^\d{4}$/.test(search)) {
-          // Committed number, no new interaction: advance without re-selecting.
-          e.preventDefault()
-          setIsOpen(false)
-          onCommit?.(search)
-        } else {
-          // Nothing actively chosen: close the list and let the event bubble
-          // so the host form decides (the verifikat form opens the review from
-          // an empty row's empty account field).
-          setIsOpen(false)
-        }
-        break
-      case 'Escape':
-        e.preventDefault()
-        setIsOpen(false)
-        break
-    }
+    navigation.handleKeyDown(e)
   }
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {

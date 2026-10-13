@@ -6,6 +6,7 @@ import { createLogger } from '@/lib/logger'
 import type { Deadline, Invoice } from '@/types'
 import { createTokenRateLimiter } from '@/lib/api/token-rate-limit'
 import { UUID_RE } from '@/lib/invariants/uuid'
+import { fileResponse } from '@/lib/api/file-response'
 
 const log = createLogger('api/calendar/feed-token')
 
@@ -153,11 +154,11 @@ export async function GET(
       }
     )
 
-    return new NextResponse(icsContent, {
+    return fileResponse(icsContent, {
+      filename: 'accounted.ics',
+      contentType: 'text/calendar; charset=utf-8',
+      cacheControl: 'no-cache, no-store, must-revalidate',
       headers: {
-        'Content-Type': 'text/calendar; charset=utf-8',
-        'Content-Disposition': 'attachment; filename="accounted.ics"',
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
         'Pragma': 'no-cache',
         'Expires': '0',
       },

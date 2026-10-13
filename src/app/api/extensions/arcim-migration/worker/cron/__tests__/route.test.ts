@@ -17,7 +17,7 @@ describe('provider worker cron', () => {
     enabled.mockReturnValue(undefined)
     const response = await GET(request())
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ data: { skipped: 'extension_disabled' } })
+    expect(await response.json()).toEqual({ skipped: true, reason: 'extension_disabled', processed: 0 })
     expect(worker).not.toHaveBeenCalled()
   })
   it('runs without a browser or user session and reports its checkpoints', async () => {

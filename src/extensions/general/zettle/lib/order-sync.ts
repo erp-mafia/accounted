@@ -7,7 +7,6 @@ import type { WebshopOrderLineItem, WebshopVatBreakdownLine } from '@/types'
 import { isRevokedCredentialsError, listPurchasesPage } from './api-client'
 import { encryptCredential, refreshTokenOf } from './credentials'
 import { isRevokedOAuthError, refreshAccessToken } from './oauth'
-import { MAX_BACKFILL_YEARS } from '../types'
 import type { ZettleConnection, ZettlePayment, ZettlePurchase } from '../types'
 
 const defaultLog = createLogger('zettle/order-sync')
@@ -439,32 +438,6 @@ export function resolveWindowStartIso(connection: ZettleConnection): string {
   if (!Number.isFinite(cursorMs)) return new Date(startMs).toISOString()
   const floorMs = Math.max(0, Math.min(cursorMs, startMs))
   return new Date(Math.max(cursorMs - CURSOR_OVERLAP_MS, floorMs)).toISOString()
-}
-
-/** Why a user-chosen backfill start date was refused. */
-export type BackfillDateError = 'invalid' | 'future' | 'too_old'
-
-/**
- * Validate a user-chosen backfill start ('YYYY-MM-DD') into a cursor value.
- * Note that Date.parse rolls a nonexistent day over ('2026-02-31' becomes
- * 3 March), so the parsed value is compared back against the input.
- */
-export function parseBackfillFrom(
-  from: unknown,
-  now: Date = new Date(),
-): { iso: string } | { error: BackfillDateError } {
-  if (typeof from !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(from)) {
-    return { error: 'invalid' }
-  }
-  const ms = Date.parse(`${from}T00:00:00.000Z`)
-  if (!Number.isFinite(ms)) return { error: 'invalid' }
-  const parsed = new Date(ms)
-  if (parsed.toISOString().slice(0, 10) !== from) return { error: 'invalid' }
-  if (ms > now.getTime()) return { error: 'future' }
-  const floor = new Date(now.getTime())
-  floor.setUTCFullYear(floor.getUTCFullYear() - MAX_BACKFILL_YEARS)
-  if (ms < floor.getTime()) return { error: 'too_old' }
-  return { iso: parsed.toISOString() }
 }
 
 export async function syncZettlePurchases(

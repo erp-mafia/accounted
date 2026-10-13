@@ -6,11 +6,17 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { guardSandbox, sandboxBlockedResponse } from '@/lib/sandbox/guard'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
-import { backfillDateErrorMessage, parseBackfillFrom } from '@/lib/feed-sync/cursor-window'
+import {
+  feedBackfillRoute,
+  feedDisconnectRoute,
+  feedSyncRoute,
+  feedTransactionSyncRoute,
+  type FeedConnectorSpec,
+} from '@/lib/feed-sync/connector-routes'
 import { isWooCommerceConfigured, encryptCredential } from './lib/credentials'
 import { normalizeStoreUrl, testConnectionAndFetchStoreInfo } from './lib/api-client'
 import { buildAuthorizeUrl } from './lib/connect'
-import { syncWooCommerceOrders, wooStoreScope } from './lib/order-sync'
+import { syncWooCommerceOrders, wooStoreScope, type WooCommerceSyncSummary } from './lib/order-sync'
 import {
   WOO_EXTENSION_ID,
   parseSkippedOrders,
@@ -25,21 +31,8 @@ import type {
   WooCommerceStatusResponse,
 } from './types'
 
-// Per-user limits: connect/disconnect start outward-facing handshakes, sync
-// hits the merchant's WooCommerce host.
+// Per-user limit: connect starts an outward-facing handshake.
 const RATE_LIMIT_CONNECT = { maxRequests: 10, windowMs: 60_000 }
-const RATE_LIMIT_DISCONNECT = { maxRequests: 10, windowMs: 60_000 }
-const RATE_LIMIT_SYNC = { maxRequests: 10, windowMs: 60_000 }
-const RATE_LIMIT_BACKFILL = { maxRequests: 5, windowMs: 60_000 }
-
-/**
- * Wall clock a single manual run may spend before it stops and resumes later.
- * Without a deadline a huge sync against a slow host would be killed at the
- * dispatcher's maxDuration with no cursor persisted; with one it stops
- * cleanly, reports a partial sync and resumes where it stopped on the next
- * press.
- */
-const MANUAL_SYNC_BUDGET_MS = 240_000
 
 // A pending row younger than this blocks a second connect attempt so a
 // double-click cannot start two handshake round-trips (only one state would
@@ -52,6 +45,32 @@ const NOT_CONFIGURED_MESSAGE =
 /** Columns safe to hand to the browser: never the encrypted credentials. */
 const STATUS_COLUMNS =
   'id, status, store_url, store_name, currency, error_message, connected_at, transaction_sync_enabled, last_order_synced_at'
+
+/**
+ * Sync, backfill, the nightly toggle and disconnect: the shared feed routes
+ * (lib/feed-sync/connector-routes); /status stays here because a company may
+ * connect several stores and each carries its skipped-orders list. There is
+ * no remote revoke API: the consumer key lives in the store's wp-admin, so
+ * disconnect drops our copy and the panel tells the user to remove the key
+ * in WooCommerce as well.
+ */
+export const woocommerceFeed: FeedConnectorSpec<WooCommerceConnection, WooCommerceSyncSummary> = {
+  extensionId: 'woocommerce',
+  table: 'woocommerce_connections',
+  capability: CAPABILITY.woocommerce_sync,
+  cursorColumn: 'last_order_synced_at',
+  maxBackfillYears: MAX_BACKFILL_YEARS,
+  notConnectedMessage: 'Ingen ansluten WooCommerce-butik.',
+  statusColumns: STATUS_COLUMNS,
+  isConfigured: isWooCommerceConfigured,
+  sync: (supabase, connection, deadlineMs) =>
+    syncWooCommerceOrders(supabase, connection, undefined, deadlineMs),
+  disconnect: {
+    columns: 'store_url',
+    clearColumns: ['oauth_state', 'consumer_key_encrypted', 'consumer_secret_encrypted'],
+    eventIdentity: (connection) => ({ storeUrl: (connection.store_url as string | null) ?? null }),
+  },
+}
 
 /**
  * Attach each store's durable skipped-orders list (lib/skipped-orders) to its
@@ -403,330 +422,8 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
       return NextResponse.json({ success: true, connection_id: created.id })
     },
   },
-  {
-    method: 'POST',
-    path: '/sync',
-    handler: async (request: Request, ctx: ExtensionContext) => {
-      const log = ctx.log
-      const capabilityBlocked = await requireCapability(
-        ctx.supabase,
-        ctx.companyId,
-        CAPABILITY.woocommerce_sync,
-      )
-      if (capabilityBlocked) return capabilityBlocked
-
-      const rl = await checkRateLimit({
-        prefix: 'woocommerce:sync',
-        identifier: ctx.userId,
-        ...RATE_LIMIT_SYNC,
-      })
-      if (!rl.ok) return rl.response!
-
-      // The sync decrypts the stored API keys, which end-user roles cannot
-      // read, so the lookup runs on the service role, scoped to the caller's
-      // active company (the dispatcher resolved it from their membership).
-      // The sync itself runs there too (cursor updates and upserts are
-      // service paths). The manual button ignores transaction_sync_enabled
-      // (that flag gates the nightly cron): pressing it IS the opt-in.
-      // connection_id targets one store; omitted, every active store syncs
-      // within one time budget.
-      const body = (await request.json().catch(() => ({}))) as { connection_id?: string }
-      const serviceClient = createServiceClientNoCookies()
-      let query = serviceClient
-        .from('woocommerce_connections')
-        .select('*')
-        .eq('company_id', ctx.companyId)
-        .eq('status', 'active')
-      if (body.connection_id) query = query.eq('id', body.connection_id)
-      const { data: connections } = await query.order('last_order_synced_at', {
-        ascending: true,
-        nullsFirst: true,
-      })
-
-      if (!connections || connections.length === 0) {
-        return NextResponse.json(
-          { error: 'Ingen ansluten WooCommerce-butik.' },
-          { status: 404 },
-        )
-      }
-
-      try {
-        // Bounded like the cron (see MANUAL_SYNC_BUDGET_MS).
-        const deadlineMs = Date.now() + MANUAL_SYNC_BUDGET_MS
-        // One entry per processed store, plus an explicit skipped count:
-        // returning only the last summary hid per-store failures and reported
-        // success for zero work when the deadline expired early.
-        const results: Array<{
-          connection_id: string
-          store_url: string
-          summary: Awaited<ReturnType<typeof syncWooCommerceOrders>>
-        }> = []
-        let skipped = 0
-        for (const connection of connections as WooCommerceConnection[]) {
-          if (Date.now() >= deadlineMs) {
-            skipped += 1
-            continue
-          }
-          const summary = await syncWooCommerceOrders(
-            serviceClient,
-            connection,
-            undefined,
-            deadlineMs,
-          )
-          results.push({
-            connection_id: connection.id,
-            store_url: connection.store_url,
-            summary,
-          })
-        }
-        return NextResponse.json({
-          success: true,
-          results,
-          skipped,
-          // Single-store shape kept for the panel's toast summary: the panel
-          // always syncs one connection_id, so this IS that store's summary.
-          transactions: results[results.length - 1]?.summary ?? null,
-        })
-      } catch (error) {
-        log.error('[woocommerce] Manual sync failed', {
-          message: error instanceof Error ? error.message : String(error),
-        })
-        return NextResponse.json(
-          { error: 'Synkroniseringen misslyckades. Försök igen.' },
-          { status: 502 },
-        )
-      }
-    },
-  },
-  {
-    method: 'POST',
-    path: '/backfill',
-    handler: async (request: Request, ctx: ExtensionContext) => {
-      const log = ctx.log
-      const capabilityBlocked = await requireCapability(
-        ctx.supabase,
-        ctx.companyId,
-        CAPABILITY.woocommerce_sync,
-      )
-      if (capabilityBlocked) return capabilityBlocked
-
-      const rl = await checkRateLimit({
-        prefix: 'woocommerce:backfill',
-        identifier: ctx.userId,
-        ...RATE_LIMIT_BACKFILL,
-      })
-      if (!rl.ok) return rl.response!
-
-      const body = (await request.json().catch(() => ({}))) as {
-        from?: unknown
-        connection_id?: unknown
-      }
-      const parsed = parseBackfillFrom(body.from, MAX_BACKFILL_YEARS)
-      if ('error' in parsed) {
-        return NextResponse.json(
-          { error: backfillDateErrorMessage(parsed.error, MAX_BACKFILL_YEARS) },
-          { status: 400 },
-        )
-      }
-
-      // A start date belongs to one store. connection_id may be omitted only
-      // when the company has a single active store (multi-store, migration
-      // 20260811073422). Service role for the same reason as /sync: the run
-      // needs the encrypted API keys, which end-user roles cannot read.
-      const serviceClient = createServiceClientNoCookies()
-      let query = serviceClient
-        .from('woocommerce_connections')
-        .select('*')
-        .eq('company_id', ctx.companyId)
-        .eq('status', 'active')
-      if (typeof body.connection_id === 'string') query = query.eq('id', body.connection_id)
-      const { data: connections } = await query.limit(2)
-
-      if (!connections || connections.length === 0) {
-        return NextResponse.json(
-          { error: 'Ingen ansluten WooCommerce-butik.' },
-          { status: 404 },
-        )
-      }
-      if (connections.length > 1) {
-        return NextResponse.json(
-          { error: 'Flera butiker är anslutna. Ange vilken butik som ska hämtas (connection_id).' },
-          { status: 400 },
-        )
-      }
-      const connection = connections[0] as WooCommerceConnection
-
-      // The cursor is the start date, so a backfill is just the cursor moved
-      // back: no second column that could disagree with it. The run advances
-      // it to the newest modified order again, and the ingest upserts by
-      // external_id, so re-reading an already imported range changes nothing.
-      const { error: cursorError } = await ctx.supabase
-        .from('woocommerce_connections')
-        .update({ last_order_synced_at: parsed.iso, error_message: null })
-        .eq('id', connection.id)
-        .eq('company_id', ctx.companyId)
-        .eq('status', 'active')
-      if (cursorError) {
-        log.error('[woocommerce] Failed to move order cursor for backfill', {
-          message: cursorError.message,
-          connection_id: connection.id,
-        })
-        return NextResponse.json(
-          { error: 'Kunde inte spara startdatumet. Försök igen.' },
-          { status: 500 },
-        )
-      }
-
-      try {
-        const summary = await syncWooCommerceOrders(
-          serviceClient,
-          { ...connection, last_order_synced_at: parsed.iso },
-          undefined,
-          Date.now() + MANUAL_SYNC_BUDGET_MS,
-        )
-        return NextResponse.json({
-          success: true,
-          from: parsed.iso,
-          connection_id: connection.id,
-          transactions: summary,
-        })
-      } catch (error) {
-        // The cursor stays at the chosen date on purpose: the next run
-        // resumes the backfill from where this one failed.
-        log.error('[woocommerce] Backfill sync failed', {
-          message: error instanceof Error ? error.message : String(error),
-          connection_id: connection.id,
-        })
-        return NextResponse.json(
-          { error: 'Synkroniseringen misslyckades. Försök igen.' },
-          { status: 502 },
-        )
-      }
-    },
-  },
-  {
-    method: 'POST',
-    path: '/transaction-sync',
-    handler: async (request: Request, ctx: ExtensionContext) => {
-      const capabilityBlocked = await requireCapability(
-        ctx.supabase,
-        ctx.companyId,
-        CAPABILITY.woocommerce_sync,
-      )
-      if (capabilityBlocked) return capabilityBlocked
-
-      const rl = await checkRateLimit({
-        prefix: 'woocommerce:transaction-sync-toggle',
-        identifier: ctx.userId,
-        ...RATE_LIMIT_SYNC,
-      })
-      if (!rl.ok) return rl.response!
-
-      const body = (await request.json().catch(() => ({}))) as {
-        enabled?: unknown
-        connection_id?: string
-      }
-      if (typeof body.enabled !== 'boolean') {
-        return NextResponse.json({ error: 'enabled (boolean) krävs.' }, { status: 400 })
-      }
-
-      let updateQuery = ctx.supabase
-        .from('woocommerce_connections')
-        .update({ transaction_sync_enabled: body.enabled })
-        .eq('company_id', ctx.companyId)
-        .eq('status', 'active')
-      if (body.connection_id) updateQuery = updateQuery.eq('id', body.connection_id)
-      const { data: updated, error: updateError } = await updateQuery.select('id')
-
-      if (updateError) {
-        return NextResponse.json(
-          { error: 'Kunde inte spara inställningen. Försök igen.' },
-          { status: 500 },
-        )
-      }
-      if (!updated || updated.length === 0) {
-        return NextResponse.json(
-          { error: 'Ingen ansluten WooCommerce-butik.' },
-          { status: 404 },
-        )
-      }
-      return NextResponse.json({ success: true, enabled: body.enabled })
-    },
-  },
-  {
-    method: 'DELETE',
-    path: '/disconnect',
-    handler: async (request: Request, ctx: ExtensionContext) => {
-      const log = ctx.log
-      const rl = await checkRateLimit({
-        prefix: 'woocommerce:disconnect',
-        identifier: ctx.userId,
-        ...RATE_LIMIT_DISCONNECT,
-      })
-      if (!rl.ok) return rl.response!
-
-      const body = (await request.json().catch(() => ({}))) as { connection_id?: string }
-      const base = ctx.supabase
-        .from('woocommerce_connections')
-        .select('id, status, store_url')
-        .eq('company_id', ctx.companyId)
-      const query = body.connection_id
-        ? base.eq('id', body.connection_id).limit(1)
-        : base.neq('status', 'revoked').order('created_at', { ascending: false }).limit(1)
-      const { data: rows, error: findError } = await query
-      const connection = rows?.[0]
-
-      if (findError || !connection) {
-        return NextResponse.json({ error: 'Connection not found' }, { status: 404 })
-      }
-
-      // There is no remote revoke API: the consumer key lives in the store's
-      // wp-admin and only the merchant can delete it there. We drop our copy
-      // of the credentials outright (nothing reads them after revoke, and a
-      // reconnect inserts a fresh row); the audit row keeps store_url and the
-      // connect/disconnect timestamps. The panel tells the user to remove the
-      // key in WooCommerce as well.
-      const { error: updateError } = await ctx.supabase
-        .from('woocommerce_connections')
-        .update({
-          status: 'revoked',
-          oauth_state: null,
-          consumer_key_encrypted: null,
-          consumer_secret_encrypted: null,
-          disconnected_at: new Date().toISOString(),
-        })
-        .eq('id', connection.id)
-        .eq('company_id', ctx.companyId)
-
-      if (updateError) {
-        log.error('[woocommerce] Failed to mark connection revoked', {
-          message: updateError.message,
-          connection_id: connection.id,
-        })
-        return NextResponse.json(
-          { error: 'Kunde inte koppla från. Försök igen.' },
-          { status: 500 },
-        )
-      }
-
-      if (ctx.emit) {
-        try {
-          await ctx.emit({
-            type: 'woocommerce.disconnected',
-            payload: {
-              connectionId: connection.id,
-              storeUrl: connection.store_url ?? null,
-              reason: 'user',
-              userId: ctx.userId,
-              companyId: ctx.companyId,
-            },
-          })
-        } catch {
-          // Audit event failure must not block the disconnect itself.
-        }
-      }
-
-      return NextResponse.json({ success: true })
-    },
-  },
+  feedSyncRoute(woocommerceFeed),
+  feedBackfillRoute(woocommerceFeed),
+  feedTransactionSyncRoute(woocommerceFeed),
+  feedDisconnectRoute(woocommerceFeed),
 ]

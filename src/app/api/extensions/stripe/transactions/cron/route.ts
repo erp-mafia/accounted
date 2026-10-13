@@ -1,7 +1,6 @@
-import { withCronContext } from '@/lib/api/with-cron-context'
+import { withServiceCronContext } from '@/lib/api/with-cron-context'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-import { extensionRegistry } from '@/lib/extensions/registry'
-import { extensionDisabledSkip, runWebshopOrderCron } from '@/lib/webshop-orders/order-cron'
+import { runWebshopOrderCron } from '@/lib/webshop-orders/order-cron'
 import { syncStripeBalanceTransactions } from '@/extensions/general/stripe/lib/transaction-sync'
 import type { StripeConnection } from '@/extensions/general/stripe/types'
 
@@ -20,8 +19,7 @@ export const maxDuration = 300
  * (company_id, external_id) unique index, so overlapping windows and re-runs
  * are no-ops. A connection Stripe reports as revoked is marked revoked here.
  */
-export const GET = withCronContext('cron.stripe_transaction_sync', async (_request, ctx) => {
-  if (!(await extensionRegistry.get('stripe'))) return extensionDisabledSkip(ctx, 'stripe')
+export const GET = withServiceCronContext('cron.stripe_transaction_sync', async (_request, ctx) => {
   return runWebshopOrderCron<StripeConnection>(ctx, {
     extensionId: 'stripe',
     label: 'Stripe Connect',
@@ -35,4 +33,4 @@ export const GET = withCronContext('cron.stripe_transaction_sync', async (_reque
       return { inserted: summary.imported, updated: 0, deadlineReached: summary.deadlineReached, revoked: summary.revoked }
     },
   })
-})
+}, { requireExtension: 'stripe' })

@@ -147,7 +147,7 @@ describe('GET /api/company/[id]/migration-reset/archive', () => {
     expect(response.status).toBe(200)
     expect(response.headers.get('Content-Type')).toBe('application/zip')
     expect(response.headers.get('Content-Disposition')).toMatch(
-      /^attachment; filename="migration_reset_archive_\d{8}\.zip"$/,
+      /^attachment; filename="migration_reset_archive_\d{8}\.zip"; filename\*=UTF-8''migration_reset_archive_\d{8}\.zip$/,
     )
     expect(response.headers.get('Cache-Control')).toBe('private, no-store')
     expect(mockGenerate).toHaveBeenCalledWith(archiveSupabase, 'source-1', {

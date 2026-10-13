@@ -33,6 +33,8 @@ import {
 } from '@/lib/vat/account-vat-treatment'
 import { isVatBoxAccount, type AccountVatBox } from '@/lib/vat/account-vat-box'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
+import type { z } from 'zod'
+import type { UpdateAccountSchema } from '@/lib/api/schemas'
 
 export const ACCOUNT_TYPES = ['asset', 'equity', 'liability', 'revenue', 'expense', 'untaxed_reserves'] as const
 export type ChartAccountType = (typeof ACCOUNT_TYPES)[number]
@@ -313,20 +315,13 @@ export async function createAccount(
   return { ok: true, data: data as ChartAccountRow, created: true }
 }
 
-export interface UpdateAccountInput {
-  account_name?: string
-  /** '' and null both clear. */
-  description?: string | null
-  default_vat_code?: string | null
-  default_vat_rate?: AccountVatRate
-  /** null restores the BAS fallback. */
-  default_vat_treatment?: AccountVatTreatment | null
-  /** null restores the BAS momsruta. */
-  vat_box?: AccountVatBox | null
-  sru_code?: string | null
-  /** false deactivates: history and balances stay, new verifikat cannot use it. */
-  is_active?: boolean
-}
+/**
+ * The request every door validates (UpdateAccountSchema). description: '' and
+ * null both clear; default_vat_treatment and vat_box: null restores the BAS
+ * fallback; is_active false deactivates (history and balances stay, new
+ * verifikat cannot use it).
+ */
+export type UpdateAccountInput = z.output<typeof UpdateAccountSchema>
 
 const UPDATABLE_FIELDS = [
   'account_name',

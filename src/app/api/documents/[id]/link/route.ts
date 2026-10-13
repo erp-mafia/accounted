@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { errorResponseFromCode, isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 import { LinkDocumentSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -112,7 +112,7 @@ export const POST = withRouteContext(
       // Linking writes journal_entry_id on document_attachments; the
       // enforce_period_lock trigger blocks that when the target entry sits in a
       // closed/locked period.
-      if (/locked\/closed fiscal period|Bokföringen är låst/i.test(message)) {
+      if (isPeriodLockRefusal(err)) {
         return errorResponseFromCode('PERIOD_LOCKED', opLog, { requestId })
       }
       if (/journal entry not found/i.test(message)) {

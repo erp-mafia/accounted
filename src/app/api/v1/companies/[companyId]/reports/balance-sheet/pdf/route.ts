@@ -18,13 +18,13 @@ import {
   safeGenerate,
   ReportPeriodQueryShape,
 } from '@/lib/api/v1/report-period'
-import { contentDisposition } from '@/lib/api/content-disposition'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import {
   buildBalanceSheetPdfModel,
   balanceSheetImbalanceKronor,
 } from '@/lib/reports/financial-statement-pdf'
 import type { CompanySettings } from '@/types'
+import { fileResponse } from '@/lib/api/file-response'
 
 // No from_date: a balansräkning is a cumulative position, not a flow over a
 // window (see the JSON route). as_of is the natural spelling; to_date is
@@ -170,13 +170,12 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // leaves the client: complements the in-document ÅRL 2:7 disclaimer.
     const filename = `balansrakning-${report.period.start}--${report.period.end}-utkast.pdf`
 
-    return new Response(new Uint8Array(pdfBuffer), {
-      status: 200,
+    return fileResponse(new Uint8Array(pdfBuffer), {
+      filename: filename,
+      contentType: 'application/pdf',
+      cacheControl: 'private, no-store',
       headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': contentDisposition('attachment', filename),
         'Content-Length': String(pdfBuffer.length),
-        'Cache-Control': 'private, no-store',
         'X-Request-Id': ctx.requestId,
       },
     })

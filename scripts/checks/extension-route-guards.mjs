@@ -101,10 +101,14 @@ export function findExtensionRouteFindings(ROOT) {
 
     // A route that hands its whole flow to the shared partner OAuth callback
     // (lib/auth/partner-oauth-callback.ts) is gated there: the helper checks
-    // extensionRegistry.get(extensionId) before anything else.
+    // extensionRegistry.get(extensionId) before anything else. A cron on
+    // withCronContext / withServiceCronContext with requireExtension is gated
+    // by the wrapper the same way (lib/api/with-cron-context.ts).
     const delegatesGate =
-      src.includes('completePartnerOAuthCallback(') &&
-      (src.includes(`extensionId: '${extensionId}'`) || src.includes(`extensionId: "${extensionId}"`))
+      (src.includes('completePartnerOAuthCallback(') &&
+        (src.includes(`extensionId: '${extensionId}'`) || src.includes(`extensionId: "${extensionId}"`))) ||
+      (/with(Service)?CronContext\(/.test(src) &&
+        (src.includes(`requireExtension: '${extensionId}'`) || src.includes(`requireExtension: "${extensionId}"`)))
     const hasGate =
       delegatesGate ||
       src.includes(`extensionRegistry.get('${extensionId}')`) ||

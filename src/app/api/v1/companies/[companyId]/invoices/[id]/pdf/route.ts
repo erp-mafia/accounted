@@ -20,7 +20,6 @@
 import { z } from 'zod'
 import { renderInvoicePdfBuffer } from '@/lib/invoices/render-invoice-pdf'
 import { invoicePdfFilename } from '@/lib/invoices/pdf-filename'
-import { contentDisposition } from '@/lib/api/content-disposition'
 import { registerEndpoint } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
@@ -31,6 +30,7 @@ import {
 import { INVOICE_PDF_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import type { CompanySettings, Customer, Invoice, InvoiceItem } from '@/types'
+import { fileResponse } from '@/lib/api/file-response'
 
 // The ciphertext is fetched here, for the render only: the template derives
 // the masked personnummer (YYYYMMDD-XXXX) in the deduction box from it. It is
@@ -202,13 +202,12 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
     })
 
     const uint8Array = new Uint8Array(pdfBuffer)
-    return new Response(uint8Array, {
-      status: 200,
+    return fileResponse(uint8Array, {
+      filename: filename,
+      contentType: 'application/pdf',
+      cacheControl: 'private, no-store',
       headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': contentDisposition('attachment', filename),
         'Content-Length': String(pdfBuffer.length),
-        'Cache-Control': 'private, no-store',
         'X-Request-Id': ctx.requestId,
       },
     })

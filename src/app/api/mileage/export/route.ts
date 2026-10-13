@@ -3,6 +3,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { ISO_DATE_RE } from '@/lib/invariants'
 import { listTrips } from '@/lib/mileage/mileage-service'
 import { mileageTripsToCsv } from '@/lib/mileage/csv-export'
+import { fileResponse } from '@/lib/api/file-response'
 
 /** Körjournal CSV export (Skatteverket audit underlag). */
 export const GET = withRouteContext('mileage.export', async (request, { supabase, companyId }) => {
@@ -51,10 +52,8 @@ export const GET = withRouteContext('mileage.export', async (request, { supabase
 
   const csv = mileageTripsToCsv(trips, voucherLabels, driverLabels)
   const suffix = [from, to].filter(Boolean).join('_')
-  return new NextResponse(csv, {
-    headers: {
-      'Content-Type': 'text/csv; charset=utf-8',
-      'Content-Disposition': `attachment; filename="korjournal${suffix ? `_${suffix}` : ''}.csv"`,
-    },
+  return fileResponse(csv, {
+    filename: `korjournal${suffix ? `_${suffix}` : ''}.csv`,
+    contentType: 'text/csv; charset=utf-8',
   })
 })

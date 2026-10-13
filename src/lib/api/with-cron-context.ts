@@ -26,6 +26,7 @@ import { createLogger, type Logger } from '@/lib/logger'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
+import { extensionRegistry } from '@/lib/extensions/registry'
 
 export interface CronItemContext {
   /** Per-item requestId, child of the run's parent requestId. */
@@ -45,6 +46,12 @@ export interface CronContext {
   requestId: string
   log: Logger
   /**
+   * Epoch ms when the request arrived, before the secret check and the
+   * extension gate: an absolute run budget measured from here also covers
+   * the extension initialization the gate may trigger.
+   */
+  startedAt: number
+  /**
    * Iterate items with isolated try/catch + structured per-item logs. The
    * returned summary is suitable to ship in the response body so an operator
    * can see how many succeeded/failed at a glance.
@@ -58,6 +65,17 @@ export interface CronContext {
 
 type CronHandler = (request: Request, ctx: CronContext) => Promise<NextResponse | Response>
 
+export interface CronContextOptions {
+  /**
+   * The extension this cron runs. Physical routes under app/api/extensions/
+   * compile into every build and the self-hosted crontab calls each one
+   * unconditionally, so when this installation does not run the extension
+   * the cron answers 200 skipped before the handler: a skip, not an outage.
+   * check:guards counts `requireExtension: '<id>'` as the route's gate.
+   */
+  requireExtension?: string
+}
+
 function generateRequestId(prefix: 'cron' | 'cron_item' = 'cron'): string {
   return `${prefix}_${crypto.randomUUID()}`
 }
@@ -65,6 +83,7 @@ function generateRequestId(prefix: 'cron' | 'cron_item' = 'cron'): string {
 export function withCronContext(
   operation: string,
   handler: CronHandler,
+  options: CronContextOptions = {},
 ): (request: Request) => Promise<Response> {
   return async function wrapped(request: Request): Promise<Response> {
     const requestId = generateRequestId('cron')
@@ -112,9 +131,17 @@ export function withCronContext(
       return result
     }
 
-    const ctx: CronContext = { requestId, log, forEach }
+    const ctx: CronContext = { requestId, log, startedAt: start, forEach }
 
     try {
+      const extensionId = options.requireExtension
+      if (extensionId && !(await extensionRegistry.get(extensionId))) {
+        log.info(`${extensionId} extension is not enabled; cron skipped`)
+        return NextResponse.json(
+          { skipped: true, reason: 'extension_disabled', processed: 0 },
+          { headers: { 'X-Request-Id': requestId } },
+        )
+      }
       const response = await handler(request, ctx)
       if (response instanceof Response && !response.headers.get('X-Request-Id')) {
         response.headers.set('X-Request-Id', requestId)
@@ -139,11 +166,13 @@ export interface ServiceCronContext extends CronContext {
 /**
  * withCronContext for a cron that reads or writes with the service role: the
  * Supabase configuration is checked once here (500 INTERNAL_ERROR without
- * it, as each cron answered) and the client arrives as ctx.supabase.
+ * it, as each cron answered) and the client arrives as ctx.supabase. The
+ * extension gate (options.requireExtension) runs first.
  */
 export function withServiceCronContext(
   operation: string,
   handler: (request: Request, ctx: ServiceCronContext) => Promise<NextResponse | Response>,
+  options: CronContextOptions = {},
 ): (request: Request) => Promise<Response> {
   return withCronContext(operation, async (request, ctx) => {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -155,5 +184,5 @@ export function withServiceCronContext(
       })
     }
     return handler(request, { ...ctx, supabase: createServiceRoleClient(supabaseUrl, supabaseServiceKey) })
-  })
+  }, options)
 }

@@ -66,6 +66,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { ORE_TOLERANCE, roundOre } from '@/lib/money'
 import { resolvePreviousFiscalPeriod } from '@/lib/core/bookkeeping/period-service'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
+import { isLockDateRefusal } from '@/lib/errors/get-structured-error'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -904,7 +905,7 @@ function rpcFailure(error: { code?: string; message?: string }, done: AppliedSoF
     // The RPC points at storno for a locked year; for a split that is the
     // wrong advice (storno carries no bags), so answer this action's own codes.
     if (/stängd eller låst/i.test(message)) return { ok: false, code: 'OB_SPLIT_PERIOD_LOCKED', ...partial }
-    if (/Bokföringen är låst/i.test(message)) return { ok: false, code: 'OB_COMPANY_LOCK_DATE', ...partial }
+    if (isLockDateRefusal(message)) return { ok: false, code: 'OB_COMPANY_LOCK_DATE', ...partial }
     if (/bokslut/i.test(message)) return { ok: false, code: 'OB_CORRECT_YEAR_END_EXISTS', ...partial }
     return { ok: false, code: 'OB_SPLIT_REFUSED', ...partial, messageSv: getUserErrorMessage(error, { locale: 'sv' }) }
   }

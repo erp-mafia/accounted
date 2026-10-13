@@ -384,6 +384,23 @@ describe('validateVoucherForInvoiceLink', () => {
 // findMatchingVouchersForInvoice: empty + ranking smoke test
 // ============================================================
 
+/**
+ * Enqueue the two pages the shared voucher search reads through the two-step
+ * entry-lines fetch (lib/bookkeeping/entry-lines.ts): the parent entries
+ * first, then their bare lines keyed by journal_entry_id. Fixtures stay
+ * embed-shaped for readability.
+ */
+function enqueueVouchers(
+  enqueue: (r: { data?: unknown; error?: unknown }) => void,
+  vouchers: Array<Record<string, unknown> & { id: string; journal_entry_lines: Array<Record<string, unknown>> }>,
+) {
+  enqueue({ data: vouchers.map(({ journal_entry_lines: _lines, ...entry }) => entry) })
+  if (vouchers.length === 0) return
+  enqueue({
+    data: vouchers.flatMap((v) => v.journal_entry_lines.map((line) => ({ ...line, journal_entry_id: v.id }))),
+  })
+}
+
 describe('findMatchingVouchersForInvoice', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -427,9 +444,8 @@ describe('findMatchingVouchersForInvoice', () => {
       invoice_number: 'F-1',
     })
     enqueue({ data: { accounting_method: 'cash' } }) // resolveAccountingMethod
-    // journal_entries query with embedded lines (kontantmetoden: 19xx debit > 0)
-    enqueue({
-      data: [
+    // the voucher search (kontantmetoden: 19xx debit > 0)
+    enqueueVouchers(enqueue, [
         {
           id: 'je-1',
           voucher_series: 'A',
@@ -450,8 +466,7 @@ describe('findMatchingVouchersForInvoice', () => {
             },
           ],
         },
-      ],
-    })
+    ])
     enqueue({ data: [] }) // invoice_payments already-linked lookup
     enqueue({ data: [] }) // fiscal_periods lock lookup
     const result = await findMatchingVouchersForInvoice(
@@ -493,7 +508,7 @@ describe('findMatchingVouchersForInvoice', () => {
       invoice_number: 'F-1',
     })
     enqueue({ data: { accounting_method: 'cash' } })
-    enqueue({ data: [cashVoucher(description, debit)] })
+    enqueueVouchers(enqueue, [cashVoucher(description, debit)])
     enqueue({ data: [] })
     enqueue({ data: [] })
     return findMatchingVouchersForInvoice(supabase as never, 'company-1', invoice as never)
@@ -563,8 +578,7 @@ function enqueueSingleAccrualCandidate(
   periodLookup: QueuedResult,
 ) {
   enqueue({ data: { accounting_method: 'accrual' } }) // resolveAccountingMethod
-  enqueue({
-    data: [
+  enqueueVouchers(enqueue, [
       {
         id: 'je-1',
         voucher_series: 'A',
@@ -585,8 +599,7 @@ function enqueueSingleAccrualCandidate(
           },
         ],
       },
-    ],
-  })
+  ])
   enqueue({ data: [] }) // invoice_payments already-linked lookup
   enqueue(periodLookup) // fiscal_periods lock lookup
 }

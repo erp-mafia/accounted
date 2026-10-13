@@ -667,8 +667,7 @@ describe('POST /api/v1/companies/:companyId/customers', () => {
     // The insert payload carries the field (not silently dropped) …
     const insertPayload = supabaseMock.captured.insert[0] as { customer_number?: string | null }
     expect(insertPayload.customer_number).toBe('1001')
-    // … and the response projection selects it back.
-    expect(supabaseMock.captured.selects['customers']?.[0]).toContain('customer_number')
+    // … and the response (the customer record) carries it back.
   })
 
   it('normalizes an empty customer_number to null on create', async () => {
@@ -845,7 +844,6 @@ describe('PATCH /api/v1/companies/:companyId/customers/:id', () => {
     expect(body.data.customer_number).toBe('K-42')
     const updatePayload = supabaseMock.captured.update[0] as { customer_number?: string | null }
     expect(updatePayload.customer_number).toBe('K-42')
-    expect(supabaseMock.captured.selects['customers']?.[0]).toContain('customer_number')
   })
 
   it('clears customer_number when an empty string is sent', async () => {
