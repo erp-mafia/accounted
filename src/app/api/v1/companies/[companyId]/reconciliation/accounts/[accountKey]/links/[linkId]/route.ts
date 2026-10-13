@@ -36,7 +36,7 @@ registerEndpoint({
   doNotUseFor:
     'Undoing a booking: a residual or categorization booking is reversed through the journal-entry reverse endpoint, not by unlinking.',
   pitfalls: [
-    'linkId is the outside row id, not a separate link entity. The one exception: verifikat settled against each other on a bank account (a pair without external_ids) are undone with their settlement_id, which the items endpoint reports as settlement.settlement_id; the response then carries settlement_id and journal_entry_ids, and previous_journal_entry_id is null.',
+    'linkId is the outside row id, not a separate link entity. The one exception: verifikat settled against each other (on a bank account a pair without external_ids; on the skattekonto the rest of a 1:N link) are undone with their settlement_id, which the items endpoint reports as settlement.settlement_id; the response then carries settlement_id and journal_entry_ids, and previous_journal_entry_id is null. Unlinking a skattekonto row that a 1:N link spread over several verifikat undoes its settlement too.',
     'Unlinking a row whose verifikat was stornoed is the expected fix for a link_problem = entry_reversed item; the row then shows under unmatched_external again.',
   ],
   example: {

@@ -9,9 +9,21 @@ import { z } from 'zod'
 // unbooked, and lib/transactions/ignore.ts refuses a booked row through the
 // three anchors (journal_entry_id, payment allocations, voucher links), so
 // this schema only has to bound the shape.
+//
+// The same operation ignores a skattekonto row (crm#1178): its params name
+// the row as skattekonto_transaction_id, and the executor hands it to
+// setItemIgnored (lib/reconciliation/actions.ts), the function the
+// Avstämning page and the v1 ignore route call. Exactly one of the two ids.
+// Operations staged before carry transaction_id only and parse unchanged.
 
-export const IgnoreTransactionParamsSchema = z.object({
-  transaction_id: z.string().uuid(),
-  // true = ignore (default), false = restore a previously ignored row.
-  ignored: z.boolean().default(true),
-})
+export const IgnoreTransactionParamsSchema = z
+  .object({
+    transaction_id: z.string().uuid().optional(),
+    skattekonto_transaction_id: z.string().uuid().optional(),
+    // true = ignore (default), false = restore a previously ignored row.
+    ignored: z.boolean().default(true),
+  })
+  .refine((p) => Boolean(p.transaction_id) !== Boolean(p.skattekonto_transaction_id), {
+    message: 'exactly one of transaction_id or skattekonto_transaction_id is required',
+    path: ['transaction_id'],
+  })

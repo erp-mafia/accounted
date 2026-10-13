@@ -17,6 +17,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { CalendarPlus, Lock, Plus } from 'lucide-react'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { useCompany } from '@/contexts/CompanyContext'
+import { useCompanySettings } from '@/components/settings/useSettings'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useCustomers } from '@/lib/reference-data/hooks'
 import { formatCurrency } from '@/lib/utils'
@@ -58,6 +59,30 @@ export default function DeadlinesPage() {
   // keeps that one in the list so the edit form does not show it blank.
   const { customers } = useCustomers({ keepId: editingDeadline?.customer_id })
   const { toast } = useToast()
+
+  // Helårsmoms is due earlier with EU trade, and the yearly row below is
+  // dated by the "Handel med andra EU-länder" setting. When the books show
+  // EU trade (the declaration's EU rutor, /api/settings/eu-trade-signal)
+  // and the setting is off, that row is too late: say so (crm#1171).
+  const { settings } = useCompanySettings()
+  const euTradeCheckApplies =
+    !!settings?.vat_registered && settings.moms_period === 'yearly' && !settings.vat_has_eu_trade
+  const [euTradeOff, setEuTradeOff] = useState(false)
+  useEffect(() => {
+    if (!euTradeCheckApplies) return
+    let cancelled = false
+    fetch('/api/settings/eu-trade-signal')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (!cancelled && (json?.data?.has_eu_purchases || json?.data?.has_eu_sales)) setEuTradeOff(true)
+      })
+      .catch(() => {
+        // Best-effort signal: a failed fetch just hides the warning.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [euTradeCheckApplies, companyId])
 
   // Returns whether the list on screen was actually refreshed. Handlers that
   // confirm an outcome to the user need that: claiming a row moved while the
@@ -492,6 +517,10 @@ export default function DeadlinesPage() {
           }}
         >
           {t('no_system_deadlines_title')} {t('no_system_deadlines_description')}
+        </AttnLine>
+      ) : euTradeCheckApplies && euTradeOff ? (
+        <AttnLine action={{ label: t('eu_trade_off_action'), href: '/settings/tax' }}>
+          {t('eu_trade_off')}
         </AttnLine>
       ) : overdueInvoices.count > 0 ? (
         <AttnLine

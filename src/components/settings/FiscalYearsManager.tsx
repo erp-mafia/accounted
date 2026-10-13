@@ -53,6 +53,7 @@ export function FiscalYearsManager() {
   const [mutatingId, setMutatingId] = useState<string | null>(null)
   const [resetTarget, setResetTarget] = useState<FiscalPeriod | null>(null)
   const [editTarget, setEditTarget] = useState<FiscalPeriod | null>(null)
+  const [editMode, setEditMode] = useState<'edit' | 'start'>('edit')
 
   // Only owners/admins may change a period's lock state. The API enforces this
   // too (requireWrite); this just hides controls a viewer/member can't use.
@@ -62,6 +63,12 @@ export function FiscalYearsManager() {
 
   // Newest first: matches the API's ordering and reads most-recent-at-top.
   const sorted = [...periods].sort((a, b) => b.period_start.localeCompare(a.period_start))
+  const earliestId = sorted.length > 0 ? sorted[sorted.length - 1].id : null
+
+  function openEdit(period: FiscalPeriod, mode: 'edit' | 'start') {
+    setEditMode(mode)
+    setEditTarget(period)
+  }
 
   async function runLockAction(
     period: FiscalPeriod,
@@ -153,6 +160,12 @@ export function FiscalYearsManager() {
           const isMutating = mutatingId === p.id
           const closedExternally = status === 'closed' && p.closed_externally === true
           const canReopen = canManage && closedExternally && !p.closing_entry_id
+          // crm#1140: the company's first year may still get its start
+          // corrected within its month once it is locked or closed (the
+          // registration day instead of the 1st). Posted opening balances
+          // pin the start, so the action is not offered then.
+          const canCorrectStart =
+            canManage && status !== 'open' && p.id === earliestId && !p.opening_balance_entry_id
           return (
             <div key={p.id} className="flex flex-col items-start gap-3 border-b border-border px-1 py-3 sm:flex-row sm:items-center">
               <div className="min-w-0 flex-1">
@@ -171,18 +184,31 @@ export function FiscalYearsManager() {
                   </Badge>
                 )}
                 {/* Ändra is offered on open years only, like Lås and
-                    Nollställ: the PATCH route refuses locked and closed years
-                    outright, and the row already carries that chip. */}
+                    Nollställ: the PATCH route refuses locked and closed years,
+                    and the row already carries that chip. The one exception
+                    is Rätta startdatum on the first year, below. */}
                 {canManage && status === 'open' && (
                   <Button
                     variant="outline"
                     size="sm"
                     className="text-muted-foreground hover:text-foreground"
                     disabled={isMutating}
-                    onClick={() => setEditTarget(p)}
+                    onClick={() => openEdit(p, 'edit')}
                   >
                     <Pencil className="mr-1.5 h-4 w-4" />
                     {t('fy_action_edit')}
+                  </Button>
+                )}
+                {canCorrectStart && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-muted-foreground hover:text-foreground"
+                    disabled={isMutating}
+                    onClick={() => openEdit(p, 'start')}
+                  >
+                    <Pencil className="mr-1.5 h-4 w-4" />
+                    {t('fy_action_correct_start')}
                   </Button>
                 )}
                 {canManage && status === 'open' && (
@@ -263,7 +289,9 @@ export function FiscalYearsManager() {
 
       {editTarget && (
         <FiscalYearEditDialog
+          key={`${editTarget.id}-${editMode}`}
           period={editTarget}
+          mode={editMode}
           open={editTarget !== null}
           onOpenChange={(open) => {
             if (!open) setEditTarget(null)

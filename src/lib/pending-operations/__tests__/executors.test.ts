@@ -818,6 +818,7 @@ describe('commitPendingOperation: create_transaction', () => {
   it('happy path: inserts a transactions row with import_source=mcp and returns the id', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [{ id: 'ca-usd', is_primary: false, bank_connection_id: null }], error: null }) // default cash account
     enqueue({ data: { id: 'tx-42' }, error: null }) // executor insert
     enqueue({ data: null, error: null }) // dispatcher's update
 
@@ -835,7 +836,9 @@ describe('commitPendingOperation: create_transaction', () => {
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
 
     expect(result.status).toBe('committed')
-    expect(result.data).toMatchObject({ transaction_id: 'tx-42' })
+    // The only USD account is the row's account, as a bank-file import of the
+    // same row would have bound it (crm#1171).
+    expect(result.data).toMatchObject({ transaction_id: 'tx-42', cash_account_id: 'ca-usd' })
   })
 
   it('rejects with 400 when required fields are missing', async () => {
@@ -857,6 +860,7 @@ describe('commitPendingOperation: create_transaction', () => {
   it('returns 409 when external_id collides with an existing row', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [], error: null }) // default cash account: none
     enqueue({ data: null, error: { code: '23505', message: 'duplicate key' } as never }) // executor insert
     enqueue({ data: null, error: null }) // dispatcher's reject update
 
@@ -905,7 +909,78 @@ describe('commitPendingOperation: create_transaction', () => {
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
 
     expect(result.status).toBe('committed')
-    expect(result.data).toMatchObject({ transaction_id: 'tx-9' })
+    expect(result.data).toMatchObject({ transaction_id: 'tx-9', cash_account_id: 'ca-1935' })
+  })
+
+  // crm#1171: a row staged without ledger_account was stored with
+  // cash_account_id NULL, while every bank-feed and bank-file row is bound.
+  describe('without ledger_account: the default account in the row currency (crm#1171)', () => {
+    async function commitWith(
+      cashAccounts: { data: unknown; error: unknown },
+      params: Record<string, unknown> = {},
+    ) {
+      const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+      enqueue(cashAccounts) // default cash account lookup
+      enqueue({ data: { id: 'tx-7' }, error: null }) // executor transactions insert
+      enqueue({ data: null, error: null }) // dispatcher's update
+      const op = makePendingOp({
+        operation_type: 'create_transaction',
+        params: { date: '2026-05-01', amount: -99, description: 'Kortköp', currency: 'SEK', ...params },
+      })
+      const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+      const insert = findCall('transactions', 'insert')?.[0] as Record<string, unknown> | undefined
+      return { result, insert, lookupEqs: findCalls('cash_accounts', 'eq') }
+    }
+
+    it('binds the primary when the company has several enabled accounts in that currency', async () => {
+      const { result, insert, lookupEqs } = await commitWith({
+        data: [
+          { id: 'ca-1686', is_primary: false, bank_connection_id: null },
+          { id: 'ca-1930', is_primary: true, bank_connection_id: 'bc-1' },
+        ],
+        error: null,
+      })
+      expect(result.status).toBe('committed')
+      expect(insert?.cash_account_id).toBe('ca-1930')
+      expect(result.data).toMatchObject({ cash_account_id: 'ca-1930' })
+      // Only the company's own enabled accounts in the row's currency.
+      expect(lookupEqs).toEqual([['company_id', 'company-1'], ['enabled', true], ['currency', 'SEK']])
+    })
+
+    it('binds only an account of the given bank connection, never another bank', async () => {
+      const bound = await commitWith(
+        {
+          data: [
+            { id: 'ca-primary', is_primary: true, bank_connection_id: 'bc-1' },
+            { id: 'ca-other-bank', is_primary: false, bank_connection_id: 'bc-2' },
+          ],
+          error: null,
+        },
+        { bank_connection_id: 'bc-2' },
+      )
+      expect(bound.insert?.cash_account_id).toBe('ca-other-bank')
+
+      const ambiguous = await commitWith(
+        {
+          data: [
+            { id: 'ca-primary', is_primary: true, bank_connection_id: 'bc-1' },
+            { id: 'ca-a', is_primary: false, bank_connection_id: 'bc-2' },
+            { id: 'ca-b', is_primary: false, bank_connection_id: 'bc-2' },
+          ],
+          error: null,
+        },
+        { bank_connection_id: 'bc-2' },
+      )
+      expect(ambiguous.result.status).toBe('committed')
+      expect(ambiguous.insert?.cash_account_id).toBeNull()
+    })
+
+    it('leaves the row unassigned, and still creates it, when the lookup fails', async () => {
+      const { result, insert } = await commitWith({ data: null, error: { message: 'timeout' } })
+      expect(result.status).toBe('committed')
+      expect(insert?.cash_account_id).toBeNull()
+    })
   })
 
   it('rejects a non-19xx ledger_account with 400', async () => {

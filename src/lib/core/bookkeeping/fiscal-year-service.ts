@@ -21,11 +21,12 @@
  *     its successor; a year prepended before the earliest ends the day before
  *     it; years never overlap (409, also the DB exclusion constraint);
  *   - a closed or locked year is never edited (the name may change on an
- *     open one at any time); its dates move only through the guarded
- *     redate_fiscal_period RPC, which refuses whenever a verifikat, an
- *     opening balance, a lock, year-end work, a filing or an SIE hold would
- *     be affected (crm#1010: a year that already holds verifikat may still
- *     move a boundary over days that hold nothing);
+ *     open one at any time), except that the earliest year's start may be
+ *     corrected within its month after the bokslut (crm#1140); dates move
+ *     only through the guarded redate_fiscal_period RPC, which refuses
+ *     whenever a verifikat, an opening balance, a lock, year-end work, a
+ *     filing or an SIE hold would be affected (crm#1010: a year that already
+ *     holds verifikat may still move a boundary over days that hold nothing);
  *   - an enskild firma uses the calendar year (BFL 3 kap.);
  *   - an open prior year is information, never a gate: the create succeeds
  *     with the PRIOR_FISCAL_YEAR_STILL_OPEN warning (BFL 5 kap. 2 § and
@@ -372,6 +373,52 @@ interface RedateRpcResult {
 }
 
 /**
+ * The refusal for editing a closed or locked räkenskapsår, or null when the
+ * request is the first-year start correction (crm#1140): only the start of
+ * the company's earliest year moves, inside the month it already starts in,
+ * and the name stays. That is how a first year recorded from the 1st of the
+ * registration month is moved to the registration day (an aktiebolag is
+ * bokföringsskyldigt from its registration, and only the first year may
+ * start mid-month, BFL 2 and 3 kap.) after its bokslut has run. Nothing
+ * booked moves and every figure the bokslut computed in whole months stays
+ * the same, so redate_fiscal_period lets it through and still refuses on
+ * whatever depends on the exact start (verifikat outside, opening balances,
+ * depreciation, a finalized annual report, filings).
+ */
+function closedYearRefusal(
+  period: FiscalPeriod,
+  input: UpdateFiscalPeriodInput,
+  newStart: string,
+  newEnd: string,
+  isFirstPeriod: boolean,
+): Failure | null {
+  const code = period.is_closed ? 'FISCAL_PERIOD_UPDATE_CLOSED' : 'FISCAL_PERIOD_UPDATE_LOCKED'
+  const startOnly =
+    newStart !== period.period_start &&
+    newEnd === period.period_end &&
+    (!input.name || input.name === period.name)
+  if (!startOnly || !isFirstPeriod) return { ok: false, code }
+
+  const month = period.period_start.slice(0, 7)
+  if (newStart.slice(0, 7) === month) return null
+
+  const { year, month: monthNumber } = parseDateParts(period.period_start)
+  const lastDay = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate()
+  const monthStart = `${month}-01`
+  const monthEnd = `${month}-${String(lastDay).padStart(2, '0')}`
+  return {
+    ok: false,
+    code,
+    details: { rule: 'start_correction_same_month', allowed_from: monthStart, allowed_to: monthEnd },
+    messageSv: period.is_closed
+      ? `Startdatumet för ett stängt räkenskapsår kan bara rättas inom samma månad (${monthStart} till ${monthEnd}): ` +
+        'bokslutet är gjort på årets nuvarande antal månader.'
+      : `Startdatumet för ett låst räkenskapsår kan bara rättas inom samma månad (${monthStart} till ${monthEnd}). ` +
+        'Lås upp året först om startdatumet ska flyttas till en annan månad.',
+  }
+}
+
+/**
  * Rename or re-date an open, unlocked räkenskapsår. The name may change at
  * any time on an open year. New dates must keep the BFL 3 kap. shape and the
  * chain to the neighbouring years (checked here first, with the codes every
@@ -381,6 +428,10 @@ interface RedateRpcResult {
  * opening balances pin the start, and a lock, year-end work, a filing or an
  * SIE hold refuses the move. Its refusal names every blocker in Swedish. A
  * request that changes nothing answers the period as is.
+ *
+ * A closed or locked year is never edited, with one exception: the
+ * first-year start correction (closedYearRefusal), which the RPC checks
+ * again under the row lock.
  */
 export async function updateFiscalPeriod(
   ctx: OperationContext,
@@ -398,23 +449,30 @@ export async function updateFiscalPeriod(
     .single()
   if (fetchError || !period) return { ok: false, code: 'PERIOD_NOT_FOUND' }
 
-  if (period.is_closed) return { ok: false, code: 'FISCAL_PERIOD_UPDATE_CLOSED' }
-  if (period.locked_at) return { ok: false, code: 'FISCAL_PERIOD_UPDATE_LOCKED' }
-
   const newStart = input.period_start || (period.period_start as string)
   const newEnd = input.period_end || (period.period_end as string)
+  const datesMove = newStart !== period.period_start || newEnd !== period.period_end
 
-  if (newStart !== period.period_start || newEnd !== period.period_end) {
-    // The first period may start on any day (BFL 3 kap. 3 §); an enskild
-    // firma's first year may also run to 31 dec next year (förlängt
-    // räkenskapsår, max 18 months).
+  // The first period may start on any day (BFL 3 kap. 3 §); an enskild
+  // firma's first year may also run to 31 dec next year (förlängt
+  // räkenskapsår, max 18 months).
+  let isFirstPeriod = false
+  if (datesMove) {
     const { count: earlierCount } = await supabase
       .from('fiscal_periods')
       .select('id', { count: 'exact', head: true })
       .eq('company_id', companyId)
       .neq('id', fiscalPeriodId)
       .lt('period_start', newStart)
-    const isFirstPeriod = !earlierCount || earlierCount === 0
+    isFirstPeriod = !earlierCount || earlierCount === 0
+  }
+
+  if (period.is_closed || period.locked_at) {
+    const refusal = closedYearRefusal(period as FiscalPeriod, input, newStart, newEnd, isFirstPeriod)
+    if (refusal) return refusal
+  }
+
+  if (datesMove) {
 
     // An enskild firma must end on 31 december (BFL 3 kap.); subsequent
     // years also start on 1 januari. The first year may start any day.

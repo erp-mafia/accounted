@@ -422,6 +422,62 @@ export function rutorFromTotals(
   return rutor
 }
 
+/** The momsdeklaration of a period as the ledger gives it, before any presentation. */
+export interface VatDeclarationLedger extends VatAccountTotals {
+  dynamicVatAccounts: DynamicVatAccounts
+  rutor: VatDeclarationRutor
+}
+
+/**
+ * The one definition of a period's rutor: the company's own account
+ * classification (momskod on class 3-6 accounts, momsruta on 26xx accounts),
+ * the ledger totals measured over those accounts and the fixed BAS map, and
+ * rutorFromTotals over both. The declaration and the settlement proposal both
+ * read it, so the net the settlement books is the net the declaration files.
+ * The settlement once called rutorFromTotals without the company's accounts:
+ * a 26xx account with its own momsruta then landed in its BAS ruta (or, for a
+ * number BAS does not know, in none), and the whole-krona net moved.
+ */
+export async function loadVatDeclarationLedger(
+  supabase: SupabaseClient,
+  companyId: string,
+  start: string,
+  end: string,
+): Promise<VatDeclarationLedger> {
+  // Which of the company's OWN class 3 accounts count as momspliktig
+  // försäljning. Resolved from their "Standard moms" rather than a fixed BAS
+  // list, because Accounted seeds no varugrupp accounts: every 3011/3013-style
+  // konto is user-added and would otherwise never be fetched at all (#1261).
+  const dynamicVatAccounts = await fetchDynamicVatAccounts(supabase, companyId)
+
+  // The unconfigured class 3 accounts ride along so the declaration can name
+  // the ones with a balance (revenueAccountsWithoutRuta). They join p_accounts
+  // only, which measures; rutorFromTotals never sums them, so no filed figure
+  // moves.
+  const ledger = await fetchVatAccountTotals(
+    supabase, companyId, start, end,
+    [...dynamicVatAccounts.accounts, ...dynamicVatAccounts.unconfiguredRevenueAccounts.keys()],
+  )
+
+  return { ...ledger, dynamicVatAccounts, rutor: rutorFromTotals(ledger.totals, dynamicVatAccounts) }
+}
+
+/**
+ * Every VAT account (26xx) a VAT ruta of this declaration reads: the fixed BAS
+ * output accounts (rutor 10-12, 30-32, 60-62) and input accounts (ruta 48),
+ * plus any 26xx account the company routed to a ruta itself (vat_box, e.g. a
+ * Fortnox chart's 2617). These are the accounts a momsredovisning clears.
+ */
+export function vatClearingAccounts(
+  dynamicVatAccounts: Pick<DynamicVatAccounts, 'mappingByAccount'>,
+): string[] {
+  const accounts = new Set([...VAT_OUTPUT_ACCOUNTS, ...VAT_INPUT_ACCOUNTS])
+  for (const account of dynamicVatAccounts.mappingByAccount.keys()) {
+    if (account.startsWith('26')) accounts.add(account)
+  }
+  return [...accounts].sort()
+}
+
 /**
  * Project the reverse-charge input pair (2645/2647) out of a full totals map,
  * for `VatDeclaration.rcInputAccountTotals`.
@@ -539,26 +595,11 @@ export async function calculateVatDeclaration(
     supabase, companyId, periodType, year, period, options.fiscalPeriodId
   )
 
-  // Which of the company's OWN class 3 accounts count as momspliktig
-  // försäljning. Resolved from their "Standard moms" rather than a fixed BAS
-  // list, because Accounted seeds no varugrupp accounts: every 3011/3013-style
-  // konto is user-added and would otherwise never be fetched at all (#1261).
-  const dynamicVatAccounts = await fetchDynamicVatAccounts(supabase, companyId)
-
-  // Fetch and aggregate posted VAT-account activity for the period. The same
-  // RPC round trip carries the per-source_type entry counts for the metadata.
-  //
-  // The unconfigured class 3 accounts ride along so the declaration can name
-  // the ones with a balance (revenueAccountsWithoutRuta). They join p_accounts
-  // only, which measures; rutorFromTotals never sums them, so no filed figure
-  // moves.
-  const { totals, sourceTypeCounts } = await fetchVatAccountTotals(
-    supabase, companyId, start, end,
-    [...dynamicVatAccounts.accounts, ...dynamicVatAccounts.unconfiguredRevenueAccounts.keys()],
-  )
-
-  // Map account balances to momsdeklaration boxes
-  const rutor = rutorFromTotals(totals, dynamicVatAccounts)
+  // The rutor, the per-account totals behind them and the per-source_type
+  // entry counts for the metadata, from the one definition the settlement
+  // proposal reads too (loadVatDeclarationLedger).
+  const { totals, sourceTypeCounts, dynamicVatAccounts, rutor } =
+    await loadVatDeclarationLedger(supabase, companyId, start, end)
 
   // Compute per-rate base amounts from individual revenue accounts. The
   // company's own accounts carry their rate on the konto itself, so they land

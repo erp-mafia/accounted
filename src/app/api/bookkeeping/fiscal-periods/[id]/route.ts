@@ -13,9 +13,10 @@ const UpdateFiscalPeriodSchema = z.object({
 
 /**
  * PATCH /api/bookkeeping/fiscal-periods/[id]: rename or re-date an open
- * räkenskapsår. The rules (closed/locked years never change, dates never move
- * under posted verifikat, BFL 3 kap. shape, enskild firma calendar year,
- * overlap 409) live in lib/core/bookkeeping/fiscal-year-service.ts, shared
+ * räkenskapsår. The rules (closed/locked years never change except the
+ * earliest year's start within its month, dates never move under posted
+ * verifikat, BFL 3 kap. shape, enskild firma calendar year, overlap 409)
+ * live in lib/core/bookkeeping/fiscal-year-service.ts, shared
  * with the v1 operation fiscal-periods.update and gnubok_update_fiscal_period.
  * Failures answer the canonical `{ error: { code, message } }` envelope; the
  * fiscal-year settings UI reads error.message.

@@ -836,6 +836,9 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
     // No 1630 verifikat in the window: the ledger-twin guard lets it through.
     empty: ['journal_entries'],
   },
+  // The credit side depends on the legal form (enskild firma owner trips
+  // credit 2018), so the preview reads companies.entity_type.
+  gnubok_book_mileage_period: { rows: { companies: LIMITED_COMPANY } },
   gnubok_link_documents_to_vouchers: {
     args: {
       links: [{ document_id: SOME_UUID, voucher_series: 'A', voucher_number: 1, fiscal_year: 2026 }],

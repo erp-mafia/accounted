@@ -40,6 +40,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { runVatDeclarationChecks } from '@/lib/reports/vat-declaration-checks'
 import { rcInputTotalsFromDeclaration } from '@/lib/reports/vat-declaration'
+import { buildFiledAmounts } from '@/lib/reports/vat-manual-filing'
 import {
   isFilingBlocked,
   withRcBasisGapFindings,
@@ -47,6 +48,7 @@ import {
 } from '@/lib/reports/vat-filing-gate'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import type {
+  VatSettlementDateReason,
   VatSettlementExistingEntry,
   VatSettlementProposal,
 } from '@/lib/reports/vat-settlement'
@@ -127,6 +129,13 @@ function VatManualFilingCard({ xmlHref, pdfHref }: { xmlHref: string; pdfHref: s
       </div>
     </section>
   )
+}
+
+/** Why the proposal is not dated the period's last day (statutory surface, Swedish in both locales). */
+const SETTLEMENT_DATE_REASON: Record<VatSettlementDateReason, string> = {
+  period_closed: 'Räkenskapsåret som periodens sista dag hör till är stängt.',
+  period_locked: 'Perioden som periodens sista dag hör till är låst.',
+  company_lock_date: 'Bokföringen är låst till och med periodens sista dag.',
 }
 
 /**
@@ -211,6 +220,13 @@ function VatBookingCard({
               .
             </p>
           </div>
+        )}
+
+        {proposal?.entry_date_reason && !booked && (
+          <p className="text-[13px] leading-6 text-muted-foreground">
+            {SETTLEMENT_DATE_REASON[proposal.entry_date_reason]} Förslaget dateras
+            därför {formatDate(proposal.entry_date)}, första dagen som går att bokföra.
+          </p>
         )}
 
         {checksBlocked && (
@@ -1089,7 +1105,7 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
             onSelect={setChosenStep}
             errorCount={errorCount}
             warningCount={warningCount}
-            ruta49={data.rutor.ruta49}
+            ruta49={buildFiledAmounts(data.rutor).net}
             bookingStatus={bookingStatus}
             filed={filingRecord !== null}
           />
@@ -1346,16 +1362,25 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
               </div>
             </div>
 
-            {/* Ruta 49 as the emphasized document foot (concept skv-foot). */}
+            {/* Ruta 49 as the emphasized document foot (concept skv-foot),
+                as filed: every ruta in whole kronor and 49 their net
+                (buildFiledAmounts), the figure the PDF, the eSKD file, the
+                Skatteverket integration and the momsverifikat all carry. */}
             <div className="mt-8 flex items-baseline gap-3 border-t-2 border-foreground/80 pt-3">
               <span className="font-mono text-xs text-muted-foreground">49</span>
               <span className="flex-1 text-sm font-medium">
-                {data.rutor.ruta49 >= 0 ? 'Moms att betala' : 'Moms att återfå'}
+                {buildFiledAmounts(data.rutor).net >= 0 ? 'Moms att betala' : 'Moms att återfå'}
               </span>
               <span className="text-sm font-semibold tabular-nums">
-                {formatAmount(Math.abs(data.rutor.ruta49))} kr
+                {formatAmount(Math.abs(buildFiledAmounts(data.rutor).net))} kr
               </span>
             </div>
+            {buildFiledAmounts(data.rutor).net !== data.rutor.ruta49 && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Varje ruta lämnas i hela kronor (öretal faller bort) och ruta 49 är
+                summan av dem. Exakt i ören: {formatAmount(Math.abs(data.rutor.ruta49))} kr.
+              </p>
+            )}
           </div>
               <div className="flex justify-end">
                 <Button variant="outline" size="sm" onClick={() => setChosenStep(3)}>

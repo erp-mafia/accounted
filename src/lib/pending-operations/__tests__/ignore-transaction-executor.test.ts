@@ -143,4 +143,86 @@ describe('commitPendingOperation: ignore_transaction', () => {
     expect(result.error).toMatch(/transaction_id/)
     expect(findCalls('transactions', 'select')).toEqual([])
   })
+
+  it('rejects params that name both a bank transaction and a skattekonto row', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' } }) // CAS claim
+    enqueue({ data: null }) // finalize
+
+    const result = await commitPendingOperation(
+      supabase as never, 'user-1', 'company-1',
+      makePendingOp({ params: { transaction_id: TX_ID, skattekonto_transaction_id: SKV_ID, ignored: true } }),
+    )
+
+    expect(result.status).not.toBe('committed')
+    expect(result.error).toMatch(/exactly one/)
+    expect(findCalls('transactions', 'select')).toEqual([])
+    expect(findCalls('skattekonto_transactions', 'select')).toEqual([])
+  })
+})
+
+const SKV_ID = '00000000-0000-4000-8000-0000000000bb'
+
+describe('commitPendingOperation: ignore_transaction on a skattekonto row (crm#1178)', () => {
+  const skvOp = (ignored = true) =>
+    makePendingOp({ params: { skattekonto_transaction_id: SKV_ID, ignored } })
+
+  it('ignores an unlinked row through setItemIgnored and never touches transactions', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' } }) // CAS claim
+    enqueue({ data: { id: SKV_ID, journal_entry_id: null, is_ignored: false } }) // row fetch
+    enqueue({ data: [{ id: SKV_ID }] }) // guarded update
+    enqueue({ data: null }) // finalize
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', skvOp())
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ skattekonto_transaction_id: SKV_ID, is_ignored: true })
+    expect(findCalls('skattekonto_transactions', 'update')).toEqual([
+      [{ is_ignored: true, suggested_journal_entry_id: null, suggested_at: null }],
+    ])
+    expect(findCalls('transactions', 'select')).toEqual([])
+    expect(findCalls('transactions', 'update')).toEqual([])
+  })
+
+  it('restore clears the flag', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' } }) // CAS claim
+    enqueue({ data: { id: SKV_ID, journal_entry_id: null, is_ignored: true } }) // row fetch
+    enqueue({ data: [{ id: SKV_ID }] }) // update
+    enqueue({ data: null }) // finalize
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', skvOp(false))
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ skattekonto_transaction_id: SKV_ID, is_ignored: false })
+    expect(findCalls('skattekonto_transactions', 'update')).toEqual([[{ is_ignored: false }]])
+  })
+
+  it('refuses a row linked between staging and approval with TX_IGNORE_ALREADY_BOOKED', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' } }) // CAS claim
+    enqueue({ data: { id: SKV_ID, journal_entry_id: 'je-1', is_ignored: false } }) // linked now
+    enqueue({ data: null }) // finalize
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', skvOp())
+
+    expect(result.status).not.toBe('committed')
+    expect(result.code).toBe('TX_IGNORE_ALREADY_BOOKED')
+    expect(result.error).toMatch(/Koppla bort/)
+    expect(findCalls('skattekonto_transactions', 'update')).toEqual([])
+  })
+
+  it('answers NOT_FOUND for a row that is not the company\'s', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' } }) // CAS claim
+    enqueue({ data: null }) // row fetch: none
+    enqueue({ data: null }) // finalize
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', skvOp())
+
+    expect(result.status).not.toBe('committed')
+    expect(result.code).toBe('NOT_FOUND')
+    expect(findCalls('skattekonto_transactions', 'update')).toEqual([])
+  })
 })

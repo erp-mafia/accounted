@@ -799,6 +799,14 @@ describe('CreateCustomerSchema', () => {
     expect(result.success).toBe(true)
   })
 
+  it('reads an empty or whitespace-only email as no email', () => {
+    for (const email of ['', '   ']) {
+      const result = CreateCustomerSchema.safeParse(validCustomer({ email }))
+      expect(result.success).toBe(true)
+      expect(result.data?.email).toBeUndefined()
+    }
+  })
+
   it('rejects negative payment terms', () => {
     const result = CreateCustomerSchema.safeParse(validCustomer({ default_payment_terms: -10 }))
     expect(result.success).toBe(false)

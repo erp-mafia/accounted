@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import { ENTITY_TYPES } from '@/lib/company/entity-type'
+import { MILEAGE_COUNTER_ACCOUNTS } from '@/lib/mileage/counter-accounts'
 import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
 import {
   normalizeSwedbankId,
@@ -1386,7 +1387,9 @@ export const CreateCustomerSchema = z.object({
     .nullable()
     .optional(),
   contact_person: z.string().trim().max(200).nullable().optional(),
-  email: z.string().email('Invalid email address').optional(),
+  // Optional on the customer: '' (an untouched form field) means no email,
+  // same as omitting it. UpdateCustomerSchema reads '' as a clear.
+  email: emptyStringAsUndefined(z.string().email('Invalid email address')),
   phone: z.string().optional(),
   invoice_email_cc_addresses: invoiceEmailAddressList.nullable().optional(),
   invoice_email_bcc_addresses: invoiceEmailAddressList.nullable().optional(),
@@ -4980,7 +4983,8 @@ export const BookMileagePeriodSchema = z
     from: saneIsoDate,
     to: saneIsoDate,
     entry_date: saneIsoDate,
-    counter_account: z.enum(['2820', '2893', '1930']).default('2820'),
+    // Omitted: the legal form's default for the trips (mileageCounterAccounts).
+    counter_account: z.enum(MILEAGE_COUNTER_ACCOUNTS).optional(),
     employee_id: uuid.optional(),
   })
   .refine((p) => p.from <= p.to, { message: 'Ogiltigt datumintervall' })

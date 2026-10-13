@@ -32,6 +32,15 @@ export const POST = withRouteContext(
           { status: 400 }
         )
       }
+      if (result.code === 'COUNTER_ACCOUNT_NOT_ALLOWED') {
+        return NextResponse.json(
+          {
+            error: `Motkontot passar inte resorna. Välj ${result.allowed.join(' eller ')}.`,
+            allowed: result.allowed,
+          },
+          { status: 400 }
+        )
+      }
       if (result.code === 'PERIOD_NOT_OPEN') {
         return NextResponse.json(
           { error: 'Bokföringsdatumet ligger i en stängd eller låst period' },

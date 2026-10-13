@@ -13,6 +13,9 @@ const skvStatusMock = vi.fn()
 const emitMock = vi.fn()
 const settleMock = vi.fn()
 const undoSettlementMock = vi.fn()
+const splitMock = vi.fn()
+const releaseSkvSettlementMock = vi.fn()
+const undoSkvSettlementMock = vi.fn()
 
 vi.mock('@/lib/skatteverket/skattekonto-link', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/skatteverket/skattekonto-link')>()
@@ -39,6 +42,12 @@ vi.mock('@/lib/events/bus', () => ({ eventBus: { emit: (...args: unknown[]) => e
 vi.mock('../ledger-settlement', () => ({
   settleLedgerEntries: (...args: unknown[]) => settleMock(...args),
   undoLedgerSettlement: (...args: unknown[]) => undoSettlementMock(...args),
+}))
+// The skattekonto 1:N policy has its own suite (skattekonto-split.test.ts).
+vi.mock('../skattekonto-split', () => ({
+  splitSkattekontoRow: (...args: unknown[]) => splitMock(...args),
+  releaseSkattekontoSettlementOf: (...args: unknown[]) => releaseSkvSettlementMock(...args),
+  undoSkattekontoSettlement: (...args: unknown[]) => undoSkvSettlementMock(...args),
 }))
 
 import { SkattekontoLinkError } from '@/lib/skatteverket/skattekonto-link'
@@ -85,8 +94,8 @@ describe('matchPairs', () => {
         { external_ids: [R1], journal_entry_ids: [E1] },
         { external_ids: [R2], journal_entry_ids: [E1] },
         { external_ids: [R1, R2], journal_entry_ids: [E2] },
-        // 1:N is a bank-only shape (#1553): a skattekonto row never splits.
-        { external_ids: [R1], journal_entry_ids: [E1, E2] },
+        // N:M has no shape on any account.
+        { external_ids: [R1, R2], journal_entry_ids: [E1, E2] },
       ],
     })
 
@@ -97,7 +106,8 @@ describe('matchPairs', () => {
       { external_id: R2, journal_entry_id: E2, via: 'entry_total' },
     ])
     expect(result?.skipped.map((s) => s.code)).toEqual(['ALREADY_LINKED', 'UNSUPPORTED_PAIR_SHAPE'])
-    expect(result?.skipped[1].message).toMatch(/skattekontot/)
+    expect(result?.skipped[1].message).toMatch(/en händelse mot flera verifikat/)
+    expect(splitMock).not.toHaveBeenCalled()
     expect(linkToVouchersMock).not.toHaveBeenCalled()
     expect(linkGroupMock).toHaveBeenCalledWith(supabase, COMPANY, [R1, R2], E2)
     expect(emitMock).toHaveBeenCalledTimes(3)
@@ -997,6 +1007,73 @@ describe('matchPairs: skattekonto rows against a summarised verifikat (allow_rem
   })
 })
 
+describe('matchPairs: one skattekonto event over several verifikat (crm#1183)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    splitMock.mockReset()
+    emitMock.mockResolvedValue(undefined)
+  })
+
+  it('hands a 1:N skattekonto pair to the split policy and reports one applied link per verifikat with its slice', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    splitMock.mockResolvedValue({
+      ok: true,
+      slices: [
+        { journal_entry_id: E1, amount: 37 },
+        { journal_entry_id: E2, amount: -8 },
+      ],
+      primary_journal_entry_id: E1,
+      settlement_id: 'set-1',
+    })
+    const allocations = [
+      { journal_entry_id: E1, amount: 37 },
+      { journal_entry_id: E2, amount: -8 },
+    ]
+
+    const result = await matchPairs(supabase as never, COMPANY, USER, 'skattekonto', {
+      pairs: [{ external_ids: [R1], journal_entry_ids: [E1, E2], allocations }],
+    })
+
+    expect(splitMock).toHaveBeenCalledWith(supabase, COMPANY, USER, R1, [E1, E2], { dryRun: false, allocations })
+    expect(result?.applied).toEqual([
+      { external_id: R1, journal_entry_id: E1, via: 'split', allocated_amount: 37 },
+      { external_id: R1, journal_entry_id: E2, via: 'split', allocated_amount: -8 },
+    ])
+    expect(result?.skipped).toEqual([])
+    expect(emitMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('a dry run passes dryRun through and emits nothing', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    splitMock.mockResolvedValue({ ok: true, slices: [{ journal_entry_id: E1, amount: 37 }, { journal_entry_id: E2, amount: -8 }], primary_journal_entry_id: E1, settlement_id: null })
+    const result = await matchPairs(
+      supabase as never,
+      COMPANY,
+      USER,
+      'skattekonto',
+      { pairs: [{ external_ids: [R1], journal_entry_ids: [E1, E2] }] },
+      { dryRun: true },
+    )
+    expect(splitMock.mock.calls[0][5]).toEqual({ dryRun: true })
+    expect(result?.applied).toHaveLength(2)
+    expect(emitMock).not.toHaveBeenCalled()
+  })
+
+  it('reports the split policy\'s refusal as the skip, and refuses allow_remainder on a 1:N pair', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    splitMock.mockResolvedValue({ ok: false, code: 'PAIR_NOT_CLOSED', message: 'summerar inte' })
+    const result = await matchPairs(supabase as never, COMPANY, USER, 'skattekonto', {
+      pairs: [
+        { external_ids: [R1], journal_entry_ids: [E1, E2] },
+        { external_ids: [R2], journal_entry_ids: [E1, E2], allow_remainder: true },
+      ],
+    })
+    expect(result?.applied).toEqual([])
+    expect(result?.skipped.map((s) => s.code)).toEqual(['PAIR_NOT_CLOSED', 'UNSUPPORTED_PAIR_SHAPE'])
+    expect(splitMock).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('unmatchLink / setItemIgnored', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -1015,6 +1092,24 @@ describe('unmatchLink / setItemIgnored', () => {
     const result = await unmatchLink(supabase as never, COMPANY, USER, 'skattekonto', R1)
     expect(result).toEqual({ external_id: R1, previous_journal_entry_id: E1 })
     expect(emitMock.mock.calls[0][0]).toMatchObject({ type: 'reconciliation.unmatched', payload: { externalId: R1 } })
+    // A split's settlement on the verifikat goes with the row link (crm#1183).
+    expect(releaseSkvSettlementMock).toHaveBeenCalledWith(supabase, COMPANY, USER, E1)
+  })
+
+  it('an id that is no skattekonto row is tried as a 1630 settlement, and refused as before when it is none', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    unlinkMock.mockRejectedValue(new SkattekontoLinkError('saknas', 'TRANSACTION_NOT_FOUND'))
+    undoSkvSettlementMock.mockResolvedValueOnce({ settlement_id: R2, journal_entry_ids: [E1, E2] })
+    expect(await unmatchLink(supabase as never, COMPANY, USER, 'skattekonto', R2)).toEqual({
+      external_id: R2,
+      previous_journal_entry_id: null,
+      settlement_id: R2,
+      journal_entry_ids: [E1, E2],
+    })
+    undoSkvSettlementMock.mockResolvedValueOnce(null)
+    await expect(unmatchLink(supabase as never, COMPANY, USER, 'skattekonto', R2)).rejects.toMatchObject({
+      code: 'TRANSACTION_NOT_FOUND',
+    })
   })
 
   it('unlinks a bank transaction through the bank engine', async () => {

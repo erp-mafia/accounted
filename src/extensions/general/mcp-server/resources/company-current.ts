@@ -3,6 +3,7 @@ import { sumUsage, usageSince, USAGE_WINDOW_DAYS } from '@/lib/arkiv/usage'
 import { createLogger } from '@/lib/logger'
 import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { resolveInboxAddress } from '@/lib/documents/inbox-address'
 
 const log = createLogger('mcp-company-current')
 
@@ -38,7 +39,7 @@ export const companyCurrentResource: McpResource = {
       lastInvoiceSentRes,
       lastBankSyncRes,
       upcomingDeadlinesRes,
-      activeInboxRes,
+      inboxAddress,
       usageRes,
     ] = await Promise.all([
       supabase
@@ -172,7 +173,7 @@ export const companyCurrentResource: McpResource = {
         .limit(5),
 
       // The forwarding address: a document mailed here walks the same pipe as an upload.
-      supabase.from('company_inboxes').select('local_part').eq('company_id', companyId).eq('status', 'active').maybeSingle(),
+      resolveInboxAddress(supabase, companyId),
 
       // Arkiv phase 9e: the meter, read in the same batch; shown only inside the rollout.
       supabase.from('arkiv_usage_daily').select('activity, units').eq('company_id', companyId).gte('day', usageSince(USAGE_WINDOW_DAYS)),
@@ -260,12 +261,7 @@ export const companyCurrentResource: McpResource = {
         last_bank_sync_at: lastBankSyncRes.data?.last_synced_at ?? null,
       },
       upcoming_deadlines: upcomingDeadlinesRes.data ?? [],
-      intake: {
-        email:
-          process.env.RESEND_INBOUND_DOMAIN && (activeInboxRes.data as { local_part?: string } | null)?.local_part
-            ? `${(activeInboxRes.data as { local_part: string }).local_part}@${process.env.RESEND_INBOUND_DOMAIN}`
-            : null,
-      },
+      intake: { email: inboxAddress },
       arkiv_usage_365d: sumUsage((usageRes.data ?? []) as Array<{ activity: string; units: number }>, usageSince(USAGE_WINDOW_DAYS), USAGE_WINDOW_DAYS),
     }
   },

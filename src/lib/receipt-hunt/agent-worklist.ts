@@ -19,6 +19,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { resolveInboxAddress } from '@/lib/documents/inbox-address'
 import { fetchCandidateTransactions } from './hunt'
 import { lookupPortal } from './portal-directory'
 import { FETCH_DATE_WINDOW_DAYS, canHaveEmailReceipt } from './select'
@@ -241,19 +242,6 @@ async function fetchClaimedTargets(supabase: SupabaseClient, companyId: string) 
   return { journalEntryIds, transactionIds }
 }
 
-async function fetchInboxAddress(supabase: SupabaseClient, companyId: string): Promise<string | null> {
-  const domain = process.env.RESEND_INBOUND_DOMAIN
-  if (!domain) return null
-  const { data, error } = await supabase
-    .from('company_inboxes')
-    .select('local_part')
-    .eq('company_id', companyId)
-    .eq('status', 'active')
-    .maybeSingle()
-  if (error || !data) return null
-  return `${(data as { local_part: string }).local_part}@${domain}`
-}
-
 interface VerifikatContext {
   counterparty: string | null
   invoice_number: string | null
@@ -374,7 +362,7 @@ export async function resolveAgentWorklist(
     fetchVerifikatWindow(supabase, companyId, since),
     fetchCandidateTransactions(supabase, companyId),
     fetchClaimedTargets(supabase, companyId),
-    fetchInboxAddress(supabase, companyId),
+    resolveInboxAddress(supabase, companyId),
   ])
 
   const verifikat = verifikatWindow.rows.filter(

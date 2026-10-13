@@ -291,6 +291,41 @@ describe('reconciliation MCP tools', () => {
     ])
   })
 
+  it('reconcile_match stages one skattekonto event over two verifikat as ONE pair with the open amounts the reviewer saw (crm#1183)', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    const entry2 = '44444444-4444-4444-8444-444444444444'
+    matchMock.mockResolvedValue({
+      dry_run: true,
+      considered: 1,
+      applied: [
+        { external_id: ROW, journal_entry_id: ENTRY, via: 'split', allocated_amount: 37 },
+        { external_id: ROW, journal_entry_id: entry2, via: 'split', allocated_amount: -8 },
+      ],
+      settled: [],
+      skipped: [],
+    })
+    const out = (await tool('gnubok_reconcile_match').execute(
+      { account_key: 'skattekonto', pairs: [{ external_ids: [ROW], journal_entry_ids: [ENTRY, entry2] }], dry_run: true },
+      COMPANY,
+      USER,
+      supabase as never,
+      { type: 'api_key', id: 'key-1' } as never,
+    )) as Record<string, unknown>
+    const preview = out.preview as Record<string, unknown>
+    expect(preview.pairs).toEqual([
+      {
+        external_ids: [ROW],
+        journal_entry_ids: [ENTRY, entry2],
+        allocations: [
+          { journal_entry_id: ENTRY, amount: 37 },
+          { journal_entry_id: entry2, amount: -8 },
+        ],
+      },
+    ])
+    // A split leaves nothing on its verifikat: no remainder line for the reviewer.
+    expect(preview).not.toHaveProperty('remainders')
+  })
+
   it('reconcile_match keeps an N:1 group as ONE staged pair (feedback seq 292682: Skatteverket rows against one 1630 verifikat)', async () => {
     const { supabase } = createQueuedMockSupabase()
     const row2 = '77777777-7777-4777-8777-777777777777'

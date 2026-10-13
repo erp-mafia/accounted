@@ -152,10 +152,10 @@ export const fiscalPeriodsUpdate = defineOperation({
     useWhen:
       'A year was created with the wrong dates or name, for example a first year that starts a day after the registration date at Bolagsverket.',
     doNotUseFor:
-      'Moving verifikat between years, changing a locked or closed year, or re-dating a year whose annual report or declaration is already filed.',
+      'Moving verifikat between years, changing a locked or closed year (beyond correcting the earliest year start within its month), or re-dating a year whose annual report or declaration is already filed.',
     pitfalls: [
       'A re-date that would affect what the year holds answers 409 FISCAL_PERIOD_DATES_BLOCKED; details.blockers names every reason (for example entries_outside with the first and last date outside the new dates). Send only name to rename.',
-      'A locked year answers 409 FISCAL_PERIOD_UPDATE_LOCKED, a closed one 409 FISCAL_PERIOD_UPDATE_CLOSED.',
+      'A locked year answers 409 FISCAL_PERIOD_UPDATE_LOCKED, a closed one 409 FISCAL_PERIOD_UPDATE_CLOSED. One exception: the earliest year may move only its start within the month it starts in (to the registration day), also when closed or locked.',
       'Only the earliest year can move its start and only the latest year its end: a boundary shared with a neighbouring year answers 400 FISCAL_PERIOD_NOT_CONTIGUOUS.',
     ],
     example: {

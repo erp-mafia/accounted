@@ -26,6 +26,11 @@ import {
   type BankLinkRefusalCode,
 } from './bank-reconciliation'
 import { getSkattekontoReconciliationStatus } from './skattekonto-reconciliation'
+import {
+  releaseSkattekontoSettlementOf,
+  splitSkattekontoRow,
+  undoSkattekontoSettlement,
+} from './skattekonto-split'
 import { settleLedgerEntries, undoLedgerSettlement, type LedgerSettlement } from './ledger-settlement'
 import { parseAccountKey } from './schemas'
 
@@ -49,10 +54,12 @@ export interface ReconciliationPair {
   external_ids: string[]
   journal_entry_ids: string[]
   /**
-   * Bank only, for the 1:N shape (one transaction over several verifikat):
-   * the signed slice per verifikat, in the transaction's sign convention.
-   * Omitted: each slice defaults to the voucher's net line on the account.
-   * Either way the slices must sum to the transaction amount.
+   * For the 1:N shape (one outside row over several verifikat): the signed
+   * slice per verifikat, in the row's sign convention. Bank: omitted, each
+   * slice defaults to the voucher's net line on the account; either way the
+   * slices must sum to the transaction amount. Skattekonto: each slice is the
+   * verifikat's whole open amount on 1630 (skattekonto-split.ts); slices
+   * given (a staged preview's) must still equal it.
    */
   allocations?: Array<{ journal_entry_id: string; amount: number }>
   /**
@@ -83,8 +90,11 @@ export type PairSkipCode =
 export interface AppliedLink {
   external_id: string
   journal_entry_id: string
-  /** Skattekonto: how the link was accepted; 'partial' = linked with a remainder (allow_remainder). */
-  via?: 'line' | 'entry_total' | 'lines' | 'partial'
+  /**
+   * Skattekonto: how the link was accepted; 'partial' = linked with a
+   * remainder (allow_remainder); 'split' = one event over several verifikat.
+   */
+  via?: 'line' | 'entry_total' | 'lines' | 'partial' | 'split'
   /** Present on the links of a 1:N split: the slice of the row this verifikat settles. */
   allocated_amount?: number
   /**
@@ -444,9 +454,9 @@ async function proposalsAsPairs(
  * exactly one verifikat (bank: independent links per transaction; skattekonto:
  * all-or-nothing with the sum settling the verifikat, or, with the pair's
  * allow_remainder, against a summarised verifikat that keeps the rest as its
- * remainder), or, on a bank account,
- * ONE transaction against SEVERAL verifikat (1:N, issue #1553): all-or-nothing
- * with the slices summing to the transaction, or, on a bank account, NO
+ * remainder), or ONE outside row against SEVERAL verifikat (1:N; bank issue
+ * #1553, skattekonto crm#1183 in skattekonto-split.ts): all-or-nothing
+ * with the slices summing to the row, or, on a bank account, NO
  * outside row and two or more verifikat that take each other out (a wrong
  * verifikat and its hand-made rättelse: all-or-nothing, reported in
  * `settled`). Any other shape is reported as
@@ -541,22 +551,47 @@ export async function matchPairs(
       continue
     }
     // N outside rows may settle ONE verifikat (the worksheet selection). ONE
-    // bank transaction may settle SEVERAL verifikat (the split, #1553). A
-    // skattekonto row never splits (Skatteverket posts each event as its own
-    // row), and N:M is refused loudly, never silently reduced.
+    // outside row may settle SEVERAL verifikat (the split: bank #1553, and on
+    // the skattekonto one event booked over several verifikat, crm#1183).
+    // N:M is refused loudly, never silently reduced.
     if (pair.journal_entry_ids.length !== 1) {
       const journalEntryIds = [...new Set(pair.journal_entry_ids)]
-      const isBankSplit =
-        parsed.kind === 'bank' && pair.external_ids.length === 1 && journalEntryIds.length >= 2
-      if (!isBankSplit) {
+      const isSplit = pair.external_ids.length === 1 && journalEntryIds.length >= 2
+      if (!isSplit || (parsed.kind === 'skattekonto' && pair.allow_remainder === true)) {
         skipped.push({
           pair,
           code: 'UNSUPPORTED_PAIR_SHAPE',
-          message:
-            parsed.kind === 'bank'
-              ? 'Ett par är en eller flera händelser mot ett verifikat, eller en händelse mot flera verifikat.'
-              : 'Flera verifikat i samma par stöds inte på skattekontot: ett par är en eller flera händelser mot ett verifikat.',
+          message: isSplit
+            ? 'allow_remainder hör till ett samlingsverifikat: en händelse mot flera verifikat kopplas bara när de tillsammans är exakt händelsens belopp.'
+            : 'Ett par är en eller flera händelser mot ett verifikat, eller en händelse mot flera verifikat.',
         })
+        continue
+      }
+      if (parsed.kind === 'skattekonto') {
+        // The whole policy, dry run included, is skattekonto-split.ts.
+        const [externalId] = pair.external_ids
+        try {
+          const r = await splitSkattekontoRow(supabase, companyId, userId, externalId, journalEntryIds, {
+            dryRun,
+            ...(pair.allocations ? { allocations: pair.allocations } : {}),
+          })
+          if (!r.ok) {
+            skipped.push({ pair, code: r.code, message: r.message })
+            continue
+          }
+          for (const slice of r.slices) {
+            applied.push({
+              external_id: externalId,
+              journal_entry_id: slice.journal_entry_id,
+              via: 'split',
+              allocated_amount: slice.amount,
+            })
+            if (!dryRun) await emitMatched(externalId, slice.journal_entry_id)
+          }
+        } catch (err) {
+          const { code, message } = skipCodeFor(err)
+          skipped.push({ pair, code, message })
+        }
         continue
       }
       // How many verifikat one row may split across is the engine's rule
@@ -749,9 +784,11 @@ export interface UnmatchResult {
 /**
  * Remove one link. link id = the outside row's id (transaction or
  * skattekonto row), which is the one-link-per-row identity both kinds share,
- * or, on a bank account, the settlement_id of verifikat settled against each
- * other (ledger-settlement.ts): an id that is no transaction of the company
- * is tried as one before the bank engine reports it missing.
+ * or the settlement_id of verifikat settled against each other (bank:
+ * ledger-settlement.ts; skattekonto: the rest of a 1:N link,
+ * skattekonto-split.ts): an id that is no outside row of the company is
+ * tried as one before it is reported missing. Unlinking a skattekonto row
+ * also undoes the settlement its verifikat is in.
  */
 export async function unmatchLink(
   supabase: SupabaseClient,
@@ -765,8 +802,32 @@ export async function unmatchLink(
 
   let previous: string | null = null
   if (parsed.kind === 'skattekonto') {
-    const r = await unlinkSkattekontoRow(supabase, companyId, linkId)
+    let r: Awaited<ReturnType<typeof unlinkSkattekontoRow>>
+    try {
+      r = await unlinkSkattekontoRow(supabase, companyId, linkId)
+    } catch (err) {
+      // No row of the company: the id may be a settlement on 1630 (an
+      // item's settlement.settlement_id), as on the bank.
+      if (err instanceof SkattekontoLinkError && err.code === 'TRANSACTION_NOT_FOUND') {
+        const undone = await undoSkattekontoSettlement(supabase, companyId, userId, linkId)
+        if (undone) {
+          return {
+            external_id: linkId,
+            previous_journal_entry_id: null,
+            settlement_id: undone.settlement_id,
+            journal_entry_ids: undone.journal_entry_ids,
+          }
+        }
+      }
+      throw err
+    }
     previous = r.previous_journal_entry_id
+    // A 1:N link is the row on its primary verifikat plus a settlement of
+    // the rest (skattekonto-split.ts): unlinking the row undoes both.
+    const released = await releaseSkattekontoSettlementOf(supabase, companyId, userId, previous)
+    if (released) {
+      log.info('skattekonto split undone with its row link', { companyId, rowId: linkId, settlementId: released })
+    }
   } else {
     const { data: tx } = await supabase
       .from('transactions')

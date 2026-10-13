@@ -69,6 +69,8 @@ function mockSupabase(opts: {
   dimensionsEnabled?: boolean
   // skatteverket_tokens rows for the connection-health block. Default: none.
   skvTokenRows?: Array<{ user_id: string; status: string | null; created_at: string | null }>
+  // company_inboxes.local_part of the active inbox (crm#1174). undefined → no row.
+  inboxLocalPart?: string
   errors?: { profile?: string; memory?: string; atoms?: string }
 }) {
   const profile = opts.profile === undefined ? null : opts.profile
@@ -189,6 +191,14 @@ function mockSupabase(opts: {
       }
       if (table === 'skatteverket_tokens') {
         return chainResolving(opts.skvTokenRows ?? [])
+      }
+      if (table === 'company_inboxes') {
+        const chain = chainResolving(null) as Record<string, unknown>
+        chain.maybeSingle = vi.fn().mockResolvedValue({
+          data: opts.inboxLocalPart === undefined ? null : { local_part: opts.inboxLocalPart },
+          error: null,
+        })
+        return chain
       }
       throw new Error(`Unexpected table in test mock: ${table}`)
     }),
@@ -484,6 +494,45 @@ describe('gnubok_get_agent_briefing tool', () => {
       { type: 'api_key' }
     )) as { dimensions?: { enabled: boolean } }
     expect(result.dimensions?.enabled).toBe(false)
+  })
+})
+
+// crm#1174: an agent asked to route a card provider's receipts into Accounted
+// looked in the briefing and the inbox list for the company's inbox address,
+// found neither, and told the user there was none. The address existed.
+describe('inbox block (crm#1174)', () => {
+  const tool = () => tools.find((t) => t.name === 'gnubok_get_agent_briefing')!
+
+  afterEach(() => {
+    delete process.env.RESEND_INBOUND_DOMAIN
+  })
+
+  it('carries the company inbox address with one sentence on what forwarding does', async () => {
+    process.env.RESEND_INBOUND_DOMAIN = 'in.example.test'
+    const supabase = mockSupabase({ profile: null, inboxLocalPart: 'acme-7f3k' })
+    const result = (await tool().execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      inbox: { address: string | null; note: string }
+    }
+    expect(result.inbox.address).toBe('acme-7f3k@in.example.test')
+    expect(result.inbox.note).toMatch(/^Forward mail here/)
+    expect(result.inbox.note).toContain('mail body')
+    // crm#1171: an agent holding the bytes mailed them and waited instead.
+    expect(result.inbox.note).toContain('gnubok_create_document_upload')
+    expect(result.inbox.note).toContain('gnubok_complete_document_upload')
+  })
+
+  it('states that there is no address instead of leaving the key out', async () => {
+    const supabase = mockSupabase({ profile: null })
+    const result = (await tool().execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      inbox: { address: string | null; note: string }
+    }
+    expect(result.inbox.address).toBeNull()
+    expect(result.inbox.note).toContain('No inbox address')
+    expect(result.inbox.note).toContain('gnubok_create_document_upload')
+  })
+
+  it('names the inbox address in the description, where an agent decides what to call', () => {
+    expect(tool().description).toContain('inbox address')
   })
 })
 

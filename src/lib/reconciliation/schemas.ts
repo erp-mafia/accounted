@@ -27,7 +27,8 @@ export const ReconciliationKindSchema = z.enum(['bank', 'skattekonto', 'manual']
 
 /**
  * One link request: outside rows against verifikat (N:1, on the skattekonto
- * optionally with a remainder), a bank 1:N with allocations, or, on a bank
+ * optionally with a remainder), one row against several verifikat (1:N: bank
+ * with optional allocations, skattekonto at the open amounts), or, on a bank
  * account, NO outside rows and two or more
  * verifikat that take each other out on the account (a wrong verifikat and
  * the rättelse booked by hand: lib/reconciliation/ledger-settlement.ts).
@@ -39,8 +40,9 @@ export const ReconciliationPairSchema = z
     // Up to MAX_BANK_ROW_SPLIT for a bank 1:N split; the other shapes carry
     // one verifikat, or are capped by their own engine (ledger-settlement.ts).
     journal_entry_ids: z.array(z.string().uuid()).min(1).max(MAX_BANK_ROW_SPLIT),
-    // Bank 1:N only: the signed slice per verifikat (transaction sign
-    // convention). Omitted: each slice defaults to the voucher's bank line.
+    // 1:N only: the signed slice per verifikat (the row's sign convention).
+    // Bank, omitted: each slice defaults to the voucher's bank line.
+    // Skattekonto: must equal each verifikat's open amount on 1630.
     allocations: z
       .array(z.object({ journal_entry_id: z.string().uuid(), amount: z.number() }))
       .min(2)
@@ -356,7 +358,7 @@ export const ReconciliationItemSchema = z.object({
    * it, or ignore it.
    */
   before_history: z.boolean().optional(),
-  /** Bank ledger rows only: the settlement the verifikat is part of, when any. */
+  /** Ledger rows: the settlement the verifikat is part of, when any (bank, and the skattekonto's 1:N links). */
   settlement: ReconciliationSettlementSchema.nullable().optional(),
   actions: z.array(ReconciliationItemActionSchema),
 })

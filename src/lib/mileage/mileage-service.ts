@@ -11,6 +11,13 @@ import { getLineItemAccount } from '@/lib/salary/account-mapping'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { roundOre } from '@/lib/money'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
+import {
+  isOwnerDeposit,
+  resolveMileageCounterAccount,
+  type MileageCounterAccount,
+} from '@/lib/mileage/counter-accounts'
+import type { EntityType } from '@/types'
 
 /**
  * Körjournal service: trip log per Skatteverket documentation requirements
@@ -26,10 +33,6 @@ const KM_PER_MIL = 10
 
 /** BAS 7331: skattefria bilersättningar. */
 const MILEAGE_TAXFREE_ACCOUNT = getLineItemAccount('mileage_taxfree')
-
-/** Counter accounts a mileage verifikat may credit. */
-export const MILEAGE_COUNTER_ACCOUNTS = ['2820', '2893', '1930'] as const
-export type MileageCounterAccount = (typeof MILEAGE_COUNTER_ACCOUNTS)[number]
 
 const round2 = roundOre
 
@@ -187,14 +190,22 @@ export type BookMileageResult =
         | 'STAMP_FAILED'
       journalEntryId?: string
     }
+  | {
+      ok: false
+      code: 'COUNTER_ACCOUNT_NOT_ALLOWED'
+      /** What the company may credit for these trips, the default first. */
+      allowed: MileageCounterAccount[]
+    }
 
 /**
  * Book all draft trips in [from, to] as one milersättning verifikat:
- * debit 7331 per vehicle type, credit the chosen counter account
- * (2820 skuld till anställda, 2893 avräkning aktieägare, or 1930 when the
- * payout already left the bank). Trips are stamped booked + linked to the
- * verifikat afterwards; the trip rows are the körjournal underlag (7-year
- * retention via DB trigger).
+ * debit 7331 per vehicle type, credit the counter account the legal form
+ * allows for these trips (mileageCounterAccounts: 2820 skuld till anställda,
+ * the owner's account, or 1930 when the payout already left the bank; an
+ * enskild firma owner's own trips credit 2018 Övriga egna insättningar).
+ * Omitted, the form's default is used. Trips are stamped booked + linked to
+ * the verifikat afterwards; the trip rows are the körjournal underlag
+ * (7-year retention via DB trigger).
  */
 export async function bookMileagePeriod(
   supabase: SupabaseClient,
@@ -203,8 +214,11 @@ export async function bookMileagePeriod(
   params: {
     from: string
     to: string
-    counterAccount: MileageCounterAccount
+    /** Omitted: the legal form's default for these trips. */
+    counterAccount?: string | null
     entryDate: string
+    /** Whatever the caller already loaded; resolveCompanyEntityType reads the company otherwise. */
+    entityType?: EntityType | null
     employeeId?: string
     createdVia?: 'manual' | 'mcp'
     /**
@@ -264,6 +278,13 @@ export async function bookMileagePeriod(
   const distinctEmployees = new Set(trips.map((t) => t.employee_id ?? 'unassigned'))
   if (distinctEmployees.size > 1) {
     return { ok: false, code: 'MIXED_EMPLOYEES' }
+  }
+
+  const entityType = await resolveCompanyEntityType(supabase, companyId, params.entityType)
+  const ownerTrips = trips.every((t) => !t.employee_id)
+  const counter = resolveMileageCounterAccount(entityType, ownerTrips, params.counterAccount)
+  if (!counter.ok) {
+    return { ok: false, code: 'COUNTER_ACCOUNT_NOT_ALLOWED', allowed: counter.allowed }
   }
 
   const period = await resolvePeriodStatusForDate(supabase, companyId, params.entryDate)
@@ -342,10 +363,12 @@ export async function bookMileagePeriod(
           line_description: `Milersättning ${VEHICLE_TYPE_LABELS[s.vehicle_type]}: ${s.total_mil} mil × ${s.rate_per_mil} kr`,
         })),
         {
-          account_number: params.counterAccount,
+          account_number: counter.account,
           debit_amount: 0,
           credit_amount: totalAmount,
-          line_description: 'Milersättning att utbetala',
+          line_description: isOwnerDeposit(entityType, counter.account)
+            ? 'Milersättning, egen insättning'
+            : 'Milersättning att utbetala',
         },
       ],
     })

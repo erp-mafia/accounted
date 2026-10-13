@@ -280,16 +280,21 @@ describe('redate_fiscal_period: refusals name what blocks.pg', () => {
   })
 
   it('refuses a locked year and a closed year', async () => {
+    // The end, and a start moved into another month: the first-year start
+    // correction (crm#1140, describe block below) is the only move a locked
+    // or closed year allows.
     const locked = await seedFirstYear()
     await getPool().query(`UPDATE public.fiscal_periods SET locked_at = now() WHERE id = $1`, [locked.periodId])
-    expect(blockerCodes(await redate(locked, '2025-04-23', null))).toContain('period_locked')
+    expect(blockerCodes(await redate(locked, null, '2026-07-31'))).toContain('period_locked')
+    expect(blockerCodes(await redate(locked, '2025-03-31', null))).toContain('period_locked')
 
     const closed = await seedFirstYear()
     await getPool().query(
       `UPDATE public.fiscal_periods SET is_closed = true, closed_at = now() WHERE id = $1`,
       [closed.periodId],
     )
-    expect(blockerCodes(await redate(closed, '2025-04-23', null))).toContain('period_closed')
+    expect(blockerCodes(await redate(closed, null, '2026-07-31'))).toContain('period_closed')
+    expect(blockerCodes(await redate(closed, '2025-03-31', null))).toContain('period_closed')
   })
 
   it('refuses when the company lock date reaches a changed day, not otherwise', async () => {
@@ -301,7 +306,9 @@ describe('redate_fiscal_period: refusals name what blocks.pg', () => {
       [year.userId, year.companyId],
     )
 
-    const covered = await redate(year, '2025-04-23', null)
+    // A start moved into another month (inside its month it is the
+    // first-year start correction, which the lock date does not block).
+    const covered = await redate(year, '2025-03-31', null)
     expect(blockerCodes(covered)).toEqual(['company_lock_date'])
     expect(covered.blockers?.[0]).toMatchObject({ locked_through: '2025-06-30' })
 
@@ -383,6 +390,180 @@ describe('redate_fiscal_period: refusals name what blocks.pg', () => {
     expect(blockerCodes(await redate(second, '2026-09-02', null)).sort()).toEqual(
       ['not_contiguous', 'start_not_first_of_month'],
     )
+  })
+})
+
+/**
+ * crm#1140: the first räkenskapsår came over from the previous system as
+ * starting on the 1st of the registration month, the bokslut was run here,
+ * and only then was the start corrected to the registration day. Moving the
+ * start of the earliest year inside its month reassigns nothing, so the
+ * year's close and lock, its closing verifikat and the company lock date do
+ * not block it; everything that depends on the exact start still does.
+ */
+describe('redate_fiscal_period: correcting the first year start after the bokslut (crm#1140).pg', () => {
+  interface ClosedYear extends Year {
+    closingEntryId: string
+    nextPeriodId: string
+  }
+
+  /** A first year 2025-03-01..2026-02-28, booked from 2025-03-20, closed, locked, behind the lock date. */
+  async function seedClosedFirstYear(opts: { lockDate?: boolean } = {}): Promise<ClosedYear> {
+    const year = await seedFirstYear({ start: '2025-03-01', end: '2026-02-28' })
+    await post(year, '2025-03-20', 1)
+    await post(year, '2026-02-10', 2)
+    const closingEntryId = await post(year, '2026-02-28', 3, 'year_end')
+    const nextPeriodId = await insertFiscalPeriod({
+      userId: year.userId,
+      companyId: year.companyId,
+      periodStart: '2026-03-01',
+      periodEnd: '2027-02-28',
+      name: 'Räkenskapsår 2026/2027',
+    })
+    await getPool().query(
+      `UPDATE public.fiscal_periods
+          SET locked_at = now(), is_closed = true, closed_at = now(), closing_entry_id = $2
+        WHERE id = $1`,
+      [year.periodId, closingEntryId],
+    )
+    if (opts.lockDate !== false) {
+      await getPool().query(
+        `INSERT INTO public.company_settings (user_id, company_id, bookkeeping_locked_through)
+         VALUES ($1, $2, '2026-02-28')`,
+        [year.userId, year.companyId],
+      )
+    }
+    return { ...year, closingEntryId, nextPeriodId }
+  }
+
+  async function stateRow(periodId: string) {
+    const { rows } = await getPool().query<{
+      period_start: string
+      is_closed: boolean
+      locked: boolean
+      closing_entry_id: string | null
+    }>(
+      `SELECT period_start::text, is_closed, locked_at IS NOT NULL AS locked, closing_entry_id
+         FROM public.fiscal_periods WHERE id = $1`,
+      [periodId],
+    )
+    return rows[0]
+  }
+
+  it('moves the start to the registration day and leaves the close, the lock and every verifikat as they were', async () => {
+    const year = await seedClosedFirstYear()
+    const before = await entriesSnapshot(year.companyId)
+
+    const result = await redate(year, '2025-03-17', null)
+
+    expect(result).toMatchObject({
+      ok: true,
+      changed: true,
+      period: { period_start: '2025-03-17', period_end: '2026-02-28' },
+      previous: { period_start: '2025-03-01', period_end: '2026-02-28' },
+    })
+    expect(await stateRow(year.periodId)).toEqual({
+      period_start: '2025-03-17',
+      is_closed: true,
+      locked: true,
+      closing_entry_id: year.closingEntryId,
+    })
+    expect(await entriesSnapshot(year.companyId)).toEqual(before)
+
+    const { rows } = await getPool().query<{ old_start: string; new_start: string }>(
+      `SELECT old_state->>'period_start' AS old_start, new_state->>'period_start' AS new_start
+         FROM public.audit_log
+        WHERE table_name = 'fiscal_periods' AND record_id = $1 AND action = 'UPDATE'
+          AND old_state->>'period_start' IS DISTINCT FROM new_state->>'period_start'`,
+      [year.periodId],
+    )
+    expect(rows).toEqual([{ old_start: '2025-03-01', new_start: '2025-03-17' }])
+
+    // The locks still hold: nothing can be booked on a day the year gained.
+    const back = await redate(year, '2025-03-01', null)
+    expect(back.ok).toBe(true)
+    await expect(post(year, '2025-03-05', 4)).rejects.toThrow(/lock|låst|closed|stängd/i)
+  })
+
+  it('a dry run answers the same verdict on a closed year and writes nothing', async () => {
+    const year = await seedClosedFirstYear()
+    const result = await redate(year, '2025-03-17', null, { dryRun: true })
+    expect(result).toMatchObject({ ok: true, changed: true, dry_run: true })
+    expect((await stateRow(year.periodId)).period_start).toBe('2025-03-01')
+  })
+
+  it('still refuses a start in another month, an end move and a rename on the closed year', async () => {
+    const year = await seedClosedFirstYear()
+
+    expect(blockerCodes(await redate(year, '2025-04-01', null))).toEqual(
+      expect.arrayContaining(['period_closed', 'period_locked', 'year_end_entries', 'company_lock_date']),
+    )
+    expect(blockerCodes(await redate(year, '2025-03-17', '2026-01-31'))).toEqual(
+      expect.arrayContaining(['period_closed', 'period_locked']),
+    )
+    expect(blockerCodes(await redate(year, '2025-03-17', null, { name: 'Första räkenskapsåret' }))).toEqual(
+      expect.arrayContaining(['period_closed', 'period_locked']),
+    )
+    expect((await stateRow(year.periodId)).period_start).toBe('2025-03-01')
+  })
+
+  it('still refuses when a verifikat would fall outside, naming it', async () => {
+    const year = await seedClosedFirstYear()
+    const result = await redate(year, '2025-03-21', null)
+    expect(blockerCodes(result)).toEqual(['entries_outside'])
+    expect(result.blockers?.[0]).toMatchObject({ count: 1, first_date: '2025-03-20' })
+  })
+
+  it('still refuses when opening balances, a finalized annual report or a filed declaration depend on the start', async () => {
+    const withIb = await seedFirstYear({ start: '2025-03-01', end: '2026-02-28' })
+    await post(withIb, '2025-03-01', 1, 'opening_balance')
+    await getPool().query(`UPDATE public.fiscal_periods SET locked_at = now() WHERE id = $1`, [withIb.periodId])
+    expect(blockerCodes(await redate(withIb, '2025-03-17', null))).toEqual(
+      expect.arrayContaining(['opening_balance', 'entries_outside']),
+    )
+
+    const withReport = await seedClosedFirstYear()
+    await getPool().query(
+      `INSERT INTO public.annual_report_versions
+         (company_id, fiscal_period_id, user_id, version_number, schema_version, framework, report_data, content_hash,
+          status, finalized_at)
+       VALUES ($1, $2, $3, 1, '1', 'k2', '{}', repeat('e', 64), 'ready_for_signature', now())`,
+      [withReport.companyId, withReport.periodId, withReport.userId],
+    )
+    expect(blockerCodes(await redate(withReport, '2025-03-17', null))).toEqual(['annual_report'])
+
+    const declared = await seedClosedFirstYear()
+    await getPool().query(
+      `INSERT INTO public.deadlines (company_id, user_id, title, due_date, deadline_type, tax_deadline_type, tax_period, status)
+       VALUES ($1, $2, 'Momsdeklaration helår 2025/2026', '2026-05-12', 'tax', 'moms_yearly', '2025/2026', 'submitted')`,
+      [declared.companyId, declared.userId],
+    )
+    expect(blockerCodes(await redate(declared, '2025-03-17', null))).toEqual(['annual_filing'])
+  })
+
+  it('only the earliest year: a closed later year keeps every refusal', async () => {
+    const year = await seedFirstYear({ start: '2024-03-15', end: '2025-02-28' })
+    const laterId = await insertFiscalPeriod({
+      userId: year.userId,
+      companyId: year.companyId,
+      periodStart: '2025-03-01',
+      periodEnd: '2026-02-28',
+      name: 'Räkenskapsår 2025/2026',
+    })
+    await getPool().query(
+      `UPDATE public.fiscal_periods SET locked_at = now(), is_closed = true, closed_at = now() WHERE id = $1`,
+      [laterId],
+    )
+    const later: Year = { ...year, periodId: laterId }
+    expect(blockerCodes(await redate(later, '2025-03-17', null))).toEqual(
+      expect.arrayContaining(['period_closed', 'period_locked', 'start_not_first_of_month', 'not_contiguous']),
+    )
+  })
+
+  it('a writing member corrects it through a session', async () => {
+    const year = await seedClosedFirstYear({ lockDate: false })
+    const result = await redateAsSession(year.userId, year, '2025-03-17', '2026-02-28')
+    expect(result).toMatchObject({ ok: true, changed: true, period: { period_start: '2025-03-17' } })
   })
 })
 

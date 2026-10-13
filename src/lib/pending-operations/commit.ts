@@ -39,9 +39,11 @@ import {
   supplierInvoiceLinesInclVat,
   supplierInvoiceTotalsGap,
 } from '@/lib/supplier-invoices/line-totals'
-import { matchPairs, unmatchLink } from '@/lib/reconciliation/actions'
+import { matchPairs, setItemIgnored, unmatchLink } from '@/lib/reconciliation/actions'
 import { signOffAccount } from '@/lib/reconciliation/signoff'
 import { bookResidualAndLink, ReconciliationResidualError } from '@/lib/reconciliation/residual'
+import { SKATTEKONTO_ACCOUNT_KEY } from '@/lib/reconciliation/schemas'
+import { SkattekontoLinkError } from '@/lib/skatteverket/skattekonto-link'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { validateVatNumber, vatValidationColumns } from '@/lib/vat/vies-client'
 import {
@@ -73,7 +75,7 @@ import {
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { buildInvoiceMatchClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
 import { booksInvoicesOnIssue, cashPartialBlockReason, creditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
-import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
+import { ensureManualCashAccount, resolveDefaultCashAccountId } from '@/lib/cash-accounts/service'
 import { createJournalEntry, findFiscalPeriod, getSwedishLocalDate, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
 import {
   canApproveSupplierInvoice,
@@ -1385,6 +1387,32 @@ async function commitIgnoreTransaction(
     throw err
   }
 
+  // A skattekonto row (crm#1178): the function the Avstämning page and the
+  // v1 reconciliation ignore route call, so the doors refuse the same rows.
+  // Idempotent, writes no verifikat, refuses a linked row (unlink first).
+  if (validated.skattekonto_transaction_id) {
+    try {
+      const result = await setItemIgnored(
+        supabase,
+        companyId,
+        SKATTEKONTO_ACCOUNT_KEY,
+        validated.skattekonto_transaction_id,
+        validated.ignored,
+      )
+      if (!result) return { error: 'Skattekontot finns inte för företaget.', status: 404 }
+      return { data: { skattekonto_transaction_id: result.external_id, is_ignored: result.is_ignored } }
+    } catch (err) {
+      if (!(err instanceof SkattekontoLinkError)) throw err
+      if (err.code === 'TRANSACTION_NOT_FOUND') {
+        return { error: err.message, errorCode: 'NOT_FOUND', status: 404 }
+      }
+      if (err.code === 'ALREADY_BOOKED') {
+        return { error: err.message, errorCode: 'TX_IGNORE_ALREADY_BOOKED', status: 409 }
+      }
+      throw err
+    }
+  }
+
   // Issue #1661: the same core the dashboard and v1 routes use, so the three
   // doors cannot drift. It refuses a booked row through all three anchors
   // (journal_entry_id, payment allocations, voucher links), is idempotent,
@@ -1392,7 +1420,7 @@ async function commitIgnoreTransaction(
   const outcome = await setTransactionIgnored(
     supabase,
     companyId,
-    validated.transaction_id,
+    validated.transaction_id as string,
     validated.ignored,
     { userId },
   )
@@ -1934,11 +1962,12 @@ async function commitCreateTransaction(
   // Bind the row to a manual kassakonto when a ledger account is given, so
   // reconciliation and voucher matching resolve the real account instead of
   // falling back to 1930 (issue #1016). Find-or-create; the row's currency
-  // follows this transaction.
-  let cashAccountId: string | null = null
-  if (ledgerAccount) {
-    cashAccountId = await ensureManualCashAccount(supabase, companyId, ledgerAccount, currency)
-  }
+  // follows this transaction. Without one, the company's default account in
+  // that currency (crm#1171): a bank-feed or bank-file row is never stored
+  // unbound, and an unbound one dropped out of every per-account view.
+  const cashAccountId = ledgerAccount
+    ? await ensureManualCashAccount(supabase, companyId, ledgerAccount, currency)
+    : await resolveDefaultCashAccountId(supabase, companyId, currency, bankConnectionId)
 
   const { data, error } = await supabase
     .from('transactions')
@@ -1972,7 +2001,7 @@ async function commitCreateTransaction(
     }
   }
 
-  return { data: { transaction_id: data.id } }
+  return { data: { transaction_id: data.id, cash_account_id: cashAccountId } }
 }
 
 async function commitCreateInvoice(
@@ -6004,7 +6033,7 @@ async function commitBookMileagePeriod(
       from: params.from as string,
       to: params.to as string,
       entryDate: params.entry_date as string,
-      counterAccount: (params.counter_account as never) || '2820',
+      counterAccount: (params.counter_account as string) || null,
       employeeId: (params.employee_id as string) || undefined,
       createdVia: 'mcp',
       // Staged approvals freeze the trip set: what was previewed is exactly
@@ -6022,6 +6051,12 @@ async function commitBookMileagePeriod(
       }
       if (result.code === 'PERIOD_NOT_OPEN') {
         return { error: 'The entry date falls in a closed or locked period', status: 400 }
+      }
+      if (result.code === 'COUNTER_ACCOUNT_NOT_ALLOWED') {
+        return {
+          error: `counter_account must be ${result.allowed.join(' or ')} for these trips; stage it again`,
+          status: 400,
+        }
       }
       if (result.code === 'TRIPS_CHANGED' || result.code === 'CLAIM_LOST') {
         return {

@@ -19,9 +19,11 @@
  *   - an empty period (no VAT to clear) refuses;
  *   - when the caller pins the fingerprint of the proposal they reviewed
  *     (the MCP stage always does), a proposal that changed since refuses;
- *   - the entry date (the period's last day) must not be in a locked or
- *     closed period nor on or before the company lock date, and an open
- *     fiscal year must cover it.
+ *   - the entry date (the period's last day, or the first open day after
+ *     it when the proposal moved it, see firstBookableSettlementDate) must
+ *     not be in a locked or closed period nor on or before the company lock
+ *     date, and an open fiscal year must cover it. The proposal already
+ *     picks a date the books accept; this check is the race guard.
  * A dry run reads, checks and previews the verifikat and writes nothing.
  */
 import { createHash } from 'node:crypto'

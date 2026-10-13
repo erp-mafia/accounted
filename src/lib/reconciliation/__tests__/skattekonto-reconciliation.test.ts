@@ -1414,3 +1414,76 @@ describe('findLedgerCoverPoint: arithmetic only, exact to the öre', () => {
     ).toEqual({ through_date: '2026-06-30', kind: 'events_equal' })
   })
 })
+
+describe('getSkattekontoReconciliationStatus: one event over two verifikat (crm#1183)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    fetchEntryLinesMock.mockReset()
+    sumAccountBalanceMock.mockReset()
+    findOpeningBalanceFloorMock.mockReset()
+    findOpeningBalanceFloorMock.mockResolvedValue(null)
+    loadImportedStornoPairsMock.mockReset()
+    loadImportedStornoPairsMock.mockResolvedValue([])
+  })
+
+  // A +29 event booked as +37 and corrected by -8 the same day.
+  const A77 = head('A77', '2026-08-01', { source_type: 'import' })
+  const A76 = head('A76', '2026-08-01', { source_type: 'import' })
+  const lines = () => [ledgerLine(A77, 37), ledgerLine(A76, -8)]
+  const member = (journal_entry_id: string, amount: number) => ({
+    settlement_id: 'set-1',
+    journal_entry_id,
+    amount,
+    settled_by: 'user-1',
+    settled_at: '2026-10-13T12:00:00Z',
+  })
+
+  it('unlinked: one open event, two open verifikat, explained but not reconciled', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueBase(enqueue, { saldo: 29, rows: [row('r29', '2026-08-01', 29)] })
+    ledger(lines(), { cutoff: 29, before: 0 })
+
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
+    expect(s?.unexplained_difference).toBe(0)
+    expect(s?.is_reconciled).toBe(false)
+    expect(s?.counts).toMatchObject({ unmatched_external: 1, unmatched_ledger: 2 })
+    expect(s?.skattekonto?.covered?.kind).toBe('events_equal')
+  })
+
+  it('split: the row on its primary plus a live settlement of the remainder: nothing open, reconciled, totals unchanged', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueueBase(enqueue, { saldo: 29, rows: [row('r29', '2026-08-01', 29, { journal_entry_id: 'A77' })], heads: [A77] })
+    enqueue({ data: [member('A77', 8), member('A76', -8)] }) // live 1630 settlements
+    ledger(lines(), { cutoff: 29, before: 0 })
+
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
+    expect(findCalls('account_reconciliation_settlements', 'eq')).toContainEqual(['account_number', '1630'])
+    expect(s?.unexplained_difference).toBe(0)
+    expect(s?.counts).toMatchObject({ unmatched_external: 0, proposed: 0, unmatched_ledger: 0, matched: 1 })
+    expect(s?.is_reconciled).toBe(true)
+    expect(s?.bridge.find((l) => l.key === 'unmatched_ledger')).toMatchObject({ amount: 0, count: 0 })
+    expect(s?.skattekonto?.covered).toBeNull()
+    const ledgerMatched = s?.items.matched.filter((i) => i.side === 'ledger') ?? []
+    expect(ledgerMatched.map((i) => [i.item_id, i.amount]).sort()).toEqual([['A76', -8], ['A77', 8]])
+    expect(ledgerMatched.find((i) => i.item_id === 'A76')).toMatchObject({
+      settlement: { settlement_id: 'set-1', state: 'settled', counterparts: [{ journal_entry_id: 'A77', amount: 8, voucher_number: 77 }] },
+      actions: ['unmatch'],
+    })
+    expect(s?.items.matched.find((i) => i.item_id === 'r29')).toMatchObject({ linked_journal_entry_id: 'A77' })
+  })
+
+  it('a settlement that no longer sums to zero is ignored: the verifikat stay open, flagged broken, totals as without it', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // The row was unlinked by a path that left the settlement live.
+    enqueueBase(enqueue, { saldo: 29, rows: [row('r29', '2026-08-01', 29)] })
+    enqueue({ data: [member('A77', 8), member('A76', -8)] })
+    ledger(lines(), { cutoff: 29, before: 0 })
+
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
+    expect(s?.unexplained_difference).toBe(0)
+    expect(s?.is_reconciled).toBe(false)
+    expect(s?.counts).toMatchObject({ unmatched_external: 1, unmatched_ledger: 2 })
+    expect(s?.items.unmatched_ledger.map((i) => i.settlement?.state)).toEqual(['broken', 'broken'])
+    expect(s?.items.unmatched_ledger[0].actions).toContain('unmatch')
+  })
+})

@@ -329,6 +329,43 @@ describe('PATCH /api/v1/companies/:companyId/fiscal-periods/:id', () => {
     expect((await res.json()).error.code).toBe('FISCAL_PERIOD_UPDATE_CLOSED')
   })
 
+  // crm#1140: the one edit a closed year allows is moving the start of the
+  // company's earliest year within its month (to the registration day). The
+  // RPC re-checks it and still refuses on whatever depends on the start.
+  it('corrects the start of a closed first year within its month through redate_fiscal_period', async () => {
+    const closedFirst = periodRow({
+      name: 'Räkenskapsår 2025/2026',
+      period_start: '2025-03-01',
+      period_end: '2026-02-28',
+      is_closed: true,
+      locked_at: '2026-03-20T10:00:00Z',
+      previous_period_id: null,
+    })
+    const client = makeClient({
+      company_members: MEMBER,
+      fiscal_periods: [
+        { data: closedFirst, error: null }, // the period
+        { count: 0, data: null, error: null }, // no earlier period: the earliest year
+        { data: [], error: null }, // overlap, then neighbours
+      ],
+      companies: { data: { entity_type: 'aktiebolag' }, error: null },
+      rpc: { data: { ok: true, changed: true, period: { ...closedFirst, period_start: '2025-03-17' } }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await updatePeriod(
+      request(`${BASE}/${PERIOD_ID}`, { method: 'PATCH', body: '{"period_start":"2025-03-17"}' }),
+      periodParams,
+    )
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.period_start).toBe('2025-03-17')
+    expect(client.rpc).toHaveBeenCalledWith(
+      'redate_fiscal_period',
+      expect.objectContaining({ p_period_start: '2025-03-17', p_period_end: '2026-02-28', p_user_id: 'user-1' }),
+    )
+    // The service never writes the row itself: only the RPC does.
+    expect(writesTo(client, ['fiscal_periods'])).toHaveLength(0)
+  })
+
   // crm#1010: posted verifikat no longer freeze the dates. What the year
   // holds is decided by redate_fiscal_period (tests/pg/redate-fiscal-period
   // .pg.test.ts), named per blocker; the door only maps its verdict.

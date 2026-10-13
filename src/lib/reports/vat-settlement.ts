@@ -1,12 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { addDaysIso } from '@/lib/dates/iso'
 import { roundOre } from '@/lib/money'
 import {
-  fetchVatAccountTotals,
   formatPeriodLabel,
+  loadVatDeclarationLedger,
   resolvePeriodDates,
-  rutorFromTotals,
-  VAT_INPUT_ACCOUNTS,
-  VAT_OUTPUT_ACCOUNTS,
+  vatClearingAccounts,
 } from './vat-declaration'
 import { buildFiledAmounts } from './vat-manual-filing'
 import type { VatPeriodType } from '@/types'
@@ -17,7 +16,8 @@ import type { VatPeriodType } from '@/types'
  * the redovisningskonto.
  *
  * Shape of the proposed entry (standard Swedish momsomföring, booked on the
- * period's last day):
+ * period's last day, or the first day after it the books accept, see
+ * firstBookableSettlementDate):
  *   - each output-VAT account (261x/262x/263x incl. reverse charge + import)
  *     is debited by its period balance, each input-VAT account (264x) is
  *     credited, at exact öre so the accounts land on zero for the period;
@@ -67,6 +67,14 @@ export interface VatSettlementExistingEntry {
   voucher_number: number | null
 }
 
+/**
+ * Why the proposed entry date is not the period's last day: the fiscal year
+ * holding it is closed (bokslut done) or locked, or the company lock date
+ * covers it. The DB triggers refuse a verifikat there, so the proposal moves
+ * to the first date after it that is open.
+ */
+export type VatSettlementDateReason = 'period_closed' | 'period_locked' | 'company_lock_date'
+
 export interface VatSettlementProposal {
   period: {
     type: VatPeriodType
@@ -77,8 +85,13 @@ export interface VatSettlementProposal {
   }
   /** Swedish period label, e.g. "Kvartal 1 2026" (Skatteverket-bound wording). */
   period_label: string
-  /** Proposed entry date: the period's last day. */
+  /**
+   * Proposed entry date: the period's last day when the books accept it,
+   * otherwise the first open date after it (entry_date_reason says why).
+   */
   entry_date: string
+  /** Null when entry_date is the period's last day. */
+  entry_date_reason: VatSettlementDateReason | null
   /** Proposed verifikationstext, e.g. "Momsredovisning Kvartal 1 2026". */
   description: string
   lines: VatSettlementProposalLine[]
@@ -118,11 +131,80 @@ export function vatSettlementBookingStatus(
   return 'none'
 }
 
+interface BookableFiscalPeriod {
+  period_start: string
+  period_end: string
+  is_closed: boolean | null
+  locked_at: string | null
+}
+
 /**
- * Build the settlement verifikat proposal for a VAT period. Reads the same
- * aggregated ledger totals as the momsrapport (fetchVatAccountTotals), so the
- * proposal always ties out with the report on screen and the filed eSKD/PDF
- * amounts.
+ * The first date on or after the period's last day that a verifikat can be
+ * posted on, by the same two layers the DB triggers enforce (company lock
+ * date, then the fiscal period's is_closed / locked_at; see
+ * resolvePeriodLockForDate). A momsredovisning for a period whose year is
+ * already closed belongs on the first open day after it: it only moves 26xx
+ * balances carried into the new year onto 2650/1650.
+ *
+ * A date no fiscal period covers is returned as is: the booking then answers
+ * VAT_SETTLEMENT_NO_FISCAL_PERIOD, which names the missing year.
+ */
+export function firstBookableSettlementDate(
+  periodEnd: string,
+  lockedThrough: string | null,
+  fiscalPeriods: BookableFiscalPeriod[],
+): { entry_date: string; entry_date_reason: VatSettlementDateReason | null } {
+  let date = periodEnd
+  let reason: VatSettlementDateReason | null = null
+  if (lockedThrough && date <= lockedThrough) {
+    date = addDaysIso(lockedThrough, 1)
+    reason = 'company_lock_date'
+  }
+  const ordered = [...fiscalPeriods].sort((a, b) => a.period_start.localeCompare(b.period_start))
+  for (const fp of ordered) {
+    if (fp.period_start > date || fp.period_end < date) continue
+    if (!fp.is_closed && !fp.locked_at) break
+    reason ??= fp.is_closed ? 'period_closed' : 'period_locked'
+    date = addDaysIso(fp.period_end, 1)
+  }
+  return { entry_date: date, entry_date_reason: reason }
+}
+
+async function resolveSettlementEntryDate(
+  supabase: SupabaseClient,
+  companyId: string,
+  periodEnd: string,
+): Promise<{ entry_date: string; entry_date_reason: VatSettlementDateReason | null }> {
+  const [settings, periods] = await Promise.all([
+    supabase
+      .from('company_settings')
+      .select('bookkeeping_locked_through')
+      .eq('company_id', companyId)
+      .maybeSingle(),
+    supabase
+      .from('fiscal_periods')
+      .select('period_start, period_end, is_closed, locked_at')
+      .eq('company_id', companyId)
+      .gte('period_end', periodEnd)
+      .order('period_start', { ascending: true }),
+  ])
+  // Fail loud like the existing-settlement lookup: an unread lock state must
+  // not turn into a date the books then refuse.
+  if (settings.error) throw new Error(`settlement lock date lookup failed: ${settings.error.message}`)
+  if (periods.error) throw new Error(`settlement fiscal period lookup failed: ${periods.error.message}`)
+  return firstBookableSettlementDate(
+    periodEnd,
+    (settings.data as { bookkeeping_locked_through: string | null } | null)?.bookkeeping_locked_through ?? null,
+    (periods.data ?? []) as BookableFiscalPeriod[],
+  )
+}
+
+/**
+ * Build the settlement verifikat proposal for a VAT period. Reads the rutor
+ * from the same definition as the momsdeklaration (loadVatDeclarationLedger,
+ * the company's own momskoder and momsrutor included), so the net it books is
+ * the whole-krona net the eSKD file, the PDF and the Skatteverket integration
+ * file (buildFiledAmounts).
  */
 export async function buildVatSettlementProposal(
   supabase: SupabaseClient,
@@ -138,19 +220,29 @@ export async function buildVatSettlementProposal(
     supabase, companyId, periodType, year, period, options.fiscalPeriodId
   )
 
-  const [{ totals, settlementShapedEntries }, existingResult] = await Promise.all([
-    fetchVatAccountTotals(supabase, companyId, start, end),
-    supabase
-      .from('journal_entries')
-      .select('id, status, entry_date, source_type, voucher_series, voucher_number')
-      .eq('company_id', companyId)
-      .eq('source_type', 'vat_settlement')
-      .in('status', ['draft', 'posted'])
-      .gte('entry_date', start)
-      .lte('entry_date', end)
-      .order('entry_date', { ascending: false })
-      .limit(5),
+  const periodLabel = formatPeriodLabel(periodType, year, period)
+  const description = `Momsredovisning ${periodLabel}`
+
+  const [{ totals, settlementShapedEntries, dynamicVatAccounts, rutor }, entryDate] = await Promise.all([
+    loadVatDeclarationLedger(supabase, companyId, start, end),
+    resolveSettlementEntryDate(supabase, companyId, end),
   ])
+
+  // A settlement dated after the period (its year was closed) lies outside
+  // the period's own range, so the lookup reaches the proposed date. Out
+  // there only a verifikat with this period's own text counts: several
+  // periods of a closed year all move to the same first open day, and one
+  // period's settlement must not gate another's.
+  const existingResult = await supabase
+    .from('journal_entries')
+    .select('id, status, entry_date, source_type, voucher_series, voucher_number, description')
+    .eq('company_id', companyId)
+    .eq('source_type', 'vat_settlement')
+    .in('status', ['draft', 'posted'])
+    .gte('entry_date', start)
+    .lte('entry_date', entryDate.entry_date > end ? entryDate.entry_date : end)
+    .order('entry_date', { ascending: false })
+    .limit(20)
 
   // The existing-settlement lookup gates the UI's "already booked" warning
   // and its create button; a swallowed error here would silently re-enable
@@ -170,21 +262,25 @@ export async function buildVatSettlementProposal(
   const shapedExisting = settlementShapedEntries.filter(
     (e) => e.status === 'posted' && e.source_type !== 'storno'
   )
+  const taggedExisting = ((existingResult.data ?? []) as Array<VatSettlementExistingEntry & { description?: string | null }>)
+    .filter((e) => e.entry_date <= end || e.description === description)
+    .map(({ description: _description, ...entry }) => entry)
   const existingEntries = [
-    ...((existingResult.data ?? []) as VatSettlementExistingEntry[]),
+    ...taggedExisting,
     ...shapedExisting,
   ]
     .sort((a, b) => (a.entry_date < b.entry_date ? 1 : a.entry_date > b.entry_date ? -1 : 0))
     .slice(0, 5)
 
-  const rutor = rutorFromTotals(totals)
   const { net: filedNet } = buildFiledAmounts(rutor)
 
   // Clear every 26xx account the declaration reads from, at exact öre, so the
   // accounts land on zero for the period. A positive (credit) balance clears
   // with a debit and vice versa: the same formula handles credit-note-heavy
-  // periods where an account sits on the "wrong" side.
-  const clearingAccounts = [...new Set([...VAT_OUTPUT_ACCOUNTS, ...VAT_INPUT_ACCOUNTS])].sort()
+  // periods where an account sits on the "wrong" side. The company's own
+  // momsruta accounts are cleared too: their balance is in the filed net, and
+  // leaving them out would put the whole amount on 3740.
+  const clearingAccounts = vatClearingAccounts(dynamicVatAccounts)
   const lines: VatSettlementProposalLine[] = []
   for (const account of clearingAccounts) {
     const t = totals.get(account)
@@ -232,13 +328,12 @@ export async function buildVatSettlementProposal(
     }
   }
 
-  const periodLabel = formatPeriodLabel(periodType, year, period)
-
   return {
     period: { type: periodType, year, period, start, end },
     period_label: periodLabel,
-    entry_date: end,
-    description: `Momsredovisning ${periodLabel}`,
+    entry_date: entryDate.entry_date,
+    entry_date_reason: entryDate.entry_date_reason,
+    description,
     lines,
     filed_net: filedNet,
     rounding_amount: roundingAmount,

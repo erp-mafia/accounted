@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { HandCoins, Landmark, MoreHorizontal, Store } from 'lucide-react'
+import { AlertTriangle, Check, Copy, HandCoins, Landmark, Mail, MoreHorizontal, Store } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { BankConnectDialog } from '@/components/bank-feed/BankConnectDialog'
@@ -29,11 +29,13 @@ import {
 } from '@/components/extensions/general/mail-connections'
 import {
   SettingsGroup,
+  SettingsInput,
   SettingsRow,
   SettingsRowEnd,
   SettingsRowNote,
   SettingsSectionHeader,
 } from '@/components/settings/SettingsRows'
+import { copyInboxAddress, type AddressCopyState } from '@/components/extensions/general/inbox-address-copy'
 import { useCompany } from '@/contexts/CompanyContext'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { createClient } from '@/lib/supabase/client'
@@ -145,6 +147,7 @@ export function ConnectionsSettingsContent() {
   const hasSkatteverket = ENABLED_EXTENSION_IDS.has('skatteverket') && !isSandbox
   const hasWhatsApp = ENABLED_EXTENSION_IDS.has('whatsapp-inbox') && !isSandbox
   const hasMail = ENABLED_EXTENSION_IDS.has('mail') && !isSandbox
+  const hasInvoiceInbox = ENABLED_EXTENSION_IDS.has('invoice-inbox') && !isSandbox
   const hasStripe = ENABLED_EXTENSION_IDS.has('stripe')
   const hasShopify = ENABLED_EXTENSION_IDS.has('shopify')
   const hasWooCommerce = ENABLED_EXTENSION_IDS.has('woocommerce')
@@ -209,6 +212,44 @@ export function ConnectionsSettingsContent() {
       cancelled = true
     }
   }, [companyId, hasMail, bankGeneration])
+
+  // The document inbox address (crm#1174): until now it was shown only behind
+  // the sources chip on the inbox page, so a person setting up a forwarding
+  // rule from their own kvitto@ mailbox looked here and found nothing.
+  // undefined while loading, null when the company has none yet (404), and
+  // the row stays out when the address cannot be read at all (no inbound
+  // domain on this install, or a failed read).
+  const [inboxAddress, setInboxAddress] = useState<string | null | undefined>(undefined)
+  const [inboxAddressReadable, setInboxAddressReadable] = useState(true)
+  useEffect(() => {
+    if (!companyId || !hasInvoiceInbox) return
+    let cancelled = false
+    fetch('/api/extensions/ext/invoice-inbox/inbox/address')
+      .then(async (res) => {
+        if (cancelled) return
+        if (res.ok) {
+          const body = (await res.json()) as { data?: { address?: string } }
+          if (!cancelled) setInboxAddress(body.data?.address ?? null)
+          return
+        }
+        if (res.status === 404) setInboxAddress(null)
+        else setInboxAddressReadable(false)
+      })
+      .catch(() => {
+        if (!cancelled) setInboxAddressReadable(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [companyId, hasInvoiceInbox])
+  const [inboxCopyState, setInboxCopyState] = useState<AddressCopyState>('idle')
+  async function handleCopyInboxAddress(address: string) {
+    // The clipboard write is the first await, so the click's user activation
+    // still holds when it runs.
+    const next = await copyInboxAddress(address)
+    setInboxCopyState(next)
+    if (next === 'copied') setTimeout(() => setInboxCopyState('idle'), 2000)
+  }
 
   // Bank payments answer in well under a second; the row must not wait for
   // the slowest of the other readouts (mail, Peppol) to appear.
@@ -431,6 +472,58 @@ export function ConnectionsSettingsContent() {
       ) : null}
 
       <SettingsGroup label={t('group_documents')}>
+        {hasInvoiceInbox && inboxAddressReadable && inboxAddress !== undefined &&
+          (inboxAddress ? (
+            <SettingsRow
+              label={
+                <span className="flex items-center gap-3">
+                  <LogoTile><Mail className="h-4 w-4 text-foreground" aria-hidden="true" /></LogoTile>
+                  {t('inbox_address')}
+                </span>
+              }
+              help={t('inbox_address_help')}
+            >
+              {/* Read-only, not disabled: selecting it by hand is the way
+                  out when the clipboard refuses the write. */}
+              <SettingsInput
+                readOnly
+                value={inboxAddress}
+                aria-label={t('inbox_address')}
+                onFocus={(e) => e.currentTarget.select()}
+                data-ph-mask=""
+                className="font-mono text-xs"
+              />
+              <SettingsRowEnd>
+                <Button
+                  variant="outline"
+                  size="icon-sm"
+                  onClick={() => { void handleCopyInboxAddress(inboxAddress) }}
+                  aria-label={inboxCopyState === 'failed' ? t('inbox_address_copy_failed') : t('inbox_address_copy')}
+                  title={inboxCopyState === 'failed' ? t('inbox_address_copy_failed') : t('inbox_address_copy')}
+                >
+                  {inboxCopyState === 'copied' ? (
+                    <Check className="h-3.5 w-3.5 text-success" />
+                  ) : inboxCopyState === 'failed' ? (
+                    <AlertTriangle className="h-3.5 w-3.5 text-attn" />
+                  ) : (
+                    <Copy className="h-3.5 w-3.5" />
+                  )}
+                </Button>
+                <Button variant="outline" size="sm" asChild>
+                  <Link href="/e/general/invoice-inbox">{t('open')}</Link>
+                </Button>
+              </SettingsRowEnd>
+            </SettingsRow>
+          ) : (
+            row({
+              logo: <Mail className="h-4 w-4 text-foreground" aria-hidden="true" />,
+              name: t('inbox_address'),
+              help: t('inbox_address_help'),
+              state: t('inbox_address_off'),
+              href: '/e/general/invoice-inbox',
+              connected: false,
+            })
+          ))}
         {row({
           logo: <span className="text-[11px] font-semibold text-foreground">P</span>,
           name: t('peppol'),

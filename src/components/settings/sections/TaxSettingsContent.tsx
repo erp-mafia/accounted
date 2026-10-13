@@ -18,6 +18,7 @@ import {
 } from '@/components/settings/SettingsRows'
 import { useSettings } from '@/components/settings/useSettings'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
+import type { KuSignalTrigger } from '@/lib/tax/ku-signal'
 import type { CompanySettings } from '@/types'
 
 export function TaxSettingsContent() {
@@ -29,14 +30,18 @@ export function TaxSettingsContent() {
 
   const hasSkatteverketExtension = ENABLED_EXTENSION_IDS.has('skatteverket')
 
-  // Derived EU-sales signal: postings on 3108/3308/3107 imply a periodisk
-  // sammanställning obligation the opt-in flags may not reflect. Suggestion
-  // only; the user confirms via the ordinary checkboxes.
+  // Derived EU-trade signal, read from the declaration's rutor: EU sales
+  // (35/38/39) imply a periodisk sammanställning obligation, and EU sales or
+  // purchases (20/21/37) an earlier helårsmoms date, which the opt-in flags
+  // may not reflect. Suggestion only; the user confirms via the ordinary
+  // checkboxes.
   const [euSalesDetected, setEuSalesDetected] = useState(false)
-  // Same pattern for kontrolluppgifter: postings on 2898 (utdelning) or
-  // 2393/2893 (ägarlån) imply a KU obligation on 31 January that AGI never
-  // covers. Suggestion only; the user confirms via the checkbox.
-  const [kuSignalDetected, setKuSignalDetected] = useState(false)
+  const [euPurchasesDetected, setEuPurchasesDetected] = useState(false)
+  // Same pattern for kontrolluppgifter: utdelning (2898) or interest on an
+  // ägarlån (84xx beside 2393/2893) implies a KU obligation on 31 January
+  // that AGI never covers. The triggers name the postings, so the line can
+  // say what it is about. Suggestion only; the user confirms via the checkbox.
+  const [kuTriggers, setKuTriggers] = useState<KuSignalTrigger[]>([])
   // And for ROT/RUT: invoices with deductions mean a begäran om utbetalning
   // must reach Skatteverket by 31 January after the payment year.
   const [rotRutSignalDetected, setRotRutSignalDetected] = useState(false)
@@ -45,7 +50,9 @@ export function TaxSettingsContent() {
     fetch('/api/settings/eu-trade-signal')
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => {
-        if (!cancelled && json?.data?.has_eu_sales) setEuSalesDetected(true)
+        if (cancelled) return
+        if (json?.data?.has_eu_sales) setEuSalesDetected(true)
+        if (json?.data?.has_eu_purchases) setEuPurchasesDetected(true)
       })
       .catch(() => {
         // Best-effort signal: a failed fetch just hides the suggestion.
@@ -53,7 +60,9 @@ export function TaxSettingsContent() {
     fetch('/api/settings/ku-signal')
       .then((res) => (res.ok ? res.json() : null))
       .then((json) => {
-        if (!cancelled && json?.data?.has_ku_signal) setKuSignalDetected(true)
+        if (!cancelled && json?.data?.has_ku_signal && Array.isArray(json.data.triggers)) {
+          setKuTriggers(json.data.triggers as KuSignalTrigger[])
+        }
       })
       .catch(() => {
         // Best-effort signal: a failed fetch just hides the suggestion.
@@ -160,7 +169,8 @@ export function TaxSettingsContent() {
         <TaxSettingsForm
           settings={settings}
           euSalesDetected={euSalesDetected}
-          kuSignalDetected={kuSignalDetected}
+          euPurchasesDetected={euPurchasesDetected}
+          kuTriggers={kuTriggers}
           rotRutSignalDetected={rotRutSignalDetected}
         />
       </SettingsFormWrapper>

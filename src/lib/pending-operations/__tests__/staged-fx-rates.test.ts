@@ -150,9 +150,10 @@ function expectHandedBack(result: Awaited<ReturnType<typeof commitPendingOperati
 // ─── create_transaction ─────────────────────────────────────────────
 
 describe('commitPendingOperation: create_transaction FX', () => {
-  /** CAS claim → transactions insert → dispatcher update. */
+  /** CAS claim → default cash account lookup (crm#1171) → transactions insert → dispatcher update. */
   const txQueue = () => [
     { data: { id: 'op-1' } },
+    { data: [] },
     { data: { id: 'tx-1' } },
     { data: null },
   ]

@@ -24,6 +24,20 @@ interface FiscalYearEditDialogProps {
   onOpenChange: (open: boolean) => void
   /** Called after a successful save so the parent can refetch. */
   onSaved: () => void
+  /**
+   * 'start': correct only the start of the company's first year within the
+   * month it starts in, also after its bokslut (crm#1140). Name and end
+   * stay; the server decides, like any re-date.
+   */
+  mode?: 'edit' | 'start'
+}
+
+/** The first and last day of the month `iso` falls in. */
+function monthBounds(iso: string): { from: string; to: string } {
+  const [y, m] = iso.split('-').map(Number)
+  const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate()
+  const month = iso.slice(0, 7)
+  return { from: `${month}-01`, to: `${month}-${String(lastDay).padStart(2, '0')}` }
 }
 
 /**
@@ -38,13 +52,19 @@ interface FiscalYearEditDialogProps {
  * example the vouchers that would end up outside) is shown verbatim so the
  * user can correct and retry without leaving the dialog. Only changed fields
  * are sent, so a pure rename never runs the date checks.
+ *
+ * In 'start' mode only the start date is editable, bounded to its month:
+ * the one change a closed or locked first year allows.
  */
 export function FiscalYearEditDialog({
   period,
   open,
   onOpenChange,
   onSaved,
+  mode = 'edit',
 }: FiscalYearEditDialogProps) {
+  const startOnly = mode === 'start'
+  const startMonth = monthBounds(period.period_start)
   const t = useTranslations('settings_bookkeeping')
   const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
@@ -54,8 +74,8 @@ export function FiscalYearEditDialog({
   // ("Räkenskapsår 2027"), the same rule as CreatePeriodDialog: a seed name
   // that never matched its dates is corrected together with them, and the
   // user watches it change. A hand-written name is never overwritten.
-  const [nameFollowsDates, setNameFollowsDates] = useState(() =>
-    isDerivedFiscalYearName(period.name),
+  const [nameFollowsDates, setNameFollowsDates] = useState(
+    () => !startOnly && isDerivedFiscalYearName(period.name),
   )
   const [periodStart, setPeriodStart] = useState(period.period_start)
   const [periodEnd, setPeriodEnd] = useState(period.period_end)
@@ -106,9 +126,16 @@ export function FiscalYearEditDialog({
   if (periodEnd && periodEnd !== period.period_end) payload.period_end = periodEnd
   const endBeforeStart = !!periodStart && !!periodEnd && periodEnd <= periodStart
   const datesIncomplete = !periodStart || !periodEnd
+  const startOutsideMonth =
+    startOnly && !!periodStart && (periodStart < startMonth.from || periodStart > startMonth.to)
   const isDirty = Object.keys(payload).length > 0
   const canSave =
-    isDirty && trimmedName.length > 0 && !endBeforeStart && !datesIncomplete && !isSaving
+    isDirty &&
+    trimmedName.length > 0 &&
+    !endBeforeStart &&
+    !datesIncomplete &&
+    !startOutsideMonth &&
+    !isSaving
 
   function handleOpenChange(nextOpen: boolean) {
     if (isSaving) return
@@ -149,8 +176,10 @@ export function FiscalYearEditDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{t('fy_edit_dialog_title')}</DialogTitle>
-          <DialogDescription>{t('fy_edit_dialog_description')}</DialogDescription>
+          <DialogTitle>{startOnly ? t('fy_correct_start_title') : t('fy_edit_dialog_title')}</DialogTitle>
+          <DialogDescription>
+            {startOnly ? t('fy_correct_start_description') : t('fy_edit_dialog_description')}
+          </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
@@ -159,6 +188,7 @@ export function FiscalYearEditDialog({
             <Input
               id="fy-edit-name"
               value={name}
+              disabled={startOnly}
               onChange={(event) => {
                 setName(event.target.value)
                 setNameFollowsDates(false)
@@ -174,6 +204,8 @@ export function FiscalYearEditDialog({
                 id="fy-edit-start"
                 type="date"
                 value={periodStart}
+                min={startOnly ? startMonth.from : undefined}
+                max={startOnly ? startMonth.to : undefined}
                 aria-describedby="fy-edit-dates-note"
                 onChange={(event) => updateDates(event.target.value, periodEnd)}
                 className="tabular-nums"
@@ -185,6 +217,7 @@ export function FiscalYearEditDialog({
                 id="fy-edit-end"
                 type="date"
                 value={periodEnd}
+                disabled={startOnly}
                 aria-describedby="fy-edit-dates-note"
                 onChange={(event) => updateDates(periodStart, event.target.value)}
                 className="tabular-nums"
@@ -194,6 +227,7 @@ export function FiscalYearEditDialog({
 
           {/* One quiet sentence on what posted vouchers mean for the dates. */}
           <p id="fy-edit-dates-note" className="text-xs text-muted-foreground">
+            {startOnly ? `${t('fy_correct_start_range', startMonth)} ` : null}
             {postedCount !== null && postedCount > 0
               ? t('fy_edit_dates_posted_note', { count: postedCount })
               : null}

@@ -28,6 +28,9 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { PageHeader } from '@/components/ui/page-header'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
+import { isEntityType } from '@/lib/company/entity-type'
+import { mileageCounterAccounts, type MileageCounterAccount } from '@/lib/mileage/counter-accounts'
 import { applyRoutePrefill, locationSuggestions } from '@/lib/mileage/route-memory'
 import type { RoutePrefill } from '@/lib/mileage/route-memory'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -137,7 +140,8 @@ export default function MileagePage() {
   const [bookFrom, setBookFrom] = useState('')
   const [bookTo, setBookTo] = useState('')
   const [bookEntryDate, setBookEntryDate] = useState(todayIsoStockholm())
-  const [counterAccount, setCounterAccount] = useState<'2820' | '2893' | '1930'>('2820')
+  const [counterChoice, setCounterChoice] = useState<MileageCounterAccount | null>(null)
+  const entityType = useCompanyOptional()?.company?.entity_type ?? null
   const [booking, setBooking] = useState(false)
 
   // Push to salary: the unbooked trips become a tax-free milersättning line on
@@ -198,6 +202,18 @@ export default function MileagePage() {
   )
 
   const suggestions = useMemo(() => locationSuggestions(trips), [trips])
+
+  // The credit side depends on the legal form and on whose trips these are:
+  // an enskild firma owner's own trips credit 2018, never skuld till anställda.
+  const counterOptions = useMemo(() => {
+    if (!isEntityType(entityType)) return []
+    const ownerTrips = trips
+      .filter((trip) => trip.status === 'draft' && trip.trip_date >= bookFrom && trip.trip_date <= bookTo)
+      .every((trip) => !trip.employee_id)
+    return mileageCounterAccounts(entityType, ownerTrips)
+  }, [entityType, trips, bookFrom, bookTo])
+  const counterAccount =
+    counterChoice && counterOptions.includes(counterChoice) ? counterChoice : (counterOptions[0] ?? null)
 
   const openCreate = () => {
     setEditingId(null)
@@ -377,7 +393,7 @@ export default function MileagePage() {
           from: bookFrom,
           to: bookTo,
           entry_date: bookEntryDate,
-          counter_account: counterAccount,
+          ...(counterAccount ? { counter_account: counterAccount } : {}),
         }),
       })
       const body = await res.json().catch(() => null)
@@ -923,22 +939,26 @@ export default function MileagePage() {
                 onChange={(e) => setBookEntryDate(e.target.value)}
               />
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="counter_account">{t('field_counter_account')}</Label>
-              <Select
-                value={counterAccount}
-                onValueChange={(v) => setCounterAccount(v as '2820' | '2893' | '1930')}
-              >
-                <SelectTrigger id="counter_account">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="2820">{t('counter_2820')}</SelectItem>
-                  <SelectItem value="2893">{t('counter_2893')}</SelectItem>
-                  <SelectItem value="1930">{t('counter_1930')}</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+            {counterAccount && (
+              <div className="space-y-2">
+                <Label htmlFor="counter_account">{t('field_counter_account')}</Label>
+                <Select
+                  value={counterAccount}
+                  onValueChange={(v) => setCounterChoice(v as MileageCounterAccount)}
+                >
+                  <SelectTrigger id="counter_account">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {counterOptions.map((account) => (
+                      <SelectItem key={account} value={account}>
+                        {t(`counter_${account}`)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <p className="text-sm text-muted-foreground">{t('book_explainer')}</p>
             <div className="flex justify-end gap-2 pt-2">
               <Button variant="ghost" onClick={() => setBookOpen(false)}>

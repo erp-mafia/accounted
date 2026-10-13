@@ -167,6 +167,28 @@ describe('gnubok_list_inbox_items', () => {
     expect(open.items.map((i) => i.id)).toEqual(['inbox-open'])
   })
 
+  it('carries the inbox address the listed mail arrived at (crm#1174)', async () => {
+    process.env.RESEND_INBOUND_DOMAIN = 'in.example.test'
+    try {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: [makeInboxItem({ source: 'email' })], error: null })
+      enqueue({ data: { local_part: 'acme-7f3k' }, error: null })
+
+      const result = await tool.execute({}, 'company-1', 'user-1', supabase as never)
+      expect(result).toMatchObject({ count: 1, inbox_address: 'acme-7f3k@in.example.test' })
+    } finally {
+      delete process.env.RESEND_INBOUND_DOMAIN
+    }
+  })
+
+  it('reports a null inbox address when none is provisioned', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [makeInboxItem()], error: null })
+
+    const result = await tool.execute({}, 'company-1', 'user-1', supabase as never)
+    expect(result).toMatchObject({ inbox_address: null })
+  })
+
   it('preserves the first-page response when there are no more items', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [makeInboxItem()], error: null })
@@ -255,6 +277,7 @@ describe('gnubok_list_inbox_items', () => {
       items: [],
       count: 0,
       next_cursor: `${rows[199].created_at}__${rows[199].id}`,
+      inbox_address: null,
     })
   })
 

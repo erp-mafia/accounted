@@ -13,6 +13,7 @@ import {
   sumAccountBalance,
   type OpeningBalanceFloor,
 } from './gl-balance'
+import { resolveLedgerSettlements, type LedgerSettlementMember } from './ledger-settlement-store'
 import {
   AWAITING_EXTERNAL_DAYS,
   SKATTEKONTO_ACCOUNT_KEY,
@@ -144,6 +145,29 @@ export interface SkattekontoLedgerCover {
 interface DatedAmount {
   date: string
   amount: number
+}
+
+/** One verifikat of the open ledger list (unmatched_ledger), complete and uncapped. */
+export interface SkattekontoOpenLedgerEntry {
+  journal_entry_id: string
+  /** What no Skatteverket row explains: the 1630 net, or its remainder (ledger sign). */
+  amount: number
+  status: EntryStatus
+  entry_date: string
+}
+
+/**
+ * The open ledger list behind a status, by verifikat id. Kept beside the
+ * result rather than on it, so the status every door serialises does not
+ * grow by one field per open verifikat; the 1:N link (skattekonto-split.ts)
+ * reads it to link only what the list shows, at the amount it shows.
+ */
+const openLedgerOfStatus = new WeakMap<SkattekontoReconciliationResult, Map<string, SkattekontoOpenLedgerEntry>>()
+
+export function skattekontoOpenLedger(
+  status: SkattekontoReconciliationResult,
+): Map<string, SkattekontoOpenLedgerEntry> | null {
+  return openLedgerOfStatus.get(status) ?? null
 }
 
 /**
@@ -460,6 +484,10 @@ function inWindow(date: string, from: string | null | undefined, to: string | nu
  * A storno pair settles itself: in-app (reversed original + storno) and
  * imported (two posted verifikat that mirror each other, "Annullering av
  * V290", found by lib/skatteverket/skattekonto-cancelled-entries.ts).
+ * Verifikat settled against each other on 1630 (what a 1:N link writes
+ * beside its row link, lib/reconciliation/skattekonto-split.ts) leave the
+ * ledger side together while their open amounts sum to zero, so they move
+ * no total.
  *
  * Returns null when the company has neither a saldo snapshot nor any
  * skattekonto rows (account not configured).
@@ -788,22 +816,71 @@ export async function getSkattekontoReconciliationStatus(
   const sortedLedger = Array.from(ledgerEntries.values()).sort((a, b) =>
     a.head.entry_date < b.head.entry_date ? -1 : a.head.entry_date > b.head.entry_date ? 1 : 0,
   )
+  const openCandidates: Array<{
+    head: EntryHead
+    entryAmount: number
+    amount: number
+    linked: { sum: number; count: number } | undefined
+  }> = []
   for (const { head, amount: entryAmount } of sortedLedger) {
     if (settledStornoIds.has(head.id) || settledAnnulmentIds.has(head.id)) continue
     if (floorIds.has(head.id)) continue
     const linked = linkedByEntry.get(head.id)
     const amount = linked ? roundOre(entryAmount - linked.sum) : entryAmount
     if (amount === 0) continue
-    unlinkedLedgerTotal = roundOre(unlinkedLedgerTotal + amount)
-    openEntries.push({ head, amount })
-    counts.unmatched_ledger++
-    if (olderThanWindow(head.entry_date)) olderUnmatched++
-    if (!visible(head.entry_date)) continue
-    pushCapped('unmatched_ledger', {
+    openCandidates.push({ head, entryAmount, amount, linked })
+  }
+
+  // Verifikat on 1630 settled against each other (account_reconciliation_
+  // settlements, the table the bank's ledger-only settlements use): the
+  // verifikat a 1:N link spreads one Skatteverket event over
+  // (skattekonto-split.ts). The rule is the reader's, as on the bank: a
+  // settlement holds only while every verifikat of it is in this open list
+  // and their open amounts sum to exactly zero. Holding, they leave
+  // unmatched_ledger together; summing to zero, they move no total and
+  // unexplained_difference cannot change. A broken one leaves its verifikat
+  // listed, flagged. Read only when two verifikat are open: a settlement
+  // needs two.
+  const settlements =
+    openCandidates.length >= 2
+      ? await resolveLedgerSettlements(
+          supabase,
+          companyId,
+          SKATTEKONTO_ACCOUNT,
+          new Map(openCandidates.map((c) => [c.head.id, c.amount])),
+          // The skattekonto ledger is not windowed: a member outside this
+          // list is not open, so the settlement does not hold.
+          async () => new Map(),
+        )
+      : null
+  const settlementOf = (
+    member: LedgerSettlementMember,
+    state: 'settled' | 'broken',
+  ): NonNullable<ReconciliationItem['settlement']> => ({
+    settlement_id: member.settlement_id,
+    state,
+    settled_at: member.settled_at,
+    settled_by: member.settled_by,
+    counterparts: (settlements?.groups.get(member.settlement_id) ?? [])
+      .filter((m) => m.journal_entry_id !== member.journal_entry_id)
+      .map((m) => {
+        const other = ledgerEntries.get(m.journal_entry_id)?.head
+        return {
+          journal_entry_id: m.journal_entry_id,
+          voucher_series: other?.voucher_series ?? null,
+          voucher_number: other?.voucher_number ?? null,
+          entry_date: other?.entry_date ?? null,
+          amount: m.amount,
+        }
+      }),
+  })
+
+  const openLedger = new Map<string, SkattekontoOpenLedgerEntry>()
+  for (const { head, entryAmount, amount, linked } of openCandidates) {
+    const ledgerItem = {
       item_id: head.id,
-      item_type: 'journal_entry',
-      side: 'ledger',
-      bucket: 'unmatched_ledger',
+      item_type: 'journal_entry' as const,
+      side: 'ledger' as const,
       date: head.entry_date,
       description: head.description ?? '',
       amount,
@@ -811,11 +888,35 @@ export async function getSkattekontoReconciliationStatus(
       voucher_number: head.voucher_number,
       voucher_series: head.voucher_series,
       entry_status: head.status,
-      awaiting_external: head.entry_date >= awaitingFrom,
       ...(linked
         ? { partially_linked: { entry_amount: entryAmount, linked_amount: linked.sum, linked_count: linked.count } }
         : {}),
-      actions: ['review', 'match'],
+    }
+    const settled = settlements?.settled.get(head.id)
+    if (settled) {
+      if (visible(head.entry_date)) {
+        pushCapped('matched', {
+          ...ledgerItem,
+          bucket: 'matched',
+          settlement: settlementOf(settled.member, 'settled'),
+          actions: ['unmatch'],
+        })
+      }
+      continue
+    }
+    unlinkedLedgerTotal = roundOre(unlinkedLedgerTotal + amount)
+    openEntries.push({ head, amount })
+    openLedger.set(head.id, { journal_entry_id: head.id, amount, status: head.status, entry_date: head.entry_date })
+    counts.unmatched_ledger++
+    if (olderThanWindow(head.entry_date)) olderUnmatched++
+    if (!visible(head.entry_date)) continue
+    const broken = settlements?.broken.get(head.id)
+    pushCapped('unmatched_ledger', {
+      ...ledgerItem,
+      bucket: 'unmatched_ledger',
+      awaiting_external: head.entry_date >= awaitingFrom,
+      ...(broken ? { settlement: settlementOf(broken, 'broken') } : {}),
+      actions: broken ? ['review', 'match', 'unmatch'] : ['review', 'match'],
     })
   }
 
@@ -995,7 +1096,7 @@ export async function getSkattekontoReconciliationStatus(
     (k) => items[k].length >= MAX_ITEMS_PER_BUCKET,
   )
 
-  return {
+  const result: SkattekontoReconciliationResult = {
     account_key: SKATTEKONTO_ACCOUNT_KEY,
     kind: 'skattekonto',
     account_number: SKATTEKONTO_ACCOUNT,
@@ -1038,4 +1139,6 @@ export async function getSkattekontoReconciliationStatus(
     ledger_read_failed: ledgerReadFailed,
     cover,
   }
+  openLedgerOfStatus.set(result, openLedger)
+  return result
 }

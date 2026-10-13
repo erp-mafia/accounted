@@ -349,6 +349,7 @@ import { decodeToolArgs } from './unicode-escape-guard'
 import { findSupplierCandidates, type SupplierRow } from './supplier-candidates'
 import { creditNoteHandoff } from './inbox-credit-note'
 import { resolveInboxKind } from '@/lib/documents/inbox-kind'
+import { resolveInboxAddress } from '@/lib/documents/inbox-address'
 import { isPeriodLocked } from '@/lib/documents/underlag-import'
 import { documentHeldElsewhereReasonEn, type DocumentLinkHolder } from '@/lib/documents/link-holder'
 import { resolveInboxCreditTarget } from '@/lib/supplier-invoices/credit-target'
@@ -1914,8 +1915,94 @@ function skattekontoBeforeHistoryBlock(summary: {
     note:
       `${summary.count} open Skatteverket row(s) are dated before history_start ${summary.history_start ?? ''}: the ingående balans on 1630 carries that time, so they are in no bridge line, count or opening difference, while Att göra (Bokför skattekontohändelser) still counts them as unbooked. ` +
       'List them with gnubok_list_reconciliation_items, account_key "skattekonto", bucket "before_history". ' +
-      'When skattekonto.opening_difference is 0 the ledger already agrees with Skatteverket through that date, so do not book them: link each row to the imported verifikat on 1630 that holds it (the proposal on the row, when there is one) with gnubok_reconcile_match (allow_remainder for a summarised verifikat), or the user ignores it (Transaktioner, Ignorera).',
+      'When skattekonto.opening_difference is 0 the ledger already agrees with Skatteverket through that date, so do not book them: link each row to the imported verifikat on 1630 that holds it (the proposal on the row, when there is one) with gnubok_reconcile_match (allow_remainder for a summarised verifikat), or, when the user agrees it is no event of the company, ignore it with gnubok_ignore_transaction (transaction_id = the item_id).',
   }
+}
+
+/**
+ * gnubok_ignore_transaction for an id that is no bank transaction: the
+ * "ignore" action gnubok_list_reconciliation_items offers on a skattekonto
+ * row (crm#1178: an enskild firma's skattekonto holds the owner's private
+ * tax from before the firm started). The commit runs setItemIgnored, the
+ * function the Avstämning page and the v1 ignore route call, so the three
+ * doors refuse the same rows. Staged with the qualified
+ * skattekonto_transaction_id, never as a transaction_id.
+ */
+async function stageSkattekontoRowIgnore(input: {
+  args: Record<string, unknown>
+  companyId: string
+  userId: string
+  supabase: SupabaseClient
+  actor: ActorContext | undefined
+  rowId: string
+  restore: boolean
+}): Promise<unknown> {
+  const { args, companyId, userId, supabase, actor, rowId, restore } = input
+  const { data: row, error } = await supabase
+    .from('skattekonto_transactions')
+    .select('id, transaktionsdatum, transaktionstext, belopp_skatteverket, journal_entry_id, is_ignored')
+    .eq('id', rowId)
+    .eq('company_id', companyId)
+    .maybeSingle<{
+      id: string
+      transaktionsdatum: string
+      transaktionstext: string
+      belopp_skatteverket: number | string
+      journal_entry_id: string | null
+      is_ignored: boolean | null
+    }>()
+  if (error) throw dbError(error)
+  if (!row) {
+    throw codedRefusal(
+      'NOT_FOUND',
+      'No bank transaction and no skattekonto row with this id in the company. Copy transaction_id from gnubok_list_uncategorized_transactions, or item_id from gnubok_list_reconciliation_items.',
+    )
+  }
+  // The rule setSkattekontoRowIgnored applies at commit: an ignored row never
+  // carries a link (DB CHECK), so a linked row is unlinked first.
+  if (!restore && row.journal_entry_id) {
+    throw codedRefusal(
+      'TX_IGNORE_ALREADY_BOOKED',
+      'The skattekonto row is linked to a verifikat. Unlink it with gnubok_reconcile_unmatch (account_key "skattekonto", external_id = this id) before ignoring it.',
+      {
+        description: 'A linked skattekonto row cannot be ignored: unlink it first, then ignore.',
+        tool: 'gnubok_reconcile_unmatch',
+        args: { account_key: 'skattekonto', external_id: row.id },
+      },
+    )
+  }
+  const label = row.transaktionstext || row.id
+  return stage({
+    supabase,
+    companyId,
+    userId,
+    type: 'ignore_transaction',
+    title: restore ? `Återställ ignorerad skattekontohändelse: ${label}` : `Ignorera skattekontohändelse: ${label}`,
+    params: { skattekonto_transaction_id: row.id, ignored: !restore },
+    preview: {
+      skattekonto_transaction_id: row.id,
+      account_key: 'skattekonto',
+      transaction_description: label,
+      amount: Number(row.belopp_skatteverket),
+      currency: 'SEK',
+      date: row.transaktionsdatum,
+      currently_ignored: Boolean(row.is_ignored),
+      will_be_ignored: !restore,
+      already_in_state: Boolean(row.is_ignored) === !restore,
+      writes_verifikat: false,
+      period_lock_applies: false,
+    },
+    actor,
+    next: {
+      description: restore
+        ? 'After approval the row is open on the skattekonto again: link it with gnubok_reconcile_match or book it.'
+        : 'After approval the row is on the bridge\'s "Ignorerade händelser" line and leaves the open rows.',
+      tool: 'gnubok_get_reconciliation_status',
+      args: { account_key: 'skattekonto' },
+    },
+    ...stagingOptions(args),
+    dateForPeriodCheck: row.transaktionsdatum,
+  })
 }
 
 const SKATTEKONTO_TWIN_TAIL =
@@ -5759,7 +5846,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_get_agent_briefing',
     title: 'Get Agent Briefing',
-    description: 'Start a company session: identity, accounting method, skills, memories, dimensions and recommended_tools. Fetch skill bodies with gnubok_load_skill; batch-load tool loadouts with ToolSearch select:a,b,c.',
+    description: 'Start a company session: identity, accounting method, inbox address, skills, memories, dimensions and recommended_tools. Fetch skill bodies with gnubok_load_skill; batch-load tool loadouts with ToolSearch select:a,b,c.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -5988,6 +6075,12 @@ export const tools: McpTool[] = [
       // grant) exists: never-connected companies pay no payload for it.
       const safeSkvConnection = getSkvConnectionHealth(supabase, companyId)
 
+      // The document inbox address (crm#1174): an agent asked to route a
+      // card provider's receipts into Accounted looked here and in the inbox
+      // list, found neither, and concluded there was no address. Best-effort
+      // like the blocks above: a failed read reports no address.
+      const inboxAddressRead = resolveInboxAddress(supabase, companyId)
+
       const [profileRes, memoryRes, userRes, companyRes, settingsRes, dimensionsRes] = await Promise.all([
         supabase
           .from('agent_profiles')
@@ -6192,6 +6285,7 @@ export const tools: McpTool[] = [
       const ledgerDigest = await safeLedgerDigest
       const skvConnection = await safeSkvConnection
       const arkivDigest = await safeArkivDigest
+      const inboxAddress = await inboxAddressRead
 
       return {
         company,
@@ -6209,6 +6303,16 @@ export const tools: McpTool[] = [
         ...(ledgerDigest ? { ledger_context: ledgerDigest } : {}),
         ...(arkivDigest ? { arkiv: arkivDigest } : {}),
         ...(skvConnection ? { skatteverket_connection: skvConnection } : {}),
+        // Always present, so the absence of an address is a stated fact and
+        // not something the agent has to infer from a missing key. The note
+        // also names the direct upload: an agent holding the file bytes
+        // mailed them here and waited for them to arrive (crm#1171).
+        inbox: {
+          address: inboxAddress,
+          note: inboxAddress
+            ? 'Forward mail here, by hand or with a forwarding rule: each attachment, or the mail body when there is none, becomes an inbox item. Holding the file itself? Upload it directly (gnubok_create_document_upload, PUT the bytes, gnubok_complete_document_upload): document_id comes back at once.'
+            : 'No inbox address on this install: upload files directly with gnubok_create_document_upload, PUT the bytes, then gnubok_complete_document_upload.',
+        },
 
         // Static per-workflow loadouts (issue #1098): lets a deferred-loading
         // harness batch-load a whole workflow cluster in one call. Validated
@@ -6267,7 +6371,7 @@ export const tools: McpTool[] = [
               amount: { type: 'number', description: 'Positive = income, negative = expense.' },
               description: { type: 'string', description: 'Free-text description shown in /transactions.' },
               currency: { type: 'string', description: 'ISO 4217 code. Default SEK.' },
-              ledger_account: { type: 'string', description: 'Optional BAS 19xx cash account (e.g. "1935") this row settles on. Binds it to a manual kassakonto so reconciliation and voucher matching resolve the right account instead of falling back to 1930.' },
+              ledger_account: { type: 'string', description: 'BAS 19xx cash account the row settles on (e.g. "1935"); a missing kassakonto is created. Omitted: the default account in the row\'s currency.' },
               bank_connection_id: { type: 'string', description: 'Optional UUID of a bank_connections row to associate with.' },
               external_id: { type: 'string', description: 'Optional external reference (e.g., Airtable record ID). Shown in the preview; the DB enforces uniqueness per user, so the second commit of the same external_id will fail at approval.' },
             },
@@ -13042,7 +13146,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_get_reconciliation_status',
     keywords: ['avstämning', 'skattekonto', 'bankavstämning', 'stäm av'],
     title: 'Reconciliation Status',
-    description: 'Reconciliation bridge for one account_key: "skattekonto", "bank:<cash_account_id>" or "manual:<BAS>". Without it: legacy bank status for account_number. Judge on unexplained_difference.',
+    description: 'Reconciliation bridge for one account_key: "skattekonto", "bank:<cash_account_id>" or "manual:<BAS>". Without it: legacy bank status for account_number. Sign-off needs unexplained_difference 0; is_reconciled also needs no open rows.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -13177,7 +13281,7 @@ export const tools: McpTool[] = [
         account_key: { type: 'string', description: '"skattekonto" or "bank:<cash_account_id>"' },
         pairs: {
           type: 'array',
-          description: 'Rows against one verifikat; (bank) one row against several, or no rows: 2+ verifikat netting to 0',
+          description: 'Rows against one verifikat, or one row against several; (bank) no rows: 2+ verifikat netting to 0',
           items: {
             type: 'object',
             additionalProperties: false,
@@ -13402,7 +13506,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_reconcile_unmatch',
     keywords: ['avstämning', 'ta bort koppling', 'skattekonto'],
     title: 'Reconcile: Unlink',
-    description: 'Remove one link on an account: an outside row (bank transaction or skattekonto row) from its verifikat, or (bank) verifikat settled against each other by settlement_id. The verifikat are untouched. Stages (low risk).',
+    description: 'Remove one link on an account: an outside row (bank transaction or skattekonto row) from its verifikat (a split row: all its verifikat), or verifikat settled against each other by settlement_id. The verifikat are untouched. Stages (low risk).',
     catalogVisibility: 'search',
     inputSchema: {
       type: 'object',
@@ -14289,7 +14393,10 @@ export const tools: McpTool[] = [
         query = query.lt('created_at', cursorTs)
       }
 
-      const { data, error } = await query
+      const [{ data, error }, inboxAddress] = await Promise.all([
+        query,
+        resolveInboxAddress(supabase, companyId),
+      ])
       if (error) throw dbError(error)
 
       const mapped = (data || []).map((item) => {
@@ -14360,6 +14467,9 @@ export const tools: McpTool[] = [
         items,
         count: items.length,
         ...(nextCursor ? { next_cursor: nextCursor } : {}),
+        // Where mail lands that becomes these items (crm#1174): the list is
+        // where an agent looks for it. Null when no address is provisioned.
+        inbox_address: inboxAddress,
       }
     },
   },
@@ -16139,7 +16249,7 @@ export const tools: McpTool[] = [
     keywords: ['körjournal', 'milersättning', 'bokför resor'],
     title: 'Book Mileage Period (Milersättning)',
     catalogVisibility: 'search',
-    description: 'Stage booking of all draft körjournal trips in a date range as one milersättning verifikat: debit 7331 at the tax-free schablon rate, credit 2820/2893/1930. Approve via gnubok_approve_pending_operation. Call gnubok_list_mileage_trips first.',
+    description: 'Stage booking of all draft körjournal trips in a date range as one milersättning verifikat: debit 7331 at the tax-free schablon rate, credit per legal form (enskild firma owner 2018). Approve via gnubok_approve_pending_operation. Call gnubok_list_mileage_trips first.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -16147,7 +16257,7 @@ export const tools: McpTool[] = [
         from: { type: 'string', description: 'Period start (YYYY-MM-DD)' },
         to: { type: 'string', description: 'Period end (YYYY-MM-DD)' },
         entry_date: { type: 'string', description: 'Verifikat date (YYYY-MM-DD); must be in an open period' },
-        counter_account: { type: 'string', enum: ['2820', '2893', '1930'], description: 'Credit side: 2820 skuld till anställda (default), 2893 avräkning aktieägare, 1930 when already paid out from bank' },
+        counter_account: { type: 'string', enum: ['2820', '2893', '2018', '1930'], description: 'Credit side; omit for the default. 2820 skuld till anställda, 2893 aktieägare (AB), 2018 egen insättning (EF owner trips), 1930 already paid out' },
         employee_id: { type: 'string', description: 'Only book trips for this employee UUID' },
       },
       required: ['from', 'to', 'entry_date'],
@@ -16167,11 +16277,10 @@ export const tools: McpTool[] = [
       if (from.slice(0, 4) !== to.slice(0, 4)) {
         throw new Error('Schablon rates are per calendar year: book one year at a time')
       }
-      const counterAccount = (args.counter_account as string) || '2820'
-
       // Read-only preflight: aggregate the draft trips so the approver sees
       // exactly what would be booked. The commit path re-reads atomically.
       const { listTrips, summarizeTrips } = await import('@/lib/mileage/mileage-service')
+      const { resolveMileageCounterAccount } = await import('@/lib/mileage/counter-accounts')
       const { loadPayrollConfig } = await import('@/lib/salary/payroll-config')
       const { roundOre } = await import('@/lib/money')
       const trips = await listTrips(supabase, companyId, {
@@ -16184,6 +16293,15 @@ export const tools: McpTool[] = [
       if (new Set(trips.map((t) => t.employee_id ?? 'unassigned')).size > 1) {
         throw new Error('The period spans several employees. Book per employee by passing employee_id (BFL motpart traceability).')
       }
+      const counter = resolveMileageCounterAccount(
+        await resolveCompanyEntityType(supabase, companyId),
+        trips.every((t) => !t.employee_id),
+        (args.counter_account as string) || null,
+      )
+      if (!counter.ok) {
+        throw badArgument('counter_account', `counter_account must be ${counter.allowed.join(' or ')} for these trips`)
+      }
+      const counterAccount = counter.account
       const config = await loadPayrollConfig(supabase, Number(to.slice(0, 4)))
       const summaries = summarizeTrips(trips, config)
       const totalAmount = roundOre(summaries.reduce((sum, s) => sum + s.amount, 0))
@@ -18644,16 +18762,21 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_ignore_transaction',
     title: 'Ignore Transaction (Ignorera)',
-    description: 'Stage ignoring an unbooked bank transaction that is no business event (PSD2 ghost row, duplicate). No verifikat is written, so a locked period does not block it: the answer to TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED. restore: true un-ignores; booked rows are refused.',
+    description: 'Stage ignoring an unbooked bank or skattekonto row that is no business event (PSD2 ghost row, duplicate, a row predating the books). No verifikat is written, so a locked period does not block it: the answer to TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED. restore: true un-ignores.',
     // Default catalog: gnubok_call_tool only bridges READ tools, so a
     // search-only WRITE is uncallable on Claude.ai, and the
     // TX_CATEGORIZE_PRIVATE_PERIOD_LOCKED remediation instructs agents to call
     // this tool. Budget accounted for in payload-size.bench.test.ts (#1661).
+    // It is also the "ignore" action gnubok_list_reconciliation_items offers
+    // on a skattekonto row: agents passed that item_id here and got NOT_FOUND
+    // (crm#1178), so an id that is no bank transaction is looked up as a
+    // skattekonto row (stageSkattekontoRowIgnore). Both ids are UUIDs, so the
+    // two tables cannot answer for the same id.
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        transaction_id: { type: 'string', description: 'UUID of the unbooked bank transaction' },
+        transaction_id: { type: 'string', description: 'Bank transaction_id or skattekonto item_id' },
         restore: { type: 'boolean', description: 'true = clear the ignore flag instead (default false)' },
         ...STAGING_ARGS_PROPERTIES,
       },
@@ -18673,7 +18796,9 @@ export const tools: McpTool[] = [
         .eq('company_id', companyId)
         .maybeSingle()
       if (txError) throw dbError(txError)
-      if (!tx) throw codedRefusal('NOT_FOUND', 'Transaction not found')
+      if (!tx) {
+        return stageSkattekontoRowIgnore({ args, companyId, userId, supabase, actor, rowId: transactionId, restore })
+      }
 
       // Preflight through the shared core in dry run (issue #1661): the booked
       // check covers all three anchors (journal_entry_id, payment allocations,

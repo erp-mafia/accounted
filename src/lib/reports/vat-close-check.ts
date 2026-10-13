@@ -23,6 +23,8 @@ import { fetchVatAccountTotals, type MomsredovisningDetection, resolvePeriodDate
 import { runVatDeclarationChecks, type VatCheckAccountTotals, type VatDeclarationCheck, type VatDeclarationCheckStatus } from '@/lib/reports/vat-declaration-checks'
 import { isFilingBlocked, type RcBasisGapScan, rcBasisTotalsByRate, withRcBasisGapFindings } from '@/lib/reports/vat-filing-gate'
 import { fetchDynamicVatAccounts } from '@/lib/reports/vat-revenue-accounts'
+import { buildFiledAmounts } from '@/lib/reports/vat-manual-filing'
+import { euTradeInRutor, formatEuTradeBoxes } from '@/lib/vat/eu-trade'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getVatDeadlineForPeriod, type VatDeadlineCalculationSettings } from '@/lib/tax/deadline-config'
 import { adjustDeadlineToNextBankingDay } from '@/lib/tax/swedish-holidays'
@@ -318,7 +320,8 @@ async function computeVatReportWithRutor(
   }
 
   const declarationRutor = rutorFromTotals(accountTotals, dynamicVatAccounts)
-  const { ruta30, ruta31, ruta32, ruta49 } = declarationRutor
+  const { ruta30, ruta31, ruta32 } = declarationRutor
+  const filedNet = buildFiledAmounts(declarationRutor).net
   const reportRuta05Accounts = new Set<string>(
     RUTA_05_COMPATIBILITY_ACCOUNTS.filter(
       (account) => !dynamicVatAccounts.explicitAccounts.has(account),
@@ -377,10 +380,12 @@ async function computeVatReportWithRutor(
     period: { type: periodType, year, period, start: startDate, end: endDate },
     period_label: periodLabel,
     rutor,
-    summary: ruta49 > 0
-      ? `Moms att betala: ${Math.abs(ruta49).toFixed(2)} kr`
-      : ruta49 < 0
-        ? `Moms att få tillbaka: ${Math.abs(ruta49).toFixed(2)} kr`
+    // The net as filed (whole kronor per ruta), not the öre sum in ruta49:
+    // the same figure the momsverifikat books (crm#1171).
+    summary: filedNet > 0
+      ? `Moms att betala: ${filedNet} kr`
+      : filedNet < 0
+        ? `Moms att få tillbaka: ${Math.abs(filedNet)} kr`
         : 'Noll i moms',
     warnings,
     excluded_settlement_entries: {
@@ -509,6 +514,7 @@ interface VatCloseBlocker {
     | 'deadline_unavailable'
     | 'fiscal_year_not_found'
     | 'momsredovisning_entries_excluded'
+    | 'eu_trade_setting_off'
   severity: 'high' | 'medium' | 'low'
   count: number
   message: string
@@ -896,6 +902,11 @@ export async function computeVatCloseCheck(
     && settings.fiscal_year_start_month <= 12
     ? settings.fiscal_year_start_month
     : null
+  // EU trade in the period's own rutor (20, 21, 37, 35, 38, 39) moves a
+  // yearly deadline earlier whatever the setting says: the setting is a
+  // statement about the books, and the books are at hand (crm#1171, #1139).
+  const ledgerEuTrade = euTradeInRutor(declarationRutor)
+  const periodHasEuTrade = ledgerEuTrade.purchases.length > 0 || ledgerEuTrade.sales.length > 0
   let deadline: { date: string; label: string } | null = null
   if (periodType === 'quarterly') {
     deadline = computeMomsDeadline('quarterly', Number(year), Number(period), {
@@ -915,8 +926,9 @@ export async function computeVatCloseCheck(
     const fiscalYearMatches = calendarYearOnly
       ? reportEndMonth === 12
       : configuredStartMonth === reportStartMonth
-    const filingMethodRequired = !calendarYearOnly && settings.vat_has_eu_trade === false
-    const filingProfileComplete = typeof settings.vat_has_eu_trade === 'boolean'
+    const euTrade = settings.vat_has_eu_trade === true || periodHasEuTrade
+    const filingMethodRequired = !calendarYearOnly && !euTrade
+    const filingProfileComplete = (euTrade || typeof settings.vat_has_eu_trade === 'boolean')
       && (!filingMethodRequired
         || settings.vat_filing_method === 'electronic'
         || settings.vat_filing_method === 'paper')
@@ -926,7 +938,7 @@ export async function computeVatCloseCheck(
         vat_taxable_base_over_40m: settings.vat_taxable_base_over_40m === true,
         entity_type: entityType,
         fiscal_year_start_month: reportStartMonth,
-        vat_has_eu_trade: settings.vat_has_eu_trade,
+        vat_has_eu_trade: euTrade,
         vat_filing_method: settings.vat_filing_method,
       }
       deadline = computeMomsDeadline('yearly', Number(year), Number(period), deadlineSettings)
@@ -991,6 +1003,21 @@ export async function computeVatCloseCheck(
       count: 1,
       message: 'Momsens inlämningsdatum kunde inte fastställas säkert',
       hint: 'Kontrollera momsinställningar, deklarationssätt och räkenskapsperiod innan deklarationen lämnas in.',
+    })
+  }
+  // The deadline above already follows the books; the stored deadline rows
+  // (deadline list, reminders, client overview) follow the setting, so say
+  // which one is wrong and how to fix it.
+  if (periodType === 'yearly' && periodHasEuTrade && settings?.vat_has_eu_trade !== true) {
+    blockers.push({
+      kind: 'eu_trade_setting_off',
+      severity: 'medium',
+      count: ledgerEuTrade.purchases.length + ledgerEuTrade.sales.length,
+      message:
+        `Perioden har handel med andra EU-länder (${formatEuTradeBoxes(ledgerEuTrade)}) men inställningen ` +
+        'Handel med andra EU-länder är av. Med EU-handel ska årsmomsen lämnas tidigare' +
+        `${deadline ? `, senast ${deadline.label}` : ''}; deadlinelistan visar ett senare datum tills inställningen slås på.`,
+      hint: 'Slå på vat_has_eu_trade med gnubok_update_company_tax_profile (eller Inställningar, Moms) så räknas deadlines om.',
     })
   }
   // Helårsmoms follows the räkenskapsår (SFL 26 kap 10-11 §§). When no fiscal
@@ -1281,13 +1308,18 @@ export async function computeVatCloseCheck(
   // readiness answer must never come from a narrower source than the UI's.
   const declarationBlocked = isFilingBlocked(declarationChecks)
   const readyToClose = highBlockers === 0 && !declarationBlocked
-  const netDue = vatReport.rutor.ruta49
+  // What reaches the skattekonto is ruta 49 as filed: every ruta in whole
+  // kronor and 49 their net (buildFiledAmounts), the amount the momsverifikat
+  // books on 2650/1650. The öre sum of the rutor can differ from it by a
+  // krona or two, and naming that one made the close check and the
+  // settlement disagree (crm#1171).
+  const netDue = buildFiledAmounts(declarationRutor).net
   const direction: 'pay' | 'refund' | 'zero' = netDue > 0 ? 'pay' : netDue < 0 ? 'refund' : 'zero'
 
   const declarationErrors = declarationChecks.filter((c) => c.status === 'ERROR').length
   let summary: string
   if (readyToClose && anomalies.length === 0) {
-    summary = `Klart för stängning. ${direction === 'pay' ? `Moms att betala: ${netDue.toFixed(2)} kr` : direction === 'refund' ? `Moms att få tillbaka: ${Math.abs(netDue).toFixed(2)} kr` : 'Noll i moms'}.${deadline ? ` Inlämning senast ${deadline.label}.` : ''}`
+    summary = `Klart för stängning. ${direction === 'pay' ? `Moms att betala: ${netDue} kr` : direction === 'refund' ? `Moms att få tillbaka: ${Math.abs(netDue)} kr` : 'Noll i moms'}.${deadline ? ` Inlämning senast ${deadline.label}.` : ''}`
   } else if (readyToClose) {
     summary = `Klart för stängning men ${anomalies.length} avvikelse(r) att granska.`
   } else if (declarationBlocked) {

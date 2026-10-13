@@ -1,5 +1,15 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { companyCurrentResource } from '../resources/company-current'
+
+// The inbox address is read only where an inbound mail domain exists
+// (lib/documents/inbox-address.ts); set one so the company_inboxes query is
+// issued and its columns stay under the schema check below.
+beforeAll(() => {
+  process.env.RESEND_INBOUND_DOMAIN = 'in.example.test'
+})
+afterAll(() => {
+  delete process.env.RESEND_INBOUND_DOMAIN
+})
 
 /**
  * The shared mock Supabase harness is a permissive proxy: it accepts any
@@ -199,6 +209,21 @@ describe('Accounted://company/current query shape', () => {
     const [invoices] = findCall(calls, 'invoices')
     expect(invoices).toBeDefined()
     expect(argsOf(invoices, 'eq')).toContainEqual(['document_type', 'invoice'])
+  })
+})
+
+describe('Accounted://company/current intake', () => {
+  it('composes the forwarding address from the active inbox (crm#1174)', async () => {
+    const results = emptyResults()
+    const inboxIndex = EXPECTED_QUERIES.findIndex((q) => q.table === 'company_inboxes')
+    results[inboxIndex] = { data: { local_part: 'acme-7f3k' } }
+    const { supabase, calls } = createRecordingSupabase(results)
+
+    const result = (await companyCurrentResource.read(ctx(supabase))) as { intake: { email: string | null } }
+
+    expect(result.intake.email).toBe('acme-7f3k@in.example.test')
+    const [inbox] = findCall(calls, 'company_inboxes')
+    expect(argsOf(inbox, 'eq')).toEqual([['company_id', 'company-1'], ['status', 'active']])
   })
 })
 

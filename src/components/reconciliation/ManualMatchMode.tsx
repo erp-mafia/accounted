@@ -20,8 +20,9 @@ import type { ResidualKind } from '@/lib/reconciliation/residual'
  * "Matcha manuellt": the two-pane worksheet from the approved design. Left:
  * outside rows with no verifikat (bank transactions or skattekonto rows),
  * multi-select. Right: verifikat on the account with no outside row. The
- * right pane follows the left: with exactly ONE bank row picked it is
- * multi-select (one row settling several verifikat, the 1:N split of #1553);
+ * right pane follows the left: with exactly ONE row picked it is
+ * multi-select (one row settling several verifikat, the 1:N split of #1553;
+ * on the skattekonto one event booked over several verifikat, crm#1183);
  * with several rows picked it is single-select (N rows settling one
  * verifikat). The footer sums both sides; Koppla is enabled only when the
  * selection nets to zero, because the engine links N rows to ONE verifikat,
@@ -116,9 +117,10 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
   const entry = entries.length === 1 ? entries[0] : null
   const ledgerSum = roundOre(entries.reduce((s, i) => s + i.amount, 0))
   const difference = roundOre(externalSum - ledgerSum)
-  // One bank row may settle several verifikat; several rows settle one.
-  // N:M has no engine shape and the right pane never lets it be built.
-  const splitMode = !isSkv && pickedExternal.size === 1
+  // One outside row may settle several verifikat (on the skattekonto only
+  // with their whole open amounts, crm#1183); several rows settle one. N:M
+  // has no engine shape and the right pane never lets it be built.
+  const splitMode = pickedExternal.size === 1
   // No outside row picked: several verifikat may be picked to settle each other.
   const ledgerOnlyMode = canSettleLedger && pickedExternal.size === 0
   const multiEntries = splitMode || ledgerOnlyMode

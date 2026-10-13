@@ -6,6 +6,7 @@ import {
   getDefaultAccountForCategory,
   getDefaultVatTreatmentForCategory,
 } from '@/lib/bookkeeping/category-mapping'
+import { getTemplateById } from '@/lib/bookkeeping/booking-templates'
 import { vatTreatmentForRegistration } from '@/lib/bookkeeping/vat-registration'
 import type { ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 import type { ExpenseVatCase } from '@/lib/expenses/expense-claim-vat'
@@ -67,7 +68,7 @@ const CATEGORY_LABEL_SV: Record<TransactionCategory, string> = {
   income_other: 'Intäkt: övrigt',
   expense_equipment: 'Utrustning/inventarier',
   expense_software: 'Programvara',
-  expense_travel: 'Resor',
+  expense_travel: 'Resor: övrigt (t.ex. hyrd bil eller elsparkcykel)',
   expense_office: 'Kontor',
   expense_marketing: 'Marknadsföring',
   expense_professional_services: 'Konsulter/tjänster',
@@ -83,6 +84,19 @@ const CATEGORY_LABEL_SV: Record<TransactionCategory, string> = {
   private: 'Privat uttag/insättning',
   uncategorized: 'Okategoriserad',
 }
+
+/**
+ * Travel split the way the catalog already prices it. The category's own
+ * default is 25 % moms, right for a hired car or scooter but not for a ticket
+ * (6 %, ML 9 kap. 8 §) or a hotel night (12 %): every train, flight and hotel
+ * the model put under "Resor" was proposed with 25 % ingående moms. Each
+ * option books its catalog template's account and VAT, so the rate stays in
+ * code; a journey to or from another country is the "utomlands" answer.
+ */
+const TRAVEL_OPTIONS: Array<{ id: string; template: string; label: string }> = [
+  { id: 'cat:expense_travel:persontransport', template: 'travel_transport', label: 'Resor: biljett för persontransport (flyg, tåg, buss, taxi, båt)' },
+  { id: 'cat:expense_travel:logi', template: 'travel_hotel', label: 'Resor: hotell och logi' },
+]
 
 const NEEDS_REVIEW = 'needs_review'
 
@@ -155,7 +169,7 @@ export interface SelectAccountInput {
 
 export type SelectionChoice =
   | { kind: 'candidate'; account: string }
-  | { kind: 'category'; category: TransactionCategory }
+  | { kind: 'category'; category: TransactionCategory; /** Catalog template that prices it (TRAVEL_OPTIONS). */ template?: string }
   | { kind: 'needs_review' }
 
 export interface AccountSelection {
@@ -197,7 +211,7 @@ Regler:
 - Kontonummer är strängar, aldrig tal att räkna på.
 - "moms" säger var köpet beskattas. Välj EXAKT ett:
   - "sverige": säljaren finns i Sverige eller tar ut svensk moms. Standardvalet; momssatsen följer kontot eller kategorin.
-  - "utomlands": köpt och förbrukat på plats utomlands, i eller utanför EU: restaurang, kafé, hotell, taxi, parkering, drivmedel, livsmedel. Det beskattas där det utförs, så ingen svensk moms dras av och hela beloppet är kostnad. Aldrig omvänd skattskyldighet. Välj det bara när raden eller underlaget visar platsen (ort, land eller utländsk valuta).
+  - "utomlands": köpt och förbrukat på plats utomlands, i eller utanför EU: restaurang, kafé, hotell, taxi, parkering, drivmedel, livsmedel. Även en resa mellan Sverige och ett annat land (flyg, tåg, färja, buss). Det beskattas där det utförs, så ingen svensk moms dras av och hela beloppet är kostnad. Aldrig omvänd skattskyldighet. Välj det bara när raden eller underlaget visar platsen (ort, land eller utländsk valuta) eller att resan går till eller från utlandet, t.ex. ett flygbolag som inte flyger inrikes i Sverige.
   - "omvand_eu": vara eller tjänst utan moms från en säljare i ett annat EU-land, där omvänd skattskyldighet gäller (köparen redovisar momsen).
   - "omvand_utanfor_eu": tjänst utan moms från en säljare i ett land utanför EU (t.ex. USA, Storbritannien, Norge, Schweiz): programvara, molntjänst, licens, annonsering, konsult. Omvänd skattskyldighet gäller. Var säljaren finns avgör, inte valutan.`
 
@@ -232,6 +246,11 @@ function buildOptions(candidates: AccountCandidate[]): {
     const id = `cat:${category}`
     rows.push({ id, choice: { kind: 'category', category } })
     lines.push(`- ${id} → ${CATEGORY_LABEL_SV[category]}`)
+    if (category !== 'expense_travel') continue
+    for (const t of TRAVEL_OPTIONS) {
+      rows.push({ id: t.id, choice: { kind: 'category', category, template: t.template } })
+      lines.push(`- ${t.id} → ${t.label}`)
+    }
   }
   lines.push('')
   rows.push({ id: NEEDS_REVIEW, choice: { kind: 'needs_review' } })
@@ -387,8 +406,9 @@ export async function selectAccount(input: SelectAccountInput): Promise<AccountS
     vatTreatment = cand?.vatTreatment ?? null
   } else if (choice.kind === 'category') {
     category = choice.category
-    account = getDefaultAccountForCategory(choice.category, input.entityType)
-    vatTreatment = getDefaultVatTreatmentForCategory(choice.category)
+    const template = choice.template ? getTemplateById(choice.template) : undefined
+    account = template?.debit_account ?? getDefaultAccountForCategory(choice.category, input.entityType)
+    vatTreatment = template ? template.vat_treatment : getDefaultVatTreatmentForCategory(choice.category)
   }
 
   // A company that is not VAT-registered books no moms line, so the category

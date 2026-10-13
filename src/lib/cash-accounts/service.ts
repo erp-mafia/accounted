@@ -1243,6 +1243,50 @@ export async function ensureManualCashAccount(
 }
 
 /**
+ * The cash account a hand-entered transaction settles on when the caller
+ * names no ledger account: the only enabled account in the row's currency,
+ * else the primary among them. With a bank connection given, only that
+ * connection's accounts are candidates, so a row the caller tied to one bank
+ * is never bound to another. Null when that leaves no single answer.
+ *
+ * Every bank-feed and bank-file row is bound to an account at ingest; a row
+ * staged by gnubok_create_transactions without ledger_account was stored with
+ * cash_account_id NULL (crm#1171). The rule picks what the NULL row already
+ * meant to its readers: resolveSettlementAccount books a NULL row on the only
+ * same-currency account, and scopeTransactionsToAccount lets only the primary
+ * account claim NULL rows. Bound, the row also shows under its account's
+ * cash_account_id filter, which a NULL row never matched.
+ *
+ * A failed read answers null (the row stays unassigned, as before) rather
+ * than failing the write it rides along with.
+ */
+export async function resolveDefaultCashAccountId(
+  supabase: SupabaseClient,
+  companyId: string,
+  currency: string,
+  bankConnectionId?: string | null,
+): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('cash_accounts')
+    .select('id, is_primary, bank_connection_id')
+    .eq('company_id', companyId)
+    .eq('enabled', true)
+    .eq('currency', currency.toUpperCase())
+  if (error) {
+    log.warn('resolveDefaultCashAccountId lookup failed; row stays unassigned', {
+      companyId,
+      currency,
+      error: error.message,
+    })
+    return null
+  }
+  const rows = (data ?? []) as Array<{ id: string; is_primary: boolean | null; bank_connection_id: string | null }>
+  const candidates = bankConnectionId ? rows.filter((row) => row.bank_connection_id === bankConnectionId) : rows
+  if (candidates.length === 1) return candidates[0].id
+  return candidates.find((row) => row.is_primary === true)?.id ?? null
+}
+
+/**
  * Toggle the enabled flag of a cash account no bank connection holds: the
  * seeded manual row, a SIE-imported one, or one a disconnect released.
  *

@@ -12,14 +12,18 @@ import {
   SettingsRow,
   SettingsSelect,
 } from '@/components/settings/SettingsRows'
+import { formatAmount } from '@/lib/utils'
+import type { KuSignalTrigger } from '@/lib/tax/ku-signal'
 import type { CompanySettings } from '@/types'
 
 interface TaxSettingsFormProps {
   settings: CompanySettings
-  /** Ledger-derived signal: EU sales postings exist (3108/3308/3107). */
+  /** Ledger-derived signal: EU sales in the declaration's rutor 35/38/39. */
   euSalesDetected?: boolean
-  /** Ledger-derived signal: utdelning/ägarlån postings exist (2898/2393/2893). */
-  kuSignalDetected?: boolean
+  /** Ledger-derived signal: EU purchases in the declaration's rutor 20/21/37. */
+  euPurchasesDetected?: boolean
+  /** Ledger-derived signal: what calls for kontrolluppgifter (interest on an ägarlån, utdelning). */
+  kuTriggers?: KuSignalTrigger[]
   /** Invoice-derived signal: invoices with ROT/RUT deductions exist. */
   rotRutSignalDetected?: boolean
 }
@@ -41,7 +45,8 @@ function SignalLine({ text, help }: { text: string; help: React.ReactNode }) {
 export function TaxSettingsForm({
   settings,
   euSalesDetected = false,
-  kuSignalDetected = false,
+  euPurchasesDetected = false,
+  kuTriggers = [],
   rotRutSignalDetected = false,
 }: TaxSettingsFormProps) {
   const t = useTranslations('settings_tax_form')
@@ -113,6 +118,14 @@ export function TaxSettingsForm({
           <SignalLine
             text={t('eu_trade_suggestion_title')}
             help={t('eu_trade_suggestion_help')}
+          />
+        )}
+        {/* EU purchases alone change only the helårsmoms date, so the
+            prompt is for yearly filers; sales are covered by the line above. */}
+        {euPurchasesDetected && !euSalesDetected && vatRegistered && momsPeriod === 'yearly' && !hasEuTrade && (
+          <SignalLine
+            text={t('eu_purchase_suggestion_title')}
+            help={t('eu_purchase_suggestion_help')}
           />
         )}
 
@@ -305,8 +318,22 @@ export function TaxSettingsForm({
       {/* Fiscal year & salaries */}
       {/* Kontrolluppgifter (KU) */}
       <SettingsGroup label={t('kontrolluppgifter_heading')}>
-        {kuSignalDetected && !kuEnabled && (
-          <SignalLine text={t('ku_suggestion_title')} help={t('ku_suggestion_help')} />
+        {kuTriggers.length > 0 && !kuEnabled && (
+          <SignalLine
+            text={kuTriggers
+              .map((trigger) =>
+                trigger.kind === 'owner_loan_interest'
+                  ? t('ku_suggestion_interest', {
+                      amount: formatAmount(trigger.amount),
+                      year: trigger.year,
+                      interest_accounts: trigger.interest_accounts.join(', '),
+                      loan_accounts: trigger.loan_accounts.join(', '),
+                    })
+                  : t('ku_suggestion_dividend', { amount: formatAmount(trigger.amount) }),
+              )
+              .join(' ')}
+            help={t('ku_suggestion_help')}
+          />
         )}
 
         <SettingsRow
