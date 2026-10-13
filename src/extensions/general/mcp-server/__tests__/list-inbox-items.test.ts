@@ -114,12 +114,57 @@ describe('gnubok_list_inbox_items', () => {
     }
 
     const select = findCall('invoice_inbox_items', 'select')?.[0]
-    expect(select).toContain('document_attachments(file_name)')
+    expect(select).toContain('document_attachments(file_name, journal_entry_id)')
     expect(result.items.map((item) => item.file_name)).toEqual([
       'leverantor-export-2026-07.pdf',
       null,
     ])
     expect(result.count).toBe(2)
+  })
+
+  it('reads an item whose document a verifikat holds as processed, stamp or not (agent feedback seq 1003926)', async () => {
+    // The document was linked before the inbox row existed, so nothing
+    // stamped the row: the document's own link is what says it is handled.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        makeInboxItem({
+          id: 'inbox-linked',
+          created_at: '2026-07-31T12:00:00Z',
+          document_attachments: { file_name: 'kvitto.pdf', journal_entry_id: 'je-a30' },
+        }),
+        makeInboxItem({
+          id: 'inbox-open',
+          created_at: '2026-07-30T12:00:00Z',
+          document_attachments: { file_name: 'oppen.pdf', journal_entry_id: null },
+        }),
+      ],
+      error: null,
+    })
+
+    const all = (await tool.execute({}, 'company-1', 'user-1', supabase as never)) as {
+      items: Array<{ id: string; processed: boolean }>
+    }
+    expect(all.items.map((i) => [i.id, i.processed])).toEqual([
+      ['inbox-linked', true],
+      ['inbox-open', false],
+    ])
+  })
+
+  it('leaves an item whose document a verifikat holds out of unprocessed_only', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        makeInboxItem({ id: 'inbox-linked', document_attachments: { file_name: 'a.pdf', journal_entry_id: 'je-a30' } }),
+        makeInboxItem({ id: 'inbox-open', document_attachments: { file_name: 'b.pdf', journal_entry_id: null } }),
+      ],
+      error: null,
+    })
+
+    const open = (await tool.execute({ unprocessed_only: true }, 'company-1', 'user-1', supabase as never)) as {
+      items: Array<{ id: string }>
+    }
+    expect(open.items.map((i) => i.id)).toEqual(['inbox-open'])
   })
 
   it('preserves the first-page response when there are no more items', async () => {

@@ -141,6 +141,7 @@ import { findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bo
 import { formatVoucherLabel, hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
 import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
+import { stampNewInboxItemIfDocumentLinked } from '@/lib/transactions/inbox-underlag'
 import { PERSON_REJECTION_CATEGORIES } from '@/lib/pending-operations/rejection-categories'
 import { canApproveSupplierInvoice, companyAttestsSupplierInvoices } from '@/lib/supplier-invoices/lifecycle'
 import { planSupplierPaymentBackfill, type SupplierPaymentColumns, type SupplierPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
@@ -1352,6 +1353,12 @@ function embeddedDocumentFileName(embed: unknown): string | null {
   return attachment?.file_name ?? null
 }
 
+/** The verifikat holding the embedded document, read the same way as its file_name. */
+function embeddedDocumentJournalEntryId(embed: unknown): string | null {
+  const attachment = (Array.isArray(embed) ? embed[0] : embed) as { journal_entry_id?: string | null } | null | undefined
+  return attachment?.journal_entry_id ?? null
+}
+
 /**
  * The same bytes uploaded again land on the document the archive already
  * holds, and the answer says so instead of minting a second inbox item. The
@@ -1475,6 +1482,10 @@ async function createDocumentInboxItem(
     }
     throw new Error(`Failed to create inbox item: ${inboxError.message}`)
   }
+  // Extraction can take minutes and the agent already holds the document id
+  // (the upload id): a link to a verifikat committed meanwhile found no inbox
+  // row to stamp (agent feedback seq 1003926).
+  await stampNewInboxItemIfDocumentLinked(supabase, companyId, documentId)
 
   return {
     document_id: documentId,
@@ -15177,7 +15188,7 @@ export const tools: McpTool[] = [
         bucket: {
           type: 'string',
           enum: ['proposed', 'unmatched_external', 'unmatched_ledger', 'matched', 'ignored', 'upcoming', 'before_history'],
-          description: 'before_history (skattekonto): open rows before history_start, listed only by name',
+          description: 'before_history = skattekonto rows pre history_start',
         },
         date_from: { type: 'string', description: 'YYYY-MM-DD; scopes lists, never counts' },
         date_to: { type: 'string', description: 'YYYY-MM-DD' },
@@ -16351,7 +16362,7 @@ export const tools: McpTool[] = [
         .select(`
           id, status, source, created_at, extracted_data, matched_supplier_id,
           matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id,
-          email_from, email_subject, error_message, document_attachments(file_name)
+          email_from, email_subject, error_message, document_attachments(file_name, journal_entry_id)
         `)
         .eq('company_id', companyId)
         .order('created_at', { ascending: false })
@@ -16391,11 +16402,14 @@ export const tools: McpTool[] = [
         // bank transaction, converted to a supplier invoice, or booked
         // directly to a journal entry. Surfacing only the supplier fields
         // (as before) made receipts booked against bank transactions look
-        // loose: and risked the agent flagging them as duplicates.
+        // loose: and risked the agent flagging them as duplicates. A document
+        // a verifikat already holds is processed too, stamp or not, as in
+        // gnubok_list_unmatched_documents (agent feedback seq 1003926).
         const processed = !!(
           item.matched_transaction_id ||
           item.created_supplier_invoice_id ||
-          item.created_journal_entry_id
+          item.created_journal_entry_id ||
+          embeddedDocumentJournalEntryId(item.document_attachments)
         )
 
         return {
@@ -17394,17 +17408,25 @@ export const tools: McpTool[] = [
 
       // Pull recent inbox items with a document, no supplier invoice and no
       // direct journal entry yet (both are terminal links per the same
-      // "processed" semantics gnubok_list_inbox_items uses), then filter out
-      // those whose document is already pinned to a transaction.
+      // "processed" semantics gnubok_list_inbox_items uses), whose document
+      // no verifikat holds, then filter out those whose document is already
+      // pinned to a transaction. The document's own link is what
+      // gnubok_link_document_to_voucher reads (document_already_linked): an
+      // item the inbox never stamped listed a document already on its
+      // verifikat as unmatched, and the agent staged a no-op link to find out
+      // (agent feedback seq 1003926). Any status counts: a link is permanent
+      // once set, so a document on a reversed or draft verifikat cannot be
+      // matched to anything else either.
       // Two-step query because PostgREST doesn't expose anti-joins.
       const fetchSize = limit * 2
       let inboxQuery = supabase
         .from('invoice_inbox_items')
-        .select('id, document_id, source, email_from, email_subject, email_received_at, extracted_data, created_at, document_attachments(file_name)')
+        .select('id, document_id, source, email_from, email_subject, email_received_at, extracted_data, created_at, document_attachments!inner(file_name, journal_entry_id)')
         .eq('company_id', companyId)
         .not('document_id', 'is', null)
         .is('created_supplier_invoice_id', null)
         .is('created_journal_entry_id', null)
+        .is('document_attachments.journal_entry_id', null)
         .order('created_at', { ascending: false })
         .order('id', { ascending: false })
         .limit(fetchSize)

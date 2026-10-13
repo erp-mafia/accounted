@@ -6,7 +6,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { tools, isDefaultCatalogTool } from '../server'
-import { toolInputSchema } from '../operation-tools'
+import { coerceStringifiedScalars, toolInputSchema } from '../operation-tools'
 import { OPERATIONS } from '@/lib/operations/registry'
 
 describe('toolInputSchema', () => {
@@ -21,6 +21,52 @@ describe('toolInputSchema', () => {
     expect(properties.n.maximum).toBeUndefined()
     expect(properties.nested.additionalProperties).toBe(false)
     expect(schema.required).toEqual(['id', 'nested'])
+  })
+
+  it('names the types of an enum that lists numbers, and leaves a string enum bare', () => {
+    // A bare enum is a parameter without a type, which clients send as a
+    // string: default_vat_rate 0 arrived as "0" (agent feedback seq 1088767).
+    const schema = toolInputSchema(
+      z.object({
+        rate: z.literal([0, 0.06, 0.12, 0.25, null]).optional(),
+        flag: z.literal([0, 1]).optional(),
+        box: z.literal(['10', '11', null]).optional(),
+      }),
+    )
+    const properties = schema.properties as Record<string, Record<string, unknown>>
+    expect(properties.rate).toEqual({ type: ['number', 'null'], enum: [0, 0.06, 0.12, 0.25, null] })
+    expect(properties.flag).toEqual({ type: 'number', enum: [0, 1] })
+    expect(properties.box).toEqual({ enum: ['10', '11', null] })
+  })
+})
+
+describe('coerceStringifiedScalars', () => {
+  const schema = toolInputSchema(
+    z.object({
+      rate: z.literal([0, 0.06, 0.12, 0.25, null]).optional(),
+      box: z.literal(['10', '11', null]).optional(),
+      count: z.number().int().optional(),
+      name: z.string().nullable().optional(),
+      code: z.string().optional(),
+    }),
+  )
+
+  it('reads a numeric string back as a number where the schema takes no string', () => {
+    expect(coerceStringifiedScalars(schema, { rate: '0', count: '12' })).toEqual({ rate: 0, count: 12 })
+    expect(coerceStringifiedScalars(schema, { rate: '0.0' })).toEqual({ rate: 0 })
+    expect(coerceStringifiedScalars(schema, { rate: '0.25' })).toEqual({ rate: 0.25 })
+  })
+
+  it('reads "null" back as null where null is allowed and the string "null" is not', () => {
+    expect(coerceStringifiedScalars(schema, { rate: 'null', box: 'null' })).toEqual({ rate: null, box: null })
+    // A free-text field takes "null" as text.
+    expect(coerceStringifiedScalars(schema, { name: 'null' })).toEqual({ name: 'null' })
+  })
+
+  it('leaves strings, non-numeric text and already typed values untouched', () => {
+    const args = { rate: 0.12, box: '10', code: '0', count: 'twelve', unknown_key: '1' }
+    expect(coerceStringifiedScalars(schema, args)).toBe(args)
+    expect(coerceStringifiedScalars(schema, { rate: '1e3' })).toEqual({ rate: '1e3' })
   })
 })
 

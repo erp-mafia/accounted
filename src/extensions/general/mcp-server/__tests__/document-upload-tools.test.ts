@@ -142,9 +142,12 @@ describe('MCP model-free document upload tools', () => {
       inboxInsert,
     ]
     const supplier = makeQueryBuilder({ data: null, error: null })
+    // Nothing linked the document while extraction ran: no stamp.
+    const documentLink = makeQueryBuilder({ data: { journal_entry_id: null }, error: null })
     const from = vi.fn((table: string) => {
       if (table === 'invoice_inbox_items') return invoiceLookups.shift()
       if (table === 'suppliers') return supplier
+      if (table === 'document_attachments') return documentLink
       throw new Error(`Unexpected table: ${table}`)
     })
 
@@ -154,6 +157,7 @@ describe('MCP model-free document upload tools', () => {
       userId,
       { from } as never,
     )
+    expect(invoiceLookups).toHaveLength(0)
 
     expect(mocks.completePendingDocumentUpload).toHaveBeenCalledWith(
       expect.anything(),
@@ -177,6 +181,52 @@ describe('MCP model-free document upload tools', () => {
       status: 'received',
     })
     expect(mocks.extractInvoiceFields).toHaveBeenCalledOnce()
+  })
+
+  it('stamps the new inbox item when the document was linked to a verifikat while extraction ran (agent feedback seq 1003926)', async () => {
+    // The agent holds the document id (the upload id) before this call
+    // returns, and linked it with gnubok_link_document_to_voucher while the
+    // extraction ran: that link found no inbox row to stamp.
+    const stampCalls: Array<[string, ...unknown[]]> = []
+    const stamp: Record<string, unknown> = {}
+    for (const method of ['update', 'eq', 'is', 'select']) {
+      stamp[method] = vi.fn((...args: unknown[]) => {
+        stampCalls.push([method, ...args])
+        return stamp
+      })
+    }
+    stamp.then = (resolve: (v: unknown) => void) => resolve({ data: [{ id: uploadId }], error: null })
+    const invoiceLookups = [
+      makeQueryBuilder({ data: null, error: null }),
+      makeQueryBuilder({ data: null, error: null }),
+      makeQueryBuilder({ data: { id: uploadId, status: 'received' }, error: null }),
+      stamp,
+    ]
+    const documentLink = makeQueryBuilder({ data: { journal_entry_id: 'je-a30' }, error: null })
+    const from = vi.fn((table: string) => {
+      if (table === 'invoice_inbox_items') return invoiceLookups.shift()
+      if (table === 'suppliers') return makeQueryBuilder({ data: null, error: null })
+      if (table === 'document_attachments') return documentLink
+      throw new Error(`Unexpected table: ${table}`)
+    })
+
+    const result = await findTool('gnubok_complete_document_upload').execute(
+      { upload_id: uploadId, file_name: 'invoice.pdf', mime_type: 'application/pdf' },
+      companyId,
+      userId,
+      { from } as never,
+    )
+
+    expect(result).toMatchObject({ document_id: uploadId, inbox_item_id: uploadId })
+    expect(invoiceLookups).toHaveLength(0)
+    expect(stampCalls).toEqual([
+      ['update', { created_journal_entry_id: 'je-a30' }],
+      ['eq', 'document_id', uploadId],
+      ['eq', 'company_id', companyId],
+      ['is', 'created_journal_entry_id', null],
+      ['is', 'created_supplier_invoice_id', null],
+      ['select', 'id'],
+    ])
   })
 
   it('answers with the existing document when the same bytes are already archived, creating nothing', async () => {

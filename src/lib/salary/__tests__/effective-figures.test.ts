@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { roundOre } from '@/lib/money'
-import { effectiveRow, effectiveRunTotals, type EffectiveFiguresInput } from '../effective-figures'
+import {
+  declaredAvgifterNote,
+  effectiveRow,
+  effectiveRunTotals,
+  type EffectiveFiguresInput,
+} from '../effective-figures'
+import { declaredAvgifterForRun } from '../declared-avgifter'
 import { salaryRunDataFromRows } from '../salary-entries'
 
 function row(overrides: Partial<EffectiveFiguresInput> = {}): EffectiveFiguresInput {
@@ -182,5 +188,50 @@ describe('parity with the booking input (salaryRunDataFromRows)', () => {
       })
       expect(eff.avgifter_overridden).toBe(booked.avgifter_amount_overridden)
     }
+  })
+})
+
+describe('declaredAvgifterNote (crm#1149)', () => {
+  const runRow = (overrides: Record<string, unknown> = {}) => ({
+    ...row({ gross_salary: 3456.78, avgifter_amount: 1086.12 }),
+    avgifter_basis: 3456.78,
+    avgifter_rate: 0.3142,
+    avgifter_category: 'standard',
+    ...overrides,
+  })
+
+  it('pairs the öre-exact 1 086,12 with the declared 1 085 on whole-krona underlag 3 456', () => {
+    expect(declaredAvgifterNote([runRow()], { avgifterTotal: 0.3142 })).toEqual({
+      computed: 1086.12,
+      declared: 1085,
+      declaredUnderlag: 3456,
+    })
+  })
+
+  it('takes the declared side from the function the AGI files with', () => {
+    const rows = [
+      runRow(),
+      runRow({ avgifter_basis: 30000.99, avgifter_amount: 9426.51 }),
+      runRow({ avgifter_amount_override: 500.75 }),
+    ]
+    const note = declaredAvgifterNote(rows, { avgifterTotal: 0.3142 })
+    expect(note?.declared).toBe(declaredAvgifterForRun(rows, { avgifterTotal: 0.3142 }).totalAmount)
+    expect(note?.computed).toBe(effectiveRunTotals(rows).total_avgifter)
+  })
+
+  it('is null when the computed avgift already is the declared whole-krona amount', () => {
+    // 40 000 × 31,42 % = 12 568,00 exactly: nothing to explain.
+    expect(
+      declaredAvgifterNote([runRow({ avgifter_basis: 40000, avgifter_amount: 12568 })], null),
+    ).toBeNull()
+  })
+
+  it('is null for a run without avgifter (F-skatt only)', () => {
+    expect(
+      declaredAvgifterNote(
+        [runRow({ avgifter_basis: 0, avgifter_amount: 0, employee: { f_skatt_status: 'f_skatt' } })],
+        null,
+      ),
+    ).toBeNull()
   })
 })

@@ -11,6 +11,8 @@ import { generateAgiDeclaration } from '../agi/generate-declaration'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
 import { roundOre } from '@/lib/money'
+import { declaredAvgifterForRun } from '../declared-avgifter'
+import { effectiveRunTotals } from '../effective-figures'
 import type { Logger } from '@/lib/logger'
 
 vi.mock('../personnummer', () => ({
@@ -553,6 +555,65 @@ describe('generateAgiDeclaration: whole-krona amounts (öretal bortfaller)', () 
     expect(result.totals.totalAvgifterAmount).toBe(16073)
     expect(result.xml).toContain(
       '<gem:SummaArbAvgSlf faltkod="487">16073</gem:SummaArbAvgSlf>',
+    )
+  })
+})
+
+describe('generateAgiDeclaration: the declared figure the run page shows is the one filed (crm#1149)', () => {
+  // The run page and the Lönesammanställning show "Deklarerad avgift (hela
+  // kronor)" next to the öre-exact avgift through declaredAvgifterForRun.
+  // For any roster it must equal the FK487 the generator files and stores.
+  const ORE_ROW = {
+    ...REGULAR_ROW,
+    gross_salary: 3456.78,
+    tax_withheld: 0,
+    net_salary: 3456.78,
+    avgifter_basis: 3456.78,
+    avgifter_amount: 1086.12,
+    vacation_accrual: 0,
+    vacation_accrual_avgifter: 0,
+  }
+
+  async function filedAvgifter(roster: Array<Record<string, unknown>>) {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueHappyPath(enqueueMany, roster)
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error('AGI generation failed')
+    return result
+  }
+
+  it('1 086,12 computed is 1 085 declared, on the screen and in FK487 alike', async () => {
+    const roster = [ORE_ROW]
+    const result = await filedAvgifter(roster)
+
+    expect(effectiveRunTotals(roster).total_avgifter).toBe(1086.12)
+    const shown = declaredAvgifterForRun(roster, RUN.calculation_params)
+    expect(shown.totalAmount).toBe(1085)
+    expect(result.totals.totalAvgifterAmount).toBe(shown.totalAmount)
+    expect(result.totals.totalAvgifterBasis).toBe(shown.totalUnderlag)
+    expect(result.xml).toContain('<gem:SummaArbAvgSlf faltkod="487">1085</gem:SummaArbAvgSlf>')
+  })
+
+  it('agrees on a mixed roster: öre wages, an amount override, a basis override, F-skatt and a borttag', async () => {
+    const roster = [
+      ORE_ROW,
+      { ...REGULAR_ROW, employee_id: '33333333-3333-4333-8333-333333333333', gross_salary: 30000.99, avgifter_basis: 30000.99, avgifter_amount: 9426.51, employee: { ...REGULAR_ROW.employee, personnummer: 'emp3_encrypted', specification_number: 3 } },
+      { ...REGULAR_ROW, employee_id: '44444444-4444-4444-8444-444444444444', avgifter_amount_override: 7855.4, employee: { ...REGULAR_ROW.employee, personnummer: 'emp4_encrypted', specification_number: 4 } },
+      { ...REGULAR_ROW, employee_id: '55555555-5555-4555-8555-555555555555', gross_salary: 51158, avgifter_basis: 51158, avgifter_amount: 16073.84, avgifter_basis_override: 40000, employee: { ...REGULAR_ROW.employee, personnummer: 'emp5_encrypted', specification_number: 5 } },
+      { ...F_SKATT_ROW, avgifter_basis_override: 15000, avgifter_amount_override: 4713 },
+      { ...REGULAR_ROW, employee_id: '66666666-6666-4666-8666-666666666666', removed_from_agi: true, employee: { ...REGULAR_ROW.employee, personnummer: 'emp6_encrypted', specification_number: 6 } },
+    ]
+    const result = await filedAvgifter(roster)
+
+    const shown = declaredAvgifterForRun(roster, RUN.calculation_params)
+    // trunc((3 456 + 30 000 + 51 158) × 31,42 %) = 26 585 for the computing
+    // rows, plus the override's trunc(7 855,40) = 7 855.
+    expect(shown.totalAmount).toBe(26585 + 7855)
+    expect(result.totals.totalAvgifterAmount).toBe(shown.totalAmount)
+    expect(result.totals.totalAvgifterBasis).toBe(shown.totalUnderlag)
+    expect(result.xml).toContain(
+      `<gem:SummaArbAvgSlf faltkod="487">${shown.totalAmount}</gem:SummaArbAvgSlf>`,
     )
   })
 })

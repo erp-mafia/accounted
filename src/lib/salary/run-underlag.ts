@@ -9,6 +9,7 @@ import {
   type SalaryJournalRow,
 } from '@/lib/reports/salary-journal'
 import { loadPostedSalaryRunEntries, type PostedSalaryEntry } from '@/lib/salary/posted-run-entries'
+import { declaredAvgifterNote } from '@/lib/salary/effective-figures'
 
 /**
  * Bokföringsunderlag for one salary run (Lönesammanställning): the document
@@ -50,6 +51,12 @@ export interface SalaryRunUnderlagData {
   generatedAt: string
   rows: SalaryJournalRow[]
   totals: SalaryJournalReport['totals']
+  /**
+   * Whole kronor: the arbetsgivaravgifter the run's AGI declares and
+   * Skatteverket draws (declaredAvgifterForRun, the AGI generator's own
+   * computation), printed under the öre-exact total. null when the two agree.
+   */
+  declaredAvgifter: number | null
   entries: SalaryRunUnderlagEntry[]
 }
 
@@ -152,6 +159,7 @@ export async function buildSalaryRunUnderlag(
       generatedAt: now.toISOString(),
       rows,
       totals: salaryJournalTotals(rows),
+      declaredAvgifter: declaredAvgifterNote(employees, run.calculation_params)?.declared ?? null,
       entries,
     },
   }

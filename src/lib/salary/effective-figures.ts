@@ -1,5 +1,5 @@
 import { roundOre } from '@/lib/money'
-import { isFSkattStatus } from './declared-avgifter'
+import { declaredAvgifterForRun, isFSkattStatus, type DeclaredAvgifterRunRow } from './declared-avgifter'
 import { effectiveNetPayout } from './payment/effective-net'
 
 /**
@@ -108,4 +108,35 @@ export function effectiveRunTotals(rows: EffectiveFiguresInput[]): EffectiveRunT
     totals.total_employer_cost = roundOre(totals.total_employer_cost + eff.employer_cost)
   }
   return totals
+}
+
+export interface DeclaredAvgifterNote {
+  /** Öre-exact run avgifter, the total the run page shows (effectiveRunTotals). */
+  computed: number
+  /** Whole kronor: what the AGI declares (FK487) and Skatteverket draws. */
+  declared: number
+  /** The whole-krona underlag the declared amount is computed on. */
+  declaredUnderlag: number
+}
+
+/**
+ * The run's öre-exact avgifter next to the whole-krona amount its AGI
+ * declares, for the "Deklarerad avgift (hela kronor)" line (crm#1149).
+ * Skatteverket computes the avgift on whole-krona underlag with öretal
+ * dropped, so the declared amount is usually a krona or so below the sum of
+ * the per-employee avgifter; without the line a reader compares 1 086,12 on
+ * the run page with 1 085 on the AGI and the skattekonto and concludes the
+ * rounding is wrong. The declared side is declaredAvgifterForRun, the call
+ * the AGI generator files FK487 with, so the two cannot disagree.
+ *
+ * null when the two agree: nothing to explain.
+ */
+export function declaredAvgifterNote(
+  rows: Array<EffectiveFiguresInput & DeclaredAvgifterRunRow>,
+  calculationParams: Record<string, unknown> | null | undefined,
+): DeclaredAvgifterNote | null {
+  const computed = effectiveRunTotals(rows).total_avgifter
+  const declared = declaredAvgifterForRun(rows, calculationParams)
+  if (declared.totalAmount === computed) return null
+  return { computed, declared: declared.totalAmount, declaredUnderlag: declared.totalUnderlag }
 }

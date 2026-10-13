@@ -319,14 +319,105 @@ async function anchorDocumentToJournalEntry(
 }
 
 /**
+ * After a document is linked to a verifikat, stamp the inbox item it came
+ * from (if any) so the inbox reads "handled". The inbox read surfaces derive
+ * "done" from the inbox row's own link columns: gnubok_list_inbox_items
+ * computes processed from matched_transaction_id / created_supplier_invoice_id
+ * / created_journal_entry_id, and the web inbox and the worklist counts read
+ * the same columns. Without this stamp a document attached through
+ * link_document_to_voucher stays "unprocessed" forever: agents re-see it as
+ * missing underlag, and one user read the five leftover rows as duplicates
+ * and nearly deleted the only copies of underlag sitting on posted verifikat
+ * (feedback 2026-08-24..26, three companies).
+ *
+ * CAS on the null link columns so a concurrent claim of the same inbox row
+ * stays a no-op. Several inbox items may carry the same
+ * created_journal_entry_id (an invoice and its payment confirmation on one
+ * verifikat): migration 20260911120500 dropped the UNIQUE that made every
+ * stamp after the first fail with 23505, which this helper used to swallow,
+ * leaving the item "unprocessed" forever (feedback seq 389343, 395894,
+ * 395931, 366701). Zero matched rows is the remaining quiet outcome (the
+ * document never came through the inbox, or the row was already claimed,
+ * typically by create_supplier_invoice_from_inbox) and is logged so the
+ * trail is visible, unless the caller says a document without an inbox row
+ * is the normal case (a transaction's pinned document). Best-effort by
+ * design: the link is already committed and inbox bookkeeping must not roll
+ * it back.
+ */
+export async function stampInboxItemsForLinkedDocument(
+  supabase: SupabaseClient,
+  companyId: string,
+  documentId: string,
+  journalEntryId: string,
+  options: { expectInboxItem?: boolean } = {},
+): Promise<void> {
+  const { data, error } = await supabase
+    .from('invoice_inbox_items')
+    .update({ created_journal_entry_id: journalEntryId })
+    .eq('document_id', documentId)
+    .eq('company_id', companyId)
+    .is('created_journal_entry_id', null)
+    .is('created_supplier_invoice_id', null)
+    .select('id')
+  if (error) {
+    log.warn('Failed to mark inbox item handled after document link (link still committed)', {
+      documentId,
+      journalEntryId,
+      error: error.message,
+    })
+    return
+  }
+  if ((!data || data.length === 0) && options.expectInboxItem !== false) {
+    log.warn('No inbox item stamped after document link: document has no inbox row or it was already claimed', {
+      documentId,
+      journalEntryId,
+    })
+  }
+}
+
+/**
+ * Stamp a just-created inbox item whose document a verifikat already holds.
+ * The MCP upload creates the item only after AI extraction, which can take
+ * minutes, and the document id is the reserved upload id the agent already
+ * has: an agent that linked the document to its verifikat in the meantime
+ * (link_document_to_voucher) found no inbox row to stamp, and the item was
+ * then born "unprocessed" next to a document already on a verifikat (agent
+ * feedback seq 1003926). Read after the insert, not before: a link that
+ * commits after this read stamps the row itself, so no interleaving leaves
+ * the item behind.
+ */
+export async function stampNewInboxItemIfDocumentLinked(
+  supabase: SupabaseClient,
+  companyId: string,
+  documentId: string,
+): Promise<string | null> {
+  const { data: doc, error } = await supabase
+    .from('document_attachments')
+    .select('journal_entry_id')
+    .eq('id', documentId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error) {
+    log.warn('Failed to read document link after inbox item insert', { documentId, error: error.message })
+    return null
+  }
+  const journalEntryId = (doc?.journal_entry_id as string | null) ?? null
+  if (!journalEntryId) return null
+  await stampInboxItemsForLinkedDocument(supabase, companyId, documentId, journalEntryId)
+  return journalEntryId
+}
+
+/**
  * Propagate the underlag onto the verifikat that booked a transaction.
  * Without this, BFL 7 kap is violated: a verifikation exists with no underlag
  * attached even though the user explicitly linked a document (or an inbox
  * item with a document) to this transaction. We:
  *   1. anchor the transaction's own pinned document (transactions.document_id)
- *      when it does not reference a verifikat yet: a document attached
- *      directly to the transaction has no inbox item, so nothing else carries
- *      it onto the verifikat
+ *      when it does not reference a verifikat yet, and stamp the inbox item
+ *      that document came from: a pinned document often arrived through the
+ *      inbox without its item being matched to the transaction, and stayed
+ *      in the inbox as unhandled next to a document already on the verifikat
+ *      (agent feedback seq 1003926)
  *   2. find the inbox item(s) where matched_transaction_id = txId that no
  *      journal entry or supplier invoice has consumed yet
  *   3. for each item with a document_id, set
@@ -358,10 +449,15 @@ export async function propagateUnderlagForBookedTransaction(
       .maybeSingle()
     const pinnedDocumentId = (tx?.document_id as string | null) ?? null
     if (pinnedDocumentId) {
-      await anchorDocumentToJournalEntry(supabase, companyId, pinnedDocumentId, journalEntryId, {
+      const anchored = await anchorDocumentToJournalEntry(supabase, companyId, pinnedDocumentId, journalEntryId, {
         transaction_id: txId,
         source: 'transaction_pin',
       })
+      if (anchored) {
+        await stampInboxItemsForLinkedDocument(supabase, companyId, pinnedDocumentId, journalEntryId, {
+          expectInboxItem: false,
+        })
+      }
     }
 
     const { data: matchedInboxItems } = await supabase

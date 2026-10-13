@@ -285,3 +285,57 @@ export function computeDeclaredAvgifterWithOverrides(
 
   return { totalAmount, totalUnderlag, byCategory }
 }
+
+/** One salary_run_employees row as stored, with the F-skatt join. */
+export interface DeclaredAvgifterRunRow {
+  avgifter_basis: number
+  avgifter_basis_override?: number | null
+  avgifter_amount_override?: number | null
+  avgifter_rate: number
+  avgifter_category?: string | null
+  removed_from_agi?: boolean | null
+  employee?: { f_skatt_status?: string | null } | null
+}
+
+/**
+ * The arbetsgivaravgifter a run's AGI declares (FK487) and Skatteverket
+ * draws, computed from the stored roster rows. The AGI generator files
+ * exactly this number, and every screen or PDF that shows the declared
+ * figure next to the öre-exact computed avgift calls it too, so the two can
+ * never disagree (crm#1149: the run page showed the öre-exact avgift with
+ * nothing explaining the lower whole-krona amount the AGI declared).
+ *
+ * Row rules, the AGI's own:
+ *  - removed_from_agi rows (FK205 borttag tombstones) contribute nothing:
+ *    the earlier submission's amounts stay on file at Skatteverket;
+ *  - F-skatt rows contribute nothing, overrides included (isFSkattStatus);
+ *  - a row with an avgifter_amount_override contributes that manual amount
+ *    (with its override-coalesced basis);
+ *  - every other row computes from the FILED basis: an
+ *    avgifter_basis_override never reaches the IU fields, so Skatteverket
+ *    computes from the filed underlag regardless.
+ */
+export function declaredAvgifterForRun(
+  rows: DeclaredAvgifterRunRow[],
+  calculationParams: Record<string, unknown> | null | undefined,
+): DeclaredAvgifterWithOverrides {
+  return computeDeclaredAvgifterWithOverrides(
+    rows
+      .filter((sre) => !sre.removed_from_agi)
+      .map((sre) => {
+        const fSkatt = isFSkattStatus(sre.employee?.f_skatt_status)
+        const overridden = !fSkatt && sre.avgifter_amount_override != null
+        return {
+          basis: fSkatt
+            ? 0
+            : overridden
+              ? (sre.avgifter_basis_override ?? sre.avgifter_basis) || 0
+              : sre.avgifter_basis || 0,
+          rate: sre.avgifter_rate,
+          category: sre.avgifter_category ?? null,
+          overrideAmount: overridden ? sre.avgifter_amount_override : null,
+        }
+      }),
+    resolveDeclaredAvgifterParams(calculationParams),
+  )
+}

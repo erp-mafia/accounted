@@ -659,6 +659,10 @@ describe('tools/list payload size guard', () => {
     //     step 24), about 108 tokens with its description at the minimum
     //     that still tells an agent to ask the owner. Main had 66 tokens
     //     of headroom, so no parameter of use fitted under the old ceiling.
+    //   * Typed numeric enums (agent feedback seq 1088767): default_vat_rate
+    //     on gnubok_create_account and gnubok_update_account names
+    //     type ["number","null"] so clients stop sending "0". String enums
+    //     stay bare. Measured 65 778 (single-company 60 769). Ceiling unchanged.
     expect(approxTokens).toBeLessThan(65_800)
   })
 

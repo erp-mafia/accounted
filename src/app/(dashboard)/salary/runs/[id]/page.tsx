@@ -1020,7 +1020,11 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       {/* Calculation detail and the journal preview read best side by side on
           the wide canvas; they stack on smaller viewports. */}
       <div className="grid gap-x-12 gap-y-8 lg:grid-cols-2 items-start">
-        <RunCalculationDetails periodYear={run.period_year} employees={employees} />
+        <RunCalculationDetails
+          periodYear={run.period_year}
+          employees={employees}
+          calculationParams={run.calculation_params}
+        />
         {preview && (
           <RunJournalPreview
             preview={preview}

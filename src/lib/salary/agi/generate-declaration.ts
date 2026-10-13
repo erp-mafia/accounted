@@ -41,11 +41,7 @@ import {
 } from '../benefit-payments'
 import { eventBus } from '@/lib/events'
 import { truncateToWholeKronor } from '@/lib/money'
-import {
-  computeDeclaredAvgifterWithOverrides,
-  isFSkattStatus,
-  resolveDeclaredAvgifterParams,
-} from '../declared-avgifter'
+import { declaredAvgifterForRun, isFSkattStatus } from '../declared-avgifter'
 import type { Logger } from '@/lib/logger'
 
 // Strict runtime validation of the joined salary_run_employees row. Without
@@ -489,36 +485,25 @@ export async function generateAgiDeclaration(
   // contribute to FK497/FK487/FK499 because the prior submission's amounts
   // remain on file at Skatteverket; the borttag just removes the IU itself.
   const activeEmployees = parsedRows.filter((sre) => !sre.removed_from_agi)
-  // F-skatt rows contribute 0 regardless of overrides (see isFSkattRow).
-  const effectiveBasis = (sre: SalaryRunEmployeeRow): number =>
-    isFSkattRow(sre) ? 0 : (sre.avgifter_basis_override ?? sre.avgifter_basis) || 0
 
-  // One computation for every roster shape (computeDeclaredAvgifterWithOverrides):
-  // rows WITHOUT an avgifter_amount_override run Skatteverket's underlag
-  // computation on the FILED basis (never basis overrides: those don't reach
-  // the IU fields, so Skatteverket computes from the filed underlag
-  // regardless, and letting them steer FK487 or the payment would file an
-  // FK487 contradicting the declaration's own IUs and underpay the
-  // skattekonto). Rows WITH an amount override (FoU-avdrag and other manual
-  // adjustments) contribute their manual amounts per category instead: a
-  // manual adjustment on one employee must not cost the colleagues their
-  // SKV-exact declared amounts. The salary booking's split runs the same
-  // function, so booked 2731 == filed FK487 == stored == paid.
-  const declared = computeDeclaredAvgifterWithOverrides(
-    activeEmployees.map((sre) => {
-      const overridden = !isFSkattRow(sre) && sre.avgifter_amount_override != null
-      return {
-        // Overridden rows report their effective (override-coalesced) basis;
-        // computing rows use the FILED basis.
-        basis: overridden ? effectiveBasis(sre) : isFSkattRow(sre) ? 0 : sre.avgifter_basis || 0,
-        rate: sre.avgifter_rate,
-        category: sre.avgifter_category ?? null,
-        overrideAmount: overridden ? sre.avgifter_amount_override : null,
-      }
-    }),
-    resolveDeclaredAvgifterParams(
-      (run.calculation_params as Record<string, unknown> | null) ?? null,
-    ),
+  // One computation for every roster shape (declaredAvgifterForRun, over
+  // computeDeclaredAvgifterWithOverrides). It drops the borttag tombstones
+  // and zeroes F-skatt rows (overrides included) itself. Rows WITHOUT an
+  // avgifter_amount_override run Skatteverket's underlag computation on the
+  // FILED basis (never basis overrides: those don't reach the IU fields, so
+  // Skatteverket computes from the filed underlag regardless, and letting
+  // them steer FK487 or the payment would file an FK487 contradicting the
+  // declaration's own IUs and underpay the skattekonto). Rows WITH an amount
+  // override (FoU-avdrag and other manual adjustments) contribute their
+  // manual amounts per category instead: a manual adjustment on one employee
+  // must not cost the colleagues their SKV-exact declared amounts. The
+  // salary booking's split runs the same computation, so booked 2731 ==
+  // filed FK487 == stored == paid, and the run page and the
+  // Lönesammanställning show the declared figure through this same call
+  // (crm#1149).
+  const declared = declaredAvgifterForRun(
+    parsedRows,
+    (run.calculation_params as Record<string, unknown> | null) ?? null,
   )
   const avgifterByCategory = declared.byCategory as AGITotals['avgifterByCategory']
   const totalAvgifterAmount = declared.totalAmount

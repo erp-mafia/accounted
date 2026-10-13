@@ -53,6 +53,7 @@ function underlag(over: Partial<SalaryRunUnderlagData> = {}): SalaryRunUnderlagD
       vacationAccrualAvgifter: 0,
       totalEmployerCost: 43139.98,
     },
+    declaredAvgifter: null,
     entries: [
       {
         description: 'Lön augusti 2026',
@@ -94,5 +95,17 @@ describe('SalaryRunUnderlagPDF', () => {
     ).join('\n')
     expect(corrected).toContain('korrigerats')
     expect(corrected).toContain('Nollkörning')
+  }, RENDER_TIMEOUT)
+
+  it('prints the whole-krona declared avgift under the öre-exact total only when they differ (crm#1149)', async () => {
+    const differs = pdfTextStrings(
+      await renderToBuffer(SalaryRunUnderlagPDF({ data: underlag({ declaredAvgifter: 10608 }) })),
+    ).join('\n')
+    expect(differs).toContain('Deklarerad avgift i AGI (hela kronor)')
+    expect(differs).toContain('10 608,00')
+    expect(differs).toContain('10 609,10')
+
+    const agrees = pdfTextStrings(await renderToBuffer(SalaryRunUnderlagPDF({ data: underlag() }))).join('\n')
+    expect(agrees).not.toContain('Deklarerad avgift')
   }, RENDER_TIMEOUT)
 })

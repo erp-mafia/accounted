@@ -73,6 +73,21 @@ describe('gnubok_list_unmatched_documents', () => {
     expect(result).toEqual({ items: [], count: 0 })
   })
 
+  it('excludes inbox rows whose document a verifikat already holds, as gnubok_link_document_to_voucher reads it (agent feedback seq 1003926)', async () => {
+    // The item was never stamped (it was created after the link), so the
+    // inbox row's own columns still read "unprocessed". The document's link
+    // is filtered in the query itself, so a page is never padded with rows
+    // that are dropped afterwards.
+    const inboxChain = makeRecordingChain({ data: [], error: null })
+    const fromMock = vi.fn().mockReturnValue(inboxChain.proxy)
+
+    await tool.execute({}, 'company-1', 'user-1', { from: fromMock } as never)
+
+    const select = inboxChain.calls.find((c) => c.method === 'select')?.args[0] as string
+    expect(select).toContain('document_attachments!inner(file_name, journal_entry_id)')
+    expect(inboxChain.calls).toContainEqual({ method: 'is', args: ['document_attachments.journal_entry_id', null] })
+  })
+
   it('maps extracted_data fields and drops documents already pinned to a transaction', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({

@@ -32,7 +32,9 @@ const SRE = (name: [string, string], gross: number, tax: number, avgifter: numbe
   tax_withheld: tax,
   net_salary: gross - tax,
   avgifter_amount: avgifter,
+  avgifter_basis: gross,
   avgifter_rate: 0.3142,
+  avgifter_category: 'standard',
   vacation_accrual: vacation,
   vacation_accrual_avgifter: 0,
   sick_days: 0,
@@ -116,6 +118,8 @@ describe('buildSalaryRunUnderlag', () => {
     expect(data.totals.netSalary).toBe(49000)
     expect(data.totals.avgifterAmount).toBe(21994)
     expect(data.totals.vacationAccrual).toBe(8400)
+    // Whole-krona salaries: the öre-exact avgift already is the declared one.
+    expect(data.declaredAvgifter).toBeNull()
 
     expect(data.entries).toHaveLength(2)
     expect(data.entries[0].voucher).toBe('L-8')
@@ -135,6 +139,21 @@ describe('buildSalaryRunUnderlag', () => {
     // Scoped to the company and to this run.
     expect(findCall('salary_run_employees', 'eq')).toEqual(['company_id', 'company-1'])
     expect(findCall('chart_of_accounts', 'in')).toEqual(['account_number', ['7210', '2710', '1930', '7510', '2731']])
+  })
+
+  it('carries the whole-krona avgift the AGI declares when it differs from the öre-exact total (crm#1149)', async () => {
+    enqueue({ data: { ...BOOKED_RUN, calculation_params: { avgifterTotal: 0.3142 } } })
+    enqueue({ data: { name: 'X AB', org_number: '556677-8899' } })
+    // 3 456,78 × 31,42 % = 1 086,12 öre-exact; the AGI declares
+    // trunc(3 456 × 31,42 %) = 1 085.
+    enqueue({ data: [SRE(['Anna', 'Ek'], 3456.78, 0, 1086.12, 0)] })
+    enqueue({ data: POSTED })
+    enqueue({ data: [] })
+    const result = await buildSalaryRunUnderlag(db, 'company-1', 'run-1')
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.totals.avgifterAmount).toBe(1086.12)
+    expect(result.data.declaredAvgifter).toBe(1085)
   })
 
   it('prints a corrected run with its original verifikat: the correction keeps the entry ids on the run', async () => {

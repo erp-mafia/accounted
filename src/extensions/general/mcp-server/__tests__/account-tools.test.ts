@@ -521,6 +521,62 @@ describe('gnubok_update_account', () => {
 
     expect(result.preview.changes).toEqual({ default_vat_treatment: null })
   })
+
+  // Agent feedback seq 1088767: the REVENUE_ACCOUNT_WITHOUT_RUTA hint says to
+  // set default_vat_rate 0 on a non-sales class 3 account, and the client sent
+  // the untyped enum value as the string "0", refused as VALIDATION_ERROR.
+  it('publishes default_vat_rate as a typed enum', () => {
+    const properties = updateAccount.inputSchema.properties as Record<string, Record<string, unknown>>
+    expect(properties.default_vat_rate).toEqual({ type: ['number', 'null'], enum: [0, 0.06, 0.12, 0.25, null] })
+  })
+
+  it.each([0, '0', '0.0'])('stages default_vat_rate 0 sent as %j', async (rate) => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        account_number: '3990', account_name: 'Övriga ersättningar och intäkter', default_vat_rate: null,
+        default_vat_treatment: null, is_active: true,
+      },
+    })
+    const result = (await updateAccount.execute(
+      { account_number: '3990', default_vat_rate: rate, dry_run: true },
+      'company-1', 'user-1', supabase as never,
+    )) as { preview: { changes: Record<string, unknown> } }
+
+    expect(result.preview.changes).toEqual({ default_vat_rate: 0 })
+  })
+
+  it('reads "0.25" and "null" back as the rate and the clearing null', async () => {
+    const current = {
+      data: {
+        account_number: '3041', account_name: 'Försäljning', default_vat_rate: 0.12,
+        default_vat_treatment: null, is_active: true,
+      },
+    }
+    const set = createQueuedMockSupabase()
+    set.enqueue(current)
+    const setResult = (await updateAccount.execute(
+      { account_number: '3041', default_vat_rate: '0.25', dry_run: true },
+      'company-1', 'user-1', set.supabase as never,
+    )) as { preview: { changes: Record<string, unknown> } }
+    expect(setResult.preview.changes).toEqual({ default_vat_rate: 0.25 })
+
+    const clear = createQueuedMockSupabase()
+    clear.enqueue(current)
+    const clearResult = (await updateAccount.execute(
+      { account_number: '3041', default_vat_rate: 'null', dry_run: true },
+      'company-1', 'user-1', clear.supabase as never,
+    )) as { preview: { changes: Record<string, unknown> } }
+    expect(clearResult.preview.changes).toEqual({ default_vat_rate: null })
+  })
+
+  it('still refuses a rate outside the set, as a number or a string', async () => {
+    for (const rate of [25, '25', 'zero']) {
+      await expect(
+        updateAccount.execute({ account_number: '3990', default_vat_rate: rate }, 'company-1', 'user-1', noopSupabase),
+      ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', message: expect.stringMatching(/^Invalid arguments: default_vat_rate: /) })
+    }
+  })
 })
 
 describe('gnubok_list_accounts: compact detail and paging', () => {

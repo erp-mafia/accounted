@@ -11,7 +11,8 @@ import type { SalaryRunUnderlagData } from '@/lib/salary/run-underlag'
  * BFL 7 kap). Swedish in both locales, like the payslip. Contents:
  * - Company, period, payment date, status (rättelse / korrigerad)
  * - Per employee: brutto, skatt, netto, arbetsgivaravgifter,
- *   semesterlöneskuld with its avgifter, total cost; totals row
+ *   semesterlöneskuld with its avgifter, total cost; totals row, and under
+ *   it the whole-krona avgift the AGI declares when it differs
  * - The posted verifikat with voucher number, account, account name,
  *   debit and credit, and per-verifikat sums
  */
@@ -100,6 +101,7 @@ const styles = StyleSheet.create({
   },
   colName: { flex: 3 },
   colPnr: { flex: 1 },
+  colNameAndPnr: { flex: 4 },
   colAmount: { flex: 1.6, textAlign: 'right' as const },
   colAccount: { flex: 0.8 },
   colAccountName: { flex: 3 },
@@ -203,6 +205,22 @@ export function SalaryRunUnderlagPDF({ data }: { data: SalaryRunUnderlagData }) 
             <Text style={styles.colAmount}>{fmt(data.totals.vacationAccrualAvgifter)}</Text>
             <Text style={styles.colAmount}>{fmt(data.totals.totalEmployerCost)}</Text>
           </View>
+          {/* AGI amounts are whole kronor and Skatteverket computes the avgift
+              on whole-krona underlag with öretal dropped, so the declared
+              amount sits under the öre-exact total it differs from (crm#1149). */}
+          {data.declaredAvgifter !== null && (
+            <View style={styles.row} wrap={false}>
+              {/* Spans the name and pnr columns so the label stays on one line. */}
+              <Text style={styles.colNameAndPnr}>Deklarerad avgift i AGI (hela kronor)</Text>
+              <Text style={styles.colAmount}></Text>
+              <Text style={styles.colAmount}></Text>
+              <Text style={styles.colAmount}></Text>
+              <Text style={styles.colAmount}>{fmt(data.declaredAvgifter)}</Text>
+              <Text style={styles.colAmount}></Text>
+              <Text style={styles.colAmount}></Text>
+              <Text style={styles.colAmount}></Text>
+            </View>
+          )}
         </View>
 
         {/* Posted verifikat */}

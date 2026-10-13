@@ -20,6 +20,7 @@ import { commitArkivProposeFact } from '@/lib/arkiv/facts/propose'
 import { parseEntityType, resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { eventBus } from '@/lib/events'
 import { bulkBookMatchedInboxItems, categorizeMatchedTransaction } from '@/lib/transactions/categorize-core'
+import { stampInboxItemsForLinkedDocument } from '@/lib/transactions/inbox-underlag'
 import {
   enforceBulkBookDimensionPolicy,
   runBulkBookDuplicateGuard,
@@ -3959,61 +3960,6 @@ async function precheckDocumentLink(
   return { ok: true }
 }
 
-/**
- * After a document is linked to a verifikat, stamp the inbox item it came
- * from (if any) so the inbox reads "handled". Both inbox read surfaces derive
- * "done" from the inbox row's own link columns, never from
- * document_attachments.journal_entry_id: gnubok_list_inbox_items computes
- * processed from matched_transaction_id / created_supplier_invoice_id /
- * created_journal_entry_id, and gnubok_list_unmatched_documents filters on the
- * same two nulls. Without this stamp a document attached through
- * link_document_to_voucher stays "unprocessed" forever: agents re-see it as
- * missing underlag, and one user read the five leftover rows as duplicates
- * and nearly deleted the only copies of underlag sitting on posted verifikat
- * (feedback 2026-08-24..26, three companies).
- *
- * Same shape as the create_voucher + inbox_item_id stamp: CAS on the null
- * link columns so a concurrent claim of the same inbox row stays a no-op.
- * Several inbox items may carry the same created_journal_entry_id (an invoice
- * and its payment confirmation on one verifikat): migration 20260911120500
- * dropped the UNIQUE that made every stamp after the first fail with 23505,
- * which this helper used to swallow, leaving the item "unprocessed" forever
- * (feedback seq 389343, 395894, 395931, 366701). Zero matched rows is the
- * remaining quiet outcome (the document never came through the inbox, or the
- * row was already claimed, typically by create_supplier_invoice_from_inbox)
- * and is logged so the trail is visible. Best-effort by design: the link is
- * already committed and inbox bookkeeping must not roll it back.
- */
-async function stampInboxItemForLinkedDocument(
-  supabase: SupabaseClient,
-  companyId: string,
-  documentId: string,
-  journalEntryId: string,
-): Promise<void> {
-  const { data, error } = await supabase
-    .from('invoice_inbox_items')
-    .update({ created_journal_entry_id: journalEntryId })
-    .eq('document_id', documentId)
-    .eq('company_id', companyId)
-    .is('created_journal_entry_id', null)
-    .is('created_supplier_invoice_id', null)
-    .select('id')
-  if (error) {
-    log.warn('Failed to mark inbox item handled after document link (link still committed)', {
-      documentId,
-      journalEntryId,
-      error: error.message,
-    })
-    return
-  }
-  if (!data || data.length === 0) {
-    log.warn('No inbox item stamped after document link: document has no inbox row or it was already claimed', {
-      documentId,
-      journalEntryId,
-    })
-  }
-}
-
 /** The immutability trigger refused the write, typed by linkToJournalEntry or raw. */
 function isDocumentLinkConflict(err: unknown): boolean {
   if (err instanceof DocumentAlreadyLinkedError) return true
@@ -4067,7 +4013,7 @@ async function commitLinkDocumentToVoucher(
       journalEntryId,
       journalEntryLineId,
     )
-    await stampInboxItemForLinkedDocument(supabase, companyId, documentId, journalEntryId)
+    await stampInboxItemsForLinkedDocument(supabase, companyId, documentId, journalEntryId)
     return {
       data: {
         document_id: updated.id,
@@ -4124,7 +4070,7 @@ async function commitLinkDocumentsToVouchers(
       const updated = await linkToJournalEntry(
         supabase, companyId, documentId, journalEntryId, link.journal_entry_line_id ?? undefined,
       )
-      await stampInboxItemForLinkedDocument(supabase, companyId, documentId, journalEntryId)
+      await stampInboxItemsForLinkedDocument(supabase, companyId, documentId, journalEntryId)
       linked.push({ document_id: updated.id, journal_entry_id: updated.journal_entry_id as string })
     } catch (err) {
       // Same mapping as the single executor, including its locked-period

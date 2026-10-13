@@ -1,7 +1,9 @@
 'use client'
 
+import type { ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
-import { effectiveRunTotals } from '@/lib/salary/effective-figures'
+import { InfoTooltip } from '@/components/ui/info-tooltip'
+import { declaredAvgifterNote, effectiveRunTotals } from '@/lib/salary/effective-figures'
 import type { SalaryRunEmployee } from '@/types'
 import { formatRunAmount, type RunDetail } from './types'
 
@@ -22,12 +24,25 @@ export function RunKpiCards({ run, employees }: RunKpiCardsProps) {
   // applies the same override rules as the booking, including that an
   // F-skatt row ignores an avgifter override.
   const effective = effectiveRunTotals(employees)
+  // The whole-krona amount the AGI declares and Skatteverket draws, from the
+  // function the AGI generator files with: shown under the öre-exact avgift
+  // whenever the two differ, so 1 086,12 here and 1 085 on the AGI and the
+  // skattekonto read as one figure, not a rounding error (crm#1149).
+  const declared = declaredAvgifterNote(employees, run.calculation_params)
 
-  const cards = [
+  const cards: Array<{ label: string; value: number; accent?: boolean; note?: ReactNode }> = [
     { label: t('kpi_gross'), value: run.total_gross },
     { label: t('kpi_tax'), value: effective.total_tax },
     { label: t('kpi_net'), value: effective.total_net, accent: true },
-    { label: t('kpi_avgifter'), value: effective.total_avgifter },
+    {
+      label: t('kpi_avgifter'),
+      value: effective.total_avgifter,
+      note: declared ? (
+        <InfoTooltip content={t('avgifter_declared_help')}>
+          {t('kpi_avgifter_declared', { amount: formatRunAmount(declared.declared) })}
+        </InfoTooltip>
+      ) : undefined,
+    },
     { label: t('kpi_employer_cost'), value: effective.total_employer_cost },
   ]
 
@@ -35,7 +50,7 @@ export function RunKpiCards({ run, employees }: RunKpiCardsProps) {
   // Metrics wrap on narrow viewports.
   return (
     <div className="flex flex-wrap gap-x-10 gap-y-4">
-      {cards.map(({ label, value, accent }) => (
+      {cards.map(({ label, value, accent, note }) => (
         <div key={label} className="min-w-0">
           <p className="text-[11px] uppercase tracking-wider text-muted-foreground">{label}</p>
           <p
@@ -43,6 +58,7 @@ export function RunKpiCards({ run, employees }: RunKpiCardsProps) {
           >
             {formatRunAmount(value)}
           </p>
+          {note && <div className="mt-2 text-[12.5px] tabular-nums text-muted-foreground">{note}</div>}
         </div>
       ))}
     </div>

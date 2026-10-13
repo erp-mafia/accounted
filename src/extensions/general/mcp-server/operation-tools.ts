@@ -2,7 +2,8 @@
  * MCP door for operations (see src/lib/operations/types.ts): every operation
  * with an `mcp` binding becomes a tool, with its inputSchema generated from
  * the operation's Zod input, so the tool and the v1 endpoint accept exactly
- * the same request.
+ * the same request (once a stringified top-level scalar is read back as the
+ * number or null it stands for: coerceStringifiedScalars).
  *
  * Reads run directly. Writes stage: the tool validates the input, asks the
  * operation for a dry-run preview (which runs every check the commit will
@@ -78,10 +79,29 @@ function foldNullable(obj: Record<string, unknown>): Record<string, unknown> {
   return { ...other, ...rest, type: [other.type, 'null'] }
 }
 
+const jsonType = (value: unknown) => (value === null ? 'null' : typeof value)
+
+/**
+ * A multi-value literal (`z.literal([0, 0.06, null])`) comes out as a bare
+ * `enum` with no `type`, and MCP clients send a parameter whose type they
+ * cannot read as a string: default_vat_rate 0 arrived as "0" and was refused
+ * (agent feedback seq 1088767). An enum listing a number or boolean therefore
+ * names its types. An enum of strings (plus null) stays bare: its values
+ * already arrive as the strings they are, and every byte of it ships in
+ * tools/list (coerceStringifiedScalars takes a stringified null back).
+ */
+function typeEnum(obj: Record<string, unknown>): Record<string, unknown> {
+  if (!Array.isArray(obj.enum) || obj.type !== undefined) return obj
+  const types = [...new Set(obj.enum.map(jsonType))]
+  if (!types.every((t) => ['number', 'boolean', 'string', 'null'].includes(t))) return obj
+  if (types.every((t) => t === 'string' || t === 'null')) return obj
+  return { type: types.length === 1 ? types[0] : types, ...obj }
+}
+
 function compact(node: unknown): unknown {
   if (Array.isArray(node)) return node.map(compact)
   if (typeof node !== 'object' || node === null) return node
-  const obj = foldNullable({ ...(node as Record<string, unknown>) })
+  const obj = typeEnum(foldNullable({ ...(node as Record<string, unknown>) }))
   if (typeof obj.format === 'string' && typeof obj.pattern === 'string') delete obj.pattern
   if (obj.maximum === Number.MAX_SAFE_INTEGER) delete obj.maximum
   if (obj.minimum === Number.MIN_SAFE_INTEGER) delete obj.minimum
@@ -132,7 +152,7 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
         catalogVisibility: binding.visibility ?? 'search',
         keywords: binding.keywords,
         async execute(args, companyId, userId, supabase) {
-          const input = parseOrThrow(op, args)
+          const input = parseOrThrow(op, inputSchema, args)
           const outcome = await op.run(
             { supabase, companyId, userId, log: log.child({ operation: op.id }) },
             input,
@@ -166,7 +186,7 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
       keywords: binding.keywords,
       async execute(args, companyId, userId, supabase, actor) {
         const { dry_run, idempotency_key, ...rest } = args
-        const input = parseOrThrow(op, rest)
+        const input = parseOrThrow(op, inputSchema, rest)
         // The preview runs every check the commit will run, so a staged
         // operation that could never commit is refused here, not at approval.
         const preview = await op.run(
@@ -210,8 +230,51 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
  * code v1 answers for the same body). A plain Error here reached the agent as
  * UNKNOWN_ERROR, "Något gick fel. Försök igen.", from every generated tool.
  */
-function parseOrThrow(op: AnyOperation, args: Record<string, unknown>): unknown {
+function parseOrThrow(op: AnyOperation, inputSchema: JsonSchema, rawArgs: Record<string, unknown>): unknown {
+  const args = coerceStringifiedScalars(inputSchema, rawArgs)
   const parsed = (op.input as unknown as z.ZodTypeAny).safeParse(args)
   if (parsed.success) return parsed.data
   throw fieldValidationError('Invalid arguments', zodFieldIssues(parsed.error, args))
+}
+
+const NUMERIC_LITERAL = /^-?\d+(\.\d+)?$/
+
+/**
+ * Top-level arguments a client sent as strings although the schema takes no
+ * string there: "0" where a number is expected, "null" where null is allowed
+ * but the string "null" is not. Clients that serialize scalar parameters
+ * without reading their JSON type do this (agent feedback seq 1088767), and
+ * a client keeps the tools/list it cached before the schema named its types.
+ * Only those two unambiguous cases are converted; anything else passes
+ * through unchanged for the operation's own validation to refuse. Nested
+ * values travel inside JSON and keep their types.
+ */
+export function coerceStringifiedScalars(
+  inputSchema: JsonSchema,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const properties = inputSchema.properties as Record<string, JsonSchema> | undefined
+  if (!properties) return args
+  let out: Record<string, unknown> | null = null
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value !== 'string') continue
+    const property = properties[key]
+    if (!property) continue
+    const values = Array.isArray(property.enum) ? (property.enum as unknown[]) : null
+    const types = Array.isArray(property.type) ? (property.type as unknown[]) : [property.type]
+    const admits = (type: string) =>
+      values
+        ? values.some((v) => jsonType(v) === type)
+        : types.includes(type) || (type === 'number' && types.includes('integer'))
+    let coerced: unknown = value
+    if (admits('number') && !admits('string') && NUMERIC_LITERAL.test(value)) {
+      coerced = Number(value)
+    } else if (value === 'null' && admits('null') && !(values ? values.includes('null') : admits('string'))) {
+      coerced = null
+    }
+    if (coerced === value) continue
+    out ??= { ...args }
+    out[key] = coerced
+  }
+  return out ?? args
 }
