@@ -711,7 +711,7 @@ const CreateInvoiceBaseSchema = z.object({
   our_reference: z.string().optional(),
   // Fakturamärkning: buyer-required marking (kostnadsställe/projekt/PO),
   // separate from your_reference. Printed on the PDF and mapped to Peppol
-  // BT-10 BuyerReference when set.
+  // BT-13 OrderReference (and BT-10 when your_reference is empty).
   invoice_marking: z.string().max(200).optional(),
   notes: z.string().optional(),
   // Optional online payment link (manual MVP): the user pastes a link created

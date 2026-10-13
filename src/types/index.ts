@@ -1523,7 +1523,7 @@ export interface Invoice {
   our_reference: string | null
   // Fakturamärkning: buyer-required marking (cost center, project, PO label),
   // separate from your_reference (Er referens = contact person). Printed on
-  // the PDF and mapped to Peppol BT-10 BuyerReference when set. Optional in
+  // the PDF and mapped to Peppol BT-13 OrderReference. Optional in
   // TS for pre-migration fixtures.
   invoice_marking?: string | null
 

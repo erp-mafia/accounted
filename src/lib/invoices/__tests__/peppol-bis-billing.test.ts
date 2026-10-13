@@ -435,18 +435,33 @@ describe('generatePeppolBisBillingInvoice', () => {
     )
   })
 
-  it('prefers invoice_marking over your_reference for BT-10 BuyerReference', () => {
+  it('sends your_reference as BT-10 BuyerReference and invoice_marking as BT-13 OrderReference', () => {
     const input = makeValidInput()
-    input.invoice = makeInvoice({ ...input.invoice, invoice_marking: 'KST 4711' })
+    input.invoice = makeInvoice({ ...input.invoice, invoice_marking: 'PO & 4711' })
 
     const result = generatePeppolBisBillingInvoice(input)
 
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.xml).toContain('<cbc:BuyerReference>KST 4711</cbc:BuyerReference>')
+    expect(result.xml).toContain('<cbc:BuyerReference>REF &amp; 42</cbc:BuyerReference>')
+    expect(result.xml).toContain(
+      '  <cbc:BuyerReference>REF &amp; 42</cbc:BuyerReference>\n' +
+      '  <cac:OrderReference>\n' +
+      '    <cbc:ID>PO &amp; 4711</cbc:ID>\n' +
+      '  </cac:OrderReference>\n' +
+      '  <cac:AccountingSupplierParty>',
+    )
   })
 
-  it('accepts a marking-only invoice (no your_reference) as buyer reference', () => {
+  it('omits BT-13 OrderReference when there is no invoice_marking', () => {
+    const result = generatePeppolBisBillingInvoice(makeValidInput())
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).not.toContain('<cac:OrderReference>')
+  })
+
+  it('falls back to invoice_marking for BT-10 when there is no your_reference', () => {
     const input = makeValidInput()
     input.invoice = makeInvoice({
       ...input.invoice,
@@ -459,6 +474,7 @@ describe('generatePeppolBisBillingInvoice', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.xml).toContain('<cbc:BuyerReference>PO-2026-17</cbc:BuyerReference>')
+    expect(result.xml).toContain('<cac:OrderReference>\n    <cbc:ID>PO-2026-17</cbc:ID>')
   })
 
   it('renders a per-line discount as a BG-27 allowance with net LineExtensionAmount', () => {

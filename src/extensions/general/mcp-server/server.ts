@@ -8224,7 +8224,7 @@ export const tools: McpTool[] = [
         currency: { type: 'string', enum: [...CURRENCIES] },
         our_reference: { type: 'string' },
         your_reference: { type: 'string' },
-        invoice_marking: { type: 'string', description: 'Fakturamärkning (buyer marking/PO label), separate from your_reference; feeds Peppol BuyerReference.' },
+        invoice_marking: { type: 'string', description: 'Fakturamärkning (buyer marking/PO label), separate from your_reference; feeds Peppol OrderReference.' },
         notes: { type: 'string' },
         payment_link_url: {
           type: 'string',

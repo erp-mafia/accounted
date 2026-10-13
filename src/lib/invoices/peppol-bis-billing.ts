@@ -296,8 +296,8 @@ function prepareInvoice(input: PeppolInvoiceInput):
       'Invoice, due, and delivery dates must be valid dates.',
     ))
   }
-  // BT-10 BuyerReference: fakturamärkning wins when set (SFTI convention:
-  // the buyer's routing/marking string), else Er referens.
+  // BT-10 BuyerReference carries Er referens and BT-13 OrderReference the
+  // fakturamärkning; either one satisfies PEPPOL-EN16931-R003.
   if (!hasText(invoice.invoice_marking) && !hasText(invoice.your_reference)) {
     issues.push(validationIssue(
       'BUYER_REFERENCE_REQUIRED', 'invoice.your_reference',
@@ -688,7 +688,16 @@ function renderInvoiceXml(input: PeppolInvoiceInput, prepared: PreparedInvoice):
     '  <cbc:InvoiceTypeCode>380</cbc:InvoiceTypeCode>',
     invoice.notes ? `  <cbc:Note>${escapeXml(invoice.notes)}</cbc:Note>` : null,
     '  <cbc:DocumentCurrencyCode>SEK</cbc:DocumentCurrencyCode>',
-    `  <cbc:BuyerReference>${escapeXml((invoice.invoice_marking?.trim() || invoice.your_reference?.trim()) ?? '')}</cbc:BuyerReference>`,
+    // Swedish buyers expect BT-10 even when BT-13 is present, so the marking
+    // stands in for a missing Er referens.
+    `  <cbc:BuyerReference>${escapeXml((invoice.your_reference?.trim() || invoice.invoice_marking?.trim()) ?? '')}</cbc:BuyerReference>`,
+    ...(invoice.invoice_marking?.trim()
+      ? [
+          '  <cac:OrderReference>',
+          `    <cbc:ID>${escapeXml(invoice.invoice_marking.trim())}</cbc:ID>`,
+          '  </cac:OrderReference>',
+        ]
+      : []),
     renderParty('AccountingSupplierParty', prepared.supplier, company.f_skatt),
     renderParty('AccountingCustomerParty', prepared.buyer, false),
     invoice.delivery_date
