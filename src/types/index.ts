@@ -3954,6 +3954,54 @@ export interface RawTransaction {
   balance_after?: number | null
   /** The bank's isEnriched flag: the row has been through its daily enrichment. Null when the bank sends none. */
   is_enriched?: boolean | null
+  /**
+   * The Bankgirot split behind this row (Open Payments only): one part per
+   * payer of a deposit or payee of a payout, in the bank's order. Stored in
+   * bank_transaction_parts beside the row; never changes the row's own
+   * amount, date or text. Null or absent when the bank sent no split.
+   */
+  parts?: BankTransactionPartInput[] | null
+}
+
+/**
+ * One part of a Bankgirot split as the bank feed delivers it (the shape of
+ * @accounted/connect-contract's bankTransactionPartSchema).
+ */
+export interface BankTransactionPartInput {
+  /** Signed like the parent: a deposit's parts are positive. */
+  amount: number
+  currency: string
+  /** debtorName on a deposit, creditorName on a payout. */
+  counterparty_name: string | null
+  /** Digits only (10-digit organisationsnummer; a 12-digit form drops the 16 prefix). */
+  counterparty_org_number: string | null
+  /** Bankgiro, plusgiro, BBAN or IBAN, as the bank gives it. */
+  counterparty_account: string | null
+  /** The structured reference (OCR first), when the part carries one. */
+  reference: string | null
+  /** referredDocumentInformation[].number, deduped; [] when none. */
+  invoice_numbers: string[]
+  /** The unstructured remittance information, joined. */
+  message: string | null
+  /** The alias row's transactionId or entryReference at the bank. */
+  provider_part_id: string | null
+}
+
+/** Why ingest suggested an invoice for a part (bank_transaction_parts.suggestion_reason). */
+export type BankTransactionPartSuggestionReason = 'ocr_exact' | 'invoice_number' | 'amount_only'
+
+/** A stored part of a Bankgirot split (bank_transaction_parts). */
+export interface BankTransactionPart extends BankTransactionPartInput {
+  id: string
+  company_id: string
+  transaction_id: string
+  /** The bank's order, from 1. */
+  seq: number
+  suggested_invoice_id: string | null
+  suggested_supplier_invoice_id: string | null
+  suggestion_reason: BankTransactionPartSuggestionReason | null
+  created_at: string
+  updated_at: string
 }
 
 /** Internal bank-fetch context. Its token is revalidated within each database write. */

@@ -41,6 +41,10 @@ export interface TransactionWithInvoice extends Transaction {
    *  verifikat (#1553) or bulk-booked has journal_entry_id NULL and is booked
    *  through these. Read via getLinkedJournalEntryIds, never the pointer alone. */
   transaction_voucher_links?: EmbeddedVoucherLink[] | null
+  /** How many parts the row's Bankgirot split has (bank_transaction_parts),
+   *  embedded by the list fetch as PostgREST's `[{ count }]`; the parts
+   *  themselves come from GET /api/transactions/[id]/parts in the drawer. */
+  parts_count?: { count: number }[] | null
 }
 
 // Page view modes. 'review' is the migrator surface: rows whose sweep

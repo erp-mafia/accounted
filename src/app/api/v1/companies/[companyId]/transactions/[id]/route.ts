@@ -11,6 +11,31 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { v1OperationHandler } from '@/lib/operations/v1'
 import { transactionsDelete, transactionsUpdate } from '@/lib/operations/transactions'
+import { readTransactionParts } from '@/lib/transactions/parts-read'
+
+const TransactionPartSuggestedInvoice = z.object({
+  kind: z.enum(['customer_invoice', 'supplier_invoice']),
+  invoice_id: z.string().uuid().describe('invoices.id or supplier_invoices.id, by kind: the id match-batch takes as invoice_id or supplier_invoice_id.'),
+  invoice_number: z.string().nullable(),
+  counterparty_name: z.string().nullable(),
+  remaining_amount: z.number(),
+  currency: z.string(),
+})
+
+const TransactionPart = z.object({
+  part_id: z.string().uuid(),
+  seq: z.number().int().describe('Position in the bank\'s order, from 1.'),
+  amount: z.number().describe('Signed like the transaction; the parts sum to its amount.'),
+  currency: z.string(),
+  counterparty_name: z.string().nullable(),
+  counterparty_org_number: z.string().nullable(),
+  counterparty_account: z.string().nullable(),
+  reference: z.string().nullable().describe('The OCR or payment reference the payer quoted.'),
+  invoice_numbers: z.array(z.string()),
+  message: z.string().nullable(),
+  suggestion_reason: z.enum(['ocr_exact', 'invoice_number', 'amount_only']).nullable(),
+  suggested_invoice: TransactionPartSuggestedInvoice.nullable().describe('The open invoice ingest suggests this part pays. A suggestion: book it through match-batch.'),
+})
 
 const TransactionDetail = z.object({
   id: z.string().uuid(),
@@ -39,6 +64,8 @@ const TransactionDetail = z.object({
   import_source: z.string().nullable(),
   reconciliation_method: z.string().nullable(),
   cash_account_id: z.string().uuid().nullable(),
+  potential_match_method: z.string().nullable().optional().describe('"bankgiro_split" when the parts below all resolved to open invoices and sum to the amount: pass them as match-batch allocations.'),
+  parts: z.array(TransactionPart).optional().describe('The Bankgirot split of the row (Open Payments): one part per payer or payee, in the bank\'s order, with the invoice ingest suggests for each. Empty for a row without a split.'),
   created_at: z.string(),
   updated_at: z.string(),
 })
@@ -50,7 +77,7 @@ const TRANSACTION_DETAIL_COLUMNS =
   'counterparty_account, counterparty_org_number, instructed_amount, instructed_currency, ' +
   'balance_after, is_enriched, journal_entry_id, invoice_id, supplier_invoice_id, ' +
   'potential_invoice_id, is_business, category, receipt_id, document_id, ' +
-  'external_id, import_source, reconciliation_method, cash_account_id, created_at, updated_at'
+  'external_id, import_source, reconciliation_method, cash_account_id, potential_match_method, created_at, updated_at'
 
 registerEndpoint({
   operation: 'transactions.get',
@@ -65,6 +92,7 @@ registerEndpoint({
   pitfalls: [
     'Both invoice_id (matched) and potential_invoice_id (suggested) can be set independently. The matched id is authoritative for accounting.',
     'reconciliation_method is null for transactions that have never been auto-reconciled. journal_entry_id may still be set via manual categorize.',
+    'parts is the Bankgirot split of an Open Payments row (one part per payer or payee with the suggested invoice). With potential_match_method "bankgiro_split" every part resolved: settle them in one call with POST .../transactions/{id}/match-batch, one allocation per part (kind, the suggested invoice id, the part amount).',
   ],
   example: {
     response: {
@@ -114,7 +142,15 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
         details: { resource: 'transaction' },
       })
     }
-    return ok(data, { requestId: ctx.requestId })
+    // The Bankgirot split, when the row carries one (Open Payments). A refused
+    // read fails the detail: a split silently missing would read as "no split".
+    let parts
+    try {
+      parts = await readTransactionParts(ctx.supabase, ctx.companyId!, idParse.data)
+    } catch (partsError) {
+      return v1ErrorResponse(partsError, ctx.log, { requestId: ctx.requestId })
+    }
+    return ok({ ...(data as unknown as Record<string, unknown>), parts }, { requestId: ctx.requestId })
   },
 )
 

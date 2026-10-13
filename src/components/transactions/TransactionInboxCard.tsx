@@ -60,6 +60,7 @@ import { TransactionAttachmentIndicator } from './TransactionAttachmentIndicator
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { canDetachDocument } from './detach-underlag'
 import type { TransactionWithInvoice, CategorizeHandler } from './transaction-types'
+import type { BatchAllocationPrefill } from '@/lib/transactions/parts-read'
 import type { CashAccount } from '@/types'
 import type { TxColumnId } from '@/lib/transactions/columns-v2'
 
@@ -86,8 +87,9 @@ interface TransactionInboxCardProps {
   onOpenMatchInvoicePicker: (transaction: TransactionWithInvoice) => void
   /** Open the split-payment allocator (1 tx → N invoices): same direction
    *  detection as the single-pick picker. Optional so legacy callers stay
-   *  source-compatible. */
-  onOpenSplitMatch?: (transaction: TransactionWithInvoice) => void
+   *  source-compatible. `prefill` carries the allocations the row's Bankgirot
+   *  split suggests (the drawer's "Matcha N fakturor"). */
+  onOpenSplitMatch?: (transaction: TransactionWithInvoice, prefill?: BatchAllocationPrefill[]) => void
   /** Open the existing-verifikat matcher: link the bank tx to an already-booked
    *  voucher (salary, Fortnox import, manual entry) with no new bokföring. */
   onOpenMatchVoucher?: (transaction: TransactionWithInvoice) => void
@@ -324,6 +326,9 @@ export default function TransactionInboxCard({
   // corresponds to an already-imported verifikat, so it carries a quiet
   // marker steering toward matching rather than re-booking.
   const isPreMigration = !!preMigrationCutoff && transaction.date <= preMigrationCutoff
+  // The Bankgirot split behind the row (bank_transaction_parts), counted by
+  // the list fetch: a quiet marker; the parts themselves are in the drawer.
+  const partsCount = transaction.parts_count?.[0]?.count ?? 0
 
   // The overflow actions as data: the row's ⋯ menu and the drawer render
   // the same list, in the same order, from one place.
@@ -440,6 +445,11 @@ export default function TransactionInboxCard({
             {isPreMigration && (
               <span className="hidden shrink-0 text-xs text-muted-foreground md:inline">
                 {t('pre_migration_marker')}
+              </span>
+            )}
+            {partsCount > 1 && (
+              <span className="hidden shrink-0 text-xs text-muted-foreground md:inline">
+                {t('parts_hint', { count: partsCount })}
               </span>
             )}
           </span>
@@ -576,6 +586,7 @@ export default function TransactionInboxCard({
             skvCounterpartDate={skvCounterpartDate}
             isPreMigration={isPreMigration}
             attachedDocumentId={attachedDocumentId}
+            onMatchParts={showSplitItem ? (prefill) => onOpenSplitMatch!(transaction, prefill) : undefined}
             extra={
               HAS_AI_EXTRACTION && (extraction.status === 'running' || extraction.status === 'failed') ? (
                 <ExtractionStatus status={extraction.status} elapsedMs={extraction.elapsedMs} />

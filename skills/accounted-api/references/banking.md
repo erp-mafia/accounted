@@ -3289,6 +3289,7 @@ Returns the full transaction record including match state, booking state, and im
 **Pitfalls:**
 - Both invoice_id (matched) and potential_invoice_id (suggested) can be set independently. The matched id is authoritative for accounting.
 - reconciliation_method is null for transactions that have never been auto-reconciled. journal_entry_id may still be set via manual categorize.
+- parts is the Bankgirot split of an Open Payments row (one part per payer or payee with the suggested invoice). With potential_match_method "bankgiro_split" every part resolved: settle them in one call with POST .../transactions/{id}/match-batch, one allocation per part (kind, the suggested invoice id, the part amount).
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -3325,6 +3326,8 @@ Response `200`:
     import_source: string | null,
     reconciliation_method: string | null,
     cash_account_id: string | null,
+    potential_match_method?: string | null,
+    parts?: { part_id: string, seq: number, amount: number, currency: string, counterparty_name: string | null, counterparty_org_number: string | null, counterparty_account: string | null, reference: string | null, invoice_numbers: string[], message: string | null, suggestion_reason: "ocr_exact" | "invoice_number" | "amount_only" | null, suggested_invoice: { kind: "customer_invoice" | "supplier_invoice", invoice_id: string, invoice_number: string | null, counterparty_name: string | null, remaining_amount: number, currency: string } | null }[],
     created_at: string,
     updated_at: string
   },

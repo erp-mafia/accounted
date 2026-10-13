@@ -3676,6 +3676,7 @@
     "invoices_help": "Invoice due dates"
   },
   "tx_inbox_card": {
+    "parts_hint": "{count} part payments",
     "drawer_rec": "Our recommendation · {why}",
     "underlag_heading": "Document",
     "underlag_supplier": "Supplier",
@@ -3739,6 +3740,14 @@
     "move_account_cancel": "Cancel",
     "move_account_save": "Move",
     "match_rot_rut_payout_set_btn": "Match ROT/RUT payout ({count} requests)"
+  },
+  "tx_parts": {
+    "heading": "Part payments ({count})",
+    "unknown_counterparty": "Unknown payer",
+    "ocr": "OCR {reference}",
+    "suggested_invoice": "Invoice {number} · {name}",
+    "no_invoice": "No invoice found",
+    "match_button": "Match {count, plural, one {# invoice} other {# invoices}}"
   },
   "tx_method": {
     "card": "Card purchase",

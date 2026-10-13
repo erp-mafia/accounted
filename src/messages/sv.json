@@ -3676,6 +3676,7 @@
     "invoices_help": "Förfallodatum för fakturor"
   },
   "tx_inbox_card": {
+    "parts_hint": "{count} delbetalningar",
     "drawer_rec": "Vår rekommendation · {why}",
     "underlag_heading": "Underlag",
     "underlag_supplier": "Leverantör",
@@ -3739,6 +3740,14 @@
     "move_account_cancel": "Avbryt",
     "move_account_save": "Flytta",
     "match_rot_rut_payout_set_btn": "Matcha ROT/RUT-utbetalning ({count} begäran)"
+  },
+  "tx_parts": {
+    "heading": "Delbetalningar ({count})",
+    "unknown_counterparty": "Okänd betalare",
+    "ocr": "OCR {reference}",
+    "suggested_invoice": "Faktura {number} · {name}",
+    "no_invoice": "Ingen faktura hittad",
+    "match_button": "Matcha {count, plural, one {# faktura} other {# fakturor}}"
   },
   "tx_method": {
     "card": "Kortköp",

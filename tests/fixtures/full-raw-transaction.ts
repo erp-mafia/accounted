@@ -43,6 +43,11 @@ export function fullRawTransaction(overrides: Partial<RawTransaction> = {}): Req
     exchange_rate: 11.26,
     balance_after: 12345.67,
     is_enriched: true,
+    // Not a transactions column: the Bankgirot split goes to
+    // bank_transaction_parts (storeTransactionParts), and only an Open
+    // Payments row carries one. Both full-row tests leave it out of the
+    // column comparison.
+    parts: null,
   }
   return { ...full, ...overrides }
 }

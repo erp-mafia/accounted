@@ -74,9 +74,12 @@ describe('mapBankFeedRows', () => {
       account, connectionId: 'conn-1', archivedPageIds: ['doc-1'],
     }).rows
     expect(enriched).toMatchObject({ counterparty_org_number: '5560160680', instructed_amount: -11.9, instructed_currency: 'EUR', exchange_rate: 11.26, balance_after: 20500.5, is_enriched: true })
-    expect('parts' in enriched).toBe(false)
-    // In the account currency: no instructed amount, no rate.
-    expect(plain).toMatchObject({ counterparty_org_number: null, instructed_amount: null, instructed_currency: null, exchange_rate: null, balance_after: null, is_enriched: null })
+    // The Bankgirot split rides the row for ingest to store (bank_transaction_parts).
+    expect(enriched.parts).toEqual([{ amount: -125.5, currency: 'SEK', counterparty_name: 'ICA Maxi', counterparty_org_number: null, counterparty_account: null, reference: null, invoice_numbers: [], message: null, provider_part_id: 'P1' }])
+    // In the account currency: no instructed amount, no rate, no split.
+    expect(plain).toMatchObject({ counterparty_org_number: null, instructed_amount: null, instructed_currency: null, exchange_rate: null, balance_after: null, is_enriched: null, parts: null })
+    // An empty split (which the contract never sends) is no split.
+    expect(mapBankFeedRows({ rows: [row({ parts: [] })], account, connectionId: 'conn-1', archivedPageIds: [] }).rows[0]!.parts).toBeNull()
     // A row an older service sends without the fields maps to nulls.
     expect(mapBankFeedRows({ rows: [row()], account, connectionId: 'conn-1', archivedPageIds: [] }).rows[0]).toMatchObject({ counterparty_org_number: null, instructed_amount: null, is_enriched: null })
   })

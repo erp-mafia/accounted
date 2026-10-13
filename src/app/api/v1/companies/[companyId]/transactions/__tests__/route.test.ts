@@ -155,7 +155,7 @@ describe('GET /api/v1/companies/:companyId/transactions', () => {
 })
 
 describe('GET /api/v1/companies/:companyId/transactions/:id', () => {
-  it('returns 200 with the transaction', async () => {
+  it('returns 200 with the transaction and an empty split for a row without parts', async () => {
     mockServiceClient.mockReturnValue(
       createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
@@ -163,6 +163,7 @@ describe('GET /api/v1/companies/:companyId/transactions/:id', () => {
           data: { id: TX_ID, date: '2026-05-12', amount: -100, currency: 'SEK' },
           error: null,
         },
+        bank_transaction_parts: { data: [], error: null },
       }).supabase,
     )
     const res = await getTransaction(
@@ -170,6 +171,52 @@ describe('GET /api/v1/companies/:companyId/transactions/:id', () => {
       { params: Promise.resolve({ companyId: COMPANY_ID, id: TX_ID }) },
     )
     expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.parts).toEqual([])
+  })
+
+  it('carries the Bankgirot split with the suggested invoice per part', async () => {
+    const INV_1 = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd1'
+    const INV_2 = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd2'
+    const PART = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee'
+    const { supabase, calls } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: {
+        data: { id: TX_ID, date: '2026-10-12', amount: 1500, currency: 'SEK', potential_match_method: 'bankgiro_split' },
+        error: null,
+      },
+      bank_transaction_parts: {
+        data: [
+          { id: `${PART}1`, company_id: COMPANY_ID, transaction_id: TX_ID, seq: 1, amount: '500.00', currency: 'SEK', counterparty_name: 'Kund AB', counterparty_org_number: '5560160680', counterparty_account: null, reference: '10017', invoice_numbers: [], message: null, provider_part_id: 'P1', suggested_invoice_id: INV_1, suggested_supplier_invoice_id: null, suggestion_reason: 'ocr_exact', created_at: '2026-10-12T05:00:00Z', updated_at: '2026-10-12T05:00:00Z' },
+          { id: `${PART}2`, company_id: COMPANY_ID, transaction_id: TX_ID, seq: 2, amount: '1000.00', currency: 'SEK', counterparty_name: 'Bolaget AB', counterparty_org_number: null, counterparty_account: null, reference: null, invoice_numbers: ['1002'], message: 'Faktura 1002', provider_part_id: 'P2', suggested_invoice_id: INV_2, suggested_supplier_invoice_id: null, suggestion_reason: 'invoice_number', created_at: '2026-10-12T05:00:00Z', updated_at: '2026-10-12T05:00:00Z' },
+        ],
+        error: null,
+      },
+      invoices: {
+        data: [
+          { id: INV_1, invoice_number: '1001', remaining_amount: '500.00', currency: 'SEK', status: 'sent', customer: { name: 'Kund AB' } },
+          { id: INV_2, invoice_number: '1002', remaining_amount: '1000.00', currency: 'SEK', status: 'sent', customer: { name: 'Bolaget AB' } },
+        ],
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+    const res = await getTransaction(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}`),
+      { params: Promise.resolve({ companyId: COMPANY_ID, id: TX_ID }) },
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.potential_match_method).toBe('bankgiro_split')
+    expect(body.data.parts).toEqual([
+      expect.objectContaining({ seq: 1, amount: 500, reference: '10017', suggestion_reason: 'ocr_exact', suggested_invoice: { kind: 'customer_invoice', invoice_id: INV_1, invoice_number: '1001', counterparty_name: 'Kund AB', remaining_amount: 500, currency: 'SEK' } }),
+      expect.objectContaining({ seq: 2, amount: 1000, invoice_numbers: ['1002'], message: 'Faktura 1002', suggested_invoice: expect.objectContaining({ invoice_id: INV_2, invoice_number: '1002' }) }),
+    ])
+    // Parts and their invoices are read for this company only.
+    const partsEq = calls.filter((c) => c.table === 'bank_transaction_parts' && c.method === 'eq').map((c) => c.args)
+    expect(partsEq).toEqual([['company_id', COMPANY_ID], ['transaction_id', TX_ID]])
+    const invoicesEq = calls.filter((c) => c.table === 'invoices' && c.method === 'eq').map((c) => c.args)
+    expect(invoicesEq).toEqual([['company_id', COMPANY_ID]])
   })
 
   it('returns 404 NOT_FOUND for unknown id', async () => {

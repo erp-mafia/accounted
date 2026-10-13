@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -23,6 +23,7 @@ import { Search, X, Plus, Check, AlertTriangle, Link2, Loader2 } from 'lucide-re
 import type { Invoice, Customer, SupplierInvoice, Supplier } from '@/types'
 import { PICKER_LIMIT, loadOpenInvoicesForMatch } from '@/lib/invoices/open-invoice-search'
 import type { TransactionWithInvoice } from './transaction-types'
+import type { BatchAllocationPrefill } from '@/lib/transactions/parts-read'
 import { parseAmountInput, formatAmountInput, roundOre } from '@/lib/money'
 
 /** Pause after the last keystroke before the search goes to the database. */
@@ -32,6 +33,12 @@ interface MatchAllocationDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   transaction: TransactionWithInvoice | null
+  /**
+   * Allocations to start from (the row's Bankgirot split, one per suggested
+   * part): picked with their amounts as soon as the candidates load, an
+   * invoice past the newest PICKER_LIMIT fetched by id. Null starts empty.
+   */
+  initialAllocations?: BatchAllocationPrefill[] | null
   onSuccess: () => void
 }
 
@@ -112,6 +119,7 @@ export default function MatchAllocationDialog({
   open,
   onOpenChange,
   transaction,
+  initialAllocations = null,
   onSuccess,
 }: MatchAllocationDialogProps) {
   const { toast } = useToast()
@@ -149,6 +157,41 @@ export default function MatchAllocationDialog({
     return () => clearTimeout(handle)
   }, [search])
 
+  const customerCandidate = useCallback(
+    (r: CustomerInvoiceRow): AllocationCandidate => ({
+      kind: 'customer_invoice',
+      id: r.id,
+      label: r.invoice_number ?? r.id.slice(0, 8),
+      counterpartyName: r.customer?.name ?? t('unknown_customer'),
+      remaining: Number(r.remaining_amount ?? r.total ?? 0),
+      total: Number(r.total ?? 0),
+      currency: r.currency,
+      exchangeRate: r.exchange_rate != null ? Number(r.exchange_rate) : null,
+      dueDate: r.due_date,
+      invoiceDate: r.invoice_date ?? null,
+    }),
+    [t],
+  )
+  const supplierCandidate = useCallback(
+    (r: SupplierInvoiceRow): AllocationCandidate => ({
+      kind: 'supplier_invoice',
+      id: r.id,
+      label: r.supplier_invoice_number ?? `LF-${r.arrival_number}`,
+      counterpartyName: r.supplier?.name ?? t('unknown_supplier'),
+      remaining: Number(r.remaining_amount ?? r.total ?? 0),
+      total: Number(r.total ?? 0),
+      currency: r.currency,
+      exchangeRate: r.exchange_rate != null ? Number(r.exchange_rate) : null,
+      dueDate: r.due_date,
+      invoiceDate: r.invoice_date ?? null,
+    }),
+    [t],
+  )
+
+  // The prefilled allocations are applied once per opening, after the first
+  // (unsearched) load: a later search must not re-pick what the person removed.
+  const prefillApplied = useRef(false)
+
   useEffect(() => {
     if (!open || !transaction || !company) return
     const companyId = company.id
@@ -161,53 +204,58 @@ export default function MatchAllocationDialog({
         // The same loader as the invoice picker: the statuses the batch RPC
         // accepts, the search in the database (so an older open invoice past
         // the newest PICKER_LIMIT is found), and the status-leak guard.
+        let loaded: AllocationCandidate[]
+        let full: boolean
         if (kind === 'customer_invoice') {
-          const { rows, capped: full } = await loadOpenInvoicesForMatch<CustomerInvoiceRow>(
-            supabase,
-            companyId,
-            'customer',
-            appliedSearch,
-          )
-          if (cancelled) return
-          setCapped(full)
-          setCandidates(
-            rows.map((r) => ({
-              kind: 'customer_invoice',
-              id: r.id,
-              label: r.invoice_number ?? r.id.slice(0, 8),
-              counterpartyName: r.customer?.name ?? t('unknown_customer'),
-              remaining: Number(r.remaining_amount ?? r.total ?? 0),
-              total: Number(r.total ?? 0),
-              currency: r.currency,
-              exchangeRate: r.exchange_rate != null ? Number(r.exchange_rate) : null,
-              dueDate: r.due_date,
-              invoiceDate: r.invoice_date ?? null,
-            })),
-          )
+          const result = await loadOpenInvoicesForMatch<CustomerInvoiceRow>(supabase, companyId, 'customer', appliedSearch)
+          loaded = result.rows.map(customerCandidate)
+          full = result.capped
         } else {
-          const { rows, capped: full } = await loadOpenInvoicesForMatch<SupplierInvoiceRow>(
-            supabase,
-            companyId,
-            'supplier',
-            appliedSearch,
-          )
-          if (cancelled) return
-          setCapped(full)
-          setCandidates(
-            rows.map((r) => ({
-              kind: 'supplier_invoice',
-              id: r.id,
-              label: r.supplier_invoice_number ?? `LF-${r.arrival_number}`,
-              counterpartyName: r.supplier?.name ?? t('unknown_supplier'),
-              remaining: Number(r.remaining_amount ?? r.total ?? 0),
-              total: Number(r.total ?? 0),
-              currency: r.currency,
-              exchangeRate: r.exchange_rate != null ? Number(r.exchange_rate) : null,
-              dueDate: r.due_date,
-              invoiceDate: r.invoice_date ?? null,
-            })),
-          )
+          const result = await loadOpenInvoicesForMatch<SupplierInvoiceRow>(supabase, companyId, 'supplier', appliedSearch)
+          loaded = result.rows.map(supplierCandidate)
+          full = result.capped
         }
+        // The split's suggested invoices of this direction: picked with the
+        // part amounts. One past the newest PICKER_LIMIT is read by id so
+        // the prefill never silently drops a part.
+        const prefill =
+          !prefillApplied.current && !appliedSearch
+            ? (initialAllocations ?? []).filter((a) => a.kind === kind)
+            : []
+        if (prefill.length > 0) {
+          const idOf = (a: BatchAllocationPrefill) => (a.kind === 'customer_invoice' ? a.invoice_id : a.supplier_invoice_id)
+          const known = new Set(loaded.map((c) => c.id))
+          const missingIds = prefill.map(idOf).filter((id) => !known.has(id))
+          if (missingIds.length > 0) {
+            if (kind === 'customer_invoice') {
+              const { data } = await supabase
+                .from('invoices')
+                .select('*, customer:customers(*)')
+                .eq('company_id', companyId)
+                .in('id', missingIds)
+              loaded = [...loaded, ...((data ?? []) as CustomerInvoiceRow[]).map(customerCandidate)]
+            } else {
+              const { data } = await supabase
+                .from('supplier_invoices')
+                .select('*, supplier:suppliers(*)')
+                .eq('company_id', companyId)
+                .in('id', missingIds)
+              loaded = [...loaded, ...((data ?? []) as SupplierInvoiceRow[]).map(supplierCandidate)]
+            }
+          }
+          if (cancelled) return
+          const byId = new Map(loaded.map((c) => [c.id, c]))
+          const picked: Record<string, AllocationDraft> = {}
+          for (const allocation of prefill) {
+            const candidate = byId.get(idOf(allocation))
+            if (candidate) picked[candidate.id] = { candidate, amount: formatAmountInput(allocation.amount) }
+          }
+          prefillApplied.current = true
+          setDrafts((prev) => ({ ...picked, ...prev }))
+        }
+        if (cancelled) return
+        setCapped(full)
+        setCandidates(loaded)
       } catch {
         if (cancelled) return
         setCandidates([])
@@ -223,7 +271,7 @@ export default function MatchAllocationDialog({
     return () => {
       cancelled = true
     }
-  }, [open, transaction, company, kind, supabase, t, appliedSearch])
+  }, [open, transaction, company, kind, supabase, appliedSearch, initialAllocations, customerCandidate, supplierCandidate])
 
   // Pre-flight: does the ledger already explain this row? Same detector the
   // route refuses with, so the panel shows before a doomed submit. Fail-open:
@@ -255,6 +303,7 @@ export default function MatchAllocationDialog({
       setAppliedSearch('')
       setExplaining(null)
       setExplainingAcknowledged(false)
+      prefillApplied.current = false
     }
   }, [open])
 

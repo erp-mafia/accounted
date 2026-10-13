@@ -24,6 +24,14 @@ import { amountToOre, contentBucketKey, descriptionsBridge, normalizeImportedDes
 import { OPEN_PAYMENTS_AGGREGATOR } from '@/lib/bank-sync/aggregator'
 import { classifyTransactionMethod } from '@/lib/transactions/transaction-method'
 import { isImportedTransaction } from '@/lib/transactions/origin'
+import {
+  BANKGIRO_SPLIT_CONFIDENCE,
+  BANKGIRO_SPLIT_METHOD,
+  splitIsComplete,
+  suggestPartInvoices,
+  type PartSuggestion,
+} from '@/lib/transactions/part-suggestions'
+import { storeTransactionParts } from '@/lib/transactions/parts-store'
 import { createLogger } from '@/lib/logger'
 import { findOrderForDebit, type OrderDebit } from '@/lib/payments/orders/debit-match'
 import { loadOpenPaymentOrders, PAYMENT_ORDER_MATCH_METHOD, settleOrderWithDebit } from '@/lib/payments/orders/auto-settle'
@@ -1369,40 +1377,140 @@ export async function ingestTransactions(
   }
 
   /**
+   * The Bankgirot split of an Open Payments row (raw.parts): store the parts
+   * beside the row, replacing what it had, and suggest the open invoice
+   * behind each part (suggestPartInvoices) for a row a person has not yet
+   * decided. When two or more parts all resolved and sum to the row, the row
+   * is marked potential_match_method = 'bankgiro_split' and a single-invoice
+   * hint it carried is cleared: the row pays several invoices, so the
+   * one-click single match would only be refused. True exactly then, so the
+   * caller skips the single-invoice passes and the mapping engine. A single
+   * part keeps today's single-invoice path. Suggestion only: nothing here
+   * books, and a failure leaves the row as it was and never fails the batch.
+   */
+  const storePartsForRow = async (tx: Transaction, raw: RawTransaction): Promise<boolean> => {
+    const parts = raw.parts
+    if (raw.import_source !== OPEN_PAYMENTS_AGGREGATOR || !parts || parts.length === 0) return false
+    try {
+      const open =
+        !options?.rawInsertOnly && !tx.journal_entry_id && !tx.invoice_id && !tx.supplier_invoice_id && !tx.is_ignored
+      let suggestions: PartSuggestion[] | undefined
+      if (open) {
+        if (tx.amount > 0) invoiceMatchPool ??= await loadInvoiceMatchPool(supabase, companyId)
+        suggestions = suggestPartInvoices({
+          parentAmount: tx.amount,
+          parts,
+          customerInvoices: tx.amount > 0 ? invoiceMatchPool?.invoices ?? [] : [],
+          supplierInvoices: tx.amount < 0 ? unpaidSupplierInvoices : [],
+          excludeInvoiceIds: tx.amount > 0 ? matchedInvoiceIds : matchedSupplierInvoiceIds,
+        })
+      }
+      await storeTransactionParts(supabase, { companyId, transactionId: tx.id, parts, suggestions })
+      if (!open || !suggestions) return false
+
+      const complete = splitIsComplete(tx.amount, parts, suggestions)
+      // A voucher suggestion (potential_journal_entry_id) owns the method and
+      // confidence columns: the split never writes over it.
+      const marker = !tx.potential_journal_entry_id
+      if (!complete) {
+        if (marker && tx.potential_match_method === BANKGIRO_SPLIT_METHOD) {
+          // The split no longer explains the row (an invoice closed another
+          // way, the bank changed the parts): the marker goes, the parts stay.
+          await supabase
+            .from('transactions')
+            .update({ potential_match_method: null, potential_match_confidence: null })
+            .eq('id', tx.id)
+            .eq('company_id', companyId)
+        }
+        return false
+      }
+
+      const allocations = suggestions.map((s, index) => ({
+        seq: s.seq,
+        amount: Math.abs(parts[index]!.amount),
+        ...(s.suggested_invoice_id ? { invoice_id: s.suggested_invoice_id } : {}),
+        ...(s.suggested_supplier_invoice_id ? { supplier_invoice_id: s.suggested_supplier_invoice_id } : {}),
+      }))
+      // Two literal payloads rather than one spread: the schema guard
+      // (tests/schema/no-phantom-columns) can only check columns it can read.
+      const marking = marker
+        ? supabase.from('transactions').update({
+            potential_match_method: BANKGIRO_SPLIT_METHOD,
+            potential_match_confidence: BANKGIRO_SPLIT_CONFIDENCE,
+            potential_invoice_id: null,
+            potential_supplier_invoice_id: null,
+          })
+        : supabase.from('transactions').update({ potential_invoice_id: null, potential_supplier_invoice_id: null })
+      const { error: markError } = await marking.eq('id', tx.id).eq('company_id', companyId)
+      if (markError) throw markError
+      // The split claims its invoices for the batch: no other row's single
+      // hint may name them, and a supplier invoice leaves the heuristics' pool.
+      for (const s of suggestions) {
+        if (s.suggested_invoice_id) matchedInvoiceIds.add(s.suggested_invoice_id)
+        if (s.suggested_supplier_invoice_id) {
+          matchedSupplierInvoiceIds.add(s.suggested_supplier_invoice_id)
+          unpaidSupplierInvoices = unpaidSupplierInvoices.filter((inv) => inv.id !== s.suggested_supplier_invoice_id)
+        }
+      }
+      await logMatchEvent(supabase, userId, tx.id, 'auto_suggested', {
+        matchConfidence: BANKGIRO_SPLIT_CONFIDENCE,
+        matchMethod: BANKGIRO_SPLIT_METHOD,
+        newState: { allocations },
+      })
+      result.auto_matched_invoices++
+      return true
+    } catch (error) {
+      log.warn('bank transaction parts not stored; the row keeps no split', {
+        transactionId: tx.id,
+        parts: parts.length,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      return false
+    }
+  }
+
+  /**
    * An Open Payments re-read of a stored row (Layer 1): write what the bank
-   * added (enrichmentPatch), count it, and give a still-open row whose
-   * matching keys changed the suggestion passes a new row gets. Everything
-   * here is best effort: a failure leaves the row as it was and never fails
-   * the batch, whose other rows are unrelated to it.
+   * added (enrichmentPatch), count it, store the split it carries
+   * (storePartsForRow), and give a still-open row whose matching keys
+   * changed the suggestion passes a new row gets. Everything here is best
+   * effort: a failure leaves the row as it was and never fails the batch,
+   * whose other rows are unrelated to it.
    */
   const enrichStoredRow = async (stored: Transaction, raw: RawTransaction): Promise<void> => {
     try {
       const { patch, keysChanged } = enrichmentPatch(stored, raw, new Date().toISOString())
-      if (!patch) return
-      const { error: updateError } = await supabase
-        .from('transactions')
-        .update(patch)
-        .eq('id', stored.id)
-        .eq('company_id', companyId)
-      if (updateError) {
-        log.warn('enrichment on re-read not stored; row kept as it was', {
-          transactionId: stored.id,
-          columns: Object.keys(patch),
-          error: updateError.message,
-        })
-        return
+      let merged: Transaction = stored
+      if (patch) {
+        const { error: updateError } = await supabase
+          .from('transactions')
+          .update(patch)
+          .eq('id', stored.id)
+          .eq('company_id', companyId)
+        if (updateError) {
+          log.warn('enrichment on re-read not stored; row kept as it was', {
+            transactionId: stored.id,
+            columns: Object.keys(patch),
+            error: updateError.message,
+          })
+          return
+        }
+        result.enriched_updated = (result.enriched_updated ?? 0) + 1
+        merged = { ...stored, ...patch }
       }
-      result.enriched_updated = (result.enriched_updated ?? 0) + 1
-      if (!keysChanged) return
+      // The split travels with the re-read whether or not the row's own
+      // fields changed: the parts always mirror the bank's latest word.
+      const completeSplit = await storePartsForRow(merged, raw)
+      if (!patch || !keysChanged) return
       log.info('enrichment on re-read: matching keys changed', {
         transactionId: stored.id,
         columns: Object.keys(patch),
         booked: Boolean(stored.journal_entry_id || stored.invoice_id || stored.supplier_invoice_id),
       })
       // The passes only for a row a person has not yet decided: unbooked,
-      // unlinked, not ignored, and not a viewer's raw import.
-      if (options?.rawInsertOnly) return
-      const merged: Transaction = { ...stored, ...patch }
+      // unlinked, not ignored, and not a viewer's raw import. A complete
+      // split explained the row already.
+      if (options?.rawInsertOnly || completeSplit) return
       if (merged.journal_entry_id || merged.invoice_id || merged.supplier_invoice_id || merged.is_ignored) return
       await suggestForRow(merged, raw, true)
     } catch (error) {
@@ -1650,8 +1758,15 @@ export async function ingestTransactions(
     result.transaction_ids.push(newTransaction.id)
     if (newTransaction.amount > 0) inboundIds.push(newTransaction.id)
 
+    // The Bankgirot split, when the row carries one: stored beside the row
+    // whatever follows, with its per-part suggestions for an open row.
+    const completeSplit = await storePartsForRow(newTransaction as Transaction, raw)
+
     // rawInsertOnly: skip invoice matching, and auto-categorization
     if (options?.rawInsertOnly) continue
+    // A complete split explains the row: its parts name the invoices, and a
+    // single-invoice hint or an auto-categorised voucher would contradict it.
+    if (completeSplit) continue
 
     // Reconciliation against existing GL lines is intentionally NOT run on
     // import: auto-linking made imported transactions appear "bokförda" to

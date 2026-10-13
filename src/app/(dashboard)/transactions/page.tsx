@@ -68,6 +68,7 @@ import type {
   PotentialRotRutPayout,
   PotentialRotRutPayoutRequest,
 } from '@/components/transactions/transaction-types'
+import type { BatchAllocationPrefill } from '@/lib/transactions/parts-read'
 import { OPEN_ROT_RUT_PAYOUT_STATUSES } from '@/lib/invoices/rot-rut-payout-matching'
 import { matchTransactionsToRotRutPayoutSets } from '@/lib/invoices/rot-rut-payout-set-matching'
 import {
@@ -137,8 +138,10 @@ import type { FiscalPeriod } from '@/types'
 // (journal_entry_id NULL, #1553) renders as booked with its verifikat instead
 // of "Ej bokförd" (crm#48). The nested journal_entry gives the row a label per
 // link (V200, V201); see getLinkedJournalEntryIds.
+// parts_count: how many parts the row's Bankgirot split has (the inbox row's
+// "N delbetalningar"); the parts themselves load in the drawer.
 const TRANSACTION_LIST_SELECT =
-  '*, transaction_voucher_links(journal_entry_id, role, journal_entry:journal_entries(voucher_series, voucher_number))'
+  '*, transaction_voucher_links(journal_entry_id, role, journal_entry:journal_entries(voucher_series, voucher_number)), parts_count:bank_transaction_parts(count)'
 
 function InlineDialogContentLoading() {
   return (
@@ -584,6 +587,9 @@ export default function TransactionsPage() {
   const [supplierInvoicePickerTransaction, setSupplierInvoicePickerTransaction] = useState<TransactionWithInvoice | null>(null)
   const [splitMatchOpen, setSplitMatchOpen] = useState(false)
   const [splitMatchTransaction, setSplitMatchTransaction] = useState<TransactionWithInvoice | null>(null)
+  // The allocations the row's Bankgirot split suggests, when the drawer's
+  // "Matcha N fakturor" opened the dialog; null from the plain split item.
+  const [splitMatchPrefill, setSplitMatchPrefill] = useState<BatchAllocationPrefill[] | null>(null)
   // "Matcha mot befintlig verifikation": link a bank tx to an already-booked
   // voucher (salary, Fortnox import, manual entry) with no new bokföring.
   const [matchVoucherTx, setMatchVoucherTx] = useState<TransactionWithInvoice | null>(null)
@@ -2998,8 +3004,9 @@ export default function TransactionsPage() {
     }
   }
 
-  function openSplitMatchDialog(transaction: TransactionWithInvoice) {
+  function openSplitMatchDialog(transaction: TransactionWithInvoice, prefill?: BatchAllocationPrefill[]) {
     setSplitMatchTransaction(transaction)
+    setSplitMatchPrefill(prefill ?? null)
     setSplitMatchOpen(true)
   }
 
@@ -4766,9 +4773,13 @@ export default function TransactionsPage() {
           open
           onOpenChange={(o) => {
             setSplitMatchOpen(o)
-            if (!o) setSplitMatchTransaction(null)
+            if (!o) {
+              setSplitMatchTransaction(null)
+              setSplitMatchPrefill(null)
+            }
           }}
           transaction={splitMatchTransaction}
+          initialAllocations={splitMatchPrefill}
           onSuccess={handleSplitMatchSuccess}
         />
       )}

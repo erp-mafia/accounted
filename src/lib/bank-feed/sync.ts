@@ -147,9 +147,11 @@ export function mapBankFeedRows(input: {
     const rowCurrency = (tx.currency || accountCurrency).toUpperCase()
     const instructedCurrency = tx.instructed_currency?.toUpperCase() || null
     const foreignPurchase = tx.instructed_amount != null && instructedCurrency !== null && instructedCurrency !== rowCurrency
-    // tx.parts (the Bankgirot split) is parsed through the contract and not
-    // carried into the row yet: the parts table and the multi-invoice
-    // matching of the split land in the following MR, which stores it.
+    // The Bankgirot split, when the bank sent one: ingest stores it beside
+    // the row (bank_transaction_parts) and suggests the invoice behind each
+    // part. An empty array is never sent (the contract says null), but map
+    // it to null all the same so a row without a split carries none.
+    const parts = tx.parts && tx.parts.length > 0 ? tx.parts : null
     return {
       date: tx.booking_date,
       description: tx.description || tx.counterparty_name || FALLBACK_DESCRIPTION,
@@ -179,6 +181,7 @@ export function mapBankFeedRows(input: {
       exchange_rate: foreignPurchase && rowCurrency === 'SEK' ? tx.exchange_rate ?? null : null,
       balance_after: tx.balance_after ?? null,
       is_enriched: tx.is_enriched ?? null,
+      parts,
     }
   })
   return { rows, scope, minBookingDate, maxBookingDate }

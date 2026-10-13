@@ -1193,6 +1193,10 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // NOTE: the date column on transactions is `date` (a previous spec said
   // booking_date, which does not exist: every backup got an error stub).
   { name: 'transactions', file: 'transactions.json', orderBy: 'date' },
+  // The Bankgirot split of a bank row (payer, OCR, amount per part): the
+  // underlag for settling several invoices from one deposit, so it travels
+  // with the transactions it explains.
+  { name: 'bank_transaction_parts', file: 'bank_transaction_parts.json', orderBy: 'created_at' },
   // Webshop order rows are booking underlag (and carry customer personal
   // data), so they belong in the archive like transactions do.
   { name: 'webshop_orders', file: 'webshop_orders.json', orderBy: 'order_date' },

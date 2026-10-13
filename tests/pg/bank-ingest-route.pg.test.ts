@@ -138,7 +138,8 @@ describe('bank ingest route boundary', () => {
   // Root-cause guard, second half: the payload ingest builds from a full bank
   // row (first half in ingest.test.ts) comes back from the database whole.
   it('stores every source field of a full bank row', async () => {
-    const sent = fullRawTransaction({ bank_connection_id: connectionId, raw_document_id: await rawDocument(owner.companyId) })
+    // `parts` is no column: the split goes to bank_transaction_parts.
+    const { parts: _split, ...sent } = fullRawTransaction({ bank_connection_id: connectionId, raw_document_id: await rawDocument(owner.companyId) })
     const tx = await insert(await route(), sent)
     expect(tx).toMatchObject(sent)
   })

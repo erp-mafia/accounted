@@ -259,7 +259,10 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // spreads buildInvoiceWriteData's invoiceFields instead of its own literal
 // copy of the invoice columns, the same spread as POST /invoices. The copy
 // is what dropped discounts and every later invoice field.
-const UNRESOLVED_CEILING = 430
+// Bankgirot split (+1): lib/transactions/parts-store.ts storeTransactionParts,
+// the one insert site for bank_transaction_parts, inserts one row per part
+// built by a map, the same shape as the payment_order_events entry above.
+const UNRESOLVED_CEILING = 431
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

@@ -213,6 +213,47 @@ describe('gnubok_list_uncategorized_transactions', () => {
     expect(result.total_count).toBe(1)
   })
 
+  it('carries parts_count per row and, for a row ingest marked a complete Bankgirot split, the allocations ready for gnubok_match_batch_allocate', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueueIds(enqueue, ['t-split', 't-partial', 't-plain'])
+    enqueueAnchors(enqueue)
+    enqueue({
+      data: [
+        { id: 't-split', date: '2026-10-12', description: 'Bg-inbetalning', amount: 1500, currency: 'SEK', merchant_name: null, reference: null, is_business: null, category: null, cash_account_id: null, potential_match_method: 'bankgiro_split' },
+        { id: 't-partial', date: '2026-10-12', description: 'Bg-inbetalning', amount: 900, currency: 'SEK', merchant_name: null, reference: null, is_business: null, category: null, cash_account_id: null, potential_match_method: null },
+        { id: 't-plain', date: '2026-10-11', description: 'Kortköp', amount: -120, currency: 'SEK', merchant_name: null, reference: null, is_business: null, category: null, cash_account_id: null, potential_match_method: null },
+      ],
+      error: null,
+    })
+    // No cash_account_id on the page: the ledger lookup is skipped; the parts read follows.
+    enqueue({
+      data: [
+        { transaction_id: 't-split', seq: 1, amount: '500.00', suggested_invoice_id: 'inv-1001', suggested_supplier_invoice_id: null },
+        { transaction_id: 't-split', seq: 2, amount: '1000.00', suggested_invoice_id: 'inv-1002', suggested_supplier_invoice_id: null },
+        { transaction_id: 't-partial', seq: 1, amount: '400.00', suggested_invoice_id: 'inv-1003', suggested_supplier_invoice_id: null },
+        { transaction_id: 't-partial', seq: 2, amount: '500.00', suggested_invoice_id: null, suggested_supplier_invoice_id: null },
+      ],
+      error: null,
+    })
+
+    const result = (await tool.execute({ limit: 20 }, 'company-1', 'user-1', supabase as never)) as {
+      transactions: Array<{ transaction_id: string; parts_count: number; batch_suggestion?: { allocations: unknown[] } }>
+    }
+
+    expect(result.transactions.map((t) => [t.transaction_id, t.parts_count])).toEqual([['t-split', 2], ['t-partial', 2], ['t-plain', 0]])
+    expect(result.transactions[0].batch_suggestion).toEqual({
+      allocations: [
+        { kind: 'customer_invoice', invoice_id: 'inv-1001', amount: 500 },
+        { kind: 'customer_invoice', invoice_id: 'inv-1002', amount: 1000 },
+      ],
+    })
+    // An incomplete split and a row without parts offer no batch.
+    expect(result.transactions[1].batch_suggestion).toBeUndefined()
+    expect(result.transactions[2].batch_suggestion).toBeUndefined()
+    expect(findCalls('bank_transaction_parts', 'in')).toEqual([['transaction_id', ['t-split', 't-partial', 't-plain']]])
+    expect(findCalls('bank_transaction_parts', 'eq')).toEqual([['company_id', 'company-1']])
+  })
+
   it('fails instead of listing a booked row when an anchor lookup fails', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueueIds(enqueue, ['t-1'])

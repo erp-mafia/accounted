@@ -455,6 +455,8 @@ import {
   KONTANTMETOD_CUTOFF_SUSPENDED_CODE,
 } from '@/lib/core/bookkeeping/kontantmetod-cutoff-suspension'
 import { fetchAnchoredTransactionIds } from '@/lib/transactions/unbooked'
+import { batchAllocationsFromParts } from '@/lib/transactions/parts-read'
+import { BANKGIRO_SPLIT_METHOD } from '@/lib/transactions/part-suggestions'
 import { buildReportDataStatus } from '@/lib/reports/data-status'
 import { generateSIEExport } from '@/lib/reports/sie-export'
 import { generateFullArchive, estimateArchiveSize } from '@/lib/reports/full-archive-export'
@@ -6355,7 +6357,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_list_uncategorized_transactions',
     keywords: ['okategoriserade', 'banktransaktioner', 'kontohändelser', 'att bokföra'],
     title: 'List Uncategorized Transactions',
-    description: 'List bank transactions with no journal entry yet, newest first. Paginated. cash_account_id narrows to one bank account.',
+    description: 'List bank transactions with no journal entry yet, newest first. Paginated. cash_account_id narrows to one bank account. batch_suggestion (a Bankgirot split) feeds gnubok_match_batch_allocate.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -6438,7 +6440,7 @@ export const tools: McpTool[] = [
           .from('transactions')
           .select(
             'id, date, description, amount, currency, merchant_name, reference, is_business, category, cash_account_id, ' +
-            'counterparty_org_number, instructed_amount, instructed_currency, balance_after, is_enriched'
+            'counterparty_org_number, instructed_amount, instructed_currency, balance_after, is_enriched, potential_match_method'
           )
           .eq('company_id', companyId)
           .in('id', pageIds)
@@ -6471,12 +6473,43 @@ export const tools: McpTool[] = [
         }
       }
 
-      const rows = pageRows.map((t) => ({
-        ...t,
-        transaction_id: t.id,
-        cash_account_id: t.cash_account_id ?? null,
-        cash_account_ledger: t.cash_account_id ? ledgerByCashAccount.get(t.cash_account_id) ?? null : null,
-      }))
+      // The Bankgirot split behind the rows on this page (bank_transaction_parts):
+      // parts_count on every row, and for a row ingest marked a complete split
+      // (potential_match_method 'bankgiro_split') the allocations ready for
+      // gnubok_match_batch_allocate. One read per page, after the ledger lookup.
+      // Undeclared in the output schema like the enrichment columns: the
+      // tools/list catalog sits at its token ceiling (payload-size.bench).
+      const partsByTransaction = new Map<string, Array<{ amount: number; suggested_invoice_id: string | null; suggested_supplier_invoice_id: string | null }>>()
+      if (pageRows.length > 0) {
+        const { data: partRows, error: partsError } = await supabase
+          .from('bank_transaction_parts')
+          .select('transaction_id, seq, amount, suggested_invoice_id, suggested_supplier_invoice_id')
+          .eq('company_id', companyId)
+          .in('transaction_id', pageRows.map((t) => t.id))
+          .order('seq', { ascending: true })
+        if (partsError) throw dbError(partsError)
+        for (const part of (partRows ?? []) as Array<{ transaction_id: string; amount: number | string; suggested_invoice_id: string | null; suggested_supplier_invoice_id: string | null }>) {
+          const list = partsByTransaction.get(part.transaction_id) ?? []
+          list.push({ amount: Number(part.amount), suggested_invoice_id: part.suggested_invoice_id, suggested_supplier_invoice_id: part.suggested_supplier_invoice_id })
+          partsByTransaction.set(part.transaction_id, list)
+        }
+      }
+
+      const rows = pageRows.map((t) => {
+        const parts = partsByTransaction.get(t.id) ?? []
+        const allocations =
+          (t as { potential_match_method?: string | null }).potential_match_method === BANKGIRO_SPLIT_METHOD
+            ? batchAllocationsFromParts(parts)
+            : null
+        return {
+          ...t,
+          transaction_id: t.id,
+          cash_account_id: t.cash_account_id ?? null,
+          cash_account_ledger: t.cash_account_id ? ledgerByCashAccount.get(t.cash_account_id) ?? null : null,
+          parts_count: parts.length,
+          ...(allocations ? { batch_suggestion: { allocations } } : {}),
+        }
+      })
       const total = totalCount
 
       return { transactions: rows, ...pageTail(rows, total, offset) }

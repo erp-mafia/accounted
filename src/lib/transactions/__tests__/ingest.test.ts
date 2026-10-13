@@ -7,7 +7,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { enrichmentPatch, ingestTransactions } from '../ingest'
 import type { RawTransaction } from '@/types'
-import { makeJournalEntry, makeTransaction } from '@/tests/helpers'
+import { makeCustomer, makeInvoice, makeJournalEntry, makeSupplier, makeSupplierInvoice, makeTransaction } from '@/tests/helpers'
+import type { BankTransactionPartInput } from '@/types'
 import { fullRawTransaction } from '@/tests/fixtures/full-raw-transaction'
 import { ARCIM, arcimDebit, arcimOrder, order as paymentOrder } from '@/lib/payments/orders/__tests__/fixtures'
 
@@ -2476,7 +2477,9 @@ describe('ingestTransactions', () => {
       const payload = (viaBankRoute
         ? supabase.rpc.mock.calls[0][1].p_transaction
         : inserts.transactions[0]) as Record<string, unknown>
-      const { description, ...columns } = raw
+      // `parts` is no column: the split goes to bank_transaction_parts
+      // (the "Bankgirot split" tests below).
+      const { description, parts: _split, ...columns } = raw
       expect(payload).toMatchObject({ ...columns, original_description: description })
     },
   )
@@ -3081,6 +3084,179 @@ describe('ingestTransactions', () => {
       expect(result).toMatchObject({ imported: 1, duplicates: 1, errors: 0, enriched_updated: 0, transaction_ids: ['tx-new'] })
       expect(updates['transactions']).toHaveLength(1)
       expect(mockBestInvoiceMatch).not.toHaveBeenCalled()
+    })
+  })
+
+  // -----------------------------------------------------------------------
+  // The Bankgirot split (bank_transaction_parts): one part per payer of a
+  // deposit or payee of a payout, stored beside the row with the invoice
+  // ingest suggests for each (gap 1 of the Open Payments granularity work).
+  // -----------------------------------------------------------------------
+  describe('the Bankgirot split (bank_transaction_parts)', () => {
+    const kundAb = makeCustomer({ id: 'cust-kund', name: 'Kund AB', org_number: '5560160680' })
+    // OCR references: the invoice number's digits plus a Luhn check digit (1001 -> 10017).
+    const invoice1001 = { ...makeInvoice({ id: 'inv-1001', invoice_number: '1001', status: 'sent', total: 500, remaining_amount: 500, customer_id: kundAb.id }), customer: kundAb }
+    const invoice1002 = { ...makeInvoice({ id: 'inv-1002', invoice_number: '1002', status: 'sent', total: 1000, remaining_amount: 1000, customer_id: kundAb.id }), customer: kundAb }
+    const part = (overrides: Partial<BankTransactionPartInput> = {}): BankTransactionPartInput => ({
+      amount: 500, currency: 'SEK', counterparty_name: 'Kund AB', counterparty_org_number: '5560160680', counterparty_account: '5050-1055',
+      reference: null, invoice_numbers: [], message: null, provider_part_id: null, ...overrides,
+    })
+    const twoParts = () => [part({ amount: 500, reference: '10017', provider_part_id: 'P1' }), part({ amount: 1000, invoice_numbers: ['1002'], provider_part_id: 'P2' })]
+    const splitDeposit = (overrides: Partial<RawTransaction> = {}) =>
+      makeRaw({ import_source: 'open_payments', bank_connection_id: 'conn-1', amount: 1500, date: '2026-10-12', description: 'Bg-inbetalning', parts: twoParts(), ...overrides })
+    const storedRow = (partsOf: { id: string; amount: number }, overrides: Partial<ReturnType<typeof makeTransaction>> = {}) =>
+      makeTransaction({
+        id: partsOf.id, external_id: `eb_SE1_2026-10-12_${partsOf.amount * 100}_0`, date: '2026-10-12', amount: partsOf.amount, currency: 'SEK',
+        description: 'Bg-inbetalning', original_description: 'Bg-inbetalning', merchant_name: 'Kund AB', reference: null, counterparty_account: '5050-1055',
+        counterparty_org_number: '5560160680', balance_after: 20500.5, import_source: 'open_payments', bank_connection_id: 'conn-1', is_enriched: true, ...overrides,
+      })
+    const storedPartRow = (seq: number, amount: number, extra: Record<string, unknown>) =>
+      expect.objectContaining({ company_id: COMPANY_ID, transaction_id: 'tx-split', seq, amount, currency: 'SEK', counterparty_name: 'Kund AB', counterparty_org_number: '5560160680', ...extra })
+
+    it('stores the parts of a deposit on insert with the invoice behind each, marks the complete split and skips the single-invoice pass', async () => {
+      const { supabase, enqueue, inserts, updates } = createQueueMockSupabase()
+      const raw = splitDeposit()
+      mockLoadInvoiceMatchPool.mockResolvedValueOnce({ invoices: [invoice1001, invoice1002] })
+      enqueue({ data: [] }, { data: [] }, { data: [] }, { data: [] }) // booked map, unbooked map, supplier invoices, external_id dedup
+      enqueue({ data: makeTransaction({ id: 'tx-split', external_id: raw.external_id, amount: 1500, potential_invoice_id: null }) }) // insert
+      enqueue({ data: null }, { data: null }) // parts: delete, insert
+      enqueue({ data: null }, { data: null }) // the split marker, the match log
+
+      const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+      expect(result).toMatchObject({ imported: 1, errors: 0, auto_matched_invoices: 1, transaction_ids: ['tx-split'] })
+      expect(inserts['bank_transaction_parts']).toEqual([[
+        storedPartRow(1, 500, { reference: '10017', invoice_numbers: [], provider_part_id: 'P1', suggested_invoice_id: 'inv-1001', suggested_supplier_invoice_id: null, suggestion_reason: 'ocr_exact' }),
+        storedPartRow(2, 1000, { reference: null, invoice_numbers: ['1002'], provider_part_id: 'P2', suggested_invoice_id: 'inv-1002', suggested_supplier_invoice_id: null, suggestion_reason: 'invoice_number' }),
+      ]])
+      expect(updates['transactions']).toEqual([
+        { potential_match_method: 'bankgiro_split', potential_match_confidence: 0.95, potential_invoice_id: null, potential_supplier_invoice_id: null },
+      ])
+      expect(inserts['payment_match_log']).toEqual([expect.objectContaining({
+        action: 'auto_suggested', match_method: 'bankgiro_split', match_confidence: 0.95,
+        new_state: { allocations: [{ seq: 1, amount: 500, invoice_id: 'inv-1001' }, { seq: 2, amount: 1000, invoice_id: 'inv-1002' }] },
+      })])
+      // The row is explained by its parts: no single-invoice hint, no auto-categorisation.
+      expect(mockBestInvoiceMatch).not.toHaveBeenCalled()
+      expect(mockEvaluateMappingRules).not.toHaveBeenCalled()
+    })
+
+    it('stores a single part without a split marker and keeps the single-invoice path, and the parts of a payout against the supplier pool', async () => {
+      const { supabase, enqueue, inserts, updates } = createQueueMockSupabase()
+      const raw = splitDeposit({ amount: 500, parts: [part({ amount: 500, reference: '10017' })] })
+      mockLoadInvoiceMatchPool.mockResolvedValueOnce({ invoices: [invoice1001] })
+      mockBestInvoiceMatch.mockReturnValueOnce({ invoice: { id: 'inv-1001' }, confidence: 0.99, matchReason: 'OCR-referens matchar fakturanummer 1001' })
+      enqueue({ data: [] }, { data: [] }, { data: [] }, { data: [] })
+      enqueue({ data: makeTransaction({ id: 'tx-split', external_id: raw.external_id, amount: 500 }) })
+      enqueue({ data: null }, { data: null }) // parts: delete, insert
+      enqueue({ data: null }, { data: null }) // the single hint, its match log
+
+      const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+      expect(result).toMatchObject({ imported: 1, auto_matched_invoices: 1 })
+      expect(inserts['bank_transaction_parts']).toEqual([[storedPartRow(1, 500, { suggested_invoice_id: 'inv-1001', suggestion_reason: 'ocr_exact' })]])
+      expect(updates['transactions']).toEqual([{ potential_invoice_id: 'inv-1001' }])
+      expect(mockBestInvoiceMatch).toHaveBeenCalledTimes(1)
+
+      // A payout: the parts resolve against the batch's open supplier invoices.
+      const supplier = makeSupplier({ id: 'sup-1', name: 'Tele2 Sverige AB', bankgiro: '5020-3103' })
+      const supplierInvoice = makeSupplierInvoice({ id: 'si-1', supplier_id: 'sup-1', payment_reference: '4711000000009', total: 1200, remaining_amount: 1200, supplier })
+      const other = makeSupplierInvoice({ id: 'si-2', supplier_id: 'sup-1', supplier_invoice_number: 'INV-9', total: 300, remaining_amount: 300, supplier })
+      const payout = createQueueMockSupabase()
+      const debit = splitDeposit({ amount: -1500, parts: [
+        part({ amount: -1200, reference: '4711000000009', counterparty_name: 'TELE2', counterparty_account: '5020-3103' }),
+        part({ amount: -300, invoice_numbers: ['INV-9'], counterparty_name: 'TELE2', counterparty_account: '5020-3103' }),
+      ] })
+      payout.enqueue({ data: [] }, { data: [] }, { data: [supplierInvoice, other] }, { data: [] })
+      payout.enqueue({ data: makeTransaction({ id: 'tx-split', external_id: debit.external_id, amount: -1500 }) })
+      payout.enqueue({ data: null }, { data: null }, { data: null }, { data: null })
+      const debited = await ingestTransactions(payout.supabase as never, COMPANY_ID, USER_ID, [debit])
+      expect(debited).toMatchObject({ imported: 1, auto_matched_invoices: 1 })
+      expect(payout.inserts['bank_transaction_parts']).toEqual([[
+        storedPartRow(1, -1200, { counterparty_name: 'TELE2', suggested_supplier_invoice_id: 'si-1', suggested_invoice_id: null, suggestion_reason: 'ocr_exact' }),
+        storedPartRow(2, -300, { counterparty_name: 'TELE2', suggested_supplier_invoice_id: 'si-2', suggested_invoice_id: null, suggestion_reason: 'invoice_number' }),
+      ]])
+      expect(payout.updates['transactions']).toEqual([
+        { potential_match_method: 'bankgiro_split', potential_match_confidence: 0.95, potential_invoice_id: null, potential_supplier_invoice_id: null },
+      ])
+      expect(mockLoadInvoiceMatchPool).toHaveBeenCalledTimes(1)
+    })
+
+    it('replaces the parts on an Open Payments re-read, clears the single hint the split contradicts, and never reads a split for an Enable Banking row', async () => {
+      const { supabase, enqueue, inserts, updates } = createQueueMockSupabase()
+      const raw = splitDeposit()
+      // Already enriched: the re-read changes nothing on the row itself, only the split.
+      const stored = storedRow({ id: 'tx-split', amount: 1500 }, { external_id: raw.external_id, potential_invoice_id: 'inv-1001' })
+      mockLoadInvoiceMatchPool.mockResolvedValueOnce({ invoices: [invoice1001, invoice1002] })
+      enqueue({ data: [] }, { data: [] }, { data: [] }, { data: [{ id: stored.id, external_id: raw.external_id }] }, { data: [stored] })
+      enqueue({ data: null }, { data: null }) // parts: delete, insert
+      enqueue({ data: null }, { data: null }) // the split marker, the match log
+
+      const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+      expect(result).toMatchObject({ imported: 0, duplicates: 1, errors: 0, enriched_updated: 0, auto_matched_invoices: 1 })
+      expect(inserts['bank_transaction_parts']![0]).toHaveLength(2)
+      expect(updates['transactions']).toEqual([
+        { potential_match_method: 'bankgiro_split', potential_match_confidence: 0.95, potential_invoice_id: null, potential_supplier_invoice_id: null },
+      ])
+      expect(mockBestInvoiceMatch).not.toHaveBeenCalled()
+
+      const eb = createQueueMockSupabase()
+      const ebRaw = splitDeposit({ import_source: 'enable_banking' })
+      eb.enqueue({ data: [] }, { data: [] }, { data: [] }, { data: [] })
+      eb.enqueue({ data: makeTransaction({ id: 'tx-eb', external_id: ebRaw.external_id, amount: 1500 }) })
+      mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+      const ebResult = await ingestTransactions(eb.supabase as never, COMPANY_ID, USER_ID, [ebRaw])
+      expect(ebResult).toMatchObject({ imported: 1, auto_matched_invoices: 0 })
+      expect(eb.inserts['bank_transaction_parts']).toBeUndefined()
+      expect(eb.updates['transactions']).toBeUndefined()
+    })
+
+    it('stores a booked row\'s parts unsuggested and without a marker, and drops a stale marker when the split no longer explains the row', async () => {
+      const { supabase, enqueue, inserts, updates } = createQueueMockSupabase()
+      const raw = splitDeposit()
+      const booked = storedRow({ id: 'tx-split', amount: 1500 }, { external_id: raw.external_id, journal_entry_id: 'je-1' })
+      enqueue({ data: [] }, { data: [] }, { data: [] }, { data: [{ id: booked.id, external_id: raw.external_id }] }, { data: [booked] })
+      enqueue({ data: null }, { data: null }) // parts: delete, insert
+
+      const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+      expect(result).toMatchObject({ duplicates: 1, enriched_updated: 0, auto_matched_invoices: 0 })
+      expect(inserts['bank_transaction_parts']).toEqual([[
+        storedPartRow(1, 500, { suggested_invoice_id: null, suggested_supplier_invoice_id: null, suggestion_reason: null }),
+        storedPartRow(2, 1000, { suggested_invoice_id: null, suggested_supplier_invoice_id: null, suggestion_reason: null }),
+      ]])
+      expect(updates['transactions']).toBeUndefined()
+      expect(mockLoadInvoiceMatchPool).not.toHaveBeenCalled()
+
+      // Invoice 1002 got paid another way: the second part finds nothing, the
+      // row's marker goes, the parts stay (one unsuggested).
+      const stale = createQueueMockSupabase()
+      const marked = storedRow({ id: 'tx-split', amount: 1500 }, { external_id: raw.external_id, potential_match_method: 'bankgiro_split', potential_match_confidence: 0.95 })
+      mockLoadInvoiceMatchPool.mockResolvedValueOnce({ invoices: [invoice1001] })
+      stale.enqueue({ data: [] }, { data: [] }, { data: [] }, { data: [{ id: marked.id, external_id: raw.external_id }] }, { data: [marked] })
+      stale.enqueue({ data: null }, { data: null }, { data: null }) // parts: delete, insert; the marker cleared
+      const staleResult = await ingestTransactions(stale.supabase as never, COMPANY_ID, USER_ID, [raw])
+      expect(staleResult).toMatchObject({ duplicates: 1, auto_matched_invoices: 0 })
+      expect((stale.inserts['bank_transaction_parts']![0] as unknown[])[1]).toEqual(expect.objectContaining({ seq: 2, suggested_invoice_id: null }))
+      expect(stale.updates['transactions']).toEqual([{ potential_match_method: null, potential_match_confidence: null }])
+      expect(mockBestInvoiceMatch).not.toHaveBeenCalled()
+    })
+
+    it('never fails the batch on a refused parts write: the row is imported and gets the single-invoice pass', async () => {
+      const { supabase, enqueue, inserts } = createQueueMockSupabase()
+      const raw = splitDeposit()
+      mockLoadInvoiceMatchPool.mockResolvedValueOnce({ invoices: [invoice1001, invoice1002] })
+      enqueue({ data: [] }, { data: [] }, { data: [] }, { data: [] })
+      enqueue({ data: makeTransaction({ id: 'tx-split', external_id: raw.external_id, amount: 1500 }) })
+      enqueue({ error: { message: 'permission denied' } }) // the parts delete refused
+      mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+      const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+      expect(result).toMatchObject({ imported: 1, errors: 0, auto_matched_invoices: 0, transaction_ids: ['tx-split'] })
+      expect(inserts['bank_transaction_parts']).toBeUndefined()
+      expect(mockBestInvoiceMatch).toHaveBeenCalledTimes(1)
     })
   })
 })

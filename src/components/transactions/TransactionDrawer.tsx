@@ -11,8 +11,11 @@ import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import { cn, formatCurrency, formatDate, formatOrgNumber } from '@/lib/utils'
 import { embeddedVoucherLabel, getLinkedJournalEntryIds } from '@/lib/transactions/is-booked'
+import { TransactionPartsSection } from '@/components/transactions/TransactionPartsSection'
 import type { TransactionWithInvoice } from '@/components/transactions/transaction-types'
 import type { TransactionUnderlag } from '@/lib/transactions/underlag-read'
+import type { BatchAllocationPrefill } from '@/lib/transactions/parts-read'
+import { OPEN_PAYMENTS_AGGREGATOR } from '@/lib/bank-sync/aggregator'
 
 async function fetchUnderlag(url: string): Promise<TransactionUnderlag> {
   const res = await fetch(url)
@@ -56,6 +59,8 @@ interface TransactionDrawerProps {
   attachedDocumentId?: string | null
   /** Anything the foldout showed that has no slot here (extraction status). */
   extra?: ReactNode
+  /** Open the batch allocation prefilled from the row's Bankgirot split; absent when the row cannot be split-matched. */
+  onMatchParts?: (allocations: BatchAllocationPrefill[]) => void
   processing: boolean
   onClose: () => void
 }
@@ -76,6 +81,7 @@ export function TransactionDrawer({
   skvCounterpartDate,
   isPreMigration,
   extra,
+  onMatchParts,
   processing,
   onClose,
 }: TransactionDrawerProps) {
@@ -274,6 +280,16 @@ export function TransactionDrawer({
             </div>
           )}
         </div>
+
+        {/* The Bankgirot split, for the one feed that sends it (Open Payments):
+            the section renders nothing for a row without parts. */}
+        {transaction.import_source === OPEN_PAYMENTS_AGGREGATOR && (
+          <TransactionPartsSection
+            transactionId={transaction.id}
+            onMatch={!booked ? onMatchParts : undefined}
+            processing={processing}
+          />
+        )}
 
         {/* Only when there is a fact to show: a heading over nothing reads as
             something missing. */}
