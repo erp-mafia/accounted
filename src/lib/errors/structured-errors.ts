@@ -4255,6 +4255,19 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Dokumentet är redan kopplat till en verifikation.',
     message_en: 'Document is already linked to a journal entry.',
   },
+  // A waiting proposal already links the document to another verifikat: only
+  // one of the two could ever be approved (crm#1158).
+  DOC_LINK_PROPOSED_ELSEWHERE: {
+    httpStatus: 409,
+    message_sv:
+      'Underlaget är redan föreslaget för en annan verifikation, och ett underlag kan bara kopplas till en verifikation. Ska båda verifikationerna ha det, till exempel ett kontoutdrag med flera avgifter, ladda upp filen igen som ett eget underlag för den här verifikationen. Annars avvisa det andra förslaget först.',
+    message_en:
+      'The document is already proposed for another verifikat, and a document can be linked to only one verifikat.',
+    remediation: {
+      description:
+        'If both verifikat need this underlag (a bank statement covering several fees), upload the file again as a separate document with gnubok_upload_document, which stores a new copy (gnubok_complete_document_upload returns the existing document for identical bytes), and link that copy. If the other proposal is the wrong one, reject it first, then stage this link again.',
+    },
+  },
   DOC_LINK_FAILED: {
     httpStatus: 500,
     message_sv: 'Kopplingen misslyckades.',

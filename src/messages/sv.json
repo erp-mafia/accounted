@@ -997,6 +997,7 @@
     "link_preview_status_unknown_fiscal_year": "Okänt räkenskapsår",
     "link_preview_status_ambiguous_fiscal_year": "Flera räkenskapsår",
     "link_preview_status_duplicate_in_batch": "Dubblett i listan",
+    "link_preview_status_proposed_elsewhere": "Föreslagen för annan verifikation",
     "recon_preview_heading": "Kopplingar: {count}",
     "recon_preview_rows_label": "Händelser som kopplas till verifikatet",
     "recon_preview_date": "Datum",

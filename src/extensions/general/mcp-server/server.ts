@@ -241,7 +241,7 @@ import { loadSkillProvenance, skillBodyHash, oauthActorLabel } from '@/lib/agent
 import { loadCompanySkillRows, ownSkill } from '@/lib/agent-skills/company-skills'
 import { skillAppliesToCompany } from '@/lib/agent-skills/applicability'
 import { buildOwnSkill, buildOwnText, OWN_SKILL_COPY } from '@/lib/agent-skills/own-skill-body'
-import { loadDocumentClaims, sharedDocumentWarning } from '@/lib/receipt-hunt/document-claims'
+import { conflictingVoucherClaims, loadDocumentClaims, sharedDocumentWarning } from '@/lib/receipt-hunt/document-claims'
 import { SkillBodySchema } from '@/lib/agent-skills/validation'
 import { recordCommunityFeedback } from '@/lib/agent-skills/community'
 import type { SkillTier } from './skills'
@@ -17657,10 +17657,25 @@ export const tools: McpTool[] = [
           throw lockedPeriodLinkError(1, [lockedLinkPeriod(linkPeriod, fiscalYear, 1)], [])
         }
       }
-      const sharedNote = sharedDocumentWarning(
-        (await loadDocumentClaims(supabase, companyId, [documentId])).get(documentId) ?? [],
-        { journal_entry_id: journalEntryId },
-      )
+      const claims = (await loadDocumentClaims(supabase, companyId, [documentId])).get(documentId) ?? []
+      // Another waiting proposal links this document to a different
+      // verifikat: whichever is approved second is refused by the same
+      // immutability trigger, so the warning used to invite an approval that
+      // could never commit (crm#1158). Refused here, dry_run included.
+      const proposedElsewhere = conflictingVoucherClaims(claims, journalEntryId)
+      if (proposedElsewhere.length > 0) {
+        throw codedRefusal(
+          'DOC_LINK_PROPOSED_ELSEWHERE',
+          `The document is already proposed for another verifikat: ${proposedElsewhere
+            .map((c) => `pending operation ${c.operation_id} (journal_entry_id ${c.journal_entry_id})`)
+            .join('; ')}. A document can be linked to only one verifikat, so at most one of these links can be approved. ` +
+            'If both verifikat need this underlag (a bank statement covering several fees), upload the file again with ' +
+            'gnubok_upload_document, which stores a separate copy (gnubok_complete_document_upload returns the existing ' +
+            'document for identical bytes), and link that copy here. If the other proposal is the wrong one, reject it ' +
+            'with gnubok_reject_pending_operation first, then stage this link again.',
+        )
+      }
+      const sharedNote = sharedDocumentWarning(claims, { journal_entry_id: journalEntryId })
 
       return stagePendingOperation(
         supabase, companyId, userId, 'link_document_to_voucher',
@@ -17785,6 +17800,10 @@ export const tools: McpTool[] = [
       const docsById = new Map((docs ?? []).map((d) => [d.id as string, d as {
         id: string; file_name: string; mime_type: string; journal_entry_id: string | null
       }]))
+      // Waiting proposals that already link a document to a verifikat: a row
+      // whose document another proposal sends to a different verifikat is a
+      // miss, since only one of the two could ever commit (crm#1158).
+      const claimsByDocument = await loadDocumentClaims(supabase, companyId, documentIds)
 
       // ── Batch-fetch candidate journal entries: every resolved period id ×
       //    every series named in the payload, then match tuples in JS (the
@@ -17834,8 +17853,10 @@ export const tools: McpTool[] = [
         voucher_number: number
         fiscal_year: number
         status: 'matched' | 'ambiguous_fiscal_year' | 'unknown_fiscal_year' | 'document_not_found'
-          | 'voucher_not_found' | 'already_linked' | 'duplicate_in_batch' | 'period_locked'
+          | 'voucher_not_found' | 'already_linked' | 'duplicate_in_batch' | 'period_locked' | 'proposed_elsewhere'
         document_file_name?: string
+        /** For proposed_elsewhere: the waiting operation that links the document to another verifikat. */
+        conflicting_operation_id?: string
         journal_entry_id?: string
         voucher_label?: string
         voucher_date?: string
@@ -17897,6 +17918,16 @@ export const tools: McpTool[] = [
         const existingJeId = doc.journal_entry_id
         if (existingJeId && existingJeId !== je.id) {
           results.push({ ...rowKey(l), status: 'already_linked', document_file_name: doc.file_name })
+          continue
+        }
+        const proposedElsewhere = conflictingVoucherClaims(claimsByDocument.get(l.document_id) ?? [], je.id)[0]
+        if (proposedElsewhere) {
+          results.push({
+            ...rowKey(l),
+            status: 'proposed_elsewhere',
+            document_file_name: doc.file_name,
+            conflicting_operation_id: proposedElsewhere.operation_id!,
+          })
           continue
         }
         const target = {

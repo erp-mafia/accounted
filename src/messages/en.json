@@ -997,6 +997,7 @@
     "link_preview_status_unknown_fiscal_year": "Unknown fiscal year",
     "link_preview_status_ambiguous_fiscal_year": "Several fiscal years",
     "link_preview_status_duplicate_in_batch": "Duplicate in batch",
+    "link_preview_status_proposed_elsewhere": "Proposed for another voucher",
     "recon_preview_heading": "Links: {count}",
     "recon_preview_rows_label": "Events linked to the voucher",
     "recon_preview_date": "Date",

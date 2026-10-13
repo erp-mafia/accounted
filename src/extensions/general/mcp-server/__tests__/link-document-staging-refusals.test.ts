@@ -10,7 +10,11 @@
  *     seq 932068, also 845101);
  *   - the target verifikat sits in a closed or locked fiscal period, where
  *     enforce_period_lock_documents refuses the link (agent feedback seq
- *     824135: the preview showed period_status closed and staged anyway).
+ *     824135: the preview showed period_status closed and staged anyway);
+ *   - another waiting proposal already links the document to a DIFFERENT
+ *     verifikat: whichever is approved second meets the same immutability
+ *     trigger, and the shared-document warning used to invite approving
+ *     both (crm#1158: one bank statement staged for two bank fees).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createTableMockSupabase } from '@/tests/helpers'
@@ -51,6 +55,8 @@ function setup(opts: {
   docJournalEntryId?: string | null
   holder?: Record<string, unknown> | null
   period?: Record<string, unknown>
+  /** Waiting link proposals on the document (the claims read); then the insert. */
+  pending?: Array<{ id: string; params: Record<string, unknown> }>
 }) {
   return createTableMockSupabase({
     document_attachments: {
@@ -59,7 +65,7 @@ function setup(opts: {
     // First the target, then (only when the document sits elsewhere) its holder.
     journal_entries: [{ data: TARGET }, { data: opts.holder ?? null }],
     fiscal_periods: { data: opts.period ?? OPEN_2026 },
-    pending_operations: { data: [] },
+    pending_operations: [{ data: opts.pending ?? [] }, { data: { id: 'op-new' } }],
     transactions: { data: [] },
   })
 }
@@ -153,10 +159,79 @@ describe('gnubok_link_document_to_voucher: refusals at staging', () => {
     expect(result.dry_run).toBe(true)
     expect(result.preview).toMatchObject({ document_already_linked: true })
   })
+
+  describe('another waiting proposal holds the document (crm#1158)', () => {
+    const OTHER_TARGET_ID = '00000000-0000-4000-8000-000000000202'
+    const OTHER_OP_ID = '00000000-0000-4000-8000-000000000401'
+    const TX_ID = '00000000-0000-4000-8000-000000000501'
+
+    it('refuses a document another proposal links to a different verifikat, naming it and both ways out; nothing is staged', async () => {
+      const { supabase, findCall } = setup({
+        pending: [{ id: OTHER_OP_ID, params: { document_id: DOC_ID, journal_entry_id: OTHER_TARGET_ID } }],
+      })
+
+      const err = await refusal({ document_id: DOC_ID, journal_entry_id: TARGET_ID }, supabase)
+
+      expect(findCall('pending_operations', 'insert')).toBeUndefined()
+      const { error } = toToolError(err)
+      expect(error.code).toBe('DOC_LINK_PROPOSED_ELSEWHERE')
+      expect(error.retryable).toBe(false)
+      expect(error.message_sv).toContain('ett underlag kan bara kopplas till en verifikation')
+      expect(error.message_sv).toContain('ladda upp filen igen som ett eget underlag')
+      expect(error.message_sv).toContain('avvisa det andra förslaget')
+      expect(error.message_sv).not.toContain('flera delar')
+      expect(error.message_en).toContain(`pending operation ${OTHER_OP_ID} (journal_entry_id ${OTHER_TARGET_ID})`)
+      expect(error.message_en).toContain('gnubok_upload_document')
+      expect(error.message_en).toContain('gnubok_reject_pending_operation')
+    })
+
+    it('refuses a dry run the same way, and a row of a waiting bulk batch counts too', async () => {
+      const { supabase } = setup({
+        pending: [{ id: OTHER_OP_ID, params: { links: [{ document_id: DOC_ID, journal_entry_id: OTHER_TARGET_ID }] } }],
+      })
+
+      const { error } = toToolError(await refusal({ document_id: DOC_ID, journal_entry_id: TARGET_ID, dry_run: true }, supabase))
+
+      expect(error.code).toBe('DOC_LINK_PROPOSED_ELSEWHERE')
+    })
+
+    it('stages when the waiting proposal links the document to the SAME verifikat: a retry, not a conflict', async () => {
+      const { supabase, findCall } = setup({
+        pending: [{ id: OTHER_OP_ID, params: { document_id: DOC_ID, journal_entry_id: TARGET_ID } }],
+      })
+
+      const result = (await linkDocument.execute(
+        { document_id: DOC_ID, journal_entry_id: TARGET_ID },
+        COMPANY_ID, USER_ID, supabase as never, ACTOR,
+      )) as { staged: boolean; preview: Record<string, unknown> }
+
+      expect(result.staged).toBe(true)
+      expect(findCall('pending_operations', 'insert')).toBeDefined()
+      expect(result.preview.compliance_warning).toBeUndefined()
+    })
+
+    it('stages next to a proposal for a bank transaction, warning that only one verifikat can get the document', async () => {
+      const { supabase } = setup({
+        pending: [{ id: OTHER_OP_ID, params: { document_id: DOC_ID, transaction_id: TX_ID } }],
+      })
+
+      const result = (await linkDocument.execute(
+        { document_id: DOC_ID, journal_entry_id: TARGET_ID, dry_run: true },
+        COMPANY_ID, USER_ID, supabase as never, ACTOR,
+      )) as { dry_run: boolean; preview: Record<string, unknown> }
+
+      expect(result.dry_run).toBe(true)
+      const warning = result.preview.compliance_warning as string
+      expect(warning).toContain('banktransaktion 00000000')
+      expect(warning).toContain('bara en av verifikationerna kan få det')
+      expect(warning).toContain('egen kopia per verifikation')
+      expect(warning).not.toContain('flera delar')
+    })
+  })
 })
 
 describe('gnubok_link_documents_to_vouchers: a document on another verifikat of any status', () => {
-  function bulkSetup(holderId: string | null) {
+  function bulkSetup(holderId: string | null, pending: Array<{ id: string; params: Record<string, unknown> }> = []) {
     return createTableMockSupabase({
       fiscal_periods: { data: [{ ...OPEN_2026, period_end: '2026-12-31' }] },
       document_attachments: {
@@ -171,7 +246,7 @@ describe('gnubok_link_documents_to_vouchers: a document on another verifikat of 
           { ...TARGET, id: '00000000-0000-4000-8000-000000000202', voucher_number: 9 },
         ],
       },
-      pending_operations: { data: { id: 'op-1' } },
+      pending_operations: [{ data: pending }, { data: { id: 'op-1' } }], // the claims read; then the insert
     })
   }
   const links = [
@@ -200,6 +275,37 @@ describe('gnubok_link_documents_to_vouchers: a document on another verifikat of 
     expect(inserted.title).toBe('Koppla 1 av 2 bilagor till verifikat D9 (1 utan träff)')
   })
 
+  it('previews a document another waiting proposal links elsewhere as proposed_elsewhere and stages only the rest (crm#1158)', async () => {
+    const otherOp = '00000000-0000-4000-8000-000000000401'
+    const { supabase, findCall } = bulkSetup(null, [
+      { id: otherOp, params: { document_id: DOC_ID, journal_entry_id: HOLDER_ID } },
+    ])
+
+    const result = (await linkDocuments.execute({ links }, COMPANY_ID, USER_ID, supabase as never, ACTOR)) as {
+      staged: boolean
+      preview: { results: Array<{ status: string; conflicting_operation_id?: string }>; matched_count: number; missed_count: number }
+    }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.results.map((r) => r.status)).toEqual(['proposed_elsewhere', 'matched'])
+    expect(result.preview.results[0]).toMatchObject({ conflicting_operation_id: otherOp })
+    expect(result.preview).toMatchObject({ matched_count: 1, missed_count: 1 })
+    const inserted = findCall('pending_operations', 'insert')![0] as { params: { links: Array<{ document_id: string }> } }
+    expect(inserted.params.links.map((l) => l.document_id)).toEqual(['00000000-0000-4000-8000-000000000102'])
+  })
+
+  it('stages a row a waiting proposal already links to the same verifikat', async () => {
+    const { supabase } = bulkSetup(null, [
+      { id: '00000000-0000-4000-8000-000000000401', params: { document_id: DOC_ID, journal_entry_id: TARGET_ID } },
+    ])
+
+    const result = (await linkDocuments.execute({ links }, COMPANY_ID, USER_ID, supabase as never, ACTOR)) as {
+      preview: { results: Array<{ status: string }> }
+    }
+
+    expect(result.preview.results.map((r) => r.status)).toEqual(['matched', 'matched'])
+  })
+
   it('titles a batch over several series by its first and last verifikat, series first', async () => {
     const { supabase, findCall } = createTableMockSupabase({
       fiscal_periods: { data: [{ ...OPEN_2026, period_end: '2026-12-31' }] },
@@ -218,7 +324,7 @@ describe('gnubok_link_documents_to_vouchers: a document on another verifikat of 
           { ...TARGET, id: '00000000-0000-4000-8000-000000000203', voucher_series: 'A', voucher_number: 9 },
         ],
       },
-      pending_operations: { data: { id: 'op-1' } },
+      pending_operations: [{ data: [] }, { data: { id: 'op-1' } }], // no waiting link proposal; then the insert
     })
     const links = [
       { document_id: '00000000-0000-4000-8000-000000000101', voucher_series: 'D', voucher_number: 3, fiscal_year: 2026 },

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { loadDocumentClaims, sharedDocumentWarning } from '../document-claims'
+import { conflictingVoucherClaims, loadDocumentClaims, sharedDocumentWarning } from '../document-claims'
 
 const { supabase, enqueue, reset } = createQueuedMockSupabase()
 beforeEach(() => reset())
@@ -36,6 +36,22 @@ describe('sharedDocumentWarning', () => {
     expect(note).toContain('betalats i flera delar')
   })
 
+  // crm#1158: once a verifikat is on either side, only one verifikat can ever
+  // hold the document, so the warning must not invite approving both.
+  it('never invites approving both when a verifikat is involved, and says a statement needs a copy per verifikat', () => {
+    const pendingVoucher = { document_id: 'doc-1', operation_id: '7a1b2c3d-0000', transaction_id: null, journal_entry_id: 'e1e2e3e4-0000' }
+    for (const note of [
+      sharedDocumentWarning([pendingVoucher], { transaction_id: '9158cf8d-11de' }),
+      sharedDocumentWarning([pendingFirst], { journal_entry_id: 'je-1' }),
+    ]) {
+      expect(note).toContain('Ett underlag kan bara kopplas till en verifikation')
+      expect(note).toContain('egen kopia per verifikation')
+      expect(note).not.toContain('flera delar')
+      expect(note).not.toMatch(/Godkänn båda/)
+    }
+    expect(sharedDocumentWarning([pendingVoucher], { transaction_id: '9158cf8d-11de' })).toContain('förslag 7a1b2c3d (verifikat e1e2e3e4)')
+  })
+
   it('does not warn about the link being staged itself', () => {
     expect(sharedDocumentWarning([pendingFirst], { transaction_id: '331ace55-cc90' })).toBeNull()
     expect(sharedDocumentWarning([], { transaction_id: 'tx-1' })).toBeNull()
@@ -44,5 +60,24 @@ describe('sharedDocumentWarning', () => {
   it('names a transaction the document is already attached to', () => {
     const note = sharedDocumentWarning([{ document_id: 'doc-1', operation_id: null, transaction_id: 'abcdef12-3456', journal_entry_id: null }], { journal_entry_id: 'je-1' })
     expect(note).toContain('banktransaktion abcdef12')
+  })
+})
+
+describe('conflictingVoucherClaims', () => {
+  const claim = (over: Partial<{ operation_id: string | null; transaction_id: string | null; journal_entry_id: string | null }>) => ({
+    document_id: 'doc-1', operation_id: null, transaction_id: null, journal_entry_id: null, ...over,
+  })
+
+  it('returns a waiting link to a different verifikat: only one of the two could ever commit (crm#1158)', () => {
+    const other = claim({ operation_id: 'op-a', journal_entry_id: 'je-other' })
+    expect(conflictingVoucherClaims([other], 'je-target')).toEqual([other])
+  })
+
+  it('ignores a waiting link to the same verifikat, a waiting bank-transaction link and a transaction the document is pinned to', () => {
+    expect(conflictingVoucherClaims([
+      claim({ operation_id: 'op-a', journal_entry_id: 'je-target' }),
+      claim({ operation_id: 'op-b', transaction_id: 'tx-1' }),
+      claim({ transaction_id: 'tx-2' }),
+    ], 'je-target')).toEqual([])
   })
 })

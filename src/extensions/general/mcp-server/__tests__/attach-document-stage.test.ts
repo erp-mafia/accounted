@@ -165,6 +165,27 @@ describe('gnubok_attach_document_to_transaction: staging', () => {
     )) as Staged
 
     expect(result.preview.compliance_warning).toMatch(/^Samma underlag är redan kopplat/)
+    // Two bank rows may share an invoice paid in parts: both attaches commit.
+    expect(result.preview.compliance_warning).toContain('betalats i flera delar')
     expect(result.message).toMatch(/WARNING: Samma underlag/)
+  })
+
+  it('does not invite approving both when a waiting proposal links the document to a verifikat (crm#1158)', async () => {
+    const { supabase } = db({
+      pending_operations: [
+        { data: [{ id: 'd0d0d0d0-0000-4000-8000-000000000004', params: { document_id: DOC, journal_entry_id: 'e0e0e0e0-0000-4000-8000-000000000005' } }] },
+        { data: { id: 'op-attach-1' } },
+      ],
+    })
+    const result = (await tool.execute(
+      { transaction_id: TX, document_id: DOC, dry_run: true },
+      'company-1', 'user-1', supabase as never,
+    )) as Staged
+
+    const warning = result.preview.compliance_warning as string
+    expect(warning).toContain('förslag d0d0d0d0 (verifikat e0e0e0e0)')
+    expect(warning).toContain('bara en av verifikationerna kan få det')
+    expect(warning).toContain('egen kopia per verifikation')
+    expect(warning).not.toContain('flera delar')
   })
 })

@@ -66,7 +66,7 @@ function setup(rows: Array<{ n: number; year: number }>, periods: Array<ReturnTy
         fiscal_period_id: `fp-${r.year}`,
       })),
     },
-    pending_operations: { data: { id: 'op-1' } },
+    pending_operations: [{ data: [] }, { data: { id: 'op-1' } }], // no waiting link proposal; then the insert
   })
   const links = rows.map((r) => ({
     document_id: uuid(100 + r.n),
