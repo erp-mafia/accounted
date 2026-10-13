@@ -26,28 +26,34 @@ export function isDefaultCatalogTool(tool: { catalogVisibility?: 'default' | 'se
 }
 
 /**
- *   tools_list: in the default catalog, listed by tools/list.
- *   call_tool:  search-only READ, reachable through gnubok_call_tool.
- *   stage_tool: search-only WRITE that only stages a pending operation,
- *               reachable through gnubok_stage_tool. Nothing reaches the books
- *               until gnubok_approve_pending_operation, a separate listed step.
- *   none:       search-only WRITE that commits directly: absent from
- *               tools/list and refused by both bridges, so a client that
- *               cannot name an unlisted tool has no way to invoke it.
+ *   tools_list: in THIS caller's tools/list.
+ *   call_tool:  a READ outside it, reachable through gnubok_call_tool.
+ *   stage_tool: a WRITE outside the default catalog that only stages a pending
+ *               operation, reachable through gnubok_stage_tool. Nothing
+ *               reaches the books until gnubok_approve_pending_operation, a
+ *               separate listed step.
+ *   none:       a WRITE outside it that neither bridge carries: it commits
+ *               directly, or it is a default-catalog write this caller's list
+ *               omits (gnubok_stage_tool carries only what is absent from the
+ *               default catalog, see bridgeRefusalReason in server.ts).
  *
- * `stages` is required, not optional: a call site that forgot it would
- * silently report every staging write as unreachable.
+ * `listed` is the caller's own tools/list membership, never the registry
+ * tier: server.ts derives it from isListedFor, the predicate the tools/list
+ * handler filters with, so a hit can never say tools_list for a tool the
+ * caller's list omits (agent feedback seq 995216). Both fields are required:
+ * a call site that forgot `stages` would report every staging write as
+ * unreachable, one that guessed `listed` would reopen the drift.
  */
 export function toolCallableVia(
   tool: {
     catalogVisibility?: 'default' | 'search'
     annotations: { readOnlyHint?: boolean }
   },
-  stages: boolean,
+  reach: { listed: boolean; stages: boolean },
 ): ToolCallableVia {
-  if (isDefaultCatalogTool(tool)) return 'tools_list'
+  if (reach.listed) return 'tools_list'
   if (tool.annotations.readOnlyHint === true) return 'call_tool'
-  return stages ? 'stage_tool' : 'none'
+  return reach.stages && !isDefaultCatalogTool(tool) ? 'stage_tool' : 'none'
 }
 
 /** One-line reason attached wherever a search-only, directly-committing WRITE is reported. */
@@ -60,3 +66,20 @@ export const SEARCH_ONLY_READ_NOTE = 'not in tools/list: invoke it through gnubo
 /** Reach note for a search-only staging WRITE: callable, but not through tools/list. */
 export const SEARCH_ONLY_STAGED_NOTE =
   'not in tools/list: stage it through gnubok_stage_tool, then approve with gnubok_approve_pending_operation'
+
+/**
+ * What callable_via "tools_list" cannot know: the server lists the tool today,
+ * but some clients keep the tools/list they fetched when the connector was
+ * added. A ChatGPT connector worked for weeks on its setup copy and never saw
+ * gnubok_update_invoice, listed two days after that copy was taken (agent
+ * feedback seq 995216). Said once per search response and in the bridge
+ * refusals that send an agent to a direct call, the two places an agent with
+ * a stale copy lands.
+ */
+export const STALE_TOOLS_LIST_NOTE =
+  'tools_list = in this server\'s tools/list now. A client that kept an older copy of the list (some connectors fetch it once, when added) does not show tools listed since: ask the user to refresh or reconnect the Accounted connector, then call the tool by name.'
+
+/** The same advice for one named tool, appended to a refusal that says "call it directly". */
+export function staleToolsListAdvice(toolName: string): string {
+  return `If your client does not show ${toolName}, it kept an older copy of tools/list: ask the user to refresh or reconnect the Accounted connector.`
+}

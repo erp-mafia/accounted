@@ -1098,26 +1098,47 @@ describe('a tool that declares the staged envelope only stages', () => {
 
 const NON_VOLATILE = /\b(STABLE|IMMUTABLE)\b/i
 
+interface FunctionDefinition {
+  sql: string
+  index: number
+}
+
+let latestDefinitions: Map<string, FunctionDefinition> | undefined
+
 /**
- * The header (signature up to the body's opening dollar quote) of a
- * function's LATEST definition. Migration filenames are timestamp-prefixed, so
- * the last match in sorted order is the definition that is live.
+ * Where every function's LATEST definition starts. Migration filenames are
+ * timestamp-prefixed, so the last match in sorted order is the definition
+ * that is live. Built once: each migration is read a single time, however
+ * many functions the tests ask about (one read of the directory per function
+ * timed out on a busy runner).
  */
-function latestFunctionHeader(fn: string): string | undefined {
+function latestFunctionDefinitions(): Map<string, FunctionDefinition> {
+  if (latestDefinitions) return latestDefinitions
   const dir = resolve(__dirname, '../../../../../supabase/migrations')
   const files = readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()
-  const pattern = new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+(?:public\\.)?${fn}\\s*\\(`, 'gi')
-  let header: string | undefined
+  const pattern = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?(\w+)\s*\(/gi
+  const found = new Map<string, FunctionDefinition>()
   for (const file of files) {
     const sql = readFileSync(resolve(dir, file), 'utf8')
     pattern.lastIndex = 0
     let match: RegExpExecArray | null
     while ((match = pattern.exec(sql)) !== null) {
-      const rest = sql.slice(match.index)
-      header = rest.slice(0, rest.search(/\bAS\s+\$/i))
+      found.set(match[1].toLowerCase(), { sql, index: match.index })
     }
   }
-  return header
+  latestDefinitions = found
+  return found
+}
+
+/**
+ * The header (signature up to the body's opening dollar quote) of a
+ * function's LATEST definition.
+ */
+function latestFunctionHeader(fn: string): string | undefined {
+  const latest = latestFunctionDefinitions().get(fn.toLowerCase())
+  if (!latest) return undefined
+  const rest = latest.sql.slice(latest.index)
+  return rest.slice(0, rest.search(/\bAS\s+\$/i))
 }
 
 describe('the guard has teeth: a tool that declares staged but commits is caught', () => {

@@ -5,8 +5,10 @@
  * - every page has the footer: the statutory line and "Sida X av Y";
  * - pages 2 and later have the running header, and the table header repeats
  *   while the table continues;
- * - the totals, the notice, the fine print and the payment area land on the
- *   same page, the last one (crm#242: the fine print was stranded alone);
+ * - the summary (totals and the notice) is never split and stays on the page
+ *   where the rows end when it fits there (agent feedback seq 1080289); the
+ *   fine print and the payment area land together on the last page (crm#242:
+ *   the fine print was stranded alone);
  * - the payment area is only on the last page and never overprints the flow;
  * - the footer states Momsreg.nr and F-skatt only when they apply, and the
  *   seller's second address line;
@@ -20,7 +22,7 @@ import type { ReactElement } from 'react'
 import { Font, pdf, renderToBuffer } from '@react-pdf/renderer'
 import layoutDocument from '@react-pdf/layout'
 import { InvoicePDF, PAYMENT_AREA_GAP_PT, PAYMENT_AREA_HEIGHT_PT, type InvoicePdfInvoice } from '@/lib/invoices/pdf-template'
-import { CONTENT_WIDTH_PT, HEADER_TEXT_MAX_WIDTH_PT, STATUS_STAMP_RESERVE_PT } from '@/lib/invoices/pdf/styles'
+import { CONTENT_WIDTH_PT, HEADER_TEXT_MAX_WIDTH_PT, STATUS_STAMP_RESERVE_PT, createStyles } from '@/lib/invoices/pdf/styles'
 import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
 import { pdfTextStrings } from '@/tests/pdf-text'
 import type { CompanySettings, InvoiceItem } from '@/types'
@@ -196,20 +198,83 @@ describe('running header and table header', () => {
 })
 
 describe('totals block and payment area', () => {
-  // Row counts around the page-1 break: the totals block moves as one unit.
+  // Row counts around the page-1 break: the summary and the payment area's
+  // reservation are two units, each kept whole.
   for (const count of [16, 18, 20, 22, 24, 26]) {
-    it(`keeps totals, fine print and the payment area together on the last page (${count} rows)`, { timeout: 30_000 }, async () => {
+    it(`keeps the summary whole and the fine print with the payment area on the last page (${count} rows)`, { timeout: 30_000 }, async () => {
       const text = await pages(invoice({ reverse_charge_text: 'Omvänd betalningsskyldighet' }), rows(count))
       const last = text.length - 1
+      const lastRowAt = text.findIndex((page) => page.includes(`Konsulttimmar vecka ${count}`))
       const totalsAt = text.findIndex((page) => page.includes('Delsumma'))
-      expect(totalsAt).toBe(last)
-      expect(text[last]).toContain('Omvänd betalningsskyldighet')
+      // The summary follows the rows, at most one page on, and is never
+      // split: Delsumma, the notice and Att betala share its page.
+      expect(totalsAt - lastRowAt).toBeGreaterThanOrEqual(0)
+      expect(totalsAt - lastRowAt).toBeLessThanOrEqual(1)
+      expect(text[totalsAt]).toContain('Omvänd betalningsskyldighet')
+      expect(text[totalsAt]).toContain('Att betala')
+      // The fine print and the payment area land together on the last page.
       expect(text[last]).toContain(FINE_PRINT)
       expect(text[last]).toContain('BETALNING')
-      // The payment area is drawn on the last page only.
-      for (const page of text.slice(0, last)) expect(page).not.toContain('BETALNING')
+      for (const page of text.slice(0, last)) {
+        expect(page).not.toContain('BETALNING')
+        expect(page).not.toContain(FINE_PRINT)
+      }
     })
   }
+
+  // Agent feedback seq 1080289: an invoice with 8 rows and a 9-line note
+  // printed Delsumma, moms and Att betala alone on page 2, because they moved
+  // with the payment area's reservation, while page 1 was half empty.
+  it('keeps the summary on page 1 when only the payment area does not fit there', { timeout: 30_000 }, async () => {
+    const note = Array.from({ length: 9 }, (_, i) => `Avräkningsrad ${i + 1}: mätarställning och period enligt avtal.`).join('\n')
+    const text = await pages(invoice({ notes: note, reverse_charge_text: 'Omvänd betalningsskyldighet' }), rows(8))
+    expect(text).toHaveLength(2)
+    const [page1, page2] = text
+    expect(page1).toContain('Konsulttimmar vecka 8')
+    expect(page1).toContain('Avräkningsrad 9')
+    expect(page1).toContain('Delsumma')
+    expect(page1).toContain('Moms 25%')
+    expect(page1).toContain('Omvänd betalningsskyldighet')
+    expect(page1).toContain('Att betala')
+    expect(page1).not.toContain(FINE_PRINT)
+    expect(page1).not.toContain('BETALNING')
+    // Page 2 carries the fine print and the payment area, nothing of the summary.
+    expect(page2).toContain(FINE_PRINT)
+    expect(page2).toContain('BETALNING')
+    expect(page2).not.toContain('Delsumma')
+  })
+
+  it('renders a one-page invoice with the summary, the fine print and the payment area on page 1', { timeout: 30_000 }, async () => {
+    for (const count of [1, 2, 6, 12]) {
+      const text = await pages(invoice({ reverse_charge_text: 'Omvänd betalningsskyldighet' }), rows(count))
+      expect(text, `${count} rows`).toHaveLength(1)
+      for (const needle of ['Delsumma', 'Omvänd betalningsskyldighet', 'Att betala', FINE_PRINT, 'BETALNING']) {
+        expect(text[0], `${count} rows: ${needle}`).toContain(needle)
+      }
+    }
+  })
+
+  it('places the fine print directly under the summary on a one-page invoice', { timeout: 30_000 }, async () => {
+    // The two units follow each other as the one block did: the fine print
+    // starts its own top margin under the notice slot's bottom edge.
+    const [page] = await layOut(InvoicePDF({ invoice: invoice({ reverse_charge_text: 'Omvänd betalningsskyldighet' }), customer, items: rows(2), company: company() }))
+    const placed = placedTexts(page)
+    const notice = placed.find((t) => t.text === 'Omvänd betalningsskyldighet')
+    const finePrint = placed.find((t) => t.text === FINE_PRINT)
+    expect(notice).toBeDefined()
+    expect(finePrint).toBeDefined()
+    const s = createStyles()
+    const slotBottomEdge = Number(s.noticeSlot.paddingVertical) + Number(s.noticeSlot.borderWidth)
+    expect(finePrint!.top - notice!.bottom).toBeCloseTo(slotBottomEdge + Number(s.finePrint.marginTop), 1)
+  })
+
+  it('keeps the fine print with the totals on a proforma, which has no payment area', { timeout: 30_000 }, async () => {
+    for (const count of [16, 18, 20, 22, 24, 26]) {
+      const text = await pages(invoice({ document_type: 'proforma' }), rows(count))
+      const totalsAt = text.findIndex((page) => page.includes('Delsumma'))
+      expect(text[totalsAt], `${count} rows`).toContain(FINE_PRINT)
+    }
+  })
 
   it('never lets the payment area overprint the flow above it', { timeout: 30_000 }, async () => {
     for (const count of [1, 18, 22, 40]) {
@@ -224,7 +289,7 @@ describe('totals block and payment area', () => {
     }
   })
 
-  it('keeps the totals with the payment area when a long ROT breakdown has to split', { timeout: 60_000 }, async () => {
+  it('keeps the summary whole and the fine print with the payment area when a long ROT breakdown has to split', { timeout: 60_000 }, async () => {
     const rotRows: InvoiceItem[] = rows(16).map((row, i) => ({
       ...row,
       description: `Renovering av badrum etapp ${i + 1}: rivning av kakel, fuktspärr, ny golvbrunn, montering av väggskivor och kakelsättning enligt ritning`,
@@ -236,10 +301,15 @@ describe('totals block and payment area', () => {
     const text = await pages(invoice({ deduction_total: 4800 }), rotRows)
     expect(text.length).toBeGreaterThan(1)
     const last = text.length - 1
-    expect(text.findIndex((page) => page.includes('Delsumma'))).toBe(last)
+    // The summary after the breakdown is never split.
+    const totalsAt = text.findIndex((page) => page.includes('Delsumma'))
+    expect(text[totalsAt]).toContain('Att betala')
     expect(text[last]).toContain(FINE_PRINT)
     expect(text[last]).toContain('BETALNING')
-    for (const page of text.slice(0, last)) expect(page).not.toContain('BETALNING')
+    for (const page of text.slice(0, last)) {
+      expect(page).not.toContain('BETALNING')
+      expect(page).not.toContain(FINE_PRINT)
+    }
     // The whole breakdown is printed.
     expect(text.join('\n')).toContain('etapp 16')
   })

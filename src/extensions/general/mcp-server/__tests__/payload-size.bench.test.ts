@@ -663,6 +663,10 @@ describe('tools/list payload size guard', () => {
     //     on gnubok_create_account and gnubok_update_account names
     //     type ["number","null"] so clients stop sending "0". String enums
     //     stay bare. Measured 65 778 (single-company 60 769). Ceiling unchanged.
+    //   * callable_via parity (agent feedback seq 995216): the search_tools
+    //     tools_list_note travels in the response and is declared in no
+    //     outputSchema: main had 6 tokens of headroom, too few for even a
+    //     bare declaration. Costs the catalog nothing. Ceiling unchanged.
     expect(approxTokens).toBeLessThan(65_800)
   })
 

@@ -255,8 +255,11 @@ import {
 import {
   SEARCH_ONLY_STAGED_NOTE,
   SEARCH_ONLY_WRITE_NOTE,
+  STALE_TOOLS_LIST_NOTE,
   isDefaultCatalogTool,
+  staleToolsListAdvice,
   toolCallableVia,
+  type ToolCallableVia,
 } from './tool-reach'
 import {
   canonicalizeToolReferencesInText,
@@ -2518,7 +2521,7 @@ function bridgeRefusalReason(
     if (required && !hasScope(keyScopes, required)) {
       return directCall(`${requestedToolName} is a listed tool, so gnubok_stage_tool will not carry it.`)
     }
-    return `${requestedToolName} is in tools/list: call it directly by name so your client applies that tool's own permission.`
+    return `${requestedToolName} is in tools/list: call it directly by name so your client applies that tool's own permission. ${staleToolsListAdvice(requestedToolName)}`
   }
   return null
 }
@@ -2532,7 +2535,14 @@ function bridgeRefusalReason(
  */
 function directCallAdvice(requestedToolName: string, target: McpTool, keyScopes: ApiKeyScope[]): string {
   const required = TOOL_SCOPE_MAP[target.name]
-  if (!required || hasScope(keyScopes, required)) return `Call ${requestedToolName} directly by name.`
+  if (!required || hasScope(keyScopes, required)) {
+    // A listed tool the agent tried to bridge is often one its client never
+    // showed it: the client kept an older tools/list (agent feedback seq
+    // 995216). Say what unblocks it instead of only repeating "call it".
+    return isDefaultCatalogTool(target)
+      ? `Call ${requestedToolName} directly by name. ${staleToolsListAdvice(requestedToolName)}`
+      : `Call ${requestedToolName} directly by name.`
+  }
   const lacks = `This API key lacks the ${required} scope, so ${requestedToolName} is not in your tools/list and a direct call is refused too.`
   return required === 'pending_operations:approve'
     ? `${lacks} Do not retry: the user approves or rejects pending operations in the web app at /pending (Att göra > Agentförslag).`
@@ -5074,6 +5084,13 @@ export const tools: McpTool[] = [
         ? (rawKeyScopes as string[])
         : []
       const scopesInjected = Array.isArray(rawKeyScopes)
+      // The same viewer tools/list filters with, so callable_via is read off
+      // the caller's own list (agent feedback seq 995216).
+      const viewer: CatalogViewer = {
+        anonymous: args.__anonymous === true,
+        simpleCompanyMode,
+        keyScopes: callerScopes as ApiKeyScope[],
+      }
 
       let candidates = tools.filter((t) => {
         if (simpleCompanyMode && isMultiCompanyOnlyTool(t.name)) return false
@@ -5140,7 +5157,7 @@ export const tools: McpTool[] = [
         // WRITE on a tools/list-only host) was reported as a missing tool four
         // times (feedback seq 372962 and siblings). Response field, so it costs
         // nothing in tools/list.
-        const callableVia = toolCallableVia(t, isStagingTool(t))
+        const callableVia = callableViaFor(t, viewer)
         const reach = {
           callable_via: callableVia,
           ...(callableVia === 'none' ? { note: SEARCH_ONLY_WRITE_NOTE } : {}),
@@ -5177,11 +5194,16 @@ export const tools: McpTool[] = [
         )
       })
 
+      // Response-only, like the report definitions: declared in no
+      // outputSchema, so it costs tools/list nothing (payload-size.bench).
+      const anyListedHit =
+        detail !== 'name' && sliced.some((t) => callableViaFor(t, viewer) === 'tools_list')
       return {
         tools: projected,
         count: projected.length,
         total_matched: totalMatched,
         detail,
+        ...(anyListedHit ? { tools_list_note: STALE_TOOLS_LIST_NOTE } : {}),
       }
     },
   },
@@ -7149,13 +7171,20 @@ export const tools: McpTool[] = [
       const grantedScopes = new Set<string>(
         Array.isArray(rawKeyScopes) ? (rawKeyScopes as string[]) : []
       )
+      // The viewer tools/list filters with: a single-company key's list omits
+      // gnubok_list_companies, which the receipt_hunt loadout names.
+      const viewer: CatalogViewer = {
+        anonymous: false,
+        simpleCompanyMode: args.__simpleCompanyMode === true,
+        keyScopes: [...grantedScopes] as ApiKeyScope[],
+      }
       const classifyRecommendedTool = (toolName: string): RecommendedToolClassification => {
         // Loadouts are validated against the registry at module init, so the
         // lookup cannot miss; the fallback only keeps the type total.
         const target = tools.find((candidate) => candidate.name === toolName)
         return {
           required_scope: TOOL_SCOPE_MAP[toolName] ?? null,
-          callable_via: target ? toolCallableVia(target, isStagingTool(target)) : 'none',
+          callable_via: target ? callableViaFor(target, viewer) : 'none',
         }
       }
 
@@ -26306,6 +26335,61 @@ function keyCanStageThroughBridge(keyScopes: ApiKeyScope[]): boolean {
   })
 }
 
+/**
+ * Who is asking, as far as tools/list is concerned. The dispatcher builds it
+ * from the request (token, reachable companies, key scopes) for tools/list
+ * and injects the same three facts into gnubok_search_tools and
+ * gnubok_get_agent_briefing.
+ */
+export interface CatalogViewer {
+  anonymous: boolean
+  simpleCompanyMode: boolean
+  keyScopes: ApiKeyScope[]
+}
+
+/**
+ * The one definition of what tools/list shows a caller. The tools/list
+ * handler filters with it, and every callable_via (search hits, the
+ * briefing's recommended_tools, unknown-tool suggestions) is derived from it
+ * through callableViaFor, so discovery cannot say "tools_list" for a tool the
+ * caller's list omits. Those used to be two copies: tools/list filtered
+ * inline while callable_via read only the registry tier, so a single-company
+ * key's briefing called gnubok_list_companies listed and a key that could
+ * stage nothing was told gnubok_stage_tool was (agent feedback seq 995216).
+ */
+export function isListedFor(t: McpTool, viewer: CatalogViewer): boolean {
+  if (!isDefaultCatalogTool(t)) return false
+  // One company (or none): the company switch and the cross-company tools
+  // have nothing to work on.
+  if (viewer.simpleCompanyMode && isMultiCompanyOnlyTool(t.name)) return false
+  // Not connected yet: the whole default catalog is listed so the agent can
+  // pick the right tool; calling a protected one is what produces the 401
+  // challenge that starts the connect (and signup) flow.
+  if (viewer.anonymous) return true
+  // Unscoped itself, so gate it on whether this key could stage anything
+  // through it (see keyCanStageThroughBridge).
+  if (t.name === 'gnubok_stage_tool') return keyCanStageThroughBridge(viewer.keyScopes)
+  const required = TOOL_SCOPE_MAP[t.name]
+  return !required || hasScope(viewer.keyScopes, required)
+}
+
+const BRIDGE_TOOL_BY_VIA: Readonly<Record<'call_tool' | 'stage_tool', McpTool>> = {
+  call_tool: tools.find((t) => t.name === 'gnubok_call_tool')!,
+  stage_tool: tools.find((t) => t.name === 'gnubok_stage_tool')!,
+}
+
+/**
+ * How THIS caller reaches a tool, read off its own tools/list (isListedFor).
+ * A bridge counts only when the caller's list carries the bridge itself.
+ */
+export function callableViaFor(t: McpTool, viewer: CatalogViewer): ToolCallableVia {
+  const via = toolCallableVia(t, { listed: isListedFor(t, viewer), stages: isStagingTool(t) })
+  if (via === 'call_tool' || via === 'stage_tool') {
+    return isListedFor(BRIDGE_TOOL_BY_VIA[via], viewer) ? via : 'none'
+  }
+  return via
+}
+
 // ── MCP Protocol Handler ─────────────────────────────────────
 
 // Build identifier so MCP clients can tell deploys apart in `initialize`
@@ -26949,6 +27033,14 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
     return simpleCompanyModeMemo
   }
 
+  // What tools/list shows this caller (isListedFor). Read at call time:
+  // keyScopes is filled in by authentication above.
+  const catalogViewer = async (): Promise<CatalogViewer> => ({
+    anonymous: isAnonymous,
+    simpleCompanyMode: await resolveSimpleCompanyMode(),
+    keyScopes,
+  })
+
   // ── Stateless core (spec 2026-07-28) ──
   // New-style clients carry their protocol version in _meta on every request
   // instead of an initialize handshake. Requests without the key come from
@@ -27162,22 +27254,9 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
 
     case 'tools/list': {
       const listStartedAt = Date.now()
-      const simpleCompanyMode = await resolveSimpleCompanyMode()
-      const allowedTools = tools.filter((t) => {
-        if (!isDefaultCatalogTool(t)) return false
-        // One company (or none): the company switch and the cross-company
-        // tools have nothing to work on.
-        if (simpleCompanyMode && isMultiCompanyOnlyTool(t.name)) return false
-        // Not connected yet: the whole default catalog is listed so the agent
-        // can pick the right tool; calling a protected one is what produces
-        // the 401 challenge that starts the connect (and signup) flow.
-        if (isAnonymous) return true
-        // Unscoped itself, so gate it on whether this key could stage anything
-        // through it (see keyCanStageThroughBridge).
-        if (t.name === 'gnubok_stage_tool') return keyCanStageThroughBridge(keyScopes)
-        const required = TOOL_SCOPE_MAP[t.name]
-        return !required || hasScope(keyScopes, required)
-      })
+      const viewer = await catalogViewer()
+      const simpleCompanyMode = viewer.simpleCompanyMode
+      const allowedTools = tools.filter((t) => isListedFor(t, viewer))
       emitToolsListTelemetry({
         toolCount: allowedTools.length,
         actor,
@@ -27347,11 +27426,12 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             return !required || hasScope(keyScopes, required)
           }),
         )
+        const viewer = suggestions.length > 0 ? await catalogViewer() : null
         const didYouMean =
-          suggestions.length > 0
+          viewer
             ? ` Did you mean: ${suggestions
                 .map((t) => {
-                  const via = toolCallableVia(t, isStagingTool(t))
+                  const via = callableViaFor(t, viewer)
                   const name = toPublicToolName(t.name, toolNamespace)
                   return via === 'call_tool' || via === 'stage_tool'
                     ? `${name} (via ${toPublicToolName(`gnubok_${via}`, toolNamespace)})`
@@ -27842,6 +27922,13 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         }
         if (toolName === 'gnubok_search_tools') {
           (toolArgs as Record<string, unknown>).__toolNamespace = toolNamespace
+          // An anonymous caller is shown the whole default catalog by
+          // tools/list; search derives callable_via from the same viewer.
+          if (isAnonymous) (toolArgs as Record<string, unknown>).__anonymous = true
+        }
+        // Both derive callable_via from the caller's own tools/list, which a
+        // single-company key sees without the multi-company tools.
+        if (toolName === 'gnubok_search_tools' || toolName === 'gnubok_get_agent_briefing') {
           if (await resolveSimpleCompanyMode()) {
             (toolArgs as Record<string, unknown>).__simpleCompanyMode = true
           }

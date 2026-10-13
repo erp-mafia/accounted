@@ -91,13 +91,19 @@ import {
   handleMcpRequest,
   tools,
   isDefaultCatalogTool,
-  isStagingTool,
+  callableViaFor,
   STAGE_BRIDGE_TARGETS,
+  type CatalogViewer,
+  type McpTool,
 } from '../server'
-import { toolCallableVia } from '../tool-reach'
 import { RECOMMENDED_WORKFLOW_LOADOUTS } from '../recommended-tools'
 import { workflowSkills } from '../skills'
 import { prompts } from '../prompts'
+
+// The connector grant for an owner on a multi-company account: every scope,
+// so the widest tools/list a caller gets. Reach below is read off it.
+const OWNER_CONNECTOR: CatalogViewer = { anonymous: false, simpleCompanyMode: false, keyScopes: [...ALL_SCOPES] }
+const reach = (tool: McpTool) => callableViaFor(tool, OWNER_CONNECTOR)
 
 const DRAFT_ROUND_TRIP_WRITES = [
   'gnubok_create_invoice',
@@ -157,7 +163,7 @@ describe('connector-minted key: invoice draft round trip', () => {
 
   it('the pre-read is bridged, and the update tool tells the agent how', () => {
     const getInvoice = tools.find((t) => t.name === 'gnubok_get_invoice')!
-    expect(toolCallableVia(getInvoice, isStagingTool(getInvoice))).toBe('call_tool')
+    expect(reach(getInvoice)).toBe('call_tool')
     const updateInvoice = tools.find((t) => t.name === 'gnubok_update_invoice')!
     expect(updateInvoice.description).toMatch(/gnubok_get_invoice.*gnubok_call_tool/)
   })
@@ -165,7 +171,7 @@ describe('connector-minted key: invoice draft round trip', () => {
   it('no tool in the draft round trip is unreachable', () => {
     for (const name of [...DRAFT_ROUND_TRIP_WRITES, 'gnubok_get_invoice', 'gnubok_list_invoices']) {
       const tool = tools.find((t) => t.name === name)!
-      expect(toolCallableVia(tool, isStagingTool(tool)), name).not.toBe('none')
+      expect(reach(tool), name).not.toBe('none')
     }
   })
 })
@@ -207,7 +213,7 @@ describe('no search-only WRITE is out of reach (issue #2800)', () => {
 
   it('every search-only WRITE is carried by gnubok_stage_tool, or is on record as unreachable', () => {
     const unreachable = searchOnlyWrites
-      .filter((t) => toolCallableVia(t, isStagingTool(t)) === 'none')
+      .filter((t) => reach(t) === 'none')
       .map((t) => t.name)
       .filter((name) => !(name in UNREACHABLE_SEARCH_ONLY_WRITES))
     expect(
@@ -221,7 +227,7 @@ describe('no search-only WRITE is out of reach (issue #2800)', () => {
   it('no entry outlives its fix', () => {
     const stale = Object.keys(UNREACHABLE_SEARCH_ONLY_WRITES).filter((name) => {
       const tool = tools.find((t) => t.name === name)
-      return !tool || toolCallableVia(tool, isStagingTool(tool)) !== 'none'
+      return !tool || reach(tool) !== 'none'
     })
     expect(stale, 'now reachable or renamed: delete the entry: ' + stale.join(', ')).toEqual([])
   })
@@ -240,7 +246,7 @@ describe('no search-only WRITE is out of reach (issue #2800)', () => {
     for (const name of [...frozenBy2768, ...DRAFT_ROUND_TRIP_WRITES]) {
       const tool = tools.find((t) => t.name === name)
       expect(tool, `${name} was renamed or removed: update this list`).toBeDefined()
-      expect(toolCallableVia(tool!, isStagingTool(tool!)), name).not.toBe('none')
+      expect(reach(tool!), name).not.toBe('none')
     }
   })
 })
@@ -254,7 +260,7 @@ describe('gnubok_stage_tool carries exactly what the dispatcher says it carries'
   it('STAGE_BRIDGE_TARGETS and callable_via agree for every tool in the registry', () => {
     const carried = new Set(STAGE_BRIDGE_TARGETS.map((t) => t.name))
     for (const tool of tools) {
-      expect(toolCallableVia(tool, isStagingTool(tool)) === 'stage_tool', tool.name).toBe(
+      expect(reach(tool) === 'stage_tool', tool.name).toBe(
         carried.has(tool.name),
       )
     }
@@ -338,16 +344,14 @@ describe('every tool a listed tool, skill, prompt, loadout or the instructions n
   const byName = new Map(tools.map((t) => [t.name, t]))
   const TOOL_NAME = /gnubok_[a-z0-9]+(?:_[a-z0-9]+)*/g
 
-  type ReachInput = Parameters<typeof toolCallableVia>[0] & { outputSchema?: Record<string, unknown> }
-
-  function unreachableNamesIn(text: string, registry: Map<string, ReachInput> = byName): string[] {
+  function unreachableNamesIn(text: string, registry: Map<string, McpTool> = byName): string[] {
     const named = new Set(text.match(TOOL_NAME) ?? [])
     return [...named].filter((name) => {
       const tool = registry.get(name)
       // Not a registry tool (an API-key prefix, a truncated "_suffix" list):
       // phantom names are other tests' business.
       if (!tool) return false
-      return toolCallableVia(tool, isStagingTool(tool)) === 'none'
+      return reach(tool) === 'none'
     })
   }
 
@@ -426,7 +430,7 @@ describe('every tool a listed tool, skill, prompt, loadout or the instructions n
     const text = `Undo it with ${victim.name}, then re-read gnubok_get_reconciliation_status.`
     expect(unreachableNamesIn(text)).toEqual([])
 
-    const rigged = new Map<string, ReachInput>(byName)
+    const rigged = new Map<string, McpTool>(byName)
     rigged.set(victim.name, { ...victim, outputSchema: { type: 'object' } })
     expect(unreachableNamesIn(text, rigged)).toEqual([victim.name])
   })

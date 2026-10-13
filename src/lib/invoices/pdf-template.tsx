@@ -398,17 +398,28 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
   )
 
   // Fine print: the company's payment terms (Betalningsvillkor, Dröjsmålsränta).
-  // Part of the totals block, so it can never be stranded alone on a page
-  // (crm#242). Payment terms, so only on a document that asks for a payment:
-  // never on a quote, a kreditfaktura or a följesedel.
+  // It travels with the payment area, or with the totals when there is none,
+  // so it can never be stranded alone on a page (crm#242). Payment terms, so
+  // only on a document that asks for a payment: never on a quote, a
+  // kreditfaktura or a följesedel.
   const finePrint = isQuote || isDeliveryNote || isCreditNote
     ? []
     : [company.invoice_late_fee_text, company.invoice_credit_terms_text].filter((t): t is string => !!t?.trim())
+  const finePrintBlock = finePrint.length > 0 ? (
+    <View style={styles.finePrint}>
+      {finePrint.map((text, index) => (
+        <Text key={index} style={styles.finePrintText} hyphenationCallback={wrapFullWidthWords}>
+          {text}
+        </Text>
+      ))}
+    </View>
+  ) : null
 
   const hasDeductionBox = !isDeliveryNote && !isCreditNote && (invoice.deduction_total ?? 0) > 0
-  // The totals block moves to the next page as one unit, unless a long
-  // ROT/RUT breakdown makes it taller than a page could hold: then it may
-  // split, each of its parts still kept whole (MAX_KEEP_TOGETHER_LINES).
+  // The summary (totals, the underlag, the notice) is kept whole, unless a
+  // long ROT/RUT breakdown makes it taller than a page could hold: then the
+  // breakdown may split, each of its parts still kept whole
+  // (MAX_KEEP_TOGETHER_LINES).
   const deductionFits = !hasDeductionBox || fitsOnOnePage(
     items
       .filter((i) => i.deduction_type)
@@ -765,14 +776,17 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
           </View>
         )}
 
-        {/* Zone D: the totals block. Totals, the deduction underlag, the one
-            notice slot, the fine print and a spacer as tall as the payment
-            area, together: it moves to the next page as a unit, and the page
-            it lands on is the last one, where the payment area is drawn over
-            the spacer. A ROT/RUT breakdown too long to keep whole comes
-            first instead and may split; everything after it stays one unit,
-            so the totals still share the last page with the payment area. */}
-        <View style={styles.totalsBlock} wrap={!deductionFits}>
+        {/* Zone D: the totals block, in two units that are each kept whole.
+            The summary (totals, the deduction underlag, the one notice slot)
+            stays on the page where the rows and the note end whenever it fits
+            (agent feedback seq 1080289: it used to follow the payment area's
+            reservation to the next page and leave page 1 half empty). The
+            fine print and a spacer as tall as the payment area follow it and
+            may move to the next page on their own; the page the spacer lands
+            on is the last one, where the payment area, which states the
+            amount again, is drawn over it. A ROT/RUT breakdown too long to
+            keep whole comes first instead and may split. */}
+        <View style={styles.totalsBlock}>
           {!deductionFits && deductionBox}
           <View style={deductionFits ? undefined : styles.totalsAfterDeduction} wrap={false}>
             {!isDeliveryNote && (
@@ -879,23 +893,19 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
               </View>
             )}
 
-            {/* Fine print and the payment area's reservation, kept together so
-                the last page always has room for the payment area. */}
-            {(finePrint.length > 0 || hasPaymentArea) && (
-              <View wrap={false}>
-                {finePrint.length > 0 && (
-                  <View style={styles.finePrint}>
-                    {finePrint.map((text, index) => (
-                      <Text key={index} style={styles.finePrintText} hyphenationCallback={wrapFullWidthWords}>
-                        {text}
-                      </Text>
-                    ))}
-                  </View>
-                )}
-                {hasPaymentArea && <View style={{ height: PAYMENT_AREA_HEIGHT_PT + PAYMENT_AREA_GAP_PT }} />}
-              </View>
-            )}
+            {/* No payment area (proforma): the fine print stays with the totals. */}
+            {!hasPaymentArea && finePrintBlock}
           </View>
+
+          {/* Fine print and the payment area's reservation, kept together so
+              the last page always has room for the payment area and the
+              fine print is never stranded without it. */}
+          {hasPaymentArea && (
+            <View wrap={false}>
+              {finePrintBlock}
+              <View style={{ height: PAYMENT_AREA_HEIGHT_PT + PAYMENT_AREA_GAP_PT }} />
+            </View>
+          )}
         </View>
 
         {/* Zone E: the payment area, drawn over the spacer at the bottom of
