@@ -1,7 +1,6 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import Image from 'next/image'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -18,7 +17,7 @@ import {
   SettingsRowEnd,
   SettingsRowNote,
 } from '@/components/settings/SettingsRows'
-import { CheckCircle2, ExternalLink, ShieldOff, FlaskConical, ShieldAlert } from 'lucide-react'
+import { CheckCircle2, ExternalLink, ShieldOff, FlaskConical, ShieldAlert, Landmark } from 'lucide-react'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { useBranding } from '@/lib/branding/brand-context'
 import { useOmbudAppointWithToasts } from '@/components/skatteverket/ombud-appoint'
@@ -271,7 +270,7 @@ function SkatteverketPersonalConnectionCard() {
       <SettingsGroup>
         <SettingsRow label={
           <span className="inline-flex items-center gap-2">
-            <Image src="/logos/skatteverket.svg" alt="" aria-hidden="true" width={14} height={14} className="dark:invert" />
+            <Landmark className="h-3.5 w-3.5" aria-hidden="true" />
             {t('title')}
           </span>
         } help={connectHelp} borderless>
@@ -287,7 +286,7 @@ function SkatteverketPersonalConnectionCard() {
         {status?.disabled && <WarningLine>{t('disabled_message')}</WarningLine>}
         <SettingsRow label={
           <span className="inline-flex items-center gap-2">
-            <Image src="/logos/skatteverket.svg" alt="" aria-hidden="true" width={14} height={14} className="dark:invert" />
+            <Landmark className="h-3.5 w-3.5" aria-hidden="true" />
             {t('title')}
           </span>
         } help={connectHelp} borderless={!hasSkatteverket}>
@@ -340,7 +339,7 @@ function SkatteverketPersonalConnectionCard() {
 
       <SettingsRow label={
           <span className="inline-flex items-center gap-2">
-            <Image src="/logos/skatteverket.svg" alt="" aria-hidden="true" width={14} height={14} className="dark:invert" />
+            <Landmark className="h-3.5 w-3.5" aria-hidden="true" />
             {t('title')}
           </span>
         } help={connectHelp}>

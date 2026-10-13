@@ -194,9 +194,9 @@ describe('listReconciliationAccounts', () => {
     expect(byKey[bankAccountKey(ID_B)].source.stale).toBe(true)
     expect(byKey[bankAccountKey(ID_C)].source).toMatchObject({ synced_at: null, stale: true })
     expect(byKey[bankAccountKey(ID_A)].status).toBeNull()
-    // Skattekonto row carries the logo and the open counts.
+    // Skattekonto row carries no logo (Skatteverket's API terms) and the open counts.
     expect(byKey.skattekonto).toMatchObject({
-      logo_url: '/logos/skatteverket_color.svg',
+      logo_url: null,
       source: { type: 'skatteverket_api', stale: false },
       status: { state: 'open', open_counts: { proposed: 2, unmatched_external: 3, unmatched_ledger: 1 } },
     })

@@ -504,7 +504,6 @@ export default function NewUserChecklist({
                 </Button>
               )
             }
-            marks={<LogoMark src="/logos/skatteverket_color.svg" name="Skatteverket" />}
           >
             {skvOmbudEnabled ? t('step_skv_description_ombud', { appName }) : t('step_skv_description')}
             {vatLine?.kind === 'date' && (

@@ -13,7 +13,7 @@ function ConnectionMark({ kind }: { kind: AgentConnection }) {
   const { cashAccounts } = useCashAccounts({ enabledOnly: true })
   const bank = cashAccounts.map(cashAccountLogoUrl).find((url): url is string => !!url)
   /* eslint-disable @next/next/no-img-element */
-  if (kind === 'skatteverket') return <img src="/logos/skatteverket_color.svg" alt="" />
+  if (kind === 'skatteverket') return <Landmark className="h-4 w-4" aria-hidden />
   if (kind === 'mail') return <GmailMark />
   if (kind === 'bank') return bank ? <img src={bank} alt="" /> : <Landmark className="h-4 w-4" aria-hidden />
   if (kind === 'peppol') return <FileText className="h-4 w-4" aria-hidden />

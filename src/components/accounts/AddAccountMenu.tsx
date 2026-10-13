@@ -19,7 +19,7 @@ import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-exten
  */
 const SOURCES: ReadonlyArray<{ key: string; href: string; logo: string | null; extension?: string }> = [
   { key: 'bank', href: '/settings/banking', logo: null },
-  { key: 'skattekonto', href: '/settings/skatteverket', logo: '/logos/skatteverket_color.svg' },
+  { key: 'skattekonto', href: '/settings/skatteverket', logo: null },
   { key: 'stripe', href: '/import?mode=stripe', logo: '/logos/banks/stripe.png', extension: 'stripe' },
   { key: 'shopify', href: '/import?mode=shopify', logo: '/logos/shopify.svg', extension: 'shopify' },
   { key: 'woocommerce', href: '/import?mode=woocommerce', logo: '/logos/woocommerce.svg', extension: 'woocommerce' },

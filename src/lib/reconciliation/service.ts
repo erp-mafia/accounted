@@ -385,7 +385,8 @@ export async function listReconciliationAccounts(
         account_number: s.account_number,
         name: 'Skattekonto',
         currency: 'SEK',
-        logo_url: '/logos/skatteverket_color.svg',
+        // Skatteverket's API terms forbid its logo: the row shows a monogram.
+        logo_url: null,
         source: {
           type: 'skatteverket_api',
           synced_at: s.skattekonto?.fetched_at ?? null,

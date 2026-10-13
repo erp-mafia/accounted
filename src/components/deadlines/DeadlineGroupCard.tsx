@@ -5,7 +5,7 @@ import { Deadline } from '@/types'
 import { cn } from '@/lib/utils'
 import { isDeadlineOverdue } from '@/lib/calendar/utils'
 import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
-import { deadlineDateLabel } from './DeadlineRow'
+import { DeadlineMark, deadlineDateLabel } from './DeadlineRow'
 import { Pencil } from 'lucide-react'
 
 /**
@@ -52,11 +52,7 @@ export function DeadlineGroupCard({ deadlines, onEdit, onRequestToggle }: Deadli
 
   return (
     <div className="flex items-start gap-3 py-3 -mx-2 px-2">
-      {/* Shared skattekonto date: always Skatteverket's mark (white ground,
-          badge not chrome). */}
-      <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border bg-white">
-        <img src="/logos/skatteverket_color.svg" alt="Skatteverket" className="h-4 w-4 object-contain" />
-      </span>
+      <DeadlineMark deadline={first} />
 
       <div className="min-w-0 flex-1">
         <p className="text-sm leading-6">

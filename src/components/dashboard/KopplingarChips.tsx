@@ -127,10 +127,7 @@ export function KopplingarChips({
         />
         {showSkv && (
           <Chip
-            icon={
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src="/logos/skatteverket_color.svg" alt="" className="h-[13px] w-[13px]" />
-            }
+            icon={<Landmark className="h-[13px] w-[13px] text-muted-foreground" aria-hidden />}
             name={t('kopplingar_skv_short')}
             status={hasSkatteverket ? t('kopplingar_skv_on') : t('kopplingar_skv_off')}
             action={hasSkatteverket ? null : skvOmbudEnabled ? (

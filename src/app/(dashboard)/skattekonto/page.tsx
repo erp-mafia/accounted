@@ -712,14 +712,7 @@ export default function SkattekontoPage() {
           <>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <div className="rounded-lg border border-border p-4">
-                <div className="flex items-center gap-2">
-                  <img
-                    src="/logos/skatteverket_color.svg"
-                    alt=""
-                    className="h-4 w-4 shrink-0 object-contain"
-                  />
-                  <p className="text-xs text-muted-foreground">Saldo hos Skatteverket</p>
-                </div>
+                <p className="text-xs text-muted-foreground">Saldo hos Skatteverket</p>
                 <p
                   className={cn(
                     'mt-2 font-display text-2xl tabular-nums tracking-tight',

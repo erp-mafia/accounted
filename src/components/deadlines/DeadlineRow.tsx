@@ -37,9 +37,9 @@ const TYPE_ICONS: Record<Deadline['deadline_type'], typeof CalendarClock> = {
   other: CalendarClock,
 }
 
-// Statutory deadlines carry the receiving authority's mark: Bolagsverket for
-// the company-law dates, Skatteverket for everything tax-shaped. Non-system
-// deadlines keep the neutral type icons.
+// Statutory company-law deadlines carry Bolagsverket's mark. Tax-shaped ones
+// keep the neutral tax icon: Skatteverket's API terms forbid using its logo
+// in information or marketing, so the app never shows it.
 const BOLAGSVERKET_TYPES = new Set([
   'arsredovisning',
   'arsstamma',
@@ -48,10 +48,8 @@ const BOLAGSVERKET_TYPES = new Set([
 ])
 
 export function deadlineAuthorityLogo(deadline: Deadline): { src: string; alt: string } | null {
-  if (deadline.tax_deadline_type) {
-    return BOLAGSVERKET_TYPES.has(deadline.tax_deadline_type)
-      ? { src: '/logos/bolagsverket.jpg', alt: 'Bolagsverket' }
-      : { src: '/logos/skatteverket_color.svg', alt: 'Skatteverket' }
+  if (deadline.tax_deadline_type && BOLAGSVERKET_TYPES.has(deadline.tax_deadline_type)) {
+    return { src: '/logos/bolagsverket.jpg', alt: 'Bolagsverket' }
   }
   // Manual deadlines (including user-created tax-category ones) keep the
   // neutral type icons: the authority crest is reserved for statutory dates

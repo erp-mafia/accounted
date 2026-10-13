@@ -4635,7 +4635,6 @@ export default function TransactionsPage() {
                         onIgnore={handleSkvIgnore}
                         columns={txColumns}
                         accountLabel={tSkvCard('account_label', { account: SKATTEKONTO_ACCOUNT })}
-                        accountLogo="/logos/skatteverket_color.svg"
                       />
                     ),
                   )}

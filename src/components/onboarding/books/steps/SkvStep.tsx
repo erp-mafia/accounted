@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
+import { Landmark } from 'lucide-react'
 import { useBranding } from '@/lib/branding/brand-context'
 import { useFormat } from '@/lib/hooks/use-format'
 import { useOAuthPopup } from '@/lib/hooks/use-oauth-popup'
@@ -207,8 +208,7 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
               onClick={ombudMode ? () => void appointOmbud() : connect}
             >
               <span className="pmark" aria-hidden="true">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/logos/skatteverket.svg" alt="" />
+                <Landmark className="h-4 w-4" />
               </span>
               <span className="jny-bankid-txt">{ombudMode ? t('skv_ombud_connect', { appName }) : t('skv_connect')}</span>
             </button>

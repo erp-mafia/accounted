@@ -1,11 +1,14 @@
 'use client'
 
+import { Landmark } from 'lucide-react'
 import type { SkvPhase } from '@/lib/onboarding-books/reducer'
 
 /**
- * Stämpeln: the Skatteverket mark on its white chip, alone, with air around
- * it. While the user is at Skatteverket a faint dashed ring turns slowly
- * outside the chip. On return the chip's own border turns sage as one
+ * Stämpeln: a neutral authority mark on its white chip, alone, with air
+ * around it (never Skatteverket's logo: its API terms forbid using it in
+ * information or marketing). While the user is at Skatteverket a faint
+ * dashed ring turns slowly outside the chip. On return the chip's own border
+ * turns sage as one
  * stroke travels around it, then a small check badge appears at its lower
  * right. Nothing else moves. Every phase is a class on the svg.
  */
@@ -16,7 +19,9 @@ export function SkvHandshake({ phase, holdText }: { phase: SkvPhase; holdText: s
       <svg className={`stamp ${cls}`} viewBox="0 0 240 200" width="240" height="200" aria-hidden="true">
         <circle className="wait" cx="120" cy="88" r="56" />
         <circle className="chip" cx="120" cy="88" r="44" />
-        <image className="mark" href="/logos/skatteverket.svg" x="94" y="62" width="52" height="52" />
+        <g className="mark">
+          <Landmark x="100" y="68" size={40} strokeWidth={1.5} />
+        </g>
         <circle className="ring" cx="120" cy="88" r="44" pathLength="1" transform="rotate(-90 120 88)" />
         <g transform="translate(152 120)">
           <g className="badge">

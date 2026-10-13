@@ -410,7 +410,7 @@ export function ConnectionsSettingsContent() {
             })}
           {hasSkatteverket &&
             row({
-              logo: <ImgLogo src="/logos/skatteverket_color.svg" />,
+              logo: <Landmark className="h-4 w-4 text-foreground" aria-hidden="true" />,
               name: t('skatteverket'),
               help: t('skatteverket_help'),
               state: status ? (status.skvConnected ? t('connected') : off) : null,
