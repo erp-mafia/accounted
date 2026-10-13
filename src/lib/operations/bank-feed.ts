@@ -22,6 +22,8 @@ import {
   startBankFeedConsent,
   syncBankFeedConnection,
 } from '@/lib/bank-feed/service'
+import { openBankFeedDoor } from '@/lib/bank-feed/door'
+import { issueSignatoryLink } from '@/lib/bank-feed/invites'
 import type { BankFeedSignerInput } from '@/lib/bank-feed/party'
 import { BANK_CONNECT_RETURN_SURFACES } from '@/lib/bank-feed/return-url'
 import { getBankSwitchProgress } from '@/lib/bank-feed/switch-campaign'
@@ -425,6 +427,42 @@ export const bankFeedDisconnect = defineOperation({
   run: async (ctx, input) => disconnectBankFeedConnection(ctx, input.connection_id),
 })
 
+export const bankFeedInvite = defineOperation({
+  id: 'bank-feed.invite',
+  kind: 'write',
+  scope: 'transactions:write',
+  risk: 'medium',
+  reversible: false,
+  docs: {
+    summary: 'Send the company\'s firmatecknare a link to connect the bank with BankID, without an Accounted login.',
+    description: 'Creates a signed link, valid 7 days, that opens the Koppla banken flow for this company at /koppla/<token> without a login: the firmatecknare picks the bank (or gets the one named), signs the consent with BankID and chooses the accounts; the link is consumed when the accounts are selected. With recipient_email the link is mailed (template bank_connect_invite); the URL is answered either way for the sender to pass on. Owners and admins only.',
+    useWhen: 'A byrå or a company admin cannot sign the bank consent themselves: the firmatecknare holds the bank access.',
+    doNotUseFor: 'Connecting the bank in person (start the consent instead), or a company not switched on for Open Payments (OPEN_BANKING_NOT_AVAILABLE).',
+    pitfalls: ['The URL carries the credential: hand it to the firmatecknare only.', 'replace_connection_id names the connection the new one takes over from (an Enable Banking row for a switch, an Open Payments row for a renewal).'],
+    example: { request: { recipient_email: 'anna@example.se', offer_payments: true }, response: { data: { invite_id: EXAMPLE_CONNECTION, url: 'https://app.accounted.se/koppla/...', expires_at: '2026-10-19T09:14:03Z', email_sent: true } } },
+  },
+  input: z.object({
+    bic: BIC.nullish(),
+    replace_connection_id: z.string().uuid().nullish(),
+    offer_payments: z.boolean().default(false),
+    recipient_email: z.string().email().max(254).nullish(),
+    bank_name: z.string().max(100).nullish().describe('The bank as the sender names it, for the mail only.'),
+  }),
+  output: z.object({ invite_id: z.string().uuid(), url: z.string(), expires_at: z.string(), email_sent: z.boolean() }),
+  errorCodes: ['OPEN_BANKING_NOT_AVAILABLE', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR'],
+  run: async (ctx, input) => {
+    const door = await openBankFeedDoor(ctx)
+    if (!door.ok) return { ok: false, code: 'OPEN_BANKING_NOT_AVAILABLE', details: { reason: door.reason } }
+    return issueSignatoryLink(ctx, {
+      bic: input.bic ?? null,
+      replaceConnectionId: input.replace_connection_id ?? null,
+      offerPayments: input.offer_payments,
+      recipientEmail: input.recipient_email ?? null,
+      bankName: input.bank_name ?? null,
+    })
+  },
+})
+
 export const BANK_FEED_OPERATIONS = [
   bankFeedBanks,
   bankFeedBank,
@@ -436,4 +474,5 @@ export const BANK_FEED_OPERATIONS = [
   bankFeedSelect,
   bankFeedSync,
   bankFeedDisconnect,
+  bankFeedInvite,
 ] as const

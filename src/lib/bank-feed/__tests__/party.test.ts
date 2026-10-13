@@ -39,6 +39,17 @@ describe('buildBankFeedParty', () => {
     expect(nobody.ok && nobody.party.personalNumber).toBeNull()
   })
 
+  it('never looks the context user up when the signer says so: the signatory link acts as the sender but signs as someone else', async () => {
+    const guarded = await buildBankFeedParty(withOrg(), { ...base, signer: { ...UNATTENDED_SIGNER, lookupOnFile: false }, userId: 'sender-1' })
+    expect(guarded.ok && guarded.party.personalNumber).toBeNull()
+    expect(mocks.onFile).not.toHaveBeenCalled()
+    expect(await buildBankFeedParty(withOrg(), { ...base, signer: { ...UNATTENDED_SIGNER, lookupOnFile: false }, userId: 'sender-1', requireSigner: true })).toEqual({
+      ok: false,
+      outcome: { ok: false, code: 'BANK_CONSENT_PERSONAL_NUMBER_REQUIRED' },
+    })
+    expect(mocks.onFile).not.toHaveBeenCalled()
+  })
+
   it('refuses a BankID start without a number, and an invalid typed number, by name', async () => {
     mocks.onFile.mockResolvedValue(null)
     expect(await buildBankFeedParty(withOrg(), { ...base, signer: UNATTENDED_SIGNER, userId: 'u', requireSigner: true })).toEqual({ ok: false, outcome: { ok: false, code: 'BANK_CONSENT_PERSONAL_NUMBER_REQUIRED' } })

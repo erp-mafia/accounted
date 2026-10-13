@@ -30,9 +30,24 @@ export function isBankConnectReturnSurface(value: unknown): value is BankConnect
   return typeof value === 'string' && (BANK_CONNECT_RETURN_SURFACES as readonly string[]).includes(value)
 }
 
-/** The return URL for a connection: the surface's page on `origin` with the connection named. */
-export function bankConnectReturnUrl(origin: string, surface: BankConnectReturnSurface, connectionId: string): string {
-  const url = new URL(SURFACE_PATHS[surface], origin)
+/**
+ * The signatory page (app/koppla/[token]): a firmatecknare without a login
+ * comes back to their own link, so this target's page is built from the
+ * link's token and is reachable only from the token routes, never from a
+ * session body (the session routes accept the allowlist above alone).
+ */
+export const BANK_CONNECT_SIGNATORY_TARGET = 'koppla' as const
+export type BankConnectReturnTarget = BankConnectReturnSurface | typeof BANK_CONNECT_SIGNATORY_TARGET
+
+/** The return URL for a connection: the target's page on `origin` with the connection named; the signatory page needs the link's token. */
+export function bankConnectReturnUrl(origin: string, surface: BankConnectReturnTarget, connectionId: string, options: { token?: string | null } = {}): string {
+  let url: URL
+  if (surface === BANK_CONNECT_SIGNATORY_TARGET) {
+    if (!options.token) throw new Error('The signatory return needs the link token')
+    url = new URL(`/koppla/${encodeURIComponent(options.token)}`, origin)
+  } else {
+    url = new URL(SURFACE_PATHS[surface], origin)
+  }
   url.searchParams.set(BANK_CONNECT_RETURN_PARAM, connectionId)
   return url.toString()
 }

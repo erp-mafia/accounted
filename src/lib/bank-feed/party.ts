@@ -32,6 +32,14 @@ export interface BankFeedSignerInput {
   personalNumber: string | null
   ipAddress: string | null
   userAgent: string | null
+  /**
+   * Whether the number on file for the context's user may stand in when none
+   * was typed. True (the default) for a session: the person acts for
+   * themselves. False on the signatory link (lib/bank-feed/invite-route.ts):
+   * the context's user is the sender, and their number must never name the
+   * firmatecknare's BankID; without a typed number the party carries none.
+   */
+  lookupOnFile?: boolean
 }
 
 /** No person present: the cron and the balance refresh after an unattended read. */
@@ -83,7 +91,7 @@ export async function buildBankFeedParty(supabase: SupabaseClient, input: PartyI
   if (input.signer.personalNumber && !typed) {
     return { ok: false, outcome: { ok: false, code: 'BANK_CONSENT_PERSONAL_NUMBER_REQUIRED', details: { reason: 'invalid' } } }
   }
-  const personalNumber = typed ?? (input.userId ? await signerPersonalNumberOnFile(input.userId) : null)
+  const personalNumber = typed ?? (input.userId && input.signer.lookupOnFile !== false ? await signerPersonalNumberOnFile(input.userId) : null)
   if (input.requireSigner && !personalNumber) return { ok: false, outcome: { ok: false, code: 'BANK_CONSENT_PERSONAL_NUMBER_REQUIRED' } }
   return {
     ok: true,

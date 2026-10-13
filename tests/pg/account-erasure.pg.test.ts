@@ -74,6 +74,7 @@ const RETAINED = new Set([
   'accrual_schedules.user_id',
   'assets.user_id',
   'bank_file_imports.user_id',
+  'bank_connect_invites.created_by', // Who sent the firmatecknare a signatory link; the company keeps the record.
   'bokslut_checklist_items.done_by',
   'bokslut_checklist_items.updated_by',
   'chart_of_accounts.user_id',

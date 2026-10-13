@@ -72,6 +72,7 @@ const WEBHOOK = 'machine endpoint: inbound webhook'
 const CONNECTOR = 'machine endpoint: self-hosted connector proxy, authenticated by a connector key'
 const PAYMENT_SIGNING = 'BankID signing of a bank payment: the account holder signs money out in person, no machine door signs'
 const BANK_CONSENT = 'BankID consent to read a bank account: the account holder gives it in person, no machine door consents'
+const SIGNATORY_LINK = 'token route of the signatory link (/koppla/<token>): the firmatecknare gives the bank consent in person, authenticated by the link, no machine door consents'
 const PREVIEW = 'preview/parse helper for an unsaved form or import wizard; the API takes structured input'
 const EXT_SYNC = 'webshop/payment integration sync is cron-driven; manual trigger has no API'
 const COLLECTIONS_AGREEMENT = "entering or ending the company's agreement with a collection provider: a person consents, accepts and signs"
@@ -443,6 +444,16 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/bank/open-payments/connections/:id/sync': covered([`POST ${V}/bank-connections/:connectionId/sync`, 'gnubok_sync_bank'], 'both doors fall through to the Open Payments runner for its connections'),
   'DELETE /api/bank/open-payments/connections/:id': gap('P3', 'remove a bank connection, as for Enable Banking'),
   'POST /api/clients/bank-switch/remind': uiOnly('a byrå mails its own clients about the one-off Enable Banking to Open Payments switch; the campaign ends with the deadline'),
+  'POST /api/bank/open-payments/invites': gap('P3', 'send the firmatecknare a signatory link (operation bank-feed.invite is defined; bind it to a v1 route when a byrå automation asks)'),
+
+  // ── The signatory link (lib/bank-feed/invites): token routes a firmatecknare reaches without a login ──
+  'POST /api/koppla/:token/connections': uiOnly(SIGNATORY_LINK),
+  'POST /api/koppla/:token/connections/:id/poll': uiOnly(SIGNATORY_LINK),
+  'POST /api/koppla/:token/connections/:id/restart': uiOnly(SIGNATORY_LINK),
+  'POST /api/koppla/:token/connections/:id/select': uiOnly(SIGNATORY_LINK),
+  'POST /api/koppla/:token/connections/:id/sync': uiOnly(SIGNATORY_LINK),
+  'DELETE /api/koppla/:token/connections/:id': uiOnly(SIGNATORY_LINK),
+  'POST /api/koppla/:token/verification/start': uiOnly(SIGNATORY_LINK),
 
   // ── Expenses, mileage, webshop ─────────────────────────────────────
   'POST /api/expense-claims': covered([`POST ${V}/expense-claims`, 'gnubok_create_expense_claim']),
@@ -743,4 +754,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 129
+export const GAP_CEILING = 130

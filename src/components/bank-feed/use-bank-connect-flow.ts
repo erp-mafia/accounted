@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useState } from 'react'
-import type { BankConnectReturnSurface } from '@/lib/bank-feed/return-url'
+import type { BankConnectReturnSurface, BankConnectReturnTarget } from '@/lib/bank-feed/return-url'
 import type { FlowMode } from './flow-steps'
 import type { OpenFlowOptions } from './connect-flow-reducer'
 
@@ -15,8 +15,13 @@ export interface BankConnectSession {
   key: number
   mode: FlowMode
   options: BankConnectOptions
-  /** The entry point this dialog belongs to: where a bank's own page sends the browser back. Null when the surface has no page of its own. */
-  returnTo: BankConnectReturnSurface | null
+  /**
+   * The entry point this flow belongs to: where a bank's own page sends the
+   * browser back. Null when the surface has no page of its own. The signatory
+   * page (app/koppla/[token]) is its own target, built from the link's token
+   * by the token routes.
+   */
+  returnTo: BankConnectReturnTarget | null
 }
 
 export interface BankConnectFlow {

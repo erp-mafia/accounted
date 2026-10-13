@@ -316,6 +316,13 @@ async function updateSessionInner(
     return supabaseResponse
   }
 
+  // The signatory link: a firmatecknare opens /koppla/<token> to give the
+  // bank consent for a company without an account (the token is resolved
+  // server-side against bank_connect_invites). See app/koppla/[token]/page.tsx.
+  if (pathname.startsWith('/koppla')) {
+    return supabaseResponse
+  }
+
   // Reset-password is reachable in both auth states. The recovery flow lands
   // here with a fresh session (created by the OTP exchange in /auth/callback)
   // precisely so the user can call supabase.auth.updateUser({ password }). If

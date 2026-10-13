@@ -33,7 +33,8 @@ interface BankIdStepProps {
   onSignAsSignatory: (method: ConnectMethod) => void
   /** Leave for the bank's own page (the top window, never a popup). */
   onContinueToBank: (url: string) => void
-  onCopyReminder: () => void
+  /** Copy the link a second signatory opens; absent where no such link exists (the signatory page), and the offer is not shown. */
+  onCopyReminder?: () => void
   closeButton: React.ReactNode
 }
 
@@ -174,18 +175,22 @@ export function BankIdStep({
           <p className="text-center text-[13px] leading-relaxed">{t('partially_authorised_sign')}</p>
           {personalNumberField}
           {state.startError && <AttnLine>{state.startError}</AttnLine>}
-          <div className="text-center">
-            <button type="button" onClick={onCopyReminder} className="text-[12.5px] underline underline-offset-2 hover:opacity-80">
-              {t('send_reminder')}
-            </button>
-          </div>
+          {onCopyReminder && (
+            <div className="text-center">
+              <button type="button" onClick={onCopyReminder} className="text-[12.5px] underline underline-offset-2 hover:opacity-80">
+                {t('send_reminder')}
+              </button>
+            </div>
+          )}
         </div>
       ) : partial ? (
         <div className="space-y-3 text-center">
           <p className="text-[13px] leading-relaxed">{t('partially_authorised')}</p>
-          <button type="button" onClick={onCopyReminder} className="text-[12.5px] underline underline-offset-2 hover:opacity-80">
-            {t('send_reminder')}
-          </button>
+          {onCopyReminder && (
+            <button type="button" onClick={onCopyReminder} className="text-[12.5px] underline underline-offset-2 hover:opacity-80">
+              {t('send_reminder')}
+            </button>
+          )}
         </div>
       ) : state.confirmed ? (
         <p className="text-center text-[13px] text-muted-foreground">{t('activating')}</p>

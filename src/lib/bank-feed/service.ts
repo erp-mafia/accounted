@@ -56,7 +56,7 @@ import { openBankFeedDoor } from './door'
 import { consentFailureText } from './failure-text'
 import { runOpenPaymentsSync } from './feed'
 import { accountContextOf, buildBankFeedParty, psuTypeOf, UNATTENDED_SIGNER, type BankFeedSignerInput, type PsuType } from './party'
-import { bankConnectReturnUrl, type BankConnectReturnSurface } from './return-url'
+import { BANK_CONNECT_SIGNATORY_TARGET, bankConnectReturnUrl, type BankConnectReturnTarget } from './return-url'
 import { normalizeIban, type BankFeedAccount } from './sync'
 
 /** BankID in our screen (same_device, qr) or on the bank's own page (redirect). */
@@ -168,7 +168,7 @@ export interface ConsentAttempt {
   replace_connection_id?: string | null
   extended_history_days?: number | null
   /** Redirect: the entry point the browser comes back to, so a restart needs no body. */
-  return_to?: BankConnectReturnSurface | null
+  return_to?: BankConnectReturnTarget | null
   /** Svea: the listing consent, ended once the second consent (naming the chosen accounts) is valid. */
   listing_consent_id?: string | null
   /** Kept through finalize for the selection step (listing_only, replace_connection_id, extended_history_days, and Svea's chosen accounts). */
@@ -178,7 +178,7 @@ export interface ConsentAttempt {
     extended_history_days?: number | null
     accounts?: Array<{ uid: string; enabled: boolean; ledger_account: string | null }>
     method?: ConsentMethod
-    return_to?: BankConnectReturnSurface | null
+    return_to?: BankConnectReturnTarget | null
   }
 }
 
@@ -456,8 +456,10 @@ export interface StartInput {
   /** The connection this one replaces: an Enable Banking row (switch, handed over at account selection) or an Open Payments row (renewal, superseded when the new consent is valid). */
   replaceConnectionId?: string | null
   /** Redirect: the entry point to come back to, and the app origin the request came to (the route resolves it). */
-  returnTo?: BankConnectReturnSurface | null
+  returnTo?: BankConnectReturnTarget | null
   returnOrigin?: string | null
+  /** The signatory page's link token: its return URL is built from it (the koppla target only). */
+  returnToken?: string | null
   now?: number
 }
 
@@ -469,14 +471,18 @@ interface RenewedConnection {
   psu_type: string | null
 }
 
-/** Where a redirect signing sends the browser back: the entry point, on the resolved app origin. */
+/** Where a redirect signing sends the browser back: the entry point, on the resolved app origin; the signatory page carries its link token. */
 interface SigningReturn {
-  surface: BankConnectReturnSurface
+  surface: BankConnectReturnTarget
   origin: string
+  token: string | null
 }
 
-function signingReturn(surface: BankConnectReturnSurface | null | undefined, origin: string | null | undefined): SigningReturn | null {
-  return surface && origin ? { surface, origin } : null
+function signingReturn(surface: BankConnectReturnTarget | null | undefined, origin: string | null | undefined, token?: string | null): SigningReturn | null {
+  if (!surface || !origin) return null
+  // The signatory page is reachable only through its link: without the token there is no page to come back to.
+  if (surface === BANK_CONNECT_SIGNATORY_TARGET && !token) return null
+  return { surface, origin, token: token ?? null }
 }
 
 const RETURN_REQUIRED: Failure = { ok: false, code: 'VALIDATION_ERROR', details: { field: 'return_to', reason: 'required_for_redirect' } }
@@ -496,7 +502,7 @@ async function startSigning(
       party,
       consentId: row.session_id!,
       method,
-      ...(method === 'redirect' && ret ? { returnUrl: bankConnectReturnUrl(ret.origin, ret.surface, row.id), returnState: row.id } : {}),
+      ...(method === 'redirect' && ret ? { returnUrl: bankConnectReturnUrl(ret.origin, ret.surface, row.id, { token: ret.token }), returnState: row.id } : {}),
     })
   } catch (error) {
     return providerFailure(error)
@@ -581,7 +587,7 @@ export async function startBankFeedConsent(ctx: OperationContext, input: StartIn
   // caller said where to come back to; a bank that also signs in our screen
   // keeps the method the person chose. Decided before anything is created,
   // so a redirect without a return leaves no consent behind.
-  const ret = signingReturn(input.returnTo, input.returnOrigin)
+  const ret = signingReturn(input.returnTo, input.returnOrigin, input.returnToken)
   const method: ConsentMethod = bank.decoupled === false && bank.redirect === true && ret ? 'redirect' : input.method
   if (method === 'redirect' && !ret) return RETURN_REQUIRED
 
@@ -676,8 +682,10 @@ export async function restartBankFeedConsent(
     method?: ConsentMethod | null
     signer?: BankFeedSignerInput
     /** Redirect: the entry point to come back to (the row's own when absent) and the app origin the request came to. */
-    returnTo?: BankConnectReturnSurface | null
+    returnTo?: BankConnectReturnTarget | null
     returnOrigin?: string | null
+    /** The signatory page's link token (the koppla target only). */
+    returnToken?: string | null
     now?: number
   },
 ): Promise<OperationOutcome<StartView>> {
@@ -686,7 +694,7 @@ export async function restartBankFeedConsent(
   const row = await loadRow(ctx, input.connectionId)
   if (!row) return { ok: false, code: 'NOT_FOUND' }
   if (row.status !== 'pending' || !row.session_id || !row.bic) return { ok: false, code: 'BANK_CONSENT_CHANGED' }
-  const ret = signingReturn(input.returnTo ?? row.consent_attempt?.return_to, input.returnOrigin)
+  const ret = signingReturn(input.returnTo ?? row.consent_attempt?.return_to, input.returnOrigin, input.returnToken)
   // The bank imposed its own page on the last attempt (SCA_REDIRECT_UNSUPPORTED):
   // "starta om och välj bankens sida" is this restart, so it goes there when
   // the browser said where to come back to, whatever method it asked for.
@@ -1037,8 +1045,10 @@ export async function selectBankFeedAccounts(
     method?: ConsentMethod | null
     signer?: BankFeedSignerInput
     /** Svea's second consent may sign on the bank's page: the entry point to come back to and the app origin the request came to, as for start. */
-    returnTo?: BankConnectReturnSurface | null
+    returnTo?: BankConnectReturnTarget | null
     returnOrigin?: string | null
+    /** The signatory page's link token (the koppla target only). */
+    returnToken?: string | null
     keepAlive?: (work: Promise<unknown>) => void
     now?: number
   },
@@ -1067,7 +1077,7 @@ export async function selectBankFeedAccounts(
     // page when that is the only way it signs and the browser said where
     // to come back to, else with the person's method. The bank's details
     // come from the adapter's cache.
-    const ret = signingReturn(input.returnTo ?? row.consent_attempt?.selection?.return_to ?? row.consent_attempt?.return_to, input.returnOrigin)
+    const ret = signingReturn(input.returnTo ?? row.consent_attempt?.selection?.return_to ?? row.consent_attempt?.return_to, input.returnOrigin, input.returnToken)
     const requested = input.method ?? row.consent_attempt?.selection?.method ?? 'qr'
     let redirectOnly = false
     if (row.bic) {

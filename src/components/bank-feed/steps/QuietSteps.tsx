@@ -37,7 +37,8 @@ interface PaymentsStepProps {
   state: FlowState
   busy: 'verify' | 'mail' | null
   onVerifyNow: () => void
-  onSendToSignatory: () => void
+  /** Hand the form over by mail; absent where the signatory is the one at the screen (the signatory page). */
+  onSendToSignatory?: () => void
   onSkip: () => void
 }
 
@@ -71,9 +72,11 @@ export function PaymentsStep({ state, busy, onVerifyNow, onSendToSignatory, onSk
         </Button>
         {!verified && (
           <>
-            <Button variant="secondary" onClick={onSendToSignatory} loading={busy === 'mail'} disabled={busy !== null}>
-              {t('send_to_signatory')}
-            </Button>
+            {onSendToSignatory && (
+              <Button variant="secondary" onClick={onSendToSignatory} loading={busy === 'mail'} disabled={busy !== null}>
+                {t('send_to_signatory')}
+              </Button>
+            )}
             <Button onClick={onVerifyNow} loading={busy === 'verify'} disabled={busy !== null}>
               {t('verify_now')}
             </Button>

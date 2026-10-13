@@ -10,7 +10,7 @@
  * person at the bank and is rendered, never printed.
  */
 
-import type { BankConnectReturnSurface } from '@/lib/bank-feed/return-url'
+import type { BankConnectReturnTarget } from '@/lib/bank-feed/return-url'
 
 /** One bank as GET /api/bank/open-payments/banks lists it. Svea Bank comes with nulls. */
 export interface OpenPaymentsBank {
@@ -50,8 +50,8 @@ export type ConsentStep = 'identify' | 'consent'
 /** BankID in our screen (qr, same_device) or on the bank's own page (redirect). */
 export type ConnectMethod = 'qr' | 'same_device' | 'redirect'
 
-/** The entry point a redirect signing comes back to (lib/bank-feed/return-url.ts). */
-export type ReturnSurface = BankConnectReturnSurface
+/** The entry point a redirect signing comes back to (lib/bank-feed/return-url.ts); the signatory page is its own target. */
+export type ReturnSurface = BankConnectReturnTarget
 
 export type AccountContext = 'corporate' | 'private'
 
@@ -244,7 +244,13 @@ export function isBankBusy(error: unknown): boolean {
   return error instanceof OpenPaymentsClientError && error.code === BANK_BUSY_CODE
 }
 
-const BASE = '/api/bank/open-payments'
+/** The session routes, for a logged-in member of the active company. */
+export const OPEN_PAYMENTS_SESSION_BASE = '/api/bank/open-payments'
+
+/** The token routes a firmatecknare reaches without a login (app/api/koppla/[token]); same bodies, same envelopes. */
+export function openPaymentsSignatoryBase(token: string): string {
+  return `/api/koppla/${encodeURIComponent(token)}`
+}
 
 async function send<T>(input: string, init?: RequestInit): Promise<T> {
   const res = await fetch(input, {
@@ -264,23 +270,82 @@ async function send<T>(input: string, init?: RequestInit): Promise<T> {
 export type OpenPaymentsAvailability = { available: true; banks: OpenPaymentsBank[] } | { available: false; banks: null }
 
 /**
- * Whether the company may read its bank through Open Payments, and the banks
- * when it may. The banks route answers 403 OPEN_BANKING_NOT_AVAILABLE for a
- * company that is not switched on; any other failure also hides the entry
- * points, since a button that leads to an error is worse than none.
+ * The calls the Koppla banken flow makes, bound to one base path: the
+ * session routes for the dialog, the token routes for the signatory page.
+ * Both answer the same shapes, so the flow controller takes an
+ * OpenPaymentsApi and never knows which door it talks through.
  */
-export async function fetchOpenPaymentsAvailability(signal?: AbortSignal): Promise<OpenPaymentsAvailability> {
-  try {
-    const { banks } = await send<{ banks: OpenPaymentsBank[] }>(`${BASE}/banks`, { signal })
-    return { available: true, banks }
-  } catch (error) {
-    if (error instanceof OpenPaymentsClientError) return { available: false, banks: null }
-    throw error
+export interface OpenPaymentsApi {
+  fetchAvailability(signal?: AbortSignal): Promise<OpenPaymentsAvailability>
+  fetchBankDetails(bic: string, signal?: AbortSignal): Promise<OpenPaymentsBankDetails>
+  fetchConnection(connectionId: string, signal?: AbortSignal): Promise<ConnectionView>
+  createConnection(input: CreateConnectionInput): Promise<CreateConnectionResult>
+  /** The poll repeats the typed personnummer: the bank wants the PSU named on every call about the consent. */
+  pollConnection(connectionId: string, signal?: AbortSignal, signer?: Pick<SignerInput, 'personal_number'>): Promise<ConnectionPoll>
+  restartConnection(connectionId: string, signer?: SignerInput): Promise<CreateConnectionResult>
+  selectAccounts(connectionId: string, accounts: AccountSelection[], signer?: SignerInput): Promise<SelectAccountsResult>
+  syncConnection(connectionId: string): Promise<SyncResult>
+  deleteConnection(connectionId: string): Promise<{ connection_id: string }>
+}
+
+export function createOpenPaymentsApi(base: string): OpenPaymentsApi {
+  const connection = (connectionId: string) => `${base}/connections/${encodeURIComponent(connectionId)}`
+  return {
+    /**
+     * Whether the company may read its bank through Open Payments, and the
+     * banks when it may. The banks route answers 403 OPEN_BANKING_NOT_AVAILABLE
+     * for a company that is not switched on; any other failure also hides the
+     * entry points, since a button that leads to an error is worse than none.
+     */
+    async fetchAvailability(signal) {
+      try {
+        const { banks } = await send<{ banks: OpenPaymentsBank[] }>(`${base}/banks`, { signal })
+        return { available: true, banks }
+      } catch (error) {
+        if (error instanceof OpenPaymentsClientError) return { available: false, banks: null }
+        throw error
+      }
+    },
+    fetchBankDetails(bic, signal) {
+      return send<OpenPaymentsBankDetails>(`${base}/banks/${encodeURIComponent(bic)}`, { signal })
+    },
+    fetchConnection(connectionId, signal) {
+      return send<ConnectionView>(connection(connectionId), { signal })
+    },
+    createConnection(input) {
+      return send<CreateConnectionResult>(`${base}/connections`, { method: 'POST', body: JSON.stringify(input) })
+    },
+    pollConnection(connectionId, signal, signer = {}) {
+      return send<ConnectionPoll>(`${connection(connectionId)}/poll`, {
+        method: 'POST',
+        body: JSON.stringify(signer.personal_number ? { personal_number: signer.personal_number } : {}),
+        signal,
+      })
+    },
+    restartConnection(connectionId, signer = {}) {
+      return send<CreateConnectionResult>(`${connection(connectionId)}/restart`, { method: 'POST', body: JSON.stringify(signer) })
+    },
+    selectAccounts(connectionId, accounts, signer = {}) {
+      return send<SelectAccountsResult>(`${connection(connectionId)}/select`, { method: 'POST', body: JSON.stringify({ accounts, ...signer }) })
+    },
+    syncConnection(connectionId) {
+      return send<SyncResult>(`${connection(connectionId)}/sync`, { method: 'POST', body: JSON.stringify({}) })
+    },
+    deleteConnection(connectionId) {
+      return send<{ connection_id: string }>(connection(connectionId), { method: 'DELETE' })
+    },
   }
 }
 
+/** The session door, used by the settings rows, the onboarding step and the dialog. */
+export const sessionOpenPaymentsApi: OpenPaymentsApi = createOpenPaymentsApi(OPEN_PAYMENTS_SESSION_BASE)
+
+export function fetchOpenPaymentsAvailability(signal?: AbortSignal): Promise<OpenPaymentsAvailability> {
+  return sessionOpenPaymentsApi.fetchAvailability(signal)
+}
+
 export function fetchOpenPaymentsBankDetails(bic: string, signal?: AbortSignal): Promise<OpenPaymentsBankDetails> {
-  return send<OpenPaymentsBankDetails>(`${BASE}/banks/${encodeURIComponent(bic)}`, { signal })
+  return sessionOpenPaymentsApi.fetchBankDetails(bic, signal)
 }
 
 /** One Enable Banking connection the switch campaign still waits for (GET .../switch-progress). */
@@ -314,48 +379,39 @@ export interface BankSwitchProgressView {
 }
 
 export function fetchBankSwitchProgress(signal?: AbortSignal): Promise<BankSwitchProgressView> {
-  return send<BankSwitchProgressView>(`${BASE}/switch-progress`, { signal })
+  return send<BankSwitchProgressView>(`${OPEN_PAYMENTS_SESSION_BASE}/switch-progress`, { signal })
 }
 
+/** The company's Open Payments connections and whether the person has a signer on file (session door only). */
 export function fetchOpenPaymentsOverview(signal?: AbortSignal): Promise<OpenPaymentsOverview> {
-  return send<OpenPaymentsOverview>(`${BASE}/connections`, { signal })
+  return send<OpenPaymentsOverview>(`${OPEN_PAYMENTS_SESSION_BASE}/connections`, { signal })
 }
 
 export function fetchOpenPaymentsConnection(connectionId: string, signal?: AbortSignal): Promise<ConnectionView> {
-  return send<ConnectionView>(`${BASE}/connections/${encodeURIComponent(connectionId)}`, { signal })
+  return sessionOpenPaymentsApi.fetchConnection(connectionId, signal)
 }
 
 export function createOpenPaymentsConnection(input: CreateConnectionInput): Promise<CreateConnectionResult> {
-  return send<CreateConnectionResult>(`${BASE}/connections`, { method: 'POST', body: JSON.stringify(input) })
+  return sessionOpenPaymentsApi.createConnection(input)
 }
 
 /** The poll repeats the typed personnummer: the bank wants the PSU named on every call about the consent. */
 export function pollOpenPaymentsConnection(connectionId: string, signal?: AbortSignal, signer: Pick<SignerInput, 'personal_number'> = {}): Promise<ConnectionPoll> {
-  return send<ConnectionPoll>(`${BASE}/connections/${encodeURIComponent(connectionId)}/poll`, {
-    method: 'POST',
-    body: JSON.stringify(signer.personal_number ? { personal_number: signer.personal_number } : {}),
-    signal,
-  })
+  return sessionOpenPaymentsApi.pollConnection(connectionId, signal, signer)
 }
 
 export function restartOpenPaymentsConnection(connectionId: string, signer: SignerInput = {}): Promise<CreateConnectionResult> {
-  return send<CreateConnectionResult>(`${BASE}/connections/${encodeURIComponent(connectionId)}/restart`, {
-    method: 'POST',
-    body: JSON.stringify(signer),
-  })
+  return sessionOpenPaymentsApi.restartConnection(connectionId, signer)
 }
 
 export function selectOpenPaymentsAccounts(connectionId: string, accounts: AccountSelection[], signer: SignerInput = {}): Promise<SelectAccountsResult> {
-  return send<SelectAccountsResult>(`${BASE}/connections/${encodeURIComponent(connectionId)}/select`, {
-    method: 'POST',
-    body: JSON.stringify({ accounts, ...signer }),
-  })
+  return sessionOpenPaymentsApi.selectAccounts(connectionId, accounts, signer)
 }
 
 export function syncOpenPaymentsConnection(connectionId: string): Promise<SyncResult> {
-  return send<SyncResult>(`${BASE}/connections/${encodeURIComponent(connectionId)}/sync`, { method: 'POST', body: JSON.stringify({}) })
+  return sessionOpenPaymentsApi.syncConnection(connectionId)
 }
 
 export function deleteOpenPaymentsConnection(connectionId: string): Promise<{ connection_id: string }> {
-  return send<{ connection_id: string }>(`${BASE}/connections/${encodeURIComponent(connectionId)}`, { method: 'DELETE' })
+  return sessionOpenPaymentsApi.deleteConnection(connectionId)
 }

@@ -8,6 +8,7 @@ import { HandCoins, Landmark, Store } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { BankConnectDialog } from '@/components/bank-feed/BankConnectDialog'
 import { OpenPaymentsConnectionRow } from '@/components/bank-feed/OpenPaymentsConnectionRows'
+import { SignatoryLinkDialog, useSignatoryLinkFlow } from '@/components/bank-feed/SignatoryLinkDialog'
 import { useBankConnectFlow } from '@/components/bank-feed/use-bank-connect-flow'
 import { useBankConnectResume } from '@/components/bank-feed/use-bank-connect-resume'
 import { useOpenPaymentsAvailability } from '@/components/bank-feed/use-open-payments-availability'
@@ -77,7 +78,7 @@ export function ConnectionsSettingsContent() {
   const t = useTranslations('settings_connections')
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
-  const { company, isSandbox } = useCompany()
+  const { company, isSandbox, role } = useCompany()
   const companyId = company?.id ?? null
   const [status, setStatus] = useState<Status | null>(null)
   // Påminnelser och inkasso shows only where the installation offers it to
@@ -93,6 +94,11 @@ export function ConnectionsSettingsContent() {
   const openPayments = useOpenPaymentsAvailability()
   const opAvailable = openPayments.status === 'available' && !isSandbox
   const bankFlow = useBankConnectFlow('connections')
+  // The signatory link: a firmatecknare who holds the bank access signs the
+  // consent from a link, without a login. Owners and admins send it (the
+  // route and the table's policy say the same).
+  const signatoryLink = useSignatoryLinkFlow()
+  const canInvite = role === 'owner' || role === 'admin'
   const bankConnections = useOpenPaymentsConnections(opAvailable ? companyId : null)
   const [bankGeneration, setBankGeneration] = useState(0)
   // A second signatory arrives with ?bank_connect=<id> (the reminder link),
@@ -284,6 +290,11 @@ export function ConnectionsSettingsContent() {
                 <Link href="/settings/banking">{t('open')}</Link>
               </Button>
             )}
+            {canInvite && (
+              <Button variant="outline" size="sm" onClick={() => signatoryLink.open()}>
+                {t('send_signatory_link')}
+              </Button>
+            )}
             <Button size="sm" onClick={() => bankFlow.open('new')}>
               {t('connect_bank')}
             </Button>
@@ -315,6 +326,11 @@ export function ConnectionsSettingsContent() {
                     <Button variant="outline" size="sm" asChild>
                       <Link href="/settings/banking">{t('manage')}</Link>
                     </Button>
+                    {canInvite && (
+                      <Button variant="outline" size="sm" onClick={() => signatoryLink.open({ bank: { bic: null, name: connection.bank_name }, replaceConnectionId: connection.id })}>
+                        {t('send_signatory_link')}
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       onClick={() => bankFlow.open('switch', { bank: { bic: '', name: connection.bank_name ?? '' }, replaceConnectionId: connection.id, deadline: switchDeadline })}
@@ -490,14 +506,17 @@ export function ConnectionsSettingsContent() {
       ) : null}
 
       {opAvailable && (
-        <BankConnectDialog
-          flow={bankFlow}
-          onConnected={() => {
-            bankConnections.refresh()
-            switchCampaign.refresh()
-            setBankGeneration((g) => g + 1)
-          }}
-        />
+        <>
+          <BankConnectDialog
+            flow={bankFlow}
+            onConnected={() => {
+              bankConnections.refresh()
+              switchCampaign.refresh()
+              setBankGeneration((g) => g + 1)
+            }}
+          />
+          <SignatoryLinkDialog flow={signatoryLink} />
+        </>
       )}
     </div>
   )
