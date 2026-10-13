@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 import { eventBus } from '@/lib/events/bus'
 import { MCP_TOOL_CAPABILITY_MAP } from '@/lib/entitlements/keys'
+import { setBankFeedConnectForTests, type BankFeedConnect } from '@/lib/bank-feed/connect'
 import { tools } from '../server'
 
 // Onboarding connect-link tools (issue #1814 PR 3): status + the browser link
@@ -11,6 +12,17 @@ import { tools } from '../server'
 const COMPANY_ID = '11111111-1111-4111-8111-111111111111'
 const bankTool = tools.find((t) => t.name === 'gnubok_connect_bank')!
 const skvTool = tools.find((t) => t.name === 'gnubok_connect_skatteverket')!
+
+/** Open the Open Payments door for COMPANY_ID: a connector with these banks, and the company on the pilot list. */
+function openDoor(banks: Array<{ bic: string; name: string }> | Error = [{ bic: 'SWEDSESS', name: 'Swedbank' }, { bic: 'ESSESESS', name: 'SEB' }]) {
+  vi.stubEnv('OPENPAYMENTS_READING_COMPANY_IDS', COMPANY_ID)
+  setBankFeedConnectForTests({
+    banks: async () => {
+      if (banks instanceof Error) throw banks
+      return banks.map((b) => ({ ...b, logoUrl: null, decoupled: true, redirect: false }))
+    },
+  } as unknown as BankFeedConnect)
+}
 
 function listClient(rows: unknown[] | null, error: unknown = null) {
   const chain: Record<string, ReturnType<typeof vi.fn>> = {
@@ -33,6 +45,7 @@ describe('onboarding connect-link tools', () => {
   })
   afterEach(() => {
     vi.unstubAllEnvs()
+    setBankFeedConnectForTests(undefined)
   })
 
   it('are read-only companies:read tools gated on the capability their link needs', () => {
@@ -104,6 +117,7 @@ describe('onboarding connect-link tools', () => {
       {
         connection_id: 'c1',
         bank: 'Swedbank',
+        aggregator: 'enable_banking',
         status: 'active',
         since: '2026-08-01T00:00:00Z',
         last_synced_at: '2026-08-30T05:00:00Z',
@@ -112,6 +126,78 @@ describe('onboarding connect-link tools', () => {
       },
     ])
     expect(result.instructions).toContain('last_synced_at')
+    // Door closed: no switch link, no Open Payments prose.
+    expect(result.connections).toEqual([expect.not.objectContaining({ switch_url: expect.anything() })])
+    expect(result.instructions).not.toContain('Open Payments')
+  })
+
+  describe('with the Open Payments door open', () => {
+    const ENABLE_BANKING_ROW = {
+      id: 'c1',
+      bank_name: 'Swedbank',
+      aggregator: 'enable_banking',
+      status: 'active',
+      created_at: '2026-08-01T00:00:00Z',
+      last_synced_at: '2026-08-30T05:00:00Z',
+      consent_expires: '2026-11-01T00:00:00Z',
+      error_message: null,
+    }
+    const OPEN_PAYMENTS_ROW = { ...ENABLE_BANKING_ROW, id: 'c2', bank_name: 'SEB', aggregator: 'open_payments' }
+
+    it('hands out the Koppla banken deep link, the picker when no bank is named', async () => {
+      openDoor()
+      const { from } = listClient([])
+      const result = (await bankTool.execute({}, COMPANY_ID, 'user-1', { from } as never)) as Record<string, unknown>
+      expect(result.connect_url).toBe('https://app.example.test/settings/connections?bank_connect=new')
+      expect(result.instructions).toContain('BankID')
+      expect(result.instructions).toContain('180 days')
+      expect(result.instructions).toContain('CONFIRMS WHICH ACCOUNTS')
+      expect(result.instructions).toContain('know-your-customer')
+      expect(result.instructions).toContain('gnubok_bank_feed_connect_link')
+      // No Enable Banking rows: nothing about a switch.
+      expect(result.instructions).not.toContain('switch_url')
+    })
+
+    it('preselects a named bank by its BIC when the bank list resolves it', async () => {
+      openDoor()
+      const { from } = listClient([])
+      const result = (await bankTool.execute({ bank: 'seb' }, COMPANY_ID, 'user-1', { from } as never)) as Record<string, unknown>
+      expect(result.connect_url).toBe('https://app.example.test/settings/connections?bank_connect=new&bic=ESSESESS')
+    })
+
+    it('falls back to the picker for a bank the list does not know, and when the list cannot be read', async () => {
+      openDoor()
+      const unknown = (await bankTool.execute({ bank: 'Monopolbanken' }, COMPANY_ID, 'user-1', { from: listClient([]).from } as never)) as Record<string, unknown>
+      expect(unknown.connect_url).toBe('https://app.example.test/settings/connections?bank_connect=new')
+
+      openDoor(new Error('provider down'))
+      const failed = (await bankTool.execute({ bank: 'Swedbank' }, COMPANY_ID, 'user-1', { from: listClient([]).from } as never)) as Record<string, unknown>
+      expect(failed.connect_url).toBe('https://app.example.test/settings/connections?bank_connect=new')
+    })
+
+    it('gives every connection its aggregator and Enable Banking rows the one-click switch link', async () => {
+      openDoor()
+      const { from } = listClient([ENABLE_BANKING_ROW, OPEN_PAYMENTS_ROW])
+      const result = (await bankTool.execute({}, COMPANY_ID, 'user-1', { from } as never)) as {
+        connections: Array<Record<string, unknown>>
+        instructions: string
+      }
+      expect(result.connections).toEqual([
+        expect.objectContaining({ connection_id: 'c1', aggregator: 'enable_banking', switch_url: 'https://app.example.test/settings/connections?bank_connect_switch=c1' }),
+        expect.objectContaining({ connection_id: 'c2', aggregator: 'open_payments' }),
+      ])
+      expect(result.connections[1]).not.toHaveProperty('switch_url')
+      expect(result.instructions).toContain('one click')
+      expect(result.instructions).toContain('gnubok_bank_feed_switch_progress')
+    })
+
+    it('keeps the Enable Banking link when the company is not on the pilot list', async () => {
+      openDoor()
+      vi.stubEnv('OPENPAYMENTS_READING_COMPANY_IDS', '22222222-2222-4222-8222-222222222222')
+      const { from } = listClient([])
+      const result = (await bankTool.execute({ bank: 'Swedbank' }, COMPANY_ID, 'user-1', { from } as never)) as Record<string, unknown>
+      expect(result.connect_url).toBe('https://app.example.test/import?mode=psd2&bank=Swedbank')
+    })
   })
 
   it('bank: surfaces the error_message and null sync stamp on a dead connection', async () => {

@@ -2,13 +2,16 @@
  * Reading a bank with BankID through Open Payments (lib/bank-feed): the
  * operations behind the dashboard routes under /api/bank/open-payments.
  *
- * None of them has a machine door yet: a BankID consent is the account
- * holder's own act (start, poll, restart, select are ui-only in
- * session-route-parity), the sync is already served for every aggregator by
- * POST /bank-connections/:id/sync and gnubok_sync_bank, and removing a
- * connection is a P3 gap exactly as for Enable Banking. They are defined here
- * so the request contract, the rules and the outcome live in one place and
- * a door can be added by binding, not by copying.
+ * The reads (banks, bank, overview, switch-progress) and the signatory link
+ * (invite) have v1 and MCP doors, so an agent or an API client sees the same
+ * connections, banks and switch state as the Kopplingar page and can hand a
+ * person the right link to connect, switch or renew. The BankID act itself
+ * never has a machine door: start, poll, restart and select are the account
+ * holder's own (ui-only in session-route-parity), disconnect is a P3 gap
+ * exactly as for Enable Banking, and the sync is already served for every
+ * aggregator by POST /bank-connections/:id/sync and gnubok_sync_bank (both
+ * fall through to the Open Payments runner), so bank-feed.sync binds nothing
+ * rather than a second door for the same call.
  */
 import { z } from 'zod'
 import {
@@ -23,13 +26,15 @@ import {
   syncBankFeedConnection,
 } from '@/lib/bank-feed/service'
 import { openBankFeedDoor } from '@/lib/bank-feed/door'
-import { issueSignatoryLink } from '@/lib/bank-feed/invites'
+import { BANK_CONNECT_INVITE_TTL_DAYS, issueSignatoryLink, previewSignatoryLink } from '@/lib/bank-feed/invites'
 import type { BankFeedSignerInput } from '@/lib/bank-feed/party'
 import { BANK_CONNECT_RETURN_SURFACES } from '@/lib/bank-feed/return-url'
 import { getBankSwitchProgress } from '@/lib/bank-feed/switch-campaign'
-import { isCompanyAdmin } from '@/lib/auth/require-write'
 import { createServiceClient } from '@/lib/supabase/server'
+import { requireCompanyAdmin } from './access'
 import { defineOperation } from './types'
+
+const V1 = '/api/v1/companies/:companyId/bank-feed'
 
 const CONNECTION_ID = z.string().uuid().describe('The bank connection (bank_connections.id).')
 const BIC = z.string().regex(/^[A-Z0-9]{8}([A-Z0-9]{3})?$/).describe('The bank, as its BIC (8 or 11 characters).')
@@ -134,6 +139,16 @@ export const bankFeedBanks = defineOperation({
   input: z.object({}),
   output: z.object({ banks: z.array(z.object({ bic: z.string(), name: z.string(), logo_url: z.string().nullable(), decoupled: z.boolean().nullable(), redirect: z.boolean().nullable() })) }),
   errorCodes: ['OPEN_BANKING_NOT_AVAILABLE', 'BANK_PROVIDER_UNAVAILABLE', 'BANK_PROVIDER_REFUSED'],
+  http: { method: 'GET', path: `${V1}/banks` },
+  mcp: {
+    name: 'gnubok_list_bank_feed_banks',
+    title: 'List Bank Feed Banks',
+    description:
+      'The banks a company can connect with BankID through Open Payments (koppla bank, bankkoppling): BIC, name, whether BankID is signed in our screen. ' +
+      'Use the BIC in the connect link from gnubok_connect_bank. OPEN_BANKING_NOT_AVAILABLE when the company is not switched on.',
+    visibility: 'search',
+    keywords: ['banker', 'vilka banker', 'koppla bank', 'bankkoppling', 'open payments', 'bic', 'sparbank', 'byt bank'],
+  },
   run: async (ctx) => listBankFeedBanks(ctx),
 })
 
@@ -148,8 +163,8 @@ export const bankFeedBank = defineOperation({
     description: 'Whether the bank signs BankID in our screen (decoupled) or on its own page (redirect), how many days of history it serves, and the savings banks reached through it (Swedbank: the sparbanker and Ölands Bank). Answered from a 24 h cache.',
     useWhen: 'After a bank is picked and before BankID starts: to show the sparbank picker and choose the signing method.',
     doNotUseFor: 'Listing banks (bank-feed.banks).',
-    pitfalls: ['A sparbank is connected through SWEDSESS with its affiliate id from this answer.'],
-    example: { response: { data: { bic: 'SWEDSESS', name: 'Swedbank', decoupled: true, redirect: true, affiliates: [{ id: '08999', name: 'Sparbanken Nord' }], transaction_history_max_days: 88, extended_transaction_history_max_days: 760 } } },
+    pitfalls: ['A sparbank is connected through SWEDSESS with its affiliate_id from this answer.', 'The BIC is upper case (SWEDSESS, not swedsess).'],
+    example: { response: { data: { bic: 'SWEDSESS', name: 'Swedbank', decoupled: true, redirect: true, affiliates: [{ affiliate_id: '08999', name: 'Sparbanken Nord' }], transaction_history_max_days: 88, extended_transaction_history_max_days: 760 } } },
   },
   input: z.object({ bic: BIC }),
   output: z.object({
@@ -157,12 +172,28 @@ export const bankFeedBank = defineOperation({
     name: z.string(),
     decoupled: z.boolean().nullable(),
     redirect: z.boolean().nullable(),
-    affiliates: z.array(z.object({ id: z.string(), name: z.string() })),
+    affiliates: z.array(z.object({ affiliate_id: z.string(), name: z.string() })),
     transaction_history_max_days: z.number().int().nullable(),
     extended_transaction_history_max_days: z.number().int().nullable(),
   }),
   errorCodes: ['OPEN_BANKING_NOT_AVAILABLE', 'BANK_CONSENT_UNKNOWN_BANK', 'BANK_PROVIDER_UNAVAILABLE', 'BANK_PROVIDER_REFUSED'],
-  run: async (ctx, input) => getBankFeedBankDetails(ctx, input.bic),
+  http: { method: 'GET', path: `${V1}/banks/:bic`, pathParams: { bic: 'bic' } },
+  mcp: {
+    name: 'gnubok_get_bank_feed_bank',
+    title: 'Get Bank Feed Bank',
+    description:
+      'One bank as Open Payments reaches it: how BankID is signed there (in our screen or on the bank\'s page), how many days of history it serves, ' +
+      'and the sparbanker behind a shared BIC (Swedbank). Call gnubok_list_bank_feed_banks for the BIC first.',
+    visibility: 'search',
+    keywords: ['bank', 'sparbank', 'bankid signering', 'bankkoppling', 'koppla bank', 'open payments', 'historik bank'],
+  },
+  run: async (ctx, input) => {
+    const outcome = await getBankFeedBankDetails(ctx, input.bic)
+    if (!outcome.ok || outcome.dryRun) return outcome
+    // The doors qualify every identifier (qualified-ids.test.ts); the
+    // dashboard client keeps the service's `id`.
+    return { ok: true, data: { ...outcome.data, affiliates: outcome.data.affiliates.map((a) => ({ affiliate_id: a.id, name: a.name })) } }
+  },
 })
 
 export const bankFeedOverview = defineOperation({
@@ -186,6 +217,16 @@ export const bankFeedOverview = defineOperation({
     connections: z.array(ConnectionOut),
     signer_known: z.boolean(),
   }),
+  http: { method: 'GET', path: V1 },
+  mcp: {
+    name: 'gnubok_bank_feed_overview',
+    title: 'Bank Feed Overview',
+    description:
+      'The company\'s Open Payments bank connections (bankkopplingar) with consent expiry, last sync and the accounts each reads, and whether the company may make one ' +
+      '(available, reason). Enable Banking rows and the connect link: gnubok_connect_bank.',
+    visibility: 'search',
+    keywords: ['bankkoppling', 'bankkopplingar', 'open payments', 'koppla bank', 'consent', 'medgivande', 'bankkonton', 'byt bank'],
+  },
   run: async (ctx) => getBankFeedOverview(ctx),
 })
 
@@ -228,10 +269,22 @@ export const bankFeedSwitchProgress = defineOperation({
     company: SwitchState.nullable(),
     totals: SwitchTotals.nullable(),
   }),
+  http: { method: 'GET', path: `${V1}/switch-progress` },
+  mcp: {
+    name: 'gnubok_bank_feed_switch_progress',
+    title: 'Bank Feed Switch Progress',
+    description:
+      'Where the company stands in the switch from Enable Banking to Open Payments (byt bank): the campaign deadline and days left, the connections still to switch, ' +
+      'the ones at banks Open Payments does not reach. The switch link per connection: gnubok_connect_bank (switch_url).',
+    visibility: 'search',
+    keywords: ['byt bank', 'bankbyte', 'open payments', 'enable banking', 'deadline bankkoppling', 'bankkoppling', 'switch'],
+  },
   run: async (ctx) => {
     // Cross-company totals are the owners' and admins' to see: the rule lives
-    // here, beside the read, and the session route applies the same one.
-    const admin = await isCompanyAdmin(ctx.supabase, ctx.companyId)
+    // here, beside the read, and the session route applies the same one. The
+    // doors run on a service-role client where user_is_company_admin() sees
+    // nobody, so the role is read from the membership (lib/operations/access).
+    const admin = (await requireCompanyAdmin(ctx, 'Bara företagets ägare eller en administratör ser totalerna.')) === null
     return { ok: true, data: await getBankSwitchProgress(ctx, { totalsClient: admin ? createServiceClient() : null }) }
   },
 })
@@ -450,19 +503,56 @@ export const bankFeedInvite = defineOperation({
   }),
   output: z.object({ invite_id: z.string().uuid(), url: z.string(), expires_at: z.string(), email_sent: z.boolean() }),
   errorCodes: ['OPEN_BANKING_NOT_AVAILABLE', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR'],
-  run: async (ctx, input) => {
+  http: { method: 'POST', path: `${V1}/invites` },
+  mcp: {
+    name: 'gnubok_bank_feed_connect_link',
+    title: 'Bank Feed Connect Link',
+    description:
+      'Stage a signatory link (koppla bank utan inloggning): a 7-day /koppla link where the firmatecknare connects, switches or renews the bank with BankID through Open Payments, ' +
+      'optionally mailed. The approval answer carries data.url (result_data after a UI approval).',
+    visibility: 'search',
+    keywords: ['firmatecknare', 'länk koppla banken', 'koppla bank', 'bankkoppling', 'byt bank', 'förnya bankkoppling', 'open payments', 'signatory link', 'skicka länk bank'],
+    stage: {
+      pendingType: 'bank_feed_invite',
+      title: (input) => {
+        const recipient = typeof input.recipient_email === 'string' && input.recipient_email.trim() ? input.recipient_email.trim() : null
+        return recipient ? `Länk till firmatecknaren: koppla banken (${recipient})` : 'Länk till firmatecknaren: koppla banken'
+      },
+      extras: () => ({
+        next: {
+          description:
+            `After approval the answer's data.url is the signatory link, valid ${BANK_CONNECT_INVITE_TTL_DAYS} days: hand it to the firmatecknare only. ` +
+            'When a person approves in Accounted instead, read result_data.url from gnubok_list_pending_operations.',
+          tool: 'gnubok_approve_pending_operation',
+        },
+      }),
+    },
+  },
+  run: async (ctx, input, { dryRun }) => {
     const door = await openBankFeedDoor(ctx)
     if (!door.ok) return { ok: false, code: 'OPEN_BANKING_NOT_AVAILABLE', details: { reason: door.reason } }
-    return issueSignatoryLink(ctx, {
+    const link = {
       bic: input.bic ?? null,
       replaceConnectionId: input.replace_connection_id ?? null,
       offerPayments: input.offer_payments,
       recipientEmail: input.recipient_email ?? null,
       bankName: input.bank_name ?? null,
-    })
+    }
+    // A dry run (the MCP staging preview, ?dry_run=true) runs every rule the
+    // mint will run and mints nothing: the URL is the credential, so it is
+    // created at approval only.
+    if (dryRun) return previewSignatoryLink(ctx, link)
+    return issueSignatoryLink(ctx, link)
   },
 })
 
+/**
+ * Doors: the four reads and the signatory link bind v1 and MCP. start, poll,
+ * restart and select stay unbound (a person's BankID and a person's choice
+ * of accounts), disconnect stays unbound (P3 gap, as for Enable Banking),
+ * and sync stays unbound because POST /bank-connections/:connectionId/sync
+ * and gnubok_sync_bank already serve Open Payments rows.
+ */
 export const BANK_FEED_OPERATIONS = [
   bankFeedBanks,
   bankFeedBank,

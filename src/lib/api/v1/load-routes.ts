@@ -86,6 +86,15 @@ import '@/app/api/v1/companies/[companyId]/cash-accounts/route'
 import '@/app/api/v1/companies/[companyId]/bank-connections/route'
 import '@/app/api/v1/companies/[companyId]/bank-connections/[connectionId]/sync/route'
 
+// Bank reading through Open Payments (operations bank-feed.*): the banks,
+// the connections, the switch progress and the signatory link. The BankID
+// consent itself has no door.
+import '@/app/api/v1/companies/[companyId]/bank-feed/route'
+import '@/app/api/v1/companies/[companyId]/bank-feed/banks/route'
+import '@/app/api/v1/companies/[companyId]/bank-feed/banks/[bic]/route'
+import '@/app/api/v1/companies/[companyId]/bank-feed/switch-progress/route'
+import '@/app/api/v1/companies/[companyId]/bank-feed/invites/route'
+
 // Phase 4 PR-1: AP world: suppliers + supplier-invoices verticals.
 import '@/app/api/v1/companies/[companyId]/suppliers/route'
 import '@/app/api/v1/companies/[companyId]/suppliers/[id]/route'

@@ -108,18 +108,36 @@ export interface SignatoryLink {
  * replaces must be one of the company's; the URL base is the brand of the
  * company (its byrå's domain when it has one, else the canonical app URL).
  */
+interface ReplacedConnection {
+  id: string
+  status: string
+  bank_name: string | null
+  aggregator?: string | null
+}
+
+/** The company's live connection a link replaces, or the NOT_FOUND the mint and its preview both answer. */
+async function findReplacedConnection(
+  supabase: SupabaseClient,
+  companyId: string,
+  connectionId: string,
+): Promise<ReplacedConnection | Extract<OperationOutcome<never>, { ok: false }>> {
+  const { data, error } = await supabase
+    .from('bank_connections')
+    .select('id, status, bank_name, aggregator')
+    .eq('id', connectionId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error) throw error
+  const replaced = data as ReplacedConnection | null
+  if (!replaced || replaced.status === 'revoked') return { ok: false, code: 'NOT_FOUND', details: { field: 'replace_connection_id' } }
+  return replaced
+}
+
 export async function createSignatoryLink(input: CreateSignatoryLinkInput): Promise<OperationOutcome<SignatoryLink>> {
   const supabase = input.supabase ?? createServiceClient()
   if (input.replaceConnectionId) {
-    const { data, error } = await supabase
-      .from('bank_connections')
-      .select('id, status')
-      .eq('id', input.replaceConnectionId)
-      .eq('company_id', input.companyId)
-      .maybeSingle()
-    if (error) throw error
-    const replaced = data as { id: string; status: string } | null
-    if (!replaced || replaced.status === 'revoked') return { ok: false, code: 'NOT_FOUND', details: { field: 'replace_connection_id' } }
+    const replaced = await findReplacedConnection(supabase, input.companyId, input.replaceConnectionId)
+    if ('ok' in replaced) return replaced
   }
   const { token, hash } = generateInviteToken()
   const expiresAt = inviteExpiresAt(input.now)
@@ -206,6 +224,39 @@ export async function issueSignatoryLink(
     if (emailSent) await markInviteMailed(service, link.invite_id).catch((error) => ctx.log.warn('signatory link mail not logged on the row', { message: error instanceof Error ? error.message : String(error) }))
   }
   return { ok: true, data: { invite_id: link.invite_id, url: link.url, expires_at: link.expires_at, email_sent: emailSent }, created: true }
+}
+
+/**
+ * What issueSignatoryLink would do, with every rule it applies (owner or
+ * admin, the replaced connection one of the company's and live) and nothing
+ * minted: the staging preview an approver reads, and the ?dry_run=true answer.
+ * The URL is the credential, so it exists only after the real call.
+ */
+export async function previewSignatoryLink(ctx: OperationContext, input: IssueSignatoryLinkInput): Promise<OperationOutcome<never>> {
+  const refused = await requireCompanyAdmin(ctx, 'Bara företagets ägare eller en administratör kan skicka en länk till firmatecknaren.')
+  if (refused) return refused
+  let replaces: { connection_id: string; bank_name: string | null; aggregator: 'enable_banking' | 'open_payments'; kind: 'switch' | 'renewal' } | null = null
+  if (input.replaceConnectionId) {
+    const replaced = await findReplacedConnection(ctx.supabase, ctx.companyId, input.replaceConnectionId)
+    if ('ok' in replaced) return replaced
+    const aggregator = aggregatorOf(replaced)
+    replaces = { connection_id: replaced.id, bank_name: replaced.bank_name, aggregator, kind: aggregator === 'open_payments' ? 'renewal' : 'switch' }
+  }
+  const recipient = input.recipientEmail?.trim().toLowerCase() || null
+  return {
+    ok: true,
+    dryRun: true,
+    preview: {
+      bic: input.bic?.toUpperCase() ?? null,
+      bank_name: input.bankName?.trim() || replaces?.bank_name || null,
+      replaces,
+      recipient_email: recipient,
+      email_will_be_sent: recipient !== null,
+      offer_payments: input.offerPayments,
+      valid_days: BANK_CONNECT_INVITE_TTL_DAYS,
+      url: null,
+    },
+  }
 }
 
 export type ResolveInviteResult =

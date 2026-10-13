@@ -39,6 +39,7 @@ const BASE = `http://localhost/api/v1/companies/${COMPANY_ID}/bank-connections`
 const CONNECTION_ROW = {
   id: '11111111-1111-4111-8111-111111111111',
   bank_name: 'Swedbank',
+  aggregator: 'open_payments',
   status: 'active',
   created_at: '2026-08-01T00:00:00Z',
   last_synced_at: '2026-08-31T05:04:12Z',
@@ -122,6 +123,7 @@ describe('v1 bank-connections list', () => {
       {
         connection_id: '11111111-1111-4111-8111-111111111111',
         bank: 'Swedbank',
+        aggregator: 'open_payments',
         status: 'active',
         since: '2026-08-01T00:00:00Z',
         last_synced_at: '2026-08-31T05:04:12Z',
@@ -130,6 +132,20 @@ describe('v1 bank-connections list', () => {
       },
     ])
     expect(body.meta.request_id).toMatch(/^req_/)
+  })
+
+  it('answers enable_banking for a row that predates the aggregator column', async () => {
+    authOk(['companies:read'])
+    const { aggregator: _aggregator, ...legacy } = CONNECTION_ROW
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { role: 'owner' } },
+        bank_connections: { data: [legacy] },
+      }).supabase,
+    )
+    const res = await GET(req(), params)
+    const body = (await res.json()) as { data: { bank_connections: Array<{ aggregator: string }> } }
+    expect(body.data.bank_connections[0].aggregator).toBe('enable_banking')
   })
 
   it('returns an empty list when the company has no connections', async () => {

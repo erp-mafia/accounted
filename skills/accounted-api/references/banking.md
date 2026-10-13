@@ -2,7 +2,7 @@
 
 # Banking endpoints
 
-Bank transactions (ingest, categorize, match against invoices), cash accounts with the bank-reported balance, PSD2 connection health (sync freshness, consent expiry), bank reconciliation runs, file imports (SIE, bank statements), and the point-of-sale business days a connected POS system delivers, booked as daily takings vouchers.
+Bank transactions (ingest, categorize, match against invoices), cash accounts with the bank-reported balance, PSD2 connection health (sync freshness, consent expiry), the Open Payments bank feed (reachable banks, connections, the switch from Enable Banking, the signatory link), bank reconciliation runs, file imports (SIE, bank statements), and the point-of-sale business days a connected POS system delivers, booked as daily takings vouchers.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -12,15 +12,15 @@ are in SKILL.md and are not repeated per endpoint.
 **List PSD2 bank connections with sync freshness and consent expiry.**
 `scope:companies:read · risk:low · idempotent`
 
-Returns every bank connection for the company with its status, last successful sync (last_synced_at), consent expiry (consent_expires) and any user-facing error message. Connections sync automatically once a day server-side; this endpoint tells you whether that is still happening.
+Returns every bank connection for the company with its aggregator (enable_banking or open_payments), status, last successful sync (last_synced_at), consent expiry (consent_expires) and any user-facing error message. Connections sync automatically once a day server-side; this endpoint tells you whether that is still happening. The Open Payments rows with their accounts, the reachable banks and the switch from Enable Banking: GET /bank-feed, /bank-feed/banks, /bank-feed/switch-progress.
 
 **Use when:** You need to verify bank data is current before building on it (liquidity, reconciliation, reports), or to detect a dead connection that needs BankID re-authorisation.
-**Do not use for:** Fetching transactions (use /transactions) or account balances (use /cash-accounts). Triggering a sync: not available on this surface; syncing is automatic.
+**Do not use for:** Fetching transactions (use /transactions) or account balances (use /cash-accounts). Triggering a sync: POST /bank-connections/{connectionId}/sync.
 
 **Pitfalls:**
 - last_synced_at is null until the first sync completes (about a minute after connecting); it does NOT mean the connection is broken.
 - A connection can hold status=active with a stale last_synced_at (older than ~36 hours): treat the data as suspect, but do NOT assume re-authorisation fixes it. Common causes are a lapsed subscription (this endpoint then answers with a capability error) or every account deselected in settings.
-- status=expired means the PSD2 consent is dead: only the user can fix it, with BankID in a browser.
+- status=expired means the PSD2 consent is dead: only the user can fix it, with BankID in a browser. An open_payments row is renewed from the Kopplingar page or from a signatory link (POST /bank-feed/invites with replace_connection_id).
 - error_message is Swedish and user-facing: show it verbatim rather than translating.
 
 | Parameter | In | Type | Required | Notes |
@@ -31,7 +31,7 @@ Response `200`:
 ```ts
 {
   data: {
-    bank_connections: { connection_id: string, bank: string | null, status: "pending" | "pending_selection" | "active" | "expired" | "error", since: string, last_synced_at: string | null, consent_expires: string | null, error_message: string | null }[]
+    bank_connections: { connection_id: string, bank: string | null, aggregator: "enable_banking" | "open_payments", status: "pending" | "pending_selection" | "active" | "expired" | "error", since: string, last_synced_at: string | null, consent_expires: string | null, error_message: string | null }[]
   },
   meta: {
     request_id: string,
@@ -53,6 +53,7 @@ Example response `200`:
       {
         "connection_id": "4f6c…",
         "bank": "Swedbank",
+        "aggregator": "open_payments",
         "status": "active",
         "since": "2026-08-01T00:00:00Z",
         "last_synced_at": "2026-08-31T05:04:12Z",
@@ -132,6 +133,297 @@ Example response `200`:
   "meta": {
     "request_id": "req_…",
     "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/bank-feed`
+
+**The company's Open Payments bank connections and whether it may make one.**
+`scope:transactions:read · risk:low · idempotent`
+
+Answers available (and why not), the connections made through Open Payments with their accounts, and whether the calling person has a personnummer on file for BankID.
+
+**Use when:** Rendering the bank connections a company reads through Open Payments.
+**Do not use for:** Enable Banking connections.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    available: boolean,
+    reason: "no_connector" | "not_in_pilot" | "subscription" | null,
+    connections: { connection_id: string, bank_name: string | null, bic: string | null, provider: string, status: string, consent_expires: string | null, last_synced_at: string | null, initial_sync_completed_at: string | null, error_message: string | null, accounts: { uid: string, name: string | null, iban: string | null, currency: string, enabled: boolean, ledger_account: string | null, usage: string | null }[] }[],
+    signer_known: boolean
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "available": true,
+    "reason": null,
+    "connections": [],
+    "signer_known": true
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/bank-feed/banks`
+
+**The banks a company can connect with BankID through Open Payments.**
+`scope:transactions:read · risk:low · idempotent`
+
+Lists the banks the account information provider reaches (BIC, name, logo, whether BankID can be signed in our screen). Answers OPEN_BANKING_NOT_AVAILABLE when reading through Open Payments is not switched on for the company.
+
+**Use when:** Before starting a bank connection with BankID.
+**Do not use for:** Enable Banking connections (the bank list of the enable-banking extension).
+
+**Pitfalls:**
+- A sparbank is reached through SWEDSESS with its affiliate id; ask bank for the list.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    banks: { bic: string, name: string, logo_url: string | null, decoupled: boolean | null, redirect: boolean | null }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "banks": [
+      {
+        "bic": "SWEDSESS",
+        "name": "Swedbank",
+        "logo_url": null,
+        "decoupled": true,
+        "redirect": false
+      }
+    ]
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/bank-feed/banks/{bic}`
+
+**One bank's details: how a person signs there, and the sparbanker behind a shared BIC.**
+`scope:transactions:read · risk:low · idempotent`
+
+Whether the bank signs BankID in our screen (decoupled) or on its own page (redirect), how many days of history it serves, and the savings banks reached through it (Swedbank: the sparbanker and Ölands Bank). Answered from a 24 h cache.
+
+**Use when:** After a bank is picked and before BankID starts: to show the sparbank picker and choose the signing method.
+**Do not use for:** Listing banks (bank-feed.banks).
+
+**Pitfalls:**
+- A sparbank is connected through SWEDSESS with its affiliate_id from this answer.
+- The BIC is upper case (SWEDSESS, not swedsess).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `bic` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    bic: string,
+    name: string,
+    decoupled: boolean | null,
+    redirect: boolean | null,
+    affiliates: { affiliate_id: string, name: string }[],
+    transaction_history_max_days: number | null,
+    extended_transaction_history_max_days: number | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "bic": "SWEDSESS",
+    "name": "Swedbank",
+    "decoupled": true,
+    "redirect": true,
+    "affiliates": [
+      {
+        "affiliate_id": "08999",
+        "name": "Sparbanken Nord"
+      }
+    ],
+    "transaction_history_max_days": 88,
+    "extended_transaction_history_max_days": 760
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/bank-feed/invites`
+
+**Send the company's firmatecknare a link to connect the bank with BankID, without an Accounted login.**
+`scope:transactions:write · risk:medium · idempotent · dry-run`
+
+Creates a signed link, valid 7 days, that opens the Koppla banken flow for this company at /koppla/<token> without a login: the firmatecknare picks the bank (or gets the one named), signs the consent with BankID and chooses the accounts; the link is consumed when the accounts are selected. With recipient_email the link is mailed (template bank_connect_invite); the URL is answered either way for the sender to pass on. Owners and admins only.
+
+**Use when:** A byrå or a company admin cannot sign the bank consent themselves: the firmatecknare holds the bank access.
+**Do not use for:** Connecting the bank in person (start the consent instead), or a company not switched on for Open Payments (OPEN_BANKING_NOT_AVAILABLE).
+
+**Pitfalls:**
+- The URL carries the credential: hand it to the firmatecknare only.
+- replace_connection_id names the connection the new one takes over from (an Enable Banking row for a switch, an Open Payments row for a renewal).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  bic?: string | null,
+  replace_connection_id?: string | null,
+  offer_payments?: boolean,
+  recipient_email?: string | null,
+  bank_name?: string | null
+}
+```
+
+Example request:
+```json
+{
+  "recipient_email": "anna@example.se",
+  "offer_payments": true
+}
+```
+
+Response `200`:
+```ts
+{
+  data: { invite_id: string, url: string, expires_at: string, email_sent: boolean },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "invite_id": "4f6c1a2b-9c0d-4e8f-8a1b-2c3d4e5f6a7b",
+    "url": "https://app.accounted.se/koppla/...",
+    "expires_at": "2026-10-19T09:14:03Z",
+    "email_sent": true
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/bank-feed/switch-progress`
+
+**Where the company stands in the switch from Enable Banking to Open Payments.**
+`scope:transactions:read · risk:low · idempotent`
+
+The campaign (on, deadline, days left), the company's state (the Enable Banking connections still to switch, the ones at banks Open Payments does not reach) and, for an owner or admin, the totals across companies (counts per bank, no company identities). Null company when the campaign does not apply to it.
+
+**Use when:** Rendering the switch deadline, the deep link to the switch, or the founders' counter.
+**Do not use for:** Starting the switch: that is bank-feed.start with replace_connection_id, and a person's BankID.
+
+**Pitfalls:**
+- totals come from a service-role RPC and are null for members below admin.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    campaign: { on: boolean, deadline: string | null, days_left: number | null, passed: boolean },
+    company: { state: "done" | "pending" | "uncovered", pending: { connection_id: string, bank_name: string }[], uncovered: { connection_id: string, bank_name: string }[], open_payments: number, deadline: string, days_left: number, passed: boolean, urgent: boolean } | null,
+    totals: { companies: { pending: number, uncovered: number, done: number }, connections: { pending: number, uncovered: number, switched: number }, banks: { bank: string, pending: number, uncovered: number, switched: number }[] } | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "campaign": {
+      "on": true,
+      "deadline": "2026-11-09",
+      "days_left": 20,
+      "passed": false
+    },
+    "company": null,
+    "totals": null
   }
 }
 ```

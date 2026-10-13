@@ -98,6 +98,7 @@ import { tools, isStagingTool, STAGE_BRIDGE_TARGETS } from '../server'
 import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
 import { registerPeppolTransport } from '@/lib/invoices/peppol-transport'
 import { registerPaymentInitiationProvider, type PaymentInitiationProvider } from '@/lib/payments/initiation/provider'
+import { setBankFeedConnectForTests, type BankFeedConnect } from '@/lib/bank-feed/connect'
 
 // The Peppol tools refuse up front when no access point is configured. A
 // transport whose every network method throws: the previews must never call
@@ -143,6 +144,28 @@ registerPaymentInitiationProvider({
 type Tool = (typeof tools)[number]
 
 const COMPANY_ID = '11111111-1111-4111-8111-111111111111'
+
+// The signatory link refuses up front when the company is not switched on for
+// reading its bank through Open Payments (lib/bank-feed/door): the pilot
+// list names this company and an adapter whose every method throws stands
+// in for the connector; the preview reads the role and the replaced row only.
+process.env.OPENPAYMENTS_READING_COMPANY_IDS = COMPANY_ID
+const noConnector = async (): Promise<never> => {
+  throw new Error('a staging preview contacted the bank connector')
+}
+setBankFeedConnectForTests({
+  banks: noConnector,
+  bank: noConnector,
+  getBankDetails: noConnector,
+  createConsent: noConnector,
+  startConsentSigning: noConnector,
+  pollConsentSigning: noConnector,
+  consentStatus: noConnector,
+  accounts: noConnector,
+  balances: noConnector,
+  syncTransactions: noConnector,
+  revokeConsent: noConnector,
+} as unknown as BankFeedConnect)
 // Arkiv tools refuse a company outside the rollout before touching the database; the fixture company is in it.
 process.env.ARKIV_BRAIN_COMPANY_IDS = '11111111-1111-4111-8111-111111111111'
 const USER_ID = '22222222-2222-4222-8222-222222222222'
@@ -738,6 +761,12 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   },
   // A draft the bank does not have: cancelled here, so the preview asks no bank.
   gnubok_cancel_payment_order: { rows: { payment_orders: { status: 'draft', provider_payment_id: null, outcome_unknown_at: null } } },
+  // The signatory link is owners' and admins'; the preview reads the role and
+  // the live Enable Banking row the link replaces, and mints nothing.
+  gnubok_bank_feed_connect_link: {
+    args: { recipient_email: 'anna@example.se' },
+    rows: { company_members: { role: 'owner' }, bank_connections: { status: 'active', bank_name: 'Swedbank', aggregator: 'enable_banking' } },
+  },
   // A custom (non-system) dimension: system dimensions are never deleted.
   gnubok_delete_dimension: { rows: { dimensions: { is_system: false, sie_dim_no: 20, name: 'Avdelning' } } },
   // Arkiv: a fact about the company itself; the predicate must belong to the subject kind.

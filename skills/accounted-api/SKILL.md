@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 315 endpoints.
+  pagination, scopes), and all 320 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -152,7 +152,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 315 operations. Paths are shown without
+API version `2026-05-12`, 320 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (12)
@@ -362,13 +362,18 @@ POST /companies/{companyId}/inbox-items/{id}/stamp : Mark an inbox item as consu
 POST /companies/{companyId}/inbox-items/{id}/unmatch-transaction : Release an inbox item's bank transaction match [scope:documents:write risk:low idempotent dry-run reversible]
 ```
 
-### Banking (54)
+### Banking (59)
 
 Full detail: [references/banking.md](references/banking.md)
 
 ```text
 GET /companies/{companyId}/bank-connections : List PSD2 bank connections with sync freshness and consent expiry [scope:companies:read risk:low idempotent]
 POST /companies/{companyId}/bank-connections/{connectionId}/sync : Sync one bank connection now instead of waiting for the nightly run [scope:transactions:write risk:low]
+GET /companies/{companyId}/bank-feed : The company's Open Payments bank connections and whether it may make one [scope:transactions:read risk:low idempotent]
+GET /companies/{companyId}/bank-feed/banks : The banks a company can connect with BankID through Open Payments [scope:transactions:read risk:low idempotent]
+GET /companies/{companyId}/bank-feed/banks/{bic} : One bank's details: how a person signs there, and the sparbanker behind a shared BIC [scope:transactions:read risk:low idempotent]
+POST /companies/{companyId}/bank-feed/invites : Send the company's firmatecknare a link to connect the bank with BankID, without an Accounted login [scope:transactions:write risk:medium idempotent dry-run]
+GET /companies/{companyId}/bank-feed/switch-progress : Where the company stands in the switch from Enable Banking to Open Payments [scope:transactions:read risk:low idempotent]
 GET /companies/{companyId}/cash-accounts : List bank/cash accounts with the bank-reported balance [scope:transactions:read risk:low idempotent]
 POST /companies/{companyId}/cash-accounts : Create a bank account by hand (no bank connection), with the payee details invoices print [scope:companies:write risk:low idempotent dry-run]
 PATCH /companies/{companyId}/cash-accounts/{id} : Edit a bank account: verifikationsserie, payee details, name, or turn it on/off [scope:companies:write risk:medium idempotent dry-run reversible]

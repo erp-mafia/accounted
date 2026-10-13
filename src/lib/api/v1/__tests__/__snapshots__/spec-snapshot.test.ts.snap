@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `315`;
+exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `320`;
 
 exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-keys 1`] = `
 [
@@ -40,6 +40,10 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/companies/:companyId/assets/:id",
   "GET /api/v1/companies/:companyId/audit-trail",
   "GET /api/v1/companies/:companyId/bank-connections",
+  "GET /api/v1/companies/:companyId/bank-feed",
+  "GET /api/v1/companies/:companyId/bank-feed/banks",
+  "GET /api/v1/companies/:companyId/bank-feed/banks/:bic",
+  "GET /api/v1/companies/:companyId/bank-feed/switch-progress",
   "GET /api/v1/companies/:companyId/cash-accounts",
   "GET /api/v1/companies/:companyId/compliance/check",
   "GET /api/v1/companies/:companyId/customers",
@@ -183,6 +187,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/assets",
   "POST /api/v1/companies/:companyId/assets/:id/dispose",
   "POST /api/v1/companies/:companyId/bank-connections/:connectionId/sync",
+  "POST /api/v1/companies/:companyId/bank-feed/invites",
   "POST /api/v1/companies/:companyId/cash-accounts",
   "POST /api/v1/companies/:companyId/cash-accounts/:id/set-primary",
   "POST /api/v1/companies/:companyId/customers",

@@ -504,6 +504,10 @@ import { MCP_TOOL_CAPABILITY_MAP } from '@/lib/entitlements/keys'
 import { triggerConnectionSync } from '@/extensions/general/enable-banking/lib/trigger-sync'
 import { getBankFeedConnect } from '@/lib/bank-feed/connect'
 import { runOpenPaymentsSync } from '@/lib/bank-feed/feed'
+import { openBankFeedDoor } from '@/lib/bank-feed/door'
+import { matchBankByName } from '@/lib/bank-feed/bank-match'
+import { switchDeepLink } from '@/lib/bank-feed/switch-link'
+import { aggregatorOf } from '@/lib/bank-sync/aggregator'
 import {
   completePendingDocumentUpload,
   createPendingDocumentUpload,
@@ -4864,14 +4868,14 @@ export const tools: McpTool[] = [
     keywords: ['bankkoppling', 'koppla bank', 'banksynk'],
     title: 'Connect Bank',
     description:
-      'Bank connection status plus the browser connect link (PSD2, BankID; user must be logged in to Accounted). When the user has NAMED their bank, pass it as bank on the FIRST call (a bare call renders a redundant generic card): the link then starts that bank\'s consent directly.',
+      'Bank connection status plus the browser link where a logged-in person connects, switches or renews a bank with BankID (bankkoppling). If the user NAMED their bank, pass it as bank on the FIRST call: the link then opens that bank directly.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         bank: {
           type: 'string',
-          description: "The bank's name as the user said it (e.g. 'Swedbank', 'SEB'); the link auto-starts that bank's consent. Omit to show the picker.",
+          description: "The bank's name as the user said it ('Swedbank', 'SEB'); omit to show the picker.",
         },
       },
     },
@@ -4886,6 +4890,7 @@ export const tools: McpTool[] = [
             properties: {
               connection_id: { type: 'string' },
               bank: { type: ['string', 'null'] },
+              aggregator: { type: 'string' },
               status: { type: 'string' },
               since: { type: 'string' },
               // Semantics live in the instructions string (runtime output), not
@@ -4894,6 +4899,7 @@ export const tools: McpTool[] = [
               last_synced_at: { type: ['string', 'null'] },
               consent_expires: { type: ['string', 'null'] },
               error_message: { type: ['string', 'null'] },
+              switch_url: { type: 'string' },
             },
           },
         },
@@ -4907,7 +4913,7 @@ export const tools: McpTool[] = [
     async execute(args, companyId, _userId, supabase) {
       const { data, error } = await supabase
         .from('bank_connections')
-        .select('id, bank_name, status, created_at, last_synced_at, consent_expires, error_message')
+        .select('id, bank_name, aggregator, status, created_at, last_synced_at, consent_expires, error_message')
         .eq('company_id', companyId)
         .in('status', ['pending', 'pending_selection', 'active', 'expired', 'error'])
         .order('created_at', { ascending: false })
@@ -4915,6 +4921,7 @@ export const tools: McpTool[] = [
       const connections = (data ?? []) as Array<{
         id: string
         bank_name: string | null
+        aggregator?: string | null
         status: string
         created_at: string
         last_synced_at: string | null
@@ -4922,31 +4929,61 @@ export const tools: McpTool[] = [
         error_message: string | null
       }>
       const active = connections.filter((c) => c.status === 'active')
-      // A named bank deep-links straight into that bank's consent (the page
-      // auto-starts it; unknown names fall back to the prefilled picker).
       const requestedBank = typeof args.bank === 'string' ? args.bank.trim() : ''
-      const connectUrl = requestedBank
-        ? `${connectLinkBaseUrl()}/import?mode=psd2&bank=${encodeURIComponent(requestedBank)}`
-        : `${connectLinkBaseUrl()}/import?mode=psd2`
+      const base = connectLinkBaseUrl()
+      // Which door the company connects through decides the link. Open
+      // Payments (lib/bank-feed): the Koppla banken dialog on Kopplingar, a
+      // named bank preselected by its BIC when the bank list resolves it
+      // (matchBankByName, the same matcher the dialog and the switch campaign
+      // use); an unresolved name or an unreachable bank list falls back to
+      // the picker. Enable Banking rows then carry the one-click switch link.
+      // Door closed: the Enable Banking page, a named bank auto-started.
+      const door = await openBankFeedDoor({ supabase, companyId })
+      let connectUrl: string
+      let resolvedBic: string | null = null
+      if (door.ok) {
+        if (requestedBank) {
+          try {
+            resolvedBic = matchBankByName(requestedBank, await door.connect.banks(companyId))?.bic ?? null
+          } catch (err) {
+            log.warn('bank list not read for the connect link', { err: err instanceof Error ? err.message : String(err) })
+          }
+        }
+        connectUrl = `${base}/settings/connections?bank_connect=new${resolvedBic ? `&bic=${encodeURIComponent(resolvedBic)}` : ''}`
+      } else {
+        // A named bank deep-links straight into that bank's consent (the page
+        // auto-starts it; unknown names fall back to the prefilled picker).
+        connectUrl = requestedBank ? `${base}/import?mode=psd2&bank=${encodeURIComponent(requestedBank)}` : `${base}/import?mode=psd2`
+      }
+      const enableBankingRows = connections.filter((c) => aggregatorOf(c) === 'enable_banking')
+      const openPaymentsNote = door.ok
+        ? ' The link opens Koppla banken in Accounted (Open Payments): the person signs with BankID (consent up to 180 days, the bank may clamp it), then CONFIRMS WHICH ACCOUNTS to sync; paying through the bank needs a one-time know-your-customer form offered after the consent. A person without an Accounted login (the firmatecknare holds the bank access): gnubok_bank_feed_connect_link stages a 7-day signatory link instead.' +
+          (enableBankingRows.length > 0
+            ? ' This company still reads through Enable Banking on the connections that carry switch_url: the switch is one click from that link (the person signs the new consent with BankID and the old connection is retired at account selection); gnubok_bank_feed_switch_progress has the deadline.'
+            : '')
+        : ''
       return {
         connected: active.length > 0,
         connections: connections.map((c) => ({
           connection_id: c.id,
           bank: c.bank_name,
+          aggregator: aggregatorOf(c),
           status: c.status,
           since: c.created_at,
           last_synced_at: c.last_synced_at,
           consent_expires: c.consent_expires,
           error_message: c.error_message,
+          ...(door.ok && aggregatorOf(c) === 'enable_banking' ? { switch_url: `${base}${switchDeepLink(c.id)}` } : {}),
         })),
         connect_url: connectUrl,
         instructions:
-          active.length > 0
+          (active.length > 0
             ? 'At least one bank is connected and syncing. Check last_synced_at on each connection: older than 36 hours means transactions and balances may be STALE; warn the user before building on them. A null last_synced_at right after connecting is normal (the first sync lands within a minute). Match the remedy to the cause: status expired/error or consent_expires near or past needs BankID re-authorisation via the connect_url; a stale last_synced_at while status is active usually means the subscription lapsed or every account is deselected, so point the user to Installningar -> Bank instead of re-authorising. To add another bank, give the user the connect_url.'
             : (requestedBank
                 ? ''
-                : 'BETTER LINK AVAILABLE: if you know (or can ask) which bank the company uses, call this tool again with bank=<name>; the link then opens that bank\'s consent directly instead of a picker. ') +
-              'On claude.ai/Claude Desktop a connect card with an open-in-browser button is rendered with this result; on other clients give the user the connect_url as a link. They must be logged in to Accounted there. They approve with BankID (consent up to 180 days), then CONFIRM WHICH ACCOUNTS to sync in the dialog that opens; the first transactions arrive within a minute of that save. Banks cap PSD2 history (often ~90 days): older history comes via SIE import, not the bank. When the user is back, call this tool again to verify status=active, then continue straight to gnubok_list_uncategorized_transactions without asking.',
+                : 'BETTER LINK AVAILABLE: if you know (or can ask) which bank the company uses, call this tool again with bank=<name>; the link then opens that bank directly instead of a picker. ') +
+              'On claude.ai/Claude Desktop a connect card with an open-in-browser button is rendered with this result; on other clients give the user the connect_url as a link. They must be logged in to Accounted there. They approve with BankID (consent up to 180 days), then CONFIRM WHICH ACCOUNTS to sync in the dialog that opens; the first transactions arrive within a minute of that save. Banks cap PSD2 history (often ~90 days): older history comes via SIE import, not the bank. When the user is back, call this tool again to verify status=active, then continue straight to gnubok_list_uncategorized_transactions without asking.') +
+          openPaymentsNote,
       }
     },
   },

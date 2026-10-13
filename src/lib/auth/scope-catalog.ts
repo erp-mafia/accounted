@@ -407,6 +407,13 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_prepare_payments: 'suppliers:write',
   gnubok_cancel_payment_order: 'suppliers:write',
   gnubok_get_payments_signing_link: 'suppliers:read',
+  // Bank reading through Open Payments (lib/operations/bank-feed.ts): the
+  // reads and the signatory link; the BankID act itself has no tool.
+  gnubok_list_bank_feed_banks: 'transactions:read',
+  gnubok_get_bank_feed_bank: 'transactions:read',
+  gnubok_bank_feed_overview: 'transactions:read',
+  gnubok_bank_feed_switch_progress: 'transactions:read',
+  gnubok_bank_feed_connect_link: 'transactions:write',
   gnubok_book_invoice: 'invoices:write',
   gnubok_bulk_book_invoices: 'invoices:write',
   gnubok_book_supplier_invoice: 'suppliers:write',

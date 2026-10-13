@@ -104,8 +104,10 @@ export function ConnectionsSettingsContent() {
   const [bankGeneration, setBankGeneration] = useState(0)
   // A second signatory arrives with ?bank_connect=<id> (the reminder link),
   // and a bank that signs on its own page sends the person back the same way:
-  // open the flow at its BankID step, once, and drop the params.
-  useBankConnectResume(bankFlow, opAvailable)
+  // open the flow at its BankID step, once, and drop the params. An agent's
+  // connect link (?bank_connect=new&bic=...) opens the flow for a new
+  // connection with that bank preselected from the loaded list.
+  useBankConnectResume(bankFlow, opAvailable, openPayments.banks)
   // The switch campaign (Enable Banking to Open Payments before a deadline):
   // the deadline the switch intro names, and which Enable Banking rows still
   // wait, so their state line says "Byt senast" instead of "Ansluten".

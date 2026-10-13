@@ -444,7 +444,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/bank/open-payments/connections/:id/sync': covered([`POST ${V}/bank-connections/:connectionId/sync`, 'gnubok_sync_bank'], 'both doors fall through to the Open Payments runner for its connections'),
   'DELETE /api/bank/open-payments/connections/:id': gap('P3', 'remove a bank connection, as for Enable Banking'),
   'POST /api/clients/bank-switch/remind': uiOnly('a byrå mails its own clients about the one-off Enable Banking to Open Payments switch; the campaign ends with the deadline'),
-  'POST /api/bank/open-payments/invites': gap('P3', 'send the firmatecknare a signatory link (operation bank-feed.invite is defined; bind it to a v1 route when a byrå automation asks)'),
+  'POST /api/bank/open-payments/invites': covered([`POST ${V}/bank-feed/invites`, 'gnubok_bank_feed_connect_link'], 'the signatory link (operation bank-feed.invite): the firmatecknare still signs the consent in person'),
 
   // ── The signatory link (lib/bank-feed/invites): token routes a firmatecknare reaches without a login ──
   'POST /api/koppla/:token/connections': uiOnly(SIGNATORY_LINK),
@@ -754,4 +754,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 130
+export const GAP_CEILING = 129

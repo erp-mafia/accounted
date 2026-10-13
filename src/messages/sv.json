@@ -900,6 +900,7 @@
     "type_cancel_supplier_payment_batch": "Makulera betalfil",
     "type_prepare_payment_orders": "Förbered bankbetalningar",
     "type_cancel_payment_order": "Makulera bankbetalning",
+    "type_bank_feed_invite": "Länk till firmatecknaren: koppla banken",
     "type_book_invoice": "Bokför kundfaktura",
     "type_bulk_book_invoices": "Bokför kundfakturor",
     "type_book_supplier_invoice": "Bokför leverantörsfaktura",

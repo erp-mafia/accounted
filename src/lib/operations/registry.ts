@@ -425,7 +425,9 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   posSalesDayGet,
   posSalesDayBook,
   posSalesFetch,
-  // bank-feed (reading a bank with BankID through Open Payments; no machine door yet, see the module header)
+  // bank-feed (reading a bank with BankID through Open Payments): the reads and the signatory link bind v1 + MCP;
+  // start, poll, restart, select and disconnect have no door (a person's BankID and a person's choice), and sync
+  // is already served by POST /bank-connections/:connectionId/sync and gnubok_sync_bank for every aggregator.
   ...BANK_FEED_OPERATIONS,
 ]
 

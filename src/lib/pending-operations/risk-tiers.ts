@@ -125,6 +125,9 @@ const RISK_TIERS = {
   // signs with BankID; a cancel only counts when the bank confirms it.
   prepare_payment_orders: 'medium',
   cancel_payment_order: 'medium',
+  // The signatory link mints a 7-day credential URL (and may mail it); the
+  // consent itself is still signed by the firmatecknare with BankID.
+  bank_feed_invite: 'medium',
   book_invoice: 'high',
   bulk_book_invoices: 'high',
   book_supplier_invoice: 'high',
