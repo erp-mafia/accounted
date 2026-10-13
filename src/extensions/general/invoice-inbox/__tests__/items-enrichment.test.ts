@@ -14,6 +14,7 @@ import {
   manyRows,
   parseJsonResponse,
   makeInvoiceInboxItem,
+  testRoutes,
 } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
@@ -26,7 +27,7 @@ vi.mock('@/lib/transactions/inbox-underlag', async (importOriginal) => ({
 }))
 
 function findRoute(method: string, path: string) {
-  return invoiceInboxExtension.apiRoutes!.find((r) => r.method === method && r.path === path)!
+  return testRoutes(invoiceInboxExtension).find((r) => r.method === method && r.path === path)!
 }
 
 function buildCtx(supabase: unknown): ExtensionContext {
@@ -68,10 +69,6 @@ beforeEach(() => {
 describe('GET /items', () => {
   const route = findRoute('GET', '/items')
   const req = () => createMockRequest('/items', { method: 'GET' })
-
-  it('returns 401 without a context', async () => {
-    expect((await route.handler(req())).status).toBe(401)
-  })
 
   it('returns 500 when the list query fails', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
@@ -189,10 +186,6 @@ describe('GET /items', () => {
 describe('GET /items/:id', () => {
   const route = findRoute('GET', '/items/:id')
   const req = (id?: string) => createMockRequest(id ? `/items/${id}?_id=${id}` : '/items/x', { method: 'GET' })
-
-  it('returns 401 without a context', async () => {
-    expect((await route.handler(req('i1'))).status).toBe(401)
-  })
 
   it('returns 400 without an id', async () => {
     const { supabase } = createQueuedMockSupabase()

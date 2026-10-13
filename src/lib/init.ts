@@ -29,7 +29,7 @@ const REQUIRED_CORE_VARS = [
 // base) so Vercel prod (which only sets the _PRODUCTION variants) doesn't
 // warn on every cold start.
 // AI features run Claude via AWS Bedrock (see lib/agent/composer/client.ts and
-// extensions/general/invoice-inbox/lib/extract-invoice-fields.ts), so the
+// lib/documents/inbox-extraction/extract-invoice-fields.ts), so the
 // static AWS keys are what actually gates them. The assistant's client can
 // fall back to the AWS credential provider chain (instance profile, IRSA),
 // but document extraction requires both static keys, so this log-only warning

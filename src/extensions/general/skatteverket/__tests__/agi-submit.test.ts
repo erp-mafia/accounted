@@ -20,7 +20,7 @@ vi.mock('../lib/agi-client', () => ({
   agiSkapaGranskningsunderlag: vi.fn(),
 }))
 
-import { submitAgiChain } from '../lib/agi-submit'
+import { createAgiSigningLink, submitAgiChain, submitAgiUnderlag } from '../lib/agi-submit'
 import { buildAgiUnderlag } from '../lib/declaration-prep'
 import { agiGetKontrollresultat, agiPostUnderlag, agiSkapaGranskningsunderlag } from '../lib/agi-client'
 
@@ -117,5 +117,42 @@ describe('submitAgiChain', () => {
       error: 'Ogiltig XML',
     })
     expect(agiGetKontrollresultat).not.toHaveBeenCalled()
+  })
+})
+
+describe('the chain\'s steps on their own', () => {
+  const target = { salaryRunId: 'run-1', arbetsgivare: '165560000000', period: '202606', periodYear: 2026, periodMonth: 6 }
+
+  it('submitAgiUnderlag stops after kontroll, with the run it posted for', async () => {
+    const { supabase, findCall } = createQueuedMockSupabase()
+
+    const result = await submitAgiUnderlag(supabase as never, 'user-1', 'company-1', settings, 'run-1')
+
+    expect(result).toEqual({ ok: true, target, inlamningId: 42, kontrollrapport: null })
+    expect(agiSkapaGranskningsunderlag).not.toHaveBeenCalled()
+    expect(findCall('agi_declarations', 'update')).toBeUndefined()
+  })
+
+  it('submitAgiUnderlag carries Skatteverket\'s felkod for the route\'s log, outside details', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    vi.mocked(agiPostUnderlag).mockResolvedValue({ ok: false, status: 400, error: 'Ogiltig XML', body: { kod: 12 } } as never)
+
+    const result = await submitAgiUnderlag(supabase as never, 'user-1', 'company-1', settings, 'run-1')
+
+    expect(result).toMatchObject({ ok: false, code: 'SKATTEVERKET_SUBMIT_REJECTED', skvKod: 12 })
+    expect(result.ok === false && result.details).toBeUndefined()
+  })
+
+  it('createAgiSigningLink answers a draft still being received as recoverable, without a flip', async () => {
+    const { supabase, findCall } = createQueuedMockSupabase()
+    vi.mocked(agiSkapaGranskningsunderlag).mockResolvedValue({
+      ok: true,
+      data: { tillstand: 'RECEIVING', link: '', meddelande: null },
+    } as never)
+
+    const result = await createAgiSigningLink(supabase as never, 'user-1', 'company-1', settings, target)
+
+    expect(result).toMatchObject({ ok: false, code: 'SKATTEVERKET_PROCESSING', recoverable: true })
+    expect(findCall('agi_declarations', 'update')).toBeUndefined()
   })
 })

@@ -1,7 +1,7 @@
 'use client'
 
 import { use, useEffect, useRef, useState } from 'react'
-import { useCompanySettings } from '@/lib/reference-data/hooks'
+import { useCompanySettings, useEmployees } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { usePathname, useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
@@ -53,7 +53,7 @@ import {
 } from '@/lib/salary/agi/reporting-period'
 import { runCalculationState } from '@/lib/salary/calculation-state'
 import { parseAmountInput, roundOre } from '@/lib/money'
-import type { EmployeeMasked, SalaryRunEmployee } from '@/types'
+import type { SalaryRunEmployee } from '@/types'
 
 /** The fields of GET /api/expense-claims?status=registered the run page reads. */
 interface OpenClaimRow {
@@ -75,7 +75,9 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
 
   const [run, setRun] = useState<RunDetail | null>(null)
   const [runError, setRunError] = useState<string | null>(null)
-  const [availableEmployees, setAvailableEmployees] = useState<EmployeeMasked[]>([])
+  // The active roster from the session cache (lib/reference-data), for the
+  // "add employee to the run" picker.
+  const { employees: availableEmployees } = useEmployees()
   // Registered utlägg (#2331): fetched only while the run is a draft, the
   // one status in which they can be put on a payslip.
   const [openClaims, setOpenClaims] = useState<OpenClaimRow[]>([])
@@ -169,16 +171,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
 
   useEffect(() => {
     async function load() {
-      // Employees and settings don't depend on the run - load all three in
-      // parallel instead of serially.
-      const [, empRes] = await Promise.all([
-        loadRun(),
-        fetch('/api/salary/employees'),
-      ])
-      if (empRes.ok) {
-        const { data } = await empRes.json()
-        setAvailableEmployees(data || [])
-      }
+      await loadRun()
       setLoading(false)
     }
     load()

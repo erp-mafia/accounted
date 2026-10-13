@@ -93,7 +93,9 @@ const blState = {
 
 const ctxFor = (userId: string) => ({
   companyId: 'company-1',
-  supabase: { auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: userId } } }) } },
+  userId,
+  supabase: {},
+  log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }) as unknown as ExtensionContext
 
 beforeEach(() => {

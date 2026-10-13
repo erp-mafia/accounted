@@ -16,7 +16,7 @@ vi.mock('@/lib/reconciliation/gl-balance', async (importOriginal) => {
   }
 })
 
-import { guessCounterAccount } from '../lib/skattekonto-booking'
+import { attachBookingSuggestions, guessCounterAccount } from '../lib/skattekonto-booking'
 
 beforeEach(() => {
   sumAccountBalanceMock.mockReset()
@@ -466,4 +466,66 @@ describe('guessCounterAccount: a VAT refund clears the 1650 receivable', () => {
     expect(findCalls('journal_entries', 'gte')).toContainEqual(['entry_date', '2026-01-01'])
     expect(findCalls('journal_entries', 'lte')).toContainEqual(['entry_date', '2026-10-05'])
   })
+})
+
+// One resolver behind every door (resolveCounterAccount): the single-event
+// guess and the list's suggestion must name the same account for the same
+// event, rules and company, including the employer gate, the primary-SEK
+// sentinel and the 1650 refund routing. The booking path is the third caller;
+// skattekonto-booking-batch.test.ts covers it against the same seeds.
+describe('one counter-account resolver: guess and suggestion agree', () => {
+  const cases: Array<{
+    name: string
+    text: string
+    belopp: number
+    entityType: 'aktiebolag' | 'enskild_firma'
+    employer?: boolean
+    receivable?: number
+    expected: string | null
+  }> = [
+    { name: 'interest income', text: 'Intäktsränta', belopp: 12, entityType: 'aktiebolag', expected: '8314' },
+    { name: 'EF preliminärskatt', text: 'Debiterad preliminärskatt', belopp: -900, entityType: 'enskild_firma', expected: '2013' },
+    { name: 'AB preliminärskatt', text: 'Debiterad preliminärskatt', belopp: -900, entityType: 'aktiebolag', expected: '2510' },
+    { name: 'EF A-skatt without employer (gated)', text: 'Avdragen skatt', belopp: -500, entityType: 'enskild_firma', expected: null },
+    { name: 'EF A-skatt as employer', text: 'Avdragen skatt', belopp: -500, entityType: 'enskild_firma', employer: true, expected: '2710' },
+    { name: 'payout to the primary SEK account', text: 'Utbetalning', belopp: 3000, entityType: 'aktiebolag', expected: '1931' },
+    { name: 'VAT charged', text: 'Mervärdesskatt mars', belopp: -3000, entityType: 'aktiebolag', expected: '2650' },
+    { name: 'VAT refund clearing 1650', text: 'Moms juli 2026 - sept 2026', belopp: 1240, entityType: 'aktiebolag', receivable: 1240, expected: '1650' },
+  ]
+
+  for (const c of cases) {
+    it(c.name, async () => {
+      sumAccountBalanceMock.mockResolvedValue(c.receivable ?? 0)
+      const primary = { ledger_account: '1931' }
+
+      const single = makeSupabase()
+      enqueueRules(single.enqueue, SEED_RULES, primary)
+      const guess = await guessCounterAccount(
+        single.supabase as unknown as SupabaseClient,
+        'company-1',
+        c.text,
+        c.entityType,
+        c.belopp,
+        c.employer ?? false,
+        '2026-10-05',
+      )
+
+      const list = makeSupabase()
+      list.enqueue({ data: SEED_RULES })
+      list.enqueue({ data: { entity_type: c.entityType, employer_registered: c.employer ?? false } })
+      list.enqueue({ data: primary })
+      const [row] = await attachBookingSuggestions(list.supabase as unknown as SupabaseClient, 'company-1', [
+        {
+          transaktionstext: c.text,
+          belopp_skatteverket: c.belopp,
+          journal_entry_id: null,
+          status: 'booked',
+          transaktionsdatum: '2026-10-05',
+        },
+      ])
+
+      expect(guess?.account ?? null).toBe(c.expected)
+      expect(row.booking_suggestion?.account ?? null).toBe(c.expected)
+    })
+  }
 })

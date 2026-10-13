@@ -33,6 +33,30 @@ describe('checked bank configuration calls', () => {
     }))
   })
 
+  it('sends the first-sync window only when the caller has one', async () => {
+    const receipt = { status: 'active', accounts: [] }
+    const withWindow = client(receipt)
+    await saveBankAccountSelection(withWindow.supabase, 'company', 'user', 'connection', 'token', [],
+      { requestedFrom: '2026-01-01', lookbackDays: 120 })
+    expect(withWindow.rpc).toHaveBeenCalledWith('save_bank_account_selection', expect.objectContaining({
+      p_initial_sync: { requested_from: '2026-01-01', lookback_days: 120 },
+    }))
+    const without = client(receipt)
+    await saveBankAccountSelection(without.supabase, 'company', 'user', 'connection', 'token', [])
+    expect(without.rpc.mock.calls[0][1]).not.toHaveProperty('p_initial_sync')
+  })
+
+  it('saves the selection without the window while the database still has the old function', async () => {
+    const rpc = vi.fn()
+      .mockResolvedValueOnce({ data: null, error: { code: 'PGRST202', message: 'Could not find the function' } })
+      .mockResolvedValueOnce({ data: { status: 'active', accounts: [] }, error: null })
+    const supabase = { rpc } as unknown as SupabaseClient
+    expect(await saveBankAccountSelection(supabase, 'company', 'user', 'connection', 'token', [],
+      { requestedFrom: '2026-01-01', lookbackDays: 120 })).toEqual({ status: 'active', accounts: [] })
+    expect(rpc).toHaveBeenCalledTimes(2)
+    expect(rpc.mock.calls[1][1]).not.toHaveProperty('p_initial_sync')
+  })
+
   it.each(['P0002', 'PT409', '42501'])('preserves database error code %s', async code => {
     const { supabase } = client(null, { code, message: 'Database refusal' })
     await expect(readBankConfiguration(supabase, 'company', 'connection')).rejects.toMatchObject({ code })

@@ -4,7 +4,7 @@
  * Implements EmailService using the Resend API.
  */
 
-import { Resend } from 'resend'
+import { getResendClient } from '@/lib/email/resend-client'
 import { createLogger } from '@/lib/logger'
 import { getBranding } from '@/lib/branding/service'
 import type { EmailService, SendEmailOptions, SendEmailResult } from '@/lib/email/service'
@@ -84,18 +84,6 @@ function optionalAddressList(addresses: string | string[] | undefined): string[]
   if (!addresses) return undefined
   const list = Array.isArray(addresses) ? addresses : [addresses]
   return list.length > 0 ? list : undefined
-}
-
-let resendClient: Resend | null = null
-
-function getResendClient(): Resend {
-  if (!resendClient) {
-    if (!process.env.RESEND_API_KEY) {
-      throw new Error('RESEND_API_KEY is not configured')
-    }
-    resendClient = new Resend(process.env.RESEND_API_KEY)
-  }
-  return resendClient
 }
 
 function isResendConfigured(): boolean {

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, use } from 'react'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
+import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Skeleton } from "@/components/ui/skeleton"
@@ -229,6 +230,8 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       setEmployee(data)
       syncFormState(data)
       setIsEditOpen(false)
+      // A renamed or re-rated employee shows in every roster picker at once.
+      void invalidateReferenceData('ref:employees')
       toast({ title: t('detail_updated') })
     } else {
       const result = await res.json()
@@ -258,6 +261,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
     try {
       const res = await fetch(`/api/salary/employees/${id}`, { method: 'DELETE' })
       if (res.ok) {
+        void invalidateReferenceData('ref:employees')
         toast({ title: t('detail_deactivated') })
         router.push('/salary/employees')
       } else {
@@ -293,6 +297,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
         const { data } = await res.json()
         setEmployee(data)
         syncFormState(data)
+        void invalidateReferenceData('ref:employees')
         toast({ title: t('detail_reactivated'), description: t('detail_reactivated_description') })
       } else {
         const result = await res.json().catch(() => null)

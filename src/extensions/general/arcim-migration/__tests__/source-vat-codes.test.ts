@@ -95,7 +95,7 @@ function buildCtx(): ExtensionContext {
   ;(supabase as unknown as { auth: unknown }).auth = {
     getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }),
   }
-  return { supabase, companyId: 'company-1' } as unknown as ExtensionContext
+  return { supabase, companyId: 'company-1', userId: 'user-1', log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } } as unknown as ExtensionContext
 }
 
 function request() {

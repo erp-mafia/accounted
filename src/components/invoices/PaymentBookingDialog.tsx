@@ -18,13 +18,12 @@ import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
-import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import { KonteringLinesEditor } from '@/components/bookkeeping/KonteringLinesEditor'
 import LinkVoucherPicker from '@/components/invoices/LinkVoucherPicker'
 import { proposePaymentLines, resolveInvoicePaymentSourceType } from '@/lib/bookkeeping/propose-payment-lines'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { useCompany } from '@/contexts/CompanyContext'
-import { Plus, Trash2 } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import { withLineDimensions } from '@/components/bookkeeping/payment-line-dimensions'
@@ -504,129 +503,22 @@ export default function PaymentBookingDialog({
             </div>
 
             {/* Journal entry lines */}
-            {/* Mobile card layout */}
-            <div className="sm:hidden space-y-3">
-              {lines.map((line, index) => (
-                <div key={index} className="rounded-lg border bg-card p-3 space-y-2">
-                  <div className="flex items-start gap-2">
-                    <div className="flex-1">
-                      <AccountCombobox
-                        value={line.account_number}
-                        accounts={accounts}
-                        onChange={(val) => updateLine(index, 'account_number', val)}
-                        selectedName={accountNameByNumber.get(line.account_number)}
-                      />
-                    </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon-sm"
-                      className="shrink-0 -mr-1 -mt-1"
-                      onClick={() => removeLine(index)}
-                      disabled={lines.length <= 2}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="space-y-1">
-                      <Label className="text-xs text-muted-foreground">{t('debit_label')}</Label>
-                      <Input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        placeholder="0,00"
-                        value={line.debit_amount}
-                        onChange={(e) => updateLine(index, 'debit_amount', e.target.value)}
-                        className="tabular-nums text-right"
-                        inputMode="decimal"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <Label className="text-xs text-muted-foreground">{t('credit_label')}</Label>
-                      <Input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        placeholder="0,00"
-                        value={line.credit_amount}
-                        onChange={(e) => updateLine(index, 'credit_amount', e.target.value)}
-                        className="tabular-nums text-right"
-                        inputMode="decimal"
-                      />
-                    </div>
-                  </div>
-                </div>
-              ))}
-              <Button type="button" variant="outline" size="sm" onClick={addLine} className="w-full">
-                <Plus className="mr-1 h-3.5 w-3.5" /> {t('add_row')}
-              </Button>
-            </div>
-
-            {/* Desktop table layout */}
-            <div className="hidden sm:block space-y-2">
-              {/* Header */}
-              <div className="grid grid-cols-[1fr_120px_120px_32px] gap-2 text-xs font-medium text-muted-foreground px-1">
-                <span>{t('account_label')}</span>
-                <span className="text-right">{t('debit_label')}</span>
-                <span className="text-right">{t('credit_label')}</span>
-                <span />
-              </div>
-
-              {/* Lines */}
-              {lines.map((line, index) => (
-                <div key={index} className="grid grid-cols-[1fr_120px_120px_32px] gap-2 items-start">
-                  <div className="min-w-0">
-                    <AccountCombobox
-                      value={line.account_number}
-                      accounts={accounts}
-                      onChange={(val) => updateLine(index, 'account_number', val)}
-                      selectedName={accountNameByNumber.get(line.account_number)}
-                    />
-                  </div>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    placeholder="0,00"
-                    value={line.debit_amount}
-                    onChange={(e) => updateLine(index, 'debit_amount', e.target.value)}
-                    className="tabular-nums text-right"
-                  />
-                  <Input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    placeholder="0,00"
-                    value={line.credit_amount}
-                    onChange={(e) => updateLine(index, 'credit_amount', e.target.value)}
-                    className="tabular-nums text-right"
-                  />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    className="text-muted-foreground hover:text-destructive"
-                    onClick={() => removeLine(index)}
-                    disabled={lines.length <= 2}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              ))}
-
-              {/* Add row */}
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={addLine}
-                className="text-muted-foreground"
-              >
-                <Plus className="mr-1 h-3.5 w-3.5" />
-                {t('add_row')}
-              </Button>
-            </div>
+            <KonteringLinesEditor
+              lines={lines}
+              accounts={accounts}
+              accountName={(number) => accountNameByNumber.get(number)}
+              onAccountChange={(index, value) => updateLine(index, 'account_number', value)}
+              onAmountChange={(index, field, value) => updateLine(index, field, value)}
+              onAdd={addLine}
+              onRemove={removeLine}
+              labels={{
+                account: t('account_label'),
+                debit: t('debit_label'),
+                credit: t('credit_label'),
+                addRow: t('add_row'),
+                removeRow: t('remove_row'),
+              }}
+            />
 
             {/* Balance indicator */}
             <div className="flex items-center justify-between border-t pt-3">

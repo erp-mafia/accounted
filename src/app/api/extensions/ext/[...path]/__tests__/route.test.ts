@@ -50,7 +50,15 @@ vi.mock('@/lib/extensions/sectors', async (importOriginal) => ({
   requiredCapabilityForExtensionId: vi.fn(),
 }))
 
+// The role gates a route declares: driven directly, with the real 403 envelope.
+vi.mock('@/lib/auth/require-write', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/auth/require-write')>()),
+  requireWritePermission: vi.fn(),
+  isCompanyAdmin: vi.fn(),
+}))
+
 import { createClient } from '@/lib/supabase/server'
+import { isCompanyAdmin, requireWritePermission } from '@/lib/auth/require-write'
 import { mfaStepUpApplies, shouldEnforceMfa } from '@/lib/auth/mfa'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { requiredCapabilityForExtensionId } from '@/lib/extensions/sectors'
@@ -62,6 +70,8 @@ const mockShouldEnforceMfa = vi.mocked(shouldEnforceMfa)
 const mockMfaStepUpApplies = vi.mocked(mfaStepUpApplies)
 const mockRequireCapability = vi.mocked(requireCapability)
 const mockRequiredCapabilityForExtensionId = vi.mocked(requiredCapabilityForExtensionId)
+const mockRequireWritePermission = vi.mocked(requireWritePermission)
+const mockIsCompanyAdmin = vi.mocked(isCompanyAdmin)
 
 function createPathParams(path: string[]) {
   return { params: Promise.resolve({ path }) }
@@ -328,5 +338,97 @@ describe('Extension Catch-All Route', () => {
     expect(response.status).toBe(200)
     expect(handler).toHaveBeenCalled()
     expect(mockRequireCapability).not.toHaveBeenCalled()
+  })
+
+  describe('declared role gates', () => {
+    function signIn() {
+      const { supabase } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null })
+      mockCreateClient.mockResolvedValue(supabase as never)
+    }
+
+    function register(route: Record<string, unknown>) {
+      extensionRegistry.register({
+        id: 'test-ext',
+        name: 'Test',
+        version: '1.0.0',
+        apiRoutes: [{ method: 'POST', path: '/write', ...route } as never],
+      })
+    }
+
+    const call = () =>
+      POST(
+        createMockRequest('/api/extensions/ext/test-ext/write', { method: 'POST', body: {} }),
+        createPathParams(['test-ext', 'write']),
+      )
+
+    it('refuses a viewer on a requireWrite route before the handler runs', async () => {
+      const handler = vi.fn()
+      register({ requireWrite: true, handler })
+      signIn()
+      mockRequireWritePermission.mockResolvedValue({
+        ok: false,
+        response: NextResponse.json({ error: 'Du har endast läsbehörighet i detta företag.' }, { status: 403 }),
+      })
+
+      const response = await call()
+
+      expect(response.status).toBe(403)
+      expect(handler).not.toHaveBeenCalled()
+      expect(mockRequireWritePermission).toHaveBeenCalledWith(expect.anything(), 'user-1', { companyId: 'company-1' })
+    })
+
+    it('dispatches a requireWrite route for a writer', async () => {
+      const handler = vi.fn().mockResolvedValue(NextResponse.json({ ok: true }))
+      register({ requireWrite: true, handler })
+      signIn()
+      mockRequireWritePermission.mockResolvedValue({ ok: true })
+
+      const response = await call()
+
+      expect(response.status).toBe(200)
+      expect(handler).toHaveBeenCalledWith(expect.any(Request), expect.objectContaining({ userId: 'user-1' }))
+    })
+
+    it('refuses a non-admin on a requireAdmin route with the FORBIDDEN envelope', async () => {
+      const handler = vi.fn()
+      register({ requireAdmin: true, handler })
+      signIn()
+      mockIsCompanyAdmin.mockResolvedValue(false)
+
+      const response = await call()
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+      expect(status).toBe(403)
+      expect(body.error.code).toBe('FORBIDDEN')
+      expect(handler).not.toHaveBeenCalled()
+      expect(mockIsCompanyAdmin).toHaveBeenCalledWith(expect.anything(), 'company-1')
+      // requireAdmin implies requireWrite: one check, not two.
+      expect(mockRequireWritePermission).not.toHaveBeenCalled()
+    })
+
+    it('dispatches a requireAdmin route for an owner or admin', async () => {
+      const handler = vi.fn().mockResolvedValue(NextResponse.json({ ok: true }))
+      register({ requireAdmin: true, handler })
+      signIn()
+      mockIsCompanyAdmin.mockResolvedValue(true)
+
+      const response = await call()
+
+      expect(response.status).toBe(200)
+      expect(handler).toHaveBeenCalled()
+    })
+
+    it('runs no role check on an undeclared route', async () => {
+      const handler = vi.fn().mockResolvedValue(NextResponse.json({ ok: true }))
+      register({ handler })
+      signIn()
+
+      const response = await call()
+
+      expect(response.status).toBe(200)
+      expect(mockRequireWritePermission).not.toHaveBeenCalled()
+      expect(mockIsCompanyAdmin).not.toHaveBeenCalled()
+    })
   })
 })

@@ -1,8 +1,7 @@
 'use client'
 
 import { useMemo } from 'react'
-import { formatCurrency } from '@/lib/utils'
-import { formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
+import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import { computeProposalLines } from '@/lib/bookkeeping/proposal-lines'
 import type { ProposalLinesInput } from '@/lib/bookkeeping/proposal-lines'
 
@@ -60,22 +59,18 @@ export default function JournalEntryPreview({ changedAccounts, ...props }: Journ
   return (
     <div className="rounded-lg border bg-muted/30 px-3 py-2.5 overflow-hidden">
       <p className="text-xs font-medium text-muted-foreground mb-1.5">Verifikation</p>
-      <div className="space-y-0.5 font-mono text-xs min-w-0">
-        {lines.map((line, i) => (
-          <div key={i} className="flex items-baseline gap-2 min-w-0">
-            <span className={`w-12 text-right flex-shrink-0 ${line.side === 'debet' ? 'text-foreground' : 'text-muted-foreground'}`}>
-              {line.side === 'debet' ? 'Debet' : 'Kredit'}
-            </span>
-            <span className={`flex-1 truncate ${changedAccounts?.includes(line.account) ? 'font-semibold text-foreground' : ''}`}>
-              {formatAccountWithName(line.account)}
-              {changedAccounts?.includes(line.account) && (
-                <span className="ml-1.5 rounded-sm bg-attn/15 px-1 font-sans text-[11px] font-medium uppercase tracking-wide text-attn">ny</span>
-              )}
-            </span>
-            <span className="flex-shrink-0 tabular-nums">{formatCurrency(line.amount, 'SEK')}</span>
-          </div>
-        ))}
-      </div>
+      <VoucherLinesTable
+        lines={lines.map((line, i) => ({
+          key: i,
+          account_number: line.account,
+          debit_amount: line.side === 'debet' ? line.amount : 0,
+          credit_amount: line.side === 'debet' ? 0 : line.amount,
+          extra: changedAccounts?.includes(line.account) ? (
+            <span className="rounded-sm bg-attn/15 px-1 text-[11px] font-medium uppercase tracking-wide text-attn">ny</span>
+          ) : undefined,
+        }))}
+        withCurrency
+      />
     </div>
   )
 }

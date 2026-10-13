@@ -146,6 +146,9 @@ const BANK_SKIP_CODE: Record<BankLinkRefusalCode, PairSkipCode> = {
   TRANSACTION_OTHER_ACCOUNT: 'NOT_FOUND',
   TRANSACTION_IGNORED: 'ROW_IGNORED',
   TRANSACTION_ALREADY_LINKED: 'ALREADY_LINKED',
+  // Only the row's-own-account link asks it (manualLink names the account);
+  // the bank-anchor guard refuses the same row at the write.
+  CURRENCY_MISMATCH: 'BANK_ANCHOR_REFUSED',
   ENTRY_NOT_FOUND: 'ENTRY_NOT_FOUND',
   ENTRY_NOT_POSTED: 'ENTRY_NOT_FOUND',
   ENTRY_REVERSED: 'ENTRY_REVERSED',

@@ -117,7 +117,7 @@ function buildCtx(): ExtensionContext {
   ;(supabase as unknown as { auth: unknown }).auth = {
     getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }),
   }
-  return { supabase, companyId: 'company-1' } as unknown as ExtensionContext
+  return { supabase, companyId: 'company-1', userId: 'user-1', log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } } as unknown as ExtensionContext
 }
 
 function request(path: string, consentId = 'consent-1') {
@@ -145,16 +145,6 @@ beforeEach(() => {
 })
 
 describe('GET /preview: every source year, with the default selection marked (#2211)', () => {
-  it('answers 401 without a user', async () => {
-    const ctx = buildCtx()
-    ;(ctx.supabase as unknown as { auth: { getUser: Mock } }).auth.getUser.mockResolvedValue({
-      data: { user: null },
-    })
-
-    const res = await handler('/preview')(request('/preview'), ctx)
-
-    expect(res.status).toBe(401)
-  })
 
   it('answers 400 VALIDATION_ERROR without a consentId, before touching the provider', async () => {
     const res = await handler('/preview')(

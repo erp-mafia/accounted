@@ -12,7 +12,8 @@
  * RPC leaves out is covered against real Postgres in tests/pg.
  */
 import { describe, it, expect } from 'vitest'
-import { computeVatReport, tools } from '../server'
+import { tools } from '../server'
+import { computeVatReport } from '@/lib/reports/vat-close-check'
 import { calculateVatDeclaration } from '@/lib/reports/vat-declaration'
 import { vatTotalsRpcResult } from './vat-totals-rpc-double'
 

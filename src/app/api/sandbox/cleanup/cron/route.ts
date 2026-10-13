@@ -1,7 +1,6 @@
-import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
-import { withCronContext } from '@/lib/api/with-cron-context'
-import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { withServiceCronContext } from '@/lib/api/with-cron-context'
+import { errorResponse } from '@/lib/errors/get-structured-error'
 
 /**
  * GET /api/sandbox/cleanup/cron: daily 04:00 UTC.
@@ -29,18 +28,8 @@ const BATCH_LIMIT = 10
 const MAX_BATCHES = 25
 const TIME_BUDGET_MS = 240_000
 
-export const GET = withCronContext('cron.sandbox_cleanup', async (_request, ctx) => {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-  if (!supabaseUrl || !supabaseServiceKey) {
-    return errorResponseFromCode('INTERNAL_ERROR', ctx.log, {
-      requestId: ctx.requestId,
-      details: { reason: 'Missing Supabase configuration' },
-    })
-  }
-
-  const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
+export const GET = withServiceCronContext('cron.sandbox_cleanup', async (_request, ctx) => {
+  const supabase = ctx.supabase
 
   const started = Date.now()
   const totals = { cleaned: 0, failed: 0, orphans_removed: 0, batches: 0 }

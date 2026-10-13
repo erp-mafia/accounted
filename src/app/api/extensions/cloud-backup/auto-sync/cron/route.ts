@@ -1,7 +1,6 @@
-import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
-import { withCronContext } from '@/lib/api/with-cron-context'
-import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { withServiceCronContext } from '@/lib/api/with-cron-context'
+import { errorResponse } from '@/lib/errors/get-structured-error'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { performSync, saveExtensionData } from '@/extensions/general/cloud-backup/lib/sync'
 import { isScheduleDue } from '@/extensions/general/cloud-backup/lib/schedule'
@@ -39,18 +38,8 @@ import type {
  * `extension_data` carries its own `user_id` (the user who configured the
  * schedule), which we use as the "actor" when writing back the sync result.
  */
-export const GET = withCronContext('cron.cloud_backup_auto_sync', async (_request, ctx) => {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-  if (!supabaseUrl || !supabaseServiceKey) {
-    return errorResponseFromCode('INTERNAL_ERROR', ctx.log, {
-      requestId: ctx.requestId,
-      details: { reason: 'Missing Supabase configuration' },
-    })
-  }
-
-  const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
+export const GET = withServiceCronContext('cron.cloud_backup_auto_sync', async (_request, ctx) => {
+  const supabase = ctx.supabase
   const now = new Date()
   const origin = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
 

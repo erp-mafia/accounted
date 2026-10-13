@@ -36,6 +36,7 @@ import {
   toDeliveryReport,
   verifyDeliveryWebhook,
 } from '@/extensions/general/email/lib/delivery-webhook'
+import { testRoutes } from '@/tests/helpers'
 
 function baseData(overrides: Record<string, unknown> = {}) {
   return {
@@ -48,7 +49,7 @@ function baseData(overrides: Record<string, unknown> = {}) {
   }
 }
 
-const deliveryRoute = emailExtension.apiRoutes!.find(
+const deliveryRoute = testRoutes(emailExtension).find(
   (route) => route.path === '/delivery-status',
 )!
 

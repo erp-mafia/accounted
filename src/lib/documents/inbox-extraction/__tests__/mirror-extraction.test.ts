@@ -6,7 +6,7 @@ vi.mock('@/lib/auth/api-keys', () => ({
   createServiceClientNoCookies: () => supabase,
 }))
 
-import { mirrorExtractionToDocument } from '../lib/mirror-extraction'
+import { mirrorExtractionToDocument } from '../mirror-extraction'
 
 function lastUpdate() {
   const updates = findCalls('document_attachments', 'update')

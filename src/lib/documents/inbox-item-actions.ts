@@ -21,6 +21,7 @@
  * A dry run reads and checks; it writes nothing.
  */
 import { z } from 'zod'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { decodeDefaultCursor, encodeDefaultCursor } from '@/lib/api/v1/pagination'
 import { UUID_RE } from '@/lib/invariants/uuid'
@@ -28,6 +29,7 @@ import {
   resolveBookedJournalEntryIds,
   resolveUnderlagAnchoring,
   type UnderlagAnchoring,
+  type UnderlagAnchoringResult,
 } from '@/lib/transactions/inbox-underlag'
 import type { InvoiceExtractionResult } from '@/types'
 import { INBOX_DOCUMENT_KINDS } from '@/lib/documents/inbox-kind'
@@ -102,34 +104,61 @@ function readingSummary(extracted: Record<string, unknown> | null) {
   }
 }
 
+/** The columns the booked-state enrichment reads. */
+export type InboxBookedStateRow = Pick<
+  InboxItemSummaryRow,
+  'id' | 'document_id' | 'matched_transaction_id' | 'created_journal_entry_id' | 'created_supplier_invoice_id'
+>
+
+export interface InboxBookedState {
+  /** The verifikat that books the item's matched transaction, when it is booked. */
+  journalEntryId: string | null
+  /** Whether THIS item's document reached that verifikat; null when nothing to judge. */
+  underlag: UnderlagStatus | null
+}
+
 /**
- * The booked-state enrichment the dashboard list and detail apply: a matched
- * but unstamped item whose transaction is booked reports that verifikat, and
- * whether THIS item's document actually reached it (#1548).
+ * The booked-state enrichment every inbox list and detail applies (the
+ * dashboard routes and the v1 operations): a matched but unstamped item whose
+ * transaction is booked reports that verifikat, and whether THIS item's
+ * document actually reached it (#1548).
+ *
+ * created_journal_entry_id is UNIQUE per verifikat, so on a samlingsverifikat
+ * only one of N items can carry it: deriving "booked" from the transaction's
+ * own state is what lets the rest leave the active inbox. The transaction
+ * being booked says a verifikat exists, not that this item's underlag reached
+ * it, so a document whose link failed or that is anchored to another
+ * verifikat keeps the item in "Att göra". Absent from the anchoring read
+ * means the document row could not be read: 'unknown', which the UI treats
+ * like a divergent item. Never booked on a guess.
  */
-async function enrich(
-  ctx: OperationContext,
-  rows: Array<Pick<InboxItemSummaryRow, 'id' | 'document_id' | 'matched_transaction_id' | 'created_journal_entry_id' | 'created_supplier_invoice_id'>>,
-): Promise<Map<string, { journalEntryId: string | null; underlag: UnderlagStatus | null }>> {
-  const out = new Map<string, { journalEntryId: string | null; underlag: UnderlagStatus | null }>()
+export async function resolveInboxBookedState(
+  supabase: SupabaseClient,
+  companyId: string,
+  rows: InboxBookedStateRow[],
+): Promise<Map<string, InboxBookedState>> {
+  const out = new Map<string, InboxBookedState>()
   const unresolved = rows.filter(
     (r) => r.matched_transaction_id && !r.created_journal_entry_id && !r.created_supplier_invoice_id,
   )
   const txIds = Array.from(new Set(unresolved.map((r) => r.matched_transaction_id as string)))
-  const bookedByTx = await resolveBookedJournalEntryIds(ctx.supabase, ctx.companyId, txIds)
-  const anchoring = await resolveUnderlagAnchoring(
-    ctx.supabase,
-    ctx.companyId,
-    unresolved
-      .filter((r) => bookedByTx.has(r.matched_transaction_id as string))
-      .map((r) => ({
-        id: r.id,
-        document_id: r.document_id,
-        journalEntryId: bookedByTx.get(r.matched_transaction_id as string) as string,
-      })),
-  )
+  const bookedByTx = txIds.length > 0
+    ? await resolveBookedJournalEntryIds(supabase, companyId, txIds)
+    : new Map<string, string>()
+  const toAnchor = unresolved
+    .filter((r) => bookedByTx.has(r.matched_transaction_id as string))
+    .map((r) => ({
+      id: r.id,
+      document_id: r.document_id,
+      journalEntryId: bookedByTx.get(r.matched_transaction_id as string) as string,
+    }))
+  const anchoring = toAnchor.length > 0
+    ? await resolveUnderlagAnchoring(supabase, companyId, toAnchor)
+    : new Map<string, UnderlagAnchoringResult>()
   for (const r of rows) {
     const derived = r.matched_transaction_id ? bookedByTx.get(r.matched_transaction_id) ?? null : null
+    // Only unstamped items were sent to the anchoring read; a stamped sibling
+    // is booked by its own column and gets no verdict here.
     const unstamped = !r.created_journal_entry_id && !r.created_supplier_invoice_id
     out.set(r.id, {
       journalEntryId: derived,
@@ -141,7 +170,7 @@ async function enrich(
 
 function toSummary(
   row: InboxItemSummaryRow,
-  extra: { journalEntryId: string | null; underlag: UnderlagStatus | null } | undefined,
+  extra: InboxBookedState | undefined,
 ): InboxItemSummary {
   return {
     inbox_item_id: row.id,
@@ -206,7 +235,7 @@ export async function listInboxItemsPage(
   if (error) return failed(error)
   const rows = (data ?? []) as unknown as InboxItemSummaryRow[]
   const page = rows.slice(0, limit)
-  const extras = await enrich(ctx, page)
+  const extras = await resolveInboxBookedState(ctx.supabase, ctx.companyId, page)
   const last = page[page.length - 1]
   return {
     ok: true,
@@ -268,7 +297,7 @@ export async function getInboxItem(
     }
   }
 
-  const extras = await enrich(ctx, [row])
+  const extras = await resolveInboxBookedState(ctx.supabase, ctx.companyId, [row])
   return {
     ok: true,
     data: {

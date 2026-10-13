@@ -1,9 +1,11 @@
 /**
- * The bulk_book_transactions executor runs the booking-time duplicate guard
- * every bulk-book door runs (runBulkBookDuplicateGuard) before the RPC.
- * Staging already ran it, but another verifikat can book the same bank line
- * between staging and approval, and the RPC only refuses a row that already
- * has a verifikat of its own.
+ * The approval of a bulk_book_transactions op runs the operation
+ * transactions.bulk-book, which runs the booking-time duplicate guard every
+ * bulk-book door runs (runBulkBookDuplicateGuard) before the RPC. Staging
+ * already ran it, but another verifikat can book the same bank line between
+ * staging and approval, and the RPC only refuses a row that already has a
+ * verifikat of its own. The ops are staged in the hand-written tool's shape
+ * (allow_duplicate), which upgradeParams rewrites to force.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { eventBus } from '@/lib/events/bus'
@@ -14,6 +16,7 @@ import {
   type BookedDuplicateCandidate,
 } from '@/lib/transactions/booking-duplicate-detection'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
+import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 
 import { commitPendingOperation } from '../commit'
 
@@ -22,6 +25,9 @@ vi.mock('@/lib/transactions/booking-duplicate-detection', async (importOriginal)
   return { ...actual, detectBookingDuplicate: vi.fn() }
 })
 vi.mock('@/lib/processing-history/append', () => ({ appendProcessingHistory: vi.fn() }))
+vi.mock('@/lib/transactions/inbox-underlag', () => ({
+  propagateUnderlagForBookedTransaction: vi.fn(async () => undefined),
+}))
 // suggestion_log is recorded around every booking; its own reads and writes
 // are covered in lib/suggestion-log, not by this file's queued client.
 vi.mock('@/lib/suggestion-log/record', async (importOriginal) => ({
@@ -38,7 +44,7 @@ function makeBulkBookOp(params: Record<string, unknown> = {}): PendingOperation 
     operation_type: 'bulk_book_transactions',
     status: 'pending',
     title: 'Länka 1 transaktioner -1 250,00 SEK 2026-05-12 till verifikat: BG 5050-1055',
-    params: { tx_ids: ['tx-1'], existing_journal_entry_id: 'je-1', new_entry: null, ...params },
+    params: { tx_ids: [TX], existing_journal_entry_id: JE, new_entry: null, ...params },
     preview_data: {},
     result_data: null,
     actor_type: 'api_key',
@@ -54,8 +60,13 @@ function makeBulkBookOp(params: Record<string, unknown> = {}): PendingOperation 
   }
 }
 
+const TX = '11111111-1111-4111-8111-111111111111'
+const JE = '33333333-3333-4333-8333-333333333333'
+
 const ROW = {
-  id: 'tx-1',
+  id: TX,
+  description: 'BG 5050-1055',
+  journal_entry_id: null,
   amount: -1250,
   currency: 'SEK',
   date: '2026-05-12',
@@ -89,14 +100,14 @@ describe('commitPendingOperation(bulk_book_transactions): duplicate guard at app
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     enqueueMany([
       { data: { id: 'op-bulk-dup' }, error: null }, // atomic claim pending -> committing
-      { data: [ROW], error: null }, // duplicate guard: row fetch
+      { data: [ROW], error: null }, // transactions
       { data: null, error: null }, // dispatcher: rejected update
     ])
 
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', makeBulkBookOp())
 
     // 409 consumes the op, like a vanished or already-booked row: the agent
-    // re-stages with allow_duplicate after the user has reviewed the candidate.
+    // re-stages with force after the user has reviewed the candidate.
     expect(result.status).toBe('rejected')
     expect(result.http_status).toBe(409)
     expect(result.code).toBe('TRANSACTION_BOOK_POSSIBLE_DUPLICATE')
@@ -104,8 +115,8 @@ describe('commitPendingOperation(bulk_book_transactions): duplicate guard at app
     expect(detectBookingDuplicate).toHaveBeenCalledWith(
       supabase,
       'company-1',
-      expect.objectContaining({ id: 'tx-1', amount: -1250 }),
-      { excludeTransactionIds: ['tx-1'], excludeJournalEntryIds: ['je-1'] },
+      expect.objectContaining({ id: TX, amount: -1250 }),
+      { excludeTransactionIds: [TX], excludeJournalEntryIds: [JE] },
     )
     expect(supabase.rpc).not.toHaveBeenCalled()
   })
@@ -115,8 +126,9 @@ describe('commitPendingOperation(bulk_book_transactions): duplicate guard at app
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     enqueueMany([
       { data: { id: 'op-bulk-dup' }, error: null },
-      { data: [ROW], error: null }, // duplicate guard: row fetch
-      { data: { ok: true, journal_entry_id: 'je-1', mode: 'link_existing', linked_tx_count: 1 }, error: null }, // RPC
+      { data: [ROW], error: null }, // transactions
+      { data: { ok: true, journal_entry_id: JE, mode: 'link_existing', linked_tx_count: 1 }, error: null }, // RPC
+      { data: [], error: null }, // transaction.reconciled: the booked rows re-read
       { data: null, error: null }, // finalize committed
     ])
 
@@ -129,11 +141,16 @@ describe('commitPendingOperation(bulk_book_transactions): duplicate guard at app
 
     expect(result.status).toBe('committed')
     expect(supabase.rpc).toHaveBeenCalledWith('bulk_book_transactions', expect.anything())
+    // What the dashboard and v1 bookings did and the hand-written executor
+    // skipped: a matched underlag completes against the samlingsverifikat.
+    expect(propagateUnderlagForBookedTransaction).toHaveBeenCalledWith(supabase, 'company-1', TX, JE)
     expect(appendProcessingHistory).toHaveBeenCalledWith(
       expect.objectContaining({
         eventType: 'BankTransactionDuplicateDismissed',
-        aggregateId: 'tx-1',
-        payload: expect.objectContaining({ dismissed_journal_entry_id: 'je-paid', via: 'allow_duplicate' }),
+        aggregateId: TX,
+        // The operation's label: an approved staged force is a machine-door
+        // write, recorded like v1's (the actor stays the approving user).
+        payload: expect.objectContaining({ dismissed_journal_entry_id: 'je-paid', via: 'api_force' }),
         actor: { type: 'user', id: 'user-1' },
       }),
     )

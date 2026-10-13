@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server'
-import { createServiceRoleClient } from '@/lib/supabase/service-client'
-import { withCronContext } from '@/lib/api/with-cron-context'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { withServiceCronContext } from '@/lib/api/with-cron-context'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import {
   probeSessionHealth,
@@ -32,7 +30,7 @@ const PROVEN_ALIVE_MS = 24 * 60 * 60 * 1000
  * Its own schedule, not a tail of the sync cron: that one runs hourly, and
  * the probes (and the expiry mail a dead session sends) are a daily job.
  */
-export const GET = withCronContext('cron.bank_session_probe', async (_request, ctx) => {
+export const GET = withServiceCronContext('cron.bank_session_probe', async (_request, ctx) => {
   if (!(await extensionRegistry.get('enable-banking'))) {
     ctx.log.warn('enable-banking extension is not enabled; cron refused')
     return NextResponse.json(
@@ -41,16 +39,7 @@ export const GET = withCronContext('cron.bank_session_probe', async (_request, c
     )
   }
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!supabaseUrl || !supabaseServiceKey) {
-    return errorResponseFromCode('INTERNAL_ERROR', ctx.log, {
-      requestId: ctx.requestId,
-      details: { reason: 'Missing Supabase configuration' },
-    })
-  }
-
-  const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
+  const supabase = ctx.supabase
   const startTime = Date.now()
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
   const probeResults: { connectionId: string; bankName: string }[] = []

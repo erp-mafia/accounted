@@ -72,7 +72,10 @@ interface SortableThProps {
   label: string
   /** The column's sort, or null when the list is sorted on another column. */
   direction: 'asc' | 'desc' | null
-  onSort: () => void
+  /** The click: a list that stacks sort keys reads shiftKey from it. */
+  onSort: (event: { shiftKey: boolean }) => void
+  /** This column's place in a multi-column sort; shown when set. */
+  rank?: number
   align?: 'left' | 'right'
   className?: string
 }
@@ -84,7 +87,7 @@ interface SortableThProps {
  * and a 40px target. The invoice and supplier invoice lists had this; the
  * customer, article and dimension lists had a bare button without any of it.
  */
-export function SortableTh({ label, direction, onSort, align = 'left', className }: SortableThProps) {
+export function SortableTh({ label, direction, onSort, rank, align = 'left', className }: SortableThProps) {
   const t = useTranslations('common')
   const SortIcon = direction === 'asc' ? ArrowUp : direction === 'desc' ? ArrowDown : ArrowUpDown
   return (
@@ -103,6 +106,11 @@ export function SortableTh({ label, direction, onSort, align = 'left', className
       >
         <span>{label}</span>
         <SortIcon aria-hidden="true" className={cn('h-3.5 w-3.5 shrink-0', !direction && 'text-muted-foreground/60')} />
+        {rank != null && (
+          <span className="text-[11px] font-medium tabular-nums text-muted-foreground" aria-hidden="true">
+            {rank}
+          </span>
+        )}
       </button>
     </th>
   )

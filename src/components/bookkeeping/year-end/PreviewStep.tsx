@@ -12,6 +12,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { formatCurrency } from '@/lib/utils'
+import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import type { YearEndPreview } from '@/types'
 
 interface PreviewStepProps {
@@ -157,30 +158,18 @@ export function PreviewStep({ preview, isLoading, error, onBack, onContinue }: P
         <p className="px-1 pb-2 text-xs leading-5 text-muted-foreground">
           {preview.closingLines.length} kontorader. Nollställer klass 3-8 mot {preview.closingAccount}.
         </p>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Konto</TableHead>
-                <TableHead>Beskrivning</TableHead>
-                <TableHead className="text-right">Debet</TableHead>
-                <TableHead className="text-right">Kredit</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {preview.closingLines.map((line, i) => (
-                <TableRow key={i}>
-                  <TableCell className="tabular-nums">{line.account_number}</TableCell>
-                  <TableCell className="text-sm">{line.line_description}</TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {line.debit_amount > 0 ? formatCurrency(line.debit_amount) : '-'}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {line.credit_amount > 0 ? formatCurrency(line.credit_amount) : '-'}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+        {/* Swedish in both locales: the year-end wizard is a statutory surface. */}
+        <VoucherLinesTable
+          lines={preview.closingLines.map((line, i) => ({
+            key: i,
+            account_number: line.account_number,
+            description: line.line_description,
+            debit_amount: line.debit_amount,
+            credit_amount: line.credit_amount,
+          }))}
+          withCurrency
+          swedish
+        />
       </section>
 
       <div className="flex justify-between">

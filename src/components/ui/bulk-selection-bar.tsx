@@ -11,9 +11,14 @@ interface BulkSelectionBarProps {
   selectableCount: number
   /** The noun after the count, e.g. "fakturor valda". */
   countLabel: string
-  /** "Markera alla (N)": shown while something visible is still unpicked. */
-  selectAllLabel: string
+  /**
+   * "Markera alla (N)": shown while something visible is still unpicked.
+   * Leave it out for a list whose select-all lives elsewhere.
+   */
+  selectAllLabel?: string
   clearLabel: string
+  /** A bulk action is running: the select links wait for it. */
+  busy?: boolean
   /** The list's own actions, between the count and the select links. */
   children: ReactNode
 }
@@ -29,6 +34,7 @@ export function BulkSelectionBar({
   countLabel,
   selectAllLabel,
   clearLabel,
+  busy = false,
   children,
 }: BulkSelectionBarProps) {
   const count = selection.selectedIds.size
@@ -40,12 +46,12 @@ export function BulkSelectionBar({
       </span>
       {children}
       {/* Hidden when everything visible is picked: "Markera alla" would do nothing. */}
-      {selectableCount > 0 && !selection.allSelected && (
-        <button type="button" className={QUIET_LINK_CLASS} onClick={selection.selectAll}>
+      {selectAllLabel && selectableCount > 0 && !selection.allSelected && (
+        <button type="button" className={QUIET_LINK_CLASS} onClick={selection.selectAll} disabled={busy}>
           {selectAllLabel}
         </button>
       )}
-      <button type="button" className={QUIET_LINK_CLASS} onClick={selection.clear}>
+      <button type="button" className={QUIET_LINK_CLASS} onClick={selection.clear} disabled={busy}>
         {clearLabel}
       </button>
     </FloatingBulkBar>

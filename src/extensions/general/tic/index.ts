@@ -535,8 +535,8 @@ export const ticExtension: Extension = {
       // BankID picker): user is authenticated but does not yet have a
       // company. Must not require a company context.
       skipCompanyContext: true,
-      handler: async (request: Request, ctx?) => {
-        const log = ctx?.log ?? console
+      handler: async (request: Request) => {
+        const log = console
         const url = new URL(request.url)
         const orgNumber = url.searchParams.get('org_number')
 
@@ -587,8 +587,8 @@ export const ticExtension: Extension = {
       // Used during onboarding to render richer company profile details:
       // user is authenticated but may not yet have a company. See /lookup.
       skipCompanyContext: true,
-      handler: async (request: Request, ctx?) => {
-        const log = ctx?.log ?? console
+      handler: async (request: Request) => {
+        const log = console
         const url = new URL(request.url)
         const orgNumber = url.searchParams.get('org_number')
 
@@ -1862,8 +1862,8 @@ export const ticExtension: Extension = {
       // returns up to five hits in /lookup's shape so a pick needs no second
       // call. User is authenticated but may not yet have a company.
       skipCompanyContext: true,
-      handler: async (request: Request, ctx?) => {
-        const log = ctx?.log ?? console
+      handler: async (request: Request) => {
+        const log = console
         const url = new URL(request.url)
         const query = (url.searchParams.get('q') ?? '').trim()
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
+import { createMockRequest, parseJsonResponse, testRoutes } from '@/tests/helpers'
 
 vi.mock('../lib/bankid-client', () => ({
   startBankIdAuth: vi.fn(),
@@ -94,7 +94,7 @@ async function flowCookie(
 }
 
 function findCompleteHandler() {
-  const route = ticExtension.apiRoutes!.find(
+  const route = testRoutes(ticExtension).find(
     (r) => r.method === 'POST' && r.path === '/bankid/complete'
   )
   if (!route) throw new Error('POST /bankid/complete route not found in ticExtension.apiRoutes')
@@ -1226,7 +1226,7 @@ describe('POST /bankid/complete', () => {
 
 describe('POST /bankid/start', () => {
   function findStartHandler() {
-    const route = ticExtension.apiRoutes!.find(
+    const route = testRoutes(ticExtension).find(
       (r) => r.method === 'POST' && r.path === '/bankid/start'
     )
     if (!route) throw new Error('POST /bankid/start route not found')
@@ -1286,7 +1286,7 @@ describe('POST /bankid/start', () => {
 
 describe('POST /bankid/poll', () => {
   function findPollHandler() {
-    const route = ticExtension.apiRoutes!.find(
+    const route = testRoutes(ticExtension).find(
       (r) => r.method === 'POST' && r.path === '/bankid/poll'
     )
     if (!route) throw new Error('POST /bankid/poll route not found')
@@ -1478,7 +1478,7 @@ describe('POST /bankid/poll', () => {
 
 describe('POST /bankid/poll: the sealed identification (#2471)', () => {
   function findPollHandler() {
-    const route = ticExtension.apiRoutes!.find(
+    const route = testRoutes(ticExtension).find(
       (r) => r.method === 'POST' && r.path === '/bankid/poll'
     )
     if (!route) throw new Error('POST /bankid/poll route not found')
@@ -1616,7 +1616,7 @@ describe('POST /bankid/poll: the sealed identification (#2471)', () => {
 
 describe('POST /bankid/cancel', () => {
   function findCancelHandler() {
-    const route = ticExtension.apiRoutes!.find(
+    const route = testRoutes(ticExtension).find(
       (r) => r.method === 'POST' && r.path === '/bankid/cancel'
     )
     if (!route) throw new Error('POST /bankid/cancel route not found')

@@ -4,7 +4,7 @@ import {
   EMAIL_ALLOWED_MIME_TYPES,
   UPLOAD_ALLOWED_MIME_TYPES,
 } from '@/extensions/general/invoice-inbox/lib/upload-and-extract'
-import { htmlToText } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
+import { htmlToText } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
 import { validateDocumentMagicBytes } from '@/lib/core/documents/document-service'
 import { INBOX_UPLOAD_ACCEPT, INBOX_UPLOAD_TYPES, declaredDocumentType } from '@/lib/documents/upload-types'
 

@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { AutoGrowTextarea } from '@/components/invoices/AutoGrowTextarea'
 import { SegmentedControl } from '@/components/ui/segmented-control'
-import { useToast } from '@/components/ui/use-toast'
+import { useSaveSettings } from '@/components/settings/use-save-settings'
 import { QrModeRadioGroup } from '@/components/settings/PdfPrintSettings'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { EditorSection } from './EditorSection'
@@ -77,7 +77,7 @@ export function PaymentPanel({
 }: PaymentPanelProps) {
   const t = useTranslations('invoice_editor_panel')
   const tPdf = useTranslations('settings_pdf_print')
-  const { toast } = useToast()
+  const saveSettings = useSaveSettings()
   const [creditTerms, setCreditTerms] = useState(settings.invoice_credit_terms_text ?? '')
   const [lateFee, setLateFee] = useState(settings.invoice_late_fee_text ?? '')
   const effectiveScope: PaymentPanelScope = canEditCompany ? scope : 'this'
@@ -88,17 +88,7 @@ export function PaymentPanel({
   }, [])
 
   async function save(updates: Partial<CompanySettings>) {
-    try {
-      const response = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates),
-      })
-      if (!response.ok) throw new Error()
-      onSettingsSaved(updates)
-    } catch {
-      toast({ title: tPdf('toast_save_failed'), variant: 'destructive' })
-    }
+    if (await saveSettings(updates, { failedTitle: tPdf('toast_save_failed') })) onSettingsSaved(updates)
   }
 
   const showRows: Array<{ field: ShowField; label: string; value: string | null; hint?: string; defaultOn: boolean }> = [

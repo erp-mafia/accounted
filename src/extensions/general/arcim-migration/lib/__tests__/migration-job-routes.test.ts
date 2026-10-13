@@ -27,10 +27,6 @@ function context() {
 }
 beforeEach(() => { vi.clearAllMocks(); ensureIdentity.mockResolvedValue('present') })
 describe('migration job API', () => {
-  it('rejects an unauthenticated request before creating service work', async () => {
-    expect((await route('POST')(request({ consentId: id, resources: ['customers'] }))).status).toBe(401)
-    expect(serviceRpc).not.toHaveBeenCalled()
-  })
   it('validates resources and rejects client-supplied company or fiscal scope', async () => {
     for (const body of [{ consentId: id, resources: [] }, { consentId: id, resources: ['journalEntries'] },
       { consentId: id, resources: ['customers'], companyId: 'foreign' }, { consentId: id, resources: ['customers'], scope: {} },

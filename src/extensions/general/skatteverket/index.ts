@@ -30,16 +30,20 @@ import {
   type OAuthFlow,
 } from '@/lib/auth/oauth-flows'
 import { storeTokens, getTokens, deleteTokens, getTokenHealth } from './lib/token-store'
-import { skvRequest, skvRequestWithAuth, SkatteverketAuthError, getSkatteverketEnvironment, isApigwClientRefusal } from './lib/api-client'
+import { skvRequest, SkatteverketAuthError, getSkatteverketEnvironment, isApigwClientRefusal } from './lib/api-client'
 import { skvAuthCodeToStructured } from './lib/error-map'
 import {
   buildMomsuppgift,
-  buildAgiUnderlag,
   type VatDeclarationPrep,
-  type AgiUnderlagPrep,
 } from './lib/declaration-prep'
 import { submitVatDeclarationChain } from './lib/vat-submit'
-import { submitAgiChain } from './lib/agi-submit'
+import {
+  agiRunTarget,
+  createAgiSigningLink,
+  submitAgiChain,
+  submitAgiUnderlag,
+  type AgiStepFailure,
+} from './lib/agi-submit'
 import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
 import {
   VAT_FILING_DEADLINE_TYPES,
@@ -64,9 +68,6 @@ import type {
   SkattekontoBookCommitResult,
 } from '@/lib/pending-operations/skatteverket-commit'
 import {
-  agiPostUnderlag,
-  agiGetKontrollresultat,
-  agiSkapaGranskningsunderlag,
   agiGetKvittenser,
   agiLasUppPeriod,
 } from './lib/agi-client'
@@ -78,7 +79,7 @@ import {
 } from './lib/core-actions'
 import type { SkvActionFailure } from '@/lib/skatteverket/extension-actions'
 import { SKATTEKONTO_BALANCE_SNAPSHOT_KEY, SKATTEKONTO_LAST_SYNCED_AT_KEY } from './lib/skattekonto-sync'
-import { fetchVatDeclarationStatus } from './lib/declaration-status'
+import { fetchDeclarationView, fetchVatDeclarationStatus } from './lib/declaration-status'
 import { runPostConnectRefresh } from './lib/post-connect-refresh'
 import { promoteAgiDeclaration } from './lib/agi-kvittens-reconcile'
 import { readAgiSubmissionStatus } from './lib/agi-submission-status'
@@ -103,14 +104,10 @@ import type { VatPeriodType } from '@/types'
 import type { SkattekontoLedgerCoverInfo } from '@/types/skatteverket'
 import { createLogger } from '@/lib/logger'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { setSkattekontoRowIgnored, SkattekontoLinkError } from '@/lib/skatteverket/skattekonto-link'
+import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
 
 const log = createLogger('skatteverket')
-
-/**
- * Audit scope for AGI calls addressed by inlamningId alone: the request names
- * no arbetsgivare or period, so the audit row leaves both empty.
- */
-const AGI_SCOPE_UNKNOWN = { agRegistreradId: null, redovisningsperiod: null } as const
 
 // Every state or handoff failure on the unauthenticated callback gets this
 // one message: unknown, forged, expired, replayed, wrong origin. Telling the
@@ -403,10 +400,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'GET',
       path: '/authorize',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const blocked = await requireSkvCapability(ctx)
         if (blocked) return blocked
 
@@ -841,11 +835,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'GET',
       path: '/status',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
-
+      handler: async (_request: Request, ctx: ExtensionContext) => {
         const tokens = await getTokens(ctx.supabase, ctx.userId, ctx.companyId)
         const environment = getSkatteverketEnvironment()
         const disabled = (process.env.SKATTEVERKET_DISABLED ?? '').toLowerCase() === 'true'
@@ -894,11 +884,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'POST',
       path: '/disconnect',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
-
+      handler: async (_request: Request, ctx: ExtensionContext) => {
         await deleteTokens(ctx.supabase, ctx.userId, ctx.companyId)
         return NextResponse.json({ success: true })
       },
@@ -919,10 +905,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'GET',
       path: '/system-connection',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
+      handler: async (_request: Request, ctx: ExtensionContext) => {
         const blocked = await requireSkvCapability(ctx)
         if (blocked) return blocked
 
@@ -954,10 +937,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'POST',
       path: '/system-connection/verify',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
+      handler: async (_request: Request, ctx: ExtensionContext) => {
         const blocked = await requireSkvCapability(ctx)
         if (blocked) return blocked
         const roleBlocked = await requireSkvWriteRole(ctx)
@@ -1030,10 +1010,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'POST',
       path: '/system-connection/deeplink',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
+      handler: async (_request: Request, ctx: ExtensionContext) => {
         const blocked = await requireSkvCapability(ctx)
         if (blocked) return blocked
         const roleBlocked = await requireSkvWriteRole(ctx)
@@ -1111,10 +1088,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'DELETE',
       path: '/system-connection',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
+      handler: async (_request: Request, ctx: ExtensionContext) => {
         const roleBlocked = await requireSkvWriteRole(ctx)
         if (roleBlocked) return roleBlocked
 
@@ -1132,10 +1106,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'POST',
       path: '/declaration/validate',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const blocked = await requireSkvCapability(ctx)
         if (blocked) return blocked
 
@@ -1176,10 +1147,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'POST',
       path: '/declaration/draft',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const blocked = await requireSkvCapability(ctx)
         if (blocked) return blocked
         const roleBlocked = await requireSkvWriteRole(ctx)
@@ -1233,11 +1201,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'GET',
       path: '/declaration/draft',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         try {
           const { redovisare, redovisningsperiod } = parseQueryParams(request, ctx)
 
@@ -1279,10 +1243,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'DELETE',
       path: '/declaration/draft',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const roleBlocked = await requireSkvWriteRole(ctx)
         if (roleBlocked) return roleBlocked
 
@@ -1320,10 +1281,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'PUT',
       path: '/declaration/lock',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const blocked = await requireSkvCapability(ctx)
         if (blocked) return blocked
         const roleBlocked = await requireSkvWriteRole(ctx)
@@ -1375,10 +1333,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'DELETE',
       path: '/declaration/lock',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const roleBlocked = await requireSkvWriteRole(ctx)
         if (roleBlocked) return roleBlocked
 
@@ -1427,10 +1382,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'POST',
       path: '/declaration/submit',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const blocked = await requireSkvCapability(ctx)
         if (blocked) return blocked
         const roleBlocked = await requireSkvWriteRole(ctx)
@@ -1487,11 +1439,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'GET',
       path: '/declaration/submitted',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         try {
           const { redovisare, redovisningsperiod } = parseQueryParams(request, ctx)
 
@@ -1503,42 +1451,27 @@ export const skatteverketExtension: Extension = {
             userId: ctx.userId,
           })
           if (!resolved.ok) return readAuthFailureResponse(resolved.reason)
-          const response = await skvRequestWithAuth(
+          // The same fetch as the v1 read service (lib/declaration-status.ts).
+          const fetched = await fetchDeclarationView(
             resolved.auth,
-            'GET',
-            `/inlamnat/${redovisare}/${redovisningsperiod}`,
-            {
-              endpoint: 'inlamnat',
-              companyId: ctx.companyId,
-              userId: ctx.userId,
-              agRegistreradId: redovisare,
-              redovisningsperiod,
-              okStatuses: [404],
-            }
+            { view: 'inlamnat', companyId: ctx.companyId, userId: ctx.userId, redovisare, redovisningsperiod },
+            ctx.log,
           )
-
-          if (response.status === 404) {
-            return NextResponse.json({ data: null })
-          }
-
-          if (!response.ok) {
-            const text = await response.text()
+          if (!fetched.ok) {
             return NextResponse.json(
-              { error: `Skatteverket svarade med ${response.status}: ${text}` },
-              { status: response.status }
+              { error: fetched.failure.error, code: fetched.failure.code },
+              { status: fetched.failure.http_status },
             )
           }
-
-          const data = await response.json()
 
           // A non-null inlamnat means the declaration is filed: complete the
           // period's moms deadline. Best-effort, gated on the caller passing
           // the picker params (older clients omit them).
-          if (data) {
+          if (fetched.body) {
             await completeVatDeadlineFromRequest(request, ctx, 'submitted')
           }
 
-          return NextResponse.json({ data })
+          return NextResponse.json({ data: fetched.body })
         } catch (err) {
           return handleSkvError(err)
         }
@@ -1549,54 +1482,38 @@ export const skatteverketExtension: Extension = {
     {
       method: 'GET',
       path: '/declaration/decided',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         try {
           const { redovisare, redovisningsperiod } = parseQueryParams(request, ctx)
 
+          // resolveReadAuth: post-signing checks should outlive the user's
+          // 65-minute session when the company has a moms_ombud grant, and
+          // any member may read what another member's token fetches (#1673).
           const resolved = await resolveReadAuth(ctx.supabase, ctx.companyId, {
             requires: 'moms_ombud',
             userId: ctx.userId,
           })
           if (!resolved.ok) return readAuthFailureResponse(resolved.reason)
-          const response = await skvRequestWithAuth(
+          // The same fetch as the v1 read service (lib/declaration-status.ts).
+          const fetched = await fetchDeclarationView(
             resolved.auth,
-            'GET',
-            `/beslutat/${redovisare}/${redovisningsperiod}`,
-            {
-              endpoint: 'beslutat',
-              companyId: ctx.companyId,
-              userId: ctx.userId,
-              agRegistreradId: redovisare,
-              redovisningsperiod,
-              okStatuses: [404],
-            }
+            { view: 'beslutat', companyId: ctx.companyId, userId: ctx.userId, redovisare, redovisningsperiod },
+            ctx.log,
           )
-
-          if (response.status === 404) {
-            return NextResponse.json({ data: null })
-          }
-
-          if (!response.ok) {
-            const text = await response.text()
+          if (!fetched.ok) {
             return NextResponse.json(
-              { error: `Skatteverket svarade med ${response.status}: ${text}` },
-              { status: response.status }
+              { error: fetched.failure.error, code: fetched.failure.code },
+              { status: fetched.failure.http_status },
             )
           }
 
-          const data = await response.json()
-
           // A beslut means Skatteverket has processed the filing: confirm
           // the period's moms deadline (terminal state).
-          if (data) {
+          if (fetched.body) {
             await completeVatDeadlineFromRequest(request, ctx, 'confirmed')
           }
 
-          return NextResponse.json({ data })
+          return NextResponse.json({ data: fetched.body })
         } catch (err) {
           return handleSkvError(err)
         }
@@ -1617,57 +1534,41 @@ export const skatteverketExtension: Extension = {
     // (kvittenser + las/lasUpp). The agi-client encapsulates both.
     // ══════════════════════════════════════════════════════════════
 
-    // ── AGI: Submit (POST /underlag with stored XML) ────────────────
-    // Body: { salaryRunId }. Reads agi_declarations.xml_content for the run,
-    // posts it to Skatteverket, returns { inlamningId } so the caller can
-    // poll kontrollresultat. Also persists inlamningId locally for recovery.
+    // ── AGI: Skicka in underlag (step 1 of the chain) ───────────────
+    // Body: { salaryRunId }. The panel's advanced "Skicka in underlag":
+    // submitAgiUnderlag (lib/agi-submit.ts), the first step of the one-click
+    // chain: POST the stored XML, poll kontrollresultat with the panel's
+    // patience, mark the run's declaration rejected on a refusal at kontroll.
+    // Answers { data: { inlamningId, kontrollrapport } } or { error, code,
+    // details } (details.kontrollrapport on a refusal at kontroll).
     {
       method: 'POST',
       path: '/agi/submit',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const blocked = await requireSkvCapability(ctx)
         if (blocked) return blocked
         const roleBlocked = await requireSkvWriteRole(ctx)
         if (roleBlocked) return roleBlocked
         try {
-          const { arbetsgivare, period, salaryRunId, xml } = await loadAGIXml(request, ctx)
-
+          const salaryRunId = await readSalaryRunId(request)
+          if (!salaryRunId) {
+            return NextResponse.json({ error: 'Saknar parameter: salaryRunId' }, { status: 400 })
+          }
           // 'agi/submit' with outcome 'ok' is read by the migration-reset
           // guard; the transport writes the row.
-          const result = await agiPostUnderlag(ctx.supabase, ctx.userId, ctx.companyId, xml, {
-            agRegistreradId: arbetsgivare,
-            redovisningsperiod: period,
+          const result = await submitAgiUnderlag(ctx.supabase, ctx.userId, ctx.companyId, ctx.settings, salaryRunId, {
+            extraPolls: 7,
+            pollIntervalMs: 1000,
           })
           if (!result.ok) {
-            ctx.log.error('AGI underlag refused', { period, status: result.status, kod: result.body?.kod })
-            return NextResponse.json(
-              { error: result.error, code: result.body?.kod },
-              { status: result.status },
-            )
+            if (result.code === 'SKATTEVERKET_SUBMIT_REJECTED') {
+              ctx.log.error('AGI underlag refused', { status: result.httpStatus, kod: result.skvKod })
+            }
+            return agiStepFailureResponse(result)
           }
-
-          await ctx.settings.set(
-            `agi_submission_${period}`,
-            JSON.stringify({
-              status: 'underlag_submitted',
-              arbetsgivare,
-              period,
-              salaryRunId,
-              inlamningId: result.data.inlamningId,
-              updatedAt: new Date().toISOString(),
-            }),
-          )
-
-          // Don't flip agi_declarations.status to 'exported' here. SKV's
-          // kontrollresultat may still come back DONE_REJECTED, in which case
-          // nothing landed in Eget utrymme. The transition belongs in
-          // /agi/granskningsunderlag below, once SKV has persisted the
-          // underlag.
-
-          return NextResponse.json({ data: result.data })
+          return NextResponse.json({
+            data: { inlamningId: result.inlamningId, kontrollrapport: result.kontrollrapport },
+          })
         } catch (err) {
           return handleSkvError(err)
         }
@@ -1684,32 +1585,22 @@ export const skatteverketExtension: Extension = {
     {
       method: 'POST',
       path: '/agi/send-for-signing',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const blocked = await requireSkvCapability(ctx)
         if (blocked) return blocked
         const roleBlocked = await requireSkvWriteRole(ctx)
         if (roleBlocked) return roleBlocked
         try {
-          const body = (await request.json().catch(() => ({}))) as { salaryRunId?: unknown }
-          if (typeof body.salaryRunId !== 'string' || !body.salaryRunId) {
+          const salaryRunId = await readSalaryRunId(request)
+          if (!salaryRunId) {
             return NextResponse.json({ error: 'Saknar parameter: salaryRunId' }, { status: 400 })
           }
           // The panel's own patience: up to eight kontroll reads a second apart.
-          const result = await submitAgiChain(ctx.supabase, ctx.userId, ctx.companyId, ctx.settings, body.salaryRunId, {
+          const result = await submitAgiChain(ctx.supabase, ctx.userId, ctx.companyId, ctx.settings, salaryRunId, {
             extraPolls: 7,
             pollIntervalMs: 1000,
           })
-          if (!result.ok) {
-            // Still processing is no success, so never a 2xx here: the panel
-            // shows the sentence and the user tries again.
-            return NextResponse.json(
-              { error: result.error, code: result.code, ...(result.details ? { details: result.details } : {}) },
-              { status: result.httpStatus === 202 ? 409 : result.httpStatus },
-            )
-          }
+          if (!result.ok) return agiStepFailureResponse(result)
           return NextResponse.json({
             data: { signing_url: result.signingUrl, tillstand: result.tillstand, period: result.period },
           })
@@ -1719,157 +1610,28 @@ export const skatteverketExtension: Extension = {
       },
     },
 
-    // ── AGI: Poll kontrollresultat ──────────────────────────────────
-    // Query: ?inlamningId=...
-    // Returns { status: PROCESSING | DONE_SUCCESS | DONE_FAILED | DONE_REJECTED, ... }
-    //
-    // Side effect: when SKV reports a terminal failure (DONE_REJECTED or
-    // DONE_FAILED), promote the matching agi_declarations row to 'rejected'.
-    // Without this the row would sit at 'generated' indefinitely while SKV's
-    // own state shows the underlag as failed: misrepresenting the filing
-    // outcome (BFNAR 2013:2 kap 8 / BFL 5 kap 5§).
-    {
-      method: 'GET',
-      path: '/agi/kontrollresultat',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
-        try {
-          const url = new URL(request.url)
-          const inlamningId = Number(url.searchParams.get('inlamningId'))
-          if (!Number.isFinite(inlamningId) || inlamningId <= 0) {
-            return NextResponse.json({ error: 'Saknar parameter: inlamningId' }, { status: 400 })
-          }
-
-          // Addressed by inlamningId alone: the request names no period.
-          const result = await agiGetKontrollresultat(
-            ctx.supabase, ctx.userId, ctx.companyId, inlamningId, AGI_SCOPE_UNKNOWN,
-          )
-          if (!result.ok) {
-            return NextResponse.json(
-              { error: result.error, code: result.body?.kod },
-              { status: result.status },
-            )
-          }
-
-          if (result.data.status === 'DONE_REJECTED' || result.data.status === 'DONE_FAILED') {
-            // Recover the salaryRunId from cached submission state. We only
-            // update when we can identify the row; a missing local cache means
-            // we silently skip (the alternative would be guessing which
-            // declaration to mark).
-            const { data: rows } = await ctx.supabase
-              .from('extension_data')
-              .select('value')
-              .eq('company_id', ctx.companyId)
-              .eq('extension_id', 'skatteverket')
-              .like('key', 'agi_submission_%')
-            for (const row of rows ?? []) {
-              try {
-                const v = JSON.parse(row.value as string) as { inlamningId?: number; salaryRunId?: string }
-                if (v.inlamningId === inlamningId && v.salaryRunId) {
-                  // Never regress from a successful filing back to 'rejected'.
-                  await ctx.supabase
-                    .from('agi_declarations')
-                    .update({ status: 'rejected' })
-                    .eq('salary_run_id', v.salaryRunId)
-                    .eq('company_id', ctx.companyId)
-                    .in('status', ['generated', 'pending_signature', 'exported'])
-                  break
-                }
-              } catch { /* skip malformed */ }
-            }
-          }
-
-          return NextResponse.json({ data: result.data })
-        } catch (err) {
-          return handleSkvError(err)
-        }
-      },
-    },
-
-    // ── AGI: Skapa granskningsunderlag (BankID signing link) ────────
-    // Query: ?arbetsgivare=...&period=YYYYMM&lasPeriod=true|false
-    // Returns { link, tillstand, meddelande }. The user opens `link` in a
-    // new tab and signs with BankID on Skatteverket's site.
+    // ── AGI: Skapa signeringslänk (step 2 of the chain) ─────────────
+    // Body: { salaryRunId }. The panel's advanced "Skapa signeringslänk",
+    // after "Skicka in underlag": createAgiSigningLink (lib/agi-submit.ts),
+    // the second step of the one-click chain. skapaGranskningsunderlag with
+    // the period locked, the link persisted for a later visit, and the run's
+    // own declaration flipped to pending_signature. Answers
+    // { data: { link, tillstand } } or { error, code }.
     {
       method: 'POST',
       path: '/agi/granskningsunderlag',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const roleBlocked = await requireSkvWriteRole(ctx)
         if (roleBlocked) return roleBlocked
         try {
-          const url = new URL(request.url)
-          const arbetsgivare = url.searchParams.get('arbetsgivare')
-          const period = url.searchParams.get('period')
-          const lasPeriod = url.searchParams.get('lasPeriod') !== 'false'  // default true
-
-          if (!arbetsgivare || !period) {
-            return NextResponse.json(
-              { error: 'Saknar parametrar: arbetsgivare, period' },
-              { status: 400 },
-            )
+          const salaryRunId = await readSalaryRunId(request)
+          if (!salaryRunId) {
+            return NextResponse.json({ error: 'Saknar parameter: salaryRunId' }, { status: 400 })
           }
-
-          const result = await agiSkapaGranskningsunderlag(
-            ctx.supabase, ctx.userId, ctx.companyId, arbetsgivare, period, { lasPeriod },
-          )
-          if (!result.ok) {
-            return NextResponse.json(
-              { error: result.error, code: result.body?.kod },
-              { status: result.status },
-            )
-          }
-
-          // Persist the link so the user can return to it after a refresh.
-          // SKV's tillstand enum (per skapagranskningsunderlagsvar.json):
-          //   LOCKED_FOR_SIGNING / UNLOCKED → granskning ready, user can sign
-          //   INCORRECT_DATA               → felrapport link, can't sign yet
-          //   RECEIVING / CALCULATING      → server still processing
-          //   SIGNING                      → another signing flow already running
-          // We key on tillstand alone: keying on HTTP status (e.g. 409) and
-          // the body string would miss future SKV additions like RECEIVING
-          // returned with HTTP 200, leaving us in an awaiting_signing state
-          // when the underlag isn't actually ready.
-          const canSign =
-            result.data.tillstand === 'LOCKED_FOR_SIGNING' ||
-            result.data.tillstand === 'UNLOCKED'
-          await ctx.settings.set(
-            `agi_submission_${period}`,
-            JSON.stringify({
-              status: canSign ? 'awaiting_signing' : 'underlag_rejected',
-              arbetsgivare,
-              period,
-              signeringslank: result.data.link,
-              tillstand: result.data.tillstand,
-              meddelande: result.data.meddelande,
-              updatedAt: new Date().toISOString(),
-            }),
-          )
-
-          // Flip the matching agi_declarations row to pending_signature when
-          // SKV returns a usable granskningsunderlag. Previously this happened
-          // in /agi/spara, but /spara is only valid for re-saving rejected
-          // underlag: successful underlag are auto-persisted by SKV, so
-          // /spara returns felkod 20 on the happy path. Doing the flip here
-          // ensures the audit trail still moves through pending_signature
-          // → submitted (BFNAR 2013:2 kap 8 / BFL 5 kap 6§) without /spara.
-          if (canSign) {
-            const periodYear = parseInt(period.slice(0, 4))
-            const periodMonth = parseInt(period.slice(4, 6))
-            await ctx.supabase
-              .from('agi_declarations')
-              .update({ status: 'pending_signature' })
-              .eq('company_id', ctx.companyId)
-              .eq('period_year', periodYear)
-              .eq('period_month', periodMonth)
-              .in('status', ['generated', 'rejected'])
-          }
-
-          return NextResponse.json({ data: result.data })
+          const target = await agiRunTarget(ctx.supabase, ctx.companyId, salaryRunId)
+          const result = await createAgiSigningLink(ctx.supabase, ctx.userId, ctx.companyId, ctx.settings, target)
+          if (!result.ok) return agiStepFailureResponse(result)
+          return NextResponse.json({ data: { link: result.signingUrl, tillstand: result.tillstand } })
         } catch (err) {
           return handleSkvError(err)
         }
@@ -1883,10 +1645,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'GET',
       path: '/agi/kvittenser',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
+      handler: async (request: Request, ctx: ExtensionContext) => {
         try {
           const url = new URL(request.url)
           const arbetsgivare = url.searchParams.get('arbetsgivare')
@@ -2055,8 +1814,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'POST',
       path: '/agi/lasUpp',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const roleBlocked = await requireSkvWriteRole(ctx)
         if (roleBlocked) return roleBlocked
         try {
@@ -2099,8 +1857,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'GET',
       path: '/agi/status',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const period = url.searchParams.get('period')
         if (!period) return NextResponse.json({ error: 'Saknar parameter: period' }, { status: 400 })
@@ -2122,10 +1879,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'GET',
       path: '/skattekonto/saldo',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
+      handler: async (_request: Request, ctx: ExtensionContext) => {
         // The Skattekonto page keys its "inte anslutet" empty state off a 401
         // NOT_CONNECTED from this route. Without this check, a company that
         // never connected rendered the connected-but-unsynced view because
@@ -2161,10 +1915,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'GET',
       path: '/skattekonto/transaktioner',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const from = url.searchParams.get('from')
         const includeIgnoredParam = url.searchParams.get('include_ignored')
@@ -2240,10 +1991,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'POST',
       path: '/skattekonto/sync',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
+      handler: async (_request: Request, ctx: ExtensionContext) => {
         const blocked = await requireSkvCapability(ctx)
         if (blocked) return blocked
         try {
@@ -2270,11 +2018,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'POST',
       path: '/skattekonto/transaktioner/bokfor-batch',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         let parsedBody: unknown
         try {
           parsedBody = await request.json()
@@ -2316,11 +2060,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'POST',
       path: '/skattekonto/transaktioner/:id/bokfor',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         // Extract :id from the catch-all dispatcher's path-param convention
         // (`_id` query string, set in app/api/extensions/ext/[...path]/route.ts).
         const url = new URL(request.url)
@@ -2395,10 +2135,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'GET',
       path: '/skattekonto/transaktioner/:id/match-candidates',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const id = url.searchParams.get('_id')
         if (!id) {
@@ -2429,10 +2166,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'POST',
       path: '/skattekonto/transaktioner/group-match-candidates',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
+      handler: async (request: Request, ctx: ExtensionContext) => {
         let body: unknown
         try {
           body = await request.json()
@@ -2478,10 +2212,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'POST',
       path: '/skattekonto/transaktioner/:id/match',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const id = url.searchParams.get('_id')
         if (!id) {
@@ -2547,10 +2278,7 @@ export const skatteverketExtension: Extension = {
     {
       method: 'PATCH',
       path: '/skattekonto/transaktioner/:id/ignore',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) {
-          return NextResponse.json({ error: 'Extension context required' }, { status: 500 })
-        }
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const id = url.searchParams.get('_id')
         if (!id) {
@@ -2570,45 +2298,15 @@ export const skatteverketExtension: Extension = {
         }
         const isIgnored = body.is_ignored
 
-        const { data: tx, error: txError } = await ctx.supabase
-          .from('skattekonto_transactions')
-          .select('id, journal_entry_id, is_ignored')
-          .eq('id', id)
-          .eq('company_id', ctx.companyId)
-          .single()
-        if (txError || !tx) {
-          return NextResponse.json(
-            { error: 'Skattekonto-transaktionen hittades inte.' },
-            { status: 404 },
-          )
-        }
-        if (isIgnored && tx.journal_entry_id) {
-          return NextResponse.json(
-            { error: 'Transaktionen är redan bokförd och kan inte ignoreras.' },
-            { status: 409 },
-          )
-        }
-
-        // Conditional write: `.is('journal_entry_id', null)` on the ignore
-        // path makes a concurrent booking race lose cleanly (zero rows
-        // updated -> 409) instead of tripping the DB CHECK.
-        let update = ctx.supabase
-          .from('skattekonto_transactions')
-          .update({ is_ignored: isIgnored })
-          .eq('id', id)
-          .eq('company_id', ctx.companyId)
-        if (isIgnored) {
-          update = update.is('journal_entry_id', null)
-        }
-        const { data: updated, error: updateError } = await update.select('id')
-        if (updateError) {
-          return NextResponse.json({ error: updateError.message }, { status: 500 })
-        }
-        if (!updated || updated.length === 0) {
-          return NextResponse.json(
-            { error: 'Transaktionen är redan bokförd och kan inte ignoreras.' },
-            { status: 409 },
-          )
+        // The same service as the reconciliation page's ignore (core
+        // lib/skatteverket/skattekonto-link.ts): one rule for which rows may
+        // be ignored, and ignoring drops a standing proposal.
+        try {
+          await setSkattekontoRowIgnored(ctx.supabase, ctx.companyId, id, isIgnored)
+        } catch (err) {
+          if (!(err instanceof SkattekontoLinkError)) throw err
+          const status = err.code === 'TRANSACTION_NOT_FOUND' ? 404 : err.code === 'ALREADY_BOOKED' ? 409 : 500
+          return NextResponse.json({ error: err.message }, { status })
         }
 
         return NextResponse.json({ data: { ok: true, is_ignored: isIgnored } })
@@ -2759,20 +2457,27 @@ async function completeVatDeadlineFromRequest(
   )
 }
 
+/** The AGI routes' `{ salaryRunId }` body, or null when it names none. */
+async function readSalaryRunId(request: Request): Promise<string | null> {
+  const body = (await request.json().catch(() => ({}))) as { salaryRunId?: unknown }
+  return typeof body.salaryRunId === 'string' && body.salaryRunId ? body.salaryRunId : null
+}
+
 /**
- * Load the AGI XML for a salary run from agi_declarations.xml_content
- * (built by app/api/salary/runs/[id]/agi/xml/route.ts via generateAGIXml).
- *
- * The lookup + status guard live in lib/declaration-prep.ts (buildAgiUnderlag)
- * so the commit-side service files the same XML this route does. This shell
- * only parses the salaryRunId from the body.
+ * A chain step's refusal, as the AGI panel routes answer it: one shape for
+ * the one-click chain and both advanced steps. Still processing is no
+ * success, so never a 2xx: the panel shows the sentence and the user tries
+ * again.
  */
-async function loadAGIXml(
-  request: Request,
-  ctx: ExtensionContext,
-): Promise<AgiUnderlagPrep> {
-  const body = (await request.json()) as { salaryRunId?: string }
-  return buildAgiUnderlag(ctx.supabase, ctx.companyId, body.salaryRunId ?? '')
+function agiStepFailureResponse(failure: AgiStepFailure): NextResponse {
+  return NextResponse.json(
+    {
+      error: failure.error,
+      code: failure.code,
+      ...(failure.details ? { details: failure.details } : {}),
+    },
+    { status: failure.httpStatus === 202 ? 409 : failure.httpStatus },
+  )
 }
 
 /**
@@ -2837,10 +2542,6 @@ function handleSkvError(err: unknown): NextResponse {
 // likewise recoverable. SKV business rejections are non-recoverable → the op
 // is consumed and the user regenerates + re-stages.
 
-function skatteverketEnabled(): boolean {
-  return process.env.SKATTEVERKET_ENABLED === 'true'
-}
-
 const EXTENSION_DISABLED_RESULT: Extract<SkvSubmitResult, { ok: false }> = {
   ok: false,
   code: 'EXTENSION_DISABLED',
@@ -2869,7 +2570,7 @@ async function commitBookSkattekontoRows(
   companyId: string,
   params: Record<string, unknown>,
 ): Promise<SkattekontoBookCommitResult> {
-  if (!skatteverketEnabled()) return EXTENSION_DISABLED_RESULT
+  if (!isSkatteverketEnabled()) return EXTENSION_DISABLED_RESULT
 
   const raw = params.ids
   const ids = Array.isArray(raw)
@@ -2952,7 +2653,7 @@ async function commitSubmitVatDeclaration(
   companyId: string,
   params: Record<string, unknown>,
 ): Promise<SkvSubmitResult> {
-  if (!skatteverketEnabled()) return EXTENSION_DISABLED_RESULT
+  if (!isSkatteverketEnabled()) return EXTENSION_DISABLED_RESULT
 
   const periodType = params.period_type as VatPeriodType
   const year = params.year as number
@@ -2993,7 +2694,7 @@ async function commitSubmitAgi(
   companyId: string,
   params: Record<string, unknown>,
 ): Promise<SkvSubmitResult> {
-  if (!skatteverketEnabled()) return EXTENSION_DISABLED_RESULT
+  if (!isSkatteverketEnabled()) return EXTENSION_DISABLED_RESULT
 
   const salaryRunId = params.salary_run_id as string
   const ctx = createExtensionContext(supabase, userId, companyId, 'skatteverket')

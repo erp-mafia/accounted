@@ -21,6 +21,7 @@ import {
   getBeneficialOwners,
 } from '../lib/tic-client'
 import type { TICCompanyDocument } from '../lib/tic-types'
+import { testRoutes } from '@/tests/helpers'
 
 const mockSearch = vi.mocked(searchCompanyByOrgNumber)
 const mockDocuments = vi.mocked(getCompanyDocuments)
@@ -37,7 +38,7 @@ function makeRequest(orgNumber?: string): Request {
   return new Request(url)
 }
 
-const profileHandler = ticExtension.apiRoutes![1].handler
+const profileHandler = testRoutes(ticExtension)[1].handler
 
 // The search doc now carries everything we used to pull from dedicated v2
 // endpoints: sniCodes, bankAccounts, emailAddresses, phoneNumbers,

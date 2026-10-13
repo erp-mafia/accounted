@@ -6,7 +6,7 @@ vi.mock('../lib/route-from-arkiv', () => ({
 }))
 
 import { runInboxSweep, PROCESSING_STUCK_MS } from '../lib/sweep'
-import { emptyResult } from '../lib/extract-invoice-fields'
+import { emptyResult } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
 import { requeueHiddenRoutedItems, routeStaleQueueItems } from '../lib/route-from-arkiv'
 
 /**

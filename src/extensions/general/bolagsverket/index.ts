@@ -191,9 +191,6 @@ function apiErrorResponse(err: unknown, ctx: ExtensionContext): NextResponse {
   })
 }
 
-const noContextResponse = () =>
-  NextResponse.json({ error: { code: 'NO_CONTEXT', message: 'Saknar kontext' } }, { status: 500 })
-
 const PersonnummerSchema = z
   .string()
   .regex(/^\d{12}$/, 'Personnummer ska normaliseras till 12 siffror')
@@ -245,7 +242,6 @@ export const bolagsverketExtension: Extension = {
       method: 'GET',
       path: '/status',
       handler: async (_request, ctx) => {
-        if (!ctx) return noContextResponse()
         try {
           const environment = await resolveEnvironment(ctx)
           const config = configFromEnv()
@@ -267,7 +263,6 @@ export const bolagsverketExtension: Extension = {
       method: 'GET',
       path: '/grunduppgifter',
       handler: async (_request, ctx) => {
-        if (!ctx) return noContextResponse()
         try {
           const client = await clientFor(ctx)
           const orgnr = await companyOrgnr(ctx)
@@ -282,7 +277,6 @@ export const bolagsverketExtension: Extension = {
       method: 'GET',
       path: '/arendestatus',
       handler: async (_request, ctx) => {
-        if (!ctx) return noContextResponse()
         try {
           const client = await clientFor(ctx)
           const orgnr = await companyOrgnr(ctx)
@@ -297,7 +291,6 @@ export const bolagsverketExtension: Extension = {
       method: 'GET',
       path: '/submissions',
       handler: async (request, ctx) => {
-        if (!ctx) return noContextResponse()
         const url = new URL(request.url)
         const fiscalPeriodId = url.searchParams.get('fiscal_period_id')
         let query = ctx.supabase
@@ -323,7 +316,6 @@ export const bolagsverketExtension: Extension = {
       method: 'POST',
       path: '/submissions',
       handler: async (request, ctx) => {
-        if (!ctx) return noContextResponse()
         if (!filingReleaseEnabled()) {
           return errorResponseFromCode('BOLAGSVERKET_NOT_RELEASED', ctx.log, {
             requestId: ctx.requestId,
@@ -413,7 +405,6 @@ export const bolagsverketExtension: Extension = {
       method: 'POST',
       path: '/poll-events',
       handler: async (request, ctx) => {
-        if (!ctx) return noContextResponse()
         const forbidden = await requireWriteRole(ctx)
         if (forbidden) return forbidden
         let parsed: z.infer<typeof PollSchema>

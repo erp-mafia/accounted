@@ -209,13 +209,6 @@ describe('GET /status: completed SIE import', () => {
     expect(body.latestCompletedSieImport).toBeNull()
   })
 
-  it('returns 401 without a user', async () => {
-    const { supabase } = buildSupabase({ history: [], latestCompleted: null, user: null })
-
-    const res = await handler(statusRequest(), buildCtx(supabase))
-
-    expect(res.status).toBe(401)
-  })
 })
 
 /**
@@ -245,13 +238,6 @@ describe('GET /status: unfinished connect', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     ;(listConsents as Mock).mockResolvedValue([])
-  })
-
-  it('returns 401 without a user and never looks up consents', async () => {
-    const { res, service } = await statusWith({ provider_consents: [attempt()] }, null)
-
-    expect(res.status).toBe(401)
-    expect(service.from).not.toHaveBeenCalled()
   })
 
   it('reports a token-less attempt older than 30 minutes', async () => {

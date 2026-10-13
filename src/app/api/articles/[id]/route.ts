@@ -3,10 +3,9 @@ import { eventBus } from '@/lib/events'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateArticleSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { checkRevenueAccount } from '@/lib/articles/validate-revenue-account'
-import { AccountsNotInChartError, accountsNotInChartResponse } from '@/lib/bookkeeping/errors'
+import { updateArticle } from '@/lib/articles/article-commands'
+import { articleRefusalResponse } from '@/lib/articles/article-refusal-response'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import type { Article } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 export const GET = withRouteContext(
@@ -52,57 +51,12 @@ export const PATCH = withRouteContext(
     if (!result.success) return result.response
     const body = result.data
 
-    // Same activate-and-retry contract as POST /api/articles: a class 1-3 account
-    // that just isn't activated yet returns ACCOUNTS_NOT_IN_CHART.
-    if (body.revenue_account) {
-      const status = await checkRevenueAccount(supabase, companyId!, body.revenue_account)
-      if (status === 'activatable') {
-        return accountsNotInChartResponse(new AccountsNotInChartError([body.revenue_account]))
-      }
-      if (status === 'invalid') {
-        return errorResponseFromCode('ARTICLE_REVENUE_ACCOUNT_INVALID', opLog, { requestId })
-      }
-    }
-
-    // Sparse update: only the fields the caller actually sent.
-    const updateData: Record<string, unknown> = {}
-    for (const key of [
-      'name', 'name_en', 'type', 'unit', 'price_excl_vat', 'vat_rate',
-      'currency', 'revenue_account', 'cost_price', 'ean', 'housework_type',
-      'notes', 'article_number', 'active',
-    ] as const) {
-      if (body[key] !== undefined) updateData[key] = body[key]
-    }
-
-    const { data, error } = await supabase
-      .from('articles')
-      .update(updateData)
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .select()
-      .single()
-
-    if (error) {
-      if (error.code === 'PGRST116') {
-        return errorResponseFromCode('ARTICLE_NOT_FOUND', opLog, { requestId })
-      }
-      if (error.code === '23505') {
-        return errorResponseFromCode('ARTICLE_DUPLICATE_NUMBER', opLog, {
-          requestId,
-          details: { articleNumber: body.article_number },
-        })
-      }
-      opLog.error('article update failed', error)
-      return errorResponseFromCode('ARTICLE_UPDATE_FAILED', opLog, {
-        requestId,
-        details: { reason: getUserErrorMessage(error) },
-      })
-    }
-
-    await eventBus.emit({
-      type: 'article.updated',
-      payload: { article: data as Article, companyId: companyId!, userId: user.id },
-    })
+    // The one update path (lib/articles/article-commands.ts), shared with the
+    // approval of an agent's staged gnubok_update_article.
+    const outcome = await updateArticle({ supabase, companyId: companyId!, userId: user.id, log: opLog }, id, body)
+    if (!outcome.ok) return articleRefusalResponse(outcome, opLog, requestId)
+    if (outcome.dryRun) throw new Error('article.update: unexpected dry-run outcome')
+    const data = outcome.data
 
     return NextResponse.json({ data })
   },

@@ -16,6 +16,7 @@ import { agiKontrolleraHU, agiKontrolleraIU } from './agi-client'
 import { skvAuthCodeToStructured } from './error-map'
 import { resolveReadAuth } from './resolve-auth'
 import { syncSkattekonto, SKATTEKONTO_LAST_SYNCED_AT_KEY } from './skattekonto-sync'
+import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
 
 /**
  * Registry-resolved services behind the AGI pre-validation and the manual
@@ -50,12 +51,8 @@ const NEEDS_RECONSENT_SV =
   'Anslutningen mot Skatteverket har gått ut. Skatteverkets inloggning gäller bara ca 1 timme, så detta är normalt. Anslut igen med BankID.'
 const NOT_CONNECTED_SV = 'Inte ansluten till Skatteverket.'
 
-function enabled(): boolean {
-  return process.env.SKATTEVERKET_ENABLED === 'true'
-}
-
 async function gate(supabase: SupabaseClient, companyId: string): Promise<SkvActionFailure | null> {
-  if (!enabled()) return DISABLED
+  if (!isSkatteverketEnabled()) return DISABLED
   if (!(await hasCapability(supabase, companyId, CAPABILITY.skatteverket))) return CAPABILITY_BLOCKED
   return null
 }

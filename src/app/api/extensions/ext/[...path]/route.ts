@@ -3,6 +3,11 @@ import { NextResponse } from 'next/server'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import { requireCompanyId } from '@/lib/company/context'
+import {
+  companyAdminRequiredResponse,
+  isCompanyAdmin,
+  requireWritePermission,
+} from '@/lib/auth/require-write'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { requiredCapabilityForExtensionId } from '@/lib/extensions/sectors'
 import { createLogger } from '@/lib/logger'
@@ -199,24 +204,11 @@ async function handleRequest(
       requestId,
     )
   }
-
-  // Config sanity check: these flags are orthogonal and the combination is
-  // nonsensical. `skipAuth` already implies no company resolution, so adding
-  // `skipCompanyContext: true` is at best redundant, and if a maintainer
-  // intended "auth required, no company" but also wrote `skipAuth: true`,
-  // the auth requirement would be silently dropped (skipAuth fires first
-  // below). Fail loudly instead of masking the mistake.
-  if (matchedRoute.skipAuth && matchedRoute.skipCompanyContext) {
-    log.error('route misconfigured: skipAuth + skipCompanyContext are mutually exclusive', undefined)
-    return decorateResponse(
-      NextResponse.json({ error: 'Route misconfigured' }, { status: 500 }),
-      requestId,
-    )
-  }
+  const route = matchedRoute
 
   // For skipAuth routes (e.g. OAuth callbacks from external providers),
   // skip user auth, toggle check, and AI consent: dispatch immediately
-  if (matchedRoute.skipAuth) {
+  if (route.skipAuth) {
     let handlerRequest = request
     if (Object.keys(extractedParams).length > 0) {
       const url = new URL(request.url)
@@ -232,7 +224,7 @@ async function handleRequest(
         duplex: 'half',
       })
     }
-    const response = await matchedRoute.handler(handlerRequest)
+    const response = await route.handler(handlerRequest)
     log.info('extension call completed', { durationMs: Date.now() - start, status: response.status })
     return decorateResponse(response, requestId)
   }
@@ -269,8 +261,8 @@ async function handleRequest(
   // Routes that are authenticated but run before a company exists (TIC
   // /lookup during onboarding, for example) opt out of company resolution.
   // Dispatch without a context: handlers that opt in must not rely on ctx.
-  if (matchedRoute.skipCompanyContext) {
-    const response = await matchedRoute.handler(handlerRequest)
+  if (route.skipCompanyContext) {
+    const response = await route.handler(handlerRequest)
     log.info('extension call completed', {
       durationMs: Date.now() - start,
       status: response.status,
@@ -280,6 +272,21 @@ async function handleRequest(
   }
 
   const companyId = await requireCompanyId(supabase, user.id)
+
+  // Role gates the route declares, checked as withRouteContext checks them,
+  // so a handler never repeats them: requireAdmin asks the database's own
+  // owner/admin predicate, requireWrite refuses viewers.
+  if (route.requireAdmin) {
+    if (!(await isCompanyAdmin(supabase, companyId))) {
+      return decorateResponse(companyAdminRequiredResponse(log, requestId), requestId)
+    }
+  } else if (route.requireWrite) {
+    const writeCheck = await requireWritePermission(supabase, user.id, { companyId })
+    if (!writeCheck.ok) {
+      log.warn('extension call blocked: write permission denied', { userId: user.id })
+      return decorateResponse(writeCheck.response, requestId)
+    }
+  }
 
   // Paywall: this dispatcher is the single chokepoint for the whole enabled-
   // extension API surface (same reasoning as the MFA gate above), so an
@@ -301,8 +308,8 @@ async function handleRequest(
   // Build context and dispatch. The second cookie-session door besides
   // withRouteContext: commits an extension makes (inbox booking, supplier
   // invoices) record the signed-in user as their actor, as there.
-  const ctx = createExtensionContext(supabase, user.id, companyId, extensionId, requestId)
-  const response = await runWithActor({ type: 'user' }, () => matchedRoute.handler(handlerRequest, ctx))
+  const ctx = createExtensionContext(supabase, user.id, companyId, extensionId, requestId, Boolean(user.is_anonymous))
+  const response = await runWithActor({ type: 'user' }, () => route.handler(handlerRequest, ctx))
   log.info('extension call completed', {
     durationMs: Date.now() - start,
     status: response.status,

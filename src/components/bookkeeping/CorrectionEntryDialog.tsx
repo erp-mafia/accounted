@@ -13,7 +13,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import { KonteringLinesEditor } from '@/components/bookkeeping/KonteringLinesEditor'
 import RattelseExplainer from '@/components/bookkeeping/RattelseExplainer'
 import { AddAccountDialog } from '@/components/bookkeeping/AddAccountDialog'
 import CorrectionPreview from '@/components/bookkeeping/CorrectionPreview'
@@ -26,7 +26,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { useAccounts } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { Loader2, Plus, Trash2 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import {
@@ -349,71 +349,30 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
             </div>
           )}
 
-          <div className="space-y-2">
-            {lines.map((line, index) => (
-              <div key={index} className="space-y-2 sm:space-y-0 sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_120px_120px_auto] sm:gap-2 sm:items-start border-b sm:border-0 pb-3 sm:pb-0 last:border-0">
-                <div className="grid grid-cols-[minmax(0,1fr)_auto] sm:contents gap-2">
-                  {/* min-w-0: at sm: the sm:contents wrapper promotes this cell
-                      to a direct grid item; without it the combobox refuses to
-                      shrink below its content and overflows the dialog (same
-                      pattern as SendInvoiceDialog's desktop rows). */}
-                  <div className="min-w-0">
-                    <AccountCombobox
-                      value={line.account_number}
-                      accounts={activeAccounts}
-                      catalog={selectableCatalog}
-                      onChange={(v) => updateLineAccount(index, v)}
-                      onCreateAccount={(prefill) => {
-                        setCreatingAccountForLine(index)
-                        setCreateAccountPrefill(prefill)
-                      }}
-                      disabled={accountsStatus !== 'ready'}
-                    />
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className="sm:order-last"
-                    onClick={() => removeLine(index)}
-                    disabled={lines.length <= 2}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-                <Input
-                  value={line.line_description}
-                  onChange={(e) => updateLine(index, 'line_description', e.target.value)}
-                  placeholder="Beskrivning"
-                  className="h-8"
-                />
-                <div className="grid grid-cols-2 gap-2 sm:contents">
-                  <Input
-                    type="number"
-                    value={line.debit_amount}
-                    onChange={(e) => updateLine(index, 'debit_amount', e.target.value)}
-                    placeholder="Debet"
-                    className="h-8 text-right"
-                    min={0}
-                    step="0.01"
-                  />
-                  <Input
-                    type="number"
-                    value={line.credit_amount}
-                    onChange={(e) => updateLine(index, 'credit_amount', e.target.value)}
-                    placeholder="Kredit"
-                    className="h-8 text-right"
-                    min={0}
-                    step="0.01"
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <Button variant="outline" size="sm" onClick={addLine}>
-            <Plus className="h-4 w-4 mr-1" />
-            Lägg till rad
-          </Button>
+          <KonteringLinesEditor
+            lines={lines}
+            accounts={activeAccounts}
+            catalog={selectableCatalog}
+            onAccountChange={updateLineAccount}
+            onAmountChange={(index, field, value) => updateLine(index, field, value)}
+            onDescriptionChange={(index, value) => updateLine(index, 'line_description', value)}
+            onAdd={addLine}
+            onRemove={removeLine}
+            onCreateAccount={(index, prefill) => {
+              setCreatingAccountForLine(index)
+              setCreateAccountPrefill(prefill)
+            }}
+            accountsDisabled={accountsStatus !== 'ready'}
+            header={false}
+            labels={{
+              account: 'Konto',
+              description: 'Beskrivning',
+              debit: 'Debet',
+              credit: 'Kredit',
+              addRow: 'Lägg till rad',
+              removeRow: 'Ta bort rad',
+            }}
+          />
 
           {/* Balance summary */}
           <div className="flex justify-end gap-6 text-sm pt-2 border-t">

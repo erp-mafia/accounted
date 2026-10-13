@@ -1,10 +1,10 @@
 'use client'
 
-import { useCallback, useState } from 'react'
+import { useCallback } from 'react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Upload, FileSpreadsheet, AlertCircle, Loader2 } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { FileDropzone } from '@/components/ui/file-dropzone'
 
 interface OpeningBalanceUploadStepProps {
   onFileSelect: (file: File) => void
@@ -20,8 +20,6 @@ export default function OpeningBalanceUploadStep({
   error,
   errorAction,
 }: OpeningBalanceUploadStepProps) {
-  const [isDragging, setIsDragging] = useState(false)
-
   const ACCEPTED_TYPES = '.xlsx,.xls,.csv,.ods'
 
   const handleFile = useCallback((file: File) => {
@@ -31,22 +29,6 @@ export default function OpeningBalanceUploadStep({
     }
     onFileSelect(file)
   }, [onFileSelect])
-
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(false)
-    const file = e.dataTransfer.files[0]
-    if (file) handleFile(file)
-  }, [handleFile])
-
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(true)
-  }, [])
-
-  const handleDragLeave = useCallback(() => {
-    setIsDragging(false)
-  }, [])
 
   return (
     <Card>
@@ -59,17 +41,12 @@ export default function OpeningBalanceUploadStep({
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Drop zone */}
-        <div
-          className={cn(
-            'flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-10 transition-colors',
-            isDragging
-              ? 'border-primary bg-primary/5'
-              : 'border-muted-foreground/20 hover:border-muted-foreground/40',
-            isLoading && 'pointer-events-none opacity-60',
-          )}
-          onDrop={handleDrop}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
+        <FileDropzone
+          onFile={handleFile}
+          accept={ACCEPTED_TYPES}
+          disabled={isLoading}
+          label="Välj fil med ingående balanser"
+          className="flex flex-col items-center justify-center p-10"
         >
           {isLoading ? (
             <div className="flex flex-col items-center gap-3">
@@ -85,27 +62,16 @@ export default function OpeningBalanceUploadStep({
               <p className="text-sm text-muted-foreground mt-1">
                 eller
               </p>
-              <label>
-                <input
-                  type="file"
-                  accept={ACCEPTED_TYPES}
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0]
-                    if (file) handleFile(file)
-                    e.target.value = ''
-                  }}
-                />
-                <Button variant="outline" size="sm" className="mt-2" asChild>
-                  <span>Välj fil</span>
-                </Button>
-              </label>
+              {/* The zone is the button: this only looks like one. */}
+              <Button variant="outline" size="sm" className="mt-2" asChild>
+                <span>Välj fil</span>
+              </Button>
               <p className="text-xs text-muted-foreground mt-3">
                 XLSX, XLS, CSV, ODS: max 10 MB
               </p>
             </>
           )}
-        </div>
+        </FileDropzone>
 
         {/* Error */}
         {error && (

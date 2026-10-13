@@ -3597,7 +3597,7 @@ Example response `200`:
 ### `POST /api/v1/companies/{companyId}/transactions/{id}/match-batch`
 
 **Book one bank payment against several customer invoices, or several supplier invoices, in one verifikat.**
-`scope:transactions:write · risk:medium · idempotent · dry-run`
+`scope:transactions:write · risk:high · idempotent · dry-run`
 
 Allocates the transaction across N invoices of one kind: one samlingsverifikation (bank against 1510 or 2440, kursdifferens on 3960/7960 for foreign invoices, öresavrundning on 3740) and one payment row per invoice, atomically. The allocations must sum to the transaction amount. The dry run answers the exact lines (expected_lines) the verifikat would carry. Idempotent. Dry-runnable.
 

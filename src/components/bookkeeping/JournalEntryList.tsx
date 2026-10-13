@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/data-list'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { FLOATING_BULK_BAR_CLASS } from '@/components/ui/floating-bulk-bar'
+import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Label } from '@/components/ui/label'
@@ -42,8 +42,9 @@ import {
   CHECKBOX_REVEAL_CLASS,
   HOVER_REVEAL_CLASS,
   RowFoldout,
+  SortableTh,
 } from '@/components/ui/dry-table'
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Copy, Paperclip, CircleSlash, Loader2, BookOpen, X, Lock, Search, SlidersHorizontal } from 'lucide-react'
+import { ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Copy, Paperclip, CircleSlash, Loader2, BookOpen, X, Lock, Search, SlidersHorizontal } from 'lucide-react'
 import { cn, formatAmount, formatDate, formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveCurrentPeriodId } from '@/lib/bookkeeping/suggest-fiscal-period'
@@ -61,7 +62,7 @@ import JournalEntryStatusBadge from '@/components/bookkeeping/JournalEntryStatus
 import AttachmentPreviewSheet from '@/components/bookkeeping/AttachmentPreviewSheet'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { useRangeSelect } from '@/lib/hooks/use-range-select'
+import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
@@ -122,66 +123,15 @@ const serializeSortStack = (stack: SortKey[]): string =>
 const sortStacksEqual = (a: SortKey[], b: SortKey[]): boolean =>
   serializeSortStack(a) === serializeSortStack(b)
 
-// Same shape as the invoices list header (app/(dashboard)/invoices/page.tsx):
-// click cycles the sort, inactive columns show a dimmed two-way arrow. Two
-// deliberate differences: the plain-click cycle has a third step back to
-// DEFAULT_SORT_STACK so a sort is always escapable from the header itself
-// (the invoices list starts unsorted and has nothing to return to), and
-// shift-click stacks the column as a secondary/tertiary key, shown with a
-// priority number next to the arrow.
-interface SortableHeaderProps {
-  label: string
-  sortLabel: string
-  column: SortColumn
-  stack: SortKey[]
-  onSort: (column: SortColumn, additive: boolean) => void
-  className?: string
-  align?: 'left' | 'right'
-}
-
-function SortableHeader({
-  label,
-  sortLabel,
-  column,
-  stack,
-  onSort,
-  className,
-  align = 'left',
-}: SortableHeaderProps) {
+// The shared SortableTh with two deliberate additions: the plain-click
+// cycle has a third step back to DEFAULT_SORT_STACK so a sort is always
+// escapable from the header itself (the invoices list starts unsorted and
+// has nothing to return to), and shift-click stacks the column as a
+// secondary/tertiary key, shown with its priority number next to the arrow.
+function sortHeadOf(stack: SortKey[], column: SortColumn): { direction: 'asc' | 'desc' | null; rank?: number } {
   const index = stack.findIndex((k) => k.column === column)
-  const active = index !== -1
-  const direction = active ? stack[index].direction : null
-  const SortIcon = !active ? ArrowUpDown : direction === 'asc' ? ArrowUp : ArrowDown
-
-  return (
-    <th
-      className={cn(TH_CLASS, className)}
-      aria-sort={active ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'}
-    >
-      {/* Preflight sets text-transform: none on buttons, which would drop the
-          TH_CLASS uppercase idiom inside the sort control. */}
-      <button
-        type="button"
-        className={cn(
-          '-mx-2 inline-flex min-h-10 items-center gap-1 rounded-sm px-2 uppercase focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
-          align === 'right' && 'ml-auto justify-end',
-        )}
-        aria-label={sortLabel}
-        onClick={(e) => onSort(column, e.shiftKey)}
-      >
-        <span>{label}</span>
-        <SortIcon
-          aria-hidden="true"
-          className={cn('h-3.5 w-3.5 shrink-0', !active && 'text-muted-foreground/60')}
-        />
-        {active && stack.length > 1 && (
-          <span className="text-[11px] font-medium tabular-nums text-muted-foreground" aria-hidden="true">
-            {index + 1}
-          </span>
-        )}
-      </button>
-    </th>
-  )
+  if (index === -1) return { direction: null }
+  return { direction: stack[index].direction, rank: stack.length > 1 ? index + 1 : undefined }
 }
 
 // Compact row density (support feedback: "kompakt visning av verifikat").
@@ -276,7 +226,6 @@ export default function JournalEntryList({
   const [rattelseFlags, setRattelseFlags] = useState<Set<string>>(new Set())
   const [noDocRequired, setNoDocRequired] = useState<Map<string, string | null>>(new Map())
   const [showMissingOnly, setShowMissingOnly] = useState(initialShowMissingOnly)
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   // Radix' onCheckedChange carries no mouse event: the click that precedes it
   // records whether shift was held, for range selection.
   const shiftHeld = useRef(false)
@@ -595,7 +544,7 @@ export default function JournalEntryList({
     const gen = ++fetchGenRef.current
     const isCurrent = () => fetchGenRef.current === gen
     setLoading(true)
-    if (!preserveSelection) setSelectedIds(new Set()) // selection is page-scoped, reset on reload
+    if (!preserveSelection) selection.clear() // selection is page-scoped, reset on reload
     const params = new URLSearchParams({
       sort_by: serializeSortStack(sortStack),
     })
@@ -641,16 +590,9 @@ export default function JournalEntryList({
       setEntries(loadedEntries)
       setCount(total || 0)
       setMissingCount(showMissingOnly && listMode === 'committed' ? total || 0 : null)
-      if (preserveSelection) {
-        // Reconcile with the refreshed page: rows that left it (recommitted
-        // elsewhere, filtered out by the new data) must leave the selection
-        // too, or the bulk bar would act on rows no longer on screen.
-        const visibleIds = new Set(loadedEntries.map((e: JournalEntry) => e.id))
-        setSelectedIds((prev) => {
-          const next = new Set([...prev].filter((id) => visibleIds.has(id)))
-          return next.size === prev.size ? prev : next
-        })
-      }
+      // A preserved selection needs no reconcile here: rows that left the
+      // page (recommitted elsewhere, filtered out) leave useBulkSelection's
+      // selection when the new page renders.
 
       // The pristine empty card vs. the (toggle-bearing) "drafts exist" state hinges
       // on draftCount. When the committed list comes back empty, resolve the draft
@@ -786,7 +728,7 @@ export default function JournalEntryList({
     if (mode === listMode) return
     setListMode(mode)
     setPage(0)
-    setSelectedIds(new Set())
+    selection.clear()
     if (mode === 'drafts') setShowMissingOnly(false)
   }
 
@@ -899,7 +841,7 @@ export default function JournalEntryList({
         for (const id of ids) next.set(id, reason)
         return next
       })
-      setSelectedIds(new Set())
+      selection.clear()
       setBatchReason('')
       toast({
         title: t('batch_no_doc_done_title'),
@@ -964,7 +906,7 @@ export default function JournalEntryList({
       setBulkOpen(false)
       setBulkCount(null)
       setBulkReason('')
-      setSelectedIds(new Set())
+      selection.clear()
       toast({
         title: t('batch_no_doc_done_title'),
         description: t('batch_no_doc_done_description', { count: body.data?.exempted ?? 0 }),
@@ -1096,27 +1038,12 @@ export default function JournalEntryList({
 
   // Rows on this page the user can batch-mark "Inget underlag krävs".
   const eligibleEntries = canWrite ? filteredEntries.filter(isEligibleForExempt) : []
-  const allEligibleSelected =
-    eligibleEntries.length > 0 && eligibleEntries.every((e) => selectedIds.has(e.id))
-  // Ranges walk the selectable rows of the current page, in rendered order.
-  const range = useRangeSelect({
-    visibleIds: eligibleEntries.map((e) => e.id),
-    selectedIds,
-    setSelectedIds,
-  })
-  const toggleSelect = (id: string, extend?: boolean) => range.toggle(id, extend)
-  const toggleSelectAll = () => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (allEligibleSelected) {
-        for (const e of eligibleEntries) next.delete(e.id)
-      } else {
-        for (const e of eligibleEntries) next.add(e.id)
-      }
-      return next
-    })
-    range.resetAnchor()
-  }
+  // Page-scoped: the selection holds only eligible rows of this page, so a
+  // search, a filter or an exemption that hides or disqualifies a row drops
+  // it before the batch call can carry it.
+  const selection = useBulkSelection(eligibleEntries.map((e) => e.id))
+  const selectedIds = selection.selectedIds
+  const toggleSelect = (id: string, extend?: boolean) => selection.toggle(id, extend)
 
   // Pristine, untouched ledger: nothing posted in ANY year, no drafts, no
   // search or dialog filters, and we're on the committed view. The fiscal-year
@@ -1473,51 +1400,39 @@ export default function JournalEntryList({
             selected via the hover checkboxes, then it pops in with the
             count and the batch actions. Select-all and the filter-scoped
             bulk mark live inside it as quiet actions. */}
-        {selectedIds.size > 0 && (
-          <div className={FLOATING_BULK_BAR_CLASS}>
-            <span className="whitespace-nowrap">
-              <strong className="font-semibold tabular-nums">{selectedIds.size}</strong>{' '}
-              {t('bulkbar_selected', { count: selectedIds.size })}
-            </span>
-            <Input
-              value={batchReason}
-              onChange={(e) => setBatchReason(e.target.value)}
-              placeholder={t('no_doc_required_reason_placeholder')}
-              list="batch-no-doc-suggestions"
-              maxLength={200}
-              className="h-8 w-56 text-xs"
-              disabled={batchSubmitting}
-            />
-            <datalist id="batch-no-doc-suggestions">
-              <option value={t('no_doc_required_suggestion_bank_fee')} />
-              <option value={t('no_doc_required_suggestion_interest')} />
-              <option value={t('no_doc_required_suggestion_internal_transfer')} />
-              <option value={t('no_doc_required_suggestion_tax_payment')} />
-              <option value={t('no_doc_required_suggestion_salary')} />
-            </datalist>
-            <Button size="sm" onClick={handleBatchExempt} loading={batchSubmitting}>
-              {t('batch_mark_no_doc')}
-            </Button>
-            {!allEligibleSelected && (
-              <button type="button" className={QUIET_LINK_CLASS} onClick={toggleSelectAll}>
-                {t('batch_select_all', { count: eligibleEntries.length })}
-              </button>
-            )}
-            {/* Filter-scoped: mark every missing-doc verifikat matching the
-                active filters across all pages: scales to a post-import flood. */}
-            <button type="button" className={QUIET_LINK_CLASS} onClick={openBulk}>
-              {t('batch_mark_all_missing')}
-            </button>
-            <button
-              type="button"
-              className={QUIET_LINK_CLASS}
-              onClick={() => setSelectedIds(new Set())}
-              disabled={batchSubmitting}
-            >
-              {t('batch_clear_selection')}
-            </button>
-          </div>
-        )}
+        <BulkSelectionBar
+          selection={selection}
+          selectableCount={eligibleEntries.length}
+          countLabel={t('bulkbar_selected', { count: selectedIds.size })}
+          selectAllLabel={t('batch_select_all', { count: eligibleEntries.length })}
+          clearLabel={t('batch_clear_selection')}
+          busy={batchSubmitting}
+        >
+          <Input
+            value={batchReason}
+            onChange={(e) => setBatchReason(e.target.value)}
+            placeholder={t('no_doc_required_reason_placeholder')}
+            list="batch-no-doc-suggestions"
+            maxLength={200}
+            className="h-8 w-56 text-xs"
+            disabled={batchSubmitting}
+          />
+          <datalist id="batch-no-doc-suggestions">
+            <option value={t('no_doc_required_suggestion_bank_fee')} />
+            <option value={t('no_doc_required_suggestion_interest')} />
+            <option value={t('no_doc_required_suggestion_internal_transfer')} />
+            <option value={t('no_doc_required_suggestion_tax_payment')} />
+            <option value={t('no_doc_required_suggestion_salary')} />
+          </datalist>
+          <Button size="sm" onClick={handleBatchExempt} loading={batchSubmitting}>
+            {t('batch_mark_no_doc')}
+          </Button>
+          {/* Filter-scoped: mark every missing-doc verifikat matching the
+              active filters across all pages: scales to a post-import flood. */}
+          <button type="button" className={QUIET_LINK_CLASS} onClick={openBulk}>
+            {t('batch_mark_all_missing')}
+          </button>
+        </BulkSelectionBar>
 
         {/* Discoverability for "Ångra import" (issue #1883): when the page
             shows import-sourced vouchers, point at the SIE import history
@@ -1539,35 +1454,27 @@ export default function JournalEntryList({
             <thead>
               <tr>
                 <th className={cn(TH_CLASS, 'w-[26px] !pl-1')} aria-hidden="true"></th>
-                <SortableHeader
+                <SortableTh
                   label={t('th_voucher')}
-                  sortLabel={t('sort_by', { column: t('th_voucher') })}
-                  column="voucher"
-                  stack={sortStack}
-                  onSort={handleHeaderSort}
+                  {...sortHeadOf(sortStack, 'voucher')}
+                  onSort={(e) => handleHeaderSort('voucher', e.shiftKey)}
                 />
-                <SortableHeader
+                <SortableTh
                   label={t('th_date')}
-                  sortLabel={t('sort_by', { column: t('th_date') })}
-                  column="date"
-                  stack={sortStack}
-                  onSort={handleHeaderSort}
+                  {...sortHeadOf(sortStack, 'date')}
+                  onSort={(e) => handleHeaderSort('date', e.shiftKey)}
                   className="hidden sm:table-cell"
                 />
-                <SortableHeader
+                <SortableTh
                   label={t('th_description')}
-                  sortLabel={t('sort_by', { column: t('th_description') })}
-                  column="description"
-                  stack={sortStack}
-                  onSort={handleHeaderSort}
+                  {...sortHeadOf(sortStack, 'description')}
+                  onSort={(e) => handleHeaderSort('description', e.shiftKey)}
                   className="w-full"
                 />
-                <SortableHeader
+                <SortableTh
                   label={t('th_amount')}
-                  sortLabel={t('sort_by', { column: t('th_amount') })}
-                  column="total"
-                  stack={sortStack}
-                  onSort={handleHeaderSort}
+                  {...sortHeadOf(sortStack, 'total')}
+                  onSort={(e) => handleHeaderSort('total', e.shiftKey)}
                   className="text-right"
                   align="right"
                 />

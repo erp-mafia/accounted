@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { invoiceInboxExtension } from '@/extensions/general/invoice-inbox'
 import { ResendSignatureError } from '@/extensions/general/invoice-inbox/lib/resend-inbound'
-import { createQueuedMockSupabase, createMockRequest } from '@/tests/helpers'
+import { createQueuedMockSupabase, createMockRequest, testRoutes } from '@/tests/helpers'
 
 vi.mock('@/extensions/general/invoice-inbox/lib/resend-inbound', async () => {
   const actual = await vi.importActual<typeof import('@/extensions/general/invoice-inbox/lib/resend-inbound')>(
@@ -48,7 +48,7 @@ import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
 
 function findRoute(method: string, path: string) {
-  return invoiceInboxExtension.apiRoutes!.find((r) => r.method === method && r.path === path)!
+  return testRoutes(invoiceInboxExtension).find((r) => r.method === method && r.path === path)!
 }
 
 const webhookRoute = findRoute('POST', '/inbound')

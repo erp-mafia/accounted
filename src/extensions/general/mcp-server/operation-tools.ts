@@ -21,13 +21,28 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fieldValidationError, zodFieldIssues } from '@/lib/errors/refusal'
 import { throwOutcomeFailure } from '@/lib/operations/errors'
 import type { AnyOperation } from '@/lib/operations/types'
+import type { ApiKeyScope } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
 import type { ActorContext, McpTool, McpToolAnnotations } from './server'
 import type { NextActionHint } from './tool-result'
 
 const log = createLogger('mcp-operation-tools')
 
+/**
+ * MCP-only input preparation for one operation, run on the raw arguments
+ * before they are validated: what agents may send that the operation's own
+ * contract does not take (a dimension value given by its name). It rewrites
+ * the arguments into the operation's input and may name what it resolved,
+ * which the staged preview then carries. It may read; it never writes.
+ */
+export type PrepareOperationInput = (
+  args: Record<string, unknown>,
+  context: { supabase: SupabaseClient; companyId: string },
+) => Promise<{ args: Record<string, unknown>; preview?: Record<string, unknown> }>
+
 interface Deps {
+  /** By operation id: see PrepareOperationInput. */
+  prepareInput?: Record<string, PrepareOperationInput>
   readOnly: McpToolAnnotations
   stagedWrite: McpToolAnnotations
   stagedSchema: Record<string, unknown>
@@ -51,8 +66,9 @@ type JsonSchema = Record<string, unknown>
 /**
  * Zod's JSON Schema, trimmed for a tool definition: no $schema header, no
  * regex spelled out next to a `format` that already says it (uuid), no
- * MAX_SAFE_INTEGER bounds, a nullable scalar as one node, and closed objects
- * so an agent's stray key is refused rather than ignored.
+ * MAX_SAFE_INTEGER bounds, a nullable scalar as one node, no `type: string`
+ * on propertyNames (a key is always a string), and closed objects so an
+ * agent's stray key is refused rather than ignored.
  */
 export function toolInputSchema(input: z.ZodTypeAny): JsonSchema {
   const raw = z.toJSONSchema(input, { io: 'input', unrepresentable: 'any' }) as JsonSchema
@@ -105,6 +121,11 @@ function compact(node: unknown): unknown {
   if (typeof obj.format === 'string' && typeof obj.pattern === 'string') delete obj.pattern
   if (obj.maximum === Number.MAX_SAFE_INTEGER) delete obj.maximum
   if (obj.minimum === Number.MIN_SAFE_INTEGER) delete obj.minimum
+  const names = obj.propertyNames as Record<string, unknown> | undefined
+  if (names && typeof names === 'object' && names.type === 'string') {
+    const { type: _string, ...rest } = names
+    obj.propertyNames = rest
+  }
   if (obj.type === 'object' && obj.properties && obj.additionalProperties === undefined) {
     obj.additionalProperties = false
   }
@@ -185,8 +206,12 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
       catalogVisibility: binding.visibility ?? 'search',
       keywords: binding.keywords,
       async execute(args, companyId, userId, supabase, actor) {
-        const { dry_run, idempotency_key, ...rest } = args
-        const input = parseOrThrow(op, inputSchema, rest)
+        // __keyScopes: the calling key's grant, injected by the dispatcher
+        // for the tools whose refusal names a follow-up call.
+        const { dry_run, idempotency_key, __keyScopes, ...rest } = args
+        const prepare = deps.prepareInput?.[op.id]
+        const prepared = prepare ? await prepare(rest, { supabase, companyId }) : { args: rest }
+        const input = parseOrThrow(op, inputSchema, prepared.args)
         // The preview runs every check the commit will run, so a staged
         // operation that could never commit is refused here, not at approval.
         const preview = await op.run(
@@ -194,7 +219,17 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
           input,
           { dryRun: true },
         )
-        if (!preview.ok) throwOutcomeFailure(preview)
+        if (!preview.ok) {
+          const refusal = preview.error
+            ? undefined
+            : stage.refusal?.(
+                { code: preview.code, details: preview.details },
+                input as Record<string, unknown>,
+                Array.isArray(__keyScopes) ? (__keyScopes as ApiKeyScope[]) : undefined,
+              )
+          if (refusal) throw refusal
+          throwOutcomeFailure(preview)
+        }
         const previewData = preview.dryRun ? preview.preview : {}
         // Pinned params (e.g. the payee each payment goes to) make the
         // commit refuse when what the approver saw no longer holds.
@@ -209,7 +244,10 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
           stage.pendingType,
           stage.title(input as Record<string, unknown>, previewData),
           params,
-          stage.preview ? stage.preview(input as Record<string, unknown>, previewData) : previewData,
+          {
+            ...(stage.preview ? stage.preview(input as Record<string, unknown>, previewData) : previewData),
+            ...(prepared.preview ?? {}),
+          },
           actor,
           extras.next,
           {

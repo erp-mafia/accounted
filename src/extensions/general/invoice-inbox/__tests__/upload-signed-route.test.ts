@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { invoiceInboxExtension } from '@/extensions/general/invoice-inbox'
-import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
+import { createQueuedMockSupabase, createMockRequest, parseJsonResponse, testRoutes } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
 // The two Storage primitives are the seam: the routes must hand the RAW
@@ -34,7 +34,7 @@ import { processArchivedDocument } from '@/extensions/general/invoice-inbox/lib/
 import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
 
 function findRoute(method: string, path: string) {
-  return invoiceInboxExtension.apiRoutes!.find(
+  return testRoutes(invoiceInboxExtension).find(
     (r) => r.method === method && r.path === path,
   )!
 }
@@ -91,10 +91,6 @@ beforeEach(() => {
 })
 
 describe('POST /upload/create (signed direct-to-storage upload)', () => {
-  it('returns 401 without a context', async () => {
-    const res = await createRoute.handler(createMockRequest('/upload/create', { method: 'POST', body: createBody() }))
-    expect(res.status).toBe(401)
-  })
 
   it('returns 400 on an invalid body', async () => {
     const mock = createQueuedMockSupabase()
@@ -210,13 +206,6 @@ describe('POST /upload/complete (signed direct-to-storage upload)', () => {
     skip_reason: null,
     page_count: 3,
   }
-
-  it('returns 401 without a context', async () => {
-    const res = await completeRoute.handler(
-      createMockRequest('/upload/complete', { method: 'POST', body: completeBody() }),
-    )
-    expect(res.status).toBe(401)
-  })
 
   it('returns 400 when upload_id is not a UUID', async () => {
     const mock = createQueuedMockSupabase()

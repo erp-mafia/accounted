@@ -152,6 +152,10 @@ export interface OperationMcpBinding {
      * For a pending type that existed before its operation did: rewrites
      * params staged in the old shape into the operation's input, so a row
      * staged before the switch still commits. Runs before validation.
+     * Removal rule (DECISIONS.md 2026-10-12): delete an upgrade 30 days after
+     * the switch reached production, once no pending row of the type is
+     * older than the switch; an older row is then rejected as
+     * VALIDATION_ERROR and re-staged.
      */
     upgradeParams?: (params: Record<string, unknown>) => Record<string, unknown>
     /**
@@ -176,6 +180,19 @@ export interface OperationMcpBinding {
      * preview. Pure: no I/O, and nothing the dry run did not answer.
      */
     preview?: (input: Record<string, unknown>, preview: Record<string, unknown>) => Record<string, unknown>
+    /**
+     * The error a refusal of the staging dry run reaches the agent as, when
+     * the registry sentence is not enough to act on: the call that resolves
+     * it, with the ids from the refusal's details. `keyScopes` is the calling
+     * key's grant when the dispatcher passes it, so the answer never points
+     * at a tool the key cannot call. Undefined keeps the registry sentence.
+     * Pure: no I/O.
+     */
+    refusal?: (
+      failure: { code: string; details?: Record<string, unknown> },
+      input: Record<string, unknown>,
+      keyScopes?: readonly ApiKeyScope[],
+    ) => Error | undefined
   }
 }
 

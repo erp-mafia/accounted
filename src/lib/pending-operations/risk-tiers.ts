@@ -19,7 +19,16 @@ import { WEB_ONLY_CASE_ACTIONS } from '@/lib/collections/stages'
 
 export type RiskLevel = 'low' | 'medium' | 'high'
 
-export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
+/**
+ * Every pending operation type with its tier: the ONE hand-kept list of
+ * operation types. PendingOperationType, PENDING_OPERATION_TYPES and the
+ * approval label keys (components/pending-operations/vocabulary.ts) are
+ * derived from it, so a type added here has a type, a tier and a label key
+ * at once (operation-contract.test.ts checks the translations). The
+ * pending_operations CHECK constraint is the database's own copy; the pg
+ * audit compares it with this list.
+ */
+const RISK_TIERS = {
   // ── Low: pure data, no booking impact ─────────────────────────────
   create_customer: 'low',
   update_customer: 'low',
@@ -422,7 +431,16 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // (getRiskLevel already defaults unknown → 'high'; explicit for intent.)
   submit_vat_declaration: 'high',
   submit_agi: 'high',
-}
+} as const satisfies Record<string, RiskLevel>
+
+/** A pending_operations.operation_type: a key of the tier table above. */
+export type PendingOperationType = keyof typeof RISK_TIERS
+
+/** The tier of each type, looked up by any string (an unknown type is undefined). */
+export const OPERATION_RISK_TIERS: Readonly<Record<string, RiskLevel>> = RISK_TIERS
+
+/** Every pending operation type, in the table's order. */
+export const PENDING_OPERATION_TYPES = Object.keys(RISK_TIERS) as PendingOperationType[]
 
 /**
  * Op types whose tier depends on the staged params, not just the type.

@@ -6,12 +6,17 @@
  *   /salary/runs/{id}  → per-employee calculation rows + payslip line items
  *
  * Everything here is a PURE ROW BUILDER, same contract as ./customers.ts and
- * ./pending-operations.ts: no Supabase, no `new Date()` inside, dates and ids
- * arrive as arguments. route.ts owns the inserts.
+ * ./pending-operations.ts: no Supabase, no `new Date()` inside, dates, ids,
+ * the year's payroll config and the tax table arrive as arguments. route.ts
+ * owns the reads and the inserts.
+ *
+ * The figures are the salary engine's own (calculateSandboxPayroll calls
+ * calculateSalary with the employee rows this module builds), so the booked
+ * run, its verifikat and the draft run's "Beräkna om" agree to the öre.
  *
  * Insert order (foreign keys):
  *   1. employees                → buildSandboxEmployees
- *   2. salary_runs              → buildSandboxSalaryRuns
+ *   2. salary_runs              → buildSandboxSalaryRuns (needs the payroll)
  *   3. salary_run_employees     → buildSandboxSalaryRunEmployees (needs 1 + 2)
  *   4. salary_line_items        → buildSandboxSalaryLineItems (needs 3)
  *
@@ -31,89 +36,21 @@
 
 import { roundOre } from '@/lib/money'
 import { lastDayOfMonth, pad2 } from './date-utils'
-import { FALLBACK_TAX_TABLES_2026 } from '@/lib/salary/tax-tables-fallback'
 import { getLineItemAccount } from '@/lib/salary/account-mapping'
+import { calculateSalary, type SalaryCalculationResult } from '@/lib/salary/calculation-engine'
+import { serializePayrollConfig, type PayrollConfig } from '@/lib/salary/payroll-config'
+import type { TaxTableRate } from '@/lib/salary/tax-tables'
 import type { SalaryLineItemType } from '@/types'
 
-// ============================================================
-// Statutory + demo rates
-// ============================================================
-
 /**
- * Arbetsgivaravgifter 2026, matching salary_payroll_config.avgifter_total
- * seeded by migration 20260414120000. Both employees are in the standard
- * age band (born 1988 and 1996), so no reduction applies.
+ * Skatteverket tax table + column both demo employees are registered on.
+ * Column 1 is ordinary employment income for someone below 66 (SKV 434).
+ * route.ts loads exactly this table and column for the booked year.
  */
-const AVGIFTER_RATE = 0.3142
-
-/**
- * Procentregeln at 25 semesterdagar: 12 % of the vacation basis (SemL 16 b §).
- * The engine switches to 14.4 % at 30+ days; both demo employees are on 25.
- */
-const VACATION_ACCRUAL_RATE = 0.12
-
-/** Skatteverket tax table + column both demo employees are registered on. */
-const TAX_TABLE_NUMBER = 34
-const TAX_COLUMN = 1
-
-/**
- * Real skatteavdrag, from the Skatteverket 2026 tables the repo already ships
- * (SKV 434, generated into lib/salary/tax-tables-fallback.ts).
- *
- * A flat schablon was tempting here and wrong. The draft run ships with
- * calculation_params set, so its "Beräkna om" is live: a visitor who presses it
- * gets the engine's real table lookup, and any approximation would make the
- * open run jump away from the booked one it is supposed to mirror. It would
- * also put a wrong skatteavdrag on screen in the payslip, the 2710 verifikat
- * line and the AGI figures, which is not a thing an accounting product should
- * demo. The fallback module is a plain synchronous constant, no DB and no
- * network, so there is nothing to depend on being loaded.
- *
- * Column 1 is ordinary employment income for someone below 66 (SKV 434), which
- * is what both demo employees are registered as.
- */
-function lookupTaxWithheld(monthlyIncome: number): number {
-  const table = FALLBACK_TAX_TABLES_2026[TAX_TABLE_NUMBER]
-  if (!table) {
-    throw new Error(`Sandbox seed: no 2026 tax table ${TAX_TABLE_NUMBER}`)
-  }
-  // Rows are [incomeFrom, incomeTo, col1..col6] and the brackets are integer
-  // kronor, so round before comparing.
-  const income = Math.round(monthlyIncome)
-  const row = table.find(([from, to]) => income >= from && income <= to)
-  if (!row) {
-    throw new Error(
-      `Sandbox seed: income ${income} is outside tax table ${TAX_TABLE_NUMBER}`,
-    )
-  }
-  return row[1 + TAX_COLUMN]
-}
-
-/**
- * Frozen payroll-config snapshot written to salary_runs.calculation_params.
- *
- * A real run stores serializePayrollConfig(config): the full 2026 config row.
- * The seed writes the documented subset that consumers actually read
- * (`slpRate` in lib/salary/salary-entries.ts, `sjuklonRate` in the AGI
- * generator) plus the rates these demo figures were computed with. The column
- * being non-null is also what makes the run detail page treat the run as
- * calculated: KPI cards, Beräkningsdetaljer and the bokförings-preview all
- * hang off `calculation_params != null`.
- */
-const DEMO_CALCULATION_PARAMS = {
-  configYear: 2026,
-  avgifterTotal: AVGIFTER_RATE,
-  avgifterReduced65plus: 0.1021,
-  egenavgifterTotal: 0.2897,
-  slpRate: 0.2426,
-  prisbasbelopp: 59200,
-  sjuklonRate: 0.8,
-  karensavdragFactor: 0.2,
-  reducedAvgiftAge: 67,
-  // Marks the snapshot as seeded rather than calculated, so anything reading
-  // it later can tell the difference from a real frozen config.
-  demoSeed: true,
-} as const
+export const SANDBOX_TAX_TABLE_NUMBER = 34
+export const SANDBOX_TAX_COLUMN = 1
+const TAX_TABLE_NUMBER = SANDBOX_TAX_TABLE_NUMBER
+const TAX_COLUMN = SANDBOX_TAX_COLUMN
 
 // ============================================================
 // Employee facts
@@ -221,103 +158,6 @@ export function resolveSandboxSalaryPeriods(today: Date): SandboxSalaryPeriods {
   }
 }
 
-// ============================================================
-// Figures (computed once, shared by the run rows and the employee rows)
-// ============================================================
-
-export interface SandboxPayrollFigures {
-  grossSalary: number
-  taxableIncome: number
-  taxWithheld: number
-  netDeductions: number
-  netSalary: number
-  avgifterRate: number
-  avgifterBasis: number
-  avgifterAmount: number
-  vacationAccrual: number
-  vacationAccrualAvgifter: number
-  totalEmployerCost: number
-}
-
-/**
- * Mirror of lib/salary/calculation-engine for the one shape the seed uses:
- * a single salary line, no benefits, no absence, no gross or net deductions.
- *
- *   taxable       = gross + förmåner (0 here)
- *   net           = gross - skatt - nettoavdrag
- *   avgifter      = (gross + förmåner) × 31,42 %
- *   semesterskuld = semesterunderlag × 12 %
- *   employer cost = gross + avgifter + semesteravsättning + avgifter på den
- */
-function computeFigures(grossSalary: number): SandboxPayrollFigures {
-  const gross = roundOre(grossSalary)
-  const taxWithheld = lookupTaxWithheld(gross)
-  const netDeductions = 0
-  const vacationAccrual = roundOre(gross * VACATION_ACCRUAL_RATE)
-  const vacationAccrualAvgifter = roundOre(vacationAccrual * AVGIFTER_RATE)
-  const avgifterAmount = roundOre(gross * AVGIFTER_RATE)
-
-  return {
-    grossSalary: gross,
-    taxableIncome: gross,
-    taxWithheld,
-    netDeductions,
-    netSalary: roundOre(gross - taxWithheld - netDeductions),
-    avgifterRate: AVGIFTER_RATE,
-    avgifterBasis: gross,
-    avgifterAmount,
-    vacationAccrual,
-    vacationAccrualAvgifter,
-    totalEmployerCost: roundOre(
-      gross + avgifterAmount + vacationAccrual + vacationAccrualAvgifter,
-    ),
-  }
-}
-
-/** The two demo employees' per-run figures. Identical on both runs. */
-export const SANDBOX_PAYROLL_FIGURES = {
-  anna: computeFigures(ANNA_MONTHLY_SALARY),
-  erik: computeFigures(ERIK_HOURLY_RATE * ERIK_HOURS_WORKED),
-} as const
-
-/**
- * Run-level totals, summed from the same figures the per-employee rows are
- * written from. Computed here rather than typed out so salary_runs.total_* can
- * never drift from sum(salary_run_employees).
- */
-export const SANDBOX_RUN_TOTALS = {
-  total_gross: roundOre(
-    SANDBOX_PAYROLL_FIGURES.anna.grossSalary + SANDBOX_PAYROLL_FIGURES.erik.grossSalary,
-  ),
-  total_tax: roundOre(
-    SANDBOX_PAYROLL_FIGURES.anna.taxWithheld + SANDBOX_PAYROLL_FIGURES.erik.taxWithheld,
-  ),
-  total_net: roundOre(
-    SANDBOX_PAYROLL_FIGURES.anna.netSalary + SANDBOX_PAYROLL_FIGURES.erik.netSalary,
-  ),
-  total_avgifter: roundOre(
-    SANDBOX_PAYROLL_FIGURES.anna.avgifterAmount + SANDBOX_PAYROLL_FIGURES.erik.avgifterAmount,
-  ),
-  total_vacation_accrual: roundOre(
-    SANDBOX_PAYROLL_FIGURES.anna.vacationAccrual + SANDBOX_PAYROLL_FIGURES.erik.vacationAccrual,
-  ),
-  total_employer_cost: roundOre(
-    SANDBOX_PAYROLL_FIGURES.anna.totalEmployerCost +
-      SANDBOX_PAYROLL_FIGURES.erik.totalEmployerCost,
-  ),
-} as const
-
-/**
- * Sum of vacation_accrual_avgifter across the run. Deliberately NOT part of
- * SANDBOX_RUN_TOTALS: salary_runs has no column for it, and everything in that
- * object is spread straight onto the run row. The semester voucher of the
- * booked run needs the figure though (7519 / 2940), so it is exported here
- * rather than recomputed by the caller.
- */
-export const SANDBOX_TOTAL_VACATION_ACCRUAL_AVGIFTER = roundOre(
-  SANDBOX_PAYROLL_FIGURES.anna.vacationAccrualAvgifter +
-    SANDBOX_PAYROLL_FIGURES.erik.vacationAccrualAvgifter,
-)
 
 // ============================================================
 // 1. employees
@@ -432,6 +272,129 @@ export function mapSandboxEmployeeIds(
 }
 
 // ============================================================
+// Figures: the salary engine, once per employee
+// ============================================================
+
+export type SandboxEmployeeRow = ReturnType<typeof buildSandboxEmployees>[number]
+
+export interface SandboxPayrollInput {
+  /** The rows buildSandboxEmployees returned, personnummer encrypted. */
+  employees: readonly SandboxEmployeeRow[]
+  today: Date
+  /** The booked year's salary_payroll_config row (loadPayrollConfig). */
+  config: PayrollConfig
+  /** Table 34, column 1 for the booked year (fetchTaxTableRates). */
+  taxRates: TaxTableRate[]
+}
+
+/** The two demo employees' calculation results, plus the config they used. */
+export interface SandboxPayroll {
+  anna: SalaryCalculationResult
+  erik: SalaryCalculationResult
+  config: PayrollConfig
+}
+
+function engineFor(
+  employee: SandboxEmployeeRow,
+  period: SandboxSalaryPeriod,
+  config: PayrollConfig,
+  taxRates: TaxTableRate[],
+): SalaryCalculationResult {
+  const periodStart = toDateString(period.year, period.month, 1)
+  const periodEnd = toDateString(period.year, period.month, lastDayOfMonth(period.year, period.month))
+  const hourly = employee.salary_type === 'hourly'
+  // The input runSalaryCalculation builds from an employee and its run row:
+  // an hourly employee's monthly_salary snapshot is 0, and the base salary
+  // line item is not passed, since the engine derives the base itself.
+  return calculateSalary(
+    {
+      employmentType: 'employee',
+      salaryType: hourly ? 'hourly' : 'monthly',
+      monthlySalary: employee.monthly_salary ?? 0,
+      hourlyRate: employee.hourly_rate ?? undefined,
+      hoursWorked: hourly ? ERIK_HOURS_WORKED : undefined,
+      employmentDegree: employee.employment_degree,
+      taxTableNumber: employee.tax_table_number,
+      taxColumn: employee.tax_column,
+      isSidoinkomst: employee.is_sidoinkomst,
+      jamkningPercentage: null,
+      jamkningValidFrom: null,
+      jamkningValidTo: null,
+      fSkattStatus: employee.f_skatt_status,
+      personnummer: employee.personnummer,
+      paymentDate: period.paymentDate,
+      vacationRule: 'procentregeln',
+      vacationDaysPerYear: employee.vacation_days_per_year,
+      // Read only under sammalöneregeln; both demo employees are on procentregeln.
+      semestertillaggRate: 0,
+      vacationPayRate: null,
+      vaxaStodEligible: false,
+      vaxaStodStart: null,
+      vaxaStodEnd: null,
+      lineItems: [],
+      periodStart,
+      periodEnd,
+      employmentStart: employee.employment_start,
+      employmentEnd: null,
+    },
+    config,
+    taxRates.map((rate) => ({ ...rate })),
+  )
+}
+
+/**
+ * Run the salary engine for both demo employees on the booked period. The
+ * draft run pays the same amounts a month later; the engine would answer the
+ * same figures for it (same age band, same table, no proration), so one
+ * calculation serves both runs, and "Beräkna om" on the draft reproduces it.
+ */
+export function calculateSandboxPayroll({
+  employees,
+  today,
+  config,
+  taxRates,
+}: SandboxPayrollInput): SandboxPayroll {
+  const { booked } = resolveSandboxSalaryPeriods(today)
+  const byLastName = (lastName: string) => {
+    const employee = employees.find((e) => e.last_name === lastName)
+    if (!employee) throw new Error(`Sandbox seed: no employee ${lastName} to calculate`)
+    return employee
+  }
+  return {
+    anna: engineFor(byLastName(SANDBOX_EMPLOYEE_LAST_NAMES.anna), booked, config, taxRates),
+    erik: engineFor(byLastName(SANDBOX_EMPLOYEE_LAST_NAMES.erik), booked, config, taxRates),
+    config,
+  }
+}
+
+/**
+ * Run-level totals, summed from the same results the per-employee rows are
+ * written from, so salary_runs.total_* can never drift from
+ * sum(salary_run_employees).
+ */
+export function sandboxRunTotals(payroll: SandboxPayroll) {
+  const { anna, erik } = payroll
+  return {
+    total_gross: roundOre(anna.grossSalary + erik.grossSalary),
+    total_tax: roundOre(anna.taxWithheld + erik.taxWithheld),
+    total_net: roundOre(anna.netSalary + erik.netSalary),
+    total_avgifter: roundOre(anna.avgifterAmount + erik.avgifterAmount),
+    total_vacation_accrual: roundOre(anna.vacationAccrual + erik.vacationAccrual),
+    total_employer_cost: roundOre(anna.totalEmployerCost + erik.totalEmployerCost),
+  }
+}
+
+/**
+ * Sum of vacation_accrual_avgifter across the run. Deliberately NOT part of
+ * sandboxRunTotals: salary_runs has no column for it, and everything in that
+ * object is spread straight onto the run row. The semester voucher of the
+ * booked run needs the figure though (7519 / 2940).
+ */
+export function sandboxVacationAccrualAvgifterTotal(payroll: SandboxPayroll): number {
+  return roundOre(payroll.anna.vacationAccrualAvgifter + payroll.erik.vacationAccrualAvgifter)
+}
+
+// ============================================================
 // 2. salary_runs
 // ============================================================
 
@@ -439,15 +402,20 @@ export interface SandboxSalaryRunsInput {
   userId: string
   companyId: string
   today: Date
+  payroll: SandboxPayroll
 }
 
 /**
  * Two runs: last month booked and paid, this month still a draft. Both carry
  * the same denormalized totals because the roster and the amounts are the
- * same in both periods; the totals come from SANDBOX_RUN_TOTALS, which is
- * summed from the per-employee figures.
+ * same in both periods.
+ *
+ * calculation_params is the frozen config a real run stores
+ * (serializePayrollConfig), marked as seeded. The column being non-null is
+ * also what makes the run detail page treat the run as calculated: KPI cards,
+ * Beräkningsdetaljer and the bokförings-preview all hang off it.
  */
-export function buildSandboxSalaryRuns({ userId, companyId, today }: SandboxSalaryRunsInput) {
+export function buildSandboxSalaryRuns({ userId, companyId, today, payroll }: SandboxSalaryRunsInput) {
   const periods = resolveSandboxSalaryPeriods(today)
   const todayDate = toDateString(today.getFullYear(), today.getMonth() + 1, today.getDate())
 
@@ -460,8 +428,8 @@ export function buildSandboxSalaryRuns({ userId, companyId, today }: SandboxSala
     user_id: userId,
     company_id: companyId,
     voucher_series: 'A',
-    ...SANDBOX_RUN_TOTALS,
-    calculation_params: DEMO_CALCULATION_PARAMS,
+    ...sandboxRunTotals(payroll),
+    calculation_params: { ...serializePayrollConfig(payroll.config), demoSeed: true },
   }
 
   return [
@@ -508,118 +476,13 @@ export interface SandboxSalaryRunEmployeesInput {
   draftRunId: string
   annaEmployeeId: string
   erikEmployeeId: string
-}
-
-interface BreakdownStep {
-  label: string
-  formula: string
-  input: Record<string, number | string>
-  output: number | null
+  payroll: SandboxPayroll
 }
 
 /**
- * calculation_breakdown, in the shape RunCalculationDetails renders
- * ({ steps: [{ label, formula, output }] }) and the engine produces. The
- * skatteavdrag step names the table and column it actually came from, because
- * it actually came from them (see lookupTaxWithheld).
- */
-function buildBreakdownSteps(
-  figures: SandboxPayrollFigures,
-  baseStep: BreakdownStep,
-): { steps: BreakdownStep[] } {
-  return {
-    steps: [
-      baseStep,
-      {
-        label: 'Bruttolön',
-        formula: 'grundlön + tillägg + frånvaro − bruttoavdrag',
-        input: { base: figures.grossSalary, additions: 0, absence: 0, gross_deductions: 0 },
-        output: figures.grossSalary,
-      },
-      {
-        label: 'Skattegrundande inkomst',
-        formula: 'bruttolön + förmåner',
-        input: { gross_salary: figures.grossSalary, benefit_values: 0 },
-        output: figures.taxableIncome,
-      },
-      {
-        label: 'Skatteavdrag',
-        formula: `skattetabell ${TAX_TABLE_NUMBER}, kolumn ${TAX_COLUMN}`,
-        input: {
-          taxable_income: figures.taxableIncome,
-          tax_table: TAX_TABLE_NUMBER,
-          tax_column: TAX_COLUMN,
-        },
-        output: figures.taxWithheld,
-      },
-      {
-        label: 'Nettolön',
-        formula: 'bruttolön − skatt − nettoavdrag',
-        input: {
-          gross: figures.grossSalary,
-          tax: figures.taxWithheld,
-          net_deductions: figures.netDeductions,
-        },
-        output: figures.netSalary,
-      },
-      {
-        label: 'Arbetsgivaravgifter',
-        formula: 'avgiftsunderlag × 31,42 %',
-        input: { avgifter_basis: figures.avgifterBasis, rate: figures.avgifterRate },
-        output: figures.avgifterAmount,
-      },
-      {
-        label: 'Semesteravsättning (procentregeln 12,00 %)',
-        formula: 'semesterunderlag × 12,00 %',
-        input: { vacation_basis: figures.grossSalary, rate: VACATION_ACCRUAL_RATE },
-        output: figures.vacationAccrual,
-      },
-      {
-        label: 'Arbetsgivaravgifter på semesteravsättning',
-        formula: 'semesteravsättning × 31,42 %',
-        input: {
-          vacation_accrual: figures.vacationAccrual,
-          avgifter_rate: figures.avgifterRate,
-        },
-        output: figures.vacationAccrualAvgifter,
-      },
-      {
-        label: 'Total arbetsgivarkostnad',
-        formula: 'bruttolön + avgifter + semesteravsättning + avgifter på semester',
-        input: {
-          gross: figures.grossSalary,
-          avgifter: figures.avgifterAmount,
-          vacation_accrual: figures.vacationAccrual,
-          vacation_avgifter: figures.vacationAccrualAvgifter,
-        },
-        output: figures.totalEmployerCost,
-      },
-    ],
-  }
-}
-
-const ANNA_BREAKDOWN = buildBreakdownSteps(
-  SANDBOX_PAYROLL_FIGURES.anna,
-  {
-    label: 'Grundlön',
-    formula: 'månadslön × (sysselsättningsgrad / 100)',
-    input: { monthly_salary: ANNA_MONTHLY_SALARY, employment_degree: 100 },
-    output: SANDBOX_PAYROLL_FIGURES.anna.grossSalary,
-  },
-)
-
-const ERIK_BREAKDOWN = buildBreakdownSteps(
-  SANDBOX_PAYROLL_FIGURES.erik,
-  {
-    label: 'Grundlön (timavlönad)',
-    formula: 'timlön × arbetade timmar',
-    input: { hourly_rate: ERIK_HOURLY_RATE, hours_worked: ERIK_HOURS_WORKED },
-    output: SANDBOX_PAYROLL_FIGURES.erik.grossSalary,
-  },
-)
-
-/**
- * Per-employee calculation results for both runs.
+ * Per-employee calculation results for both runs, in the columns
+ * runSalaryCalculation writes, with the engine's own steps as the
+ * calculation_breakdown.
  *
  * YTD: the booked run is the earliest payroll in the sandbox, so its YTD is
  * its own month; the draft run's YTD is the booked run plus itself. That is
@@ -638,6 +501,7 @@ export function buildSandboxSalaryRunEmployees({
   draftRunId,
   annaEmployeeId,
   erikEmployeeId,
+  payroll,
 }: SandboxSalaryRunEmployeesInput) {
   const periods = resolveSandboxSalaryPeriods(today)
 
@@ -648,26 +512,26 @@ export function buildSandboxSalaryRunEmployees({
     // Both runs pay out in the current calendar year (see the January note on
     // resolveSandboxSalaryPeriods), so one year covers both.
     tax_table_year: periods.booked.year,
-    avgifter_category: 'standard',
   }
 
-  const anna = SANDBOX_PAYROLL_FIGURES.anna
-  const erik = SANDBOX_PAYROLL_FIGURES.erik
+  const { anna, erik } = payroll
 
   /** Figure columns shared by both runs for one employee. */
-  const results = (f: SandboxPayrollFigures) => ({
-    gross_salary: f.grossSalary,
-    gross_deductions: 0,
-    benefit_values: 0,
-    taxable_income: f.taxableIncome,
-    tax_withheld: f.taxWithheld,
-    net_deductions: f.netDeductions,
-    net_salary: f.netSalary,
-    avgifter_rate: f.avgifterRate,
-    avgifter_amount: f.avgifterAmount,
-    avgifter_basis: f.avgifterBasis,
-    vacation_accrual: f.vacationAccrual,
-    vacation_accrual_avgifter: f.vacationAccrualAvgifter,
+  const results = (r: SalaryCalculationResult) => ({
+    gross_salary: r.grossSalary,
+    gross_deductions: r.grossDeductions,
+    benefit_values: r.benefitValues,
+    taxable_income: r.taxableIncome,
+    tax_withheld: r.taxWithheld,
+    net_deductions: r.netDeductions,
+    net_salary: r.netSalary,
+    avgifter_rate: r.avgifterRate,
+    avgifter_amount: r.avgifterAmount,
+    avgifter_basis: r.avgifterBasis,
+    avgifter_category: r.avgifterCategory,
+    vacation_accrual: r.vacationAccrual,
+    vacation_accrual_avgifter: r.vacationAccrualAvgifter,
+    calculation_breakdown: { steps: r.steps },
   })
 
   const annaSnapshot = {
@@ -677,7 +541,6 @@ export function buildSandboxSalaryRunEmployees({
     salary_type: 'monthly',
     // Månadsavlönade have no hour count; the column is nullable.
     hours_worked: null,
-    calculation_breakdown: ANNA_BREAKDOWN,
     ...results(anna),
   }
 
@@ -689,7 +552,6 @@ export function buildSandboxSalaryRunEmployees({
     monthly_salary: 0,
     salary_type: 'hourly',
     hours_worked: ERIK_HOURS_WORKED,
-    calculation_breakdown: ERIK_BREAKDOWN,
     ...results(erik),
   }
 
@@ -744,6 +606,7 @@ export interface SandboxSalaryLineItemsInput {
    * both runs pay the same amounts.
    */
   runEmployees: Array<{ id: string; employee_id: string }>
+  payroll: SandboxPayroll
 }
 
 /**
@@ -757,6 +620,7 @@ export function buildSandboxSalaryLineItems({
   annaEmployeeId,
   erikEmployeeId,
   runEmployees,
+  payroll,
 }: SandboxSalaryLineItemsInput) {
   return runEmployees.map((sre) => {
     const isAnna = sre.employee_id === annaEmployeeId
@@ -776,9 +640,7 @@ export function buildSandboxSalaryLineItems({
       description: isAnna ? 'Grundlön' : 'Timlön',
       quantity: isAnna ? 1 : ERIK_HOURS_WORKED,
       unit_price: isAnna ? ANNA_MONTHLY_SALARY : ERIK_HOURLY_RATE,
-      amount: isAnna
-        ? SANDBOX_PAYROLL_FIGURES.anna.grossSalary
-        : SANDBOX_PAYROLL_FIGURES.erik.grossSalary,
+      amount: isAnna ? payroll.anna.grossSalary : payroll.erik.grossSalary,
       is_taxable: true,
       is_avgift_basis: true,
       is_vacation_basis: true,

@@ -10,10 +10,10 @@ import type { ExtensionContext } from '@/lib/extensions/types'
 
 // Mock the Bedrock call. The whole point of this file is to assert it is
 // never invoked on sandbox companies.
-vi.mock('@/extensions/general/invoice-inbox/lib/extract-invoice-fields', async () => {
+vi.mock('@/lib/documents/inbox-extraction/extract-invoice-fields', async () => {
   const actual = await vi.importActual<
-    typeof import('@/extensions/general/invoice-inbox/lib/extract-invoice-fields')
-  >('@/extensions/general/invoice-inbox/lib/extract-invoice-fields')
+    typeof import('@/lib/documents/inbox-extraction/extract-invoice-fields')
+  >('@/lib/documents/inbox-extraction/extract-invoice-fields')
   return {
     ...actual,
     extractInvoiceFields: vi.fn(),
@@ -64,7 +64,7 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
   return { ...actual, createServiceClientNoCookies: vi.fn() }
 })
 
-import { extractInvoiceFields } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
+import { extractInvoiceFields } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 

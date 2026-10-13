@@ -1,5 +1,5 @@
 import type { VatPeriodType } from '@/types'
-import { codedError } from './company-routing'
+import { codedRefusal } from '@/lib/errors/refusal'
 
 /**
  * The (period_type, year, period) triple every VAT tool takes, checked before
@@ -58,5 +58,5 @@ function describe(value: unknown): string {
 }
 
 function invalid(reason: string): Error {
-  return codedError('VALIDATION_ERROR', `${reason}. A working call looks like: ${EXAMPLE_CALL}`)
+  return codedRefusal('VALIDATION_ERROR', `${reason}. A working call looks like: ${EXAMPLE_CALL}`)
 }

@@ -1,4 +1,4 @@
-import { Resend } from 'resend'
+import { getResendClient } from '@/lib/email/resend-client'
 import type { EmailReceivedEvent, GetReceivingEmailResponseSuccess, WebhookEventPayload } from 'resend'
 
 export type ResendReceivedEmail = GetReceivingEmailResponseSuccess
@@ -8,12 +8,6 @@ export interface ResendAttachmentDownload {
   filename: string
   contentType: string
   buffer: ArrayBuffer
-}
-
-function getResend(): Resend {
-  const apiKey = process.env.RESEND_API_KEY
-  if (!apiKey) throw new Error('RESEND_API_KEY is required')
-  return new Resend(apiKey)
 }
 
 export class ResendSignatureError extends Error {
@@ -36,7 +30,7 @@ export function verifyInboundWebhook(rawBody: string, requestHeaders: Headers): 
     signature: requestHeaders.get('svix-signature') ?? '',
   }
 
-  const resend = getResend()
+  const resend = getResendClient()
   try {
     return resend.webhooks.verify({ payload: rawBody, headers: svixHeaders, webhookSecret: secret })
   } catch (err) {
@@ -46,7 +40,7 @@ export function verifyInboundWebhook(rawBody: string, requestHeaders: Headers): 
 
 // Fetches the full received email (body, headers, attachment metadata) by email_id.
 export async function fetchReceivingEmail(emailId: string): Promise<ResendReceivedEmail> {
-  const resend = getResend()
+  const resend = getResendClient()
   const { data, error } = await resend.emails.receiving.get(emailId)
   if (error || !data) {
     throw new Error(`Failed to fetch received email ${emailId}: ${error?.message ?? 'no data'}`)
@@ -59,7 +53,7 @@ export async function fetchInboundAttachment(
   emailId: string,
   attachmentId: string
 ): Promise<ResendAttachmentDownload> {
-  const resend = getResend()
+  const resend = getResendClient()
   const { data, error } = await resend.emails.receiving.attachments.get({ emailId, id: attachmentId })
   if (error || !data) {
     throw new Error(`Failed to fetch attachment ${attachmentId}: ${error?.message ?? 'no data'}`)

@@ -22,7 +22,8 @@ vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
 }))
 
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
-import { BANK_ROWS_MISSING_HINT, SETTLED_ELSEWHERE_HINT, computeVatCloseCheck, tools } from '../server'
+import { tools } from '../server'
+import { BANK_ROWS_MISSING_HINT, SETTLED_ELSEWHERE_HINT, computeVatCloseCheck } from '@/lib/reports/vat-close-check'
 import { toToolError } from '../tool-result'
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'

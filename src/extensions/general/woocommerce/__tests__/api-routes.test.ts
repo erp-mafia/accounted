@@ -99,15 +99,6 @@ describe('woocommerce extension routes', () => {
   })
 
   describe('GET /status', () => {
-    it('returns 401 without a user', async () => {
-      const { supabase } = createQueuedMockSupabase()
-      supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
-      const res = await findRoute('GET', '/status').handler(
-        makeRequest('GET'),
-        makeContext(supabase),
-      )
-      expect(res.status).toBe(401)
-    })
 
     it('prefers the active connection and reports configured', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
@@ -172,25 +163,13 @@ describe('woocommerce extension routes', () => {
   })
 
   describe('POST /connect', () => {
-    it('returns 401 without a user', async () => {
-      const { supabase } = createQueuedMockSupabase()
-      supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
-      const res = await findRoute('POST', '/connect').handler(
-        makeRequest('POST', {}),
-        makeContext(supabase),
-      )
-      expect(res.status).toBe(401)
-    })
 
     it('blocks anonymous (sandbox) users before any external call', async () => {
       const { supabase } = createQueuedMockSupabase()
-      supabase.auth.getUser.mockResolvedValue({
-        data: { user: { id: 'user-1', is_anonymous: true } },
-        error: null,
-      })
+      // The dispatcher marks an anonymous (sandbox) session on the context.
       const res = await findRoute('POST', '/connect').handler(
         makeRequest('POST', {}),
-        makeContext(supabase),
+        { ...makeContext(supabase), isAnonymous: true },
       )
       expect(res.status).toBe(403)
       const body = await res.json()
@@ -418,17 +397,6 @@ describe('woocommerce extension routes', () => {
       unknownCurrency: 0,
       errors: 0,
     }
-
-    it('returns 401 without a user', async () => {
-      const { supabase } = createQueuedMockSupabase()
-      supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
-      const res = await findRoute('POST', '/backfill').handler(
-        makeRequest('POST', { from: '2026-01-01' }),
-        makeContext(supabase),
-      )
-      expect(res.status).toBe(401)
-      expect(syncWooCommerceOrders).not.toHaveBeenCalled()
-    })
 
     it('rejects a date it cannot honour with 400', async () => {
       const { supabase } = createQueuedMockSupabase()

@@ -35,51 +35,22 @@ const NOT_CONFIGURED_MESSAGE =
 const STATUS_COLUMNS =
   'id, status, organization_uuid, organization_name, currency, error_message, connected_at, transaction_sync_enabled, last_order_synced_at'
 
-type AuthedContext = {
-  supabase: ExtensionContext['supabase']
-  userId: string
-  isAnonymous: boolean
-  companyId: string
-}
-
-async function requireUserAndCompany(
-  ctx: ExtensionContext | undefined,
-): Promise<AuthedContext | NextResponse> {
-  const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-  if (!ctx?.companyId) {
-    return NextResponse.json({ error: 'Company context required' }, { status: 400 })
-  }
-  return {
-    supabase,
-    userId: user.id,
-    isAnonymous: Boolean(user.is_anonymous),
-    companyId: ctx.companyId,
-  }
-}
-
-async function guardConnectPreconditions(auth: AuthedContext): Promise<NextResponse | null> {
-  if (auth.isAnonymous) return sandboxBlockedResponse()
-  const sandboxBlocked = await guardSandbox(auth.supabase, auth.companyId)
+async function guardConnectPreconditions(ctx: ExtensionContext): Promise<NextResponse | null> {
+  if (ctx.isAnonymous) return sandboxBlockedResponse()
+  const sandboxBlocked = await guardSandbox(ctx.supabase, ctx.companyId)
   if (sandboxBlocked) return sandboxBlocked
-  return requireCapability(auth.supabase, auth.companyId, CAPABILITY.zettle_sync)
+  return requireCapability(ctx.supabase, ctx.companyId, CAPABILITY.zettle_sync)
 }
 
 export const zettleApiRoutes: ApiRouteDefinition[] = [
   {
     method: 'GET',
     path: '/status',
-    handler: async (_request: Request, ctx?: ExtensionContext) => {
-      const auth = await requireUserAndCompany(ctx)
-      if (auth instanceof NextResponse) return auth
-
-      const { data: rows } = await auth.supabase
+    handler: async (_request: Request, ctx: ExtensionContext) => {
+      const { data: rows } = await ctx.supabase
         .from('zettle_connections')
         .select(STATUS_COLUMNS)
-        .eq('company_id', auth.companyId)
+        .eq('company_id', ctx.companyId)
         .order('created_at', { ascending: false })
         .limit(10)
 
@@ -94,17 +65,14 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
   {
     method: 'POST',
     path: '/connect',
-    handler: async (request: Request, ctx?: ExtensionContext) => {
-      const log = ctx?.log ?? console
-      const auth = await requireUserAndCompany(ctx)
-      if (auth instanceof NextResponse) return auth
-
-      const blocked = await guardConnectPreconditions(auth)
+    handler: async (request: Request, ctx: ExtensionContext) => {
+      const log = ctx.log
+      const blocked = await guardConnectPreconditions(ctx)
       if (blocked) return blocked
 
       const rl = await checkRateLimit({
         prefix: 'zettle:connect',
-        identifier: auth.userId,
+        identifier: ctx.userId,
         ...RATE_LIMIT_CONNECT,
       })
       if (!rl.ok) return rl.response!
@@ -113,10 +81,10 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
         return NextResponse.json({ error: NOT_CONFIGURED_MESSAGE }, { status: 503 })
       }
 
-      const { data: existing } = await auth.supabase
+      const { data: existing } = await ctx.supabase
         .from('zettle_connections')
         .select('id')
-        .eq('company_id', auth.companyId)
+        .eq('company_id', ctx.companyId)
         .eq('status', 'active')
       if (existing && existing.length > 0) {
         return NextResponse.json(
@@ -126,10 +94,10 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
       }
 
       // Drop stale pending rows for this company so a retry starts clean.
-      await auth.supabase
+      await ctx.supabase
         .from('zettle_connections')
         .update({ status: 'error', oauth_state: null, error_message: 'Ersatt av ny anslutning' })
-        .eq('company_id', auth.companyId)
+        .eq('company_id', ctx.companyId)
         .eq('status', 'pending')
 
       const oauthState = crypto.randomUUID()
@@ -137,11 +105,11 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
       // started on: Zettle redirects to the one registered callback URL, so
       // the callback cannot see which brand the browser came from.
       const returnOrigin = await resolveOAuthOrigin(request)
-      const { data: created, error: insertError } = await auth.supabase
+      const { data: created, error: insertError } = await ctx.supabase
         .from('zettle_connections')
         .insert({
-          company_id: auth.companyId,
-          user_id: auth.userId,
+          company_id: ctx.companyId,
+          user_id: ctx.userId,
           status: 'pending',
           oauth_state: oauthState,
           return_origin: returnOrigin,
@@ -153,7 +121,7 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
         log.error('[zettle] Failed to create pending connection', {
           message: insertError?.message,
           code: insertError?.code,
-          companyId: auth.companyId,
+          companyId: ctx.companyId,
         })
         return NextResponse.json(
           { error: 'Kunde inte starta anslutningen. Försök igen.' },
@@ -174,21 +142,18 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
   {
     method: 'POST',
     path: '/sync',
-    handler: async (_request: Request, ctx?: ExtensionContext) => {
-      const log = ctx?.log ?? console
-      const auth = await requireUserAndCompany(ctx)
-      if (auth instanceof NextResponse) return auth
-
+    handler: async (_request: Request, ctx: ExtensionContext) => {
+      const log = ctx.log
       const capabilityBlocked = await requireCapability(
-        auth.supabase,
-        auth.companyId,
+        ctx.supabase,
+        ctx.companyId,
         CAPABILITY.zettle_sync,
       )
       if (capabilityBlocked) return capabilityBlocked
 
       const rl = await checkRateLimit({
         prefix: 'zettle:sync',
-        identifier: auth.userId,
+        identifier: ctx.userId,
         ...RATE_LIMIT_SYNC,
       })
       if (!rl.ok) return rl.response!
@@ -201,7 +166,7 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
       const { data: connection } = await serviceClient
         .from('zettle_connections')
         .select('*')
-        .eq('company_id', auth.companyId)
+        .eq('company_id', ctx.companyId)
         .eq('status', 'active')
         .maybeSingle()
 
@@ -238,21 +203,18 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
   {
     method: 'POST',
     path: '/backfill',
-    handler: async (request: Request, ctx?: ExtensionContext) => {
-      const log = ctx?.log ?? console
-      const auth = await requireUserAndCompany(ctx)
-      if (auth instanceof NextResponse) return auth
-
+    handler: async (request: Request, ctx: ExtensionContext) => {
+      const log = ctx.log
       const capabilityBlocked = await requireCapability(
-        auth.supabase,
-        auth.companyId,
+        ctx.supabase,
+        ctx.companyId,
         CAPABILITY.zettle_sync,
       )
       if (capabilityBlocked) return capabilityBlocked
 
       const rl = await checkRateLimit({
         prefix: 'zettle:backfill',
-        identifier: auth.userId,
+        identifier: ctx.userId,
         ...RATE_LIMIT_BACKFILL,
       })
       if (!rl.ok) return rl.response!
@@ -272,7 +234,7 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
       const { data: connection } = await serviceClient
         .from('zettle_connections')
         .select('*')
-        .eq('company_id', auth.companyId)
+        .eq('company_id', ctx.companyId)
         .eq('status', 'active')
         .maybeSingle()
 
@@ -286,11 +248,11 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
       // upserts by external_id, so re-reading an already imported range
       // changes nothing.
       const previousCursor = (connection as ZettleConnection).last_order_synced_at
-      const { error: cursorError } = await auth.supabase
+      const { error: cursorError } = await ctx.supabase
         .from('zettle_connections')
         .update({ last_order_synced_at: parsed.iso, error_message: null })
         .eq('id', connection.id)
-        .eq('company_id', auth.companyId)
+        .eq('company_id', ctx.companyId)
         .eq('status', 'active')
       if (cursorError) {
         log.error('[zettle] Failed to move purchase cursor for backfill', {
@@ -314,11 +276,11 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
           // Nothing ran, and the concurrent run holds its own cursor in
           // memory: leaving the date in place would let it overwrite the
           // backfill silently. Put the cursor back and let the user retry.
-          await auth.supabase
+          await ctx.supabase
             .from('zettle_connections')
             .update({ last_order_synced_at: previousCursor })
             .eq('id', connection.id)
-            .eq('company_id', auth.companyId)
+            .eq('company_id', ctx.companyId)
           return NextResponse.json(
             { error: 'En synkronisering pågår redan. Försök igen om en stund.' },
             { status: 409 },
@@ -342,20 +304,17 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
   {
     method: 'POST',
     path: '/transaction-sync',
-    handler: async (request: Request, ctx?: ExtensionContext) => {
-      const auth = await requireUserAndCompany(ctx)
-      if (auth instanceof NextResponse) return auth
-
+    handler: async (request: Request, ctx: ExtensionContext) => {
       const capabilityBlocked = await requireCapability(
-        auth.supabase,
-        auth.companyId,
+        ctx.supabase,
+        ctx.companyId,
         CAPABILITY.zettle_sync,
       )
       if (capabilityBlocked) return capabilityBlocked
 
       const rl = await checkRateLimit({
         prefix: 'zettle:transaction-sync-toggle',
-        identifier: auth.userId,
+        identifier: ctx.userId,
         ...RATE_LIMIT_SYNC,
       })
       if (!rl.ok) return rl.response!
@@ -365,10 +324,10 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
         return NextResponse.json({ error: 'enabled (boolean) krävs.' }, { status: 400 })
       }
 
-      const { data: updated, error: updateError } = await auth.supabase
+      const { data: updated, error: updateError } = await ctx.supabase
         .from('zettle_connections')
         .update({ transaction_sync_enabled: body.enabled })
-        .eq('company_id', auth.companyId)
+        .eq('company_id', ctx.companyId)
         .eq('status', 'active')
         .select('id')
 
@@ -387,14 +346,11 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
   {
     method: 'DELETE',
     path: '/disconnect',
-    handler: async (request: Request, ctx?: ExtensionContext) => {
-      const log = ctx?.log ?? console
-      const auth = await requireUserAndCompany(ctx)
-      if (auth instanceof NextResponse) return auth
-
+    handler: async (request: Request, ctx: ExtensionContext) => {
+      const log = ctx.log
       const rl = await checkRateLimit({
         prefix: 'zettle:disconnect',
-        identifier: auth.userId,
+        identifier: ctx.userId,
         ...RATE_LIMIT_DISCONNECT,
       })
       if (!rl.ok) return rl.response!
@@ -407,7 +363,7 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
       const base = createServiceClientNoCookies()
         .from('zettle_connections')
         .select('id, status, organization_uuid, refresh_token_encrypted')
-        .eq('company_id', auth.companyId)
+        .eq('company_id', ctx.companyId)
       const query = body.connection_id
         ? base.eq('id', body.connection_id).limit(1)
         : base.neq('status', 'revoked').order('created_at', { ascending: false }).limit(1)
@@ -430,7 +386,7 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
         }
       }
 
-      const { error: updateError } = await auth.supabase
+      const { error: updateError } = await ctx.supabase
         .from('zettle_connections')
         .update({
           status: 'revoked',
@@ -439,7 +395,7 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
           disconnected_at: new Date().toISOString(),
         })
         .eq('id', connection.id)
-        .eq('company_id', auth.companyId)
+        .eq('company_id', ctx.companyId)
 
       if (updateError) {
         log.error('[zettle] Failed to mark connection revoked', {
@@ -452,7 +408,7 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
         )
       }
 
-      if (ctx?.emit) {
+      if (ctx.emit) {
         try {
           await ctx.emit({
             type: 'zettle.disconnected',
@@ -460,8 +416,8 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
               connectionId: connection.id,
               organizationUuid: connection.organization_uuid ?? null,
               reason: 'user',
-              userId: auth.userId,
-              companyId: auth.companyId,
+              userId: ctx.userId,
+              companyId: ctx.companyId,
             },
           })
         } catch {

@@ -19,6 +19,13 @@ describe('pruneSelection', () => {
   })
 })
 
+describe('selectOnly', () => {
+  it('picks only the given rows that are visible (the type and same-account shortcuts)', () => {
+    // selectOnly is pruneSelection over the ids it is handed.
+    expect([...pruneSelection(new Set(['b', 'hidden', 'a']), ['a', 'b', 'c'])]).toEqual(['a', 'b'])
+  })
+})
+
 describe('the bug it removes', () => {
   it('a bulk action after a filter change acts on the visible rows only', () => {
     // Pick three drafts, then filter the list down to one of them: the bar
@@ -48,10 +55,32 @@ describe('lists on the shared selection', () => {
     'app/(dashboard)/invoices/page.tsx',
     'app/(dashboard)/supplier-invoices/page.tsx',
     'app/(dashboard)/orders/page.tsx',
+    'app/(dashboard)/pending/page.tsx',
+    'app/(dashboard)/skattekonto/page.tsx',
+    'components/bookkeeping/ChartOfAccountsManager.tsx',
+    'components/payments/PaymentOrdersPage.tsx',
+    'components/bookkeeping/JournalEntryList.tsx',
+    'components/extensions/general/InvoiceInboxWorkspace.tsx',
+    'app/(dashboard)/transactions/page.tsx',
   ])('%s', (rel) => {
     const src = fs.readFileSync(path.join(root, rel), 'utf8')
     expect(src).toContain('useBulkSelection(')
-    expect(src).not.toMatch(/\[selectedIds, setSelectedIds\] = useState/)
+    expect(src).not.toMatch(/\[(selectedIds|selectedNumbers|selected), set\w+\] = useState<Set<string>>/)
     expect(src).not.toContain('useRangeSelect(')
+  })
+
+  // The inbox keeps its inline bar (a floating one would cover the detail
+  // pane) and the transactions page its two-selection bar; the rest use the
+  // shared one.
+  it.each([
+    'app/(dashboard)/pending/page.tsx',
+    'app/(dashboard)/skattekonto/page.tsx',
+    'components/bookkeeping/ChartOfAccountsManager.tsx',
+    'components/payments/PaymentOrdersPage.tsx',
+    'components/bookkeeping/JournalEntryList.tsx',
+  ])('%s renders the shared bar', (rel) => {
+    const src = fs.readFileSync(path.join(root, rel), 'utf8')
+    expect(src).toContain('<BulkSelectionBar')
+    expect(src).not.toContain('FLOATING_BULK_BAR_CLASS')
   })
 })

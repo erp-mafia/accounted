@@ -1,8 +1,9 @@
 /**
- * Suggestion-pointer cleanup for the agent/MCP batch-allocation commit path
- * (`commitMatchBatchAllocate` in lib/pending-operations/commit.ts), the second
- * caller of the `match_batch_allocate` RPC next to
- * POST /api/transactions/[id]/match-batch.
+ * The approval of a staged match_batch_allocate: commitPendingOperation runs
+ * the operation transactions.match-batch (lib/transactions/match-batch.ts),
+ * the same service as POST /api/transactions/[id]/match-batch and v1. These
+ * cases pin that the approval door keeps every rule the hand-written
+ * executor had (it was deleted when the tool moved onto the operation).
  *
  * Issue #1259: the RPC nulls potential_invoice_id /
  * potential_supplier_invoice_id only on the source transaction
@@ -154,6 +155,7 @@ describe('commitPendingOperation: match_batch_allocate suggestion cleanup', () =
   it('retires a fully settled customer invoice allocation', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [{ id: INV_ID, document_type: 'invoice' }], error: null }) // only fakturor carry a receivable
     enqueue({
       data: {
         ok: true,
@@ -246,6 +248,8 @@ describe('commitPendingOperation: match_batch_allocate already-explained guard',
     mockDetectExplaining.mockResolvedValue(explainingSet)
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [{ id: INV_ID, document_type: 'invoice' }], error: null }) // only fakturor carry a receivable
+    enqueue({ data: { cash_account_id: 'ca-1' }, error: null }) // the row's cash account, for the details
     enqueue({ data: null, error: null }) // dispatcher rejection update
 
     const op = makePendingOp({ transaction_id: TX_ID, allocations })
@@ -267,6 +271,7 @@ describe('commitPendingOperation: match_batch_allocate already-explained guard',
     mockDetectExplaining.mockResolvedValue(explainingSet)
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [{ id: INV_ID, document_type: 'invoice' }], error: null }) // only fakturor carry a receivable
     enqueue({ data: rpcOk, error: null }) // match_batch_allocate RPC
     enqueue(POSTED_RELOAD) // the engine door reloads the posted verifikat
     enqueue({ data: null, error: null }) // dispatcher finalize update
@@ -297,7 +302,9 @@ describe('commitPendingOperation: match_batch_allocate already-explained guard',
         dismissed_voucher_labels: ['A57', 'A58'],
         total_ore: 8825000,
         bank_account_number: '1930',
-        via: 'pending_operation_force',
+        // The operation's label: an approved staged force is a machine-door
+        // write, recorded like v1's (the actor stays the approving user).
+        via: 'api_force',
       },
     })
   })
@@ -306,6 +313,8 @@ describe('commitPendingOperation: match_batch_allocate already-explained guard',
     mockDetectExplaining.mockResolvedValue(explainingSet)
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [{ id: INV_ID, document_type: 'invoice' }], error: null }) // only fakturor carry a receivable
+    enqueue({ data: { cash_account_id: 'ca-1' }, error: null }) // the row's cash account, for the details
     enqueue({ data: null, error: null }) // dispatcher rejection update
 
     // Staged when only A57 existed; A58 was posted before approval.
@@ -324,6 +333,7 @@ describe('commitPendingOperation: match_batch_allocate already-explained guard',
     mockDetectExplaining.mockRejectedValue(new Error('ledger scan timed out'))
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [{ id: INV_ID, document_type: 'invoice' }], error: null }) // only fakturor carry a receivable
     enqueue({ data: null, error: null }) // dispatcher rejection update
 
     const op = makePendingOp({ transaction_id: TX_ID, allocations, force: true, expected_journal_entry_ids: [JE_A, JE_B] })
@@ -341,6 +351,7 @@ describe('commitPendingOperation: match_batch_allocate already-explained guard',
     mockDetectExplaining.mockRejectedValue(new Error('ledger scan timed out'))
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [{ id: INV_ID, document_type: 'invoice' }], error: null }) // only fakturor carry a receivable
     enqueue({ data: rpcOk, error: null }) // match_batch_allocate RPC
     enqueue(POSTED_RELOAD) // the engine door reloads the posted verifikat
     enqueue({ data: null, error: null }) // dispatcher finalize update
@@ -364,6 +375,7 @@ describe('commitPendingOperation: match_batch_allocate kontantmetoden guard', ()
     })
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [{ id: INV_ID, document_type: 'invoice' }], error: null }) // only fakturor carry a receivable
     enqueue({ data: null, error: null }) // dispatcher rejection update
 
     const op = makePendingOp({ transaction_id: TX_ID, allocations })
@@ -372,6 +384,7 @@ describe('commitPendingOperation: match_batch_allocate kontantmetoden guard', ()
     expect(result.code).toBe('BATCH_CASH_METHOD_UNBOOKED_INVOICE')
     expect(result.http_status).toBe(400)
     expect(result.error).toContain('kontantmetoden')
+    expect(result.error).toContain('Obokförda fakturor: 231.')
     expect((result.data as { invoices: Array<{ id: string }> }).invoices[0].id).toBe(INV_ID)
     expect(mockFindCashUnbooked).toHaveBeenCalledWith(supabase, 'company-1', allocations)
     expect(supabase.rpc).not.toHaveBeenCalled()
@@ -381,6 +394,7 @@ describe('commitPendingOperation: match_batch_allocate kontantmetoden guard', ()
     mockFindCashUnbooked.mockResolvedValueOnce({ ok: false, error: new Error('down') })
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [{ id: INV_ID, document_type: 'invoice' }], error: null }) // only fakturor carry a receivable
     enqueue({ data: null, error: null }) // dispatcher update
 
     const op = makePendingOp({ transaction_id: TX_ID, allocations })
@@ -476,6 +490,7 @@ describe('commitPendingOperation: match_batch_allocate events', () => {
     eventBus.on('invoice.paid', paid)
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: [{ id: INV_ID, document_type: 'invoice' }], error: null }) // only fakturor carry a receivable
     enqueue({
       data: {
         ok: true,

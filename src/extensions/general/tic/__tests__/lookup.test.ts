@@ -28,6 +28,7 @@ import type { TICCompanyDocument } from '../lib/tic-types'
 import { isScbConfigured } from '@/lib/parties/scb/config'
 import { createScbClient } from '@/lib/parties/scb/client'
 import { factsFromScbCompany } from '@/lib/parties/scb/map'
+import { testRoutes } from '@/tests/helpers'
 
 const mockSearch = vi.mocked(searchCompanyByOrgNumber)
 const mockFiscalYears = vi.mocked(getFiscalYears)
@@ -39,7 +40,7 @@ function makeRequest(orgNumber?: string): Request {
   return new Request(url)
 }
 
-const lookupHandler = ticExtension.apiRoutes![0].handler
+const lookupHandler = testRoutes(ticExtension)[0].handler
 
 // Search-public document now carries everything /lookup needs at the top
 // level: sniCodes, bankAccounts, emailAddresses, phoneNumbers,

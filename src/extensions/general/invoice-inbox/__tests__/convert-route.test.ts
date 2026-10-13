@@ -7,6 +7,7 @@ import {
   makeInvoiceInboxItem,
   makeSupplier,
   makeCompanySettings,
+  testRoutes,
 } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 import { recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
@@ -42,7 +43,7 @@ vi.mock('@/lib/currency/riksbanken', async () => {
 // ── Helpers ──────────────────────────────────────────────────
 
 function findRoute(method: string, path: string) {
-  return invoiceInboxExtension.apiRoutes!.find(
+  return testRoutes(invoiceInboxExtension).find(
     (r) => r.method === method && r.path === path
   )!
 }
@@ -77,17 +78,6 @@ const VALID_CONVERT_BODY = {
 
 describe('POST /items/:id/convert', () => {
   const route = findRoute('POST', '/items/:id/convert')
-
-  it('returns 401 when no context', async () => {
-    const request = createMockRequest('/items/item-1/convert', {
-      method: 'POST',
-      body: VALID_CONVERT_BODY,
-      searchParams: { _id: 'item-1' },
-    })
-    const res = await route.handler(request, undefined)
-    const { status } = await parseJsonResponse(res)
-    expect(status).toBe(401)
-  })
 
   it('returns 404 when item not found', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
@@ -695,16 +685,6 @@ describe('POST /items/:id/convert: exchange rate + SEK amounts', () => {
 describe('DELETE /items/:id', () => {
   const route = findRoute('DELETE', '/items/:id')
 
-  it('returns 401 when no context', async () => {
-    const request = createMockRequest('/items/item-1', {
-      method: 'DELETE',
-      searchParams: { _id: 'item-1' },
-    })
-    const res = await route.handler(request, undefined)
-    const { status } = await parseJsonResponse(res)
-    expect(status).toBe(401)
-  })
-
   it('returns 404 when item not found', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: null })
@@ -787,10 +767,8 @@ describe('POST /items/:id/convert honours defer_invoice_booking (#967)', () => {
 describe('GET /items/:id/credit-target', () => {
   const route = findRoute('GET', '/items/:id/credit-target')
 
-  it('returns 401 without a context and 404 for an unknown item', async () => {
+  it('returns 404 for an unknown item', async () => {
     const request = createMockRequest('/items/item-1/credit-target', { searchParams: { _id: 'item-1' } })
-    expect((await route.handler(request, undefined)).status).toBe(401)
-
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: null })
     expect((await route.handler(request, buildCtx(supabase))).status).toBe(404)

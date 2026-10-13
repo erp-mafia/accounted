@@ -8,6 +8,7 @@ import { skvRequestWithAuth, SkatteverketAuthError } from './api-client'
 import { resolveReadAuth } from './resolve-auth'
 import { resolveRedovisare, resolveRedovisningsperiod } from './declaration-prep'
 import { skvAuthCodeToStructured } from './error-map'
+import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
 
 /**
  * Registry-resolved read service for filed momsdeklarationer (issue #1663).
@@ -36,7 +37,7 @@ export async function fetchVatDeclarationStatus(
   // Direct service calls bypass the HTTP dispatcher's SKATTEVERKET_ENABLED
   // gate (app/api/extensions/ext/[...path]/route.ts), so check the flag here:
   // same reasoning as the commit services in index.ts.
-  if (process.env.SKATTEVERKET_ENABLED !== 'true') {
+  if (!isSkatteverketEnabled()) {
     return {
       ok: false,
       code: 'EXTENSION_DISABLED',
@@ -86,64 +87,8 @@ export async function fetchVatDeclarationStatus(
       }
     }
 
-    const fetchView = async (
-      view: 'inlamnat' | 'beslutat',
-    ): Promise<
-      | { ok: true; body: unknown }
-      | { ok: false; failure: Extract<SkvVatDeclarationStatusResult, { ok: false }> }
-    > => {
-      // 404 means "nothing on file for the period": a normal answer, not an
-      // upstream failure (okStatuses). A 2xx with an unreadable body is
-      // recorded as skv_error (expectJson) and maps to SKATTEVERKET_API_ERROR
-      // below instead of escaping as an internal 500.
-      const res = await skvRequestWithAuth(
-        resolved.auth, 'GET', `/${view}/${redovisare}/${redovisningsperiod}`,
-        {
-          endpoint: view,
-          companyId,
-          userId,
-          agRegistreradId: redovisare,
-          redovisningsperiod,
-          okStatuses: [404],
-          expectJson: true,
-        },
-      )
-      let body: unknown = null
-      let bodyUnparseable = false
-      if (res.ok) {
-        try {
-          body = await res.json()
-        } catch {
-          bodyUnparseable = true
-        }
-      }
-      if (res.status === 404) return { ok: true, body: null }
-      if (!res.ok || bodyUnparseable) {
-        // The upstream body is logged server-side only. Forwarding it verbatim
-        // to API consumers would leak Skatteverket system details; the caller
-        // gets the status code and a generic Swedish message.
-        const text = bodyUnparseable
-          ? '<2xx body was not valid JSON>'
-          : await res.text().catch(() => '')
-        ctx.log.warn('skv declaration-status upstream error', {
-          view,
-          status: res.status,
-          body: text.slice(0, 500),
-        })
-        return {
-          ok: false,
-          failure: {
-            ok: false,
-            code: 'SKATTEVERKET_API_ERROR',
-            http_status: 502,
-            error: bodyUnparseable
-              ? 'Skatteverket svarade med ett svar som inte kunde tolkas.'
-              : `Skatteverket svarade med ${res.status}.`,
-          },
-        }
-      }
-      return { ok: true, body }
-    }
+    const fetchView = (view: 'inlamnat' | 'beslutat') =>
+      fetchDeclarationView(resolved.auth, { view, companyId, userId, redovisare, redovisningsperiod }, ctx.log)
 
     let submitted: unknown = null
     let decided: unknown = null
@@ -166,4 +111,68 @@ export async function fetchVatDeclarationStatus(
     }
     throw err
   }
+}
+
+export type DeclarationViewFetch =
+  | { ok: true; body: unknown }
+  | { ok: false; failure: Extract<SkvVatDeclarationStatusResult, { ok: false }> }
+
+/**
+ * One filed-declaration view from Skatteverket: /inlamnat (as filed) or
+ * /beslutat (the beslut), for the v1 read service above and the dashboard's
+ * /declaration/submitted and /declaration/decided routes alike.
+ *
+ * 404 means "nothing on file for the period": a normal answer (body null),
+ * not an upstream failure. A 2xx with an unreadable body is recorded as
+ * skv_error (expectJson) and fails as SKATTEVERKET_API_ERROR. The upstream
+ * body is logged server-side only: forwarding it would leak Skatteverket
+ * system details, so the caller gets the status and a generic sentence.
+ */
+export async function fetchDeclarationView(
+  auth: Parameters<typeof skvRequestWithAuth>[0],
+  args: {
+    view: 'inlamnat' | 'beslutat'
+    companyId: string
+    userId: string
+    redovisare: string
+    redovisningsperiod: string
+  },
+  log: { warn: (message: string, ...rest: unknown[]) => void },
+): Promise<DeclarationViewFetch> {
+  const { view, companyId, userId, redovisare, redovisningsperiod } = args
+  const res = await skvRequestWithAuth(auth, 'GET', `/${view}/${redovisare}/${redovisningsperiod}`, {
+    endpoint: view,
+    companyId,
+    userId,
+    agRegistreradId: redovisare,
+    redovisningsperiod,
+    okStatuses: [404],
+    expectJson: true,
+  })
+  let body: unknown = null
+  let bodyUnparseable = false
+  if (res.ok) {
+    try {
+      body = await res.json()
+    } catch {
+      bodyUnparseable = true
+    }
+  }
+  if (res.status === 404) return { ok: true, body: null }
+  if (!res.ok || bodyUnparseable) {
+    const text = bodyUnparseable ? '<2xx body was not valid JSON>' : await res.text().catch(() => '')
+    log.warn('skv declaration-status upstream error', { view, status: res.status, body: text.slice(0, 500) })
+    return {
+      ok: false,
+      failure: {
+        ok: false,
+        code: 'SKATTEVERKET_API_ERROR',
+        http_status: 502,
+        error: bodyUnparseable
+          ? 'Skatteverket svarade med ett svar som inte kunde tolkas.'
+          : `Skatteverket svarade med ${res.status}.`,
+      },
+    }
+  }
+  return { ok: true, body }
 }

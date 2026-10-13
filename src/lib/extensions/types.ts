@@ -52,32 +52,50 @@ export interface ExtensionDefinition {
 // Extension Interface & Supporting Types
 // ============================================================
 
-/**
- * An API route exposed by an extension.
- *
- * Auth/context modes (mutually exclusive: combining throws at dispatch time):
- *   - default: requires auth AND a resolved company; ctx is passed to the handler
- *   - `skipAuth: true`: no auth, no ctx (e.g. OAuth callbacks)
- *   - `skipCompanyContext: true`: auth required, no ctx (pre-onboarding routes)
- */
-export interface ApiRouteDefinition {
+interface ApiRouteBase {
   method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH'
   path: string
-  /** Skip auth check for this route (e.g. OAuth callbacks from external providers) */
-  skipAuth?: boolean
-  /**
-   * Require auth but NOT a resolved company context. Use for routes that
-   * legitimately run during onboarding (before the user has a company):
-   * e.g. TIC /lookup used by Step2CompanyDetails to fetch company info
-   * while the user types their org number. Handler is called without a
-   * ctx argument; handlers that opt in must tolerate a missing context.
-   *
-   * Must NOT be combined with `skipAuth: true`: the dispatcher treats
-   * that as a misconfiguration and returns 500.
-   */
-  skipCompanyContext?: boolean
-  handler: (request: Request, ctx?: ExtensionContext) => Promise<Response>
 }
+
+/**
+ * The default route: the dispatcher has authenticated the caller and resolved
+ * their active company before the handler runs, so `ctx` is always there.
+ * Role gates are declared, not coded: the dispatcher answers 403 before the
+ * handler runs, with the same checks withRouteContext makes.
+ */
+export interface ContextApiRoute extends ApiRouteBase {
+  skipAuth?: false
+  skipCompanyContext?: false
+  /** Refuse viewers (and callers without a membership). */
+  requireWrite?: boolean
+  /**
+   * Refuse everyone but owner and admin, by the database's own predicate
+   * (user_is_company_admin). Implies requireWrite.
+   */
+  requireAdmin?: boolean
+  handler: (request: Request, ctx: ExtensionContext) => Promise<Response>
+}
+
+/** No auth and no ctx (e.g. OAuth callbacks from external providers). */
+export interface PublicApiRoute extends ApiRouteBase {
+  skipAuth: true
+  skipCompanyContext?: false
+  handler: (request: Request) => Promise<Response>
+}
+
+/**
+ * Auth required but NOT a resolved company context: routes that run during
+ * onboarding, before the user has a company (e.g. TIC /lookup used by
+ * Step2CompanyDetails while the user types their org number). No ctx.
+ */
+export interface NoCompanyApiRoute extends ApiRouteBase {
+  skipAuth?: false
+  skipCompanyContext: true
+  handler: (request: Request) => Promise<Response>
+}
+
+/** An API route exposed by an extension: exactly one of the three modes. */
+export type ApiRouteDefinition = ContextApiRoute | PublicApiRoute | NoCompanyApiRoute
 
 /** Event handler registration for an extension */
 export interface ExtensionEventHandler {
@@ -121,6 +139,12 @@ export interface ExtensionContext {
    * support staff can grep stdout logs by it.
    */
   requestId?: string
+  /**
+   * True when the caller signed in anonymously (a sandbox demo session). Set
+   * by the route dispatcher from the authenticated user, so a route never
+   * asks auth again; absent outside an HTTP request.
+   */
+  isAnonymous?: boolean
   supabase: SupabaseClient
   emit(event: CoreEvent): Promise<void>
   settings: ExtensionSettings

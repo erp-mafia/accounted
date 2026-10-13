@@ -3,15 +3,21 @@
  * kontrollresultat -> skapaGranskningsunderlag(lasPeriod) -> the Mina Sidor
  * signing link. The AGI twin of vat-submit.ts.
  *
- * Two callers file through this module so they can never drift apart:
- *   - the one-click extension route `POST /agi/send-for-signing` (index.ts),
- *     which the AGI panel calls for "Skicka för signering"
+ * The chain is two steps, exported on their own so every door runs the same
+ * code and flips the same rows:
+ *   - submitAgiUnderlag: POST /underlag, poll kontrollresultat;
+ *   - createAgiSigningLink: skapaGranskningsunderlag with the period locked.
+ * Callers:
+ *   - `POST /agi/send-for-signing` (index.ts), the panel's one-click
+ *     "Skicka för signering": submitAgiChain;
  *   - the pending-operations commit service `commitSubmitAgi` (index.ts),
- *     behind MCP gnubok_agi_submit
- * The panel used to run the chain itself across three routes, and those
- * routes flip agi_declarations by period only, so a correction run sharing
- * the period was flipped with it. Here every status flip is scoped by the
- * salary run, with the monotonic guards the commit service already had.
+ *     behind MCP gnubok_agi_submit: submitAgiChain;
+ *   - `POST /agi/submit` and `POST /agi/granskningsunderlag`, the panel's
+ *     advanced recovery buttons: one step each.
+ * The panel used to run the chain itself across three routes that flipped
+ * agi_declarations by period only, so a correction run sharing the period
+ * was flipped with it. Here every status flip is scoped by the salary run,
+ * with the monotonic guards the commit service already had.
  *
  * Nothing here files the AGI: filing is the user's BankID signature in Mina
  * Sidor after the lock. The kvittens is recorded later, through the
@@ -26,7 +32,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ExtensionContext } from '@/lib/extensions/types'
 import { sleep } from '@/lib/utils'
 import { agiGetKontrollresultat, agiPostUnderlag, agiSkapaGranskningsunderlag } from './agi-client'
-import { firstAgiKontrollMessage, summarizeAgiKontrollrapport } from './agi-kontrollrapport'
+import { firstAgiKontrollMessage, summarizeAgiKontrollrapport, type AgiKontrollrapportSummary } from './agi-kontrollrapport'
 import { buildAgiUnderlag } from './declaration-prep'
 
 export interface AgiSubmitChainOptions {
@@ -34,6 +40,41 @@ export interface AgiSubmitChainOptions {
   extraPolls?: number
   pollIntervalMs?: number
 }
+
+/** Why a step stopped. `recoverable`: nothing is wrong with the declaration, try again shortly. */
+export interface AgiStepFailure {
+  ok: false
+  code: string
+  httpStatus: number
+  recoverable: boolean
+  error: string
+  details?: Record<string, unknown>
+  /** Skatteverket's own felkod on a refused call, for the route's log line. */
+  skvKod?: number
+}
+
+/** The run's declaration as Skatteverket addresses it. */
+export interface AgiRunTarget {
+  salaryRunId: string
+  arbetsgivare: string
+  period: string
+  periodYear: number
+  periodMonth: number
+}
+
+export type AgiUnderlagStepResult =
+  | {
+      ok: true
+      target: AgiRunTarget
+      inlamningId: number
+      /** Skatteverket's kontrollsvar on an accepted underlag (warnings), masked; null when it sent none. */
+      kontrollrapport: AgiKontrollrapportSummary | null
+    }
+  | AgiStepFailure
+
+export type AgiSigningLinkStepResult =
+  | { ok: true; signingUrl: string; tillstand: string }
+  | AgiStepFailure
 
 export type AgiSubmitChainResult =
   | {
@@ -44,42 +85,49 @@ export type AgiSubmitChainResult =
       inlamningId: number
       tillstand: string
     }
-  | {
-      ok: false
-      code: string
-      httpStatus: number
-      /** true: nothing is wrong with the declaration, try again shortly. */
-      recoverable: boolean
-      error: string
-      details?: Record<string, unknown>
-    }
+  | AgiStepFailure
 
-export async function submitAgiChain(
+/** Flip the run's own declaration, only out of the given statuses. */
+function flipRunDeclaration(supabase: SupabaseClient, companyId: string, target: AgiRunTarget, status: string, from: string[]) {
+  // Every status flip names the run: a correction run sharing the period
+  // keeps its own (still valid) declaration.
+  return supabase
+    .from('agi_declarations')
+    .update({ status })
+    .eq('company_id', companyId)
+    .eq('salary_run_id', target.salaryRunId)
+    .eq('period_year', target.periodYear)
+    .eq('period_month', target.periodMonth)
+    .in('status', from)
+}
+
+/**
+ * Step 1: POST the run's stored underlag and poll kontrollresultat until it
+ * settles. A refusal at kontroll marks the run's declaration rejected and
+ * carries Skatteverket's kontrollsvar.
+ */
+export async function submitAgiUnderlag(
   supabase: SupabaseClient,
   userId: string,
   companyId: string,
   settings: ExtensionContext['settings'],
   salaryRunId: string,
   options: AgiSubmitChainOptions = {},
-): Promise<AgiSubmitChainResult> {
+): Promise<AgiUnderlagStepResult> {
   const { arbetsgivare, period, xml, periodYear, periodMonth } = await buildAgiUnderlag(supabase, companyId, salaryRunId)
+  const target: AgiRunTarget = { salaryRunId, arbetsgivare, period, periodYear, periodMonth }
   const scope = { agRegistreradId: arbetsgivare, redovisningsperiod: period }
-  // Every status flip below names the run: a correction run sharing the
-  // period keeps its own (still valid) declaration.
-  const declarationOfRun = (status: string, from: string[]) =>
-    supabase
-      .from('agi_declarations')
-      .update({ status })
-      .eq('company_id', companyId)
-      .eq('salary_run_id', salaryRunId)
-      .eq('period_year', periodYear)
-      .eq('period_month', periodMonth)
-      .in('status', from)
 
-  // 1. POST /underlag (XML) -> inlamningId.
   const submit = await agiPostUnderlag(supabase, userId, companyId, xml, scope)
   if (!submit.ok) {
-    return { ok: false, code: 'SKATTEVERKET_SUBMIT_REJECTED', httpStatus: submit.status, recoverable: false, error: submit.error }
+    return {
+      ok: false,
+      code: 'SKATTEVERKET_SUBMIT_REJECTED',
+      httpStatus: submit.status,
+      recoverable: false,
+      error: submit.error,
+      ...(submit.body?.kod ? { skvKod: submit.body.kod } : {}),
+    }
   }
   const inlamningId = submit.data.inlamningId
   await settings.set(
@@ -87,7 +135,6 @@ export async function submitAgiChain(
     JSON.stringify({ status: 'underlag_submitted', arbetsgivare, period, salaryRunId, inlamningId, updatedAt: new Date().toISOString() }),
   )
 
-  // 2. Poll kontrollresultat (bounded).
   const extraPolls = options.extraPolls ?? 2
   const interval = options.pollIntervalMs ?? 750
   let kontroll = await agiGetKontrollresultat(supabase, userId, companyId, inlamningId, scope)
@@ -110,7 +157,7 @@ export async function submitAgiChain(
   if (kontroll.data.status === 'DONE_REJECTED' || kontroll.data.status === 'DONE_FAILED') {
     // Nothing landed in Eget utrymme: the declaration must not sit at
     // 'generated' while Skatteverket's own state shows it failed.
-    await declarationOfRun('rejected', ['generated', 'pending_signature', 'exported'])
+    await flipRunDeclaration(supabase, companyId, target, 'rejected', ['generated', 'pending_signature', 'exported'])
     // Skatteverket's kontrollsvar rides along (personnummer masked) so the
     // reader sees which fields were refused, not only that they were.
     const kontrollrapport = summarizeAgiKontrollrapport(kontroll.data)
@@ -126,12 +173,37 @@ export async function submitAgiChain(
       details: { kontrollrapport: kontrollrapport ?? { kontrollresultat_status: kontroll.data.status } },
     }
   }
+  return { ok: true, target, inlamningId, kontrollrapport: summarizeAgiKontrollrapport(kontroll.data) }
+}
 
-  // 3. skapaGranskningsunderlag (lasPeriod=true) -> Mina Sidor signing link.
+/**
+ * Step 2: skapaGranskningsunderlag with the period locked, the Mina Sidor
+ * signing link. Flips the run's declaration to pending_signature once
+ * Skatteverket holds a signable draft.
+ */
+export async function createAgiSigningLink(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  settings: ExtensionContext['settings'],
+  target: AgiRunTarget,
+): Promise<AgiSigningLinkStepResult> {
+  const { arbetsgivare, period } = target
   const gransk = await agiSkapaGranskningsunderlag(supabase, userId, companyId, arbetsgivare, period, { lasPeriod: true })
   if (!gransk.ok) {
-    return { ok: false, code: 'SKATTEVERKET_SUBMIT_REJECTED', httpStatus: gransk.status, recoverable: false, error: gransk.error }
+    return {
+      ok: false,
+      code: 'SKATTEVERKET_SUBMIT_REJECTED',
+      httpStatus: gransk.status,
+      recoverable: false,
+      error: gransk.error,
+      ...(gransk.body?.kod ? { skvKod: gransk.body.kod } : {}),
+    }
   }
+  // SKV's tillstand (skapagranskningsunderlagsvar.json): LOCKED_FOR_SIGNING
+  // and UNLOCKED can be signed; INCORRECT_DATA carries a felrapport link;
+  // RECEIVING, CALCULATING and the like are still processing. Keyed on
+  // tillstand alone, never on the HTTP status.
   const tillstand = gransk.data.tillstand
   const canSign = tillstand === 'LOCKED_FOR_SIGNING' || tillstand === 'UNLOCKED'
   await settings.set(
@@ -156,7 +228,6 @@ export async function submitAgiChain(
     }
   }
   if (!canSign) {
-    // RECEIVING / CALCULATING and the like: still processing.
     return {
       ok: false,
       code: 'SKATTEVERKET_PROCESSING',
@@ -166,6 +237,42 @@ export async function submitAgiChain(
     }
   }
 
-  await declarationOfRun('pending_signature', ['generated', 'rejected'])
-  return { ok: true, signingUrl: gransk.data.link, arbetsgivare, period, inlamningId, tillstand }
+  await flipRunDeclaration(supabase, companyId, target, 'pending_signature', ['generated', 'rejected'])
+  return { ok: true, signingUrl: gransk.data.link, tillstand }
+}
+
+/**
+ * The run's target for step 2 on its own (the panel's "Skapa signeringslänk"
+ * after a step-1 success): the same arbetsgivare and period step 1 posted.
+ */
+export async function agiRunTarget(
+  supabase: SupabaseClient,
+  companyId: string,
+  salaryRunId: string,
+): Promise<AgiRunTarget> {
+  const { arbetsgivare, period, periodYear, periodMonth } = await buildAgiUnderlag(supabase, companyId, salaryRunId)
+  return { salaryRunId, arbetsgivare, period, periodYear, periodMonth }
+}
+
+/** Both steps in order: what "Skicka för signering" and MCP approval run. */
+export async function submitAgiChain(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  settings: ExtensionContext['settings'],
+  salaryRunId: string,
+  options: AgiSubmitChainOptions = {},
+): Promise<AgiSubmitChainResult> {
+  const underlag = await submitAgiUnderlag(supabase, userId, companyId, settings, salaryRunId, options)
+  if (!underlag.ok) return underlag
+  const link = await createAgiSigningLink(supabase, userId, companyId, settings, underlag.target)
+  if (!link.ok) return link
+  return {
+    ok: true,
+    signingUrl: link.signingUrl,
+    arbetsgivare: underlag.target.arbetsgivare,
+    period: underlag.target.period,
+    inlamningId: underlag.inlamningId,
+    tillstand: link.tillstand,
+  }
 }

@@ -121,10 +121,9 @@ async function isCompanyAdmin(
  * account). Returns the response to send, or null to proceed.
  */
 async function guardSendingDomainRoute(
-  ctx: ExtensionContext | undefined,
+  ctx: ExtensionContext,
   opts: { write: boolean },
 ): Promise<NextResponse | null> {
-  if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   const blocked = await requireCapability(ctx.supabase, ctx.companyId, CAPABILITY.custom_sender_domain)
   if (blocked) return blocked
   if (!opts.write) return null
@@ -147,13 +146,13 @@ export const emailExtension: Extension = {
     {
       method: 'GET',
       path: '/sending-domain',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
+      handler: async (_request: Request, ctx: ExtensionContext) => {
         const denied = await guardSendingDomainRoute(ctx, { write: false })
         if (denied) return denied
         try {
           // null when the company has no sending domain: the UI renders the
           // claim form in that case.
-          const row = await getSendingDomain(ctx!.supabase, ctx!.companyId)
+          const row = await getSendingDomain(ctx.supabase, ctx.companyId)
           return NextResponse.json({ data: row })
         } catch (err) {
           return NextResponse.json(
@@ -168,7 +167,7 @@ export const emailExtension: Extension = {
     {
       method: 'POST',
       path: '/sending-domain',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const denied = await guardSendingDomainRoute(ctx, { write: true })
         if (denied) return denied
 
@@ -185,9 +184,9 @@ export const emailExtension: Extension = {
         // Verification state is service-role only (tenant guard trigger);
         // the user client still does the insert, so RLS proves membership.
         const result = await claimSendingDomain(
-          ctx!.supabase,
+          ctx.supabase,
           createServiceClientNoCookies(),
-          ctx!.companyId,
+          ctx.companyId,
           body.domain,
         )
         if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
@@ -199,14 +198,14 @@ export const emailExtension: Extension = {
     {
       method: 'POST',
       path: '/sending-domain/verify',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
+      handler: async (_request: Request, ctx: ExtensionContext) => {
         const denied = await guardSendingDomainRoute(ctx, { write: true })
         if (denied) return denied
 
         const result = await checkSendingDomainVerification(
-          ctx!.supabase,
+          ctx.supabase,
           createServiceClientNoCookies(),
-          ctx!.companyId,
+          ctx.companyId,
         )
         if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
         return NextResponse.json({ data: result.data })
@@ -217,7 +216,7 @@ export const emailExtension: Extension = {
     {
       method: 'PATCH',
       path: '/sending-domain',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const denied = await guardSendingDomainRoute(ctx, { write: true })
         if (denied) return denied
 
@@ -231,7 +230,7 @@ export const emailExtension: Extension = {
           )
         }
 
-        const result = await updateSendingDomainSettings(ctx!.supabase, ctx!.companyId, body)
+        const result = await updateSendingDomainSettings(ctx.supabase, ctx.companyId, body)
         if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
         return NextResponse.json({ data: result.data })
       },
@@ -241,11 +240,11 @@ export const emailExtension: Extension = {
     {
       method: 'DELETE',
       path: '/sending-domain',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
+      handler: async (_request: Request, ctx: ExtensionContext) => {
         const denied = await guardSendingDomainRoute(ctx, { write: true })
         if (denied) return denied
 
-        const result = await removeSendingDomain(ctx!.supabase, ctx!.companyId)
+        const result = await removeSendingDomain(ctx.supabase, ctx.companyId)
         if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
         return NextResponse.json({ data: result.data })
       },

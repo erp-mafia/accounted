@@ -331,24 +331,9 @@ describe('routes: exactly one row per outbound call, with its label', () => {
       scope: { agRegistreradId: REDOVISARE, redovisningsperiod: PERIOD },
     },
     {
-      name: 'AGI submit',
-      method: 'POST', path: '/agi/submit', url: '/agi/submit',
-      body: { salaryRunId: 'run-1' },
-      answer: () => json(200, { inlamningId: 7 }),
-      endpoint: 'agi/submit',
-      scope: { agRegistreradId: REDOVISARE, redovisningsperiod: PERIOD },
-    },
-    {
-      name: 'AGI kontrollresultat',
-      method: 'GET', path: '/agi/kontrollresultat', url: '/agi/kontrollresultat?inlamningId=7',
-      answer: () => json(200, { status: 'DONE_SUCCESS' }),
-      endpoint: 'agi/kontrollresultat',
-      scope: { agRegistreradId: null, redovisningsperiod: null },
-      skvStatus: 'DONE_SUCCESS',
-    },
-    {
       name: 'AGI granskningsunderlag',
-      method: 'POST', path: '/agi/granskningsunderlag', url: `/agi/granskningsunderlag?${agiPeriod}`,
+      method: 'POST', path: '/agi/granskningsunderlag', url: '/agi/granskningsunderlag',
+      body: { salaryRunId: 'run-1' },
       answer: () => json(200, { link: 'https://skv.test/agi', tillstand: 'LOCKED_FOR_SIGNING' }),
       endpoint: 'agi/granskningsunderlag',
       scope: { agRegistreradId: REDOVISARE, redovisningsperiod: PERIOD },
@@ -440,6 +425,28 @@ describe('routes: exactly one row per outbound call, with its label', () => {
     expect(res.status).toBe(409)
     expect(rows()).toEqual([
       expect.objectContaining({ endpoint: 'declaration/lock', outcome: 'skv_error', responseStatus: 409 }),
+    ])
+  })
+
+  it('AGI submit step: the underlag and its kontroll read, two rows, both naming the period', async () => {
+    answers = [json(200, { inlamningId: 7 }), json(200, { status: 'DONE_SUCCESS' })]
+
+    const res = await route('POST', '/agi/submit').handler(
+      request('POST', '/agi/submit', { salaryRunId: 'run-1' }),
+      makeContext(),
+    )
+
+    expect(res.status).toBe(200)
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    // The kontroll read used to come from its own route, addressed by
+    // inlamningId alone, so its row named no arbetsgivare or period.
+    expect(rows()).toEqual([
+      expect.objectContaining({
+        endpoint: 'agi/submit', agRegistreradId: REDOVISARE, redovisningsperiod: PERIOD, outcome: 'ok', skvStatus: null,
+      }),
+      expect.objectContaining({
+        endpoint: 'agi/kontrollresultat', agRegistreradId: REDOVISARE, redovisningsperiod: PERIOD, outcome: 'ok', skvStatus: 'DONE_SUCCESS',
+      }),
     ])
   })
 

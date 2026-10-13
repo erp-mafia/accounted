@@ -6,9 +6,14 @@ const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: () => supabase,
 }))
+// The stamp after a model call is the shared mirror's (extractAndMirror),
+// which writes through the cookieless service client.
+vi.mock('@/lib/auth/api-keys', () => ({
+  createServiceClientNoCookies: () => supabase,
+}))
 
 const extractMock = vi.fn()
-vi.mock('@/extensions/general/invoice-inbox/lib/extract-invoice-fields', () => ({
+vi.mock('@/lib/documents/inbox-extraction/extract-invoice-fields', () => ({
   extractInvoiceFields: (...args: unknown[]) => extractMock(...args),
   fetchOwnCompanyIdentity: vi.fn().mockResolvedValue({ orgNumber: null, name: null }),
 }))
@@ -162,5 +167,13 @@ describe('document-extraction handler', () => {
     enqueue({ data: null })
     await handler(payload())
     expect(lastStamp()).toBe('failed:no_raw_text')
+  })
+
+  it('stamps failed:exception when the extraction throws', async () => {
+    extractMock.mockRejectedValue(new Error('pdfjs blew up'))
+    enqueue({ data: { id: 'doc-1', mime_type: 'application/pdf', storage_path: 'p', extracted_at: null } })
+    enqueue({ data: null })
+    await handler(payload())
+    expect(lastStamp()).toBe('failed:exception')
   })
 })

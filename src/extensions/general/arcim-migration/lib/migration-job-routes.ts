@@ -69,7 +69,6 @@ function logRefusal(ctx: ExtensionContext, rpcError: { code?: string; message: s
 }
 
 /** Extension dispatcher supplies MFA, company context and the write-role gate. */
-function requireContext(ctx?: ExtensionContext): ctx is ExtensionContext { return !!ctx?.companyId && !!ctx.userId }
 
 interface IssueRow {
   id: string
@@ -215,7 +214,6 @@ export const migrationJobRoutes: ApiRouteDefinition[] = [
   {
     method: 'POST', path: '/migration-jobs',
     handler: async (request, ctx) => {
-      if (!requireContext(ctx)) return error('UNAUTHORIZED', 401)
       const body = await validateBody(request, CreateSchema)
       if (!body.success) return body.response
       const resources = MIGRATION_RESOURCES.filter(resource => body.data.resources.includes(resource))
@@ -249,7 +247,6 @@ export const migrationJobRoutes: ApiRouteDefinition[] = [
   {
     method: 'GET', path: '/migration-jobs',
     handler: async (request, ctx) => {
-      if (!requireContext(ctx)) return error('UNAUTHORIZED', 401)
       const id = new URL(request.url).searchParams.get('jobId') ?? undefined
       if (id && !z.uuid().safeParse(id).success) return error('VALIDATION_ERROR', 400)
       const result = await readMigrationStatus(ctx, id)
@@ -259,8 +256,7 @@ export const migrationJobRoutes: ApiRouteDefinition[] = [
   },
   ...(['run', 'retry'] as const).map(action => ({
     method: 'POST' as const, path: `/migration-jobs/${action}`,
-    handler: async (request: Request, ctx?: ExtensionContext) => {
-      if (!requireContext(ctx)) return error('UNAUTHORIZED', 401)
+    handler: async (request: Request, ctx: ExtensionContext) => {
       const body = await validateBody(request, JobSchema)
       if (!body.success) return body.response
       const job = await readJob(ctx, body.data.jobId)
@@ -294,7 +290,6 @@ export const migrationJobRoutes: ApiRouteDefinition[] = [
     // goes on listing them; nothing is dropped, rewritten or retried.
     method: 'POST', path: '/migration-jobs/accept',
     handler: async (request, ctx) => {
-      if (!requireContext(ctx)) return error('UNAUTHORIZED', 401, ACCEPT_FAILED)
       const body = await validateBody(request, AcceptSchema)
       if (!body.success) return body.response
       const { data: job, error: readError } = await ctx.supabase.from('migration_jobs').select('id,phase,state')

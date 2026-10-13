@@ -299,24 +299,21 @@ describe('registry codes the refusal already had', () => {
     expect((await refusal('gnubok_unlock_period', { fiscal_period_id: FP }, supabase)).code).toBe('PERIOD_UNLOCK_NOT_LOCKED')
   })
 
-  it('bulk_book_transactions: unbalanced new_entry lines are JOURNAL_ENTRY_NOT_BALANCED with both totals', async () => {
+  it('bulk_book_transactions: unbalanced manual_lines are BULK_BOOK_UNBALANCED with both totals, before any query', async () => {
     const from = vi.fn()
     const error = await refusal(
       'gnubok_bulk_book_transactions',
       {
-        tx_ids: ['tx-1'],
-        new_entry: {
-          description: 'Skatteverket',
-          lines: [
-            { account_number: '2710', debit_amount: 3001.41, credit_amount: 0, currency: 'SEK' },
-            { account_number: '2731', debit_amount: 0, credit_amount: 590.28, currency: 'SEK' },
-          ],
-        },
+        tx_ids: ['11111111-1111-4111-8111-111111111111'],
+        entry_description: 'Skatteverket',
+        manual_lines: [
+          { account_number: '2710', debit_amount: 3001.41, credit_amount: 0, currency: 'SEK' },
+          { account_number: '2731', debit_amount: 0, credit_amount: 590.28, currency: 'SEK' },
+        ],
       },
       { from },
     )
-    expect(error).toMatchObject({ code: 'JOURNAL_ENTRY_NOT_BALANCED', retryable: false })
-    expect(error.message_en).toBe('new_entry.lines must balance: debits=3001.41 credits=590.28')
+    expect(error).toMatchObject({ code: 'BULK_BOOK_UNBALANCED' })
     // Intl separates thousands and the currency with no-break spaces.
     expect(error.message_sv).toMatch(/^Verifikationen balanserar inte \(3\s001,41\skr debet vs 590,28\skr kredit\)\.$/)
     expect(from).not.toHaveBeenCalled()

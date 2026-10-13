@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { FLOATING_BULK_BAR_CLASS } from '@/components/ui/floating-bulk-bar'
+import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { PageHeader } from '@/components/ui/page-header'
@@ -44,7 +44,7 @@ import {
   formatDateTime,
 } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
-import { useRangeSelect } from '@/lib/hooks/use-range-select'
+import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import { rowsNeedingInterestDate } from '@/lib/skatteverket/interest-period'
 import {
   skvAuthErrorNeedsReconnect,
@@ -132,11 +132,10 @@ export default function SkattekontoPage() {
     useDestructiveConfirm()
   // Bulk ignore (hover-checkbox pattern from /transactions and /orders): a
   // sole trader's skattekonto carries private tax rows that are not the
-  // firm's affärshändelser, often dozens at a time. Selection holds raw ids;
-  // the rendered set is re-derived against what is still ignorable after a
-  // reload, so a row that got booked or ignored meanwhile drops out on its
-  // own instead of being carried into the next bulk call.
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  // firm's affärshändelser, often dozens at a time. The selection itself
+  // (useBulkSelection below) holds only rows that are still ignorable, so a
+  // row booked or ignored meanwhile drops out on reload instead of being
+  // carried into the next bulk call.
 
   // The /status probe is fire-and-forget, so a slow response from an earlier
   // reload can land after a later one and overwrite the fresher banner state.
@@ -500,7 +499,7 @@ export default function SkattekontoPage() {
       },
     )
     if (!ok) return
-    setSelectedIds(new Set())
+    selection.clear()
     const undo =
       outcome.done.length > 0 ? (
         <ToastAction
@@ -557,11 +556,8 @@ export default function SkattekontoPage() {
         .map((r) => r.id),
     [tx],
   )
-  const activeSelectedIds = useMemo(() => {
-    const selectable = new Set(selectableIds)
-    return new Set([...selectedIds].filter((id) => selectable.has(id)))
-  }, [selectableIds, selectedIds])
-  const range = useRangeSelect({ visibleIds: selectableIds, selectedIds, setSelectedIds })
+  const selection = useBulkSelection(selectableIds)
+  const activeSelectedIds = selection.selectedIds
   // The bulk bar matches the ticked rows to one verifikat only when every
   // one is settled (Genomförda): a kommande row cannot be linked yet. Date
   // order, so the dialog lists them the way they happened.
@@ -576,10 +572,7 @@ export default function SkattekontoPage() {
   )
   const canMatchSelection =
     selectedSettledRows.length >= 2 && selectedSettledRows.length === activeSelectedIds.size
-  const toggleSelect = useCallback(
-    (id: string, extend?: boolean) => range.toggle(id, extend),
-    [range],
-  )
+  const toggleSelect = selection.toggle
 
   const saldoNow = saldo?.data ? saldo.data.saldoSkatteverket : null
   const shortfall =
@@ -812,43 +805,22 @@ export default function SkattekontoPage() {
 
       {/* Bulkbar (transactions-page pattern): hidden until at least one
           ignorable row is selected via the hover checkboxes. */}
-      {activeSelectedIds.size > 0 && (
-        <div className={FLOATING_BULK_BAR_CLASS}>
-          <span className="whitespace-nowrap">
-            {t('bulk_selected', { count: activeSelectedIds.size })}
-          </span>
-          <Button size="sm" onClick={() => void ignoreSelected([...activeSelectedIds])}>
-            {t('bulk_ignore_cta', { count: activeSelectedIds.size })}
+      <BulkSelectionBar
+        selection={selection}
+        selectableCount={selectableIds.length}
+        countLabel={t('bulkbar_selected', { count: activeSelectedIds.size })}
+        selectAllLabel={t('bulk_select_all', { count: selectableIds.length })}
+        clearLabel={t('bulk_clear')}
+      >
+        <Button size="sm" onClick={() => void ignoreSelected([...activeSelectedIds])}>
+          {t('bulk_ignore_cta', { count: activeSelectedIds.size })}
+        </Button>
+        {canMatchSelection && (
+          <Button size="sm" variant="outline" onClick={() => setGroupMatchRows(selectedSettledRows)}>
+            {t('bulk_match_cta')}
           </Button>
-          {canMatchSelection && (
-            <Button size="sm" variant="outline" onClick={() => setGroupMatchRows(selectedSettledRows)}>
-              {t('bulk_match_cta')}
-            </Button>
-          )}
-          {activeSelectedIds.size < selectableIds.length && (
-            <button
-              type="button"
-              className={QUIET_LINK_CLASS}
-              onClick={() => {
-                setSelectedIds(new Set(selectableIds))
-                range.resetAnchor()
-              }}
-            >
-              {t('bulk_select_all', { count: selectableIds.length })}
-            </button>
-          )}
-          <button
-            type="button"
-            className={QUIET_LINK_CLASS}
-            onClick={() => {
-              setSelectedIds(new Set())
-              range.resetAnchor()
-            }}
-          >
-            {t('bulk_clear')}
-          </button>
-        </div>
-      )}
+        )}
+      </BulkSelectionBar>
 
       {/* One dry table with band rows (concept): Kommande, Förfallna, Genomförda */}
       <SkattekontoTable
@@ -908,8 +880,7 @@ export default function SkattekontoPage() {
         open={!!groupMatchRows}
         onClose={closeGroupMatch}
         onMatched={() => {
-          setSelectedIds(new Set())
-          range.resetAnchor()
+          selection.clear()
           void reload()
         }}
       />

@@ -20,7 +20,7 @@
 
 import { createClient } from '@/lib/supabase/client'
 import type {
-  Employee,
+  EmployeeMasked,
   Article,
   BASAccount,
   BookingTemplateLibrary,
@@ -122,9 +122,9 @@ export function fetchSuppliers(): Promise<Supplier[]> {
 }
 
 /** The salary roster (GET /api/salary/employees: personnummer masked); active employees unless includeInactive. */
-export function fetchEmployees(includeInactive = false): Promise<Employee[]> {
+export function fetchEmployees(includeInactive = false): Promise<EmployeeMasked[]> {
   const url = includeInactive ? '/api/salary/employees?active=false' : '/api/salary/employees'
-  return getJson<Employee[]>(url, (b) => b.data)
+  return getJson<EmployeeMasked[]>(url, (b) => b.data)
 }
 
 export function fetchArticles(includeInactive = false): Promise<Article[]> {

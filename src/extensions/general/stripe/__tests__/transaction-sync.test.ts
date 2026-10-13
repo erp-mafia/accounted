@@ -449,9 +449,46 @@ describe('syncStripeBalanceTransactions', () => {
     expect(op(cursorUpdate, 'eq')!.args).toEqual(['id', 'conn-1'])
   })
 
+  it('moves the cursor on to the run start once the window is listed to its end', async () => {
+    stubList([makeCharge()])
+    const { supabase, queriesFor, op } = createCaptureSupabase({
+      company_settings: [{ data: null, error: null }],
+    })
+
+    await syncStripeBalanceTransactions(supabase, { ...CONNECTION })
+
+    const [chunk, watermark] = queriesFor('stripe_connections')
+    expect(op(chunk, 'update')!.args[0]).toEqual({ last_balance_txn_synced_at: new Date(CREATED * 1000).toISOString() })
+    const iso = (op(watermark, 'update')!.args[0] as { last_balance_txn_synced_at: string }).last_balance_txn_synced_at
+    expect(Math.abs(Date.parse(iso) - Date.now())).toBeLessThan(60_000)
+  })
+
+  it('moves a quiet account\'s cursor to the run start on a later run', async () => {
+    // Otherwise it keeps the front of the cron's oldest-cursor-first list.
+    stubList([])
+    const { supabase, queriesFor, op } = createCaptureSupabase()
+
+    await syncStripeBalanceTransactions(supabase, { ...CONNECTION, last_balance_txn_synced_at: '2026-07-10T00:00:00.000Z' })
+
+    const updates = queriesFor('stripe_connections')
+    expect(updates).toHaveLength(1)
+    const iso = (op(updates[0], 'update')!.args[0] as { last_balance_txn_synced_at: string }).last_balance_txn_synced_at
+    expect(Math.abs(Date.parse(iso) - Date.now())).toBeLessThan(60_000)
+  })
+
+  it('keeps the seeded cursor on a quiet first run, so the one-time 1686 setup still runs on the first row', async () => {
+    stubList([])
+    const { supabase, queriesFor } = createCaptureSupabase()
+
+    await syncStripeBalanceTransactions(supabase, { ...CONNECTION, last_balance_txn_synced_at: CONNECTION.connected_at })
+
+    expect(queriesFor('stripe_connections')).toHaveLength(0)
+    expect(vi.mocked(syncMappedAccounts)).not.toHaveBeenCalled()
+  })
+
   it('stops before ingesting when the deadline already passed and reports it', async () => {
     stubList([makeCharge()])
-    const { supabase } = createCaptureSupabase({
+    const { supabase, queriesFor } = createCaptureSupabase({
       company_settings: [{ data: null, error: null }],
     })
 
@@ -461,6 +498,8 @@ describe('syncStripeBalanceTransactions', () => {
 
     expect(summary.deadlineReached).toBe(true)
     expect(vi.mocked(ingestTransactions)).not.toHaveBeenCalled()
+    // Unprocessed rows remain, so no watermark either.
+    expect(queriesFor('stripe_connections')).toHaveLength(0)
   })
 
   it('marks a connection revoked upstream as revoked and audits it', async () => {

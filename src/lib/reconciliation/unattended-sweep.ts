@@ -54,6 +54,12 @@ export interface UnattendedSweepOptions {
    * every unattended caller feeds the "Granska migrerad historik" surface).
    */
   persistSuggestions?: boolean
+  /**
+   * Sweep only these ledger accounts' cash accounts: a bank sync sweeps the
+   * accounts it fetched. A ledger account without an enabled cash_accounts
+   * row is skipped, never widened to the pooled 1930 run.
+   */
+  ledgerAccounts?: readonly string[]
 }
 
 /**
@@ -110,6 +116,8 @@ export function toSweepSummary(
  * Companies with no cash_accounts rows at all keep the legacy single
  * 1930/SEK run: with no rows there is no per-account scope to apply, and
  * scopeTransactionsToAccount's currency-only path is the supported mode there.
+ * A sweep limited to `ledgerAccounts` never takes that run: it sweeps the
+ * named accounts that have a row, and nothing else.
  *
  * One account's run failing (thrown) is counted as one error on that account
  * and the sweep continues: an unattended sweep must not let one broken account
@@ -153,9 +161,11 @@ export async function runUnattendedReconciliationSweep(
     is_primary: boolean | null
   }>
 
+  const wanted = options.ledgerAccounts ? new Set(options.ledgerAccounts) : null
+  const scoped = wanted ? rows.filter((row) => wanted.has(row.ledger_account)) : rows
   const scopes: Scope[] =
-    rows.length > 0
-      ? rows.map((row) => ({
+    scoped.length > 0 || wanted
+      ? scoped.map((row) => ({
           cashAccountId: row.id,
           accountNumber: row.ledger_account,
           currency: row.currency ?? 'SEK',

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, beforeAll } from 'vitest'
 import { isForbiddenOrigin, forbiddenOriginResponse } from '../origin-guard'
 import type { mcpServerExtension as McpServerExtension } from '../index'
+import { testRoutes } from '@/tests/helpers'
 
 const ENDPOINT = 'https://app.gnubok.se/api/extensions/ext/mcp-server/mcp'
 
@@ -111,7 +112,7 @@ describe('mcp-server apiRoutes origin enforcement', () => {
   }, 60_000)
 
   it('rejects foreign-Origin requests on every /mcp method before dispatch', async () => {
-    const routes = (mcpServerExtension.apiRoutes ?? []).filter((r) => r.path === '/mcp')
+    const routes = testRoutes(mcpServerExtension).filter((r) => r.path === '/mcp')
     expect(routes.map((r) => r.method).sort()).toEqual(['DELETE', 'GET', 'POST'])
 
     for (const route of routes) {

@@ -83,6 +83,32 @@ describe('runUnattendedReconciliationSweep', () => {
     vi.clearAllMocks()
   })
 
+  it('sweeps only the named ledger accounts when a bank sync limits it', async () => {
+    const supabase = makeSupabase({ data: [CA_1930, CA_1931, CA_1932_EUR], error: null })
+    runReconciliationMock.mockResolvedValue(emptyRunResult({ applied: 1 }))
+
+    const result = await runUnattendedReconciliationSweep(supabase as never, 'company-1', 'user-1', {
+      dateFrom: '2026-01-01',
+      dateTo: '2026-06-30',
+      ledgerAccounts: ['1931', '1932'],
+    })
+
+    expect(runReconciliationMock).toHaveBeenCalledTimes(2)
+    expect(runReconciliationMock.mock.calls.map((c) => c[3].accountNumber)).toEqual(['1931', '1932'])
+    expect(result.applied).toBe(2)
+  })
+
+  it('never widens a limited sweep to the pooled 1930 run when no named account has a row', async () => {
+    const supabase = makeSupabase({ data: [CA_1931], error: null })
+
+    const result = await runUnattendedReconciliationSweep(supabase as never, 'company-1', 'user-1', {
+      ledgerAccounts: ['1930'],
+    })
+
+    expect(runReconciliationMock).not.toHaveBeenCalled()
+    expect(result.accounts).toEqual([])
+  })
+
   it('runs once per enabled cash account with that account\'s scope', async () => {
     const supabase = makeSupabase({ data: [CA_1930, CA_1931, CA_1932_EUR], error: null })
     runReconciliationMock.mockResolvedValue(emptyRunResult())

@@ -4,10 +4,11 @@ import {
   createQueuedMockSupabase,
   createMockRequest,
   parseJsonResponse,
+  testRoutes,
 } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
-vi.mock('@/extensions/general/invoice-inbox/lib/extract-invoice-fields', () => ({
+vi.mock('@/lib/documents/inbox-extraction/extract-invoice-fields', () => ({
   extractInvoiceFields: vi.fn(),
   fetchOwnCompanyIdentity: vi.fn().mockResolvedValue({ orgNumber: null, name: null }),
 }))
@@ -34,12 +35,12 @@ vi.mock('@/lib/supabase/server', () => ({
   }),
 }))
 
-import { extractInvoiceFields } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
+import { extractInvoiceFields } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
 import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 
 function findRoute(method: string, path: string) {
-  return invoiceInboxExtension.apiRoutes!.find(
+  return testRoutes(invoiceInboxExtension).find(
     (r) => r.method === method && r.path === path,
   )!
 }
@@ -85,11 +86,6 @@ beforeEach(() => {
 })
 
 describe('POST /items/:id/retry-extraction', () => {
-  it('returns 401 when no context', async () => {
-    const res = await retryRoute.handler(makeReq(), undefined)
-    const { status } = await parseJsonResponse(res)
-    expect(status).toBe(401)
-  })
 
   it('returns 429 when the per-company rate limit is exceeded', async () => {
     vi.mocked(checkInboxUploadRateLimit).mockResolvedValueOnce({

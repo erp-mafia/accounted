@@ -425,6 +425,8 @@ describe('POST /transactions/:id/refresh-exchange-rate', () => {
 
 // ---------------------------------------------------------------------------
 
+const BANK_LINE = { data: [{ account_number: '1930', debit_amount: 500, credit_amount: 0 }], error: null }
+
 describe('POST /transactions/:id/link-journal-entry', () => {
   const post = (body: unknown, query = '') =>
     linkJe(request(`${BASE}/${TX_ID}/link-journal-entry${query}`, { method: 'POST', body: JSON.stringify(body) }), txParams())
@@ -456,6 +458,8 @@ describe('POST /transactions/:id/link-journal-entry', () => {
       company_members: OWNER,
       transactions: { data: txRow, error: null },
       journal_entries: { data: { id: JE_ID, status: 'posted', voucher_series: 'A', voucher_number: 12, entry_date: '2026-05-12' }, error: null },
+      // The verifikat's line on the row's bank account (the bank link core's check).
+      journal_entry_lines: BANK_LINE,
     })
     mockServiceClient.mockReturnValue(client)
     const res = await post({ journal_entry_id: JE_ID }, '?dry_run=true')
@@ -472,6 +476,8 @@ describe('POST /transactions/:id/link-journal-entry', () => {
         { data: [{ id: TX_ID }], error: null },
       ],
       journal_entries: { data: { id: JE_ID, status: 'posted', voucher_series: 'A', voucher_number: 12, entry_date: '2026-05-12' }, error: null },
+      // The verifikat's line on the row's bank account (the bank link core's check).
+      journal_entry_lines: BANK_LINE,
     })
     mockServiceClient.mockReturnValue(client)
     const res = await post({ journal_entry_id: JE_ID })

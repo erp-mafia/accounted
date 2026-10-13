@@ -13,7 +13,6 @@ import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest'
 import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
-vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn() }))
 vi.mock('@/lib/import/sie-import', () => ({ loadMappings: vi.fn(), generateImportPreview: vi.fn() }))
 vi.mock('@/lib/import/sie-jobs', async (load) => ({
   ...await load<typeof import('@/lib/import/sie-jobs')>(),
@@ -23,7 +22,6 @@ vi.mock('next/server', async (load) => ({ ...await load<typeof import('next/serv
 vi.mock('@/lib/import/sie-job-worker', () => ({ runSIEWorker: vi.fn() }))
 
 import { arcimMigrationExtension } from '../index'
-import { createClient } from '@/lib/supabase/server'
 import { submitSIEJob, jobDatabaseError } from '@/lib/import/sie-jobs'
 import { memoryIntakeStorage, intakePath } from './intake-storage'
 
@@ -46,29 +44,20 @@ const BODY = { storagePath: PATH, filename: 'migration-sie-2026.se', mappings: M
 
 type Envelope = { error: { code: string; message: string; message_en: string; requestId?: string } }
 
-function signIn(userId: string | null) {
-  ;(createClient as Mock).mockResolvedValue({
-    auth: { getUser: vi.fn().mockResolvedValue({ data: { user: userId ? { id: userId } : null } }) },
-    storage: memoryIntakeStorage({ [PATH]: SIE }).storage,
-  })
-}
-
-// No ctx.supabase: the handler resolves its client from @/lib/supabase/server.
-const ctx = { companyId: 'company-1', requestId: 'req-9', log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } } as unknown as ExtensionContext
+// The dispatcher's context: the signed-in user, their company and client.
+const ctx = {
+  supabase: { storage: memoryIntakeStorage({ [PATH]: SIE }).storage },
+  companyId: 'company-1',
+  userId: 'user-1',
+  requestId: 'req-9',
+  log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+} as unknown as ExtensionContext
 const post = (body: Record<string, unknown>) => handler(
   createMockRequest('http://localhost/api/extensions/ext/arcim-migration/import-sie', { method: 'POST', body }), ctx)
 
 describe('POST /import-sie: job refusals', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    signIn('user-1')
-  })
-
-  it('401 without a signed-in user', async () => {
-    signIn(null)
-    const response = await post(BODY)
-    expect(response.status).toBe(401)
-    expect(submitSIEJob).not.toHaveBeenCalled()
   })
 
   it('400 without the storage path or mappings', async () => {

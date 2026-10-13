@@ -23,7 +23,13 @@ vi.mock('@supabase/supabase-js', async () => {
   return { ...actual, createClient: vi.fn().mockReturnValue({}) }
 })
 
+// vat_close runs the MCP close check's computation; its own tests live with
+// it (lib/reports/vat-close-check.ts, the mcp-server vat-close-check suites).
+const { mockComputeVatCloseCheck } = vi.hoisted(() => ({ mockComputeVatCloseCheck: vi.fn() }))
+vi.mock('@/lib/reports/vat-close-check', () => ({ computeVatCloseCheck: mockComputeVatCloseCheck }))
+
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { codedRefusal } from '@/lib/errors/refusal'
 import { GET as complianceCheck } from '../route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
@@ -235,5 +241,74 @@ describe('GET /api/v1/companies/:companyId/compliance/check', () => {
     )
     const res = await call(makeRequest(`?type=voucher_gaps&fiscal_period_id=${PERIOD_ID}`))
     expect(res.status).toBe(400)
+  })
+})
+
+describe('GET /api/v1/companies/:companyId/compliance/check?type=vat_close', () => {
+  const closeCheck = {
+    period: { type: 'quarterly', year: 2026, period: 3, start: '2026-07-01', end: '2026-09-30', source: 'fiscal_year' },
+    period_label: 'Q3 2026',
+    rutor: { ruta05: 100000, ruta10: 25000, ruta48: 4000, ruta49: 21000 },
+    payment: { net_due: 21000, direction: 'pay', deadline: '2026-11-12', deadline_label: '12 november 2026', moms_period: 'quarterly' },
+    blockers: [
+      { kind: 'uncategorized_transactions', severity: 'high', count: 3, message: '3 okategoriserade transaktioner', hint: 'gnubok_categorize_transaction' },
+      { kind: 'missing_high_value_receipts', severity: 'medium', count: 1, message: '1 underlag saknas', hint: 'ladda upp' },
+    ],
+    declaration_checks: [{ code: 'FK004', status: 'WARNING', message: 'Kontrollera ruta 30', rutor: ['30'] }],
+    sanity: { anomalies: [], ratios: { output_vat_ratio_25: 0.25, output_vat_ratio_12: 0, output_vat_ratio_6: 0, previous_period_compared: true } },
+    ready_to_close: false,
+    summary: 'Momsperioden kan inte stängas ännu.',
+  }
+
+  it('runs the close check for the period and answers it in the shared envelope', async () => {
+    mockServiceClient.mockReturnValue(makeSupabase({ tables: { company_members: MEMBERSHIP } }))
+    mockComputeVatCloseCheck.mockResolvedValue(closeCheck)
+
+    const res = await call(makeRequest('?type=vat_close&period_type=quarterly&year=2026&period=3'))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { data: Record<string, unknown> }
+
+    expect(mockComputeVatCloseCheck).toHaveBeenCalledWith(
+      { period_type: 'quarterly', year: 2026, period: 3 },
+      COMPANY_ID,
+      expect.anything(),
+    )
+    expect(body.data).toMatchObject({
+      type: 'vat_close',
+      ready: false,
+      summary: 'Momsperioden kan inte stängas ännu.',
+      params: { type: 'vat_close', period_type: 'quarterly', year: '2026', period: '3' },
+      details: { period_label: 'Q3 2026', payment: { net_due: 21000, direction: 'pay' }, rutor: { ruta49: 21000 } },
+    })
+    expect(body.data.findings).toEqual([
+      expect.objectContaining({ severity: 'blocker', code: 'VAT_CLOSE_UNCATEGORIZED_TRANSACTIONS', details: expect.objectContaining({ count: 3 }) }),
+      expect.objectContaining({ severity: 'warning', code: 'VAT_CLOSE_MISSING_HIGH_VALUE_RECEIPTS' }),
+      expect.objectContaining({ severity: 'warning', code: 'FK004', details: { rutor: ['30'] } }),
+    ])
+  })
+
+  it('returns 400 for a malformed period, with the reason', async () => {
+    mockServiceClient.mockReturnValue(makeSupabase({ tables: { company_members: MEMBERSHIP } }))
+    mockComputeVatCloseCheck.mockRejectedValue(codedRefusal('VALIDATION_ERROR', 'year must be between 2000 and 2100'))
+
+    const res = await call(makeRequest('?type=vat_close&period_type=quarterly&period=3'))
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error: { details?: { message?: string } } }
+    expect(JSON.stringify(body)).toContain('year must be between 2000 and 2100')
+  })
+
+  it('answers a computation failure as a server error, never as a clean check', async () => {
+    mockServiceClient.mockReturnValue(makeSupabase({ tables: { company_members: MEMBERSHIP } }))
+    mockComputeVatCloseCheck.mockRejectedValue(new Error('get_vat_declaration_totals timed out'))
+
+    const res = await call(makeRequest('?type=vat_close&period_type=monthly&year=2026&period=9'))
+    expect(res.status).toBeGreaterThanOrEqual(500)
+  })
+
+  it('returns 401 without a bearer token', async () => {
+    mockServiceClient.mockReturnValue(makeSupabase({}))
+    const res = await call(makeRequest('?type=vat_close&period_type=monthly&year=2026&period=9', { auth: false }))
+    expect(res.status).toBe(401)
+    expect(mockComputeVatCloseCheck).not.toHaveBeenCalled()
   })
 })

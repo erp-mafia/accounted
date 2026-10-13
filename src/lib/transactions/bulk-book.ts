@@ -16,13 +16,9 @@
  *   3. manual_lines + entry_description: caller-built balanced lines.
  *
  * One implementation behind the dashboard route
- * (POST /api/transactions/bulk-book) and the v1 operation
- * transactions.bulk-book (lib/operations/transactions.ts). The MCP tool
- * gnubok_bulk_book_transactions stages the same RPC through its own
- * hand-written preview and commit executor (through the same engine door),
- * and runs the same dimension policy (enforceBulkBookDimensionPolicy below)
- * and duplicate guard (runBulkBookDuplicateGuard below) at stage and at
- * commit.
+ * (POST /api/transactions/bulk-book) and the operation transactions.bulk-book
+ * (lib/operations/transactions.ts), which serves v1, the MCP tool
+ * gnubok_bulk_book_transactions and its approval.
  *
  * Rules before the RPC: every row belongs to the company; one currency, and
  * that currency SEK (the ledger columns are kronor and nothing here carries
@@ -35,10 +31,16 @@
  * RPC re-checks tenant scope, date, direction, balance, periods and
  * not-already-booked.
  *
- * A dry run runs every rule above and answers the lines the verifikat would
- * carry; it writes nothing (no RPC, no events, no behandlingshistorik).
+ * A dry run runs every rule above, then the RPC's refusals the rows already
+ * show (a booked or zero row, two dates, two directions, a link target that
+ * is missing or not posted, manual lines that do not balance or carry an
+ * empty line), and answers the lines the verifikat would carry, with the
+ * account names. It writes nothing (no RPC, no events, no
+ * behandlingshistorik).
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { z } from 'zod'
+import type { BulkBookSchema } from '@/lib/api/schemas'
 import type { Logger } from '@/lib/logger'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { BookingTemplateLibraryLine, Transaction } from '@/types'
@@ -61,28 +63,16 @@ import {
   type BookedDuplicateCandidate,
 } from '@/lib/transactions/booking-duplicate-detection'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
+import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { finalFromLines, recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
 import { eventBus } from '@/lib/events/bus'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { roundOre } from '@/lib/money'
+import { formatCurrency } from '@/lib/utils'
 
-export interface BulkBookInput {
-  tx_ids: string[]
-  existing_journal_entry_id?: string
-  template_id?: string
-  mode?: 'one_line_per_tx' | 'sum_per_account'
-  entry_description?: string
-  manual_lines?: Array<{
-    account_number: string
-    debit_amount: number
-    credit_amount: number
-    currency: string
-    line_description?: string
-    dimensions?: Record<string, string>
-  }>
-  default_dimensions?: Record<string, string>
-  force?: boolean
-}
+/** The request every door validates (BulkBookSchema, the v1 and MCP contract). */
+export type BulkBookInput = z.output<typeof BulkBookSchema>
 
 export interface BulkBookResult {
   mode: 'link_existing' | 'create_new'
@@ -117,8 +107,19 @@ interface ComputedLine {
 
 type SelectedTx = Pick<
   Transaction,
-  'id' | 'amount' | 'currency' | 'description' | 'date' | 'amount_sek' | 'exchange_rate' | 'cash_account_id'
+  | 'id'
+  | 'amount'
+  | 'currency'
+  | 'description'
+  | 'merchant_name'
+  | 'date'
+  | 'amount_sek'
+  | 'exchange_rate'
+  | 'cash_account_id'
+  | 'journal_entry_id'
 >
+
+type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
 export async function bulkBookTransactions(
   ctx: OperationContext,
@@ -129,11 +130,17 @@ export async function bulkBookTransactions(
   const { supabase, companyId, userId, log } = ctx
   const opLog = log.child({ txCount: body.tx_ids.length })
 
+  // Manual lines the RPC would refuse, answered from the input alone.
+  if (options.dryRun && body.manual_lines) {
+    const lineRefusal = manualLinesRefusal(body.manual_lines)
+    if (lineRefusal) return lineRefusal
+  }
+
   // Fetch the selected rows once, for every path: the template branch needs
   // the amounts, every branch the currencies.
   const { data: txs, error: txError } = await supabase
     .from('transactions')
-    .select('id, amount, currency, description, date, amount_sek, exchange_rate, cash_account_id')
+    .select('id, amount, currency, description, merchant_name, date, amount_sek, exchange_rate, cash_account_id, journal_entry_id')
     .in('id', body.tx_ids)
     .eq('company_id', companyId)
 
@@ -156,6 +163,14 @@ export async function bulkBookTransactions(
   // single-row flows book those.
   if (currency !== 'SEK') return { ok: false, code: 'BULK_BOOK_FOREIGN_CURRENCY', details: { currency } }
 
+  // The RPC's own refusals the rows already show, answered on the dry run so
+  // a staged booking never waits for an approval that cannot post. The RPC
+  // re-checks all of them under its row locks.
+  if (options.dryRun) {
+    const rowRefusal = rowShapeRefusal(body.tx_ids, txTyped)
+    if (rowRefusal) return rowRefusal
+  }
+
   // Booking-time duplicate guard, parity with /categorize and /book.
   const duplicate = await runBulkBookDuplicateGuard(
     supabase,
@@ -172,7 +187,14 @@ export async function bulkBookTransactions(
     opLog,
   )
   if (!duplicate.ok) {
-    return { ok: false, code: duplicate.code, details: duplicate.details as unknown as Record<string, unknown> }
+    const dup = duplicate.details.candidate
+    return {
+      ok: false,
+      code: duplicate.code,
+      // Names the verifikat, so the approver and the dialog see which.
+      messageSv: `${getErrorEntry(duplicate.code)?.message_sv ?? ''} (verifikat ${dup.voucher_label}, ${dup.entry_date})`.trim(),
+      details: duplicate.details as unknown as Record<string, unknown>,
+    }
   }
 
   let newEntryPayload: { description: string; lines: ComputedLine[] } | null = null
@@ -295,20 +317,48 @@ export async function bulkBookTransactions(
   }
 
   if (options.dryRun) {
+    // The link target: there, posted, and its date (the later of the two
+    // dates is the one whose period must be open).
+    let existingEntryDate: string | null = null
+    if (body.existing_journal_entry_id) {
+      const { data: je, error: jeError } = await supabase
+        .from('journal_entries')
+        .select('id, status, entry_date')
+        .eq('id', body.existing_journal_entry_id)
+        .eq('company_id', companyId)
+        .maybeSingle()
+      if (jeError) return { ok: false, code: 'UNKNOWN_ERROR', error: jeError }
+      if (!je) return { ok: false, code: 'BULK_BOOK_VOUCHER_NOT_FOUND' }
+      const entry = je as { status: string; entry_date: string }
+      if (entry.status !== 'posted') {
+        return { ok: false, code: 'BULK_BOOK_VOUCHER_NOT_POSTED', details: { status: entry.status } }
+      }
+      existingEntryDate = entry.entry_date
+    }
     const txSum = roundOre(txTyped.reduce((s, t) => s + t.amount, 0))
+    const first = txTyped.find((t) => t.id === body.tx_ids[0]) ?? txTyped[0]!
     return {
       ok: true,
       dryRun: true,
       preview: {
         mode: body.existing_journal_entry_id ? 'link_existing' : 'create_new',
         tx_count: txTyped.length,
+        tx_date: first.date,
+        direction: first.amount > 0 ? 'income' : 'expense',
+        // The first row's counterparty text, for a title the approver recognises.
+        lead_description: String(first.merchant_name || first.description || '').trim().slice(0, 40),
         // Signed SEK sum of the selected rows (this path is SEK-only).
         tx_sum: txSum,
         tx_sum_abs: Math.abs(txSum),
         currency,
-        ...(body.existing_journal_entry_id ? { existing_journal_entry_id: body.existing_journal_entry_id } : {}),
+        ...(body.existing_journal_entry_id
+          ? { existing_journal_entry_id: body.existing_journal_entry_id, existing_entry_date: existingEntryDate }
+          : {}),
         ...(newEntryPayload
-          ? { entry_description: newEntryPayload.description, lines: newEntryPayload.lines }
+          ? {
+              entry_description: newEntryPayload.description,
+              lines: await withAccountNames(supabase, companyId, newEntryPayload.lines),
+            }
           : {}),
         ...(body.force ? { duplicate_guard: 'bypassed (force=true)' } : {}),
         note: 'The RPC re-checks date, direction, balance, period locks and not-already-booked at commit.',
@@ -393,6 +443,86 @@ export async function bulkBookTransactions(
       docs_linked: result.docs_linked,
     },
   }
+}
+
+/**
+ * The first refusal the RPC would give that the selected rows already show:
+ * a row with a verifikat, a zero row, two dates or two directions (BFL 5 kap
+ * 6 § allows one gemensam verifikation only for likartade affärshändelser of
+ * one day). Checked in the caller's order, like the RPC's first offender.
+ */
+function rowShapeRefusal(txIds: string[], txs: SelectedTx[]): Failure | null {
+  const byId = new Map(txs.map((t) => [t.id, t]))
+  const ordered = txIds.map((id) => byId.get(id)).filter((t): t is SelectedTx => t !== undefined)
+  const booked = ordered.find((t) => t.journal_entry_id)
+  if (booked) return { ok: false, code: 'BULK_BOOK_TX_ALREADY_BOOKED', details: { tx_id: booked.id } }
+  const zero = ordered.find((t) => t.amount === 0)
+  if (zero) return { ok: false, code: 'BULK_BOOK_TX_ZERO_AMOUNT', details: { tx_id: zero.id } }
+  const firstDate = ordered[0]?.date
+  const otherDate = ordered.find((t) => t.date !== firstDate)
+  if (otherDate) {
+    return { ok: false, code: 'BULK_BOOK_DATE_MISMATCH', details: { first_date: firstDate, other_date: otherDate.date } }
+  }
+  const expected = (ordered[0]?.amount ?? 0) > 0 ? 'income' : 'expense'
+  const other = ordered.find((t) => (expected === 'income' ? t.amount < 0 : t.amount > 0))
+  if (other) return { ok: false, code: 'BULK_BOOK_DIRECTION_MISMATCH', details: { expected, tx_id: other.id } }
+  return null
+}
+
+/**
+ * Manual lines that the RPC would refuse or that are no bokföringspost: a
+ * line with neither a debit nor a credit (BFL 5 kap 6 §), or debits and
+ * credits that do not balance (0.005 is float equalisation only; the RPC
+ * enforces the öre).
+ */
+function manualLinesRefusal(lines: NonNullable<BulkBookInput['manual_lines']>): Failure | null {
+  const empty = lines.findIndex((l) => roundOre(l.debit_amount) === 0 && roundOre(l.credit_amount) === 0)
+  if (empty >= 0) {
+    return {
+      ok: false,
+      code: 'VALIDATION_ERROR',
+      messageSv: `manual_lines.${empty}: en verifikationsrad måste ha ett belopp i debet eller kredit (BFL 5 kap 6 §).`,
+      details: { issues: [{ field: `manual_lines.${empty}`, message: 'debit_amount och credit_amount kan inte båda vara noll.' }] },
+    }
+  }
+  const debit = roundOre(lines.reduce((s, l) => s + l.debit_amount, 0))
+  const credit = roundOre(lines.reduce((s, l) => s + l.credit_amount, 0))
+  if (Math.abs(debit - credit) > 0.005) {
+    return {
+      ok: false,
+      code: 'BULK_BOOK_UNBALANCED',
+      messageSv: `Verifikationen balanserar inte (${formatCurrency(debit)} debet vs ${formatCurrency(credit)} kredit).`,
+      details: { total_debit: debit, total_credit: credit },
+    }
+  }
+  return null
+}
+
+/**
+ * The lines as the approver reads them: each account with its name from the
+ * company's chart, else the BAS reference name. One chart read per voucher.
+ */
+async function withAccountNames(
+  supabase: SupabaseClient,
+  companyId: string,
+  lines: ComputedLine[],
+): Promise<Array<ComputedLine & { account_name: string | null }>> {
+  const accountNumbers = Array.from(new Set(lines.map((l) => l.account_number)))
+  const { data } = await supabase
+    .from('chart_of_accounts')
+    .select('account_number, account_name')
+    .eq('company_id', companyId)
+    .in('account_number', accountNumbers)
+  const names = new Map(
+    ((data ?? []) as Array<{ account_number: string; account_name: string | null }>).map((a) => [
+      String(a.account_number),
+      a.account_name ?? '',
+    ]),
+  )
+  return lines.map((l) => ({
+    ...l,
+    account_name: names.get(l.account_number) ?? getBASReference(l.account_number)?.account_name ?? null,
+  }))
 }
 
 /**

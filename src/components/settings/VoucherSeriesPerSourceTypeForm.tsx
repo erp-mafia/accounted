@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
+import { useSaveSettings } from '@/components/settings/use-save-settings'
 import { ChevronDown } from 'lucide-react'
 import {
   SettingsGroup,
@@ -12,7 +13,6 @@ import {
   SettingsSelect,
 } from '@/components/settings/SettingsRows'
 import { cn } from '@/lib/utils'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { HelpPopover } from '@/components/ui/help-popover'
 import {
   buildVoucherSeriesOptions,
@@ -94,6 +94,7 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
   const tCommon = useTranslations('dashboard')
   const t = useTranslations('settings_bookkeeping')
   const { toast } = useToast()
+  const saveSettings = useSaveSettings()
   const initialMap = settings.default_voucher_series_per_source_type || {}
   const [draft, setDraft] = useState<Partial<Record<JournalEntrySourceType, string>>>(
     initialMap as Partial<Record<JournalEntrySourceType, string>>,
@@ -144,34 +145,17 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
   const handleSave = async () => {
     setIsSaving(true)
     try {
-      const res = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          default_voucher_series_per_source_type: draft,
-        }),
-      })
-      const json = await res.json()
-      if (!res.ok) {
-        toast({
-          title: 'Kunde inte spara',
-          description: getErrorMessage(json, { context: 'settings', statusCode: res.status }),
-          variant: 'destructive',
-        })
-        return
-      }
+      const saved = await saveSettings(
+        { default_voucher_series_per_source_type: draft as Record<JournalEntrySourceType, string> },
+        { failedTitle: 'Kunde inte spara' },
+      )
+      if (!saved) return
       onSettingsUpdated({
         default_voucher_series_per_source_type: draft as Record<JournalEntrySourceType, string>,
       })
       toast({
         title: 'Verifikationsserier sparade',
         description: 'Nya verifikat använder de uppdaterade serierna.',
-      })
-    } catch (err) {
-      toast({
-        title: 'Kunde inte spara',
-        description: getErrorMessage(err, { context: 'settings' }),
-        variant: 'destructive',
       })
     } finally {
       setIsSaving(false)

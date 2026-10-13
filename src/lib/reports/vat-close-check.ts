@@ -1,0 +1,1335 @@
+/**
+ * The momsdeklaration as agents and API clients read it, and the "can I close
+ * VAT?" answer, computed once for every door: the MCP tools
+ * gnubok_get_vat_report, gnubok_vat_review_widget and gnubok_vat_close_check,
+ * and the v1 compliance check (type=vat_close).
+ *
+ * The rutor come from the same aggregate the web momsdeklaration, its exports
+ * and the Skatteverket submission read (get_vat_declaration_totals through
+ * fetchVatAccountTotals in ./vat-declaration.ts); the completeness checks are
+ * ./vat-declaration-checks.ts through the filing gate the web UI's Skicka
+ * button reads (./vat-filing-gate.ts). Moved here from the MCP server, where
+ * the v1 door could not reach it (core never imports an extension).
+ */
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { type EntryLinesQuery, fetchLinesByEntryIds } from '@/lib/bookkeeping/entry-lines'
+import { fiscalYearLockedToCalendar, isEntityType } from '@/lib/company/entity-type'
+import { nextDay } from '@/lib/core/bookkeeping/kontantmetod-cutoff'
+import { codedRefusal } from '@/lib/errors/refusal'
+import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
+import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
+import { findRcBasisGaps } from '@/lib/reports/rc-basis-gaps'
+import { fetchVatAccountTotals, type MomsredovisningDetection, resolvePeriodDates, revenueAccountsWithoutRuta, rutorFromTotals, VAT_SETTLEMENT_NET_ACCOUNTS, type VatPeriodSource, type VatSettlementShapedEntry } from '@/lib/reports/vat-declaration'
+import { runVatDeclarationChecks, type VatCheckAccountTotals, type VatDeclarationCheck, type VatDeclarationCheckStatus } from '@/lib/reports/vat-declaration-checks'
+import { isFilingBlocked, type RcBasisGapScan, rcBasisTotalsByRate, withRcBasisGapFindings } from '@/lib/reports/vat-filing-gate'
+import { fetchDynamicVatAccounts } from '@/lib/reports/vat-revenue-accounts'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { getVatDeadlineForPeriod, type VatDeadlineCalculationSettings } from '@/lib/tax/deadline-config'
+import { adjustDeadlineToNextBankingDay } from '@/lib/tax/swedish-holidays'
+import { formatVoucherLabel } from '@/lib/transactions/link-journal-entry'
+import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
+import type { VatDeclarationRutor, VatPeriodType, VatRevenueAccountWithoutRuta } from '@/types'
+import { createLogger } from '@/lib/logger'
+import { parseVatPeriodArgs } from './vat-period-args'
+
+const log = createLogger('reports/vat-close-check')
+
+/** Plain two-decimal amounts for agent-facing English prose ("1234.50"). */
+export const AGENT_AMOUNT_FORMAT = new Intl.NumberFormat('en-US', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+  useGrouping: false,
+})
+
+// ── VAT report computation (shared by gnubok_get_vat_report + gnubok_vat_review_widget) ──
+//
+// Maps posted journal entry lines to SKV 4700 rutor. ruta49 covers domestic
+// output VAT (10/11/12) AND reverse-charge output VAT (30/31/32) per
+// ML 2023:200: both must be displayed and netted against ruta48 (input VAT).
+//
+// Account → ruta map:
+//   3001-3008, 3041-3048, 3051-3058, 3071-3078 → ruta05  (all domestic taxable sales, common BAS revenue accounts)
+//   2611           → ruta10  (output VAT 25%)
+//   2621           → ruta11  (output VAT 12%)
+//   2631           → ruta12  (output VAT 6%)
+//   2614           → ruta30  (reverse-charge output VAT 25%)
+//   2624           → ruta31  (reverse-charge output VAT 12%)
+//   2634           → ruta32  (reverse-charge output VAT 6%)
+//   3308           → ruta39  (EU services sold)
+//   3305           → ruta40  (export outside EU)
+//   2641/2645/2647 → ruta48  (all input VAT)
+//
+// Posted+reversed status filter: a "reversed" original entry is still part of
+// its period's books: Skatteverket files VAT period-by-period under
+// faktureringsmetoden (sale's VAT in invoice-date period; kreditfaktura's
+// reduction in storno-date period). The original entry stays in its period;
+// the storno (status 'posted', dated when the credit was issued) lands in
+// its own period. The two periods file independently; across a year they
+// arithmetically cancel. *Excluding* 'reversed' would under-report Period N
+// (the original sale's VAT silently disappears) and over-credit Period N+M
+// (a reversal with no original), incorrect per ML 2023:200.
+
+// Keep the MCP report's historical ruta 05 widening for accounts that do not
+// have an explicit treatment. The effective resolver adds custom ruta 05
+// accounts and removes any of these when the company overrides their treatment.
+const RUTA_05_COMPATIBILITY_ACCOUNTS = [
+  '3000',
+  '3001', '3002', '3003', '3005', '3006', '3007', '3008',
+  '3106',
+  '3041', '3042', '3043', '3044', '3045', '3046', '3047', '3048',
+  '3051', '3052', '3053', '3054', '3055', '3056', '3057', '3058',
+  '3071', '3072', '3073', '3074', '3075', '3076', '3077', '3078',
+] as const
+
+interface VatReportResult {
+  period: { type: string; year: number; period: number; start: string; end: string }
+  period_label: string
+  /**
+   * Every box of the SKV 4700 declaration, keyed exactly like
+   * VatDeclarationRutor, so no box the Skatteverket filing carries can be
+   * missing from what the agent reads (agent feedback seq 911266: ruta 50 was
+   * filed but never shown). Absolute values except the signed ruta 49.
+   */
+  rutor: VatDeclarationRutor
+  summary: string
+  warnings: string[]
+  /**
+   * The verifikat in the period that are NOT in the rutor because they are
+   * classified as momsredovisning. Without this an agent comparing a ruta with
+   * the general ledger sees a gap and nothing that explains it (#2805).
+   * Capped at EXCLUDED_SETTLEMENT_ENTRIES_CAP; `count` is the uncapped total.
+   * Not declared in VAT_REPORT_OUTPUT_SCHEMA on purpose: that schema leaves the
+   * top level open, and the tools/list payload budget has no room for prose.
+   */
+  excluded_settlement_entries: {
+    count: number
+    truncated: boolean
+    note: string
+    entries: VatExcludedSettlementEntry[]
+  }
+}
+
+/** One verifikat kept out of the rutor as a momsredovisning. */
+interface VatExcludedSettlementEntry {
+  journal_entry_id: string
+  voucher_label: string
+  entry_date: string
+  source_type: string | null
+  /**
+   * `tagged`: source_type vat_settlement. `net_account_shape`: a declaration
+   * account and a 2650/1650 line. `tax_account_shape`: only 26xx, the
+   * skattekonto 1630 and 3740. The shapes are decided in SQL
+   * (get_vat_declaration_totals); see listExcludedSettlementEntries.
+   */
+  detected_by: MomsredovisningDetection
+}
+
+const EXCLUDED_SETTLEMENT_ENTRIES_CAP = 20
+
+const EXCLUDED_SETTLEMENT_ENTRIES_NOTE =
+  'Dessa verifikat är klassade som momsredovisning (taggade vat_settlement, eller igenkända på formen: ' +
+  'ett momskonto mot 2650/1650, eller enbart 26xx mot skattekontot 1630) och ingår därför inte i rutorna. ' +
+  'Skiljer sig en ruta från huvudboken är det här förklaringen finns.'
+
+/**
+ * Name the verifikat get_vat_declaration_totals kept out of the rutor as a
+ * momsredovisning, so an agent comparing a ruta with the general ledger sees
+ * what explains the gap (#2805). The RPC decides; this only labels:
+ *
+ *   - the shape-detected entries are the RPC's own settlement_shaped_entries.
+ *     Its two shapes are disjoint on a 2650/1650 line (the net-account shape
+ *     requires one, the skattekonto shape forbids one), so that line alone
+ *     tells which shape matched, with no second copy of the predicate;
+ *   - the tagged entries (source_type vat_settlement) are filtered inside the
+ *     RPC without being listed, so they are read here by their tag.
+ *
+ * Sorted by date, then voucher label in numeric order.
+ */
+async function listExcludedSettlementEntries(
+  supabase: SupabaseClient,
+  companyId: string,
+  start: string,
+  end: string,
+  shapedEntries: VatSettlementShapedEntry[],
+): Promise<VatExcludedSettlementEntry[]> {
+  const [tagged, netLines] = await Promise.all([
+    fetchAllRows<{
+      id: string
+      entry_date: string
+      source_type: string | null
+      voucher_series: string | null
+      voucher_number: number | null
+    }>(({ from, to }) =>
+      supabase
+        .from('journal_entries')
+        .select('id, entry_date, source_type, voucher_series, voucher_number')
+        .eq('company_id', companyId)
+        .eq('source_type', 'vat_settlement')
+        .in('status', ['posted', 'reversed'])
+        .gte('entry_date', start)
+        .lte('entry_date', end)
+        .order('id', { ascending: true })
+        .range(from, to),
+    ),
+    fetchLinesByEntryIds<{ id: string; journal_entry_id: string }>(
+      supabase,
+      shapedEntries.map((e) => e.id),
+      'id, journal_entry_id',
+      (q: EntryLinesQuery) => q.in('account_number', VAT_SETTLEMENT_NET_ACCOUNTS),
+    ),
+  ])
+  const hasNetAccountLine = new Set(netLines.map((l) => l.journal_entry_id))
+
+  const entries: VatExcludedSettlementEntry[] = [
+    ...tagged.map((e) => ({
+      journal_entry_id: e.id,
+      voucher_label: formatVoucherLabel(e.voucher_series, e.voucher_number),
+      entry_date: e.entry_date ?? '',
+      source_type: e.source_type,
+      detected_by: 'tagged' as const,
+    })),
+    ...shapedEntries.map((e) => ({
+      journal_entry_id: e.id,
+      voucher_label: formatVoucherLabel(e.voucher_series, e.voucher_number),
+      entry_date: e.entry_date ?? '',
+      source_type: e.source_type,
+      detected_by: hasNetAccountLine.has(e.id)
+        ? ('net_account_shape' as const)
+        : ('tax_account_shape' as const),
+    })),
+  ]
+  return entries.sort((a, b) =>
+    a.entry_date === b.entry_date
+      ? a.voucher_label.localeCompare(b.voucher_label, 'sv', { numeric: true })
+      : a.entry_date < b.entry_date ? -1 : 1,
+  )
+}
+
+interface VatReportWithRutor {
+  report: VatReportResult
+  dynamicVatAccounts: Awaited<ReturnType<typeof fetchDynamicVatAccounts>>
+  /**
+   * The FULL SKV 4700 projection of the same ledger aggregate, via core's
+   * `rutorFromTotals`, signed as filed. `report.rutor` carries the same boxes
+   * (it is built from this object's keys) as absolute values for display.
+   *
+   * The two differ on ruta 05 by design: `report.rutor.ruta05` sums the
+   * widened RUTA_05_ACCOUNTS list for display, while this one is the canonical
+   * ACCOUNT_RUTA projection, i.e. what would actually be filed. Checks run on
+   * the filed shape, never on the display shape. The company's own ruta 05
+   * accounts feed BOTH: they are part of the filing, not a display widening.
+   */
+  declarationRutor: VatDeclarationRutor
+  /**
+   * The per-account debit/credit totals both projections above are built from,
+   * exactly the shape `runVatDeclarationChecks` takes as its optional second
+   * argument. Threaded through so the completeness checks compare rutor 30-32
+   * against the reverse-charge INPUT accounts (2645/2647) rather than the ruta
+   * 48 aggregate, which ordinary debiterad ingående moms on 2641 masks. Internal
+   * to the server: no tool puts this map on the wire.
+   */
+  accountTotals: VatCheckAccountTotals
+  /**
+   * Which branch of resolvePeriodDates produced `report.period`. Kept off the
+   * report itself: gnubok_get_vat_report declares its period object closed
+   * (additionalProperties: false), so the close check is the surface that
+   * discloses a yearly calendar fallback.
+   */
+  periodSource: VatPeriodSource
+  /**
+   * EVERY verifikat kept out of the rutor as a momsredovisning, uncapped
+   * (`report.excluded_settlement_entries.entries` is the capped wire view).
+   * The close check names the shape-detected ones from this list.
+   */
+  excludedSettlementEntries: VatExcludedSettlementEntry[]
+}
+
+/**
+ * Agent-facing VAT report. Thin wrapper over {@link computeVatReportWithRutor}
+ * so callers that only need the report keep the old signature.
+ */
+export async function computeVatReport(
+  args: Record<string, unknown>,
+  companyId: string,
+  supabase: SupabaseClient
+): Promise<VatReportResult> {
+  const { report } = await computeVatReportWithRutor(args, companyId, supabase)
+  return report
+}
+
+async function computeVatReportWithRutor(
+  args: Record<string, unknown>,
+  companyId: string,
+  supabase: SupabaseClient
+): Promise<VatReportWithRutor> {
+  const { periodType, year, period } = parseVatPeriodArgs(args)
+
+  const { start: startDate, end: endDate, source: periodSource } = await resolvePeriodDates(
+    supabase,
+    companyId,
+    periodType,
+    year,
+    period,
+  )
+
+  const dynamicVatAccounts = await fetchDynamicVatAccounts(supabase, companyId)
+
+  // The per-account totals come from the SAME aggregate the web momsdeklaration,
+  // its exports and the Skatteverket submission read: get_vat_declaration_totals
+  // via fetchVatAccountTotals. That RPC is the one definition of which ledger
+  // lines a momsdeklaration counts: posted and reversed entries in the period,
+  // minus the posted bokslutsverifikat (fiscal_periods.closing_entry_id), the
+  // marked kontantmetod vändningar and every momsredovisning (tagged or
+  // recognised by shape). This report used to scan the journal itself and
+  // mirror only the momsredovisning rule, so after year-end closing the
+  // bokslutsverifikat that zeroes class 3-8 against equity (2099/2010) zeroed
+  // ruta 05 and rutor 20-24 here while the filing stayed correct (crm#1139).
+  //
+  // The extra accounts are measured, never shape detectors (see
+  // fetchVatAccountTotals): the company's own ruta 05 accounts, the class 3
+  // accounts with no momskod (REVENUE_ACCOUNT_WITHOUT_RUTA) and this report's
+  // historical ruta 05 display widening.
+  const { totals: accountTotals, settlementShapedEntries } = await fetchVatAccountTotals(
+    supabase,
+    companyId,
+    startDate,
+    endDate,
+    [
+      ...dynamicVatAccounts.accounts,
+      ...dynamicVatAccounts.unconfiguredRevenueAccounts.keys(),
+      ...RUTA_05_COMPATIBILITY_ACCOUNTS,
+    ],
+  )
+  const excludedEntries = await listExcludedSettlementEntries(
+    supabase,
+    companyId,
+    startDate,
+    endDate,
+    settlementShapedEntries,
+  )
+
+  function debitBalance(acc: string): number {
+    const t = accountTotals.get(acc)
+    return t ? Math.round((t.debit - t.credit) * 100) / 100 : 0
+  }
+
+  function creditBalance(acc: string): number {
+    return -debitBalance(acc)
+  }
+
+  const declarationRutor = rutorFromTotals(accountTotals, dynamicVatAccounts)
+  const { ruta30, ruta31, ruta32, ruta49 } = declarationRutor
+  const reportRuta05Accounts = new Set<string>(
+    RUTA_05_COMPATIBILITY_ACCOUNTS.filter(
+      (account) => !dynamicVatAccounts.explicitAccounts.has(account),
+    ),
+  )
+  for (const [account, mapping] of dynamicVatAccounts.mappingByAccount) {
+    if (mapping.box === 'ruta05') reportRuta05Accounts.add(account)
+  }
+  const ruta05 = [...reportRuta05Accounts]
+    .reduce((sum, account) => sum + creditBalance(account), 0)
+  // Import VAT (since 2015 declared via momsdeklaration, not Tullverket): the
+  // importer books output VAT to 2615/2625/2635 (ruta 60/61/62) and the
+  // matching deductible input to 2645 (rolls into ruta 48 below).
+  const calculatedInput2645 = debitBalance('2645')
+  const calculatedInput2647 = debitBalance('2647')
+
+  const monthNames = ['Januari', 'Februari', 'Mars', 'April', 'Maj', 'Juni',
+    'Juli', 'Augusti', 'September', 'Oktober', 'November', 'December']
+
+  let periodLabel: string
+  if (periodType === 'monthly') periodLabel = `${monthNames[period - 1]} ${year}`
+  else if (periodType === 'quarterly') periodLabel = `Q${period} ${year}`
+  else periodLabel = `${year}`
+
+  // Pre-filing warnings: surface common compliance footguns.
+  //
+  // The matching input for reverse-charge output (2614/2624/2634) lands on
+  // 2645 (EU acquisitions) or 2647 (domestic reverse charge per ML 16:13,
+  // byggtjänster, electronics > 100k SEK, etc.). Either is a valid mirror;
+  // the warning must fire only when *both* are zero.
+  const warnings: string[] = []
+  const totalReverseChargeOutput = ruta30 + ruta31 + ruta32
+  const totalReverseChargeInput = calculatedInput2645 + calculatedInput2647
+  if (totalReverseChargeOutput > 0 && totalReverseChargeInput === 0) {
+    warnings.push(
+      'Omvänd betalningsskyldighet: utgående moms har bokförts (rutor 30/31/32) men ingen ' +
+      'beräknad ingående moms (varken 2645 EU eller 2647 inhemsk). Kontrollera att den ' +
+      'motsvarande ingående bokningen finns: båda sidor krävs enligt ML 2023:200.'
+    )
+  }
+
+  // Derived from the declaration's own keys rather than hand-listed: a
+  // hand-listed copy is how ruta 50 (and 06-08, 36-38, 41, 42) went missing
+  // from this view while the Skatteverket mapper filed them. Every box is an
+  // absolute value except ruta 49, which keeps its pay/refund sign; ruta 05
+  // keeps the display widening above.
+  const rutor = Object.fromEntries(
+    Object.entries(declarationRutor).map(([box, value]) => [
+      box,
+      box === 'ruta49' ? value : Math.abs(value),
+    ]),
+  ) as unknown as VatDeclarationRutor
+  rutor.ruta05 = Math.abs(ruta05)
+
+  const report: VatReportResult = {
+    period: { type: periodType, year, period, start: startDate, end: endDate },
+    period_label: periodLabel,
+    rutor,
+    summary: ruta49 > 0
+      ? `Moms att betala: ${Math.abs(ruta49).toFixed(2)} kr`
+      : ruta49 < 0
+        ? `Moms att få tillbaka: ${Math.abs(ruta49).toFixed(2)} kr`
+        : 'Noll i moms',
+    warnings,
+    excluded_settlement_entries: {
+      count: excludedEntries.length,
+      truncated: excludedEntries.length > EXCLUDED_SETTLEMENT_ENTRIES_CAP,
+      note: EXCLUDED_SETTLEMENT_ENTRIES_NOTE,
+      entries: excludedEntries.slice(0, EXCLUDED_SETTLEMENT_ENTRIES_CAP),
+    },
+  }
+
+  // Same `accountTotals` the report is built from, projected through core's
+  // ACCOUNT_RUTA map: the completeness checks run on the signed, filed shape
+  // (canonical ruta 05), never on the absolute display view.
+  return {
+    report,
+    declarationRutor,
+    dynamicVatAccounts,
+    accountTotals,
+    periodSource,
+    excludedSettlementEntries: excludedEntries,
+  }
+}
+
+/**
+ * Momsdeklaration completeness pre-flight, shared by gnubok_vat_close_check
+ * and gnubok_vat_declaration_validate.
+ *
+ * Runs core's `runVatDeclarationChecks` (period aggregates, proportional) and
+ * folds in the per-verifikat FK004 scan through the SAME gate helper the web
+ * UI's "Kontroll av underlaget" banner and its Skicka button read
+ * (lib/reports/vat-filing-gate.ts). One check list, one verdict: the MCP
+ * surface can no longer give a green light the UI would refuse.
+ *
+ * The per-verifikat scan is allowed to degrade: a failure becomes
+ * `{ status: 'unavailable' }`, which the gate turns into an explicit WARNING
+ * finding rather than silence, because an empty list reads as "no problems"
+ * and that claim is not earned when the scan never answered.
+ *
+ * `accountTotals` is the per-account debit/credit aggregate the rutor were
+ * projected from. Passing it switches RC_INPUT_VAT_MISMATCH from the ruta 48
+ * aggregate to the reverse-charge input accounts (2645/2647). Both call sites
+ * have it in hand, so both pass it; the parameter stays optional only because
+ * the check itself degrades gracefully without it.
+ *
+ * `revenueWithoutRuta` feeds REVENUE_ACCOUNT_WITHOUT_RUTA (#3387). The validate
+ * tool passes the list its declaration carries; the close check passes nothing
+ * and it is derived here from the same account totals and dynamic account
+ * resolution its rutor came from, through core's revenueAccountsWithoutRuta.
+ */
+export async function runVatCompletenessChecks(
+  supabase: SupabaseClient,
+  companyId: string,
+  rutor: VatDeclarationRutor,
+  periodType: VatPeriodType,
+  year: number,
+  period: number,
+  accountTotals?: VatCheckAccountTotals,
+  dynamicVatAccounts?: Awaited<ReturnType<typeof fetchDynamicVatAccounts>>,
+  rcBasisByRate?: { r25: number; r12: number; r6: number },
+  revenueWithoutRuta?: VatRevenueAccountWithoutRuta[],
+): Promise<VatDeclarationCheck[]> {
+  let scan: RcBasisGapScan
+  try {
+    const gaps = await findRcBasisGaps(supabase, companyId, periodType, year, period)
+    scan = { status: 'scanned', gapCount: gaps.length }
+  } catch {
+    scan = { status: 'unavailable' }
+  }
+  // Downgrade evidence (per-momssats 44xx/45xx balances) only exists when the
+  // caller supplied the account totals; without them the per-voucher gaps
+  // keep their blocking ERROR tier rather than guessing.
+  const evidence = accountTotals
+    ? {
+        rutor,
+        rcBasisByRate: rcBasisByRate ?? rcBasisTotalsByRate(accountTotals, dynamicVatAccounts),
+      }
+    : undefined
+  const revenueAccounts = revenueWithoutRuta ??
+    (accountTotals && dynamicVatAccounts
+      ? revenueAccountsWithoutRuta(accountTotals, dynamicVatAccounts)
+      : undefined)
+  return withRcBasisGapFindings(
+    runVatDeclarationChecks(rutor, accountTotals, { revenueAccountsWithoutRuta: revenueAccounts }),
+    scan,
+    evidence,
+  )
+}
+
+/** Wire shape for a completeness finding on the MCP surface. */
+interface VatCompletenessFinding {
+  code: VatDeclarationCheck['code']
+  status: VatDeclarationCheckStatus
+  message: string
+  rutor: string[]
+}
+
+/**
+ * Serialize findings for an agent. Unlike the web UI (which deliberately hides
+ * the rule ids as visual noise, DECISIONS.md archive 2026-07-24), the machine surface
+ * carries `code`: an agent needs a stable key to branch on, not prose.
+ */
+export function toCompletenessFindings(checks: VatDeclarationCheck[]): VatCompletenessFinding[] {
+  return checks.map((c) => ({
+    code: c.code,
+    status: c.status,
+    message: c.message,
+    rutor: (c.rutor ?? []) as string[],
+  }))
+}
+
+// ── VAT close check (composes VAT report + blocker scans + sanity ratios) ──
+//
+// Intent-shaped tool: answers "can I close VAT for this period?" in one call.
+// Replaces the 5-7 chained tool calls (vat_report + uncategorized + supplier
+// invoices + reconciliation + voucher gaps + prior-period compare) the agent
+// would otherwise need to assemble the same answer.
+
+interface VatCloseBlocker {
+  kind:
+    | 'uncategorized_transactions'
+    | 'unapproved_supplier_invoices'
+    | 'bank_unreconciled'
+    | 'missing_high_value_receipts'
+    | 'reverse_charge_input_missing'
+    | 'declaration_incomplete'
+    | 'deadline_unavailable'
+    | 'fiscal_year_not_found'
+    | 'momsredovisning_entries_excluded'
+  severity: 'high' | 'medium' | 'low'
+  count: number
+  message: string
+  hint: string
+  /**
+   * Only on `momsredovisning_entries_excluded`: the verifikat the finding is
+   * about, capped like the report's list. `blockers` items are open objects in
+   * the outputSchema, so this costs no tools/list budget.
+   */
+  entries?: VatExcludedSettlementEntry[]
+  /**
+   * Stable rule id when this blocker comes from the shared momsdeklaration
+   * completeness checks (lib/reports/vat-declaration-checks.ts), so an agent
+   * can branch on the rule rather than parse the Swedish message.
+   */
+  check_code?: VatDeclarationCheck['code']
+}
+
+/**
+ * Hint for the uncategorized_transactions blocker. Must name BOTH resolution
+ * paths: categorize/auto-match creates NEW bookkeeping, so for a transaction
+ * whose affärshändelse is already booked on an existing verifikat the agent
+ * needs gnubok_link_transaction_to_journal_entry instead; a hint that only
+ * offers the booking tools dead-ends that case into "contact support"
+ * (2026-08-06 support case). Exported so the test can pin the contract.
+ */
+export const UNCATEGORIZED_TRANSACTIONS_HINT =
+  'Kategorisera via gnubok_categorize_transaction eller kör gnubok_auto_match_period. ' +
+  'Är affärshändelsen redan bokförd på ett befintligt verifikat: koppla i stället med ' +
+  'gnubok_link_transaction_to_journal_entry (ingen ny bokföring skapas).'
+
+/**
+ * Hint for a blocking (ERROR) RC_BASIS_MISSING: names the repair, not only the
+ * rutor. The finding means verifikat carry fiktiv moms without the basis pair, which
+ * gnubok_correct_entry adds (the same storno + corrected entry the web
+ * momsvy's Korrigera books). New reverse-charge categorizations carry the
+ * pair themselves (#2919), so this is the path for history. Exported so the
+ * test can pin the contract.
+ */
+export const RC_BASIS_MISSING_HINT =
+  'Verifikat med fiktiv moms (2614/2624/2634) saknar basbelopp: hitta dem i huvudboken för 2614/2624/2634 ' +
+  '(gnubok_get_general_ledger) och lägg till 45xx D / 4598 K via gnubok_correct_entry, per momssats bara det ' +
+  'som saknas: fiktiv moms / sats minus det basbelopp verifikatet redan redovisar på den satsen i ruta 20-24, ' +
+  'på 44xx/45xx eller på ett konto vars momskod redovisar ruta 20-24. Konton för 25/12/6 %: 4535-4537 ' +
+  'EU-tjänster ruta 21, 4531-4533 tjänster utanför EU ruta 22, 4515-4517 EU-varor ruta 20. Eller Korrigera i ' +
+  'momsvyn. Har ett konto en momskod för omvänd skattskyldighet utan Standard moms 25, 12 eller 6 %, rätta ' +
+  'kontot i kontoplanen först.'
+
+/**
+ * Hint for the bank_unreconciled blocker when every bank row in the period is
+ * matched and the whole difference is verifikat with no bank row (crm#185: an
+ * SIE import booked January to May, the bank connection returned rows from
+ * June). Stäm av counts those verifikat as explained, so a signed avstämning
+ * leaves this gate closed: only bank rows for those dates clear it. Linking
+ * books nothing, and categorizing would book the same affärshändelse twice,
+ * which gnubok_create_transactions' own next step points at. Exported so the
+ * test can pin the contract.
+ */
+export const BANK_ROWS_MISSING_HINT =
+  'Importera kontoutdraget för de datumen som bankfil (Importera, Bankfil) eller skapa raderna med ' +
+  'gnubok_create_transactions. Koppla dem sedan till de befintliga verifikaten i Stäm av eller med ' +
+  'gnubok_reconcile_match: ingenting bokförs på nytt, så kategorisera dem inte. En PDF i Underlag ' +
+  'eller en signerad avstämning ersätter inte bankraderna.'
+
+/**
+ * Hint for bank_unreconciled when nothing is left to match and the period's
+ * whole difference is verifikat settled against a rättelse dated outside the
+ * period (crm#1074). There is no bank row to import and nothing to link, so
+ * neither of the other hints applies. Reconciliation facts only: whether the
+ * check is accepted with the difference is the user's decision. Exported so
+ * the test can pin the contract.
+ */
+export const SETTLED_ELSEWHERE_HINT =
+  'Inget att matcha och ingen bankrad att importera: verifikaten är rättade med verifikat daterade i en annan period ' +
+  '(gnubok_list_reconciliation_items med bucket "matched" visar vilka). Visa användaren verifikaten och differensen; ' +
+  'om kontrollen godtas trots differensen är användarens beslut.'
+
+/**
+ * Hint for the REVENUE_ACCOUNT_WITHOUT_RUTA finding (#3387): the fix is on the
+ * account, not in the ledger, and it is the user's call which ruta the sales
+ * belong in. Exported so the test can pin the contract.
+ */
+export const REVENUE_ACCOUNT_WITHOUT_RUTA_HINT =
+  'Fråga användaren vad kontot avser och sätt sedan default_vat_treatment på kontot med ' +
+  'gnubok_update_account (standard_25/reduced_12/reduced_6 för ruta 05, exempt för ruta 42). ' +
+  'Avser kontot inte försäljning, sätt default_vat_rate 0. Inga verifikat ändras.'
+
+/**
+ * Completeness codes that describe the omvänd-skattskyldighet pair. They keep
+ * the pre-existing `reverse_charge_input_missing` blocker kind so clients
+ * already switching on it do not lose the case they were watching for.
+ */
+const RC_COMPLETENESS_CODES = new Set<VatDeclarationCheck['code']>([
+  'RC_BASIS_MISSING',
+  'RC_OUTPUT_MISSING',
+  'RC_INPUT_VAT_MISMATCH',
+])
+
+interface VatCloseSanityAnomaly {
+  kind: 'output_vat_ratio_drift' | 'input_vat_ratio_drift' | 'revenue_drop' | 'revenue_spike'
+  rate?: '25' | '12' | '6'
+  current: number
+  previous: number
+  delta_pct: number
+  message: string
+}
+
+interface VatCloseCheckResult {
+  /**
+   * `source` discloses whether the range is a resolved räkenskapsår or the
+   * calendar arithmetic (yearly: 'calendar_fallback' when no fiscal year ends
+   * in `year`). The outputSchema keeps `period` an open object, so this costs
+   * no tools/list budget.
+   */
+  period: VatReportResult['period'] & { source: VatPeriodSource }
+  period_label: string
+  rutor: VatReportResult['rutor']
+  payment: {
+    net_due: number
+    direction: 'pay' | 'refund' | 'zero'
+    deadline: string | null
+    deadline_label: string | null
+    moms_period: 'monthly' | 'quarterly' | 'yearly' | null
+  }
+  blockers: VatCloseBlocker[]
+  /**
+   * The momsdeklaration completeness findings behind the
+   * declaration_incomplete / reverse_charge_input_missing blockers, verbatim
+   * from the shared checks. Empty means the declaration itself looks complete;
+   * it says nothing about the other blockers.
+   */
+  declaration_checks: VatCompletenessFinding[]
+  sanity: {
+    anomalies: VatCloseSanityAnomaly[]
+    ratios: {
+      output_vat_ratio_25: number  // ruta10 / domestic 25% revenue
+      output_vat_ratio_12: number
+      output_vat_ratio_6: number
+      previous_period_compared: boolean
+    }
+  }
+  ready_to_close: boolean
+  summary: string
+}
+
+/** Adapt the canonical VAT deadline configuration to the MCP wire shape. */
+export function computeMomsDeadline(
+  periodType: 'monthly' | 'quarterly' | 'yearly',
+  year: number,
+  period: number,
+  settings: VatDeadlineCalculationSettings,
+): { date: string; label: string } | null {
+  const instance = getVatDeadlineForPeriod(periodType, year, period, settings)
+  if (!instance) return null
+
+  const adjusted = adjustDeadlineToNextBankingDay(
+    new Date(instance.year, instance.month, instance.day),
+  )
+  const deadlineYear = adjusted.getFullYear()
+  const deadlineMonth = adjusted.getMonth() + 1
+  const deadlineDay = adjusted.getDate()
+
+  return {
+    date: `${deadlineYear}-${String(deadlineMonth).padStart(2, '0')}-${String(deadlineDay).padStart(2, '0')}`,
+    label: `${deadlineDay} ${monthName(deadlineMonth)} ${deadlineYear}`,
+  }
+}
+
+function monthName(m: number): string {
+  return ['januari', 'februari', 'mars', 'april', 'maj', 'juni',
+    'juli', 'augusti', 'september', 'oktober', 'november', 'december'][m - 1] ?? ''
+}
+
+/**
+ * Gross floor for the missing-underlag blocker. ML 17 kap 26-28 § (förenklad
+ * faktura) expresses 4 000 kr inclusive of moms, so the comparison is against
+ * the RPC's gross_amount: the debit total less self-assessed reverse-charge
+ * and import moms, which no seller charges, so a reverse-charge purchase is
+ * measured by its invoice amount (migration 20261011125000).
+ */
+const MISSING_UNDERLAG_MIN_GROSS_SEK = 4000
+
+/** One `verifikat_without_documents` page-of-one, used only for its total. */
+async function totalMissingUnderlagSince(
+  supabase: SupabaseClient,
+  companyId: string,
+  since: string
+): Promise<number> {
+  const { data, error } = await supabase.rpc('verifikat_without_documents', {
+    p_company_id: companyId,
+    p_since: since,
+    p_min_amount: MISSING_UNDERLAG_MIN_GROSS_SEK,
+    // p_limit only sizes the page; total_count is computed over the FULL
+    // filtered set in an independent CTE, so 1 is the cheapest valid size.
+    p_limit: 1,
+    p_offset: 0,
+  })
+  if (error) throw new Error(`verifikat_without_documents failed: ${error.message}`)
+  const result = data as { ok?: boolean; code?: string; total_count?: number } | null
+  if (!result?.ok) {
+    throw new Error(`verifikat_without_documents failed: ${result?.code ?? 'unknown error'}`)
+  }
+  return result.total_count ?? 0
+}
+
+/**
+ * Posted verifikat dated within [start, end] that genuinely lack an underlag
+ * and whose gross reaches MISSING_UNDERLAG_MIN_GROSS_SEK.
+ *
+ * BFL 5 kap 6-7 §: every affärshändelse needs a verifikation, and the
+ * verifikation must reference its underlag. This delegates to the
+ * `verifikat_without_documents` RPC, the SINGLE owner of that predicate: the
+ * same SQL behind the web worklist badge (countVerifikatMissingDocument) and
+ * behind gnubok_list_verifikat_without_documents. It carries three things a
+ * hand-rolled scan here kept getting wrong:
+ *
+ *   1. the needs-doc source types (mirrors NEEDS_DOC_SOURCE_TYPES,
+ *      lib/worklist/categories.ts, pinned by
+ *      tests/pg/document-surfaces-unification.pg.test.ts). The local list read
+ *      'supplier_invoice' and 'receipt', which are not members of the
+ *      journal_entries.source_type CHECK at all: PostgREST matched zero rows,
+ *      so supplier-invoice verifikat NEVER surfaced here and the momsperiod
+ *      got a clean bill of health on exactly the entry types most likely to be
+ *      missing their underlag;
+ *   2. is_current_version, so a superseded document version does not silence
+ *      the warning, and journal_entry_no_doc_required, so an explicit user
+ *      waiver does;
+ *   3. BFL 5 kap 7 § hänvisning till underlag: a payment verifikat whose
+ *      supplier invoice carries an anchored document is covered by that
+ *      document even though the doc row hangs on the registration verifikat.
+ *      Without this, adding supplier_invoice_paid to the list would flag every
+ *      paid supplier invoice in the period (the 2026-07-24 support case).
+ *
+ * The RPC takes `since` and no upper bound, so the in-period count is the
+ * difference between two filter-respecting totals. Both calls run the same
+ * predicate, so the subtraction is exact rather than an estimate.
+ */
+async function countMissingUnderlagInPeriod(
+  supabase: SupabaseClient,
+  companyId: string,
+  start: string,
+  end: string
+): Promise<number> {
+  const [fromStart, afterEnd] = await Promise.all([
+    totalMissingUnderlagSince(supabase, companyId, start),
+    totalMissingUnderlagSince(supabase, companyId, nextDay(end)),
+  ])
+  return Math.max(0, fromStart - afterEnd)
+}
+
+/**
+ * Resolve the cash-account identity before comparing its bank feed with the
+ * ledger. The cashAccountId is what prevents another same-currency account
+ * from being included in the transaction total.
+ *
+ * The lookup itself lives in lib/reconciliation/cash-account-scope.ts so the
+ * bokslut readiness aggregator (core code, which cannot import from
+ * @/extensions/) resolves the scope the exact same way. It keeps the fail-closed
+ * contract this function introduced in #1295: a cash_accounts lookup error
+ * throws rather than degrading into the unscoped currency-only path.
+ *
+ * Pass accountNumber only when the CALLER named an account; leaving it
+ * undefined means "the company's bank account", which additionally falls back
+ * to the primary cash account for companies that have no 1930 row at all.
+ */
+export async function getScopedReconciliationStatus(
+  supabase: SupabaseClient,
+  companyId: string,
+  dateFrom: string | undefined,
+  dateTo: string | undefined,
+  accountNumber?: string,
+) {
+  const scope = await resolveCashAccountScope(supabase, companyId, accountNumber)
+
+  if (!scope.found && accountNumber !== undefined && accountNumber !== '1930') {
+    // Coded: as a plain Error it reached agents as UNKNOWN_ERROR ("Försök
+    // igen") for 1630, 1931, 1932 and 1940, and no retry finds an account the
+    // company does not have. 1630 is the skattekonto, keyed on its own.
+    throw codedRefusal('CASH_ACCOUNT_NOT_FOUND', `Okänt kassakonto ${accountNumber} för det här företaget`, {
+      description: `No bank account of this company books to ${accountNumber}. Pick a ledger_account from gnubok_list_cash_accounts, or pass account_key "bank:<cash_account_id>" instead of account_number; the skattekonto (1630) is account_key "skattekonto".`,
+      tool: 'gnubok_list_cash_accounts',
+    })
+  }
+
+  const status = await getReconciliationStatus(
+    supabase,
+    companyId,
+    dateFrom,
+    dateTo,
+    scope.accountNumber,
+    scope.currency,
+    scope.cashAccountId,
+    scope.includeUnassigned,
+  )
+
+  return { status, scope }
+}
+
+/**
+ * Whether a momsperiod [start, end] (whole months, YYYY-MM-DD) holds the last
+ * day of a räkenskapsår that starts in fiscalYearStartMonth (1-12). Fiscal
+ * years end on the last day of the month before their start month, so this is
+ * whether that month falls inside the period.
+ */
+export function vatPeriodContainsFiscalYearEnd(start: string, end: string, fiscalYearStartMonth: number): boolean {
+  const fiscalYearEndMonth = fiscalYearStartMonth === 1 ? 12 : fiscalYearStartMonth - 1
+  let year = Number(start.slice(0, 4))
+  let month = Number(start.slice(5, 7))
+  const endKey = Number(end.slice(0, 4)) * 12 + Number(end.slice(5, 7))
+  while (year * 12 + month <= endKey) {
+    if (month === fiscalYearEndMonth) return true
+    month += 1
+    if (month > 12) {
+      month = 1
+      year += 1
+    }
+  }
+  return false
+}
+
+/**
+ * Whether the momsperiod [start, end] holds the end of a räkenskapsår, from
+ * the company's fiscal_periods rows that overlap it; the configured
+ * fiscal_year_start_month only when no such row exists. null when neither
+ * answers (a failed read, or no row and no setting).
+ */
+async function vatPeriodHoldsFiscalYearEnd(
+  supabase: SupabaseClient,
+  companyId: string,
+  start: string,
+  end: string,
+  configuredStartMonth: number | null,
+): Promise<boolean | null> {
+  const { data, error } = await supabase
+    .from('fiscal_periods')
+    .select('period_end')
+    .eq('company_id', companyId)
+    .lte('period_start', end)
+    .gte('period_end', start)
+  if (error) return null
+  const rows = (data ?? []) as Array<{ period_end: string }>
+  if (rows.length > 0) return rows.some((r) => r.period_end >= start && r.period_end <= end)
+  return configuredStartMonth === null ? null : vatPeriodContainsFiscalYearEnd(start, end, configuredStartMonth)
+}
+
+export async function computeVatCloseCheck(
+  args: Record<string, unknown>,
+  companyId: string,
+  supabase: SupabaseClient
+): Promise<VatCloseCheckResult> {
+  // 1) VAT report (validates inputs + gives us figures + period dates). The
+  //    full SKV 4700 projection rides along for the completeness checks in
+  //    step 4b: they need the signed, filed rutor (the report view is absolute
+  //    values with a widened ruta 05), plus
+  //    the per-account totals so the RC input comparison reads 2645/2647
+  //    instead of the ruta 48 aggregate.
+  const {
+    report: vatReport,
+    declarationRutor,
+    dynamicVatAccounts,
+    accountTotals,
+    periodSource,
+    excludedSettlementEntries,
+  } = await computeVatReportWithRutor(args, companyId, supabase)
+  const { start, end, type: periodType, year, period } = vatReport.period
+
+  // 2) Company settings: deadline inputs come from the same fields used by
+  //    lib/tax/deadline-config.ts. The over-40M flag changes monthly filers
+  //    from the 12th/17th M+2 schedule to the 26th M+1 schedule.
+  const { data: settings, error: settingsError } = await supabase
+    .from('company_settings')
+    .select('moms_period, vat_taxable_base_over_40m, entity_type, fiscal_year_start_month, vat_has_eu_trade, vat_filing_method, accounting_method')
+    .eq('company_id', companyId)
+    .single()
+  const momsPeriod = (settings?.moms_period as 'monthly' | 'quarterly' | 'yearly' | null) ?? null
+  const entityType = isEntityType(settings?.entity_type) ? settings.entity_type : null
+  // 3) Deadline: based on the *requested* period type, not company setting,
+  //    so the model gets the right deadline even when querying ad-hoc periods.
+  //    Never turn missing settings into a plausible statutory date. Monthly
+  //    deadlines need the turnover threshold; annual deadlines additionally
+  //    need the filing profile and a configured fiscal year matching the
+  //    report range. Quarterly dates are independent of company settings.
+  const configuredStartMonth = typeof settings?.fiscal_year_start_month === 'number'
+    && settings.fiscal_year_start_month >= 1
+    && settings.fiscal_year_start_month <= 12
+    ? settings.fiscal_year_start_month
+    : null
+  let deadline: { date: string; label: string } | null = null
+  if (periodType === 'quarterly') {
+    deadline = computeMomsDeadline('quarterly', Number(year), Number(period), {
+      vat_taxable_base_over_40m: false,
+    })
+  } else if (
+    periodType === 'monthly'
+    && typeof settings?.vat_taxable_base_over_40m === 'boolean'
+  ) {
+    deadline = computeMomsDeadline('monthly', Number(year), Number(period), {
+      vat_taxable_base_over_40m: settings.vat_taxable_base_over_40m,
+    })
+  } else if (periodType === 'yearly' && settings && entityType) {
+    const reportEndMonth = Number(end.slice(5, 7))
+    const reportStartMonth = reportEndMonth === 12 ? 1 : reportEndMonth + 1
+    const calendarYearOnly = fiscalYearLockedToCalendar(entityType)
+    const fiscalYearMatches = calendarYearOnly
+      ? reportEndMonth === 12
+      : configuredStartMonth === reportStartMonth
+    const filingMethodRequired = !calendarYearOnly && settings.vat_has_eu_trade === false
+    const filingProfileComplete = typeof settings.vat_has_eu_trade === 'boolean'
+      && (!filingMethodRequired
+        || settings.vat_filing_method === 'electronic'
+        || settings.vat_filing_method === 'paper')
+
+    if (fiscalYearMatches && filingProfileComplete) {
+      const deadlineSettings: VatDeadlineCalculationSettings = {
+        vat_taxable_base_over_40m: settings.vat_taxable_base_over_40m === true,
+        entity_type: entityType,
+        fiscal_year_start_month: reportStartMonth,
+        vat_has_eu_trade: settings.vat_has_eu_trade,
+        vat_filing_method: settings.vat_filing_method,
+      }
+      deadline = computeMomsDeadline('yearly', Number(year), Number(period), deadlineSettings)
+    }
+  }
+  if (!deadline) {
+    log.warn('VAT deadline unavailable', {
+      companyId,
+      periodType,
+      hasSettings: Boolean(settings),
+      settingsErrorCode: settingsError?.code,
+    })
+  }
+
+  // Kontantmetoden (bokslutsmetoden): ingående moms is recognised when a
+  // supplier invoice is paid, except at the räkenskapsår's end, when every
+  // invoice unpaid at balansdagen is booked. Which of the two this momsperiod
+  // is decides what unattested supplier invoices mean for it (agent feedback
+  // seq 878478). null = not known: treated as the year end (fail closed).
+  const cashMethod = settings?.accounting_method === 'cash'
+  const fiscalYearEndInPeriod = cashMethod
+    ? await vatPeriodHoldsFiscalYearEnd(supabase, companyId, start, end, configuredStartMonth)
+    : null
+  const cashOutsideYearEnd = cashMethod && fiscalYearEndInPeriod === false
+  const cashAtYearEnd = cashMethod && !cashOutsideYearEnd
+
+  // 4) Blocker scans: run in parallel
+  const [unbooked, unapprovedRes, recon, missingUnderlag] = await Promise.all([
+    // The shared "no verifikat" predicate (lib/transactions/unbooked.ts), the
+    // same one the period-lock guard, attention and report data_status use.
+    // The local journal_entry_id IS NULL count it replaced also counted
+    // private rows and bulk-booked rows anchored via transaction_voucher_links.
+    countUnbookedBankTransactions(supabase, companyId, { fromDate: start, toDate: end }),
+    // Unattested supplier invoices dated in the period; under kontantmetoden
+    // at the räkenskapsår's end, every one dated up to the period end, since
+    // all of them are unpaid at balansdagen and are booked then.
+    (() => {
+      const query = supabase
+        .from('supplier_invoices')
+        .select('id', { count: 'exact', head: true })
+        .eq('company_id', companyId)
+        .eq('status', 'registered')
+        .lte('invoice_date', end)
+      return cashAtYearEnd ? query : query.gte('invoice_date', start)
+    })(),
+    // No account_number argument: the close check wants "the company's bank
+    // account", so the scope resolver may land on the primary cash account for
+    // a company that has no 1930 row.
+    getScopedReconciliationStatus(supabase, companyId, start, end),
+    // Verifikat in the period that genuinely lack an underlag (BFL 5 kap
+    // 6-7 §), counted over the SHARED SQL predicate. Never re-derive this
+    // locally: countMissingUnderlagInPeriod documents what the hand-rolled
+    // scan that used to sit here got wrong.
+    countMissingUnderlagInPeriod(supabase, companyId, start, end),
+  ])
+
+  const blockers: VatCloseBlocker[] = []
+  if (!deadline) {
+    blockers.push({
+      kind: 'deadline_unavailable',
+      severity: 'high',
+      count: 1,
+      message: 'Momsens inlämningsdatum kunde inte fastställas säkert',
+      hint: 'Kontrollera momsinställningar, deklarationssätt och räkenskapsperiod innan deklarationen lämnas in.',
+    })
+  }
+  // Helårsmoms follows the räkenskapsår (SFL 26 kap 10-11 §§). When no fiscal
+  // year ends in `year` the report silently fell back to Jan-Dec, which for a
+  // company whose fiscal year does not start in January means every figure
+  // above describes the wrong period (feedback seq 330091: FY Apr-Mar, yearly
+  // 2026 came back as 2026-01-01..2026-12-31). Say so instead of leaving the
+  // agent to infer it from an unavailable deadline.
+  if (
+    periodType === 'yearly'
+    && periodSource === 'calendar_fallback'
+    && configuredStartMonth !== null
+    && configuredStartMonth !== 1
+  ) {
+    blockers.push({
+      kind: 'fiscal_year_not_found',
+      severity: 'high',
+      count: 1,
+      message: `Inget räkenskapsår som slutar ${year} hittades: perioden föll tillbaka på kalenderåret ${start}..${end}, men helårsmoms redovisas per räkenskapsår (SFL 26 kap 10-11 §§)`,
+      hint: `Företagets räkenskapsår börjar månad ${configuredStartMonth}. Kontrollera räkenskapsåren med gnubok_list_fiscal_periods och ange year = det år räkenskapsåret slutar.`,
+    })
+  }
+  const uncategorizedCount = unbooked.total
+  if (uncategorizedCount > 0) {
+    blockers.push({
+      kind: 'uncategorized_transactions',
+      severity: 'high',
+      count: uncategorizedCount,
+      message: `${uncategorizedCount} banktransaktioner i perioden saknar verifikat`,
+      hint: UNCATEGORIZED_TRANSACTIONS_HINT,
+    })
+  }
+  const unapprovedCount = unapprovedRes.count ?? 0
+  // Kontantmetoden outside the year end: an unattested invoice does not move
+  // this period's moms, so it is information, not a blocker.
+  if (unapprovedCount > 0 && cashOutsideYearEnd) {
+    blockers.push({
+      kind: 'unapproved_supplier_invoices',
+      severity: 'low',
+      count: unapprovedCount,
+      message: `Information: ${unapprovedCount} oattesterade leverantörsfakturor i perioden påverkar inte momsen för perioden under kontantmetoden`,
+      hint: 'Blockerar inte. Under kontantmetoden redovisas ingående moms när fakturan betalas; vid räkenskapsårets slut bokförs obetalda fakturor och påverkar då momsen. Attestera dem via gnubok_approve_supplier_invoice före bokslutet.',
+    })
+  } else if (unapprovedCount > 0) {
+    blockers.push({
+      kind: 'unapproved_supplier_invoices',
+      severity: 'high',
+      count: unapprovedCount,
+      message: cashAtYearEnd
+        ? `${unapprovedCount} oattesterade leverantörsfakturor daterade till och med ${end}: under kontantmetoden bokförs obetalda fakturor vid räkenskapsårets slut`
+        : `${unapprovedCount} oattesterade leverantörsfakturor i perioden`,
+      hint: 'Attestera via gnubok_approve_supplier_invoice: ingående moms (ruta 48) påverkas.',
+    })
+  }
+  const reconRes = recon.status
+  if (!reconRes.is_reconciled) {
+    // Every bank row is matched and verifikat without a bank row explain the
+    // whole difference (the residual is under half an öre, the Stäm av
+    // sign-off threshold). The bridge calls that avstämt, so the user can sign
+    // the month off, yet the gate stays closed: the bank side is missing for
+    // those dates. Same gate and severity; the message names the situation and
+    // the hint the action that clears it (crm#185).
+    const bankRowsMissing =
+      reconRes.unmatched_transaction_count === 0 &&
+      reconRes.unmatched_gl_line_count > 0 &&
+      typeof reconRes.unexplained_difference === 'number' &&
+      Math.abs(reconRes.unexplained_difference) < 0.005
+    // Nothing is left to match, and the whole difference is verifikat that
+    // are settled against a rättelse dated outside the period (crm#1074).
+    // The gate itself is unchanged (the period's bank and ledger movements do
+    // differ); only the message names what it is, so it does not read as
+    // "0 omatchade" with a difference and send the agent off to match.
+    const settledElsewhere =
+      reconRes.unmatched_transaction_count === 0 &&
+      reconRes.unmatched_gl_line_count === 0 &&
+      (reconRes.settled_gl_entry_count ?? 0) > 0 &&
+      typeof reconRes.unexplained_difference === 'number' &&
+      Math.abs(reconRes.unexplained_difference) < 0.005
+    blockers.push({
+      kind: 'bank_unreconciled',
+      severity: Math.abs(reconRes.difference) > 100 ? 'high' : 'medium',
+      count:
+        reconRes.unmatched_transaction_count +
+        reconRes.unmatched_gl_line_count +
+        (settledElsewhere ? reconRes.settled_gl_entry_count : 0),
+      // The account is named from the RESOLVED scope, not hard-coded: for a
+      // company with no 1930 row this check now reconciles its primary cash
+      // account, and a message pointing at 1930 would send the user to an
+      // account with no lines on it.
+      message: settledElsewhere
+        ? `${reconRes.settled_gl_entry_count} verifikat på ${recon.scope.accountNumber} är kopplade mot verifikat daterade utanför perioden: periodens differens ${AGENT_AMOUNT_FORMAT.format(reconRes.difference)} kr är rättad i en annan period`
+        : bankRowsMissing
+        ? `${reconRes.unmatched_gl_line_count} verifikat på ${recon.scope.accountNumber} saknar banktransaktion: banken har inga rader för de datumen`
+        : `Bankavstämning visar differens ${reconRes.difference.toFixed(2)} kr (${reconRes.unmatched_transaction_count} omatchade banktransaktioner, ${reconRes.unmatched_gl_line_count} omatchade huvudbokslinjer på ${recon.scope.accountNumber})`,
+      hint: settledElsewhere
+        ? SETTLED_ELSEWHERE_HINT
+        : bankRowsMissing
+        ? BANK_ROWS_MISSING_HINT
+        : 'Granska via gnubok_get_reconciliation_status och matcha: moms beräknas från huvudboken så differenser döljer fel.',
+    })
+  }
+  if (missingUnderlag > 0) {
+    blockers.push({
+      kind: 'missing_high_value_receipts',
+      severity: 'medium',
+      count: missingUnderlag,
+      message: `${missingUnderlag} verifikat över ${MISSING_UNDERLAG_MIN_GROSS_SEK} kr saknar underlag`,
+      hint: `BFL 5 kap 6-7 §: varje affärshändelse måste ha en verifikation med hänvisning till sitt underlag. Lista dem med gnubok_list_verifikat_without_documents (via gnubok_call_tool; since=${start}, min_amount=${MISSING_UNDERLAG_MIN_GROSS_SEK}) och para ihop via gnubok_list_unmatched_documents.`,
+    })
+  }
+  // Untagged verifikat the report classified as momsredovisning BY SHAPE and
+  // therefore kept out of the rutor. Informational (severity low, never part
+  // of ready_to_close): a manual or imported settlement is supposed to be
+  // excluded. It is named because shape is an inference, not a recorded intent
+  // (#2805): when a ruta disagrees with the general ledger, these are the
+  // verifikat that explain it, and until now nothing pointed at them. Tagged
+  // vat_settlement entries are left out: the app booked those itself.
+  const shapeDetectedEntries = excludedSettlementEntries.filter((e) => e.detected_by !== 'tagged')
+  if (shapeDetectedEntries.length > 0) {
+    const named = shapeDetectedEntries
+      .slice(0, EXCLUDED_SETTLEMENT_ENTRIES_CAP)
+      .map((e) => `${e.voucher_label} (${e.entry_date})`)
+      .join(', ')
+    const more = shapeDetectedEntries.length > EXCLUDED_SETTLEMENT_ENTRIES_CAP
+      ? ` och ${shapeDetectedEntries.length - EXCLUDED_SETTLEMENT_ENTRIES_CAP} till`
+      : ''
+    blockers.push({
+      kind: 'momsredovisning_entries_excluded',
+      severity: 'low',
+      count: shapeDetectedEntries.length,
+      message: `Information: ${shapeDetectedEntries.length} verifikat utan momsredovisningstagg är klassade som momsredovisning på formen och ingår inte i rutorna: ${named}${more}`,
+      hint: 'Blockerar inte. Formen är ett momskonto mot 2650/1650, eller enbart 26xx mot skattekontot 1630. Skiljer sig en ruta från huvudboken är det dessa verifikat som förklarar skillnaden: granska dem med gnubok_query_journal.',
+      entries: shapeDetectedEntries.slice(0, EXCLUDED_SETTLEMENT_ENTRIES_CAP),
+    })
+  }
+
+  // 4b) Is the DECLARATION itself complete? Everything above is about the
+  //     bookkeeping around it; this is about the momsdeklaration.
+  //
+  //     Until 2026-07 this was a single hand-rolled mirror,
+  //     `acquisitionAndImportBase > 0 && ruta48 === 0`, and ruta 48 aggregates
+  //     2641/2642/2645/2646/2647/2649: ONE ordinary domestic receipt in the
+  //     period made it unreachable, so a declaration with omvänd
+  //     skattskyldighet booked on one side only sailed through as "Klart för
+  //     stängning". There was no basbelopp check (rutor 20-24 vs 30-32) at all,
+  //     which is the FK004 case Skatteverket rejects.
+  //
+  //     Now the shared core checks run instead, over the full SKV 4700
+  //     projection, so the MCP verdict is the SAME verdict the web UI's
+  //     "Kontroll av underlaget" gate gives. Never re-derive these locally.
+  const declarationChecks = await runVatCompletenessChecks(
+    supabase,
+    companyId,
+    declarationRutor,
+    periodType as VatPeriodType,
+    Number(year),
+    Number(period),
+    accountTotals,
+    dynamicVatAccounts,
+  )
+
+  // Zero deductible input VAT against self-assessed utgående moms is
+  // unambiguous: rutor 30-32 (omvänd skattskyldighet, 2614/2624/2634) and
+  // rutor 60-62 (import since 2015, 2615/2625/2635) each require the matching
+  // ingående moms on 2645/2647 (ML 2023:200); with ruta 48 at zero there is no
+  // partial-deduction story that explains it.
+  //
+  // The shared RC_INPUT_VAT_MISMATCH now isolates the RC share exactly (it reads
+  // 2645/2647, see the accountTotals argument above) and still stays a WARNING,
+  // deliberately: limited avdragsrätt (blandad verksamhet, ML 13 kap 18/24-25 §§)
+  // makes a shortfall legally correct for some filers, and no SKV gateway rule
+  // rejects it. Both halves of this escalation survive that sharpening:
+  //   - the RC half turns the warning into a blocker in the one case where no
+  //     deduction story exists at all (ruta 48 itself is zero);
+  //   - the IMPORT half (rutor 60-62 against ruta 48, below) is coverage the
+  //     shared checks still do not have: they compare import output only against
+  //     the tullvärdesunderlag in ruta 50, never against the input side.
+  const eps = 0.5
+  const rcOutput = declarationRutor.ruta30 + declarationRutor.ruta31 + declarationRutor.ruta32
+  const selfAssessedOutput =
+    rcOutput + declarationRutor.ruta60 + declarationRutor.ruta61 + declarationRutor.ruta62
+  const noInputVatAtAll = selfAssessedOutput > eps && declarationRutor.ruta48 <= eps
+
+  for (const check of declarationChecks) {
+    const escalated =
+      check.status === 'ERROR' ||
+      (check.code === 'RC_INPUT_VAT_MISMATCH' && noInputVatAtAll)
+    blockers.push({
+      kind: RC_COMPLETENESS_CODES.has(check.code)
+        ? 'reverse_charge_input_missing'
+        : 'declaration_incomplete',
+      severity: escalated ? 'high' : 'medium',
+      count: 1,
+      message: check.message,
+      // Only the blocking variant: the advisory RC_BASIS_MISSING (period
+      // consistent per rate) and the scan-unavailable one must not be told to
+      // add basis pairs, that would double-count rutor 20-24.
+      hint: check.code === 'RC_BASIS_MISSING' && check.status === 'ERROR'
+        ? RC_BASIS_MISSING_HINT
+        : check.code === 'REVENUE_ACCOUNT_WITHOUT_RUTA'
+          ? REVENUE_ACCOUNT_WITHOUT_RUTA_HINT
+          : check.rutor?.length
+          ? `Granska ${check.rutor.join(', ')} i huvudboken innan inlämning (gnubok_get_general_ledger).`
+          : 'Granska underlaget i huvudboken innan inlämning (gnubok_get_general_ledger).',
+      check_code: check.code,
+    })
+  }
+
+  // Import-only variant of the same defect: no RC output means no
+  // RC_INPUT_VAT_MISMATCH finding exists to escalate above.
+  if (noInputVatAtAll && rcOutput <= eps) {
+    blockers.push({
+      kind: 'reverse_charge_input_missing',
+      severity: 'high',
+      count: 1,
+      message:
+        'Import: utgående importmoms är bokförd (ruta 60/61/62) men ingen avdragsgill ingående moms alls (ruta 48 är noll)',
+      hint: 'ML 2023:200: importören redovisar både beräknad utgående moms (2615/2625/2635) och avdragsgill ingående moms (2645).',
+    })
+  }
+
+  // 5) Sanity ratios: current period output VAT to revenue per rate, vs prior period
+  const ratios = {
+    output_vat_ratio_25: vatReport.rutor.ruta05 > 0
+      ? Math.round((vatReport.rutor.ruta10 / vatReport.rutor.ruta05) * 10000) / 100
+      : 0,
+    output_vat_ratio_12: 0,  // no per-rate revenue split available from VAT report
+    output_vat_ratio_6: 0,
+    previous_period_compared: false,
+  }
+  const anomalies: VatCloseSanityAnomaly[] = []
+
+  // Compare to previous same-length period
+  const prevArgs = previousPeriodArgs(periodType as 'monthly' | 'quarterly' | 'yearly', Number(year), Number(period))
+  if (prevArgs) {
+    try {
+      const prev = await computeVatReport(prevArgs, companyId, supabase)
+      ratios.previous_period_compared = true
+      // Output VAT ratio 25% drift
+      if (vatReport.rutor.ruta05 > 0 && prev.rutor.ruta05 > 0) {
+        const cur = vatReport.rutor.ruta10 / vatReport.rutor.ruta05
+        const prv = prev.rutor.ruta10 / prev.rutor.ruta05
+        if (prv > 0) {
+          const deltaPct = Math.round(((cur - prv) / prv) * 10000) / 100
+          if (Math.abs(deltaPct) > 20) {
+            anomalies.push({
+              kind: 'output_vat_ratio_drift',
+              rate: '25',
+              current: Math.round(cur * 10000) / 100,
+              previous: Math.round(prv * 10000) / 100,
+              delta_pct: deltaPct,
+              message: `Utgående moms 25% / försäljning ändrades ${deltaPct > 0 ? '+' : ''}${deltaPct}% jämfört med föregående period: kontrollera momssatser`,
+            })
+          }
+        }
+      }
+      // Revenue spike/drop
+      if (prev.rutor.ruta05 > 0) {
+        const revDelta = Math.round(((vatReport.rutor.ruta05 - prev.rutor.ruta05) / prev.rutor.ruta05) * 10000) / 100
+        if (revDelta < -50) {
+          anomalies.push({
+            kind: 'revenue_drop',
+            current: vatReport.rutor.ruta05,
+            previous: prev.rutor.ruta05,
+            delta_pct: revDelta,
+            message: `Försäljning föll ${revDelta}%: bekräfta att alla fakturor är bokförda`,
+          })
+        } else if (revDelta > 200) {
+          anomalies.push({
+            kind: 'revenue_spike',
+            current: vatReport.rutor.ruta05,
+            previous: prev.rutor.ruta05,
+            delta_pct: revDelta,
+            message: `Försäljning steg ${revDelta}%: kontrollera att inget bokats två gånger`,
+          })
+        }
+      }
+    } catch {
+      // Previous period unavailable: skip comparison silently
+    }
+  }
+
+  const highBlockers = blockers.filter((b) => b.severity === 'high').length
+  // Two gates, one verdict. `isFilingBlocked` over the SAME check array the web
+  // UI gates "Skicka till Skatteverket" on is authoritative for the declaration
+  // itself; the blocker scan covers the bookkeeping around it. An ERROR finding
+  // is already a high blocker, so this is belt and braces on purpose: the
+  // readiness answer must never come from a narrower source than the UI's.
+  const declarationBlocked = isFilingBlocked(declarationChecks)
+  const readyToClose = highBlockers === 0 && !declarationBlocked
+  const netDue = vatReport.rutor.ruta49
+  const direction: 'pay' | 'refund' | 'zero' = netDue > 0 ? 'pay' : netDue < 0 ? 'refund' : 'zero'
+
+  const declarationErrors = declarationChecks.filter((c) => c.status === 'ERROR').length
+  let summary: string
+  if (readyToClose && anomalies.length === 0) {
+    summary = `Klart för stängning. ${direction === 'pay' ? `Moms att betala: ${netDue.toFixed(2)} kr` : direction === 'refund' ? `Moms att få tillbaka: ${Math.abs(netDue).toFixed(2)} kr` : 'Noll i moms'}.${deadline ? ` Inlämning senast ${deadline.label}.` : ''}`
+  } else if (readyToClose) {
+    summary = `Klart för stängning men ${anomalies.length} avvikelse(r) att granska.`
+  } else if (declarationBlocked) {
+    summary = `Inte klart: deklarationsunderlaget är ofullständigt (${declarationErrors} fel), ${highBlockers} kritiska blockerare totalt.`
+  } else {
+    summary = `Inte klart: ${highBlockers} kritiska blockerare.`
+  }
+
+  return {
+    period: { ...vatReport.period, source: periodSource },
+    period_label: vatReport.period_label,
+    rutor: vatReport.rutor,
+    payment: {
+      net_due: netDue,
+      direction,
+      deadline: deadline?.date ?? null,
+      deadline_label: deadline?.label ?? null,
+      moms_period: momsPeriod,
+    },
+    blockers,
+    declaration_checks: toCompletenessFindings(declarationChecks),
+    sanity: { anomalies, ratios },
+    ready_to_close: readyToClose,
+    summary,
+  }
+}
+
+function previousPeriodArgs(
+  periodType: 'monthly' | 'quarterly' | 'yearly',
+  year: number,
+  period: number
+): { period_type: string; year: number; period: number } | null {
+  if (periodType === 'monthly') {
+    if (period === 1) return { period_type: 'monthly', year: year - 1, period: 12 }
+    return { period_type: 'monthly', year, period: period - 1 }
+  }
+  if (periodType === 'quarterly') {
+    if (period === 1) return { period_type: 'quarterly', year: year - 1, period: 4 }
+    return { period_type: 'quarterly', year, period: period - 1 }
+  }
+  if (periodType === 'yearly') {
+    return { period_type: 'yearly', year: year - 1, period: 1 }
+  }
+  return null
+}

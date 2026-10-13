@@ -6,6 +6,8 @@
  */
 
 import type { HydrationReport } from '@/lib/providers/provider-data-fetcher'
+import type { ProviderName } from '@/lib/providers/types'
+import { MIGRATION_PROVIDERS } from '@/lib/providers/catalog'
 
 // Re-export the canonical DTOs used by arcim-client (entity-mapper imports
 // its DTOs straight from '@/lib/providers/dto')
@@ -21,23 +23,11 @@ export type {
 
 // ── Supported providers ─────────────────────────────────────────────
 
-export type ArcimProvider = 'fortnox' | 'visma' | 'briox' | 'bokio' | 'bjornlunden' | 'wint'
-
-// `sieViaApi`: the provider serves its general ledger as SIE over the API, so
-// the wizard imports bookkeeping automatically: no manual SIE upload needed.
-// Mirrored in ArcimMigrationWorkspace.tsx (deliberate duplication: core code
-// must not import from @/extensions/: CI enforces it). Keep both in sync.
-export const ARCIM_PROVIDERS: { id: ArcimProvider; name: string; authType: 'oauth' | 'token'; sieViaApi: boolean }[] = [
-  { id: 'fortnox', name: 'Fortnox', authType: 'oauth', sieViaApi: true },
-  { id: 'visma', name: 'Visma eEkonomi', authType: 'oauth', sieViaApi: false },
-  { id: 'bokio', name: 'Bokio', authType: 'token', sieViaApi: false },
-  { id: 'bjornlunden', name: 'Björn Lundén', authType: 'token', sieViaApi: true },
-  { id: 'briox', name: 'Briox', authType: 'token', sieViaApi: true },
-  // WINT's "token" is the user's WINT login exchanged once for a JWT pair
-  // (WINT has no API keys or OAuth). Gated behind WINT_MIGRATION_ENABLED in
-  // index.ts until verified against a live account.
-  { id: 'wint', name: 'WINT', authType: 'token', sieViaApi: true },
-]
+// The providers and their catalog (name, auth, sieViaApi) are core's:
+// lib/providers/catalog.ts, one list for the workspace, this extension and
+// the MCP connect card.
+export type ArcimProvider = ProviderName
+export const ARCIM_PROVIDERS = MIGRATION_PROVIDERS
 
 // ── Migration state ─────────────────────────────────────────────────
 

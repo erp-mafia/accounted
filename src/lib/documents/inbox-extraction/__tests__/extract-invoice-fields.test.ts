@@ -4,7 +4,7 @@ import {
   extractJsonObject,
   stripOwnCompanyAsSupplier,
   emptyResult,
-} from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
+} from '@/lib/documents/inbox-extraction/extract-invoice-fields'
 
 // Mock the Bedrock SDK so tests drive the JSON parser without
 // network/credential needs.
@@ -24,6 +24,13 @@ vi.mock('@anthropic-ai/bedrock-sdk', () => {
 const sharpMock = vi.fn()
 vi.mock('sharp', () => ({
   default: (...args: unknown[]) => sharpMock(...args),
+}))
+
+// The shared fitter falls back to heic-convert when sharp cannot read HEIC.
+// The default mock fails like a build without the decoder.
+const heicConvertMock = vi.fn((_opts: unknown): Promise<ArrayBuffer> => Promise.reject(new Error('no decoder')))
+vi.mock('heic-convert', () => ({
+  default: (opts: unknown) => heicConvertMock(opts),
 }))
 
 function workingSharpChain(outputBuffer: Buffer) {
@@ -681,6 +688,33 @@ describe('extractInvoiceFields', () => {
     expect(data.supplier.name).toBe('Anthropic, PBC')
   })
 
+  it('reads a HEIC photo through heic-convert when sharp cannot decode it', async () => {
+    // The inbox skipped every iPhone photo on a sharp without libheif; the
+    // shared fitter decodes it with heic-convert, then fits the JPEG.
+    const decoded = Buffer.from('decoded-jpeg')
+    const fitted = Buffer.from('fitted-jpeg')
+    heicConvertMock.mockResolvedValueOnce(decoded.buffer.slice(decoded.byteOffset, decoded.byteOffset + decoded.byteLength) as ArrayBuffer)
+    sharpMock
+      .mockImplementationOnce(() => {
+        throw new Error('heif: unsupported')
+      })
+      .mockImplementationOnce(() => workingSharpChain(fitted))
+    mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
+
+    const { data } = await extractInvoiceFields({
+      buffer: Buffer.from('heic-bytes'),
+      mimeType: 'image/heic',
+      fileName: 'photo.heic',
+    })
+
+    expect(heicConvertMock).toHaveBeenCalledOnce()
+    expect(sharpMock).toHaveBeenNthCalledWith(2, decoded)
+    const content = mockCreate.mock.calls[0][0].messages[0].content
+    expect(content[0].source.media_type).toBe('image/jpeg')
+    expect(content[0].source.data).toBe(fitted.toString('base64'))
+    expect(data.supplier.name).toBe('Anthropic, PBC')
+  })
+
   it('downscales oversized JPEGs before sending to Bedrock', async () => {
     const converted = Buffer.from('downscaled-jpeg')
     sharpMock.mockImplementationOnce(() => workingSharpChain(converted))
@@ -898,7 +932,7 @@ describe('stripOwnCompanyAsSupplier', () => {
 
   it('fetchOwnCompanyIdentity degrades to nulls on a reported query error (fail open, logged)', async () => {
     const { fetchOwnCompanyIdentity } = await import(
-      '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
+      '@/lib/documents/inbox-extraction/extract-invoice-fields'
     )
     const supabase = {
       from: () => ({

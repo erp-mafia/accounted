@@ -14,7 +14,7 @@ import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { HandCoins, Plus, Users } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { useCompanySettings } from '@/lib/reference-data/hooks'
+import { useCompanySettings, useEmployees } from '@/lib/reference-data/hooks'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { agiReportingPeriod, formatAgiPeriodDashed } from '@/lib/salary/agi/reporting-period'
@@ -25,7 +25,7 @@ import {
   type RunPeriod,
   type RunPeriodChoice,
 } from '@/lib/salary/next-run-period'
-import type { EmployeeMasked, SalaryRun } from '@/types'
+import type { SalaryRun } from '@/types'
 import { salaryRunStatusDisplay } from '@/lib/salary/run-status-display'
 
 /**
@@ -36,8 +36,10 @@ import { salaryRunStatusDisplay } from '@/lib/salary/run-status-display'
  */
 export default function SalaryPage() {
   const [runs, setRuns] = useState<SalaryRun[]>([])
-  const [employees, setEmployees] = useState<EmployeeMasked[]>([])
-  const [loading, setLoading] = useState(true)
+  const [runsLoading, setRunsLoading] = useState(true)
+  // The active roster from the session cache: the start card counts it.
+  const { employees, isLoading: employeesLoading } = useEmployees()
+  const loading = runsLoading || employeesLoading
   // The month being created (formatRunPeriod), 'default' when the server
   // picks it; null when nothing is being started.
   const [startingKey, setStartingKey] = useState<string | null>(null)
@@ -55,10 +57,7 @@ export default function SalaryPage() {
   const tStart = useTranslations('start_cards')
 
   const load = useCallback(async () => {
-    const [runsRes, empRes] = await Promise.all([
-      fetch('/api/salary/runs').catch(() => null),
-      fetch('/api/salary/employees').catch(() => null),
-    ])
+    const runsRes = await fetch('/api/salary/runs').catch(() => null)
     if (runsRes?.ok) {
       const { data } = await runsRes.json()
       setRuns(data || [])
@@ -66,11 +65,7 @@ export default function SalaryPage() {
     } else {
       setChoices(null)
     }
-    if (empRes?.ok) {
-      const { data } = await empRes.json()
-      setEmployees(data || [])
-    }
-    setLoading(false)
+    setRunsLoading(false)
   }, [])
 
   useEffect(() => {

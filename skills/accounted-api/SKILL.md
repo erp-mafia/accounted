@@ -412,7 +412,7 @@ POST /companies/{companyId}/transactions/{id}/detach-document : Take the pinned 
 POST /companies/{companyId}/transactions/{id}/ignore : Ignore a bank transaction (no verifikat, allowed in locked periods) [scope:transactions:write risk:low idempotent dry-run reversible]
 DELETE /companies/{companyId}/transactions/{id}/ignore : Restore an ignored bank transaction to the "to book" list [scope:transactions:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/transactions/{id}/link-journal-entry : Link a bank transaction to a verifikat that already books it (no new bookkeeping) [scope:transactions:write risk:medium idempotent dry-run]
-POST /companies/{companyId}/transactions/{id}/match-batch : Book one bank payment against several customer invoices, or several supplier invoices, in one verifikat [scope:transactions:write risk:medium idempotent dry-run]
+POST /companies/{companyId}/transactions/{id}/match-batch : Book one bank payment against several customer invoices, or several supplier invoices, in one verifikat [scope:transactions:write risk:high idempotent dry-run]
 POST /companies/{companyId}/transactions/{id}/match-expense-payout : Book an outgoing bank transaction as the repayment of one person's expense claims [scope:transactions:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/transactions/{id}/match-invoice : Match a positive bank transaction to a customer invoice [scope:transactions:write risk:high idempotent]
 POST /companies/{companyId}/transactions/{id}/match-supplier-invoice : Match a negative bank transaction to a supplier invoice [scope:transactions:write risk:high idempotent]

@@ -7,6 +7,7 @@ import {
 } from '../lib/agi-submission-status'
 import { skatteverketExtension } from '../index'
 import type { ExtensionContext } from '@/lib/extensions/types'
+import { testRoutes } from '@/tests/helpers'
 
 /**
  * GET /agi/status feeds AGIPanel and the run page. The kvittens cron deletes
@@ -163,7 +164,7 @@ describe('readAgiSubmissionStatus', () => {
 
 describe('GET /agi/status', () => {
   function findRoute() {
-    const route = skatteverketExtension.apiRoutes?.find(
+    const route = testRoutes(skatteverketExtension).find(
       (r) => r.method === 'GET' && r.path === '/agi/status',
     )
     if (!route) throw new Error('/agi/status route not registered')
@@ -194,11 +195,6 @@ describe('GET /agi/status', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-  })
-
-  it('returns 500 without an extension context', async () => {
-    const res = await findRoute().handler(makeRequest(`?period=${PERIOD}`))
-    expect(res.status).toBe(500)
   })
 
   it('returns 400 without a period', async () => {

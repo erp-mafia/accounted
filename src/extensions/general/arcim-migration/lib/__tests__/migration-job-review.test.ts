@@ -33,10 +33,6 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllEnvs() })
 
 describe('accepting a reviewed import', () => {
-  it('rejects an unauthenticated request before any service work', async () => {
-    expect((await accept(request({ jobId }))).status).toBe(401)
-    expect(serviceRpc).not.toHaveBeenCalled()
-  })
   it('validates the body', async () => {
     for (const body of [{}, { jobId: 'not-a-uuid' }, { jobId, companyId: 'foreign' }]) {
       expect((await accept(request(body), context().ctx)).status).toBe(400)

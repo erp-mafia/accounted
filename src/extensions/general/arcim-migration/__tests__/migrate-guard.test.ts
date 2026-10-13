@@ -63,7 +63,7 @@ function buildCtx(count: number | null): ExtensionContext {
   ;(supabase as unknown as { auth: unknown }).auth = {
     getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }),
   }
-  return { supabase, companyId: 'company-1' } as unknown as ExtensionContext
+  return { supabase, companyId: 'company-1', userId: 'user-1', log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } } as unknown as ExtensionContext
 }
 
 function migrateRequest(body: Record<string, unknown> = { consentId: 'consent-1' }) {
@@ -78,18 +78,6 @@ type GuardErrorBody = { error: { code: string; message: string; message_en?: str
 describe('POST /migrate: SIE-import-required guard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-  })
-
-  it('returns 401 when there is no authenticated user', async () => {
-    const ctx = buildCtx(0)
-    ;(ctx.supabase as unknown as { auth: { getUser: Mock } }).auth.getUser
-      .mockResolvedValue({ data: { user: null } })
-
-    const res = await handler(migrateRequest(), ctx)
-
-    expect(res.status).toBe(401)
-    expect(getConsent).not.toHaveBeenCalled()
-    expect(executeMigration).not.toHaveBeenCalled()
   })
 
   it('returns 400 when consentId is missing', async () => {

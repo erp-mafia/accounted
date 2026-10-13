@@ -457,14 +457,28 @@ export async function setSkattekontoRowIgnored(
   }
   // Two literal payloads (not one conditional expression) so the phantom-column
   // guard can read the column set; ignoring also drops a standing proposal.
-  const update = ignored
-    ? supabase
+  // Ignoring is conditional on the row still being unlinked: a booking that
+  // lands between the read above and this write makes it match zero rows
+  // (ALREADY_BOOKED) instead of tripping the DB CHECK.
+  const { data: updated, error: updateError } = ignored
+    ? await supabase
         .from('skattekonto_transactions')
         .update({ is_ignored: true, suggested_journal_entry_id: null, suggested_at: null })
-    : supabase.from('skattekonto_transactions').update({ is_ignored: false })
-  const { error: updateError } = await update.eq('id', transactionId).eq('company_id', companyId)
+        .eq('id', transactionId)
+        .eq('company_id', companyId)
+        .is('journal_entry_id', null)
+        .select('id')
+    : await supabase
+        .from('skattekonto_transactions')
+        .update({ is_ignored: false })
+        .eq('id', transactionId)
+        .eq('company_id', companyId)
+        .select('id')
   if (updateError) {
     throw new SkattekontoLinkError(`Kunde inte uppdatera: ${updateError.message}`, 'LINK_RACE')
+  }
+  if (!updated || updated.length === 0) {
+    throw new SkattekontoLinkError('En kopplad händelse kan inte ignoreras. Koppla bort den först.', 'ALREADY_BOOKED')
   }
   return { skattekonto_transaction_id: transactionId, is_ignored: ignored }
 }

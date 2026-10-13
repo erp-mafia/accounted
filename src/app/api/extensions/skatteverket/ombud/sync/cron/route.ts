@@ -19,6 +19,7 @@ import {
   type HuvudmanGrantSummary,
 } from '@/extensions/general/skatteverket/lib/ombud-client'
 import type { SkvBehorighet } from '@/extensions/general/skatteverket/lib/connection-store'
+import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
 
 export const maxDuration = 60
 
@@ -91,7 +92,7 @@ export async function GET(request: Request) {
     )
   }
 
-  if (process.env.SKATTEVERKET_ENABLED !== 'true') {
+  if (!isSkatteverketEnabled()) {
     return NextResponse.json({ message: 'Skatteverket extension disabled', processed: 0 })
   }
   if (getSystemAuthMode() === 'off' || !isSystemAuthConfigured()) {

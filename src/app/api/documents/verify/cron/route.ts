@@ -1,8 +1,8 @@
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
-import { withCronContext } from '@/lib/api/with-cron-context'
+import { withServiceCronContext } from '@/lib/api/with-cron-context'
 import { downloadDocumentObject } from '@/lib/core/documents/document-service'
-import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { errorResponse } from '@/lib/errors/get-structured-error'
 
 /**
  * GET /api/documents/verify/cron: nightly 03:00 UTC (schedule in vercel.json).
@@ -72,18 +72,8 @@ async function recordCheck(
   return { error }
 }
 
-export const GET = withCronContext('cron.documents_verify', async (_request, ctx) => {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-  if (!supabaseUrl || !supabaseServiceKey) {
-    return errorResponseFromCode('INTERNAL_ERROR', ctx.log, {
-      requestId: ctx.requestId,
-      details: { reason: 'Missing Supabase configuration' },
-    })
-  }
-
-  const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
+export const GET = withServiceCronContext('cron.documents_verify', async (_request, ctx) => {
+  const supabase = ctx.supabase
 
   const batchSize =
     parseInt(process.env.DOCUMENT_VERIFY_BATCH_SIZE || '', 10) || DEFAULT_VERIFY_BATCH_SIZE

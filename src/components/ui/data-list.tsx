@@ -1,5 +1,6 @@
 import * as React from "react"
 import { cn } from "@/lib/utils"
+import { Skeleton } from "@/components/ui/skeleton"
 
 /**
  * DataList: unified list surface (one bordered container, hairline rows).
@@ -184,14 +185,22 @@ const DataListEmpty = ({
 )
 DataListEmpty.displayName = "DataListEmpty"
 
-const DataListLoading = ({ className }: { className?: string }) => (
-  <div
-    className={cn(
-      "flex items-center justify-center px-6 py-16 text-muted-foreground",
-      className
-    )}
-  >
-    <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent motion-reduce:animate-none" />
+/**
+ * The list's own rows as skeletons while it loads, the silhouette
+ * ListPageSkeleton paints for a route: a centred spinner made the list jump
+ * from one dot to a full table when the rows arrived.
+ */
+const DataListLoading = ({ className, rows = 4 }: { className?: string; rows?: number }) => (
+  <div className={className} aria-busy="true" aria-live="polite">
+    {Array.from({ length: rows }, (_, i) => (
+      <div key={i} className="flex items-center justify-between gap-4 border-b border-border py-3.5 last:border-b-0">
+        <Skeleton className="h-4 w-48" />
+        <div className="flex items-center gap-6">
+          <Skeleton className="h-4 w-20" />
+          <Skeleton className="h-4 w-16" />
+        </div>
+      </div>
+    ))}
   </div>
 )
 DataListLoading.displayName = "DataListLoading"

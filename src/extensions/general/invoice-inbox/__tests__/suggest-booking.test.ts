@@ -13,7 +13,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { invoiceInboxExtension } from '@/extensions/general/invoice-inbox'
-import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
+import { createQueuedMockSupabase, createMockRequest, parseJsonResponse, testRoutes } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
 const evaluateMappingRules = vi.fn()
@@ -25,7 +25,7 @@ vi.mock('@/lib/bookkeeping/settlement-account', () => ({
   resolveSettlementAccount: vi.fn(async () => '1930'),
 }))
 
-const route = invoiceInboxExtension.apiRoutes!.find(
+const route = testRoutes(invoiceInboxExtension).find(
   (r) => r.method === 'POST' && r.path === '/items/:id/suggest-booking',
 )!
 
@@ -105,9 +105,6 @@ beforeEach(() => {
 })
 
 describe('POST /items/:id/suggest-booking', () => {
-  it('returns 401 without a context', async () => {
-    expect((await route.handler(req())).status).toBe(401)
-  })
 
   it('returns 404 for an item in another company', async () => {
     const mock = createQueuedMockSupabase()

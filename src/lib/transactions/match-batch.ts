@@ -6,11 +6,9 @@
  * journal_entry.committed for the verifikat.
  *
  * One implementation behind the dashboard route
- * (POST /api/transactions/[id]/match-batch) and the v1 operation
- * transactions.match-batch (lib/operations/transactions.ts). The MCP tool
- * gnubok_match_batch_allocate stages the same RPC through its own
- * hand-written preview and commit executor (lib/pending-operations/commit.ts
- * commitMatchBatchAllocate), which runs the same two shared guards.
+ * (POST /api/transactions/[id]/match-batch) and the operation
+ * transactions.match-batch (lib/operations/transactions.ts), which serves
+ * v1, the MCP tool gnubok_match_batch_allocate and its approval.
  *
  * Rules, in order (the dashboard's order, pinned by its tests):
  *   1. only fakturor carry a receivable: a proforma or quote is refused
@@ -25,13 +23,18 @@
  * A dry run runs 1-3, then reads the transaction and the invoices and
  * projects the verifikat the RPC would post (lib/invoices/batch-allocation-
  * preview.ts mirrors the migration). It writes nothing: no RPC, no events,
- * no behandlingshistorik.
+ * no behandlingshistorik. It says when the guard in 2 was bypassed
+ * (already_explained_by names the vouchers) or could not run
+ * (duplicate_check_failed), so the approver never takes it for a clean check.
  */
+import type { z } from 'zod'
+import type { MatchBatchSchema } from '@/lib/api/schemas'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { emitBatchAllocationEvents } from '@/lib/transactions/batch-allocation-events'
 import { clearSettledBatchAllocationSuggestions } from '@/lib/invoices/clear-settled-batch-allocations'
 import {
   alreadyExplainedDetails,
+  describeExplainingSet,
   guardAlreadyExplained,
   recordExplainedOverride,
 } from '@/lib/invoices/already-explained-guard'
@@ -41,6 +44,7 @@ import {
   type BatchAllocationPreviewInvoice,
 } from '@/lib/invoices/batch-allocation-preview'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { commitMatchBatchAllocation } from '@/lib/bookkeeping/engine'
 import { roundOre } from '@/lib/money'
@@ -48,15 +52,9 @@ import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
 import { chunk } from '@/lib/utils'
 import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
 
-export type MatchBatchAllocation =
-  | { kind: 'customer_invoice'; invoice_id: string; amount: number }
-  | { kind: 'supplier_invoice'; supplier_invoice_id: string; amount: number }
-
-export interface MatchBatchInput {
-  allocations: MatchBatchAllocation[]
-  force?: boolean
-  expected_journal_entry_ids?: string[]
-}
+/** The request every door validates (MatchBatchSchema, the v1 and MCP contract). */
+export type MatchBatchInput = z.output<typeof MatchBatchSchema>
+export type MatchBatchAllocation = MatchBatchInput['allocations'][number]
 
 export interface MatchBatchAllocationResult {
   kind: 'customer_invoice' | 'supplier_invoice'
@@ -138,14 +136,32 @@ export async function matchTransactionBatch(
 
   // 2. Already-explained guard (issue #2294). Fail-open on a detection error
   // without force; with force the override cannot be re-verified and is refused.
+  let detectFailed = false
   const explained = await guardAlreadyExplained(supabase, companyId, transactionId, input, {
-    onDetectError: (err) => txLog.warn('match-batch: explaining-voucher detection failed', err as Error),
+    onDetectError: (err) => {
+      detectFailed = true
+      txLog.warn('match-batch: explaining-voucher detection failed', err as Error)
+    },
   })
   if (explained.status === 'blocked') {
+    // The row's cash account names the reconciliation account the vouchers
+    // link through (bank:<cash_account_id>), for a refusal that says how.
+    const { data: row } = await supabase
+      .from('transactions')
+      .select('cash_account_id')
+      .eq('id', transactionId)
+      .eq('company_id', companyId)
+      .maybeSingle()
     return {
       ok: false,
       code: 'BATCH_TX_POSSIBLE_DUPLICATE',
-      details: alreadyExplainedDetails(explained) as unknown as Record<string, unknown>,
+      // Names the vouchers, so the approver and the dialog see which.
+      messageSv: `${getErrorEntry('BATCH_TX_POSSIBLE_DUPLICATE')?.message_sv ?? ''} (${describeExplainingSet(explained.set)})`.trim(),
+      details: {
+        ...(alreadyExplainedDetails(explained) as unknown as Record<string, unknown>),
+        transaction_id: transactionId,
+        cash_account_id: (row as { cash_account_id?: string | null } | null)?.cash_account_id ?? null,
+      },
     }
   }
   if (explained.status === 'unverifiable') {
@@ -164,10 +180,21 @@ export async function matchTransactionBatch(
     return failed(cashCheck.error)
   }
   if (cashCheck.unbooked.length > 0) {
-    return { ok: false, code: 'BATCH_CASH_METHOD_UNBOOKED_INVOICE', details: { invoices: cashCheck.unbooked } }
+    const numbers = cashCheck.unbooked.map((u) => u.invoice_number ?? u.id).join(', ')
+    return {
+      ok: false,
+      code: 'BATCH_CASH_METHOD_UNBOOKED_INVOICE',
+      messageSv: `${getErrorEntry('BATCH_CASH_METHOD_UNBOOKED_INVOICE')?.message_sv ?? ''} Obokförda fakturor: ${numbers}.`.trim(),
+      details: { invoices: cashCheck.unbooked },
+    }
   }
 
-  if (options.dryRun) return previewMatchBatch(ctx, transactionId, input, explained.status === 'overridden')
+  if (options.dryRun) {
+    return previewMatchBatch(ctx, transactionId, input, {
+      overriddenBy: explained.status === 'overridden' ? describeExplainingSet(explained.set) : null,
+      detectFailed,
+    })
+  }
 
   if (explained.status === 'overridden') {
     txLog.warn('match-batch: already-explained guard bypassed', {
@@ -245,14 +272,14 @@ async function previewMatchBatch(
   ctx: OperationContext,
   transactionId: string,
   input: MatchBatchInput,
-  overridden: boolean,
+  guard: { overriddenBy: string | null; detectFailed: boolean },
 ): Promise<OperationOutcome<MatchBatchResult>> {
   const { supabase, companyId, log } = ctx
   const { allocations } = input
 
   const { data: txRow, error: txError } = await supabase
     .from('transactions')
-    .select('id, amount, currency, date, journal_entry_id, cash_account_id')
+    .select('id, description, merchant_name, amount, currency, date, journal_entry_id, cash_account_id')
     .eq('id', transactionId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -260,6 +287,8 @@ async function previewMatchBatch(
   if (!txRow) return { ok: false, code: 'BATCH_TX_NOT_FOUND' }
   const transaction = txRow as {
     id: string
+    description: string | null
+    merchant_name: string | null
     amount: number
     currency: string | null
     date: string
@@ -322,8 +351,10 @@ async function previewMatchBatch(
     dryRun: true,
     preview: {
       transaction_id: transaction.id,
+      transaction_description: transaction.merchant_name || transaction.description || null,
       transaction_amount: transaction.amount,
       transaction_currency: transaction.currency ?? 'SEK',
+      transaction_date: transaction.date,
       allocations_count: allocations.length,
       allocations_kind: isCustomer ? 'customer_invoice' : 'supplier_invoice',
       total_allocated: totalAllocated,
@@ -332,7 +363,8 @@ async function previewMatchBatch(
       expected_lines: expected.lines,
       expected_lines_balanced: expected.balanced,
       expected_fx: expected.fx,
-      ...(overridden ? { already_explained_override: true } : {}),
+      ...(guard.overriddenBy ? { already_explained_override: true, already_explained_by: guard.overriddenBy } : {}),
+      ...(guard.detectFailed ? { duplicate_check_failed: true } : {}),
     },
   }
 }

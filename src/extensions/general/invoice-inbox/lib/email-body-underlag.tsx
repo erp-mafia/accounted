@@ -1,4 +1,4 @@
-import { htmlToText } from './extract-invoice-fields'
+import { htmlToText } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
 import { sanitiseFilename } from './upload-and-extract'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 

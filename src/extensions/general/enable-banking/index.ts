@@ -16,7 +16,7 @@ import {
   type ASPSP,
 } from './lib/api-client'
 import { buildPrefilledCredentials, wantsCompanyId } from './lib/prefill-credentials'
-import { syncAccountTransactions } from './lib/sync'
+import { runConnectionSync } from './lib/run-connection-sync'
 import { emitBankSyncFailed } from './lib/sync-failure-event'
 import {
   applyRateLimitCooldown,
@@ -27,28 +27,18 @@ import {
 } from './lib/sync-lease'
 import { rateLimitMessages, retryAfterSeconds } from './lib/rate-limit-message'
 import {
-  persistBankSyncResult,
   persistBankSyncFailure,
   persistBankRouteNeedsConfiguration,
   BankSyncResultObsoleteError,
 } from '@/lib/bank-sync/persist-sync-result'
 import { isBankRoutingConflict, isBankRouteUnresolved } from '@/lib/bank-sync/ingest-route'
 import { SYNC_COOLDOWN_MS } from '@/lib/bank-sync/trigger-sync-contract'
-import { INITIAL_SYNC_DEFERRED, INITIAL_SYNC_TIMEOUT } from '@/lib/bank-sync/initial-sync-error'
+import { INITIAL_SYNC_DEFERRED } from '@/lib/bank-sync/initial-sync-error'
 import { triggerConnectionSync } from './lib/trigger-sync'
 import { findReusableSessions } from './lib/session-sharing'
 import { retireBankConnection } from './lib/retire-connection'
 import { hasSelectableAccounts } from './lib/claimed-accounts'
 import { isMirrorCardAccount, isSyncedAccount } from '@/lib/bank-sync/mirror-card-account'
-import {
-  runUnattendedReconciliationSweep,
-  toSweepSummary,
-} from '@/lib/reconciliation/unattended-sweep'
-import {
-  runReconciliation,
-  DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
-} from '@/lib/reconciliation/bank-reconciliation'
-import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -122,12 +112,12 @@ export const enableBankingExtension: Extension = {
     {
       method: 'GET',
       path: '/banks',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        const log = ctx?.log ?? console
+      handler: async (_request: Request, ctx: ExtensionContext) => {
+        const log = ctx.log
         try {
           // Detect PSU type from company entity_type
           let psuType: 'personal' | 'business' = 'business'
-          if (ctx?.companyId && ctx?.supabase) {
+          if (ctx.companyId && ctx.supabase) {
             const { data: company } = await ctx.supabase
               .from('companies')
               .select('entity_type')
@@ -168,20 +158,12 @@ export const enableBankingExtension: Extension = {
       // An empty list is the normal case and renders no offer at all.
       method: 'GET',
       path: '/reusable-sessions',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        const log = ctx?.log ?? console
-        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-        const { data: { user } } = await supabase.auth.getUser()
-
-        if (!user) {
-          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
-        if (!ctx?.companyId) {
-          return NextResponse.json({ error: 'Company context required' }, { status: 400 })
-        }
+      handler: async (_request: Request, ctx: ExtensionContext) => {
+        const log = ctx.log
+        const supabase = ctx.supabase
 
         try {
-          const sessions = await findReusableSessions(supabase, user.id, ctx.companyId)
+          const sessions = await findReusableSessions(supabase, ctx.userId, ctx.companyId)
           // Never ship session_id to the browser: it is the bearer of the PSD2
           // consent. The client only needs to name the offer and post back the
           // source connection id, which is re-validated server-side on attach.
@@ -209,17 +191,9 @@ export const enableBankingExtension: Extension = {
       // existing AccountPickerDialog does the ledger mapping, IBAN-aware.
       method: 'POST',
       path: '/attach',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        const log = ctx?.log ?? console
-        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-        const { data: { user } } = await supabase.auth.getUser()
-
-        if (!user) {
-          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
-        if (!ctx?.companyId) {
-          return NextResponse.json({ error: 'Company context required' }, { status: 400 })
-        }
+      handler: async (request: Request, ctx: ExtensionContext) => {
+        const log = ctx.log
+        const supabase = ctx.supabase
         const companyId = ctx.companyId
 
         const blocked = await requireCapability(supabase, companyId, CAPABILITY.bank_sync)
@@ -227,7 +201,7 @@ export const enableBankingExtension: Extension = {
 
         const rl = await checkRateLimit({
           prefix: 'enable-banking:attach',
-          identifier: user.id,
+          identifier: ctx.userId,
           ...RATE_LIMIT_ATTACH,
         })
         if (!rl.ok) return rl.response!
@@ -240,7 +214,7 @@ export const enableBankingExtension: Extension = {
           // The service-only RPC validates both memberships, source ownership,
           // live consent and every visible company claim under ordered locks.
           // Its receipt contains no upstream session identifier.
-          const created = await attachSharedBankSession(await createServiceClient(), companyId, user.id, connection_id)
+          const created = await attachSharedBankSession(await createServiceClient(), companyId, ctx.userId, connection_id)
 
           log.info('[enable-banking] Attached company to an existing PSD2 session', {
             connectionId: created.connection_id,
@@ -254,7 +228,7 @@ export const enableBankingExtension: Extension = {
           // from an audit standpoint even though no new consent was signed
           // (ASVS V16 / GDPR Art.30), same event the callback emits.
           try {
-            const emit = ctx?.emit ?? (await import('@/lib/events/bus')).eventBus.emit.bind((await import('@/lib/events/bus')).eventBus)
+            const emit = ctx.emit ?? (await import('@/lib/events/bus')).eventBus.emit.bind((await import('@/lib/events/bus')).eventBus)
             await emit({
               type: 'bank_connection.consent_granted',
               payload: {
@@ -262,7 +236,7 @@ export const enableBankingExtension: Extension = {
                 bankName: created.bank_name ?? null,
                 accountCount: created.account_count,
                 consentExpiresAt: created.consent_expires ?? null,
-                userId: user.id,
+                userId: ctx.userId,
                 companyId,
               },
             })
@@ -282,18 +256,10 @@ export const enableBankingExtension: Extension = {
     {
       method: 'POST',
       path: '/connect',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        const log = ctx?.log ?? console
-        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-        const { data: { user } } = await supabase.auth.getUser()
+      handler: async (request: Request, ctx: ExtensionContext) => {
+        const log = ctx.log
+        const supabase = ctx.supabase
 
-        if (!user) {
-          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
-
-        if (!ctx?.companyId) {
-          return NextResponse.json({ error: 'Company context required' }, { status: 400 })
-        }
         const companyId = ctx.companyId
 
         const blocked = await requireCapability(supabase, companyId, CAPABILITY.bank_sync)
@@ -414,7 +380,7 @@ export const enableBankingExtension: Extension = {
             : undefined
 
           log.info('[enable-banking] Starting bank connection', {
-            user_id: user.id,
+            user_id: ctx.userId,
             bank: resolvedAspspName,
             country: resolvedAspspCountry,
             psu_type: psuType,
@@ -551,10 +517,10 @@ export const enableBankingExtension: Extension = {
                   await retireBankConnection({
                     supabase,
                     companyId,
-                    userId: user.id,
+                    userId: ctx.userId,
                     connectionId: establishedRow.id,
                     log,
-                    emit: ctx?.emit,
+                    emit: ctx.emit,
                   })
                 } catch (error) {
                   return errorResponse(error, log)
@@ -666,7 +632,7 @@ export const enableBankingExtension: Extension = {
                 errorMessage: stateError.message,
                 errorCode: stateError.code,
                 connection_id: existing.id,
-                user_id: user.id,
+                user_id: ctx.userId,
               })
               throw new Error(`Failed to update connection: ${stateError.message}`)
             }
@@ -725,7 +691,7 @@ export const enableBankingExtension: Extension = {
             .from('bank_connections')
             .insert({
               company_id: companyId,
-              user_id: user.id,
+              user_id: ctx.userId,
               provider: `${resolvedAspspName.toLowerCase().replace(/\s+/g, '-')}-${resolvedAspspCountry.toLowerCase()}`,
               bank_name: resolvedAspspName,
               authorization_id,
@@ -742,7 +708,7 @@ export const enableBankingExtension: Extension = {
               errorMessage: error.message,
               errorCode: error.code,
               errorDetails: error.details,
-              user_id: user.id,
+              user_id: ctx.userId,
               bank: resolvedAspspName,
             })
             throw new Error(`Failed to store connection: ${error.message}`)
@@ -757,7 +723,7 @@ export const enableBankingExtension: Extension = {
             message: error instanceof Error ? error.message : String(error),
             stack: error instanceof Error ? error.stack : undefined,
             name: error instanceof Error ? error.name : undefined,
-            user_id: user.id,
+            user_id: ctx.userId,
             aspsp_name,
             aspsp_country,
           })
@@ -771,18 +737,10 @@ export const enableBankingExtension: Extension = {
     {
       method: 'POST',
       path: '/sync',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        const log = ctx?.log ?? console
-        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-        const { data: { user } } = await supabase.auth.getUser()
+      handler: async (request: Request, ctx: ExtensionContext) => {
+        const log = ctx.log
+        const supabase = ctx.supabase
 
-        if (!user) {
-          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
-
-        if (!ctx?.companyId) {
-          return NextResponse.json({ error: 'Company context required' }, { status: 400 })
-        }
         const companyId = ctx.companyId
 
         const blocked = await requireCapability(supabase, companyId, CAPABILITY.bank_sync)
@@ -790,7 +748,7 @@ export const enableBankingExtension: Extension = {
 
         const rl = await checkRateLimit({
           prefix: 'enable-banking:sync',
-          identifier: user.id,
+          identifier: ctx.userId,
           ...RATE_LIMIT_SYNC,
         })
         if (!rl.ok) return rl.response!
@@ -868,125 +826,35 @@ export const enableBankingExtension: Extension = {
           const fromDate = new Date(Date.now() - days_back * 24 * 60 * 60 * 1000)
             .toISOString()
             .split('T')[0]
-          // Use ctx.services.ingestTransactions when available
-          const ingestFn = ctx?.services.ingestTransactions
-
-          // Detect SIE overlap: skip auto-categorization if the sync range
-          // overlaps with a completed SIE import to prevent double-booking.
-          // Reconciliation still links bank transactions to existing GL lines.
-          const { data: sieOverlap } = await supabase
-            .from('sie_imports')
-            .select('id')
-            .eq('company_id', companyId)
-            .eq('status', 'completed')
-            .gte('fiscal_year_end', fromDate)
-            .limit(1)
-            .maybeSingle()
-
-          // Check if user is a viewer: viewers get rawInsertOnly (no categorization)
+          // Viewers get rawInsertOnly: rows only, no categorization.
           const { data: membership } = await supabase
             .from('company_members')
             .select('role')
             .eq('company_id', companyId)
-            .eq('user_id', user.id)
+            .eq('user_id', ctx.userId)
             .maybeSingle()
           const isViewer = membership?.role === 'viewer'
 
-          // Use strategy=longest when the caller asks for >= 30 days of history
-          // (initial sync, manual backfill). Short windows get the implicit
-          // default since there's no older data to surface.
-          const syncOptions = {
-            ...(sieOverlap ? { skipAutoCategorization: true } : {}),
-            ...(isViewer ? { rawInsertOnly: true } : {}),
-            ...(days_back >= 30 ? { strategy: 'longest' as const } : {}),
-          }
-
-          if (sieOverlap) {
-            log.info('SIE import overlap detected: suppressing auto-categorization', {
-              sieImportId: sieOverlap.id,
-              fromDate,
-              toDate,
-            })
-          }
-          const results = await Promise.all(
-            accounts.map(account => syncAccountTransactions(
-              supabase,
-              companyId,
-              user.id,
-              connection.id,
-              account,
-              fromDate,
-              toDate,
-              ingestFn,
-              syncOptions
-            ))
-          )
-
-          const totalImported = results.reduce((sum, r) => sum + r.imported, 0)
-          const totalDuplicates = results.reduce((sum, r) => sum + r.duplicates, 0)
-
-          // When SIE overlap is detected, run a batch reconciliation sweep.
-          // The greedy algorithm considers all candidates globally (highest-
-          // confidence first) and catches matches the inline per-transaction
-          // pass may have missed due to processing order. One scoped run per
-          // enabled cash account (issue #1298): the pooled run could persist a
-          // cross-account journal_entry_id.
-          // Skip for viewers: reconciliation updates transactions which viewers cannot do.
-          if (sieOverlap && totalImported > 0 && !isViewer) {
-            try {
-              const reconResult = await runUnattendedReconciliationSweep(
-                supabase,
-                companyId,
-                user.id,
-                { dateFrom: fromDate, dateTo: toDate },
-              )
-              // Stamp the outcome so the UI can render "Vi matchade X av Y" and
-              // the review surface knows there is something to granska.
-              await supabase
-                .from('bank_connections')
-                .update({
-                  last_sie_sweep: toSweepSummary(reconResult, {
-                    dateFrom: fromDate,
-                    dateTo: toDate,
-                  }),
-                })
-                .eq('id', connection.id)
-              if (reconResult.applied > 0 || reconResult.skippedBelowThreshold > 0) {
-                log.info('Post-sync batch reconciliation matched additional transactions', {
-                  applied: reconResult.applied,
-                  skippedBelowThreshold: reconResult.skippedBelowThreshold,
-                  accounts: reconResult.accounts.map((a) => ({
-                    accountNumber: a.accountNumber,
-                    applied: a.applied,
-                    skippedBelowThreshold: a.skippedBelowThreshold,
-                  })),
-                })
-              }
-            } catch {
-              // Non-critical: transactions remain uncategorized for manual review
-            }
-          }
-
-          const syncedAt = new Date().toISOString()
-          await persistBankSyncResult(supabase, {
+          const outcome = await runConnectionSync({
+            supabase,
             companyId,
-            connectionId: connection.id,
-            sessionId: connection.session_id,
-            startedAt: syncStartedAt,
-            completedAt: syncedAt,
+            userId: ctx.userId,
+            connection,
             accounts,
+            fromDate,
+            toDate,
+            lookbackDays: days_back,
+            rawInsertOnly: isViewer,
+            ingest: ctx.services.ingestTransactions,
+            startedAt: syncStartedAt,
+            log,
           })
-
+          const totalImported = outcome.imported
+          const totalDuplicates = outcome.duplicates
+          const syncedAt = outcome.completedAt
           // A bank that refused the requested window answered a narrower one;
           // say so instead of reporting a truncated sync as complete (#2202).
-          // history_from is the LATEST effective date across the accounts:
-          // the date from which every account is complete.
-          const narrowedFrom = results
-            .filter((r) => r.historyNarrowed && r.effectiveFromDate)
-            .map((r) => r.effectiveFromDate as string)
-          const historyFrom = narrowedFrom.length > 0
-            ? narrowedFrom.reduce((a, b) => (a > b ? a : b))
-            : null
+          const historyFrom = outcome.historyFrom
 
           return NextResponse.json({
             imported: totalImported,
@@ -1001,12 +869,12 @@ export const enableBankingExtension: Extension = {
           // (feedback seq 340107). status is the row's state after this
           // handler: expired for a dead session, unchanged otherwise.
           const emitFailed =
-            ctx?.emit ??
+            ctx.emit ??
             (await import('@/lib/events/bus')).eventBus.emit.bind((await import('@/lib/events/bus')).eventBus)
           await emitBankSyncFailed(emitFailed, {
             connectionId: connection.id,
             companyId,
-            userId: user.id,
+            userId: ctx.userId,
             bankName: connection.bank_name,
             status: error instanceof SessionExpiredError ? 'expired' : connection.status,
             trigger: 'manual',
@@ -1043,7 +911,7 @@ export const enableBankingExtension: Extension = {
               status: error instanceof AspspUnavailableError ? error.status : undefined,
               rateLimit: error instanceof AspspUnavailableError ? error.rateLimit : undefined,
               cooldownMs,
-              user_id: user.id,
+              user_id: ctx.userId,
               connection_id,
               bankName: connection.bank_name,
             })
@@ -1060,7 +928,7 @@ export const enableBankingExtension: Extension = {
               dateFrom: error.dateFrom,
               status: error.status,
               body: error.body,
-              user_id: user.id,
+              user_id: ctx.userId,
               connection_id,
               bankName: connection.bank_name,
             })
@@ -1086,7 +954,7 @@ export const enableBankingExtension: Extension = {
               status: error.status,
               issues: error.issues,
               bodyLength: error.body.length,
-              user_id: user.id,
+              user_id: ctx.userId,
               connection_id,
               bankName: connection.bank_name,
             })
@@ -1105,7 +973,7 @@ export const enableBankingExtension: Extension = {
             message: error instanceof Error ? error.message : String(error),
             stack: error instanceof Error ? error.stack : undefined,
             name: error instanceof Error ? error.name : undefined,
-            user_id: user.id,
+            user_id: ctx.userId,
             connection_id,
             connectionStatus: connection.status,
             bankName: connection.bank_name,
@@ -1161,26 +1029,18 @@ export const enableBankingExtension: Extension = {
     {
       method: 'PATCH',
       path: '/accounts',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        const log = ctx?.log ?? console
-        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-        const { data: { user } } = await supabase.auth.getUser()
-
-        if (!user) {
-          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
+      handler: async (request: Request, ctx: ExtensionContext) => {
+        const log = ctx.log
+        const supabase = ctx.supabase
 
         // company_id must come from the verified extension context, never fall
         // back to user.id (which is a different identifier dimension and would
         // silently mis-scope queries in multi-tenant deployments).
-        if (!ctx?.companyId) {
-          return NextResponse.json({ error: 'Company context required' }, { status: 400 })
-        }
         const companyId = ctx.companyId
 
         const rl = await checkRateLimit({
           prefix: 'enable-banking:accounts',
-          identifier: user.id,
+          identifier: ctx.userId,
           ...RATE_LIMIT_ACCOUNTS,
         })
         if (!rl.ok) return rl.response!
@@ -1587,7 +1447,7 @@ export const enableBankingExtension: Extension = {
           if (!enabledSet.has(a.uid) || effectiveLedgerByUid.has(a.uid)) continue
           let allocated: string | null = null
           try {
-            const resolved = await resolvePsd2LedgerAccount(supabase, companyId, user.id, {
+            const resolved = await resolvePsd2LedgerAccount(supabase, companyId, ctx.userId, {
               iban: a.iban,
               currency: a.currency,
               accountName: a.name,
@@ -1621,12 +1481,21 @@ export const enableBankingExtension: Extension = {
           a.ledger_account = effectiveLedgerByUid.get(a.uid)
         }
 
+        // The first import's window. Saved with the activation below, before
+        // any attempt, so a deferred, timed-out or failed inline import still
+        // gets the window the user picked from the cron (cron-lookback.ts),
+        // not its fixed 90 days.
+        const toDate = new Date().toISOString().split('T')[0]
+        const fromDate = new Date(Date.now() - initialLookbackDays * 24 * 60 * 60 * 1000)
+          .toISOString()
+          .split('T')[0]
+
         // Release, chart creation, account promotion and routing commit together.
         // The database retains observations that arrived after this read and
         // refuses the complete save if its configuration snapshot changed.
         let saved: Awaited<ReturnType<typeof saveBankAccountSelection>>
         try {
-          saved = await saveBankAccountSelection(supabase, companyId, user.id, connection.id, snapshot.token,
+          saved = await saveBankAccountSelection(supabase, companyId, ctx.userId, connection.id, snapshot.token,
             updatedAccounts.map(account => {
               const reuse = reuseRowByUid.get(account.uid)
               return {
@@ -1634,7 +1503,10 @@ export const enableBankingExtension: Extension = {
                 ledger_account: account.ledger_account,
                 reuse_cash_account_id: reuse && reuse.ledger_account === account.ledger_account ? reuse.id : null,
               }
-            }))
+            }),
+            connection.status === 'pending_selection'
+              ? { requestedFrom: fromDate, lookbackDays: initialLookbackDays }
+              : undefined)
         } catch (error) {
           return errorResponse(error, log)
         }
@@ -1648,12 +1520,12 @@ export const enableBankingExtension: Extension = {
           newStatus,
           // Unused rows of unchecked accounts deleted when they gave their ledger up.
           yieldedCashAccounts: saved.yielded ?? [],
-          userId: user.id,
+          userId: ctx.userId,
           companyId,
         })
 
         try {
-          const emit = ctx?.emit ?? (await import('@/lib/events/bus')).eventBus.emit.bind((await import('@/lib/events/bus')).eventBus)
+          const emit = ctx.emit ?? (await import('@/lib/events/bus')).eventBus.emit.bind((await import('@/lib/events/bus')).eventBus)
           await emit({
             type: 'bank_connection.account_selection_changed',
             payload: {
@@ -1663,7 +1535,7 @@ export const enableBankingExtension: Extension = {
               newStatus,
               enabledCount: enabledSet.size,
               totalCount: existing.length,
-              userId: user.id,
+              userId: ctx.userId,
               companyId,
             },
           })
@@ -1671,7 +1543,7 @@ export const enableBankingExtension: Extension = {
           log.error('[enable-banking] Failed to emit account selection event', {
             errorMessage: emitError instanceof Error ? emitError.message : String(emitError),
             connectionId: connection.id,
-            userId: user.id,
+            userId: ctx.userId,
             companyId,
           })
         }
@@ -1717,40 +1589,21 @@ export const enableBankingExtension: Extension = {
             initialSyncError = INITIAL_SYNC_DEFERRED
             log.info('[enable-banking] Inline initial backfill skipped: sync lease not taken, cron will run it', {
               connectionId: connection.id,
-              userId: user.id,
+              userId: ctx.userId,
               companyId,
             })
           }
         }
 
         if (initialSyncLeased) {
-          const accountsToSync = updatedAccounts.filter(a => a.enabled !== false)
-          const toDate = new Date().toISOString().split('T')[0]
-          const fromDate = new Date(Date.now() - initialLookbackDays * 24 * 60 * 60 * 1000)
-            .toISOString()
-            .split('T')[0]
-
-          // Same guard the manual /sync route and the cron apply. This path also
-          // runs on RENEWAL (reconnect resets status to pending_selection), and a
-          // fresh consent often makes the bank release history the first connect
-          // never delivered, straight over an already-bookkept period. Without
-          // the guard those rows would be auto-categorized into brand-new
-          // verifikat (double-booking) instead of being linked to the ones that
-          // already describe them.
-          const { data: sieOverlap } = await supabase
-            .from('sie_imports')
-            .select('id')
-            .eq('company_id', companyId)
-            .eq('status', 'completed')
-            .gte('fiscal_year_end', fromDate)
-            .limit(1)
-            .maybeSingle()
+          // Never a mirror card account, even one switched on (isSyncedAccount).
+          const accountsToSync = updatedAccounts.filter(isSyncedAccount)
 
           const { data: membership } = await supabase
             .from('company_members')
             .select('role')
             .eq('company_id', companyId)
-            .eq('user_id', user.id)
+            .eq('user_id', ctx.userId)
             .maybeSingle()
           const isViewer = membership?.role === 'viewer'
 
@@ -1760,150 +1613,39 @@ export const enableBankingExtension: Extension = {
             lookbackDays: initialLookbackDays,
             fromDate,
             toDate,
-            sieOverlap: Boolean(sieOverlap),
           })
 
-          const initialSyncStartedAt = new Date().toISOString()
-          let timeoutHandle: ReturnType<typeof setTimeout> | undefined
           try {
-            const ingestFn = ctx?.services.ingestTransactions
-            const syncPromise = Promise.all(
-              accountsToSync.map(account => syncAccountTransactions(
-                supabase,
-                companyId,
-                user.id,
-                connection.id,
-                account,
-                fromDate,
-                toDate,
-                ingestFn,
-                {
-                  strategy: 'longest',
-                  ...(sieOverlap ? { skipAutoCategorization: true } : {}),
-                  ...(isViewer ? { rawInsertOnly: true } : {}),
-                }
-              ))
-            )
-            // If the timeout wins the race, the underlying Promise.all keeps
-            // running. Without a registered handler, a late rejection from the
-            // bank API would surface as an unhandledRejection: Node 22 (the
-            // self-hosted Docker runtime) terminates the process by default on
-            // those, taking the whole server down. The cron retries the
-            // backfill via initial_sync_completed_at IS NULL once the lease
-            // claimed above expires, so a no-op catch is the right policy here.
-            syncPromise.catch(() => {})
-
-            const TIMEOUT_MS = 60_000
-            const timeoutPromise = new Promise<never>((_, reject) => {
-              timeoutHandle = setTimeout(() => reject(new Error(INITIAL_SYNC_TIMEOUT)), TIMEOUT_MS)
-            })
-            const results = await Promise.race([syncPromise, timeoutPromise])
-
-            const totalImported = results.reduce((sum, r) => sum + r.imported, 0)
-            const totalDuplicates = results.reduce((sum, r) => sum + r.duplicates, 0)
-
-            // Min/max booking date across all synced accounts
-            const minDates = results.map(r => r.returnedMinBookingDate).filter((d): d is string => !!d)
-            const maxDates = results.map(r => r.returnedMaxBookingDate).filter((d): d is string => !!d)
-            const returnedMin = minDates.length > 0 ? minDates.reduce((a, b) => (a < b ? a : b)) : null
-            const returnedMax = maxDates.length > 0 ? maxDates.reduce((a, b) => (a > b ? a : b)) : null
-
-            // Post-backfill reconciliation sweep, mirroring the manual /sync
-            // route: link just-imported rows to the verifikat that already
-            // describe them so a re-released period does not resurface as
-            // hundreds of "ohanterade" transactions. Unlike the /sync and cron
-            // sweeps this runs once per enabled ledger account with a resolved
-            // cash-account scope: the pooled unscoped form can cross-link
-            // accounts (#1290/#1298). Both a thrown scope resolution AND an
-            // unresolved cash-account row (found: false) skip that account's
-            // sweep instead of widening to the pooled form.
-            //
-            // The window opens at the OLDEST booking date the bank actually
-            // returned when that is older than the requested fromDate: some
-            // ASPSPs over-return history, and rows outside the requested window
-            // would otherwise be ingested but never swept.
-            const sweepDateFrom = returnedMin && returnedMin < fromDate ? returnedMin : fromDate
-            // The sweep writes bank-feed metadata only (transactions.journal_entry_id,
-            // reconciliation_method, is_business): journal tables are never touched,
-            // so BFL immutability and period locks (which guard journal entries) are
-            // not in play. Links to opening-balance verifikat are blocked by the
-            // check_transaction_link_not_opening_balance trigger, and every link is
-            // reversible via unlinkReconciliation without any ledger write.
-            let totalAutoMatched = 0
-            if (sieOverlap && totalImported > 0 && !isViewer) {
-              // Filter, not `?? undefined`: an undefined accountNumber makes
-              // resolveCashAccountScope fall back to the primary account with
-              // includeUnassigned=true, which is the pooled form this block must
-              // never widen to. The allocator gives every enabled account a
-              // concrete ledger_account, so nothing is skipped in practice.
-              const ledgerAccounts = Array.from(
-                new Set(
-                  accountsToSync
-                    .map(a => a.ledger_account)
-                    .filter((l): l is string => typeof l === 'string' && l.length > 0)
-                )
-              )
-              for (const ledgerAccount of ledgerAccounts) {
-                try {
-                  const scope = await resolveCashAccountScope(supabase, companyId, ledgerAccount)
-                  if (!scope.found) {
-                    log.warn('[enable-banking] No cash_accounts row for ledger account; skipping its reconciliation sweep', {
-                      connectionId: connection.id,
-                      ledgerAccount,
-                    })
-                    continue
-                  }
-                  const reconResult = await runReconciliation(supabase, companyId, user.id, {
-                    dateFrom: sweepDateFrom,
-                    dateTo: toDate,
-                    accountNumber: scope.accountNumber,
-                    currency: scope.currency,
-                    cashAccountId: scope.cashAccountId,
-                    includeUnassigned: scope.includeUnassigned,
-                    // Unattended run: nobody reviews a dry-run first, so never
-                    // commit low-confidence (fuzzy / date-range) matches.
-                    confidenceThreshold: DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD,
-                    // ...but don't DROP them either: the 0.75-0.89 band feeds
-                    // the "Granska förslag" review surface.
-                    persistSuggestions: true,
-                  })
-                  totalAutoMatched += reconResult.applied
-                  if (reconResult.applied > 0 || reconResult.skippedBelowThreshold > 0) {
-                    log.info('[enable-banking] Post-backfill reconciliation linked imported rows to existing verifikat', {
-                      connectionId: connection.id,
-                      accountNumber: scope.accountNumber,
-                      applied: reconResult.applied,
-                      skippedBelowThreshold: reconResult.skippedBelowThreshold,
-                      total: reconResult.matches.length,
-                    })
-                  }
-                } catch {
-                  // Non-critical: rows stay unmatched for manual review.
-                }
-              }
-            }
-
-            await persistBankSyncResult(supabase, {
+            // This path also runs on RENEWAL (reconnect resets status to
+            // pending_selection), and a fresh consent often makes the bank
+            // release history the first connect never delivered, straight
+            // over an already-bookkept period: the runner's SIE-overlap guard
+            // links those rows instead of booking them again. The cron
+            // retries via initial_sync_completed_at IS NULL once the lease
+            // claimed above expires, so the 60 s budget only bounds the wait.
+            const outcome = await runConnectionSync({
+              supabase,
               companyId,
-              connectionId: connection.id,
-              sessionId: connection.session_id,
-              startedAt: initialSyncStartedAt,
-              completedAt: new Date().toISOString(),
+              userId: ctx.userId,
+              connection,
               accounts: accountsToSync,
-              initialSync: {
-                requestedFrom: fromDate,
-                returnedMin,
-                returnedMax,
-                lookbackDays: initialLookbackDays,
-              },
+              fromDate,
+              toDate,
+              lookbackDays: initialLookbackDays,
+              firstSync: true,
+              rawInsertOnly: isViewer,
+              ingest: ctx.services.ingestTransactions,
+              startedAt: new Date().toISOString(),
+              fetchTimeoutMs: 60_000,
+              log,
             })
             initialSyncSummary = {
-              imported: totalImported,
-              duplicates: totalDuplicates,
-              auto_matched: totalAutoMatched,
+              imported: outcome.imported,
+              duplicates: outcome.duplicates,
+              auto_matched: outcome.autoMatched,
               requested_from: fromDate,
-              returned_min_date: returnedMin,
-              returned_max_date: returnedMax,
+              returned_min_date: outcome.returnedMin,
+              returned_max_date: outcome.returnedMax,
             }
             log.info('[enable-banking] Inline initial backfill complete', {
               connectionId: connection.id,
@@ -1914,11 +1656,9 @@ export const enableBankingExtension: Extension = {
             log.error('[enable-banking] Inline initial backfill failed: cron will retry', {
               connectionId: connection.id,
               error: initialSyncError,
-              userId: user.id,
+              userId: ctx.userId,
               companyId,
             })
-          } finally {
-            if (timeoutHandle) clearTimeout(timeoutHandle)
           }
         }
 
@@ -1934,23 +1674,15 @@ export const enableBankingExtension: Extension = {
     {
       method: 'DELETE',
       path: '/disconnect',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        const log = ctx?.log ?? console
-        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-        const { data: { user } } = await supabase.auth.getUser()
+      handler: async (request: Request, ctx: ExtensionContext) => {
+        const log = ctx.log
+        const supabase = ctx.supabase
 
-        if (!user) {
-          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
-
-        if (!ctx?.companyId) {
-          return NextResponse.json({ error: 'Company context required' }, { status: 400 })
-        }
         const companyId = ctx.companyId
 
         const rl = await checkRateLimit({
           prefix: 'enable-banking:disconnect',
-          identifier: user.id,
+          identifier: ctx.userId,
           ...RATE_LIMIT_DISCONNECT,
         })
         if (!rl.ok) return rl.response!
@@ -1963,10 +1695,10 @@ export const enableBankingExtension: Extension = {
           await retireBankConnection({
             supabase,
             companyId,
-            userId: user.id,
+            userId: ctx.userId,
             connectionId: connection_id,
             log,
-            emit: ctx?.emit,
+            emit: ctx.emit,
           })
         } catch (error) {
           return errorResponse(error, log)

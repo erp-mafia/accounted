@@ -4,6 +4,7 @@ import {
   parseJsonResponse,
   createMockRouteParams,
   createQueuedMockSupabase,
+  enqueueBankLinkLeg,
   makeTransaction,
   makeInvoice,
 } from '@/tests/helpers'
@@ -108,6 +109,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       data: { id: JE_UUID, status: 'posted', voucher_series: 'A', voucher_number: 7, entry_date: '2026-05-15' },
       error: null,
     }) // target JE fetch
+    enqueueBankLinkLeg(enqueue)
     enqueue({ data: [{ id: TX_UUID }], error: null }) // tx UPDATE
     enqueue({ data: null, error: null }) // logMatchEvent insert
     const request = createMockRequest(`/api/transactions/${TX_UUID}/link-journal-entry`, {
@@ -179,6 +181,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       },
       error: null,
     })
+    enqueueBankLinkLeg(enqueue)
     // Update transaction
     enqueue({ data: [{ id: TX_UUID }], error: null })
     // logMatchEvent insert
@@ -222,6 +225,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       },
       error: null,
     })
+    enqueueBankLinkLeg(enqueue)
     enqueue({
       data: makeInvoice({
         id: INV_UUID,
@@ -333,6 +337,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       },
       error: null,
     })
+    enqueueBankLinkLeg(enqueue)
     enqueue({
       data: makeInvoice({
         id: INV_UUID,
@@ -380,6 +385,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       },
       error: null,
     })
+    enqueueBankLinkLeg(enqueue)
     enqueue({ data: null, error: { message: 'not found' } })
 
     const request = createMockRequest(`/api/transactions/${TX_UUID}/link-journal-entry`, {
@@ -407,6 +413,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       },
       error: null,
     })
+    enqueueBankLinkLeg(enqueue)
     enqueue({
       data: makeInvoice({ id: INV_UUID, status: 'paid' }),
       error: null,
@@ -437,6 +444,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       },
       error: null,
     })
+    enqueueBankLinkLeg(enqueue)
     enqueue({
       data: makeInvoice({
         id: INV_UUID,
@@ -474,6 +482,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       },
       error: null,
     })
+    enqueueBankLinkLeg(enqueue)
     enqueue({
       data: makeInvoice({ id: INV_UUID, status: 'sent', total: 1000, remaining_amount: 1000 }),
       error: null,
@@ -510,6 +519,7 @@ describe('POST /api/transactions/[id]/link-journal-entry', () => {
       },
       error: null,
     })
+    enqueueBankLinkLeg(enqueue)
     enqueue({
       data: makeInvoice({
         id: INV_UUID,

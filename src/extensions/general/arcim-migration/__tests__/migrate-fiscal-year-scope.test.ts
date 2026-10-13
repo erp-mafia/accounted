@@ -50,7 +50,7 @@ function buildCtx(importedYears: ImportRow[]): ExtensionContext {
   ;(supabase as unknown as { auth: unknown }).auth = {
     getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }),
   }
-  return { supabase, companyId: 'company-1' } as unknown as ExtensionContext
+  return { supabase, companyId: 'company-1', userId: 'user-1', log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } } as unknown as ExtensionContext
 }
 
 function migrateRequest(body: Record<string, unknown>) {
@@ -92,7 +92,7 @@ describe('POST /migrate: fiscal-year scope and per-step finishing flag', () => {
     ])
     ;(supabase as unknown as { auth: { getUser: Mock } }).auth.getUser
       .mockResolvedValue({ data: { user: { id: 'user-1' } } })
-    const ctx = { supabase, companyId: 'company-1' } as unknown as ExtensionContext
+    const ctx = { supabase, companyId: 'company-1', userId: 'user-1', log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } } as unknown as ExtensionContext
 
     const res = await handler(migrateRequest({ importSalesInvoices: true }), ctx)
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)

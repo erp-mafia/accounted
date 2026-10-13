@@ -21,9 +21,9 @@ vi.mock('@/lib/core/documents/document-service', async (importOriginal) => {
   }
 })
 
-vi.mock('@/extensions/general/invoice-inbox/lib/extract-invoice-fields', async (importOriginal) => {
+vi.mock('@/lib/documents/inbox-extraction/extract-invoice-fields', async (importOriginal) => {
   const actual = await importOriginal<
-    typeof import('@/extensions/general/invoice-inbox/lib/extract-invoice-fields')
+    typeof import('@/lib/documents/inbox-extraction/extract-invoice-fields')
   >()
   return { ...actual, extractInvoiceFields: mocks.extractInvoiceFields }
 })

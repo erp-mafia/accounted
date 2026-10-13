@@ -333,15 +333,10 @@ export const arcimMigrationExtension: Extension = {
     {
       method: 'GET',
       path: '/status',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-        const { data: { user } } = await supabase.auth.getUser()
+      handler: async (request: Request, ctx: ExtensionContext) => {
+        const supabase = ctx.supabase
 
-        if (!user) {
-          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
-
-        const companyId = ctx?.companyId ?? user.id
+        const companyId = ctx.companyId
 
         try {
           // Get accepted consents only (status 1): not abandoned/created ones
@@ -422,16 +417,9 @@ export const arcimMigrationExtension: Extension = {
     {
       method: 'POST',
       path: '/connect',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        const log = ctx?.log ?? console
-        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-        const { data: { user } } = await supabase.auth.getUser()
-
-        if (!user) {
-          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
-
-        const companyId = ctx?.companyId ?? user.id
+      handler: async (request: Request, ctx: ExtensionContext) => {
+        const log = ctx.log
+        const companyId = ctx.companyId
 
         const {
           provider,
@@ -481,12 +469,12 @@ export const arcimMigrationExtension: Extension = {
               c => c.provider === provider && (c.status === 0 || c.status === 1),
             )
             if (stale) {
-              if (ctx?.settings) {
+              if (ctx.settings) {
                 await ctx.settings.set('consent_id', stale.id)
                 await ctx.settings.set('provider', provider)
               }
               if (providerInfo.authType === 'oauth') {
-                const authUrl = await buildArcimOAuthUrl(stale.id, provider, user.id, await resolveOAuthOrigin(request), {
+                const authUrl = await buildArcimOAuthUrl(stale.id, provider, ctx.userId, await resolveOAuthOrigin(request), {
                   documentScopes: documentScopes === true,
                 })
                 return NextResponse.json({
@@ -499,7 +487,7 @@ export const arcimMigrationExtension: Extension = {
               // Token-based providers re-authorize by re-entering credentials
               // (Björn Lundén also through Lundify's activation redirect).
               const activationUrl = provider === 'bjornlunden'
-                ? await buildBjornLundenActivationUrl(stale.id, user.id, await resolveOAuthOrigin(request))
+                ? await buildBjornLundenActivationUrl(stale.id, ctx.userId, await resolveOAuthOrigin(request))
                 : null
               return NextResponse.json({
                 consentId: stale.id,
@@ -516,7 +504,7 @@ export const arcimMigrationExtension: Extension = {
 
           if (accepted) {
             // Already connected: skip OAuth, go straight to preview
-            if (ctx?.settings) {
+            if (ctx.settings) {
               await ctx.settings.set('consent_id', accepted.id)
               await ctx.settings.set('provider', provider)
             }
@@ -544,7 +532,7 @@ export const arcimMigrationExtension: Extension = {
                 .limit(1)
               if (tokens && tokens.length > 0) {
                 // Tokens exist: reuse this consent, skip credential entry
-                if (ctx?.settings) {
+                if (ctx.settings) {
                   await ctx.settings.set('consent_id', p.id)
                   await ctx.settings.set('provider', provider)
                 }
@@ -565,18 +553,18 @@ export const arcimMigrationExtension: Extension = {
           const consent = await createConsent(
             companyId,
             provider,
-            `gnubok-migration-${user.id}`,
+            `gnubok-migration-${ctx.userId}`,
             orgNumber,
             companyName
           )
 
-          if (ctx?.settings) {
+          if (ctx.settings) {
             await ctx.settings.set('consent_id', consent.id)
             await ctx.settings.set('provider', provider)
           }
 
           if (providerInfo.authType === 'oauth') {
-            const authUrl = await buildArcimOAuthUrl(consent.id, provider, user.id, await resolveOAuthOrigin(request))
+            const authUrl = await buildArcimOAuthUrl(consent.id, provider, ctx.userId, await resolveOAuthOrigin(request))
 
             return NextResponse.json({
               consentId: consent.id,
@@ -588,7 +576,7 @@ export const arcimMigrationExtension: Extension = {
             // Lundén additionally gets the Lundify activation URL when BL has
             // issued an activation key, so the User-Key never has to be pasted.
             const activationUrl = provider === 'bjornlunden'
-              ? await buildBjornLundenActivationUrl(consent.id, user.id, await resolveOAuthOrigin(request))
+              ? await buildBjornLundenActivationUrl(consent.id, ctx.userId, await resolveOAuthOrigin(request))
               : null
             return NextResponse.json({
               consentId: consent.id,
@@ -609,17 +597,11 @@ export const arcimMigrationExtension: Extension = {
     {
       method: 'POST',
       path: '/submit-token',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        const log = ctx?.log ?? console
-        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-        const { data: { user } } = await supabase.auth.getUser()
-
-        if (!user) {
-          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
+      handler: async (request: Request, ctx: ExtensionContext) => {
+        const log = ctx.log
 
         // The caller's tenant: NOT the provider-side company id below.
-        const ownerCompanyId = ctx?.companyId ?? user.id
+        const ownerCompanyId = ctx.companyId
 
         // `companyId` in the body is the PROVIDER-side company identifier
         // (BL User-Key / Briox account ID / Bokio company GUID).
@@ -725,8 +707,8 @@ export const arcimMigrationExtension: Extension = {
       method: 'GET',
       path: '/callback',
       skipAuth: true,
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        const log = ctx?.log ?? console
+      handler: async (request: Request) => {
+        const log = console
         const url = new URL(request.url)
         let code = url.searchParams.get('code')
         const handoff = url.searchParams.get('handoff')
@@ -997,16 +979,11 @@ export const arcimMigrationExtension: Extension = {
     {
       method: 'GET',
       path: '/preview',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        const log = ctx?.log ?? console
-        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-        const { data: { user } } = await supabase.auth.getUser()
+      handler: async (request: Request, ctx: ExtensionContext) => {
+        const log = ctx.log
+        const supabase = ctx.supabase
 
-        if (!user) {
-          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
-
-        const companyId = ctx?.companyId ?? user.id
+        const companyId = ctx.companyId
 
         const url = new URL(request.url)
         const consentId = url.searchParams.get('consentId')
@@ -1172,16 +1149,11 @@ export const arcimMigrationExtension: Extension = {
     {
       method: 'GET',
       path: '/sie-data',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        const log = ctx?.log ?? console
-        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-        const { data: { user } } = await supabase.auth.getUser()
+      handler: async (request: Request, ctx: ExtensionContext) => {
+        const log = ctx.log
+        const supabase = ctx.supabase
 
-        if (!user) {
-          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
-
-        const companyId = ctx?.companyId ?? user.id
+        const companyId = ctx.companyId
 
         const url = new URL(request.url)
         const consentId = url.searchParams.get('consentId')
@@ -1314,7 +1286,7 @@ export const arcimMigrationExtension: Extension = {
           const existingMappings = await loadMappings(supabase, companyId)
           const existingRecords = [...existingMappings.values()].map(m => ({
             id: '',
-            user_id: user.id,
+            user_id: ctx.userId,
             source_account: m.sourceAccount,
             source_name: m.sourceName,
             target_account: m.targetAccount,
@@ -1489,16 +1461,11 @@ export const arcimMigrationExtension: Extension = {
     {
       method: 'POST',
       path: '/import-sie',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        const log = ctx?.log ?? console
-        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-        const { data: { user } } = await supabase.auth.getUser()
+      handler: async (request: Request, ctx: ExtensionContext) => {
+        const log = ctx.log
+        const supabase = ctx.supabase
 
-        if (!user) {
-          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
-
-        const companyId = ctx?.companyId ?? user.id
+        const companyId = ctx.companyId
 
         // The file travels by path, never as content: /sie-data archived it
         // on the server, and a body carrying the text hit the hosting
@@ -1576,7 +1543,7 @@ export const arcimMigrationExtension: Extension = {
             // The structured envelope: the wizard used to print the legacy
             // tag "validation" as the whole message.
             return errorResponseFromCode('SIE_IMPORT_UNMAPPED_ACCOUNTS', moduleLog, {
-              requestId: ctx?.requestId,
+              requestId: ctx.requestId,
               details: {
                 unmappedAccounts: unmapped.map((m: import('@/lib/import/types').AccountMapping) => ({
                   account: m.sourceAccount,
@@ -1586,7 +1553,7 @@ export const arcimMigrationExtension: Extension = {
             })
           }
 
-          const job = await submitSIEJob(supabase,companyId,user.id,rawContent,mappings,{
+          const job = await submitSIEJob(supabase,companyId,ctx.userId,rawContent,mappings,{
             filename: 'migration-sie-'+parsed.stats.fiscalYearStart+'.se',
             ...options,updateAccountNames:options.updateAccountNames ?? true,
             onExistingPeriod:options.supersedesImportId ? 'replace' : 'block',
@@ -1600,14 +1567,14 @@ export const arcimMigrationExtension: Extension = {
           // refused the file; wrapped as SIE_IMPORT_UNEXPECTED it reached the
           // wizard as "Importens resultat kunde inte bekräftas" with the
           // reason buried in details.reason.
-          if (error instanceof SIEJobValidationError) return sieJobValidationResponse(error, moduleLog, ctx?.requestId)
+          if (error instanceof SIEJobValidationError) return sieJobValidationResponse(error, moduleLog, ctx.requestId)
           // A job RPC that refused rolled back, so the outcome is known: nothing
           // started. Answer with the code the manual upload route gives it (409
           // SIE_IMPORT_PERIOD_ALREADY_IMPORTED for a year that already holds an
           // import), not the 500 "could not be confirmed", which is for a call
           // whose outcome really is unknown.
           if (error instanceof SIEJobDatabaseError && error.code && getErrorEntry(error.code)) {
-            return errorResponse(error, moduleLog, { requestId: ctx?.requestId })
+            return errorResponse(error, moduleLog, { requestId: ctx.requestId })
           }
           log.error('arcim sie import failed', error as Error)
           return providerFailureResponse(error, 'SIE_IMPORT_UNEXPECTED')
@@ -1619,16 +1586,11 @@ export const arcimMigrationExtension: Extension = {
     {
       method: 'POST',
       path: '/migrate',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        const log = ctx?.log ?? console
-        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-        const { data: { user } } = await supabase.auth.getUser()
+      handler: async (request: Request, ctx: ExtensionContext) => {
+        const log = ctx.log
+        const supabase = ctx.supabase
 
-        if (!user) {
-          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
-
-        const companyId = ctx?.companyId ?? user.id
+        const companyId = ctx.companyId
 
         const {
           consentId,
@@ -1762,12 +1724,12 @@ export const arcimMigrationExtension: Extension = {
             )
           }
 
-          log.info(`Starting migration for user ${user.id} from ${consent.provider}`)
+          log.info(`Starting migration for user ${ctx.userId} from ${consent.provider}`)
 
           const migrationOptions = {
             consentId,
             companyId,
-            userId: user.id,
+            userId: ctx.userId,
             supabase,
             suggestParties,
             fiscalYearScope,
@@ -1883,16 +1845,11 @@ export const arcimMigrationExtension: Extension = {
     {
       method: 'POST',
       path: '/reconcile',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        const log = ctx?.log ?? console
-        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-        const { data: { user } } = await supabase.auth.getUser()
+      handler: async (request: Request, ctx: ExtensionContext) => {
+        const log = ctx.log
+        const supabase = ctx.supabase
 
-        if (!user) {
-          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
-
-        const companyId = ctx?.companyId ?? user.id
+        const companyId = ctx.companyId
 
         let dryRun = false
         let consentId: string | null = null
@@ -1940,7 +1897,7 @@ export const arcimMigrationExtension: Extension = {
           result = await reconcileSupplierInvoiceVouchers({
             supabase,
             companyId,
-            userId: user.id,
+            userId: ctx.userId,
             dryRun,
           })
           log.info('arcim reconcile completed', {
@@ -2057,16 +2014,11 @@ export const arcimMigrationExtension: Extension = {
     {
       method: 'POST',
       path: '/import-documents',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        const log = ctx?.log ?? console
-        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-        const { data: { user } } = await supabase.auth.getUser()
+      handler: async (request: Request, ctx: ExtensionContext) => {
+        const log = ctx.log
+        const supabase = ctx.supabase
 
-        if (!user) {
-          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
-
-        const companyId = ctx?.companyId ?? user.id
+        const companyId = ctx.companyId
 
         let consentId: string | undefined
         let dryRun = false
@@ -2099,7 +2051,7 @@ export const arcimMigrationExtension: Extension = {
           const result = await importProviderDocuments({
             supabase,
             companyId,
-            userId: user.id,
+            userId: ctx.userId,
             consentId,
             dryRun,
             cursor,
@@ -2159,15 +2111,10 @@ export const arcimMigrationExtension: Extension = {
     {
       method: 'POST',
       path: '/accept',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-        const { data: { user } } = await supabase.auth.getUser()
+      handler: async (request: Request, ctx: ExtensionContext) => {
+        const supabase = ctx.supabase
 
-        if (!user) {
-          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
-
-        const companyId = ctx?.companyId ?? user.id
+        const companyId = ctx.companyId
         const { consentId } = await request.json() as { consentId: string }
         if (!consentId) {
           return NextResponse.json({ error: 'consentId is required' }, { status: 400 })
@@ -2201,16 +2148,11 @@ export const arcimMigrationExtension: Extension = {
     {
       method: 'DELETE',
       path: '/disconnect',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        const log = ctx?.log ?? console
-        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-        const { data: { user } } = await supabase.auth.getUser()
+      handler: async (request: Request, ctx: ExtensionContext) => {
+        const log = ctx.log
+        const supabase = ctx.supabase
 
-        if (!user) {
-          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
-
-        const companyId = ctx?.companyId ?? user.id
+        const companyId = ctx.companyId
         const { consentId } = await request.json() as { consentId: string }
 
         if (!consentId) {
@@ -2232,7 +2174,7 @@ export const arcimMigrationExtension: Extension = {
         try {
           await deleteConsent(consentId)
 
-          if (ctx?.settings) {
+          if (ctx.settings) {
             await ctx.settings.clear('consent_id')
             await ctx.settings.clear('provider')
           }

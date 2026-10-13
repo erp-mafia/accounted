@@ -11,6 +11,7 @@ import { searchCompaniesByName } from '../lib/tic-client'
 import { lensRegistrationToOrgNumber, searchCompaniesForLookup } from '../lib/lookup'
 import { TICAPIError } from '../lib/tic-types'
 import type { TICCompanyDocument } from '../lib/tic-types'
+import { testRoutes } from '@/tests/helpers'
 
 const mockSearch = vi.mocked(searchCompaniesByName)
 
@@ -21,7 +22,7 @@ function makeRequest(q?: string): Request {
   return new Request(url)
 }
 
-const route = ticExtension.apiRoutes!.find((r) => r.path === '/search')!
+const route = testRoutes(ticExtension).find((r) => r.path === '/search')!
 const searchHandler = route.handler
 
 function doc(overrides: Partial<TICCompanyDocument>): TICCompanyDocument {

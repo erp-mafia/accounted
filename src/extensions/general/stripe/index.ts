@@ -71,15 +71,8 @@ export const stripeExtension: Extension = {
     {
       method: 'GET',
       path: '/status',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-        const { data: { user } } = await supabase.auth.getUser()
-        if (!user) {
-          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
-        if (!ctx?.companyId) {
-          return NextResponse.json({ error: 'Company context required' }, { status: 400 })
-        }
+      handler: async (_request: Request, ctx: ExtensionContext) => {
+        const supabase = ctx.supabase
 
         // Prefer the active connection; otherwise surface the most recent row
         // so the panel can show pending/error/revoked states.
@@ -105,16 +98,9 @@ export const stripeExtension: Extension = {
     {
       method: 'POST',
       path: '/sync',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        const log = ctx?.log ?? console
-        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-        const { data: { user } } = await supabase.auth.getUser()
-        if (!user) {
-          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
-        if (!ctx?.companyId) {
-          return NextResponse.json({ error: 'Company context required' }, { status: 400 })
-        }
+      handler: async (_request: Request, ctx: ExtensionContext) => {
+        const log = ctx.log
+        const supabase = ctx.supabase
         const companyId = ctx.companyId
 
         const capabilityBlocked = await requireCapability(
@@ -126,7 +112,7 @@ export const stripeExtension: Extension = {
 
         const rl = await checkRateLimit({
           prefix: 'stripe:sync',
-          identifier: user.id,
+          identifier: ctx.userId,
           ...RATE_LIMIT_SYNC,
         })
         if (!rl.ok) return rl.response!
@@ -169,16 +155,9 @@ export const stripeExtension: Extension = {
     {
       method: 'POST',
       path: '/backfill',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        const log = ctx?.log ?? console
-        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-        const { data: { user } } = await supabase.auth.getUser()
-        if (!user) {
-          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
-        if (!ctx?.companyId) {
-          return NextResponse.json({ error: 'Company context required' }, { status: 400 })
-        }
+      handler: async (request: Request, ctx: ExtensionContext) => {
+        const log = ctx.log
+        const supabase = ctx.supabase
         const companyId = ctx.companyId
 
         const capabilityBlocked = await requireCapability(
@@ -190,7 +169,7 @@ export const stripeExtension: Extension = {
 
         const rl = await checkRateLimit({
           prefix: 'stripe:backfill',
-          identifier: user.id,
+          identifier: ctx.userId,
           ...RATE_LIMIT_BACKFILL,
         })
         if (!rl.ok) return rl.response!
@@ -265,15 +244,8 @@ export const stripeExtension: Extension = {
     {
       method: 'POST',
       path: '/transaction-sync',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-        const { data: { user } } = await supabase.auth.getUser()
-        if (!user) {
-          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
-        if (!ctx?.companyId) {
-          return NextResponse.json({ error: 'Company context required' }, { status: 400 })
-        }
+      handler: async (request: Request, ctx: ExtensionContext) => {
+        const supabase = ctx.supabase
         const companyId = ctx.companyId
 
         const capabilityBlocked = await requireCapability(
@@ -285,7 +257,7 @@ export const stripeExtension: Extension = {
 
         const rl = await checkRateLimit({
           prefix: 'stripe:transaction-sync-toggle',
-          identifier: user.id,
+          identifier: ctx.userId,
           ...RATE_LIMIT_SYNC,
         })
         if (!rl.ok) return rl.response!
@@ -321,22 +293,15 @@ export const stripeExtension: Extension = {
     {
       method: 'POST',
       path: '/connect',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        const log = ctx?.log ?? console
-        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-        const { data: { user } } = await supabase.auth.getUser()
-        if (!user) {
-          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
-        if (!ctx?.companyId) {
-          return NextResponse.json({ error: 'Company context required' }, { status: 400 })
-        }
+      handler: async (_request: Request, ctx: ExtensionContext) => {
+        const log = ctx.log
+        const supabase = ctx.supabase
         const companyId = ctx.companyId
 
         // Anonymous/sandbox users must never reach Stripe (same doctrine as
         // billing checkout: the sandbox never talks to external services).
         // The anon check is identity truth and runs first (no DB round trip).
-        if (user.is_anonymous) return sandboxBlockedResponse()
+        if (ctx.isAnonymous) return sandboxBlockedResponse()
         const sandboxBlocked = await guardSandbox(supabase, companyId)
         if (sandboxBlocked) return sandboxBlocked
 
@@ -349,7 +314,7 @@ export const stripeExtension: Extension = {
 
         const rl = await checkRateLimit({
           prefix: 'stripe:connect',
-          identifier: user.id,
+          identifier: ctx.userId,
           ...RATE_LIMIT_CONNECT,
         })
         if (!rl.ok) return rl.response!
@@ -404,7 +369,7 @@ export const stripeExtension: Extension = {
           .from('stripe_connections')
           .insert({
             company_id: companyId,
-            user_id: user.id,
+            user_id: ctx.userId,
             status: 'pending',
             oauth_state: oauthState,
             livemode: isLiveMode(),
@@ -436,21 +401,14 @@ export const stripeExtension: Extension = {
     {
       method: 'DELETE',
       path: '/disconnect',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        const log = ctx?.log ?? console
-        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-        const { data: { user } } = await supabase.auth.getUser()
-        if (!user) {
-          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-        }
-        if (!ctx?.companyId) {
-          return NextResponse.json({ error: 'Company context required' }, { status: 400 })
-        }
+      handler: async (request: Request, ctx: ExtensionContext) => {
+        const log = ctx.log
+        const supabase = ctx.supabase
         const companyId = ctx.companyId
 
         const rl = await checkRateLimit({
           prefix: 'stripe:disconnect',
-          identifier: user.id,
+          identifier: ctx.userId,
           ...RATE_LIMIT_DISCONNECT,
         })
         if (!rl.ok) return rl.response!
@@ -508,7 +466,7 @@ export const stripeExtension: Extension = {
           )
         }
 
-        if (ctx?.emit) {
+        if (ctx.emit) {
           try {
             await ctx.emit({
               type: 'stripe.disconnected',
@@ -516,7 +474,7 @@ export const stripeExtension: Extension = {
                 connectionId: connection.id,
                 stripeAccountId: connection.stripe_account_id,
                 reason: 'user',
-                userId: user.id,
+                userId: ctx.userId,
                 companyId,
               },
             })

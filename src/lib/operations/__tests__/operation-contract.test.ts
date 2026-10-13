@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import { describe, expect, it } from 'vitest'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/scope-catalog'
-import { OPERATION_RISK_TIERS } from '@/lib/pending-operations/risk-tiers'
+import { OPERATION_RISK_TIERS, PENDING_OPERATION_TYPES } from '@/lib/pending-operations/risk-tiers'
 import { OPERATION_LABEL_KEYS, singleActionWarnings } from '@/components/pending-operations/vocabulary'
 import { listEndpoints } from '@/lib/api/v1/registry'
 import '@/lib/api/v1/load-routes'
@@ -73,6 +73,16 @@ describe('operation registry contract', () => {
       expect(description, op.id).toMatch(/\bstage\b/i)
       expect(description.length, op.id).toBeLessThanOrEqual(280)
     }
+  })
+
+  it('labels every pending operation type in both languages, so none shows its raw name', () => {
+    const sv = messages('sv').pending
+    const en = messages('en').pending
+    const missing = PENDING_OPERATION_TYPES.filter((type) => {
+      const key = OPERATION_LABEL_KEYS[type]
+      return !key || !sv[key] || !en[key]
+    })
+    expect(missing).toEqual([])
   })
 
   it('declares every pending type in the risk tiers, the vocabulary and both languages', () => {

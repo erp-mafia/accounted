@@ -7,7 +7,7 @@ import {
   verifyOAuthState,
 } from './lib/crypto'
 import { performSync } from './lib/sync'
-import { resolveCallbackOrigin } from './lib/callback-origin'
+import { resolveCallbackOrigin } from '@/lib/auth/callback-origin'
 import { stockholmHourToUtcHour } from './lib/schedule'
 import { CLOUD_PROVIDERS, providerFromRequest } from './lib/provider-registry'
 import { googleDriveProvider } from './lib/google-provider'
@@ -84,10 +84,9 @@ async function readProviderStatus(
  */
 async function handleOAuthCallback(
   request: Request,
-  ctx: ExtensionContext | undefined,
+  ctx: ExtensionContext,
   provider: CloudStorageProvider
 ): Promise<Response> {
-  if (!ctx) return jsonError('Missing context', 500)
   const url = new URL(request.url)
   const code = url.searchParams.get('code')
   const state = url.searchParams.get('state')
@@ -187,7 +186,6 @@ export const cloudBackupExtension: Extension = {
       method: 'POST',
       path: '/connect',
       handler: async (request, ctx) => {
-        if (!ctx) return jsonError('Missing context', 500)
         const resolved = resolveProvider(request, { requireConfigured: true })
         if ('error' in resolved) return resolved.error
         try {
@@ -226,7 +224,6 @@ export const cloudBackupExtension: Extension = {
       method: 'POST',
       path: '/disconnect',
       handler: async (request, ctx) => {
-        if (!ctx) return jsonError('Missing context', 500)
         const resolved = resolveProvider(request)
         if ('error' in resolved) return resolved.error
         const { provider } = resolved
@@ -266,7 +263,6 @@ export const cloudBackupExtension: Extension = {
       method: 'GET',
       path: '/status',
       handler: async (_request, ctx) => {
-        if (!ctx) return jsonError('Missing context', 500)
         const providers: CloudProviderStatus[] = []
         for (const provider of CLOUD_PROVIDERS) {
           providers.push(await readProviderStatus(ctx, provider))
@@ -293,7 +289,6 @@ export const cloudBackupExtension: Extension = {
       method: 'PUT',
       path: '/schedule',
       handler: async (request, ctx) => {
-        if (!ctx) return jsonError('Missing context', 500)
         const resolved = resolveProvider(request)
         if ('error' in resolved) return resolved.error
         try {
@@ -354,7 +349,6 @@ export const cloudBackupExtension: Extension = {
       method: 'POST',
       path: '/sync',
       handler: async (request, ctx) => {
-        if (!ctx) return jsonError('Missing context', 500)
         const resolved = resolveProvider(request)
         if ('error' in resolved) return resolved.error
         try {

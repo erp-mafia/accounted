@@ -368,30 +368,17 @@ export async function guessCounterAccount(
   const rules = await fetchSkattekontoRules(supabase, companyId)
   if (rules.length === 0) return null
 
-  const outcome = matchSkattekontoRule(
-    rules,
-    transaktionstext,
-    entityType,
-    belopp,
-    employerRegistered,
-  )
-  if (outcome.kind !== 'match') return null
-  const match = outcome.match
-
-  return resolveVatRefundCounterAccount(
+  const outcome = await resolveCounterAccount(
     {
-      ...match,
-      account:
-        match.account === PRIMARY_SEK_SENTINEL
-          ? await resolvePrimarySekAccount(supabase, companyId)
-          : match.account,
+      rules,
+      entityType,
+      employerRegistered,
+      resolvePrimarySek: () => resolvePrimarySekAccount(supabase, companyId),
     },
-    outcome.seedRule,
-    belopp,
-    transaktionstext,
-    eventDate,
+    { transaktionstext, belopp, transaktionsdatum: eventDate },
     readVatReceivableBalance(supabase, companyId),
   )
+  return outcome.kind === 'match' ? outcome.match : null
 }
 
 /**
@@ -452,6 +439,47 @@ export async function loadRuleContext(
       return primary
     },
   }
+}
+
+/**
+ * The one counter-account resolver for a skattekonto event, behind every path
+ * that books or suggests one: the per-row and batch booking, the list's
+ * suggestion and guessCounterAccount. It walks the rules
+ * (matchSkattekontoRule: legal form, amount bounds, the employer gate),
+ * resolves the __PRIMARY_SEK__ sentinel against cash_accounts, and lets a
+ * seed-rule VAT refund clear the 1650 receivable
+ * (resolveVatRefundCounterAccount). A caller only chooses how the 1650
+ * balance is read: fresh per row when booking, the page's remaining
+ * receivable when suggesting.
+ */
+async function resolveCounterAccount(
+  ctx: SkattekontoRuleContext,
+  event: { transaktionstext: string; belopp: number | undefined; transaktionsdatum: string | undefined },
+  readBalance: VatReceivableBalanceReader,
+): Promise<RuleMatchOutcome> {
+  const outcome = matchSkattekontoRule(
+    ctx.rules,
+    event.transaktionstext,
+    ctx.entityType,
+    event.belopp,
+    ctx.employerRegistered,
+  )
+  if (outcome.kind !== 'match') return outcome
+  const match = await resolveVatRefundCounterAccount(
+    {
+      ...outcome.match,
+      account:
+        outcome.match.account === PRIMARY_SEK_SENTINEL
+          ? await ctx.resolvePrimarySek()
+          : outcome.match.account,
+    },
+    outcome.seedRule,
+    event.belopp,
+    event.transaktionstext,
+    event.transaktionsdatum,
+    readBalance,
+  )
+  return { ...outcome, match }
 }
 
 /**
@@ -522,12 +550,14 @@ export async function attachBookingSuggestions<
       continue
     }
 
-    const outcome = matchSkattekontoRule(
-      ctx.rules,
-      row.transaktionstext,
-      ctx.entityType,
-      Number(row.belopp_skatteverket),
-      ctx.employerRegistered,
+    const outcome = await resolveCounterAccount(
+      ctx,
+      {
+        transaktionstext: row.transaktionstext,
+        belopp: Number(row.belopp_skatteverket),
+        transaktionsdatum: row.transaktionsdatum,
+      },
+      readRemainingReceivable,
     )
     if (outcome.kind === 'employer_gated') {
       // No suggestion, but tell the UI WHY so it can show the "likely your
@@ -539,20 +569,7 @@ export async function attachBookingSuggestions<
       enriched.push({ ...row, booking_suggestion: null })
       continue
     }
-    const match = await resolveVatRefundCounterAccount(
-      {
-        ...outcome.match,
-        account:
-          outcome.match.account === PRIMARY_SEK_SENTINEL
-            ? await ctx.resolvePrimarySek()
-            : outcome.match.account,
-      },
-      outcome.seedRule,
-      Number(row.belopp_skatteverket),
-      row.transaktionstext,
-      row.transaktionsdatum,
-      readRemainingReceivable,
-    )
+    const match = outcome.match
     if (match.account === VAT_REFUND_ACCOUNT) {
       // What this booking takes off 1650: the receivable, not the refund.
       suggestedRefunds.push({
@@ -948,12 +965,16 @@ export async function bokforSkattekontoTransaction(
   // non-employer enskild firma). The per-call path builds the same context
   // the batch path preloads, so both share one matcher and one gate.
   const ctx = ruleContext ?? (await loadRuleContext(supabase, companyId))
-  const outcome = matchSkattekontoRule(
-    ctx.rules,
-    tx.transaktionstext,
-    ctx.entityType,
-    Number(tx.belopp_skatteverket),
-    ctx.employerRegistered,
+  // The 1650 balance is read fresh for every row (no memo): a batch commits
+  // row by row, so a refund booked earlier in the batch is already counted.
+  const outcome = await resolveCounterAccount(
+    ctx,
+    {
+      transaktionstext: tx.transaktionstext,
+      belopp: Number(tx.belopp_skatteverket),
+      transaktionsdatum: tx.transaktionsdatum,
+    },
+    readVatReceivableBalance(supabase, companyId),
   )
   if (outcome.kind === 'employer_gated') {
     throw new SkattekontoBookingError(
@@ -963,25 +984,7 @@ export async function bokforSkattekontoTransaction(
       'NO_COUNTER_ACCOUNT',
     )
   }
-  // The 1650 balance is read fresh for every row (no memo): a batch commits
-  // row by row, so a refund booked earlier in the batch is already counted.
-  const guess: CounterAccountMatch | null =
-    outcome.kind === 'match'
-      ? await resolveVatRefundCounterAccount(
-          {
-            ...outcome.match,
-            account:
-              outcome.match.account === PRIMARY_SEK_SENTINEL
-                ? await ctx.resolvePrimarySek()
-                : outcome.match.account,
-          },
-          outcome.seedRule,
-          Number(tx.belopp_skatteverket),
-          tx.transaktionstext,
-          tx.transaktionsdatum,
-          readVatReceivableBalance(supabase, companyId),
-        )
-      : null
+  const guess: CounterAccountMatch | null = outcome.kind === 'match' ? outcome.match : null
   if (!guess) {
     throw new SkattekontoBookingError(
       `Vi kunde inte gissa motkontot för "${tx.transaktionstext}". Skapa verifikatet manuellt.`,

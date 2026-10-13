@@ -27,7 +27,7 @@ vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
   })),
 }))
 
-import { computeVatCloseCheck, computeVatReport } from '../server'
+import { computeVatCloseCheck, computeVatReport } from '@/lib/reports/vat-close-check'
 import { vatTotalsRpcResult } from './vat-totals-rpc-double'
 
 interface MockEntry {

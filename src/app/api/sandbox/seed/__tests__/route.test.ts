@@ -33,8 +33,37 @@ vi.mock('@/lib/bookkeeping/bas-reference', () => ({
     k2_excluded: false,
   }),
 }))
-vi.mock('@/lib/salary/personnummer', () => ({
+vi.mock('@/lib/salary/personnummer', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/salary/personnummer')>()),
   encryptPersonnummer: (value: string) => `encrypted:${value}`,
+  decryptPersonnummer: (value: string) => value.replace(/^encrypted:/, ''),
+}))
+// The year's payroll figures and tax table the seed hands the salary engine.
+vi.mock('@/lib/salary/payroll-config', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/salary/payroll-config')>()),
+  loadPayrollConfig: async (_db: unknown, year: number) => ({
+    configYear: year,
+    avgifterTotal: 0.3142,
+    avgifterReduced65plus: 0.1021,
+    avgifterYouthRate: 0.2081,
+    avgifterYouthSalaryCap: 25000,
+    avgifterVaxaStodRate: 0.1021,
+    avgifterVaxaStodCap: 35000,
+    reducedAvgiftAge: 67,
+    slpRate: 0.2426,
+    sjuklonRate: 0.8,
+    karensavdragFactor: 0.2,
+  }),
+}))
+vi.mock('@/lib/salary/tax-tables', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/salary/tax-tables')>()),
+  fetchTaxTableRates: async (year: number, tableNumber: number, column: number) => ({
+    rates: [{
+      tableYear: year, tableNumber, columnNumber: column,
+      incomeFrom: 0, incomeTo: 9999999, kind: 'amount', taxAmount: 5000,
+    }],
+    source: 'fallback',
+  }),
 }))
 vi.mock('../customers', () => ({
   buildSandboxCustomers: () => [

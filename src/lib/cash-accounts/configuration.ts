@@ -47,16 +47,37 @@ export interface YieldedCashAccount {
   is_primary: boolean
 }
 
-/** The caller prepares a selection without writing chart, route or cash rows. */
+/** The first-sync window the user picked, saved with the activation. */
+export interface InitialSyncWindow {
+  /** YYYY-MM-DD, the first day the first import asks the bank for. */
+  requestedFrom: string
+  lookbackDays: number
+}
+
+/**
+ * The caller prepares a selection without writing chart, route or cash rows.
+ * `initialSync` is the window of the first import, saved on activation so the
+ * cron takes it when the inline import is deferred or fails.
+ */
 export async function saveBankAccountSelection(
   supabase: SupabaseClient, companyId: string, userId: string, connectionId: string,
-  expectedToken: string, selections: BankAccountSelection[],
+  expectedToken: string, selections: BankAccountSelection[], initialSync?: InitialSyncWindow,
 ): Promise<{ status: string; accounts: unknown[]; yielded?: YieldedCashAccount[] }> {
   const chartAccounts = buildBankChartAccounts(companyId, userId, selections)
-  const { data, error } = await supabase.rpc('save_bank_account_selection', {
+  const args = {
     p_company_id: companyId, p_user_id: userId, p_connection_id: connectionId,
     p_expected_token: expectedToken, p_selections: selections, p_chart_accounts: chartAccounts,
-  })
+  }
+  let { data, error } = await supabase.rpc('save_bank_account_selection', initialSync
+    ? { ...args, p_initial_sync: { requested_from: initialSync.requestedFrom, lookback_days: initialSync.lookbackDays } }
+    : args)
+  // Deploy window only: code can go live before migration 20261013120000
+  // adds p_initial_sync, and PostgREST then finds no such function
+  // (PGRST202). The selection is saved without the window, as before. Delete
+  // this fallback 30 days after that migration reaches production.
+  if (error?.code === 'PGRST202' && initialSync) {
+    ({ data, error } = await supabase.rpc('save_bank_account_selection', args))
+  }
   if (error) throw selectionError(error)
   if (!data?.status || !Array.isArray(data?.accounts)) throw new Error('Bank selection receipt missing')
   return data as { status: string; accounts: unknown[]; yielded?: YieldedCashAccount[] }

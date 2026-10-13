@@ -5,7 +5,8 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { FLOATING_BULK_BAR_CLASS } from '@/components/ui/floating-bulk-bar'
+import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
+import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Switch } from '@/components/ui/switch'
@@ -140,9 +141,8 @@ export default function ChartOfAccountsManager() {
   // A deactivated account is otherwise invisible everywhere and unrecoverable.
   const [showInactive, setShowInactive] = useState(false)
   const [usageFilter, setUsageFilter] = useState<UsageFilter>('all')
-  // Row selection for the bulk inactivate (#2186), keyed by account number
-  // (the PUT/deactivate routes key on it too). Cleared on view switch.
-  const [selectedNumbers, setSelectedNumbers] = useState<Set<string>>(new Set())
+  // Row selection for the bulk inactivate (#2186) is useBulkSelection below,
+  // keyed by account number (the PUT/deactivate routes key on it too).
   const [bulkDeactivating, setBulkDeactivating] = useState(false)
   // The usage map loads after first paint; until it has, "utan verifikat"
   // would match every account, so the filter stays disabled.
@@ -389,7 +389,7 @@ export default function ChartOfAccountsManager() {
       if (!res.ok) throw new Error(t('toast_update_failed'))
       const body = (await res.json().catch(() => ({}))) as { deactivated?: number }
       toast({ title: t('bulk_deactivate_done', { count: Number(body.deactivated ?? 0) }) })
-      setSelectedNumbers(new Set())
+      selection.clear()
       await refreshAll()
     } catch {
       toast({ title: t('toast_update_failed'), variant: 'destructive' })
@@ -507,17 +507,11 @@ export default function ChartOfAccountsManager() {
     () => filteredAccounts.map((a) => a.account_number),
     [filteredAccounts],
   )
-  const allVisibleSelected =
-    visibleNumbers.length > 0 && visibleNumbers.every((n) => selectedNumbers.has(n))
-  const toggleSelect = (number: string) =>
-    setSelectedNumbers((prev) => {
-      const next = new Set(prev)
-      if (next.has(number)) next.delete(number)
-      else next.add(number)
-      return next
-    })
-  const toggleSelectAllVisible = () =>
-    setSelectedNumbers(allVisibleSelected ? new Set() : new Set(visibleNumbers))
+  // A search or usage filter that hides a ticked account drops it, so the
+  // bulk inactivate never reaches an account the user can no longer see.
+  const selection = useBulkSelection(visibleNumbers)
+  const selectedNumbers = selection.selectedIds
+  const toggleSelectAllVisible = () => (selection.allSelected ? selection.clear() : selection.selectAll())
 
   const groupedAccounts = useMemo(() => {
     const grouped: Record<number, BASAccount[]> = {}
@@ -586,7 +580,7 @@ export default function ChartOfAccountsManager() {
 
   const switchView = (next: 'my-accounts' | 'bas-catalog') => {
     setView(next)
-    setSelectedNumbers(new Set())
+    selection.clear()
     setCollapsedMyClasses(new Set())
     setExpandedCatalogClasses(new Set())
     if (next === 'bas-catalog') void ensureReferenceLoaded()
@@ -674,37 +668,25 @@ export default function ChartOfAccountsManager() {
           <div>
             {/* Bulk bar: appears with the first selection, carries the count
                 and the one action the selection exists for. */}
-            {selectedNumbers.size > 0 && (
-              <div className={FLOATING_BULK_BAR_CLASS}>
-                <span className="whitespace-nowrap">
-                  <strong className="font-semibold tabular-nums">{selectedNumbers.size}</strong>{' '}
-                  {t('bulkbar_selected', { count: selectedNumbers.size })}
-                </span>
-                <Button size="sm" onClick={bulkDeactivate} loading={bulkDeactivating}>
-                  {t('deactivate_confirm_action')}
-                </Button>
-                {!allVisibleSelected && (
-                  <button type="button" className={QUIET_LINK_CLASS} onClick={toggleSelectAllVisible}>
-                    {t('bulk_select_all', { count: visibleNumbers.length })}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className={QUIET_LINK_CLASS}
-                  onClick={() => setSelectedNumbers(new Set())}
-                  disabled={bulkDeactivating}
-                >
-                  {t('bulk_clear_selection')}
-                </button>
-              </div>
-            )}
+            <BulkSelectionBar
+              selection={selection}
+              selectableCount={visibleNumbers.length}
+              countLabel={t('bulkbar_selected', { count: selectedNumbers.size })}
+              selectAllLabel={t('bulk_select_all', { count: visibleNumbers.length })}
+              clearLabel={t('bulk_clear_selection')}
+              busy={bulkDeactivating}
+            >
+              <Button size="sm" onClick={bulkDeactivate} loading={bulkDeactivating}>
+                {t('deactivate_confirm_action')}
+              </Button>
+            </BulkSelectionBar>
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
                   <th className={cn(TH_CLASS, 'w-[36px] pr-0')}>
                     <Checkbox
-                      checked={allVisibleSelected}
+                      checked={selection.headerState}
                       onCheckedChange={toggleSelectAllVisible}
                       aria-label={t('select_all_aria')}
                       className="border-foreground"
@@ -774,7 +756,7 @@ export default function ChartOfAccountsManager() {
                               <td className={cn(TD_CLASS, 'w-[36px] pr-0 py-[9px]')}>
                                 <Checkbox
                                   checked={selectedNumbers.has(account.account_number)}
-                                  onCheckedChange={() => toggleSelect(account.account_number)}
+                                  onCheckedChange={() => selection.toggle(account.account_number)}
                                   aria-label={t('select_row_aria', { number: account.account_number })}
                                   className={cn(
                                     'border-foreground',

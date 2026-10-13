@@ -33,18 +33,12 @@ vi.mock('@/lib/cash-accounts/service', () => ({
     iban ? iban.replace(/\s+/g, '').toUpperCase() || null : null,
 }))
 
-// Mock the reconciliation modules so the renewal-guard sweep is deterministic
-// and observable. The mocks must export every symbol index.ts imports.
-const { mockRunReconciliation, mockResolveCashAccountScope } = vi.hoisted(() => ({
-  mockRunReconciliation: vi.fn(),
-  mockResolveCashAccountScope: vi.fn(),
-}))
-vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
-  runReconciliation: (...args: unknown[]) => mockRunReconciliation(...args),
-  DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD: 0.9,
-}))
-vi.mock('@/lib/reconciliation/cash-account-scope', () => ({
-  resolveCashAccountScope: (...args: unknown[]) => mockResolveCashAccountScope(...args),
+// The post-sync sweep is the shared unattended sweep (its own tests cover the
+// per-account scoping); here only how the backfill calls it matters.
+const { mockSweep } = vi.hoisted(() => ({ mockSweep: vi.fn() }))
+vi.mock('@/lib/reconciliation/unattended-sweep', () => ({
+  runUnattendedReconciliationSweep: (...args: unknown[]) => mockSweep(...args),
+  toSweepSummary: () => ({ auto_linked: 0 }),
 }))
 
 import { enableBankingExtension } from '../index'
@@ -185,7 +179,14 @@ function buildSupabase(stub: SupabaseStub) {
           data: stub.connectionRow,
           error: stub.connectionError ?? null,
         }),
-        update: vi.fn(() => { throw new Error('Selection must not write connections outside its RPC') }),
+        // The post-sync sweep stamps its summary; nothing else may be written
+        // outside the selection RPC.
+        update: vi.fn((patch: Record<string, unknown>) => {
+          if (Object.keys(patch).join() !== 'last_sie_sweep') {
+            throw new Error('Selection must not write connections outside its RPC')
+          }
+          return { eq: vi.fn().mockResolvedValue({ data: null, error: null }) }
+        }),
       }
     }),
   }
@@ -232,23 +233,7 @@ describe('PATCH /accounts (enable-banking)', () => {
     eventBus.clear()
     // Default: the initial backfill wins the shared sync lease.
     mockClaimSyncLease.mockResolvedValue(true)
-    mockRunReconciliation.mockResolvedValue({
-      matches: [],
-      applied: 0,
-      errors: 0,
-      skippedBelowThreshold: 0,
-    })
-    // Scope stand-in: echo the requested account (or the '1930' default) so
-    // tests can assert the sweep runs once per ledger account, correctly scoped.
-    mockResolveCashAccountScope.mockImplementation(
-      async (_supabase: unknown, _companyId: unknown, accountNumber?: string) => ({
-        accountNumber: accountNumber ?? '1930',
-        currency: 'SEK',
-        cashAccountId: `ca-${accountNumber ?? '1930'}`,
-        includeUnassigned: accountNumber === undefined,
-        found: true,
-      }),
-    )
+    mockSweep.mockResolvedValue({ accounts: [], applied: 0, errors: 0, skippedBelowThreshold: 0, suggested: 0, unmatched: 0 })
     // Default: no revoked connections; individual tests override to exercise
     // the self-heal path.
     mockGetRevokedConnectionIds.mockResolvedValue(new Set<string>())
@@ -272,17 +257,6 @@ describe('PATCH /accounts (enable-banking)', () => {
         return null
       },
     )
-  })
-
-  it('returns 401 when unauthenticated', async () => {
-    const supabase = buildSupabase({ authUser: null, connectionRow: null })
-    const ctx = makeContext(supabase)
-
-    const res = await accountsRoute.handler(
-      makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'] }),
-      ctx
-    )
-    expect(res.status).toBe(401)
   })
 
   it('returns 400 when connection_id missing', async () => {
@@ -620,21 +594,6 @@ describe('PATCH /accounts (enable-banking)', () => {
     expect(stub.selectionCalls?.[0]).not.toHaveProperty('status')
   })
 
-  it('returns 400 when ctx.companyId is absent (no user.id fallback)', async () => {
-    const supabase = buildSupabase({ authUser: { id: 'user-1' }, connectionRow: null })
-    const ctx = makeContext(supabase)
-    // Simulate a missing company context: should not fall back to user.id.
-    const ctxWithoutCompany = { ...ctx, companyId: undefined as unknown as string }
-
-    const res = await accountsRoute.handler(
-      makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'] }),
-      ctxWithoutCompany
-    )
-    expect(res.status).toBe(400)
-    const body = await res.json()
-    expect(body.error).toMatch(/Company context required/i)
-  })
-
   it('returns 400 when enabled_uids exceeds the per-connection cap', async () => {
     const supabase = buildSupabase({
       authUser: { id: 'user-1' },
@@ -774,9 +733,7 @@ describe('PATCH /accounts (enable-banking)', () => {
         returnedMinBookingDate: '2026-01-05',
         returnedMaxBookingDate: '2026-05-06',
       })
-      mockRunReconciliation
-        .mockResolvedValueOnce({ matches: [{}, {}, {}, {}], applied: 3, errors: 0, skippedBelowThreshold: 1 })
-        .mockResolvedValueOnce({ matches: [{}, {}], applied: 2, errors: 0, skippedBelowThreshold: 0 })
+      mockSweep.mockResolvedValueOnce({ accounts: [], applied: 5, errors: 0, skippedBelowThreshold: 1, suggested: 0, unmatched: 0 })
 
       const stub: SupabaseStub = {
         authUser: { id: 'user-1' },
@@ -818,34 +775,21 @@ describe('PATCH /accounts (enable-banking)', () => {
         expect.any(String),
         expect.any(String),
         undefined,
-        { strategy: 'longest', skipAutoCategorization: true }
+        { skipAutoCategorization: true, strategy: 'longest' }
       )
 
-      // One scoped sweep per distinct ledger account: pooled unscoped runs can
-      // cross-link accounts (#1290/#1298). The EUR account had no stored
-      // ledger_account, but the PATCH allocator assigns one ('1932') before the
-      // backfill, so both sweeps run with a concrete account.
-      expect(mockResolveCashAccountScope).toHaveBeenCalledTimes(2)
-      expect(mockResolveCashAccountScope).toHaveBeenCalledWith(expect.anything(), 'company-1', '1930')
-      expect(mockResolveCashAccountScope).toHaveBeenCalledWith(expect.anything(), 'company-1', '1932')
-      expect(mockRunReconciliation).toHaveBeenCalledTimes(2)
-      expect(mockRunReconciliation).toHaveBeenCalledWith(
-        expect.anything(),
-        'company-1',
-        'user-1',
-        expect.objectContaining({
-          accountNumber: '1930',
-          currency: 'SEK',
-          cashAccountId: 'ca-1930',
-          includeUnassigned: false,
-          confidenceThreshold: 0.9,
-          // The bank over-returned history: the sweep window opens at the
-          // oldest returned booking date, not the requested 90-day fromDate,
-          // so over-returned rows are swept too.
-          dateFrom: '2026-01-05',
-          dateTo: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
-        })
-      )
+      // One sweep over the synced ledger accounts only, each in its own
+      // cash-account scope, never the pooled form (#1290/#1298). The EUR
+      // account had no stored ledger_account, but the PATCH allocator assigns
+      // one ('1932') before the backfill. The bank over-returned history: the
+      // window opens at the oldest returned booking date, not the requested
+      // 90-day fromDate, so over-returned rows are swept too.
+      expect(mockSweep).toHaveBeenCalledTimes(1)
+      expect(mockSweep).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', {
+        dateFrom: '2026-01-05',
+        dateTo: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+        ledgerAccounts: ['1930', '1932'],
+      })
 
       // Applied links surface to the UI so the user sees the period was
       // recognized, not re-imported as work.
@@ -892,7 +836,7 @@ describe('PATCH /accounts (enable-banking)', () => {
         undefined,
         { strategy: 'longest' }
       )
-      expect(mockRunReconciliation).not.toHaveBeenCalled()
+      expect(mockSweep).not.toHaveBeenCalled()
       expect(body.initial_sync.auto_matched).toBe(0)
     })
 
@@ -935,54 +879,9 @@ describe('PATCH /accounts (enable-banking)', () => {
         expect.any(String),
         expect.any(String),
         undefined,
-        { strategy: 'longest', skipAutoCategorization: true, rawInsertOnly: true }
+        { skipAutoCategorization: true, rawInsertOnly: true, strategy: 'longest' }
       )
-      expect(mockRunReconciliation).not.toHaveBeenCalled()
-    })
-
-    it('skips the sweep for an account whose cash_accounts row did not resolve instead of widening to the pooled form', async () => {
-      mockedSync.mockResolvedValue({
-        requestedFromDate: '2026-01-01',
-        historyNarrowed: false,
-        imported: 6,
-        duplicates: 0,
-        errors: 0,
-        returnedMinBookingDate: '2026-05-01',
-        returnedMaxBookingDate: '2026-05-13',
-      })
-      // found: false = no cash_accounts row (e.g. the mirror upsert failed
-      // earlier in the request). Running anyway would sweep currency-only
-      // across every same-currency account (#1290 write shape).
-      mockResolveCashAccountScope.mockResolvedValue({
-        accountNumber: '1930',
-        currency: 'SEK',
-        cashAccountId: undefined,
-        includeUnassigned: true,
-        found: false,
-      })
-
-      const stub: SupabaseStub = {
-        authUser: { id: 'user-1' },
-        connectionRow: {
-          id: 'conn-1',
-          status: 'pending_selection',
-          accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true, ledger_account: '1930' }] as StoredAccount[],
-        },
-        sieImportRow: { id: 'sie-1' },
-      }
-      const supabase = buildSupabase(stub)
-      const ctx = makeContext(supabase)
-
-      const res = await accountsRoute.handler(
-        makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'], initial_lookback_days: 90 }),
-        ctx
-      )
-
-      expect(res.status).toBe(200)
-      const body = await res.json()
-      expect(mockResolveCashAccountScope).toHaveBeenCalled()
-      expect(mockRunReconciliation).not.toHaveBeenCalled()
-      expect(body.initial_sync.auto_matched).toBe(0)
+      expect(mockSweep).not.toHaveBeenCalled()
     })
 
     it('keeps the backfill successful when the reconciliation sweep throws (non-critical)', async () => {
@@ -995,7 +894,7 @@ describe('PATCH /accounts (enable-banking)', () => {
         returnedMinBookingDate: '2026-05-01',
         returnedMaxBookingDate: '2026-05-13',
       })
-      mockRunReconciliation.mockRejectedValue(new Error('recon exploded'))
+      mockSweep.mockRejectedValue(new Error('recon exploded'))
 
       const stub: SupabaseStub = {
         authUser: { id: 'user-1' },
@@ -1180,6 +1079,36 @@ describe('PATCH /accounts (enable-banking)', () => {
       // Status flip happened; no metadata follow-up because sync threw.
       expect(stub.selectionReceipts).toHaveLength(1)
       expect(stub.selectionReceipts?.[0]?.status).toBe('active')
+    })
+
+    it('saves the picked window with the activation, before the inline import runs or fails', async () => {
+      mockedSync.mockRejectedValue(new Error('ASPSP_DOWN'))
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        connectionRow: { id: 'conn-1', status: 'pending_selection', accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true }] },
+      }
+      const res = await accountsRoute.handler(
+        makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'], initial_lookback_days: 180 }),
+        makeContext(buildSupabase(stub)),
+      )
+      expect(res.status).toBe(200)
+      const expectedFrom = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+      // The cron's first sync reads this date when the inline import did not finish.
+      expect(stub.selectionCalls?.[0]?.p_initial_sync).toEqual({ requested_from: expectedFrom, lookback_days: 180 })
+      expect(stub.capturedSync).toBeUndefined()
+    })
+
+    it('saves no window when an active connection only changes its selection', async () => {
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        connectionRow: { id: 'conn-1', status: 'active', accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true }] },
+      }
+      const res = await accountsRoute.handler(
+        makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'], initial_lookback_days: 180 }),
+        makeContext(buildSupabase(stub)),
+      )
+      expect(res.status).toBe(200)
+      expect(stub.selectionCalls?.[0]).not.toHaveProperty('p_initial_sync')
     })
 
     it('clamps initial_lookback_days to [30, 365]', async () => {

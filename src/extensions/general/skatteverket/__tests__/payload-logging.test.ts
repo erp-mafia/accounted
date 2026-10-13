@@ -9,6 +9,7 @@ const PAYLOAD_MARKER = 987654
 
 const mockSkvRequest = vi.fn()
 const mockAgiPostUnderlag = vi.fn()
+const mockAgiGetKontrollresultat = vi.fn()
 
 vi.mock('../lib/api-client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/api-client')>()
@@ -23,6 +24,7 @@ vi.mock('../lib/agi-client', async (importOriginal) => {
   return {
     ...actual,
     agiPostUnderlag: (...args: unknown[]) => mockAgiPostUnderlag(...args),
+    agiGetKontrollresultat: (...args: unknown[]) => mockAgiGetKontrollresultat(...args),
   }
 })
 
@@ -197,7 +199,8 @@ describe('Skatteverket routes never log the declaration payload or the redovisar
   )
 
   it('/agi/submit logs nothing personal on success', async () => {
-    mockAgiPostUnderlag.mockResolvedValue({ ok: true, data: { inlamningId: 'inl-1' } })
+    mockAgiPostUnderlag.mockResolvedValue({ ok: true, data: { inlamningId: 7 } })
+    mockAgiGetKontrollresultat.mockResolvedValue({ ok: true, data: { status: 'DONE_SUCCESS' } })
     const ctx = makeContext()
 
     const response = await route('POST', '/agi/submit').handler(postJson('/agi/submit', { salaryRunId: 'run-1' }), ctx)
@@ -220,7 +223,6 @@ describe('Skatteverket routes never log the declaration payload or the redovisar
 
     expect(response.status).toBe(400)
     expect(ctx.log.error).toHaveBeenCalledWith(expect.any(String), {
-      period: '202606',
       status: 400,
       kod: 'FEL_01',
     })

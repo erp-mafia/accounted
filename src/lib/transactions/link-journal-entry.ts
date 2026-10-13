@@ -4,11 +4,15 @@
  * inserting an invoice_payments row pointing at the existing JE and flipping
  * the invoice status with an optimistic-lock pattern.
  *
- * Shared between two callers:
- *   - REST: app/api/transactions/[id]/link-journal-entry/route.ts
- *     (duplicate-payment UI: user confirms the suggested existing voucher)
- *   - MCP commit handler: lib/pending-operations/commit.ts
- *     (gnubok_link_transaction_to_journal_entry, agent-staged operation)
+ * One implementation behind the dashboard route
+ * (app/api/transactions/[id]/link-journal-entry/route.ts: the duplicate-
+ * payment UI, where the user confirms the suggested existing voucher) and
+ * the operation transactions.link-journal-entry (lib/operations/
+ * transactions.ts), which serves v1, the MCP tool
+ * gnubok_link_transaction_to_journal_entry and its approval. The bank side
+ * of the link (which pairs may link, and the locked pointer write) is the
+ * bank link core in lib/transactions/bank-link.ts, shared with the
+ * reconciliation page's manualLink.
  *
  * NEVER creates a new journal entry. The match log records
  * 'linked_to_existing_voucher' for audit on success.
@@ -22,7 +26,12 @@ import { roundOre } from '@/lib/money'
 import { recordInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
-import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
+import {
+  hasLiveJournalEntryLink,
+  prepareBankLink,
+  writeBankLink,
+  type PreparedBankLink,
+} from '@/lib/transactions/bank-link'
 import { createLogger } from '@/lib/logger'
 import { conflictCode } from '@/lib/errors/structured-errors'
 import type { Invoice, Transaction } from '@/types'
@@ -31,8 +40,8 @@ import { isMatchableInvoiceStatus, MATCHABLE_INVOICE_STATUSES } from '@/lib/invo
 const log = createLogger('transactions/link-journal-entry')
 
 // Codes returned by linkTransactionToJournalEntry. All map to entries in
-// lib/errors/structured-errors.ts so both callers (REST route, MCP commit
-// handler) can surface the right HTTP status and the localized message.
+// lib/errors/structured-errors.ts so every door (the dashboard route, the
+// operation) can surface the right HTTP status and the localized message.
 // The TX-not-found case reuses the shared TX_CATEGORIZE_TX_NOT_FOUND code
 // rather than a link-specific one: it predates this route and is the
 // canonical "bank tx not found in this company" envelope.
@@ -40,6 +49,8 @@ export type LinkTransactionJournalEntryErrorCode =
   | ReturnType<typeof conflictCode>
   | 'TX_CATEGORIZE_TX_NOT_FOUND'
   | 'LINK_TX_TX_ALREADY_LINKED'
+  | 'LINK_TX_TX_IGNORED'
+  | 'BANK_ANCHOR_SETTLEMENT_CHANGED'
   | 'LINK_TX_JE_NOT_FOUND'
   | 'LINK_TX_JE_NOT_POSTED'
   | 'LINK_TX_INVOICE_NOT_FOUND'
@@ -48,6 +59,7 @@ export type LinkTransactionJournalEntryErrorCode =
   | 'LINK_TX_INVOICE_CURRENCY_MISMATCH'
   | 'LINK_TX_INVOICE_RACE'
   | 'MATCH_INVOICE_RECORD_PAYMENT_FAILED'
+  | 'BANK_BOOKING_CURRENCY_MISMATCH'
   | 'LINK_TX_DB_ERROR'
 
 export interface LinkTransactionJournalEntryParams {
@@ -66,9 +78,24 @@ export interface LinkTransactionJournalEntryResult {
   remainingAmount: number | null
 }
 
+/**
+ * What a dry run read on the way, so an approver can recognise the pair:
+ * the row (its counterparty text, amount, currency, date), the verifikat's
+ * date and the invoice number.
+ */
+export interface LinkTransactionJournalEntrySubject {
+  transactionDescription: string | null
+  transactionAmount: number
+  transactionCurrency: string
+  transactionDate: string
+  voucherDate: string
+  invoiceNumber: string | null
+}
+
 export type LinkTransactionJournalEntryOutcome =
   // dryRun: the result the link WOULD produce; nothing was written.
-  | { ok: true; result: LinkTransactionJournalEntryResult; dryRun?: boolean }
+  | { ok: true; result: LinkTransactionJournalEntryResult; dryRun?: false }
+  | { ok: true; result: LinkTransactionJournalEntryResult; dryRun: true; subject: LinkTransactionJournalEntrySubject }
   | { ok: false; code: LinkTransactionJournalEntryErrorCode; details?: Record<string, unknown> }
 
 /**
@@ -91,42 +118,51 @@ export function formatVoucherLabel(
   return num === '' ? series : `${series}-${num}`
 }
 
+// The liveness predicate lives with the bank link core; re-exported for the
+// re-booking guards that import it from here.
+export { hasLiveJournalEntryLink }
+
 /**
- * Is `journalEntryId` a LIVE link, i.e. does it reference a posted verifikat?
- *
- * A transaction can carry a non-null `journal_entry_id` that no longer points
- * at a live booking: reversing (storno) or correcting an entry marks the
- * original `reversed`, and while both flows try to detach or re-point the
- * transaction (engine.ts `reverseEntry`, storno-service `relinkTransactions-
- * ToEntry`), those re-links are best-effort and rows reversed before #726
- * (2026-06-15) were never touched at all. Such a transaction reads as "utan
- * koppling" in the UI: the transactions page enriches only `status='posted'`
- * links, so a reversed pointer renders as no link, yet the raw column is still
- * set.
- *
- * The "already linked" guards on the re-booking paths must mirror that same
- * posted-only predicate. If they treat any non-null pointer as linked, a
- * transaction the UI shows as free can never be re-linked or re-categorized
- * (issue #988). Returns true ONLY when the pointer references a posted entry;
- * null / missing / reversed / cancelled / draft all count as no live link, so
- * the caller may overwrite the stale pointer. Fails closed (returns true) on a
- * read error so a transient lookup blip can never detach a genuinely live link.
+ * A refusal of the bank link core as this door's structured error code. The
+ * core's checks are the reconciliation page's: a row the page refuses to
+ * link (ignored, or a verifikat with no line on the row's bank account) is
+ * refused here by name too, on the dry run and the approval alike, instead
+ * of the database's bank-anchor guard answering at the write.
  */
-export async function hasLiveJournalEntryLink(
-  supabase: SupabaseClient,
-  companyId: string,
-  journalEntryId: string | null | undefined,
-): Promise<boolean> {
-  if (!journalEntryId) return false
-  const { data, error } = await supabase
-    .from('journal_entries')
-    .select('status')
-    .eq('id', journalEntryId)
-    .eq('company_id', companyId)
-    .maybeSingle()
-  if (error) return true
-  return data?.status === 'posted'
+function linkRefusal(
+  prepared: Extract<PreparedBankLink, { ok: false }>,
+): Extract<LinkTransactionJournalEntryOutcome, { ok: false }> {
+  switch (prepared.code) {
+    case 'TRANSACTION_NOT_FOUND':
+      return { ok: false, code: 'TX_CATEGORIZE_TX_NOT_FOUND' }
+    case 'TRANSACTION_ALREADY_LINKED':
+      return {
+        ok: false,
+        code: 'LINK_TX_TX_ALREADY_LINKED',
+        details: { existingJournalEntryId: prepared.existingJournalEntryId ?? null },
+      }
+    case 'TRANSACTION_IGNORED':
+      return { ok: false, code: 'LINK_TX_TX_IGNORED' }
+    case 'ENTRY_NOT_FOUND':
+      return { ok: false, code: 'LINK_TX_JE_NOT_FOUND' }
+    case 'ENTRY_NOT_POSTED':
+    case 'ENTRY_REVERSED':
+      return { ok: false, code: 'LINK_TX_JE_NOT_POSTED', details: { currentStatus: prepared.entryStatus ?? null } }
+    case 'CURRENCY_MISMATCH':
+      return { ok: false, code: 'BANK_BOOKING_CURRENCY_MISMATCH', details: { reason: prepared.error } }
+    default:
+      // NOT_SETTLED (and TRANSACTION_OTHER_ACCOUNT, which cannot happen on
+      // the row's own account): the answer the bank-anchor guard gives the
+      // same pair at the write.
+      return { ok: false, code: 'BANK_ANCHOR_SETTLEMENT_CHANGED', details: { reason: prepared.error } }
+  }
 }
+
+// Data minimization (GDPR Art.5(1)(c)): only the columns needed for the
+// checks, the optimistic-lock invoice update, the invoice_payments insert,
+// and the compensating-rollback path. No select('*').
+const LINK_TX_COLUMNS =
+  'id, date, amount, currency, exchange_rate, description, merchant_name, cash_account_id, journal_entry_id, invoice_id, is_business, is_ignored, potential_invoice_id, potential_supplier_invoice_id, potential_rot_rut_payout_request_id'
 
 export async function linkTransactionToJournalEntry(
   supabase: SupabaseClient,
@@ -137,72 +173,22 @@ export async function linkTransactionToJournalEntry(
 ): Promise<LinkTransactionJournalEntryOutcome> {
   const { transactionId, journalEntryId, invoiceId } = params
 
-  // Data minimization (GDPR Art.5(1)(c)): pull only the columns needed for
-  // validation, optimistic-lock invoice update, invoice_payments insert, and
-  // the compensating-rollback path. No select('*').
-  // transaction_voucher_links rides along on the same read: a row bulk-booked
-  // into a samlingsverifikat or split over several verifikat (1:N, #1553)
-  // carries journal_entry_id = NULL and must still refuse a second link. Only
-  // 'bank_line' rows count (hasBankLineJunctionRow): a residual's 'other' row
-  // left behind by a storno must stay re-linkable.
-  const { data: transactionRow, error: fetchTxError } = await supabase
-    .from('transactions')
-    .select(
-      'id, date, amount, currency, exchange_rate, journal_entry_id, invoice_id, is_business, potential_invoice_id, potential_supplier_invoice_id, potential_rot_rut_payout_request_id, transaction_voucher_links(journal_entry_id, role)'
-    )
-    .eq('id', transactionId)
-    .eq('company_id', companyId)
-    .single()
-
-  if (fetchTxError || !transactionRow) {
-    return { ok: false, code: 'TX_CATEGORIZE_TX_NOT_FOUND' }
+  // Every bank check is the bank link core's (lib/transactions/bank-link.ts),
+  // the one manualLink runs for the reconciliation page.
+  const prepared = await prepareBankLink(supabase, companyId, {
+    transactionId,
+    journalEntryId,
+    accountNumber: null,
+    txColumns: LINK_TX_COLUMNS,
+  })
+  if (!prepared.ok) return linkRefusal(prepared)
+  const transaction = prepared.tx as Record<string, unknown> & {
+    date: string
+    amount: number
+    currency: string
+    exchange_rate: number | null
   }
-  const { transaction_voucher_links: junctionLinks, ...transaction } = transactionRow as typeof transactionRow & {
-    transaction_voucher_links?: Array<{ journal_entry_id: string; role?: string | null }> | null
-  }
-  if (hasBankLineJunctionRow(junctionLinks)) {
-    const bankLine = junctionLinks!.find((row) => (row.role ?? 'bank_line') === 'bank_line')!
-    return {
-      ok: false,
-      code: 'LINK_TX_TX_ALREADY_LINKED',
-      details: { existingJournalEntryId: bankLine.journal_entry_id },
-    }
-  }
-
-  // Only a LIVE (posted) pointer blocks re-linking. A pointer left behind by a
-  // storno/correction references a 'reversed' entry: the UI already shows the
-  // row as "utan koppling", so the guard must agree and let the user re-link it
-  // to another verifikat (issue #988). The stale pointer is overwritten by the
-  // optimistic-locked UPDATE below.
-  if (
-    transaction.journal_entry_id &&
-    (await hasLiveJournalEntryLink(supabase, companyId, transaction.journal_entry_id as string))
-  ) {
-    return {
-      ok: false,
-      code: 'LINK_TX_TX_ALREADY_LINKED',
-      details: { existingJournalEntryId: transaction.journal_entry_id as string },
-    }
-  }
-
-  const { data: journalEntry, error: fetchJeError } = await supabase
-    .from('journal_entries')
-    .select('id, status, voucher_series, voucher_number, entry_date')
-    .eq('id', journalEntryId)
-    .eq('company_id', companyId)
-    .single()
-
-  if (fetchJeError || !journalEntry) {
-    return { ok: false, code: 'LINK_TX_JE_NOT_FOUND' }
-  }
-
-  if (journalEntry.status !== 'posted') {
-    return {
-      ok: false,
-      code: 'LINK_TX_JE_NOT_POSTED',
-      details: { currentStatus: journalEntry.status as string },
-    }
-  }
+  const journalEntry = prepared.entry
 
   type FetchedInvoice = Pick<
     Invoice,
@@ -300,6 +286,15 @@ export async function linkTransactionToJournalEntry(
         paidAmount: invoice ? newPaidAmount : null,
         remainingAmount: invoice ? newRemaining : null,
       },
+      subject: {
+        transactionDescription:
+          ((transaction.merchant_name as string | null) || (transaction.description as string | null)) ?? null,
+        transactionAmount: transaction.amount as number,
+        transactionCurrency: (transaction.currency as string | null) ?? 'SEK',
+        transactionDate: transaction.date as string,
+        voucherDate: journalEntry.entry_date as string,
+        invoiceNumber: (invoice?.invoice_number as string | null | undefined) ?? null,
+      },
     }
   }
 
@@ -308,7 +303,9 @@ export async function linkTransactionToJournalEntry(
   // (tx linked, invoice unchanged, no payment row).
   const priorTxState = {
     // null, or a stale 'reversed'-entry id we're clearing (validated not-live above)
-    journal_entry_id: transaction.journal_entry_id,
+    journal_entry_id: prepared.previousJournalEntryId,
+    // A link to a voucher on a sibling ledger moved the row there.
+    ...(prepared.repointCashAccountId ? { cash_account_id: transaction.cash_account_id } : {}),
     invoice_id: transaction.invoice_id,
     potential_invoice_id: transaction.potential_invoice_id,
     potential_supplier_invoice_id: transaction.potential_supplier_invoice_id,
@@ -316,41 +313,34 @@ export async function linkTransactionToJournalEntry(
     is_business: transaction.is_business,
   }
 
-  // Optimistic lock on the pointer we validated: null for a free row, or the
-  // exact stale id for one we're detaching from a reversed entry. Locking on
-  // the known value (rather than always .is(null)) lets the stale-pointer
-  // overwrite through while still turning a concurrent re-link into a no-op.
-  const previousJournalEntryId = (transaction.journal_entry_id as string | null) ?? null
-  const txUpdate = supabase
-    .from('transactions')
-    .update({
-      journal_entry_id: journalEntryId,
+  const written = await writeBankLink(supabase, companyId, {
+    transactionId,
+    journalEntryId,
+    prepared,
+    fields: {
       invoice_id: invoiceId ?? null,
       potential_invoice_id: null,
       potential_supplier_invoice_id: null,
       potential_rot_rut_payout_request_id: null,
-      is_business: true,
-    })
-    .eq('id', transactionId)
-    .eq('company_id', companyId)
-  const { data: updatedTxRows, error: updateTxError } = await (previousJournalEntryId === null
-    ? txUpdate.is('journal_entry_id', null)
-    : txUpdate.eq('journal_entry_id', previousJournalEntryId)
-  ).select('id')
-
-  if (updateTxError) {
-    return { ok: false, code: updateTxError.code === 'PT409' ? conflictCode(updateTxError.message) : 'LINK_TX_DB_ERROR', details: { reason: updateTxError.message } }
+    },
+  })
+  if (!written.ok && !written.race) {
+    const { error } = written
+    return {
+      ok: false,
+      code: error.code === 'PT409' ? conflictCode(error.message) : 'LINK_TX_DB_ERROR',
+      details: { reason: error.message },
+    }
   }
   // CAS lost: a concurrent linker changed the pointer between the liveness
   // check and this write, so 0 rows matched. Fail BEFORE any invoice side
   // effects: otherwise we'd settle the invoice + insert an invoice_payments row
-  // for a transaction we didn't actually link (same optimistic-lock contract as
-  // manualLink in lib/reconciliation/bank-reconciliation.ts).
-  if (!updatedTxRows || updatedTxRows.length === 0) {
+  // for a transaction we didn't actually link.
+  if (!written.ok) {
     return {
       ok: false,
       code: 'LINK_TX_TX_ALREADY_LINKED',
-      details: { existingJournalEntryId: previousJournalEntryId },
+      details: { existingJournalEntryId: prepared.previousJournalEntryId },
     }
   }
 

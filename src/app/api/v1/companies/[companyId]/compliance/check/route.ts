@@ -6,9 +6,10 @@
  * an agent can act on programmatically.
  *
  * Generalises the existing MCP tools (gnubok_vat_close_check,
- * gnubok_year_end_readiness) under a single response shape. New check types
- * can be added by registering an entry in CHECK_RUNNERS: the response
- * envelope stays stable so agents only learn one shape.
+ * gnubok_year_end_readiness) under a single response shape. vat_close runs
+ * the same computeVatCloseCheck the MCP tool runs (lib/reports/
+ * vat-close-check.ts). New check types are a case in the switch below: the
+ * response envelope stays stable so agents only learn one shape.
  *
  * Response shape:
  *   {
@@ -25,15 +26,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { ownsFiscalPeriod } from '@/lib/api/v1/owns-fiscal-period'
 import { validateYearEndReadiness } from '@/lib/core/bookkeeping/year-end-service'
-
-// NOTE: `vat_close` is documented in the plan as a supported check type but
-// is NOT shipped here yet. The underlying logic lives in
-// `extensions/general/mcp-server/server.ts::computeVatCloseCheck` and core
-// routes can't import from `@/extensions/` (CI guard `core-only.yml`). A
-// follow-up PR will extract that function into `lib/reports/` so it can be
-// re-used from both the MCP tool and this endpoint without violating the
-// extension/core boundary. The CHECK_RUNNERS shape is ready: adding the
-// type back is a one-liner once the function is in `lib/`.
+import { computeVatCloseCheck } from '@/lib/reports/vat-close-check'
 
 // --------------------------------------------------------------------
 // Response envelope: identical shape across check types so agents learn
@@ -73,6 +66,7 @@ interface CheckResult {
 const SUPPORTED_TYPES = [
   'year_end_readiness',
   'voucher_gaps',
+  'vat_close',
 ] as const
 type CheckType = (typeof SUPPORTED_TYPES)[number]
 
@@ -252,6 +246,61 @@ async function runVoucherGapsCheck(
   }
 }
 
+/**
+ * "Can I close VAT?" for one momsperiod: the MCP close check
+ * (computeVatCloseCheck), in the shared envelope. ready is its
+ * ready_to_close; each blocker and each completeness finding becomes a
+ * finding (a high blocker or an ERROR check is a blocker), and the rutor,
+ * the payment and the sanity ratios ride along under details.
+ */
+async function runVatCloseCheck(
+  supabase: SupabaseClient,
+  companyId: string,
+  url: URL,
+): Promise<CheckResult | { error: string; details?: unknown }> {
+  const args: Record<string, unknown> = { period_type: url.searchParams.get('period_type') ?? undefined }
+  for (const key of ['year', 'period'] as const) {
+    const raw = url.searchParams.get(key)
+    if (raw !== null) args[key] = Number(raw)
+  }
+  let result: Awaited<ReturnType<typeof computeVatCloseCheck>>
+  try {
+    result = await computeVatCloseCheck(args, companyId, supabase)
+  } catch (err) {
+    // A malformed period is the caller's to fix; anything else is ours.
+    if ((err as { code?: string }).code === 'VALIDATION_ERROR') return { error: (err as Error).message }
+    throw err
+  }
+
+  const findings: FindingShape[] = [
+    ...result.blockers.map((b) => ({
+      severity: (b.severity === 'high' ? 'blocker' : b.severity === 'medium' ? 'warning' : 'info') as FindingShape['severity'],
+      code: `VAT_CLOSE_${b.kind.toUpperCase()}`,
+      message: b.message,
+      details: { count: b.count, hint: b.hint, ...(b.check_code ? { check_code: b.check_code } : {}), ...(b.entries ? { entries: b.entries } : {}) },
+    })),
+    ...result.declaration_checks.map((c) => ({
+      severity: (c.status === 'ERROR' ? 'blocker' : c.status === 'WARNING' ? 'warning' : 'info') as FindingShape['severity'],
+      code: c.code,
+      message: c.message,
+      details: { rutor: c.rutor },
+    })),
+  ]
+
+  return {
+    ready: result.ready_to_close,
+    findings,
+    summary: result.summary,
+    extra: {
+      period: result.period,
+      period_label: result.period_label,
+      rutor: result.rutor,
+      payment: result.payment,
+      sanity: result.sanity,
+    },
+  }
+}
+
 // --------------------------------------------------------------------
 // Endpoint definition
 // --------------------------------------------------------------------
@@ -264,7 +313,14 @@ const CheckQuery = z.object({
   fiscal_period_id: z
     .string()
     .uuid()
-    .describe('Fiscal period to check (id from GET /fiscal-periods). Both current check types require it.'),
+    .optional()
+    .describe('Fiscal period to check (id from GET /fiscal-periods). Required by year_end_readiness and voucher_gaps.'),
+  period_type: z
+    .enum(['monthly', 'quarterly', 'yearly'])
+    .optional()
+    .describe('vat_close: the momsperiod length.'),
+  year: z.coerce.number().int().optional().describe('vat_close: the year; for yearly, the year the räkenskapsår ends.'),
+  period: z.coerce.number().int().optional().describe('vat_close: 1-12 monthly, 1-4 quarterly, 1 yearly.'),
 })
 
 registerEndpoint({
@@ -273,16 +329,16 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/compliance/check',
   summary: 'Run a structured compliance pre-flight check.',
   description:
-    'Generalised pre-flight that consolidates the Accounted pre-close validators under one envelope. Supported check types: year_end_readiness (BFNAR 2017:3 + ÅRL 2:1 blockers), voucher_gaps (BFNAR 2013:2 kap 8 § series continuity). vat_close is planned for a follow-up PR (the underlying function currently lives in the MCP extension and core routes cannot import from extensions; it will be extracted into lib/reports/ then exposed here). New types can be added without changing the response shape.',
+    'Generalised pre-flight that consolidates the Accounted pre-close validators under one envelope. Supported check types: year_end_readiness (BFNAR 2017:3 + ÅRL 2:1 blockers), voucher_gaps (BFNAR 2013:2 kap 8 § series continuity), vat_close (can the momsperiod be closed: SKV 4700 rutor, bookkeeping blockers and the momsdeklaration completeness checks the web filing UI uses; the same answer as the MCP tool gnubok_vat_close_check). New types can be added without changing the response shape.',
   useWhen:
     'Before committing to an irreversible action (VAT close, year-end close), or as a periodic audit sweep to surface blockers before they become urgent.',
   doNotUseFor:
     'Executing the underlying action: this is read-only. After a passing check, call the corresponding async endpoint (POST /fiscal-periods/{id}/year-end, etc).',
   pitfalls: [
-    'year_end_readiness and voucher_gaps require fiscal_period_id (UUID).',
+    'year_end_readiness and voucher_gaps require fiscal_period_id (UUID); vat_close requires period_type, year and period.',
     'voucher_gaps covers EVERY voucher series registered for the period (A, B, F, ...), not only series A.',
     'A passing check is a SNAPSHOT: the state can change between the check and the action. The same blocker logic runs again on commit.',
-    'vat_close is documented in the plan but NOT yet supported by this endpoint: call gnubok_vat_close_check via the MCP server until the function is extracted into lib/reports/.',
+    'vat_close: details carries the rutor (ruta49 = to pay, negative = refund), the payment block with the deadline, and the sanity ratios.',
   ],
   example: {
     response: {
@@ -338,6 +394,12 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
         case 'voucher_gaps':
           result = await runVoucherGapsCheck(ctx.supabase, ctx.companyId!, url)
           params.fiscal_period_id = url.searchParams.get('fiscal_period_id')
+          break
+        case 'vat_close':
+          result = await runVatCloseCheck(ctx.supabase, ctx.companyId!, url)
+          params.period_type = url.searchParams.get('period_type')
+          params.year = url.searchParams.get('year')
+          params.period = url.searchParams.get('period')
           break
       }
 

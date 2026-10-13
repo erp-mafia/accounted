@@ -20,7 +20,7 @@ vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
   })),
 }))
 
-import { computeVatCloseCheck, vatPeriodContainsFiscalYearEnd } from '../server'
+import { computeVatCloseCheck, vatPeriodContainsFiscalYearEnd } from '@/lib/reports/vat-close-check'
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 

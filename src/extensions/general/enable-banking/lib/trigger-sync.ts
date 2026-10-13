@@ -13,6 +13,9 @@
  * starts. An unattended agent loop therefore costs at most one sync per
  * connection per cooldown window, regardless of how often it asks.
  *
+ * The sync itself is runConnectionSync (run-connection-sync.ts), the same
+ * one the web routes and the cron run.
+ *
  * Failures are reported as codes, never thrown, so each surface maps them
  * to its own envelope (structured-errors.ts BANK_SYNC_*). A dead PSD2
  * session is flipped to 'expired' here exactly like the web route does:
@@ -23,7 +26,7 @@
  * lib/bank-sync/trigger-sync-contract.ts.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { syncAccountTransactions, type SyncOptions } from './sync'
+import { runConnectionSync } from './run-connection-sync'
 import {
   SessionExpiredError,
   AspspUnavailableError,
@@ -36,7 +39,6 @@ import { emitBankSyncFailed } from './sync-failure-event'
 import { applyRateLimitCooldown, claimSyncLease, rateLimitHoldUntil } from './sync-lease'
 import { retryAfterSeconds } from './rate-limit-message'
 import {
-  persistBankSyncResult,
   persistBankSyncFailure,
   persistBankRouteNeedsConfiguration,
   BankSyncResultObsoleteError,
@@ -192,49 +194,18 @@ export async function triggerConnectionSync(
   const syncStartedAt = new Date(now).toISOString()
 
   try {
-    // Same SIE-overlap guard as the web route and the cron: never
-    // auto-categorise into a range a completed SIE import already covers.
-    const { data: sieOverlap } = await supabase
-      .from('sie_imports')
-      .select('id')
-      .eq('company_id', companyId)
-      .eq('status', 'completed')
-      .gte('fiscal_year_end', fromDate)
-      .limit(1)
-      .maybeSingle()
-
-    const syncOptions: SyncOptions = {
-      ...(sieOverlap ? { skipAutoCategorization: true } : {}),
-      ...(isViewer ? { rawInsertOnly: true } : {}),
-      ...(lookbackDays >= 30 ? { strategy: 'longest' as const } : {}),
-    }
-
-    const results = await Promise.all(
-      accounts.map((account) =>
-        syncAccountTransactions(
-          supabase,
-          companyId,
-          userId,
-          connection.id as string,
-          account,
-          fromDate,
-          toDate,
-          undefined,
-          syncOptions,
-        ),
-      ),
-    )
-    const imported = results.reduce((sum, r) => sum + r.imported, 0)
-    const duplicates = results.reduce((sum, r) => sum + r.duplicates, 0)
-
-    const syncedAt = new Date().toISOString()
-    await persistBankSyncResult(supabase, {
+    const { imported, duplicates, completedAt: syncedAt } = await runConnectionSync({
+      supabase,
       companyId,
-      connectionId: connection.id as string,
-      sessionId: connection.session_id as string | null,
-      startedAt: syncStartedAt,
-      completedAt: syncedAt,
+      userId,
+      connection: { id: connection.id as string, session_id: connection.session_id as string | null },
       accounts,
+      fromDate,
+      toDate,
+      lookbackDays,
+      rawInsertOnly: isViewer,
+      startedAt: syncStartedAt,
+      log,
     })
 
     if (imported > 0) {

@@ -15,13 +15,14 @@ import { skatteverketExtension } from '../index'
 import { bokforSkattekontoTransactionsBatch } from '../lib/skattekonto-booking'
 import type { ExtensionContext } from '@/lib/extensions/types'
 import type { SkattekontoBatchResult } from '@/types/skatteverket'
+import { testRoutes } from '@/tests/helpers'
 
 const ROUTE_PATH = '/skattekonto/transaktioner/bokfor-batch'
 const UUID_A = '11111111-1111-4111-8111-111111111111'
 const UUID_B = '22222222-2222-4222-8222-222222222222'
 
 function findRoute() {
-  const route = skatteverketExtension.apiRoutes?.find(
+  const route = testRoutes(skatteverketExtension).find(
     (r) => r.method === 'POST' && r.path === ROUTE_PATH,
   )
   if (!route) throw new Error('bokfor-batch route not registered')

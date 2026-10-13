@@ -25,9 +25,10 @@ vi.mock('../server', () => {
 
 import { mcpServerExtension } from '../index'
 import { agentToolRegistry } from '@/lib/agent/tools/registry'
+import { testRoutes } from '@/tests/helpers'
 
 function route(method: string) {
-  const r = mcpServerExtension.apiRoutes?.find((x) => x.method === method && x.path === '/mcp')
+  const r = testRoutes(mcpServerExtension).find((x) => x.method === method && x.path === '/mcp')
   if (!r) throw new Error(`no ${method} /mcp route`)
   return r
 }

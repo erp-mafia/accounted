@@ -57,29 +57,21 @@ import {
   type ArcimDocumentImportProblem,
   type ArcimDocumentImportState,
 } from './arcim-document-import-flow'
+import { MIGRATION_PROVIDERS } from '@/lib/providers/catalog'
+import type { ProviderName } from '@/lib/providers/types'
 import {
   trackMigrationConnectClicked,
   trackMigrationConnectFinished,
   type MigrationConnectOutcome,
 } from './arcim-connect-track'
 
-type ArcimProvider = 'fortnox' | 'visma' | 'briox' | 'bokio' | 'bjornlunden' | 'wint'
+type ArcimProvider = ProviderName
 
-// `sieViaApi`: the provider serves its general ledger as SIE over the API:
-// no manual SIE upload needed. Deliberately duplicated from
-// extensions/general/arcim-migration/types.ts (core code must not import from
-// @/extensions/: CI enforces it). Keep both lists in sync.
-// WINT is env-gated server-side (WINT_MIGRATION_ENABLED): GET /status names
-// the providers this deployment can connect and the provider list shows only
+// One catalog for the workspace, the extension and the MCP connect card. WINT
+// is env-gated server-side (WINT_MIGRATION_ENABLED): GET /status names the
+// providers this deployment can connect and the provider list shows only
 // those (offeredProviders below).
-const ARCIM_PROVIDERS: { id: ArcimProvider; name: string; authType: 'oauth' | 'token'; sieViaApi: boolean }[] = [
-  { id: 'fortnox', name: 'Fortnox', authType: 'oauth', sieViaApi: true },
-  { id: 'visma', name: 'Visma', authType: 'oauth', sieViaApi: false },
-  { id: 'bokio', name: 'Bokio', authType: 'token', sieViaApi: false },
-  { id: 'bjornlunden', name: 'Björn Lundén', authType: 'token', sieViaApi: true },
-  { id: 'briox', name: 'Briox', authType: 'token', sieViaApi: true },
-  { id: 'wint', name: 'WINT', authType: 'token', sieViaApi: true },
-]
+const ARCIM_PROVIDERS = MIGRATION_PROVIDERS
 
 /**
  * Extract a human-readable message from an API error body. Routes answer in

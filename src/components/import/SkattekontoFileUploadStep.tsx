@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useCallback } from 'react'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { FileDropzone } from '@/components/ui/file-dropzone'
 import { Upload, FileText, AlertCircle, HelpCircle, Loader2 } from 'lucide-react'
 
 interface SkattekontoFileUploadStepProps {
@@ -21,7 +22,6 @@ export default function SkattekontoFileUploadStep({
   errorTitle,
 }: SkattekontoFileUploadStepProps) {
   const t = useTranslations('import')
-  const [isDragging, setIsDragging] = useState(false)
 
   const acceptFile = useCallback(
     (file: File | undefined) => {
@@ -32,15 +32,6 @@ export default function SkattekontoFileUploadStep({
       }
     },
     [onFileSelect],
-  )
-
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault()
-      setIsDragging(false)
-      acceptFile(e.dataTransfer.files[0])
-    },
-    [acceptFile],
   )
 
   return (
@@ -54,41 +45,14 @@ export default function SkattekontoFileUploadStep({
           <CardDescription>{t('skattekonto_upload_description')}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div
-            role="button"
-            tabIndex={isLoading ? -1 : 0}
-            aria-label={t('skattekonto_tap_select')}
-            className={`
-              relative border-2 border-dashed rounded-lg p-8 text-center transition-colors
-              ${isDragging ? 'border-primary bg-primary/5' : 'border-muted-foreground/25'}
-              ${error ? 'border-destructive bg-destructive/5' : ''}
-              ${isLoading ? 'pointer-events-none opacity-50' : 'cursor-pointer hover:border-primary/50'}
-            `}
-            onDragOver={(e) => {
-              e.preventDefault()
-              setIsDragging(true)
-            }}
-            onDragLeave={(e) => {
-              e.preventDefault()
-              setIsDragging(false)
-            }}
-            onDrop={handleDrop}
-            onClick={() => document.getElementById('skattekonto-file-input')?.click()}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault()
-                document.getElementById('skattekonto-file-input')?.click()
-              }
-            }}
+          <FileDropzone
+            onFile={acceptFile}
+            accept={ACCEPTED_EXTENSIONS.join(',')}
+            disabled={isLoading}
+            invalid={!!error}
+            label={t('skattekonto_tap_select')}
+            className="relative p-8 text-center"
           >
-            <input
-              id="skattekonto-file-input"
-              type="file"
-              accept={ACCEPTED_EXTENSIONS.join(',')}
-              className="hidden"
-              onChange={(e) => acceptFile(e.target.files?.[0])}
-              disabled={isLoading}
-            />
 
             {isLoading ? (
               <div className="space-y-4">
@@ -108,7 +72,7 @@ export default function SkattekontoFileUploadStep({
                 </div>
               </div>
             )}
-          </div>
+          </FileDropzone>
 
           {error && (
             <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-lg flex gap-3">

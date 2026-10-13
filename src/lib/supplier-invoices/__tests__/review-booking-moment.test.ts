@@ -38,13 +38,20 @@ function render(
   }))
 }
 
-/** [account, debit, credit] for each row of the voucher preview table. */
+/**
+ * [account, debit, credit] for each line row of the voucher preview table
+ * (VoucherLinesTable): cell text without its markup, and without the Summa
+ * row, the one row that spans columns.
+ */
 function voucherRows(html: string): string[][] {
   const body = [...html.matchAll(/<tbody>([\s\S]*?)<\/tbody>/g)].at(-1)![1]
-  return [...body.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)].map((row) => {
-    const cells = [...row[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((cell) => cell[1])
-    return [cells[0], cells[2], cells[3]]
-  })
+  const text = (cell: string) => cell.replace(/<[^>]+>/g, '')
+  return [...body.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)]
+    .filter((row) => !row[1].includes('colSpan') && !row[1].includes('colspan'))
+    .map((row) => {
+      const cells = [...row[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((cell) => text(cell[1]))
+      return [cells[0], cells[2], cells[3]]
+    })
 }
 
 describe('SupplierInvoiceReviewContent booking moment', () => {

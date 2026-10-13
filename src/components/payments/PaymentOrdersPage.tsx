@@ -9,7 +9,7 @@ import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Button } from '@/components/ui/button'
 import { BankMark } from '@/components/banks/BankMark'
-import { FLOATING_BULK_BAR_CLASS } from '@/components/ui/floating-bulk-bar'
+import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -20,6 +20,7 @@ import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, HOVER_REVEAL_CLASS, CHECKBOX_REVE
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { parsePaymentSigningReturn, stripPaymentSigningReturn, type PaymentSigningReturn } from '@/lib/payments/orders/return-url'
@@ -64,7 +65,6 @@ export function PaymentOrdersPage() {
 
   const [availability, setAvailability] = useState<PaymentsAvailability | null>(null)
   const [orders, setOrders] = useState<PaymentOrder[] | null>(null)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
   const [approving, setApproving] = useState<PaymentOrder[] | null>(null)
   const [signing, setSigning] = useState<PaymentOrder[] | null>(null)
   /** Set when the signing dialog was reopened by a return from the bank's own page. */
@@ -117,8 +117,9 @@ export function PaymentOrdersPage() {
     window.history.replaceState(window.history.state, '', stripPaymentSigningReturn(window.location.href))
   }, [orders, availability, searchParams])
 
+  // No explicit clear: an order that signing, approval or a resolve moves out
+  // of "Att signera" leaves the selection when the reload lands.
   const refresh = useCallback(() => {
-    setSelected(new Set())
     load().catch(() => {
       // The list keeps what it had; the next action reloads it.
     })
@@ -132,7 +133,12 @@ export function PaymentOrdersPage() {
     return groups
   }, [orders])
 
-  const toSign = bySection.get('to_sign') ?? []
+  const toSign = useMemo(() => bySection.get('to_sign') ?? [], [bySection])
+  // The selection holds only orders still waiting to be signed: a reload that
+  // moves one on (signed elsewhere, refused) drops it from the bar.
+  const toSignIds = useMemo(() => (available && canWrite ? toSign.map((o) => o.id) : []), [toSign, available, canWrite])
+  const selection = useBulkSelection(toSignIds)
+  const selected = selection.selectedIds
   const selectedOrders = toSign.filter((o) => selected.has(o.id))
   // One signing = one account and one currency (the server refuses a mix):
   // the first selected order decides which others may join.
@@ -142,12 +148,7 @@ export function PaymentOrdersPage() {
   const allSelected = selectableToSign.length > 0 && selectableToSign.every((o) => selected.has(o.id))
 
   function toggle(id: string, on: boolean) {
-    setSelected((prev) => {
-      const next = new Set(prev)
-      if (on) next.add(id)
-      else next.delete(id)
-      return next
-    })
+    if (selected.has(id) !== on) selection.toggle(id)
   }
 
   async function unapprove(order: PaymentOrder) {
@@ -235,19 +236,18 @@ export function PaymentOrdersPage() {
     <div className="space-y-8">
       {header}
 
-      {available && canWrite && selectedOrders.length > 0 && (
-        <div className={FLOATING_BULK_BAR_CLASS}>
-          <span className="whitespace-nowrap">
-            <strong className="font-semibold tabular-nums">{selectedOrders.length}</strong> {t('selected_count', { count: selectedOrders.length })}
-          </span>
-          <Button size="sm" onClick={() => setSigning(selectedOrders)}>
-            {t('sign_selected', { count: selectedOrders.length })}
-          </Button>
-          <button type="button" className={QUIET_LINK_CLASS} onClick={() => setSelected(new Set())}>
-            {t('clear_selection')}
-          </button>
-        </div>
-      )}
+      {/* Select-all lives on the section head: it picks only the orders that
+          can share one signing, which a plain "Markera alla" would not. */}
+      <BulkSelectionBar
+        selection={selection}
+        selectableCount={selectableToSign.length}
+        countLabel={t('selected_count', { count: selectedOrders.length })}
+        clearLabel={t('clear_selection')}
+      >
+        <Button size="sm" onClick={() => setSigning(selectedOrders)}>
+          {t('sign_selected', { count: selectedOrders.length })}
+        </Button>
+      </BulkSelectionBar>
 
       {!available && !hasOrders && (
         <>
@@ -291,7 +291,7 @@ export function PaymentOrdersPage() {
                   <button
                     type="button"
                     className={QUIET_LINK_CLASS}
-                    onClick={() => setSelected(allSelected ? new Set() : new Set(selectableToSign.map((o) => o.id)))}
+                    onClick={() => (allSelected ? selection.clear() : selection.selectOnly(selectableToSign.map((o) => o.id)))}
                   >
                     {allSelected ? t('clear_selection') : t('select_all', { count: selectableToSign.length })}
                   </button>

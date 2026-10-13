@@ -18,6 +18,7 @@ import type {
   CategorizationTemplate,
 } from '@/types'
 import type { SIEVoucher, SIETransactionLine } from '@/lib/import/types'
+import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 
 // ============================================================
 // Chainable Supabase mock
@@ -681,6 +682,17 @@ export function createMockRouteParams<T extends Record<string, string>>(
 }
 
 /**
+ * The bank link core's reads after the verifikat (lib/transactions/bank-link.ts),
+ * for a queued-mock test of a link that goes on: the settlement account of a
+ * row without a cash account (no enabled account in its currency answers
+ * 1930), then the voucher's line on 1930.
+ */
+export function enqueueBankLinkLeg(enqueue: (result: { data?: unknown; error?: unknown }) => void): void {
+  enqueue({ data: [], error: null }) // cash_accounts in the row's currency
+  enqueue({ data: [{ account_number: '1930', debit_amount: 1000, credit_amount: 0 }], error: null }) // the voucher's bank line
+}
+
+/**
  * Queue-based Supabase mock for routes with multiple sequential DB calls.
  *
  * Each call to `.from()` or `.rpc()` consumes the next result in the queue.
@@ -1062,3 +1074,28 @@ export function makeSIEVoucher(
     ...overrides,
   }
 }
+
+// ============================================================
+// Extension routes
+// ============================================================
+
+/**
+ * An extension route as a test calls it. ApiRouteDefinition is a union: a
+ * context route's handler takes the dispatcher's ctx, a skipAuth or
+ * skipCompanyContext handler takes none. A test knows which route it holds
+ * and calls the handler the way the dispatcher would.
+ */
+export interface TestExtensionRoute {
+  method: string
+  path: string
+  skipAuth?: boolean
+  skipCompanyContext?: boolean
+  requireWrite?: boolean
+  requireAdmin?: boolean
+  handler: (request: Request, ctx?: ExtensionContext) => Promise<Response>
+}
+
+export function testRoutes(extension: Extension): TestExtensionRoute[] {
+  return (extension.apiRoutes ?? []) as TestExtensionRoute[]
+}
+

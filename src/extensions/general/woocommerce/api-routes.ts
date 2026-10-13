@@ -92,43 +92,16 @@ async function withSkippedOrders(
   })
 }
 
-type AuthedContext = {
-  supabase: ExtensionContext['supabase']
-  userId: string
-  isAnonymous: boolean
-  companyId: string
-}
-
-/** Shared auth preamble: cookie user + company context, or an error response. */
-async function requireUserAndCompany(
-  ctx: ExtensionContext | undefined,
-): Promise<AuthedContext | NextResponse> {
-  const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-  if (!ctx?.companyId) {
-    return NextResponse.json({ error: 'Company context required' }, { status: 400 })
-  }
-  return {
-    supabase,
-    userId: user.id,
-    isAnonymous: Boolean(user.is_anonymous),
-    companyId: ctx.companyId,
-  }
-}
-
 /**
  * Guards shared by both connect paths: sandbox users never reach external
  * stores (same doctrine as Stripe connect), and the feed is a paid
  * capability (woocommerce_sync).
  */
-async function guardConnectPreconditions(auth: AuthedContext): Promise<NextResponse | null> {
-  if (auth.isAnonymous) return sandboxBlockedResponse()
-  const sandboxBlocked = await guardSandbox(auth.supabase, auth.companyId)
+async function guardConnectPreconditions(ctx: ExtensionContext): Promise<NextResponse | null> {
+  if (ctx.isAnonymous) return sandboxBlockedResponse()
+  const sandboxBlocked = await guardSandbox(ctx.supabase, ctx.companyId)
   if (sandboxBlocked) return sandboxBlocked
-  return requireCapability(auth.supabase, auth.companyId, CAPABILITY.woocommerce_sync)
+  return requireCapability(ctx.supabase, ctx.companyId, CAPABILITY.woocommerce_sync)
 }
 
 /**
@@ -139,13 +112,13 @@ async function guardConnectPreconditions(auth: AuthedContext): Promise<NextRespo
  * connect several stores (multi-store, migration 20260811073422).
  */
 async function blockOrSupersedeExisting(
-  auth: AuthedContext,
+  ctx: ExtensionContext,
   storeUrl: string,
 ): Promise<NextResponse | null> {
-  const { data: existing } = await auth.supabase
+  const { data: existing } = await ctx.supabase
     .from('woocommerce_connections')
     .select('id, status, created_at')
-    .eq('company_id', auth.companyId)
+    .eq('company_id', ctx.companyId)
     .eq('store_url', storeUrl)
     .in('status', ['active', 'pending'])
     .order('created_at', { ascending: false })
@@ -167,7 +140,7 @@ async function blockOrSupersedeExisting(
     )
   }
   if (pending.length > 0) {
-    await auth.supabase
+    await ctx.supabase
       .from('woocommerce_connections')
       .update({
         status: 'error',
@@ -181,7 +154,7 @@ async function blockOrSupersedeExisting(
         wc_version: null,
         key_permissions: null,
       })
-      .eq('company_id', auth.companyId)
+      .eq('company_id', ctx.companyId)
       .eq('store_url', storeUrl)
       .eq('status', 'pending')
   }
@@ -192,28 +165,25 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
   {
     method: 'GET',
     path: '/status',
-    handler: async (_request: Request, ctx?: ExtensionContext) => {
-      const auth = await requireUserAndCompany(ctx)
-      if (auth instanceof NextResponse) return auth
-
+    handler: async (_request: Request, ctx: ExtensionContext) => {
       // Multi-store: every active connection, plus the most recent inactive
       // row when nothing is active (so the panel can show a pending/error/
       // revoked state instead of an empty list). `connection` mirrors the
       // first entry for callers of the old single-store shape.
-      const { data: rows } = await auth.supabase
+      const { data: rows } = await ctx.supabase
         .from('woocommerce_connections')
         .select(STATUS_COLUMNS)
-        .eq('company_id', auth.companyId)
+        .eq('company_id', ctx.companyId)
         .order('created_at', { ascending: false })
         .limit(25)
 
       const active = (rows ?? []).filter((r) => r.status === 'active')
       const listed = active.length > 0 ? active : rows?.[0] ? [rows[0]] : []
       const connections = await withSkippedOrders(
-        auth.supabase,
-        auth.companyId,
+        ctx.supabase,
+        ctx.companyId,
         listed as WooCommerceConnectionStatus[],
-        ctx?.log ?? console,
+        ctx.log ?? console,
       )
       const payload: WooCommerceStatusResponse = {
         configured: isWooCommerceConfigured(),
@@ -226,17 +196,14 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
   {
     method: 'POST',
     path: '/connect',
-    handler: async (request: Request, ctx?: ExtensionContext) => {
-      const log = ctx?.log ?? console
-      const auth = await requireUserAndCompany(ctx)
-      if (auth instanceof NextResponse) return auth
-
-      const blocked = await guardConnectPreconditions(auth)
+    handler: async (request: Request, ctx: ExtensionContext) => {
+      const log = ctx.log
+      const blocked = await guardConnectPreconditions(ctx)
       if (blocked) return blocked
 
       const rl = await checkRateLimit({
         prefix: 'woocommerce:connect',
-        identifier: auth.userId,
+        identifier: ctx.userId,
         ...RATE_LIMIT_CONNECT,
       })
       if (!rl.ok) return rl.response!
@@ -255,18 +222,18 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
         )
       }
 
-      const conflict = await blockOrSupersedeExisting(auth, storeUrl)
+      const conflict = await blockOrSupersedeExisting(ctx, storeUrl)
       if (conflict) return conflict
 
       // Persist the CSRF state BEFORE handing the user to the store: the
       // callback locates the row by oauth_state alone, so the row must exist
       // before the store can ever POST back with that state.
       const oauthState = crypto.randomUUID()
-      const { data: created, error: insertError } = await auth.supabase
+      const { data: created, error: insertError } = await ctx.supabase
         .from('woocommerce_connections')
         .insert({
-          company_id: auth.companyId,
-          user_id: auth.userId,
+          company_id: ctx.companyId,
+          user_id: ctx.userId,
           store_url: storeUrl,
           status: 'pending',
           oauth_state: oauthState,
@@ -278,7 +245,7 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
         log.error('[woocommerce] Failed to stage pending connection', {
           message: insertError?.message,
           code: insertError?.code,
-          companyId: auth.companyId,
+          companyId: ctx.companyId,
         })
         return NextResponse.json(
           { error: 'Kunde inte starta anslutningen. Försök igen.' },
@@ -297,7 +264,7 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
 
       log.info('[woocommerce] Starting wc-auth handshake', {
         connection_id: created.id,
-        company_id: auth.companyId,
+        company_id: ctx.companyId,
       })
       return NextResponse.json({ url: buildAuthorizeUrl(storeUrl, oauthState, appOrigin) })
     },
@@ -305,17 +272,14 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
   {
     method: 'POST',
     path: '/manual-connect',
-    handler: async (request: Request, ctx?: ExtensionContext) => {
-      const log = ctx?.log ?? console
-      const auth = await requireUserAndCompany(ctx)
-      if (auth instanceof NextResponse) return auth
-
-      const blocked = await guardConnectPreconditions(auth)
+    handler: async (request: Request, ctx: ExtensionContext) => {
+      const log = ctx.log
+      const blocked = await guardConnectPreconditions(ctx)
       if (blocked) return blocked
 
       const rl = await checkRateLimit({
         prefix: 'woocommerce:connect',
-        identifier: auth.userId,
+        identifier: ctx.userId,
         ...RATE_LIMIT_CONNECT,
       })
       if (!rl.ok) return rl.response!
@@ -348,7 +312,7 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
         )
       }
 
-      const conflict = await blockOrSupersedeExisting(auth, storeUrl)
+      const conflict = await blockOrSupersedeExisting(ctx, storeUrl)
       if (conflict) return conflict
 
       // Verify before storing: a typo'd key must fail here, not at 03:45.
@@ -361,7 +325,7 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
         })
       } catch (probeError) {
         log.warn('[woocommerce] Manual credential probe failed', {
-          companyId: auth.companyId,
+          companyId: ctx.companyId,
           message: probeError instanceof Error ? probeError.message : String(probeError),
         })
         return NextResponse.json(
@@ -376,7 +340,7 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
       // The keys were typed in under this user's session: that IS the browser
       // confirmation the activation CHECK requires. browser_confirmed_at is
       // server-only (trigger, 20260907150000), so the insert runs on the
-      // service client; membership was already proven by requireUserAndCompany
+      // service client; membership was already proven by the dispatcher
       // and company_id/user_id come from that context, never from the body.
       // The order cursor is seeded with the connection moment, same as the
       // handshake activation (activateIfComplete): older orders are already
@@ -385,8 +349,8 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
       const { data: created, error: insertError } = await createServiceClientNoCookies()
         .from('woocommerce_connections')
         .insert({
-          company_id: auth.companyId,
-          user_id: auth.userId,
+          company_id: ctx.companyId,
+          user_id: ctx.userId,
           store_url: storeUrl,
           store_name: storeInfo.name,
           currency: storeInfo.currency,
@@ -408,7 +372,7 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
         log.error('[woocommerce] Failed to create manual connection', {
           message: insertError?.message,
           code: insertError?.code,
-          companyId: auth.companyId,
+          companyId: ctx.companyId,
         })
         return NextResponse.json(
           {
@@ -420,15 +384,15 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
         )
       }
 
-      if (ctx?.emit) {
+      if (ctx.emit) {
         try {
           await ctx.emit({
             type: 'woocommerce.connected',
             payload: {
               connectionId: created.id,
               storeUrl: created.store_url,
-              userId: auth.userId,
-              companyId: auth.companyId,
+              userId: ctx.userId,
+              companyId: ctx.companyId,
             },
           })
         } catch {
@@ -442,21 +406,18 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
   {
     method: 'POST',
     path: '/sync',
-    handler: async (request: Request, ctx?: ExtensionContext) => {
-      const log = ctx?.log ?? console
-      const auth = await requireUserAndCompany(ctx)
-      if (auth instanceof NextResponse) return auth
-
+    handler: async (request: Request, ctx: ExtensionContext) => {
+      const log = ctx.log
       const capabilityBlocked = await requireCapability(
-        auth.supabase,
-        auth.companyId,
+        ctx.supabase,
+        ctx.companyId,
         CAPABILITY.woocommerce_sync,
       )
       if (capabilityBlocked) return capabilityBlocked
 
       const rl = await checkRateLimit({
         prefix: 'woocommerce:sync',
-        identifier: auth.userId,
+        identifier: ctx.userId,
         ...RATE_LIMIT_SYNC,
       })
       if (!rl.ok) return rl.response!
@@ -474,7 +435,7 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
       let query = serviceClient
         .from('woocommerce_connections')
         .select('*')
-        .eq('company_id', auth.companyId)
+        .eq('company_id', ctx.companyId)
         .eq('status', 'active')
       if (body.connection_id) query = query.eq('id', body.connection_id)
       const { data: connections } = await query.order('last_order_synced_at', {
@@ -540,21 +501,18 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
   {
     method: 'POST',
     path: '/backfill',
-    handler: async (request: Request, ctx?: ExtensionContext) => {
-      const log = ctx?.log ?? console
-      const auth = await requireUserAndCompany(ctx)
-      if (auth instanceof NextResponse) return auth
-
+    handler: async (request: Request, ctx: ExtensionContext) => {
+      const log = ctx.log
       const capabilityBlocked = await requireCapability(
-        auth.supabase,
-        auth.companyId,
+        ctx.supabase,
+        ctx.companyId,
         CAPABILITY.woocommerce_sync,
       )
       if (capabilityBlocked) return capabilityBlocked
 
       const rl = await checkRateLimit({
         prefix: 'woocommerce:backfill',
-        identifier: auth.userId,
+        identifier: ctx.userId,
         ...RATE_LIMIT_BACKFILL,
       })
       if (!rl.ok) return rl.response!
@@ -579,7 +537,7 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
       let query = serviceClient
         .from('woocommerce_connections')
         .select('*')
-        .eq('company_id', auth.companyId)
+        .eq('company_id', ctx.companyId)
         .eq('status', 'active')
       if (typeof body.connection_id === 'string') query = query.eq('id', body.connection_id)
       const { data: connections } = await query.limit(2)
@@ -602,11 +560,11 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
       // back: no second column that could disagree with it. The run advances
       // it to the newest modified order again, and the ingest upserts by
       // external_id, so re-reading an already imported range changes nothing.
-      const { error: cursorError } = await auth.supabase
+      const { error: cursorError } = await ctx.supabase
         .from('woocommerce_connections')
         .update({ last_order_synced_at: parsed.iso, error_message: null })
         .eq('id', connection.id)
-        .eq('company_id', auth.companyId)
+        .eq('company_id', ctx.companyId)
         .eq('status', 'active')
       if (cursorError) {
         log.error('[woocommerce] Failed to move order cursor for backfill', {
@@ -649,20 +607,17 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
   {
     method: 'POST',
     path: '/transaction-sync',
-    handler: async (request: Request, ctx?: ExtensionContext) => {
-      const auth = await requireUserAndCompany(ctx)
-      if (auth instanceof NextResponse) return auth
-
+    handler: async (request: Request, ctx: ExtensionContext) => {
       const capabilityBlocked = await requireCapability(
-        auth.supabase,
-        auth.companyId,
+        ctx.supabase,
+        ctx.companyId,
         CAPABILITY.woocommerce_sync,
       )
       if (capabilityBlocked) return capabilityBlocked
 
       const rl = await checkRateLimit({
         prefix: 'woocommerce:transaction-sync-toggle',
-        identifier: auth.userId,
+        identifier: ctx.userId,
         ...RATE_LIMIT_SYNC,
       })
       if (!rl.ok) return rl.response!
@@ -675,10 +630,10 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
         return NextResponse.json({ error: 'enabled (boolean) krävs.' }, { status: 400 })
       }
 
-      let updateQuery = auth.supabase
+      let updateQuery = ctx.supabase
         .from('woocommerce_connections')
         .update({ transaction_sync_enabled: body.enabled })
-        .eq('company_id', auth.companyId)
+        .eq('company_id', ctx.companyId)
         .eq('status', 'active')
       if (body.connection_id) updateQuery = updateQuery.eq('id', body.connection_id)
       const { data: updated, error: updateError } = await updateQuery.select('id')
@@ -701,23 +656,20 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
   {
     method: 'DELETE',
     path: '/disconnect',
-    handler: async (request: Request, ctx?: ExtensionContext) => {
-      const log = ctx?.log ?? console
-      const auth = await requireUserAndCompany(ctx)
-      if (auth instanceof NextResponse) return auth
-
+    handler: async (request: Request, ctx: ExtensionContext) => {
+      const log = ctx.log
       const rl = await checkRateLimit({
         prefix: 'woocommerce:disconnect',
-        identifier: auth.userId,
+        identifier: ctx.userId,
         ...RATE_LIMIT_DISCONNECT,
       })
       if (!rl.ok) return rl.response!
 
       const body = (await request.json().catch(() => ({}))) as { connection_id?: string }
-      const base = auth.supabase
+      const base = ctx.supabase
         .from('woocommerce_connections')
         .select('id, status, store_url')
-        .eq('company_id', auth.companyId)
+        .eq('company_id', ctx.companyId)
       const query = body.connection_id
         ? base.eq('id', body.connection_id).limit(1)
         : base.neq('status', 'revoked').order('created_at', { ascending: false }).limit(1)
@@ -734,7 +686,7 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
       // reconnect inserts a fresh row); the audit row keeps store_url and the
       // connect/disconnect timestamps. The panel tells the user to remove the
       // key in WooCommerce as well.
-      const { error: updateError } = await auth.supabase
+      const { error: updateError } = await ctx.supabase
         .from('woocommerce_connections')
         .update({
           status: 'revoked',
@@ -744,7 +696,7 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
           disconnected_at: new Date().toISOString(),
         })
         .eq('id', connection.id)
-        .eq('company_id', auth.companyId)
+        .eq('company_id', ctx.companyId)
 
       if (updateError) {
         log.error('[woocommerce] Failed to mark connection revoked', {
@@ -757,7 +709,7 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
         )
       }
 
-      if (ctx?.emit) {
+      if (ctx.emit) {
         try {
           await ctx.emit({
             type: 'woocommerce.disconnected',
@@ -765,8 +717,8 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
               connectionId: connection.id,
               storeUrl: connection.store_url ?? null,
               reason: 'user',
-              userId: auth.userId,
-              companyId: auth.companyId,
+              userId: ctx.userId,
+              companyId: ctx.companyId,
             },
           })
         } catch {

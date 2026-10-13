@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { FileDropzone } from '@/components/ui/file-dropzone'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
@@ -28,7 +29,6 @@ interface SIEUploadStepProps {
 }
 
 export default function SIEUploadStep({ onFileSelect, isLoading, error, errorType, validationErrors, validationWarnings, duplicateImportId, onReplace, isReplacing }: SIEUploadStepProps) {
-  const [isDragging, setIsDragging] = useState(false)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [loadingPhase, setLoadingPhase] = useState(0)
   const [fileTypeError, setFileTypeError] = useState<string | null>(null)
@@ -49,16 +49,6 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
     return () => timers.forEach(clearTimeout)
   }, [isLoading])
 
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(true)
-  }, [])
-
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(false)
-  }, [])
-
   // No `accept` attribute on the input and no silent rejection here: Safari
   // maps accept extensions to system file types, and unregistered extensions
   // like .sie/.se/.si grey out perfectly valid files in the picker. All
@@ -77,25 +67,6 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
       setFileTypeError(`Filen "${file.name}" stöds inte. Välj en SIE-fil som slutar på ${SIE_FILE_EXTENSIONS_SV}.`)
     }
   }, [onFileSelect])
-
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(false)
-
-    const files = e.dataTransfer.files
-    if (files.length > 0) {
-      trySelectFile(files[0])
-    }
-  }, [trySelectFile])
-
-  const handleFileInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files
-    if (files && files.length > 0) {
-      trySelectFile(files[0])
-    }
-    // Allow re-picking the same file after a rejection
-    e.target.value = ''
-  }, [trySelectFile])
 
   const phase = LOADING_PHASES[loadingPhase]
 
@@ -159,24 +130,14 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
         </CardHeader>
         <CardContent>
           {/* Drop zone */}
-          <div
-            className={`
-              relative border-2 border-dashed rounded-lg p-8 text-center transition-colors cursor-pointer hover:border-primary/50
-              ${isDragging ? 'border-primary bg-primary/5' : 'border-muted-foreground/25'}
-              ${error || fileTypeError ? 'border-destructive bg-destructive/5' : ''}
-            `}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            onClick={() => document.getElementById('file-input')?.click()}
+          {/* No accept attribute: see trySelectFile. */}
+          <FileDropzone
+            onFile={trySelectFile}
+            disabled={isLoading}
+            invalid={!!(error || fileTypeError)}
+            label="Välj SIE-fil"
+            className="relative p-8 text-center"
           >
-            <input
-              id="file-input"
-              type="file"
-              className="hidden"
-              onChange={handleFileInput}
-              disabled={isLoading}
-            />
 
             {selectedFile ? (
               <div className="space-y-4">
@@ -199,7 +160,7 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
                 </div>
               </div>
             )}
-          </div>
+          </FileDropzone>
 
           {/* Rejected file type (client-side, before upload) */}
           {fileTypeError && (

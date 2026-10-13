@@ -96,6 +96,7 @@ function createServices(): ExtensionServices {
  * `requestId` (when supplied by the dispatcher) flows through the bound logger
  * and is exposed on the context so handlers can pass it into
  * `errorResponseFromCode(...)` for the envelope + `X-Request-Id` header.
+ * `isAnonymous` is the dispatcher's answer from the authenticated user.
  */
 export function createExtensionContext(
   supabase: SupabaseClient,
@@ -103,6 +104,7 @@ export function createExtensionContext(
   companyId: string,
   extensionId: string,
   requestId?: string,
+  isAnonymous?: boolean,
 ): ExtensionContext {
   const logBindings: Record<string, unknown> = { userId, companyId, extensionId }
   if (requestId) logBindings.requestId = requestId
@@ -112,6 +114,7 @@ export function createExtensionContext(
     companyId,
     extensionId,
     requestId,
+    ...(isAnonymous === undefined ? {} : { isAnonymous }),
     supabase,
     emit: (event: CoreEvent) => eventBus.emit(event),
     settings: createSettings(supabase, userId, companyId, extensionId),

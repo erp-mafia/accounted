@@ -14,6 +14,7 @@ import { listVerifiedCompanies, markGrantRevoked } from '@/extensions/general/sk
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { currentSkvEnvironment, hasVerifiedGrant } from '@/extensions/general/skatteverket/lib/resolve-auth'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
 
 export const maxDuration = 60
 
@@ -57,7 +58,7 @@ export async function GET(request: Request) {
 
   // Respect the runtime extension toggle. When the integration is disabled
   // the cron should no-op rather than spam Skatteverket with stale tokens.
-  if (process.env.SKATTEVERKET_ENABLED !== 'true') {
+  if (!isSkatteverketEnabled()) {
     return NextResponse.json({ message: 'Skatteverket extension disabled', processed: 0 })
   }
 

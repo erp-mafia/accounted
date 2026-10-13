@@ -568,6 +568,37 @@ describe('POST /api/v1/companies/:companyId/suppliers/bulk-create', () => {
     expect(body.data.results[1].error.code).toBe('SUPPLIER_DUPLICATE_ORG_NUMBER')
   })
 
+  it('inserts each item through createSupplier: the payee fields kept, an empty field stored as null', async () => {
+    // The loop used to insert its own copy, which dropped clearing_number and
+    // account_number (a supplier paid by Swedish bank account lost its payee)
+    // and stored '' for an empty field.
+    const client = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      suppliers: { data: SAMPLE_SUPPLIER, error: null },
+    })
+    mockServiceClient.mockReturnValue(client.supabase)
+
+    const res = await bulkCreateSuppliers(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/suppliers/bulk-create`, {
+        method: 'POST',
+        body: JSON.stringify({
+          suppliers: [{ name: 'Elnät AB', supplier_type: 'swedish_business', clearing_number: '8327', account_number: '9123456', email: '' }],
+        }),
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect(client.findCall('suppliers', 'insert')?.[0]).toMatchObject({
+      name: 'Elnät AB',
+      clearing_number: '8327',
+      account_number: '9123456',
+      email: null,
+      default_payment_terms: 30,
+      company_id: COMPANY_ID,
+    })
+  })
+
   it('rejects all_or_nothing: true with 501 NOT_IMPLEMENTED', async () => {
     mockServiceClient.mockReturnValue(
       createTableMockSupabase({

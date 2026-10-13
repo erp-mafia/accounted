@@ -6,6 +6,7 @@ import {
   parseJsonResponse,
   makeInvoiceInboxItem,
   makeTransaction,
+  testRoutes,
 } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -48,7 +49,7 @@ vi.mock('@/lib/bookkeeping/cancel-orphaned-entry', () => ({
 }))
 
 function findRoute(method: string, path: string) {
-  return invoiceInboxExtension.apiRoutes!.find(
+  return testRoutes(invoiceInboxExtension).find(
     (r) => r.method === method && r.path === path
   )!
 }
@@ -97,17 +98,6 @@ describe('POST /items/:id/book-direct', () => {
       voucher_number: 42,
     })
     linkToJournalEntryMock.mockResolvedValue({ id: 'doc-1' })
-  })
-
-  it('returns 401 when no context', async () => {
-    const request = createMockRequest('/items/item-1/book-direct', {
-      method: 'POST',
-      body: VALID_BODY,
-      searchParams: { _id: 'item-1' },
-    })
-    const res = await route.handler(request, undefined)
-    const { status } = await parseJsonResponse(res)
-    expect(status).toBe(401)
   })
 
   it('returns 400 when body is invalid (unbalanced is checked by engine; here we check zod-level)', async () => {

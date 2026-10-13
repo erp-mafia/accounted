@@ -11,6 +11,7 @@ import { formatRedovisningsperiod } from '@/lib/skatteverket/format'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
 
 export const maxDuration = 60
 
@@ -49,7 +50,7 @@ export async function GET(request: Request) {
   const authError = verifyCronSecret(request)
   if (authError) return authError
 
-  if (process.env.SKATTEVERKET_ENABLED !== 'true') {
+  if (!isSkatteverketEnabled()) {
     return NextResponse.json(
       { message: 'Skatteverket extension disabled', processed: 0 },
       { headers: NO_STORE_HEADERS },

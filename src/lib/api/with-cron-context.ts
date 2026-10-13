@@ -24,6 +24,8 @@ import { NextResponse } from 'next/server'
 import { verifyCronSecret } from '@/lib/auth/cron'
 import { createLogger, type Logger } from '@/lib/logger'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { createServiceRoleClient } from '@/lib/supabase/service-client'
 
 export interface CronItemContext {
   /** Per-item requestId, child of the run's parent requestId. */
@@ -127,4 +129,31 @@ export function withCronContext(
       return errorResponse(err, log, { requestId })
     }
   }
+}
+
+export interface ServiceCronContext extends CronContext {
+  /** Service-role client: a cron acts for every company, past RLS. */
+  supabase: SupabaseClient
+}
+
+/**
+ * withCronContext for a cron that reads or writes with the service role: the
+ * Supabase configuration is checked once here (500 INTERNAL_ERROR without
+ * it, as each cron answered) and the client arrives as ctx.supabase.
+ */
+export function withServiceCronContext(
+  operation: string,
+  handler: (request: Request, ctx: ServiceCronContext) => Promise<NextResponse | Response>,
+): (request: Request) => Promise<Response> {
+  return withCronContext(operation, async (request, ctx) => {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+    const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+    if (!supabaseUrl || !supabaseServiceKey) {
+      return errorResponseFromCode('INTERNAL_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { reason: 'Missing Supabase configuration' },
+      })
+    }
+    return handler(request, { ...ctx, supabase: createServiceRoleClient(supabaseUrl, supabaseServiceKey) })
+  })
 }

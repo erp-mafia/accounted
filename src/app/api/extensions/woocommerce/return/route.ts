@@ -1,3 +1,4 @@
+import { UUID_RE } from '@/lib/invariants/uuid'
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
 import { eventBus } from '@/lib/events/bus'
@@ -15,10 +16,6 @@ import {
 } from '@/extensions/general/woocommerce/lib/connect'
 
 const log = createLogger('woocommerce/return')
-
-// The state is a UUID we generated; anything else cannot match a row (and the
-// column is typed uuid, which would error opaquely on a non-UUID filter).
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /**
  * GET /api/extensions/woocommerce/return

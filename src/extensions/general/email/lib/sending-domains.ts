@@ -1,4 +1,4 @@
-import { Resend } from 'resend'
+import { getResendClient } from '@/lib/email/resend-client'
 import type { DomainStatus } from 'resend'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CompanySendingDomain, CompanySendingDomainStatus } from '@/types'
@@ -20,12 +20,6 @@ import {
  * sending domain would hand them production sending infrastructure. A name
  * that already exists in Resend is a 409, not an adoption.
  */
-
-function getResend(): Resend {
-  const apiKey = process.env.RESEND_API_KEY
-  if (!apiKey) throw new Error('RESEND_API_KEY is required')
-  return new Resend(apiKey)
-}
 
 export type SendingDomainResult<T> =
   | { ok: true; data: T }
@@ -187,7 +181,7 @@ export async function claimSendingDomain(
   }
 
   try {
-    const resend = getResend()
+    const resend = getResendClient()
 
     // Sending only: receiving stays disabled so the DNS list is DKIM/SPF
     // only and the company's existing MX (their real mailbox) is untouched.
@@ -303,7 +297,7 @@ export async function checkSendingDomainVerification(
   }
 
   try {
-    const resend = getResend()
+    const resend = getResendClient()
     let fetched = await resend.domains.get(row.resend_domain_id)
     if (fetched.data && needsVerificationRun(fetched.data.status)) {
       await resend.domains.verify(row.resend_domain_id)
@@ -437,7 +431,7 @@ export async function removeSendingDomain(
 
   if (row.resend_domain_id) {
     try {
-      const resend = getResend()
+      const resend = getResendClient()
       const fetched = await resend.domains.get(row.resend_domain_id)
       if (fetched.error && fetched.error.statusCode !== 404) {
         return {
@@ -516,7 +510,7 @@ export async function applySendingDomainStatusFromWebhook(
     // the row claims before flipping to verified (see resendNameMatchesRow).
     let sendingConfirmed = false
     try {
-      const fetched = await getResend().domains.get(event.id)
+      const fetched = await getResendClient().domains.get(event.id)
       sendingConfirmed =
         !fetched.error &&
         fetched.data?.capabilities?.sending === 'enabled' &&

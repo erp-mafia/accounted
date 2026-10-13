@@ -10,9 +10,9 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
+import { useSaveSettings } from '@/components/settings/use-save-settings'
 import { BankNameCombobox } from '@/components/settings/BankNameCombobox'
 import { validateBankgiroNumber, formatBankgiroNumber } from '@/lib/bankgiro/luhn'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface BankDetailsSetupFormProps {
   onComplete: () => void
@@ -27,6 +27,7 @@ interface BankDetailsSetupFormProps {
  */
 export function BankDetailsSetupForm({ onComplete, onCancel }: BankDetailsSetupFormProps) {
   const { toast } = useToast()
+  const saveSettings = useSaveSettings()
   const t = useTranslations('invoice_bank_setup')
   const [isSaving, setIsSaving] = useState(false)
   const [showInternational, setShowInternational] = useState(false)
@@ -133,32 +134,14 @@ export function BankDetailsSetupForm({ onComplete, onCancel }: BankDetailsSetupF
       }
     }
 
-    try {
-      const response = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-
-      if (!response.ok) {
-        const result = await response.json()
-        throw new Error(result.error || t('save_failed_fallback'))
-      }
-
-      toast({
-        title: t('saved_title'),
-        description: t('saved_description'),
-      })
-      onComplete()
-    } catch (error) {
-      toast({
-        title: t('save_failed_title'),
-        description: error instanceof Error ? getUserErrorMessage(error) : t('save_failed_fallback'),
-        variant: 'destructive',
-      })
-    } finally {
-      setIsSaving(false)
-    }
+    const saved = await saveSettings(payload, { failedTitle: t('save_failed_title') })
+    setIsSaving(false)
+    if (!saved) return
+    toast({
+      title: t('saved_title'),
+      description: t('saved_description'),
+    })
+    onComplete()
   }
 
   // Flatten refine errors so they appear on the right fields

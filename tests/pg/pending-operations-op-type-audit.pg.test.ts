@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import { beforeAll, describe, expect, it } from 'vitest'
-import { OPERATION_RISK_TIERS } from '@/lib/pending-operations/risk-tiers'
+import { OPERATION_RISK_TIERS, PENDING_OPERATION_TYPES } from '@/lib/pending-operations/risk-tiers'
 import { getPool } from './setup'
 import { seedCompany } from './fixtures'
 
@@ -19,28 +19,18 @@ import { seedCompany } from './fixtures'
  * a stale branch can silently drop a type added in between.
  *
  * Op types are collected from BOTH code-side sources of truth:
- *  1. literal types passed to stagePendingOperation() in the MCP server
+ *  1. literal types passed to stage({ type }) in the MCP server
  *  2. keys of OPERATION_RISK_TIERS (imported, not parsed)
- * and the PendingOperationType union in src/types is checked against the
- * constraint's definition itself.
+ * and PENDING_OPERATION_TYPES (the PendingOperationType union, derived from
+ * the risk tiers) is checked against the constraint's definition itself.
  */
 
 const SERVER_TS = resolve(__dirname, '../../src/extensions/general/mcp-server/server.ts')
-const TYPES_TS = resolve(__dirname, '../../src/types/index.ts')
 
-/** Every literal of the PendingOperationType union in src/types/index.ts. */
-function extractPendingOperationTypeUnion(): string[] {
-  const src = readFileSync(TYPES_TS, 'utf8')
-  const start = src.indexOf('export type PendingOperationType =')
-  const end = src.indexOf('\nexport ', start + 1)
-  const body = src.slice(start, end).replace(/\/\/[^\n]*/g, '')
-  return [...body.matchAll(/\|\s*'([a-z0-9_]+)'/g)].map((m) => m[1])
-}
-
-// Matches `stagePendingOperation(<client>, <companyId>, <userId>, '<op_type>'`
-// across line breaks. If the staging signature changes, the call-site count
-// assertion below fails loudly: update this regex together with the signature.
-const STAGE_CALL_RE = /stagePendingOperation\(\s*[\w.]+,\s*[\w.]+,\s*[\w.]+,\s*'([a-z_]+)'/g
+// Matches `stage({ supabase, companyId, userId, type: '<op_type>'` across line
+// breaks. If the staging call shape changes, the call-site count assertion
+// below fails loudly: update this regex together with the shape.
+const STAGE_CALL_RE = /\bstage\(\{\s*(?:[\w.]+(?::\s*[\w.]+)?,\s*){3}type:\s*'([a-z_]+)'/g
 
 function extractStagedOpTypes(): { types: Set<string>; callSites: number } {
   const src = readFileSync(SERVER_TS, 'utf8')
@@ -105,8 +95,8 @@ describe('pending_operations operation_type CHECK audit', () => {
   })
 
   it('the final CHECK holds every PendingOperationType in src/types (a rebuilt list never drops one)', async () => {
-    const types = extractPendingOperationTypeUnion()
-    // A floor, as above: a big drop means the parse no longer matches the union.
+    const types: string[] = PENDING_OPERATION_TYPES
+    // A floor, as above: a big drop means the risk tiers lost their list.
     expect(types.length).toBeGreaterThanOrEqual(150)
     const { rows } = await getPool().query<{ def: string }>(
       `SELECT pg_get_constraintdef(oid) AS def

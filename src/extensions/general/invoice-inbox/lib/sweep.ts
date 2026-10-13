@@ -17,7 +17,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { requeueHiddenRoutedItems, routeStaleQueueItems } from './route-from-arkiv'
 import { createLogger } from '@/lib/logger'
-import { emptyResult } from './extract-invoice-fields'
+import { emptyResult } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
 
 const log = createLogger('invoice-inbox/sweep')
 

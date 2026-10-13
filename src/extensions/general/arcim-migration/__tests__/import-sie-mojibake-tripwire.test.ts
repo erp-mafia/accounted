@@ -72,7 +72,7 @@ function buildCtx(userId: string | null) {
     },
     storage: memoryIntakeStorage({ [CLEAN_PATH]: CLEAN_SIE, [MOJIBAKE_PATH]: MOJIBAKE_SIE }).storage,
   }
-  const ctx = { supabase, companyId: 'company-1', log } as unknown as ExtensionContext
+  const ctx = { supabase, companyId: 'company-1', userId: userId ?? 'user-1', log } as unknown as ExtensionContext
   return { ctx, log }
 }
 
@@ -93,16 +93,6 @@ describe('POST /import-sie: mojibake tripwire', () => {
       errors: [],
       warnings: [],
     }))
-  })
-
-  it('returns 401 when unauthenticated', async () => {
-    const { ctx } = buildCtx(null)
-    const response = await handler(
-      importRequest({ storagePath: CLEAN_PATH, mappings: MAPPINGS, options: {} }),
-      ctx,
-    )
-    expect(response.status).toBe(401)
-    expect(submitSIEJob).not.toHaveBeenCalled()
   })
 
   it('returns 400 when storagePath is missing', async () => {

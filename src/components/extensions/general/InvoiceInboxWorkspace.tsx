@@ -51,7 +51,7 @@ import {
 import Link from 'next/link'
 import { cn, formatCurrency, formatDate, formatDateTime } from '@/lib/utils'
 import { QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
-import { useRangeSelect } from '@/lib/hooks/use-range-select'
+import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import { GoogleMark, MicrosoftMark } from '@/components/ui/provider-marks'
 import { StartCard } from '@/components/dashboard/StartCard'
 import EditKonteringDialog from '@/components/extensions/general/EditKonteringDialog'
@@ -490,10 +490,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     'todo' | 'linked' | 'booked' | 'error' | 'all' | 'missing' | 'portal'
   >('todo')
   const [searchTerm, setSearchTerm] = useState('')
-  // Bulk selection. Items linked to a supplier invoice are skipped at delete
-  // time (server returns 409); we still allow them to be selected so the
-  // user can see the "X skipped" toast and learn the rule.
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  // Bulk selection (useBulkSelection below). Items linked to a supplier
+  // invoice are skipped at delete time (server returns 409); we still allow
+  // them to be selected so the user can see the "X skipped" toast and learn
+  // the rule.
   const [isBulkDeleting, setIsBulkDeleting] = useState(false)
   // Onboarding card visibility. Hides when all three steps are complete or
   // the user dismissed it. Persisted to localStorage so refresh doesn't
@@ -1277,23 +1277,17 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     }
   }, [fetchItems, selectedId, toast])
 
-  // Ranges walk the rendered inbox rows in order. Optimistic upload
-  // placeholders render no checkbox, so they stay out of the range: their
-  // temp-* ids are not server rows and must never reach a bulk action.
-  const range = useRangeSelect({
-    visibleIds: filteredItems.filter((item) => !item.isPlaceholder).map((item) => item.id),
-    selectedIds,
-    setSelectedIds,
-  })
-  const toggleSelected = useCallback(
-    (id: string, extend?: boolean) => range.toggle(id, extend),
-    [range],
+  // The selection holds only the rendered inbox rows: a filter tab or a
+  // search that hides a ticked row drops it, so "Ta bort" and "Bokför valda"
+  // never reach a row the user can no longer see. Optimistic upload
+  // placeholders render no checkbox, so they stay out: their temp-* ids are
+  // not server rows and must never reach a bulk action.
+  const selection = useBulkSelection(
+    filteredItems.filter((item) => !item.isPlaceholder).map((item) => item.id),
   )
-
-  const clearSelection = useCallback(() => {
-    setSelectedIds(new Set())
-    range.resetAnchor()
-  }, [range])
+  const selectedIds = selection.selectedIds
+  const toggleSelected = selection.toggle
+  const clearSelection = selection.clear
 
   // The selected rows, and how many of them can actually be bulk-booked
   // (matched to a transaction and not yet booked). Drives the "Bokför valda"

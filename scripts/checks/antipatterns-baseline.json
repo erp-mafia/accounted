@@ -36,12 +36,8 @@
     ]
   },
   "rawReferenceFetch": {
-    "count": 3,
-    "files": [
-      "app/(dashboard)/salary/employees/page.tsx",
-      "app/(dashboard)/salary/page.tsx",
-      "app/(dashboard)/salary/runs/[id]/page.tsx"
-    ]
+    "count": 0,
+    "files": []
   },
   "providerHosts": {
     "count": 22,

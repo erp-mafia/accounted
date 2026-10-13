@@ -1,0 +1,197 @@
+/**
+ * runConnectionSync is the one sync behind "Synka nu", the initial backfill,
+ * the agent-triggered sync and the cron. These pin what every door now
+ * shares: the SIE-overlap guard, the fetch options, the totals and dates, the
+ * post-sync sweep and the persisted result.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { createTableMockSupabase } from '@/tests/helpers'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import type { StoredAccount } from '../../types'
+
+vi.mock('../sync', () => ({ syncAccountTransactions: vi.fn() }))
+vi.mock('@/lib/bank-sync/persist-sync-result', () => ({ persistBankSyncResult: vi.fn() }))
+vi.mock('@/lib/reconciliation/unattended-sweep', () => ({
+  runUnattendedReconciliationSweep: vi.fn(),
+  toSweepSummary: vi.fn(() => ({ summary: true })),
+}))
+
+import { syncAccountTransactions } from '../sync'
+import { persistBankSyncResult } from '@/lib/bank-sync/persist-sync-result'
+import { runUnattendedReconciliationSweep } from '@/lib/reconciliation/unattended-sweep'
+import { INITIAL_SYNC_TIMEOUT } from '@/lib/bank-sync/initial-sync-error'
+import { runConnectionSync, type ConnectionSyncInput } from '../run-connection-sync'
+
+const mockSync = vi.mocked(syncAccountTransactions)
+const mockPersist = vi.mocked(persistBankSyncResult)
+const mockSweep = vi.mocked(runUnattendedReconciliationSweep)
+
+const ACCOUNTS = [
+  { uid: 'acc-1', ledger_account: '1930' },
+  { uid: 'acc-2', ledger_account: '1931' },
+] as unknown as StoredAccount[]
+
+function input(supabase: unknown, overrides: Partial<ConnectionSyncInput> = {}): ConnectionSyncInput {
+  return {
+    supabase: supabase as SupabaseClient,
+    companyId: 'company-1',
+    userId: 'user-1',
+    connection: { id: 'conn-1', session_id: 'session-1' },
+    accounts: ACCOUNTS,
+    fromDate: '2026-07-01',
+    toDate: '2026-10-01',
+    lookbackDays: 92,
+    startedAt: '2026-10-01T10:00:00.000Z',
+    log: { info: vi.fn(), warn: vi.fn() },
+    ...overrides,
+  }
+}
+
+const result = (overrides: Record<string, unknown> = {}) => ({
+  imported: 2,
+  duplicates: 1,
+  errors: 0,
+  requestedFromDate: '2026-07-01',
+  historyNarrowed: false,
+  ...overrides,
+})
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  mockSweep.mockResolvedValue({ applied: 3, skippedBelowThreshold: 1, accounts: [] } as never)
+})
+
+describe('runConnectionSync', () => {
+  it('fetches every account with the deepest history for a long window and persists the result', async () => {
+    const { supabase } = createTableMockSupabase({ sie_imports: { data: null } })
+    mockSync
+      .mockResolvedValueOnce(result({ returnedMinBookingDate: '2026-07-03', returnedMaxBookingDate: '2026-09-30' }) as never)
+      .mockResolvedValueOnce(result({ imported: 5, returnedMinBookingDate: '2026-07-02', returnedMaxBookingDate: '2026-09-29' }) as never)
+
+    const outcome = await runConnectionSync(input(supabase))
+
+    expect(mockSync).toHaveBeenCalledTimes(2)
+    expect(mockSync).toHaveBeenCalledWith(
+      supabase, 'company-1', 'user-1', 'conn-1', ACCOUNTS[0], '2026-07-01', '2026-10-01', undefined,
+      { strategy: 'longest' },
+    )
+    expect(outcome).toMatchObject({
+      imported: 7,
+      duplicates: 2,
+      returnedMin: '2026-07-02',
+      returnedMax: '2026-09-30',
+      historyFrom: null,
+      sieOverlap: false,
+      autoMatched: 0,
+    })
+    expect(mockSweep).not.toHaveBeenCalled()
+    expect(mockPersist).toHaveBeenCalledWith(supabase, expect.objectContaining({
+      companyId: 'company-1',
+      connectionId: 'conn-1',
+      sessionId: 'session-1',
+      startedAt: '2026-10-01T10:00:00.000Z',
+      accounts: ACCOUNTS,
+    }))
+    expect(mockPersist.mock.calls[0][1]).not.toHaveProperty('initialSync')
+  })
+
+  it('keeps the default strategy for a short incremental window', async () => {
+    const { supabase } = createTableMockSupabase({ sie_imports: { data: null } })
+    mockSync.mockResolvedValue(result() as never)
+
+    await runConnectionSync(input(supabase, { lookbackDays: 7 }))
+
+    expect(mockSync.mock.calls[0][8]).toEqual({})
+  })
+
+  it('records the window and what the bank returned on a first sync', async () => {
+    const { supabase } = createTableMockSupabase({ sie_imports: { data: null } })
+    mockSync.mockResolvedValue(result({ returnedMinBookingDate: '2026-07-05', returnedMaxBookingDate: '2026-09-30' }) as never)
+
+    await runConnectionSync(input(supabase, { firstSync: true, lookbackDays: 7 }))
+
+    expect(mockSync.mock.calls[0][8]).toEqual({ strategy: 'longest' })
+    expect(mockPersist.mock.calls[0][1].initialSync).toEqual({
+      requestedFrom: '2026-07-01',
+      returnedMin: '2026-07-05',
+      returnedMax: '2026-09-30',
+      lookbackDays: 7,
+    })
+  })
+
+  it('links instead of booking over a completed SIE import, sweeping from the oldest returned date', async () => {
+    const { supabase, payloads } = createTableMockSupabase({
+      sie_imports: { data: { id: 'sie-1' } },
+      bank_connections: { data: null },
+    })
+    mockSync.mockResolvedValue(result({ returnedMinBookingDate: '2026-06-20' }) as never)
+
+    const outcome = await runConnectionSync(input(supabase))
+
+    expect(mockSync.mock.calls[0][8]).toEqual({ skipAutoCategorization: true, strategy: 'longest' })
+    // The fetched accounts only, from the oldest date the bank returned.
+    expect(mockSweep).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', {
+      dateFrom: '2026-06-20',
+      dateTo: '2026-10-01',
+      ledgerAccounts: ['1930', '1931'],
+    })
+    expect(payloads('bank_connections', 'update')).toEqual([{ last_sie_sweep: { summary: true } }])
+    expect(outcome).toMatchObject({ sieOverlap: true, autoMatched: 3 })
+  })
+
+  it('stores a viewer sync raw: no categorising and no sweep', async () => {
+    const { supabase } = createTableMockSupabase({ sie_imports: { data: { id: 'sie-1' } } })
+    mockSync.mockResolvedValue(result() as never)
+
+    await runConnectionSync(input(supabase, { rawInsertOnly: true }))
+
+    expect(mockSync.mock.calls[0][8]).toEqual({ skipAutoCategorization: true, rawInsertOnly: true, strategy: 'longest' })
+    expect(mockSweep).not.toHaveBeenCalled()
+  })
+
+  it('still persists the sync when the sweep fails', async () => {
+    const { supabase } = createTableMockSupabase({ sie_imports: { data: { id: 'sie-1' } } })
+    mockSync.mockResolvedValue(result() as never)
+    mockSweep.mockRejectedValue(new Error('sweep down'))
+
+    const outcome = await runConnectionSync(input(supabase))
+
+    expect(outcome.autoMatched).toBe(0)
+    expect(mockPersist).toHaveBeenCalled()
+  })
+
+  it('names the date every account is complete from when a bank narrowed the window', async () => {
+    const { supabase } = createTableMockSupabase({ sie_imports: { data: null } })
+    mockSync
+      .mockResolvedValueOnce(result({ historyNarrowed: true, effectiveFromDate: '2026-08-01' }) as never)
+      .mockResolvedValueOnce(result({ historyNarrowed: true, effectiveFromDate: '2026-08-15' }) as never)
+
+    const outcome = await runConnectionSync(input(supabase))
+
+    expect(outcome.historyFrom).toBe('2026-08-15')
+  })
+
+  it('gives up on a slow bank with the initial-sync timeout and persists nothing', async () => {
+    vi.useFakeTimers()
+    try {
+      const { supabase } = createTableMockSupabase({ sie_imports: { data: null } })
+      mockSync.mockReturnValue(new Promise(() => {}) as never)
+
+      const run = runConnectionSync(input(supabase, { fetchTimeoutMs: 60_000 }))
+      const expectation = expect(run).rejects.toThrow(INITIAL_SYNC_TIMEOUT)
+      await vi.advanceTimersByTimeAsync(60_000)
+      await expectation
+      expect(mockPersist).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('throws a fetch failure to the door, unpersisted', async () => {
+    const { supabase } = createTableMockSupabase({ sie_imports: { data: null } })
+    mockSync.mockRejectedValue(new Error('bank down'))
+
+    await expect(runConnectionSync(input(supabase))).rejects.toThrow('bank down')
+    expect(mockPersist).not.toHaveBeenCalled()
+  })
+})

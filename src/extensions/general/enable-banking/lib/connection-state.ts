@@ -131,14 +131,17 @@ export function offersAccountChoice(
  * save (crm#1097). The initial backfill runs once per connection, for the
  * accounts chosen then: an account switched on later gets the cron's own
  * window (cronLookbackDays), about a week on a healthy connection, the gap
- * since the last sync on a stale one, 90 days while the first import is still
- * owed. Null when no scheduled sync comes next: a stopped sync
+ * since the last sync on a stale one, from the picked start date while the
+ * first import is still owed. Null when no scheduled sync comes next: a stopped sync
  * (needs_configuration) syncs right after the save instead, and a connection
  * that is not active cannot save a changed selection. A company without
  * bank_sync gets null from the caller: the cron skips it and Synka is refused.
  */
 export function nextScheduledSyncFrom(
-  connection: ConnectionStateInput & { initial_sync_completed_at?: string | null },
+  connection: ConnectionStateInput & {
+    initial_sync_completed_at?: string | null
+    initial_sync_requested_from?: string | null
+  },
   now: number = Date.now(),
 ): string | null {
   if (connection.status !== 'active') return null

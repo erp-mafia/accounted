@@ -5,6 +5,7 @@ import { CalendarClock } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { AccountNumber } from '@/components/ui/account-number'
+import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import { formatAmount, formatCurrency, formatDate } from '@/lib/utils'
 import {
   resolveReverseChargeRate,
@@ -304,8 +305,6 @@ export function SupplierInvoiceReviewContent({
     voucherDescription,
     chartVatTreatments,
   )
-  const totalDebit = journalLines.reduce((sum, l) => sum + l.debit, 0)
-  const totalCredit = journalLines.reduce((sum, l) => sum + l.credit, 0)
   const showingSek = fxRate !== 1
 
   // No account-label lookup any more: the BESKRIVNING column shows the
@@ -470,64 +469,16 @@ export function SupplierInvoiceReviewContent({
               <span className="ml-1.5 font-normal text-xs">{t('review_voucher_in_sek_suffix')}</span>
             )}
           </p>
-          <div className="hidden sm:block">
-            <table className="w-full text-sm">
-              <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
-                <tr className="text-left">
-                  <th className="pb-1 w-16">{t('col_account')}</th>
-                  <th className="pb-1">{t('col_description')}</th>
-                  <th className="pb-1 w-24 text-right">{t('col_debit')}</th>
-                  <th className="pb-1 w-24 text-right">{t('col_credit')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {journalLines.map((line, index) => (
-                  <tr key={index} className="border-b border-dashed border-muted-foreground/20 last:border-0">
-                    <td className="py-1">
-                      <AccountNumber number={line.account_number} size="sm" />
-                    </td>
-                    <td className="py-1 text-xs">
-                      {line.description}
-                    </td>
-                    <td className="py-1 text-right tabular-nums">
-                      {line.debit > 0 ? formatAmount(line.debit) : ''}
-                    </td>
-                    <td className="py-1 text-right tabular-nums">
-                      {line.credit > 0 ? formatAmount(line.credit) : ''}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr className="border-t font-semibold">
-                  <td className="pt-1" colSpan={2}>{t('sum_label')}</td>
-                  <td className="pt-1 text-right tabular-nums">{formatAmount(totalDebit)}</td>
-                  <td className="pt-1 text-right tabular-nums">{formatAmount(totalCredit)}</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-          <div className="sm:hidden space-y-1.5 text-sm">
-            {journalLines.map((line, index) => (
-              <div key={index} className="flex items-center justify-between py-1 border-b border-dashed border-muted-foreground/20 last:border-0">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <AccountNumber number={line.account_number} size="sm" />
-                    <span className="text-xs text-muted-foreground truncate">
-                      {line.description}
-                    </span>
-                  </div>
-                </div>
-                <span className="tabular-nums text-xs shrink-0 ml-2">
-                  {line.debit > 0 ? t('debit_short', { amount: formatAmount(line.debit) }) : t('credit_short', { amount: formatAmount(line.credit) })}
-                </span>
-              </div>
-            ))}
-            <div className="flex justify-between pt-1 border-t font-semibold text-xs tabular-nums">
-              <span>{t('sum_label')}</span>
-              <span>{t('debit_credit_short', { debit: formatAmount(totalDebit), credit: formatAmount(totalCredit) })}</span>
-            </div>
-          </div>
+          <VoucherLinesTable
+            lines={journalLines.map((line, index) => ({
+              key: index,
+              account_number: line.account_number,
+              description: line.description,
+              debit_amount: line.debit,
+              credit_amount: line.credit,
+            }))}
+            showTotals
+          />
           {figures.rounding.applies && (
             <p className="text-xs text-muted-foreground">
               {t('review_ore_rounding_note', {

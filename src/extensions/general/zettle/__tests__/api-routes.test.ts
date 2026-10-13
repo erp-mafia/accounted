@@ -175,17 +175,6 @@ describe('zettle extension routes', () => {
     expect([402, 403]).toContain(res.status)
   })
 
-  it('POST /backfill refuses without a session', async () => {
-    const { supabase } = createQueuedMockSupabase()
-    supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
-    const res = await findRoute('POST', '/backfill').handler(
-      makeRequest('POST', { from: '2026-01-01' }),
-      makeContext(supabase),
-    )
-    expect(res.status).toBe(401)
-    expect(syncZettlePurchases).not.toHaveBeenCalled()
-  })
-
   it('POST /backfill rejects a date it cannot honour', async () => {
     const { supabase } = createQueuedMockSupabase()
     supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
@@ -333,16 +322,6 @@ describe('zettle extension routes', () => {
   })
 
   describe('DELETE /disconnect', () => {
-    it('returns 401 without a user', async () => {
-      const { supabase } = createQueuedMockSupabase()
-      supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
-      const res = await findRoute('DELETE', '/disconnect').handler(
-        makeRequest('DELETE', {}),
-        makeContext(supabase),
-      )
-      expect(res.status).toBe(401)
-      expect(createServiceClientNoCookies).not.toHaveBeenCalled()
-    })
 
     it('returns 404 when the company has no connection', async () => {
       const { supabase } = createQueuedMockSupabase()

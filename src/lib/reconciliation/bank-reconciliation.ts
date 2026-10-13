@@ -5,18 +5,17 @@ import { eventBus } from '@/lib/events/bus'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
-import { hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
+import {
+  hasLiveJournalEntryLink,
+  prepareBankLink,
+  writeBankLink,
+  type BankLinkRefusalCode,
+} from '@/lib/transactions/bank-link'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
-import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import {
   ledgerLineAmountIn,
   type LedgerLineAmount,
 } from '@/lib/bookkeeping/ledger-line-amount'
-import {
-  describeCashAccountSiblings,
-  shouldRepointToSibling,
-  type CashAccountSiblings,
-} from '@/lib/cash-accounts/service'
 import { createLogger } from '@/lib/logger'
 import { chunk } from '@/lib/utils'
 import { resolveLedgerSettlements } from './ledger-settlement-store'
@@ -1160,43 +1159,10 @@ export async function getReconciliationStatus(
 // ============================================================
 
 /**
- * Why manualLink or linkTransactionToVouchers refused. Stable, so a caller
- * branches on the code and never on the Swedish sentence: the account-keyed
- * surface (lib/reconciliation/actions.ts) maps it to its pair skip codes.
- * Before the codes, every refusal read as "the amounts do not close", which
- * sent an agent with a mistyped verifikat id off to book a residual.
+ * Why manualLink or linkTransactionToVouchers refused: the one code set of
+ * the bank link core (lib/transactions/bank-link.ts).
  */
-export type BankLinkRefusalCode =
-  | 'TRANSACTION_NOT_FOUND'
-  /** Bound to a cash account on another ledger account than the one reconciled. */
-  | 'TRANSACTION_OTHER_ACCOUNT'
-  | 'TRANSACTION_IGNORED'
-  | 'TRANSACTION_ALREADY_LINKED'
-  | 'ENTRY_NOT_FOUND'
-  /** A draft or a cancelled draft: not in the ledger. */
-  | 'ENTRY_NOT_POSTED'
-  | 'ENTRY_REVERSED'
-  /** The verifikat does not settle the row on the account: no line there, or the amounts differ. */
-  | 'NOT_SETTLED'
-  /** A 1:N request that is not a split: a verifikat twice, fewer than two, more than 50. */
-  | 'INVALID_SPLIT'
-  /** Someone else linked the row between the read and the write. */
-  | 'LINK_RACE'
-  /**
-   * The database's bank-anchor guard refused the write (PT409 BANK_ANCHOR_*,
-   * 20260921183218, 20261006121001, 20261006121004): a verifikat does not
-   * book the row, or its 1:N slice, on the bank ledger in that direction,
-   * slices against the row's direction do not add up to it, or the row's
-   * bank account binding does not allow the link. Retrying the same request
-   * cannot succeed.
-   */
-  | 'BANK_ANCHOR_REFUSED'
-  /**
-   * A 1:N slice asks a verifikat for more than other bank rows' slices leave
-   * of it on the account (or nothing is left at all).
-   */
-  | 'OVER_ALLOCATED'
-  | 'WRITE_FAILED'
+export type { BankLinkRefusalCode }
 
 function refused(code: BankLinkRefusalCode, error: string): { success: false; error: string; code: BankLinkRefusalCode } {
   return { success: false, error, code }
@@ -1264,203 +1230,27 @@ export async function manualLink(
   accountNumber: string = '1930',
   options: { anchorUnderlag?: boolean } = {},
 ): Promise<{ success: boolean; error?: string; code?: BankLinkRefusalCode }> {
-  // Fetch transaction. The junction rows ride along on the same read: a row
-  // split over several verifikat (linkTransactionToVouchers) or bulk-booked
-  // into a samlingsverifikat carries journal_entry_id = NULL, and the pointer
-  // alone would let it be linked a second time. Only 'bank_line' rows count:
-  // they are the slices that explain the row's bank amount. A residual
-  // booking's row (role 'other') is supplementary and must not strand the
-  // row after a storno of its main verifikat nulls the pointer.
-  const { data: txRow, error: txError } = await supabase
-    .from('transactions')
-    .select('*, transaction_voucher_links(journal_entry_id, role)')
-    .eq('id', transactionId)
-    .eq('company_id', companyId)
-    .single()
+  // Every check is the bank link core's (lib/transactions/bank-link.ts), the
+  // same one linkTransactionToJournalEntry runs: pointer and junction guards,
+  // ignored row, posted verifikat, the row's account, a line on it or on a
+  // sibling ledger the row moves to.
+  const prepared = await prepareBankLink(supabase, companyId, {
+    transactionId,
+    journalEntryId,
+    accountNumber,
+    txColumns: '*',
+  })
+  if (!prepared.ok) return refused(prepared.code, prepared.error)
 
-  if (txError || !txRow) {
-    return refused('TRANSACTION_NOT_FOUND', 'Transaktionen kunde inte hittas.')
-  }
-  const { transaction_voucher_links: junctionRows, ...tx } = txRow as Record<string, unknown> & {
-    transaction_voucher_links?: Array<{ journal_entry_id: string; role?: string | null }> | null
-  }
-  if (hasBankLineJunctionRow(junctionRows)) {
-    return refused('TRANSACTION_ALREADY_LINKED', 'Transaktionen är redan kopplad till en verifikation.')
-  }
-  // An ignored row can never carry a link (CHECK transactions_is_ignored_no_
-  // journal_entry): refused by name here, where the UPDATE below used to fail
-  // on the constraint with a "Försök igen" that no retry can satisfy.
-  if (tx.is_ignored === true) {
-    return refused('TRANSACTION_IGNORED', 'Transaktionen är ignorerad. Återställ den innan du kopplar.')
-  }
-
-  // Only a LIVE (posted) pointer blocks re-linking. A transaction still pointing
-  // at a 'reversed' entry (storno/correction left the link behind) reads as
-  // "utan koppling" in the UI, so it must be re-linkable to another verifikat
-  // (issue #988). The stale pointer is overwritten by the locked UPDATE below.
-  if (
-    typeof tx.journal_entry_id === 'string' &&
-    (await hasLiveJournalEntryLink(supabase, companyId, tx.journal_entry_id))
-  ) {
-    return refused('TRANSACTION_ALREADY_LINKED', 'Transaktionen är redan kopplad till en verifikation.')
-  }
-
-  // Fetch journal entry + verify it has a 1930 line
-  const { data: entry, error: entryError } = await supabase
-    .from('journal_entries')
-    .select('id, company_id, status')
-    .eq('id', journalEntryId)
-    .eq('company_id', companyId)
-    .single()
-
-  if (entryError || !entry) {
-    return refused('ENTRY_NOT_FOUND', 'Verifikationen kunde inte hittas.')
-  }
-
-  if (entry.status === 'reversed') {
-    return refused('ENTRY_REVERSED', 'Verifikationen är makulerad och kan inte kopplas.')
-  }
-  if (entry.status !== 'posted') {
-    return refused('ENTRY_NOT_POSTED', 'Verifikationen är inte bokförd ännu.')
-  }
-
-  // Defense-in-depth: the transaction must belong to the account being
-  // reconciled. A transaction bound to 1930 must not be linked against a 1931
-  // voucher even if the caller passes accountNumber=1931. Legacy rows with no
-  // cash_account_id fall through (the UI list already gates them by currency).
-  //
-  // Sibling ledgers of the SAME physical account (rows sharing the IBAN, in
-  // the same currency) are additionally accepted for the voucher-line check
-  // below: a transaction stranded on an orphaned reconnect row (e.g. 1931)
-  // must be linkable to the verifikat booked on the live ledger of that same
-  // account (e.g. 1940), issue #1643 problem 1. Unrelated accounts, and the
-  // other currency pockets of a multi-currency account (same IBAN, other
-  // currency), stay rejected.
-  let allowedLineAccounts: string[] = [accountNumber]
-  let siblingInfo: CashAccountSiblings | null = null
-  if (typeof tx.cash_account_id === 'string') {
-    const { data: txCa } = await supabase
-      .from('cash_accounts')
-      .select('ledger_account')
-      .eq('id', tx.cash_account_id)
-      .eq('company_id', companyId)
-      .maybeSingle()
-    if (txCa?.ledger_account && txCa.ledger_account !== accountNumber) {
-      return refused('TRANSACTION_OTHER_ACCOUNT', `Transaktionen hör till ${txCa.ledger_account}, inte ${accountNumber}`)
-    }
-    siblingInfo = await describeCashAccountSiblings(supabase, companyId, tx.cash_account_id)
-    if (siblingInfo && siblingInfo.siblings.length > 0) {
-      allowedLineAccounts = [
-        ...new Set([accountNumber, ...siblingInfo.siblings.map((row) => row.ledger_account)]),
-      ]
-    }
-  }
-
-  // Check for a bank account line on the SELECTED settlement account (or a
-  // sibling ledger of the same physical account, see above). The old
-  // "any 19xx line" check let a 1930 transaction link to a voucher that only
-  // touched 1931: a cross-account link that silently hides a real imbalance.
-  const { data: lines } = await supabase
-    .from('journal_entry_lines')
-    .select('debit_amount, credit_amount, account_number')
-    .eq('journal_entry_id', journalEntryId)
-    .in('account_number', allowedLineAccounts)
-
-  if (!lines || lines.length === 0) {
-    return refused('NOT_SETTLED', `Verifikationen saknar rad på ${allowedLineAccounts.join(' eller ')}`)
-  }
-
-  // When the voucher's bank leg sits on a SIBLING ledger only, the row moves
-  // to that sibling in the same write that links it: siblings are the same
-  // physical account in the same currency, and the voucher is the source of
-  // truth for where the money was booked. A cross-account link would leave
-  // the money on one ledger while the voucher settles on the other, and the
-  // account-keyed reconciliation would count it as an imbalance on BOTH
-  // accounts. Same gate as PATCH /api/transactions/[id]/cash-account: the row
-  // is unbooked by construction (the locked UPDATE below asserts that). This
-  // covers the stranded row linking to the live ledger, two live twins of one
-  // connection, and two demoted rows after a full disconnect. The decision
-  // is about the DESTINATION: the row moves when the sibling is live, or
-  // when its own holder is definitively gone (demoted to manual or revoked)
-  // and no other sibling is live either. A row whose connection is merely
-  // expired/error/pending is still the syncing account (re-auth renews it in
-  // place), so a voucher booked ONLY on a dead sibling is REFUSED (round 4):
-  // the voucher is what is wrong, moving the row would strand it on the
-  // orphan the moment consent is renewed, and writing the link anyway would
-  // be the cross-account link the line check above exists to refuse (the
-  // REST and MCP callers reach this directly, without the unmatched-entries
-  // filter that hides such vouchers from the dialog). The same rule keeps a
-  // live row from being parked on a row no connection can sync again.
-  // A voucher touching several sibling ledgers (an old "transfer" between
-  // two rows of one physical account) is judged on the best of them, never
-  // on whichever line the query happened to return first: a live sibling
-  // wins, else the first sibling the row may move to.
-  const typedLines = lines as Array<{ account_number: string }>
-  let repointCashAccountId: string | null = null
-  if (!typedLines.some((line) => line.account_number === accountNumber)) {
-    const siblingLedgers = [...new Set(typedLines.map((line) => line.account_number))]
-    const candidates = siblingLedgers
-      .map((ledger) => siblingInfo?.siblings.find((row) => row.ledger_account === ledger) ?? null)
-      .filter((row): row is NonNullable<typeof row> => row !== null)
-      .filter((row) => siblingInfo !== null && shouldRepointToSibling(siblingInfo, row))
-    const destination = candidates.find((row) => row.live) ?? candidates[0] ?? null
-    if (destination) {
-      repointCashAccountId = destination.id
-    } else {
-      log.warn('manualLink: refused a link to a voucher booked only on a dead sibling ledger', {
-        companyId,
-        transactionId,
-        accountNumber,
-        siblingLedgers,
-      })
-      return refused(
-        'NOT_SETTLED',
-        `Verifikationen är bokförd på ${siblingLedgers.join(' och ')}, som inte är transaktionens konto (${accountNumber}). Rätta verifikationen eller flytta transaktionen först.`,
-      )
-    }
-  }
-
-  // N:1 is intentionally allowed: several bank transactions may settle ONE
-  // verifikat (a salary run paid out in multiple transfers, a supplier invoice
-  // paid in instalments). The voucher's bank line is counted once in the period
-  // movement while each transaction sums on the bank side, so correctly-summing
-  // links net to zero and any mis-link surfaces as a non-zero difference on the
-  // status card: there's no need to forbid a second link here. (A given
-  // transaction still can't be double-linked: the tx.journal_entry_id guard
-  // above already blocks that.) The candidate list surfaces a voucher already
-  // settled on THIS account only when the user opts in via "Visa även matchade
-  // verifikationer"; a voucher whose links all sit on another cash account (the
-  // second leg of an own-account transfer, issue #1026) surfaces by default,
-  // which is exactly the N:1-across-accounts case this permits.
-
-  // Apply link. The write re-checks the pointer we validated inside the write
-  // itself (the read above is advisory): null for a free row, or the exact
-  // stale 'reversed'-entry id we're detaching from. Locking on the known value
-  // lets the stale-pointer overwrite through while a concurrent re-link becomes
-  // a no-op (0 rows → the "redan kopplad" branch below). Same optimistic-lock
-  // pattern as lib/transactions/link-journal-entry.ts.
-  const previousJournalEntryId =
-    typeof tx.journal_entry_id === 'string' ? tx.journal_entry_id : null
-  const linkUpdate = supabase
-    .from('transactions')
-    .update({
-      journal_entry_id: journalEntryId,
-      reconciliation_method: 'manual' as ReconciliationMethod,
-      is_business: true,
-      ...(repointCashAccountId ? { cash_account_id: repointCashAccountId } : {}),
-    })
-    .eq('id', transactionId)
-    .eq('company_id', companyId)
-  const { data: updatedRows, error: updateError } = await (previousJournalEntryId === null
-    ? linkUpdate.is('journal_entry_id', null)
-    : linkUpdate.eq('journal_entry_id', previousJournalEntryId)
-  ).select('id')
-
-  if (updateError) {
-    return bankAnchorRefusal(updateError) ?? refused('WRITE_FAILED', 'Kunde inte koppla transaktionen. Försök igen.')
-  }
-  if (!updatedRows || updatedRows.length === 0) {
-    return refused('LINK_RACE', 'Transaktionen är redan kopplad till en verifikation.')
+  const written = await writeBankLink(supabase, companyId, {
+    transactionId,
+    journalEntryId,
+    prepared,
+    fields: { reconciliation_method: 'manual' as ReconciliationMethod },
+  })
+  if (!written.ok) {
+    if (written.race) return refused('LINK_RACE', 'Transaktionen är redan kopplad till en verifikation.')
+    return bankAnchorRefusal(written.error) ?? refused('WRITE_FAILED', 'Kunde inte koppla transaktionen. Försök igen.')
   }
 
   // On a link someone chose, the row's underlag goes onto the verifikat it
@@ -1478,7 +1268,7 @@ export async function manualLink(
     await eventBus.emit({
       type: 'transaction.reconciled',
       payload: {
-        transaction: tx as unknown as Transaction,
+        transaction: prepared.tx as unknown as Transaction,
         journalEntryId,
         method: 'manual' as ReconciliationMethod,
         userId,

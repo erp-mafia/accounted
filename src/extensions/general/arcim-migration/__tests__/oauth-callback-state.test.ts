@@ -281,7 +281,7 @@ describe('white-label OAuth callback handoff', () => {
     const connect = findRoute('POST', '/connect').handler as RouteHandler
     const response = await connect(createMockRequest(`${origin}/api/extensions/ext/arcim-migration/connect`, {
       method: 'POST', body: { provider: 'fortnox', origin: 'https://attacker.test' },
-    }), { supabase, companyId: 'company-1' } as unknown as ExtensionContext)
+    }), { supabase, companyId: 'company-1', userId: 'user-1', log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } } as unknown as ExtensionContext)
     expect(response.status).toBe(200)
     expect(generateOtc).toHaveBeenCalledWith('consent-new', 'user-1', expected)
   })
@@ -298,7 +298,9 @@ describe('white-label OAuth callback handoff', () => {
     vi.mocked(getAuthUrl).mockResolvedValue({ url: 'https://provider.test/login' })
     const ctx = {
       companyId: 'company-1',
-      supabase: { auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }) } },
+      userId: 'user-1',
+      supabase: {},
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     } as unknown as ExtensionContext
     const connect = findRoute('POST', '/connect').handler as RouteHandler
     const response = await connect(createMockRequest(`${APP_URL}/api/extensions/ext/arcim-migration/connect`, {
@@ -550,7 +552,7 @@ describe('OAuth redirect_uri symmetry between authorize and exchange', () => {
     ;(supabase as unknown as { auth: unknown }).auth = {
       getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }),
     }
-    return { supabase, companyId: 'company-1' } as unknown as ExtensionContext
+    return { supabase, companyId: 'company-1', userId: 'user-1', log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } } as unknown as ExtensionContext
   }
 
   beforeEach(() => {
@@ -704,7 +706,7 @@ describe('GET /preview: cross-tenant consent status oracle', () => {
     ;(supabase as unknown as { auth: unknown }).auth = {
       getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } } }),
     }
-    return { supabase, companyId: 'company-1' } as unknown as ExtensionContext
+    return { supabase, companyId: 'company-1', userId: 'user-1', log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } } as unknown as ExtensionContext
   }
 
   it('scopes the consent read to the caller company', async () => {

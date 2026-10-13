@@ -7,13 +7,13 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
+import { useSaveSettings } from '@/components/settings/use-save-settings'
 import {
   SettingsGroup,
   SettingsInput,
   SettingsRow,
   SettingsRowNote,
 } from '@/components/settings/SettingsRows'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { voucherSeriesLabel } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { CompanySettings } from '@/types'
 
@@ -54,6 +54,7 @@ export function VoucherSeriesManager({ settings, onSettingsUpdated }: VoucherSer
   const t = useTranslations('settings_voucher_series')
   const { company } = useCompany()
   const { toast } = useToast()
+  const saveSettings = useSaveSettings()
   const [series, setSeries] = useState<VoucherSeries[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
@@ -130,38 +131,17 @@ export function VoucherSeriesManager({ settings, onSettingsUpdated }: VoucherSer
 
   const handleSave = async () => {
     setIsSaving(true)
-    try {
-      // Every nameable letter is sent, empty string meaning "clear this
-      // name"; the schema strips empties before storing.
-      const payload: Record<string, string> = {}
-      for (const letter of nameableLetters) payload[letter] = (draft[letter] ?? '').trim()
-      const res = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ voucher_series_labels: payload }),
-      })
-      const json = await res.json()
-      if (!res.ok) {
-        toast({
-          title: t('per_account_save_failed'),
-          description: getErrorMessage(json, { context: 'settings', statusCode: res.status }),
-          variant: 'destructive',
-        })
-        return
-      }
-      const stored: Record<string, string> = {}
-      for (const [letter, name] of Object.entries(payload)) if (name) stored[letter] = name
-      onSettingsUpdated({ voucher_series_labels: stored })
-      toast({ title: t('names_saved_title'), description: t('names_saved_description') })
-    } catch (err) {
-      toast({
-        title: t('per_account_save_failed'),
-        description: getErrorMessage(err, { context: 'settings' }),
-        variant: 'destructive',
-      })
-    } finally {
-      setIsSaving(false)
-    }
+    // Every nameable letter is sent, empty string meaning "clear this
+    // name"; the schema strips empties before storing.
+    const payload: Record<string, string> = {}
+    for (const letter of nameableLetters) payload[letter] = (draft[letter] ?? '').trim()
+    const saved = await saveSettings({ voucher_series_labels: payload }, { failedTitle: t('per_account_save_failed') })
+    setIsSaving(false)
+    if (!saved) return
+    const stored: Record<string, string> = {}
+    for (const [letter, name] of Object.entries(payload)) if (name) stored[letter] = name
+    onSettingsUpdated({ voucher_series_labels: stored })
+    toast({ title: t('names_saved_title'), description: t('names_saved_description') })
   }
 
   return (

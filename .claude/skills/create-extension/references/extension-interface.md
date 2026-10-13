@@ -18,11 +18,19 @@ All three surfaces are optional, and core reads each of them. There is no instal
 ## Key Supporting Types
 
 ```typescript
-interface ApiRouteDefinition {
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH'
-  path: string  // e.g., "/:id/confirm"
-  handler: (request: Request, ctx?: ExtensionContext) => Promise<Response>
-}
+// Exactly one of three modes. The default route always gets ctx: the
+// dispatcher has authenticated the caller and resolved the company first, so
+// a handler never checks `if (!ctx)` or calls auth.getUser() again. Declare
+// a role gate with requireWrite or requireAdmin; the dispatcher refuses with
+// 403 before the handler runs.
+type ApiRouteDefinition =
+  | { method; path; requireWrite?: boolean; requireAdmin?: boolean
+      handler: (request: Request, ctx: ExtensionContext) => Promise<Response> }
+  | { method; path; skipAuth: true                 // no auth, no ctx (OAuth callbacks, webhooks)
+      handler: (request: Request) => Promise<Response> }
+  | { method; path; skipCompanyContext: true       // auth, no company (onboarding), no ctx
+      handler: (request: Request) => Promise<Response> }
+// method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH'; path e.g. "/:id/confirm"
 
 interface ExtensionEventHandler {
   eventType: CoreEventType
@@ -35,6 +43,7 @@ interface ExtensionEventHandler {
 ```typescript
 interface ExtensionContext {
   userId: string; companyId: string; extensionId: string; requestId?: string
+  isAnonymous?: boolean  // set by the route dispatcher for a sandbox (anonymous) session
   supabase: SupabaseClient
   emit(event: CoreEvent): Promise<void>
   settings: { get<T>(key?: string): Promise<T | null>; set<T>(key: string, value: T): Promise<void> }

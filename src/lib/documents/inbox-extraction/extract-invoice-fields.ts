@@ -20,6 +20,7 @@ import { getAiService, readAiConfig, extractJsonObject } from '@/lib/ai'
 import { orgNumberKey } from '@/lib/invariants/org-number'
 import type { AiDocumentInput, AiImageMediaType, ExtractionSkipReason } from '@/lib/ai'
 import { createLogger } from '@/lib/logger'
+import { fitImageForModel, HEIC_MIME_TYPES } from '@/lib/documents/read/image'
 
 // Re-exported for callers and tests that import it from here.
 export { extractJsonObject }
@@ -31,9 +32,10 @@ const log = createLogger('invoice-inbox-extract')
 // resolved by lib/ai/config.ts (AI_EXTRACTION_MODEL, legacy BEDROCK_MODEL_ID,
 // AI_MODEL, then the Claude default on the Anthropic family).
 
-// Media types the extraction accepts. HEIC/HEIF are not on the list, so we
-// skip AI for those: the inbox row still lands and the user can edit fields
-// manually or replace the file. text/html (mail-body invoices from the
+// Media types the extraction accepts. HEIC/HEIF are not on the list: they are
+// transcoded to JPEG first (fitImageForExtraction), and one that cannot be
+// decoded is skipped, so the inbox row still lands and the user can edit
+// fields manually or replace the file. text/html (mail-body invoices from the
 // inbound pipeline) is not sent as a document block: it is converted to plain
 // text via htmlToText() first, which also makes it work on text-only models.
 const SUPPORTED_MEDIA_TYPES = new Set([
@@ -468,60 +470,21 @@ export function emptyResult(): InvoiceExtractionResult {
   }
 }
 
-// Anthropic rejects images above 5 MB (decoded bytes), and 12 MP phone photos
-// routinely exceed that: before this step they errored out to an empty
-// extraction. Downscaling to ≤2000px JPEG also cuts input tokens on every
-// large image. HEIC/HEIF (iPhone default) is transcoded to JPEG when the
-// local sharp/libvips build can decode it; prebuilt binaries usually cannot
-// (patent licensing), in which case the caller falls through to the
-// unsupported-type path exactly as before. The 5 MB limit is on the base64
-// the API receives, 4/3 of the file, so the file threshold is 3.75 MB, not 4:
-// a 4.13 MB photo was refused as "5506368 bytes > 5242880" (2026-09-22).
-const IMAGE_DOWNSCALE_THRESHOLD_BYTES = Math.floor(3.5 * 1024 * 1024)
-const IMAGE_MAX_DIMENSION = 2000
-
-async function normalizeImageForExtraction(
-  input: ExtractionInput
-): Promise<ExtractionInput> {
-  const isHeic = input.mimeType === 'image/heic' || input.mimeType === 'image/heif'
-  const isLargeSupportedImage =
-    input.mimeType.startsWith('image/') &&
-    SUPPORTED_MEDIA_TYPES.has(input.mimeType) &&
-    input.buffer.byteLength > IMAGE_DOWNSCALE_THRESHOLD_BYTES
-  if (!isHeic && !isLargeSupportedImage) return input
-
-  try {
-    // Lazy import: sharp is a native module and only a fraction of
-    // extractions need it; loading it at module scope would tax every
-    // cold start of the extension route bundle.
-    const sharp = (await import('sharp')).default
-    const converted = await sharp(input.buffer)
-      // Apply the EXIF orientation before it is lost in re-encoding:
-      // phone photos are routinely stored rotated.
-      .rotate()
-      .resize({
-        width: IMAGE_MAX_DIMENSION,
-        height: IMAGE_MAX_DIMENSION,
-        fit: 'inside',
-        withoutEnlargement: true,
-      })
-      .jpeg({ quality: 80 })
-      .toBuffer()
-    // Spread first: normalization must not shed fields like ownCompany, or
-    // the own-company supplier guard silently dies for photographed documents.
-    return { ...input, buffer: converted, mimeType: 'image/jpeg' }
-  } catch (err) {
-    // HEIC without libheif lands here → caller hits the unsupported-type
-    // guard, same net behavior as before this step existed. For oversized
-    // JPEG/PNG the original buffer is still worth attempting.
-    log.warn('image normalization failed', {
-      file_name_hash: createHash('sha256').update(input.fileName).digest('hex').slice(0, 12),
-      mime_type: input.mimeType,
-      byte_length: input.buffer.byteLength,
-      error: err instanceof Error ? err.message : String(err),
-    })
-    return input
-  }
+// Photos go through the shared fitter (lib/documents/read/image.ts), the same
+// numbers as every door that reads a photo: over 3.5 MB it rotates by EXIF
+// and fits inside 2000 px as JPEG 80 (the model refuses images above 5 MB of
+// base64), and HEIC/HEIF (the iPhone default) is transcoded to JPEG, with
+// heic-convert when the local sharp cannot decode it. A HEIC nothing could
+// decode stays as it was and is skipped as unsupported below.
+async function fitImageForExtraction(input: ExtractionInput): Promise<ExtractionInput> {
+  const isHeic = (HEIC_MIME_TYPES as readonly string[]).includes(input.mimeType)
+  const isSupportedImage = input.mimeType.startsWith('image/') && SUPPORTED_MEDIA_TYPES.has(input.mimeType)
+  if (!isHeic && !isSupportedImage) return input
+  const fitted = await fitImageForModel(input.buffer, input.mimeType)
+  if (!fitted) return input
+  // Spread first: fitting must not shed fields like ownCompany, or the
+  // own-company supplier guard silently dies for photographed documents.
+  return { ...input, buffer: fitted.bytes, mimeType: fitted.mediaType }
 }
 
 // Cap the text handed to the model. HTML mails can carry hundreds of KB of
@@ -717,9 +680,9 @@ const EXTRACTION_JSON_SCHEMA: Record<string, unknown> = {
 export async function extractInvoiceFields(
   rawInput: ExtractionInput
 ): Promise<ExtractionOutput> {
-  // Transcodes HEIC when possible and downscales oversized images; a no-op
-  // for PDFs and normal-sized supported images.
-  const input = await normalizeImageForExtraction(rawInput)
+  // Transcodes HEIC and downscales oversized photos; a no-op for PDFs, text
+  // and normal-sized supported images.
+  const input = await fitImageForExtraction(rawInput)
 
   if (!SUPPORTED_MEDIA_TYPES.has(input.mimeType)) {
     return { data: emptyResult(), rawText: null, skipped: 'unsupported_media' }

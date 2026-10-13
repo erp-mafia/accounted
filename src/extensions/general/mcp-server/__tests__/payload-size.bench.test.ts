@@ -667,6 +667,22 @@ describe('tools/list payload size guard', () => {
     //     tools_list_note travels in the response and is declared in no
     //     outputSchema: main had 6 tokens of headroom, too few for even a
     //     bare declaration. Costs the catalog nothing. Ceiling unchanged.
+    //   * Link and batch allocation generated from their operations
+    //     (2026-10-12): gnubok_match_batch_allocate gains uuid formats, the
+    //     union discriminated on kind and dry_run/idempotency_key, ~95 over
+    //     the hand-written schema (the link tool is search-only). Paid for by
+    //     the shared idempotency_key note on nine hand-written tools that
+    //     spelled out their own. Measured 65 793. Ceiling unchanged.
+    //   * Bulk booking generated from its operation (2026-10-12): the
+    //     operation's input (template path, manual_lines, uuid formats,
+    //     dry_run/idempotency_key) is ~25 over the hand-written schema. Paid
+    //     for by dropping `type: string` from generated propertyNames and by
+    //     a uuid format instead of the "UUID of the fiscal period" note on
+    //     ten hand-written tools. Measured 65 754. Ceiling unchanged.
+    //   * Staging boilerplate (2026-10-12): every hand-written write tool's
+    //     dry_run and idempotency_key are STAGING_ARGS_PROPERTIES. Tools that
+    //     declared a bare dry_run gain the shared note, those with a longer
+    //     one lose theirs: +21. Measured 65 775. Ceiling unchanged.
     expect(approxTokens).toBeLessThan(65_800)
   })
 
@@ -713,6 +729,12 @@ describe('tools/list payload size guard', () => {
     // case above): measured 60 483. Ceiling unchanged.
     // 60 500 to 60 600 on 2026-10-11, for the same tools as the 65 600 note
     // in the case above: together they measured 60 587.
+    // 2026-10-12, link and batch allocation generated from their operations
+    // (see the case above): measured 60 581. Ceiling unchanged.
+    // 2026-10-12, bulk booking generated from its operation (see the case
+    // above): measured 60 542. Ceiling unchanged.
+    // 2026-10-12, the shared staging arguments (see the case above): measured
+    // 60 563. Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

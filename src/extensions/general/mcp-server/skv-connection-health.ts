@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { findCompanyTokenUser, hasOmbudReadAccess } from '@/extensions/general/skatteverket/lib/resolve-auth'
+import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
 
 export interface SkvConnectionHealth {
   status: 'active' | 'needs_reconsent'
@@ -32,7 +33,7 @@ export async function getSkvConnectionHealth(
   companyId: string,
 ): Promise<SkvConnectionHealth | null> {
   try {
-    if (process.env.SKATTEVERKET_ENABLED !== 'true') return null
+    if (!isSkatteverketEnabled()) return null
     if (await hasOmbudReadAccess(companyId)) {
       return { status: 'active', source: 'system' }
     }

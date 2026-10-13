@@ -7,7 +7,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { invoiceInboxExtension } from '@/extensions/general/invoice-inbox'
-import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
+import { createMockRequest, parseJsonResponse, testRoutes } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
 const fetchPurchases = vi.fn()
@@ -15,7 +15,7 @@ vi.mock('@/lib/transactions/purchases-without-underlag', () => ({
   fetchPurchasesWithoutUnderlag: (...a: unknown[]) => fetchPurchases(...a),
 }))
 
-const route = invoiceInboxExtension.apiRoutes!.find(
+const route = testRoutes(invoiceInboxExtension).find(
   (r) => r.method === 'GET' && r.path === '/purchases',
 )!
 
@@ -56,9 +56,6 @@ beforeEach(() => {
 })
 
 describe('GET /purchases', () => {
-  it('returns 401 without a context', async () => {
-    expect((await route.handler(req())).status).toBe(401)
-  })
 
   it('returns the purchases with a count', async () => {
     fetchPurchases.mockResolvedValue([purchase(), purchase({ id: 'tx-2' })])

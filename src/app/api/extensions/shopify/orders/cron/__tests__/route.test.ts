@@ -10,7 +10,7 @@ vi.mock('@/lib/extensions/registry', () => ({
   extensionRegistry: { get: (...args: unknown[]) => registryGet(...args) },
 }))
 
-// The connection query chain ends in .limit(); resolve it there.
+// The candidate query chain ends in .range(); resolve each page there.
 const limitResult = vi.fn()
 vi.mock('@supabase/supabase-js', () => ({
   createClient: vi.fn(() => ({
@@ -19,7 +19,7 @@ vi.mock('@supabase/supabase-js', () => ({
         eq: () => ({
           eq: () => ({
             order: () => ({
-              limit: (...args: unknown[]) => limitResult(...args),
+              range: (...args: unknown[]) => limitResult(...args),
             }),
           }),
         }),
@@ -79,12 +79,13 @@ describe('GET /api/extensions/shopify/orders/cron', () => {
     expect(syncShopifyOrders).not.toHaveBeenCalled()
   })
 
-  it('refuses with 503 when the extension is not enabled', async () => {
+  it('answers 200 skipped when the extension is not enabled, without syncing', async () => {
     registryGet.mockReturnValue(undefined)
     const res = await callRoute()
-    expect(res.status).toBe(503)
+    expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body.code).toBe('EXTENSION_DISABLED')
+    expect(body).toEqual({ skipped: true, reason: 'extension_disabled', processed: 0 })
+    expect(syncShopifyOrders).not.toHaveBeenCalled()
   })
 
   it('no-ops when the encryption key is not configured', async () => {
@@ -163,5 +164,22 @@ describe('GET /api/extensions/shopify/orders/cron', () => {
     })
     const body = await (await callRoute()).json()
     expect(body.results[0].status).toBe('revoked')
+  })
+
+  it('pages past a front of non-entitled connections so entitled ones still sync', async () => {
+    // limit(50) before hasCapability starved every entitled store behind 50
+    // non-entitled ones; the shared runner snapshots pages first (as Zettle did).
+    const notEntitled = Array.from({ length: 50 }, (_, i) => ({ id: `skip-${i}`, company_id: `co-skip-${i}` }))
+    const entitled = { id: 'conn-entitled', company_id: 'company-entitled' }
+    limitResult.mockResolvedValue({ data: [...notEntitled, entitled], error: null })
+    hasCapability.mockImplementation(async (_sb: unknown, companyId: string) => companyId === 'company-entitled')
+
+    const res = await callRoute()
+    const body = await res.json()
+
+    expect(body.processed).toBe(1)
+    expect(syncShopifyOrders).toHaveBeenCalledTimes(1)
+    expect(syncShopifyOrders.mock.calls[0][1]).toMatchObject(entitled)
+    expect(limitResult).toHaveBeenCalledWith(0, 99)
   })
 })

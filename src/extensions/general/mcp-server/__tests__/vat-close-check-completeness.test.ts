@@ -28,11 +28,7 @@ vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
   })),
 }))
 
-import {
-  computeVatCloseCheck,
-  RC_BASIS_MISSING_HINT,
-  REVENUE_ACCOUNT_WITHOUT_RUTA_HINT,
-} from '../server'
+import { computeVatCloseCheck, RC_BASIS_MISSING_HINT, REVENUE_ACCOUNT_WITHOUT_RUTA_HINT } from '@/lib/reports/vat-close-check'
 import { vatTotalsRpcResult } from './vat-totals-rpc-double'
 
 interface MockLine {

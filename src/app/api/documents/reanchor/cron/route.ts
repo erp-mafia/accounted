@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server'
-import { withCronContext } from '@/lib/api/with-cron-context'
-import { createServiceRoleClient } from '@/lib/supabase/service-client'
+import { withServiceCronContext } from '@/lib/api/with-cron-context'
 import { sweepFloatingSupplierInvoiceDocuments } from '@/lib/core/documents/supplier-invoice-underlag'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
 /**
  * GET /api/documents/reanchor/cron: daily 03:30 UTC (schedule in vercel.json).
@@ -21,18 +19,8 @@ import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 
 export const maxDuration = 120
 
-export const GET = withCronContext('cron.documents_reanchor', async (_request, ctx) => {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-  if (!supabaseUrl || !supabaseServiceKey) {
-    return errorResponseFromCode('INTERNAL_ERROR', ctx.log, {
-      requestId: ctx.requestId,
-      details: { reason: 'Missing Supabase configuration' },
-    })
-  }
-
-  const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
+export const GET = withServiceCronContext('cron.documents_reanchor', async (_request, ctx) => {
+  const supabase = ctx.supabase
   const result = await sweepFloatingSupplierInvoiceDocuments(supabase)
 
   ctx.log.info('reanchor sweep finished', { ...result })

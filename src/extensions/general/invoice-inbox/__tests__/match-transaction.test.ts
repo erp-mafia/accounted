@@ -4,11 +4,12 @@ import {
   createQueuedMockSupabase,
   createMockRequest,
   parseJsonResponse,
+  testRoutes,
 } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
 function findRoute(method: string, path: string) {
-  return invoiceInboxExtension.apiRoutes!.find(
+  return testRoutes(invoiceInboxExtension).find(
     (r) => r.method === method && r.path === path,
   )!
 }
@@ -41,11 +42,6 @@ describe('POST /items/:id/match-transaction', () => {
   let mock: ReturnType<typeof createQueuedMockSupabase>
   beforeEach(() => {
     mock = createQueuedMockSupabase()
-  })
-
-  it('returns 401 without ctx', async () => {
-    const res = await matchRoute.handler(makeReq('/items/item-1/match-transaction'))
-    expect(res.status).toBe(401)
   })
 
   it('returns 400 when transaction_id is missing', async () => {
@@ -130,8 +126,4 @@ describe('POST /items/:id/unmatch-transaction', () => {
     expect(body.data.matched_transaction_id).toBeNull()
   })
 
-  it('returns 401 without ctx', async () => {
-    const res = await unmatchRoute.handler(makeReq('/items/item-1/unmatch-transaction'))
-    expect(res.status).toBe(401)
-  })
 })

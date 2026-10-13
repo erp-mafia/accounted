@@ -210,6 +210,13 @@ export interface BookingTarget extends TransactionAmountFields {
   id: string
   date: string
   cash_account_id?: string | null
+  /**
+   * The row's settlement ledger account when the caller already resolved it:
+   * the invoice-match door resolves it fail-closed
+   * (lib/invoices/duplicate-payment-detection.ts). Skips the cash-account
+   * lookup; undefined looks it up from cash_account_id, null scans 19xx.
+   */
+  settlement_account?: string | null
 }
 
 /**
@@ -564,8 +571,9 @@ export async function detectLedgerDuplicateVoucher(
   // Resolve the bank line's settlement ledger account, when known, so a movement
   // on one bank account never deduplicates a voucher on a different account of
   // the same company (the 19xx leg below is matched against it).
-  let settlementAccount: string | null = null
-  if (target.cash_account_id) {
+  let settlementAccount: string | null =
+    target.settlement_account !== undefined ? target.settlement_account?.trim() || null : null
+  if (target.settlement_account === undefined && target.cash_account_id) {
     const { data: ca } = await supabase
       .from('cash_accounts')
       .select('ledger_account')

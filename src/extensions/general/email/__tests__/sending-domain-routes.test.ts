@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { emailExtension } from '@/extensions/general/email'
-import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
+import { createQueuedMockSupabase, createMockRequest, parseJsonResponse, testRoutes } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
 const claimMock = vi.fn()
@@ -56,7 +56,7 @@ vi.mock('@/lib/auth/api-keys', () => ({
 }))
 
 function findRoute(method: string, path: string) {
-  return emailExtension.apiRoutes!.find((r) => r.method === method && r.path === path)!
+  return testRoutes(emailExtension).find((r) => r.method === method && r.path === path)!
 }
 
 function buildCtx(supabase: unknown, overrides: Partial<ExtensionContext> = {}): ExtensionContext {
@@ -102,11 +102,6 @@ beforeEach(() => {
 
 describe('GET /sending-domain', () => {
   const route = findRoute('GET', '/sending-domain')
-
-  it('returns 401 without context', async () => {
-    const res = await route.handler(createMockRequest('/sending-domain'), undefined)
-    expect(res.status).toBe(401)
-  })
 
   it('returns 403 capability_blocked without the opt-in grant (the UI hides on this)', async () => {
     hasCapabilityMock.mockResolvedValue(false)

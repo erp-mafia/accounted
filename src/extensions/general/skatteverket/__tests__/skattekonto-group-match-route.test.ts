@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { createQueuedMockSupabase } from '@/tests/helpers'
+import { createQueuedMockSupabase, testRoutes } from '@/tests/helpers'
 
 // The ledger cover (rows a summarised verifikat already holds, crm#1043) is
 // the reconciliation bridge's arithmetic, covered in its own tests: stubbed
@@ -27,7 +27,7 @@ const ID_B = '22222222-2222-4222-8222-222222222222'
 const { supabase, enqueue, reset } = createQueuedMockSupabase()
 
 function findRoute() {
-  const route = skatteverketExtension.apiRoutes?.find(
+  const route = testRoutes(skatteverketExtension).find(
     (r) => r.method === 'POST' && r.path === ROUTE_PATH,
   )
   if (!route) throw new Error('group-match-candidates route not registered')
@@ -248,7 +248,7 @@ describe('POST /skattekonto/transaktioner/group-match-candidates', () => {
 
 describe('GET /skattekonto/transaktioner/:id/match-candidates', () => {
   const route = () => {
-    const found = skatteverketExtension.apiRoutes?.find(
+    const found = testRoutes(skatteverketExtension).find(
       (r) => r.method === 'GET' && r.path === '/skattekonto/transaktioner/:id/match-candidates',
     )
     if (!found) throw new Error('match-candidates route not registered')

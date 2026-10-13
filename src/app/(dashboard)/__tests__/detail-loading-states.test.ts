@@ -39,3 +39,14 @@ describe('detail pages do not gate on the bare centred spinner', () => {
     })
   }
 })
+
+// The register lists paint the one list silhouette (ListPageSkeleton) for
+// their route fallback: eight hand-drawn copies of it had drifted apart.
+describe('register lists share the list silhouette', () => {
+  for (const segment of ['customers', 'suppliers', 'articles', 'invoices', 'supplier-invoices', 'transactions', 'bookkeeping', 'salary']) {
+    it(`${segment}/loading.tsx renders ListPageSkeleton`, () => {
+      const src = fs.readFileSync(path.join(APP, segment, 'loading.tsx'), 'utf8')
+      expect(src).toContain('<ListPageSkeleton')
+    })
+  }
+})

@@ -1,27 +1,15 @@
-import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { NextResponse } from 'next/server'
 import {
   backfillMissingTaxDeadlines,
   generateNewYearDeadlines,
 } from '@/lib/tax/deadline-generator'
-import { withCronContext } from '@/lib/api/with-cron-context'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { withServiceCronContext } from '@/lib/api/with-cron-context'
 
 /**
  * GET /api/tax-deadlines/cron: daily recovery plus annual horizon extension.
  */
-export const GET = withCronContext('cron.tax_deadlines', async (_request, ctx) => {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-
-  if (!supabaseUrl || !supabaseServiceKey) {
-    return errorResponseFromCode('INTERNAL_ERROR', ctx.log, {
-      requestId: ctx.requestId,
-      details: { reason: 'Missing Supabase configuration' },
-    })
-  }
-
-  const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
+export const GET = withServiceCronContext('cron.tax_deadlines', async (_request, ctx) => {
+  const supabase = ctx.supabase
   const now = new Date()
   const isAnnualRun = now.getUTCMonth() === 0 && now.getUTCDate() === 2
 

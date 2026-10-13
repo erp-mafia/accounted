@@ -87,9 +87,10 @@ interface KontrollFinding {
 }
 
 /**
- * The summarized kontrollrapport the send-for-signing route answers with on a
- * refusal at kontroll (personnummer already masked). Local, not imported: core
- * components never import from an extension.
+ * The summarized kontrollrapport the AGI routes answer with (personnummer
+ * already masked): on a refusal at kontroll, and on an accepted underlag from
+ * the "Skicka in underlag" step. Local, not imported: core components never
+ * import from an extension.
  */
 interface KontrollrapportSummary {
   valideringsfel?: Array<{ felmeddelande: string }>
@@ -104,28 +105,6 @@ interface KontrollrapportSummary {
       felstatus: string
     }>
   }>
-}
-
-/** Subset of SkatteverketAGIKontrollresultat we use in the panel. */
-interface Kontrollresultat {
-  status: 'PROCESSING' | 'DONE_SUCCESS' | 'DONE_FAILED' | 'DONE_REJECTED'
-  kontrollrapport?: {
-    bearbetningsfel?: Array<{ felmeddelande: string }>
-    valideringsfel?: Array<{ felmeddelande: string }>
-    redovisningsperioder?: Array<{
-      perioder: Array<{
-        kontrollfel: Array<{
-          textNyckel?: string
-          kontrollnyckel?: string
-          felmeddelande: string
-          felstatus: 'STOPP' | 'ARENDE'
-          uppgiftsTyp?: string
-          specifikationsnummer?: number
-          identifierare?: string
-        }>
-      }>
-    }>
-  }
 }
 
 const ENABLED_KEY = 'EXTENSION_DISABLED'
@@ -590,32 +569,6 @@ export function AGIPanel(props: AGIPanelProps) {
     ]
   }
 
-  function extractFindings(kr: Kontrollresultat | undefined): KontrollFinding[] {
-    if (!kr?.kontrollrapport) return []
-    const out: KontrollFinding[] = []
-    for (const f of kr.kontrollrapport.bearbetningsfel ?? []) {
-      out.push({ status: 'STOPP', beskrivning: f.felmeddelande })
-    }
-    for (const f of kr.kontrollrapport.valideringsfel ?? []) {
-      out.push({ status: 'STOPP', beskrivning: f.felmeddelande })
-    }
-    for (const rp of kr.kontrollrapport.redovisningsperioder ?? []) {
-      for (const p of rp.perioder ?? []) {
-        for (const kf of p.kontrollfel ?? []) {
-          out.push({
-            kod: kf.textNyckel ?? kf.kontrollnyckel,
-            status: kf.felstatus,
-            beskrivning: kf.felmeddelande,
-            uppgiftsTyp: kf.uppgiftsTyp,
-            specifikationsnummer: kf.specifikationsnummer,
-            identifierare: kf.identifierare,
-          })
-        }
-      }
-    }
-    return out
-  }
-
   /**
    * The XML must exist in agi_declarations before anything can be submitted.
    * The internal xml route both generates and persists it (and stamps
@@ -635,93 +588,48 @@ export function AGIPanel(props: AGIPanelProps) {
   }
 
   /**
-   * POST the stored XML underlag, then poll kontrollresultat until status
-   * flips out of PROCESSING. Skatteverket's spec says polling is usually
-   * instantaneous, but we cap at 8 attempts × 1s to be safe.
-   *
-   * On DONE_SUCCESS the underlag is auto-persisted by SKV: no /spara call.
-   * Calling /spara when there are no errors returns 400 felkod 20
-   * ("Inlämningen är redan sparad/borttagen eller innehöll inga felaktiga
-   * underlag") because /spara is specifically for re-persisting rejected
-   * underlag so the user can fix them later in Mina Sidor. Successful
-   * underlag move straight to the granskningsunderlag step.
-   *
-   * On DONE_REJECTED we surface the validation findings; the user can still
-   * choose to save (so they can fix it in Mina Sidor) or abort.
-   *
-   * Failures surface via setError/setKontroller and return false. The
-   * advanced "Skicka in underlag" step; the one-click chain runs server-side
-   * (runSendForSigning).
+   * The advanced "Skicka in underlag" step: the first step of the server
+   * chain (submitAgiUnderlag), which posts the stored XML and polls
+   * kontrollresultat. Skatteverket's findings render either way: warnings on
+   * an accepted underlag, the refusal on a rejected one. On DONE_SUCCESS the
+   * underlag is persisted by Skatteverket, so the next step is the signing
+   * link. Failures surface via setError/setKontroller and return false.
    */
   async function runSubmitUnderlag(): Promise<boolean> {
     setKontroller([])
-    const submitRes = await fetch('/api/extensions/ext/skatteverket/agi/submit', {
+    const res = await fetch('/api/extensions/ext/skatteverket/agi/submit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ salaryRunId }),
     })
-    const submitJson = await submitRes.json()
-    if (!submitRes.ok || submitJson.error) {
-      setError(submitJson.error || t('submit_failed_status', { status: submitRes.status }))
+    const json = await res.json().catch(() => ({}))
+    const rapport = (json.data?.kontrollrapport ?? json.details?.kontrollrapport) as
+      | KontrollrapportSummary
+      | undefined
+    if (rapport) setKontroller(findingsFromRapport(rapport))
+    if (!res.ok || json.error) {
+      setError(json.error || t('submit_failed_status', { status: res.status }))
       return false
     }
-    const inlamningId = submitJson.data?.inlamningId as number | undefined
-    if (!inlamningId) {
-      setError(t('submit_missing_id'))
-      return false
-    }
-
-    // Poll kontrollresultat until DONE_*
-    let kr: Kontrollresultat | undefined
-    for (let attempt = 0; attempt < 8; attempt++) {
-      const krRes = await fetch(
-        `/api/extensions/ext/skatteverket/agi/kontrollresultat?inlamningId=${inlamningId}`,
-      )
-      const krJson = await krRes.json()
-      if (!krRes.ok || krJson.error) {
-        setError(krJson.error || t('kontrollresultat_failed_status', { status: krRes.status }))
-        return false
-      }
-      kr = krJson.data as Kontrollresultat
-      if (kr.status !== 'PROCESSING') break
-      await new Promise(r => setTimeout(r, 1000))
-    }
-    if (!kr || kr.status === 'PROCESSING') {
-      setError(t('still_processing'))
-      return false
-    }
-
-    const findings = extractFindings(kr)
-    setKontroller(findings)
-
-    if (kr.status === 'DONE_SUCCESS') return true
-    if (kr.status === 'DONE_REJECTED') {
-      setError(t('underlag_rejected_error', { count: findings.filter(f => f.status === 'STOPP').length }))
-    } else {
-      setError(t('underlag_failed'))
-    }
-    return false
+    return true
   }
 
   /**
-   * skapaGranskningsunderlag: returns the Mina Sidor deep-link the user opens
-   * to sign with BankID. Defaults to `lasPeriod=true` so the period is locked
-   * while the signing window is open. Returns the link on success ('' when
-   * the response carried none: the signing-link card renders it after the
-   * submission refresh) and null on failure (error already surfaced).
+   * The advanced "Skapa signeringslänk" step: the second step of the server
+   * chain (createAgiSigningLink), skapaGranskningsunderlag with the period
+   * locked for the run's own declaration. Returns the link on success (''
+   * when the response carried none: the signing-link card renders it after
+   * the submission refresh) and null on failure (error already surfaced).
    */
   async function runCreateSigningLink(): Promise<string | null> {
-    const res = await fetch(
-      `/api/extensions/ext/skatteverket/agi/granskningsunderlag?arbetsgivare=${encodeURIComponent(arbetsgivare)}&period=${period}`,
-      { method: 'POST' },
-    )
-    const json = await res.json()
+    const res = await fetch('/api/extensions/ext/skatteverket/agi/granskningsunderlag', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ salaryRunId }),
+    })
+    const json = await res.json().catch(() => ({}))
     if (!res.ok || json.error) {
       setError(json.error || t('signing_link_failed_status', { status: res.status }))
-      return null
-    }
-    if (json.data?.tillstand === 'INCORRECT_DATA') {
-      setError(t('incorrect_data_error', { message: json.data.meddelande || t('incorrect_data_fallback') }))
       return null
     }
     // The user typically opens the link, signs in Mina Sidor, then returns

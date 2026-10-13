@@ -353,7 +353,8 @@ function inspectSource(tool: Tool): string[] {
   const problems = FORBIDDEN_IN_SOURCE.filter(([pattern]) => pattern.test(source)).map(
     ([, label]) => `contains ${label}`,
   )
-  if (!/\bstagePendingOperation\(/.test(source)) problems.push('never calls stagePendingOperation(')
+  // stage({...}) in a hand-written tool, deps.stagePendingOperation(...) in a generated one.
+  if (!/\bstage(PendingOperation)?\(/.test(source)) problems.push('never calls stage(')
   return problems
 }
 
@@ -763,7 +764,12 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   gnubok_dispose_asset: { args: { disposal_type: 'scrap', disposed_proceeds: 0 } },
   // State preconditions on the row the tool pre-reads.
   gnubok_link_transaction_to_journal_entry: {
-    rows: { journal_entries: { status: 'posted' }, transactions: { journal_entry_id: null } },
+    rows: {
+      journal_entries: { status: 'posted' },
+      transactions: { journal_entry_id: null },
+      // The verifikat's line on the row's bank account (the bank link core's check).
+      journal_entry_lines: { account_number: '1930', debit_amount: 100, credit_amount: 0 },
+    },
   },
   gnubok_create_invoice_from_sales_order: { rows: { sales_orders: CONFIRMED_ORDER } },
   gnubok_link_rot_rut_payout_voucher: { rows: { journal_entries: { status: 'posted' } } },
@@ -1179,10 +1185,10 @@ describe('the guard has teeth: a tool that declares staged but commits is caught
 
   it('the static check flags both as well', () => {
     expect(inspectSource(rogueDirectWrite)).toEqual(
-      expect.arrayContaining(['contains .insert(', 'never calls stagePendingOperation(']),
+      expect.arrayContaining(['contains .insert(', 'never calls stage(']),
     )
     expect(inspectSource(rogueViaRpc)).toEqual(
-      expect.arrayContaining(['contains .rpc(', 'never calls stagePendingOperation(']),
+      expect.arrayContaining(['contains .rpc(', 'never calls stage(']),
     )
   })
 })

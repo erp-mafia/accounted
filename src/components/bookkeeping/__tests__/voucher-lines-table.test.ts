@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest'
+import fs from 'node:fs'
+import path from 'node:path'
 import { lineTextAddsSomething, voucherLinesTotals } from '../VoucherLinesTable'
 
 describe('voucherLinesTotals', () => {
@@ -26,5 +28,29 @@ describe('lineTextAddsSomething', () => {
   it('shows a text that adds something', () => {
     expect(lineTextAddsSomething('Telia mars', 'Telefon', ['Mars'])).toBe(true)
     expect(lineTextAddsSomething('Telia mars', null)).toBe(true)
+  })
+})
+
+/*
+ * The read-only konteringar of the review steps and previews render through
+ * the one table: a hand-built Konto/Debet/Kredit table, or a second phone copy
+ * of one, in these files is the drift coming back.
+ */
+describe('surfaces on the shared voucher lines table', () => {
+  const root = path.resolve(__dirname, '../../../')
+  it.each([
+    'components/bookkeeping/JournalEntryReviewContent.tsx',
+    'components/suppliers/SupplierInvoiceReviewContent.tsx',
+    'components/transactions/JournalEntryPreview.tsx',
+    'components/bookkeeping/year-end/PreviewStep.tsx',
+  ])('%s', (rel) => {
+    const src = fs.readFileSync(path.join(root, rel), 'utf8')
+    expect(src).toContain('<VoucherLinesTable')
+    expect(src).not.toMatch(/sm:hidden space-y-1\.5/)
+  })
+
+  it('the year-end preview keeps Swedish heads in both locales', () => {
+    const src = fs.readFileSync(path.join(root, 'components/bookkeeping/year-end/PreviewStep.tsx'), 'utf8')
+    expect(src).toMatch(/<VoucherLinesTable[\s\S]*?\bswedish\b/)
   })
 })

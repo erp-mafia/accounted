@@ -245,6 +245,11 @@ describe('nextScheduledSyncFrom (crm#1097)', () => {
     expect(nextScheduledSyncFrom(conn({ last_synced_at: null }), NOW)).toBe('2026-05-21')
   })
 
+  it('is the saved start date while the first import is still owed', () => {
+    expect(nextScheduledSyncFrom({ ...conn({}), initial_sync_completed_at: null, initial_sync_requested_from: '2026-01-01' }, NOW))
+      .toBe('2026-01-01')
+  })
+
   it('says nothing where no scheduled sync comes next', () => {
     // A stopped sync is run right after the save (BankingSettingsPanel), with its own window.
     expect(nextScheduledSyncFrom(imported({ error_message: 'Synkningen har stannat.' }), NOW)).toBeNull()

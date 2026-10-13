@@ -34,59 +34,29 @@ const NOT_CONFIGURED_MESSAGE =
 const STATUS_COLUMNS =
   'id, status, shop_domain, shop_name, currency, error_message, connected_at, transaction_sync_enabled, last_order_synced_at'
 
-type AuthedContext = {
-  supabase: ExtensionContext['supabase']
-  userId: string
-  isAnonymous: boolean
-  companyId: string
-}
-
-/** Shared auth preamble: cookie user + company context, or an error response. */
-async function requireUserAndCompany(
-  ctx: ExtensionContext | undefined,
-): Promise<AuthedContext | NextResponse> {
-  const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-  if (!ctx?.companyId) {
-    return NextResponse.json({ error: 'Company context required' }, { status: 400 })
-  }
-  return {
-    supabase,
-    userId: user.id,
-    isAnonymous: Boolean(user.is_anonymous),
-    companyId: ctx.companyId,
-  }
-}
-
 /**
  * Connect guards: sandbox users never reach external stores (same doctrine as
  * the Stripe/WooCommerce connects), and the feed is a paid capability
  * (shopify_sync).
  */
-async function guardConnectPreconditions(auth: AuthedContext): Promise<NextResponse | null> {
-  if (auth.isAnonymous) return sandboxBlockedResponse()
-  const sandboxBlocked = await guardSandbox(auth.supabase, auth.companyId)
+async function guardConnectPreconditions(ctx: ExtensionContext): Promise<NextResponse | null> {
+  if (ctx.isAnonymous) return sandboxBlockedResponse()
+  const sandboxBlocked = await guardSandbox(ctx.supabase, ctx.companyId)
   if (sandboxBlocked) return sandboxBlocked
-  return requireCapability(auth.supabase, auth.companyId, CAPABILITY.shopify_sync)
+  return requireCapability(ctx.supabase, ctx.companyId, CAPABILITY.shopify_sync)
 }
 
 export const shopifyApiRoutes: ApiRouteDefinition[] = [
   {
     method: 'GET',
     path: '/status',
-    handler: async (_request: Request, ctx?: ExtensionContext) => {
-      const auth = await requireUserAndCompany(ctx)
-      if (auth instanceof NextResponse) return auth
-
+    handler: async (_request: Request, ctx: ExtensionContext) => {
       // Prefer the active connection; otherwise surface the most recent row
       // so the panel can show error/revoked states.
-      const { data: rows } = await auth.supabase
+      const { data: rows } = await ctx.supabase
         .from('shopify_connections')
         .select(STATUS_COLUMNS)
-        .eq('company_id', auth.companyId)
+        .eq('company_id', ctx.companyId)
         .order('created_at', { ascending: false })
         .limit(10)
 
@@ -101,17 +71,14 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
   {
     method: 'POST',
     path: '/connect',
-    handler: async (request: Request, ctx?: ExtensionContext) => {
-      const log = ctx?.log ?? console
-      const auth = await requireUserAndCompany(ctx)
-      if (auth instanceof NextResponse) return auth
-
-      const blocked = await guardConnectPreconditions(auth)
+    handler: async (request: Request, ctx: ExtensionContext) => {
+      const log = ctx.log
+      const blocked = await guardConnectPreconditions(ctx)
       if (blocked) return blocked
 
       const rl = await checkRateLimit({
         prefix: 'shopify:connect',
-        identifier: auth.userId,
+        identifier: ctx.userId,
         ...RATE_LIMIT_CONNECT,
       })
       if (!rl.ok) return rl.response!
@@ -143,10 +110,10 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
         )
       }
 
-      const { data: existing } = await auth.supabase
+      const { data: existing } = await ctx.supabase
         .from('shopify_connections')
         .select('id, status')
-        .eq('company_id', auth.companyId)
+        .eq('company_id', ctx.companyId)
         .eq('status', 'active')
       if (existing && existing.length > 0) {
         return NextResponse.json(
@@ -166,7 +133,7 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
         })
       } catch (probeError) {
         log.warn('[shopify] Credential probe failed', {
-          companyId: auth.companyId,
+          companyId: ctx.companyId,
           message: probeError instanceof Error ? probeError.message : String(probeError),
         })
         return NextResponse.json(
@@ -184,11 +151,11 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
       // duplicates (#2631). Reaching further back is an explicit choice: POST
       // /api/extensions/ext/shopify/backfill with a start date.
       const connectedAt = new Date().toISOString()
-      const { data: created, error: insertError } = await auth.supabase
+      const { data: created, error: insertError } = await ctx.supabase
         .from('shopify_connections')
         .insert({
-          company_id: auth.companyId,
-          user_id: auth.userId,
+          company_id: ctx.companyId,
+          user_id: ctx.userId,
           shop_domain: shopDomain,
           shop_name: shopInfo.name,
           currency: shopInfo.currency,
@@ -207,7 +174,7 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
         log.error('[shopify] Failed to create connection', {
           message: insertError?.message,
           code: insertError?.code,
-          companyId: auth.companyId,
+          companyId: ctx.companyId,
         })
         return NextResponse.json(
           {
@@ -219,15 +186,15 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
         )
       }
 
-      if (ctx?.emit) {
+      if (ctx.emit) {
         try {
           await ctx.emit({
             type: 'shopify.connected',
             payload: {
               connectionId: created.id,
               shopDomain: created.shop_domain,
-              userId: auth.userId,
-              companyId: auth.companyId,
+              userId: ctx.userId,
+              companyId: ctx.companyId,
             },
           })
         } catch {
@@ -241,21 +208,18 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
   {
     method: 'POST',
     path: '/sync',
-    handler: async (_request: Request, ctx?: ExtensionContext) => {
-      const log = ctx?.log ?? console
-      const auth = await requireUserAndCompany(ctx)
-      if (auth instanceof NextResponse) return auth
-
+    handler: async (_request: Request, ctx: ExtensionContext) => {
+      const log = ctx.log
       const capabilityBlocked = await requireCapability(
-        auth.supabase,
-        auth.companyId,
+        ctx.supabase,
+        ctx.companyId,
         CAPABILITY.shopify_sync,
       )
       if (capabilityBlocked) return capabilityBlocked
 
       const rl = await checkRateLimit({
         prefix: 'shopify:sync',
-        identifier: auth.userId,
+        identifier: ctx.userId,
         ...RATE_LIMIT_SYNC,
       })
       if (!rl.ok) return rl.response!
@@ -270,7 +234,7 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
       const { data: connection } = await serviceClient
         .from('shopify_connections')
         .select('*')
-        .eq('company_id', auth.companyId)
+        .eq('company_id', ctx.companyId)
         .eq('status', 'active')
         .maybeSingle()
 
@@ -305,21 +269,18 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
   {
     method: 'POST',
     path: '/backfill',
-    handler: async (request: Request, ctx?: ExtensionContext) => {
-      const log = ctx?.log ?? console
-      const auth = await requireUserAndCompany(ctx)
-      if (auth instanceof NextResponse) return auth
-
+    handler: async (request: Request, ctx: ExtensionContext) => {
+      const log = ctx.log
       const capabilityBlocked = await requireCapability(
-        auth.supabase,
-        auth.companyId,
+        ctx.supabase,
+        ctx.companyId,
         CAPABILITY.shopify_sync,
       )
       if (capabilityBlocked) return capabilityBlocked
 
       const rl = await checkRateLimit({
         prefix: 'shopify:backfill',
-        identifier: auth.userId,
+        identifier: ctx.userId,
         ...RATE_LIMIT_BACKFILL,
       })
       if (!rl.ok) return rl.response!
@@ -339,7 +300,7 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
       const { data: connection } = await serviceClient
         .from('shopify_connections')
         .select('*')
-        .eq('company_id', auth.companyId)
+        .eq('company_id', ctx.companyId)
         .eq('status', 'active')
         .maybeSingle()
 
@@ -355,11 +316,11 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
       // forward to now again once the window is exhausted, and the ingest
       // upserts by external_id, so re-reading an already imported range
       // changes nothing.
-      const { error: cursorError } = await auth.supabase
+      const { error: cursorError } = await ctx.supabase
         .from('shopify_connections')
         .update({ last_order_synced_at: parsed.iso, error_message: null })
         .eq('id', connection.id)
-        .eq('company_id', auth.companyId)
+        .eq('company_id', ctx.companyId)
         .eq('status', 'active')
       if (cursorError) {
         log.error('[shopify] Failed to move order cursor for backfill', {
@@ -397,20 +358,17 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
   {
     method: 'POST',
     path: '/transaction-sync',
-    handler: async (request: Request, ctx?: ExtensionContext) => {
-      const auth = await requireUserAndCompany(ctx)
-      if (auth instanceof NextResponse) return auth
-
+    handler: async (request: Request, ctx: ExtensionContext) => {
       const capabilityBlocked = await requireCapability(
-        auth.supabase,
-        auth.companyId,
+        ctx.supabase,
+        ctx.companyId,
         CAPABILITY.shopify_sync,
       )
       if (capabilityBlocked) return capabilityBlocked
 
       const rl = await checkRateLimit({
         prefix: 'shopify:transaction-sync-toggle',
-        identifier: auth.userId,
+        identifier: ctx.userId,
         ...RATE_LIMIT_SYNC,
       })
       if (!rl.ok) return rl.response!
@@ -420,10 +378,10 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
         return NextResponse.json({ error: 'enabled (boolean) krävs.' }, { status: 400 })
       }
 
-      const { data: updated, error: updateError } = await auth.supabase
+      const { data: updated, error: updateError } = await ctx.supabase
         .from('shopify_connections')
         .update({ transaction_sync_enabled: body.enabled })
-        .eq('company_id', auth.companyId)
+        .eq('company_id', ctx.companyId)
         .eq('status', 'active')
         .select('id')
 
@@ -445,23 +403,20 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
   {
     method: 'DELETE',
     path: '/disconnect',
-    handler: async (request: Request, ctx?: ExtensionContext) => {
-      const log = ctx?.log ?? console
-      const auth = await requireUserAndCompany(ctx)
-      if (auth instanceof NextResponse) return auth
-
+    handler: async (request: Request, ctx: ExtensionContext) => {
+      const log = ctx.log
       const rl = await checkRateLimit({
         prefix: 'shopify:disconnect',
-        identifier: auth.userId,
+        identifier: ctx.userId,
         ...RATE_LIMIT_DISCONNECT,
       })
       if (!rl.ok) return rl.response!
 
       const body = (await request.json().catch(() => ({}))) as { connection_id?: string }
-      const base = auth.supabase
+      const base = ctx.supabase
         .from('shopify_connections')
         .select('id, status, shop_domain')
-        .eq('company_id', auth.companyId)
+        .eq('company_id', ctx.companyId)
       const query = body.connection_id
         ? base.eq('id', body.connection_id).limit(1)
         : base.neq('status', 'revoked').order('created_at', { ascending: false }).limit(1)
@@ -478,7 +433,7 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
       // (nothing reads them after revoke, and a reconnect inserts a fresh
       // row); the audit row keeps shop_domain and the connect/disconnect
       // timestamps. The panel tells the user to remove the app in Shopify too.
-      const { error: updateError } = await auth.supabase
+      const { error: updateError } = await ctx.supabase
         .from('shopify_connections')
         .update({
           status: 'revoked',
@@ -487,7 +442,7 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
           disconnected_at: new Date().toISOString(),
         })
         .eq('id', connection.id)
-        .eq('company_id', auth.companyId)
+        .eq('company_id', ctx.companyId)
 
       if (updateError) {
         log.error('[shopify] Failed to mark connection revoked', {
@@ -500,7 +455,7 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
         )
       }
 
-      if (ctx?.emit) {
+      if (ctx.emit) {
         try {
           await ctx.emit({
             type: 'shopify.disconnected',
@@ -508,8 +463,8 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
               connectionId: connection.id,
               shopDomain: connection.shop_domain ?? null,
               reason: 'user',
-              userId: auth.userId,
-              companyId: auth.companyId,
+              userId: ctx.userId,
+              companyId: ctx.companyId,
             },
           })
         } catch {

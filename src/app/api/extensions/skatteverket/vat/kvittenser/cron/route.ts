@@ -13,6 +13,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { SkatteverketInlamnatResponse } from '@/extensions/general/skatteverket/types'
 import type { VatPeriodType } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
 
 export const maxDuration = 60
 
@@ -36,7 +37,7 @@ export async function GET(request: Request) {
   const authError = verifyCronSecret(request)
   if (authError) return authError
 
-  if (process.env.SKATTEVERKET_ENABLED !== 'true') {
+  if (!isSkatteverketEnabled()) {
     return NextResponse.json({ message: 'Skatteverket extension disabled', processed: 0 })
   }
 

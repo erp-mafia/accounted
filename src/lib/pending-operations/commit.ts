@@ -21,11 +21,6 @@ import { parseEntityType, resolveCompanyEntityType } from '@/lib/company/entity-
 import { eventBus } from '@/lib/events'
 import { bulkBookMatchedInboxItems, categorizeMatchedTransaction } from '@/lib/transactions/categorize-core'
 import { stampInboxItemsForLinkedDocument } from '@/lib/transactions/inbox-underlag'
-import {
-  enforceBulkBookDimensionPolicy,
-  runBulkBookDuplicateGuard,
-  type BulkBookDuplicateTx,
-} from '@/lib/transactions/bulk-book'
 import { syncDraftVatHeadersForCustomer } from '@/lib/invoices/sync-draft-vat-headers'
 import {
   COUNTRY_CONSISTENCY_MESSAGES,
@@ -79,7 +74,7 @@ import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { buildInvoiceMatchClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
 import { booksInvoicesOnIssue, cashPartialBlockReason, creditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
-import { commitBulkBooking, commitMatchBatchAllocation, createJournalEntry, findFiscalPeriod, getSwedishLocalDate, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
+import { createJournalEntry, findFiscalPeriod, getSwedishLocalDate, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
 import {
   canApproveSupplierInvoice,
   resolveUnsettledStatus,
@@ -147,13 +142,8 @@ import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
 import { planTransactionInvoiceMatch } from '@/lib/invoices/match-payment-plan'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import {
-  alreadyExplainedDetails,
-  describeExplainingSet,
-  guardAlreadyExplained,
   guardDuplicatePaymentVoucher,
   recordDuplicateCandidateOverride,
-  recordExplainedOverride,
-  type ExplainedOverride,
 } from '@/lib/invoices/already-explained-guard'
 import {
   linkSupplierInvoiceToVoucher,
@@ -161,18 +151,8 @@ import {
 } from '@/lib/invoices/supplier-voucher-matching'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
-import {
-  findCashMethodUnbookedAllocations,
-  type BatchAllocationRef,
-} from '@/lib/invoices/batch-cash-method-guard'
 import { recordInvoicePaymentRow, removeInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
-import {
-  clearSettledBatchAllocationSuggestions,
-  type BatchAllocationResult,
-} from '@/lib/invoices/clear-settled-batch-allocations'
-import { linkTransactionToJournalEntry } from '@/lib/transactions/link-journal-entry'
-import { emitBatchAllocationEvents } from '@/lib/transactions/batch-allocation-events'
 import { matchTransactionToRotRutPayout } from '@/lib/invoices/rot-rut-match-transaction'
 import { linkRotRutPayoutVoucher } from '@/lib/invoices/rot-rut-link-voucher'
 import {
@@ -237,13 +217,13 @@ import {
 import { createLogger } from '@/lib/logger'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { createSupplier } from '@/lib/suppliers/create-supplier'
-import { CreateArticleParamsSchema, UpdateArticleParamsSchema } from '@/lib/pending-operations/schemas/article'
+import { createArticle, updateArticle } from '@/lib/articles/article-commands'
+import { UUID_RE } from '@/lib/invariants/uuid'
 import { CreateDimensionValueParamsSchema } from '@/lib/pending-operations/schemas/dimension-value'
 import { RetagLineDimensionsParamsSchema } from '@/lib/pending-operations/schemas/retag-line-dimensions'
 import { everyRetagRefused, retagLines } from '@/lib/dimensions/retag-service'
 import { IgnoreTransactionParamsSchema } from '@/lib/pending-operations/schemas/ignore-transaction'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
-import { finalFromLines, recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
 import { loadEntryLines, recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
 import { resultAccounts } from '@/lib/suggestion-log/inbox-classify'
 import {
@@ -283,16 +263,20 @@ import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
 import { applyRecurringScheduleUpdate } from '@/lib/invoices/apply-recurring-schedule-update'
 import { toRecurringScheduleItemRow } from '@/lib/invoices/recurring-schedule-items'
 import { periodPlaceholderProblem } from '@/lib/invoices/recurring-placeholders'
-import { BulkBookInboxSchema, CreateSupplierSchema, OpeningBalancesBulkSchema } from '@/lib/api/schemas'
-import { ensureArticleNumber } from '@/lib/articles/ensure-article-number'
-import { isValidRevenueAccount } from '@/lib/articles/validate-revenue-account'
+import {
+  BulkBookInboxSchema,
+  CreateArticleSchema,
+  CreateSupplierSchema,
+  OpeningBalancesBulkSchema,
+  UpdateArticleSchema,
+} from '@/lib/api/schemas'
 import { z } from 'zod'
 import { operationForPendingType } from '@/lib/operations/registry'
 import { rejectSupersededInboxConversions } from './supersede'
 import { backfillSupplierPaymentDetails, type SupplierPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
 import { COLLECTIONS_BATCH_TYPE } from '@/lib/collections/batch'
 import { batchApprovalRefusal, commitCollectionsDailyBatch } from '@/lib/collections/batch-commit'
-import type { AnyOperation } from '@/lib/operations/types'
+import type { AnyOperation, OperationOutcome } from '@/lib/operations/types'
 import type {
   Transaction,
   TransactionCategory,
@@ -301,8 +285,6 @@ import type {
   Currency,
   Invoice,
   Customer,
-  Supplier,
-  Article,
   SupplierInvoice,
   SupplierInvoiceItem,
   PendingOperation,
@@ -502,6 +484,9 @@ async function commitRegisteredOperation(
       error: outcome.messageSv || entry?.message_sv || entry?.message_en || outcome.code,
       errorCode: outcome.code,
       status: entry?.httpStatus ?? 400,
+      // What the refusal names (the vouchers that already book a bank row),
+      // kept on the rejected row's result_data as v1 answers it in details.
+      ...(outcome.details ? { data: outcome.details } : {}),
       // A failure after an irreversible step: failed_partial, not rejected.
       ...(partial ? { partialPostedIds: outcome.partialPostedIds } : {}),
     }
@@ -1313,6 +1298,36 @@ async function commitUpdateRecurringSchedule(
   }
 }
 
+/**
+ * An article command's refusal as the approval's failure, in the register's
+ * own codes (lib/articles/article-commands.ts).
+ */
+function articleCommandFailure(outcome: Extract<OperationOutcome<unknown>, { ok: false }>): ExecutorResult {
+  // A posting account that is merely not activated is the recoverable case:
+  // thrown, so the op stays pending and the approver can activate and retry.
+  if (outcome.code === ACCOUNTS_NOT_IN_CHART) {
+    throw new AccountsNotInChartError((outcome.details?.account_numbers as string[] | undefined) ?? [])
+  }
+  const entry = getErrorEntry(outcome.code)
+  return {
+    error: outcome.messageSv ?? entry?.message_sv ?? outcome.code,
+    errorCode: outcome.code,
+    status: entry?.httpStatus ?? 500,
+  }
+}
+
+/** A staged article row re-parsed with the register's one rule set (ASVS V4.5). */
+function parseArticleParams<S extends z.ZodTypeAny>(
+  schema: S,
+  params: Record<string, unknown>,
+): { ok: true; data: z.output<S> } | { ok: false; result: ExecutorResult } {
+  const validated = schema.safeParse(params)
+  if (validated.success) return { ok: true, data: validated.data }
+  const issue = validated.error.issues[0]
+  const path = issue?.path?.join('.') || 'params'
+  return { ok: false, result: { error: `Invalid ${path}: ${issue?.message ?? 'validation failed'}`, status: 400 } }
+}
+
 async function commitCreateArticle(
   supabase: SupabaseClient,
   userId: string,
@@ -1320,64 +1335,16 @@ async function commitCreateArticle(
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
   // Defense in depth: re-validate the staged params at the commit boundary so a
-  // tampered pending_operations row cannot inject unexpected fields (ASVS V4.5).
-  let validated
-  try {
-    validated = CreateArticleParamsSchema.parse(params)
-  } catch (err) {
-    if (err instanceof z.ZodError) {
-      const issue = err.issues[0]
-      return { error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`, status: 400 }
-    }
-    throw err
-  }
+  // tampered pending_operations row cannot inject unexpected fields (ASVS V4.5),
+  // with the rule set the dashboard uses.
+  const parsed = parseArticleParams(CreateArticleSchema, params)
+  if (!parsed.ok) return parsed.result
 
-  if (validated.revenue_account) {
-    const ok = await isValidRevenueAccount(supabase, companyId, validated.revenue_account)
-    if (!ok) return { error: 'Posting account is not an active class 1-3 account', status: 400 }
-  }
-
-  const { data, error } = await supabase
-    .from('articles')
-    .insert({
-      user_id: userId,
-      company_id: companyId,
-      name: validated.name,
-      name_en: validated.name_en ?? null,
-      type: validated.type,
-      unit: validated.unit ?? 'st',
-      price_excl_vat: validated.price_excl_vat,
-      currency: validated.currency ?? 'SEK',
-      vat_rate: validated.vat_rate,
-      revenue_account: validated.revenue_account ?? null,
-      cost_price: validated.cost_price ?? null,
-      ean: validated.ean ?? null,
-      housework_type: validated.housework_type ?? null,
-      notes: validated.notes ?? null,
-      article_number: validated.article_number ?? null,
-    })
-    .select()
-    .single()
-
-  if (error) {
-    // FK to public.currencies: the reference table is the allow-list.
-    if (error.code === '23503' && error.message.includes('currency')) {
-      return { error: `Currency ${validated.currency} is not supported`, status: 400 }
-    }
-    return { error: error.message, status: 500 }
-  }
-
-  if (!data.article_number) {
-    try {
-      data.article_number = await ensureArticleNumber(supabase, companyId, data.id)
-    } catch (err) {
-      log.warn('article number assignment failed (staged create):', err)
-    }
-  }
-
-  await eventBus.emit({ type: 'article.created', payload: { article: data as Article, userId, companyId } })
-
-  return { data: { article_id: data.id, article_number: data.article_number } }
+  // The insert the dashboard makes (lib/articles/article-commands.ts).
+  const outcome = await createArticle({ supabase, companyId, userId, log }, parsed.data)
+  if (!outcome.ok) return articleCommandFailure(outcome)
+  if (outcome.dryRun) throw new Error('create_article: unexpected dry-run outcome')
+  return { data: { article_id: outcome.data.id, article_number: outcome.data.article_number } }
 }
 
 async function commitUpdateArticle(
@@ -1386,49 +1353,20 @@ async function commitUpdateArticle(
   companyId: string,
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
-  let validated
-  try {
-    validated = UpdateArticleParamsSchema.parse(params)
-  } catch (err) {
-    if (err instanceof z.ZodError) {
-      const issue = err.issues[0]
-      return { error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`, status: 400 }
-    }
-    throw err
+  const { article_id: articleId, ...changes } = params
+  if (typeof articleId !== 'string' || !UUID_RE.test(articleId)) {
+    return { error: 'Invalid article_id: expected a UUID', status: 400 }
   }
+  const parsed = parseArticleParams(UpdateArticleSchema, changes)
+  if (!parsed.ok) return parsed.result
 
-  if (validated.revenue_account) {
-    const ok = await isValidRevenueAccount(supabase, companyId, validated.revenue_account)
-    if (!ok) return { error: 'Posting account is not an active class 1-3 account', status: 400 }
-  }
-
-  const { article_id, ...rest } = validated
-  const updateData: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(rest)) {
-    if (value !== undefined) updateData[key] = value
-  }
-
-  const { data, error } = await supabase
-    .from('articles')
-    .update(updateData)
-    .eq('id', article_id)
-    .eq('company_id', companyId)
-    .select()
-    .single()
-
-  if (error) {
-    if (error.code === 'PGRST116') return { error: 'Article not found', status: 404 }
-    // FK to public.currencies: the reference table is the allow-list.
-    if (error.code === '23503' && error.message.includes('currency')) {
-      return { error: `Currency ${validated.currency} is not supported`, status: 400 }
-    }
-    return { error: error.message, status: 500 }
-  }
-
-  await eventBus.emit({ type: 'article.updated', payload: { article: data as Article, userId, companyId } })
-
-  return { data: { article_id: data.id } }
+  // The update the dashboard makes (lib/articles/article-commands.ts).
+  const outcome = await updateArticle({ supabase, companyId, userId, log }, articleId, parsed.data)
+  if (!outcome.ok) return articleCommandFailure(outcome)
+  if (outcome.dryRun) throw new Error('update_article: unexpected dry-run outcome')
+  return { data: { article_id: outcome.data.id } }
 }
+
 
 async function commitIgnoreTransaction(
   supabase: SupabaseClient,
@@ -6820,325 +6758,9 @@ async function commitBookSkattekontoRows(
   return { data: { results: result.results, summary: result.summary } }
 }
 
-// ── Multi-tx commit handlers (PRs #603/#606/#608/#610) ────────────
-//
-// Both wrap their SQL RPC. The RPCs do all the heavy lifting (locking,
-// balance/period checks, journal entry creation, voucher number,
-// payment/junction rows, doc inheritance). The commit handlers just
-// shape params, call the RPC, and translate the structured error code
-// or success payload into an ExecutorResult.
-
-async function commitMatchBatchAllocate(
-  supabase: SupabaseClient,
-  userId: string,
-  companyId: string,
-  params: Record<string, unknown>
-): Promise<ExecutorResult> {
-  // Trust boundary (compliance-swarm V8.2.1, A.8.2):
-  // Tenant isolation is enforced authoritatively inside the SQL RPC
-  // `match_batch_allocate` (supabase/migrations/20260817150000_*.sql):
-  //   - `transactions` row fetched WHERE id = p_tx_id AND company_id = p_company_id
-  //   - `invoices` and `supplier_invoices` rows fetched WHERE id = ? AND company_id = p_company_id
-  //   - the actor resolves from auth.uid(), with p_user_id honored only for
-  //     service_role callers (this commit path runs on the cookieless
-  //     service client, where auth.uid() is NULL); membership checked
-  //     against `company_members.company_id = p_company_id`
-  // The MCP execute() handler additionally pre-checks the same IDs to
-  // surface clean errors before staging. This commit handler is a thin
-  // pass-through by design: re-querying here would triple the same
-  // check without adding security.
-  const txId = params.transaction_id as string
-  const allocations = params.allocations
-  if (!txId) return { error: 'transaction_id is required', status: 400 }
-  if (!Array.isArray(allocations) || allocations.length === 0) {
-    return { error: 'allocations is required (non-empty array)', status: 400 }
-  }
-
-  // Already-explained guard: the RPC only knows the invoices in the request,
-  // so posted vouchers that already book this bank row (each invoice marked
-  // paid by hand, a Bankgirot aggregate) are invisible to it and the money
-  // gets booked a second time. Same detector + force binding as the
-  // dashboard route and the staging tool (lib/invoices/already-explained-
-  // guard.ts). Commit is the last gate: the binding is re-validated against
-  // the set detected NOW, so an approval staged before a voucher was posted
-  // cannot slip through (issue #2294). 409 auto-rejects the op with the
-  // vouchers in result_data.
-  const override: ExplainedOverride = {
-    force: params.force === true,
-    expected_journal_entry_ids: Array.isArray(params.expected_journal_entry_ids)
-      ? (params.expected_journal_entry_ids as unknown[]).filter((v): v is string => typeof v === 'string')
-      : undefined,
-  }
-  const explained = await guardAlreadyExplained(supabase, companyId, txId, override, {
-    onDetectError: (err) => log.warn('match_batch_allocate: explaining-voucher detection failed (continuing)', err),
-  })
-  if (explained.status === 'blocked') {
-    const entry = getErrorEntry('BATCH_TX_POSSIBLE_DUPLICATE')
-    return {
-      error: `${entry?.message_sv ?? 'Transaktionen ser redan ut att vara bokförd.'} (${describeExplainingSet(explained.set)})`,
-      errorCode: 'BATCH_TX_POSSIBLE_DUPLICATE',
-      status: 409,
-      data: alreadyExplainedDetails(explained) as unknown as Record<string, unknown>,
-    }
-  }
-  if (explained.status === 'unverifiable') {
-    // force=true but the check could not run at commit: the staged binding
-    // cannot be re-verified, so the op is refused (auto-rejected), never
-    // waved through on the strength of an earlier review.
-    const entry = getErrorEntry('BATCH_TX_EXPLAINED_CHECK_FAILED')
-    return {
-      error: entry?.message_sv ?? 'Dubblettkontrollen kunde inte köras, så "bokför ändå" avvisades.',
-      errorCode: 'BATCH_TX_EXPLAINED_CHECK_FAILED',
-      status: 409,
-      data: { reason: 'detector_failed', force_rejected: true },
-    }
-  }
-
-  // Kontantmetoden: the RPC only clears 1510/2440, so an invoice with no
-  // booking yet would never get its revenue/cost + moms on the ledger. Same
-  // guard as the dashboard route (lib/invoices/batch-cash-method-guard.ts);
-  // the refusal auto-rejects the op and names the invoices.
-  const cashCheck = await findCashMethodUnbookedAllocations(
-    supabase,
-    companyId,
-    allocations as BatchAllocationRef[],
-  )
-  if (!cashCheck.ok) {
-    return { error: 'Kontantmetodskontrollen kunde inte köras. Försök igen.', status: 500 }
-  }
-  if (cashCheck.unbooked.length > 0) {
-    const entry = getErrorEntry('BATCH_CASH_METHOD_UNBOOKED_INVOICE')
-    return {
-      error: entry?.message_sv ?? 'Kontantmetoden: obokförda fakturor kan inte samlingsmatchas.',
-      errorCode: 'BATCH_CASH_METHOD_UNBOOKED_INVOICE',
-      status: 400,
-      data: { invoices: cashCheck.unbooked } as unknown as Record<string, unknown>,
-    }
-  }
-
-  // Through the engine door, which also emits journal_entry.committed for
-  // the samlingsverifikat.
-  const { data, error } = await commitMatchBatchAllocation(supabase, companyId, userId, {
-    transactionId: txId,
-    allocations,
-  })
-  if (error) {
-    // Sanitised log (A.8.11, CC7.2): only error code + message, no
-    // payload: error.details can echo invoice IDs, amounts, etc.
-    log.error('match_batch_allocate RPC error', {
-      code: (error as { code?: string }).code,
-      message: error.message,
-    })
-    return { error: error.message || 'Database error', status: 500 }
-  }
-  const result = data as {
-    ok: boolean
-    code?: string
-    details?: unknown
-    journal_entry_id?: string
-    allocations?: BatchAllocationResult[]
-  }
-  if (!result || !result.ok) {
-    return {
-      error: result?.code || 'match_batch_allocate failed',
-      status: 400,
-      data: result?.details as Record<string, unknown> | undefined,
-    }
-  }
-  // Every allocation the RPC settled in full retires its suggestion pointer
-  // from the company's OTHER transactions (issue #1259): the RPC only nulls
-  // them on the source tx. Same helper as the HTTP twin
-  // (app/api/transactions/[id]/match-batch/route.ts) so the two cannot drift.
-  await clearSettledBatchAllocationSuggestions(supabase, companyId, result.allocations ?? [], txId)
-  // Payment rows on an invoice under collection wait in the forwarding outbox.
-  scheduleCollectionForwardDrain(companyId)
-
-  // Same events as the HTTP twin (match_confirmed per allocation, invoice.paid
-  // / supplier_invoice.paid per allocation settled in full), through the same
-  // helper. This door used to emit nothing, so webhooks never heard of an
-  // agent-approved samlingsbetalning. Best-effort: the RPC has committed.
-  await emitBatchAllocationEvents(
-    supabase,
-    { companyId, userId, transactionId: txId, allocations: result.allocations ?? [] },
-    log,
-  )
-
-  // The override was acted on: durable behandlingshistorik record (BFNAR
-  // 2013:2 p. 9.16), same event the categorize guard writes.
-  if (explained.status === 'overridden') {
-    await recordExplainedOverride(
-      companyId,
-      txId,
-      explained.set,
-      { actor: { type: 'user', id: userId }, via: 'pending_operation_force' },
-      (err) => log.warn('match_batch_allocate: failed to record override behandlingshistorik', err),
-    )
-  }
-
-  // Structured audit-trail entry on success (compliance-swarm V16). Tx
-  // count + JE id + the source tx id only: no amounts, no
-  // counterparty identifiers, no descriptions. txId is included
-  // intentionally so the audit trail can join successful commits back
-  // to the source bank tx without a separate query; it's not PII on
-  // its own (just an internal UUID, scoped to companyId already logged).
-  log.info('match_batch_allocate committed', {
-    companyId,
-    operationType: 'match_batch_allocate',
-    journalEntryId: result.journal_entry_id,
-    txId,
-    allocationCount: allocations.length,
-  })
-  return { data: result as unknown as Record<string, unknown>, status: 200 }
-}
-
-async function commitBulkBookTransactions(
-  supabase: SupabaseClient,
-  userId: string,
-  companyId: string,
-  params: Record<string, unknown>
-): Promise<ExecutorResult> {
-  // Trust boundary (compliance-swarm V8.2.1, A.8.2):
-  // Tenant isolation + chart-of-accounts validation are enforced
-  // authoritatively inside the SQL RPC `bulk_book_transactions`
-  // (supabase/migrations/20260602121000_*.sql):
-  //   - All `transactions` rows fetched WHERE id = ANY(p_tx_ids) AND
-  //     company_id = p_company_id (line ~115).
-  //   - `journal_entries` row (link-existing branch) fetched WHERE id =
-  //     p_existing_journal_entry_id AND company_id = p_company_id.
-  //   - Every account_number in p_new_entry.lines validated against
-  //     `chart_of_accounts` filtered by company_id + is_active (PR #610
-  //     round 2 added this allowlist).
-  //   - `auth.uid()` resolves the caller; membership checked against
-  //     `company_members.company_id = p_company_id`.
-  // The MCP execute() handler additionally pre-checks tx ownership +
-  // JE ownership at stage time to surface clean errors. The two rules this
-  // handler runs itself are the dimension policy and the booking-time
-  // duplicate guard, which the RPC does not: rules may have changed, a value
-  // may have been archived, and another verifikat may have booked the same
-  // bank line since staging.
-  const txIds = params.tx_ids
-  const existingJeId = (params.existing_journal_entry_id as string | null | undefined) ?? null
-  let newEntry = (params.new_entry as Record<string, unknown> | null | undefined) ?? null
-  if (!Array.isArray(txIds) || txIds.length === 0) {
-    return { error: 'tx_ids is required (non-empty array)', status: 400 }
-  }
-  if ((existingJeId == null) === (newEntry == null)) {
-    return {
-      error: 'Provide exactly one of existing_journal_entry_id or new_entry',
-      status: 400,
-    }
-  }
-  if (newEntry && Array.isArray(newEntry.lines) && newEntry.lines.length > 0) {
-    // Throws the typed MandatoryDimensionMissingError / DimensionValidationError;
-    // the dispatcher maps a BookkeepingError like every ledger executor's.
-    const lines = await enforceBulkBookDimensionPolicy(
-      supabase,
-      companyId,
-      newEntry.lines as Array<{ account_number: string; dimensions?: Record<string, string> }>,
-      log,
-    )
-    newEntry = { ...newEntry, lines }
-  }
-  // Booking-time duplicate guard, the one every bulk-book door runs
-  // (runBulkBookDuplicateGuard). allow_duplicate is the reviewed override
-  // staged with the operation; honouring it records each dismissal in
-  // behandlingshistorik. A failed row fetch skips the guard (fail-open, like
-  // a failed detection): the RPC still refuses a row that is not the
-  // company's or already booked.
-  const allowDuplicate = params.allow_duplicate === true
-  const { data: dupTxs, error: dupTxError } = await supabase
-    .from('transactions')
-    .select('id, amount, currency, date, amount_sek, exchange_rate, cash_account_id')
-    .in('id', txIds as string[])
-    .eq('company_id', companyId)
-  if (dupTxError) {
-    log.warn('bulk_book_transactions: duplicate guard skipped, row fetch failed', { code: dupTxError.code })
-  } else {
-    const duplicate = await runBulkBookDuplicateGuard(
-      supabase,
-      companyId,
-      userId,
-      (dupTxs ?? []) as BulkBookDuplicateTx[],
-      {
-        txIds: txIds as string[],
-        existingJournalEntryId: existingJeId,
-        force: allowDuplicate,
-        recordDismissal: true,
-        via: 'allow_duplicate',
-      },
-      log,
-    )
-    if (!duplicate.ok) {
-      const entry = getErrorEntry('TRANSACTION_BOOK_POSSIBLE_DUPLICATE')
-      const dup = duplicate.details.candidate
-      return {
-        error: `${entry?.message_sv ?? 'Den här affärshändelsen ser redan ut att vara bokförd.'} (verifikat ${dup.voucher_label}, ${dup.entry_date})`,
-        errorCode: 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE',
-        status: 409,
-        data: duplicate.details as unknown as Record<string, unknown>,
-      }
-    }
-  }
-  // Through the engine door, which also emits journal_entry.committed for a
-  // new samlingsverifikat. This path runs on the cookieless service client
-  // where auth.uid() is NULL; the RPC honors p_user_id only for service_role
-  // callers (migration 20260824170000), so the approving human is the actor.
-  const suggestionSnapshot = await snapshotSuggestions(supabase, companyId, txIds as string[])
-  const { data, error } = await commitBulkBooking(supabase, companyId, userId, {
-    txIds: txIds as string[],
-    existingJournalEntryId: existingJeId,
-    newEntry,
-  })
-  if (error) {
-    // Sanitised log (A.8.11, CC7.2): only error code + message.
-    log.error('bulk_book_transactions RPC error', {
-      code: (error as { code?: string }).code,
-      message: error.message,
-    })
-    return { error: error.message || 'Database error', status: 500 }
-  }
-  const result = data as { ok: boolean; code?: string; details?: unknown; journal_entry_id?: string; mode?: string; linked_tx_count?: number; docs_linked?: number }
-  if (!result || !result.ok) {
-    const code = result?.code
-    const entry = code ? getErrorEntry(code) : undefined
-    return {
-      error: code || 'bulk_book_transactions failed',
-      // Registry httpStatus so the dispatcher can tell an authorization
-      // refusal (403: nothing posted, op must stay pending) from bad input
-      // (400) or a vanished/already-booked tx (404/409: auto-reject).
-      status: entry?.httpStatus ?? 400,
-      ...(code ? { errorCode: code } : {}),
-      data: result?.details as Record<string, unknown> | undefined,
-    }
-  }
-  // One decision row per bank line, all pointing at the one verifikat.
-  if (result.journal_entry_id) {
-    const entryLines = Array.isArray(newEntry?.lines)
-      ? (newEntry.lines as Array<{ account_number: string; debit_amount?: number; credit_amount?: number }>)
-      : []
-    const postedLines = entryLines.map((l) => ({
-      account: l.account_number,
-      debit: Number(l.debit_amount ?? 0),
-      credit: Number(l.credit_amount ?? 0),
-    }))
-    await recordDecisions(
-      supabase,
-      suggestionSnapshot,
-      (txIds as string[]).map((txId) => ({ transactionId: txId, final: finalFromLines(result.journal_entry_id!, postedLines) })),
-      userId,
-    )
-  }
-  // Structured audit-trail entry on success (compliance-swarm V16).
-  log.info('bulk_book_transactions committed', {
-    companyId,
-    operationType: 'bulk_book_transactions',
-    journalEntryId: result.journal_entry_id,
-    mode: result.mode,
-    txCount: result.linked_tx_count,
-    docsLinked: result.docs_linked,
-  })
-  return { data: result as unknown as Record<string, unknown>, status: 200 }
-}
+// The multi-transaction bookings (the batch allocation, the bulk booking and
+// the link to an existing verifikat) run their operations
+// (commitRegisteredOperation), the same run() as v1 and the dashboard.
 
 /**
  * Bulk-book selected Underlag (Dokumentinkorgen): Lena-driven flow. Each
@@ -7359,71 +6981,6 @@ async function commitReconciliationResidual(
       }
     }
     throw err
-  }
-}
-
-async function commitLinkTransactionJournalEntry(
-  supabase: SupabaseClient,
-  userId: string,
-  companyId: string,
-  params: Record<string, unknown>
-): Promise<ExecutorResult> {
-  const transactionId = params.transaction_id as string | undefined
-  const journalEntryId = params.journal_entry_id as string | undefined
-  const invoiceId = (params.invoice_id as string | undefined) ?? undefined
-
-  if (!transactionId || !journalEntryId) {
-    return { error: 'transaction_id and journal_entry_id are required', status: 400 }
-  }
-
-  const outcome = await linkTransactionToJournalEntry(supabase, userId, companyId, {
-    transactionId,
-    journalEntryId,
-    invoiceId,
-  })
-
-  if (!outcome.ok) {
-    const entry = getErrorEntry(outcome.code)
-    const httpStatus = entry?.httpStatus ?? 500
-    // Carry the DB reason into the message itself: the dispatcher persists and
-    // returns `error`/`errorCode`, and the MCP approve result has no separate
-    // details slot, so a bare "database error" left the agent with nothing to
-    // act on.
-    const reason = outcome.details && typeof outcome.details.reason === 'string'
-      ? outcome.details.reason
-      : null
-    const baseMessage = entry?.message_en ?? outcome.code
-    return {
-      error: reason ? `${baseMessage} (${reason})` : baseMessage,
-      errorCode: outcome.code,
-      status: httpStatus,
-      data: outcome.details as Record<string, unknown> | undefined,
-    }
-  }
-
-  // Structured audit-trail entry on success (compliance-swarm V16, SOC 2 CC4.1).
-  // Mirrors commitMatchBatchAllocate / commitBulkBookTransactions: IDs only,
-  // no amounts or counterparty PII. invoiceId is logged as boolean to avoid
-  // leaking which invoices are touched while still distinguishing the two
-  // code paths (link-only vs link+settle).
-  log.info('link_transaction_journal_entry committed', {
-    companyId,
-    operationType: 'link_transaction_journal_entry',
-    transactionId: outcome.result.transactionId,
-    journalEntryId: outcome.result.journalEntryId,
-    settledInvoice: outcome.result.invoiceId != null,
-  })
-
-  return {
-    data: {
-      transaction_id: outcome.result.transactionId,
-      journal_entry_id: outcome.result.journalEntryId,
-      voucher_label: outcome.result.voucherLabel,
-      invoice_id: outcome.result.invoiceId,
-      invoice_status: outcome.result.invoiceStatus,
-      paid_amount: outcome.result.paidAmount,
-      remaining_amount: outcome.result.remainingAmount,
-    },
   }
 }
 
@@ -7802,17 +7359,8 @@ async function commitPendingOperationInner(
       case 'vacation_year_close':
         result = await commitVacationYearClose(supabase, userId, companyId, pendingOp.params)
         break
-      case 'match_batch_allocate':
-        result = await commitMatchBatchAllocate(supabase, userId, companyId, pendingOp.params)
-        break
-      case 'bulk_book_transactions':
-        result = await commitBulkBookTransactions(supabase, userId, companyId, pendingOp.params)
-        break
       case 'bulk_book_inbox_items':
         result = await commitBulkBookInboxItems(supabase, userId, companyId, pendingOp.params)
-        break
-      case 'link_transaction_journal_entry':
-        result = await commitLinkTransactionJournalEntry(supabase, userId, companyId, pendingOp.params)
         break
       case 'reconciliation_match':
         result = await commitReconciliationMatch(supabase, userId, companyId, pendingOp.params)

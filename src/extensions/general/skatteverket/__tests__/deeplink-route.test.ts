@@ -34,12 +34,13 @@ vi.mock('../lib/audit', () => ({ writeSkatteverketAudit: (...a: unknown[]) => mo
 import { skatteverketExtension } from '../index'
 import { OmbudApiError } from '../lib/ombud-client'
 import type { ExtensionContext } from '@/lib/extensions/types'
+import { testRoutes } from '@/tests/helpers'
 
 const ENV_KEYS = ['SKATTEVERKET_SYSTEM_AUTH_MODE', 'SKATTEVERKET_SYSTEM_AUTH_MECHANISM']
 let savedEnv: Record<string, string | undefined>
 
 function findRoute() {
-  const route = skatteverketExtension.apiRoutes?.find(
+  const route = testRoutes(skatteverketExtension).find(
     (r) => r.method === 'POST' && r.path === '/system-connection/deeplink'
   )
   if (!route) throw new Error('deeplink route not registered')
@@ -115,10 +116,6 @@ afterEach(() => {
 })
 
 describe('POST /system-connection/deeplink', () => {
-  it('500 without an extension context', async () => {
-    const res = await findRoute().handler(request())
-    expect(res.status).toBe(500)
-  })
 
   it('refuses when the capability gate blocks', async () => {
     const { NextResponse } = await import('next/server')

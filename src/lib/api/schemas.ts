@@ -1025,17 +1025,28 @@ export const HouseworkTypeSchema = z
     return normalized
   })
 
+// One rule set for every article door: the dashboard, and the approval of an
+// agent's staged gnubok_create_article / gnubok_update_article
+// (lib/articles/article-commands.ts). An empty optional text is stored as
+// null there; '' (and a null currency) for unit or currency means "not
+// sent", as the agent path always read it.
+const blankAsUnset = (v: unknown) => (typeof v === 'string' && v.trim() === '' ? undefined : v)
+
 export const CreateArticleSchema = z.object({
-  name: z.string().min(1, 'Article name is required').max(200),
+  name: z.string().trim().min(1, 'Article name is required').max(200),
   type: ArticleTypeSchema.optional(),
-  unit: z.string().min(1).max(32).optional(),
+  unit: z.preprocess(blankAsUnset, z.string().trim().min(1).max(32).optional()),
   price_excl_vat: nonNegativeAmount,
   vat_rate: vatRatePercent.optional(),
   // Default price currency; omitted = SEK. Pre-fills a new invoice's currency.
   // Constrained to the same CurrencySchema enum invoices use, which mirrors the
   // seeded currencies reference table: an unknown code is a clean 400 here
-  // instead of a raw FK violation (23503) surfacing at insert time.
-  currency: CurrencySchema.optional(),
+  // instead of a raw FK violation (23503) surfacing at insert time. Case is
+  // not significant ('eur' is EUR).
+  currency: z.preprocess(
+    (v) => (v == null ? undefined : typeof v === 'string' ? blankAsUnset(v.trim().toUpperCase()) : v),
+    CurrencySchema.optional(),
+  ),
   // Optional BAS class 1-3 posting-account override. Null/omitted = derive from
   // the invoice's VAT treatment (current behaviour).
   revenue_account: invoicePostingAccount.nullable().optional(),
@@ -2717,6 +2728,14 @@ export const BulkBookSchema = z
       })
       return
     }
+    if (hasExisting && data.default_dimensions) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'default_dimensions only applies when a new verifikat is created: a posted verifikat is immutable, so a link cannot tag it',
+        path: ['default_dimensions'],
+      })
+    }
     if (hasTemplate) {
       if (!data.mode) {
         ctx.addIssue({
@@ -2765,7 +2784,11 @@ export const MatchBatchSchema = z
             supplier_invoice_id: uuid,
             amount: z.number().positive('Allocation amount must be greater than 0'),
           }),
-        ]),
+        ], {
+          // Every guard branches on kind: say which id goes with which.
+          error:
+            'kind is required: "customer_invoice" (incoming payment, pass invoice_id) or "supplier_invoice" (outgoing payment, pass supplier_invoice_id)',
+        }),
       )
       .min(1, 'At least one allocation is required')
       // Capped to bound the FOR UPDATE locks the RPC takes (PR #603 compliance

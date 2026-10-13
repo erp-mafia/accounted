@@ -17,6 +17,13 @@
  * Consequence worth remembering: because we never hold a send scope, the agent
  * can prepare a forward for the user but can never send one itself.
  */
+import {
+  buildGoogleConsentUrl,
+  exchangeGoogleCode,
+  refreshGoogleAccessToken,
+  type GoogleOAuthClient,
+} from '@/lib/auth/google-oauth'
+
 export const GMAIL_READONLY_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly'
 
 /**
@@ -34,7 +41,6 @@ export function lacksGmailScope(scopes: readonly string[] | null | undefined): b
   return Array.isArray(scopes) && scopes.length > 0 && !scopes.includes(GMAIL_READONLY_SCOPE)
 }
 
-const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth'
 /**
  * Deadline on the token endpoint.
  *
@@ -44,15 +50,7 @@ const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth'
  */
 export const TOKEN_TIMEOUT_MS = 15_000
 
-const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token'
-
-const REVOKE_ENDPOINT = 'https://oauth2.googleapis.com/revoke'
-
-export interface GoogleOAuthEnv {
-  clientId: string
-  clientSecret: string
-  redirectUri: string
-}
+export type GoogleOAuthEnv = GoogleOAuthClient
 
 /**
  * Deliberately distinct from cloud-backup's GOOGLE_CLIENT_ID: that is a
@@ -80,29 +78,18 @@ export function getGoogleOAuthEnv(origin: string): GoogleOAuthEnv {
 }
 
 export function buildAuthorizationUrl(env: GoogleOAuthEnv, state: string, codeChallenge?: string): string {
-  const params = new URLSearchParams({
-    client_id: env.clientId,
-    redirect_uri: env.redirectUri,
-    response_type: 'code',
+  return buildGoogleConsentUrl(env, {
     scope: GMAIL_READONLY_SCOPE,
     // Signed, self-expiring CSRF token. The callback refuses anything without
     // it, so omitting this breaks the flow as well as the protection.
     state,
-    // offline + consent is what returns a refresh token at all; without it a
-    // grant dies in an hour and the nightly hunt silently stops.
-    access_type: 'offline',
+    // PKCE (RFC 7636): the code is only redeemable with the verifier sealed in
+    // the state. Changes nothing about the scope Google reviews.
+    codeChallenge,
     // No include_granted_scopes: it lets Google add scopes this app was granted
     // elsewhere to the token it returns here, so a mailbox grant could quietly
     // carry more authority than the consent screen showed.
-    prompt: 'consent',
   })
-  // PKCE (RFC 7636): the code is only redeemable with the verifier sealed in
-  // the state. Changes nothing about the scope Google reviews.
-  if (codeChallenge) {
-    params.set('code_challenge', codeChallenge)
-    params.set('code_challenge_method', 'S256')
-  }
-  return `${AUTH_ENDPOINT}?${params.toString()}`
 }
 
 export interface GoogleTokens {
@@ -129,18 +116,10 @@ export async function exchangeCodeForTokens(
   /** The PKCE verifier from the state; null for a flow started without one. */
   codeVerifier: string | null = null,
 ): Promise<GoogleTokens> {
-  const response = await fetch(TOKEN_ENDPOINT, {
-    method: 'POST',
-    signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      code,
-      client_id: env.clientId,
-      client_secret: env.clientSecret,
-      redirect_uri: env.redirectUri,
-      grant_type: 'authorization_code',
-      ...(codeVerifier ? { code_verifier: codeVerifier } : {}),
-    }),
+  const response = await exchangeGoogleCode(env, code, {
+    codeVerifier,
+    timeoutMs: TOKEN_TIMEOUT_MS,
+    description: 'Gmail token exchange',
   })
   const body = (await response.json()) as {
     access_token?: string
@@ -170,16 +149,9 @@ export async function refreshAccessToken(
   env: GoogleOAuthEnv,
   refreshToken: string,
 ): Promise<{ accessToken: string; expiresAt: Date }> {
-  const response = await fetch(TOKEN_ENDPOINT, {
-    method: 'POST',
-    signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      refresh_token: refreshToken,
-      client_id: env.clientId,
-      client_secret: env.clientSecret,
-      grant_type: 'refresh_token',
-    }),
+  const response = await refreshGoogleAccessToken(env, refreshToken, {
+    timeoutMs: TOKEN_TIMEOUT_MS,
+    description: 'Gmail token refresh',
   })
   const body = (await response.json()) as {
     access_token?: string
@@ -203,59 +175,8 @@ export async function refreshAccessToken(
   }
 }
 
-/**
- * What Google answered when asked to revoke a grant.
- *
- *   revoked          Google confirmed it (200).
- *   already_invalid  Google no longer knows the token (400 invalid_token):
- *                    the person removed the app at myaccount.google.com, or
- *                    the grant was revoked or expired before. Nothing is left.
- *   failed           no confirmation: a timeout, a network error, any other
- *                    answer.
- */
-export type GoogleRevocationOutcome = 'revoked' | 'already_invalid' | 'failed'
-
-export interface GoogleRevocationResult {
-  outcome: GoogleRevocationOutcome
-  /** HTTP status, or null when no answer arrived. */
-  status: number | null
-  /** Google's error code or the local error's name. Never the token. */
-  error: string | null
-}
-
-/**
- * Revoke a grant at Google, so deleting our copy of a token is not the only
- * thing that ends the access.
- *
- * Revoking a refresh token also revokes the access tokens issued from it, and
- * the app leaves the account's list of third-party access, so this is treated
- * as ending the app's access to that Google account rather than to one token.
- * Callers that may hold the same mailbox under several connections check that
- * first (revokeStoredGrant in connections.ts).
- *
- * The token goes in a form-encoded body, never in the URL, where proxies and
- * request logs keep it. Best effort by contract: it never throws, so a slow
- * or broken Google can never block the deletion that follows it.
- */
-export async function revokeGoogleToken(token: string): Promise<GoogleRevocationResult> {
-  try {
-    const response = await fetch(REVOKE_ENDPOINT, {
-      method: 'POST',
-      signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ token }),
-    })
-    if (response.ok) return { outcome: 'revoked', status: response.status, error: null }
-    const body = (await response.json().catch(() => ({}))) as { error?: unknown }
-    const error = typeof body.error === 'string' ? body.error.slice(0, 64) : null
-    return {
-      outcome: response.status === 400 && error === 'invalid_token' ? 'already_invalid' : 'failed',
-      status: response.status,
-      error,
-    }
-  } catch (err) {
-    // A TimeoutError or a network failure. The name only: nothing that could
-    // echo the request body into a log line.
-    return { outcome: 'failed', status: null, error: err instanceof Error ? err.name : 'unknown' }
-  }
-}
+export {
+  revokeGoogleToken,
+  type GoogleRevocationOutcome,
+  type GoogleRevocationResult,
+} from '@/lib/auth/google-revoke'

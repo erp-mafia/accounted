@@ -60,7 +60,9 @@ const defaultLog = createLogger('woocommerce/order-sync')
  * never advances past failed work: a page with refund-fetch failures, upsert
  * errors, or deadline-skipped refunds caps the persisted cursor just below
  * the earliest affected order's date_modified, so the next run re-lists
- * exactly the orders whose rows are incomplete. Activation seeds the cursor
+ * exactly the orders whose rows are incomplete. A window listed to its end
+ * moves the cursor to the run start (the scanned-through watermark), so a
+ * quiet store does not re-list the same window every night. Activation seeds the cursor
  * with the connection moment, so the first run starts there; older history
  * is an explicit choice (POST /backfill moves the cursor back).
  *
@@ -701,6 +703,7 @@ export async function syncWooCommerceOrders(
   const creds = credentialsOf(connection)
   const storeScope = wooStoreScope(connection.store_url)
 
+  const runStartMs = Date.now()
   let modifiedAfter = resolveWindowStartIso(connection)
   // Offset page within a same-timestamp tie only; 1 whenever the cursor moves.
   let tiePage = 1
@@ -709,6 +712,8 @@ export async function syncWooCommerceOrders(
     : 0
   // Earliest incomplete work this run; the persisted cursor never passes it.
   let failureFloorMs = Number.POSITIVE_INFINITY
+  // True once the window was listed to its end (an empty page).
+  let windowExhausted = false
 
   try {
     for (;;) {
@@ -725,7 +730,10 @@ export async function syncWooCommerceOrders(
       // Termination is an EMPTY page, not a short one: hosts and security
       // plugins may cap per_page below our request, and treating a short page
       // as the end would strand the cursor at the first page forever.
-      if (orders.length === 0) break
+      if (orders.length === 0) {
+        windowExhausted = true
+        break
+      }
       summary.fetched += orders.length
 
       const page = await buildPageRows(
@@ -848,6 +856,26 @@ export async function syncWooCommerceOrders(
           cap: MAX_ORDERS_PER_RUN,
         })
         break
+      }
+    }
+
+    // Watermark advance, as in the Shopify and Zettle syncs: a window listed
+    // to its end means "scanned through run start", even when it held no
+    // orders. Without it a quiet store keeps its old cursor, stays at the
+    // front of the cron's oldest-cursor-first candidates and re-lists the
+    // same window every night. Capped by the failure floor like every other
+    // cursor write; the 24h overlap re-poll still covers orders modified
+    // while the run was in flight.
+    if (windowExhausted) {
+      const watermarkMs = Math.min(runStartMs, failureFloorMs)
+      if (watermarkMs > prevCursorMs) {
+        const cursorIso = new Date(watermarkMs).toISOString()
+        await supabase
+          .from('woocommerce_connections')
+          .update({ last_order_synced_at: cursorIso, error_message: null })
+          .eq('id', connection.id)
+        connection.last_order_synced_at = cursorIso
+        prevCursorMs = watermarkMs
       }
     }
   } catch (err) {

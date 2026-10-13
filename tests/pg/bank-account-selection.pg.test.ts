@@ -630,3 +630,64 @@ describe('ledger changes keep the bank account row', () => {
     })
   })
 })
+
+describe('the first-sync window is saved with the activation', () => {
+  async function saveWithWindow(token: string, window: unknown) {
+    return (await client.query('SELECT save_bank_account_selection($1,$2,$3,$4,$5,$6,$7) AS result',
+      [owner.companyId, owner.userId, connectionId, token, JSON.stringify(selection), JSON.stringify(charts),
+        window === null ? null : JSON.stringify(window)])).rows[0].result
+  }
+  async function window() {
+    return (await client.query(`SELECT status, initial_sync_requested_from::text AS requested_from,
+      initial_sync_lookback_days AS lookback_days FROM bank_connections WHERE id=$1`, [connectionId])).rows[0]
+  }
+
+  it('writes the picked window in the statement that activates the connection', async () => {
+    await saveWithWindow((await snapshot()).token, { requested_from: '2026-01-01', lookback_days: 180 })
+    expect(await window()).toEqual({ status: 'active', requested_from: '2026-01-01', lookback_days: 180 })
+  })
+
+  it('still answers the six-argument call, and then saves no window', async () => {
+    await save((await snapshot()).token)
+    expect(await window()).toEqual({ status: 'active', requested_from: null, lookback_days: null })
+  })
+
+  it('leaves the window of an active connection alone on a later selection save', async () => {
+    await saveWithWindow((await snapshot()).token, { requested_from: '2026-01-01', lookback_days: 180 })
+    await saveWithWindow((await snapshot()).token, { requested_from: '2026-06-01', lookback_days: 30 })
+    expect(await window()).toMatchObject({ requested_from: '2026-01-01', lookback_days: 180 })
+  })
+
+  it('keeps the window of a done first import when a renewal activates the connection again', async () => {
+    await client.query(`UPDATE bank_connections SET initial_sync_completed_at=now(),
+      initial_sync_requested_from='2025-10-01', initial_sync_lookback_days=120 WHERE id=$1`, [connectionId])
+    await saveWithWindow((await snapshot()).token, { requested_from: '2026-06-01', lookback_days: 30 })
+    expect(await window()).toEqual({ status: 'active', requested_from: '2025-10-01', lookback_days: 120 })
+  })
+
+  it.each([
+    ['not an object', [1]],
+    ['a missing date', { lookback_days: 30 }],
+    ['a date in the future', { requested_from: '2999-01-01', lookback_days: 30 }],
+    ['zero days', { requested_from: '2026-01-01', lookback_days: 0 }],
+    ['a fraction of a day', { requested_from: '2026-01-01', lookback_days: 1.5 }],
+    ['days as text', { requested_from: '2026-01-01', lookback_days: '30' }],
+    ['more than a year', { requested_from: '2026-01-01', lookback_days: 366 }],
+  ])('refuses %s without a write', async (_label, invalid) => {
+    const before = await state()
+    const token = (await snapshot()).token
+    await client.query('SAVEPOINT invalid_window')
+    await expect(saveWithWindow(token, invalid)).rejects.toMatchObject({ code: '22023', message: 'BANK_SELECTION_INVALID' })
+    await client.query('ROLLBACK TO SAVEPOINT invalid_window')
+    expect(await state()).toEqual(before)
+  })
+
+  it('grants the new signature to authenticated and service_role only', async () => {
+    const sig = 'public.save_bank_account_selection(uuid,uuid,uuid,text,jsonb,jsonb,jsonb)'
+    const grants = (await client.query(`SELECT has_function_privilege('authenticated',$1,'EXECUTE') AS auth,
+      has_function_privilege('service_role',$1,'EXECUTE') AS service, has_function_privilege('anon',$1,'EXECUTE') AS anon`,
+    [sig])).rows[0]
+    expect(grants).toEqual({ auth: true, service: true, anon: false })
+    expect((await client.query("SELECT to_regprocedure('public.save_bank_account_selection(uuid,uuid,uuid,text,jsonb,jsonb)') AS old")).rows[0].old).toBeNull()
+  })
+})

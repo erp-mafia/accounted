@@ -27,7 +27,7 @@ import useSWR, { type SWRConfiguration } from 'swr'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type {
   Article,
-  Employee,
+  EmployeeMasked,
   BASAccount,
   Customer,
   FiscalPeriod,
@@ -175,7 +175,7 @@ export function useSuppliers(): ReferenceListState & { suppliers: Supplier[] } {
  */
 export function useEmployees(
   options: { includeInactive?: boolean } = {},
-): ReferenceListState & { employees: Employee[] } {
+): ReferenceListState & { employees: EmployeeMasked[] } {
   const companyId = useActiveCompanyId()
   const includeInactive = options.includeInactive ?? false
   const { items, ...state } = useReferenceList(

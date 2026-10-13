@@ -7,11 +7,13 @@
  * matcher would happily propose a second payment voucher: double-booking
  * the bank receipt.
  *
- * Heuristic: a posted journal entry within a tight date window whose lines
- * debit a bank/cash account (BAS 19xx) for the same amount, and which is
- * not already linked to any transaction or invoice payment, is almost
- * certainly the manual booking. We surface it as a candidate; the API
- * refuses the match unless the caller passes `force: true`.
+ * Heuristic: a posted journal entry within a tight date window that books
+ * the same amount on the row's bank account in the row's direction, and
+ * which is not already linked to any transaction or invoice payment, is
+ * almost certainly the manual booking. We surface it as a candidate; the
+ * API refuses the match unless the caller passes `force: true`. The 1:1
+ * detector is the booking guard's ledger detector, adapted to this door's
+ * candidate shape (one rule for "a voucher already books this movement").
  *
  * Mirrors `findDuplicatePaymentCandidatesForInvoice` (which scans for the
  * reverse direction: unlinked transactions that look like a manually-marked
@@ -25,12 +27,9 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
-import { resolveTransactionAmountSek } from '@/lib/transactions/booking-duplicate-detection'
+import { detectLedgerDuplicateVoucher, resolveTransactionAmountSek } from '@/lib/transactions/booking-duplicate-detection'
 import { findExactCoveringSet } from '@/lib/reconciliation/covering-set'
 import { roundOre } from '@/lib/money'
-
-/** ± days around the transaction date considered "the same payment". */
-const DATE_WINDOW_DAYS = 7
 
 /** BAS "kassa och bank" range. 1910-1919 = kassa, 1920-1949 = bank/giro. */
 const BANK_ACCOUNT_LOW = 1910
@@ -108,48 +107,38 @@ interface DetectArgs {
 }
 
 /**
- * Find the single most likely manual verifikation that already books this
- * bank transaction. Returns null when no candidate is found.
+ * Find the single most likely verifikation that already books this bank
+ * transaction. Returns null when no candidate is found.
  *
- * Filters applied:
- *  - posted status (drafts cannot be a duplicate by definition)
- *  - entry date within ±DATE_WINDOW_DAYS of transaction.date
- *  - has a line that debits the row's own settlement account
- *    (`bankAccountNumber`), or any BAS 19xx (kassa/bank) account when that is
- *    unknown, for the same rounded amount (within 0.01 SEK), the bank line's
- *    SEK value against the
- *    leg's debit column, which is always SEK. When the bank line has no SEK
- *    value (a foreign row with no stored rate) the amount test is skipped and
- *    the candidate comes back with `amount_verified: false`: skipping is not a
- *    pass, it is an explicit "could not verify" the caller must surface.
- *  - not already linked from `transactions.journal_entry_id` (for any row)
- *  - not already referenced by `invoice_payments.journal_entry_id`
- *  - not the storno/correction entry for any prior original (source_type
- *    excluded: those are valid second-line vouchers, not duplicates)
+ * The question is the booking guard's ("does a voucher already book this bank
+ * movement?"), so the answer is the booking guard's ledger detector
+ * (detectLedgerDuplicateVoucher in lib/transactions/booking-duplicate-
+ * detection.ts), adapted to this door's candidate shape. Its rules:
+ *  - posted entries within ±7 days of transaction.date, storno and correction
+ *    entries excluded;
+ *  - a leg on the row's own settlement account (`bankAccountNumber`, else
+ *    resolved from `cashAccountId`), or any BAS 19xx account when that is
+ *    unknown, in the row's direction: a DEBIT for money in, a CREDIT for
+ *    money out;
+ *  - the same SEK amount within 0.01 (the leg's column is always SEK). When
+ *    the bank line has no SEK value the amount test is skipped, the
+ *    candidate must lie within ±1 day, and it comes back with
+ *    `amount_verified: false`, an explicit "could not verify";
+ *  - not already linked to another transaction or to an invoice payment that
+ *    carries one, EXCEPT a voucher whose linking transaction is this row's
+ *    twin (same öre, same currency, compatible account, date in the window):
+ *    the date-drifted duplicate import whose copy is already booked.
+ *
+ * This door resolves the settlement account itself and fails closed: a
+ * failed cash-account lookup throws, so the caller's detection-failure path
+ * runs instead of a scan widened to every 19xx account.
  */
 export async function detectDuplicatePaymentVoucher(
   supabase: SupabaseClient,
   args: DetectArgs,
 ): Promise<DuplicateVoucherCandidate | null> {
   const { companyId, transactionId, transactionDate, transactionAmount } = args
-  if (Math.round(Math.abs(transactionAmount) * 100) === 0) return null
 
-  // The bank line stated in SEK, or null when it cannot be: a non-SEK row with
-  // neither amount_sek nor exchange_rate. Null disables the amount test below,
-  // it does not short-circuit to "no duplicate".
-  const targetSek = resolveTransactionAmountSek({
-    amount: transactionAmount,
-    currency: args.transactionCurrency,
-    amount_sek: args.transactionAmountSek,
-    exchange_rate: args.transactionExchangeRate,
-  })
-
-  const dateMs = new Date(transactionDate).getTime()
-  if (Number.isNaN(dateMs)) return null
-
-  // The account the money landed on. A PSP row on 1686 compared with every
-  // 19xx debit was refused as a duplicate of a 1930 voucher that merely had
-  // the same amount (agent feedback seq 965009).
   let bankAccountNumber = args.bankAccountNumber?.trim() || null
   if (args.bankAccountNumber === undefined && args.cashAccountId) {
     const ledger = await resolveCashAccountLedger(supabase, companyId, args.cashAccountId)
@@ -157,155 +146,36 @@ export async function detectDuplicatePaymentVoucher(
     bankAccountNumber = ledger.accountNumber?.trim() || null
   }
 
-  const lowDate = new Date(dateMs - DATE_WINDOW_DAYS * 24 * 3600 * 1000)
-    .toISOString()
-    .split('T')[0]
-  const highDate = new Date(dateMs + DATE_WINDOW_DAYS * 24 * 3600 * 1000)
-    .toISOString()
-    .split('T')[0]
-
-  type LineRow = {
-    account_number: string
-    debit_amount: number | string
-    journal_entry: {
-      id: string
-      entry_date: string
-      description: string | null
-      voucher_series: string | null
-      voucher_number: number | null
-      status: string
-      source_type: string | null
-    }
-  }
-
-  // Find bank-account debits within the window. The scope filters live on
-  // journal_entries and the query is driven from there: the old
-  // `journal_entries!inner` embed made PostgREST compile a correlated LATERAL
-  // join that walked the ENTIRE journal_entry_lines table across all tenants
-  // (see lib/bookkeeping/entry-lines.ts). RLS handles isolation; the
-  // company_id filter is defense-in-depth. The old `.limit(50)` is gone with
-  // the embed: it capped a ±7-day window of one company's bank legs and could
-  // hide the real duplicate behind unrelated ones.
-  let lines: LineRow[]
-  try {
-    lines = await fetchEntryLines<LineRow>({
-      supabase,
-      entryColumns: 'id, entry_date, description, voucher_series, voucher_number, status, source_type, company_id',
-      lineColumns: 'account_number, debit_amount',
-      filterEntries: (q: EntryLinesQuery) =>
-        q
-          .eq('company_id', companyId)
-          .eq('status', 'posted')
-          .gte('entry_date', lowDate)
-          .lte('entry_date', highDate),
-      filterLines: (q: EntryLinesQuery) => {
-        const scoped = bankAccountNumber
-          ? q.eq('account_number', bankAccountNumber)
-          : q.gte('account_number', String(BANK_ACCOUNT_LOW)).lte('account_number', String(BANK_ACCOUNT_HIGH))
-        return scoped.gt('debit_amount', 0)
-      },
-      // The old embed was aliased: journal_entry:journal_entries!inner(...).
-      attachEntriesAs: 'journal_entry',
-    })
-  } catch {
-    // Fail-open, as before: a detection failure must not block the match.
-    return null
-  }
-  if (lines.length === 0) return null
-
-  // System-generated payment vouchers (invoice_paid etc.) ARE valid
-  // duplicates to surface: those are exactly the case where the user
-  // already booked through a different flow. Only exclude reversals
-  // and corrections, which are bookkeeping noise rather than payment
-  // candidates the user would want to link to.
-  const bankDebits = lines.filter(
-    (l) => l.journal_entry.source_type !== 'storno' && l.journal_entry.source_type !== 'correction',
-  )
-
-  // Narrow to lines whose SEK debit matches the bank line's SEK value within
-  // 0.01. With no SEK value on the bank side the test cannot run: keep the
-  // survivors and flag them unverified rather than returning null, which would
-  // read as "not a duplicate, go ahead". The existence half of the question is
-  // unit-free (posted, 19xx, in-window, unlinked), so an empty list here is
-  // still a genuine "no duplicate".
-  const candidates =
-    targetSek === null
-      ? bankDebits
-      : bankDebits.filter((l) => {
-          const debitSek = Math.round(Number(l.debit_amount) * 100) / 100
-          return Math.abs(debitSek - targetSek) < 0.01
-        })
-
-  if (candidates.length === 0) return null
-
-  // Exclude entries already linked to a bank transaction, directly or through
-  // an invoice_payments row that carries one. A payment row with
-  // transaction_id NULL is a manual / Stripe settlement (#2019): its bank line
-  // has not been matched yet, so the voucher stays a duplicate candidate.
-  const entryIds = candidates.map((l) => l.journal_entry.id)
-
-  const [{ data: paymentLinks }, { data: txLinks }] = await Promise.all([
-    supabase
-      .from('invoice_payments')
-      .select('journal_entry_id, transaction_id')
-      .eq('company_id', companyId)
-      .in('journal_entry_id', entryIds),
-    supabase
-      .from('transactions')
-      .select('id, journal_entry_id')
-      .eq('company_id', companyId)
-      .in('journal_entry_id', entryIds),
-  ])
-
-  const linkedIds = new Set<string>()
-  for (const row of (paymentLinks ?? []) as {
-    journal_entry_id: string | null
-    transaction_id: string | null
-  }[]) {
-    if (row.journal_entry_id && row.transaction_id) linkedIds.add(row.journal_entry_id)
-  }
-  for (const row of (txLinks ?? []) as { id: string; journal_entry_id: string | null }[]) {
-    // A transaction can link to its own JE via the current match flow: but
-    // we're called *before* that link is created, so the caller's own
-    // transactionId shouldn't appear. Guard anyway in case of a retry.
-    if (row.journal_entry_id && row.id !== transactionId) {
-      linkedIds.add(row.journal_entry_id)
-    }
-  }
-
-  const unlinked = candidates.filter((l) => !linkedIds.has(l.journal_entry.id))
-  if (unlinked.length === 0) return null
-
-  // Pick the best candidate: same-date beats within-window; otherwise pick
-  // the closest by date difference.
-  const targetDateMs = new Date(transactionDate).getTime()
-  unlinked.sort((a, b) => {
-    const aDiff = Math.abs(new Date(a.journal_entry.entry_date).getTime() - targetDateMs)
-    const bDiff = Math.abs(new Date(b.journal_entry.entry_date).getTime() - targetDateMs)
-    return aDiff - bDiff
+  const candidate = await detectLedgerDuplicateVoucher(supabase, companyId, {
+    id: transactionId,
+    date: transactionDate,
+    amount: transactionAmount,
+    currency: args.transactionCurrency,
+    amount_sek: args.transactionAmountSek ?? null,
+    exchange_rate: args.transactionExchangeRate ?? null,
+    cash_account_id: args.cashAccountId ?? null,
+    settlement_account: bankAccountNumber,
   })
-
-  const best = unlinked[0]
-  const sameDate = best.journal_entry.entry_date === transactionDate
+  if (!candidate) return null
 
   return {
-    journal_entry_id: best.journal_entry.id,
-    voucher_label: `${best.journal_entry.voucher_series ?? 'A'}${best.journal_entry.voucher_number ?? ''}`,
-    entry_date: best.journal_entry.entry_date,
-    description: best.journal_entry.description,
-    amount: Math.round(Number(best.debit_amount) * 100) / 100,
-    bank_account_number: best.account_number,
+    journal_entry_id: candidate.journal_entry_id,
+    voucher_label: candidate.voucher_label,
+    entry_date: candidate.entry_date,
+    description: candidate.description,
+    // A ledger candidate's amount is the matched leg's SEK figure, always set.
+    amount: candidate.amount ?? 0,
+    bank_account_number: candidate.account_number ?? bankAccountNumber ?? '',
     // When the amount test never ran, the reason must say so: labelling a
     // date-only survivor 'exact_amount_*' made the UI claim an amount match
     // that was never made.
-    reason:
-      targetSek === null
-        ? 'date_window_only'
-        : sameDate
-          ? 'exact_amount_same_date'
-          : 'exact_amount_within_window',
-    amount_verified: targetSek !== null,
-    unverified_reason: targetSek === null ? 'transaction_missing_sek_value' : null,
+    reason: !candidate.amount_verified
+      ? 'date_window_only'
+      : candidate.entry_date === transactionDate
+        ? 'exact_amount_same_date'
+        : 'exact_amount_within_window',
+    amount_verified: candidate.amount_verified,
+    unverified_reason: candidate.unverified_reason,
   }
 }
 

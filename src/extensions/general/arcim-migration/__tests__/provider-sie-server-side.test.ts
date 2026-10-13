@@ -87,16 +87,13 @@ const MAPPINGS = [
 const OPTIONS = { createFiscalPeriod: true, importOpeningBalances: true, importTransactions: true }
 
 /** Every table query answers an empty list; storage is the in-memory bucket. */
-function buildCtx(opts: { userId?: string | null; files?: Record<string, string> } = {}) {
+function buildCtx(opts: { files?: Record<string, string> } = {}) {
   const { supabase, mockResult } = createMockSupabase()
   mockResult({ data: [], count: 0 })
   const intake = memoryIntakeStorage(opts.files)
-  const userId = opts.userId === undefined ? 'user-1' : opts.userId
-  Object.assign(supabase, {
-    auth: { getUser: vi.fn().mockResolvedValue({ data: { user: userId ? { id: userId } : null } }) },
-    storage: intake.storage,
-  })
-  const ctx = { supabase, companyId: 'company-1', requestId: 'req-1', log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } } as unknown as ExtensionContext
+  Object.assign(supabase, { storage: intake.storage })
+  // The dispatcher's context: the signed-in user, their company and client.
+  const ctx = { supabase, companyId: 'company-1', userId: 'user-1', requestId: 'req-1', log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } } as unknown as ExtensionContext
   return { ctx, intake }
 }
 
@@ -167,13 +164,6 @@ describe('GET /sie-data: archives each file and answers with its path', () => {
 
 describe('POST /import-sie: reads the file by path, only from the active company', () => {
   const OWN = intakePath('company-1')
-
-  it('401 without a signed-in user', async () => {
-    const { ctx } = buildCtx({ userId: null, files: { [OWN]: FY2026 } })
-    const { response } = postImport({ storagePath: OWN, mappings: MAPPINGS, options: OPTIONS }, ctx)
-    expect((await response).status).toBe(401)
-    expect(submitSIEJob).not.toHaveBeenCalled()
-  })
 
   it('400 for the old shape that posted the content itself', async () => {
     const { ctx, intake } = buildCtx()

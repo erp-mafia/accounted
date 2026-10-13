@@ -5,12 +5,13 @@
  * already-posted verifikat, allocate one payment across N invoices, and
  * book many rows as one samlingsverifikat.
  *
- * All v1 only. The last three already have hand-written staged MCP tools
- * (gnubok_link_transaction_to_journal_entry, gnubok_match_batch_allocate,
- * gnubok_bulk_book_transactions) with their own commit executors; a binding
- * here would duplicate them. The rules live in the services the dashboard
- * routes call: lib/transactions/manage.ts, lib/transactions/link-journal-
- * entry.ts, lib/transactions/match-batch.ts, lib/transactions/bulk-book.ts.
+ * The link, the allocation and the bulk booking are also the MCP tools
+ * gnubok_link_transaction_to_journal_entry, gnubok_match_batch_allocate and
+ * gnubok_bulk_book_transactions, which stage the same input and whose
+ * approval runs the same run(). The rules live in the services the
+ * dashboard routes call:
+ * lib/transactions/manage.ts, lib/transactions/link-journal-entry.ts,
+ * lib/transactions/match-batch.ts, lib/transactions/bulk-book.ts.
  */
 import { z } from 'zod'
 import {
@@ -22,8 +23,16 @@ import {
 } from '@/lib/api/schemas'
 import { deleteTransaction, refreshTransactionExchangeRate, updateTransaction } from '@/lib/transactions/manage'
 import { linkTransactionToJournalEntry } from '@/lib/transactions/link-journal-entry'
-import { matchTransactionBatch } from '@/lib/transactions/match-batch'
+import { matchTransactionBatch, type MatchBatchInput } from '@/lib/transactions/match-batch'
 import { bulkBookTransactions } from '@/lib/transactions/bulk-book'
+import { hasScope, type ApiKeyScope } from '@/lib/auth/api-keys'
+import { codedRefusal } from '@/lib/errors/refusal'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import {
+  describeExplainingSet,
+  DUPLICATE_CHECK_FAILED_NOTE,
+  type AlreadyExplainedDetails,
+} from '@/lib/invoices/already-explained-guard'
 import { defineOperation } from './types'
 
 const META = { request_id: 'req_…', api_version: '2026-05-12' }
@@ -297,11 +306,70 @@ export const transactionsLinkJournalEntry = defineOperation({
     'LINK_TX_INVOICE_CURRENCY_MISMATCH',
     'LINK_TX_INVOICE_RACE',
     'MATCH_INVOICE_RECORD_PAYMENT_FAILED',
+    'BANK_BOOKING_CURRENCY_MISMATCH',
   ],
   http: {
     method: 'POST',
     path: '/api/v1/companies/:companyId/transactions/:id/link-journal-entry',
     pathParams: { id: 'transaction_id' },
+  },
+  mcp: {
+    name: 'gnubok_link_transaction_to_journal_entry',
+    title: 'Link Transaction to Verifikat',
+    // Search-only: the account-keyed gnubok_reconcile_match covers the same
+    // link (one pair) for bank AND skattekonto and is the listed tool.
+    visibility: 'search',
+    keywords: ['koppla transaktion', 'verifikat'],
+    description:
+      'Stage linking 1 bank tx to an already-posted verifikat (no new bokföring), for an affärshändelse the user booked by hand. Pass invoice_id to also settle a kundfaktura in the same currency.',
+    stage: {
+      pendingType: 'link_transaction_journal_entry',
+      title: (input, preview) => {
+        const tx = (preview?.transaction_description as string | null) || String(input.transaction_id).slice(0, 8)
+        const link = `Länka ${tx} → verifikat ${String(preview?.voucher_label ?? '')}`
+        if (!input.invoice_id) return link
+        return `${link} + faktura ${(preview?.invoice_number as string | null) ?? String(input.invoice_id).slice(0, 8)}`
+      },
+      // Staged before the operation existed with invoice_id: null when none.
+      upgradeParams: (params) => {
+        if (params.invoice_id !== null) return params
+        const { invoice_id: _none, ...rest } = params
+        return rest
+      },
+      // The approval card's rows; the verifikat's own text stays out (it can
+      // carry counterparty free text, and the label identifies it).
+      preview: (_input, p) => ({
+        transaction_description: p.transaction_description,
+        transaction_amount: p.transaction_amount,
+        transaction_currency: p.transaction_currency,
+        transaction_date: p.transaction_date,
+        voucher_label: p.voucher_label,
+        voucher_date: p.voucher_date,
+        invoice_id: p.invoice_id,
+        invoice_number: p.invoice_number,
+        invoice_remaining_after: p.remaining_amount,
+        will_be_fully_paid: p.invoice_status == null ? null : p.invoice_status === 'paid',
+      }),
+      extras: (input, p) => {
+        const txDate = String(p.transaction_date ?? '')
+        const jeDate = String(p.voucher_date ?? '')
+        return {
+          next: input.invoice_id
+            ? {
+                description:
+                  'After approval the tx attaches to the existing verifikat and the invoice flips to paid/partially_paid. No new bokföring. Verify with gnubok_get_ar_ledger.',
+                tool: 'gnubok_get_ar_ledger',
+              }
+            : {
+                description: 'After approval the tx attaches to the existing verifikat. No new bokföring. Verify with gnubok_query_journal.',
+                tool: 'gnubok_query_journal',
+              },
+          // The later of the two dates: a row in an open period linked to a
+          // verifikat in a locked one must report the locked one.
+          periodDate: jeDate > txDate ? jeDate : txDate,
+        }
+      },
+    },
   },
   run: async (ctx, { transaction_id, journal_entry_id, invoice_id }, { dryRun }) => {
     const outcome = await linkTransactionToJournalEntry(
@@ -327,7 +395,22 @@ export const transactionsLinkJournalEntry = defineOperation({
       paid_amount: r.paidAmount,
       remaining_amount: r.remainingAmount,
     }
-    if (outcome.dryRun) return { ok: true, dryRun: true, preview: data }
+    if (outcome.dryRun) {
+      const subject = outcome.subject
+      return {
+        ok: true,
+        dryRun: true,
+        preview: {
+          ...data,
+          transaction_description: subject.transactionDescription,
+          transaction_amount: subject.transactionAmount,
+          transaction_currency: subject.transactionCurrency,
+          transaction_date: subject.transactionDate,
+          voucher_date: subject.voucherDate,
+          invoice_number: subject.invoiceNumber,
+        },
+      }
+    }
     return { ok: true, data }
   },
 })
@@ -351,7 +434,7 @@ export const transactionsMatchBatch = defineOperation({
   id: 'transactions.match-batch',
   kind: 'write',
   scope: 'transactions:write',
-  risk: 'medium',
+  risk: 'high',
   reversible: false,
   docs: {
     summary: 'Book one bank payment against several customer invoices, or several supplier invoices, in one verifikat.',
@@ -418,12 +501,139 @@ export const transactionsMatchBatch = defineOperation({
     path: '/api/v1/companies/:companyId/transactions/:id/match-batch',
     pathParams: { id: 'transaction_id' },
   },
+  mcp: {
+    name: 'gnubok_match_batch_allocate',
+    title: 'Batch-Allocate Payment',
+    visibility: 'default',
+    keywords: ['klumpbetalning', 'fördela betalning', 'matcha betalningar'],
+    description:
+      'Stage booking 1 bank tx against N customer OR N supplier invoices in one verifikat (samlingsbetalning, BFL 5 kap 6§). Amounts in the tx currency (cross-currency: the SEK the bank credited). preview.expected_lines = the rows approval posts.',
+    stage: {
+      pendingType: 'match_batch_allocate',
+      title: (input, preview) => {
+        const allocations = (input.allocations as unknown[]) ?? []
+        // Swedish plurals: kundfaktura → kundfakturor, leverantörsfaktura → leverantörsfakturor.
+        const noun = preview?.allocations_kind === 'supplier_invoice' ? 'leverantörsfaktura' : 'kundfaktura'
+        const summary = `${allocations.length} ${allocations.length === 1 ? noun : `${noun.slice(0, -1)}or`}`
+        return `Fördela: ${(preview?.transaction_description as string | null) || String(input.transaction_id)} → ${summary}`
+      },
+      // GDPR Art.25: the row's text identifies it for the approver; the
+      // invoice ids stay in params (the audit trail), and the lines carry
+      // neutral descriptions ("Kundfaktura 1 av 3").
+      preview: (input, p) => ({
+        transaction_description: p.transaction_description || input.transaction_id,
+        transaction_amount: p.transaction_amount,
+        transaction_currency: p.transaction_currency,
+        transaction_date: p.transaction_date,
+        allocations_count: p.allocations_count,
+        allocations_kind: p.allocations_kind,
+        total_allocated: p.total_allocated,
+        expected_entry_date: p.expected_entry_date,
+        expected_description: p.expected_description,
+        expected_lines: p.expected_lines,
+        expected_lines_balanced: p.expected_lines_balanced,
+        expected_fx: p.expected_fx,
+      }),
+      extras: (_input, p) => ({
+        next: {
+          description:
+            'After approval the combined verifikat is created exactly as preview.expected_lines and each invoice is advanced. Verify with gnubok_get_ar_ledger (customer) or gnubok_get_supplier_ledger.',
+          tool: p.allocations_kind === 'supplier_invoice' ? 'gnubok_get_supplier_ledger' : 'gnubok_get_ar_ledger',
+        },
+        periodDate: p.transaction_date as string | undefined,
+        // Never silent: an honoured override names the vouchers it books
+        // over, and a check that could not run says so.
+        ...(p.already_explained_by
+          ? { complianceNote: `Bokförs trots att ${String(p.already_explained_by)} redan förklarar raden (force=true).` }
+          : p.duplicate_check_failed
+            ? { complianceNote: DUPLICATE_CHECK_FAILED_NOTE }
+            : {}),
+      }),
+      refusal: (failure, _input, keyScopes) => {
+        if (failure.code === 'BATCH_TX_POSSIBLE_DUPLICATE' && failure.details) {
+          return alreadyExplainedRefusal(failure.details as unknown as AlreadyExplainedRefusalDetails, keyScopes)
+        }
+        if (failure.code === 'BATCH_CASH_METHOD_UNBOOKED_INVOICE') {
+          const unbooked = (failure.details?.invoices as Array<{ id: string; invoice_number?: string | null }> | undefined) ?? []
+          const numbers = unbooked.map((u) => u.invoice_number ?? u.id).join(', ')
+          return codedRefusal(
+            failure.code,
+            `${getErrorEntry(failure.code)?.message_sv ?? failure.code}` +
+              ` Obokförda fakturor: ${numbers}. En faktura som ensam motsvarar beloppet: gnubok_match_transaction_to_invoice.` +
+              ' Flera fakturor: markera varje faktura som betald (kundfakturor: gnubok_mark_invoice_as_paid), sedan gnubok_reconcile_match för att koppla transaktionen till verifikaten.',
+          )
+        }
+        return undefined
+      },
+    },
+  },
   run: (ctx, { transaction_id, ...body }, { dryRun }) =>
-    matchTransactionBatch(ctx, transaction_id, body as Parameters<typeof matchTransactionBatch>[2], {
+    matchTransactionBatch(ctx, transaction_id, body as MatchBatchInput, {
       dryRun,
       via: 'api_force',
     }),
 })
+
+type AlreadyExplainedRefusalDetails = AlreadyExplainedDetails & {
+  transaction_id: string
+  cash_account_id: string | null
+}
+
+/**
+ * The already-explained refusal for gnubok_match_batch_allocate, coded
+ * BATCH_TX_POSSIBLE_DUPLICATE (the code every door answers). The MCP error
+ * envelope carries no `details`, so the vouchers, the link call that
+ * resolves the row and the exact force binding are all in the message: that
+ * is what the agent reads. One voucher is also linkable through
+ * gnubok_link_transaction_to_journal_entry (which can settle a kundfaktura
+ * at the same time); several need the bank 1:N pair on gnubok_reconcile_match.
+ *
+ * `keyScopes` is the calling key's grant (undefined outside the dispatcher).
+ * Without reconciliation:write, gnubok_reconcile_match is not callable, so
+ * the refusal says so and points where the key can go: one voucher through
+ * gnubok_link_transaction_to_journal_entry (transactions:write, which this
+ * tool already needs), several through a person on the Avstämning page or a
+ * reconnected connector. Keys minted before the reconciliation scopes existed
+ * (#1833) never gain them (feedback seqs 817176, 817189).
+ */
+function alreadyExplainedRefusal(details: AlreadyExplainedRefusalDetails, keyScopes?: readonly ApiKeyScope[]): Error {
+  const set = details
+  const transactionId = details.transaction_id
+  const ids = set.vouchers.map((v) => v.journal_entry_id)
+  const accountKey = `bank:${details.cash_account_id ?? '<cash_account_id>'}`
+  const canReconcile = !keyScopes || hasScope([...keyScopes], 'reconciliation:write')
+  const linkOne = `gnubok_link_transaction_to_journal_entry (transaction_id="${transactionId}", journal_entry_id="${ids[0]}", invoice_id om en kundfaktura ska markeras betald samtidigt)`
+  const missingScope =
+    'den här API-nyckeln saknar behörigheten reconciliation:write, så gnubok_reconcile_match går inte att anropa med den'
+  const link = !canReconcile
+    ? ids.length === 1
+      ? `${linkOne}. Obs: ${missingScope}; användaren kan också koppla raden på sidan Avstämning i Accounted, eller koppla om connectorn så att den nya nyckeln får behörigheten`
+      : `användaren kopplar den på sidan Avstämning i Accounted, eller kopplar om connectorn så att den nya nyckeln får behörigheten (${missingScope})`
+    : ids.length === 1
+      ? `${linkOne} eller gnubok_reconcile_match (account_key "${accountKey}", pairs [{ external_ids: ["${transactionId}"], journal_entry_ids: ["${ids[0]}"] }])`
+      : `gnubok_reconcile_match (account_key "${accountKey}", pairs [{ external_ids: ["${transactionId}"], journal_entry_ids: ${JSON.stringify(ids)}, allocations: [{ journal_entry_id, amount }] per verifikat, summan = radens belopp })`
+  const message = details.force_rejected
+    ? `force=true avvisad: expected_journal_entry_ids är inte exakt de verifikat som förklarar raden just nu (${describeExplainingSet(set)}). ` +
+      `Koppla raden till dem i stället: ${link}. Om raden verkligen är en separat affärshändelse: anropa igen med force=true och expected_journal_entry_ids=${JSON.stringify(ids)}.`
+    : `Transaktionen ser redan ut att vara bokförd som ${describeExplainingSet(set)}: bokförda verifikat utan bankkoppling på kontot summerar exakt till beloppet. ` +
+      `Bokför inte igen; koppla raden till dem: ${link}. Endast om raden verkligen är en separat affärshändelse: anropa igen med force=true och expected_journal_entry_ids=${JSON.stringify(ids)}.`
+  // The registry hint names gnubok_reconcile_match; a key that cannot call it
+  // gets one it can act on.
+  const remediation = canReconcile
+    ? undefined
+    : ids.length === 1
+      ? {
+          description:
+            'This key lacks the reconciliation:write scope, so gnubok_reconcile_match is not callable. Link the row to the one voucher with gnubok_link_transaction_to_journal_entry (reach it through gnubok_stage_tool when it is not in tools/list). Do not book the row again.',
+          tool: 'gnubok_link_transaction_to_journal_entry',
+          args: { transaction_id: transactionId, journal_entry_id: ids[0] },
+        }
+      : {
+          description:
+            'This key lacks the reconciliation:write scope, and one bank row against several vouchers links only through gnubok_reconcile_match. Ask the user to link the row to the listed vouchers on the Avstämning page in Accounted, or to reconnect the connector so its new key carries reconciliation:write. Do not book the row again.',
+        }
+  return codedRefusal('BATCH_TX_POSSIBLE_DUPLICATE', message, remediation)
+}
 
 // ---------------------------------------------------------------------------
 // transactions.bulk-book
@@ -487,6 +697,7 @@ export const transactionsBulkBook = defineOperation({
     'BULK_BOOK_INVALID_ACCOUNT',
     'BULK_BOOK_TEMPLATE_NOT_FOUND',
     'BULK_BOOK_TX_ALREADY_BOOKED',
+    'BULK_BOOK_TX_ZERO_AMOUNT',
     'BULK_BOOK_DATE_MISMATCH',
     'BULK_BOOK_DIRECTION_MISMATCH',
     'BULK_BOOK_VOUCHER_NOT_FOUND',
@@ -497,6 +708,152 @@ export const transactionsBulkBook = defineOperation({
     'BULK_BOOK_RPC_FAILED',
   ],
   http: { method: 'POST', path: '/api/v1/companies/:companyId/transactions/bulk-book' },
+  mcp: {
+    name: 'gnubok_bulk_book_transactions',
+    title: 'Bulk-Book Transactions',
+    visibility: 'default',
+    keywords: ['bokför', 'kontera', 'massbokföring', 'banktransaktioner'],
+    description:
+      'Stage booking N SEK bank txs of one date and direction as 1 samlingsverifikat (BFL 5 kap 6§): link to a posted verifikat, expand a template, or post manual_lines. Dimensions: code or name.',
+    stage: {
+      pendingType: 'bulk_book_transactions',
+      // The queue title is what a reviewer approves from (often on a phone):
+      // amount, direction, date and the first row's counterparty
+      // (feedback seq 261545); preview_data stays aggregate-only.
+      title: (input, p) => {
+        const count = (input.tx_ids as unknown[]).length
+        const sum = Number(p?.tx_sum ?? 0)
+        const amount =
+          `${p?.direction === 'income' ? '+' : '-'}` +
+          `${Math.abs(sum).toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ` +
+          `${String(p?.currency ?? 'SEK')}`
+        const lead = String(p?.lead_description ?? '')
+        const rest = count > 1 ? ` (+${count - 1} till)` : ''
+        return input.existing_journal_entry_id
+          ? `Länka ${count} transaktioner ${amount} ${String(p?.tx_date ?? '')} till verifikat: ${lead}${rest}`
+          : `Samlingsverifikation ${amount} ${String(p?.tx_date ?? '')}: ${lead}${rest}`
+      },
+      // Staged before the operation existed: new_entry {description, lines}
+      // for a new verifikat and allow_duplicate for the reviewed override.
+      upgradeParams: (params) => {
+        if (!('new_entry' in params) && !('allow_duplicate' in params)) return params
+        const { new_entry, allow_duplicate, existing_journal_entry_id, ...rest } = params as {
+          new_entry?: { description?: string; lines?: unknown[] } | null
+          allow_duplicate?: boolean
+          existing_journal_entry_id?: string | null
+        } & Record<string, unknown>
+        return {
+          ...rest,
+          ...(existing_journal_entry_id ? { existing_journal_entry_id } : {}),
+          ...(new_entry ? { entry_description: new_entry.description, manual_lines: new_entry.lines } : {}),
+          ...(allow_duplicate === true ? { force: true } : {}),
+        }
+      },
+      // What the approver saw is what posts: manual lines staged with the
+      // dimension codes the names resolved to and the account rules applied,
+      // a template's default bag with the resolved codes.
+      pinParams: (input, p) => {
+        const lines = p.lines as Array<Record<string, unknown>> | undefined
+        if (input.manual_lines && lines) {
+          const { default_dimensions: _merged, ...rest } = input
+          return {
+            ...rest,
+            manual_lines: lines.map((l) => ({
+              account_number: l.account_number,
+              debit_amount: l.debit_amount,
+              credit_amount: l.credit_amount,
+              currency: l.currency,
+              ...(l.line_description ? { line_description: l.line_description } : {}),
+              ...(l.dimensions && Object.keys(l.dimensions as object).length > 0 ? { dimensions: l.dimensions } : {}),
+            })),
+          }
+        }
+        const defaults = input.default_dimensions as Record<string, string> | undefined
+        const firstBag = lines?.[0]?.dimensions as Record<string, string> | undefined
+        if (defaults && firstBag) {
+          const pinned = Object.fromEntries(Object.keys(defaults).map((k) => [k, firstBag[k] ?? defaults[k]!]))
+          return { ...input, default_dimensions: pinned }
+        }
+        return input
+      },
+      // The approval card's rows (BulkBookPreview): aggregates and the
+      // kontering, named; no per-row texts or counterparty ids.
+      preview: (_input, p) => ({
+        tx_count: p.tx_count,
+        tx_date: p.tx_date,
+        tx_sum: p.tx_sum,
+        currency: p.currency,
+        direction: p.direction,
+        mode: p.mode,
+        ...(Array.isArray(p.lines)
+          ? {
+              entry_description: p.entry_description ?? null,
+              lines: (p.lines as Array<Record<string, unknown>>).map((l) => ({
+                account_number: l.account_number,
+                account_name: l.account_name ?? null,
+                debit_amount: l.debit_amount,
+                credit_amount: l.credit_amount,
+                line_description: l.line_description ?? null,
+              })),
+            }
+          : {}),
+        ...(p.dimension_resolutions ? { dimension_resolutions: p.dimension_resolutions } : {}),
+      }),
+      extras: (_input, p) => {
+        const txDate = String(p.tx_date ?? '')
+        const jeDate = String(p.existing_entry_date ?? '')
+        return {
+          next: {
+            description:
+              'After approval the verifikat carries the combined business event. Verify with gnubok_query_journal or gnubok_get_reconciliation_status.',
+            tool: 'gnubok_query_journal',
+          },
+          // The later of the two dates: rows in an open period linked to a
+          // verifikat in a locked one must report the locked one.
+          periodDate: jeDate > txDate ? jeDate : txDate,
+        }
+      },
+      // The legal limits read as legal limits, with the split that works: a
+      // reader who takes them for technical ones proposes a monthly
+      // samlingsverifikat next (feedback seq 378710 / 382660).
+      refusal: (failure) => {
+        switch (failure.code) {
+          case 'BULK_BOOK_DATE_MISMATCH':
+            return codedRefusal(
+              failure.code,
+              'All transactions must share the same date: BFL 5 kap 6 § tredje stycket allows a gemensam verifikation only for likartade affärshändelser on the same day, ' +
+                'so a monthly samlingsverifikat is not a legal option. Group the tx_ids by date and call gnubok_bulk_book_transactions once per date.',
+            )
+          case 'BULK_BOOK_DIRECTION_MISMATCH':
+            return codedRefusal(
+              failure.code,
+              'All transactions must share the same direction (all income or all expense): BFL 5 kap 6 § tredje stycket allows a gemensam verifikation only for likartade affärshändelser, ' +
+                'and an inflow and an outflow are not alike. Call gnubok_bulk_book_transactions once for the income rows and once for the expense rows.',
+            )
+          case 'BULK_BOOK_MIXED_CURRENCY':
+            return codedRefusal(
+              failure.code,
+              'All transactions must share the same currency. For cross-currency allocations, use gnubok_match_batch_allocate (which handles the FX diff on 7960/3960).',
+            )
+          case 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE': {
+            const details = failure.details as
+              | { transaction_id?: string; candidate?: { voucher_label?: string; entry_date?: string; amount_verified?: boolean } }
+              | undefined
+            const dup = details?.candidate
+            if (!dup) return undefined
+            return codedRefusal(
+              failure.code,
+              `Possible double booking: transaction ${details?.transaction_id} looks already booked by verifikat ${dup.voucher_label} (${dup.entry_date})` +
+                `${dup.amount_verified ? '' : ', though the amounts could not be compared in SEK'}. ` +
+                'Link the transaction to that verifikat instead. Call again with force=true only after the user confirms it is a genuinely separate business event.',
+            )
+          }
+          default:
+            return undefined
+        }
+      },
+    },
+  },
   run: (ctx, input, { dryRun }) =>
-    bulkBookTransactions(ctx, input as Parameters<typeof bulkBookTransactions>[1], { dryRun, via: 'api_force' }),
+    bulkBookTransactions(ctx, input, { dryRun, via: 'api_force' }),
 })

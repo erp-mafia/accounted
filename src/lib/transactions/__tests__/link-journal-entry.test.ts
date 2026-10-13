@@ -12,7 +12,7 @@
  * the pending-op commit test.
  */
 import { describe, it, expect } from 'vitest'
-import { createQueuedMockSupabase } from '@/tests/helpers'
+import { createQueuedMockSupabase, enqueueBankLinkLeg } from '@/tests/helpers'
 import { hasLiveJournalEntryLink, linkTransactionToJournalEntry } from '../link-journal-entry'
 
 describe('hasLiveJournalEntryLink', () => {
@@ -71,6 +71,7 @@ describe('linkTransactionToJournalEntry: junction-row guard (#1553)', () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: base, error: null })
     enqueue({ data: { id: 'je-1', status: 'posted', voucher_series: 'A', voucher_number: 1 }, error: null })
+    enqueueBankLinkLeg(enqueue)
     enqueue({ data: null, error: { code, message: 'bank link rejected' } })
     expect(await linkTransactionToJournalEntry(supabase as never, 'user-1', 'company-1', {
       transactionId: 'tx-1', journalEntryId: 'je-1',
@@ -84,6 +85,7 @@ describe('linkTransactionToJournalEntry: junction-row guard (#1553)', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: base, error: null })
     enqueue({ data: { id: 'je-1', status: 'posted', voucher_series: 'A', voucher_number: 1 }, error: null })
+    enqueueBankLinkLeg(enqueue)
     enqueue({ data: null, error: { code: 'PT409', message: 'BANK_ANCHOR_SETTLEMENT_CHANGED' } })
     expect(await linkTransactionToJournalEntry(supabase as never, 'user-1', 'company-1', {
       transactionId: 'tx-1', journalEntryId: 'je-1',

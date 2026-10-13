@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
@@ -14,8 +14,8 @@ import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { Plus, UserCircle } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { cn, formatCurrency } from '@/lib/utils'
+import { useEmployees } from '@/lib/reference-data/hooks'
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
-import type { EmployeeMasked } from '@/types'
 
 const NewEmployeeDialog = dynamic(
   () => import('@/components/salary/NewEmployeeDialog'),
@@ -35,8 +35,12 @@ const EMPLOYMENT_LABEL_KEYS: Record<string, string> = {
  */
 export default function EmployeesPage() {
   const t = useTranslations('employees')
-  const [employees, setEmployees] = useState<EmployeeMasked[]>([])
-  const [loading, setLoading] = useState(true)
+  // The whole register, inactive rows included, filtered here: the page has
+  // to know that inactive employees exist to offer the way back to them.
+  // Before, "Inaktivera" made the person vanish with nothing on the page
+  // saying where they went (crm#1133). The session cache (lib/reference-data)
+  // refetches after a create, edit or deactivation anywhere.
+  const { employees, isLoading: loading } = useEmployees({ includeInactive: true })
   const { canWrite } = useCanWrite()
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -47,25 +51,6 @@ export default function EmployeesPage() {
   const showNewEmployee = searchParams.has('new')
   const closeNewEmployee = () => router.replace('/salary/employees', { scroll: false })
   const openNewEmployee = () => router.push('/salary/employees?new=1', { scroll: false })
-
-  // Bumped after a create in the dialog so the effect refetches the list.
-  const [refreshKey, setRefreshKey] = useState(0)
-
-  // The whole register is loaded, inactive rows included, and filtered here:
-  // the page has to know that inactive employees exist to offer the way back
-  // to them. Before, "Inaktivera" made the person vanish with nothing on the
-  // page saying where they went (crm#1133).
-  useEffect(() => {
-    async function load() {
-      const res = await fetch('/api/salary/employees?active=false')
-      if (res.ok) {
-        const { data } = await res.json()
-        setEmployees(data || [])
-      }
-      setLoading(false)
-    }
-    load()
-  }, [refreshKey])
 
   const inactiveCount = employees.filter((emp) => !emp.is_active).length
   // null = not chosen yet. Until the user flips the switch, inactive rows show
@@ -196,10 +181,7 @@ export default function EmployeesPage() {
           onOpenChange={(open) => {
             if (!open) closeNewEmployee()
           }}
-          onCreated={() => {
-            closeNewEmployee()
-            setRefreshKey((k) => k + 1)
-          }}
+          onCreated={closeNewEmployee}
         />
       )}
     </div>

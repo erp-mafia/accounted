@@ -18,8 +18,8 @@ import { validateBody } from '@/lib/api/validate'
 import { hasErrorEntry } from '@/lib/errors/structured-errors'
 import { dbError } from '@/lib/errors/db-error'
 import { matchSupplierId } from '@/lib/suppliers/match-supplier'
-import { extractInvoiceFields, fetchOwnCompanyIdentity } from './lib/extract-invoice-fields'
-import { mirrorExtractionToDocument } from './lib/mirror-extraction'
+import { fetchOwnCompanyIdentity } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
+import { extractAndMirror } from '@/lib/documents/inbox-extraction/extract-and-mirror'
 import {
   uploadAndExtract,
   processArchivedDocument,
@@ -61,18 +61,6 @@ import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
 import { CreateSupplierInvoiceSchema, BookInboxItemDirectlySchema, BulkBookInboxSchema } from '@/lib/api/schemas'
 import { bulkBookMatchedInboxItems } from '@/lib/transactions/categorize-core'
-import {
-  resolveBookedJournalEntryIds,
-  resolveUnderlagAnchoring,
-  type UnderlagAnchoring,
-} from '@/lib/transactions/inbox-underlag'
-
-/**
- * Per-item underlag status on the wire (#1548): the anchoring verdict, or
- * 'unknown' when the document row could not be read. Absence is never
- * reported as anchored; the UI keeps 'unknown' out of the booked bucket.
- */
-type UnderlagStatus = UnderlagAnchoring | 'unknown'
 import { hasCapability, capabilityBlockedResponse } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { evaluateMappingRules } from '@/lib/bookkeeping/mapping-engine'
@@ -90,6 +78,7 @@ import { matchInboxItemTransaction } from '@/lib/documents/inbox-match'
 import type { OperationContext } from '@/lib/operations/types'
 import {
   deleteInboxItem,
+  resolveInboxBookedState,
   unmatchInboxItemTransaction,
   updateInboxItemFields,
   UpdateInboxItemFieldsSchema,
@@ -280,9 +269,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'POST',
       path: '/upload',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         // Per-company rate limit (30/min, 500/day). Defense against script
         // floods and compromised sessions; never hit by real users in normal
         // monthly receipt-clearing.
@@ -376,9 +363,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'POST',
       path: '/upload/create',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const limit = await checkInboxUploadRateLimit(ctx.supabase, ctx.companyId)
         if (!limit.ok) {
           return NextResponse.json(
@@ -449,9 +434,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'POST',
       path: '/upload/complete',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const parsed = await validateBody(request, CompleteSignedUploadSchema)
         if (!parsed.success) return parsed.response
         const { upload_id: uploadId, file_name: fileName, mime_type: mimeType } = parsed.data
@@ -514,9 +497,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'GET',
       path: '/items',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const status = url.searchParams.get('status')
         // The inbox is a workqueue and booked items drop out of the view
@@ -558,13 +539,9 @@ export const invoiceInboxExtension: Extension = {
           return NextResponse.json({ error: (error as { message?: string }).message ?? String(error) }, { status: 500 })
         }
 
-        // Enrich matched-but-unstamped items with the verifikat that anchors
-        // their transaction, when it is already booked. The stamp
-        // (created_journal_entry_id) is UNIQUE per verifikat, so on a
-        // samlingsverifikat only one of N items can carry it: deriving
-        // "booked" from the transaction's own state is what lets the rest
-        // leave the active inbox (2026-08-12 report: booked items stuck in
-        // "Att göra" pointing at a transaction no longer in the work list).
+        // Matched-but-unstamped items carry the verifikat that books their
+        // transaction, and whether this item's underlag reached it: the same
+        // enrichment as v1 (resolveInboxBookedState in inbox-item-actions).
         type ItemRow = {
           id: string
           document_id: string | null
@@ -575,54 +552,12 @@ export const invoiceInboxExtension: Extension = {
           extraction_skipped: boolean | null
         }
         const rows = (data ?? []) as ItemRow[]
-        const unresolved = rows.filter(
-          (r) =>
-            r.matched_transaction_id &&
-            !r.created_journal_entry_id &&
-            !r.created_supplier_invoice_id,
-        )
-        const unresolvedTxIds = Array.from(
-          new Set(unresolved.map((r) => r.matched_transaction_id as string)),
-        )
-        const bookedByTx = await resolveBookedJournalEntryIds(
-          ctx.supabase,
-          ctx.companyId,
-          unresolvedTxIds,
-        )
-        // Per-item honesty (#1548): the transaction being booked says a
-        // verifikat exists, not that THIS item's underlag reached it. A
-        // document whose link failed, or that is anchored to another
-        // verifikat, must keep the item in "Att göra" instead of reading as
-        // booked on the transaction's word alone.
-        const anchoring = await resolveUnderlagAnchoring(
-          ctx.supabase,
-          ctx.companyId,
-          unresolved
-            .filter((r) => bookedByTx.has(r.matched_transaction_id as string))
-            .map((r) => ({
-              id: r.id,
-              document_id: r.document_id,
-              journalEntryId: bookedByTx.get(r.matched_transaction_id as string) as string,
-            })),
-        )
-        const items = rows.map((r) => {
-          const derivedEntryId = r.matched_transaction_id
-            ? bookedByTx.get(r.matched_transaction_id) ?? null
-            : null
-          // Absent from the anchoring map means the document row could not
-          // be read: 'unknown', which the UI treats like a divergent item
-          // (stays in Att göra, no booking bridge). Never booked on a guess.
-          // Only unstamped items were sent to the anchoring read; a stamped
-          // sibling is booked by its own column and gets no verdict here.
-          const unstamped = !r.created_journal_entry_id && !r.created_supplier_invoice_id
-          const underlagStatus: UnderlagStatus | null =
-            derivedEntryId && unstamped ? anchoring.get(r.id)?.status ?? 'unknown' : null
-          return {
-            ...r,
-            matched_transaction_journal_entry_id: derivedEntryId,
-            underlag_status: underlagStatus,
-          }
-        })
+        const bookedState = await resolveInboxBookedState(ctx.supabase, ctx.companyId, rows)
+        const items = rows.map((r) => ({
+          ...r,
+          matched_transaction_journal_entry_id: bookedState.get(r.id)?.journalEntryId ?? null,
+          underlag_status: bookedState.get(r.id)?.underlag ?? null,
+        }))
 
         // A receipt dropped into Dokument is routed here the moment the
         // classifier types it, before its reading has landed: the item was
@@ -663,9 +598,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'GET',
       path: '/items/:id/credit-target',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const id = url.searchParams.get('_id')
         if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
@@ -702,9 +635,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'GET',
       path: '/items/:id',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const id = url.searchParams.get('_id')
         if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
@@ -730,28 +661,9 @@ export const invoiceInboxExtension: Extension = {
           extracted_data: Record<string, unknown> | null
           extraction_skipped: boolean | null
         }
-        let matchedTransactionJournalEntryId: string | null = null
-        let underlagStatus: UnderlagStatus | null = null
-        if (
-          row.matched_transaction_id &&
-          !row.created_journal_entry_id &&
-          !row.created_supplier_invoice_id
-        ) {
-          const bookedByTx = await resolveBookedJournalEntryIds(ctx.supabase, ctx.companyId, [
-            row.matched_transaction_id,
-          ])
-          matchedTransactionJournalEntryId = bookedByTx.get(row.matched_transaction_id) ?? null
-          if (matchedTransactionJournalEntryId) {
-            const anchoring = await resolveUnderlagAnchoring(ctx.supabase, ctx.companyId, [
-              {
-                id: row.id,
-                document_id: row.document_id,
-                journalEntryId: matchedTransactionJournalEntryId,
-              },
-            ])
-            underlagStatus = anchoring.get(row.id)?.status ?? 'unknown'
-          }
-        }
+        const bookedState = (await resolveInboxBookedState(ctx.supabase, ctx.companyId, [row])).get(row.id)
+        const matchedTransactionJournalEntryId = bookedState?.journalEntryId ?? null
+        const underlagStatus = bookedState?.underlag ?? null
 
         // Same stand-in as the list: the document's reading when the item has none.
         if (row.extracted_data == null && row.document_id) {
@@ -780,9 +692,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'PATCH',
       path: '/items/:id/fields',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const id = url.searchParams.get('_id')
         if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
@@ -813,9 +723,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'POST',
       path: '/items/:id/match-transaction',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const id = url.searchParams.get('_id')
         if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
@@ -843,9 +751,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'POST',
       path: '/items/:id/unmatch-transaction',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const id = url.searchParams.get('_id')
         if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
@@ -861,9 +767,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'POST',
       path: '/items/:id/retry-extraction',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         // Retry runs pdfjs extraction synchronously and is CPU-heavy; counts
         // against the same per-company quota as a fresh upload so an
         // attacker can't burn server CPU by repeatedly re-extracting one doc.
@@ -950,19 +854,13 @@ export const invoiceInboxExtension: Extension = {
 
         try {
           const buffer = Buffer.from(await blob.arrayBuffer())
-          const extraction = await extractInvoiceFields({
+          const extraction = await extractAndMirror(item.document_id, {
             buffer,
             mimeType: doc.mime_type,
             fileName: doc.file_name,
             ownCompany: await fetchOwnCompanyIdentity(ctx.supabase, ctx.companyId),
           })
           const { data: extracted } = extraction
-          await mirrorExtractionToDocument(item.document_id, {
-            data: extracted,
-            rawText: extraction.rawText,
-            model: extraction.model ?? null,
-            skipped: extraction.skipped ?? null,
-          })
 
           // Re-running the extraction has to re-run the match too, or the one
           // affordance the user reaches for when an item failed to auto-link
@@ -1046,9 +944,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'GET',
       path: '/inbox/address',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (_request: Request, ctx: ExtensionContext) => {
         const domain = process.env.RESEND_INBOUND_DOMAIN
         if (!domain) {
           return NextResponse.json({ error: 'RESEND_INBOUND_DOMAIN not configured' }, { status: 503 })
@@ -1080,9 +976,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'POST',
       path: '/inbox/rotate',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (_request: Request, ctx: ExtensionContext) => {
         const domain = process.env.RESEND_INBOUND_DOMAIN
         if (!domain) {
           return NextResponse.json({ error: 'RESEND_INBOUND_DOMAIN not configured' }, { status: 503 })
@@ -1882,9 +1776,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'GET',
       path: '/inbound-history',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const rawDays = url.searchParams.get('days')
         const days = rawDays === null ? INBOUND_HISTORY_DEFAULT_DAYS : Number(rawDays)
@@ -1948,9 +1840,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'DELETE',
       path: '/items/:id',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const id = url.searchParams.get('_id')
         if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
@@ -1968,9 +1858,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'POST',
       path: '/items/:id/convert',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const id = url.searchParams.get('_id')
         if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
@@ -2009,9 +1897,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'POST',
       path: '/items/:id/book-direct',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const id = url.searchParams.get('_id')
         if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
@@ -2277,9 +2163,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'POST',
       path: '/items/bulk-book',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         let body: z.infer<typeof BulkBookInboxSchema>
         try {
           const json = await request.json()
@@ -2327,9 +2211,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'POST',
       path: '/items/:id/suggest-booking',
-      handler: async (request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (request: Request, ctx: ExtensionContext) => {
         const url = new URL(request.url)
         const id = url.searchParams.get('_id')
         if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
@@ -2574,9 +2456,7 @@ export const invoiceInboxExtension: Extension = {
     {
       method: 'GET',
       path: '/purchases',
-      handler: async (_request: Request, ctx?: ExtensionContext) => {
-        if (!ctx) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
+      handler: async (_request: Request, ctx: ExtensionContext) => {
         try {
           const purchases = await fetchPurchasesWithoutUnderlag(ctx.supabase, ctx.companyId)
 

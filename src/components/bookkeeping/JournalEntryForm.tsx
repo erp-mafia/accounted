@@ -1471,8 +1471,6 @@ export default function JournalEntryForm({
         notes={notes || undefined}
         voucherSeries={voucherSeries}
         lines={bookedLines}
-        totalDebit={bookedTotalDebit}
-        totalCredit={bookedTotalCredit}
         attachmentCount={uploadedFiles.filter((f) => f.status === 'uploaded').length}
         showBalanceBadge
         hideDate={false}
@@ -2342,8 +2340,6 @@ export default function JournalEntryForm({
           notes={notes || undefined}
           voucherSeries={!embedded ? voucherSeries : undefined}
           lines={bookedLines}
-          totalDebit={bookedTotalDebit}
-          totalCredit={bookedTotalCredit}
           attachmentCount={uploadedFiles.filter((f) => f.status === 'uploaded').length}
           showBalanceBadge={!embedded}
           hideDate={!!embedded}

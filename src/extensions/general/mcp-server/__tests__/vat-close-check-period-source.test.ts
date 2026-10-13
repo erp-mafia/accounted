@@ -26,7 +26,7 @@ vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
   })),
 }))
 
-import { computeVatCloseCheck } from '../server'
+import { computeVatCloseCheck } from '@/lib/reports/vat-close-check'
 
 interface RecordedCall {
   table: string

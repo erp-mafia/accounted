@@ -8,6 +8,8 @@ import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import { truncateIp } from '@/lib/api/v1/with-api-v1'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
 import { encryptPersonnummer } from '@/lib/salary/personnummer'
+import { loadPayrollConfig } from '@/lib/salary/payroll-config'
+import { fetchTaxTableRates } from '@/lib/salary/tax-tables'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { markEntriesNoDocRequired } from '@/lib/bookkeeping/no-doc-required'
 import { recordInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
@@ -24,10 +26,13 @@ import {
   buildSandboxSalaryLineItems,
   buildSandboxSalaryRunEmployees,
   buildSandboxSalaryRuns,
+  calculateSandboxPayroll,
   mapSandboxEmployeeIds,
   resolveSandboxSalaryPeriods,
-  SANDBOX_RUN_TOTALS,
-  SANDBOX_TOTAL_VACATION_ACCRUAL_AVGIFTER,
+  SANDBOX_TAX_COLUMN,
+  SANDBOX_TAX_TABLE_NUMBER,
+  sandboxRunTotals,
+  sandboxVacationAccrualAvgifterTotal,
 } from './salary'
 import {
   buildSandboxSalaryVouchers,
@@ -972,19 +977,34 @@ export async function POST(request: Request) {
 
     // 20. Payroll. An enskild firma may employ staff (it just may not put its
     // own owner on payroll), so the demo runs two employees through one booked
-    // and one open lönekörning.
+    // and one open lönekörning. The figures are the salary engine's, from the
+    // year's payroll config and Skatteverket table a real run loads, so a year
+    // without official rates fails here like a real calculation would.
+    const bookedYear = resolveSandboxSalaryPeriods(today).booked.year
+    const payrollConfig = await loadPayrollConfig(supabase, bookedYear)
+    const { rates: taxRates } = await fetchTaxTableRates(
+      bookedYear,
+      SANDBOX_TAX_TABLE_NUMBER,
+      SANDBOX_TAX_COLUMN,
+    )
+    const sandboxEmployees = buildSandboxEmployees({
+      userId,
+      companyId,
+      today,
+      // employees.personnummer stores AES-256-GCM ciphertext; the builder
+      // stays pure by taking the cipher as an argument.
+      encrypt: encryptPersonnummer,
+    })
+    const payroll = calculateSandboxPayroll({
+      employees: sandboxEmployees,
+      today,
+      config: payrollConfig,
+      taxRates,
+    })
+
     const { data: employeeRows, error: employeesError } = await supabase
       .from('employees')
-      .insert(
-        buildSandboxEmployees({
-          userId,
-          companyId,
-          today,
-          // employees.personnummer stores AES-256-GCM ciphertext; the builder
-          // stays pure by taking the cipher as an argument.
-          encrypt: encryptPersonnummer,
-        }),
-      )
+      .insert(sandboxEmployees)
       .select('id, last_name')
 
     if (employeesError) throw employeesError
@@ -992,7 +1012,7 @@ export async function POST(request: Request) {
 
     const { data: salaryRunRows, error: salaryRunsError } = await supabase
       .from('salary_runs')
-      .insert(buildSandboxSalaryRuns({ userId, companyId, today }))
+      .insert(buildSandboxSalaryRuns({ userId, companyId, today, payroll }))
       .select('id, status')
 
     if (salaryRunsError) throw salaryRunsError
@@ -1013,6 +1033,7 @@ export async function POST(request: Request) {
           draftRunId: draftRun.id,
           annaEmployeeId,
           erikEmployeeId,
+          payroll,
         }),
       )
       .select('id, employee_id')
@@ -1027,6 +1048,7 @@ export async function POST(request: Request) {
           annaEmployeeId,
           erikEmployeeId,
           runEmployees: runEmployeeRows,
+          payroll,
         }),
       )
 
@@ -1037,6 +1059,7 @@ export async function POST(request: Request) {
     // these through the engine before advancing the status. The pure builder
     // supplies the same account structure and the engine performs the writes.
     const bookedPeriod = resolveSandboxSalaryPeriods(today).booked
+    const runTotals = sandboxRunTotals(payroll)
     const salaryVouchers = buildSandboxSalaryVouchers({
       userId,
       companyId,
@@ -1045,15 +1068,15 @@ export async function POST(request: Request) {
       paymentDate: bookedPeriod.paymentDate,
       periodYear: bookedPeriod.year,
       periodMonth: bookedPeriod.month,
-      totalGross: SANDBOX_RUN_TOTALS.total_gross,
-      totalTax: SANDBOX_RUN_TOTALS.total_tax,
-      totalNet: SANDBOX_RUN_TOTALS.total_net,
-      totalAvgifter: SANDBOX_RUN_TOTALS.total_avgifter,
-      totalVacationAccrual: SANDBOX_RUN_TOTALS.total_vacation_accrual,
+      totalGross: runTotals.total_gross,
+      totalTax: runTotals.total_tax,
+      totalNet: runTotals.total_net,
+      totalAvgifter: runTotals.total_avgifter,
+      totalVacationAccrual: runTotals.total_vacation_accrual,
       // salary_runs has no column for avgifter on the vacation accrual (it is
-      // a per-employee figure), so ./salary exports the sum of the same
-      // figures the salary_run_employees rows were written from.
-      totalVacationAvgifter: SANDBOX_TOTAL_VACATION_ACCRUAL_AVGIFTER,
+      // a per-employee figure), so ./salary sums the same results the
+      // salary_run_employees rows were written from.
+      totalVacationAvgifter: sandboxVacationAccrualAvgifterTotal(payroll),
     })
 
     const runEntryLinks: Record<string, string> = {}

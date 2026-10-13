@@ -720,4 +720,15 @@ describe('GET /api/extensions/enable-banking/sync/cron: incremental lookback', (
     expect(fromDate).toBe(isoDate(90 * DAY_MS))
     expect(options).toMatchObject({ strategy: 'longest' })
   })
+
+  it('starts an owed first import at the date saved with the account selection', async () => {
+    // The user picked the fiscal year's start; the inline import never ran.
+    state.active = [connection({ initial_sync_completed_at: null, initial_sync_requested_from: '2026-01-01', last_synced_at: null })]
+
+    await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
+
+    const [, , , , , fromDate, , , options] = mocks.syncAccountTransactions.mock.calls[0]
+    expect(fromDate).toBe('2026-01-01')
+    expect(options).toMatchObject({ strategy: 'longest' })
+  })
 })

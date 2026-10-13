@@ -43,9 +43,16 @@ interface VoucherLinesTableProps {
   accountNames?: Readonly<Record<string, string>>
   /** Amounts as kronor ("1 250 kr"), as confirm surfaces state them; the ledger form ("1 250,00") otherwise. */
   withCurrency?: boolean
+  /**
+   * Swedish heads in both locales, for the surfaces that stay Swedish
+   * (.claude/rules/i18n.md: the year-end wizard, the verifikat page).
+   */
+  swedish?: boolean
   'aria-label'?: string
   className?: string
 }
+
+const SWEDISH_HEADS = { account: 'Konto', description: 'Beskrivning', debit: 'Debet', credit: 'Kredit', total: 'Summa' } as const
 
 const amountOf = (value: number | string | null | undefined): number => Number(value) || 0
 
@@ -87,10 +94,14 @@ export function VoucherLinesTable({
   maxRows,
   accountNames,
   withCurrency = false,
+  swedish = false,
   'aria-label': ariaLabel,
   className,
 }: VoucherLinesTableProps) {
-  const t = useTranslations('voucher_lines')
+  const tVoucher = useTranslations('voucher_lines')
+  const head = (key: keyof typeof SWEDISH_HEADS) => (swedish ? SWEDISH_HEADS[key] : tVoucher(key))
+  const moreRows = (count: number) =>
+    swedish ? `+ ${count} ${count === 1 ? 'rad' : 'rader'} till` : tVoucher('more_rows', { count })
   const shown = maxRows != null ? lines.slice(0, maxRows) : lines
   const hidden = lines.length - shown.length
   const totals = voucherLinesTotals(lines)
@@ -100,10 +111,10 @@ export function VoucherLinesTable({
     <table className={cn('w-full border-collapse text-[12.5px]', className)} aria-label={ariaLabel}>
       <thead>
         <tr>
-          <th className={cn(VTH_CLASS, 'w-[180px]')}>{t('account')}</th>
-          <th className={VTH_CLASS}>{t('description')}</th>
-          <th className={cn(VTH_CLASS, 'text-right')}>{t('debit')}</th>
-          <th className={cn(VTH_CLASS, 'pr-0 text-right')}>{t('credit')}</th>
+          <th className={cn(VTH_CLASS, 'w-[180px]')}>{head('account')}</th>
+          <th className={VTH_CLASS}>{head('description')}</th>
+          <th className={cn(VTH_CLASS, 'text-right')}>{head('debit')}</th>
+          <th className={cn(VTH_CLASS, 'pr-0 text-right')}>{head('credit')}</th>
         </tr>
       </thead>
       <tbody>
@@ -148,13 +159,13 @@ export function VoucherLinesTable({
         {hidden > 0 && (
           <tr>
             <td colSpan={4} className={cn(VTD_CLASS, 'pr-0 text-center text-muted-foreground')}>
-              {t('more_rows', { count: hidden })}
+              {moreRows(hidden)}
             </td>
           </tr>
         )}
         {showTotals && (
           <tr>
-            <td colSpan={2} className="py-[7px] pr-4 font-medium">{t('total')}</td>
+            <td colSpan={2} className="py-[7px] pr-4 font-medium">{head('total')}</td>
             <td className="py-[7px] pr-4 text-right tabular-nums font-medium whitespace-nowrap">
               {money(totals.debit)}
             </td>

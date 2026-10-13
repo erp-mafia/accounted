@@ -990,6 +990,13 @@ const LINK_TX_JE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Transaktionen är redan kopplad till en verifikation.',
     message_en: 'Transaction is already linked to a journal entry.',
   },
+  // An ignored row can never carry a link (CHECK transactions_is_ignored_no_
+  // journal_entry); the reconciliation page refuses it by the same sentence.
+  LINK_TX_TX_IGNORED: {
+    httpStatus: 400,
+    message_sv: 'Transaktionen är ignorerad. Återställ den innan du kopplar.',
+    message_en: 'The transaction is ignored. Restore it before linking it.',
+  },
   LINK_TX_INVOICE_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Fakturan kunde inte hittas.',

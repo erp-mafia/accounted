@@ -1,10 +1,10 @@
 'use client'
 
-import { useCallback, useState } from 'react'
+import { useCallback } from 'react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Upload, FileSpreadsheet, AlertCircle, Loader2 } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { FileDropzone } from '@/components/ui/file-dropzone'
 
 export type RegisterEntity = 'customers' | 'suppliers' | 'articles'
 
@@ -45,7 +45,6 @@ export default function RegisterUploadStep({
   isLoading,
   error,
 }: RegisterUploadStepProps) {
-  const [isDragging, setIsDragging] = useState(false)
   const copy = COPY[entity]
 
   const handleFile = useCallback((file: File) => {
@@ -54,13 +53,6 @@ export default function RegisterUploadStep({
     onFileSelect(file)
   }, [onFileSelect])
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(false)
-    const file = e.dataTransfer.files[0]
-    if (file) handleFile(file)
-  }, [handleFile])
-
   return (
     <Card>
       <CardHeader>
@@ -68,17 +60,12 @@ export default function RegisterUploadStep({
         <CardDescription>{copy.description}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div
-          className={cn(
-            'flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-10 transition-colors',
-            isDragging
-              ? 'border-primary bg-primary/5'
-              : 'border-muted-foreground/20 hover:border-muted-foreground/40',
-            isLoading && 'pointer-events-none opacity-60',
-          )}
-          onDrop={handleDrop}
-          onDragOver={(e) => { e.preventDefault(); setIsDragging(true) }}
-          onDragLeave={() => setIsDragging(false)}
+        <FileDropzone
+          onFile={handleFile}
+          accept=".xlsx,.xls,.csv,.ods"
+          disabled={isLoading}
+          label={copy.title}
+          className="flex flex-col items-center justify-center p-10"
         >
           {isLoading ? (
             <div className="flex flex-col items-center gap-3">
@@ -90,25 +77,14 @@ export default function RegisterUploadStep({
               <Upload className="h-8 w-8 text-muted-foreground/50 mb-3" />
               <p className="text-sm font-medium">Dra och släpp din fil här</p>
               <p className="text-sm text-muted-foreground mt-1">eller</p>
-              <label>
-                <input
-                  type="file"
-                  accept=".xlsx,.xls,.csv,.ods"
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0]
-                    if (file) handleFile(file)
-                    e.target.value = ''
-                  }}
-                />
-                <Button variant="outline" size="sm" className="mt-2" asChild>
-                  <span>Välj fil</span>
-                </Button>
-              </label>
+              {/* The zone is the button: this only looks like one. */}
+              <Button variant="outline" size="sm" className="mt-2" asChild>
+                <span>Välj fil</span>
+              </Button>
               <p className="text-xs text-muted-foreground mt-3">XLSX, XLS, CSV, ODS: max 10 MB</p>
             </>
           )}
-        </div>
+        </FileDropzone>
 
         {error && (
           <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3">

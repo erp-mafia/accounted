@@ -85,6 +85,7 @@ import { exchangeCodeForTokens } from '../lib/oauth'
 import { storeTokens } from '../lib/token-store'
 import { runPostConnectRefresh } from '../lib/post-connect-refresh'
 import type { OAuthFlow, OAuthFlowHandoff } from '@/lib/auth/oauth-flows'
+import { testRoutes } from '@/tests/helpers'
 
 const mockExchange = vi.mocked(exchangeCodeForTokens)
 const mockStoreTokens = vi.mocked(storeTokens)
@@ -147,7 +148,7 @@ function makeCookieClient(userId: string | null) {
 }
 
 function callbackRoute() {
-  const route = skatteverketExtension.apiRoutes?.find(
+  const route = testRoutes(skatteverketExtension).find(
     (r) => r.method === 'GET' && r.path === '/callback',
   )
   expect(route, 'GET /callback must be registered').toBeDefined()

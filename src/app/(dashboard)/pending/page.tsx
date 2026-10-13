@@ -7,13 +7,13 @@ import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { FLOATING_BULK_BAR_CLASS } from '@/components/ui/floating-bulk-bar'
+import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
 import { Checkbox } from '@/components/ui/checkbox'
 import { DataListEmpty, DataListLoading } from '@/components/ui/data-list'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { CHECKBOX_REVEAL_CLASS, HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
-import { useRangeSelect } from '@/lib/hooks/use-range-select'
+import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import {
   SlideOver,
   SlideOverContent,
@@ -323,7 +323,6 @@ export default function PendingOperationsPage() {
   const [selectedOp, setSelectedOp] = useState<PendingOperation | null>(null)
   const [showCommitDialog, setShowCommitDialog] = useState(false)
   const [isCommitting, setIsCommitting] = useState(false)
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   // Radix' onCheckedChange carries no mouse event: the preceding click records
   // whether shift was held, for range selection.
   const shiftHeld = useRef(false)
@@ -528,11 +527,6 @@ export default function PendingOperationsPage() {
     }
   }, [companyId, fetchOperations])
 
-  // Clear selection when filters/tab change
-  useEffect(() => {
-    setSelectedIds(new Set())
-  }, [activeTab, sourceFilter, conversationFilter])
-
   // Resolving operations changes what Att göra counts, and Att göra is a
   // server render the client router keeps (staleTimes.dynamic in
   // next.config.ts, and every back/forward restore): without this the user
@@ -562,15 +556,9 @@ export default function PendingOperationsPage() {
       toast({ title: 'Godkänd', description: op.title })
       setShowCommitDialog(false)
       setSelectedOp(null)
-      // Drop the committed op from the bulk selection: the row leaves the
-      // pending list on refresh, but a stale id would keep inflating the
-      // bulk bar and ride along into bulk-commit.
-      setSelectedIds((prev) => {
-        if (!prev.has(op.id)) return prev
-        const next = new Set(prev)
-        next.delete(op.id)
-        return next
-      })
+      // Drop the committed op from the bulk selection now: the row leaves
+      // the list (and so the selection) only when the refetch lands.
+      selection.deselect([op.id])
       afterResolve()
     } catch (err) {
       toast({
@@ -645,7 +633,7 @@ export default function PendingOperationsPage() {
       }
 
       setShowBulkDialog(false)
-      setSelectedIds(new Set())
+      selection.clear()
       afterResolve()
     } catch (err) {
       toast({
@@ -676,7 +664,7 @@ export default function PendingOperationsPage() {
         const res = await fetch('/api/pending-operations/bulk-reject', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ids: Array.from(selectedIds), ...feedback }),
+          body: JSON.stringify({ ids: Array.from(selection.selectedIds), ...feedback }),
         })
         const json = await res.json().catch(() => ({}))
         if (!res.ok) throw new Error(getErrorMessage(json, { statusCode: res.status }))
@@ -697,7 +685,7 @@ export default function PendingOperationsPage() {
         } else {
           toast({ title: 'Avvisade' })
         }
-        setSelectedIds(new Set())
+        selection.clear()
       } else {
         const res = await fetch(`/api/pending-operations/${rejectTarget.id}/reject`, {
           method: 'POST',
@@ -760,39 +748,18 @@ export default function PendingOperationsPage() {
     [filteredOperations]
   )
   const bulkEligibleIds = useMemo(() => bulkEligible.map((op) => op.id), [bulkEligible])
-  const allSelected =
-    bulkEligibleIds.length > 0 && bulkEligibleIds.every((id) => selectedIds.has(id))
+  // The selection holds only bulk-eligible operations of the current view: a
+  // tab, filter or refetch that hides one (approved elsewhere, its period
+  // locked) drops it, so the bar and the bulk calls never carry it.
+  const selection = useBulkSelection(bulkEligibleIds)
+  const selectedIds = selection.selectedIds
 
   const pendingTotal = filteredOperations.filter((op) => op.status === 'pending').length
   const excludedFromBulk = pendingTotal - bulkEligible.length
 
-  // Ranges walk the bulk-eligible operations in rendered order.
-  const range = useRangeSelect({
-    visibleIds: bulkEligibleIds,
-    selectedIds,
-    setSelectedIds,
-  })
-
-  function toggleSelected(id: string, extend?: boolean) {
-    range.toggle(id, extend)
-  }
-
-  function toggleSelectAll() {
-    if (allSelected) {
-      setSelectedIds(new Set())
-    } else {
-      setSelectedIds(new Set(bulkEligibleIds))
-    }
-    range.resetAnchor()
-  }
-
   // "Approve all of this type": find bulk-eligible ops with the same bulkActionKey
   function selectAllOfType(key: string) {
-    const ids = bulkEligible
-      .filter((op) => bulkActionKey(op) === key)
-      .map((op) => op.id)
-    setSelectedIds(new Set(ids))
-    range.resetAnchor()
+    selection.selectOnly(bulkEligible.filter((op) => bulkActionKey(op) === key).map((op) => op.id))
   }
 
   // Group counts for type-quick-action buttons (only show if 2+ of same type pending)
@@ -870,8 +837,7 @@ export default function PendingOperationsPage() {
           <Button size="sm"
             disabled={isBulkCommitting || isRejecting}
             onClick={() => {
-              setSelectedIds(new Set(bulkEligibleIds))
-              range.resetAnchor()
+              selection.selectAll()
               setShowBulkDialog(true)
             }}
           >
@@ -957,12 +923,14 @@ export default function PendingOperationsPage() {
         {/* Bulkbar (concept): hidden until at least one operation is selected
             via the hover checkboxes, then it pops in with the count, the batch
             actions, and the selection shortcuts as quiet links. */}
-        {showBulkControls && selectedCount > 0 && (
-          <div className={FLOATING_BULK_BAR_CLASS}>
-            <span className="whitespace-nowrap">
-              <strong className="font-semibold tabular-nums">{selectedCount}</strong>{' '}
-              {t('bulkbar_selected', { count: selectedCount })}
-            </span>
+        {showBulkControls && (
+          <BulkSelectionBar
+            selection={selection}
+            selectableCount={bulkEligible.length}
+            countLabel={t('bulkbar_selected', { count: selectedCount })}
+            selectAllLabel={t('select_all_count', { count: bulkEligible.length })}
+            clearLabel={t('deselect')}
+          >
             <Button
               size="sm"
               disabled={isBulkCommitting || isRejecting}
@@ -989,24 +957,12 @@ export default function PendingOperationsPage() {
                   {bulkActionKeyLabel(type, t)} ({count})
                 </button>
               ))}
-            {!allSelected && (
-              <button type="button" className={QUIET_LINK_CLASS} onClick={toggleSelectAll}>
-                {t('select_all_count', { count: bulkEligible.length })}
-              </button>
-            )}
             {excludedFromBulk > 0 && (
               <span className="text-muted-foreground">
                 {t('bulk_excluded_note', { count: excludedFromBulk })}
               </span>
             )}
-            <button
-              type="button"
-              className={QUIET_LINK_CLASS}
-              onClick={() => setSelectedIds(new Set())}
-            >
-              {t('deselect')}
-            </button>
-          </div>
+          </BulkSelectionBar>
         )}
 
         {isLoading ? (
@@ -1160,7 +1116,7 @@ export default function PendingOperationsPage() {
                         onClick={(e) => {
                           shiftHeld.current = e.shiftKey
                         }}
-                        onCheckedChange={() => toggleSelected(op.id, shiftHeld.current)}
+                        onCheckedChange={() => selection.toggle(op.id, shiftHeld.current)}
                         aria-label={t('select_operation_aria')}
                         className={cn(
                           'border-foreground duration-150',

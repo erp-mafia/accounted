@@ -20,6 +20,10 @@ export interface BulkSelection {
   /** Toggle one row; pass shiftKey to extend the range (useRangeSelect). */
   toggle: (id: string, extend?: boolean) => void
   selectAll: () => void
+  /** Replace the selection with these rows (those of them that are visible). */
+  selectOnly: (ids: Iterable<string>) => void
+  /** Drop these rows, e.g. one approved or deleted before the refetch lands. */
+  deselect: (ids: Iterable<string>) => void
   clear: () => void
   /** Every visible row is selected (false when there are none). */
   allSelected: boolean
@@ -69,6 +73,25 @@ export function useBulkSelection(
     resetAnchor()
   }, [visible, setIds, resetAnchor])
 
+  const selectOnly = useCallback(
+    (ids: Iterable<string>) => {
+      setIds(pruneSelection(new Set(ids), visible))
+      resetAnchor()
+    },
+    [visible, setIds, resetAnchor],
+  )
+
+  const deselect = useCallback(
+    (ids: Iterable<string>) => {
+      const drop = new Set(ids)
+      setState((prev) => {
+        if (![...drop].some((id) => prev.ids.has(id))) return prev
+        return { key: prev.key, ids: new Set([...prev.ids].filter((id) => !drop.has(id))) }
+      })
+    },
+    [],
+  )
+
   const clear = useCallback(() => {
     setIds(new Set())
     resetAnchor()
@@ -77,5 +100,5 @@ export function useBulkSelection(
   const allSelected = visible.length > 0 && selectedIds.size === visible.length
   const headerState: boolean | 'indeterminate' = allSelected ? true : selectedIds.size > 0 ? 'indeterminate' : false
 
-  return { selectedIds, toggle, selectAll, clear, allSelected, headerState }
+  return { selectedIds, toggle, selectAll, selectOnly, deselect, clear, allSelected, headerState }
 }

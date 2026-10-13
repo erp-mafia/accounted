@@ -1,18 +1,17 @@
 /**
- * Unit tests for commitLinkTransactionJournalEntry.
- * Driven through the public commitPendingOperation dispatcher.
+ * The approval of a staged link_transaction_journal_entry, driven through
+ * the public commitPendingOperation dispatcher.
  *
- * The MCP tool gnubok_link_transaction_to_journal_entry stages a
- * 'link_transaction_journal_entry' pending_operation; this dispatcher
- * picks it up, the executor delegates to the shared service in
- * lib/transactions/link-journal-entry.ts. The service is also covered
- * indirectly by the REST route test
- * app/api/transactions/[id]/link-journal-entry/__tests__/route.test.ts;
- * these tests focus on the dispatcher/executor wiring.
+ * The MCP tool gnubok_link_transaction_to_journal_entry is generated from
+ * the operation transactions.link-journal-entry and stages its input; the
+ * approval runs the same operation (commitRegisteredOperation), whose
+ * service is lib/transactions/link-journal-entry.ts, also behind the REST
+ * route (app/api/transactions/[id]/link-journal-entry/__tests__/route.test.ts)
+ * and v1. These tests focus on the approval wiring.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { eventBus } from '@/lib/events/bus'
-import { createQueuedMockSupabase, makeTransaction, makeInvoice } from '@/tests/helpers'
+import { createQueuedMockSupabase, enqueueBankLinkLeg, makeTransaction, makeInvoice } from '@/tests/helpers'
 import type { PendingOperation } from '@/types'
 
 vi.mock('@/lib/invoices/match-log', () => ({
@@ -101,7 +100,8 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
 
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(400)
-    expect(result.error).toMatch(/already linked/i)
+    expect(result.code).toBe('LINK_TX_TX_ALREADY_LINKED')
+    expect(result.error).toBe('Transaktionen är redan kopplad till en verifikation.')
   })
 
   it('re-links a transaction stranded on a reversed entry (#988)', async () => {
@@ -119,6 +119,7 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
       data: { id: JE_UUID, status: 'posted', voucher_series: 'A', voucher_number: 12, entry_date: '2026-05-15' },
       error: null,
     }) // target JE fetch
+    enqueueBankLinkLeg(enqueue)
     enqueue({ data: [{ id: TX_UUID }], error: null }) // tx UPDATE (overwrites the stale pointer)
     enqueue({ data: null, error: null }) // logMatchEvent insert
     enqueue({ data: null, error: null }) // dispatcher commit update
@@ -162,7 +163,8 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
 
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(400)
-    expect(result.error).toMatch(/posted/i)
+    expect(result.code).toBe('LINK_TX_JE_NOT_POSTED')
+    expect(result.error).toBe('Endast bokförda verifikationer kan kopplas till en banktransaktion.')
   })
 
   it('happy path: links tx without invoice, no new bookkeeping created', async () => {
@@ -182,6 +184,7 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
       },
       error: null,
     })
+    enqueueBankLinkLeg(enqueue)
     enqueue({ data: [{ id: TX_UUID }], error: null }) // tx UPDATE
     enqueue({ data: null, error: null }) // logMatchEvent insert
     enqueue({ data: null, error: null }) // dispatcher commit update
@@ -201,6 +204,34 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
     })
   })
 
+  it('commits a row staged in the old shape (invoice_id: null) as the same notes-free link', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: 1000, date: '2026-05-15' }),
+      error: null,
+    })
+    enqueue({
+      data: { id: JE_UUID, status: 'posted', voucher_series: 'A', voucher_number: 12, entry_date: '2026-05-15' },
+      error: null,
+    })
+    enqueueBankLinkLeg(enqueue)
+    enqueue({ data: [{ id: TX_UUID }], error: null }) // tx UPDATE
+    enqueue({ data: null, error: null }) // logMatchEvent insert
+    enqueue({ data: null, error: null }) // dispatcher commit update
+
+    // The hand-written tool staged invoice_id: null when none was given.
+    const op = makePendingOp({
+      params: { transaction_id: TX_UUID, journal_entry_id: JE_UUID, invoice_id: null },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ journal_entry_id: JE_UUID, invoice_id: null })
+    expect(findCalls('transactions', 'update')[0]?.[0]).toMatchObject({ journal_entry_id: JE_UUID, invoice_id: null })
+    expect(findCalls('invoices', 'update')).toEqual([])
+  })
+
   it('happy path with invoice: links tx, flips invoice to paid', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
@@ -218,6 +249,7 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
       },
       error: null,
     })
+    enqueueBankLinkLeg(enqueue)
     enqueue({
       data: makeInvoice({
         id: INV_UUID,
@@ -270,6 +302,7 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
       },
       error: null,
     })
+    enqueueBankLinkLeg(enqueue)
     enqueue({
       data: makeInvoice({
         id: INV_UUID,
@@ -293,14 +326,16 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
 
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(400)
-    expect(result.error).toBe('Credit notes cannot be recorded as paid.')
+    expect(result.code).toBe('LINK_TX_INVOICE_CREDIT_NOTE')
+    expect(result.error).toBe('Kreditfakturor kan inte registreras som betalda.')
   })
 
   it('surfaces the database reason and code when the transaction UPDATE fails (LINK_TX_DB_ERROR)', async () => {
     // A customer hit LINK_TX_DB_ERROR reproducibly on certain incoming
     // payments and could not tell us why: the Postgres message was logged
-    // but dropped on the way to the approver. The dispatcher must carry the
-    // reason, the structured code and the details through.
+    // but dropped on the way to the approver. The operation hands the
+    // database failure to the door as an error (v1 answers it as an internal
+    // error), and the approval carries its message through.
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({
@@ -317,6 +352,7 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
       },
       error: null,
     })
+    enqueueBankLinkLeg(enqueue)
     const pgMessage =
       'new row for relation "transactions" violates check constraint "transactions_is_ignored_no_journal_entry"'
     enqueue({ data: null, error: { message: pgMessage, code: '23514' } }) // tx UPDATE fails
@@ -329,9 +365,7 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
 
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(500)
-    expect(result.code).toBe('LINK_TX_DB_ERROR')
     expect(result.error).toContain(pgMessage)
-    expect(result.data).toMatchObject({ reason: pgMessage })
   })
 
   it('returns 409 LINK_TX_INVOICE_RACE when optimistic lock loses', async () => {
@@ -351,6 +385,7 @@ describe('commitPendingOperation: link_transaction_journal_entry', () => {
       },
       error: null,
     })
+    enqueueBankLinkLeg(enqueue)
     enqueue({
       data: makeInvoice({ id: INV_UUID, status: 'sent', total: 1000, remaining_amount: 1000 }),
       error: null,

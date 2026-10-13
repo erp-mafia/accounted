@@ -8,10 +8,10 @@ import { receiptImage } from '@/tests/fixtures/receipt-images'
 // Mocks. extract-invoice-fields is the AI call we want to assert is NOT
 // invoked when the gate trips. uploadDocument is the storage write: we
 // short-circuit it to a synthetic doc row.
-vi.mock('@/extensions/general/invoice-inbox/lib/extract-invoice-fields', async () => {
+vi.mock('@/lib/documents/inbox-extraction/extract-invoice-fields', async () => {
   const actual = await vi.importActual<
-    typeof import('@/extensions/general/invoice-inbox/lib/extract-invoice-fields')
-  >('@/extensions/general/invoice-inbox/lib/extract-invoice-fields')
+    typeof import('@/lib/documents/inbox-extraction/extract-invoice-fields')
+  >('@/lib/documents/inbox-extraction/extract-invoice-fields')
   return {
     ...actual,
     extractInvoiceFields: vi.fn(),
@@ -61,7 +61,7 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
   return { ...actual, createServiceClientNoCookies: vi.fn() }
 })
 
-import { extractInvoiceFields, emptyResult } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
+import { extractInvoiceFields, emptyResult } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { processArchivedDocument, uploadAndExtract } from '../lib/upload-and-extract'

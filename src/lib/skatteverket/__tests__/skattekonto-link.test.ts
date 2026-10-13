@@ -174,10 +174,18 @@ describe('unlinkSkattekontoRow / setSkattekontoRowIgnored', () => {
     expect(findCalls('skattekonto_transactions', 'update')).toHaveLength(0)
   })
 
+  it('refuses with ALREADY_BOOKED when a booking lands between the read and the write', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: ROW, journal_entry_id: null, is_ignored: false } })
+    enqueue({ data: [] })
+    await expect(setSkattekontoRowIgnored(supabase as never, COMPANY, ROW, true)).rejects.toMatchObject({ code: 'ALREADY_BOOKED' })
+    expect(findCalls('skattekonto_transactions', 'is')).toContainEqual(['journal_entry_id', null])
+  })
+
   it('ignoring clears the proposal too', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { id: ROW, journal_entry_id: null, is_ignored: false } })
-    enqueue({ data: null })
+    enqueue({ data: [{ id: ROW }] })
     await setSkattekontoRowIgnored(supabase as never, COMPANY, ROW, true)
     expect(findCalls('skattekonto_transactions', 'update')[0][0]).toEqual({
       is_ignored: true,

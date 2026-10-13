@@ -17,12 +17,13 @@ const h = vi.hoisted(() => ({
 }))
 
 vi.mock('@/lib/api/with-cron-context', () => ({
-  withCronContext:
+  withServiceCronContext:
     (_name: string, handler: (req: Request, ctx: unknown) => Promise<Response>) =>
     (req: Request) =>
       handler(req, {
         log: { info: h.logInfo, error: h.logError, warn: vi.fn() },
         requestId: 'req_test',
+        supabase: { rpc: h.rpc },
       }),
 }))
 
@@ -184,13 +185,4 @@ describe('GET /api/sandbox/cleanup/cron', () => {
     expect(h.logError).toHaveBeenCalled()
   })
 
-  it('returns an error when Supabase configuration is missing', async () => {
-    delete process.env.SUPABASE_SERVICE_ROLE_KEY
-
-    const res = await GET(createCronRequest('/api/sandbox/cleanup/cron'))
-    const body = await res.json()
-
-    expect(res.status).toBeGreaterThanOrEqual(500)
-    expect(body.error).toBeDefined()
-  })
 })

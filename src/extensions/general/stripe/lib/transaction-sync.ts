@@ -35,7 +35,8 @@ const defaultLog = createLogger('stripe/transaction-sync')
  * account reconcile against the real Stripe balance.
  *
  * Cursor: stripe_connections.last_balance_txn_synced_at (max `created`
- * processed), re-polled with a 24h overlap. Safe because balance transactions
+ * processed, or the run start once a window is listed to its end), re-polled
+ * with a 24h overlap. Safe because balance transactions
  * are immutable and carry stable txn_... ids: a re-seen transaction collides
  * on (company_id, external_id) and is skipped. The OAuth callback seeds the
  * cursor with the connection moment, so the first run starts there (money
@@ -223,6 +224,24 @@ export function mapBalanceTransaction(
   return rows
 }
 
+/** Moves the cursor forward to `ms`, never back. */
+async function advanceWatermark(
+  supabase: SupabaseClient,
+  connection: StripeConnection,
+  ms: number,
+): Promise<void> {
+  const current = connection.last_balance_txn_synced_at
+    ? Date.parse(connection.last_balance_txn_synced_at)
+    : Number.NEGATIVE_INFINITY
+  if (!(ms > current)) return
+  const iso = new Date(ms).toISOString()
+  await supabase
+    .from('stripe_connections')
+    .update({ last_balance_txn_synced_at: iso })
+    .eq('id', connection.id)
+  connection.last_balance_txn_synced_at = iso
+}
+
 /** The cursor-window view of a connection (see lib/feed-sync/cursor-window). */
 function cursorWindowOf(connection: StripeConnection): CursorWindowConnection {
   return {
@@ -340,6 +359,7 @@ export async function syncStripeBalanceTransactions(
   // connection moment: a freshly activated connection carries a seeded
   // cursor, so "no cursor" no longer identifies the first run.
   const firstRun = isBeforeFirstAdvance(cursorWindowOf(connection))
+  const runStartMs = Date.now()
   const gte = await resolveWindowStartSeconds(supabase, connection)
 
   let txns: BalanceTxnLike[]
@@ -357,7 +377,16 @@ export async function syncStripeBalanceTransactions(
   }
 
   summary.fetched = txns.length
-  if (txns.length === 0) return summary
+  // Fewer than the cap: the list ran to the end of the window.
+  const windowExhausted = txns.length < MAX_TXNS_PER_RUN
+  if (txns.length === 0) {
+    // A quiet account moves its cursor to the run start too, or it keeps the
+    // front of the cron's oldest-cursor-first candidates. Not on the first
+    // run: the cursor passing the connection moment is what ends the one-time
+    // 1686 chart setup, which only an imported row needs.
+    if (!firstRun) await advanceWatermark(supabase, connection, runStartMs)
+    return summary
+  }
 
   // Oldest first: cursor advancement stays chronological.
   txns.sort((a, b) => a.created - b.created)
@@ -406,6 +435,14 @@ export async function syncStripeBalanceTransactions(
       .update({ last_balance_txn_synced_at: new Date(maxCreated * 1000).toISOString() })
       .eq('id', connection.id)
     connection.last_balance_txn_synced_at = new Date(maxCreated * 1000).toISOString()
+  }
+
+  // Scanned-through watermark, as in the webshop order syncs: a window listed
+  // to its end and fully processed means "synced through run start", even
+  // when the last transaction is days old. The 24h overlap re-poll covers
+  // transactions Stripe made visible while the run was in flight.
+  if (windowExhausted && !summary.deadlineReached) {
+    await advanceWatermark(supabase, connection, runStartMs)
   }
 
   log.info('stripe balance-transaction sync done', {

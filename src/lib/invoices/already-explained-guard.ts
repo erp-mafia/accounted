@@ -108,6 +108,16 @@ export function describeExplainingSet(set: ExplainingVoucherSet): string {
   return `${labels} (${set.bank_account_number}, ${when}, ${sek(set.total)})`
 }
 
+/**
+ * Staged into preview.compliance_warning when a duplicate / already-explained
+ * check threw at stage time without force. The stage fails open (the commit
+ * re-runs the check as the hard gate), but the approver must see that the
+ * check did not run rather than approve as if it had.
+ */
+export const DUPLICATE_CHECK_FAILED_NOTE =
+  'Dubblettkontrollen kunde inte köras vid stagingen: kontrollera manuellt att raden inte redan är bokförd ' +
+  '(verifikat utan bankkoppling på kontot) innan du godkänner. Kontrollen körs igen vid godkännandet.'
+
 export interface GuardOptions {
   /** Called when the detector throws; the guard then fails open. */
   onDetectError?: (err: unknown) => void

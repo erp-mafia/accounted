@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { invoiceInboxExtension } from '@/extensions/general/invoice-inbox'
-import { createQueuedMockSupabase, createMockRequest } from '@/tests/helpers'
+import { createQueuedMockSupabase, createMockRequest, testRoutes } from '@/tests/helpers'
 
 /**
  * PII boundary for the two inbound-mail behandlingshistorik events.
@@ -52,7 +52,7 @@ import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { createClient } from '@supabase/supabase-js'
 
-const webhookRoute = invoiceInboxExtension.apiRoutes!.find(
+const webhookRoute = testRoutes(invoiceInboxExtension).find(
   (r) => r.method === 'POST' && r.path === '/inbound'
 )!
 

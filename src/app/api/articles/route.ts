@@ -1,15 +1,10 @@
 import { NextResponse } from 'next/server'
-import { eventBus } from '@/lib/events'
 import { validateBody } from '@/lib/api/validate'
 import { CreateArticleSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { ensureArticleNumber } from '@/lib/articles/ensure-article-number'
-import { checkRevenueAccount } from '@/lib/articles/validate-revenue-account'
-import { AccountsNotInChartError, accountsNotInChartResponse } from '@/lib/bookkeeping/errors'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { createArticle } from '@/lib/articles/article-commands'
+import { articleRefusalResponse } from '@/lib/articles/article-refusal-response'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import type { Article } from '@/types'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // GET /api/articles: list the active company's articles. `?include_inactive=1`
 // returns soft-deactivated ones too (the register page can show an archive view).
@@ -52,69 +47,12 @@ export const POST = withRouteContext(
     if (!result.success) return result.response
     const body = result.data
 
-    // Guard the optional posting-account override against the chart of accounts.
-    // A class 1-3 account that merely isn't activated yet gets the standard
-    // ACCOUNTS_NOT_IN_CHART envelope so the client can offer activate-and-retry.
-    if (body.revenue_account) {
-      const status = await checkRevenueAccount(supabase, companyId!, body.revenue_account)
-      if (status === 'activatable') {
-        return accountsNotInChartResponse(new AccountsNotInChartError([body.revenue_account]))
-      }
-      if (status === 'invalid') {
-        return errorResponseFromCode('ARTICLE_REVENUE_ACCOUNT_INVALID', log, { requestId })
-      }
-    }
-
-    const { data, error } = await supabase
-      .from('articles')
-      .insert({
-        user_id: user.id,
-        company_id: companyId,
-        name: body.name,
-        name_en: body.name_en ?? null,
-        type: body.type ?? 'tjanst',
-        unit: body.unit ?? 'st',
-        price_excl_vat: body.price_excl_vat,
-        vat_rate: body.vat_rate ?? 25,
-        currency: body.currency ?? 'SEK',
-        revenue_account: body.revenue_account ?? null,
-        cost_price: body.cost_price ?? null,
-        ean: body.ean ?? null,
-        housework_type: body.housework_type ?? null,
-        notes: body.notes ?? null,
-        article_number: body.article_number ?? null,
-      })
-      .select()
-      .single()
-
-    if (error) {
-      if (error.code === '23505') {
-        return errorResponseFromCode('ARTICLE_DUPLICATE_NUMBER', log, {
-          requestId,
-          details: { articleNumber: body.article_number },
-        })
-      }
-      log.error('article insert failed', error)
-      return errorResponseFromCode('ARTICLE_CREATE_FAILED', log, {
-        requestId,
-        details: { reason: getUserErrorMessage(error) },
-      })
-    }
-
-    // Auto-number when the caller didn't supply one. Non-fatal: an unnumbered
-    // article is still usable and can be numbered later.
-    if (!data.article_number) {
-      try {
-        data.article_number = await ensureArticleNumber(supabase, companyId!, data.id)
-      } catch (err) {
-        log.warn('article number assignment failed', err as Error, { articleId: data.id })
-      }
-    }
-
-    await eventBus.emit({
-      type: 'article.created',
-      payload: { article: data as Article, companyId: companyId!, userId: user.id },
-    })
+    // The one create path (lib/articles/article-commands.ts), shared with the
+    // approval of an agent's staged gnubok_create_article.
+    const outcome = await createArticle({ supabase, companyId: companyId!, userId: user.id, log }, body)
+    if (!outcome.ok) return articleRefusalResponse(outcome, log, requestId)
+    if (outcome.dryRun) throw new Error('article.create: unexpected dry-run outcome')
+    const data = outcome.data
 
     return NextResponse.json({ data })
   },

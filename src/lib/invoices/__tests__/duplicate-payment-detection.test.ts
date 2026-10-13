@@ -6,7 +6,7 @@ import {
 } from '../duplicate-payment-detection'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
-const { supabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
 describe('detectDuplicatePaymentVoucher', () => {
   beforeEach(() => {
@@ -17,6 +17,7 @@ describe('detectDuplicatePaymentVoucher', () => {
     je_id: string
     account: string
     debit: number
+    credit?: number
     date: string
     voucher_label?: string
     source_type?: string | null
@@ -27,6 +28,7 @@ describe('detectDuplicatePaymentVoucher', () => {
     return {
       account_number: opts.account,
       debit_amount: opts.debit,
+      credit_amount: opts.credit ?? 0,
       journal_entry: {
         id: opts.je_id,
         entry_date: opts.date,
@@ -60,6 +62,7 @@ describe('detectDuplicatePaymentVoucher', () => {
         journal_entry_id: r.journal_entry.id,
         account_number: r.account_number,
         debit_amount: r.debit_amount,
+        credit_amount: r.credit_amount,
       })),
       error: null,
     })
@@ -235,8 +238,9 @@ describe('detectDuplicatePaymentVoucher', () => {
         date: '2026-05-15',
       }),
     ])
-    enqueue({ data: [{ journal_entry_id: 'je-manual', transaction_id: null }], error: null })
+    // The link lookups, transactions first (the ledger detector's order).
     enqueue({ data: [], error: null })
+    enqueue({ data: [{ journal_entry_id: 'je-manual', transaction_id: null }], error: null })
 
     const result = await detectDuplicatePaymentVoucher(supabase as never, {
       companyId: 'company-1',
@@ -258,9 +262,9 @@ describe('detectDuplicatePaymentVoucher', () => {
         date: '2026-05-15',
       }),
     ])
+    // another transaction already links this JE (the transactions lookup runs first)
+    enqueue({ data: [{ id: 'tx-other', journal_entry_id: 'je-4', date: '2026-05-01', amount: 999, currency: 'SEK' }], error: null })
     enqueue({ data: [], error: null })
-    // another transaction already links this JE
-    enqueue({ data: [{ id: 'tx-other', journal_entry_id: 'je-4' }], error: null })
 
     const result = await detectDuplicatePaymentVoucher(supabase as never, {
       companyId: 'company-1',
@@ -271,6 +275,29 @@ describe('detectDuplicatePaymentVoucher', () => {
     })
 
     expect(result).toBeNull()
+  })
+
+  it('flags a voucher linked to this row\'s twin (a duplicate import whose copy is already booked)', async () => {
+    // The old invoice-side detector excluded every voucher another row links,
+    // so the duplicate import of a booked payment matched the invoice a second
+    // time. The ledger rule keeps a voucher whose linking row is this row's
+    // twin: same öre, same currency, date in the window.
+    enqueueLines([makeLineRow({ je_id: 'je-twin', account: '1930', debit: 1000, date: '2026-05-14' })])
+    enqueue({
+      data: [{ id: 'tx-twin', journal_entry_id: 'je-twin', date: '2026-05-14', amount: 1000, currency: 'SEK', cash_account_id: null }],
+      error: null,
+    })
+    enqueue({ data: [], error: null })
+
+    const result = await detectDuplicatePaymentVoucher(supabase as never, {
+      companyId: 'company-1',
+      transactionId: 'tx-1',
+      transactionDate: '2026-05-15',
+      transactionAmount: 1000,
+      transactionCurrency: 'SEK',
+    })
+
+    expect(result).toMatchObject({ journal_entry_id: 'je-twin', reason: 'exact_amount_within_window' })
   })
 
   it('excludes storno entries', async () => {
@@ -354,14 +381,12 @@ describe('detectDuplicatePaymentVoucher', () => {
     expect(result!.reason).toBe('exact_amount_same_date')
   })
 
-  it('matches absolute value for negative transaction amounts (expense)', async () => {
+  it('matches an outflow against a CREDIT on the bank account, never against a debit', async () => {
+    // The old invoice-side detector compared every row with bank DEBITS, so a
+    // 250 kr payment out matched a 250 kr receipt voucher. The ledger rule is
+    // direction-aware: money out is a credit on the bank account.
     enqueueLines([
-      makeLineRow({
-        je_id: 'je-x',
-        account: '1930',
-        debit: 250,
-        date: '2026-05-15',
-      }),
+      makeLineRow({ je_id: 'je-out', account: '1930', debit: 0, credit: 250, date: '2026-05-15' }),
     ])
     enqueue({ data: [], error: null })
     enqueue({ data: [], error: null })
@@ -374,12 +399,28 @@ describe('detectDuplicatePaymentVoucher', () => {
       transactionCurrency: 'SEK',
     })
 
-    // Note: while the match-invoice route only handles income, the
-    // detector itself is amount-direction agnostic: it just finds JEs
-    // that book the same magnitude on the bank side. Callers gate by
-    // direction.
     expect(result).not.toBeNull()
+    expect(result!.journal_entry_id).toBe('je-out')
     expect(result!.amount).toBe(250)
+  })
+
+  it('does not take a receipt voucher (bank debit) for an outflow of the same amount', async () => {
+    // The scan asks for credit legs only, so the debit-only voucher's line
+    // never comes back from the database.
+    const receipt = makeLineRow({ je_id: 'je-in', account: '1930', debit: 250, date: '2026-05-15' })
+    enqueue({ data: [receipt.journal_entry], error: null })
+    enqueue({ data: [], error: null })
+
+    const result = await detectDuplicatePaymentVoucher(supabase as never, {
+      companyId: 'company-1',
+      transactionId: 'tx-1',
+      transactionDate: '2026-05-15',
+      transactionAmount: -250,
+      transactionCurrency: 'SEK',
+    })
+
+    expect(result).toBeNull()
+    expect(findCalls('journal_entry_lines', 'gt')).toEqual([['credit_amount', 0]])
   })
 
   it('skips lines whose amount differs by more than 0.01', async () => {

@@ -2,7 +2,7 @@
 
 import { useCallback, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { useToast } from '@/components/ui/use-toast'
+import { useSaveSettings } from '@/components/settings/use-save-settings'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import {
   SettingsGroup,
@@ -89,7 +89,7 @@ function toOverrides(display: DisplayTexts): InvoiceEmailTexts | null {
 
 export function InvoiceEmailTextsSettings({ settings, onUpdate }: InvoiceEmailTextsSettingsProps) {
   const t = useTranslations('settings_email_texts')
-  const { toast } = useToast()
+  const saveSettings = useSaveSettings()
   const { canWrite } = useCanWrite()
   const [lang, setLang] = useState<Lang>('sv')
   const [texts, setTexts] = useState<DisplayTexts>(() => buildDisplay(settings.invoice_email_texts))
@@ -110,19 +110,11 @@ export function InvoiceEmailTextsSettings({ settings, onUpdate }: InvoiceEmailTe
     const overrides = toOverrides(display)
     const serialized = JSON.stringify(overrides)
     if (serialized === lastSavedRef.current) return
-    try {
-      const response = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ invoice_email_texts: overrides }),
-      })
-      if (!response.ok) throw new Error()
-      lastSavedRef.current = serialized
-      onUpdate({ invoice_email_texts: overrides })
-    } catch {
-      toast({ title: t('toast_save_failed'), variant: 'destructive' })
-    }
-  }, [onUpdate, toast, t])
+    const saved = await saveSettings({ invoice_email_texts: overrides }, { failedTitle: t('toast_save_failed') })
+    if (!saved) return
+    lastSavedRef.current = serialized
+    onUpdate({ invoice_email_texts: overrides })
+  }, [onUpdate, saveSettings, t])
 
   const handleBlur = () => {
     const normalized = normalize(texts)

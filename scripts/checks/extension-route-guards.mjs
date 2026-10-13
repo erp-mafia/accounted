@@ -42,8 +42,6 @@ export const UNGATED_EXTENSION_ROUTES = new Set([
   'app/api/extensions/skatteverket/agi/kvittenser/cron/route.ts',
   'app/api/extensions/skatteverket/skattekonto/sync/cron/route.ts',
   'app/api/extensions/skatteverket/vat/kvittenser/cron/route.ts',
-  'app/api/extensions/stripe/callback/route.ts',
-  'app/api/extensions/stripe/transactions/cron/route.ts',
 ])
 
 const EXTENSION_IMPORT_RE = /from\s+['"]@\/extensions\/[^/'"]+\/([^/'"]+)\//g
@@ -101,7 +99,14 @@ export function findExtensionRouteFindings(ROOT) {
 
     if (!importsOwnExtension && crossImports.every((c) => c.file !== relPath)) continue
 
+    // A route that hands its whole flow to the shared partner OAuth callback
+    // (lib/auth/partner-oauth-callback.ts) is gated there: the helper checks
+    // extensionRegistry.get(extensionId) before anything else.
+    const delegatesGate =
+      src.includes('completePartnerOAuthCallback(') &&
+      (src.includes(`extensionId: '${extensionId}'`) || src.includes(`extensionId: "${extensionId}"`))
     const hasGate =
+      delegatesGate ||
       src.includes(`extensionRegistry.get('${extensionId}')`) ||
       src.includes(`extensionRegistry.get("${extensionId}")`)
     if (!hasGate) ungated.push(relPath)

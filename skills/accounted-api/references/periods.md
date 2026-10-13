@@ -538,22 +538,25 @@ Example response `200`:
 **Run a structured compliance pre-flight check.**
 `scope:compliance:read · risk:low · idempotent`
 
-Generalised pre-flight that consolidates the Accounted pre-close validators under one envelope. Supported check types: year_end_readiness (BFNAR 2017:3 + ÅRL 2:1 blockers), voucher_gaps (BFNAR 2013:2 kap 8 § series continuity). vat_close is planned for a follow-up PR (the underlying function currently lives in the MCP extension and core routes cannot import from extensions; it will be extracted into lib/reports/ then exposed here). New types can be added without changing the response shape.
+Generalised pre-flight that consolidates the Accounted pre-close validators under one envelope. Supported check types: year_end_readiness (BFNAR 2017:3 + ÅRL 2:1 blockers), voucher_gaps (BFNAR 2013:2 kap 8 § series continuity), vat_close (can the momsperiod be closed: SKV 4700 rutor, bookkeeping blockers and the momsdeklaration completeness checks the web filing UI uses; the same answer as the MCP tool gnubok_vat_close_check). New types can be added without changing the response shape.
 
 **Use when:** Before committing to an irreversible action (VAT close, year-end close), or as a periodic audit sweep to surface blockers before they become urgent.
 **Do not use for:** Executing the underlying action: this is read-only. After a passing check, call the corresponding async endpoint (POST /fiscal-periods/{id}/year-end, etc).
 
 **Pitfalls:**
-- year_end_readiness and voucher_gaps require fiscal_period_id (UUID).
+- year_end_readiness and voucher_gaps require fiscal_period_id (UUID); vat_close requires period_type, year and period.
 - voucher_gaps covers EVERY voucher series registered for the period (A, B, F, ...), not only series A.
 - A passing check is a SNAPSHOT: the state can change between the check and the action. The same blocker logic runs again on commit.
-- vat_close is documented in the plan but NOT yet supported by this endpoint: call gnubok_vat_close_check via the MCP server until the function is extracted into lib/reports/.
+- vat_close: details carries the rutor (ruta49 = to pay, negative = refund), the payment block with the deadline, and the sanity ratios.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
-| `type` | query | `"year_end_readiness" \| "voucher_gaps"` | yes | Which check to run. |
-| `fiscal_period_id` | query | `string` | yes | Fiscal period to check (id from GET /fiscal-periods). Both current check types require it. |
+| `type` | query | `"year_end_readiness" \| "voucher_gaps" \| "vat_close"` | yes | Which check to run. |
+| `fiscal_period_id` | query | `string` | no | Fiscal period to check (id from GET /fiscal-periods). Required by year_end_readiness and voucher_gaps. |
+| `period_type` | query | `"monthly" \| "quarterly" \| "yearly"` | no | vat_close: the momsperiod length. |
+| `year` | query | `number` | no | vat_close: the year; for yearly, the year the räkenskapsår ends. |
+| `period` | query | `number` | no | vat_close: 1-12 monthly, 1-4 quarterly, 1 yearly. |
 
 Response `200`:
 ```ts

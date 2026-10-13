@@ -100,7 +100,7 @@ import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { collectPages } from '@/lib/lists/collect-pages'
 import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
-import { useRangeSelect } from '@/lib/hooks/use-range-select'
+import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { resolveDetachErrorMessage } from '@/components/transactions/detach-underlag'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
@@ -518,7 +518,7 @@ export default function TransactionsPage() {
   const [searchTerm, setSearchTerm] = useState('')
 
   // Batch selection: hover checkboxes + bulkbar (concept), no mode toggle.
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  // The selections themselves are bankSelection and skvSelection below.
   const [showBatchSelector, setShowBatchSelector] = useState(false)
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null)
   // Row expansion (concept foldout): one open row at a time, mirroring the
@@ -711,10 +711,9 @@ export default function TransactionsPage() {
   const [skvBookTarget, setSkvBookTarget] = useState<SkattekontoTransactionWithSuggestion | null>(
     null,
   )
-  // SKV bulk selection: deliberately a SEPARATE set from the bank
-  // `selectedIds`: every bank batch handler POSTs /api/transactions/* and
-  // would 404 on skattekonto ids.
-  const [skvSelectedIds, setSkvSelectedIds] = useState<Set<string>>(new Set())
+  // SKV bulk selection (skvSelection below): deliberately a SEPARATE set
+  // from the bank `selectedIds`: every bank batch handler POSTs
+  // /api/transactions/* and would 404 on skattekonto ids.
   const [skvBulkConfirmOpen, setSkvBulkConfirmOpen] = useState(false)
   const [skvBulkSubmitting, setSkvBulkSubmitting] = useState(false)
   // True when an SKV connection exists but is dead (needs_reconsent, or
@@ -756,10 +755,8 @@ export default function TransactionsPage() {
   const handlePeriodChange = useCallback((periodId: string | null, period?: FiscalPeriod | null) => {
     setFyPeriodId(periodId)
     setFyPeriod(period ?? null)
-    // Batch selections may reference rows the new scope hides; every batch
-    // action operates on "what you see", so drop them.
-    setSelectedIds(new Set())
-    setSkvSelectedIds(new Set())
+    // Rows the new scope hides leave both batch selections when it renders
+    // (useBulkSelection): every batch action operates on "what you see".
   }, [])
 
   // Footer "Visa alla" escape hatch: clears the period scope AND its
@@ -767,8 +764,6 @@ export default function TransactionsPage() {
   const clearPeriodFilter = useCallback(() => {
     setFyPeriodId(null)
     setFyPeriod(null)
-    setSelectedIds(new Set())
-    setSkvSelectedIds(new Set())
     if (companyId) {
       try {
         window.localStorage.setItem(PERIOD_FILTER_STORAGE_PREFIX + companyId, ALL_YEARS_VALUE)
@@ -1117,16 +1112,13 @@ export default function TransactionsPage() {
   // Shift-click ranges run per selection set: bank rows and skattekonto rows
   // are interleaved in one table but are booked through different endpoints,
   // so each range walks only its own selectable ids in rendered order.
-  const bankRange = useRangeSelect({
-    visibleIds: selectableInboxIds,
-    selectedIds,
-    setSelectedIds,
-  })
-  const skvRange = useRangeSelect({
-    visibleIds: selectableSkvIds,
-    selectedIds: skvSelectedIds,
-    setSelectedIds: setSkvSelectedIds,
-  })
+  // Each selection holds only its own selectable rows of the current view:
+  // a search, source, period or exit animation that hides a ticked row drops
+  // it, so the bar never counts or acts on a row the user cannot see.
+  const bankSelection = useBulkSelection(selectableInboxIds)
+  const skvSelection = useBulkSelection(selectableSkvIds)
+  const selectedIds = bankSelection.selectedIds
+  const skvSelectedIds = skvSelection.selectedIds
 
   const skvSelectedRows = useMemo(
     () => skvRows.filter((r) => skvSelectedIds.has(r.id)),
@@ -3038,7 +3030,7 @@ export default function TransactionsPage() {
       return next
     })
     await refreshTransactions()
-    setSelectedIds(new Set())
+    bankSelection.clear()
     setTimeout(() => {
       setExitingIds((prev) => {
         const next = new Set(prev)
@@ -3140,12 +3132,7 @@ export default function TransactionsPage() {
         // Drop the row from the batch selection immediately: leaving it there
         // keeps the bulk bar counting (and acting on) a row that no longer
         // exists once the timer removes it.
-        setSelectedIds((prev) => {
-          if (!prev.has(id)) return prev
-          const next = new Set(prev)
-          next.delete(id)
-          return next
-        })
+        bankSelection.deselect([id])
         toast({ title: t('deleted_title'), description: t('deleted_description') })
         setTimeout(() => {
           setTransactions((prev) => prev.filter((t) => t.id !== id))
@@ -3259,12 +3246,7 @@ export default function TransactionsPage() {
    */
   function handleSkvBooked(rowId: string, result: SkattekontoBatchRowResult) {
     setSkvBookTarget(null)
-    setSkvSelectedIds((prev) => {
-      if (!prev.has(rowId)) return prev
-      const next = new Set(prev)
-      next.delete(rowId)
-      return next
-    })
+    skvSelection.deselect([rowId])
     setExitingIds((prev) => new Set(prev).add(rowId))
     setTimeout(() => {
       setSkvRows((prev) =>
@@ -3304,7 +3286,7 @@ export default function TransactionsPage() {
   }
 
   function toggleSkvSelect(id: string, extend?: boolean) {
-    skvRange.toggle(id, extend)
+    skvSelection.toggle(id, extend)
   }
 
   async function handleSkvUnignore(id: string) {
@@ -3370,12 +3352,7 @@ export default function TransactionsPage() {
     )
     if (!ok) return
 
-    setSkvSelectedIds((prev) => {
-      if (!prev.has(row.id)) return prev
-      const next = new Set(prev)
-      next.delete(row.id)
-      return next
-    })
+    skvSelection.deselect([row.id])
     setExitingIds((prev) => new Set(prev).add(row.id))
     setTimeout(() => {
       setSkvRows((prev) =>
@@ -3411,7 +3388,7 @@ export default function TransactionsPage() {
     const ids = skvBookableSelectedRows.map((r) => r.id)
     if (ids.length === 0) {
       setSkvBulkConfirmOpen(false)
-      setSkvSelectedIds(new Set())
+      skvSelection.clear()
       return
     }
     setSkvBulkConfirmOpen(false)
@@ -3478,7 +3455,7 @@ export default function TransactionsPage() {
         })
       }, 350)
     }
-    setSkvSelectedIds(new Set())
+    skvSelection.clear()
 
     const succeeded = results.filter((r) => r.ok).length
     const failures = results.filter((r) => !r.ok)
@@ -3676,14 +3653,12 @@ export default function TransactionsPage() {
   const BATCH_CONCURRENCY = 5
 
   function toggleBatchSelect(id: string, extend?: boolean) {
-    bankRange.toggle(id, extend)
+    bankSelection.toggle(id, extend)
   }
 
   function exitBatchMode() {
-    setSelectedIds(new Set())
-    setSkvSelectedIds(new Set())
-    bankRange.resetAnchor()
-    skvRange.resetAnchor()
+    bankSelection.clear()
+    skvSelection.clear()
   }
 
   async function handleBatchDelete() {
@@ -4478,7 +4453,9 @@ export default function TransactionsPage() {
             {/* Bulkbar (concept): hidden until at least one transaction is
                 selected via the hover checkboxes, then it pops in with the
                 count and the batch actions. */}
-            {(selectedIds.size > 0 || skvSelectedIds.size > 0) && (
+            {/* batchProgress keeps it up while a run animates its booked rows
+                out of the selection, so the counter stays to the end. */}
+            {(selectedIds.size > 0 || skvSelectedIds.size > 0 || batchProgress) && (
               <div
                 className={FLOATING_BULK_BAR_CLASS}
               >
@@ -4541,10 +4518,8 @@ export default function TransactionsPage() {
                         type="button"
                         className={QUIET_LINK_CLASS}
                         onClick={() => {
-                          setSelectedIds(new Set(selectableInboxIds))
-                          setSkvSelectedIds(new Set(selectableSkvIds))
-                          bankRange.resetAnchor()
-                          skvRange.resetAnchor()
+                          bankSelection.selectAll()
+                          skvSelection.selectAll()
                         }}
                       >
                         {t('batch_select_all', {

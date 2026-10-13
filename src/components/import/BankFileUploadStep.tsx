@@ -4,6 +4,7 @@ import { useState, useCallback } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { FileDropzone } from '@/components/ui/file-dropzone'
 import { Badge } from '@/components/ui/badge'
 import {
   Select,
@@ -60,43 +61,18 @@ export default function BankFileUploadStep({
   skattekontoDetected,
 }: BankFileUploadStepProps) {
   const t = useTranslations('import')
-  const [isDragging, setIsDragging] = useState(false)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [formatOverride, setFormatOverride] = useState<BankFileFormatId | undefined>(undefined)
 
   const acceptedExtensions = '.csv,.txt,.xml'
 
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(true)
-  }, [])
-
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(false)
-  }, [])
-
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setIsDragging(false)
-
-    const files = e.dataTransfer.files
-    if (files.length > 0) {
-      const file = files[0]
-      const ext = file.name.toLowerCase()
-      if (ext.endsWith('.csv') || ext.endsWith('.txt') || ext.endsWith('.xml')) {
-        setSelectedFile(file)
-        onFileSelect(file, formatOverride)
-      }
-    }
-  }, [onFileSelect, formatOverride])
-
-  const handleFileInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files
-    if (files && files.length > 0) {
-      setSelectedFile(files[0])
-      onFileSelect(files[0], formatOverride)
-    }
+  // One rule for a dropped and a picked file: the picker's accept filter can
+  // be switched to "all files", and a dropped file never had it.
+  const handleFile = useCallback((file: File) => {
+    const name = file.name.toLowerCase()
+    if (!(name.endsWith('.csv') || name.endsWith('.txt') || name.endsWith('.xml'))) return
+    setSelectedFile(file)
+    onFileSelect(file, formatOverride)
   }, [onFileSelect, formatOverride])
 
   const handleFormatChange = (value: string) => {
@@ -151,26 +127,14 @@ export default function BankFileUploadStep({
           </div>
 
           {/* Drop zone */}
-          <div
-            className={`
-              relative border-2 border-dashed rounded-lg p-8 text-center transition-colors
-              ${isDragging ? 'border-primary bg-primary/5' : 'border-muted-foreground/25'}
-              ${error ? 'border-destructive bg-destructive/5' : ''}
-              ${isLoading ? 'pointer-events-none opacity-50' : 'cursor-pointer hover:border-primary/50'}
-            `}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            onClick={() => document.getElementById('bank-file-input')?.click()}
+          <FileDropzone
+            onFile={handleFile}
+            accept={acceptedExtensions}
+            disabled={isLoading}
+            invalid={!!error}
+            label="Välj bankfil"
+            className="relative p-8 text-center"
           >
-            <input
-              id="bank-file-input"
-              type="file"
-              accept={acceptedExtensions}
-              className="hidden"
-              onChange={handleFileInput}
-              disabled={isLoading}
-            />
 
             {isLoading ? (
               <div className="space-y-4">
@@ -208,7 +172,7 @@ export default function BankFileUploadStep({
                 </div>
               </div>
             )}
-          </div>
+          </FileDropzone>
 
           {/* Skattekonto redirect: not an error, a pointer to the right flow */}
           {skattekontoDetected && (
