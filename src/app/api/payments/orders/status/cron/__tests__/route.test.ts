@@ -30,7 +30,7 @@ describe('GET /api/payments/orders/status/cron', () => {
   })
 
   it('runs the status sync and returns its summary', async () => {
-    const summary = { checked: 3, moved: 1, markedUnknown: 0, released: 0, abandoned: 1, signedLate: 0, cancelledForClosedInvoice: 1, heldForPerson: 0, errors: 0 }
+    const summary = { checked: 3, moved: 1, markedUnknown: 0, released: 0, abandoned: 1, signedLate: 0, cancelledForClosedInvoice: 1, heldForPerson: 0, settledByDebit: 0, errors: 0 }
     vi.mocked(syncPaymentOrderStatuses).mockResolvedValueOnce(summary)
 
     const response = await GET(request())

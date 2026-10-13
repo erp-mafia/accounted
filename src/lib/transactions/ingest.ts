@@ -23,6 +23,9 @@ import { contentBucketKey, descriptionsBridge, normalizeImportedDescription, rec
 import { classifyTransactionMethod } from '@/lib/transactions/transaction-method'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { createLogger } from '@/lib/logger'
+import { findOrderForDebit, type OrderDebit } from '@/lib/payments/orders/debit-match'
+import { loadOpenPaymentOrders, PAYMENT_ORDER_MATCH_METHOD, settleOrderWithDebit } from '@/lib/payments/orders/auto-settle'
+import type { PaymentOrderRow } from '@/lib/payments/orders/types'
 import { scheduleCollectionSweep } from '@/lib/collections/sweep-hook'
 import { physicalAccountKey, reenableIfUnused, sameCashAccount } from '@/lib/cash-accounts/service'
 import type { Transaction, RawTransaction, IngestResult, IngestOptions, IngestSkipReason, IngestSkippedRow, SupplierInvoice, Currency, ExchangeRate } from '@/types'
@@ -810,6 +813,26 @@ function isExternalIdConflict(error: { code?: string | null; message?: string | 
 }
 
 /**
+ * The inserted row as findOrderForDebit reads it. The stored row wins (its
+ * description is the display title, the original is kept beside it); the raw
+ * row fills what a store path did not return.
+ */
+function debitForOrderMatch(stored: Transaction, raw: RawTransaction): OrderDebit {
+  return {
+    amount: stored.amount ?? raw.amount,
+    currency: stored.currency ?? raw.currency,
+    date: stored.date ?? raw.date,
+    value_date: stored.value_date ?? raw.value_date ?? null,
+    cash_account_id: stored.cash_account_id ?? null,
+    description: stored.original_description ?? stored.description ?? raw.description,
+    reference: stored.reference ?? raw.reference ?? null,
+    counterparty_iban: stored.counterparty_iban ?? raw.counterparty_iban ?? null,
+    counterparty_account: stored.counterparty_account ?? raw.counterparty_account ?? null,
+    end_to_end_id: stored.end_to_end_id ?? raw.end_to_end_id ?? null,
+  }
+}
+
+/**
  * Generic transaction ingestion pipeline.
  *
  * Handles:
@@ -900,8 +923,9 @@ export async function ingestTransactions(
   // invoices and exchange rates: they are not used.
   let unpaidSupplierInvoices: SupplierInvoice[] = []
   let openRotRutPayoutRequests: RotRutPayoutRequestCandidate[] = []
-  // Open bank payment orders by the end-to-end id their own debit carries (lower-cased).
-  const openPaymentOrdersByE2E = new Map<string, { id: string; supplier_invoice_id: string }>()
+  // The company's open bank payment orders (payment_orders): a debit in this
+  // batch may be the one that settles one of them (step 3a).
+  let openPaymentOrders: PaymentOrderRow[] = []
   // Keyed by `${currency}|${date}` so each non-SEK transaction gets the
   // rate that was valid on its own transaction date, not the import date.
   const exchangeRatesByDate = new Map<string, ExchangeRate>()
@@ -927,30 +951,11 @@ export async function ingestTransactions(
   // longer explain (remaining_amount is net of the deduction), so the begäran
   // is the candidate. Small table: a company has a handful of open requests.
   openRotRutPayoutRequests = await loadOpenRotRutPayoutRequests(supabase, companyId)
-  // Bank payments Accounted initiated (payment_orders) come back on their own
-  // debit with the order's end-to-end id. Only feeds that report one (Open
-  // Payments) trigger this read; every other batch skips it. The match is
-  // case-insensitive: banks have echoed the id in another case. Non-critical.
-  const endToEndIds = [...new Set(rawTransactions.map(raw => raw.end_to_end_id?.trim()).filter((id): id is string => Boolean(id)))]
-  if (endToEndIds.length > 0) {
-    try {
-      const variants = [...new Set(endToEndIds.flatMap(id => [id, id.toUpperCase(), id.toLowerCase()]))]
-      const wanted = new Set(endToEndIds.map(id => id.toLowerCase()))
-      const { data: orders } = await supabase
-        .from('payment_orders')
-        .select('id, end_to_end_id, supplier_invoice_id')
-        .eq('company_id', companyId)
-        .in('end_to_end_id', variants)
-        .in('status', ['accepted', 'awaiting_second_signer', 'executed'])
-        .is('supplier_invoice_payment_id', null)
-      for (const order of (orders ?? []) as Array<{ id: string; end_to_end_id: string; supplier_invoice_id: string | null }>) {
-        const key = order.end_to_end_id.toLowerCase()
-        if (order.supplier_invoice_id && wanted.has(key)) openPaymentOrdersByE2E.set(key, { id: order.id, supplier_invoice_id: order.supplier_invoice_id })
-      }
-    } catch {
-      // Non-critical: the heuristics below still run
-    }
-  }
+  // Bank payments Accounted initiated (payment_orders) come back as their own
+  // debit: with the order's end-to-end id when the bank echoes it (Open
+  // Payments does, Swedbank does not), otherwise as the order's amount from
+  // its account on its execution day. Read once per batch; never throws.
+  openPaymentOrders = await loadOpenPaymentOrders(supabase, companyId)
   }
 
   // Pre-fetch exchange rates for each unique (currency, date) pair in the
@@ -1309,28 +1314,60 @@ export async function ingestTransactions(
       }
     }
 
-    // 3a. The debit of a bank payment Accounted initiated carries the order's
-    // own end-to-end id: the strongest evidence there is, so it goes before
-    // the heuristics. Still ONLY a suggestion (potential_supplier_invoice_id):
-    // the match route books the payment when a person confirms, and that
-    // payment row is what settles the order.
-    const paymentOrder = raw.end_to_end_id ? openPaymentOrdersByE2E.get(raw.end_to_end_id.trim().toLowerCase()) : undefined
-    if (newTransaction.amount < 0 && paymentOrder && !matchedSupplierInvoiceIds.has(paymentOrder.supplier_invoice_id)) {
-      const { error: hintError } = await supabase
-        .from('transactions')
-        .update({ potential_supplier_invoice_id: paymentOrder.supplier_invoice_id })
-        .eq('id', newTransaction.id)
-      if (!hintError) {
-        await logMatchEvent(supabase, userId, newTransaction.id, 'auto_suggested', {
-          supplierInvoiceId: paymentOrder.supplier_invoice_id,
-          matchConfidence: 0.99,
-          matchMethod: 'payment_order',
-          newState: { payment_order_id: paymentOrder.id },
-        })
-        matchedSupplierInvoiceIds.add(paymentOrder.supplier_invoice_id)
-        unpaidSupplierInvoices = unpaidSupplierInvoices.filter(inv => inv.id !== paymentOrder.supplier_invoice_id)
-        result.auto_matched_invoices++
-        continue
+    // 3a. The debit of a bank payment Accounted initiated (findOrderForDebit:
+    // the order's end-to-end id, or a unique amount, account and date match).
+    // The owner approved and BankID-signed exactly this payment, so the bank's
+    // matching debit is the confirmation: the supplier payment is booked here,
+    // as the user who approved the order, and the payment row settles the
+    // order (settleOrderWithDebit). When the booking is refused (a locked
+    // period, an invoice no longer open, amounts apart) the row keeps the
+    // suggestion a person confirms, as before. Goes before the heuristics:
+    // it is the strongest evidence there is.
+    if (newTransaction.amount < 0 && openPaymentOrders.length > 0) {
+      try {
+        const match = findOrderForDebit(debitForOrderMatch(newTransaction as Transaction, raw), openPaymentOrders)
+        const invoiceId = match?.order.supplier_invoice_id
+        if (match && invoiceId && !matchedSupplierInvoiceIds.has(invoiceId)) {
+          const order = match.order
+          // One debit per order per batch, booked or suggested.
+          openPaymentOrders = openPaymentOrders.filter((o) => o.id !== order.id)
+          const settled = await settleOrderWithDebit(supabase, {
+            order,
+            transaction: newTransaction as Transaction,
+            confidence: match.confidence,
+            basis: match.basis,
+            log,
+          })
+          if (settled.ok) {
+            matchedSupplierInvoiceIds.add(invoiceId)
+            unpaidSupplierInvoices = unpaidSupplierInvoices.filter(inv => inv.id !== invoiceId)
+            result.auto_matched_invoices++
+            continue
+          }
+          const { error: hintError } = await supabase
+            .from('transactions')
+            .update({ potential_supplier_invoice_id: invoiceId })
+            .eq('id', newTransaction.id)
+          if (!hintError) {
+            await logMatchEvent(supabase, userId, newTransaction.id, 'auto_suggested', {
+              supplierInvoiceId: invoiceId,
+              matchConfidence: match.confidence,
+              matchMethod: PAYMENT_ORDER_MATCH_METHOD,
+              newState: {
+                payment_order_id: order.id,
+                matched_by: match.basis,
+                auto_settle_refused: settled.reason,
+                ...(settled.code ? { code: settled.code } : {}),
+              },
+            })
+            matchedSupplierInvoiceIds.add(invoiceId)
+            unpaidSupplierInvoices = unpaidSupplierInvoices.filter(inv => inv.id !== invoiceId)
+            result.auto_matched_invoices++
+            continue
+          }
+        }
+      } catch {
+        // Non-critical: the heuristics below still run
       }
     }
 

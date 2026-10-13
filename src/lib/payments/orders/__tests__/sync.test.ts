@@ -8,8 +8,23 @@ import {
   type PaymentInitiationProvider,
 } from '@/lib/payments/initiation/provider'
 import type { Logger } from '@/lib/logger'
+import type { CreateJournalEntryInput } from '@/types'
+
+// The debit sweep books for real down to the engine; the side-effect helpers
+// pinned elsewhere are mocked so they consume no table answers.
+const mockCreateJournalEntry = vi.fn()
+vi.mock('@/lib/bookkeeping/engine', () => ({
+  createJournalEntry: (...args: unknown[]) => mockCreateJournalEntry(...args),
+  findFiscalPeriod: vi.fn().mockResolvedValue('fp-2026'),
+  reverseEntry: vi.fn(),
+}))
+vi.mock('@/lib/events/bus', () => ({ eventBus: { emit: vi.fn() } }))
+vi.mock('@/lib/core/documents/supplier-invoice-underlag', () => ({ anchorSupplierInvoiceDocument: vi.fn() }))
+vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({ clearSettledInvoiceSuggestions: vi.fn() }))
+
 import { syncPaymentOrderStatuses } from '../sync'
 import type { PaymentOrderBatchRow, PaymentOrderRow } from '../types'
+import { ARCIM, arcimDebit, arcimInvoice, arcimOrder } from './fixtures'
 
 const COMPANY = 'company-1'
 
@@ -62,12 +77,15 @@ async function run() {
 beforeEach(() => {
   vi.clearAllMocks()
   resetPaymentInitiationProviders()
+  mockCreateJournalEntry.mockResolvedValue({ id: 'je-payment' })
   db = createTableMockSupabase({
-    company_settings: { data: { org_number: '556677-8899' } },
+    company_settings: { data: { org_number: '556677-8899', accounting_method: 'accrual' } },
+    cash_accounts: { data: { ledger_account: '1930' } },
     payment_order_batches: { data: [] },
     payment_order_events: { data: [] },
     payment_orders: { data: [] },
     supplier_invoices: { data: [] },
+    transactions: { data: [] },
     'rpc:sweep_stale_payment_order_claims': { data: { marked_unknown: 0, released: 0 } },
     'rpc:release_payment_order': { data: { ok: true, status: 'cancelled' } },
   })
@@ -207,6 +225,7 @@ describe('syncPaymentOrderStatuses', () => {
       signedLate: 0,
       cancelledForClosedInvoice: 0,
       heldForPerson: 0,
+      settledByDebit: 0,
       errors: 0,
       noProvider: true,
     })
@@ -281,5 +300,117 @@ describe('syncPaymentOrderStatuses', () => {
     expect(result).toMatchObject({ cancelledForClosedInvoice: 0, heldForPerson: 0 })
     expect(cancelPayment).toHaveBeenCalledTimes(1)
     expect(events().some((e) => e.event_type === 'cancel_requested')).toBe(false)
+  })
+})
+
+describe('syncPaymentOrderStatuses: the debit sweep', () => {
+  type Line = { account_number: string; debit_amount: number; credit_amount: number }
+  const shape = (input: CreateJournalEntryInput | undefined) =>
+    (input?.lines ?? []).map((l: Line) => [l.account_number, l.debit_amount, l.credit_amount])
+
+  /** The bank is reachable but holds nothing in flight: only the sweep has work. */
+  function seedArcim(options: { debits?: unknown[] } = {}) {
+    registerPaymentInitiationProvider(provider(vi.fn()))
+    db.setTable('payment_orders', [
+      { data: [] }, // in flight: nothing
+      { data: [arcimOrder()] }, // executed, unsettled
+      { data: arcimOrder() }, // read again before booking
+      { data: { id: ARCIM.orderId, status: 'executed', supplier_invoice_payment_id: 'sip-1' } }, // the trigger linked it
+    ])
+    db.setTable('transactions', [
+      { data: options.debits ?? [arcimDebit()] }, // unbooked debits of the order's shape
+      { data: arcimDebit() }, // read again before booking
+      { data: null },
+    ])
+    db.setTable('supplier_invoices', [{ data: arcimInvoice() }, { data: [{ id: ARCIM.invoiceId }] }])
+    db.setTable('supplier_invoice_payments', { data: null })
+    db.setTable('payment_match_log', { data: null })
+  }
+
+  it("settles Arcim's executed order 4e42c482 with the Swedbank debit 7af13560 already in the feed, on the first run", async () => {
+    seedArcim()
+
+    const result = await run()
+
+    expect(result).toMatchObject({ settledByDebit: 1, errors: 0, checked: 0 })
+    // Executed, unsettled orders of the last 14 days, each against the
+    // unbooked debits of its amount from its account in the bank feeds.
+    expect(db.findCalls('payment_orders', 'eq')).toContainEqual(['status', 'executed'])
+    expect(db.findCalls('payment_orders', 'is')).toContainEqual(['supplier_invoice_payment_id', null])
+    expect(db.findCalls('transactions', 'eq')).toEqual(
+      expect.arrayContaining([
+        ['company_id', ARCIM.companyId],
+        ['cash_account_id', ARCIM.cashAccountId],
+        ['currency', 'SEK'],
+        ['amount', -10],
+        ['is_ignored', false],
+      ]),
+    )
+    expect(db.findCalls('transactions', 'is')).toEqual(expect.arrayContaining([['journal_entry_id', null], ['supplier_invoice_id', null]]))
+    expect(db.findCalls('transactions', 'in')).toContainEqual(['import_source', ['open_payments', 'enable_banking']])
+    // Booked as the user who approved the order: Dr 2440 / Cr 1930, 10,00 on 2026-10-13.
+    expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
+    const [, companyId, userId, input] = mockCreateJournalEntry.mock.calls[0] as [unknown, string, string, CreateJournalEntryInput]
+    expect([companyId, userId]).toEqual([ARCIM.companyId, ARCIM.userId])
+    expect(shape(input)).toEqual([['2440', 10, 0], ['1930', 0, 10]])
+    expect(db.findCall('supplier_invoice_payments', 'insert')?.[0]).toMatchObject({
+      supplier_invoice_id: ARCIM.invoiceId, transaction_id: ARCIM.transactionId, amount: 10, user_id: ARCIM.userId,
+    })
+    expect(db.findCall('transactions', 'update')?.[0]).toMatchObject({
+      supplier_invoice_id: ARCIM.invoiceId, potential_supplier_invoice_id: null, journal_entry_id: 'je-payment',
+    })
+    expect(db.findCall('payment_match_log', 'insert')?.[0]).toMatchObject({
+      action: 'auto_matched',
+      match_method: 'payment_order',
+      match_confidence: 0.98,
+      new_state: expect.objectContaining({ payment_order_id: ARCIM.orderId, matched_by: 'payee' }),
+    })
+    expect(log.info).toHaveBeenCalledWith(
+      'executed payment order settled with its debit',
+      expect.objectContaining({ orderId: ARCIM.orderId, transactionId: ARCIM.transactionId, basis: 'payee', orderLinked: true }),
+    )
+  })
+
+  it('leaves an executed order alone when no unbooked debit of its shape is in the feed', async () => {
+    seedArcim({ debits: [] })
+
+    const result = await run()
+
+    expect(result).toMatchObject({ settledByDebit: 0, errors: 0 })
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('leaves an executed order alone when two unbooked debits could be it', async () => {
+    seedArcim({ debits: [arcimDebit(), arcimDebit({ id: 'tx-twin' })] })
+
+    const result = await run()
+
+    expect(result).toMatchObject({ settledByDebit: 0, errors: 0 })
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('leaves an executed order alone when its debit was booked meanwhile', async () => {
+    seedArcim()
+    db.setTable('transactions', [{ data: [arcimDebit()] }, { data: arcimDebit({ journal_entry_id: 'je-by-hand' }) }])
+
+    const result = await run()
+
+    expect(result).toMatchObject({ settledByDebit: 0, errors: 0 })
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(log.info).toHaveBeenCalledWith('executed payment order left unsettled', expect.objectContaining({ reason: 'transaction_not_open' }))
+  })
+
+  it('runs after the statuses are applied, and a failing read counts as an error without undoing them', async () => {
+    registerPaymentInitiationProvider(provider(vi.fn().mockResolvedValue({ providerStatus: 'ACSC', status: 'executed', messages: [] })))
+    db.setTable('payment_orders', [
+      { data: [order('o1', { status: 'accepted' })] },
+      { data: [{ id: 'o1' }] },
+      { data: null, error: { message: 'connection reset' } }, // the sweep's read
+    ])
+
+    const result = await run()
+
+    expect(result).toMatchObject({ checked: 1, moved: 1, settledByDebit: 0, errors: 1 })
+    expect(patches('payment_orders').at(-1)).toMatchObject({ status: 'executed' })
   })
 })

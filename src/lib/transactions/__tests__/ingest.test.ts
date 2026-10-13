@@ -9,6 +9,7 @@ import { ingestTransactions } from '../ingest'
 import type { RawTransaction } from '@/types'
 import { makeJournalEntry, makeTransaction } from '@/tests/helpers'
 import { fullRawTransaction } from '@/tests/fixtures/full-raw-transaction'
+import { ARCIM, arcimDebit, arcimOrder, order as paymentOrder } from '@/lib/payments/orders/__tests__/fixtures'
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -48,6 +49,22 @@ vi.mock('@/lib/invoices/rot-rut-payout-candidates', () => ({
 // Default: no open begäran. vi.clearAllMocks keeps implementations, so this
 // survives beforeEach; tests that need a pool override it.
 mockLoadOpenRotRutPayoutRequests.mockResolvedValue([])
+
+// Mocked for the same reason: the open bank payment orders are read once per
+// batch, and the settle itself (the booking, the order link) is pinned in
+// lib/payments/orders/__tests__/auto-settle.test.ts. The matcher runs for real.
+const mockLoadOpenPaymentOrders = vi.fn()
+const mockSettleOrderWithDebit = vi.fn()
+vi.mock('@/lib/payments/orders/auto-settle', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/payments/orders/auto-settle')>()
+  return {
+    ...actual,
+    loadOpenPaymentOrders: (...args: unknown[]) => mockLoadOpenPaymentOrders(...args),
+    settleOrderWithDebit: (...args: unknown[]) => mockSettleOrderWithDebit(...args),
+  }
+})
+// Default: no open orders.
+mockLoadOpenPaymentOrders.mockResolvedValue([])
 
 // ---------------------------------------------------------------------------
 // Queue-based Supabase mock
@@ -321,32 +338,107 @@ describe('ingestTransactions', () => {
   // -----------------------------------------------------------------------
   // 1c2. Stamps bank_file_import_id from the batch option
   // -----------------------------------------------------------------------
-  it('suggests the invoice of the bank payment whose end-to-end id the debit carries, case-insensitively, before any heuristic', async () => {
+  it('books the invoice of the bank payment whose end-to-end id the debit carries, case-insensitively, before any heuristic', async () => {
     const { supabase, enqueue, updates } = createQueueMockSupabase()
     const raw = makeRaw({ amount: -1000, end_to_end_id: 'acc0f3a', import_source: 'open_payments' })
+    const openOrder = paymentOrder('po-1', {
+      status: 'accepted', provider_payment_id: 'pay-1', amount: 1000, end_to_end_id: 'ACC0F3A', supplier_invoice_id: 'si-1',
+    })
+    mockLoadOpenPaymentOrders.mockResolvedValueOnce([openOrder])
+    mockSettleOrderWithDebit.mockResolvedValueOnce({ ok: true, journalEntryId: 'je-1', orderLinked: true, linkedBy: 'trigger' })
     enqueue({ data: [] }, { data: [] }) // booked map, unbooked map
     enqueue({ data: [] }) // supplier invoices
-    enqueue({ data: [{ id: 'po-1', end_to_end_id: 'ACC0F3A', supplier_invoice_id: 'si-1' }] }) // open payment orders
     enqueue({ data: [] }) // external_id dedup
     enqueue({ data: makeTransaction({ id: 'tx-1', amount: -1000 }) }) // insert
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+    expect(mockLoadOpenPaymentOrders).toHaveBeenCalledWith(supabase, COMPANY_ID)
+    expect(mockSettleOrderWithDebit).toHaveBeenCalledTimes(1)
+    expect(mockSettleOrderWithDebit.mock.calls[0][1]).toMatchObject({
+      order: { id: 'po-1' }, transaction: { id: 'tx-1' }, confidence: 0.99, basis: 'end_to_end_id',
+    })
+    expect(result.auto_matched_invoices).toBe(1)
+    // Booked, not suggested: no hint, no heuristic, no auto-categorisation.
+    expect(updates['transactions']).toBeUndefined()
+    expect(mockEvaluateMappingRules).not.toHaveBeenCalled()
+    expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('books the Swedbank debit of an executed order, which carries no end-to-end id, by amount, account, date and the zero-padded bankgiro', async () => {
+    const { supabase, enqueue, updates } = createQueueMockSupabase()
+    const raw = makeRaw({
+      date: '2026-10-13', amount: -10, description: 'MATTSSON SYSTEMS BG 0000052386828',
+      reference: 'Bg-bet. via internet', value_date: '2026-10-13', import_source: 'open_payments',
+    })
+    mockLoadOpenPaymentOrders.mockResolvedValueOnce([arcimOrder()])
+    mockSettleOrderWithDebit.mockResolvedValueOnce({ ok: true, journalEntryId: 'je-1', orderLinked: true, linkedBy: 'trigger' })
+    enqueue({ data: [] }, { data: [] }) // booked map, unbooked map
+    enqueue({ data: [{ id: ARCIM.invoiceId, status: 'approved', total: 10, remaining_amount: 10, supplier: { name: 'Mattsson Systems AB' } }] }) // supplier invoices
+    enqueue({ data: [] }) // external_id dedup
+    enqueue({ data: arcimDebit({ potential_supplier_invoice_id: null }) }) // insert
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
+
+    expect(mockSettleOrderWithDebit).toHaveBeenCalledTimes(1)
+    expect(mockSettleOrderWithDebit.mock.calls[0][1]).toMatchObject({
+      order: { id: ARCIM.orderId }, transaction: { id: ARCIM.transactionId }, confidence: 0.98, basis: 'payee',
+    })
+    expect(result.auto_matched_invoices).toBe(1)
+    expect(updates['transactions']).toBeUndefined()
+    expect(mockEvaluateMappingRules).not.toHaveBeenCalled()
+  })
+
+  it("keeps the suggestion when the order's debit cannot be booked (a locked period), as before", async () => {
+    const { supabase, enqueue, updates, inserts } = createQueueMockSupabase()
+    const raw = makeRaw({
+      date: '2026-10-13', amount: -10, description: 'MATTSSON SYSTEMS BG 0000052386828',
+      reference: 'Bg-bet. via internet', import_source: 'open_payments',
+    })
+    mockLoadOpenPaymentOrders.mockResolvedValueOnce([arcimOrder()])
+    mockSettleOrderWithDebit.mockResolvedValueOnce({ ok: false, reason: 'booking_failed', code: 'TARGET_PERIOD_LOCKED' })
+    enqueue({ data: [] }, { data: [] }) // booked map, unbooked map
+    enqueue({ data: [] }) // supplier invoices
+    enqueue({ data: [] }) // external_id dedup
+    enqueue({ data: arcimDebit({ potential_supplier_invoice_id: null }) }) // insert
     enqueue({ data: null }, { data: null }) // suggestion update, match log
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw])
 
-    expect(supabase.from).toHaveBeenCalledWith('payment_orders')
-    expect(updates['transactions']).toContainEqual({ potential_supplier_invoice_id: 'si-1' })
+    expect(updates['transactions']).toEqual([{ potential_supplier_invoice_id: ARCIM.invoiceId }])
+    expect(inserts['payment_match_log']).toEqual([
+      expect.objectContaining({
+        action: 'auto_suggested',
+        supplier_invoice_id: ARCIM.invoiceId,
+        match_method: 'payment_order',
+        match_confidence: 0.98,
+        new_state: { payment_order_id: ARCIM.orderId, matched_by: 'payee', auto_settle_refused: 'booking_failed', code: 'TARGET_PERIOD_LOCKED' },
+      }),
+    ])
     expect(result.auto_matched_invoices).toBe(1)
     // A suggestion only: nothing is booked.
     expect(mockEvaluateMappingRules).not.toHaveBeenCalled()
     expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
   })
 
-  it('reads no payment orders for a batch without end-to-end ids', async () => {
+  it('reads the open orders once per batch, never for a raw insert, and runs the heuristics for a debit no order explains', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
-    enqueue({ data: [] }, { data: [] }, { data: [] }, { data: [] }, { data: makeTransaction({ id: 'tx-1', amount: -50 }) })
+    mockLoadOpenPaymentOrders.mockResolvedValueOnce([arcimOrder()])
+    enqueue({ data: [] }, { data: [] }, { data: [] }, { data: [] })
+    enqueue({ data: makeTransaction({ id: 'tx-1', amount: -50 }) }, { data: makeTransaction({ id: 'tx-2', amount: -60 }) })
     mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
-    await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [makeRaw({ amount: -50 })])
-    expect(supabase.from).not.toHaveBeenCalledWith('payment_orders')
+
+    await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [makeRaw({ amount: -50 }), makeRaw({ amount: -60 })])
+
+    expect(mockLoadOpenPaymentOrders).toHaveBeenCalledTimes(1)
+    expect(mockSettleOrderWithDebit).not.toHaveBeenCalled()
+    expect(mockEvaluateMappingRules).toHaveBeenCalledTimes(2)
+
+    mockLoadOpenPaymentOrders.mockClear()
+    const raw = createQueueMockSupabase()
+    raw.enqueue({ data: [] }, { data: [] }, { data: [] }, { data: makeTransaction({ id: 'tx-3', amount: -50 }) })
+    await ingestTransactions(raw.supabase as never, COMPANY_ID, USER_ID, [makeRaw({ amount: -50 })], { rawInsertOnly: true })
+    expect(mockLoadOpenPaymentOrders).not.toHaveBeenCalled()
   })
 
   it('stamps bank_file_import_id on the insert when bankFileImportId is given', async () => {

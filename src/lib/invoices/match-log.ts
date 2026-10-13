@@ -1,12 +1,20 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 
-type MatchAction =
+/**
+ * Every value must also be in the payment_match_log.action CHECK (latest:
+ * migration 20261013160000) and in tests/pg/payment-match-log-actions.pg.test.ts:
+ * the insert below is fire-and-forget, so a value the CHECK lacks is dropped
+ * silently.
+ */
+export type MatchAction =
   | 'matched'
   | 'unmatched'
   | 'auto_suggested'
   | 'suggestion_cleared'
   | 'storno_conflict_resolved'
   | 'linked_to_existing_voucher'
+  /** Booked without a person: the debit of a bank payment order settled its invoice. */
+  | 'auto_matched'
 
 /**
  * Log a payment match event to the append-only audit trail.

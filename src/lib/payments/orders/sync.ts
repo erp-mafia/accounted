@@ -17,6 +17,11 @@
  * An unsigned payment whose invoice no longer needs paying (paid another way,
  * credited) is cancelled at the bank, once: a confirmed cancel cancels the
  * order, any other answer holds it for a person (release.ts).
+ *
+ * Last, the sweep: an executed order still unsettled whose debit is already
+ * in the feed and still unbooked (the debit arrived before the bank reported
+ * the payment executed, or before this release) is booked with it
+ * (auto-settle.ts), the same way ingest books a debit that arrives after.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -27,7 +32,18 @@ import {
   PaymentProviderError,
   type PaymentPartyContext,
 } from '@/lib/payments/initiation/provider'
+import { addDaysIso } from '@/lib/dates/iso'
+import type { Transaction } from '@/types'
 import { applyProviderState } from './apply-state'
+import { settleOrderWithDebit } from './auto-settle'
+import {
+  DEBIT_WINDOW_DAYS_AFTER,
+  DEBIT_WINDOW_DAYS_BEFORE,
+  findOrderForDebit,
+  isDebitSettleableOrder,
+  type DebitMatchBasis,
+  type OrderDebit,
+} from './debit-match'
 import { paymentAccountContext } from './debtor'
 import { cancelForClosedInvoice, unpayableOrders } from './release'
 import type { PaymentOrderStatus } from './status'
@@ -42,6 +58,16 @@ export const STALE_CREATE_MINUTES = 15
 /** A BankID signing nobody finished: BankID itself gives up after a few minutes. */
 export const ABANDONED_SIGNING_MINUTES = 15
 const BATCH_LIMIT = 200
+/** An executed order is swept for its debit this long after the bank executed it. */
+export const EXECUTED_ORDER_SWEEP_DAYS = 14
+/** The bank feeds whose unbooked debits the sweep may book. */
+const DEBIT_FEEDS = ['open_payments', 'enable_banking'] as const
+/**
+ * The debit read is bounded by booking date; the matcher then applies the
+ * exact window to the booking date or the value date, which may lie a few
+ * days apart around a weekend.
+ */
+const DEBIT_READ_SLACK_DAYS = 3
 
 /** Statuses only a finished signing reaches. */
 const SIGNED: ReadonlySet<PaymentOrderStatus> = new Set(['awaiting_second_signer', 'accepted', 'executed'])
@@ -61,6 +87,8 @@ export interface PaymentStatusSyncResult {
   abandoned: number
   /** Signings finished at the bank after the dialog closed: the batch now says so. */
   signedLate: number
+  /** Executed orders settled by a debit already in the feed (auto-settle.ts). */
+  settledByDebit: number
   errors: number
   /** True when no payments provider is registered: only the stale-claim pass ran. */
   noProvider?: boolean
@@ -251,6 +279,7 @@ export async function syncPaymentOrderStatuses(writer: SupabaseClient, log: Logg
     signedLate: 0,
     cancelledForClosedInvoice: 0,
     heldForPerson: 0,
+    settledByDebit: 0,
     errors: 0,
   }
 
@@ -308,5 +337,126 @@ export async function syncPaymentOrderStatuses(writer: SupabaseClient, log: Logg
     if (outcome === 'cancelled' || outcome === 'released') result.cancelledForClosedInvoice += 1
     else if (outcome === 'held') result.heldForPerson += 1
   }
+
+  await settleExecutedOrdersByDebit(writer, log, result)
   return result
+}
+
+/** A stored transactions row as the matcher reads it. */
+function debitOf(row: Transaction): OrderDebit {
+  return {
+    amount: row.amount,
+    currency: row.currency,
+    date: row.date,
+    value_date: row.value_date ?? null,
+    cash_account_id: row.cash_account_id,
+    description: row.original_description ?? row.description,
+    reference: row.reference,
+    counterparty_iban: row.counterparty_iban,
+    counterparty_account: row.counterparty_account,
+    end_to_end_id: row.end_to_end_id ?? null,
+  }
+}
+
+/**
+ * The one unbooked debit in the feed that is this order's: the order's amount
+ * from its account in its execution window (findOrderForDebit decides, with
+ * the same rules ingest applies). Two such debits and neither carrying the
+ * order's end-to-end id is left for a person.
+ */
+async function unbookedDebitFor(
+  writer: SupabaseClient,
+  order: PaymentOrderRow,
+): Promise<{ transaction: Transaction; confidence: number; basis: DebitMatchBasis } | null> {
+  const { data, error } = await writer
+    .from('transactions')
+    .select('*')
+    .eq('company_id', order.company_id)
+    .eq('cash_account_id', order.cash_account_id)
+    .eq('currency', order.currency)
+    .eq('amount', -Number(order.amount))
+    .is('journal_entry_id', null)
+    .is('supplier_invoice_id', null)
+    .eq('is_ignored', false)
+    .in('import_source', [...DEBIT_FEEDS])
+    .gte('date', addDaysIso(order.requested_execution_date, -(DEBIT_WINDOW_DAYS_BEFORE + DEBIT_READ_SLACK_DAYS)))
+    .lte('date', addDaysIso(order.requested_execution_date, DEBIT_WINDOW_DAYS_AFTER + DEBIT_READ_SLACK_DAYS))
+    .limit(20)
+  if (error) throw error
+  const rows = Array.isArray(data) ? (data as Transaction[]) : []
+  const matches = rows.flatMap((row) => {
+    const match = findOrderForDebit(debitOf(row), [order])
+    return match ? [{ transaction: row, confidence: match.confidence, basis: match.basis }] : []
+  })
+  if (matches.length === 1) return matches[0]
+  const named = matches.filter((m) => m.basis === 'end_to_end_id')
+  return named.length === 1 ? named[0] : null
+}
+
+/**
+ * Executed orders nobody has settled, each booked with its own debit when
+ * exactly one unbooked debit in the feed is it. Idempotent: the order and the
+ * debit are read again right before booking (settleOrderWithDebit), and a
+ * settled order leaves the read's filter.
+ */
+async function settleExecutedOrdersByDebit(writer: SupabaseClient, log: Logger, result: PaymentStatusSyncResult): Promise<void> {
+  let orders: PaymentOrderRow[]
+  try {
+    const since = new Date(Date.now() - EXECUTED_ORDER_SWEEP_DAYS * 86_400_000).toISOString()
+    const { data, error } = await writer
+      .from('payment_orders')
+      .select('*')
+      .eq('status', 'executed')
+      .is('supplier_invoice_payment_id', null)
+      .not('supplier_invoice_id', 'is', null)
+      .not('provider_payment_id', 'is', null)
+      .gte('executed_at', since)
+      .order('executed_at', { ascending: true })
+      .limit(BATCH_LIMIT)
+    if (error) throw error
+    // The read's own filter, applied again: a row another writer changed
+    // between the read and here is left alone.
+    orders = (Array.isArray(data) ? (data as PaymentOrderRow[]) : []).filter(
+      (order) => order.status === 'executed' && isDebitSettleableOrder(order),
+    )
+  } catch (err) {
+    // The sweep is additive to the status sync: its failure never undoes the
+    // statuses applied above.
+    result.errors += 1
+    log.error('executed payment orders could not be read for the debit sweep', err as Error)
+    return
+  }
+
+  for (const order of orders) {
+    try {
+      const debit = await unbookedDebitFor(writer, order)
+      if (!debit) continue
+      const outcome = await settleOrderWithDebit(writer, {
+        order,
+        transaction: debit.transaction,
+        confidence: debit.confidence,
+        basis: debit.basis,
+        log,
+      })
+      if (outcome.ok) {
+        result.settledByDebit += 1
+        log.info('executed payment order settled with its debit', {
+          orderId: order.id,
+          transactionId: debit.transaction.id,
+          basis: debit.basis,
+          orderLinked: outcome.orderLinked,
+        })
+      } else {
+        log.info('executed payment order left unsettled', {
+          orderId: order.id,
+          transactionId: debit.transaction.id,
+          reason: outcome.reason,
+          code: outcome.code ?? null,
+        })
+      }
+    } catch (err) {
+      result.errors += 1
+      log.warn('debit sweep failed for one order', { orderId: order.id, error: err instanceof Error ? err.message : String(err) })
+    }
+  }
 }
