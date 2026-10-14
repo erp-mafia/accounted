@@ -41,6 +41,11 @@ vi.mock('@/lib/providers/fortnox/attachments', () => ({
   fetchFortnoxFinancialYears: vi.fn(),
   fetchFortnoxFileConnections: vi.fn(),
   downloadFortnoxArchiveFile: vi.fn(),
+  // Supplier-invoice files have their own suite against Fortnox HTTP shapes
+  // (import-documents-fortnox-supplier-invoices.test.ts); here the register is empty.
+  fetchFortnoxSupplierInvoiceFileConnections: vi.fn(async () => []),
+  fetchFortnoxSupplierInvoiceBookings: vi.fn(async () => new Map()),
+  fetchFortnoxSupplierInvoiceBookingVoucher: vi.fn(async () => null),
 }))
 vi.mock('@/lib/core/documents/document-service', () => ({
   uploadDocument: vi.fn(),
@@ -456,6 +461,7 @@ describe('importProviderDocuments', () => {
       uploadId: 'fortnox-file-1',
       voucher: '(unresolved)',
       date: '',
+      reason: 'no_voucher_ref',
     })
     expect(mockDownloadFortnoxArchiveFile).not.toHaveBeenCalled()
   })
@@ -797,9 +803,114 @@ describe('importProviderDocuments', () => {
     })
 
     expect(result).toMatchObject({ scanned: 1, linked: 0, unmatched: 1, failed: 0 })
-    expect(result.unmatchedSamples[0]).toMatchObject({ voucher: 'A12' })
+    expect(result.unmatchedSamples[0]).toMatchObject({ voucher: 'A12', reason: 'several_posted' })
     expect(mockDownloadFortnoxArchiveFile).not.toHaveBeenCalled()
     expect(mockUpload).not.toHaveBeenCalled()
+  })
+
+  describe('a re-synced year: a reversed copy of each verifikat beside the live one (PH 163)', () => {
+    // Replacing a year by an SIE re-sync reverses the first import's copy and
+    // imports the year again: both copies carry the same source ref (A12).
+    const liveCopy = { id: 'je-live', fiscal_period_id: 'fp-2021', entry_date: '2021-03-01', source_voucher_series: 'A', source_voucher_number: 12, status: 'posted' }
+    const firstCopy = { ...liveCopy, id: 'je-first-copy', status: 'reversed' }
+
+    it('links the Fortnox file to the live copy, never to the reversed one', async () => {
+      const supabase = wireFortnox({ vouchers: [firstCopy, liveCopy] })
+
+      const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      expect(result).toMatchObject({ scanned: 1, linked: 1, unmatched: 0, failed: 0 })
+      expect(mockUpload).toHaveBeenCalledTimes(1)
+      expect(mockUpload.mock.calls[0][4]).toMatchObject({ journal_entry_id: 'je-live', idempotency_key: 'je-live' })
+    })
+
+    it('counts the live copy as a would-link in the dry run', async () => {
+      const supabase = wireFortnox({ vouchers: [firstCopy, liveCopy] })
+
+      const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1', dryRun: true })
+
+      expect(result).toMatchObject({ dryRun: true, linked: 1, unmatched: 0 })
+      expect(mockDownloadFortnoxArchiveFile).not.toHaveBeenCalled()
+    })
+
+    it('links a Bokio receipt to the live copy too: the sweep is shared', async () => {
+      mockFetchUploads.mockResolvedValue([UPLOAD] as never)
+      mockFetchVoucherIndex.mockResolvedValue(new Map([['bokio-je-1', VOUCHER_REF]]))
+      mockDownload.mockResolvedValue({ bytes: bytesOf('PDFBYTES'), contentType: 'application/pdf' })
+      const bokioLive = { ...liveCopy, source_voucher_series: 'V', source_voucher_number: 33 }
+      const supabase = rangeMockSupabase({
+        fiscal_periods: PERIODS,
+        journal_entries: [{ ...bokioLive, id: 'je-first-copy', status: 'reversed' }, bokioLive],
+        document_attachments: [],
+      })
+
+      const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      expect(result).toMatchObject({ provider: 'bokio', linked: 1, unmatched: 0 })
+      expect(mockUpload.mock.calls[0][4]).toMatchObject({ journal_entry_id: 'je-live' })
+    })
+
+    it('leaves a ref only reversed copies carry unmatched, with its reason and without a download', async () => {
+      const supabase = wireFortnox({ vouchers: [firstCopy] })
+
+      const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      expect(result).toMatchObject({ scanned: 1, linked: 0, unmatched: 1, failed: 0 })
+      expect(result.unmatchedSamples).toEqual([
+        { uploadId: 'fortnox-file-1', voucher: 'A12', date: '2021-02-04', reason: 'only_reversed' },
+      ])
+      expect(mockDownloadFortnoxArchiveFile).not.toHaveBeenCalled()
+      expect(mockUpload).not.toHaveBeenCalled()
+    })
+
+    it('still refuses two live copies beside a reversed one', async () => {
+      const supabase = wireFortnox({ vouchers: [firstCopy, liveCopy, { ...liveCopy, id: 'je-live-2' }] })
+
+      const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      expect(result).toMatchObject({ linked: 0, unmatched: 1 })
+      expect(result.unmatchedSamples[0]).toMatchObject({ voucher: 'A12', reason: 'several_posted' })
+      expect(mockUpload).not.toHaveBeenCalled()
+    })
+
+    it('reports the live copy in a klarmarkerat year as locked, without a download', async () => {
+      const supabase = wireFortnox({
+        vouchers: [firstCopy, liveCopy],
+        periods: [{ ...PERIODS[0], is_closed: true, locked_at: '2026-09-30T11:52:22Z' }],
+      })
+
+      const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      expect(result).toMatchObject({ linked: 0, locked: 1, unmatched: 0, failed: 0 })
+      expect(mockDownloadFortnoxArchiveFile).not.toHaveBeenCalled()
+    })
+
+    it('leaves the live copy alone when it already carries underlag from another path', async () => {
+      const supabase = wireFortnox({
+        vouchers: [firstCopy, liveCopy],
+        existingAttachments: [{ id: 'manual-doc', sha256_hash: 'sha-OTHER', journal_entry_id: 'je-live', upload_source: 'file_upload' }],
+      })
+
+      const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      expect(result).toMatchObject({ linked: 0, skipped: 1, unmatched: 0 })
+      expect(mockDownloadFortnoxArchiveFile).not.toHaveBeenCalled()
+    })
+
+    it('links the live copy although the reversed copy kept the file an earlier run linked', async () => {
+      // The earlier run's document stays on the reversed copy (it cannot be
+      // removed), and the live verifikat in the books gets its own.
+      const supabase = wireFortnox({
+        vouchers: [firstCopy, liveCopy],
+        existingAttachments: [{ id: 'earlier-run', sha256_hash: 'sha-FORTNOX-PDF', journal_entry_id: 'je-first-copy', upload_source: 'api' }],
+      })
+      mockArchivedForOwnEntry.mockResolvedValue(true)
+
+      const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+      expect(result).toMatchObject({ linked: 1, skipped: 0 })
+      expect(mockUpload.mock.calls[0][4]).toMatchObject({ journal_entry_id: 'je-live' })
+    })
   })
 
   it('counts a receipt as unmatched when its journalEntryId is not in the Bokio voucher index', async () => {

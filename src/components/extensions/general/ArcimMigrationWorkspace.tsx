@@ -56,6 +56,7 @@ import {
   watchArcimOAuthPopup,
   type ArcimDocumentImportProblem,
   type ArcimDocumentImportState,
+  type ArcimUnreachableDocumentSource,
 } from './arcim-document-import-flow'
 import { MIGRATION_PROVIDERS } from '@/lib/providers/catalog'
 import type { ProviderName } from '@/lib/providers/types'
@@ -2048,6 +2049,27 @@ function DocumentImportFollowUp({
       </p>
     ) : null
 
+  // Files Fortnox keeps on supplier invoices come from a second register with
+  // its own scope: when Fortnox refused it, the voucher files still ran, and
+  // the panel says which permission or licence held the rest back.
+  const unreachableSourcesNote = (state.result?.unreachableSources ?? []).map(
+    (entry: ArcimUnreachableDocumentSource) => {
+      const scope = t(`ext_arcim_documents_scope_${entry.scope}`)
+      return (
+        <div key={entry.scope} className="space-y-1">
+          <p className="text-sm text-muted-foreground">
+            {t(`ext_arcim_documents_supplier_files_${entry.reason}`, { scope })}
+          </p>
+          {entry.providerMessage && (
+            <p className="text-xs text-muted-foreground">
+              {t('ext_arcim_documents_provider_message', { message: entry.providerMessage })}
+            </p>
+          )}
+        </div>
+      )
+    },
+  )
+
   if (
     state.phase === 'discovering' ||
     state.phase === 'importing' ||
@@ -2088,6 +2110,7 @@ function DocumentImportFollowUp({
             : t('ext_arcim_documents_prompt', { count: state.found, provider })}
         </p>
         {lockedYearsLine('ext_arcim_documents_locked_offer')}
+        {unreachableSourcesNote}
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <Button onClick={onImport}>
             {t('ext_arcim_documents_import_action', { provider })}
@@ -2105,6 +2128,7 @@ function DocumentImportFollowUp({
       <section className="space-y-3" aria-live="polite">
         {title}
         <p className="text-sm text-muted-foreground">{t('ext_arcim_documents_empty', { provider })}</p>
+        {unreachableSourcesNote}
         <Button variant="outline" onClick={onDiscover}>
           <RotateCcw className="mr-2 h-4 w-4" />
           {t('ext_arcim_documents_retry_discovery')}
@@ -2173,6 +2197,7 @@ function DocumentImportFollowUp({
             {t('ext_arcim_documents_unmatched_help')}
           </p>
         )}
+        {unreachableSourcesNote}
         {lockedCount > 0 && (
           <div className="space-y-3">
             {lockedYearsLine('ext_arcim_documents_locked_result')}

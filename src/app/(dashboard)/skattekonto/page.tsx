@@ -66,6 +66,7 @@ import type {
 import type { SkattekontoBatchRowResult } from '@/types/skatteverket'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { useSkattekontoLedgerProposalCount } from '@/components/skattekonto/use-ledger-proposal-count'
 
 const SkattekontoMatchDialog = dynamic(
   () =>
@@ -77,6 +78,14 @@ const SkattekontoMatchDialog = dynamic(
 
 const SkattekontoBookDialog = dynamic(
   () => import('@/components/skattekonto/SkattekontoBookDialog'),
+  { loading: DialogLoadingSkeleton },
+)
+
+const SkattekontoLinkProposalsDialog = dynamic(
+  () =>
+    import('@/components/skattekonto/SkattekontoLinkProposalsDialog').then(
+      (module) => module.SkattekontoLinkProposalsDialog,
+    ),
   { loading: DialogLoadingSkeleton },
 )
 
@@ -112,6 +121,14 @@ export default function SkattekontoPage() {
   )
   const [notConnected, setNotConnected] = useState(false)
   const [loadError, setLoadError] = useState(false)
+  // Open rows a verifikat already holds (imported history, PH 171), linked
+  // in one action from the page's attention line.
+  const [linkAllOpen, setLinkAllOpen] = useState(false)
+  const openRowCount = tx?.booked.filter((r) => !r.journal_entry_id).length ?? 0
+  const { count: ledgerProposals, refresh: refreshLedgerProposals } = useSkattekontoLedgerProposalCount(
+    openRowCount > 0,
+    openRowCount,
+  )
   // Reason string from a failed call; the flag is the same state found
   // proactively by the /status probe. Two pieces so reload() stays
   // dependency-free. The banner renders on either.
@@ -675,6 +692,12 @@ export default function SkattekontoPage() {
         <AttnLine action={{ label: t('attn_reconnect_action'), href: '/settings/skatteverket' }}>
           {reconnectBody}
         </AttnLine>
+      ) : (ledgerProposals ?? 0) > 0 ? (
+        // Rows the imported books already hold win over the connect hint:
+        // without the link they read as unbooked and invite a second booking.
+        <AttnLine action={{ label: t('ledger_attn_cta'), onClick: () => setLinkAllOpen(true) }}>
+          {t('ledger_attn_body', { count: ledgerProposals ?? 0 })}
+        </AttnLine>
       ) : notConnected ? (
         // File-imported rows without a connection: no saldo to show, but the
         // booking/matching flows below work on the local table. One ochre
@@ -863,6 +886,23 @@ export default function SkattekontoPage() {
             const target = bookTarget
             setBookTarget(null)
             openMatch(target)
+          }}
+          onLinked={() => {
+            void reload()
+            refreshLedgerProposals()
+          }}
+        />
+      )}
+
+      {linkAllOpen && (
+        <SkattekontoLinkProposalsDialog
+          open
+          onOpenChange={(o) => {
+            if (!o) setLinkAllOpen(false)
+          }}
+          onLinked={() => {
+            void reload()
+            refreshLedgerProposals()
           }}
         />
       )}

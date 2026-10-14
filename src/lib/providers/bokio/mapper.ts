@@ -108,10 +108,88 @@ function buildParty(name: string, orgNumber?: string, address?: Record<string, u
 }
 
 /**
- * Bokio's sales line items (`salesInvoiceItem`), shared by invoices and
- * credit notes: description, quantity, unitPrice, taxRate, unitType. The
+ * Bokio's `unitType` enum (company-api, salesInvoiceItem.unitType, default
+ * `unspecified`) to the unit Accounted stores and prints. The enum values are
+ * identifiers, not labels: copied verbatim they printed "2 unspecified" and
+ * "1 piece" on migrated invoices (crm#1084). The codes are the Swedish ones
+ * the invoice editor offers (lib/invoices/units.ts), and the conventional
+ * abbreviation where the editor offers none. `mile` is the Scandinavian mil
+ * (10 km): Bokio is a Swedish product and the unit is what milersättning is
+ * invoiced in. `unspecified` is no unit at all, so it stays empty rather
+ * than becoming "st". `custom` carries its text in `customUnitType`. A value
+ * this table does not know is kept as Bokio sent it.
+ */
+const BOKIO_UNIT_TYPES: Record<string, string> = {
+  unspecified: '',
+  piece: 'st',
+  hour: 'tim',
+  minute: 'min',
+  day: 'dag',
+  week: 'vecka',
+  month: 'månad',
+  year: 'år',
+  gram: 'g',
+  kilogram: 'kg',
+  ton: 'ton',
+  liter: 'l',
+  millimeter: 'mm',
+  centimeter: 'cm',
+  meter: 'm',
+  kilometer: 'km',
+  mile: 'mil',
+  meterSquared: 'kvm',
+  meterCubic: 'm3',
+  hectar: 'ha',
+  megabyte: 'MB',
+  gigabyte: 'GB',
+  words: 'ord',
+};
+
+/** Same cap as invoice_items.unit takes through the API (lib/invoices/units.ts UNIT_MAX_LENGTH). */
+const BOKIO_CUSTOM_UNIT_MAX_LENGTH = 32;
+
+/**
+ * The unit of one Bokio line item, or undefined when the line states none
+ * (a descriptionOnlyItem has no unitType; the importer then applies its own
+ * default). An empty string is a stated "no unit".
+ */
+export function bokioUnit(line: Record<string, unknown>): string | undefined {
+  const unitType = line['unitType'];
+  if (typeof unitType !== 'string') return undefined;
+  if (unitType === 'custom') {
+    const custom = line['customUnitType'];
+    return typeof custom === 'string'
+      ? custom.trim().replace(/\s+/g, ' ').slice(0, BOKIO_CUSTOM_UNIT_MAX_LENGTH).trim()
+      : '';
+  }
+  return Object.prototype.hasOwnProperty.call(BOKIO_UNIT_TYPES, unitType)
+    ? BOKIO_UNIT_TYPES[unitType]
+    : unitType;
+}
+
+/**
+ * The row kind Bokio states for a line item: `itemType` is `salesItem` or
+ * `descriptionOnlyItem` (the oneOf in the company-api spec). Undefined when
+ * the field is absent or unknown, so the importer falls back to inferring a
+ * text row from its missing amounts.
+ */
+function bokioLineType(line: Record<string, unknown>): SalesInvoiceLineDto['lineType'] {
+  const itemType = line['itemType'];
+  if (itemType === 'descriptionOnlyItem') return 'text';
+  if (itemType === 'salesItem') return 'product';
+  return undefined;
+}
+
+/**
+ * Bokio's sales line items (`salesInvoiceItem` and
+ * `descriptionOnlyInvoiceItem`), shared by invoices and credit notes:
+ * itemType, description, quantity, unitPrice, taxRate, unitType. The
  * line's `discount` is not applied here; the header totals come from
  * Bokio's own totalAmount/totalTax, which already include it.
+ *
+ * `itemRef` (the Bokio item a line was made from) is not carried: Bokio's
+ * item register is not imported, and its items have no article number, so
+ * there is no Accounted article it could point at (crm#1084).
  */
 function mapBokioSalesLines(
   rawLines: Record<string, unknown>[] | undefined,
@@ -126,9 +204,10 @@ function mapBokioSalesLines(
 
     return {
       id: String(line['id'] ?? idx + 1),
+      lineType: bokioLineType(line),
       description: line['description'] as string | undefined,
       quantity,
-      unitCode: line['unitType'] as string | undefined,
+      unitCode: bokioUnit(line),
       unitPrice: unitPrice != null ? amount(unitPrice, currency) : undefined,
       lineExtensionAmount: amount(lineTotal, currency),
       taxPercent,
@@ -138,12 +217,31 @@ function mapBokioSalesLines(
 }
 
 /**
+ * The number of a Bokio sales document. Bokio generates it when the
+ * document is published, so a draft has none (`invoiceNumber` null; the
+ * spec: "generated at the time of publishing"). Substituting Bokio's record
+ * id put a UUID in "Fakturanummer" on every unnumbered draft and on the
+ * drafts later cancelled (crm#1084). Empty becomes NULL at the insert, which
+ * invoices_sent_requires_number allows for draft and cancelled.
+ *
+ * Every other status requires a number, so a published document that
+ * arrives without one keeps the id as before: refused at the insert, it
+ * would not be imported at all.
+ */
+function bokioDocumentNumber(raw: Record<string, unknown>, status: InvoiceStatusCode): string {
+  const stated = raw['invoiceNumber'] == null ? '' : String(raw['invoiceNumber']).trim();
+  if (stated) return stated;
+  if (status === 'draft' || status === 'cancelled') return '';
+  return String(raw['id'] ?? '');
+}
+
+/**
  * Map Bokio Invoice to SalesInvoiceDto.
  *
  * Bokio Invoice fields (company-api spec, schema `invoice`):
  * - id, invoiceNumber, status (see deriveInvoiceStatus)
  * - invoiceDate, dueDate, currency, totalAmount, totalTax, paidAmount
- * - customerRef: { id, name }, lineItems: [{ id, description, quantity, unitPrice, taxRate, unitType }]
+ * - customerRef: { id, name }, lineItems: [{ id, itemType, description, quantity, unitPrice, taxRate, unitType }]
  * - creditNoteRefs: [{ id }] on an invoice that has been credited
  *
  * A payload in the `creditNote` shape is handed to mapBokioToCreditNote:
@@ -177,9 +275,11 @@ export function mapBokioToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
     balance: amount(balance, currency),
   };
 
+  const status = deriveInvoiceStatus(raw);
+
   return {
     id: String(raw['id'] ?? ''),
-    invoiceNumber: String(raw['invoiceNumber'] ?? raw['id'] ?? ''),
+    invoiceNumber: bokioDocumentNumber(raw, status),
     issueDate: (raw['invoiceDate'] as string) ?? '',
     dueDate: raw['dueDate'] as string | undefined,
     // An /invoices row Bokio itself labels `credit` is a credit document,
@@ -189,7 +289,7 @@ export function mapBokioToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
     // provider-data-fetcher.
     invoiceTypeCode: isBokioCreditStatus(raw) ? '381' : undefined,
     currencyCode: currency,
-    status: deriveInvoiceStatus(raw),
+    status,
     supplier: buildParty(''),
     customer: buildParty(
       (customerRef?.['name'] as string) ?? '',
@@ -258,17 +358,20 @@ export function mapBokioToCreditNote(raw: Record<string, unknown>): SalesInvoice
         }
       : undefined;
 
+  // Bokio's credit-note enum is draft | published. A draft has not been
+  // issued and stays a draft; anything else is a terminal credit.
+  const status: InvoiceStatusCode =
+    (raw['status'] as string | undefined)?.toLowerCase() === 'draft' ? 'draft' : 'credited';
+
   return {
     id: String(raw['id'] ?? ''),
-    invoiceNumber: String(raw['invoiceNumber'] ?? raw['id'] ?? ''),
+    invoiceNumber: bokioDocumentNumber(raw, status),
     issueDate: (raw['creditDate'] as string) ?? '',
     dueDate: raw['dueDate'] as string | undefined,
     invoiceTypeCode: '381',
     creditedInvoiceRef,
     currencyCode: currency,
-    // Bokio's credit-note enum is draft | published. A draft has not been
-    // issued and stays a draft; anything else is a terminal credit.
-    status: (raw['status'] as string | undefined)?.toLowerCase() === 'draft' ? 'draft' : 'credited',
+    status,
     supplier: buildParty(''),
     customer: buildParty(
       (customerRef?.['name'] as string) ?? '',
@@ -468,7 +571,7 @@ export function mapBokioToSupplierInvoice(raw: Record<string, unknown>): Supplie
       id: String(line['id'] ?? idx + 1),
       description: line['description'] as string | undefined,
       quantity,
-      unitCode: line['unitType'] as string | undefined,
+      unitCode: bokioUnit(line),
       unitPrice: unitPrice != null ? amount(unitPrice, currency) : undefined,
       lineExtensionAmount: amount(lineTotal, currency),
       taxPercent,

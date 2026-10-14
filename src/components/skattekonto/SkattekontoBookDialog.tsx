@@ -9,6 +9,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { stageSkvManualPrefill } from '@/lib/skatteverket/manual-verifikat-prefill'
+import { SkattekontoLinkProposalsDialog } from './SkattekontoLinkProposalsDialog'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import type {
@@ -18,9 +19,6 @@ import type {
   SkattekontoLedgerTwin,
   SkattekontoTransactionWithSuggestion,
 } from '@/types/skatteverket'
-
-/** Where rows are linked to a summarised verifikat: the Avstämning manual match view. */
-const MANUAL_MATCH_HREF = '/reconciliation?account=skattekonto&mode=match'
 
 /** The twin fields of a match-candidates candidate (it carries more). */
 function toLedgerTwin(c: SkattekontoLedgerTwin): SkattekontoLedgerTwin {
@@ -61,10 +59,12 @@ function toLedgerTwin(c: SkattekontoLedgerTwin): SkattekontoLedgerTwin {
  * LEDGER_COVER_EXISTS is the same answer for a row no single verifikat
  * carries, but that unlinked verifikat on 1630 already hold in aggregate (a
  * summarised year-end or month-end verifikat, crm#1043): the covering
- * verifikat are listed, the primary action goes to "Matcha manuellt", where
- * the rows are linked with the remainder in view, and "Bokför ändå" repeats
- * the booking with the same per-row override. "Skapa manuellt" gets the same
- * answer from the candidate search (ledger_cover).
+ * verifikat are listed, the primary action opens the one-action link of
+ * every row a verifikat already holds (SkattekontoLinkProposalsDialog,
+ * PH 171), which falls back to "Matcha manuellt" for what no proposal
+ * covers, and "Bokför ändå" repeats the booking with the same per-row
+ * override. "Skapa manuellt" gets the same answer from the candidate search
+ * (ledger_cover).
  */
 export default function SkattekontoBookDialog({
   row,
@@ -73,6 +73,7 @@ export default function SkattekontoBookDialog({
   onBooked,
   onMatch,
   onLinkCovered,
+  onLinked,
 }: {
   row: SkattekontoTransactionWithSuggestion | null
   open: boolean
@@ -85,6 +86,8 @@ export default function SkattekontoBookDialog({
   // Opens the manual match view for a row a summarised verifikat covers; the
   // dialog closes itself first. Omitted: the dialog navigates there itself.
   onLinkCovered?: () => void
+  // Rows were linked (or the link undone) from the cover answer: reload them.
+  onLinked?: () => void
 }) {
   const t = useTranslations('skv_book_dialog')
   const { toast } = useToast()
@@ -106,6 +109,8 @@ export default function SkattekontoBookDialog({
     cover: SkattekontoLedgerCoverInfo | null
     mode: 'book' | 'draft' | 'manual'
   } | null>(null)
+  // The cover answer's "Koppla händelserna" swaps this dialog for the bulk link.
+  const [linkAllFor, setLinkAllFor] = useState<string | null>(null)
 
   if (!row) return null
   const twinState = twinRefusal?.rowId === row.id ? twinRefusal : null
@@ -116,6 +121,7 @@ export default function SkattekontoBookDialog({
     if (!next) {
       setTwinRefusal(null)
       setCoverRefusal(null)
+      setLinkAllFor(null)
     }
     onOpenChange(next)
   }
@@ -264,6 +270,20 @@ export default function SkattekontoBookDialog({
     else void handleManualCreate(true)
   }
 
+  if (coverState && linkAllFor === row.id) {
+    return (
+      <SkattekontoLinkProposalsDialog
+        open={open}
+        onOpenChange={(next) => {
+          if (!next) handleOpenChange(false)
+        }}
+        onLinked={onLinked}
+        focusRowId={row.id}
+        onManual={onLinkCovered}
+      />
+    )
+  }
+
   if (coverState) {
     const cover = coverState.cover
     const submitting = isBooking || isOpeningDraft
@@ -279,14 +299,10 @@ export default function SkattekontoBookDialog({
         onOpenChange={handleOpenChange}
         title={t('cover_title')}
         isSubmitting={submitting}
-        confirmLabel={t('cover_match_cta')}
+        confirmLabel={t('cover_link_cta')}
         // The override records the event a second time: say so.
         warningText={t('cover_warning')}
-        onConfirm={() => {
-          handleOpenChange(false)
-          if (onLinkCovered) onLinkCovered()
-          else router.push(MANUAL_MATCH_HREF)
-        }}
+        onConfirm={() => setLinkAllFor(row.id)}
         extraActions={
           <Button
             variant="ghost"

@@ -72,6 +72,9 @@ import { invoiceWithinScope, type FiscalYearScope } from './invoice-scope'
 import {
   existingInvoiceKeys, fortnoxNumberOf, listedInvoiceKeys, listedMatchNumber, type ExistingSupplierInvoiceIdentity,
 } from './supplier-invoice-identity'
+import {
+  existingSalesInvoiceKey, listedSalesInvoiceKeys, type ExistingSalesInvoiceIdentity,
+} from './sales-invoice-identity'
 
 const log = createLogger('extensions/arcim-migration/migration-orchestrator')
 
@@ -892,15 +895,27 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         // customer step ran in this request or an earlier one.
         await loadCustomerRegister()
 
-        // Bulk-load existing invoice numbers once.
-        const existingInvoices = await fetchAllRows<{ id: string; invoice_number: string | null }>(({ from, to }) =>
+        // Bulk-load every existing invoice's identity once: its number, or
+        // (customer, date, currency, amount) for a number-less one.
+        const existingInvoices = await fetchAllRows<{ id: string } & ExistingSalesInvoiceIdentity>(({ from, to }) =>
           supabase
             .from('invoices')
-            .select('id, invoice_number')
+            .select('id, invoice_number, customer_id, invoice_date, currency, total')
             .eq('company_id', companyId)
             .range(from, to)
         )
-        const existingInvoiceNumbers = new Set(existingInvoices.map((r) => r.invoice_number))
+        const existingSalesKeys = new Set(
+          existingInvoices.map(existingSalesInvoiceKey).filter((key): key is string => key !== null)
+        )
+        // The customer a listed invoice resolves to in the register, the same
+        // lookup Phase A applies; null when it is not there yet.
+        const resolveExistingCustomerId = (inv: SalesInvoiceDto): string | null => {
+          const orgNumber = getOrgNumberFromParty(inv.customer)
+          if (orgNumber && orgNumberToCustomerId.has(orgNumber)) return orgNumberToCustomerId.get(orgNumber)!
+          return nameToCustomerId.get(inv.customer.name) ?? null
+        }
+        const isAlreadyImported = (inv: SalesInvoiceDto): boolean =>
+          listedSalesInvoiceKeys(inv, resolveExistingCustomerId(inv)).some((key) => existingSalesKeys.has(key))
         // For pairing a migrated kreditfaktura with the invoice it credits
         // when that invoice was imported by an earlier run (Phase D below).
         const invoiceIdByNumber = new Map<string, string>()
@@ -920,7 +935,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         // in the database is a duplicate whatever its detail form says, so a
         // request spent on it buys nothing: on a re-run of a large register
         // it would burn the whole budget on rows that never reach the insert.
-        const fresh = listed.filter((inv) => !existingInvoiceNumbers.has(inv.invoiceNumber))
+        const fresh = listed.filter((inv) => !isAlreadyImported(inv))
         const alreadyImported = listed.length - fresh.length
         if (alreadyImported > 0) {
           skipReasons.duplicate = alreadyImported

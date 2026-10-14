@@ -218,8 +218,18 @@ export interface PaymentStatusDto {
 
 export interface SalesInvoiceLineDto {
   id: string;
+  /**
+   * The row kind, when the provider states it (Bokio itemType). Absent: the
+   * importer infers a text row from a row with no quantity and no amount.
+   */
+  lineType?: 'product' | 'text';
   description?: string;
   quantity?: number;
+  /**
+   * The unit as the provider states it. Absent means the source said
+   * nothing (the importer's default applies); an empty string is a stated
+   * "no unit" and is kept empty.
+   */
   unitCode?: string;
   unitPrice?: AmountType;
   lineExtensionAmount: AmountType;

@@ -45,9 +45,10 @@ export interface VoucherRow {
   source_voucher_number: number | null
   /**
    * 'posted' or 'reversed', the only statuses the fetchers read. The
-   * registration linker resolves from posted entries alone: an SIE re-sync
-   * leaves the first copy of every verifikat reversed beside the live one.
-   * The underlag flows attach to either and do not read it.
+   * registration linker and the provider underlag sweep resolve from live
+   * copies alone (isLiveCopy): an SIE re-sync leaves the first copy of every
+   * verifikat reversed beside the live one. The filename underlag plan lists
+   * both for a human to pick and does not read it.
    */
   status?: string | null
   // Display-only, and fetched only by the reads that need them: the provider
@@ -141,6 +142,13 @@ export function buildVoucherIndex(vouchers: VoucherRow[]): VoucherIndex {
   return { byPeriodKey, bySourceRef, byNumber, ambiguousPeriodKeys }
 }
 
+/** The entries carrying a ref whose entry date falls inside its year window. */
+function candidatesInWindow(index: VoucherIndex, ref: DatedSourceVoucherRef & { dateTo: string }): VoucherRow[] {
+  return (index.bySourceRef.get(sourceRefKey(ref.series, ref.number)) ?? []).filter(
+    (voucher) => ref.date <= voucher.entry_date && voucher.entry_date <= ref.dateTo,
+  )
+}
+
 /**
  * Resolve a ref that carries date information. Returns undefined when the ref
  * matches nothing or is ambiguous: callers count it as unmatched, never guess.
@@ -153,14 +161,87 @@ export function resolveDatedRef(
   if (ref.dateTo) {
     // The source pinned the attachment to a financial year, not a day: accept
     // it only when exactly one migrated verifikat in that window carries the ref.
-    const candidates = (index.bySourceRef.get(sourceRefKey(ref.series, ref.number)) ?? []).filter(
-      (voucher) => ref.date <= voucher.entry_date && voucher.entry_date <= ref.dateTo!,
-    )
+    const candidates = candidatesInWindow(index, { ...ref, dateTo: ref.dateTo })
     return candidates.length === 1 ? candidates[0].id : undefined
   }
 
   const periodId = periodIdForDate(periods, ref.date)
   return periodId ? index.byPeriodKey.get(voucherKey(periodId, ref.series, ref.number)) : undefined
+}
+
+/**
+ * Whether an entry is the live copy of its source voucher, the only copy a
+ * ref may resolve to. Replacing a fiscal year by an SIE re-sync reverses
+ * every verifikat the previous import brought in (Makulering) and imports the
+ * year again, so each source ref is then carried twice in that year: by the
+ * reversed first copy and by the live second one. A reversed copy is never a
+ * registration voucher and never takes a provider file; counting it made
+ * every re-synced ref ambiguous.
+ *
+ * The fetchers read posted and reversed entries only. A row without a status
+ * (none in practice) stays a candidate. The Makulering and a rättelse never
+ * carry a source ref (the storno insert omits the pair, correctEntry leaves
+ * it behind: correction-column-policy.ts), so they never enter the index.
+ */
+export function isLiveCopy(row: VoucherRow): boolean {
+  return row.status !== 'reversed'
+}
+
+/** The live and the reversed copies, indexed apart (see isLiveCopy). */
+export interface CopyIndexes {
+  /** Live copies: the only ones a ref resolves to. */
+  live: VoucherIndex
+  /** Reversed copies: they only explain why a ref did not resolve. */
+  reversed: VoucherIndex
+}
+
+export function buildCopyIndexes(vouchers: VoucherRow[]): CopyIndexes {
+  return {
+    live: buildVoucherIndex(vouchers.filter(isLiveCopy)),
+    reversed: buildVoucherIndex(vouchers.filter((voucher) => !isLiveCopy(voucher))),
+  }
+}
+
+/** Why a dated ref resolved to no live verifikat. */
+export type UnresolvedRefReason =
+  /** No fiscal period covers the ref's date. */
+  | 'no_fiscal_year'
+  /** No migrated verifikat, live or reversed, carries the ref there. */
+  | 'no_verifikat'
+  /** Only reversed copies carry the ref there: never a target. */
+  | 'only_reversed'
+  /** More than one live verifikat carries the ref there: never guessed. */
+  | 'several_posted'
+
+export type LiveRefResolution =
+  | { resolved: true; entryId: string }
+  | { resolved: false; reason: UnresolvedRefReason }
+
+/**
+ * resolveDatedRef over the live copies, with the reason when it finds none:
+ * the one live verifikat that carries the ref in its year, whatever reversed
+ * copies sit beside it.
+ */
+export function resolveLiveDatedRef(
+  copies: CopyIndexes,
+  periods: FiscalPeriodRow[],
+  ref: DatedSourceVoucherRef,
+): LiveRefResolution {
+  const entryId = resolveDatedRef(copies.live, periods, ref)
+  if (entryId) return { resolved: true, entryId }
+
+  if (ref.dateTo) {
+    const window = { ...ref, dateTo: ref.dateTo }
+    if (candidatesInWindow(copies.live, window).length > 1) return { resolved: false, reason: 'several_posted' }
+    return { resolved: false, reason: candidatesInWindow(copies.reversed, window).length > 0 ? 'only_reversed' : 'no_verifikat' }
+  }
+
+  const periodId = periodIdForDate(periods, ref.date)
+  if (!periodId) return { resolved: false, reason: 'no_fiscal_year' }
+  const key = voucherKey(periodId, ref.series, ref.number)
+  if (copies.live.ambiguousPeriodKeys.has(key)) return { resolved: false, reason: 'several_posted' }
+  const onlyReversed = copies.reversed.byPeriodKey.has(key) || copies.reversed.ambiguousPeriodKeys.has(key)
+  return { resolved: false, reason: onlyReversed ? 'only_reversed' : 'no_verifikat' }
 }
 
 /**
@@ -189,9 +270,10 @@ export function candidatesForNumber(index: VoucherIndex, number: number): Vouche
 // path that writes irreversible räkenskapsinformation links.
 
 /**
- * Statuses a resolved verifikat may have to receive underlag. Posted is the
- * normal case; reversed stays in, because a storno'd original remains
- * räkenskapsinformation and its underlag belongs on it. Draft and cancelled
+ * Statuses the fetchers read. Posted is the normal case. Reversed stays in
+ * the read: the filename underlag plan lists a storno'd original for a human
+ * to pick, and the callers that resolve from live copies only (isLiveCopy)
+ * use the reversed rows to explain a ref that did not resolve. Draft and cancelled
  * are excluded: the SIE import RPC posts every entry inside its own
  * transaction, so a draft with a source ref should be unobservable, but the
  * link is irreversible, and an invariant that lives in another file is not an

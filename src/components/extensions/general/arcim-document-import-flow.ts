@@ -100,9 +100,33 @@ export interface ArcimDocumentImportResult {
   partial: boolean
   /** Provider id of the last handled attachment, or null when complete. */
   nextCursor: string | null
+  /**
+   * Attachment sources the provider refused (Fortnox supplier-invoice files),
+   * with the scope the refused call needs, so the panel can name it.
+   */
+  unreachableSources: ArcimUnreachableDocumentSource[]
+}
+
+export type ArcimDocumentScope = 'archive' | 'connectfile' | 'supplierinvoice'
+
+export interface ArcimUnreachableDocumentSource {
+  source: 'supplier_invoice_files'
+  scope: ArcimDocumentScope
+  reason: 'license' | 'permission' | 'error'
+  providerMessage: string | null
 }
 
 const MAX_UNMATCHED_SAMPLES = 20
+
+/** One entry per scope: the latest answer wins, as the slices run in order. */
+function mergeUnreachableSources(
+  accumulated: ArcimUnreachableDocumentSource[],
+  next: ArcimUnreachableDocumentSource[],
+): ArcimUnreachableDocumentSource[] {
+  const byScope = new Map(accumulated.map((entry) => [entry.scope, entry]))
+  for (const entry of next) byScope.set(entry.scope, entry)
+  return [...byScope.values()]
+}
 
 /**
  * Fold one server call into the running totals of a multi-call import. The
@@ -132,6 +156,7 @@ export function mergeArcimDocumentImportResults(
     total: next.total,
     partial: next.partial,
     nextCursor: next.nextCursor,
+    unreachableSources: mergeUnreachableSources(accumulated.unreachableSources, next.unreachableSources),
   }
 }
 
@@ -343,11 +368,31 @@ function problemFromPayload(payload: unknown): ArcimDocumentImportProblem {
 
 type WireDocumentImportResult = Omit<
   ArcimDocumentImportResult,
-  'total' | 'partial' | 'nextCursor' | 'locked' | 'lockedPeriods'
+  'total' | 'partial' | 'nextCursor' | 'locked' | 'lockedPeriods' | 'unreachableSources'
 > &
   Partial<
-    Pick<ArcimDocumentImportResult, 'total' | 'partial' | 'nextCursor' | 'locked' | 'lockedPeriods'>
+    Pick<
+      ArcimDocumentImportResult,
+      'total' | 'partial' | 'nextCursor' | 'locked' | 'lockedPeriods' | 'unreachableSources'
+    >
   >
+
+const DOCUMENT_SCOPES: readonly ArcimDocumentScope[] = ['archive', 'connectfile', 'supplierinvoice']
+const UNREACHABLE_REASONS: readonly ArcimUnreachableDocumentSource['reason'][] = [
+  'license',
+  'permission',
+  'error',
+]
+
+function isUnreachableSource(value: unknown): value is ArcimUnreachableDocumentSource {
+  if (!value || typeof value !== 'object') return false
+  const entry = value as Partial<ArcimUnreachableDocumentSource>
+  return (
+    entry.source === 'supplier_invoice_files' &&
+    DOCUMENT_SCOPES.includes(entry.scope as ArcimDocumentScope) &&
+    UNREACHABLE_REASONS.includes(entry.reason as ArcimUnreachableDocumentSource['reason'])
+  )
+}
 
 function isDocumentImportResult(value: unknown): value is WireDocumentImportResult {
   if (!value || typeof value !== 'object') return false
@@ -365,14 +410,26 @@ function isDocumentImportResult(value: unknown): value is WireDocumentImportResu
 }
 
 /**
- * Older servers answer without the resume fields (a single complete slice) and
- * without the locked-year count (nothing was told apart as locked).
+ * Older servers answer without the resume fields (a single complete slice),
+ * without the locked-year count (nothing was told apart as locked) and
+ * without unreachable sources (supplier-invoice files were not read).
  */
 function normalizeDocumentImportResult(
   result: WireDocumentImportResult,
 ): ArcimDocumentImportResult {
   return {
     ...result,
+    unreachableSources: Array.isArray(result.unreachableSources)
+      ? result.unreachableSources.filter(isUnreachableSource).map((entry) => ({
+          source: entry.source,
+          scope: entry.scope,
+          reason: entry.reason,
+          providerMessage:
+            typeof entry.providerMessage === 'string' && entry.providerMessage.trim()
+              ? entry.providerMessage.trim()
+              : null,
+        }))
+      : [],
     locked: typeof result.locked === 'number' ? result.locked : 0,
     lockedPeriods: Array.isArray(result.lockedPeriods)
       ? result.lockedPeriods.filter((label): label is string => typeof label === 'string')

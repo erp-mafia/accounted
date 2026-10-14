@@ -42,6 +42,7 @@ import TransactionInboxCard from '@/components/transactions/TransactionInboxCard
 import TransactionHistoryList from '@/components/transactions/TransactionHistoryList'
 import InboxZeroState from '@/components/transactions/InboxZeroState'
 import SkattekontoInboxCard from '@/components/transactions/SkattekontoInboxCard'
+import { useSkattekontoLedgerProposalCount } from '@/components/skattekonto/use-ledger-proposal-count'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
 import { mapWithConcurrency } from '@/lib/concurrency'
 import {
@@ -186,6 +187,13 @@ const SkattekontoMatchDialog = dynamic(
 )
 const SkattekontoBookDialog = dynamic(
   () => import('@/components/skattekonto/SkattekontoBookDialog'),
+  { loading: DialogLoadingSkeleton },
+)
+const SkattekontoLinkProposalsDialog = dynamic(
+  () =>
+    import('@/components/skattekonto/SkattekontoLinkProposalsDialog').then(
+      (module) => module.SkattekontoLinkProposalsDialog,
+    ),
   { loading: DialogLoadingSkeleton },
 )
 const DuplicateBookingDialog = dynamic(
@@ -985,6 +993,17 @@ export default function TransactionsPage() {
     [sourceFilter, sourceItems],
   )
 
+  // Skattekonto rows a verifikat already holds (imported history, PH 171):
+  // one line with the one action that links them all, instead of a cover
+  // answer per row. Read only while open skattekonto rows are in view; the
+  // count reloads as the open rows change.
+  const [skvLinkAllOpen, setSkvLinkAllOpen] = useState(false)
+  const { count: skvLedgerProposals, refresh: refreshSkvLedgerProposals } =
+    useSkattekontoLedgerProposalCount(
+      skvUnmatched.length > 0 && skattekontoInSource(effectiveSourceFilter),
+      skvUnmatched.length,
+    )
+
   // Every pending row (bank + skattekonto) in exactly one bucket: shown by
   // the active source and period (the tab badge), hidden by the source, or
   // outside the period. The badge reads the same source predicate as the
@@ -1193,6 +1212,12 @@ export default function TransactionsPage() {
       setSkvRows([])
     }
   }, [])
+
+  // Rows were linked from the skattekonto cover answer or the line above.
+  const handleSkvLinked = useCallback(() => {
+    void loadSkvRows()
+    refreshSkvLedgerProposals()
+  }, [loadSkvRows, refreshSkvLedgerProposals])
 
   const fetchTransactions = useCallback(async (
     showLoading = false,
@@ -4281,6 +4306,10 @@ export default function TransactionsPage() {
         // verifikat use, neither the review list nor the bulk match can find
         // them. So this line wins over both.
         ledgerSuggestionNotice
+      ) : (skvLedgerProposals ?? 0) > 0 && skattekontoInSource(effectiveSourceFilter) ? (
+        <AttnLine action={{ label: t('skv_ledger_attn_cta'), onClick: () => setSkvLinkAllOpen(true) }}>
+          {t('skv_ledger_attn_body', { count: skvLedgerProposals ?? 0 })}
+        </AttnLine>
       ) : suggestionItems.length > 0 && mode !== 'review' ? (
         // Migrated-history review nudge. Max one attn line per page
         // (convention 6): the SKV reconnect line wins when both apply.
@@ -4986,6 +5015,17 @@ export default function TransactionsPage() {
             setSkvMatchTarget(skvBookTarget)
             setSkvBookTarget(null)
           }}
+          onLinked={handleSkvLinked}
+        />
+      )}
+
+      {skvLinkAllOpen && (
+        <SkattekontoLinkProposalsDialog
+          open
+          onOpenChange={(o) => {
+            if (!o) setSkvLinkAllOpen(false)
+          }}
+          onLinked={handleSkvLinked}
         />
       )}
 

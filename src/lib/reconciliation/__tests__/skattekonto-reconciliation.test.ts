@@ -1415,6 +1415,127 @@ describe('findLedgerCoverPoint: arithmetic only, exact to the öre', () => {
   })
 })
 
+describe('monthly summaries from the previous system become proposals (PH 171)', () => {
+  // The previous system booked each month's charges and interest as one
+  // verifikat on the draw day, and each payment in as its own. The payments
+  // are linked; the charges and the interest a week before have no verifikat
+  // of their own, so every one of them used to wait for a click.
+  const M7 = head('M7', '2026-07-14', { source_type: 'import', voucher_series: 'M', description: 'Skattekonto juli' })
+  const M8 = head('M8', '2026-08-18', { source_type: 'import', voucher_series: 'M', description: 'Skattekonto augusti' })
+  const A5 = head('A5', '2026-07-14', { source_type: 'import' })
+  const A29 = head('A29', '2026-08-18', { source_type: 'import' })
+  const JULY = [
+    row('jul-ranta', '2026-07-05', 91),
+    row('jul-ag', '2026-07-14', -33682),
+    row('jul-skatt', '2026-07-14', -25746),
+    row('jul-prel', '2026-07-14', -9884),
+  ]
+  const AUGUST = [
+    row('aug-ranta', '2026-08-02', 74),
+    row('aug-moms', '2026-08-18', -114824),
+    row('aug-ag', '2026-08-18', -16841),
+    row('aug-skatt', '2026-08-18', -12873),
+    row('aug-prel', '2026-08-18', -11393),
+  ]
+  const PAYMENTS = [
+    row('jul-in', '2026-07-15', 69312, { journal_entry_id: 'A5' }),
+    row('aug-in', '2026-08-19', 155931, { journal_entry_id: 'A29' }),
+  ]
+  const LINES = [ledgerLine(M7, -69221), ledgerLine(A5, 69312), ledgerLine(M8, -155857), ledgerLine(A29, 155931)]
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    fetchEntryLinesMock.mockReset()
+    sumAccountBalanceMock.mockReset()
+    findOpeningBalanceFloorMock.mockReset()
+    findOpeningBalanceFloorMock.mockResolvedValue(null)
+    loadImportedStornoPairsMock.mockReset()
+    loadImportedStornoPairsMock.mockResolvedValue([])
+  })
+
+  async function statusOf(rows: ReturnType<typeof row>[], saldo: number) {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueBase(enqueue, { saldo, rows, heads: [A5, A29, M7, M8] })
+    wholeLedger(LINES)
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
+    if (!s) throw new Error('expected status')
+    return s
+  }
+
+  it('proposes each month to the verifikat that holds it, one group per verifikat, and moves no figure', async () => {
+    const s = await statusOf([...JULY, ...AUGUST, ...PAYMENTS], 165)
+    expect(s.difference).toBe(0)
+    expect(s.unexplained_difference).toBe(0)
+    expect(s.counts).toMatchObject({ proposed: 9, unmatched_external: 0, matched: 2, unmatched_ledger: 2 })
+    expect(s.items.unmatched_external).toEqual([])
+
+    const july = s.items.proposed.filter((i) => i.item_id.startsWith('jul-'))
+    expect(july).toHaveLength(4)
+    for (const item of july) {
+      expect(item.proposal).toMatchObject({
+        journal_entry_id: 'M7',
+        voucher_series: 'M',
+        voucher_number: 7,
+        entry_status: 'posted',
+        external_ids: ['jul-ranta', 'jul-ag', 'jul-prel', 'jul-skatt'],
+      })
+      expect(item.actions).toEqual(['match', 'book', 'ignore'])
+    }
+    expect(july[0].proposal?.reasons[0]).toBe('summan av 4 händelser är exakt verifikatets belopp på 1630')
+    const august = s.items.proposed.filter((i) => i.item_id.startsWith('aug-'))
+    expect(new Set(august.map((i) => i.proposal?.journal_entry_id))).toEqual(new Set(['M8']))
+    expect(august[0].proposal?.external_ids).toHaveLength(5)
+    // Date order in the bucket, as the page lists it.
+    expect(s.items.proposed.map((i) => i.date)).toEqual([...s.items.proposed.map((i) => i.date)].sort())
+
+    // The bridge counts both buckets on one line: unchanged by the move.
+    const external = s.bridge.find((b) => b.key === 'unmatched_external')
+    expect(external).toMatchObject({ count: 9, amount: roundOre(-[...JULY, ...AUGUST].reduce((sum, r) => sum + r.belopp_skatteverket, 0)) })
+    // The cover still says why the rows must not be booked.
+    expect(s.cover).toMatchObject({ through_date: '2026-08-18', kind: 'events_equal', event_count: 9 })
+    expect(s.items.proposed.every((i) => i.covered_by_ledger === true)).toBe(true)
+  })
+
+  it('leaves a month whose rows do not add up to its verifikat to the manual match, and proposes the month after it', async () => {
+    // July's preliminärskatt is ignored: M7 holds 9 884 more than July's open rows.
+    const rows = [...JULY.map((r) => (r.id === 'jul-prel' ? { ...r, is_ignored: true } : r)), ...AUGUST, ...PAYMENTS]
+    const s = await statusOf(rows, 165)
+    expect(s.counts).toMatchObject({ proposed: 5, unmatched_external: 3, ignored: 1 })
+    expect(s.items.proposed.map((i) => i.item_id).sort()).toEqual(AUGUST.map((r) => r.id).sort())
+    expect(s.items.unmatched_external.map((i) => i.item_id).sort()).toEqual(['jul-ag', 'jul-ranta', 'jul-skatt'])
+  })
+
+  it('leaves a standing proposal and its verifikat alone', async () => {
+    // A persisted proposal names M8 for the moms row alone: the plan neither
+    // regroups it nor offers M8 to the rest of August.
+    const rows = [
+      ...JULY,
+      ...AUGUST.map((r) => (r.id === 'aug-moms' ? { ...r, suggested_journal_entry_id: 'M8' } : r)),
+      ...PAYMENTS,
+    ]
+    const s = await statusOf(rows, 165)
+    const moms = s.items.proposed.find((i) => i.item_id === 'aug-moms')
+    expect(moms?.proposal?.journal_entry_id).toBe('M8')
+    expect(moms?.proposal?.external_ids).toBeUndefined()
+    expect(s.items.proposed.filter((i) => i.proposal?.journal_entry_id === 'M7')).toHaveLength(4)
+    expect(s.items.unmatched_external.map((i) => i.item_id).sort()).toEqual(['aug-ag', 'aug-prel', 'aug-ranta', 'aug-skatt'])
+  })
+
+  it('counts the planned rows outside the window too', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueBase(enqueue, { saldo: 165, rows: [...JULY, ...AUGUST, ...PAYMENTS], heads: [A5, A29, M7, M8] })
+    wholeLedger(LINES)
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, {
+      today: TODAY,
+      windowFrom: '2026-08-01',
+      windowTo: '2026-08-31',
+    })
+    if (!s) throw new Error('expected status')
+    expect(s.counts).toMatchObject({ proposed: 9, unmatched_external: 0 })
+    expect(s.items.proposed.map((i) => i.item_id).every((id) => id.startsWith('aug-'))).toBe(true)
+  })
+})
+
 describe('getSkattekontoReconciliationStatus: one event over two verifikat (crm#1183)', () => {
   beforeEach(() => {
     vi.clearAllMocks()

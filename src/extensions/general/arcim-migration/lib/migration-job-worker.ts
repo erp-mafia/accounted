@@ -143,6 +143,12 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
   if (c.resource === 'supplierInvoices' && !invoice.legalMonetaryTotal.payableAmount.value && !invoice.lines.length) {
     return { id: c.id, skip: 'zeroTotal' }
   }
+  // Keep the legacy stand-in number on the row, so the commit adopts the
+  // stored invoice by it (and checks its header) instead of inserting it again.
+  if (c.resource === 'salesInvoices' && !mapped.invoice.invoice_number && invoice.id
+    && await storedUnderSourceId(supabase, job, invoice.id, deadline)) {
+    mapped.invoice.invoice_number = invoice.id
+  }
   if (c.resource === 'supplierInvoices' && mapped.invoice.is_credit_note
     && await hasPreNormalisationCreditNote(supabase, job, mapped.invoice, deadline)) {
     return { id: c.id, skip: 'creditNoteInOldShape' }
@@ -232,6 +238,21 @@ async function hasPreNormalisationCreditNote(supabase: SupabaseClient, job: Prov
   if (!data?.length) return false
   log.warn('supplier credit note already imported in the pre-normalisation shape: left as is', { jobId: job.id, targetId: (data[0] as { id: string }).id })
   return true
+}
+
+/**
+ * Is a number-less sales document already stored under its source id? Imports
+ * before crm#1084 put Bokio's record id in invoice_number when a draft had no
+ * number. The commit adopts a stored invoice by its number, and a number-less
+ * record only by its source map, so such a draft imported by the wizard (no
+ * source map) would otherwise be inserted a second time.
+ */
+async function storedUnderSourceId(supabase: SupabaseClient, job: ProviderMigrationJob,
+  sourceId: string, deadline: number): Promise<boolean> {
+  const { data, error } = await withinMigrationDeadline(supabase.from('invoices').select('id')
+    .eq('company_id', job.company_id).eq('invoice_number', sourceId).limit(1), deadline)
+  if (error) throw new Error(error.message)
+  return !!data?.length
 }
 
 /** Where each register keeps a credit note's pointer at the invoice it credits. */

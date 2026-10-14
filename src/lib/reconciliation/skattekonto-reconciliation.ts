@@ -6,6 +6,7 @@ import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill
 import { loadImportedStornoPairs } from '@/lib/skatteverket/skattekonto-cancelled-entries'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
+import { planSkattekontoLedgerLinks, type PlannedLedgerLink } from './skattekonto-ledger-plan'
 import { addDaysIso, daysBetweenIso, toIsoDate, todayIsoStockholm } from '@/lib/dates/iso'
 import {
   LEDGER_BALANCE_STATUSES,
@@ -421,6 +422,57 @@ function proposalFrom(head: EntryHead, row: SkattekontoRow, groupIds: string[]):
   }
 }
 
+/**
+ * The ledger plan (skattekonto-ledger-plan.ts) as proposals: every planned
+ * row moves from unmatched_external to proposed, naming the verifikat that
+ * holds it and, for a group, every row of it (external_ids), so linking the
+ * proposal links the group as one exact N:1 pair. The counts move with the
+ * rows whether they are in the window or not; the bridge counts both buckets
+ * on one line and no total changes.
+ */
+function proposeLedgerPlan(input: {
+  planned: PlannedLedgerLink[]
+  heads: Map<string, EntryHead>
+  items: SkattekontoReconciliationItems
+  counts: { proposed: number; unmatched_external: number }
+}): void {
+  const { planned, heads, items, counts } = input
+  const proposalByRow = new Map<string, ReconciliationProposal>()
+  for (const link of planned) {
+    const head = heads.get(link.journal_entry_id)
+    if (!head) continue
+    const count = link.event_ids.length
+    const proposal: ReconciliationProposal = {
+      journal_entry_id: head.id,
+      voucher_number: head.voucher_number,
+      voucher_series: head.voucher_series,
+      entry_date: head.entry_date,
+      description: head.description ?? '',
+      entry_status: head.status,
+      confidence: 0.9,
+      reasons: [
+        count > 1 ? `summan av ${count} händelser är exakt verifikatets belopp på 1630` : 'exakt belopp på 1630',
+        link.from_date === link.to_date ? `samma dag, ${link.from_date}` : `${link.from_date} till ${link.to_date}`,
+      ],
+      ...(count > 1 ? { external_ids: link.event_ids } : {}),
+    }
+    for (const id of link.event_ids) proposalByRow.set(id, proposal)
+  }
+  if (proposalByRow.size === 0) return
+  counts.unmatched_external -= proposalByRow.size
+  counts.proposed += proposalByRow.size
+  const moved: ReconciliationItem[] = []
+  items.unmatched_external = items.unmatched_external.filter((item) => {
+    const proposal = proposalByRow.get(item.item_id)
+    if (!proposal) return true
+    moved.push({ ...item, bucket: 'proposed', proposal, actions: ['match', 'book', 'ignore'] })
+    return false
+  })
+  items.proposed = [...items.proposed, ...moved]
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+    .slice(0, MAX_ITEMS_PER_BUCKET)
+}
+
 function inWindow(date: string, from: string | null | undefined, to: string | null | undefined): boolean {
   if (from && date < from) return false
   if (to && date > to) return false
@@ -655,6 +707,13 @@ export async function getSkattekontoReconciliationStatus(
   let ignoredTotal = 0
   let olderUnmatched = 0
   const counts = { proposed: 0, unmatched_external: 0, unmatched_ledger: 0, matched: 0, ignored: 0 }
+  // Complete and unwindowed: the rows a standing proposal names and the
+  // verifikat it names, which the ledger plan below leaves to it.
+  const proposedRowIds = new Set<string>()
+  const proposedEntryIds = new Set<string>()
+  // Open rows whose link points at a reversed, draft or missing verifikat: a
+  // new link refuses them until they are unlinked.
+  const deadLinkRowIds = new Set<string>()
 
   // A combined proposal (crm#128) is persisted as the same suggested
   // verifikat on every row of the group; the group is what gets linked.
@@ -727,6 +786,7 @@ export async function getSkattekontoReconciliationStatus(
     // Unlinked (or dead link): counts toward the bridge either way.
     unlinkedExternalTotal = roundOre(unlinkedExternalTotal + amount)
     openEvents.push({ id: row.id, date: row.transaktionsdatum, amount })
+    if (row.journal_entry_id) deadLinkRowIds.add(row.id)
     if (olderThanWindow(row.transaktionsdatum)) olderUnmatched++
 
     const suggestedHead = row.suggested_journal_entry_id
@@ -743,6 +803,8 @@ export async function getSkattekontoReconciliationStatus(
 
     if (proposal) {
       counts.proposed++
+      proposedRowIds.add(row.id)
+      proposedEntryIds.add(proposal.journal_entry_id)
       if (visible(row.transaktionsdatum)) {
         pushCapped('proposed', {
           ...base,
@@ -987,6 +1049,25 @@ export async function getSkattekontoReconciliationStatus(
       : roundOre(
           difference - openingDifference - unlinkedExternalTotal - ignoredTotal + unlinkedLedgerTotal,
         )
+
+  // Rows that exactly one open verifikat holds (a monthly summary from the
+  // previous system, PH 171) become proposals, so every door that links
+  // proposals links them in one action. Not on a failed ledger read.
+  if (!ledgerReadFailed) {
+    proposeLedgerPlan({
+      planned: planSkattekontoLedgerLinks({
+        rows: openEvents
+          .filter((e) => !proposedRowIds.has(e.id))
+          .map((e) => ({ ...e, linkable: !deadLinkRowIds.has(e.id) })),
+        entries: openEntries
+          .filter((e) => !proposedEntryIds.has(e.head.id))
+          .map(({ head, amount }) => ({ id: head.id, date: head.entry_date, amount, linkable: head.status === 'posted' })),
+      }),
+      heads: new Map(openEntries.map((e) => [e.head.id, e.head])),
+      items,
+      counts,
+    })
+  }
 
   // Open rows the ledger already holds through open verifikat (see
   // findLedgerCoverPoint). Not computed on a failed ledger read: an

@@ -36,6 +36,7 @@ function result(
     total: 7,
     partial: false,
     nextCursor: null,
+    unreachableSources: [],
     ...overrides,
   }
 }
@@ -418,6 +419,55 @@ describe('resumable import (one server slice per call)', () => {
     )
 
     expect(merged).toMatchObject({ locked: 5, lockedPeriods: ['2022/2023', '2024', '2025'] })
+  })
+
+  it('keeps one unreachable source per scope across slices, the latest answer winning (PH 176)', () => {
+    const merged = mergeArcimDocumentImportResults(
+      result({
+        unreachableSources: [
+          { source: 'supplier_invoice_files', scope: 'archive', reason: 'error', providerMessage: null },
+        ],
+      }),
+      result({
+        unreachableSources: [
+          { source: 'supplier_invoice_files', scope: 'archive', reason: 'permission', providerMessage: 'Har inte behörighet för scope.' },
+          { source: 'supplier_invoice_files', scope: 'supplierinvoice', reason: 'license', providerMessage: null },
+        ],
+      }),
+    )
+
+    expect(merged.unreachableSources).toEqual([
+      { source: 'supplier_invoice_files', scope: 'archive', reason: 'permission', providerMessage: 'Har inte behörighet för scope.' },
+      { source: 'supplier_invoice_files', scope: 'supplierinvoice', reason: 'license', providerMessage: null },
+    ])
+  })
+
+  it('reads an older server answer without unreachable sources as none, and drops malformed entries', async () => {
+    const { unreachableSources: _u, ...legacy } = result({ scanned: 4 })
+    const legacyFetcher = vi.fn().mockResolvedValue(jsonResponse({ success: true, result: legacy }))
+    await expect(requestArcimDocumentImport('consent-1', true, legacyFetcher)).resolves.toMatchObject({
+      unreachableSources: [],
+    })
+
+    const fetcher = vi.fn().mockResolvedValue(
+      jsonResponse({
+        success: true,
+        result: {
+          ...result(),
+          unreachableSources: [
+            { source: 'supplier_invoice_files', scope: 'connectfile', reason: 'permission', providerMessage: '  Saknar behörighet.  ' },
+            { source: 'supplier_invoice_files', scope: 'inbox', reason: 'permission', providerMessage: null },
+            { source: 'supplier_invoice_files', scope: 'archive', reason: 'maybe' },
+            'connectfile',
+          ],
+        },
+      }),
+    )
+    await expect(requestArcimDocumentImport('consent-1', true, fetcher)).resolves.toMatchObject({
+      unreachableSources: [
+        { source: 'supplier_invoice_files', scope: 'connectfile', reason: 'permission', providerMessage: 'Saknar behörighet.' },
+      ],
+    })
   })
 
   it('loops until the server reports the end, passing the cursor back and reporting running totals', async () => {

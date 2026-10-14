@@ -45,16 +45,15 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchLinesByEntryIds } from '@/lib/bookkeeping/entry-lines'
 import { LEDGER_RATE_BAND } from '@/lib/bookkeeping/supplier-payment-amounts'
 import {
-  buildVoucherIndex,
+  buildCopyIndexes,
   fetchFiscalPeriods,
   fetchSourceRefVouchers,
   fetchVouchersForNumbers,
   periodIdForDate,
-  resolveDatedRef,
+  resolveLiveDatedRef,
   sourceRefKey,
-  voucherKey,
+  type CopyIndexes,
   type FiscalPeriodRow,
-  type VoucherIndex,
   type VoucherRow,
 } from '@/lib/documents/voucher-ref-resolver'
 import type { SourceVoucherRefDto } from '@/lib/providers/dto'
@@ -424,16 +423,6 @@ async function writeSourceRateLink(
     .select('id')
 }
 
-/**
- * Whether an entry is a live copy. The fetchers read posted and reversed
- * entries only; a row without a status (none in practice) stays a candidate,
- * as before, and the status read in the corroboration step still refuses
- * anything that is not posted.
- */
-function isLiveCopy(row: VoucherRow): boolean {
-  return row.status !== 'reversed'
-}
-
 type Resolution =
   | { outcome: 'resolved'; entryId: string }
   /** Several dated verifikat; the AP/AR amount decides once the lines are read. */
@@ -472,15 +461,17 @@ function checkEntryDate(row: VoucherRow, input: MigratedInvoiceLinkInput): Resol
  * is checked against the date corridor, several are narrowed by it and hand
  * the survivors to the amount check.
  *
- * `index` holds the live entries only; `reversedCopies` the reversed ones,
- * which never resolve a ref and only explain why one is unresolved.
+ * `copies.live` holds the live entries only; `copies.reversed` the reversed
+ * ones, which never resolve a ref and only explain why one is unresolved.
+ * The status read in the corroboration step still refuses anything that is
+ * not posted.
  */
 function resolveInput(
-  index: VoucherIndex,
-  reversedCopies: VoucherIndex,
+  copies: CopyIndexes,
   periods: FiscalPeriodRow[],
   input: MigratedInvoiceLinkInput,
 ): Resolution {
+  const { live: index, reversed: reversedCopies } = copies
   const ref = input.sourceVoucher
   if (!ref || !Number.isInteger(ref.number) || ref.number <= 0) {
     if (input.refNotFetched) {
@@ -517,22 +508,21 @@ function resolveInput(
       reason: `source number ${ref.number} matches ${dated.length} series dated with the invoice` }
   }
 
-  const entryId = resolveDatedRef(index, periods, { series: ref.series, number: ref.number, date: referenceDate })
-  if (entryId) {
-    // resolveDatedRef hands back the id; the row (with its entry_date) sits
+  const resolution = resolveLiveDatedRef(copies, periods, { series: ref.series, number: ref.number, date: referenceDate })
+  if (resolution.resolved) {
+    // The resolver hands back the id; the row (with its entry_date) sits
     // in the period-agnostic index under the same source ref.
-    const row = (index.bySourceRef.get(sourceRefKey(ref.series, ref.number)) ?? []).find((v) => v.id === entryId)
+    const row = (index.bySourceRef.get(sourceRefKey(ref.series, ref.number)) ?? []).find((v) => v.id === resolution.entryId)
     if (!row) {
       return { outcome: 'unresolved', reason: `source ref ${ref.series}${ref.number} resolved to an entry the index does not carry` }
     }
     return checkEntryDate(row, input)
   }
 
-  const key = voucherKey(periodId, ref.series, ref.number)
-  if (index.ambiguousPeriodKeys.has(key)) {
+  if (resolution.reason === 'several_posted') {
     return { outcome: 'ambiguous', reason: `source ref ${ref.series}${ref.number} is carried by more than one verifikat in that fiscal year` }
   }
-  if (reversedCopies.byPeriodKey.has(key) || reversedCopies.ambiguousPeriodKeys.has(key)) {
+  if (resolution.reason === 'only_reversed') {
     return { outcome: 'unresolved', reason: `source ref ${ref.series}${ref.number} is carried only by reversed (storno) verifikat in that fiscal year` }
   }
   return { outcome: 'unresolved', reason: `no migrated verifikat carries source ref ${ref.series}${ref.number} in that fiscal year` }
@@ -592,8 +582,8 @@ export async function linkMigratedRegistrationVouchers(
   // A reversed copy never resolves a ref (see the module header). It is kept
   // apart to explain an unresolved ref, and to recognise an invoice that still
   // points at the copy an SIE re-sync replaced.
-  const index = buildVoucherIndex(vouchers.filter(isLiveCopy))
-  const reversedCopies = buildVoucherIndex(vouchers.filter((v) => !isLiveCopy(v)))
+  const copies = buildCopyIndexes(vouchers)
+  const reversedCopies = copies.reversed
 
   // 2. Resolve refs in memory. Two inputs landing on one verifikat is a
   //    contest neither side can win without guessing: both stay NULL.
@@ -607,7 +597,7 @@ export async function linkMigratedRegistrationVouchers(
     else claimants.set(entryId, [input])
   }
   for (const input of invoices) {
-    const resolution = resolveInput(index, reversedCopies, periods, input)
+    const resolution = resolveInput(copies, periods, input)
     if (resolution.outcome === 'candidates') {
       contested.push({ input, entryIds: resolution.entryIds, reason: resolution.reason })
       continue

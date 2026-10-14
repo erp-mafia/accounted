@@ -34,6 +34,14 @@ const SkattekontoBookDialog = dynamic(
   { loading: DialogLoadingSkeleton },
 )
 
+const SkattekontoLinkProposalsDialog = dynamic(
+  () =>
+    import('@/components/skattekonto/SkattekontoLinkProposalsDialog').then(
+      (module) => module.SkattekontoLinkProposalsDialog,
+    ),
+  { loading: DialogLoadingSkeleton },
+)
+
 const SkattekontoMatchDialog = dynamic(
   () =>
     import('@/components/skattekonto/SkattekontoMatchDialog').then(
@@ -100,6 +108,8 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
   const [busy, setBusy] = useState<string | null>(null)
   const [unfolded, setUnfolded] = useState<Set<ReconciliationItemBucket>>(new Set())
   const [bookRow, setBookRow] = useState<ReconciliationItem | null>(null)
+  // Skattekonto: every proposal linked in one previewed action (PH 171).
+  const [linkAllOpen, setLinkAllOpen] = useState(false)
   // Row the book dialog handed to the match flow (a ledger twin exists). Kept
   // as the converted row so the match dialog's fetch effect sees a stable object.
   const [matchRow, setMatchRow] = useState<SkattekontoTransactionWithSuggestion | null>(null)
@@ -699,7 +709,15 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
       {status.stale ? (
         <AttnLine>{t('stale_line', { source: sourceLabel })}</AttnLine>
       ) : isSkv && status.skattekonto?.covered ? (
-        <AttnLine action={onMatchManually ? { label: t('mode_match'), onClick: onMatchManually } : undefined}>
+        <AttnLine
+          action={
+            proposedCount > 0
+              ? { label: t('action_match_proposals', { count: proposedCount }), onClick: () => setLinkAllOpen(true) }
+              : onMatchManually
+                ? { label: t('mode_match'), onClick: onMatchManually }
+                : undefined
+          }
+        >
           {t('covered_line', {
             count: status.skattekonto.covered.event_count,
             date: formatDate(status.skattekonto.covered.through_date),
@@ -727,7 +745,14 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
       {/* Actions row: the work, then the way to the richer surfaces. */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         {proposedCount > 0 && (
-          <Button size="sm" onClick={() => void matchProposals()} disabled={busy !== null}>
+          // Skattekonto: the proposals open as one previewed set (count, sum,
+          // verifikat) with Ångra afterwards, PH 171; a bank account links
+          // its proposals directly, as before.
+          <Button
+            size="sm"
+            onClick={() => (isSkv ? setLinkAllOpen(true) : void matchProposals())}
+            disabled={busy !== null}
+          >
             {t('action_match_proposals', { count: proposedCount })}
           </Button>
         )}
@@ -916,6 +941,18 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
             setBookRow(null)
           }}
           onLinkCovered={onMatchManually}
+          onLinked={() => void refresh()}
+        />
+      )}
+
+      {linkAllOpen && (
+        <SkattekontoLinkProposalsDialog
+          open
+          onOpenChange={(o) => {
+            if (!o) setLinkAllOpen(false)
+          }}
+          onLinked={() => void refresh()}
+          onManual={onMatchManually}
         />
       )}
 

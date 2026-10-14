@@ -6516,7 +6516,7 @@ const SKATTEVERKET: Record<string, StructuredErrorEntry> = {
     retryable: false,
     remediation: {
       description:
-        'Link the covered rows (covered_by_ledger in gnubok_list_reconciliation_items, account_key "skattekonto") to the unlinked verifikat with gnubok_reconcile_match, at most 50 rows per pair, with allow_remainder: true when the rows do not sum to the verifikat: the rest stays on it as its remainder. Book anyway (allow_duplicate / allow_duplicate_ids) only when the user confirms the event is really missing from the ledger.',
+        'Rows one verifikat holds exactly are already proposed: link them with gnubok_reconcile_match use_proposals: true, dry_run first. Link the other covered rows (covered_by_ledger in gnubok_list_reconciliation_items, account_key "skattekonto") to the unlinked verifikat with gnubok_reconcile_match, at most 50 rows per pair, with allow_remainder: true when the rows do not sum to the verifikat: the rest stays on it as its remainder. Book anyway (allow_duplicate / allow_duplicate_ids) only when the user confirms the event is really missing from the ledger.',
       tool: 'gnubok_reconcile_match',
     },
     thrown_message_sv: true,

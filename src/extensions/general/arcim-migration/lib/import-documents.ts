@@ -21,6 +21,12 @@
  *    path (the underlag wizard, an API client, a manual upload): those are
  *    skipped without a download. Only this import's own earlier files let a
  *    re-run continue on a verifikat.
+ *  - A file links only to the live (posted) copy of its verifikat, never to
+ *    a reversed one: the registration linker's rule (isLiveCopy). An SIE
+ *    re-sync of a year leaves a reversed copy of every verifikat beside the
+ *    live one under the same source ref, and counting that copy left every
+ *    file of a re-synced year unmatched. A ref that only reversed copies
+ *    carry, or that several live ones carry, stays unmatched with its reason.
  *  - A Bokio receipt links only when Bokio's entry date equals the
  *    verifikat's date; a mismatch is reported as unmatched.
  *  - A receipt whose verifikat sits in a klarmarkerat or locked fiscal year
@@ -33,6 +39,17 @@
  * critical path: provider document APIs are rate-limited and a full sweep can
  * issue hundreds of download calls. Fortnox requires archive and connectfile
  * scopes; existing consents must reconnect before this import can run.
+ *
+ * Fortnox keeps underlag in two places: on the verifikat (voucher file
+ * connections) and on the supplier invoice (supplier-invoice file
+ * connections). The second is where a scanned leverantörsfaktura lives, so
+ * reading only the first left every supplier-invoice verifikat (the D series
+ * by default) without its invoice (crm#1146, PH 176). A supplier-invoice file
+ * is linked to the verifikat that booked the invoice, which Fortnox names on
+ * the invoice (series, number, financial year) and the SIE import preserved
+ * as the source ref: the same resolution as a voucher file. That source is
+ * additive: a refusal on it (scope or licence) is reported in
+ * `unreachableSources` and never stops the voucher files.
  *
  * Resumable: one call works through the provider's attachment list (sorted
  * by provider id so the order is stable between calls) until `timeBudgetMs`
@@ -63,13 +80,20 @@ import {
 import {
   FortnoxApiError,
   FortnoxClient,
+  fortnoxErrorMessage,
   isFortnoxPermissionError,
 } from '@/lib/providers/fortnox/client'
 import {
   downloadFortnoxArchiveFile,
   fetchFortnoxFileConnections,
   fetchFortnoxFinancialYears,
+  fetchFortnoxSupplierInvoiceBookings,
+  fetchFortnoxSupplierInvoiceBookingVoucher,
+  fetchFortnoxSupplierInvoiceFileConnections,
+  type FortnoxBookingVoucher,
+  type FortnoxFinancialYear,
 } from '@/lib/providers/fortnox/attachments'
+import { providerRefusalReason, type ProviderRefusalReason } from '@/lib/providers/with-provider-call'
 import {
   uploadDocument,
   computeSHA256,
@@ -78,10 +102,11 @@ import {
   ALLOWED_DOCUMENT_TYPES,
 } from '@/lib/core/documents/document-service'
 import {
-  buildVoucherIndex,
+  buildCopyIndexes,
   fetchFiscalPeriods,
   fetchSourceRefVouchers,
-  resolveDatedRef,
+  resolveLiveDatedRef,
+  type UnresolvedRefReason,
 } from '@/lib/documents/voucher-ref-resolver'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { supportsUnderlagImport } from '@/lib/providers/underlag-import'
@@ -149,26 +174,84 @@ export interface ImportDocumentsResult {
   lockedPeriods: string[]
   dryRun: boolean
   /** A few unmatched voucher labels, to aid diagnosis without dumping all. */
-  unmatchedSamples: { uploadId: string; voucher: string; date: string }[]
+  unmatchedSamples: { uploadId: string; voucher: string; date: string; reason: UnmatchedReason }[]
   /** Provider attachments linked to a voucher in total (all calls). */
   total: number
   /** True when the time budget ran out before the end of the list. */
   partial: boolean
   /** Last handled attachment id; pass back as `cursor` to continue. Null when complete. */
   nextCursor: string | null
+  /**
+   * Attachment sources the provider refused in this call, with the scope the
+   * refused call needs, so the UI can name it. Empty when every source answered.
+   */
+  unreachableSources: UnreachableAttachmentSource[]
 }
 
+/** Why an attachment was counted as unmatched. */
+export type UnmatchedReason =
+  /** The provider names no verifikat, or none in a financial year it lists. */
+  | 'no_voucher_ref'
+  /** Bokio dates the entry otherwise than the verifikat the ref found. */
+  | 'date_mismatch'
+  | UnresolvedRefReason
+
+/** Fortnox scopes behind the document import (Fortnox's scope table). */
+export type FortnoxDocumentScope = 'archive' | 'connectfile' | 'supplierinvoice'
+
+export interface UnreachableAttachmentSource {
+  /** Files Fortnox keeps on supplier invoices (not on the verifikat). */
+  source: 'supplier_invoice_files'
+  /** The scope the refused call needs. */
+  scope: FortnoxDocumentScope
+  /**
+   * license: the Fortnox company lacks the module. permission: the connection
+   * lacks the right. error: Fortnox failed otherwise (a retry may help).
+   */
+  reason: ProviderRefusalReason | 'error'
+  /** What Fortnox itself answered, when it said anything. */
+  providerMessage: string | null
+}
+
+type AttachmentRef = { series: string; number: number; date: string; dateTo?: string }
+
 interface ProviderAttachment {
+  /** Unique per attachment: the sweep's sort key and resume cursor. */
   id: string
+  /** The provider file to download; the id itself when absent. */
+  fileId?: string
+  /** A Fortnox supplier-invoice file, linked through the invoice's booking voucher. */
+  supplierInvoiceNumber?: string
   fileName: string | null
   fileNameIsBaseName: boolean
   declaredContentType: string | null
-  ref: { series: string; number: number; date: string; dateTo?: string } | null
+  ref: AttachmentRef | null
+  /** The ref needs one more provider read (resolveRef) before it is known. */
+  refPending?: boolean
+}
+
+interface ProviderAttachmentListing {
+  attachments: ProviderAttachment[]
+  unreachable: UnreachableAttachmentSource[]
 }
 
 interface ProviderAttachmentSource {
-  list(): Promise<ProviderAttachment[]>
-  download(id: string): Promise<{ bytes: ArrayBuffer; contentType: string | null }>
+  list(): Promise<ProviderAttachmentListing>
+  download(fileId: string): Promise<{ bytes: ArrayBuffer; contentType: string | null }>
+  /** Resolve a `refPending` attachment; null when the provider names no verifikat. */
+  resolveRef?(attachment: ProviderAttachment): Promise<AttachmentRef | null>
+}
+
+function unreachableFrom(
+  scope: FortnoxDocumentScope,
+  error: unknown,
+): UnreachableAttachmentSource {
+  return {
+    source: 'supplier_invoice_files',
+    scope,
+    reason: isFortnoxPermissionError(error) ? providerRefusalReason(error) : 'error',
+    providerMessage: fortnoxErrorMessage(error),
+  }
 }
 
 const EXTENSION_BY_TYPE: Record<string, string> = {
@@ -234,7 +317,7 @@ function bokioSource(
         fetchBokioVoucherIndex(client, accessToken, providerCompanyId),
       ])
 
-      return uploads
+      const attachments = uploads
         .filter((upload) => upload.journalEntryId != null)
         .map((upload: BokioUpload): ProviderAttachment => ({
           id: upload.id,
@@ -245,6 +328,7 @@ function bokioSource(
           declaredContentType: upload.contentType,
           ref: voucherIndex.get(upload.journalEntryId as string) ?? null,
         }))
+      return { attachments, unreachable: [] }
     },
     download(id) {
       return downloadBokioUpload(client, accessToken, providerCompanyId, id)
@@ -252,36 +336,117 @@ function bokioSource(
   }
 }
 
+/**
+ * A Fortnox voucher pinned to its financial year, as the resolver wants it:
+ * the year's window, never a calendar guess. An unknown year id is no ref.
+ */
+function fortnoxRef(
+  voucher: { series: string; number: number; financialYearId: number },
+  financialYearById: Map<number, FortnoxFinancialYear>,
+): AttachmentRef | null {
+  const financialYear = financialYearById.get(voucher.financialYearId)
+  return financialYear
+    ? {
+        series: voucher.series,
+        number: voucher.number,
+        date: financialYear.fromDate,
+        dateTo: financialYear.toDate,
+      }
+    : null
+}
+
+/** Same voucher, same file: the key both Fortnox registers are deduplicated on. */
+function fortnoxFileVoucherKey(fileId: string, voucher: FortnoxBookingVoucher): string {
+  return `${fileId}|${voucher.financialYearId}|${voucher.series.trim().toUpperCase()}|${voucher.number}`
+}
+
+/**
+ * Keeps a supplier-invoice attachment's id apart from the bare file id of a
+ * voucher attachment, and in practice sorts it after Fortnox's file ids
+ * (UUIDs), so voucher files run first. Nothing relies on that order.
+ */
+const SUPPLIER_INVOICE_ATTACHMENT_PREFIX = 'si:'
+
 function fortnoxSource(
   client: FortnoxClient,
-  accessToken: string,
+  accessToken: () => string,
 ): ProviderAttachmentSource {
+  // Read by resolveRef on later attachments of the same call.
+  let financialYearById = new Map<number, FortnoxFinancialYear>()
+
+  /**
+   * Files on supplier invoices, linked through each invoice's booking
+   * voucher. Additive to the voucher files: any refusal or failure here is
+   * reported and the voucher files carry on, because this source must never
+   * take away what the voucher sweep already delivers.
+   */
+  const supplierInvoiceAttachments = async (
+    voucherFileKeys: Set<string>,
+  ): Promise<ProviderAttachmentListing> => {
+    let scope: FortnoxDocumentScope = 'connectfile'
+    try {
+      const connections = await fetchFortnoxSupplierInvoiceFileConnections(client, accessToken())
+      if (connections.length === 0) return { attachments: [], unreachable: [] }
+
+      scope = 'supplierinvoice'
+      const bookings = await fetchFortnoxSupplierInvoiceBookings(client, accessToken())
+
+      const attachments: ProviderAttachment[] = []
+      for (const connection of connections) {
+        const booking = bookings.get(connection.givenNumber) ?? { state: 'unknown' as const }
+        // A file on an unbooked or cancelled invoice has no verifikat to sit
+        // on, so it is not an attachment "linked to a voucher" (the listing's
+        // definition, as Bokio uploads without a journal entry).
+        if (booking.state === 'unbooked') continue
+        if (
+          booking.state === 'booked' &&
+          voucherFileKeys.has(fortnoxFileVoucherKey(connection.fileId, booking.voucher))
+        ) {
+          continue
+        }
+        attachments.push({
+          id: `${SUPPLIER_INVOICE_ATTACHMENT_PREFIX}${connection.givenNumber}:${connection.fileId}`,
+          fileId: connection.fileId,
+          supplierInvoiceNumber: connection.givenNumber,
+          fileName: connection.name,
+          fileNameIsBaseName: false,
+          declaredContentType: null,
+          ref: booking.state === 'booked' ? fortnoxRef(booking.voucher, financialYearById) : null,
+          refPending: booking.state === 'unknown',
+        })
+      }
+      return { attachments, unreachable: [] }
+    } catch (error) {
+      log.error('fortnox supplier-invoice files not listed', error as Error, {
+        scope,
+        providerStatus: error instanceof FortnoxApiError ? error.statusCode : undefined,
+        providerMessage: fortnoxErrorMessage(error),
+      })
+      return { attachments: [], unreachable: [unreachableFrom(scope, error)] }
+    }
+  }
+
   return {
     async list() {
+      let voucherAttachments: ProviderAttachment[]
+      const voucherFileKeys = new Set<string>()
       try {
-        const financialYears = await fetchFortnoxFinancialYears(client, accessToken)
+        const financialYears = await fetchFortnoxFinancialYears(client, accessToken())
         const connections = await fetchFortnoxFileConnections(
           client,
-          accessToken,
+          accessToken(),
           financialYears.map((year) => year.id),
         )
-        const financialYearById = new Map(financialYears.map((year) => [year.id, year]))
+        financialYearById = new Map(financialYears.map((year) => [year.id, year]))
 
-        return connections.map((connection): ProviderAttachment => {
-          const financialYear = financialYearById.get(connection.financialYearId)
+        voucherAttachments = connections.map((connection): ProviderAttachment => {
+          voucherFileKeys.add(fortnoxFileVoucherKey(connection.fileId, connection))
           return {
             id: connection.fileId,
             fileName: connection.name,
             fileNameIsBaseName: false,
             declaredContentType: null,
-            ref: financialYear
-              ? {
-                  series: connection.series,
-                  number: connection.number,
-                  date: financialYear.fromDate,
-                  dateTo: financialYear.toDate,
-                }
-              : null,
+            ref: fortnoxRef(connection, financialYearById),
           }
         })
       } catch (error) {
@@ -290,9 +455,24 @@ function fortnoxSource(
         }
         throw error
       }
+
+      const supplierInvoiceFiles = await supplierInvoiceAttachments(voucherFileKeys)
+      return {
+        attachments: [...voucherAttachments, ...supplierInvoiceFiles.attachments],
+        unreachable: supplierInvoiceFiles.unreachable,
+      }
     },
-    download(id) {
-      return downloadFortnoxArchiveFile(client, accessToken, id)
+    download(fileId) {
+      return downloadFortnoxArchiveFile(client, accessToken(), fileId)
+    },
+    async resolveRef(attachment) {
+      if (!attachment.supplierInvoiceNumber) return null
+      const voucher = await fetchFortnoxSupplierInvoiceBookingVoucher(
+        client,
+        accessToken(),
+        attachment.supplierInvoiceNumber,
+      )
+      return voucher ? fortnoxRef(voucher, financialYearById) : null
     },
   }
 }
@@ -329,6 +509,7 @@ export async function importProviderDocuments(
     total: 0,
     partial: false,
     nextCursor: null,
+    unreachableSources: [],
   }
 
   // Unsupported providers are a no-op rather than an error
@@ -340,14 +521,18 @@ export async function importProviderDocuments(
   }
 
   const bokioClient = provider === 'bokio' ? new BokioClient() : null
-  const fortnoxClient = provider === 'fortnox' ? new FortnoxClient() : null
+  // One Fortnox source per call: it keeps the financial years its listing read
+  // for resolveRef, and reads the token on every request, so a refresh after
+  // a 401 reaches it.
+  const fortnox =
+    provider === 'fortnox' ? fortnoxSource(new FortnoxClient(), () => resolved.accessToken) : null
   const source = (): ProviderAttachmentSource =>
     provider === 'bokio'
       ? bokioSource(bokioClient as BokioClient, resolved)
-      : fortnoxSource(fortnoxClient as FortnoxClient, resolved.accessToken)
+      : (fortnox as ProviderAttachmentSource)
 
   // ── Bulk reads (one round of paged requests each, no per-item N+1) ──
-  const [listedAttachments, periods, vouchers, existingAttachments] = await Promise.all([
+  const [listing, periods, vouchers, existingAttachments] = await Promise.all([
     source().list(),
     fetchFiscalPeriods(supabase, companyId),
     fetchSourceRefVouchers(supabase, companyId),
@@ -371,15 +556,17 @@ export async function importProviderDocuments(
 
   // Stable order across calls: a provider may page its listing differently
   // from one call to the next, and the cursor is "continue after this id".
-  const attachments = [...listedAttachments].sort((a, b) =>
+  const attachments = [...listing.attachments].sort((a, b) =>
     a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
   )
   result.total = attachments.length
+  result.unreachableSources = [...listing.unreachable]
   const firstAfterCursor = cursor ? attachments.findIndex((a) => a.id > cursor) : 0
   const startIndex = firstAfterCursor === -1 ? attachments.length : firstAfterCursor
 
-  // Index gnubok verifikat by (period, series, number) for in-memory resolution.
-  const voucherIndex = buildVoucherIndex(vouchers)
+  // Index gnubok verifikat by (period, series, number) for in-memory
+  // resolution, the live copies apart from the reversed ones (isLiveCopy).
+  const voucherCopies = buildCopyIndexes(vouchers)
   const entryDateById = new Map(vouchers.map((v) => [v.id, v.entry_date]))
   const periodIdByEntry = new Map(vouchers.map((v) => [v.id, v.fiscal_period_id]))
   const periodById = new Map(periods.map((p) => [p.id, p]))
@@ -417,14 +604,50 @@ export async function importProviderDocuments(
     if (error) throw new Error('BOKIO_UPLOAD_MAPPING_FAILED')
   }
 
-  const recordUnmatched = (uploadId: string, voucher: string, date: string) => {
+  const unmatchedByReason: Partial<Record<UnmatchedReason, number>> = {}
+  const recordUnmatched = (uploadId: string, voucher: string, date: string, reason: UnmatchedReason) => {
     result.unmatched++
+    unmatchedByReason[reason] = (unmatchedByReason[reason] ?? 0) + 1
     if (result.unmatchedSamples.length < 20) {
-      result.unmatchedSamples.push({ uploadId, voucher, date })
+      result.unmatchedSamples.push({ uploadId, voucher, date, reason })
     }
   }
 
   let refreshedAfterUnauthorized = false
+  /** One consent refresh per call after a Fortnox 401, then the call once more. */
+  const withUnauthorizedRefresh = async <T,>(call: () => Promise<T>): Promise<T> => {
+    try {
+      return await call()
+    } catch (error) {
+      if (
+        provider !== 'fortnox' ||
+        !(error instanceof FortnoxApiError) ||
+        error.statusCode !== 401 ||
+        refreshedAfterUnauthorized
+      ) {
+        throw error
+      }
+      refreshedAfterUnauthorized = true
+      resolved = await resolveConsent(companyId, consentId)
+      return call()
+    }
+  }
+
+  // Scopes Fortnox refused for supplier-invoice files in this call: the rest
+  // of those files are not tried again (each would be refused the same way),
+  // and the refusal is reported once instead of failing the whole sweep.
+  const refusedSupplierInvoiceScopes = new Set<FortnoxDocumentScope>()
+  const refuseSupplierInvoiceScope = (scope: FortnoxDocumentScope, error: unknown) => {
+    if (refusedSupplierInvoiceScopes.has(scope)) return
+    refusedSupplierInvoiceScopes.add(scope)
+    result.unreachableSources.push(unreachableFrom(scope, error))
+    log.warn('fortnox refused supplier-invoice files', {
+      scope,
+      providerStatus: error instanceof FortnoxApiError ? error.statusCode : undefined,
+      providerMessage: fortnoxErrorMessage(error),
+    })
+  }
+
   // The listing above is paid again by every slice; it must not eat the
   // slice itself (or cut the in-memory dry run short).
   const sweepStartedAt = now()
@@ -440,25 +663,52 @@ export async function importProviderDocuments(
     }
     const attachment = attachments[index]
     result.scanned++
-    const ref = attachment.ref
+    const isSupplierInvoiceFile = attachment.supplierInvoiceNumber != null
+    if (isSupplierInvoiceFile && refusedSupplierInvoiceScopes.has('archive')) continue
+
+    let ref = attachment.ref
+    if (attachment.refPending) {
+      // The dry run spends no provider calls past the listing: it counts the
+      // file as found, and the real run resolves it.
+      if (dryRun || refusedSupplierInvoiceScopes.has('supplierinvoice')) continue
+      try {
+        ref = (await withUnauthorizedRefresh(() => source().resolveRef!(attachment))) ?? null
+      } catch (error) {
+        if (provider === 'fortnox' && isFortnoxPermissionError(error)) {
+          refuseSupplierInvoiceScope('supplierinvoice', error)
+          continue
+        }
+        result.failed++
+        log.error('failed to resolve a supplier invoice voucher', error as Error, {
+          uploadId: attachment.id,
+        })
+        continue
+      }
+    }
 
     if (!ref) {
-      recordUnmatched(attachment.id, '(unresolved)', '')
+      recordUnmatched(
+        attachment.id,
+        isSupplierInvoiceFile ? `(supplier invoice ${attachment.supplierInvoiceNumber})` : '(unresolved)',
+        '',
+        'no_voucher_ref',
+      )
       continue
     }
 
-    const journalEntryId = resolveDatedRef(voucherIndex, periods, ref)
+    const target: AttachmentRef = ref
+    const resolution = resolveLiveDatedRef(voucherCopies, periods, target)
+    if (!resolution.resolved) {
+      recordUnmatched(attachment.id, `${target.series}${target.number}`, target.date, resolution.reason)
+      continue
+    }
+    const journalEntryId = resolution.entryId
 
     // A source that dates the entry itself (Bokio) must agree with the
     // verifikat on that date: the number alone is unique only within a
     // fiscal year, and a wrong link can never be undone.
-    const dateDisagrees =
-      journalEntryId != null &&
-      !ref.dateTo &&
-      entryDateById.get(journalEntryId)?.slice(0, 10) !== ref.date.slice(0, 10)
-
-    if (!journalEntryId || dateDisagrees) {
-      recordUnmatched(attachment.id, `${ref.series}${ref.number}`, ref.date)
+    if (!target.dateTo && entryDateById.get(journalEntryId)?.slice(0, 10) !== target.date.slice(0, 10)) {
+      recordUnmatched(attachment.id, `${target.series}${target.number}`, target.date, 'date_mismatch')
       continue
     }
 
@@ -487,7 +737,7 @@ export async function importProviderDocuments(
     }
 
     const importAttachment = async () => {
-      const { bytes, contentType } = await source().download(attachment.id)
+      const { bytes, contentType } = await source().download(attachment.fileId ?? attachment.id)
 
       const sha256 = await computeSHA256(bytes)
       if (seenAttachments.has(attachmentKey(sha256, journalEntryId))) {
@@ -517,7 +767,7 @@ export async function importProviderDocuments(
         userId,
         companyId,
         {
-          name: fileNameFor(attachment, ref, effectiveType ?? declaredType),
+          name: fileNameFor(attachment, target, effectiveType ?? declaredType),
           buffer: bytes,
           type: effectiveType,
         },
@@ -536,33 +786,22 @@ export async function importProviderDocuments(
     }
 
     try {
-      await importAttachment()
+      await withUnauthorizedRefresh(importAttachment)
     } catch (error) {
-      let finalError = error
-      if (
-        provider === 'fortnox' &&
-        error instanceof FortnoxApiError &&
-        error.statusCode === 401 &&
-        !refreshedAfterUnauthorized
-      ) {
-        refreshedAfterUnauthorized = true
-        try {
-          resolved = await resolveConsent(companyId, consentId)
-          await importAttachment()
+      if (provider === 'fortnox' && isFortnoxPermissionError(error)) {
+        // A supplier-invoice file is an addition to the voucher files: a
+        // refused download stops those files only, and says which scope.
+        if (isSupplierInvoiceFile) {
+          refuseSupplierInvoiceScope('archive', error)
           continue
-        } catch (retryError) {
-          finalError = retryError
         }
-      }
-
-      if (provider === 'fortnox' && isFortnoxPermissionError(finalError)) {
         throw new FortnoxDocumentScopesRequiredError()
       }
 
       result.failed++
-      log.error('failed to import a receipt', finalError as Error, {
+      log.error('failed to import a receipt', error as Error, {
         uploadId: attachment.id,
-        voucher: `${ref.series}${ref.number}`,
+        voucher: `${target.series}${target.number}`,
       })
     }
   }
@@ -582,10 +821,12 @@ export async function importProviderDocuments(
     linked: result.linked,
     skipped: result.skipped,
     unmatched: result.unmatched,
+    unmatchedByReason,
     failed: result.failed,
     locked: result.locked,
     partial: result.partial,
     nextCursor: result.nextCursor,
+    unreachableScopes: result.unreachableSources.map((s) => `${s.scope}:${s.reason}`),
     elapsedMs: now() - startedAt,
   })
 

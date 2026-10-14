@@ -2068,7 +2068,7 @@ function skattekontoLedgerCoverRefusal(
   const target = cover.entries[0]?.journal_entry_id
   return codedRefusal('SKATTEKONTO_BOOK_LEDGER_COVER_EXISTS', `${lead}${ledgerCoverMessage(cover)}`, {
     description:
-      `Do not book. Link the open rows up to ${cover.through_date} to the unlinked verifikat on 1630 that already hold them (gnubok_list_reconciliation_items, account_key "skattekonto": rows with covered_by_ledger in unmatched_external, the verifikat in unmatched_ledger): gnubok_reconcile_match with pairs of at most 50 rows per verifikat, and allow_remainder: true on a pair whose rows do not sum to the verifikat (a summarised verifikat: the rest stays on it as its remainder). With several verifikat ask the user which rows belong to which. ${SKATTEKONTO_TWIN_TAIL}`,
+      `Do not book. Rows that one verifikat holds exactly are already proposed (bucket proposed, a group named in external_ids): gnubok_reconcile_match with use_proposals: true links them all, dry_run first. Link the other open rows up to ${cover.through_date} to the unlinked verifikat on 1630 that already hold them (gnubok_list_reconciliation_items, account_key "skattekonto": rows with covered_by_ledger in unmatched_external, the verifikat in unmatched_ledger): gnubok_reconcile_match with pairs of at most 50 rows per verifikat, and allow_remainder: true on a pair whose rows do not sum to the verifikat (a summarised verifikat: the rest stays on it as its remainder). With several verifikat ask the user which rows belong to which. ${SKATTEKONTO_TWIN_TAIL}`,
     tool: 'gnubok_reconcile_match',
     args: {
       account_key: 'skattekonto',

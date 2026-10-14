@@ -189,6 +189,39 @@ describe('executeMigration: hydration budget and scope', () => {
     })
   })
 
+  it('recognises a number-less draft stored on an earlier run, by its legacy stand-in number or by its header', async () => {
+    // Bokio drafts have no number until they are published (crm#1084).
+    const numberless = (id: string, total: number): SalesInvoiceDto => {
+      const dto = salesDto('')
+      return {
+        ...dto, id, status: 'draft',
+        legalMonetaryTotal: { payableAmount: { value: total, currencyCode: 'SEK' } },
+        paymentStatus: { paid: false, balance: { value: total, currencyCode: 'SEK' } },
+      }
+    }
+    mListSales.mockResolvedValue([
+      numberless('cec22965-5dc1-4e13-bde6-4d51c7d7a680', 1000),
+      numberless('6feb8f89-0c91-44e0-a046-de5d8f14e488', 1000),
+      numberless('9d72bbf9-5835-48ce-8f54-8735d9cd2bd8', 1500),
+    ])
+    mFetchAll
+      // The customer register.
+      .mockResolvedValueOnce([{ id: 'customer-1', org_number: null, name: 'Kund AB' }])
+      // The invoices already stored: one under the Bokio id an older import
+      // used as its number, one with no number and the same header.
+      .mockResolvedValueOnce([
+        { id: 'inv-1', invoice_number: 'cec22965-5dc1-4e13-bde6-4d51c7d7a680', customer_id: 'customer-1', invoice_date: '2025-03-14', currency: 'SEK', total: 1000 },
+        { id: 'inv-2', invoice_number: null, customer_id: 'customer-1', invoice_date: '2025-03-14', currency: 'SEK', total: 1000 },
+      ])
+      .mockResolvedValue([])
+
+    const results = await executeMigration(baseOptions({ importSalesInvoices: true }))
+
+    const given = mHydrateSales.mock.calls[0][3] as SalesInvoiceDto[]
+    expect(given.map((dto) => dto.id)).toEqual(['9d72bbf9-5835-48ce-8f54-8735d9cd2bd8'])
+    expect(results.salesInvoices).toMatchObject({ total: 3, imported: 1, skipped: 2, skipReasons: { duplicate: 2 } })
+  })
+
   it('leaves the budget to the provider default when the run has no deadline', async () => {
     mListSales.mockResolvedValue([salesDto('1001')])
 

@@ -299,19 +299,28 @@ function treatmentForRate(rate: number, currencyCode?: string): VatTreatment {
  * rate goes to null so no downstream reader can mistake silence for 25 %.
  */
 /**
- * A free-text row: no quantity, no amount, no unit price. Providers ship
- * these as ordinary rows (Fortnox: DeliveredQuantity "0", Total 0, VAT 0);
- * Accounted models them as `line_type = 'text'`, which the invoice page
- * renders without amounts and the booking engine leaves out.
+ * A free-text row. Accounted models it as `line_type = 'text'`, which the
+ * invoice page renders without amounts and the booking engine leaves out.
+ *
+ * A provider that states the row kind (Bokio's itemType
+ * `descriptionOnlyItem`, carried as `lineType`) is taken at its word. The
+ * others ship text rows as ordinary rows (Fortnox: DeliveredQuantity "0",
+ * Total 0, VAT 0), so for them a row with no quantity, no amount and no unit
+ * price is read as text.
  */
 interface LineShape {
+  lineType?: 'product' | 'text'
   quantity?: number
   unitPrice?: { value: number }
   lineExtensionAmount?: { value: number }
 }
 
-function isTextLine(line: LineShape): boolean {
+function carriesNoMoney(line: LineShape): boolean {
   return !line.quantity && !line.unitPrice?.value && line.lineExtensionAmount?.value === 0
+}
+
+function isTextLine(line: LineShape): boolean {
+  return line.lineType ? line.lineType === 'text' : carriesNoMoney(line)
 }
 
 function resolveInvoiceVat(
@@ -353,7 +362,7 @@ function resolveInvoiceVat(
   // nulled its header rate.
   const statedRates = [...new Set(
     dto.lines
-      .filter((line) => line.taxPercent != null && !isTextLine(line))
+      .filter((line) => line.taxPercent != null && !isTextLine(line) && !carriesNoMoney(line))
       .map((line) => snapToSwedishRate(line.taxPercent as number) ?? (line.taxPercent as number)),
   )]
 
@@ -1063,7 +1072,9 @@ function mapSalesInvoiceLine(
     sort_order: index + 1,
     description: line.description || line.itemName || '',
     quantity: sign(line.quantity || 1),
-    unit: line.unitCode || 'st',
+    // The source's unit, empty included ("unspecified" in Bokio is no unit,
+    // not "st"); the default only when the source said nothing.
+    unit: line.unitCode ?? 'st',
     unit_price: roundOre(line.unitPrice?.value ?? line.lineExtensionAmount.value),
     line_total: sign(lineTotal),
     // 0 rather than the old hardcoded 25 when nothing established a rate: a

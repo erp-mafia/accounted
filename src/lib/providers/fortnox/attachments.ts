@@ -1,12 +1,20 @@
 import { FortnoxApiError, type FortnoxClient } from './client';
 
 /**
- * Fortnox voucher attachment resource config + fetchers.
+ * Fortnox attachment resource config + fetchers.
  *
  * Voucher file connections identify the archive file and the target voucher
  * directly. VoucherYear is Fortnox's financial-year ID, not a calendar year,
  * so callers must resolve it through /financialyears before matching the
  * SIE-preserved voucher series and number.
+ *
+ * Supplier-invoice file connections name the supplier invoice instead; the
+ * verifikat is the one that booked that invoice. Scopes (Fortnox's scope
+ * table, developer guide "Scopes"): both file-connection registers are
+ * `connectfile`, /archive is `archive`, /supplierinvoices is
+ * `supplierinvoice`. Customer-invoice files have no file-connection register
+ * there: they live in the separate fileattachments service, keyed per
+ * invoice id, so they are not read here.
  */
 
 const PAGE_SIZE = 500;
@@ -121,6 +129,164 @@ export async function fetchFortnoxFileConnections(
   }
 
   return connections;
+}
+
+/**
+ * A file Fortnox keeps on a supplier invoice rather than on its verifikat.
+ *
+ * Fortnox stores the scanned invoice on the supplier invoice itself
+ * (Leverantörsfakturor), so the verifikat that books it (D series by
+ * default) has no voucher file connection: a voucher-only sweep never sees
+ * these files. `givenNumber` is the invoice's löpnummer (GivenNumber), the
+ * key the connection names it by (`SupplierInvoiceNumber`).
+ */
+export interface FortnoxSupplierInvoiceFileConnection {
+  fileId: string;
+  name: string | null;
+  givenNumber: string;
+}
+
+/** The verifikat that booked a supplier invoice, as Fortnox numbers it. */
+export interface FortnoxBookingVoucher {
+  series: string;
+  number: number;
+  /** Fortnox's financial-year ID, resolved through /financialyears like VoucherYear. */
+  financialYearId: number;
+}
+
+/**
+ * What the supplier-invoice register says about one invoice's booking.
+ *  - `booked`: one booking voucher named exactly.
+ *  - `unbooked`: Fortnox says the invoice was never booked or was cancelled,
+ *    so no verifikat exists to carry its file.
+ *  - `unknown`: the list form named no single booking voucher; only the
+ *    detail form can tell (fetchFortnoxSupplierInvoiceBookingVoucher).
+ */
+export type FortnoxSupplierInvoiceBooking =
+  | { state: 'booked'; voucher: FortnoxBookingVoucher }
+  | { state: 'unbooked' }
+  | { state: 'unknown' };
+
+/** The ReferenceType Fortnox gives the voucher that books a supplier invoice. */
+const SUPPLIER_INVOICE_BOOKING_REFERENCE = 'SUPPLIERINVOICE';
+
+function bookingVoucherFrom(
+  series: unknown,
+  number: unknown,
+  year: unknown,
+): FortnoxBookingVoucher | null {
+  const seriesText = typeof series === 'string' ? series.trim() : '';
+  const voucherNumber = finiteInteger(number);
+  const financialYearId = finiteInteger(year);
+  if (!seriesText || voucherNumber == null || financialYearId == null) return null;
+  return { series: seriesText, number: voucherNumber, financialYearId };
+}
+
+function givenNumberOf(value: unknown): string {
+  return typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
+}
+
+/**
+ * Every supplier-invoice file connection in the company. The register takes
+ * no year filter (the API reference lists none), so one paged listing covers
+ * all years. Scope: connectfile, the same as voucher file connections.
+ */
+export async function fetchFortnoxSupplierInvoiceFileConnections(
+  client: FortnoxClient,
+  accessToken: string,
+): Promise<FortnoxSupplierInvoiceFileConnection[]> {
+  const rawConnections = await client.getPaginated<Record<string, unknown>>(
+    accessToken,
+    '/supplierinvoicefileconnections',
+    'SupplierInvoiceFileConnections',
+    { pageSize: PAGE_SIZE },
+  );
+
+  const connections: FortnoxSupplierInvoiceFileConnection[] = [];
+  const seen = new Set<string>();
+  for (const raw of rawConnections) {
+    const fileId = typeof raw.FileId === 'string' ? raw.FileId.trim() : '';
+    const givenNumber = givenNumberOf(raw.SupplierInvoiceNumber);
+    if (!fileId || !/^\d+$/.test(givenNumber)) continue;
+
+    const key = `${fileId}|${givenNumber}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const name = typeof raw.Name === 'string' && raw.Name.trim() ? raw.Name.trim() : null;
+    connections.push({ fileId, name, givenNumber });
+  }
+  return connections;
+}
+
+/**
+ * The booking voucher of every supplier invoice, read from the register's
+ * list form (paid invoices included). A list item names its vouchers in
+ * `Vouchers` with a ReferenceType; exactly one SUPPLIERINVOICE voucher is the
+ * booking. Anything else (no Vouchers on the list form, several bookings, a
+ * ReferenceType spelled otherwise) is `unknown`, never a guess: the caller
+ * asks the detail form, whose VoucherSeries/VoucherNumber/VoucherYear name
+ * the booking voucher by definition. Scope: supplierinvoice.
+ */
+export async function fetchFortnoxSupplierInvoiceBookings(
+  client: FortnoxClient,
+  accessToken: string,
+): Promise<Map<string, FortnoxSupplierInvoiceBooking>> {
+  const rawInvoices = await client.getPaginated<Record<string, unknown>>(
+    accessToken,
+    '/supplierinvoices',
+    'SupplierInvoices',
+    { pageSize: PAGE_SIZE },
+  );
+
+  const bookings = new Map<string, FortnoxSupplierInvoiceBooking>();
+  for (const raw of rawInvoices) {
+    const givenNumber = givenNumberOf(raw.GivenNumber);
+    if (!givenNumber) continue;
+
+    // The list form spells cancellation `Cancel`, the detail form `Cancelled`.
+    if (raw.Cancel === true || raw.Cancelled === true || raw.Booked === false) {
+      bookings.set(givenNumber, { state: 'unbooked' });
+      continue;
+    }
+
+    const vouchers = Array.isArray(raw.Vouchers) ? (raw.Vouchers as Record<string, unknown>[]) : [];
+    const booking = vouchers
+      .filter((voucher) => voucher?.ReferenceType === SUPPLIER_INVOICE_BOOKING_REFERENCE)
+      .map((voucher) => bookingVoucherFrom(voucher.Series, voucher.Number, voucher.Year));
+    bookings.set(
+      givenNumber,
+      booking.length === 1 && booking[0]
+        ? { state: 'booked', voucher: booking[0] }
+        : { state: 'unknown' },
+    );
+  }
+  return bookings;
+}
+
+/**
+ * The booking voucher from one supplier invoice's detail form, or null when
+ * Fortnox names none (VoucherNumber 0 or absent: never booked; cancelled; an
+ * invoice the register no longer has).
+ */
+export async function fetchFortnoxSupplierInvoiceBookingVoucher(
+  client: FortnoxClient,
+  accessToken: string,
+  givenNumber: string,
+): Promise<FortnoxBookingVoucher | null> {
+  let response: Record<string, unknown>;
+  try {
+    response = await client.get<Record<string, unknown>>(
+      accessToken,
+      `/supplierinvoices/${encodeURIComponent(givenNumber)}`,
+    );
+  } catch (error) {
+    if (error instanceof FortnoxApiError && error.statusCode === 404) return null;
+    throw error;
+  }
+  const invoice = (response?.SupplierInvoice ?? {}) as Record<string, unknown>;
+  if (invoice.Cancelled === true || invoice.Cancel === true) return null;
+  return bookingVoucherFrom(invoice.VoucherSeries, invoice.VoucherNumber, invoice.VoucherYear);
 }
 
 /** Download a Fortnox archive object, including the inbox-compatible fallback. */

@@ -1101,3 +1101,46 @@ describe('records the review lists', () => {
     }))
   })
 })
+
+describe('a number-less Bokio draft (crm#1084)', () => {
+  const DRAFT_ID = 'cec22965-5dc1-4e13-bde6-4d51c7d7a680'
+
+  it.each([
+    ['keeps the Bokio id an older import stored as its number, so the commit adopts that invoice', true, DRAFT_ID],
+    ['goes to the commit with no number when nothing is stored under its id', false, null],
+  ] as const)('%s', async (_label, storedUnderId, expected) => {
+    const db = database({ phase: 'import', resources: ['salesInvoices'], provider: 'bokio' })
+    mocks.resolve.mockResolvedValue({ accessToken: 'token', consent: { provider: 'bokio', org_number: '556000-0000' } })
+    const dto = mapBokioToSalesInvoice({ id: DRAFT_ID, invoiceNumber: null, status: 'draft', invoiceDate: '2025-02-18',
+      currency: 'SEK', totalAmount: 125, totalTax: 25, paidAmount: 0, customerRef: { id: 'customer', name: 'Customer' },
+      lineItems: [{ id: 1, description: 'Test', itemType: 'salesItem', quantity: 1, unitPrice: 100, taxRate: 25 }] })
+    expect(dto.invoiceNumber).toBe('')
+    vi.mocked(mapSalesInvoice).mockReturnValueOnce({
+      invoice: { invoice_number: null, status: 'draft', subtotal: 100, vat_amount: 25, total_sek: 125 },
+      items: [{ line_total: 100, vat_amount: 25 }],
+      fxUnresolved: null, vatUnresolved: false, creditNoteUnlinked: false, creditedInvoiceRef: null,
+    })
+    const lookups: Record<string, unknown>[] = []
+    const from = db.supabase.from.bind(db.supabase)
+    ;(db.supabase as unknown as { from: (table: string) => unknown }).from = (table: string) => {
+      if (table !== 'invoices') return from(table)
+      const filters: Record<string, unknown> = {}
+      const chain = { select: () => chain, eq: (key: string, value: unknown) => { filters[key] = value; return chain },
+        limit: () => chain,
+        then: (resolve: (data: unknown) => void) => {
+          lookups.push(filters)
+          resolve({ data: storedUnderId && filters.invoice_number === DRAFT_ID ? [{ id: 'stored' }] : [], error: null })
+        } }
+      return chain
+    }
+    db.rows.push({ id: dto.id, source_id: dto.id, resource: 'salesInvoices', state: 'pending', ...sealMigrationPayload(dto) })
+    mocks.hydrate.mockResolvedValueOnce({ invoices: [dto], unhydratedIds: new Set(), hydration: {} })
+
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+
+    expect(lookups).toEqual([{ company_id: 'company', invoice_number: DRAFT_ID }])
+    const commit = db.rpc.mock.calls.find(([name]) => name === 'commit_provider_migration_records')!
+    const [record] = (commit[1] as { p_records: { row: Record<string, unknown> }[] }).p_records
+    expect(record.row.invoice_number).toBe(expected)
+  })
+})
