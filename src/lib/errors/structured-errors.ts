@@ -395,6 +395,13 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
       'Verifikationen har redan stornats av en annan användare. Ladda om sidan och försök igen.',
     message_en: 'Entry was already reversed by a concurrent operation.',
   },
+  MIGRATED_DEDUCTION_HELD_BY_REQUEST: {
+    httpStatus: 409,
+    message_sv:
+      'Fakturan ingår i en begäran om utbetalning till Skatteverket. Avbryt begäran innan du stornerar omföringen av skattereduktionen.',
+    message_en:
+      'The invoice is part of a payout request to Skatteverket. Cancel the request before reversing the deduction reclassification.',
+  },
   CURRENCY_REVALUATION_ALREADY_EXISTS: {
     httpStatus: 409,
     message_sv: 'En valutaomvärdering finns redan för denna period.',

@@ -38,6 +38,7 @@ import {
   DimensionValidationError,
   EntryAlreadyReversedError,
   EntryDateOutsideFiscalPeriodError,
+  MigratedDeductionHeldByRequestError,
   FiscalPeriodNotFoundError,
   InvalidMappingResultError,
   JournalEntryNotBalancedError,
@@ -660,6 +661,9 @@ export function extractBookkeepingDetails(err: unknown): { code: string; details
     return { code: err.code, details: { currentStatus: err.currentStatus } }
   }
   if (err instanceof EntryAlreadyReversedError) return { code: err.code }
+  if (err instanceof MigratedDeductionHeldByRequestError) {
+    return { code: err.code, details: { invoiceId: err.invoiceId } }
+  }
   if (err instanceof CurrencyRevaluationAlreadyExistsError) return { code: err.code }
   if (err instanceof InvalidMappingResultError) {
     return {

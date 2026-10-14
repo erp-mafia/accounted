@@ -118,6 +118,60 @@ to issue the next invoice under them (`INVOICE_NUMBER_SERIES_BEHIND`, migration
 20261012161600) and the first issue asks where the series continues: the number
 after the highest imported one, or a new prefix. Nothing is used up meanwhile.
 
+## ROT, RUT and grön teknik on Visma invoices (crm#1144)
+
+The import has no slot for a household deduction, and Visma's SIE keeps the
+whole invoice on 1510. An open Visma invoice issued under fakturamodellen
+therefore arrives reading as owed in full by the buyer, and cannot be requested
+from Skatteverket in Accounted. Visma's detail payload carries the deduction
+(`RotReducedInvoicingType`, `RotReducedInvoicingAmount`, `Persons`, the property
+fields, `TaxDeductionStatus`, per row `IsWorkCost`, `WorkCostType`, `WorkHours`,
+`GreenTechnologyType`); the mapper reads it into `SalesInvoiceDto.householdDeduction`
+and `SalesInvoiceLineDto.householdWork`, and `lib/providers/visma/housework.ts`
+maps `WorkCostType` to Skatteverket's arbetstypskod. The importer itself still
+writes no deduction: moving it onto 1513 needs a voucher.
+
+That is the post-migration step on `/import` (card "ROT- och RUT-avdrag från
+Visma", `POST /api/extensions/ext/arcim-migration/deduction-backfill` with
+`mode` `preview` or `apply`, runner `lib/deduction-backfill.ts`). It finds the
+imported invoices through `migration_source_records`, fetches each open one's
+detail from Visma, and plans it (`lib/invoices/migrated-deduction-plan.ts`):
+
+| Visma `TaxDeductionStatus` | Buyer has paid | Result |
+|---|---|---|
+| 0/1, not requested | nothing | deduction applied, status unchanged |
+| 0/1 | part of their share | applied, `partially_paid` |
+| 0/1 | their whole share | applied, `paid` on Visma's `PaymentDate`; review if Visma's remaining differs from ours or that payment year's deadline (31 January after) has passed |
+| 2, requested from Visma | any | not applied: Skatteverket's payout is matched on 1510 as an ordinary payment; a part-paid invoice is repaired to `partially_paid` |
+| 3, refused | any | not applied: the buyer owes it, already on 1510; same status repair |
+
+Review instead of apply: more than one buyer (#3314), a missing or invalid
+personnummer, a work type with no element in the begäran schema (heat pumps,
+boilers), rows that differ from the stored items, missing hours, ROT without a
+property, a deduction above the open amount or not in whole kronor, a non-SEK
+invoice. Paid invoices are never touched.
+
+Apply books, per invoice and dated the run day, a `rot_rut_reclassification`
+voucher through the engine (debit 1513, credit 1510; one live voucher per
+invoice by partial unique index) after a dry run of
+`apply_migrated_invoice_deduction`, then the RPC itself
+(migration 20261015001000): it refuses any drift from what the plan saw,
+checks the voucher moved exactly the deduction, derives `remaining_amount` and
+status with `rot_rut_customer_outstanding`, writes the header and work rows,
+and logs `InvoiceDeductionMigrated` in `processing_history`. 1510 and 1513 share
+SRU 7251: no balance sheet, INK2 or VAT figure moves. A run that stops (Visma's
+600 requests a minute, an expired token, a locked period, the 10-minute budget)
+continues on the next call: applied invoices are skipped and a posted voucher
+is reused. Reversing the voucher reverts the invoice
+(`revert_migrated_invoice_deduction`); the storno is refused while a begäran
+made in Accounted holds the invoice. The preview also lists invoices applied
+here that Visma has since marked as requested: those must not be requested
+again from Accounted.
+
+The new mapper also gives a part-paid sales invoice of any provider
+`partially_paid` (payment date empty, as on a native partial payment) instead
+of `sent`.
+
 ## Local session with staging
 
 Use a checkout containing the provider migration worker, with Node 22 and environment configuration

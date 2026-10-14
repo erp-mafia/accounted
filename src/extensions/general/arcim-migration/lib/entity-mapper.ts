@@ -920,7 +920,7 @@ export function mapSalesInvoice(
   // (Bokio's draft | published enum) stays a draft, the state an in-app
   // credit note starts in, and one the source voided (makulerad) stays
   // cancelled instead of being revived as an effective credit.
-  const status = isCreditNote
+  const lifecycleStatus = isCreditNote
     ? (dto.status === 'draft' || dto.status === 'cancelled' ? dto.status : 'credited')
     : (statusMap[dto.status] || 'sent')
 
@@ -941,6 +941,19 @@ export function mapSalesInvoice(
         paidAmount: dto.paymentStatus.paid ? total : roundOre(total - balance),
         remainingAmount: dto.paymentStatus.paid ? 0 : Math.max(0, balance),
       }
+
+  // An open invoice the customer has paid part of is partially_paid, the
+  // status a native invoice takes on a part payment; it used to land as
+  // 'sent' beside a non-zero paid_amount. paid_at stays null, as natively
+  // (settle-invoice-payment.ts dates only the full settlement): a part-paid
+  // invoice is not paid, so settlement.paidAt is already null.
+  const status =
+    !isCreditNote &&
+    (lifecycleStatus === 'sent' || lifecycleStatus === 'overdue') &&
+    settlement.paidAmount > 0 &&
+    settlement.paidAmount < total
+      ? 'partially_paid'
+      : lifecycleStatus
 
   // SEK value of a foreign invoice, at the rate valid on its own issue date.
   const fx = resolveFx(dto.currencyCode, dto.issueDate, fxRates)

@@ -3,15 +3,19 @@ import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { hasPreRegisterArInPeriod } from '@/lib/invoices/invoice-register-coverage'
+import {
+  fetchSkatteverketSettled,
+  liveReceivableOutstanding,
+} from '@/lib/invoices/skatteverket-share'
 import { fetchCreditNoteCreditUsed, outstandingWithCreditUsed } from './credit-note-settlement'
 
 export interface ARReconciliationResult {
   ar_ledger_total: number
   /**
    * Sum of posted balances on accounts 1510 (Kundfordringar) and 1513
-   * (Kundfordringar: delad faktura). 1513 covers the Skatteverket portion
-   * of ROT/RUT fakturamodellen invoices and is zero today (no fakturamodellen
-   * postings yet): included for forward compatibility.
+   * (Kundfordringar: delad faktura). 1513 carries the Skatteverket portion
+   * of ROT/RUT fakturamodellen invoices until the begäran's payout clears it;
+   * ar_ledger_total counts the same share per invoice (skatteverket-share.ts).
    */
   account_1510_balance: number
   difference: number
@@ -59,31 +63,49 @@ export async function generateARReconciliation(
   // truncated, manufacturing a phantom reconciliation gap.
   const invoices = await fetchAllRows<{
     id: string
+    status: string | null
     total: number | null
     paid_amount: number | null
+    deduction_total: number | null
+    deduction_reclaimed_total: number | null
     currency: string | null
     exchange_rate: number | null
     journal_entry_id: string | null
   }>(({ from, to }) =>
     supabase
       .from('invoices')
-      .select('id, total, paid_amount, currency, exchange_rate, journal_entry_id')
+      .select('id, status, total, paid_amount, deduction_total, deduction_reclaimed_total, currency, exchange_rate, journal_entry_id')
       .eq('company_id', companyId)
       // Proformas, delivery notes and quotes are never receivables.
       .eq('document_type', 'invoice')
       // A partially paid invoice still carries total - paid_amount on 1510;
       // leaving it out turned that remainder into a reconciliation difference.
-      .in('status', ['sent', 'overdue', 'partially_paid'])
+      // A paid one with a ROT/RUT deduction can still carry Skatteverket's
+      // share on 1513, the same way.
+      .or('status.in.(sent,overdue,partially_paid),and(status.eq.paid,deduction_total.gt.0)')
       .order('id', { ascending: true })
       .range(from, to)
   )
   // A credit note whose verifikat paid another invoice has used that much of
   // its credit: the kundreskontra's rule (credit-note-settlement.ts).
   const creditUsed = await fetchCreditNoteCreditUsed(supabase, companyId, invoices)
+  // What Skatteverket has paid out of each invoice's deduction, which no
+  // longer sits on 1513: the kundreskontra's rule (skatteverket-share.ts).
+  const settled = await fetchSkatteverketSettled(supabase, companyId, invoices)
 
   let unconvertedFxCount = 0
   const arLedgerTotal = (invoices || [])
     .reduce((sum, inv) => {
+      const outstanding = outstandingWithCreditUsed(
+        liveReceivableOutstanding(
+          inv,
+          (Number(inv.total) || 0) - (Number(inv.paid_amount) || 0),
+          settled.get(inv.id)
+        ),
+        creditUsed.get(inv.id)
+      )
+      // A paid invoice Skatteverket has settled in full is not a receivable.
+      if (inv.status === 'paid' && outstanding === 0) return sum
       const isFx = inv.currency && inv.currency !== 'SEK'
       const hasRate = inv.exchange_rate != null && Number(inv.exchange_rate) > 0
       // Skip unconvertible FX rows from the sum: adding raw foreign amounts
@@ -92,10 +114,6 @@ export async function generateARReconciliation(
         unconvertedFxCount += 1
         return sum
       }
-      const outstanding = outstandingWithCreditUsed(
-        (Number(inv.total) || 0) - (Number(inv.paid_amount) || 0),
-        creditUsed.get(inv.id)
-      )
       const sek = resolveSekAmount(outstanding, null, inv.currency, inv.exchange_rate)
       return Math.round((sum + sek) * 100) / 100
     }, 0)
@@ -104,8 +122,8 @@ export async function generateARReconciliation(
   // (Kundfordringar) AND 1513 (Kundfordringar: delad faktura) so the comparison
   // stays correct under ROT/RUT fakturamodellen, where the customer portion sits
   // on 1510 and the Skatteverket claim on 1513: both are open AR receivable
-  // from the company's perspective. 1513 is zero today (no fakturamodellen
-  // postings yet) so this is a forward-looking defense.
+  // from the company's perspective, and the subledger side above counts each
+  // invoice's Skatteverket share until the begäran's payout clears it.
   //
   // We count posted AND reversed entries together: the SAME inclusion rule the
   // trial balance / balance sheet use. A corrected invoice flips its original to

@@ -2025,6 +2025,10 @@ export type JournalEntrySourceType =
   // One point-of-sale business day booked as its daily takings voucher
   // (gemensam verifikation, BFL 5 kap 6 §). lib/pos-sales/book-day.ts.
   | 'pos_daily_sales'
+  // A migrated invoice's household deduction moved from 1510 onto 1513
+  // (debit 1513 / credit 1510), the claim on Skatteverket an invoice issued
+  // here books on day one. lib/invoices/migrated-deduction-apply.ts.
+  | 'rot_rut_reclassification'
 
 // Journal entry status
 export type JournalEntryStatus = 'draft' | 'posted' | 'reversed' | 'cancelled'

@@ -264,3 +264,57 @@ export async function createRotRutReclaimEntry(
 
   return createJournalEntry(supabase, companyId, userId, input)
 }
+
+/**
+ * Reclassification voucher for the household deduction of a migrated
+ * invoice. Visma books the whole invoice on 1510; an invoice issued here
+ * books the deduction on 1513 from day one (fakturamodellen,
+ * swedish-invoice-compliance section 8). This moves it there:
+ *
+ *   Debit  1513 Skattereduktion rot/rut      [deduction]
+ *   Credit 1510 Kundfordringar               [deduction]
+ *
+ * One voucher per invoice (source_id = invoice id, guarded by the partial
+ * unique index journal_entries_rot_rut_reclassification_live_unique). Both
+ * accounts carry SRU 7251, so no balance sheet, INK2 or VAT figure moves.
+ */
+export async function createMigratedDeductionEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  params: {
+    invoiceId: string
+    invoiceNumber: string | null
+    deductionType: DeductionType
+    /** The deduction (kr), > 0. */
+    amount: number
+    bookingDate: string
+  },
+): Promise<JournalEntry> {
+  const amount = roundOre(params.amount)
+  if (!(amount > 0)) {
+    throw new Error('A deduction reclassification voucher needs a positive amount')
+  }
+  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, params.bookingDate)
+  if (!fiscalPeriodId) {
+    throw new Error(`No open fiscal period found for booking date ${params.bookingDate}`)
+  }
+
+  // 'RUT-avdrag faktura 1042, omföring vid systembyte'.
+  const ledger = (DEDUCTION_TYPE_LABELS[params.deductionType] ?? DEDUCTION_TYPE_LABELS.rot).ledger
+  const description = `${ledger} faktura ${params.invoiceNumber ?? params.invoiceId}, omföring vid systembyte`
+
+  const input: CreateJournalEntryInput = {
+    fiscal_period_id: fiscalPeriodId,
+    entry_date: params.bookingDate,
+    description,
+    source_type: 'rot_rut_reclassification',
+    source_id: params.invoiceId,
+    lines: [
+      { account_number: '1513', debit_amount: amount, credit_amount: 0, line_description: description },
+      { account_number: '1510', debit_amount: 0, credit_amount: amount, line_description: description },
+    ],
+  }
+
+  return createJournalEntry(supabase, companyId, userId, input)
+}

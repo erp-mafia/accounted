@@ -1,5 +1,6 @@
 import { migrationJobRoutes } from './lib/migration-job-routes'
 import { invoiceCompletionRoutes } from './lib/invoice-completion-routes'
+import { deductionBackfillRoutes } from './lib/deduction-backfill-routes'
 import { archiveSIEIntakeText, readSIEIntakeFile } from '@/lib/import/sie-intake'
 import { buildTheaterModel } from '@/lib/import/theater-model'
 import { submitSIEJob } from '@/lib/import/sie-jobs'
@@ -329,6 +330,7 @@ export const arcimMigrationExtension: Extension = {
   apiRoutes: [
     ...migrationJobRoutes,
     ...invoiceCompletionRoutes,
+    ...deductionBackfillRoutes,
     // ── Check existing connections and import history ──────────────
     {
       method: 'GET',

@@ -97,6 +97,7 @@ const ENGINE_OWNED = [
   'vat_settlement',
   'rot_rut_payout',
   'rot_rut_reclaim',
+  'rot_rut_reclassification',
   'expense_payout',
   'stripe_payout',
 ]

@@ -54,8 +54,8 @@ export type DimensionRulePolicy = 'enforced' | 'exempt'
  *     schedule would strand every remaining installment (the daily cron
  *     retries the same impossible entry while the interim account stays
  *     overstated);
- *   - vat_settlement, rot_rut_payout, rot_rut_reclaim, expense_payout,
- *     stripe_payout: settlements computed from balances already booked
+ *   - vat_settlement, rot_rut_payout, rot_rut_reclaim,
+ *     rot_rut_reclassification, expense_payout, stripe_payout: settlements computed from balances already booked
  *     (26xx, 1513, 2820/2893, the Stripe balance). Their only result lines
  *     (öresavrundning, Stripe fees) belong to no single project.
  */
@@ -89,6 +89,7 @@ export const DIMENSION_RULE_POLICY: Readonly<Record<JournalEntrySourceType, Dime
   vat_settlement: 'exempt',
   rot_rut_payout: 'exempt',
   rot_rut_reclaim: 'exempt',
+  rot_rut_reclassification: 'exempt',
   expense_payout: 'exempt',
   stripe_payout: 'exempt',
 }

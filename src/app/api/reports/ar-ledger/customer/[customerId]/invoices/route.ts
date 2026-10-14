@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
-import { AR_LEDGER_STATUSES, withoutSettledCreditNotes } from '@/lib/reports/ar-ledger'
+import { withoutSettledCreditNotes } from '@/lib/reports/ar-ledger'
 import { fetchCreditNoteCreditUsed, outstandingWithCreditUsed } from '@/lib/reports/credit-note-settlement'
+import {
+  fetchSkatteverketSettled,
+  liveReceivableOutstanding,
+} from '@/lib/invoices/skatteverket-share'
 import type { ReportSourceLine } from '@/lib/reports/source-lines'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { roundOre } from '@/lib/money'
@@ -51,6 +55,8 @@ export const GET = withRouteContext<{ params: Promise<{ customerId: string }> }>
       due_date,
       total,
       paid_amount,
+      deduction_total,
+      deduction_reclaimed_total,
       currency,
       exchange_rate,
       remaining_amount,
@@ -63,7 +69,7 @@ export const GET = withRouteContext<{ params: Promise<{ customerId: string }> }>
     // Proformas, delivery notes and quotes are never receivables (parity
     // with generateARLedger).
     .eq('document_type', 'invoice')
-    .in('status', [...AR_LEDGER_STATUSES])
+    .or('status.in.(sent,overdue,partially_paid,credited),and(status.eq.paid,deduction_total.gt.0)')
     .order('invoice_date', { ascending: true })
     .limit(PAGE_LIMIT)
 
@@ -76,9 +82,27 @@ export const GET = withRouteContext<{ params: Promise<{ customerId: string }> }>
   // a single DB roundtrip. Settled credit notes are dropped first, as in
   // generateARLedger.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const invoices = withoutSettledCreditNotes((data || []) as any[])
+  const population = withoutSettledCreditNotes((data || []) as any[])
   // Credit a credit note used to pay another invoice, as in generateARLedger.
-  const creditUsed = await fetchCreditNoteCreditUsed(supabase, companyId, invoices)
+  const creditUsed = await fetchCreditNoteCreditUsed(supabase, companyId, population)
+  // Skatteverket's payouts on ROT/RUT deductions, as in generateARLedger.
+  const settled = await fetchSkatteverketSettled(supabase, companyId, population)
+  const outstandingOf = new Map(
+    population.map((inv) => [
+      inv.id as string,
+      outstandingWithCreditUsed(
+        liveReceivableOutstanding(
+          inv,
+          roundOre((Number(inv.total) || 0) - (Number(inv.paid_amount) || 0)),
+          settled.get(inv.id)
+        ),
+        creditUsed.get(inv.id)
+      ),
+    ])
+  )
+  // A paid invoice is only read for a deduction Skatteverket has yet to pay
+  // out: once it has, the invoice is not a receivable (as in generateARLedger).
+  const invoices = population.filter((inv) => !(inv.status === 'paid' && outstandingOf.get(inv.id) === 0))
   const ids = invoices.map((i) => i.id)
   const entryMap = new Map<
     string,
@@ -142,12 +166,8 @@ export const GET = withRouteContext<{ params: Promise<{ customerId: string }> }>
     due_date: string
   })[] = invoices.map((inv) => {
     const entry = entryMap.get(inv.id)
-    const paidAmount = Number(inv.paid_amount) || 0
     const total = Number(inv.total) || 0
-    const outstanding = outstandingWithCreditUsed(
-      roundOre(total - paidAmount),
-      creditUsed.get(inv.id)
-    )
+    const outstanding = outstandingOf.get(inv.id) as number
     const isFx = inv.currency && inv.currency !== 'SEK'
     const hasRate = inv.exchange_rate != null && Number(inv.exchange_rate) > 0
     const outstandingSek =

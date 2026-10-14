@@ -227,6 +227,58 @@ describe('mapSupplierInvoice: an explicit unpaid enum is never overridden by a z
 })
 
 /**
+ * A customer invoice the customer had paid part of landed as 'sent' beside a
+ * non-zero paid_amount, a state no native invoice is ever in: a native part
+ * payment sets 'partially_paid' and leaves paid_at empty until the invoice is
+ * fully paid (settle-invoice-payment.ts). Provider-neutral: the DTO is the
+ * same for every provider.
+ */
+describe('mapSalesInvoice: a part-paid open invoice is partially_paid', () => {
+  it.each(['sent', 'booked', 'overdue'] as InvoiceStatusCode[])(
+    'lifecycle %s with 0 < paid < total → partially_paid, paid_at null',
+    (status) => {
+      const inv = mapSales({ status, paid: false, balance: 300, total: 1000, lastPaymentDate: '2026-02-05' })
+      expect(inv.status).toBe('partially_paid')
+      expect(inv.paid_amount).toBe(700)
+      expect(inv.remaining_amount).toBe(300)
+      expect(inv.paid_at).toBeNull()
+    },
+  )
+
+  it('the same from a Visma-style enum flag beside a positive balance', () => {
+    const inv = mapSales({ status: 'overdue', paid: false, balance: 0.5, total: 1000, source: 'enum' })
+    expect(inv.status).toBe('partially_paid')
+    expect(inv.paid_amount).toBe(999.5)
+    expect(inv.remaining_amount).toBe(0.5)
+  })
+
+  it('a fully paid invoice stays paid', () => {
+    const inv = mapSales({ status: 'paid', paid: true, balance: 0, total: 1000, lastPaymentDate: '2026-02-05' })
+    expect(inv.status).toBe('paid')
+    expect(inv.paid_at).toBe('2026-02-05')
+  })
+
+  it('an unpaid invoice keeps its lifecycle status', () => {
+    expect(mapSales({ status: 'sent', paid: false, balance: 1000, total: 1000 }).status).toBe('sent')
+    expect(mapSales({ status: 'overdue', paid: false, balance: 1000, total: 1000 }).status).toBe('overdue')
+  })
+
+  it('a draft or cancelled invoice is never turned into partially_paid', () => {
+    expect(mapSales({ status: 'draft', paid: false, balance: 300, total: 1000 }).status).toBe('draft')
+    expect(mapSales({ status: 'cancelled', paid: false, balance: 300, total: 1000 }).status).toBe('cancelled')
+  })
+
+  it('a credit note is never partially_paid', () => {
+    const dto = makeSalesDto({ status: 'sent', paid: false, balance: 300, total: 1000 })
+    dto.invoiceTypeCode = '381'
+    const inv = mapSalesInvoice(dto, 'user-1', 'company-1', 'customer-1').invoice
+    expect(inv.status).toBe('credited')
+    expect(inv.paid_amount).toBe(0)
+    expect(inv.paid_at).toBeNull()
+  })
+})
+
+/**
  * Prod: Fora credit note 1188488603 landed as 'credited' with
  * remaining_amount 5905, its own total, because the amounts were derived as
  * for an unpaid invoice. The customer side already zeroes both amounts.

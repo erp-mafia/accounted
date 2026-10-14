@@ -216,6 +216,45 @@ export interface PaymentStatusDto {
   source?: 'enum' | 'balance';
 }
 
+/**
+ * A household deduction (ROT, RUT or grön teknik) the source invoice
+ * carries under fakturamodellen: the buyer was invoiced the total minus
+ * `amount`, and `amount` is the company's claim on Skatteverket.
+ *
+ * The importer does not write it: Visma books the whole invoice on 1510, so
+ * moving the deduction onto 1513 needs its own voucher. The post-migration
+ * deduction step reads it from the provider's invoice detail
+ * (lib/invoices/migrated-deduction-plan.ts).
+ */
+export interface HouseholdDeductionDto {
+  kind: 'rot' | 'rut' | 'gron_teknik';
+  /** The deduction on the invoice, in invoice currency. */
+  amount: number;
+  /** The buyers the deduction is split between, as the provider states them. */
+  buyers: Array<{ personnummer?: string; amount?: number }>;
+  /** Fastighetsbeteckning, or lägenhetsnummer plus the förening's orgnr. */
+  property?: { designation?: string; brfOrgNumber?: string; type?: 'property' | 'apartment' };
+  /**
+   * Where the claim stands at Skatteverket according to the provider:
+   * 'open' not yet requested, 'requested' sent to Skatteverket from the
+   * provider, 'rejected' refused there. Absent when the provider says nothing.
+   */
+  providerState?: 'open' | 'requested' | 'rejected';
+}
+
+/**
+ * The deduction data of one work row. `workType` is Skatteverket's
+ * arbetstypskod (lib/invoices/rot-rut-rules.ts), or null when the provider's
+ * type has no element in the begäran schema; `providerWorkType` keeps the
+ * provider's own code for the review list.
+ */
+export interface HouseholdWorkDto {
+  workType: string | null;
+  providerWorkType: string;
+  hours?: number;
+  materialCost?: number;
+}
+
 export interface SalesInvoiceLineDto {
   id: string;
   /**
@@ -239,6 +278,8 @@ export interface SalesInvoiceLineDto {
   itemName?: string;
   articleNumber?: string;
   financialDimensions?: FinancialDimensionRef[];
+  /** Set on the rows the provider marks as deduction work. */
+  householdWork?: HouseholdWorkDto;
 }
 
 export interface SalesInvoiceDto {
@@ -271,6 +312,7 @@ export interface SalesInvoiceDto {
   taxTotal?: TaxTotalDto;
   legalMonetaryTotal: LegalMonetaryTotalDto;
   paymentStatus: PaymentStatusDto;
+  householdDeduction?: HouseholdDeductionDto;
   paymentTerms?: string;
   note?: string;
   buyerReference?: string;
