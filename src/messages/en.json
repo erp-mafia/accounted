@@ -3765,6 +3765,7 @@
     "amount_loading": "Fetching exchange rate…",
     "amount_approx": "≈ {sign}{sek}",
     "rate_footnote": "Posted in SEK at Riksbanken's rate {rate} per {currency} ({date}).",
+    "preview_loading": "Working out the voucher",
     "edit_lines": "Edit lines",
     "reverse_charge_warning": "Reverse charge requires the supplier's VAT registration number and country.",
     "label_account": "Account",

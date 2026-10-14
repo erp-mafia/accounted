@@ -15,7 +15,8 @@ import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
-import { staticTemplateToFormLines } from '@/lib/bookkeeping/proposal-lines'
+import { proposalLinesToFormLines } from '@/lib/bookkeeping/proposal-lines'
+import { useProposalPreview } from '@/lib/hooks/use-proposal-preview'
 import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import TemplatePicker from '@/components/transactions/TemplatePicker'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -23,8 +24,7 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { roundOre, parseAmountInput } from '@/lib/money'
 import { ArrowLeft, Check } from 'lucide-react'
 import type { BookingTemplateLibrary } from '@/types'
-import { useAccounts, useFiscalPeriods } from '@/lib/reference-data/hooks'
-import { chartVatTreatmentsOf } from '@/lib/bookkeeping/vat-entries'
+import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
@@ -53,10 +53,6 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
 
   const { company } = useCompany()
   const { periods } = useFiscalPeriods()
-  // The company's momskoder: a reverse-charge template on an account that
-  // reports ruta 20-24 itself gets no basis pair (staticTemplateToFormLines).
-  const { accounts } = useAccounts()
-  const chartVatTreatments = useMemo(() => chartVatTreatmentsOf(accounts), [accounts])
   const [selected, setSelected] = useState<
     { kind: 'library'; raw: BookingTemplateLibrary } | { kind: 'static'; template: BookingTemplate } | null
   >(null)
@@ -77,18 +73,25 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
     return parsed !== null && parsed > 0 ? parsed : 0
   }, [amountInput])
 
-  // The live kontering: recomputed from the template's line pattern on
-  // every amount change (momssplit etc. handled by applyTemplate).
+  // The live kontering, recomputed on every amount change: an own library
+  // template from its line pattern (applyTemplate), a catalog template by
+  // the server the way a bank row of that total is booked with it (moms,
+  // omvänd skattskyldighet settled with the company's momskoder).
+  const staticPreview = useProposalPreview(
+    selected?.kind === 'static' && amount > 0 ? { amount, template_id: selected.template.id } : null,
+  )
   const lines = useMemo<FormLine[]>(() => {
     if (!selected || amount <= 0) return []
     return selected.kind === 'library'
       ? applyTemplate(selected.raw.lines, amount)
-      : staticTemplateToFormLines(selected.template, amount, company?.entity_type, chartVatTreatments)
-  }, [selected, amount, company?.entity_type, chartVatTreatments])
+      : proposalLinesToFormLines(staticPreview.lines)
+  }, [selected, amount, staticPreview.lines])
+  // Never book lines computed for an amount the field no longer shows.
+  const linesPending = selected?.kind === 'static' && staticPreview.loading
   const selectedName = selected ? (selected.kind === 'library' ? selected.raw.name : selected.template.name_sv) : null
   const totalDebit = sumSide(lines, 'debit_amount')
   const totalCredit = sumSide(lines, 'credit_amount')
-  const balanced = lines.length >= 2 && totalDebit === totalCredit && totalDebit > 0
+  const balanced = !linesPending && lines.length >= 2 && totalDebit === totalCredit && totalDebit > 0
 
   const periodForDate = periods.find(
     (p) => p.period_start <= entryDate && entryDate <= p.period_end,
@@ -205,7 +208,11 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
 
             {/* Live kontering preview */}
             <div className="rounded-lg border border-border">
-              {lines.length === 0 ? (
+              {selected.kind === 'static' && staticPreview.error ? (
+                <p role="alert" className="px-3 py-4 text-center text-[13px] text-destructive">
+                  {staticPreview.error}
+                </p>
+              ) : lines.length === 0 ? (
                 <p className="px-3 py-4 text-center text-[13px] text-muted-foreground">
                   {t('tpl_enter_amount')}
                 </p>

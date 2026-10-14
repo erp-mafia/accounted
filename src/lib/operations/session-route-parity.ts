@@ -242,6 +242,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/bookkeeping/fiscal-periods/:id/arsredovisning/signatures': covered([`POST ${V}/fiscal-periods/:id/arsredovisning/signatures`, 'gnubok_add_arsredovisning_signature']),
   'PATCH /api/bookkeeping/fiscal-periods/:id/arsredovisning/signatures/:signatureId': covered([`PATCH ${V}/fiscal-periods/:id/arsredovisning/signatures/:signatureId`], 'v1 only: an agent never attests that a person signed'),
   'DELETE /api/bookkeeping/fiscal-periods/:id/arsredovisning/signatures/:signatureId': covered([`DELETE ${V}/fiscal-periods/:id/arsredovisning/signatures/:signatureId`]),
+  'POST /api/bookkeeping/proposal-preview': uiOnly('preview of an unsaved booking proposal (read-only, POST for its body); agents get the same lines from the categorize dry run'),
 
   // ── Dimensions ─────────────────────────────────────────────────────
   'POST /api/dimensions': covered([`POST ${V}/dimensions`, 'gnubok_create_dimension']),

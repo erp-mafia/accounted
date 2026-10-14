@@ -2378,6 +2378,30 @@ export const CategorizeTransactionSchema = z
     path: ['reverse_charge_kind'],
   })
 
+/**
+ * POST /api/bookkeeping/proposal-preview: the lines a proposal books. A bank
+ * row's proposal is the categorize body its booking sends; a template applied
+ * to a typed total names the catalog template, or one cost/liability pair
+ * booked as money out (an utlägg's omvänd skattskyldighet).
+ */
+export const ProposalPreviewSchema = z.union([
+  z.object({ transaction_id: uuid, booking: CategorizeTransactionSchema }).strict(),
+  z.object({ amount: z.number().positive().max(1_000_000_000), template_id: z.string().min(1).max(100) }).strict(),
+  z
+    .object({
+      amount: z.number().positive().max(1_000_000_000),
+      pair: z
+        .object({
+          debit_account: accountNumber,
+          credit_account: accountNumber,
+          vat_treatment: VatTreatmentSchema.nullable(),
+          reverse_charge_supplier_type: z.enum(['eu_business', 'non_eu_business', 'swedish_business']).optional(),
+        })
+        .strict(),
+    })
+    .strict(),
+])
+
 export const BookTransactionSchema = z
   .object({
     fiscal_period_id: uuid,
