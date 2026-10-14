@@ -651,6 +651,54 @@ describe('correctSalaryRun roster copy', () => {
     expect(utlagg).toMatchObject({ amount: 640, account_number: '2820', source_expense_claim_id: null })
   })
 
+  // Plan 1: the correction books on the default resolved at its own booking,
+  // so a default the original run cached on its lines is not carried; a
+  // deliberate override and the utlägg account are.
+  it("drops the original's cached default accounts and keeps overrides", async () => {
+    const { supabase, enqueueMany, findCalls } = trackedSupabase()
+    const line = (id: string, item_type: string, account_number: string | null) => ({
+      ...ORIGINAL_EMPLOYEE.line_items[1],
+      id,
+      item_type,
+      account_number,
+    })
+    enqueueMany([
+      { data: makeBookedRun() },
+      { data: null },
+      { data: CORRECTION_ROW },
+      {
+        data: [
+          {
+            ...ORIGINAL_EMPLOYEE,
+            employee: { employment_type: 'company_owner' },
+            line_items: [
+              line('li-hourly', 'hourly_salary', '7210'), // the bug: cached without the owner's type
+              line('li-unpaid', 'unpaid_leave', '7220'), // cached with it
+              line('li-bonus', 'bonus', '7010'), // a deliberate override
+              { ...ORIGINAL_EMPLOYEE.line_items[3] }, // utlägg on its claim's 2820
+            ],
+          },
+        ],
+      },
+      { data: [{ id: 'sre-new', employee_id: 'emp-1' }] },
+      { data: null },
+    ])
+
+    await correctSalaryRun(supabase as never, ARGS)
+
+    // The employees join is read for the rule, never written back.
+    expect(findCalls('salary_run_employees', 'insert')[0][0]).toEqual([
+      expect.not.objectContaining({ employee: expect.anything() }),
+    ])
+    const accounts = Object.fromEntries(copiedLines(findCalls).map((l) => [l.item_type as string, l.account_number]))
+    expect(accounts).toEqual({
+      hourly_salary: null,
+      unpaid_leave: null,
+      bonus: '7010',
+      expense_reimbursement: '2820',
+    })
+  })
+
   it('copies the engine semesterersättning row as engine-owned, so recalculating replaces it instead of adding a second one', async () => {
     const { supabase, enqueueMany, findCalls } = trackedSupabase()
     enqueueMany([

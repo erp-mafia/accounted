@@ -44,6 +44,11 @@ import { getVacationYearBasis, syncVacationLedgerForEmployees, type VacationBala
 import { remainingSavedDays } from './vacation-category'
 import { decryptPersonnummer } from './personnummer'
 import { avgiftAgeTier } from './avgift-tier'
+import {
+  splitVacationLiabilityChange,
+  vacationLiabilityChangeAccount,
+  type VacationLiabilityChangeAccount,
+} from './account-mapping'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
@@ -86,6 +91,9 @@ export interface VacationCloseEmployeeRow {
   /** Age-tier avgifter rate applied to this employee's liability for the
    * 2940 target (0 exempt, 0.1021 fyllt 67, 0.3142 standard). */
   avgifter_rate: number
+  /** Where this employee's share of a 2920 drift adjustment books: 7090
+   * arbetare, 7290 everyone else (vacationLiabilityChangeAccount). */
+  liability_change_account: VacationLiabilityChangeAccount
 }
 
 export interface VacationCloseReport {
@@ -110,6 +118,8 @@ interface EmployeeRosterRow {
   id: string
   first_name: string
   last_name: string
+  employment_type: string
+  personnel_category: string | null
   personnummer: string | null
   vacation_rule: string
   vacation_days_per_year: number
@@ -226,7 +236,7 @@ async function loadRoster(
   const { data, error } = await supabase
     .from('employees')
     .select(
-      'id, first_name, last_name, personnummer, vacation_rule, vacation_days_per_year, vacation_pay_rate, semestertillagg_rate, salary_type, monthly_salary, employment_degree, hourly_rate, hours_per_week, workdays_per_week, employment_start, employment_end',
+      'id, first_name, last_name, employment_type, personnel_category, personnummer, vacation_rule, vacation_days_per_year, vacation_pay_rate, semestertillagg_rate, salary_type, monthly_salary, employment_degree, hourly_rate, hours_per_week, workdays_per_week, employment_start, employment_end',
     )
     .eq('company_id', companyId)
     .eq('is_active', true)
@@ -434,6 +444,10 @@ export async function previewVacationYearClose(
       day_value_sek: dayValue,
       computed_liability_sek: liability,
       avgifter_rate: avgifterRateFor(emp, settlementYear),
+      liability_change_account: vacationLiabilityChangeAccount({
+        employmentType: emp.employment_type,
+        personnelCategory: emp.personnel_category,
+      }),
     })
   }
 
@@ -569,7 +583,7 @@ export async function commitVacationYearClose(
     report.rows.map((r) => r.employee_id),
   )
 
-  // 4. Drift adjustment verifikation (7290/2920 + 7519/2940).
+  // 4. Drift adjustment verifikation (7090/7290 vs 2920 + 7519/2940).
   let adjustmentEntryId: string | null = null
   if (options.bookAdjustment && report.sek.adjustment_needed) {
     const { data: period } = await supabase
@@ -590,12 +604,22 @@ export async function commitVacationYearClose(
     const lines: Array<{ account_number: string; debit_amount: number; credit_amount: number; line_description?: string }> = []
     const d2920 = report.sek.drift_2920
     if (Math.abs(d2920) > DRIFT_TOLERANCE_SEK) {
+      // The cost side splits per category, pro rata by each employee's
+      // liability (7090 arbetare, 7290 everyone else); 2920 stays one line.
+      const parts = splitVacationLiabilityChange(
+        report.rows.map((row) => ({ account: row.liability_change_account, liability: row.computed_liability_sek })),
+        d2920,
+      )
       if (d2920 > 0) {
-        lines.push({ account_number: '7290', debit_amount: d2920, credit_amount: 0, line_description: 'Justering semesterlöneskuld' })
+        for (const part of parts) {
+          lines.push({ account_number: part.account, debit_amount: part.amount, credit_amount: 0, line_description: 'Justering semesterlöneskuld' })
+        }
         lines.push({ account_number: '2920', debit_amount: 0, credit_amount: d2920, line_description: 'Justering semesterlöneskuld' })
       } else {
         lines.push({ account_number: '2920', debit_amount: -d2920, credit_amount: 0, line_description: 'Justering semesterlöneskuld' })
-        lines.push({ account_number: '7290', debit_amount: 0, credit_amount: -d2920, line_description: 'Justering semesterlöneskuld' })
+        for (const part of parts) {
+          lines.push({ account_number: part.account, debit_amount: 0, credit_amount: -part.amount, line_description: 'Justering semesterlöneskuld' })
+        }
       }
     }
     const d2940 = report.sek.drift_2940

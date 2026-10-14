@@ -1130,7 +1130,7 @@ Example response `200`:
 **Add a payslip line to an employee in a draft salary run.**
 `scope:payroll:write · risk:low · idempotent · dry-run · reversible`
 
-Creates a salary_line_items row (bonus, overtime, gross/net deduction, benefit, traktamente, text row, ...) for one employee in a draft run. account_number auto-resolves from item_type when omitted. Amounts are rounded to whole öre, and every line but a text row needs a non-zero amount (a vacation line may carry only its days). A text row (item_type text, Textrad) carries words only: no amount, quantity or unit_price, every flag false and no account, so it explains the payslip without reaching tax, AGI or the booking. one_off_tax_percent (engångsskatt) taxes the line at that verified flat percentage instead of the monthly table; allowed on a positive taxable bonus, commission, other, correction or semesterersattning line. A vacation line (item_type vacation, quantity = days) may carry vacation_category to say which pool the days come from: paid (Betalda, the default), extra_paid (Extra betalda), saved (Sparade, optionally one origin year in vacation_saved_year), unpaid (Obetalda) or advance (Förskott).
+Creates a salary_line_items row (bonus, overtime, gross/net deduction, benefit, traktamente, text row, ...) for one employee in a draft run. account_number is an override only: omit it and the line returns account_number null and books on the default the booking resolves from item_type, the employee's employment_type and personnel_category (an arbetare's wages on 7010, a tjänsteman's on 7210, an owner's on 7220). Amounts are rounded to whole öre, and every line but a text row needs a non-zero amount (a vacation line may carry only its days). A text row (item_type text, Textrad) carries words only: no amount, quantity or unit_price, every flag false and no account, so it explains the payslip without reaching tax, AGI or the booking. one_off_tax_percent (engångsskatt) taxes the line at that verified flat percentage instead of the monthly table; allowed on a positive taxable bonus, commission, other, correction or semesterersattning line. A vacation line (item_type vacation, quantity = days) may carry vacation_category to say which pool the days come from: paid (Betalda, the default), extra_paid (Extra betalda), saved (Sparade, optionally one origin year in vacation_saved_year), unpaid (Obetalda) or advance (Förskott).
 
 **Use when:** You need to add a one-off pay component before calculating: a bonus, an expense reimbursement, a union fee, or a manual correction line. A bonus or final-settlement semesterersättning that Skatteverket taxes as an engångsbelopp: send one_off_tax_percent with the percentage you verified for the employee. Vacation days taken: an item_type vacation line with quantity = days and, when they are not this year's paid days, vacation_category. Words on this payslip without money (how the salary is built up): an item_type text line.
 **Do not use for:** Editing the base monthly salary (PATCH the run-employee via the internal surface; not on v1 yet). Absence: register absence days instead (PUT /employees/{id}/absence); the engine derives sick/VAB lines itself.
@@ -1225,7 +1225,7 @@ Example response `200`:
     "item_type": "bonus",
     "description": "Kvartalsbonus Q2",
     "amount": 5000,
-    "account_number": "7210",
+    "account_number": null,
     "one_off_tax_percent": 30
   },
   "meta": {
@@ -1321,7 +1321,7 @@ Example response `200`:
 **Update a payslip line in a draft salary run.**
 `scope:payroll:write · risk:low · idempotent · dry-run · reversible`
 
-Updates fields on a salary_line_items row (amount, description, quantity, unit_price, flags, account_number, one_off_tax_percent, vacation_category, vacation_saved_year) while the run is a draft. Amounts are rounded to whole öre. one_off_tax_percent: null removes the engångsskatt and returns the line to table taxation. vacation_category: null returns a vacation line to this year's paid days. A text row (item_type text) stays words only: its amount stays 0 and it has no flags or account.
+Updates fields on a salary_line_items row (amount, description, quantity, unit_price, flags, account_number, one_off_tax_percent, vacation_category, vacation_saved_year) while the run is a draft. Amounts are rounded to whole öre. one_off_tax_percent: null removes the engångsskatt and returns the line to table taxation. vacation_category: null returns a vacation line to this year's paid days. A text row (item_type text) stays words only: its amount stays 0 and it has no flags or account. account_number is an override only: null drops it so the line books on the default resolved at booking (item_type, employment_type, personnel_category), and changing item_type drops a stored override unless the same PATCH sets account_number.
 
 **Use when:** You spotted a wrong amount or description on a manual line before calculating: fix it in place instead of delete + recreate.
 **Do not use for:** Post-calculation tax/avgifter adjustments (review-stage overrides are not on v1). Engine-derived lines (absence/benefits): they are regenerated by :calculate, so edits are overwritten.
@@ -1356,7 +1356,7 @@ Request body:
   is_vacation_basis?: boolean,
   is_gross_deduction?: boolean,
   is_net_deduction?: boolean,
-  account_number?: string,
+  account_number?: string | null,
   sort_order?: number,
   one_off_tax_percent?: number | null,
   vacation_category?: "paid" | "extra_paid" | "saved" | "unpaid" | "advance" | null,

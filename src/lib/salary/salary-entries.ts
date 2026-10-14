@@ -19,7 +19,14 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { creditNatural, debitNatural } from '@/lib/bookkeeping/line-side'
-import { SALARY_ACCOUNTS, getLineItemAccount, isTaxFreeReimbursementType } from './account-mapping'
+import {
+  SALARY_ACCOUNTS,
+  isTaxFreeReimbursementType,
+  lineItemAccount,
+  vacationLiabilityChangeAccount,
+  type MoneyLineItemType,
+  type SalaryAccountContext,
+} from './account-mapping'
 import { isTextRow } from './text-rows'
 import {
   computeDeclaredAvgifterWithOverrides,
@@ -39,6 +46,9 @@ const log = createLogger('salary-entries')
 export interface SalaryRunEmployee {
   employee_id: string
   employment_type: string
+  // employees.personnel_category: arbetare book the 70xx wage series,
+  // tjänstemän 72xx (lineItemAccount). Missing reads tjänsteman.
+  personnel_category?: string | null
   gross_salary: number
   tax_withheld: number
   net_salary: number
@@ -128,6 +138,7 @@ export interface SalaryRosterRow {
   vacation_accrual_avgifter: number
   employee?: {
     employment_type?: string | null
+    personnel_category?: string | null
     default_dimensions?: Record<string, string> | null
     f_skatt_status?: string | null
   } | null
@@ -150,8 +161,10 @@ export interface SalaryRosterRow {
  * one (a basis override never reaches the filed IU fields, so Skatteverket
  * computes from these values regardless), zeroed for F-skatt rows; an
  * amount override is flagged instead so the 2731 split mirrors the AGI's
- * override path. The employee's dimensions bag is read live from the
- * employee row, so preview and booking show the same split.
+ * override path. The employee's dimensions bag and personnel category are
+ * read live from the employee row, so preview and booking show the same
+ * split and the same wage accounts (the booking stamps the category it read
+ * on the roster row before it posts, book-run.ts).
  */
 export function salaryRunDataFromRows(run: SalaryRunRow, roster: SalaryRosterRow[]): SalaryRunData {
   return {
@@ -174,6 +187,7 @@ export function salaryRunDataFromRows(run: SalaryRunRow, roster: SalaryRosterRow
       return {
         employee_id: sre.employee_id,
         employment_type: sre.employee?.employment_type || 'employee',
+        personnel_category: sre.employee?.personnel_category ?? null,
         gross_salary: sre.gross_salary,
         tax_withheld: taxWithheld,
         net_salary: sre.net_salary + (sre.tax_withheld - taxWithheld),
@@ -335,11 +349,11 @@ export async function createSalaryRunEntries(
   // account, the same resolver the preview route calls (issue #3097).
   const bankAccount = await resolvePrimaryBankAccount(supabase, companyId, log)
 
-  await activateSalaryAccounts(supabase, companyId, userId, postingRun, bankAccount)
-
   // The four line sets come from the same builder the preview route renders,
   // so what the user approved on screen is what posts.
   const built = buildSalaryRunEntryLines(postingRun, desc, bankAccount)
+
+  await activateSalaryAccounts(supabase, companyId, userId, built)
 
   // The run's vouchers in posting order. Avgifter exists only when the run
   // has any, vacation only when something accrues, pension only with
@@ -555,7 +569,7 @@ export function buildSalaryRunEntryLines(
 /**
  * Entry 1: Salary booking.
  *
- * Debit:  7210/7220/7240 Löner (per employee by type)
+ * Debit:  7010/7210/7220/7240 Löner (per employee: lineItemAccount)
  * Debit:  7321/7331 skattefri kostnadsersättning, 2820 utlägg repaid with
  *         the salary (outside gross, inside the net payout)
  * Credit: 2710 Personalskatt (total tax withheld)
@@ -597,8 +611,11 @@ function buildSalaryLines(
   const netDeductionBuckets = new Map<string, number>()
 
   for (const emp of run.employees) {
-    // Base salary and additions go to the employee-type account
-    const salaryAccount = getEmployeeSalaryAccount(emp.employment_type)
+    // Every line without an override, and the base salary remainder, books
+    // on the account the resolver gives this employee (owner, board member,
+    // arbetare or tjänsteman).
+    const ctx = employeeAccountContext(emp)
+    const salaryAccount = lineItemAccount('monthly_salary', ctx)
     const dimensions = coerceDimensionsBag(emp.default_dimensions)
 
     // Add salary line items that are cash expenses
@@ -615,12 +632,12 @@ function buildSalaryLines(
       // gross_salary, and counting the rounding there would shrink the base
       // salary debit by the same amount and unbalance the entry.
       if (li.item_type === 'oresavrundning') {
-        const account = li.account_number || getLineItemAccount('oresavrundning', emp.employment_type)
+        const account = li.account_number || lineItemAccount('oresavrundning', ctx)
         addExpense(account, dimensions, li.amount)
         continue
       }
       if (li.is_net_deduction) {
-        const account = li.account_number || getLineItemAccount(li.item_type as never, emp.employment_type)
+        const account = li.account_number || lineItemAccount(li.item_type as MoneyLineItemType, ctx)
         netDeductionBuckets.set(account, (netDeductionBuckets.get(account) ?? 0) + li.amount)
         continue
       }
@@ -632,7 +649,7 @@ function buildSalaryLines(
       // liability the registration credited (2820), a settlement leg that
       // stays aggregated and undimensioned like 2710/1930.
       if (isTaxFreeReimbursementType(li.item_type)) {
-        const account = li.account_number || getLineItemAccount(li.item_type as never, emp.employment_type)
+        const account = li.account_number || lineItemAccount(li.item_type as MoneyLineItemType, ctx)
         if (li.item_type === 'expense_reimbursement') {
           netDeductionBuckets.set(account, (netDeductionBuckets.get(account) ?? 0) + li.amount)
         } else {
@@ -642,7 +659,7 @@ function buildSalaryLines(
       }
       if (li.is_gross_deduction) continue
       if (BENEFIT_TYPES.includes(li.item_type)) continue // No cash flow for förmånsvärden
-      const account = li.account_number || getLineItemAccount(li.item_type as never, emp.employment_type)
+      const account = li.account_number || lineItemAccount(li.item_type as MoneyLineItemType, ctx)
       addExpense(account, dimensions, li.amount)
       lineItemTotal += li.amount
     }
@@ -728,19 +745,23 @@ function buildSalaryLines(
  * one debit line per distinct bag, while the liability credit stays a single
  * aggregated line. Zero amounts are skipped; each bucket is rounded and the
  * caller credits the SUM OF ROUNDED buckets so the entry balances by
- * construction regardless of how the total partitions.
+ * construction regardless of how the total partitions. `accountOf` splits
+ * the buckets per cost account as well (the vacation accrual's 7090/7290);
+ * without it every bucket carries the empty account.
  */
 function bucketByEmployeeDimensions(
   employees: SalaryRunEmployee[],
-  amountOf: (emp: SalaryRunEmployee) => number
-): Array<{ dimensions?: LineDimensions; amount: number }> {
-  const buckets = new Map<string, { dimensions?: LineDimensions; amount: number }>()
+  amountOf: (emp: SalaryRunEmployee) => number,
+  accountOf: (emp: SalaryRunEmployee) => string = () => '',
+): Array<{ account: string; dimensions?: LineDimensions; amount: number }> {
+  const buckets = new Map<string, { account: string; dimensions?: LineDimensions; amount: number }>()
   for (const emp of employees) {
     const amount = amountOf(emp)
     if (!amount) continue
+    const account = accountOf(emp)
     const dimensions = coerceDimensionsBag(emp.default_dimensions)
-    const key = dimensionsBagKey(dimensions)
-    const bucket = buckets.get(key) ?? { dimensions, amount: 0 }
+    const key = `${account}\u0000${dimensionsBagKey(dimensions)}`
+    const bucket = buckets.get(key) ?? { account, dimensions, amount: 0 }
     bucket.amount += amount
     buckets.set(key, bucket)
   }
@@ -887,7 +908,8 @@ function buildAvgifterLines(run: SalaryRunData, desc: string): CreateJournalEntr
 /**
  * Entry 3: Vacation accrual.
  *
- * Debit:  7290 Förändring semesterlöneskuld
+ * Debit:  7090/7290 Förändring semesterlöneskuld (per employee:
+ *         vacationLiabilityChangeAccount)
  * Credit: 2920 Upplupna semesterlöner
  * Debit:  7519 Sociala avgifter semester
  * Credit: 2940 Upplupna sociala avgifter
@@ -907,11 +929,17 @@ function buildVacationLines(
     // Dimensions PR8: cost per bag, liability aggregated. The credit equals
     // the sum of the rounded debit buckets so the entry balances by
     // construction (may differ from round(total) by an öre when partitioned).
-    const buckets = bucketByEmployeeDimensions(run.employees, (e) => e.vacation_accrual)
+    // The cost splits per employee account as well (7090 arbetare, 7290
+    // everyone else); the 2920 credit stays one line.
+    const buckets = bucketByEmployeeDimensions(
+      run.employees,
+      (e) => e.vacation_accrual,
+      (e) => vacationLiabilityChangeAccount(employeeAccountContext(e)),
+    )
     const creditTotal = roundOre(buckets.reduce((sum, b) => sum + b.amount, 0))
     lines.push(
       ...buckets.map((bucket): CreateJournalEntryLineInput => ({
-        account_number: SALARY_ACCOUNTS.VACATION_ACCRUAL_EXPENSE,
+        account_number: bucket.account,
         ...debitNatural(bucket.amount),
         line_description: `${desc}: Semesteravsättning`,
         dimensions: bucket.dimensions,
@@ -1007,12 +1035,8 @@ function buildPensionLines(
 // Helpers
 // ============================================================
 
-function getEmployeeSalaryAccount(employmentType: string): string {
-  switch (employmentType) {
-    case 'company_owner': return SALARY_ACCOUNTS.SALARY_OWNER
-    case 'board_member': return SALARY_ACCOUNTS.SALARY_BOARD
-    default: return SALARY_ACCOUNTS.SALARY_EMPLOYEE
-  }
+function employeeAccountContext(emp: SalaryRunEmployee): SalaryAccountContext {
+  return { employmentType: emp.employment_type, personnelCategory: emp.personnel_category }
 }
 
 /**
@@ -1022,26 +1046,20 @@ function getEmployeeSalaryAccount(employmentType: string): string {
  * reactivated. Both go through activateAccounts, the one activation path the
  * chart page and the API use. A number that is neither in the chart nor in
  * BAS 2026 is refused instead of invented.
+ *
+ * The set is read off the built lines, so it is exactly what posts: a company
+ * that books only arbetare gets 7010 activated and not an unused 7210, and a
+ * resolver rule can never post to an account this step skipped.
  */
 async function activateSalaryAccounts(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
-  run: SalaryRunData,
-  bankAccount: string,
+  built: SalaryRunEntryLines,
 ): Promise<void> {
   const needed = new Set<string>()
-
-  for (const account of Object.values(SALARY_ACCOUNTS)) needed.add(account)
-  needed.add(bankAccount)
-
-  for (const emp of run.employees) {
-    needed.add(getEmployeeSalaryAccount(emp.employment_type))
-    for (const li of emp.line_items) {
-      if (isTextRow(li)) continue
-      const account = li.account_number || getLineItemAccount(li.item_type as never, emp.employment_type)
-      if (account) needed.add(account)
-    }
+  for (const lines of Object.values(built) as CreateJournalEntryLineInput[][]) {
+    for (const line of lines) needed.add(line.account_number)
   }
 
   const outcome = await activateAccounts({ supabase, companyId, userId, log }, [...needed])
@@ -1060,11 +1078,16 @@ async function activateSalaryAccounts(
 
 function accountLabel(account: string): string {
   const labels: Record<string, string> = {
+    '7010': 'Löner kollektivanställda',
+    '7081': 'Sjuklöner kollektivanställda',
+    '7082': 'Semesterlöner kollektivanställda',
     '7210': 'Löner tjänstemän',
     '7220': 'Löner företagsledare',
     '7240': 'Styrelsearvoden',
     '7281': 'Sjuklöner',
+    '7282': 'Sjuklöner företagsledare',
     '7285': 'Semesterlöner',
+    '7286': 'Semesterlöner företagsledare',
     '7321': 'Traktamenten skattefria',
     '7322': 'Traktamenten skattepliktiga',
     '7331': 'Bilersättningar skattefria',

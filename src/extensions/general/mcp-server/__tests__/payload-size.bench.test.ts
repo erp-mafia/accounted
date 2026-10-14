@@ -690,6 +690,10 @@ describe('tools/list payload size guard', () => {
     //     requested TOTAL, which an agent cannot guess), gnubok_update_employee
     //     the same two as bare nullable types. Main had ~25 tokens of
     //     headroom. Measured 65 871 (single-company 60 862).
+    //   * Personalkategori (2026-10-14): gnubok_create_employee and
+    //     gnubok_update_employee gain personnel_category (arbetare 70xx,
+    //     tjansteman 72xx); gnubok_update_payslip_line's description was
+    //     tightened to pay for it. Measured 65 899. Ceiling unchanged.
     expect(approxTokens).toBeLessThan(65_900)
   })
 
@@ -744,6 +748,8 @@ describe('tools/list payload size guard', () => {
     // 60 563. Ceiling unchanged.
     // 60 800 to 60 900 on 2026-10-14, for the extra tax fields in the 65 900
     // note above: measured 60 862.
+    // 2026-10-14, personnel_category on the employee tools (see the case
+    // above): measured 60 890. Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

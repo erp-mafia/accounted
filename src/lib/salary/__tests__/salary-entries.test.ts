@@ -168,6 +168,7 @@ function makeSupabase(
 interface EmployeeOverrides {
   employee_id?: string
   employment_type?: string
+  personnel_category?: string | null
   gross_salary?: number
   tax_withheld?: number
   net_salary?: number
@@ -1108,9 +1109,32 @@ describe('salary entries: accounts the run posts to are activated first', () => 
   it('creates a standard BAS account the chart lacks', async () => {
     fake.absent.add('2940')
 
-    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', makeRun([makeEmployee()]))
+    await createSalaryRunEntries(
+      makeSupabase(),
+      'company-1',
+      'user-1',
+      makeRun([makeEmployee({ vacation_accrual: 3600, vacation_accrual_avgifter: 1131.12 })]),
+    )
 
     expect(fake.inserted).toEqual(['2940'])
+  })
+
+  it('activates exactly the accounts the built lines post to', async () => {
+    // No vacation accrual and no pension: 2940 and 7410 post nothing, so a
+    // chart without them gets neither (the activation set is read off the
+    // lines, not off the account map).
+    fake.absent.add('2940')
+    fake.absent.add('7410')
+    fake.absent.add('7010')
+
+    await createSalaryRunEntries(
+      makeSupabase(),
+      'company-1',
+      'user-1',
+      makeRun([makeEmployee({ personnel_category: 'arbetare' })]),
+    )
+
+    expect(fake.inserted).toEqual(['7010'])
   })
 
   it('refuses a line account that is neither in the chart nor in BAS, drafting nothing', async () => {
@@ -1564,5 +1588,109 @@ describe('salary entries: text rows book nothing', () => {
     expect([...textAccounts].sort()).toEqual([...plainAccounts].sort())
     expect(textAccounts.length).toBeGreaterThan(0)
     for (const account of textAccounts) expect(account).toEqual(expect.stringMatching(/^\d{4}$/))
+  })
+})
+
+// Plan 1: a payslip line's account is an override only; without one the line
+// books on the account resolved for the employee (owner, board member,
+// arbetare or tjänsteman), and the vacation accrual's förändring account
+// follows the same category.
+describe('salary entries: wage accounts per employee', () => {
+  const line = (item_type: string, amount: number, account_number: string | null = null) => ({
+    item_type,
+    amount,
+    account_number,
+    is_net_deduction: false,
+    is_gross_deduction: false,
+  })
+
+  it("books an owner's hourly pay on 7220, not 7210", async () => {
+    await createSalaryRunEntries(
+      makeSupabase(),
+      'company-1',
+      'user-1',
+      makeRun([makeEmployee({ employment_type: 'company_owner', line_items: [line('hourly_salary', 30000)] })]),
+    )
+
+    const salary = entryByDescription('Lön 2026-06')
+    expect(linesOn(salary, '7220')[0].debit_amount).toBe(30000)
+    expect(linesOn(salary, '7210')).toHaveLength(0)
+    assertBalanced(salary)
+  })
+
+  it('books arbetare on 7010, their vacation pay on 7082 and their accrual on 7090', async () => {
+    await createSalaryRunEntries(
+      makeSupabase(),
+      'company-1',
+      'user-1',
+      makeRun([
+        makeEmployee({
+          personnel_category: 'arbetare',
+          gross_salary: 32000,
+          net_salary: 25000,
+          vacation_accrual: 3840,
+          vacation_accrual_avgifter: 1206.53,
+          line_items: [line('monthly_salary', 30000), line('vacation', 2000)],
+        }),
+      ]),
+    )
+
+    const salary = entryByDescription('Lön 2026-06')
+    expect(linesOn(salary, '7010')[0].debit_amount).toBe(30000)
+    expect(linesOn(salary, '7082')[0].debit_amount).toBe(2000)
+    expect(linesOn(salary, '7210')).toHaveLength(0)
+    assertBalanced(salary)
+    const vacation = entryByDescription('Semesteravsättning')
+    expect(linesOn(vacation, '7090')[0].debit_amount).toBe(3840)
+    expect(linesOn(vacation, '7290')).toHaveLength(0)
+    expect(linesOn(vacation, '2920')[0].credit_amount).toBe(3840)
+    assertBalanced(vacation)
+  })
+
+  it('splits a mixed roster per series and keeps one 2920 credit', async () => {
+    await createSalaryRunEntries(
+      makeSupabase(),
+      'company-1',
+      'user-1',
+      makeRun([
+        makeEmployee({ employee_id: 'e-arb', personnel_category: 'arbetare', vacation_accrual: 3600 }),
+        makeEmployee({ employee_id: 'e-tj', personnel_category: 'tjansteman', vacation_accrual: 4800 }),
+        makeEmployee({ employee_id: 'e-own', employment_type: 'company_owner', personnel_category: 'arbetare', vacation_accrual: 1200 }),
+      ]),
+    )
+
+    const salary = entryByDescription('Lön 2026-06')
+    // makeEmployee carries no lines: the whole gross is the base remainder.
+    expect(linesOn(salary, '7010')[0].debit_amount).toBe(30000)
+    expect(linesOn(salary, '7210')[0].debit_amount).toBe(30000)
+    expect(linesOn(salary, '7220')[0].debit_amount).toBe(30000)
+    assertBalanced(salary)
+    const vacation = entryByDescription('Semesteravsättning')
+    expect(linesOn(vacation, '7090')[0].debit_amount).toBe(3600)
+    // The owner's accrual books with the tjänstemän: the category is ignored.
+    expect(linesOn(vacation, '7290')[0].debit_amount).toBe(6000)
+    expect(linesOn(vacation, '2920')).toEqual([expect.objectContaining({ credit_amount: 9600 })])
+    assertBalanced(vacation)
+  })
+
+  it('lets an explicit line account win over the resolved default', async () => {
+    await createSalaryRunEntries(
+      makeSupabase(),
+      'company-1',
+      'user-1',
+      makeRun([
+        makeEmployee({
+          personnel_category: 'arbetare',
+          gross_salary: 35000,
+          net_salary: 28000,
+          line_items: [line('monthly_salary', 30000), line('bonus', 5000, '7210')],
+        }),
+      ]),
+    )
+
+    const salary = entryByDescription('Lön 2026-06')
+    expect(linesOn(salary, '7010')[0].debit_amount).toBe(30000)
+    expect(linesOn(salary, '7210')[0].debit_amount).toBe(5000)
+    assertBalanced(salary)
   })
 })

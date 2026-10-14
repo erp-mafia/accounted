@@ -4368,6 +4368,7 @@ export interface KPIPreferences {
 // ============================================================
 
 export type EmploymentType = 'employee' | 'company_owner' | 'board_member'
+export type PersonnelCategory = 'arbetare' | 'tjansteman'
 export type SalaryType = 'monthly' | 'hourly'
 export type FSkattStatus = 'a_skatt' | 'f_skatt' | 'fa_skatt' | 'not_verified'
 export type VacationRule = 'procentregeln' | 'sammaloneregeln' | 'none' | 'semesterersattning'
@@ -4426,6 +4427,9 @@ export interface Employee {
   personnummer: string
   personnummer_last4: string
   employment_type: EmploymentType
+  // Which BAS wage series the employee books on (employment_type 'employee'
+  // only): arbetare 70xx, tjänstemän 72xx. lib/salary/account-mapping.ts.
+  personnel_category: PersonnelCategory
   employment_start: string
   employment_end: string | null
   employment_degree: number

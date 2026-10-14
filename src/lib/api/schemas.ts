@@ -3993,6 +3993,10 @@ export const ArticleColumnOverridesSchema = z.object({
 // ============================================================
 
 export const EmploymentTypeSchema = z.enum(['employee', 'company_owner', 'board_member'])
+// Personalkategori: the BAS wage series an employee books on. Arbetare
+// (kollektivanställda) book 70xx (7010/7082/7090), tjänstemän 72xx; owners and
+// board members ignore it (lib/salary/account-mapping.ts lineItemAccount).
+export const PersonnelCategorySchema = z.enum(['arbetare', 'tjansteman'])
 export const SalaryTypeSchema = z.enum(['monthly', 'hourly'])
 export const FSkattStatusSchema = z.enum(['a_skatt', 'f_skatt', 'fa_skatt', 'not_verified'])
 export const VacationRuleSchema = z.enum(['procentregeln', 'sammaloneregeln', 'none', 'semesterersattning'])
@@ -4026,6 +4030,7 @@ const EmployeeSchemaBase = z.object({
   last_name: z.string().min(1).max(200),
   personnummer: z.string().regex(/^\d{12}$/, 'Personnummer måste vara 12 siffror (ÅÅÅÅMMDDNNNN)'),
   employment_type: EmploymentTypeSchema.default('employee'),
+  personnel_category: PersonnelCategorySchema.default('tjansteman'),
   employment_start: isoDate,
   employment_end: isoDate.optional(),
   employment_degree: z.number().min(1).max(100).default(100),
@@ -4209,6 +4214,7 @@ const EmployeeSchemaPatchBase = EmployeeSchemaBase.extend({
   vaxa_stod_start: EmployeeSchemaBase.shape.vaxa_stod_start.nullable(),
   vaxa_stod_end: EmployeeSchemaBase.shape.vaxa_stod_end.nullable(),
   employment_type: EmploymentTypeSchema,
+  personnel_category: PersonnelCategorySchema,
   employment_degree: z.number().min(1).max(100),
   hours_per_week: z.number().positive().max(80),
   workdays_per_week: z.number().min(1).max(7),
@@ -4571,7 +4577,12 @@ export const CreateSalaryLineItemSchema = z.object({
   vacation_saved_year: fiscalYearSchema.nullable().optional(),
 })
 
-export const UpdateSalaryLineItemSchema = CreateSalaryLineItemSchema.partial().omit({ salary_run_employee_id: true })
+// account_number is an override only (lib/salary/account-mapping.ts): null
+// drops a stored override so the line books on the default the booking
+// resolves from the item type and the employee.
+export const UpdateSalaryLineItemSchema = CreateSalaryLineItemSchema.partial()
+  .omit({ salary_run_employee_id: true })
+  .extend({ account_number: accountNumber.nullable().optional() })
 
 // ── Absence (frånvaro) per-day records ──────────────────────────────
 //

@@ -84,6 +84,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   const [reactivating, setReactivating] = useState(false)
   const [isEditOpen, setIsEditOpen] = useState(false)
   const [employmentType, setEmploymentType] = useState('employee')
+  const [personnelCategory, setPersonnelCategory] = useState('tjansteman')
   const [salaryType, setSalaryType] = useState('monthly')
   const [vacationRule, setVacationRule] = useState('procentregeln')
   const [clearing, setClearing] = useState('')
@@ -104,6 +105,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   // its children on close).
   function syncFormState(data: EmployeeMasked) {
     setEmploymentType(data.employment_type)
+    setPersonnelCategory(data.personnel_category || 'tjansteman')
     setSalaryType(data.salary_type || 'monthly')
     setVacationRule(data.vacation_rule || 'procentregeln')
     setClearing(data.clearing_number || '')
@@ -166,6 +168,9 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       first_name: form.get('first_name') as string,
       last_name: form.get('last_name') as string,
       employment_type: employmentType,
+      // Shown (and sent) for employees only: owners and board members book on
+      // their own accounts whatever it says, so a hidden field changes nothing.
+      personnel_category: employmentType === 'employee' ? personnelCategory : undefined,
       employment_start: form.get('employment_start') as string || undefined,
       // Optional fields seeded from the row: emptying one sends null, which
       // clears the column (#3008). Before, the emptied value was omitted and
@@ -450,6 +455,15 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       </DetailSection>
 
       <DetailSection kicker={t('form_employment_salary')}>
+        {employee.employment_type === 'employee' && (
+          <DefRow label={t('form_personnel_category')}>
+            {t(
+              employee.personnel_category === 'arbetare'
+                ? 'form_personnel_category_arbetare'
+                : 'form_personnel_category_tjansteman',
+            )}
+          </DefRow>
+        )}
         <DefRow label={t('form_employment_start')}>
           {employee.employment_start ? (
             <span className="tabular-nums">{formatDate(employee.employment_start)}</span>
@@ -609,7 +623,12 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
           benefits and opening balances write to their own endpoints, so the
           "Spara ändringar" in the edit dialog never touches them. */}
       <EmployeeBenefitsPanel employeeId={id} canWrite={canWrite} />
-      <EmployeeRecurringLinesPanel employeeId={id} canWrite={canWrite} />
+      <EmployeeRecurringLinesPanel
+        employeeId={id}
+        canWrite={canWrite}
+        employmentType={employee.employment_type}
+        personnelCategory={employee.personnel_category}
+      />
       <OpeningBalancesPanel employeeId={id} canWrite={canWrite} />
 
       <DestructiveConfirmDialog {...dialogProps} />
@@ -684,6 +703,21 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
                         </SelectContent>
                       </Select>
                     </div>
+                    {employmentType === 'employee' && (
+                      <div className="space-y-2">
+                        <Label htmlFor="personnel_category">{t('form_personnel_category')}</Label>
+                        <Select value={personnelCategory} onValueChange={setPersonnelCategory} disabled={!canWrite}>
+                          <SelectTrigger id="personnel_category">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="tjansteman">{t('form_personnel_category_tjansteman')}</SelectItem>
+                            <SelectItem value="arbetare">{t('form_personnel_category_arbetare')}</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-muted-foreground">{t('form_personnel_category_hint')}</p>
+                      </div>
+                    )}
                     <div className="space-y-2">
                       <Label htmlFor="employment_degree">{t('form_employment_degree')}</Label>
                       <Input id="employment_degree" name="employment_degree" type="number" defaultValue={employee.employment_degree} min="1" max="100" disabled={!canWrite} />

@@ -28,6 +28,8 @@ import {
   type RecurringLineItemType,
 } from '@/lib/salary/recurring-lines'
 import { TEXT_ROW_MAX_LENGTH, isTextRow, normalizeTextRow } from '@/lib/salary/text-rows'
+import { isAllowedOverrideAccount, lineAccountOverride } from '@/lib/salary/line-account-override'
+import { LineAccountField } from '@/components/salary/LineAccountField'
 
 interface EmployeeRecurringLine {
   id: string
@@ -45,7 +47,18 @@ interface EmployeeRecurringLine {
 const ROW_ACTION_CLASS =
   'text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors duration-150 hover:text-foreground hover:decoration-foreground disabled:opacity-50'
 
-export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employeeId: string; canWrite: boolean }) {
+export function EmployeeRecurringLinesPanel({
+  employeeId,
+  canWrite,
+  employmentType,
+  personnelCategory,
+}: {
+  employeeId: string
+  canWrite: boolean
+  /** The employee's employment type and personnel category: they decide the default account shown. */
+  employmentType: string
+  personnelCategory: string | null | undefined
+}) {
   const t = useTranslations('salary_employee')
   const { toast } = useToast()
   const [lines, setLines] = useState<EmployeeRecurringLine[]>([])
@@ -65,6 +78,8 @@ export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employee
   const [textMissing, setTextMissing] = useState(false)
   // A Textrad is words only: no amount, and no Swedish default text.
   const isText = isTextRow({ item_type: type })
+  const [account, setAccount] = useState('')
+  const [accountInvalid, setAccountInvalid] = useState(false)
 
   async function load() {
     const seq = ++loadSeq.current
@@ -95,6 +110,8 @@ export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employee
     setValidFrom(todayIsoStockholm())
     setValidTo('')
     setTextMissing(false)
+    setAccount('')
+    setAccountInvalid(false)
     setAdding(false)
   }
 
@@ -102,6 +119,13 @@ export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employee
     const text = normalizeTextRow(description)
     if (isText && text === '') {
       setTextMissing(true)
+      return
+    }
+    // An override only: empty leaves account_number out, so every run books
+    // the line on the default resolved at booking.
+    const accountNumber = lineAccountOverride(type) === 'none' ? '' : account.trim()
+    if (accountNumber && !isAllowedOverrideAccount(type, accountNumber)) {
+      setAccountInvalid(true)
       return
     }
     setSubmitting(true)
@@ -119,6 +143,7 @@ export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employee
         body.amount = -magnitude
       }
       if (validTo) body.valid_to = validTo
+      if (accountNumber) body.account_number = accountNumber
 
       const res = await fetch(`/api/salary/employees/${employeeId}/recurring-lines`, {
         method: 'POST',
@@ -203,6 +228,7 @@ export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employee
                 </span>
                 <span className="text-xs tabular-nums text-muted-foreground">
                   {formatDate(l.valid_from)} → {l.valid_to ? formatDate(l.valid_to) : t('recurring_ongoing')}
+                  {l.account_number && <>{' · '}{t('line_account_short', { account: l.account_number })}</>}
                 </span>
                 {/* A text row has no amount: never "0,00 kr". */}
                 {!text && (
@@ -250,6 +276,9 @@ export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employee
                   onValueChange={(v) => {
                     setType(v as RecurringLineItemType)
                     setTextMissing(false)
+                    // An override picked for the old type need not fit the new one.
+                    setAccount('')
+                    setAccountInvalid(false)
                   }}
                 >
                   <SelectTrigger id="recurring_type">
@@ -327,6 +356,16 @@ export function EmployeeRecurringLinesPanel({ employeeId, canWrite }: { employee
               </div>
             </div>
             <p className="text-xs text-muted-foreground">{t('recurring_window_hint')}</p>
+
+            <LineAccountField
+              id="recurring_account"
+              itemType={type}
+              employmentType={employmentType}
+              personnelCategory={personnelCategory}
+              value={account}
+              onChange={(next) => { setAccount(next); setAccountInvalid(false) }}
+              invalid={accountInvalid}
+            />
           </div>
 
           <DialogFooter>

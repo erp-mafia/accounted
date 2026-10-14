@@ -790,6 +790,43 @@ describe('gnubok_create_employee', () => {
     expect(inserted.params.default_dimensions).toEqual({ '1': 'KS1' })
   })
 
+  it('stages personnel_category tjansteman by default and arbetare when asked', async () => {
+    for (const [args, expected] of [
+      [validArgs, 'tjansteman'],
+      [{ ...validArgs, personnel_category: 'arbetare' }, 'arbetare'],
+    ] as const) {
+      const supabaseMock = makeCapturingSupabase({
+        company_settings: { data: { entity_type: 'ab' } },
+        fiscal_periods: { data: null },
+        pending_operations: { data: { id: 'op-category' }, error: null },
+      })
+
+      const result = (await createEmployee.execute(
+        args, 'company-1', 'user-1', supabaseMock as never, { type: 'user' },
+      )) as { staged: boolean; preview: Record<string, unknown> }
+
+      expect(result.staged).toBe(true)
+      expect(result.preview.personnel_category).toBe(expected)
+      const inserted = supabaseMock.inserts.pending_operations?.[0] as { params: Record<string, unknown> }
+      expect(inserted.params.personnel_category).toBe(expected)
+    }
+  })
+
+  it('rejects an unknown personnel_category', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      createEmployee.execute(
+        { ...validArgs, personnel_category: 'kollektiv' },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/Invalid employee/)
+  })
+
+  it('advertises personnel_category as the two-value enum', () => {
+    const props = (createEmployee.inputSchema as { properties: Record<string, { enum?: string[] }> }).properties
+    expect(props.personnel_category.enum).toEqual(['arbetare', 'tjansteman'])
+  })
+
   it('rejects invalid input via CreateEmployeeSchema (missing salary)', async () => {
     const { supabase } = createQueuedMockSupabase()
     await expect(
@@ -908,6 +945,38 @@ describe('gnubok_update_employee', () => {
     expect(result.preview.bank_details_changed).toBe(true)
     const salaryChange = result.preview.changes.find((c) => c.field === 'monthly_salary')
     expect(salaryChange).toEqual({ field: 'monthly_salary', from: 35000, to: 38000 })
+  })
+
+  it('stages a personnel_category change with a from/to preview', async () => {
+    const supabaseMock = makeCapturingSupabase({
+      employees: { data: { ...EXISTING, personnel_category: 'tjansteman' } },
+      fiscal_periods: { data: null },
+      company_settings: { data: null },
+      pending_operations: { data: { id: 'op-category-upd' }, error: null },
+    })
+
+    const result = (await updateEmployee.execute(
+      { employee_id: 'emp-1', personnel_category: 'arbetare' },
+      'company-1', 'user-1', supabaseMock as never, { type: 'user' },
+    )) as { staged: boolean; preview: { changes: Array<{ field: string; from: unknown; to: unknown }> } }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.changes).toContainEqual({ field: 'personnel_category', from: 'tjansteman', to: 'arbetare' })
+    const inserted = supabaseMock.inserts.pending_operations?.[0] as { params: { patch: Record<string, unknown> } }
+    expect(inserted.params.patch).toEqual({ personnel_category: 'arbetare' })
+  })
+
+  it('refuses null and unknown values for personnel_category at staging', async () => {
+    for (const value of [null, 'kollektiv']) {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: EXISTING })
+      await expect(
+        updateEmployee.execute(
+          { employee_id: 'emp-1', personnel_category: value },
+          'company-1', 'user-1', supabase as never, { type: 'user' },
+        ),
+      ).rejects.toThrow(/Invalid employee update/)
+    }
   })
 
   it('stages a default_dimensions patch, with {} as the clear-all-tags update', async () => {

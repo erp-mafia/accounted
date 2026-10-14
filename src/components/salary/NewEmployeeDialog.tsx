@@ -174,6 +174,8 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
   const [saving, setSaving] = useState(false)
   const [submitError, setSubmitError] = useState<SubmitError | null>(null)
   const [employmentType, setEmploymentType] = useState('employee')
+  // Wage series (70xx arbetare, 72xx tjänsteman); only asked of employees.
+  const [personnelCategory, setPersonnelCategory] = useState('tjansteman')
   const [salaryType, setSalaryType] = useState('monthly')
   const [personnummer, setPersonnummer] = useState('')
   const [vacationRule, setVacationRule] = useState('procentregeln')
@@ -236,6 +238,9 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
       last_name: form.get('last_name') as string,
       personnummer: personnummer.replace(/\D/g, ''),
       employment_type: employmentType,
+      // Owners and board members book on their own accounts: the category is
+      // left at its default for them.
+      personnel_category: employmentType === 'employee' ? personnelCategory : undefined,
       employment_start: form.get('employment_start') as string,
       employment_end: form.get('employment_end') as string || undefined,
       employment_degree: parseFloat(form.get('employment_degree') as string) || 100,
@@ -376,6 +381,20 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
                 </SelectContent>
               </Select>
             </Field>
+            {employmentType === 'employee' && (
+              <Field label={tEmployee('form_personnel_category')} htmlFor="personnel_category">
+                <Select value={personnelCategory} onValueChange={setPersonnelCategory}>
+                  <SelectTrigger id="personnel_category">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="tjansteman">{tEmployee('form_personnel_category_tjansteman')}</SelectItem>
+                    <SelectItem value="arbetare">{tEmployee('form_personnel_category_arbetare')}</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">{tEmployee('form_personnel_category_hint')}</p>
+              </Field>
+            )}
             <Field label="Anställningsdatum" htmlFor="employment_start" required>
               <Input id="employment_start" name="employment_start" type="date" required />
             </Field>
@@ -444,7 +463,7 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
               )}
               {vacationRule === 'semesterersattning' && (
                 <p className="text-xs text-muted-foreground">
-                  12 % läggs på varje lönekörning och bokas mot 7285. Ingen semesterlöneskuld byggs upp. Vanligt för tim- och visstidsanställda.
+                  12 % läggs på varje lönekörning och bokas som semesterlön (7285, 7082 för arbetare, 7286 för företagsledare). Ingen semesterlöneskuld byggs upp. Vanligt för tim- och visstidsanställda.
                 </p>
               )}
             </Field>

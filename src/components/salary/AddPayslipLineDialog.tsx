@@ -27,6 +27,8 @@ import {
   type ManualPayslipLineType,
 } from '@/lib/salary/manual-payslip-lines'
 import { TEXT_ROW_MAX_LENGTH, isTextRow } from '@/lib/salary/text-rows'
+import { isAllowedOverrideAccount, lineAccountOverride } from '@/lib/salary/line-account-override'
+import { LineAccountField } from '@/components/salary/LineAccountField'
 
 const DEFAULT_TYPE: ManualPayslipLineType = 'mileage_taxfree'
 
@@ -39,7 +41,9 @@ const parseNumber = (s: string): number | undefined => parseDecimalInput(s) ?? u
  * övertid, OB, a deduction, or a Textrad (words only, no amount). Convention
  * 13: centered modal for create. The catalogue and the flags each type
  * carries live in lib/salary/manual-payslip-lines.ts; this dialog only
- * collects the numbers, or the text.
+ * collects the numbers, or the text, and, on rows that post on their own
+ * account, an optional account override (empty = the default the booking
+ * resolves for this employee).
  */
 export function AddPayslipLineDialog({
   open,
@@ -47,12 +51,17 @@ export function AddPayslipLineDialog({
   runId,
   salaryRunEmployeeId,
   taxFreeCaps,
+  employmentType,
+  personnelCategory,
   onAdded,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   runId: string
   salaryRunEmployeeId: string
+  /** The employee's employment type and personnel category: they decide the default account shown. */
+  employmentType: string
+  personnelCategory: string | null | undefined
   /** Schablon per mil / per day for the run's year; a tax-free line above it is refused. */
   taxFreeCaps?: ManualLineCaps
   onAdded: () => void | Promise<void>
@@ -66,6 +75,8 @@ export function AddPayslipLineDialog({
   const [unitPrice, setUnitPrice] = useState('')
   const [amount, setAmount] = useState('')
   const [invalid, setInvalid] = useState(false)
+  const [account, setAccount] = useState('')
+  const [accountInvalid, setAccountInvalid] = useState(false)
 
   const spec = MANUAL_PAYSLIP_LINE_SPECS[type]
   // A Textrad is words only: no quantity, no à-pris, no amount.
@@ -97,6 +108,8 @@ export function AddPayslipLineDialog({
     setUnitPrice('')
     setAmount('')
     setInvalid(false)
+    setAccount('')
+    setAccountInvalid(false)
     onOpenChange(false)
   }
 
@@ -105,12 +118,22 @@ export function AddPayslipLineDialog({
       setInvalid(true)
       return
     }
+    // An override only: empty sends no account_number.
+    const accountNumber = lineAccountOverride(type) === 'none' ? '' : account.trim()
+    if (accountNumber && !isAllowedOverrideAccount(type, accountNumber)) {
+      setAccountInvalid(true)
+      return
+    }
     setSubmitting(true)
     try {
       const res = await fetch(`/api/salary/runs/${runId}/lines`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ salary_run_employee_id: salaryRunEmployeeId, ...preview }),
+        body: JSON.stringify({
+          salary_run_employee_id: salaryRunEmployeeId,
+          ...preview,
+          ...(accountNumber ? { account_number: accountNumber } : {}),
+        }),
       })
       if (res.ok) {
         toast({ title: t('line_added') })
@@ -157,7 +180,16 @@ export function AddPayslipLineDialog({
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="payslip_line_type">{t('add_line_type')}</Label>
-              <Select value={type} onValueChange={(v) => { setType(v as ManualPayslipLineType); setInvalid(false) }}>
+              <Select
+                value={type}
+                onValueChange={(v) => {
+                  setType(v as ManualPayslipLineType)
+                  setInvalid(false)
+                  // An override picked for the old type need not fit the new one.
+                  setAccount('')
+                  setAccountInvalid(false)
+                }}
+              >
                 <SelectTrigger id="payslip_line_type">
                   <SelectValue />
                 </SelectTrigger>
@@ -257,6 +289,16 @@ export function AddPayslipLineDialog({
                   ? `${t('add_line_computed')} = ${formatCurrency(preview.amount)}`
                   : t(hintKey)}
           </p>
+
+          <LineAccountField
+            id="payslip_line_account"
+            itemType={type}
+            employmentType={employmentType}
+            personnelCategory={personnelCategory}
+            value={account}
+            onChange={(next) => { setAccount(next); setAccountInvalid(false) }}
+            invalid={accountInvalid}
+          />
         </div>
 
         <DialogFooter>

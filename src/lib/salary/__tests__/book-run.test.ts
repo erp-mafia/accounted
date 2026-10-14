@@ -146,6 +146,7 @@ describe('advanceAndBookSalaryRun', () => {
       { data: { id: 'run-1' } }, // review → approved
       { data: { id: 'run-1' } }, // approved → paid
       { data: BOOKING_CLAIM }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
       { data: { id: 'run-1', status: 'booked' } }, // paid → booked
     ])
 
@@ -181,6 +182,7 @@ describe('advanceAndBookSalaryRun', () => {
       { data: { id: 'run-1' } },
       { data: { id: 'run-1' } },
       { data: BOOKING_CLAIM }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
       { data: { id: 'run-1', status: 'booked' } },
     ])
 
@@ -238,6 +240,7 @@ describe('advanceAndBookSalaryRun', () => {
       { data: { id: 'run-1' } }, // review → approved
       { data: { id: 'run-1' } }, // approved → paid
       { data: BOOKING_CLAIM }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
       { data: { id: 'run-1', status: 'booked' } }, // paid → booked
     ])
 
@@ -365,6 +368,7 @@ describe('bookPaidSalaryRun', () => {
       { data: makeRun({ status: 'paid' }) },
       { data: [makeSre()] },
       { data: BOOKING_CLAIM }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
       { data: { id: 'run-1', status: 'booked' } },
     ])
 
@@ -463,6 +467,7 @@ describe('bookPaidSalaryRun: utlägg repaid with the salary (#2331)', () => {
       { data: [makeSre({ net_salary: 23500, line_items: [claimLine('claim-1', 500)] })] },
       { data: BOOKING_CLAIM }, // claim_salary_run_booking
       { data: [{ id: 'claim-1', status: 'registered', employee_id: 'e1', amount_sek: '500.00' }] },
+      { data: null }, // personnel category stamp
       { data: { id: 'run-1', status: 'booked' } },
     ])
 
@@ -485,6 +490,7 @@ describe('bookPaidSalaryRun: utlägg repaid with the salary (#2331)', () => {
       { data: [makeSre({ net_salary: 23500, line_items: [claimLine('claim-1', 500)] })] },
       { data: BOOKING_CLAIM }, // claim_salary_run_booking
       { data: [{ id: 'claim-1', status: 'registered', employee_id: 'e1', amount_sek: 500 }] },
+      { data: null }, // personnel category stamp
       { data: { id: 'run-1', status: 'booked' } },
     ])
     vi.mocked(settleExpenseClaimsForBookedRun).mockResolvedValue({ ok: false, code: 'SETTLE_FAILED', detail: 'boom' })
@@ -506,6 +512,7 @@ describe('bookPaidSalaryRun: utlägg repaid with the salary (#2331)', () => {
       { data: makeRun({ status: 'paid' }) },
       { data: [makeSre()] },
       { data: BOOKING_CLAIM }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
       { data: { id: 'run-1', status: 'booked' } },
     ])
 
@@ -532,6 +539,7 @@ describe('bookPaidSalaryRun: utlägg repaid with the salary (#2331)', () => {
       },
       { data: BOOKING_CLAIM }, // claim_salary_run_booking
       { data: [{ id: 'claim-1', status: 'registered', employee_id: 'e1', amount_sek: 800 }] },
+      { data: null }, // personnel category stamp
       { data: { id: 'run-1', status: 'booked' } },
     ])
 
@@ -556,6 +564,76 @@ describe('bookPaidSalaryRun: utlägg repaid with the salary (#2331)', () => {
     const runUpdate = findCalls('salary_runs', 'update').at(-1)?.[0] as Record<string, unknown>
     expect(runUpdate).toMatchObject({ status: 'booked', salary_entry_id: 'je-1' })
     expect(runUpdate).not.toHaveProperty('avgifter_entry_id')
+  })
+})
+
+// Plan 1: the booking stamps each roster row with the personnel category it
+// posts with, before anything is posted, so a booked run's Lönejournal keeps
+// the category its verifikat was booked with.
+describe('bookPaidSalaryRun: personnel category stamp', () => {
+  const arbetare = (id: string, employeeId: string) =>
+    makeSre({ id, employee_id: employeeId, employee: { ...makeSre().employee, personnel_category: 'arbetare' } })
+  const tjansteman = (id: string, employeeId: string) =>
+    makeSre({ id, employee_id: employeeId, employee: { ...makeSre().employee, personnel_category: 'tjansteman' } })
+
+  it('stamps every roster row with its category, then posts with the same category', async () => {
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'paid' }) },
+      { data: [arbetare('sre-1', 'e1'), tjansteman('sre-2', 'e2'), arbetare('sre-3', 'e3')] },
+      { data: BOOKING_CLAIM },
+      { data: null }, // stamp arbetare
+      { data: null }, // stamp tjansteman
+      { data: { id: 'run-1', status: 'booked' } },
+    ])
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(true)
+    const stamps = findCalls('salary_run_employees', 'update').map((call) => call[0])
+    expect(stamps).toEqual([{ personnel_category: 'arbetare' }, { personnel_category: 'tjansteman' }])
+    expect(findCalls('salary_run_employees', 'in')).toEqual([
+      ['id', ['sre-1', 'sre-3']],
+      ['id', ['sre-2']],
+    ])
+    const engineInput = vi.mocked(createSalaryRunEntries).mock.calls[0][3]
+    expect(engineInput.employees.map((e) => e.personnel_category)).toEqual(['arbetare', 'tjansteman', 'arbetare'])
+  })
+
+  it('stops before posting anything when the stamp fails, and hands the claim back', async () => {
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'paid' }) },
+      { data: [arbetare('sre-1', 'e1')] },
+      { data: BOOKING_CLAIM },
+      { data: null, error: { message: 'stamp failed' } },
+      { data: null }, // claim release
+    ])
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('SALARY_RUN_BOOK_FAILED')
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
+    expect(eventBus.emit).not.toHaveBeenCalled()
+    const runUpdates = findCalls('salary_runs', 'update').map((call) => call[0])
+    expect(runUpdates).toEqual([{ booking_claim_id: null, booking_claimed_at: null }])
+  })
+
+  it('stamps a roster row whose employee has no category as tjänsteman', async () => {
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'paid' }) },
+      { data: [makeSre({ id: 'sre-1' })] },
+      { data: BOOKING_CLAIM },
+      { data: null },
+      { data: { id: 'run-1', status: 'booked' } },
+    ])
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(true)
+    expect(findCalls('salary_run_employees', 'update')).toEqual([[{ personnel_category: 'tjansteman' }]])
   })
 })
 
@@ -595,6 +673,7 @@ describe('salary run booking claim (#3251)', () => {
       { data: makeRun({ status: 'paid' }) },
       { data: [makeSre()] },
       { data: BOOKING_CLAIM },
+      { data: null }, // personnel category stamp
       { data: { id: 'run-1', status: 'booked' } },
     ])
 
@@ -662,6 +741,7 @@ describe('salary run booking claim (#3251)', () => {
       { data: makeRun({ status: 'paid' }) },
       { data: [makeSre()] },
       { data: BOOKING_CLAIM },
+      { data: null }, // personnel category stamp
       { data: { id: 'run-1', status: 'booked' } },
     ])
 
@@ -717,6 +797,7 @@ describe('salary run booking claim (#3251)', () => {
       { data: makeRun({ status: 'paid' }) },
       { data: [makeSre()] },
       { data: BOOKING_CLAIM },
+      { data: null }, // personnel category stamp
       { data: null }, // the flip matched no row: the claim is no longer ours
     ])
 

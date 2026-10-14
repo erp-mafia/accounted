@@ -29,7 +29,7 @@ import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/regis
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
-import { CreateEmployeeSchema } from '@/lib/api/schemas'
+import { CreateEmployeeSchema, PersonnelCategorySchema } from '@/lib/api/schemas'
 import { maskPersonnummer } from '@/lib/salary/personnummer-format'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
 import { createEmployee, sealPersonnummer } from '@/lib/salary/employee-commands'
@@ -45,6 +45,8 @@ const EmployeeSummary = z.object({
   /** Masked: first 8 digits + 'XXXX' (birthdate visible, last-4 hidden). */
   personnummer_masked: z.string(),
   employment_type: EmploymentType,
+  /** BAS wage series: arbetare 70xx, tjansteman 72xx (employees only). */
+  personnel_category: PersonnelCategorySchema,
   employment_start: z.string(),
   employment_end: z.string().nullable(),
   salary_type: SalaryType,
@@ -62,10 +64,13 @@ const EmployeesListResponse = listEnvelope(EmployeeSummary)
 // personnummer is loaded so the response can serve a masked form; the full
 // value never leaves this projection.
 const EMPLOYEE_SUMMARY_COLUMNS =
-  'id, first_name, last_name, personnummer, employment_type, employment_start, employment_end, salary_type, monthly_salary, hourly_rate, f_skatt_status, is_active, created_at'
+  'id, first_name, last_name, personnummer, employment_type, personnel_category, employment_start, employment_end, salary_type, monthly_salary, hourly_rate, f_skatt_status, is_active, created_at'
 
 const ListFilters = z.object({
   employment_type: EmploymentType.optional().describe('Only employees with this employment type.'),
+  personnel_category: PersonnelCategorySchema.optional().describe(
+    'Only employees in this personnel category (arbetare or tjansteman).',
+  ),
   search: z
     .string()
     .min(1)
@@ -95,6 +100,7 @@ registerEndpoint({
     'Inactive employees are hidden by default; soft-delete via DELETE sets is_active=false (BFL 7 kap retention).',
     'personnummer is masked in the list response (GDPR Art.5(1)(c) data minimisation). The detail endpoint returns the full value.',
     'salary_type drives which field is meaningful: monthly_salary for monthly, hourly_rate for hourly. The other is null.',
+    'personnel_category decides the wage account series for employment_type employee only: arbetare book 70xx (7010/7082/7090), tjansteman 72xx. Owners and board members keep their own accounts whatever it says.',
   ],
   example: {
     response: {
@@ -105,6 +111,7 @@ registerEndpoint({
           last_name: 'Andersson',
           personnummer_masked: 'YYYYMMDD-XXXX',
           employment_type: 'employee',
+          personnel_category: 'tjansteman',
           employment_start: '2024-01-15',
           employment_end: null,
           salary_type: 'monthly',
@@ -136,6 +143,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     const filtersResult = ListFilters.safeParse({
       employment_type: url.searchParams.get('employment_type') ?? undefined,
+      personnel_category: url.searchParams.get('personnel_category') ?? undefined,
       search: url.searchParams.get('search') ?? undefined,
       include_inactive: url.searchParams.get('include_inactive') ?? undefined,
     })
@@ -156,6 +164,9 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
     if (filters.employment_type) {
       query = query.eq('employment_type', filters.employment_type)
+    }
+    if (filters.personnel_category) {
+      query = query.eq('personnel_category', filters.personnel_category)
     }
     if (filters.search) {
       // Two layers of escaping (matches the customer/supplier list):
@@ -185,6 +196,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       last_name: string
       personnummer: string
       employment_type: string
+      personnel_category: string
       employment_start: string
       employment_end: string | null
       salary_type: string
@@ -208,6 +220,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       // plaintext rows through unchanged.
       personnummer_masked: maskPersonnummer(decryptPersonnummer(r.personnummer)),
       employment_type: r.employment_type,
+      personnel_category: r.personnel_category,
       employment_start: r.employment_start,
       employment_end: r.employment_end,
       salary_type: r.salary_type,
@@ -240,6 +253,7 @@ const EmployeeCreated = z.object({
   last_name: z.string(),
   personnummer_masked: z.string(),
   employment_type: EmploymentType,
+  personnel_category: PersonnelCategorySchema,
   employment_start: z.string(),
   employment_end: z.string().nullable(),
   employment_degree: z.number(),
@@ -274,6 +288,7 @@ registerEndpoint({
     'Duplicate personnummer within a company returns 409 EMPLOYEE_DUPLICATE_PERSONNUMMER. Personnummer is unique per (company_id, personnummer).',
     'For A-skatt employees who are not sidoinkomst, tax_table_number is required (29-42).',
     'salary_type drives which salary field is required: monthly_salary for monthly, hourly_rate for hourly.',
+    'personnel_category defaults to tjansteman (72xx wage accounts). Set arbetare for kollektivanställda so their wages book on 7010, vacation pay on 7082 and the vacation liability change on 7090. Ignored for company_owner and board_member.',
     'The response masks personnummer; never echo back the supplied value. Detail endpoint (deliberate drill-in) returns the full value.',
     'vaxa_stod_eligible never lowers the arbetsgivaravgifter: from redovisningsperiod 202601 (Lag 2025:1334) the AGI declares the full avgifter and the company applies to Skatteverket for the refund after filing. A salary run paid inside vaxa_stod_start..vaxa_stod_end (end optional; never past the 24th calendar month counted from the start month) notes the expected refund per employee and warns to apply.',
   ],
@@ -301,6 +316,7 @@ registerEndpoint({
         last_name: 'Andersson',
         personnummer_masked: 'YYYYMMDD-XXXX',
         employment_type: 'employee',
+        personnel_category: 'tjansteman',
         employment_start: '2024-01-15',
         employment_end: null,
         employment_degree: 100,
@@ -330,7 +346,7 @@ registerEndpoint({
 })
 
 const EMPLOYEE_RESPONSE_COLUMNS =
-  'id, first_name, last_name, personnummer, employment_type, employment_start, employment_end, employment_degree, salary_type, monthly_salary, hourly_rate, tax_table_number, tax_column, tax_municipality, is_sidoinkomst, f_skatt_status, vacation_rule, vacation_days_per_year, is_active, created_at'
+  'id, first_name, last_name, personnummer, employment_type, personnel_category, employment_start, employment_end, employment_degree, salary_type, monthly_salary, hourly_rate, tax_table_number, tax_column, tax_municipality, is_sidoinkomst, f_skatt_status, vacation_rule, vacation_days_per_year, is_active, created_at'
 
 export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
   'employees.create',

@@ -7,7 +7,7 @@ import type {
 } from '@/types'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { loadPayrollConfig, type PayrollConfig } from '@/lib/salary/payroll-config'
-import { getLineItemAccount } from '@/lib/salary/account-mapping'
+import { baseLineItemAccount } from '@/lib/salary/account-mapping'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { roundOre } from '@/lib/money'
@@ -32,7 +32,7 @@ import type { EntityType } from '@/types'
 const KM_PER_MIL = 10
 
 /** BAS 7331: skattefria bilersättningar. */
-const MILEAGE_TAXFREE_ACCOUNT = getLineItemAccount('mileage_taxfree')
+const MILEAGE_TAXFREE_ACCOUNT = baseLineItemAccount('mileage_taxfree')
 
 const round2 = roundOre
 

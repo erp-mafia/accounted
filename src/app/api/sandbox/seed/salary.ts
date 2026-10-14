@@ -36,7 +36,7 @@
 
 import { roundOre } from '@/lib/money'
 import { lastDayOfMonth, pad2 } from './date-utils'
-import { getLineItemAccount } from '@/lib/salary/account-mapping'
+import { lineItemAccount } from '@/lib/salary/account-mapping'
 import { calculateSalary, type SalaryCalculationResult } from '@/lib/salary/calculation-engine'
 import { serializePayrollConfig, type PayrollConfig } from '@/lib/salary/payroll-config'
 import type { TaxTableRate } from '@/lib/salary/tax-tables'
@@ -191,7 +191,7 @@ export function buildSandboxEmployees({
     user_id: userId,
     company_id: companyId,
     // Both are ordinary employees (7210), not företagsledare (7220) or
-    // styrelseledamot (7240): getLineItemAccount keys off this.
+    // styrelseledamot (7240): lineItemAccount keys off this.
     employment_type: 'employee',
     tax_table_number: TAX_TABLE_NUMBER,
     tax_column: TAX_COLUMN,
@@ -611,9 +611,10 @@ export interface SandboxSalaryLineItemsInput {
 
 /**
  * One payslip line per calculation row: Grundlön for the månadsavlönad,
- * Timlön (80 tim × 245 kr) for the timavlönad. Account numbers come from
- * getLineItemAccount so the seed cannot drift from the salary account map
- * (both resolve to 7210 Löner till tjänstemän for employment_type 'employee').
+ * Timlön (80 tim × 245 kr) for the timavlönad. The seeded runs are booked,
+ * so the lines carry the account they were booked on, from lineItemAccount
+ * so the seed cannot drift from the salary account map (both resolve to 7210
+ * Löner till tjänstemän for a tjänsteman with employment_type 'employee').
  */
 export function buildSandboxSalaryLineItems({
   companyId,
@@ -646,7 +647,7 @@ export function buildSandboxSalaryLineItems({
       is_vacation_basis: true,
       is_gross_deduction: false,
       is_net_deduction: false,
-      account_number: getLineItemAccount(itemType, 'employee'),
+      account_number: lineItemAccount(itemType, { employmentType: 'employee' }),
       sort_order: 0,
     }
   })

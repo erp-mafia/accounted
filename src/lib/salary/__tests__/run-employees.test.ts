@@ -398,7 +398,7 @@ describe('setRunEmployeeSalary', () => {
     expect(mock.findCall('salary_line_items', 'insert')?.[0]).toMatchObject({
       item_type: 'monthly_salary',
       description: 'Grundlön',
-      account_number: '7210',
+      account_number: null,
     })
     // The new line is priced by the regular display refresh: 30 000 x 80 %.
     const lineUpdates = mock.findCalls('salary_line_items', 'update').map((a) => a[0])

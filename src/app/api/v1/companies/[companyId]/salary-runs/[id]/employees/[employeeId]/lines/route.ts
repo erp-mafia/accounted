@@ -50,7 +50,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId/lines',
   summary: 'Add a payslip line to an employee in a draft salary run.',
   description:
-    'Creates a salary_line_items row (bonus, overtime, gross/net deduction, benefit, traktamente, text row, ...) for one employee in a draft run. account_number auto-resolves from item_type when omitted. Amounts are rounded to whole öre, and every line but a text row needs a non-zero amount (a vacation line may carry only its days). A text row (item_type text, Textrad) carries words only: no amount, quantity or unit_price, every flag false and no account, so it explains the payslip without reaching tax, AGI or the booking. one_off_tax_percent (engångsskatt) taxes the line at that verified flat percentage instead of the monthly table; allowed on a positive taxable bonus, commission, other, correction or semesterersattning line. A vacation line (item_type vacation, quantity = days) may carry vacation_category to say which pool the days come from: paid (Betalda, the default), extra_paid (Extra betalda), saved (Sparade, optionally one origin year in vacation_saved_year), unpaid (Obetalda) or advance (Förskott).',
+    'Creates a salary_line_items row (bonus, overtime, gross/net deduction, benefit, traktamente, text row, ...) for one employee in a draft run. account_number is an override only: omit it and the line returns account_number null and books on the default the booking resolves from item_type, the employee\'s employment_type and personnel_category (an arbetare\'s wages on 7010, a tjänsteman\'s on 7210, an owner\'s on 7220). Amounts are rounded to whole öre, and every line but a text row needs a non-zero amount (a vacation line may carry only its days). A text row (item_type text, Textrad) carries words only: no amount, quantity or unit_price, every flag false and no account, so it explains the payslip without reaching tax, AGI or the booking. one_off_tax_percent (engångsskatt) taxes the line at that verified flat percentage instead of the monthly table; allowed on a positive taxable bonus, commission, other, correction or semesterersattning line. A vacation line (item_type vacation, quantity = days) may carry vacation_category to say which pool the days come from: paid (Betalda, the default), extra_paid (Extra betalda), saved (Sparade, optionally one origin year in vacation_saved_year), unpaid (Obetalda) or advance (Förskott).',
   useWhen:
     'You need to add a one-off pay component before calculating: a bonus, an expense reimbursement, a union fee, or a manual correction line. A bonus or final-settlement semesterersättning that Skatteverket taxes as an engångsbelopp: send one_off_tax_percent with the percentage you verified for the employee. Vacation days taken: an item_type vacation line with quantity = days and, when they are not this year\'s paid days, vacation_category. Words on this payslip without money (how the salary is built up): an item_type text line.',
   doNotUseFor:
@@ -78,7 +78,7 @@ registerEndpoint({
         item_type: 'bonus',
         description: 'Kvartalsbonus Q2',
         amount: 5000,
-        account_number: '7210',
+        account_number: null,
         one_off_tax_percent: 30,
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },

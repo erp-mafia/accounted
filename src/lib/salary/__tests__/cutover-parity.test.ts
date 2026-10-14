@@ -238,6 +238,7 @@ describe('cutover parity: vacation liability without categorized fields', () => 
             "avgifterRate": 0.3142,
             "employeeId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
             "employeeName": "Anna Andersson",
+            "liabilityChangeAccount": "7290",
             "personnummerLast4": "0000",
             "totalLiability": 66235.68,
             "vacationDaysEntitled": 19.5,

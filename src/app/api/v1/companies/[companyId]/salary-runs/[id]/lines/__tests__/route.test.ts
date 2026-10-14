@@ -217,7 +217,8 @@ describe('POST /salary-runs/:id/employees/:employeeId/lines', () => {
     expect(body.data.preview.salary_line_item_id).toBeNull()
     // roundOre: 1.005 -> 1.01 (the exact-half case naive rounding gets wrong).
     expect(body.data.preview.amount).toBe(1.01)
-    expect(body.data.preview.account_number).toBe('7210')
+    // No override given: the booking resolves the default.
+    expect(body.data.preview.account_number).toBeNull()
     // No insert happened: salary_line_items was never touched.
     expect(supabaseMock.tables()).not.toContain('salary_line_items')
   })

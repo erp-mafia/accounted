@@ -76,7 +76,7 @@ export interface BookRunArgs {
 }
 
 const ROSTER_SELECT =
-  '*, employee:employees(first_name, last_name, employment_type, default_dimensions, f_skatt_status, clearing_number, bank_account_number, email)'
+  '*, employee:employees(first_name, last_name, employment_type, personnel_category, default_dimensions, f_skatt_status, clearing_number, bank_account_number, email)'
 
 type RosterRow = SalaryRosterRow & Record<string, unknown> & {
   tax_withheld_override: number | null
@@ -84,6 +84,7 @@ type RosterRow = SalaryRosterRow & Record<string, unknown> & {
     first_name: string
     last_name: string
     employment_type: string | null
+    personnel_category: string | null
     default_dimensions: Record<string, string> | null
     f_skatt_status: string | null
     clearing_number: string | null
@@ -344,6 +345,35 @@ async function bookLoadedRun(
   }
 }
 
+/**
+ * Stamp every roster row with the personnel category this booking posts with
+ * (the employee's live personnel_category, the value salaryRunDataFromRows
+ * resolves the wage accounts from), before anything is posted. The stamp is
+ * what the Lönejournal shows for a booked run, so a later change of the
+ * employee's category never rewrites a booked run. A failed stamp stops the
+ * booking here, where nothing has been posted yet.
+ */
+async function stampPersonnelCategories(
+  supabase: SupabaseClient,
+  companyId: string,
+  roster: RosterRow[],
+): Promise<BookRunResult<null>> {
+  const idsByCategory = new Map<string, string[]>()
+  for (const sre of roster) {
+    const category = sre.employee?.personnel_category ?? 'tjansteman'
+    idsByCategory.set(category, [...(idsByCategory.get(category) ?? []), sre.id as string])
+  }
+  for (const [category, ids] of idsByCategory) {
+    const { error } = await supabase
+      .from('salary_run_employees')
+      .update({ personnel_category: category })
+      .in('id', ids)
+      .eq('company_id', companyId)
+    if (error) return { ok: false, code: 'SALARY_RUN_BOOK_FAILED', dbError: error }
+  }
+  return { ok: true, data: null }
+}
+
 async function bookClaimedRun(
   supabase: SupabaseClient,
   args: BookRunArgs,
@@ -371,6 +401,9 @@ async function bookClaimedRun(
   if (!claimsCheck.ok) {
     return { ok: false, code: claimsCheck.code, details: claimsCheck.details }
   }
+
+  const stamped = await stampPersonnelCategories(supabase, companyId, roster)
+  if (!stamped.ok) return stamped
 
   // Nollkörning (isNollkorning): nothing to post, so skip journal-entry
   // creation entirely and just advance to 'booked'.

@@ -11,7 +11,6 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { getLineItemAccount } from '@/lib/salary/account-mapping'
 import { roundOre } from '@/lib/money'
 import { degreeAdjustedMonthlySalary } from '@/lib/salary/work-schedule'
 import { runDeviationWindow } from '@/lib/salary/deviation-period'
@@ -189,7 +188,7 @@ export async function addEmployeeToRun(
     is_taxable: true,
     is_avgift_basis: true,
     is_vacation_basis: true,
-    account_number: getLineItemAccount(baseSalaryType, emp.employment_type as never),
+    account_number: null,
     sort_order: 0,
   })
 
@@ -397,7 +396,6 @@ export async function setRunEmployeeSalary(
       companyId: args.companyId,
       salaryRunEmployeeId: row.id,
       salaryType,
-      employmentType: row.employee?.employment_type || 'employee',
       amount: 0,
       quantity: null,
       unitPrice: null,

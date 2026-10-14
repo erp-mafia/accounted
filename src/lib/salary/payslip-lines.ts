@@ -12,7 +12,10 @@
  *     the run advances, its numbers feed a verifikation).
  *   - The target salary_run_employee must belong to the given run.
  *   - Money is rounded via roundOre() (never naive Math.round(x*100)/100).
- *   - account_number auto-resolves from the item type when not supplied.
+ *   - account_number is an override only: null books on the default the
+ *     booking resolves from the item type and the employee
+ *     (account-mapping.ts lineItemAccount), and changing a line's item type
+ *     clears a stored account unless the patch sets one.
  *   - A line the calculation owns is never added, edited or deleted by hand
  *     (SALARY_LINE_CALCULATED): the next calculation, which every run needs
  *     before booking, would silently undo it (#3185, calculated-line-items.ts).
@@ -29,7 +32,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { z } from 'zod'
 import type { CreateSalaryLineItemSchema, UpdateSalaryLineItemSchema } from '@/lib/api/schemas'
-import { getLineItemAccount, type MoneyLineItemType } from '@/lib/salary/account-mapping'
 import { validateOneOffTaxLine } from '@/lib/salary/one-off-tax'
 import { validateVacationCategoryLine } from '@/lib/salary/vacation-category'
 import { roundOre } from '@/lib/money'
@@ -288,10 +290,10 @@ export async function createPayslipLine(
     return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'is_avgift_basis', message: avgiftBasisError } }
   }
   // A text row has no account and no flags to choose: the schema defaults
-  // (is_taxable true, ...) are overridden, never stored.
-  const accountNumber = text
-    ? null
-    : input.account_number || getLineItemAccount(input.item_type as MoneyLineItemType)
+  // (is_taxable true, ...) are overridden, never stored. Any other row's
+  // account is an override only; without one the booking resolves the
+  // default.
+  const accountNumber = text ? null : input.account_number || null
   const flags = text
     ? TEXT_ROW_FLAGS
     : {
@@ -365,6 +367,16 @@ export async function updatePayslipLine(
   }
 
   const updates: Record<string, unknown> = { ...args.patch }
+  // A stored account belonged to the old item type (a bonus turned into a
+  // union deduction must not stay on 7210): a type change drops it so the
+  // line books on its new type's default, unless the patch names one.
+  if (
+    updates.item_type !== undefined &&
+    updates.item_type !== loaded.data.line.item_type &&
+    !('account_number' in updates)
+  ) {
+    updates.account_number = null
+  }
   if (typeof updates.amount === 'number') {
     updates.amount = roundOre(updates.amount)
   }

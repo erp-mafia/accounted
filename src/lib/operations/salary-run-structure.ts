@@ -424,7 +424,7 @@ export const salaryRunsLinesCreate = defineOperation({
   docs: {
     summary: 'Add a payslip line for one employee on a draft salary run.',
     description:
-      'Creates a payslip line (bonus, provision, övertid, traktamente, milersättning, bruttolöneavdrag, nettolöneavdrag, förskott, förmån, semesterdagar or a text row) for one employee on a draft run. account_number defaults from item_type. Amounts are rounded to whole öre, and every line but a text row needs a non-zero amount (a vacation line may carry only its days). A text row (item_type text, Textrad) carries words only: no amount, quantity or unit_price, every flag false and no account, so it explains the payslip without reaching tax, AGI or the booking. one_off_tax_percent (engångsskatt) taxes the line at that verified flat percentage instead of the monthly table; allowed on a positive taxable bonus, commission, other, correction or semesterersattning line. A vacation line (item_type vacation, quantity = days) may carry vacation_category to say which days are taken: paid (Betalda, the default), extra_paid (Extra betalda), saved (Sparade, optionally one origin year in vacation_saved_year), unpaid (Obetalda) or advance (Förskott). Tax and totals change only when the run is recalculated. Dry-runnable: the preview is the line as it would be stored.',
+      'Creates a payslip line (bonus, provision, övertid, traktamente, milersättning, bruttolöneavdrag, nettolöneavdrag, förskott, förmån, semesterdagar or a text row) for one employee on a draft run. account_number is an override: omitted, the line books on the default resolved at booking. Amounts are rounded to whole öre, and every line but a text row needs a non-zero amount (a vacation line may carry only its days). A text row (item_type text, Textrad) carries words only: no amount, quantity or unit_price, every flag false and no account, so it explains the payslip without reaching tax, AGI or the booking. one_off_tax_percent (engångsskatt) taxes the line at that verified flat percentage instead of the monthly table; allowed on a positive taxable bonus, commission, other, correction or semesterersattning line. A vacation line (item_type vacation, quantity = days) may carry vacation_category to say which days are taken: paid (Betalda, the default), extra_paid (Extra betalda), saved (Sparade, optionally one origin year in vacation_saved_year), unpaid (Obetalda) or advance (Förskott). Tax and totals change only when the run is recalculated. Dry-runnable: the preview is the line as it would be stored.',
     useWhen:
       'A one-off pay component before calculating: a bonus or provision, övertid, traktamente or milersättning, a deduction or förskott, or vacation days taken. Words on this payslip without money (how the salary is built up): item_type text. A bonus or final-settlement semesterersättning that Skatteverket taxes as an engångsbelopp: send one_off_tax_percent with the percentage you verified for the employee.',
     doNotUseFor:
@@ -436,7 +436,7 @@ export const salaryRunsLinesCreate = defineOperation({
       'Deductions carry a negative amount, as the dashboard stores them: the booking credits a nettolöneavdrag\'s account only when its amount is negative.',
       'A 0 kr line is refused with VALIDATION_ERROR (details.field amount), also when the amount rounds to 0 at whole öre: every line but a text row needs a non-zero amount, except a vacation line carrying its days in quantity. For words without money use item_type text.',
       `A text row (item_type text): description is the whole row, at most ${TEXT_ROW_MAX_LENGTH} characters, line breaks become spaces. Omit amount (0 is accepted), quantity and unit_price, otherwise VALIDATION_ERROR. The flags and account_number are ignored: the row is stored with every flag false and no account. A standing text on every payslip is a recurring line (gnubok_add_employee_recurring_line).`,
-      'account_number defaults as for an employee (bonus "7210") even when the employee is a company owner, whose Grundlön books on "7220": send account_number on an owner\'s line.',
+      'account_number is an override only: omit it and the line stores null and books on the account the booking resolves from item_type, the employee\'s employment_type and personnel_category (a company owner\'s bonus on "7220", an arbetare\'s on "7010", a tjänsteman\'s on "7210").',
       'one_off_tax_percent is the percentage YOU verified against Skatteverket\'s engångsbelopp table for the employee\'s yearly income; it is never estimated. It is refused (VALIDATION_ERROR) on deductions, benefits, non-taxable rows and non-positive amounts. A valid jämkning decision on the employee overrides it. Equal percentages are summed before the öre are dropped, so splitting one bonus over two rows never changes the withholding.',
       'vacation_category is only valid on item_type vacation (VALIDATION_ERROR otherwise) and vacation_saved_year only with category saved. Omitted category = paid. The vacation ledger splits the booked run\'s days by category: saved consumes the named origin year, or the oldest saved year first when omitted; unpaid and advance consume their own pools.',
       'Adding a line does not recompute tax or totals: run gnubok_calculate_salary_run afterwards.',
@@ -458,7 +458,7 @@ export const salaryRunsLinesCreate = defineOperation({
           item_type: 'bonus',
           description: 'Kvartalsbonus Q2',
           amount: 5000,
-          account_number: '7210',
+          account_number: null,
           one_off_tax_percent: 30,
         },
         meta: META,
@@ -503,7 +503,7 @@ export const salaryRunsLinesCreate = defineOperation({
       'True on a nettolöneavdrag or förskott (reduces the payout after tax), with a negative amount.',
     ),
     account_number: LINE.account_number.describe(
-      'BAS account as a string. Omit for the item type\'s default (bonus "7210", förskott "1613"); a company owner\'s pay books on "7220".',
+      'Override BAS account as a string. Omit for the default resolved at booking from item type and employee (owner 72xx, arbetare 70xx).',
     ),
     sort_order: LINE.sort_order.describe('Position on the payslip. Default 0.'),
     one_off_tax_percent: LINE.one_off_tax_percent.describe(

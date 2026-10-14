@@ -822,3 +822,73 @@ describe('förhöjt skatteavdrag on PATCH /api/salary/employees/[id]', () => {
     expect(body.data.extra_tax_amount).toBeNull()
   })
 })
+
+/**
+ * Personalkategori on the route the employee page calls: the wage series the
+ * booking resolves (arbetare 70xx, tjänsteman 72xx). NOT NULL with no clear.
+ */
+describe('personnel_category on PATCH /api/salary/employees/[id]', () => {
+  function useRow(existing: Record<string, unknown> | null) {
+    const mock = employeeSupabase(existing as Record<string, unknown>)
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: mock.supabase })
+    return mock.captured
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireWriteMock.mockResolvedValue({ ok: true })
+  })
+
+  it('401 when unauthenticated, and nothing is written', async () => {
+    const captured = useRow({ ...EXISTING_ROW })
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+
+    const response = await PATCH(patchRequest({ personnel_category: 'arbetare' }), params)
+
+    expect(response.status).toBe(401)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('200 and writes only the category', async () => {
+    const captured = useRow({ ...EXISTING_ROW, personnel_category: 'tjansteman' })
+
+    const response = await PATCH(patchRequest({ personnel_category: 'arbetare' }), params)
+    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(response)
+
+    expect(status).toBe(200)
+    expect(captured.updates).toEqual({ personnel_category: 'arbetare' })
+    expect(body.data.personnel_category).toBe('arbetare')
+  })
+
+  it('400 for an unknown category, and nothing is written', async () => {
+    const captured = useRow({ ...EXISTING_ROW })
+
+    const response = await PATCH(patchRequest({ personnel_category: 'kollektiv' }), params)
+
+    expect(response.status).toBe(400)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('400 for null (NOT NULL column), and nothing is written', async () => {
+    const captured = useRow({ ...EXISTING_ROW })
+
+    const response = await PATCH(patchRequest({ personnel_category: null }), params)
+
+    expect(response.status).toBe(400)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('404 when no employee row matches, and nothing is written', async () => {
+    const captured = useRow(null)
+
+    const response = await PATCH(patchRequest({ personnel_category: 'arbetare' }), params)
+
+    expect(response.status).toBe(404)
+    expect(captured.updates).toBeNull()
+  })
+})

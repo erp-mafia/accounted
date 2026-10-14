@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { roundOre } from '@/lib/money'
-import { getLineItemAccount } from '@/lib/salary/account-mapping'
+import { lineItemAccount } from '@/lib/salary/account-mapping'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
 import type { PayrollConfig } from '@/lib/salary/payroll-config'
 import {
@@ -601,7 +601,7 @@ describe('sandbox salary line item seed data', () => {
   it('takes the BAS account from the salary account map, as a string', () => {
     for (const row of lineItems()) {
       expect(typeof row.account_number).toBe('string')
-      expect(row.account_number).toBe(getLineItemAccount(row.item_type, 'employee'))
+      expect(row.account_number).toBe(lineItemAccount(row.item_type, { employmentType: 'employee' }))
       // Ordinary employees: 7210 Löner till tjänstemän.
       expect(row.account_number).toBe('7210')
     }
