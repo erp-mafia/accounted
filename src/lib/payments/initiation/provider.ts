@@ -49,6 +49,8 @@ export interface PaymentPartyContext {
   /** The signer's IP address and user agent, forwarded to the bank for its fraud checks. */
   psuIpAddress: string | null
   psuUserAgent: string | null
+  /** The signer's Nordea Corporate Netbank logon id, when typed: the provider sends it on the signing calls only. Never stored. */
+  psuAuthoriserId?: string | null
 }
 
 export type PayeeInstruction =

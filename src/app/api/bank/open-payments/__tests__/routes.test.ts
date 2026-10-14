@@ -190,6 +190,20 @@ describe('open payments routes map the service answers', () => {
     expect(service.restartBankFeedConsent).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ method: null, returnTo: null }))
   })
 
+  it('POST connections, restart and poll carry a typed Nordea Corporate Netbank logon id to the service; 400 when it is not text', async () => {
+    await start(post('/api/bank/open-payments/connections', { bic: 'NDEASESS', method: 'qr', personal_number: '199001011239', psu_authoriser_id: ' corp-user-1 ' }), none)
+    expect(service.startBankFeedConsent).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ bic: 'NDEASESS', signer: expect.objectContaining({ psuAuthoriserId: 'corp-user-1' }) }))
+    await restart(post(`/api/bank/open-payments/connections/${ID}/restart`, { method: 'redirect', psu_authoriser_id: 'second-signer' }), params(ID))
+    expect(service.restartBankFeedConsent).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ signer: expect.objectContaining({ psuAuthoriserId: 'second-signer' }) }))
+    await poll(post(`/api/bank/open-payments/connections/${ID}/poll`, { psu_authoriser_id: 'corp-user-1' }), params(ID))
+    expect(service.pollBankFeedConsent).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ signer: expect.objectContaining({ psuAuthoriserId: 'corp-user-1' }) }))
+    // Nothing typed: no key at all.
+    await poll(post(`/api/bank/open-payments/connections/${ID}/poll`, { personal_number: '199001011239' }), params(ID))
+    expect(service.pollBankFeedConsent.mock.lastCall?.[1].signer).not.toHaveProperty('psuAuthoriserId')
+    const refused = await start(post('/api/bank/open-payments/connections', { bic: 'NDEASESS', method: 'qr', psu_authoriser_id: 42 }), none)
+    expect(refused.status).toBe(400)
+  })
+
   it('POST select forwards the selection with null ledgers and the keep-alive, and maps a conflict', async () => {
     service.selectBankFeedAccounts.mockResolvedValue({ ok: true, data: { connection: {}, sync: null, sync_pending: true } })
     const response = await select(post(`/api/bank/open-payments/connections/${ID}/select`, { accounts: [{ uid: 'A', enabled: true, ledger_account: '1930' }, { uid: 'B', enabled: false, ledger_account: null }] }), params(ID))

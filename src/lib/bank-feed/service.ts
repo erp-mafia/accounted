@@ -62,6 +62,7 @@ import { openBankFeedDoor } from './door'
 import { consentFailureText } from './failure-text'
 import { runOpenPaymentsSync } from './feed'
 import { accountContextOf, buildBankFeedParty, psuTypeOf, UNATTENDED_SIGNER, type BankFeedSignerInput, type PsuType } from './party'
+import { PSU_AUTHORISER_ID_MISSING } from './psu-authoriser'
 import { BANK_CONNECT_SIGNATORY_TARGET, bankConnectReturnUrl, type BankConnectReturnTarget } from './return-url'
 import { normalizeIban, type BankFeedAccount } from './sync'
 
@@ -228,6 +229,9 @@ function providerFailure(error: unknown): Failure {
       ok: false,
       code: error.retryable ? 'BANK_PROVIDER_UNAVAILABLE' : 'BANK_PROVIDER_REFUSED',
       details: { provider_code: error.providerCode ?? error.code, ...(error.providerCode ? { provider_text: consentFailureText(error.providerCode).sv } : {}) },
+      // Nordea Corporate Netbank's missing logon id is fixed on the very
+      // screen that started: the bank's sentence, not the generic refusal.
+      ...(error.providerCode === PSU_AUTHORISER_ID_MISSING ? { messageSv: consentFailureText(error.providerCode).sv } : {}),
     }
   }
   return { ok: false, code: 'BANK_PROVIDER_REFUSED', details: { provider_code: 'UNEXPECTED_ERROR' } }

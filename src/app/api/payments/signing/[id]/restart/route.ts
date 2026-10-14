@@ -16,6 +16,8 @@ const RestartSchema = z.object({
   /** BankID in our screen (same_device, qr) or on the bank's own page (redirect); a bank that signs only there gets redirect whatever is asked. */
   method: z.enum(['same_device', 'qr', 'redirect']),
   personal_number: z.string().max(20).nullish(),
+  /** Nordea Corporate Netbank: the signer's own logon id, when they use it. Sent with a Nordea signing only, never stored. */
+  psu_authoriser_id: z.string().max(100).nullish(),
 })
 
 /** POST /api/payments/signing/:id/restart: start BankID again after an abandoned or timed-out signing. */
@@ -30,7 +32,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       {
         batchId: id,
         method: validation.data.method,
-        signer: signerFromRequest(request, validation.data.personal_number),
+        signer: signerFromRequest(request, validation.data.personal_number, validation.data.psu_authoriser_id),
         returnOrigin: await resolveRequestAppOrigin(request, { onLookupFailure: 'canonical' }),
       },
     )

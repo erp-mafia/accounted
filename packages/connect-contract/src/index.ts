@@ -32,9 +32,15 @@ import { z } from 'zod'
  * plusgiro number, and whether an OCR reference passes the creditor's
  * check) and `lookupGiroNumbers` (the giro numbers registered to a company).
  * New operations only: nothing existing changed shape.
+ *
+ * 2026-10-17 added `psuAuthoriserId` to the AIS and the payments party: the
+ * signer's logon id at a bank that asks for one besides BankID (Nordea
+ * Corporate Netbank), sent to the provider as PSU-Authoriser-ID on the
+ * authorisation calls only. Optional: a party without it is the party of
+ * the previous version.
  */
 
-export const CONTRACT_VERSION = '2026-10-16'
+export const CONTRACT_VERSION = '2026-10-17'
 
 // ---------------------------------------------------------------------------
 // Keys, headers and paths
@@ -901,6 +907,20 @@ export const paymentsAccountContextSchema = z.enum(['corporate', 'private'])
 export type PaymentsAccountContext = z.infer<typeof paymentsAccountContextSchema>
 
 /**
+ * PSU-Authoriser-ID: the person's logon id at a bank that identifies the
+ * signer by one besides BankID (Nordea Corporate Netbank: the user's logon id
+ * there). 1 to 64 letters, digits, `-` or `_`, trimmed. The service sends it
+ * ONLY on the authorisation calls (starting, choosing the method and polling
+ * a BankID signing), never on a create, a read, a status or a cancel, and
+ * never stores it. A second signatory of a partially authorised consent
+ * sends their own.
+ */
+export const psuAuthoriserIdSchema = z
+  .string()
+  .trim()
+  .regex(/^[A-Za-z0-9_-]{1,64}$/, 'PSU-Authoriser-ID: 1 to 64 letters, digits, - or _')
+
+/**
  * Who pays, from which bank, and who signs. Sent with every payments call and
  * forwarded to the provider as PSU headers; the service never stores it.
  * `signerPersonalNumber` is the signer's personnummer (12 digits) when the
@@ -913,7 +933,8 @@ export type PaymentsAccountContext = z.infer<typeof paymentsAccountContextSchema
  * call. `redirectPreferred` (default false) asks the bank for redirect-based
  * SCA (its own page) over decoupled BankID when it offers both: sent as
  * TPP-Redirect-Preferred when the payment or basket is created; the signing
- * calls take it from the chosen method instead.
+ * calls take it from the chosen method instead. `psuAuthoriserId`
+ * (2026-10-17, psuAuthoriserIdSchema) goes on the signing calls only.
  */
 export const paymentsPartySchema = z.object({
   orgNumber: paymentsOrgNumberSchema,
@@ -924,6 +945,7 @@ export const paymentsPartySchema = z.object({
   psuUserAgent: z.string().max(300).nullable(),
   affiliatedAspspId: z.string().trim().min(1).max(64).nullable().optional(),
   redirectPreferred: z.boolean().optional(),
+  psuAuthoriserId: psuAuthoriserIdSchema.nullable().optional(),
 })
 export type PaymentsParty = z.infer<typeof paymentsPartySchema>
 
@@ -1385,7 +1407,9 @@ const aisIbanSchema = z.string().trim().min(1).max(34)
  * (default false) asks the bank for redirect-based SCA (its own page) over
  * decoupled BankID when it offers both: sent as TPP-Redirect-Preferred when
  * the consent is created; the signing calls take it from the chosen method
- * instead.
+ * instead. `psuAuthoriserId` (2026-10-17, psuAuthoriserIdSchema) goes on the
+ * consent's signing calls only (start and poll), never on the consent's
+ * creation, its status or a read.
  */
 export const aisPartySchema = z.object({
   orgNumber: aisOrgNumberSchema,
@@ -1396,6 +1420,7 @@ export const aisPartySchema = z.object({
   psuUserAgent: z.string().max(300).nullable(),
   affiliatedAspspId: z.string().trim().min(1).max(64).nullable().optional(),
   redirectPreferred: z.boolean().optional(),
+  psuAuthoriserId: psuAuthoriserIdSchema.nullable().optional(),
 })
 export type AisParty = z.infer<typeof aisPartySchema>
 

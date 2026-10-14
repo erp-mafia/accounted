@@ -8,6 +8,8 @@ import { sessionFailureResponse } from '@/lib/operations/session'
 /** The typed personnummer, so the bank sees the PSU on the poll too. On the signatory link it is the only PSU there is. */
 const PollSchema = z.object({
   personal_number: z.string().max(20).nullish(),
+  /** Nordea Corporate Netbank: the signer's own logon id, when they use it. Sent with a Nordea signing only, never stored. */
+  psu_authoriser_id: z.string().max(100).nullish(),
 })
 
 async function readOptionalBody(request: Request): Promise<z.infer<typeof PollSchema>> {
@@ -34,7 +36,7 @@ export const POST = withInviteToken<{ token: string; id: string }>('bank_feed.po
   const body = await readOptionalBody(request)
   const personalNumber = typedPersonalNumber(body.personal_number)
   if (!personalNumber) return signerRequired()
-  const outcome = await pollBankFeedConsent(op, { connectionId: id, signer: signer(personalNumber) })
+  const outcome = await pollBankFeedConsent(op, { connectionId: id, signer: signer(personalNumber, body.psu_authoriser_id) })
   if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
   if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
   return NextResponse.json({ data: outcome.data })

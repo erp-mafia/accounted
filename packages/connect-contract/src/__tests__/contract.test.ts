@@ -220,7 +220,7 @@ describe('payments family', () => {
     expect(PAYMENTS_SCOPE).toBe('payments')
     expect(CONNECTOR_HEADERS.contractVersion).toBe('X-Connect-Contract-Version')
     expect(CONNECTOR_HEADERS.connection).toBe('X-Connector-Connection')
-    expect(CONTRACT_VERSION).toBe('2026-10-16')
+    expect(CONTRACT_VERSION).toBe('2026-10-17')
   })
 
   it('lists every operation as a company POST with schemas, and the writes among them', () => {
@@ -275,6 +275,12 @@ describe('payments family', () => {
     expect(paymentsPartySchema.safeParse({ ...party, affiliatedAspspId: null }).success).toBe(true)
     expect(paymentsPartySchema.safeParse({ ...party, affiliatedAspspId: '' }).success).toBe(false)
     expect(paymentsPartySchema.safeParse({ ...party, redirectPreferred: 'yes' }).success).toBe(false)
+    // 2026-10-17: the signer's Nordea Corporate Netbank logon id, as on the AIS party.
+    const nordea = paymentsPartySchema.safeParse({ ...party, debtorBic: 'NDEASESS', psuAuthoriserId: ' user_01 ' })
+    expect(nordea.success && nordea.data.psuAuthoriserId).toBe('user_01')
+    expect(paymentsPartySchema.safeParse({ ...party, psuAuthoriserId: null }).success).toBe(true)
+    expect(paymentsPartySchema.safeParse({ ...party, psuAuthoriserId: 'x'.repeat(65) }).success).toBe(false)
+    expect(paymentsPartySchema.safeParse({ ...party, psuAuthoriserId: 'a;b' }).success).toBe(false)
   })
 
   it('validates a create request and refuses a bad payee, amount or date', () => {

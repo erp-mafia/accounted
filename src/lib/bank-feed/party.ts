@@ -25,6 +25,9 @@
  *     cron.
  *   - affiliatedAspspId: the sparbank behind a shared BIC, when the
  *     connection has one.
+ *   - psuAuthoriserId: the logon id the person typed for Nordea Corporate
+ *     Netbank (./psu-authoriser.ts), for a Nordea consent only; Connect puts
+ *     it on the authorisation calls alone. Never stored.
  */
 
 import type { AisParty } from '@accounted/connect-contract'
@@ -32,6 +35,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { normalizeSignerPersonalNumber, signerPersonalNumberOnFile } from '@/lib/auth/bankid-signer'
 import { storedConnectionPsu, type ConnectionPsuSource } from '@/lib/auth/resource-psu'
 import type { OperationOutcome } from '@/lib/operations/types'
+import { psuAuthoriserIdFor } from './psu-authoriser'
 
 export interface BankFeedSignerInput {
   /** Typed in the dialog; used when the person has no personnummer on file. */
@@ -46,6 +50,8 @@ export interface BankFeedSignerInput {
    * firmatecknare's BankID; without a typed number the party carries none.
    */
   lookupOnFile?: boolean
+  /** Typed in the dialog for Nordea Corporate Netbank; sent with a Nordea consent's signing only, never stored. */
+  psuAuthoriserId?: string | null
 }
 
 /** No person present: the cron and the balance refresh after an unattended read. */
@@ -121,6 +127,8 @@ export async function buildBankFeedParty(supabase: SupabaseClient, input: PartyI
     : typed
       ? input.signer.lookupOnFile === false ? 'signatory_link' : 'typed'
       : onFile ? 'on_file' : null
+  const authoriser = psuAuthoriserIdFor(input.bic, input.signer.psuAuthoriserId)
+  if (!authoriser.ok) return { ok: false, outcome: { ok: false, code: 'VALIDATION_ERROR', details: { field: 'psu_authoriser_id', reason: 'invalid' } } }
   return {
     ok: true,
     source,
@@ -132,6 +140,7 @@ export async function buildBankFeedParty(supabase: SupabaseClient, input: PartyI
       psuIpAddress: input.signer.ipAddress,
       psuUserAgent: input.signer.userAgent ? input.signer.userAgent.slice(0, 300) : null,
       affiliatedAspspId: input.affiliatedAspspId ?? null,
+      ...(authoriser.value ? { psuAuthoriserId: authoriser.value } : {}),
     },
   }
 }

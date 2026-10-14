@@ -9,7 +9,7 @@
  */
 
 import type { SigningClient } from './BankIdSigningFlow'
-import { PaymentsClientError, type PaymentOrderStatus, type SigningBatchStatus, type SigningView } from './payments-client'
+import { PaymentsClientError, psuAuthoriserBody, type PaymentOrderStatus, type SigningBatchStatus, type SigningView } from './payments-client'
 
 async function send<T>(input: string, init?: RequestInit): Promise<T> {
   const res = await fetch(input, {
@@ -156,17 +156,24 @@ export function createSigningLinkClient(token: string): SigningClient {
     verification: false,
     start(input) {
       keepSigningLinkPersonalNumber(token, input.personalNumber)
-      return send<SigningView>(`${base}/signing`, { method: 'POST', body: JSON.stringify({ method: input.method, personal_number: input.personalNumber }) })
+      return send<SigningView>(`${base}/signing`, {
+        method: 'POST',
+        body: JSON.stringify({ method: input.method, personal_number: input.personalNumber, ...psuAuthoriserBody(input.psuAuthoriserId) }),
+      })
     },
     restart(input) {
       keepSigningLinkPersonalNumber(token, input.personalNumber)
       return send<SigningView>(`${base}/signing/${input.batchId}/restart`, {
         method: 'POST',
-        body: JSON.stringify({ method: input.method, personal_number: input.personalNumber }),
+        body: JSON.stringify({ method: input.method, personal_number: input.personalNumber, ...psuAuthoriserBody(input.psuAuthoriserId) }),
       })
     },
     poll(input, signal) {
-      return send<SigningView>(`${base}/signing/${input.batchId}/poll`, { method: 'POST', body: JSON.stringify({ personal_number: input.personalNumber }), signal })
+      return send<SigningView>(`${base}/signing/${input.batchId}/poll`, {
+        method: 'POST',
+        body: JSON.stringify({ personal_number: input.personalNumber, ...psuAuthoriserBody(input.psuAuthoriserId) }),
+        signal,
+      })
     },
   }
 }

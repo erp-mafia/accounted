@@ -334,24 +334,29 @@ export function resolvePaymentOrder(orderId: string, resolution: PaymentOrderRes
   })
 }
 
-export function startSigning(input: { orderIds: string[]; method: SigningMethod; personalNumber: string | null }): Promise<SigningView> {
+/** The Nordea Corporate Netbank logon id for a signing body, only when one was typed. */
+export function psuAuthoriserBody(psuAuthoriserId: string | null | undefined): { psu_authoriser_id?: string } {
+  return psuAuthoriserId ? { psu_authoriser_id: psuAuthoriserId } : {}
+}
+
+export function startSigning(input: { orderIds: string[]; method: SigningMethod; personalNumber: string | null; psuAuthoriserId?: string | null }): Promise<SigningView> {
   return send<SigningView>('/api/payments/signing', {
     method: 'POST',
-    body: JSON.stringify({ order_ids: input.orderIds, method: input.method, personal_number: input.personalNumber }),
+    body: JSON.stringify({ order_ids: input.orderIds, method: input.method, personal_number: input.personalNumber, ...psuAuthoriserBody(input.psuAuthoriserId) }),
   })
 }
 
-export function restartSigning(input: { batchId: string; method: SigningMethod; personalNumber: string | null }): Promise<SigningView> {
+export function restartSigning(input: { batchId: string; method: SigningMethod; personalNumber: string | null; psuAuthoriserId?: string | null }): Promise<SigningView> {
   return send<SigningView>(`/api/payments/signing/${input.batchId}/restart`, {
     method: 'POST',
-    body: JSON.stringify({ method: input.method, personal_number: input.personalNumber }),
+    body: JSON.stringify({ method: input.method, personal_number: input.personalNumber, ...psuAuthoriserBody(input.psuAuthoriserId) }),
   })
 }
 
-export function pollSigning(input: { batchId: string; personalNumber: string | null }, signal?: AbortSignal): Promise<SigningView> {
+export function pollSigning(input: { batchId: string; personalNumber: string | null; psuAuthoriserId?: string | null }, signal?: AbortSignal): Promise<SigningView> {
   return send<SigningView>(`/api/payments/signing/${input.batchId}/poll`, {
     method: 'POST',
-    body: JSON.stringify({ personal_number: input.personalNumber }),
+    body: JSON.stringify({ personal_number: input.personalNumber, ...psuAuthoriserBody(input.psuAuthoriserId) }),
     signal,
   })
 }

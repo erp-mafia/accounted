@@ -99,6 +99,13 @@ export const OPEN_BANKING_FAILURE_TEXTS: Readonly<Record<string, FailureText>> =
     sv: 'Användaren har konton i flera anslutna banker. Välj vilken sparbank kopplingen gäller.',
     en: 'The user has accounts at several affiliated banks. Pick which savings bank the connection is for.',
   },
+  // Connect's code for a bank's refusal that names the PSU-Authoriser-ID header
+  // (the provider documents none): fixed here by filling in the field, so
+  // not permanent.
+  PSU_AUTHORISER_ID_MISSING: {
+    sv: 'Nordea Corporate Netbank behöver ert inloggnings-ID. Fyll i det och försök igen.',
+    en: 'Nordea Corporate Netbank needs your logon ID. Fill it in and try again.',
+  },
   PSU_CREDENTIALS_INVALID: {
     sv: 'Det valda avtalet överensstämmer inte med företagets organisationsnummer. Kontrollera uppgifterna.',
     en: 'The selected agreement does not match the company\'s organisation number. Check the details.',

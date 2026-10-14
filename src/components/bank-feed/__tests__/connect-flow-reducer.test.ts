@@ -287,6 +287,15 @@ describe('the BankID step', () => {
     const valid = flowReducer(signing, { type: 'polled', poll: poll({ state: 'valid', accounts: [account()] }) })
     expect(valid.step).toBe('accounts')
   })
+
+  it('keeps the Nordea Corporate Netbank logon id the person types, empty at open, and through a start', () => {
+    const open = openFlow('resume', { connectionId: 'c-1' })
+    expect(open.psuAuthoriserId).toBe('')
+    const typed = run(open, { type: 'psu_authoriser_id_set', value: 'second-signer' }, { type: 'start' })
+    expect(typed.psuAuthoriserId).toBe('second-signer')
+    const started = flowReducer(typed, { type: 'started', result: { connection_id: 'c-1', attempt: attempt() } })
+    expect(started.psuAuthoriserId).toBe('second-signer')
+  })
 })
 
 describe('the accounts step', () => {

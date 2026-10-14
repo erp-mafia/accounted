@@ -73,6 +73,8 @@ export interface FlowState {
   context: AccountContext | null
   method: ConnectMethod
   personalNumber: string
+  /** Nordea Corporate Netbank's logon id, typed under the personnummer at Nordea only; '' for Nordea Business. Never stored. */
+  psuAuthoriserId: string
   replaceConnectionId: string | null
   connectionId: string | null
   /** The challenge on screen; null before the BankID starts. */
@@ -136,6 +138,7 @@ export function openFlow(mode: FlowMode, options: OpenFlowOptions = {}): FlowSta
     context: null,
     method: returned ? 'redirect' : 'qr',
     personalNumber: '',
+    psuAuthoriserId: '',
     replaceConnectionId: options.replaceConnectionId ?? null,
     connectionId: options.connectionId ?? null,
     attempt: null,
@@ -180,6 +183,7 @@ export type FlowAction =
   | { type: 'to_bankid' }
   | { type: 'method_set'; method: ConnectMethod }
   | { type: 'personal_number_set'; value: string }
+  | { type: 'psu_authoriser_id_set'; value: string }
   | { type: 'start' }
   | { type: 'started'; result: CreateConnectionResult }
   | { type: 'start_failed'; message: string }
@@ -309,6 +313,9 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
 
     case 'personal_number_set':
       return { ...state, personalNumber: action.value }
+
+    case 'psu_authoriser_id_set':
+      return { ...state, psuAuthoriserId: action.value }
 
     case 'start':
       return { ...state, starting: true, startError: null, failure: null, stepsSeen: [] }

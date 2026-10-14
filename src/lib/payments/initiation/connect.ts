@@ -66,6 +66,7 @@ export function toConnectorParty(ctx: PaymentPartyContext): PaymentsParty {
     psuUserAgent: ctx.psuUserAgent,
     affiliatedAspspId: ctx.affiliatedAspspId ?? null,
     ...(ctx.redirectPreferred ? { redirectPreferred: true } : {}),
+    ...(ctx.psuAuthoriserId ? { psuAuthoriserId: ctx.psuAuthoriserId } : {}),
   }
 }
 

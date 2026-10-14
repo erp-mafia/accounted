@@ -86,6 +86,9 @@ describe('the session calls', () => {
     const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit]
     expect(url).toBe('/api/bank/open-payments/connections/c-1/poll')
     expect(JSON.parse(init.body as string)).toEqual({ personal_number: '199001010017' })
+    // A Nordea Corporate Netbank logon id rides along the same way.
+    await pollOpenPaymentsConnection('c-1', undefined, { personal_number: '199001010017', psu_authoriser_id: 'corp-user-1' })
+    expect(JSON.parse((fetchMock.mock.calls[2] as [string, RequestInit])[1].body as string)).toEqual({ personal_number: '199001010017', psu_authoriser_id: 'corp-user-1' })
   })
 
   it('restart carries the method and the typed personnummer again (the server stores none)', async () => {

@@ -8,6 +8,8 @@ import { signerFromRequest } from '@/lib/payments/orders/request-signer'
 /** The body is optional: the typed personnummer may come along, so the bank sees the PSU on the poll too. */
 const PollSchema = z.object({
   personal_number: z.string().max(20).nullish(),
+  /** Nordea Corporate Netbank: the signer's own logon id, when they use it. Sent with a Nordea signing only, never stored. */
+  psu_authoriser_id: z.string().max(100).nullish(),
 })
 
 async function readOptionalBody(request: Request): Promise<z.infer<typeof PollSchema>> {
@@ -37,7 +39,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     const body = await readOptionalBody(request)
     const outcome = await pollBankFeedConsent(
       { supabase, companyId, userId: user.id, log },
-      { connectionId: id, signer: signerFromRequest(request, body.personal_number) },
+      { connectionId: id, signer: signerFromRequest(request, body.personal_number, body.psu_authoriser_id) },
     )
     if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
     if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })

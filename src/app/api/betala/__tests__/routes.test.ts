@@ -306,3 +306,31 @@ describe('POST /api/betala/:token/signing/:id/restart', () => {
     expect(signing.restartPaymentSigning).not.toHaveBeenCalled()
   })
 })
+
+describe('the Nordea Corporate Netbank logon id on the signing link', () => {
+  it('carries the firmatecknare\'s typed logon id on the start, the restart and the poll, and no key without one', async () => {
+    const token = freshToken()
+    db.setTable('payment_signing_links', [{ data: link() }, { data: null }])
+    await start(post(`/api/betala/${token}/signing`, { method: 'redirect', personal_number: PN, psu_authoriser_id: ' corp-user-1 ' }), tokenParams(token))
+    expect(signing.startPaymentSigning.mock.lastCall?.[1].signer).toEqual({ personalNumber: PN, ipAddress: '203.0.113.9', userAgent: 'Browser/1.0', psuAuthoriserId: 'corp-user-1', lookupOnFile: false })
+
+    db.setTable('payment_signing_links', [{ data: link({ batch_id: BATCH }) }, { data: null }])
+    await restart(post(`/api/betala/${token}/signing/${BATCH}/restart`, { method: 'qr', personal_number: PN, psu_authoriser_id: 'corp-user-1' }), idParams(token, BATCH))
+    expect(signing.restartPaymentSigning.mock.lastCall?.[1].signer).toMatchObject({ psuAuthoriserId: 'corp-user-1' })
+
+    db.setTable('payment_signing_links', [{ data: link({ batch_id: BATCH }) }, { data: null }])
+    await poll(post(`/api/betala/${token}/signing/${BATCH}/poll`, { personal_number: PN, psu_authoriser_id: 'corp-user-1' }), idParams(token, BATCH))
+    expect(signing.pollPaymentSigning.mock.lastCall?.[1].signer).toMatchObject({ psuAuthoriserId: 'corp-user-1' })
+
+    db.setTable('payment_signing_links', [{ data: link({ batch_id: BATCH }) }, { data: null }])
+    await poll(post(`/api/betala/${token}/signing/${BATCH}/poll`, { personal_number: PN }), idParams(token, BATCH))
+    expect(signing.pollPaymentSigning.mock.lastCall?.[1].signer).not.toHaveProperty('psuAuthoriserId')
+  })
+
+  it('answers 400 for a logon id that is not text', async () => {
+    const token = freshToken()
+    db.setTable('payment_signing_links', { data: link() })
+    expect((await start(post(`/api/betala/${token}/signing`, { method: 'qr', personal_number: PN, psu_authoriser_id: 42 }), tokenParams(token))).status).toBe(400)
+    expect(signing.startPaymentSigning).not.toHaveBeenCalled()
+  })
+})
