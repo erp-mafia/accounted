@@ -47,8 +47,11 @@ const BASELINE_PATH = path.join(ROOT, 'scripts', 'checks', 'typecheck-baseline.j
  * `tsc --noEmit` dies with "Ineffective mark-compacts near heap limit" after
  * about two minutes of work, which reads like a hang rather than a
  * misconfiguration. The build sets the same flag for the same reason.
+ * A cold check of main measured 8.6 GB on 2026-10-14 (3.76M types) and CI
+ * stopped it at the old 8 GB cap: the cap only ends a run that would finish,
+ * so it sits well above the measured need.
  */
-const HEAP_MB = 8192
+const HEAP_MB = 12288
 
 function runTsc() {
   const tscBin = path.join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc')
