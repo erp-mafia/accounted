@@ -49,6 +49,7 @@ import {
 } from '@/lib/supplier-invoices/lifecycle'
 import { DetailPager } from '@/components/common/DetailPager'
 import { SupplierPaymentDialog } from '@/components/supplier-invoices/SupplierPaymentDialog'
+import { SupplierInvoiceAttestPanel, useSupplierInvoiceAttest } from '@/components/supplier-invoices/SupplierInvoiceAttestPanel'
 import { listContextKey } from '@/lib/navigation/list-context'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { SupplierInvoice, SupplierInvoiceItem, SupplierInvoicePayment } from '@/types'
@@ -146,11 +147,15 @@ export default function SupplierInvoiceDetailPage() {
       return json.data.stages[invoiceIdParam] ?? null
     },
   )
+  // Where the attest stands under the company's attest policy: who attested,
+  // who is left, and whether this user may attest at all.
+  const { data: attestState, mutate: mutateAttest } = useSupplierInvoiceAttest(invoiceIdParam || null)
   const params = useParams()
   const router = useRouter()
   const company = useCompanyOptional()?.company ?? null
   const { toast } = useToast()
   const t = useTranslations('supplier_invoice_detail')
+  const tAttest = useTranslations('supplier_invoice_attest')
   const tCommon = useTranslations('common')
   // The list page's "Betald {date}" label, so the header reads like the row.
   const tList = useTranslations('supplier_invoices')
@@ -251,10 +256,17 @@ export default function SupplierInvoiceDetailPage() {
       if (!res.ok) {
         toast({ title: t('approve_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
       } else {
-        toast({ title: t('approved_title'), description: t('approved_description') })
+        // Under the attest policy in mode 'all' an approval can be one of
+        // several: the invoice is attested only when the last one lands.
+        const attest = result?.data?.attest as { approved?: boolean; remaining?: string[] } | undefined
+        if (attest && !attest.approved && (attest.remaining?.length ?? 0) > 0) {
+          toast({ title: tAttest('approved_waiting', { count: attest.remaining!.length }) })
+        } else {
+          toast({ title: t('approved_title'), description: t('approved_description') })
+        }
         // Awaited: the Attestera button keeps its spinner until the page shows
         // the approved state (the refetch runs behind the mounted content).
-        await fetchInvoice()
+        await Promise.all([fetchInvoice(), mutateAttest()])
       }
     } catch (err) {
       toast({ title: t('approve_failed_title'), description: getErrorMessage(err, { context: 'supplier_invoice' }), variant: 'destructive' })
@@ -503,10 +515,13 @@ export default function SupplierInvoiceDetailPage() {
   // alone left them with no way through attest (#1206).
   // Kontantmetod companies never attest: the debt is not booked before payment.
   // The same rule keeps them out of the Att göra attest count (crm#1156).
+  // With the attest policy governing the invoice, only the people it lets
+  // attest see the button (the server refuses everyone else anyway).
   const canApprove =
     canApproveSupplierInvoice(invoice) &&
     !invoice.is_credit_note &&
-    companyAttestsSupplierInvoices(companySettings?.accounting_method)
+    companyAttestsSupplierInvoices(companySettings?.accounting_method) &&
+    (!attestState?.required || attestState.viewer.may_approve)
   const stripText = (s: SupplierInvoiceLadderStage, state: 'done' | 'now' | 'todo'): string => {
     if (state === 'todo') return t(`strip_pending_${s}`)
     switch (s) {
@@ -725,6 +740,16 @@ export default function SupplierInvoiceDetailPage() {
           stages={stagesFor(companySettings?.accounting_method)}
           current={lifecycle.stage}
           detail={stripText}
+        />
+      )}
+
+      {attestState && (
+        <SupplierInvoiceAttestPanel
+          state={attestState}
+          canWrite={canWrite}
+          onChanged={async () => {
+            await Promise.all([fetchInvoice(), mutateAttest()])
+          }}
         />
       )}
 

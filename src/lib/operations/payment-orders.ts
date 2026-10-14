@@ -417,6 +417,7 @@ const SKIP_REASON = z
     'payee_missing',
     'payee_invalid',
     'reference_missing',
+    'attest_required',
     'not_found',
     'in_bank_payment',
     'in_payment_file',
@@ -424,8 +425,9 @@ const SKIP_REASON = z
   ])
   .describe(
     'not_payable: not approved (or paid, credited...); nothing_remaining; credit_note; foreign_currency (only SEK); payee_missing / payee_invalid ' +
-      '(the supplier card has no valid bankgiro, plusgiro or clearing + account); reference_missing; not_found; in_payment_file (sits in an ' +
-      'active betalfil: cancel it first); already_in_payment (an open bank payment covers the invoice).',
+      '(the supplier card has no valid bankgiro, plusgiro or clearing + account); reference_missing; attest_required (the attest policy requires ' +
+      'attest and it has not been given); not_found; in_payment_file (sits in an active betalfil: cancel it first); already_in_payment (an open ' +
+      'bank payment covers the invoice).',
   )
 
 const PrepareWarning = z.object({

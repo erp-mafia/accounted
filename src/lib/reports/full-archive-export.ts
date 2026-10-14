@@ -1120,6 +1120,8 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
     denormalize: { prefix: 'supplier_invoice_', columns: ['currency', 'exchange_rate'] },
   },
   { name: 'supplier_invoice_payments', file: 'supplier_invoice_payments.json' },
+  // The attest trail: who approved or rejected each supplier invoice, when, from where and why.
+  { name: 'supplier_invoice_attestations', file: 'supplier_invoice_attestations.json', orderBy: 'decided_at' },
   // Payment batches (betalfil): the immutable instruction snapshots a
   // generated bank payment file derives from; underlag for the payments it
   // initiated, so they leave with the archive.
@@ -1332,6 +1334,8 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   },
   // Settings
   { name: 'company_settings', file: 'company_settings.json' },
+  // The attest policy the trail above was decided under.
+  { name: 'company_attest_policies', file: 'company_attest_policies.json', pageKey: 'company_id' },
 ]
 
 /**
@@ -1373,6 +1377,7 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   api_keys: 'secrets',
   api_key_companies: 'per-key company allowlist (API access control), not räkenskapsinformation',
   bank_connect_invites: 'signatory link tokens (secrets, hashed) for a bank consent; expire in 7 days, not räkenskapsinformation',
+  supplier_invoice_attest_links: 'attest mail link tokens (secrets, hashed) for one attester and one invoice; expire in 7 days, not räkenskapsinformation (every decision made through them is exported in supplier_invoice_attestations)',
   payment_signing_links: 'signing link tokens (secrets, hashed) for a basket of bank payments; expire in 72 hours, not räkenskapsinformation (the payment orders and their events, who approved and who signed, are exported)',
   bank_connections: 'PSD2 connection state and tokens, not portable',
   bank_connection_psus: 'the personnummer (encrypted) a bank consent was created with, kept only to send it again on later calls to that consent; operational personal data, never exported, not räkenskapsinformation',

@@ -41,6 +41,7 @@ import { formatPayeeLabel, type SupplierPayee, type SupplierPayeeSource } from '
 import { isOpenPaymentOrder, OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES } from './orders/status'
 import { generateSupplierPain001, type SupplierPain001Payment } from './pain001-supplier'
 import { resolveSwedbankFileIds, swedbankIso2PaysPayee } from './swedbank'
+import { loadAttestBlockedInvoiceIds } from '@/lib/supplier-invoices/attest-policy-read'
 import type { SupplierPaymentBatch, SupplierPaymentBatchItem } from '@/types'
 
 const log = createLogger('payments/batch-service')
@@ -249,7 +250,7 @@ export async function previewSupplierPaymentBatch(
   // execution date the bank rejects as passed.
   const today = getSwedishLocalDate()
 
-  const [{ data: invoices }, activeBatchIdByInvoice, debtorResolution, inBankPayment] = await Promise.all([
+  const [{ data: invoices }, activeBatchIdByInvoice, debtorResolution, inBankPayment, attestBlocked] = await Promise.all([
     supabase
       .from('supplier_invoices')
       .select(INVOICE_SELECT)
@@ -258,6 +259,7 @@ export async function previewSupplierPaymentBatch(
     loadActiveBatchMap(supabase, companyId),
     resolveBatchDebtor(supabase, companyId),
     loadInvoicesInBankPayment(supabase, companyId, input.ids),
+    loadAttestBlockedInvoiceIds(supabase, companyId, input.ids),
   ])
 
   const rows = (invoices ?? []) as unknown as InvoiceRow[]
@@ -280,6 +282,7 @@ export async function previewSupplierPaymentBatch(
     const evaluation = evaluateInvoiceForBatch(invoice, invoice.supplier, {
       today,
       activeBatchIdByInvoice,
+      attestBlocked,
     })
     if (!evaluation.eligible) {
       excluded.push({ id, reason: evaluation.reason })
@@ -415,7 +418,7 @@ export async function planSupplierPaymentBatch(
   const { debtor } = debtorResolution
   const swedbankIso2 = paysThroughSwedbankIso2(debtorResolution)
 
-  const [{ data: invoices }, activeBatchIdByInvoice, inBankPayment] = await Promise.all([
+  const [{ data: invoices }, activeBatchIdByInvoice, inBankPayment, attestBlocked] = await Promise.all([
     supabase
       .from('supplier_invoices')
       .select(INVOICE_SELECT)
@@ -423,6 +426,7 @@ export async function planSupplierPaymentBatch(
       .in('id', ids),
     loadActiveBatchMap(supabase, companyId),
     loadInvoicesInBankPayment(supabase, companyId, ids),
+    loadAttestBlockedInvoiceIds(supabase, companyId, ids),
   ])
   const rows = (invoices ?? []) as unknown as InvoiceRow[]
   const byId = new Map(rows.map((row) => [row.id, row]))
@@ -449,6 +453,7 @@ export async function planSupplierPaymentBatch(
     const evaluation = evaluateInvoiceForBatch(invoice, invoice.supplier, {
       today,
       activeBatchIdByInvoice,
+      attestBlocked,
     })
     if (!evaluation.eligible) {
       ineligible.push({ id: invoice.id, reason: evaluation.reason })

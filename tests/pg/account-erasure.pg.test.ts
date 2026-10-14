@@ -76,6 +76,10 @@ const RETAINED = new Set([
   'bank_file_imports.user_id',
   'bank_connect_invites.created_by', // Who sent the firmatecknare a signatory link; the company keeps the record.
   'payment_signing_links.created_by', // Who asked the firmatecknare to sign a basket of payments; the company keeps the record.
+  'company_attest_policies.updated_by', // Who last changed the attest policy; the company keeps the record.
+  'supplier_invoice_attestations.user_id', // Who attested or rejected a supplier invoice; the company keeps the record.
+  'supplier_invoice_attest_links.attester_user_id', // The attester an attest link speaks for; the link refuses anyone no longer a member.
+  'supplier_invoices.approved_by', // Who gave the attest; the company keeps the record.
   'company_payment_verifications.started_by', // Who created the payment provider's verification form link; the company keeps the record.
   'bokslut_checklist_items.done_by',
   'bokslut_checklist_items.updated_by',

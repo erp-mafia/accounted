@@ -36,7 +36,16 @@ import { paymentsAdmitted } from '@/lib/payments/orders/pilot'
 import { readVerificationRecord } from '@/lib/payments/orders/verification-record'
 import { deriveVerificationState, RENEWAL_DUE_STATES } from '@/lib/payments/orders/verification-state'
 import { companyAttestsSupplierInvoices } from '@/lib/supplier-invoices/lifecycle'
-import type { BankSwitchDue, ExpensePayoutDue, PaymentsVerificationDue, SkattekontoPaymentDue, SuggestedMatch } from './types'
+import { currentRound, invoiceNeedsAttest, mayAttest } from '@/lib/supplier-invoices/attest-policy'
+import { loadAttestPolicy } from '@/lib/supplier-invoices/attest-policy-read'
+import type {
+  BankSwitchDue,
+  ExpensePayoutDue,
+  PaymentsVerificationDue,
+  SkattekontoPaymentDue,
+  SuggestedMatch,
+  SupplierInvoiceAttestDue,
+} from './types'
 
 // Canonical home is lib/worklist/types.ts (dependency-free, client-safe);
 // re-exported here so existing server-side imports keep working.
@@ -237,6 +246,102 @@ export async function countSupplierInvoicesAwaitingApproval(
   const accountingMethod = (settings as { accounting_method?: string | null } | null)?.accounting_method
   if (!companyAttestsSupplierInvoices(accountingMethod)) return 0
   return count ?? 0
+}
+
+/** How many invoices awaiting attest one person's rows are read from, oldest due date first. */
+const ATTEST_DUE_SCAN_CAP = 200
+
+/**
+ * Supplier invoices waiting for this user's attest under the company's attest
+ * policy (lib/supplier-invoices/attest-policy.ts), soonest due first: one Att
+ * göra row each, "Attestera {leverantör} {belopp}". Empty when the policy is
+ * off, the company keeps kontantmetoden, or the user is not an attester.
+ * Pending: registered or overdue, not attested (approved_at null), not a
+ * credit note, the policy requires attest, the user may attest it and has
+ * not approved it in the current round. Done: the user approves or rejects,
+ * the policy is satisfied by others, or the invoice leaves attest.
+ * Soft-fails to an empty list, like every count here.
+ */
+export async function listSupplierInvoiceAttestsDue(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+): Promise<SupplierInvoiceAttestDue[]> {
+  try {
+    const policy = await loadAttestPolicy(supabase, companyId)
+    if (!policy.enabled || !policy.attesters.includes(userId)) return []
+    const [{ data: settings, error: settingsError }, { data: membership, error: memberError }] = await Promise.all([
+      supabase.from('company_settings').select('accounting_method').eq('company_id', companyId).maybeSingle(),
+      supabase.from('company_members').select('role').eq('company_id', companyId).eq('user_id', userId).maybeSingle(),
+    ])
+    if (settingsError || memberError) {
+      logAndZero('supplier_invoice_attest_due', companyId, settingsError ?? memberError)
+      return []
+    }
+    const accountingMethod = (settings as { accounting_method?: string | null } | null)?.accounting_method
+    const role = (membership as { role?: string } | null)?.role
+    if (!role || role === 'viewer' || !companyAttestsSupplierInvoices(accountingMethod)) return []
+
+    const { data: invoices, error } = await supabase
+      .from('supplier_invoices')
+      .select('id, user_id, supplier_invoice_number, arrival_number, total, total_sek, exchange_rate, currency, due_date, is_credit_note, supplier:suppliers(name)')
+      .eq('company_id', companyId)
+      .in('status', ['registered', 'overdue'])
+      .is('approved_at', null)
+      .eq('is_credit_note', false)
+      .order('due_date', { ascending: true })
+      .limit(ATTEST_DUE_SCAN_CAP)
+    if (error) {
+      logAndZero('supplier_invoice_attest_due', companyId, error)
+      return []
+    }
+    type Row = {
+      id: string
+      user_id: string
+      supplier_invoice_number: string | null
+      arrival_number: number
+      total: number
+      total_sek: number | null
+      exchange_rate: number | null
+      currency: string
+      due_date: string
+      is_credit_note: boolean
+      supplier: { name: string | null } | null
+    }
+    const candidates = ((invoices ?? []) as unknown as Row[]).filter((row) => {
+      const facts = { ...row, total: Number(row.total) }
+      return invoiceNeedsAttest(policy, accountingMethod, facts) && mayAttest(policy, facts, userId).ok
+    })
+    if (candidates.length === 0) return []
+
+    const { data: decisions, error: decisionsError } = await supabase
+      .from('supplier_invoice_attestations')
+      .select('supplier_invoice_id, user_id, decision, decided_at')
+      .eq('company_id', companyId)
+      .in('supplier_invoice_id', candidates.map((c) => c.id))
+    if (decisionsError) {
+      logAndZero('supplier_invoice_attest_due', companyId, decisionsError)
+      return []
+    }
+    const byInvoice = new Map<string, Array<{ user_id: string; decision: 'approved' | 'rejected'; decided_at: string }>>()
+    for (const d of (decisions ?? []) as Array<{ supplier_invoice_id: string; user_id: string; decision: 'approved' | 'rejected'; decided_at: string }>) {
+      byInvoice.set(d.supplier_invoice_id, [...(byInvoice.get(d.supplier_invoice_id) ?? []), d])
+    }
+    return candidates
+      .filter((c) => !currentRound(byInvoice.get(c.id) ?? []).some((d) => d.decision === 'approved' && d.user_id === userId))
+      .map((c) => ({
+        supplier_invoice_id: c.id,
+        supplier_name: c.supplier?.name ?? null,
+        supplier_invoice_number: c.supplier_invoice_number,
+        arrival_number: c.arrival_number,
+        total: Number(c.total),
+        currency: c.currency,
+        due_date: c.due_date,
+      }))
+  } catch (error) {
+    logAndZero('supplier_invoice_attest_due', companyId, { message: error instanceof Error ? error.message : String(error) })
+    return []
+  }
 }
 
 /**

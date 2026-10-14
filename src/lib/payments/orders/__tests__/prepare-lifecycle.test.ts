@@ -102,6 +102,39 @@ describe('preparePaymentOrders', () => {
     expect(args.p_orders[0]).not.toHaveProperty('payee_check')
   })
 
+  it('leaves out an invoice the attest policy still waits on, and keeps the attested one (attest_required)', async () => {
+    db.setTable('company_attest_policies', { data: { company_id: COMPANY, enabled: true, threshold_amount: 500, mode: 'any', attesters: ['anna'], preparer_may_attest: false, updated_by: null, updated_at: null } })
+    db.setTable('company_settings', { data: { accounting_method: 'accrual' } })
+    db.setTable('supplier_invoices', {
+      data: [
+        invoice('a', { status: 'registered', approved_at: null, user_id: 'user-1', total: 737.5 }),
+        invoice('b', { user_id: 'user-1', total: 737.5 }),
+        invoice('c', { status: 'registered', approved_at: null, user_id: 'user-1', total: 100, remaining_amount: 100 }),
+      ],
+    })
+    db.setTable('rpc:create_payment_orders', { data: { ok: true, orders: [{ id: 'order-b', supplier_invoice_id: 'b' }] } })
+
+    const result = await preparePaymentOrders(ctx, { supplierInvoiceIds: ['a', 'b', 'c'], cashAccountId: 'acct-1', today: '2026-09-30' })
+
+    if (!result.ok || result.dryRun) throw new Error('unexpected')
+    expect(result.data.skipped).toEqual([{ supplier_invoice_id: 'a', reason: 'attest_required' }])
+    const [args] = db.findCall('rpc:create_payment_orders', 'rpc') as [{ p_orders: Array<Record<string, unknown>> }]
+    expect(args.p_orders.map((o) => o.supplier_invoice_id)).toEqual(['b', 'c'])
+    // Below the threshold attest is not required: today's warning stays.
+    expect(result.data.warnings).toContainEqual({ supplier_invoice_id: 'c', code: 'unattested' })
+  })
+
+  it('with the policy off, an unattested invoice is paid with the warning, as before', async () => {
+    db.setTable('supplier_invoices', { data: [invoice('a', { status: 'registered', approved_at: null, user_id: 'user-1', total: 737.5 })] })
+    db.setTable('rpc:create_payment_orders', { data: { ok: true, orders: [{ id: 'order-a', supplier_invoice_id: 'a' }] } })
+
+    const result = await preparePaymentOrders(ctx, { supplierInvoiceIds: ['a'], cashAccountId: 'acct-1', today: '2026-09-30' })
+
+    if (!result.ok || result.dryRun) throw new Error('unexpected')
+    expect(result.data.skipped).toEqual([])
+    expect(result.data.warnings).toContainEqual({ supplier_invoice_id: 'a', code: 'unattested' })
+  })
+
   it('warns from what the database decided: a changed account names the other one, a new one asks for a check', async () => {
     db.setTable('supplier_invoices', { data: [invoice('a', { payee_bankgiro: '5402-0102' }), invoice('b')] })
     db.setTable('rpc:create_payment_orders', {

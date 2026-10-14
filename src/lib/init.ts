@@ -2,6 +2,7 @@ import { loadExtensions } from '@/lib/extensions/loader'
 import { setContextFactory } from '@/lib/extensions/registry'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import { registerSupplierInvoiceHandler } from '@/lib/bookkeeping/handlers/supplier-invoice-handler'
+import { registerAttestNotificationHandler } from '@/lib/supplier-invoices/attest-notify'
 import { registerEventLogHandler } from '@/lib/events/handlers/event-log-handler'
 import { registerDocumentReadHandler } from '@/lib/events/handlers/document-read-handler'
 import { registerAgentFeedbackRelayHandler } from '@/lib/events/handlers/agent-feedback-relay-handler'
@@ -99,6 +100,8 @@ export function ensureInitialized(): void {
   // get it without this init.
   ensureObservability()
   registerSupplierInvoiceHandler()
+  // The attest mail to each attester when an invoice that needs attest is registered.
+  registerAttestNotificationHandler()
   registerEventLogHandler()
   registerDocumentReadHandler()
   registerAgentFeedbackRelayHandler()

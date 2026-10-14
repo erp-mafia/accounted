@@ -47,6 +47,7 @@ import type {
   ExpensePayoutDue,
   SkattekontoPaymentDue,
   SuggestedMatch,
+  SupplierInvoiceAttestDue,
   WorklistCounts,
 } from '@/lib/worklist/types'
 
@@ -75,6 +76,12 @@ interface AttGoraSectionProps {
   suggestedMatches: SuggestedMatch[]
   /** People owed for registered, unpaid utlägg: one Betala row each. */
   expensePayouts?: ExpensePayoutDue[]
+  /**
+   * Supplier invoices waiting for this user's attest under the attest policy
+   * (lib/worklist listSupplierInvoiceAttestsDue): one Granska row each,
+   * "Attestera {leverantör} {belopp}", above the company's attest count.
+   */
+  attestsDue?: SupplierInvoiceAttestDue[]
   /** The next skattekonto charge the balance does not cover: one Betala row. */
   skattekontoPayment?: SkattekontoPaymentDue | null
   /**
@@ -195,6 +202,7 @@ export default function AttGoraSection({
   worklist,
   suggestedMatches,
   expensePayouts = [],
+  attestsDue = [],
   skattekontoPayment = null,
   bankSwitches = [],
   paymentsVerification = null,
@@ -208,6 +216,7 @@ export default function AttGoraSection({
   showKopplingar = false,
 }: AttGoraSectionProps) {
   const t = useTranslations('dashboard')
+  const tAttest = useTranslations('att_gora_attest')
   const router = useRouter()
   const { toast } = useToast()
   const { formatDateLong } = useFormat()
@@ -330,6 +339,7 @@ export default function AttGoraSection({
     matches.length > 0
   const betalaRows = expensePayouts.length > 0 || skattekontoPayment !== null
   const granskaRows =
+    attestsDue.length > 0 ||
     counts.supplier_invoice_approval > 0 ||
     counts.verifikat_missing_document > 0 ||
     counts.pending_operations > 0 ||
@@ -633,6 +643,18 @@ export default function AttGoraSection({
                 <div>
                   <BandHeader>{t('band_granska')}</BandHeader>
                   <div>
+                    {attestsDue.map((a) => (
+                      <WorklistRow
+                        key={a.supplier_invoice_id}
+                        href={`/supplier-invoices/${a.supplier_invoice_id}`}
+                        icon={Stamp}
+                        label={tAttest('row_label', {
+                          supplier: a.supplier_name ?? tAttest('supplier_fallback'),
+                          amount: formatCurrency(a.total, a.currency),
+                        })}
+                        detail={tAttest('row_detail', { date: formatDate(a.due_date) })}
+                      />
+                    ))}
                     {counts.supplier_invoice_approval > 0 && (
                       <WorklistRow
                         href="/supplier-invoices"

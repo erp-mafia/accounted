@@ -9,7 +9,10 @@
  * Warnings never block; exclusions always do. An un-attested invoice is a
  * warning (mark-paid pays registered invoices today, and sjalvbokforare have
  * no attest step), while a missing payee is an exclusion (there is nothing to
- * route the payment to).
+ * route the payment to). With the company's attest policy on, an invoice the
+ * policy requires attest for and has not got it is an exclusion instead
+ * (attest_required): the caller reads which ones through
+ * loadAttestBlockedInvoiceIds (lib/supplier-invoices/attest-service.ts).
  */
 
 import { ORE_TOLERANCE, roundOre } from '@/lib/money'
@@ -44,6 +47,8 @@ export type BatchExclusionReason =
   // No valid OCR and no supplier invoice number: the payment would reach the
   // supplier with nothing to match it by (resolvePaymentReference).
   | 'reference_missing'
+  // The attest policy requires attest for the invoice and it has not been given.
+  | 'attest_required'
 
 export type BatchItemWarning =
   | 'unattested'
@@ -71,6 +76,8 @@ export interface BatchEvaluationOptions {
   today: string
   /** invoice id -> active (created, not cancelled) batch id it already sits in. */
   activeBatchIdByInvoice?: ReadonlyMap<string, string>
+  /** Invoices payment waits with: the attest policy requires attest and it has not been given. */
+  attestBlocked?: ReadonlySet<string>
 }
 
 export type BatchInvoiceEvaluation =
@@ -97,6 +104,7 @@ export function evaluateInvoiceForBatch(
     return { eligible: false, reason: 'nothing_remaining' }
   }
   if (invoice.currency !== 'SEK') return { eligible: false, reason: 'foreign_currency' }
+  if (options.attestBlocked?.has(invoice.id)) return { eligible: false, reason: 'attest_required' }
 
   const resolution = resolveSupplierPayee(supplier)
   if (!resolution.ok) return { eligible: false, reason: resolution.reason }
