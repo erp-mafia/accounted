@@ -161,7 +161,7 @@ export function StartCard({
 
   return (
     <div
-      className={cn('relative h-[216px] overflow-hidden rounded-xl', className)}
+      className={cn('relative flex min-h-[216px] overflow-hidden rounded-xl', className)}
       style={{ ...CARD_PALETTE, backgroundColor: asset.ground }}
     >
       {layout === 'side-right' ? (
@@ -224,13 +224,13 @@ export function StartCard({
 
       <div
         className={cn(
-          'relative z-[2] flex h-full flex-col justify-center',
+          'relative z-[2] flex flex-col justify-center',
           dense ? 'px-6 py-4' : 'px-7 py-5',
           layout === 'center'
             ? 'mx-auto max-w-[70%] items-center text-center'
             : floatIcons
-              ? 'max-w-[66%] items-start'
-              : 'max-w-[58%] items-start',
+              ? 'max-w-[80%] items-start sm:max-w-[66%]'
+              : 'max-w-[80%] items-start sm:max-w-[58%]',
         )}
       >
         {eyebrow && (
