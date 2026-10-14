@@ -36,6 +36,7 @@ import {
   getTemplateById,
   buildMappingResultFromTemplate,
   validateTemplateForEntity,
+  type BookingTemplate,
 } from '@/lib/bookkeeping/booking-templates'
 import { reconcileRcBasisWithChart } from '@/lib/bookkeeping/rc-basis-reconcile'
 import { chartVatTreatmentsLoader, type ChartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
@@ -78,6 +79,7 @@ import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import type {
   CreateJournalEntryLineInput,
+  EntityType,
   InboxChannelContext,
   JournalEntry,
   MappingResult,
@@ -210,7 +212,7 @@ function refuse(
 }
 
 /** The category the row is stored with: a template's fallback, the category, or 'private'. */
-function resolveFinalCategory(input: CategorizeInput): TransactionCategory {
+function resolveFinalCategory(input: Pick<CategorizeInput, 'is_business' | 'category' | 'template_id'>): TransactionCategory {
   if (!input.is_business) return 'private'
   const template = input.template_id ? getTemplateById(input.template_id) : undefined
   if (template) return template.fallback_category
@@ -344,6 +346,225 @@ export async function ensureFiscalPeriod(
   return true
 }
 
+// ── The kontering a booking decision maps to ─────────────────────────
+
+/** The company a booking decision is read in, and what it decides before any mapping. */
+export interface CategorizeContext {
+  entityType: EntityType
+  /** Icke momsregistrerad verksamhet books no moms line (lib/bookkeeping/vat-registration.ts). */
+  vatRegistered: boolean | null
+  fiscalYearStartMonth: number
+  template: BookingTemplate | undefined
+  finalCategory: TransactionCategory
+}
+
+/**
+ * The company settings a booking is read in and the template it names,
+ * refused when the template is unknown or not for this legal form.
+ */
+export async function resolveCategorizeContext(
+  supabase: SupabaseClient,
+  companyId: string,
+  input: Pick<CategorizeInput, 'is_business' | 'category' | 'template_id'>,
+): Promise<{ ok: true; context: CategorizeContext } | CategorizeRefusal> {
+  const { data: settings } = await supabase
+    .from('company_settings')
+    .select('entity_type, fiscal_year_start_month, vat_registered')
+    .eq('company_id', companyId)
+    .single()
+  const entityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
+  // Icke momsregistrerad verksamhet books no moms line on a bank transaction
+  // (lib/bookkeeping/vat-registration.ts); the flag is passed as loaded.
+  const vatRegistered: boolean | null = settings?.vat_registered ?? null
+
+  const template = input.template_id ? getTemplateById(input.template_id) : undefined
+  if (input.template_id) {
+    if (!template) {
+      return refuse('TX_CATEGORIZE_INVALID_TEMPLATE', { templateId: input.template_id, reason: 'unknown_template' })
+    }
+    const valid = validateTemplateForEntity(template, entityType)
+    if (!valid.valid) {
+      return refuse('TX_CATEGORIZE_INVALID_TEMPLATE', { templateId: input.template_id, reason: valid.error })
+    }
+  }
+  const finalCategory = resolveFinalCategory(input)
+
+  return {
+    ok: true,
+    context: {
+      entityType,
+      vatRegistered,
+      fiscalYearStartMonth: settings?.fiscal_year_start_month ?? 1,
+      template,
+      finalCategory,
+    },
+  }
+}
+
+export interface CategorizeMappingOptions {
+  log: Logger
+  loadChart?: ChartVatTreatmentsLoader
+  /**
+   * The proposal preview (lib/bookkeeping/proposal-preview.ts): an
+   * account_override the chart lacks or has inactive is still placed, since
+   * the review activates the person's pick as it books; the booking itself
+   * re-checks it.
+   */
+  preview?: boolean
+}
+
+/**
+ * The kontering a booking decision maps to on this row: the counterparty
+ * template, catalog template or category mapping, the underlag's moms, the
+ * row's own settlement account, the account override, the reverse-charge
+ * basis settled with the chart, the dimensions bag and the counter-leg
+ * guard. The booking posts these lines (buildTransactionEntryLines) and the
+ * proposal preview shows them, so the two cannot differ.
+ */
+export async function buildCategorizeMapping(
+  supabase: SupabaseClient,
+  companyId: string,
+  transaction: Transaction,
+  input: CategorizeInput,
+  context: CategorizeContext,
+  options: CategorizeMappingOptions,
+): Promise<{ ok: true; mappingResult: MappingResult; settlementAccount: string } | CategorizeRefusal> {
+  const isBusiness = input.is_business
+  const { template, finalCategory, entityType, vatRegistered } = context
+
+  let mappingResult: MappingResult
+  if (input.counterparty_template_id && isBusiness) {
+    // Learned codes the registry no longer accepts are dropped on load; an
+    // explicit input.dimensions (applied below) is never filtered.
+    const match = await loadCounterpartyTemplateMatch(supabase, companyId, input.counterparty_template_id)
+    if (!match) {
+      return refuse('NOT_FOUND', { resource: 'counterparty_template', id: input.counterparty_template_id })
+    }
+    mappingResult = buildMappingResultFromCounterpartyTemplate(match, transaction, entityType, vatRegistered)
+  } else if (template) {
+    mappingResult = buildMappingResultFromTemplate(template, transaction, entityType, vatRegistered)
+    if (input.vat_amount != null) {
+      // The underlag's moms replaces the template's rate-based line; the
+      // helper refuses a treatment it cannot apply to.
+      try {
+        mappingResult = applyVatAmountOverride(mappingResult, transaction, template.vat_treatment, input.vat_amount)
+      } catch (err) {
+        return refuse('TX_CATEGORIZE_INVALID_VAT_AMOUNT', {
+          vat_amount: input.vat_amount,
+          vat_treatment: template.vat_treatment ?? null,
+          reason: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+  } else {
+    try {
+      mappingResult = buildMappingResultFromCategory(
+        finalCategory,
+        transaction,
+        isBusiness,
+        entityType,
+        input.vat_treatment,
+        input.vat_amount,
+        vatRegistered,
+        input.reverse_charge_kind,
+      )
+    } catch (err) {
+      if (input.vat_amount == null) throw err
+      return refuse('TX_CATEGORIZE_INVALID_VAT_AMOUNT', {
+        vat_amount: input.vat_amount,
+        vat_treatment: input.vat_treatment ?? null,
+        reason: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  // Book the bank leg against the transaction's ACTUAL settlement account,
+  // whichever cash ledger the proposal named (the 1930 placeholder, or the
+  // ledger a counterparty template was learned on, crm#1046). The counter leg
+  // is never rewritten.
+  const settlementAccount = await resolveSettlementAccount(
+    supabase,
+    companyId,
+    transaction.cash_account_id,
+    options.log,
+    transaction.currency,
+  )
+  mappingResult = applySettlementAccount(mappingResult, settlementAccount, transaction.amount)
+
+  // The override replaces the business side of a category booking, never a
+  // template's or a learned template's accounts. Re-validated at every
+  // booking: the account can be deactivated between staging and approval.
+  if (input.account_override && !template && !(input.counterparty_template_id && isBusiness)) {
+    if (!isBusiness) {
+      return refuse(
+        'VALIDATION_ERROR',
+        { field: 'account_override', message: 'account_override cannot be combined with a private marking.' },
+        { message: { sv: 'account_override kan inte kombineras med category "private".' } },
+      )
+    }
+    try {
+      mappingResult = await applyAccountOverride(
+        supabase,
+        companyId,
+        input.account_override,
+        transaction.amount,
+        mappingResult,
+        // Explicit VAT intent: a stated treatment or an underlag vat_amount.
+        // Without it the override books gross (see applyAccountOverride).
+        input.vat_treatment != null || input.vat_amount != null,
+        { allowUnlisted: options.preview === true },
+      )
+    } catch (err) {
+      const code = (err as { code?: unknown }).code
+      if (typeof code !== 'string') throw err
+      return refuse(code, { accountNumber: input.account_override }, {
+        message: { sv: err instanceof Error ? err.message : String(err) },
+      })
+    }
+  }
+
+  // A reverse-charge purchase keeps its 45xx/4598 basis pair only when the
+  // account its cost line lands on (after any account_override) does not
+  // report ruta 20-24 itself, by the company's momskoder (crm#1096, #2919).
+  mappingResult = await reconcileRcBasisWithChart(
+    mappingResult,
+    options.loadChart ?? chartVatTreatmentsLoader(supabase, companyId),
+  )
+
+  // An explicit bag tags the business lines (bank/VAT legs stay untagged); it
+  // wins over a learned counterparty-template bag.
+  if (input.dimensions && Object.keys(input.dimensions).length > 0) {
+    mappingResult.dimensions = input.dimensions
+  }
+
+  if (!mappingResult.debit_account || !mappingResult.credit_account) {
+    return refuse('TX_CATEGORIZE_INVALID_MAPPING', {
+      debitAccount: mappingResult.debit_account,
+      creditAccount: mappingResult.credit_account,
+    })
+  }
+
+  // Issue #1643 problem 4: never book the COUNTER leg onto an orphaned
+  // cash-account ledger or a twin ledger of the transaction's own bank
+  // account. A twin that is merely the stale BANK leg of a learned template
+  // is rewritten to the settlement account instead (see guardCounterLegs).
+  const guarded = await guardCounterLegs(
+    supabase,
+    companyId,
+    mappingResult,
+    settlementAccount,
+    transaction.cash_account_id,
+  )
+  if (guarded.refusedLedger) {
+    return refuse('TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT', { accountNumber: guarded.refusedLedger }, {
+      message: {
+        sv: `Motkontot ${guarded.refusedLedger} är ett bankkonto som hör till transaktionens eget konto eller till en frånkopplad bankanslutning och kan inte användas. Välj ett intäkts- eller kostnadskonto i stället.`,
+      },
+    })
+  }
+  return { ok: true, mappingResult: guarded.mappingResult, settlementAccount }
+}
+
 // ── The service ──────────────────────────────────────────────────────
 
 /**
@@ -438,27 +659,10 @@ export async function categorizeTransaction(
     }
   }
 
-  const { data: settings } = await supabase
-    .from('company_settings')
-    .select('entity_type, fiscal_year_start_month, vat_registered')
-    .eq('company_id', companyId)
-    .single()
-  const entityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
-  // Icke momsregistrerad verksamhet books no moms line on a bank transaction
-  // (lib/bookkeeping/vat-registration.ts); the flag is passed as loaded.
-  const vatRegistered: boolean | null = settings?.vat_registered ?? null
-
-  const template = input.template_id ? getTemplateById(input.template_id) : undefined
-  if (input.template_id) {
-    if (!template) {
-      return refuseFor('TX_CATEGORIZE_INVALID_TEMPLATE', { templateId: input.template_id, reason: 'unknown_template' })
-    }
-    const valid = validateTemplateForEntity(template, entityType)
-    if (!valid.valid) {
-      return refuseFor('TX_CATEGORIZE_INVALID_TEMPLATE', { templateId: input.template_id, reason: valid.error })
-    }
-  }
-  const finalCategory = resolveFinalCategory(input)
+  const resolved = await resolveCategorizeContext(supabase, companyId, input)
+  if (!resolved.ok) return { ...resolved, transaction }
+  const { context } = resolved
+  const { finalCategory } = context
 
   // The pinned document's own reading: shown on a preview, and the check that
   // a reverse-charge booking is not made on an invoice where the seller
@@ -500,136 +704,12 @@ export async function categorizeTransaction(
     }
   }
 
-  let mappingResult: MappingResult
-  if (input.counterparty_template_id && isBusiness) {
-    // Learned codes the registry no longer accepts are dropped on load; an
-    // explicit input.dimensions (applied below) is never filtered.
-    const match = await loadCounterpartyTemplateMatch(supabase, companyId, input.counterparty_template_id)
-    if (!match) {
-      return refuseFor('NOT_FOUND', { resource: 'counterparty_template', id: input.counterparty_template_id })
-    }
-    mappingResult = buildMappingResultFromCounterpartyTemplate(match, transaction, entityType, vatRegistered)
-  } else if (template) {
-    mappingResult = buildMappingResultFromTemplate(template, transaction, entityType, vatRegistered)
-    if (input.vat_amount != null) {
-      // The underlag's moms replaces the template's rate-based line; the
-      // helper refuses a treatment it cannot apply to.
-      try {
-        mappingResult = applyVatAmountOverride(mappingResult, transaction, template.vat_treatment, input.vat_amount)
-      } catch (err) {
-        return refuseFor('TX_CATEGORIZE_INVALID_VAT_AMOUNT', {
-          vat_amount: input.vat_amount,
-          vat_treatment: template.vat_treatment ?? null,
-          reason: err instanceof Error ? err.message : String(err),
-        })
-      }
-    }
-  } else {
-    try {
-      mappingResult = buildMappingResultFromCategory(
-        finalCategory,
-        transaction,
-        isBusiness,
-        entityType,
-        input.vat_treatment,
-        input.vat_amount,
-        vatRegistered,
-        input.reverse_charge_kind,
-      )
-    } catch (err) {
-      if (input.vat_amount == null) throw err
-      return refuseFor('TX_CATEGORIZE_INVALID_VAT_AMOUNT', {
-        vat_amount: input.vat_amount,
-        vat_treatment: input.vat_treatment ?? null,
-        reason: err instanceof Error ? err.message : String(err),
-      })
-    }
-  }
-
-  // Book the bank leg against the transaction's ACTUAL settlement account,
-  // whichever cash ledger the proposal named (the 1930 placeholder, or the
-  // ledger a counterparty template was learned on, crm#1046). The counter leg
-  // is never rewritten.
-  const settlementAccount = await resolveSettlementAccount(
-    supabase,
-    companyId,
-    transaction.cash_account_id,
-    txLog,
-    transaction.currency,
-  )
-  mappingResult = applySettlementAccount(mappingResult, settlementAccount, transaction.amount)
-
-  // The override replaces the business side of a category booking, never a
-  // template's or a learned template's accounts. Re-validated at every
-  // booking: the account can be deactivated between staging and approval.
-  if (input.account_override && !template && !(input.counterparty_template_id && isBusiness)) {
-    if (!isBusiness) {
-      return refuseFor(
-        'VALIDATION_ERROR',
-        { field: 'account_override', message: 'account_override cannot be combined with a private marking.' },
-        { message: { sv: 'account_override kan inte kombineras med category "private".' } },
-      )
-    }
-    try {
-      mappingResult = await applyAccountOverride(
-        supabase,
-        companyId,
-        input.account_override,
-        transaction.amount,
-        mappingResult,
-        // Explicit VAT intent: a stated treatment or an underlag vat_amount.
-        // Without it the override books gross (see applyAccountOverride).
-        input.vat_treatment != null || input.vat_amount != null,
-      )
-    } catch (err) {
-      const code = (err as { code?: unknown }).code
-      if (typeof code !== 'string') throw err
-      return refuseFor(code, { accountNumber: input.account_override }, {
-        message: { sv: err instanceof Error ? err.message : String(err) },
-      })
-    }
-  }
-
-  // A reverse-charge purchase keeps its 45xx/4598 basis pair only when the
-  // account its cost line lands on (after any account_override) does not
-  // report ruta 20-24 itself, by the company's momskoder (crm#1096, #2919).
-  mappingResult = await reconcileRcBasisWithChart(
-    mappingResult,
-    options.loadChart ?? chartVatTreatmentsLoader(supabase, companyId),
-  )
-
-  // An explicit bag tags the business lines (bank/VAT legs stay untagged); it
-  // wins over a learned counterparty-template bag.
-  if (input.dimensions && Object.keys(input.dimensions).length > 0) {
-    mappingResult.dimensions = input.dimensions
-  }
-
-  if (!mappingResult.debit_account || !mappingResult.credit_account) {
-    return refuseFor('TX_CATEGORIZE_INVALID_MAPPING', {
-      debitAccount: mappingResult.debit_account,
-      creditAccount: mappingResult.credit_account,
-    })
-  }
-
-  // Issue #1643 problem 4: never book the COUNTER leg onto an orphaned
-  // cash-account ledger or a twin ledger of the transaction's own bank
-  // account. A twin that is merely the stale BANK leg of a learned template
-  // is rewritten to the settlement account instead (see guardCounterLegs).
-  const guarded = await guardCounterLegs(
-    supabase,
-    companyId,
-    mappingResult,
-    settlementAccount,
-    transaction.cash_account_id,
-  )
-  if (guarded.refusedLedger) {
-    return refuseFor('TX_CATEGORIZE_ORPHANED_COUNTER_ACCOUNT', { accountNumber: guarded.refusedLedger }, {
-      message: {
-        sv: `Motkontot ${guarded.refusedLedger} är ett bankkonto som hör till transaktionens eget konto eller till en frånkopplad bankanslutning och kan inte användas. Välj ett intäkts- eller kostnadskonto i stället.`,
-      },
-    })
-  }
-  mappingResult = guarded.mappingResult
+  const mapped = await buildCategorizeMapping(supabase, companyId, transaction, input, context, {
+    log: txLog,
+    loadChart: options.loadChart,
+  })
+  if (!mapped.ok) return { ...mapped, transaction }
+  const { mappingResult } = mapped
 
   // Every account the verifikat posts to must be in the chart or seedable
   // from BAS: a missing one would otherwise make the engine throw mid-flight.
@@ -668,7 +748,7 @@ export async function categorizeTransaction(
 
   if (wouldBook) {
     if (!dryRun) {
-      await ensureFiscalPeriod(supabase, userId, companyId, transaction.date, settings?.fiscal_year_start_month ?? 1)
+      await ensureFiscalPeriod(supabase, userId, companyId, transaction.date, context.fiscalYearStartMonth)
     }
     // Issue #1661: a private marking books eget uttag/insättning, so a locked
     // period refuses it like any verifikat; its code names the ignore path,

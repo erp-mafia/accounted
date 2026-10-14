@@ -37,6 +37,10 @@ import type { MappingResult } from '@/types'
  * degenerate same-account entry (TX_CATEGORIZE_INVALID_MAPPING); the message
  * is Swedish and actionable for both the agent and the approval UI. A thrown
  * error without a code is a database failure.
+ *
+ * `allowUnlisted` is the proposal preview's: it places an account the chart
+ * lacks or has inactive (the review activates the person's pick as it books)
+ * and reads its class from the number. Every booking leaves it off.
  */
 export async function applyAccountOverride(
   supabase: SupabaseClient,
@@ -45,6 +49,7 @@ export async function applyAccountOverride(
   transactionAmount: number,
   mappingResult: MappingResult,
   vatExplicit: boolean,
+  options: { allowUnlisted?: boolean } = {},
 ): Promise<MappingResult> {
   const { data: account, error } = await supabase
     .from('chart_of_accounts')
@@ -56,13 +61,13 @@ export async function applyAccountOverride(
   if (error) {
     throw new Error(`Database error: ${error.message}`)
   }
-  if (!account) {
+  if (!account && !options.allowUnlisted) {
     throw unusableOverride(
       `Konto ${accountOverride} finns inte i kontoplanen: account_override kräver ett befintligt aktivt konto. ` +
       'Skapa det först (gnubok_create_account) eller välj ett annat konto.',
     )
   }
-  if (!account.is_active) {
+  if (account && !account.is_active && !options.allowUnlisted) {
     throw unusableOverride(
       `Konto ${accountOverride} är inaktivt i kontoplanen. ` +
       'Aktivera det först (gnubok_update_account med is_active=true) eller välj ett annat konto.',
@@ -87,7 +92,9 @@ export async function applyAccountOverride(
 
   const overrideNum = parseInt(accountOverride, 10)
   const isMomsLineAccount = overrideNum >= 2610 && overrideNum <= 2649
-  if (!vatExplicit || (account.account_class === 2 && !isMomsLineAccount)) {
+  // BAS: the class is the number's first digit, for an account the chart lacks.
+  const balanceSheetClass2 = account ? account.account_class === 2 : accountOverride.startsWith('2')
+  if (!vatExplicit || (balanceSheetClass2 && !isMomsLineAccount)) {
     mappingResult.vat_lines = []
   }
 

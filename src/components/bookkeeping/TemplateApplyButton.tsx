@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { BookOpen } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -8,11 +8,12 @@ import { Input } from '@/components/ui/input'
 import { CategoryPopover } from '@/components/transactions/CategoryPopover'
 import TemplatePicker from '@/components/transactions/TemplatePicker'
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
-import { staticTemplateToFormLines } from '@/lib/bookkeeping/proposal-lines'
+import { proposalLinesToFormLines } from '@/lib/bookkeeping/proposal-lines'
 import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import { useCompany } from '@/contexts/CompanyContext'
-import { useAccounts } from '@/lib/reference-data/hooks'
-import { chartVatTreatmentsOf } from '@/lib/bookkeeping/vat-entries'
+import { useToast } from '@/components/ui/use-toast'
+import { fetchProposalPreview } from '@/lib/hooks/use-proposal-preview'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { parseAmountInput, formatAmountInput } from '@/lib/money'
 import type { BookingTemplateCategory, BookingTemplateLibrary, EntityType } from '@/types'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
@@ -42,17 +43,13 @@ function parseAmount(raw: string): number {
 export default function TemplateApplyButton({ onApply, entityType, defaultAmount, disabled }: Props) {
   const t = useTranslations('tx_template_picker')
   const { company } = useCompany()
+  const { toast } = useToast()
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const [amount, setAmount] = useState('')
   const [picked, setPicked] = useState<Picked | null>(null)
+  const [applying, setApplying] = useState(false)
   const amountRef = useRef<HTMLInputElement>(null)
   const resolvedEntity = entityType ?? company?.entity_type
-  // The company's momskoder over the whole kontoplan, since the manual form
-  // activates an inactive account when it posts: the applied lines are posted
-  // as they are, so a reverse-charge template on an account that reports ruta
-  // 20-24 itself must already be settled (staticTemplateToFormLines).
-  const { accounts: wholeChart } = useAccounts(false)
-  const chartVatTreatments = useMemo(() => chartVatTreatmentsOf(wholeChart), [wholeChart])
 
   const close = useCallback(() => setAnchor(null), [])
 
@@ -64,20 +61,33 @@ export default function TemplateApplyButton({ onApply, entityType, defaultAmount
   }
 
   const apply = useCallback(
-    (choice: Picked, total: number) => {
+    async (choice: Picked, total: number) => {
       if (choice.kind === 'library') {
         onApply(applyTemplate(choice.raw.lines, total), choice.raw.name, choice.raw.category)
-      } else {
-        onApply(staticTemplateToFormLines(choice.template, total, resolvedEntity, chartVatTreatments), choice.template.name_sv)
+        setAnchor(null)
+        return
       }
-      setAnchor(null)
+      // A catalog template books the total the way a bank row of that total
+      // is booked with it: the server builds the lines with the booking's
+      // own builders (moms, omvänd skattskyldighet settled with the company's
+      // momskoder), and the form posts them as they are.
+      setApplying(true)
+      try {
+        const lines = await fetchProposalPreview({ amount: total, template_id: choice.template.id })
+        onApply(proposalLinesToFormLines(lines), choice.template.name_sv)
+        setAnchor(null)
+      } catch (err) {
+        toast({ title: getErrorMessage(err), variant: 'destructive' })
+      } finally {
+        setApplying(false)
+      }
     },
-    [onApply, resolvedEntity, chartVatTreatments],
+    [onApply, toast],
   )
 
   const choose = (choice: Picked) => {
     const total = parseAmount(amount)
-    if (total > 0) return apply(choice, total)
+    if (total > 0) return void apply(choice, total)
     setPicked(choice)
     amountRef.current?.focus()
     amountRef.current?.select()
@@ -85,7 +95,7 @@ export default function TemplateApplyButton({ onApply, entityType, defaultAmount
 
   const submit = () => {
     const total = parseAmount(amount)
-    if (picked && total > 0) apply(picked, total)
+    if (picked && total > 0) void apply(picked, total)
   }
 
   const pickedId = picked ? (picked.kind === 'library' ? picked.raw.id : picked.template.id) : undefined
@@ -135,7 +145,7 @@ export default function TemplateApplyButton({ onApply, entityType, defaultAmount
               onChange={(e) => setAmount(e.target.value)}
               className="h-8 flex-1 tabular-nums"
             />
-            <Button type="submit" size="sm" disabled={!picked || parseAmount(amount) <= 0}>
+            <Button type="submit" size="sm" disabled={!picked || applying || parseAmount(amount) <= 0}>
               {t('apply')}
             </Button>
           </form>

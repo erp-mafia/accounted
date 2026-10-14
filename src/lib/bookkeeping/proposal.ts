@@ -1,6 +1,6 @@
 import { getTemplateById, type BookingTemplate, type TemplateGroup } from './booking-templates'
 import { isLibraryTemplateId } from './template-library'
-import { resolveTemplateAccountsForEntity, type ProposalLinesInput } from './proposal-lines'
+import { resolveTemplateAccountsForEntity } from './proposal-lines'
 import { accountHue, templateGroupHue, type TemplateHue } from './template-group-colors'
 import { getDefaultAccountForCategory, getDefaultVatTreatmentForCategory } from './category-mapping'
 import { REVERSE_CHARGE_TREATMENT_KINDS, type ReverseChargeKind } from './vat-entries'
@@ -279,55 +279,6 @@ export function categorizeBodyFor(
         ...from,
       }
   }
-}
-
-/**
- * The verifikat the proposal books, as the preview input the engine mirror
- * (lib/bookkeeping/proposal-lines.ts) computes lines from. One function for
- * every kind, so the review shows exactly what the booking will post.
- */
-export function previewInputFor(
-  p: BookingProposal,
-  ctx: { amount: number; amountSek: number; entityType?: EntityType },
-): ProposalLinesInput {
-  const base = { amount: ctx.amount, amountSek: ctx.amountSek, entityType: ctx.entityType }
-  if (p.booking.kind === 'counterparty') {
-    if (p.line_pattern && p.line_pattern.length > 0) {
-      // Engine parity for the money leg: the settlement books on the learned
-      // template's legacy pair (raw accounts, no entity resolution).
-      return { ...base, linePattern: p.line_pattern, templateDebitAccount: p.debit_account, templateCreditAccount: p.credit_account }
-    }
-    // Legacy single pair: VAT from the learned treatment on expenses only,
-    // the 2645/2614 pair for reverse charge, no basbelopp pair.
-    return {
-      ...base,
-      templateDebitAccount: p.debit_account,
-      templateCreditAccount: p.credit_account,
-      templateVatTreatment: p.vat_treatment ?? null,
-      counterpartyLegacy: true,
-    }
-  }
-  if (p.booking.kind === 'template') {
-    const t = getTemplateById(p.booking.template_id)
-    if (t) {
-      // Static templates carry AB-specific accounts; the engine substitutes
-      // them at booking, so the preview shows the same substitution.
-      const accounts = resolveTemplateAccountsForEntity(t, ctx.entityType)
-      return {
-        ...base,
-        templateDebitAccount: accounts.debitAccount ?? t.debit_account,
-        templateCreditAccount: accounts.creditAccount ?? t.credit_account,
-        templateVatRate: t.vat_rate,
-        templateVatTreatment: t.vat_treatment,
-        templateSupplierType: t.reverse_charge_supplier_type,
-      }
-    }
-  }
-  const account = p.booking.kind === 'account' ? p.booking.account : businessAccount(p)
-  const category = p.booking.kind === 'account' ? p.booking.category : categoryFallback(ctx.amount)
-  const vat = p.booking.kind === 'account' ? p.booking.vat_treatment : (p.vat_treatment ?? 'exempt')
-  const kind = p.booking.kind === 'account' ? kindFor(vat, p.booking.reverse_charge_kind).reverse_charge_kind : undefined
-  return { ...base, category, accountOverride: account, vatTreatment: vat, ...(kind ? { reverseChargeKind: kind } : {}) }
 }
 
 /** The catalog template behind a proposal, when it has one (rules text, AB accounts). */

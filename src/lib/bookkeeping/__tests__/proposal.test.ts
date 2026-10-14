@@ -5,7 +5,6 @@ import {
   carriedCategory,
   categorizeArgsFor,
   categorizeBodyFor,
-  previewInputFor,
   proposalFromTemplate,
   slateAccount,
   whyKeyFor,
@@ -15,7 +14,8 @@ import {
 } from '../proposal'
 import { getTemplateById } from '../booking-templates'
 import { buildMappingResultFromCategory } from '../category-mapping'
-import { computeProposalLines } from '../proposal-lines'
+import { buildTransactionEntryLines } from '../transaction-entries'
+import { toProposalLines } from '../proposal-preview'
 import type { Transaction } from '@/types'
 
 const mobile = getTemplateById('telecom_mobile')!
@@ -117,12 +117,16 @@ describe('withAccount', () => {
       expect(p.booking).toEqual({ kind: 'account', account: '7699', vat_treatment: 'standard_25', category: 'expense_other' })
       expect(categorizeBodyFor(p)).toMatchObject({ category: 'expense_other', account_override: '7699', vat_treatment: 'standard_25' })
 
-      const lines = computeProposalLines(previewInputFor(p, { amount: -1000, amountSek: -1000, entityType: 'aktiebolag' }))
-      expect(lines).toEqual([
+      // The preview books the body: the category builder, the override on the business side.
+      const body = categorizeBodyFor(p)
+      const tx = { id: 't1', amount: -1000, currency: 'SEK', amount_sek: -1000, exchange_rate: 1 } as unknown as Transaction
+      const mapping = buildMappingResultFromCategory(body.category!, tx, true, 'aktiebolag', body.vat_treatment)
+      mapping.debit_account = body.account_override!
+      expect(toProposalLines(tx, buildTransactionEntryLines(tx, mapping))).toEqual(expect.arrayContaining([
         { side: 'debet', account: '7699', amount: 800 },
         { side: 'debet', account: '2641', amount: 200 },
         { side: 'kredit', account: '1930', amount: 1000, settlement: true },
-      ])
+      ]))
     })
 
     it('sends a category the server books moms for (the private one booked none)', () => {
@@ -218,29 +222,23 @@ describe('categorizeArgsFor', () => {
   })
 })
 
-describe('previewInputFor', () => {
-  it('previews a template with its entity-resolved accounts and VAT rate', () => {
-    const input = previewInputFor(proposalFromTemplate(stripe, 'catalog'), { amount: -100, amountSek: -100, entityType: 'aktiebolag' })
-    expect(input).toMatchObject({ templateDebitAccount: '6570', templateCreditAccount: '1930', templateVatTreatment: 'reverse_charge' })
-    const lines = computeProposalLines(input)
-    expect(lines.map((l) => l.account)).toContain('6570')
+describe('categorizeBodyFor: the body the preview shows and the booking posts', () => {
+  it('names a catalog template by id, the server resolving its accounts for the legal form', () => {
+    expect(categorizeBodyFor(proposalFromTemplate(stripe, 'catalog'))).toMatchObject({ is_business: true, template_id: stripe.id })
   })
-  it('previews an account booking on the category path with the explicit VAT', () => {
+  it('books an account on the category path with the explicit VAT', () => {
     const p = accountProposal({ id: 'a', source: 'assistant', account: '6071', label: 'x', category: 'expense_representation', vat_treatment: 'reduced_12', amount: -45 })
-    const input = previewInputFor(p, { amount: -45, amountSek: -45 })
-    expect(input).toMatchObject({ category: 'expense_representation', accountOverride: '6071', vatTreatment: 'reduced_12' })
-    const accounts = computeProposalLines(input).map((l) => l.account)
-    expect(accounts).toContain('6071')
-    expect(accounts).toContain('2641')
+    expect(categorizeBodyFor(p)).toMatchObject({ category: 'expense_representation', account_override: '6071', vat_treatment: 'reduced_12' })
   })
-  it('previews a counterpart pattern on its own lines', () => {
+  it('books a counterpart pattern by its template, on its own lines', () => {
     const p: BookingProposal = {
       template_id: 'cp:abc', source: 'counterparty', booking: { kind: 'counterparty', counterparty_template_id: 'abc' },
       name_sv: 'Telia', name_en: 'Telia', group: 'counterparty', debit_account: '6211', credit_account: '1930', confidence: 0.9,
       description_sv: '', risk_level: 'NONE', requires_review: false,
       line_pattern: [{ account: '6211', type: 'business', share: 1 } as never],
     }
-    expect(previewInputFor(p, { amount: -100, amountSek: -100 })).toMatchObject({ linePattern: p.line_pattern, templateDebitAccount: '6211' })
+    expect(categorizeBodyFor(p)).toMatchObject({ is_business: true, counterparty_template_id: 'abc' })
+    expect(categorizeBodyFor(p)).not.toHaveProperty('account_override')
   })
 })
 

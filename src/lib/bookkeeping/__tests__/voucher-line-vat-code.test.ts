@@ -16,7 +16,9 @@ import {
 import { chartVatTreatmentsOf, costAccountRcBasisRate, generateReverseChargePurchaseLines } from '../vat-entries'
 import { buildMappingResultFromCategory } from '../category-mapping'
 import { buildTransactionEntryLines } from '../transaction-entries'
-import { computeProposalLines, proposalLinesToFormLines } from '../proposal-lines'
+import { proposalLinesToFormLines } from '../proposal-lines'
+import { toProposalLines } from '../proposal-preview'
+import { reconcileRcBasisWithCostLines } from '../rc-basis-reconcile'
 import { rutorFromTotals } from '@/lib/reports/vat-declaration'
 import { rcBasisTotalsByRate } from '@/lib/reports/vat-filing-gate'
 import { resolveEffectiveVatRate } from '@/lib/reports/vat-revenue-accounts'
@@ -588,18 +590,19 @@ describe('foldGeneratedVatLines', () => {
   })
 
   it.each([undefined, '4531'])('leaves a bank proposal (cost account %s) as typed lines and counts its purchase once', (accountOverride) => {
-    // The proposal puts the reverse-charge lines after the bank leg, without
-    // descriptions; on 4531 itself its fiktiv pair is typed, so 4531's own
-    // code yields to it.
-    const proposal = proposalLinesToFormLines(computeProposalLines({
-      amount: -1000,
-      category: 'expense_software',
-      vatTreatment: 'reverse_charge',
-      reverseChargeKind: 'non_eu_services',
-      entityType: 'aktiebolag',
-      accountOverride,
-    }), { settlementAccount: '1930' })
-    expect(proposal[1].account_number).toBe('1930')
+    // The proposal is the verifikat the booking posts (the server preview):
+    // the reverse-charge lines above the cost line, without descriptions; on
+    // 4531 itself its fiktiv pair is typed, so 4531's own code yields to it.
+    const tx = makeTransaction({ amount: -1000, amount_sek: -1000, currency: 'SEK', exchange_rate: 1 })
+    const mapping = buildMappingResultFromCategory('expense_software', tx, true, 'aktiebolag', 'reverse_charge', null, undefined, 'non_eu_services')
+    if (accountOverride) mapping.debit_account = accountOverride
+    const proposal = proposalLinesToFormLines(
+      toProposalLines(tx, buildTransactionEntryLines(tx, reconcileRcBasisWithCostLines(mapping, chartVatTreatmentsOf([])))),
+      { settlementAccount: '1930' },
+    )
+    expect(proposal.findIndex((l) => l.account_number === '2645')).toBeLessThan(
+      proposal.findIndex((l) => l.account_number === (accountOverride ?? '5420')),
+    )
 
     const folded = foldGeneratedVatLines(proposal, chart())
     expect(folded).toBe(proposal)

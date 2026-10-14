@@ -40,8 +40,8 @@ import type { BookingTemplateWithUsage } from '@/lib/reference-data/fetchers'
 import { TemplateForm } from '@/components/settings/TemplateForm'
 import { applyTemplate, deriveTemplateLinesFromBooking } from '@/lib/bookkeeping/template-library'
 import { BOOKING_TEMPLATES, findMatchingTemplates } from '@/lib/bookkeeping/booking-templates'
-import { computeProposalLines } from '@/lib/bookkeeping/proposal-lines'
-import { chartVatTreatmentsOf } from '@/lib/bookkeeping/vat-entries'
+import { useProposalPreview } from '@/lib/hooks/use-proposal-preview'
+import { isGeneratedVatAccount, isReverseChargeBasisLeg } from '@/lib/bookkeeping/vat-entries'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { roundOre, sumOre, formatAmountInput } from '@/lib/money'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
@@ -340,8 +340,24 @@ export default function ExpenseClaimsPage() {
   // on 2641. Foreign sellers default to gross-as-cost: hotel, restaurant,
   // taxi and the like are taxed where performed (ML 6 kap.), the foreign VAT
   // is not deductible and no omvänd skattskyldighet applies. Reverse charge
-  // (goods, services under huvudregeln like SaaS) is an explicit opt-in and
-  // rides computeProposalLines, the client mirror of the engine's builder.
+  // (goods, services under huvudregeln like SaaS) is an explicit opt-in: the
+  // server books the cost against the claim's liability the way a bank row
+  // is booked (fiktiv moms, and the basis pair unless the cost account
+  // reports ruta 20-24 itself).
+  const reverseChargeBooked = sellerCountry !== 'se' && sellerCountry !== 'abroad' && reverseCharge
+  const reverseChargePreview = useProposalPreview(
+    reverseChargeBooked && parsedAmount > 0 && ACCOUNT_NUMBER_RE.test(expenseAccount)
+      ? {
+          amount: parsedAmount,
+          pair: {
+            debit_account: expenseAccount,
+            credit_account: liabilityAccount,
+            vat_treatment: 'reverse_charge',
+            reverse_charge_supplier_type: sellerCountry === 'eu' ? 'eu_business' : 'non_eu_business',
+          },
+        }
+      : null,
+  )
   const generatedRows = useMemo<BookingRow[]>(() => {
     if (sellerCountry === 'se') {
       return [
@@ -351,28 +367,24 @@ export default function ExpenseClaimsPage() {
           : []),
       ]
     }
-    if (!reverseCharge || sellerCountry === 'abroad') {
+    if (!reverseChargeBooked) {
       return [
         { key: -1, account: expenseAccount, debit: formatAmountInput(parsedAmount, '.'), credit: '' },
       ]
     }
-    return computeProposalLines({
-      amount: -parsedAmount,
-      templateDebitAccount: expenseAccount,
-      templateCreditAccount: liabilityAccount,
-      templateVatTreatment: 'reverse_charge',
-      templateSupplierType: sellerCountry === 'eu' ? 'eu_business' : 'non_eu_business',
-      // No basis pair on an account that reports ruta 20-24 itself.
-      chartVatTreatments: chartVatTreatmentsOf(accounts),
-    })
+    // The claim's liability is the editor's own credit row, so the money leg
+    // stays out; the cost line leads, the moms and basis legs follow it.
+    const isGenerated = (account: string) => isGeneratedVatAccount(account) || isReverseChargeBasisLeg(account)
+    return reverseChargePreview.lines
       .filter((line) => !line.settlement)
+      .sort((a, b) => Number(isGenerated(a.account)) - Number(isGenerated(b.account)))
       .map((line, i) => ({
         key: -(i + 1),
         account: line.account,
         debit: line.side === 'debet' ? formatAmountInput(line.amount, '.') : '',
         credit: line.side === 'kredit' ? formatAmountInput(line.amount, '.') : '',
       }))
-  }, [sellerCountry, reverseCharge, expenseAccount, liabilityAccount, netAmount, parsedAmount, parsedVat, accounts])
+  }, [sellerCountry, reverseChargeBooked, reverseChargePreview.lines, expenseAccount, netAmount, parsedAmount, parsedVat])
 
   const editorRows = bookingRows ?? generatedRows
   const rowSum = (side: 'debit' | 'credit') => sumOre(editorRows.map((r) => parseFloat(r[side]) || 0))

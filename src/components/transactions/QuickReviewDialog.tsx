@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { activateBasAccounts, pickNeedsActivation } from '@/lib/bookkeeping/bas-catalog-client'
@@ -19,10 +19,10 @@ import { AttnLine } from '@/components/ui/attn-line'
 import { needsUnderlagPrompt, templateVatMismatch, vatDisagrees, vatTreatmentAfterAccountChange } from '@/lib/transactions/underlag-read'
 import { linkDocuments, formatFailedDocumentNames } from '@/lib/documents/link-documents'
 import { ArrowUpRight, ArrowDownRight, Check, Paperclip, ChevronDown, ChevronUp, Inbox } from 'lucide-react'
-import { computeProposalLines, resolveTemplateAccountsForEntity } from '@/lib/bookkeeping/proposal-lines'
-import { chartVatTreatmentsOf } from '@/lib/bookkeeping/vat-entries'
-import type { ProposalLine, ProposalLinesInput } from '@/lib/bookkeeping/proposal-lines'
-import { accountProposal, businessAccount, carriedCategory, previewInputFor, templateBehind, withAccount, type BookingProposal } from '@/lib/bookkeeping/proposal'
+import { resolveTemplateAccountsForEntity } from '@/lib/bookkeeping/proposal-lines'
+import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
+import { accountProposal, businessAccount, carriedCategory, categorizeBodyFor, templateBehind, withAccount, type BookingProposal } from '@/lib/bookkeeping/proposal'
+import { useProposalPreview } from '@/lib/hooks/use-proposal-preview'
 import { useProposalWhy } from './proposal-why'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import JournalEntryPreview from './JournalEntryPreview'
@@ -142,11 +142,6 @@ export default function QuickReviewDialog({
   // same; handleConfirm activates the one the person picks here, and no
   // other (pickedToActivate below).
   const { catalog: basCatalog, chart: wholeChart } = useBasCatalog({ includeDeactivated: true })
-  // The company's momskoder over the whole kontoplan, deactivated accounts
-  // included since a pick activates one: a reverse-charge proposal on an
-  // account that reports ruta 20-24 itself previews, and hands "Ändra rader",
-  // the set as it is booked.
-  const chartVatTreatments = useMemo(() => chartVatTreatmentsOf(wholeChart ?? accounts), [wholeChart, accounts])
   const { settings: companySettings } = useCompanySettings()
   // The AI proposal shown this session, kept so we can log a calibration sample
   // (proposed vs actually booked) once the user confirms.
@@ -432,6 +427,70 @@ export default function QuickReviewDialog({
     }
   }, [open, transaction, t])
 
+  // ── The lines the proposal books ─────────────────────────────────────
+  // Built on the server by the code the booking posts with (POST
+  // /api/bookkeeping/proposal-preview), from the body handleConfirm sends:
+  // the preview shows, and "Ändra rader" hands over, the verifikat the
+  // booking makes. The server reads the row itself, so its SEK backfill
+  // above asks again.
+  const previewTx = enrichedTx ?? transaction
+  const previewVersion = previewTx ? `${previewTx.amount_sek}:${previewTx.exchange_rate}` : ''
+  const basePreview = useProposalPreview(
+    open && previewTx ? { transaction_id: previewTx.id, booking: categorizeBodyFor(proposal) } : null,
+    { refreshKey: previewVersion },
+  )
+
+  // The document's moms against the proposal's. The VAT leg of the lines the
+  // preview shows (ingående 264x on a purchase, utgående 261x-263x on a sale)
+  // is SEK; the document's figure is in the row's currency, so the proposal
+  // is scaled back by the gross's own ratio before they are compared. Only a
+  // rate-based treatment has a line to replace, and a counterparty pattern
+  // carries its own lines, which the override does not touch.
+  const previewSekAmount = previewTx
+    ? resolveSekAmount(previewTx.amount, previewTx.amount_sek, previewTx.currency, previewTx.exchange_rate)
+    : 0
+  const previewSekMissing =
+    !!previewTx?.currency && previewTx.currency !== 'SEK' && (previewTx.amount_sek == null || previewTx.exchange_rate == null)
+  const currentTreatment = proposal.booking.kind === 'account' ? proposal.booking.vat_treatment : (catalogTemplate?.vat_treatment ?? proposal.vat_treatment ?? null)
+  const rateBased = currentTreatment === 'standard_25' || currentTreatment === 'reduced_12' || currentTreatment === 'reduced_6'
+  const proposedVatSek = basePreview.lines
+    .filter((l) =>
+      (previewTx?.amount ?? 0) < 0
+        ? l.side === 'debet' && l.account.startsWith('264') && l.account !== '2645'
+        : l.side === 'kredit' && /^26[123]/.test(l.account),
+    )
+    .reduce((sum, l) => sum + l.amount, 0)
+  const docVat = docFacts?.vat_amount ?? null
+  const docVatUsable =
+    !!previewTx &&
+    docVat != null &&
+    docVat > 0 &&
+    rateBased &&
+    !accountOverride.startsWith('2') &&
+    proposal.booking.kind !== 'counterparty' &&
+    proposedVatSek > 0 &&
+    !previewSekMissing &&
+    (docFacts?.currency ?? previewTx.currency) === previewTx.currency
+  const proposedVatInTxCurrency =
+    previewTx && previewSekAmount && Math.abs(previewSekAmount) > 0
+      ? proposedVatSek * (Math.abs(previewTx.amount) / Math.abs(previewSekAmount))
+      : proposedVatSek
+  const docVatDiffers = docVatUsable && vatDisagrees(docVat, proposedVatInTxCurrency)
+  const bookDocVat = docVatUsable && docVatDiffers && useDocVat && docVat != null
+  // Booking the document's moms is its own preview, the body with vat_amount
+  // exactly as handleConfirm sends it.
+  const docVatPreview = useProposalPreview(
+    bookDocVat && previewTx ? { transaction_id: previewTx.id, booking: categorizeBodyFor(proposal, { vatAmount: docVat }) } : null,
+    { refreshKey: previewVersion },
+  )
+  const preview = bookDocVat ? docVatPreview : basePreview
+  // The lines the previous proposal did not have are marked in the preview,
+  // so the change the assistant's pick made is seen, not inferred.
+  const previousPreview = useProposalPreview(
+    open && previewTx && previous ? { transaction_id: previewTx.id, booking: categorizeBodyFor(previous) } : null,
+    { refreshKey: previewVersion },
+  )
+
   // Non-modal dialog (see the Dialog below): hand-restore page modality so
   // the agent sheet stays live. See useDashShellInert in ui/dialog.tsx.
   useDashShellInert(open)
@@ -499,70 +558,25 @@ export default function QuickReviewDialog({
     ? businessAccount({ debit_account: entityAccounts.debitAccount ?? catalogTemplate.debit_account, credit_account: entityAccounts.creditAccount ?? catalogTemplate.credit_account })
     : businessAccount(proposal)
 
-  // The one proposal definition: rendered by JournalEntryPreview and, via
-  // "Andra rader", computed into editable prefill lines. One function for
-  // every kind of booking (lib/bookkeeping/proposal.ts) mirrors the engine
-  // path that posts it, so the person edits exactly the lines they were shown.
-  const baseProposalInput: ProposalLinesInput = {
-    ...previewInputFor(proposal, { amount: tx.amount, amountSek: sekAmount, entityType }),
-    chartVatTreatments,
-  }
-
-  // The document's moms against the proposal's. The VAT leg of the lines the
-  // preview shows (ingående 264x on a purchase, utgående 261x-263x on a sale)
-  // is SEK; the document's figure is in the row's currency, so the proposal
-  // is scaled back by the gross's own ratio before they are compared. Only a
-  // rate-based treatment has a line to replace, and a counterparty pattern
-  // carries its own lines, which the override does not touch.
-  const currentTreatment = proposal.booking.kind === 'account' ? proposal.booking.vat_treatment : (catalogTemplate?.vat_treatment ?? proposal.vat_treatment ?? null)
-  const rateBased = currentTreatment === 'standard_25' || currentTreatment === 'reduced_12' || currentTreatment === 'reduced_6'
-  const proposedVatSek = computeProposalLines(baseProposalInput)
-    .filter((l) =>
-      tx.amount < 0
-        ? l.side === 'debet' && l.account.startsWith('264') && l.account !== '2645'
-        : l.side === 'kredit' && /^26[123]/.test(l.account),
-    )
-    .reduce((sum, l) => sum + l.amount, 0)
-  const docVat = docFacts?.vat_amount ?? null
-  const docVatUsable =
-    docVat != null &&
-    docVat > 0 &&
-    rateBased &&
-    !isLiabilityAccount &&
-    !isCounterpartyTemplate &&
-    !hasCounterpartyPattern &&
-    proposedVatSek > 0 &&
-    !sekConversionMissing &&
-    (docFacts?.currency ?? tx.currency) === tx.currency
-  const proposedVatInTxCurrency =
-    sekAmount && Math.abs(sekAmount) > 0 ? proposedVatSek * (Math.abs(tx.amount) / Math.abs(sekAmount)) : proposedVatSek
-  const docVatDiffers = docVatUsable && vatDisagrees(docVat, proposedVatInTxCurrency)
-  const bookDocVat = docVatUsable && docVatDiffers && useDocVat && docVat != null
   // A template whose rate is not the one the underlag states (a massage
   // invoice at 25 % through Friskvård's 6 %, PostHog PH 118): said beside the
   // moms, never acted on. The person keeps the template, books the
   // underlag's moms below, or picks another one.
   const vatRateMismatch = templateVatMismatch({ template: catalogTemplate, underlagRate: underlagVatRate, vatRegistered })
-  // What the preview shows and "Ändra rader" hands over is what gets booked:
-  // the document's moms folded in, scaled to SEK the way the server does it.
-  const proposalInput: ProposalLinesInput = bookDocVat
-    ? { ...baseProposalInput, vatAmountSek: docVat * (Math.abs(sekAmount) / Math.abs(tx.amount)) }
-    : baseProposalInput
   // A purchase worth asking about and nothing to show for it: the review
   // says so and the button says what booking now means.
   const bookingWithoutUnderlag = !documentId && attachedCount === 0 && !!underlag && needsUnderlagPrompt(sekAmount)
 
-  // Computed once per render: gates the affordance (no lines, no link) and is
-  // the exact payload the link hands over.
-  const proposalLines = onEditLines ? computeProposalLines(proposalInput) : []
-  // The lines the previous proposal did not have: marked in the preview so
-  // the change is seen, not inferred.
-  const changedAccounts = previous
-    ? (() => {
-        const before = new Set(computeProposalLines({ ...previewInputFor(previous, { amount: tx.amount, amountSek: sekAmount, entityType }), chartVatTreatments }).map((l) => l.account))
-        return computeProposalLines(proposalInput).map((l) => l.account).filter((a) => !before.has(a))
-      })()
-    : []
+  // What "Ändra rader" hands over: the lines the preview shows, never ones
+  // still on their way for a changed proposal.
+  const proposalLines = onEditLines && !preview.loading ? preview.lines : []
+  const changedAccounts =
+    previous && !previousPreview.loading && previousPreview.lines.length > 0
+      ? (() => {
+          const before = new Set(previousPreview.lines.map((l) => l.account))
+          return preview.lines.map((l) => l.account).filter((a) => !before.has(a))
+        })()
+      : []
 
   function handleEditLines() {
     if (!onEditLines || proposalLines.length === 0) return
@@ -929,7 +943,7 @@ export default function QuickReviewDialog({
             otherwise we'd render a verifikation in the wrong currency. */}
         {!sekConversionMissing && !rateLoading && (
           <div>
-            <JournalEntryPreview {...proposalInput} changedAccounts={changedAccounts} />
+            <JournalEntryPreview lines={preview.lines} loading={preview.loading} error={preview.error} changedAccounts={changedAccounts} />
             {/* "Andra rader": send the computed lines into the manual booking
                 dialog for per-line editing. Offered on every proposal surface
                 (AI suggestion, static template, counterparty pattern). */}
