@@ -4,7 +4,7 @@
  *
  *   employees.worked-days.*       hours per date (tidrapport) for hourly staff and OB
  *   employees.benefits.*          förmåner: a standing monthly förmånsvärde per row
- *   employees.recurring-lines.*   standing payslip deductions (bruttolöneavdrag, fackavgift)
+ *   employees.recurring-lines.*   standing payslip deductions (bruttolöneavdrag, fackavgift) and text rows
  *   employees.delete              soft delete: is_active=false, the row is kept
  *
  * MCP only. The v1 doors are the hand-written routes under
@@ -709,7 +709,7 @@ export const employeesBenefitsDelete = defineOperation({
 const RecurringLineFields = z.object({
   item_type: RecurringLineItemTypeSchema,
   description: z.string(),
-  amount: z.number().describe('SEK, negative: every supported item type is a deduction.'),
+  amount: z.number().describe('SEK: negative on a deduction, 0 on a text row (item_type text).'),
   account_number: z
     .string()
     .nullable()
@@ -769,9 +769,11 @@ const RECURRING_LINE_PATCH_FIELDS = Object.keys(UpdateEmployeeRecurringLineSchem
 const RECURRING_DERIVED_PITFALL =
   'Lines are derived again on every calculation of a run whose payment_date is within valid_from..valid_to (valid_to null = open-ended): a hand edit to a derived payslip row is overwritten by the next gnubok_calculate_salary_run.'
 const RECURRING_SIGN_PITFALL =
-  'Every supported item_type is a deduction, so the amount is negative (e.g. -670.17 for a benefit bike bruttolöneavdrag); the wrong sign is refused with VALIDATION_ERROR on amount.'
+  'The amount follows the item_type: a deduction is negative (e.g. -670.17 for a benefit bike bruttolöneavdrag); a text row (item_type text) has none: omit amount (0 is accepted) and put the words in description, e.g. how the salary is built up. The wrong sign, or an amount on a text row, is refused with VALIDATION_ERROR on amount.'
+const RECURRING_ADDITION_PITFALL =
+  'Recurring additions (a personligt tillägg next to Grundlön, a cash allowance) are refused: proration, absence deductions, sjuklön, semestertillägg and the OB rate read only monthly_salary, so a standing tillägg row would be paid in full through sick leave. Put a standing raise on monthly_salary (gnubok_update_employee) and explain the split with a text row.'
 const RECURRING_ACCOUNT_PITFALL =
-  'account_number overrides the default BAS account for the derived payslip row; null lets the engine map the item type.'
+  'account_number overrides the default BAS account for the derived payslip row; null lets the engine map the item type. A text row has no account: account_number is ignored.'
 
 export const employeesRecurringLinesList = defineOperation({
   id: 'employees.recurring-lines.list',
@@ -782,7 +784,7 @@ export const employeesRecurringLinesList = defineOperation({
   docs: {
     summary: 'List recurring payslip lines for an employee.',
     description:
-      "Returns the employee's standing monthly payslip rows (gross and net deductions such as a benefit bike bruttolöneavdrag, a union fee, or a net deduction for a benefit the employee pays for), newest valid_from first. Active and deactivated lines unless active filters them.",
+      "Returns the employee's standing monthly payslip rows (gross and net deductions such as a benefit bike bruttolöneavdrag, a union fee, or a net deduction for a benefit the employee pays for, and text rows explaining the payslip), newest valid_from first. Active and deactivated lines unless active filters them.",
     useWhen:
       'You need to see what the salary engine derives for an employee every month, to reconcile with an HR system, or to find the employee_recurring_line_id to update or delete.',
     doNotUseFor:
@@ -811,8 +813,8 @@ export const employeesRecurringLinesList = defineOperation({
     name: 'gnubok_list_employee_recurring_lines',
     title: 'List Recurring Payslip Lines',
     description:
-      "An employee's recurring payslip lines (bruttolöneavdrag, fackavgift, nettolöneavdrag): standing monthly deductions every salary run derives while the line is valid. Active and deactivated lines.",
-    keywords: ['återkommande lönerad', 'löneavdrag', 'bruttolöneavdrag', 'nettolöneavdrag', 'fackavgift', 'förmånscykel', 'löneväxling'],
+      "An employee's recurring payslip lines (bruttolöneavdrag, fackavgift, nettolöneavdrag, textrad): standing monthly deductions and payslip text every salary run derives while the line is valid. Active and deactivated lines.",
+    keywords: ['återkommande lönerad', 'löneavdrag', 'bruttolöneavdrag', 'nettolöneavdrag', 'fackavgift', 'förmånscykel', 'löneväxling', 'textrad'],
   },
   run: async (ctx, { employee_id, active }) => {
     const result = await listEmployeeRecurringLines(ctx.supabase, {
@@ -834,13 +836,14 @@ export const employeesRecurringLinesCreate = defineOperation({
   docs: {
     summary: 'Create a recurring payslip line for an employee.',
     description:
-      'Adds a standing monthly payslip row. From the next calculation on, every salary run whose payment_date is within valid_from..valid_to derives a payslip line from it, with its flags (taxable, avgift basis, gross or net deduction) fixed by item_type. Amounts are kept to whole öre. The dry run (the staging preview) is the row that would be inserted.',
+      'Adds a standing monthly payslip row. From the next calculation on, every salary run whose payment_date is within valid_from..valid_to derives a payslip line from it, with its flags (taxable, avgift basis, gross or net deduction) fixed by item_type. Amounts are kept to whole öre. A text row (item_type text) carries words only (no amount, account or flags) and is printed under the base salary on every payslip, without reaching tax, AGI or the booking. The dry run (the staging preview) is the row that would be inserted.',
     useWhen:
-      'An employee starts a benefit bike bruttolöneavdrag, a union fee, a monthly net deduction for a benefit they pay for, or any other deduction that repeats every month until further notice.',
+      'An employee starts a benefit bike bruttolöneavdrag, a union fee, a monthly net deduction for a benefit they pay for, or any other deduction that repeats every month until further notice; or every payslip should explain how the salary is built up (item_type text).',
     doNotUseFor:
-      'A one-off deduction on a single payslip: a line on that salary run. Additions (a monthly allowance paid in cash): not a recurring line, add them per run. Taxable benefits in kind: gnubok_add_employee_benefit.',
+      'A one-off deduction on a single payslip: a line on that salary run. Additions (a personligt tillägg, a monthly allowance paid in cash): refused, a standing raise goes on monthly_salary (gnubok_update_employee) and a one-off addition on that salary run. Taxable benefits in kind: gnubok_add_employee_benefit.',
     pitfalls: [
       RECURRING_SIGN_PITFALL,
+      RECURRING_ADDITION_PITFALL,
       'valid_to must be on or after valid_from (inclusive); omit it for an open-ended line.',
       RECURRING_ACCOUNT_PITFALL,
       'Creating a line does not recalculate an open salary run: call gnubok_calculate_salary_run afterwards.',
@@ -863,8 +866,8 @@ export const employeesRecurringLinesCreate = defineOperation({
     name: 'gnubok_add_employee_recurring_line',
     title: 'Add Recurring Payslip Line',
     description:
-      'Stage a recurring payslip line for an employee: a monthly deduction (negative amount) such as a bike bruttolöneavdrag or a union fee, derived into every salary run whose payment date is within valid_from..valid_to.',
-    keywords: ['återkommande avdrag', 'återkommande lönerad', 'bruttolöneavdrag', 'nettolöneavdrag', 'fackavgift', 'löneväxling', 'förmånscykel'],
+      'Stage a recurring payslip line for an employee, derived into every salary run whose payment date is within valid_from..valid_to: a deduction (negative amount) such as a union fee, or a text row (item_type text, no amount). Additions are refused.',
+    keywords: ['återkommande avdrag', 'återkommande lönerad', 'bruttolöneavdrag', 'nettolöneavdrag', 'fackavgift', 'löneväxling', 'förmånscykel', 'textrad'],
     stage: {
       pendingType: 'add_employee_recurring_line',
       title: (input) => `Lägg till återkommande lönerad: ${String(input.description)}`,
@@ -896,7 +899,7 @@ export const employeesRecurringLinesUpdate = defineOperation({
   docs: {
     summary: 'Update a recurring payslip line.',
     description:
-      'Changes description, amount, account_number, valid_from, valid_to, is_active or metadata on a recurring line. The amount sign is checked against the stored item_type and the validity period against the stored dates merged with the change. item_type cannot change: delete the line and create a new one. The dry run (the staging preview) is the merged row.',
+      'Changes description, amount, account_number, valid_from, valid_to, is_active or metadata on a recurring line. The amount sign is checked against the stored item_type and the validity period against the stored dates merged with the change. A text row keeps no amount (anything but 0 is refused) and no account (account_number is ignored). item_type cannot change: delete the line and create a new one. The dry run (the staging preview) is the merged row.',
     useWhen:
       'The monthly deduction changed (a new bike lease amount), the line ends on a known date (set valid_to), or it should pause without losing history (is_active=false).',
     doNotUseFor:
@@ -933,7 +936,7 @@ export const employeesRecurringLinesUpdate = defineOperation({
     name: 'gnubok_update_employee_recurring_line',
     title: 'Update Recurring Payslip Line',
     description:
-      'Stage a change to a recurring payslip line: amount (negative, a deduction), description, account, validity (valid_to ends it) or is_active. item_type cannot change. Recalculate a draft salary run afterwards.',
+      'Stage a change to a recurring payslip line: amount (negative on a deduction, none on a text row), description, account, validity (valid_to ends it) or is_active. item_type cannot change. Recalculate a draft salary run afterwards.',
     keywords: ['ändra löneavdrag', 'ändra återkommande lönerad', 'bruttolöneavdrag', 'fackavgift', 'avsluta avdrag'],
     stage: {
       pendingType: 'update_employee_recurring_line',

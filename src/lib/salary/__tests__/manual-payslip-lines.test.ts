@@ -198,3 +198,39 @@ describe('manualLineCapsFromRunParams', () => {
     }
   })
 })
+
+describe('Textrad', () => {
+  it('is offered, takes only its words and carries no money and no flags', () => {
+    expect(isManualPayslipLineType('text')).toBe(true)
+    expect(MANUAL_PAYSLIP_LINE_SPECS.text.sign).toBe('none')
+    expect(
+      body(
+        buildManualPayslipLine({
+          item_type: 'text',
+          description: '  Lönen består av grundlön\noch personligt tillägg ',
+          quantity: 2,
+          unit_price: 100,
+          amount: 500,
+        }),
+      ),
+    ).toEqual({
+      item_type: 'text',
+      description: 'Lönen består av grundlön och personligt tillägg',
+      amount: 0,
+      is_taxable: false,
+      is_avgift_basis: false,
+      is_vacation_basis: false,
+      is_gross_deduction: false,
+      is_net_deduction: false,
+    })
+  })
+
+  it('refuses blank or over-long text instead of falling back to the label', () => {
+    expect(buildManualPayslipLine({ item_type: 'text', description: '  ' })).toEqual({ ok: false, reason: 'no_text' })
+    expect(buildManualPayslipLine({ item_type: 'text' })).toEqual({ ok: false, reason: 'no_text' })
+    expect(buildManualPayslipLine({ item_type: 'text', description: 'x'.repeat(201) })).toEqual({
+      ok: false,
+      reason: 'no_text',
+    })
+  })
+})

@@ -1218,15 +1218,16 @@ Example response `200`:
 **List recurring payslip lines for an employee.**
 `scope:payroll:read · risk:low · idempotent`
 
-Returns the employee's standing monthly payslip rows (gross and net deductions such as a benefit bike bruttolöneavdrag, a union fee, or a net deduction for a benefit the employee pays for), newest valid_from first. Both active and deactivated lines are returned unless ?active filters them.
+Returns the employee's standing monthly payslip rows (gross and net deductions such as a benefit bike bruttolöneavdrag, a union fee, or a net deduction for a benefit the employee pays for, and text rows explaining the payslip), newest valid_from first. Both active and deactivated lines are returned unless ?active filters them.
 
 **Use when:** You need to see what the salary engine will derive for an employee every month, to reconcile with an HR system, or to find the employee_recurring_line_id to update or delete.
 **Do not use for:** The derived payslip rows of one run: those are on the salary run detail after :calculate. Taxable benefits in kind (bilförmån, kostförmån): use the employee benefits endpoints.
 
 **Pitfalls:**
 - Rows are re-derived on every :calculate for runs whose payment_date falls inside valid_from..valid_to (valid_to null = open-ended). Hand edits to a derived payslip row are overwritten by the next :calculate.
-- The amount sign follows the item type: every supported type is a deduction and must be negative (e.g. -670.17 for a benefit bike bruttolöneavdrag). The API rejects the wrong sign with 400 VALIDATION_ERROR on field amount.
-- account_number overrides the default BAS account for the derived payslip row; null lets the engine use its item-type mapping.
+- The amount follows the item type: a deduction is negative (e.g. -670.17 for a benefit bike bruttolöneavdrag), and a text row (item_type text) has none: omit amount (0 is accepted) and put the words in description, e.g. how the salary is built up. The API rejects the wrong sign, or an amount on a text row, with 400 VALIDATION_ERROR on field amount.
+- Recurring additions (a personligt tillägg next to Grundlön, a cash allowance) are not supported: proration, absence deductions, sjuklön, semestertillägg and the OB rate read only monthly_salary, so a standing tillägg row would be paid in full through sick leave. Put a standing raise on the employee's monthly_salary and explain the split with a text row.
+- account_number overrides the default BAS account for the derived payslip row; null lets the engine use its item-type mapping. A text row has no account: account_number is ignored.
 - Draft-only per-run edits (a one-off change on one payslip) still go through the salary-runs lines endpoints, not through recurring lines.
 - Deactivated lines (is_active=false) are listed too: a line that a booked run derived from cannot be deleted, only deactivated, so history keeps it.
 
@@ -1239,7 +1240,7 @@ Returns the employee's standing monthly payslip rows (gross and net deductions s
 Response `200`:
 ```ts
 {
-  data: { employee_recurring_line_id: string, item_type: "gross_deduction_pension" | "gross_deduction_other" | "net_deduction_union" | "net_deduction_benefit_payment" | "net_deduction_other", description: string, amount: number, account_number: string | null, valid_from: string, valid_to: string | null, is_active: boolean, metadata: Record<string, unknown>, created_at: string, updated_at: string }[],
+  data: { employee_recurring_line_id: string, item_type: "gross_deduction_pension" | "gross_deduction_other" | "net_deduction_union" | "net_deduction_benefit_payment" | "net_deduction_other" | "text", description: string, amount: number, account_number: string | null, valid_from: string, valid_to: string | null, is_active: boolean, metadata: Record<string, unknown>, created_at: string, updated_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -1282,15 +1283,16 @@ Example response `200`:
 **Create a recurring payslip line for an employee.**
 `scope:payroll:write · risk:low · idempotent · dry-run · reversible`
 
-Adds a standing monthly payslip row. From the next :calculate on, every salary run whose payment_date falls inside valid_from..valid_to derives a payslip line from it, with flags (taxable, avgift basis, gross vs net deduction) fixed by item_type. Amounts are kept to whole öre. Requires an Idempotency-Key header.
+Adds a standing monthly payslip row. From the next :calculate on, every salary run whose payment_date falls inside valid_from..valid_to derives a payslip line from it, with flags (taxable, avgift basis, gross vs net deduction) fixed by item_type. Amounts are kept to whole öre. A text row (item_type text) carries words only (no amount, account or flags) and is printed under the base salary on every payslip, without reaching tax, AGI or the booking. Requires an Idempotency-Key header.
 
-**Use when:** An employee starts a benefit bike bruttolöneavdrag, a union fee, a monthly net deduction for a benefit they pay for, or any other deduction that repeats every month until further notice.
-**Do not use for:** One-off deductions on a single payslip: add a line on the salary run instead. Additions (a monthly allowance paid in cash): not supported as recurring lines; add them per run. Taxable benefits in kind: use the employee benefits endpoints.
+**Use when:** An employee starts a benefit bike bruttolöneavdrag, a union fee, a monthly net deduction for a benefit they pay for, or any other deduction that repeats every month until further notice; or every payslip should explain how the salary is built up (item_type text).
+**Do not use for:** One-off deductions on a single payslip: add a line on the salary run instead. Additions (a personligt tillägg, a monthly allowance paid in cash): not supported as recurring lines; a standing raise goes on monthly_salary (PATCH /employees/{id}) and a one-off addition on the salary run. Taxable benefits in kind: use the employee benefits endpoints.
 
 **Pitfalls:**
 - Rows are re-derived on every :calculate for runs whose payment_date falls inside valid_from..valid_to (valid_to null = open-ended). Hand edits to a derived payslip row are overwritten by the next :calculate.
-- The amount sign follows the item type: every supported type is a deduction and must be negative (e.g. -670.17 for a benefit bike bruttolöneavdrag). The API rejects the wrong sign with 400 VALIDATION_ERROR on field amount.
-- account_number overrides the default BAS account for the derived payslip row; null lets the engine use its item-type mapping.
+- The amount follows the item type: a deduction is negative (e.g. -670.17 for a benefit bike bruttolöneavdrag), and a text row (item_type text) has none: omit amount (0 is accepted) and put the words in description, e.g. how the salary is built up. The API rejects the wrong sign, or an amount on a text row, with 400 VALIDATION_ERROR on field amount.
+- Recurring additions (a personligt tillägg next to Grundlön, a cash allowance) are not supported: proration, absence deductions, sjuklön, semestertillägg and the OB rate read only monthly_salary, so a standing tillägg row would be paid in full through sick leave. Put a standing raise on the employee's monthly_salary and explain the split with a text row.
+- account_number overrides the default BAS account for the derived payslip row; null lets the engine use its item-type mapping. A text row has no account: account_number is ignored.
 - Draft-only per-run edits (a one-off change on one payslip) still go through the salary-runs lines endpoints, not through recurring lines.
 - valid_to must be on or after valid_from (inclusive); omit it for an open-ended line.
 - Creating a line does not recompute an open salary run: call POST /salary-runs/{id}/calculate afterwards.
@@ -1304,9 +1306,9 @@ Adds a standing monthly payslip row. From the next :calculate on, every salary r
 Request body:
 ```ts
 {
-  item_type: "gross_deduction_pension" | "gross_deduction_other" | "net_deduction_union" | "net_deduction_benefit_payment" | "net_deduction_other",
+  item_type: "gross_deduction_pension" | "gross_deduction_other" | "net_deduction_union" | "net_deduction_benefit_payment" | "net_deduction_other" | "text",
   description: string,
-  amount: number,
+  amount?: number,
   account_number?: string,
   valid_from: string,
   valid_to?: string,
@@ -1330,7 +1332,7 @@ Response `200`:
 {
   data: {
     employee_recurring_line_id: string,
-    item_type: "gross_deduction_pension" | "gross_deduction_other" | "net_deduction_union" | "net_deduction_benefit_payment" | "net_deduction_other",
+    item_type: "gross_deduction_pension" | "gross_deduction_other" | "net_deduction_union" | "net_deduction_benefit_payment" | "net_deduction_other" | "text",
     description: string,
     amount: number,
     account_number: string | null,
@@ -1381,15 +1383,16 @@ Example response `200`:
 **Update a recurring payslip line.**
 `scope:payroll:write · risk:low · idempotent · dry-run · reversible`
 
-Patches description, amount, account_number, valid_from, valid_to, is_active or metadata on a recurring line. The amount sign is re-checked against the stored item_type and the validity period against the merged (stored + patched) dates. item_type cannot change: delete and recreate instead. Requires an Idempotency-Key header.
+Patches description, amount, account_number, valid_from, valid_to, is_active or metadata on a recurring line. The amount sign is re-checked against the stored item_type and the validity period against the merged (stored + patched) dates. A text row keeps no amount (anything but 0 is refused) and no account (account_number is ignored). item_type cannot change: delete and recreate instead. Requires an Idempotency-Key header.
 
 **Use when:** The monthly deduction changed (new bike lease amount), the line ends on a known date (set valid_to), or it should pause without losing history (is_active=false).
 **Do not use for:** Changing the kind of line (gross to net deduction): DELETE and POST a new one. Fixing one payslip only: edit the salary run line instead.
 
 **Pitfalls:**
 - Rows are re-derived on every :calculate for runs whose payment_date falls inside valid_from..valid_to (valid_to null = open-ended). Hand edits to a derived payslip row are overwritten by the next :calculate.
-- The amount sign follows the item type: every supported type is a deduction and must be negative (e.g. -670.17 for a benefit bike bruttolöneavdrag). The API rejects the wrong sign with 400 VALIDATION_ERROR on field amount.
-- account_number overrides the default BAS account for the derived payslip row; null lets the engine use its item-type mapping.
+- The amount follows the item type: a deduction is negative (e.g. -670.17 for a benefit bike bruttolöneavdrag), and a text row (item_type text) has none: omit amount (0 is accepted) and put the words in description, e.g. how the salary is built up. The API rejects the wrong sign, or an amount on a text row, with 400 VALIDATION_ERROR on field amount.
+- Recurring additions (a personligt tillägg next to Grundlön, a cash allowance) are not supported: proration, absence deductions, sjuklön, semestertillägg and the OB rate read only monthly_salary, so a standing tillägg row would be paid in full through sick leave. Put a standing raise on the employee's monthly_salary and explain the split with a text row.
+- account_number overrides the default BAS account for the derived payslip row; null lets the engine use its item-type mapping. A text row has no account: account_number is ignored.
 - Draft-only per-run edits (a one-off change on one payslip) still go through the salary-runs lines endpoints, not through recurring lines.
 - A patch that leaves valid_to before valid_from on the merged row is rejected with 400 VALIDATION_ERROR on field valid_to; send valid_to: null to make the line open-ended again.
 - Runs already calculated keep their derived rows until they are recalculated; booked runs are never touched.
@@ -1427,7 +1430,7 @@ Response `200`:
 {
   data: {
     employee_recurring_line_id: string,
-    item_type: "gross_deduction_pension" | "gross_deduction_other" | "net_deduction_union" | "net_deduction_benefit_payment" | "net_deduction_other",
+    item_type: "gross_deduction_pension" | "gross_deduction_other" | "net_deduction_union" | "net_deduction_benefit_payment" | "net_deduction_other" | "text",
     description: string,
     amount: number,
     account_number: string | null,
@@ -1485,8 +1488,9 @@ Removes the line when no salary run has derived a payslip row from it. Once a ru
 
 **Pitfalls:**
 - Rows are re-derived on every :calculate for runs whose payment_date falls inside valid_from..valid_to (valid_to null = open-ended). Hand edits to a derived payslip row are overwritten by the next :calculate.
-- The amount sign follows the item type: every supported type is a deduction and must be negative (e.g. -670.17 for a benefit bike bruttolöneavdrag). The API rejects the wrong sign with 400 VALIDATION_ERROR on field amount.
-- account_number overrides the default BAS account for the derived payslip row; null lets the engine use its item-type mapping.
+- The amount follows the item type: a deduction is negative (e.g. -670.17 for a benefit bike bruttolöneavdrag), and a text row (item_type text) has none: omit amount (0 is accepted) and put the words in description, e.g. how the salary is built up. The API rejects the wrong sign, or an amount on a text row, with 400 VALIDATION_ERROR on field amount.
+- Recurring additions (a personligt tillägg next to Grundlön, a cash allowance) are not supported: proration, absence deductions, sjuklön, semestertillägg and the OB rate read only monthly_salary, so a standing tillägg row would be paid in full through sick leave. Put a standing raise on the employee's monthly_salary and explain the split with a text row.
+- account_number overrides the default BAS account for the derived payslip row; null lets the engine use its item-type mapping. A text row has no account: account_number is ignored.
 - Draft-only per-run edits (a one-off change on one payslip) still go through the salary-runs lines endpoints, not through recurring lines.
 - deleted: false with deactivated: true is a success, not an error: a run already derived from the line, so it is kept for history and switched off.
 - A lineId under another employee or company answers 404 NOT_FOUND.

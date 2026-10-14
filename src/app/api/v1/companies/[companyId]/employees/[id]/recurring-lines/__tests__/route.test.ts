@@ -332,3 +332,113 @@ describe('POST /api/v1/companies/:companyId/employees/:id/recurring-lines', () =
     expect(res.status).toBe(401)
   })
 })
+
+// Text rows (item_type 'text', lib/salary/text-rows.ts): a standing row of
+// words on every payslip, no amount and no account.
+describe('POST /api/v1/companies/:companyId/employees/:id/recurring-lines: text rows', () => {
+  const idem = { idempotency_keys: { data: null, error: null } }
+  const textBody = {
+    item_type: 'text',
+    description: 'Grundlön 40 000 kr + personligt tillägg 2 000 kr',
+    valid_from: '2026-01-01',
+  }
+  const TEXT_LINE = { ...SAMPLE_LINE, item_type: 'text', description: textBody.description, amount: 0 }
+
+  async function create(tables: Parameters<typeof createTableMockSupabase>[0], body: unknown, url = BASE_URL) {
+    const mock = createTableMockSupabase(tables)
+    mockServiceClient.mockReturnValue(mock.supabase)
+    const res = await createLine(
+      makeRequest(url, { method: 'POST', body: JSON.stringify(body) }),
+      lineParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+    return { res, body: await res.json(), mock }
+  }
+
+  it('creates a text row with no amount and returns 201', async () => {
+    const { res, body, mock } = await create(
+      {
+        ...membership,
+        ...idem,
+        employees: { data: { id: EMPLOYEE_ID }, error: null },
+        employee_recurring_lines: { data: TEXT_LINE, error: null },
+      },
+      { ...textBody, account_number: '7210' },
+    )
+
+    expect(res.status).toBe(201)
+    expect(body.data).toMatchObject({
+      employee_recurring_line_id: LINE_ID,
+      item_type: 'text',
+      amount: 0,
+      account_number: null,
+    })
+    expect(mock.findCall('employee_recurring_lines', 'insert')?.[0]).toMatchObject({
+      item_type: 'text',
+      description: textBody.description,
+      amount: 0,
+      account_number: null,
+    })
+  })
+
+  it('previews a text row on dry_run with amount 0 and no account, without writing', async () => {
+    const { res, body, mock } = await create(
+      { ...membership, ...idem, employees: { data: { id: EMPLOYEE_ID }, error: null } },
+      { ...textBody, account_number: '7210' },
+      `${BASE_URL}?dry_run=true`,
+    )
+    expect(res.status).toBe(200)
+    expect(body.data.preview).toMatchObject({ item_type: 'text', amount: 0, account_number: null })
+    expect(mock.tables()).not.toContain('employee_recurring_lines')
+  })
+
+  it('returns a field-level 400 for a text row with an amount', async () => {
+    const { res, body, mock } = await create({ ...membership, ...idem }, { ...textBody, amount: 500 })
+    expect(res.status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ field: 'amount' })]),
+    )
+    expect(mock.tables()).not.toContain('employee_recurring_lines')
+  })
+
+  it('returns a field-level 400 for a text row with no words', async () => {
+    const { res, body, mock } = await create({ ...membership, ...idem }, { ...textBody, description: '  \n  ' })
+    expect(res.status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.issues).toEqual([{ field: 'description', message: 'En textrad måste ha en text.' }])
+    expect(mock.tables()).not.toContain('employee_recurring_lines')
+  })
+
+  it('returns 400 for a 0 kr deduction and for a deduction without an amount', async () => {
+    for (const body of [
+      { item_type: 'gross_deduction_other', description: 'Bruttolöneavdrag', amount: 0, valid_from: '2026-01-01' },
+      { item_type: 'gross_deduction_other', description: 'Bruttolöneavdrag', valid_from: '2026-01-01' },
+    ]) {
+      const { res, body: json, mock } = await create({ ...membership, ...idem }, body)
+      expect(res.status).toBe(400)
+      expect(json.error.details.issues).toEqual(
+        expect.arrayContaining([expect.objectContaining({ field: 'amount' })]),
+      )
+      expect(mock.tables()).not.toContain('employee_recurring_lines')
+    }
+  })
+
+  it('returns 404 EMPLOYEE_NOT_FOUND for a text row on an unknown employee', async () => {
+    const { res, body } = await create(
+      { ...membership, ...idem, employees: { data: null, error: null } },
+      textBody,
+    )
+    expect(res.status).toBe(404)
+    expect(body.error.code).toBe('EMPLOYEE_NOT_FOUND')
+  })
+
+  it('returns 401 for a text row without a bearer token', async () => {
+    mockValidate.mockResolvedValue(null)
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
+    const res = await createLine(
+      new Request(BASE_URL, { method: 'POST', body: JSON.stringify(textBody) }),
+      lineParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+    expect(res.status).toBe(401)
+  })
+})

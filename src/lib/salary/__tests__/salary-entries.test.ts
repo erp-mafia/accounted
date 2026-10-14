@@ -1433,3 +1433,136 @@ describe('salary entries: all vouchers or none, and a retry never posts one twic
     expect(mockedCommit).not.toHaveBeenCalled()
   })
 })
+
+// Text rows (item_type 'text', lib/salary/text-rows.ts): words on the payslip,
+// amount 0, no account, every flag false. They never reach the booking.
+describe('salary entries: text rows book nothing', () => {
+  const textRow = (account_number: string | null = null) => ({
+    item_type: 'text',
+    amount: 0,
+    account_number,
+    is_net_deduction: false,
+    is_gross_deduction: false,
+  })
+
+  // 42 000 Grundlön + 5 000 bonus, a 3 000 löneväxling, a 450 union fee.
+  const moneyRows = [
+    { item_type: 'monthly_salary', amount: 42000, account_number: null, is_net_deduction: false, is_gross_deduction: false },
+    { item_type: 'bonus', amount: 5000, account_number: null, is_net_deduction: false, is_gross_deduction: false },
+    { item_type: 'gross_deduction_pension', amount: -3000, account_number: '7412', is_net_deduction: false, is_gross_deduction: true },
+    { item_type: 'net_deduction_union', amount: -450, account_number: null, is_net_deduction: true, is_gross_deduction: false },
+  ]
+
+  const run = (lineItems: EmployeeOverrides['line_items']) =>
+    makeRun([
+      makeEmployee({
+        gross_salary: 44000,
+        tax_withheld: 11000,
+        net_salary: 32550,
+        avgifter_basis: 44000,
+        avgifter_amount: 13824.8,
+        vacation_accrual: 4800,
+        vacation_accrual_avgifter: 1508.16,
+        default_dimensions: { '1': 'KS01' },
+        line_items: lineItems,
+      }),
+    ])
+
+  const allLines = (built: ReturnType<typeof buildSalaryRunEntryLines>) => [
+    ...built.salaryLines,
+    ...built.avgifterLines,
+    ...built.vacationLines,
+    ...built.pensionLines,
+  ]
+
+  it('builds the same journal lines with and without text rows on the payslip', () => {
+    const plain = buildSalaryRunEntryLines(run(moneyRows), 'Lön 2026-06', '1930')
+    const withText = buildSalaryRunEntryLines(
+      run([textRow(), ...moneyRows.slice(0, 2), textRow(), ...moneyRows.slice(2)]),
+      'Lön 2026-06',
+      '1930',
+    )
+
+    expect(withText).toEqual(plain)
+    // The comparison is not vacuous: every voucher has lines.
+    expect(plain.salaryLines.length).toBeGreaterThan(0)
+    expect(plain.avgifterLines.length).toBeGreaterThan(0)
+    expect(plain.vacationLines.length).toBeGreaterThan(0)
+    expect(plain.pensionLines.length).toBeGreaterThan(0)
+  })
+
+  it('posts identical, balanced vouchers and never a line with neither a debit nor a credit', async () => {
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run(moneyRows))
+    const plain = mockedCreateEntry.mock.calls.map((c) => c[3].lines)
+    mockedCreateEntry.mockClear()
+    fake.ledger.length = 0
+    fake.drafts.clear()
+
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run([...moneyRows, textRow(), textRow()]))
+    const withText = mockedCreateEntry.mock.calls.map((c) => c[3].lines)
+
+    expect(withText).toEqual(plain)
+    expect(withText).toHaveLength(4)
+    for (const call of mockedCreateEntry.mock.calls) assertBalanced(call[3])
+    for (const l of withText.flat()) {
+      expect(l.debit_amount === 0 && l.credit_amount === 0, `${l.account_number} has a 0,00 line`).toBe(false)
+      expect(l.account_number).toEqual(expect.stringMatching(/^\d{4}$/))
+    }
+  })
+
+  it('books a run whose only rows are text rows like a run with no rows at all', () => {
+    const plain = buildSalaryRunEntryLines(run([]), 'Lön 2026-06', '1930')
+    const textOnly = buildSalaryRunEntryLines(run([textRow(), textRow()]), 'Lön 2026-06', '1930')
+    expect(textOnly).toEqual(plain)
+    expect(allLines(textOnly).every((l) => l.debit_amount > 0 || l.credit_amount > 0)).toBe(true)
+  })
+
+  it('posts no line for an expense bucket whose rows cancel to 0 kr (0,1 + 0,2 - 0,3 on an account override)', () => {
+    // In floating point 0.1 + 0.2 - 0.3 is 5.55e-17, not 0: judged on the
+    // unrounded sum the bucket posted a 0,00 debit on 7699.
+    const correction = (amount: number) => ({
+      item_type: 'correction',
+      amount,
+      account_number: '7699',
+      is_net_deduction: false,
+      is_gross_deduction: false,
+    })
+    const built = buildSalaryRunEntryLines(
+      makeRun([
+        makeEmployee({
+          line_items: [correction(0.1), correction(0.2), correction(-0.3)],
+        }),
+      ]),
+      'Lön 2026-06',
+      '1930',
+    )
+
+    expect(built.salaryLines.some((l) => l.account_number === '7699')).toBe(false)
+    expect(built.salaryLines.every((l) => l.debit_amount > 0 || l.credit_amount > 0)).toBe(true)
+    // The base remainder still carries the whole gross.
+    expect(built.salaryLines.find((l) => l.account_number === '7210')?.debit_amount).toBe(30000)
+    const debit = built.salaryLines.reduce((s, l) => s + l.debit_amount, 0)
+    const credit = built.salaryLines.reduce((s, l) => s + l.credit_amount, 0)
+    expect(Math.abs(debit - credit)).toBeLessThan(0.005)
+  })
+
+  it('activates the same accounts with and without text rows, and never asks for an empty account', async () => {
+    const plainAccounts: string[] = []
+    await createSalaryRunEntries(makeSupabase(undefined, plainAccounts), 'company-1', 'user-1', run(moneyRows))
+    mockedCreateEntry.mockClear()
+    fake.ledger.length = 0
+    fake.drafts.clear()
+
+    const textAccounts: string[] = []
+    await createSalaryRunEntries(
+      makeSupabase(undefined, textAccounts),
+      'company-1',
+      'user-1',
+      run([textRow(), ...moneyRows, textRow()]),
+    )
+
+    expect([...textAccounts].sort()).toEqual([...plainAccounts].sort())
+    expect(textAccounts.length).toBeGreaterThan(0)
+    for (const account of textAccounts) expect(account).toEqual(expect.stringMatching(/^\d{4}$/))
+  })
+})

@@ -403,3 +403,208 @@ describe('DELETE /salary-runs/:id/lines/:lineId', () => {
     expect(body.error.code).toBe('SALARY_RUN_LINE_NOT_DRAFT')
   })
 })
+
+// Text rows (item_type 'text', lib/salary/text-rows.ts) and the 0 kr rule
+// every door shares (crm#1076).
+describe('v1 payslip lines: text rows and 0 kr rows', () => {
+  const owner = { company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null } }
+  const idem = { idempotency_keys: { data: null, error: null } }
+  const draftRun = { salary_runs: { data: { id: RUN_ID, status: 'draft' }, error: null } }
+  const onRun = { salary_run_employees: { data: { id: SRE_ID, employee_id: EMPLOYEE_ID }, error: null } }
+
+  const TEXT_LINE = {
+    ...SAMPLE_LINE,
+    item_type: 'text',
+    description: 'Lön enligt kollektivavtal',
+    amount: 0,
+    is_taxable: false,
+    is_avgift_basis: false,
+    is_vacation_basis: false,
+    account_number: null,
+    sort_order: 5,
+  }
+
+  const createUrl = `https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/employees/${EMPLOYEE_ID}/lines`
+  const lineUrl = `https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/lines/${LINE_ID}`
+  const textBody = { item_type: 'text', description: 'Lön enligt kollektivavtal' }
+
+  async function create(tables: Parameters<typeof createTableMockSupabase>[0], body: unknown) {
+    const mock = createTableMockSupabase(tables)
+    mockServiceClient.mockReturnValue(mock.supabase)
+    const res = await createLine(
+      makeRequest(createUrl, { method: 'POST', body: JSON.stringify(body) }),
+      createParams(COMPANY_ID, RUN_ID, EMPLOYEE_ID),
+    )
+    return { res, body: await res.json(), mock }
+  }
+
+  async function update(tables: Parameters<typeof createTableMockSupabase>[0], body: unknown) {
+    const mock = createTableMockSupabase(tables)
+    mockServiceClient.mockReturnValue(mock.supabase)
+    const res = await patchLine(
+      makeRequest(lineUrl, { method: 'PATCH', body: JSON.stringify(body) }),
+      lineParams(COMPANY_ID, RUN_ID, LINE_ID),
+    )
+    return { res, body: await res.json(), mock }
+  }
+
+  describe('POST /salary-runs/:id/employees/:employeeId/lines', () => {
+    it('creates a text row with no amount and returns 201', async () => {
+      const { res, body, mock } = await create(
+        { ...owner, ...idem, ...draftRun, ...onRun, salary_line_items: { data: TEXT_LINE, error: null } },
+        { ...textBody, is_taxable: true },
+      )
+
+      expect(res.status).toBe(201)
+      expect(body.data).toMatchObject({ salary_line_item_id: LINE_ID, item_type: 'text', amount: 0, account_number: null })
+      expect(mock.findCall('salary_line_items', 'insert')?.[0]).toMatchObject({
+        item_type: 'text',
+        description: 'Lön enligt kollektivavtal',
+        quantity: null,
+        unit_price: null,
+        amount: 0,
+        account_number: null,
+        is_taxable: false,
+        is_avgift_basis: false,
+        is_vacation_basis: false,
+        is_gross_deduction: false,
+        is_net_deduction: false,
+      })
+    })
+
+    it('previews a text row on dry_run without writing', async () => {
+      const mock = createTableMockSupabase({ ...owner, ...idem, ...draftRun, ...onRun })
+      mockServiceClient.mockReturnValue(mock.supabase)
+      const res = await createLine(
+        makeRequest(`${createUrl}?dry_run=true`, { method: 'POST', body: JSON.stringify(textBody) }),
+        createParams(COMPANY_ID, RUN_ID, EMPLOYEE_ID),
+      )
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.data.preview).toMatchObject({ salary_line_item_id: null, item_type: 'text', amount: 0, account_number: null })
+      expect(mock.tables()).not.toContain('salary_line_items')
+    })
+
+    it('returns 400 VALIDATION_ERROR for a text row with an amount', async () => {
+      const { res, body, mock } = await create({ ...owner, ...idem, ...draftRun, ...onRun }, { ...textBody, amount: 500 })
+      expect(res.status).toBe(400)
+      expect(body.error.code).toBe('VALIDATION_ERROR')
+      expect(body.error.details).toMatchObject({
+        field: 'amount',
+        message: 'En textrad har inget belopp. Lägg beloppet på en egen rad.',
+      })
+      expect(mock.tables()).not.toContain('salary_line_items')
+    })
+
+    it('returns 400 VALIDATION_ERROR for a 0 kr money row and a money row without an amount', async () => {
+      for (const body of [
+        { item_type: 'bonus', description: 'Bonus', amount: 0 },
+        { item_type: 'bonus', description: 'Bonus' },
+      ]) {
+        const { res, body: json, mock } = await create({ ...owner, ...idem, ...draftRun, ...onRun }, body)
+        expect(res.status).toBe(400)
+        expect(json.error.code).toBe('VALIDATION_ERROR')
+        expect(json.error.details.field).toBe('amount')
+        expect(json.error.details.message).toMatch(/inte är 0 kr/)
+        expect(mock.tables()).not.toContain('salary_line_items')
+      }
+    })
+
+    it('returns 404 SALARY_RUN_NOT_FOUND for an unknown run', async () => {
+      const { res, body } = await create(
+        { ...owner, ...idem, salary_runs: { data: null, error: null } },
+        textBody,
+      )
+      expect(res.status).toBe(404)
+      expect(body.error.code).toBe('SALARY_RUN_NOT_FOUND')
+    })
+
+    it('returns 404 SALARY_RUN_EMPLOYEE_NOT_FOUND for an employee not on the run', async () => {
+      const { res, body } = await create(
+        { ...owner, ...idem, ...draftRun, salary_run_employees: { data: null, error: null } },
+        textBody,
+      )
+      expect(res.status).toBe(404)
+      expect(body.error.code).toBe('SALARY_RUN_EMPLOYEE_NOT_FOUND')
+    })
+
+    it('returns 401 for a text row without a bearer token', async () => {
+      mockValidate.mockResolvedValue(null)
+      mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
+      const res = await createLine(
+        new Request(createUrl, { method: 'POST', body: JSON.stringify(textBody) }),
+        createParams(COMPANY_ID, RUN_ID, EMPLOYEE_ID),
+      )
+      expect(res.status).toBe(401)
+    })
+  })
+
+  describe('PATCH /salary-runs/:id/lines/:lineId', () => {
+    const storedText = { data: { ...TEXT_LINE, salary_run_employee: { salary_run_id: RUN_ID } }, error: null }
+
+    it('updates the words of a text row and returns 200', async () => {
+      const { res, body, mock } = await update(
+        {
+          ...owner,
+          ...idem,
+          ...draftRun,
+          salary_line_items: [storedText, { data: { ...TEXT_LINE, description: 'Ny text' }, error: null }],
+        },
+        { description: 'Ny text' },
+      )
+      expect(res.status).toBe(200)
+      expect(body.data).toMatchObject({ salary_line_item_id: LINE_ID, description: 'Ny text', amount: 0 })
+      expect(mock.findCall('salary_line_items', 'update')?.[0]).toMatchObject({
+        description: 'Ny text',
+        account_number: null,
+        is_taxable: false,
+      })
+    })
+
+    it('returns 400 VALIDATION_ERROR for an amount on a text row', async () => {
+      const { res, body, mock } = await update(
+        { ...owner, ...idem, ...draftRun, salary_line_items: [storedText] },
+        { amount: 250 },
+      )
+      expect(res.status).toBe(400)
+      expect(body.error.code).toBe('VALIDATION_ERROR')
+      expect(body.error.details.field).toBe('amount')
+      expect(mock.findCall('salary_line_items', 'update')).toBeUndefined()
+    })
+
+    it('returns 400 VALIDATION_ERROR when a money row is patched to 0 kr', async () => {
+      const { res, body, mock } = await update(
+        {
+          ...owner,
+          ...idem,
+          ...draftRun,
+          salary_line_items: [{ data: { ...SAMPLE_LINE, salary_run_employee: { salary_run_id: RUN_ID } }, error: null }],
+        },
+        { amount: 0 },
+      )
+      expect(res.status).toBe(400)
+      expect(body.error.code).toBe('VALIDATION_ERROR')
+      expect(body.error.details.message).toMatch(/inte är 0 kr/)
+      expect(mock.findCall('salary_line_items', 'update')).toBeUndefined()
+    })
+
+    it('returns 404 SALARY_RUN_NOT_FOUND for an unknown run', async () => {
+      const { res, body } = await update(
+        { ...owner, ...idem, salary_runs: { data: null, error: null } },
+        { description: 'Ny text' },
+      )
+      expect(res.status).toBe(404)
+      expect(body.error.code).toBe('SALARY_RUN_NOT_FOUND')
+    })
+
+    it('returns 401 without a bearer token', async () => {
+      mockValidate.mockResolvedValue(null)
+      mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
+      const res = await patchLine(
+        new Request(lineUrl, { method: 'PATCH', body: JSON.stringify({ description: 'Ny text' }) }),
+        lineParams(COMPANY_ID, RUN_ID, LINE_ID),
+      )
+      expect(res.status).toBe(401)
+    })
+  })
+})

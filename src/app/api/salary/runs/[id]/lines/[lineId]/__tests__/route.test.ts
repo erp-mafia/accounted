@@ -162,3 +162,149 @@ describe('DELETE /api/salary/runs/[id]/lines/[lineId]', () => {
     expect(body.data.deleted).toBe(true)
   })
 })
+
+// Text rows (item_type 'text', lib/salary/text-rows.ts) and the 0 kr rule
+// every door shares (crm#1076).
+describe('PATCH /api/salary/runs/[id]/lines/[lineId]: text rows and 0 kr rows', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(requireWritePermission).mockResolvedValue({ ok: true } as never)
+  })
+
+  function authedWithCalls() {
+    const mock = createQueuedMockSupabase()
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: mockUser as never,
+      supabase: mock.supabase as never,
+      error: null,
+    })
+    return mock
+  }
+
+  const TEXT_LINE = {
+    id: 'line-1',
+    item_type: 'text',
+    description: 'Lön enligt kollektivavtal',
+    quantity: null,
+    unit_price: null,
+    amount: 0,
+    is_taxable: false,
+    is_avgift_basis: false,
+    is_vacation_basis: false,
+    is_gross_deduction: false,
+    is_net_deduction: false,
+    account_number: null,
+    sort_order: 5,
+    one_off_tax_percent: null,
+    vacation_category: null,
+    vacation_saved_year: null,
+    calculation_source: null,
+    source_benefit_id: null,
+    source_recurring_line_id: null,
+    salary_run_employee: { salary_run_id: 'run-1' },
+  }
+  const BONUS_LINE = {
+    ...TEXT_LINE,
+    item_type: 'bonus',
+    description: 'Bonus',
+    amount: 5000,
+    is_taxable: true,
+    is_avgift_basis: true,
+    is_vacation_basis: true,
+    account_number: '7210',
+  }
+
+  async function patch(body: unknown) {
+    const response = await PATCH(
+      createMockRequest('/api/salary/runs/run-1/lines/line-1', { method: 'PATCH', body }),
+      params(),
+    )
+    return parseJsonResponse<{ data?: { id: string }; error?: string; code?: string }>(response)
+  }
+
+  it('returns 401 for a text-row edit when not authenticated', async () => {
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: null,
+      supabase: null as never,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+    const { status } = await patch({ description: 'Ny text' })
+    expect(status).toBe(401)
+  })
+
+  it('updates the words of a text row and keeps it words only (200)', async () => {
+    const { enqueueMany, findCall } = authedWithCalls()
+    enqueueMany([
+      { data: { id: 'run-1', status: 'draft' } },
+      { data: TEXT_LINE },
+      { data: { ...TEXT_LINE, description: 'Ny text på två rader' } },
+    ])
+
+    // Flags and an account in the patch are overridden, never stored.
+    const { status, body } = await patch({ description: ' Ny text\n på två rader ', is_taxable: true, account_number: '7210' })
+
+    expect(status).toBe(200)
+    expect(body.data?.id).toBe('line-1')
+    expect(findCall('salary_line_items', 'update')?.[0]).toEqual({
+      description: 'Ny text på två rader',
+      is_taxable: false,
+      is_avgift_basis: false,
+      is_vacation_basis: false,
+      is_gross_deduction: false,
+      is_net_deduction: false,
+      account_number: null,
+    })
+  })
+
+  it('returns 400 for an amount on a text row, and writes nothing', async () => {
+    const { enqueueMany, findCall } = authedWithCalls()
+    enqueueMany([{ data: { id: 'run-1', status: 'draft' } }, { data: TEXT_LINE }])
+    const { status, body } = await patch({ amount: 250 })
+    expect(status).toBe(400)
+    expect(body.code).toBe('VALIDATION_ERROR')
+    expect(body.error).toBe('En textrad har inget belopp. Lägg beloppet på en egen rad.')
+    expect(findCall('salary_line_items', 'update')).toBeUndefined()
+  })
+
+  it('returns 400 when a money row is patched to 0 kr', async () => {
+    const { enqueueMany, findCall } = authedWithCalls()
+    enqueueMany([{ data: { id: 'run-1', status: 'draft' } }, { data: BONUS_LINE }])
+    const { status, body } = await patch({ amount: 0 })
+    expect(status).toBe(400)
+    expect(body.code).toBe('VALIDATION_ERROR')
+    expect(body.error).toMatch(/inte är 0 kr/)
+    expect(findCall('salary_line_items', 'update')).toBeUndefined()
+  })
+
+  it('returns 400 when a row is turned into or out of a text row', async () => {
+    for (const [line, itemType] of [
+      [BONUS_LINE, 'text'],
+      [TEXT_LINE, 'bonus'],
+    ] as const) {
+      const { enqueueMany } = authedWithCalls()
+      enqueueMany([{ data: { id: 'run-1', status: 'draft' } }, { data: line }])
+      const { status, body } = await patch({ item_type: itemType })
+      expect(status).toBe(400)
+      expect(body.error).toMatch(/kan inte göras om till eller från en textrad/)
+    }
+  })
+
+  it('returns 404 for an unknown run', async () => {
+    const { enqueueMany } = authedWithCalls()
+    enqueueMany([{ data: null }])
+    const { status, body } = await patch({ description: 'Ny text' })
+    expect(status).toBe(404)
+    expect(body.code).toBe('SALARY_RUN_NOT_FOUND')
+  })
+
+  it('returns 404 for a text row of another run', async () => {
+    const { enqueueMany } = authedWithCalls()
+    enqueueMany([
+      { data: { id: 'run-1', status: 'draft' } },
+      { data: { ...TEXT_LINE, salary_run_employee: { salary_run_id: 'run-2' } } },
+    ])
+    const { status, body } = await patch({ description: 'Ny text' })
+    expect(status).toBe(404)
+    expect(body.code).toBe('SALARY_LINE_NOT_FOUND')
+  })
+})

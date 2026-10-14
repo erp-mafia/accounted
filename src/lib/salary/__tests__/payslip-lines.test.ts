@@ -14,6 +14,7 @@ import {
   updatePayslipLine,
   deletePayslipLine,
 } from '@/lib/salary/payslip-lines'
+import { TEXT_ROW_RETYPE_MESSAGE, ZERO_AMOUNT_MESSAGE } from '@/lib/salary/text-rows'
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const RUN_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
@@ -698,6 +699,162 @@ describe('is_avgift_basis=false on a line the avgiftsunderlag always includes (a
       patch: { amount: 6000 },
       dryRun: true,
     })
+    expect(result.ok).toBe(true)
+  })
+})
+
+describe('text rows and the zero-amount rule (crm#1076)', () => {
+  const TEXT_INPUT = {
+    ...BASE_INPUT,
+    item_type: 'text' as const,
+    description: '  Lönen består av grundlön\n och personligt tillägg ',
+    amount: undefined,
+  }
+  const TEXT_LINE = {
+    ...EXISTING_LINE,
+    item_type: 'text',
+    description: 'Lönen enligt avtal',
+    amount: 0,
+    is_taxable: false,
+    is_avgift_basis: false,
+    is_vacation_basis: false,
+    account_number: null,
+  }
+  const gates = () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: { id: SRE_ID, employee_id: EMPLOYEE_ID } })
+  }
+  const create = (input: Record<string, unknown>) =>
+    createPayslipLine(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      target: { salaryRunEmployeeId: SRE_ID },
+      input: input as never,
+    })
+  const update = (patch: Record<string, unknown>) =>
+    updatePayslipLine(supabase, { companyId: COMPANY_ID, salaryRunId: RUN_ID, lineId: LINE_ID, patch: patch as never })
+
+  it('stores a text row as words only: amount 0, every flag false, no account, normalised text', async () => {
+    gates()
+    mock.enqueue({ data: TEXT_LINE })
+    const result = await create(TEXT_INPUT)
+    expect(result.ok).toBe(true)
+    expect(mock.findCall('salary_line_items', 'insert')?.[0]).toMatchObject({
+      item_type: 'text',
+      description: 'Lönen består av grundlön och personligt tillägg',
+      quantity: null,
+      unit_price: null,
+      amount: 0,
+      is_taxable: false,
+      is_avgift_basis: false,
+      is_vacation_basis: false,
+      is_gross_deduction: false,
+      is_net_deduction: false,
+      account_number: null,
+    })
+  })
+
+  it('ignores a caller account on a text row', async () => {
+    gates()
+    mock.enqueue({ data: TEXT_LINE })
+    await create({ ...TEXT_INPUT, amount: 0, account_number: '7210' })
+    expect(mock.findCall('salary_line_items', 'insert')?.[0]).toMatchObject({ account_number: null, amount: 0 })
+  })
+
+  it.each([
+    ['an amount', { amount: 500 }, 'amount'],
+    ['a quantity', { quantity: 1 }, 'quantity'],
+    ['an à-pris', { unit_price: 100 }, 'unit_price'],
+    ['blank text', { description: ' \n ' }, 'description'],
+  ])('refuses a text row with %s before writing', async (_label, fields, field) => {
+    gates()
+    const result = await create({ ...TEXT_INPUT, ...fields })
+    expect(result).toMatchObject({ ok: false, code: 'VALIDATION_ERROR', details: { field } })
+    expect(mock.findCall('salary_line_items', 'insert')).toBeUndefined()
+  })
+
+  it('refuses a 0 kr money row from every door, before writing', async () => {
+    gates()
+    const result = await create({ ...BASE_INPUT, item_type: 'other', description: 'Semesterdagar kvar: 12', amount: 0 })
+    expect(result).toEqual({
+      ok: false,
+      code: 'VALIDATION_ERROR',
+      details: { field: 'amount', message: ZERO_AMOUNT_MESSAGE },
+    })
+    expect(mock.findCall('salary_line_items', 'insert')).toBeUndefined()
+  })
+
+  it('refuses a money row without an amount, and one that rounds to 0 kr', async () => {
+    gates()
+    expect(await create({ ...BASE_INPUT, amount: undefined })).toMatchObject({ ok: false, code: 'VALIDATION_ERROR' })
+    gates()
+    expect(await create({ ...BASE_INPUT, amount: 0.004 })).toMatchObject({ ok: false, code: 'VALIDATION_ERROR' })
+  })
+
+  it('accepts a vacation row that carries days and no amount', async () => {
+    gates()
+    mock.enqueue({ data: { ...EXISTING_LINE, item_type: 'vacation', quantity: 3, amount: 0 } })
+    const result = await create({ ...BASE_INPUT, item_type: 'vacation', description: 'Semester', quantity: 3, amount: 0 })
+    expect(result.ok).toBe(true)
+    expect(mock.findCall('salary_line_items', 'insert')?.[0]).toMatchObject({ item_type: 'vacation', quantity: 3, amount: 0 })
+  })
+
+  it('refuses turning a money row into a text row', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: { ...EXISTING_LINE, amount: 0 } })
+    const result = await update({ item_type: 'text', amount: 0 })
+    expect(result).toEqual({
+      ok: false,
+      code: 'VALIDATION_ERROR',
+      details: { field: 'item_type', message: TEXT_ROW_RETYPE_MESSAGE },
+    })
+    expect(mock.findCall('salary_line_items', 'update')).toBeUndefined()
+  })
+
+  it('refuses turning a text row into a money row', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: TEXT_LINE })
+    const result = await update({ item_type: 'other', amount: 100 })
+    expect(result).toMatchObject({ ok: false, details: { field: 'item_type' } })
+  })
+
+  it('a patch on a text row keeps it words only: flags forced false, account null, text normalised', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: TEXT_LINE })
+    mock.enqueue({ data: { ...TEXT_LINE, salary_run_employee: undefined } })
+    const result = await update({ description: 'Ny\ntext', is_taxable: true, account_number: '7210' })
+    expect(result.ok).toBe(true)
+    expect(mock.findCall('salary_line_items', 'update')?.[0]).toMatchObject({
+      description: 'Ny text',
+      is_taxable: false,
+      is_avgift_basis: false,
+      is_vacation_basis: false,
+      is_gross_deduction: false,
+      is_net_deduction: false,
+      account_number: null,
+    })
+  })
+
+  it('refuses an amount patched onto a text row', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: TEXT_LINE })
+    const result = await update({ amount: 250 })
+    expect(result).toMatchObject({ ok: false, code: 'VALIDATION_ERROR', details: { field: 'amount' } })
+  })
+
+  it('refuses patching a money row down to 0 kr', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: EXISTING_LINE })
+    const result = await update({ amount: 0 })
+    expect(result).toMatchObject({ ok: false, code: 'VALIDATION_ERROR', details: { field: 'amount' } })
+    expect(mock.findCall('salary_line_items', 'update')).toBeUndefined()
+  })
+
+  it('lets an unrelated patch through on a 0 kr row stored before the rule', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: { ...EXISTING_LINE, item_type: 'other', amount: 0 } })
+    mock.enqueue({ data: { ...EXISTING_LINE, item_type: 'other', amount: 0, description: 'Ny', salary_run_employee: undefined } })
+    const result = await update({ description: 'Ny' })
     expect(result.ok).toBe(true)
   })
 })

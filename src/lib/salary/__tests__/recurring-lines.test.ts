@@ -2,9 +2,12 @@ import { describe, it, expect } from 'vitest'
 import {
   RECURRING_LINE_ITEM_TYPES,
   RECURRING_LINE_AMOUNT_SIGN_MESSAGE,
+  RECURRING_LINE_LABELS,
   recurringLineFlags,
   validateRecurringLineAmount,
 } from '../recurring-lines'
+import { RecurringLineItemTypeSchema } from '@/lib/api/schemas'
+import { TEXT_ROW_AMOUNT_MESSAGE } from '@/lib/salary/text-rows'
 
 describe('recurringLineFlags', () => {
   it('marks gross deductions as taxable, avgift-basis gross deductions', () => {
@@ -35,15 +38,33 @@ describe('recurringLineFlags', () => {
     }
   })
 
-  it('every supported type is a deduction with exactly one deduction flag set', () => {
-    // 'other' (recurring addition) is deliberately absent: the engine does
-    // not treat generic taxable rows as additions, see recurring-lines.ts.
+  it('every money type is a deduction with exactly one deduction flag set', () => {
+    // 'other' (recurring addition) is deliberately absent: proration,
+    // absence, sjuklön and the OB rate read only monthly_salary, see
+    // recurring-lines.ts.
     expect(RECURRING_LINE_ITEM_TYPES).not.toContain('other')
-    for (const t of RECURRING_LINE_ITEM_TYPES) {
+    for (const t of RECURRING_LINE_ITEM_TYPES.filter((type) => type !== 'text')) {
       const flags = recurringLineFlags(t)
       expect(flags.is_gross_deduction && flags.is_net_deduction).toBe(false)
       expect(flags.is_gross_deduction || flags.is_net_deduction).toBe(true)
     }
+  })
+
+  it('a text row carries no flag at all', () => {
+    expect(recurringLineFlags('text')).toEqual({
+      is_taxable: false,
+      is_avgift_basis: false,
+      is_vacation_basis: false,
+      is_gross_deduction: false,
+      is_net_deduction: false,
+    })
+  })
+
+  it('the Zod enum and the labels are derived from the one type list', () => {
+    expect(RecurringLineItemTypeSchema.options).toEqual([...RECURRING_LINE_ITEM_TYPES])
+    expect(Object.keys(RECURRING_LINE_LABELS).sort()).toEqual(
+      RECURRING_LINE_ITEM_TYPES.filter((type) => type !== 'text').sort(),
+    )
   })
 })
 
@@ -69,5 +90,18 @@ describe('validateRecurringLineAmount', () => {
     expect(validateRecurringLineAmount('gross_deduction_pension', Number.POSITIVE_INFINITY)).toBe(
       RECURRING_LINE_AMOUNT_SIGN_MESSAGE,
     )
+  })
+})
+
+describe('validateRecurringLineAmount on a text row', () => {
+  it('accepts no amount or 0, refuses any other amount', () => {
+    expect(validateRecurringLineAmount('text', undefined)).toBeNull()
+    expect(validateRecurringLineAmount('text', 0)).toBeNull()
+    expect(validateRecurringLineAmount('text', -100)).toBe(TEXT_ROW_AMOUNT_MESSAGE)
+    expect(validateRecurringLineAmount('text', 100)).toBe(TEXT_ROW_AMOUNT_MESSAGE)
+  })
+
+  it('a deduction still needs an amount', () => {
+    expect(validateRecurringLineAmount('net_deduction_union', undefined)).toBe(RECURRING_LINE_AMOUNT_SIGN_MESSAGE)
   })
 })

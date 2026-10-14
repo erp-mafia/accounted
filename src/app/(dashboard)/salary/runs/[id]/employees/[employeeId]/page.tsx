@@ -15,6 +15,7 @@ import { SalaryCalendar } from '@/components/salary/SalaryCalendar'
 import { SalaryOverridePanel } from '@/components/salary/SalaryOverridePanel'
 import { AddPayslipLineDialog } from '@/components/salary/AddPayslipLineDialog'
 import { isManualPayslipLineType, manualLineCapsFromRunParams } from '@/lib/salary/manual-payslip-lines'
+import { comparePayslipLines, isTextRow } from '@/lib/salary/text-rows'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { hasCustomDeviationWindow } from '@/lib/salary/deviation-period'
 import { payslipCalendarWindow } from '@/lib/salary/payslip-calendar'
@@ -63,6 +64,7 @@ const LINE_ITEM_TYPE_KEYS: Record<SalaryLineItemType, string> = {
   oresavrundning: 'li_oresavrundning',
   correction: 'li_correction',
   other: 'li_other',
+  text: 'li_text',
 }
 
 /** A line as the detail route returns it: the source columns say where it came from. */
@@ -241,7 +243,9 @@ export default function SalaryRunEmployeeDetailPage({
 
   const { run, runEmployee } = current
   const employee = runEmployee.employee
-  const lineItems = runEmployee.line_items ?? []
+  // The payslip order (the PDF uses the same compare): base salary, the
+  // recurring text rows, manual text rows, then the rest by sort_order.
+  const lineItems = [...(runEmployee.line_items ?? [])].sort(comparePayslipLines)
   const periodLabel = `${run.period_year}-${String(run.period_month).padStart(2, '0')}`
   const readOnly = run.status !== 'draft' && run.status !== 'review'
   // Lines can be added to and taken off the payslip only while the run is a
@@ -451,35 +455,39 @@ export default function SalaryRunEmployeeDetailPage({
                 </tr>
               </thead>
               <tbody>
-                {lineItems.map(li => (
-                  <tr key={li.id} className={cn(canEditLines && 'group')}>
-                    <td className={cn(TD_CLASS, 'pl-0 text-muted-foreground')}>
-                      {LINE_ITEM_TYPE_KEYS[li.item_type] ? t(LINE_ITEM_TYPE_KEYS[li.item_type]) : li.item_type}
-                    </td>
-                    <td className={TD_CLASS}>{li.description}</td>
-                    <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{li.quantity ?? '-'}</td>
-                    <td className={cn(TD_CLASS, 'text-right tabular-nums', !canEditLines && 'pr-0')}>
-                      {formatCurrency(li.amount)}
-                    </td>
-                    {canEditLines && (
-                      <td className={cn(TD_CLASS, 'pr-0 text-right')}>
-                        {isRemovableLine(li) && (
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            className={cn('-my-1 text-muted-foreground hover:text-foreground', HOVER_REVEAL_CLASS)}
-                            onClick={() => handleRemoveLine(li.id)}
-                            loading={removingLineId === li.id}
-                            aria-label={li.source_expense_claim_id ? t('remove_expense_claim_line_aria') : t('remove_line_aria')}
-                            title={li.source_expense_claim_id ? t('remove_expense_claim_line_aria') : t('remove_line_aria')}
-                          >
-                            {removingLineId !== li.id && <X className="h-4 w-4" />}
-                          </Button>
-                        )}
+                {lineItems.map(li => {
+                  // A text row is words only: blank quantity and amount, never "0,00 kr".
+                  const text = isTextRow(li)
+                  return (
+                    <tr key={li.id} className={cn(canEditLines && 'group')}>
+                      <td className={cn(TD_CLASS, 'pl-0 text-muted-foreground')}>
+                        {LINE_ITEM_TYPE_KEYS[li.item_type] ? t(LINE_ITEM_TYPE_KEYS[li.item_type]) : li.item_type}
                       </td>
-                    )}
-                  </tr>
-                ))}
+                      <td className={TD_CLASS}>{li.description}</td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{text ? null : (li.quantity ?? '-')}</td>
+                      <td className={cn(TD_CLASS, 'text-right tabular-nums', !canEditLines && 'pr-0')}>
+                        {text ? null : formatCurrency(li.amount)}
+                      </td>
+                      {canEditLines && (
+                        <td className={cn(TD_CLASS, 'pr-0 text-right')}>
+                          {isRemovableLine(li) && (
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              className={cn('-my-1 text-muted-foreground hover:text-foreground', HOVER_REVEAL_CLASS)}
+                              onClick={() => handleRemoveLine(li.id)}
+                              loading={removingLineId === li.id}
+                              aria-label={li.source_expense_claim_id ? t('remove_expense_claim_line_aria') : t('remove_line_aria')}
+                              title={li.source_expense_claim_id ? t('remove_expense_claim_line_aria') : t('remove_line_aria')}
+                            >
+                              {removingLineId !== li.id && <X className="h-4 w-4" />}
+                            </Button>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>

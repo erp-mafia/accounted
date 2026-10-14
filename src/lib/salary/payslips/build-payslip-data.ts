@@ -21,6 +21,7 @@ import type { PayslipData, PayslipLineItem } from '@/lib/salary/pdf/payslip-temp
 import { hasCustomDeviationWindow, runDeviationWindow } from '@/lib/salary/deviation-period'
 import { decryptPersonnummer, maskPersonnummer } from '@/lib/salary/personnummer'
 import { VAXA_STOD_REFUND_STEP_LABEL } from '@/lib/salary/vaxa-stod'
+import { comparePayslipLines, isTextRow } from '@/lib/salary/text-rows'
 
 const EMPLOYMENT_LABELS: Record<string, string> = {
   employee: 'Anställd',
@@ -179,9 +180,11 @@ export function buildPayslipData(params: {
   const { run, sre, employee: emp, company } = params
   const sections = payslipSectionsFor(params.audience, run)
 
-  const lineItems: PayslipLineItem[] = ((sre.line_items || []) as Array<Record<string, unknown>>)
-    .sort((a, b) => ((a.sort_order as number) || 0) - ((b.sort_order as number) || 0))
-    .map(li => ({
+  // The payslip order the run-employee page uses too (text-rows.ts): base
+  // salary, its recurring text rows, manual text rows, then the rest.
+  const lineItems: PayslipLineItem[] = [...((sre.line_items || []) as Array<Record<string, unknown>>)]
+    .sort(comparePayslipLines)
+    .map(li => isTextRow(li) ? { description: li.description as string, amount: 0, text: true } : ({
       // A line taxed at a flat engångsskatt says so on the payslip: the
       // "Preliminär skatt" total then differs from the table amount and the
       // breakdown's "Engångsskatt (x %)" step explains the difference.

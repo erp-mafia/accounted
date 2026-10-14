@@ -162,10 +162,10 @@ curl -X PUT "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/employees/$EMPLO
 **Standing rows and benefits** live on the employee and are re-derived on every run whose payment date falls inside their validity:
 
 \`\`\`bash
-# A monthly allowance that recurs until further notice
+# A text row on every payslip that explains how the salary is built up (words only, no amount)
 curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/employees/$EMPLOYEE_ID/recurring-lines" \\
   -H "Authorization: Bearer gnubok_sk_..." -H "Idempotency-Key: $(uuidgen)" -H "Content-Type: application/json" \\
-  -d '{ "item_type": "allowance", "description": "Friskvårdsbidrag", "amount": 416.67, "valid_from": "2026-09-01" }'
+  -d '{ "item_type": "text", "description": "Månadslön 32 000 kr, varav personligt tillägg 2 000 kr", "valid_from": "2026-09-01" }'
 
 # Bilförmån at the Skatteverket schablon value
 curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/employees/$EMPLOYEE_ID/benefits" \\
@@ -173,7 +173,7 @@ curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/employees/$EMPLOYEE_ID/
   -d '{ "benefit_type": "car", "description": "Volvo XC40 2025", "monthly_value": 4210, "valid_from": "2026-09-01" }'
 \`\`\`
 
-Deductions carry a negative amount and the API rejects the wrong sign for the item type. The förmånsvärde is added to the tax and avgifter basis at \`:calculate\`; supply the schablon figure, the API does not compute it from the car.
+A recurring line is a deduction with a negative amount (the API rejects the wrong sign for the item type) or a text row with no amount. Recurring additions are refused, because proration, absence, sjuklön and semestertillägg read only the employee's \`monthly_salary\`: put a standing raise there. The förmånsvärde is added to the tax and avgifter basis at \`:calculate\`; supply the schablon figure, the API does not compute it from the car.
 
 **Vacation taken** is a payslip line too: \`item_type: "vacation"\` with \`quantity\` = days, and \`vacation_category\` when the days are not this year's paid days (\`saved\` with an optional \`vacation_saved_year\`, else the oldest saved year is consumed first; \`unpaid\`; \`advance\`; \`extra_paid\`), so the ledger draws them from the right pool loaded in step 4.
 

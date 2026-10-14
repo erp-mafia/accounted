@@ -83,6 +83,8 @@ const styles = StyleSheet.create({
   colQty: { flex: 1, textAlign: 'right' as const },
   colRate: { flex: 1.5, textAlign: 'right' as const },
   colAmount: { flex: 1.5, textAlign: 'right' as const },
+  // A text row's words run across Beskrivning, Antal and á-pris.
+  colText: { flex: 6 },
   headerText: {
     fontSize: 8,
     fontFamily: 'Helvetica-Bold',
@@ -259,6 +261,8 @@ export interface PayslipLineItem {
   quantity?: number
   unitPrice?: number
   amount: number
+  /** A text row (lib/salary/text-rows.ts): words across the row, no amount printed. */
+  text?: boolean
 }
 
 function fmt(amount: number): string {
@@ -332,14 +336,21 @@ export function PayslipPDF({ data }: { data: PayslipData }) {
             <Text style={[styles.headerText, styles.colRate]}>á-pris</Text>
             <Text style={[styles.headerText, styles.colAmount]}>Belopp</Text>
           </View>
-          {data.lineItems.map((item, i) => (
-            <View key={i} style={i % 2 === 1 ? styles.rowAlt : styles.row}>
-              <Text style={styles.colDesc}>{item.description}</Text>
-              <Text style={styles.colQty}>{item.quantity != null ? item.quantity : ''}</Text>
-              <Text style={styles.colRate}>{item.unitPrice != null ? fmt(item.unitPrice) : ''}</Text>
-              <Text style={styles.colAmount}>{fmt(item.amount)}</Text>
-            </View>
-          ))}
+          {data.lineItems.map((item, i) =>
+            item.text ? (
+              <View key={i} style={i % 2 === 1 ? styles.rowAlt : styles.row}>
+                <Text style={styles.colText}>{pdfText(item.description)}</Text>
+                <View style={styles.colAmount} />
+              </View>
+            ) : (
+              <View key={i} style={i % 2 === 1 ? styles.rowAlt : styles.row}>
+                <Text style={styles.colDesc}>{item.description}</Text>
+                <Text style={styles.colQty}>{item.quantity != null ? item.quantity : ''}</Text>
+                <Text style={styles.colRate}>{item.unitPrice != null ? fmt(item.unitPrice) : ''}</Text>
+                <Text style={styles.colAmount}>{fmt(item.amount)}</Text>
+              </View>
+            ),
+          )}
         </View>
 
         {/* Summary: Gross → Tax → Net */}

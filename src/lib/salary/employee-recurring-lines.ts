@@ -12,9 +12,11 @@
  * whose payment_date falls inside valid_from..valid_to
  * (lib/salary/run-calculation.ts, step 8d3). Rules enforced here so they
  * cannot drift between surfaces:
- *   - the amount sign follows the item type: every supported type is a
- *     deduction and must be negative, mirroring the
- *     employee_recurring_lines_amount_sign CHECK;
+ *   - the amount sign follows the item type: a deduction must be negative,
+ *     mirroring the employee_recurring_lines_amount_sign CHECK;
+ *   - a text row (lib/salary/text-rows.ts) carries words only: amount 0,
+ *     no account (both forced), its text normalised and not blank, mirroring
+ *     the employee_recurring_lines_text_row CHECK;
  *   - valid_to, when set, is on or after valid_from, checked against the
  *     MERGED state on update (the partial schema only sees the body);
  *   - account_number is a four-digit BAS number or null (null lets the
@@ -45,6 +47,7 @@ import {
   validateRecurringLineAmount,
   type RecurringLineItemType,
 } from '@/lib/salary/recurring-lines'
+import { isTextRow, normalizeTextRow, validateTextRow } from '@/lib/salary/text-rows'
 
 export interface RecurringLineFailure {
   ok: false
@@ -165,9 +168,15 @@ function accountFailure(accountNumber: string | null | undefined): RecurringLine
   return null
 }
 
-function amountFailure(itemType: RecurringLineItemType, amount: number): RecurringLineFailure | null {
+function amountFailure(itemType: RecurringLineItemType, amount: number | undefined): RecurringLineFailure | null {
   const message = validateRecurringLineAmount(itemType, amount)
   return message ? validationFailure('amount', message) : null
+}
+
+/** A text row's words, normalised: present and within the cap. */
+function textFailure(description: string): RecurringLineFailure | null {
+  const issue = validateTextRow({ description })
+  return issue ? validationFailure(issue.field, issue.message) : null
 }
 
 export async function listEmployeeRecurringLines(
@@ -213,8 +222,10 @@ export async function createEmployeeRecurringLine(
 
   // Input rules first: they need no database round trip, and a caller that
   // bypassed the schema (MCP, scripts) gets the same field-level answer.
+  const text = isTextRow(input)
   const invalid =
     amountFailure(input.item_type, input.amount) ??
+    (text ? textFailure(input.description) : null) ??
     periodFailure(input.valid_from, input.valid_to ?? null) ??
     accountFailure(input.account_number)
   if (invalid) return invalid
@@ -227,9 +238,11 @@ export async function createEmployeeRecurringLine(
     company_id: args.companyId,
     user_id: args.userId,
     item_type: input.item_type,
-    description: input.description,
-    amount: roundOre(input.amount),
-    account_number: input.account_number ?? null,
+    description: text ? normalizeTextRow(input.description) : input.description,
+    // A text row has no amount and no account; validation above guaranteed
+    // the amount of every other row.
+    amount: text ? 0 : roundOre(input.amount as number),
+    account_number: text ? null : (input.account_number ?? null),
     valid_from: input.valid_from,
     valid_to: input.valid_to ?? null,
     metadata: input.metadata ?? {},
@@ -297,6 +310,11 @@ export async function updateEmployeeRecurringLine(
     const invalid = amountFailure(existing.item_type, patch.amount)
     if (invalid) return invalid
   }
+  const text = isTextRow(existing)
+  if (text && patch.description !== undefined) {
+    const invalid = textFailure(patch.description)
+    if (invalid) return invalid
+  }
 
   // Validity period against the MERGED state: when only one half is patched
   // the other half lives on the stored row.
@@ -311,9 +329,12 @@ export async function updateEmployeeRecurringLine(
   // Explicit literal keys (not a body spread) so the phantom-column scanner
   // can verify every column this update can touch.
   const updates: Record<string, unknown> = {}
-  if (patch.description !== undefined) updates.description = patch.description
+  if (patch.description !== undefined) {
+    updates.description = text ? normalizeTextRow(patch.description) : patch.description
+  }
   if (patch.amount !== undefined) updates.amount = roundOre(patch.amount)
-  if (patch.account_number !== undefined) updates.account_number = patch.account_number
+  // A text row has no account to set.
+  if (patch.account_number !== undefined && !text) updates.account_number = patch.account_number
   if (patch.valid_from !== undefined) updates.valid_from = patch.valid_from
   if (patch.valid_to !== undefined) updates.valid_to = patch.valid_to
   if (patch.metadata !== undefined) updates.metadata = patch.metadata

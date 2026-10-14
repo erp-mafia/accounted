@@ -20,6 +20,7 @@ import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { creditNatural, debitNatural } from '@/lib/bookkeeping/line-side'
 import { SALARY_ACCOUNTS, getLineItemAccount, isTaxFreeReimbursementType } from './account-mapping'
+import { isTextRow } from './text-rows'
 import {
   computeDeclaredAvgifterWithOverrides,
   isFSkattStatus,
@@ -606,6 +607,8 @@ function buildSalaryLines(
     const BENEFIT_TYPES = ['benefit_car', 'benefit_housing', 'benefit_meals', 'benefit_wellness', 'benefit_bike', 'benefit_other']
     let lineItemTotal = 0
     for (const li of emp.line_items) {
+      // A text row is words on the payslip, no money: nothing to book.
+      if (isTextRow(li)) continue
       // Öresavrundning: part of the payout (the 1930 credit uses the rounded
       // net) but NOT part of gross salary, so it must stay out of
       // lineItemTotal: the baseRemainder below reconciles line items against
@@ -655,9 +658,11 @@ function buildSalaryLines(
     }
   }
 
-  // Debit: Salary expense accounts (one line per account+dimensions bucket)
+  // Debit: Salary expense accounts (one line per account+dimensions bucket).
+  // Judged on the rounded amount: a bucket whose rows cancel to float noise
+  // would otherwise post a 0,00 line.
   for (const bucket of expenseBuckets.values()) {
-    if (bucket.amount === 0) continue
+    if (roundOre(bucket.amount) === 0) continue
     if (bucket.amount > 0) {
       lines.push({
         account_number: bucket.account,
@@ -1033,6 +1038,7 @@ async function activateSalaryAccounts(
   for (const emp of run.employees) {
     needed.add(getEmployeeSalaryAccount(emp.employment_type))
     for (const li of emp.line_items) {
+      if (isTextRow(li)) continue
       const account = li.account_number || getLineItemAccount(li.item_type as never, emp.employment_type)
       if (account) needed.add(account)
     }

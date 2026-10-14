@@ -892,3 +892,80 @@ describe('generateAgiDeclaration: an employee payment for a benefit reduces the 
     expect(JSON.stringify(result.details)).toContain('flera förmånstyper')
   })
 })
+
+describe('generateAgiDeclaration: text rows never reach the declaration', () => {
+  // A text row (item_type 'text', lib/salary/text-rows.ts) is words on the
+  // payslip: amount 0, no quantity, every flag false. The AGI reads the
+  // stored totals and the benefit rows only, so a run with text rows declares
+  // exactly what the same run without them declares.
+  const text = (description: string) => ({
+    item_type: 'text',
+    description,
+    amount: 0,
+    quantity: null,
+    unit_price: null,
+    account_number: null,
+    is_taxable: false,
+    is_avgift_basis: false,
+    is_vacation_basis: false,
+    is_gross_deduction: false,
+    is_net_deduction: false,
+  })
+  const CAR = { item_type: 'benefit_car', amount: 3000 }
+  const PAYMENT = { item_type: 'net_deduction_benefit_payment', amount: -1000, is_net_deduction: true }
+  const regular = (lineItems: unknown[]) => ({
+    ...REGULAR_ROW,
+    benefit_values: 2000,
+    avgifter_basis: 42000,
+    avgifter_amount: roundOre(42000 * 0.3142),
+    sick_days: 1,
+    line_items: lineItems,
+  })
+  const fSkatt = (lineItems: unknown[]) => ({ ...F_SKATT_ROW, line_items: lineItems })
+
+  async function generate(roster: unknown[]) {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueHappyPath(enqueueMany, roster)
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error('AGI refused')
+    // The generation timestamp is the only part that may differ between two calls.
+    const stripCreated = (xml: string) => xml.replace(/<gem:Skapad>[^<]*<\/gem:Skapad>/, '')
+    const { xml, ...rest } = result
+    const stored = findCall('agi_declarations', 'insert')?.[0] as Record<string, unknown>
+    const storedWithoutXml = Object.fromEntries(
+      Object.entries(stored).map(([k, v]) => [k, typeof v === 'string' && v.includes('<gem:') ? stripCreated(v) : v]),
+    )
+    return { xml: stripCreated(xml), rest, stored: storedWithoutXml }
+  }
+
+  it('declares the same IU and HU figures with and without text rows', async () => {
+    const moneyRows = [{ item_type: 'monthly_salary', amount: 40000 }, CAR, PAYMENT]
+    const plain = await generate([regular(moneyRows), fSkatt([])])
+    const withText = await generate([
+      regular([text('Grundlön enligt avtal'), ...moneyRows, text('Bilförmån Volvo XC40')]),
+      fSkatt([text('Konsultarvode september')]),
+    ])
+
+    expect(withText.xml).toEqual(plain.xml)
+    expect(withText.rest).toEqual(plain.rest)
+    expect(withText.stored).toEqual(plain.stored)
+
+    // Not vacuous: the declaration carries the salary, the reduced benefit,
+    // the F-skatt payment and the employer totals.
+    const iu = iuBlockFor(withText.xml, '199001011234')
+    expect(iu).toContain('<gem:KontantErsattningUlagAG faltkod="011">40000</gem:KontantErsattningUlagAG>')
+    expect(iu).toContain('<gem:SkatteplBilformanUlagAG faltkod="013">2000</gem:SkatteplBilformanUlagAG>')
+    expect(withText.xml).toContain('faltkod="131">15000<')
+    expect(withText.xml).not.toContain('Grundlön enligt avtal')
+    expect(withText.rest.employeeCount).toBe(2)
+  })
+
+  it('a payslip whose only extra row is text keeps a benefit payment attributable', async () => {
+    // resolveTaxableBenefits sees the text row (amount 0) and must not count
+    // it as a second benefit type or a payment.
+    const result = await generate([regular([text('Förmånsbil enligt avtal'), CAR, PAYMENT])])
+    const iu = iuBlockFor(result.xml, '199001011234')
+    expect(iu).toContain('<gem:SkatteplBilformanUlagAG faltkod="013">2000</gem:SkatteplBilformanUlagAG>')
+  })
+})

@@ -1,11 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { getLineItemAccount } from '@/lib/salary/account-mapping'
-import type { SalaryLineItemType } from '@/types'
+import { getLineItemAccount, type MoneyLineItemType } from '@/lib/salary/account-mapping'
 
-const BASE_LINE_TYPES: SalaryLineItemType[] = ['monthly_salary', 'hourly_salary']
+const BASE_LINE_TYPES: MoneyLineItemType[] = ['monthly_salary', 'hourly_salary']
 
 /** The display line a pay type is shown with: Grundlön or Timlön. */
-export function baseSalaryLineType(salaryType: string): SalaryLineItemType {
+export function baseSalaryLineType(salaryType: string): MoneyLineItemType {
   return salaryType === 'monthly' ? 'monthly_salary' : 'hourly_salary'
 }
 
