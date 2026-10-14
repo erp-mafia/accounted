@@ -21,6 +21,7 @@ export const SE_IDEELL_FORENING: LegalFormProfile = {
     // BFNAR 2010:1 (K1 for ideella föreningar).
     simplifiedRegelverk: 'K1',
     templateColumn: 'base',
+    skattekontoAccounts: ['1630'],
   },
   equity: {
     closing: '2069',

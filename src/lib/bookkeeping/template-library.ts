@@ -9,6 +9,11 @@ import {
 import { rcBasisAccountRate } from '@/lib/reports/vat-filing-gate'
 import { roundOre } from '@/lib/money'
 import { grossVat, treatmentForRate } from '@/lib/vat/gross-split'
+import {
+  templateSkattekontoAccount,
+  templateTouchesSkattekonto,
+  type SkattekontoLedgerAccount,
+} from '@/lib/skatteverket/skattekonto-account'
 
 /**
  * Prefix for library template ids when they are mapped into the
@@ -16,6 +21,26 @@ import { grossVat, treatmentForRate } from '@/lib/vat/gross-split'
  */
 export const LIBRARY_TEMPLATE_PREFIX = 'library:'
 export function isLibraryTemplateId(id: string): boolean { return id.startsWith(LIBRARY_TEMPLATE_PREFIX) }
+
+/** Whether a library template's lines name the skattekonto (1630). */
+export function libraryLinesTouchSkattekonto(lines: ReadonlyArray<BookingTemplateLibraryLine> | null | undefined): boolean {
+  return templateTouchesSkattekonto((lines ?? []).map((l) => l.account))
+}
+
+/**
+ * A system library template (a pack: "Insättning skattekonto", "Momsbetalning
+ * via skattekonto", F-skatt, AGI) names the skattekonto as 1630; for a
+ * company that runs its skattekonto on 2012 it books 2012 (PH 175). Applied
+ * where a company reads or books a system template; a company's own template
+ * keeps the accounts its author wrote.
+ */
+export function libraryLinesForSkattekonto(
+  lines: BookingTemplateLibraryLine[],
+  skattekontoAccount: SkattekontoLedgerAccount | undefined,
+): BookingTemplateLibraryLine[] {
+  if (!skattekontoAccount || !libraryLinesTouchSkattekonto(lines)) return lines
+  return lines.map((l) => ({ ...l, account: templateSkattekontoAccount(l.account, skattekontoAccount) }))
+}
 
 /**
  * Convert a template's line pattern + total amount into form lines

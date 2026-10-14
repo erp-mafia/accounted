@@ -38,7 +38,15 @@ vi.mock('@/lib/auth/require-write', () => ({
 
 // applyTemplate is the pure ratio/VAT expander used by the route. The
 // route test stubs it so we don't need a real template object.
-vi.mock('@/lib/bookkeeping/template-library', () => ({
+// The company's skattekonto account (PH 175): read only for a system
+// template that names 1630.
+vi.mock('@/lib/skatteverket/skattekonto-account', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/skatteverket/skattekonto-account')>()),
+  resolveSkattekontoAccount: vi.fn(async () => '1630'),
+}))
+
+vi.mock('@/lib/bookkeeping/template-library', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/bookkeeping/template-library')>()),
   applyTemplate: vi.fn(),
 }))
 
@@ -63,6 +71,7 @@ vi.mock('@/lib/processing-history/append', () => ({
 import { POST } from '../route'
 import { eventBus } from '@/lib/events/bus'
 import { applyTemplate } from '@/lib/bookkeeping/template-library'
+import { resolveSkattekontoAccount } from '@/lib/skatteverket/skattekonto-account'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
@@ -288,6 +297,44 @@ describe('POST /api/transactions/bulk-book', () => {
       type: 'journal_entry.committed',
       payload: { entry: posted, userId: 'user-1', companyId: 'company-1' },
     })
+  })
+
+  it('books a system skattekonto template on 2012 for a firm that runs the skattekonto there (PH 175)', async () => {
+    vi.mocked(resolveSkattekontoAccount).mockResolvedValueOnce('2012')
+    enqueue({
+      data: [{ id: TX1, amount: -3000, currency: 'SEK', description: 'Skatteverket', date: '2026-06-05' }],
+      error: null,
+    })
+    enqueue({
+      data: {
+        id: TPL,
+        name: 'Insättning skattekonto',
+        lines: [
+          { account: '1630', label: 'Skattekonto', side: 'debit', type: 'business', ratio: 1 },
+          { account: '1930', label: 'Företagskonto', side: 'credit', type: 'settlement', ratio: 1 },
+        ],
+        is_active: true,
+        is_system: true,
+      },
+      error: null,
+    })
+    vi.mocked(applyTemplate).mockImplementation((_lines, total) => [
+      { account_number: '2012', debit_amount: String(total), credit_amount: '', line_description: 'Skattekonto' },
+      { account_number: '1930', debit_amount: '', credit_amount: String(total), line_description: 'Bank' },
+    ])
+    enqueue({ data: [], error: null })
+    enqueue({ data: { ok: true, mode: 'create_new', journal_entry_id: JE, voucher_series: 'A', voucher_number: 14, linked_tx_count: 1, tx_sum: -3000 }, error: null })
+    enqueue({ data: { id: JE, company_id: 'company-1', status: 'posted', voucher_series: 'A', voucher_number: 14, lines: [] }, error: null })
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/transactions/bulk-book', {
+      method: 'POST',
+      body: { tx_ids: [TX1], template_id: TPL, mode: 'sum_per_account', entry_description: 'Skattekonto juni' },
+    })
+    await POST(request, { params: Promise.resolve({}) })
+    const [lines] = vi.mocked(applyTemplate).mock.calls[0]
+    expect(lines.map((l) => l.account)).toEqual(['2012', '1930'])
+    expect(resolveSkattekontoAccount).toHaveBeenCalledTimes(1)
   })
 
   it('maps RPC structured failure code to errorResponseFromCode', async () => {

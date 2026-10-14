@@ -93,6 +93,43 @@ describe('gnubok_credit_invoice: staging preview (#2552)', () => {
   })
 })
 
+// accounted#34: a self-billed original has invoice_number null by design; the
+// staging title and preview read "null" and the approved commit stored KR-null.
+describe('gnubok_credit_invoice: the original reference (#34)', () => {
+  it('names a self-billed original by its external number and previews KR-<external number>', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: original({ invoice_number: null, external_invoice_number: 'SB-2026-17' }) })
+    enqueue({ data: { accounting_method: 'accrual' } })
+    enqueue({ data: { bookkeeping_locked_through: null } }) // period check: lock date
+    enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null } }) // period check: period
+    enqueue({ data: { id: 'op-credit-1' } })
+
+    const result = (await tool().execute(
+      { invoice_id: INVOICE_ID },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.invoice_number).toBe('SB-2026-17')
+    expect(result.preview.credit_note_number).toBe('KR-SB-2026-17')
+    const staged = findCall('pending_operations', 'insert')?.[0] as Record<string, unknown>
+    expect(staged.title).toBe('Kreditera faktura SB-2026-17')
+  })
+
+  it('refuses INVOICE_CREDIT_NO_NUMBER when the original has no number at all', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: original({ invoice_number: null, external_invoice_number: null }) })
+    enqueue({ data: { accounting_method: 'accrual' } })
+
+    await expect(
+      tool().execute({ invoice_id: INVOICE_ID }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toMatchObject({ code: 'INVOICE_CREDIT_NO_NUMBER' })
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+})
+
 // The guard list every credit door runs (creditNoteRefusal): staging used to
 // accept a credit note as the original and the approval then posted a second
 // reversal of the same sale.

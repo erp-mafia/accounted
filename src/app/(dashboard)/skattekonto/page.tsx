@@ -66,6 +66,7 @@ import type {
 import type { SkattekontoBatchRowResult } from '@/types/skatteverket'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { SKATTEKONTO_ACCOUNT_DEFAULT, isSkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 import { useSkattekontoLedgerProposalCount } from '@/components/skattekonto/use-ledger-proposal-count'
 
 const SkattekontoMatchDialog = dynamic(
@@ -102,6 +103,8 @@ interface TransaktionerEnvelope {
     upcoming: StoredSkattekontoTransaction[]
     ignored_count: number
     ignored?: StoredSkattekontoTransaction[]
+    /** The company's skattekonto account: 1630, or 2012 for an enskild firma that runs it there. */
+    skattekonto_account?: string
   }
 }
 
@@ -113,6 +116,11 @@ export default function SkattekontoPage() {
   const [showPayment, setShowPayment] = useState(false)
   const [saldo, setSaldo] = useState<SaldoEnvelope | null>(null)
   const [tx, setTx] = useState<TransaktionerEnvelope['data'] | null>(null)
+  // The company's skattekonto account (1630, or 2012 for an enskild firma that
+  // runs it there), as the rows' list route reports it.
+  const skattekontoAccount = isSkattekontoLedgerAccount(tx?.skattekonto_account)
+    ? tx.skattekonto_account
+    : SKATTEKONTO_ACCOUNT_DEFAULT
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   // Row whose inline booking dialog is open (null = closed).
@@ -696,7 +704,7 @@ export default function SkattekontoPage() {
         // Rows the imported books already hold win over the connect hint:
         // without the link they read as unbooked and invite a second booking.
         <AttnLine action={{ label: t('ledger_attn_cta'), onClick: () => setLinkAllOpen(true) }}>
-          {t('ledger_attn_body', { count: ledgerProposals ?? 0 })}
+          {t('ledger_attn_body', { count: ledgerProposals ?? 0, skattekonto: skattekontoAccount })}
         </AttnLine>
       ) : notConnected ? (
         // File-imported rows without a connection: no saldo to show, but the
@@ -877,6 +885,7 @@ export default function SkattekontoPage() {
       {bookTarget && (
         <SkattekontoBookDialog
           row={bookTarget}
+          skattekontoAccount={skattekontoAccount}
           open
           onOpenChange={(o) => {
             if (!o) setBookTarget(null)
@@ -904,6 +913,7 @@ export default function SkattekontoPage() {
             void reload()
             refreshLedgerProposals()
           }}
+          skattekontoAccount={skattekontoAccount}
         />
       )}
 
@@ -912,6 +922,7 @@ export default function SkattekontoPage() {
         open={!!matchOpenFor}
         onClose={closeMatch}
         onMatched={() => void reload()}
+        skattekontoAccount={skattekontoAccount}
       />
 
       <SkattekontoMatchDialog
@@ -923,6 +934,7 @@ export default function SkattekontoPage() {
           selection.clear()
           void reload()
         }}
+        skattekontoAccount={skattekontoAccount}
       />
 
       <Dialog open={showPayment} onOpenChange={setShowPayment}>

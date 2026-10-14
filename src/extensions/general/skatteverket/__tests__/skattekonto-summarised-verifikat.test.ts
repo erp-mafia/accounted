@@ -21,6 +21,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 
+// The company's skattekonto account (lib/skatteverket/skattekonto-account.ts):
+// 1630 here, what every company resolved to before the setting existed.
+vi.mock('@/lib/skatteverket/skattekonto-account', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/skatteverket/skattekonto-account')>()),
+  resolveSkattekontoAccount: vi.fn(async () => '1630'),
+}))
+
 type Row = Record<string, unknown>
 type Line = { account_number: string; debit_amount: number; credit_amount: number }
 
@@ -365,10 +372,20 @@ describe('the whole year booked as one summarised verifikat (crm#1043)', () => {
     expect((err as SkattekontoBookingError).ledgerCover?.entries[0].journal_entry_id).toBe(YEAR_END_ID)
     expect(vi.mocked(createDraftEntry)).not.toHaveBeenCalled()
 
-    // The override exists, and shows what it does: 1630 no longer agrees.
+    // An override without a reason is none.
     const kostnadsranta = EVENTS[4]
-    await bokforSkattekontoTransaction(supabase, COMPANY, USER, kostnadsranta.id, undefined, { allowDuplicate: true })
+    await expect(
+      bokforSkattekontoTransaction(supabase, COMPANY, USER, kostnadsranta.id, undefined, { duplicateReason: ' ' }),
+    ).rejects.toMatchObject({ code: 'LEDGER_COVER_EXISTS' })
+
+    // The override exists, needs a reason the verifikat keeps, and shows what it does: 1630 no longer agrees.
+    await bokforSkattekontoTransaction(supabase, COMPANY, USER, kostnadsranta.id, undefined, {
+      duplicateReason: 'Räntan saknas i samlingsverifikatet',
+    })
     expect(vi.mocked(createDraftEntry)).toHaveBeenCalledTimes(1)
+    expect((vi.mocked(createDraftEntry).mock.calls[0][3] as { notes?: string }).notes).toContain(
+      'Bokförd trots att bokföringen redan innehåller händelsen (B1). Skäl: Räntan saknas i samlingsverifikatet',
+    )
     const after = await bridge()
     expect(after.ledger_balance).toBe(roundOre(YEAR_NET + kostnadsranta.amount))
     expect(after.difference).toBe(roundOre(-kostnadsranta.amount))
@@ -499,5 +516,101 @@ describe('the whole year booked as one summarised verifikat (crm#1043)', () => {
     expect(second?.applied).toHaveLength(25)
     expect(second?.applied[0].remainder_amount).toBe(BEFORE_HISTORY)
     expect((await bridge()).items.unmatched_ledger[0].amount).toBe(BEFORE_HISTORY)
+  })
+})
+
+/**
+ * PH 171 follow-up, over the same real bridge and guard: the previous system
+ * booked the skattekonto one verifikat per month, dated at month end, and
+ * Skatteverket posts some events weeks after that date. The ledger plan
+ * assigns those rows to the month's verifikat, but the cover stops at an
+ * earlier date, so before this guard a planned row could be booked a second
+ * time from Transaktioner.
+ */
+describe('a monthly verifikat dated before the events it holds (PH 171)', () => {
+  const SEPTEMBER_ID = uuid(901)
+  const OCTOBER_ID = uuid(902)
+  const R0 = { id: uuid(1), date: '2026-09-14', text: 'Kostnadsränta', amount: -300 }
+  const R1 = { id: uuid(2), date: '2026-11-20', text: 'Kostnadsränta', amount: -100 }
+  const R2 = { id: uuid(3), date: '2026-11-26', text: 'Debiterad preliminärskatt', amount: -5000 }
+  // Really missing from the books: no verifikat holds it.
+  const R3 = { id: uuid(4), date: '2026-12-12', text: 'Kostnadsränta', amount: -50 }
+
+  function monthly(id: string, date: string, voucher: number, lines: Line[]): Row {
+    return {
+      id,
+      company_id: COMPANY,
+      status: 'posted',
+      voucher_number: voucher,
+      voucher_series: 'B',
+      entry_date: date,
+      description: `Skattekonto ${date.slice(0, 7)}`,
+      source_type: 'import',
+      reverses_id: null,
+      reversed_by_id: null,
+      lines,
+    }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    seed()
+    setSaldo(-5450)
+    db.skattekonto_transactions = [R0, R1, R2, R3].map(skvRow)
+    db.journal_entries = [
+      monthly(SEPTEMBER_ID, '2026-09-30', 9, [
+        { account_number: '8423', debit_amount: 300, credit_amount: 0 },
+        { account_number: '1630', debit_amount: 0, credit_amount: 300 },
+      ]),
+      // October's verifikat holds the interest and the F-skatt Skatteverket posts in November.
+      monthly(OCTOBER_ID, '2026-10-31', 10, [
+        { account_number: '2510', debit_amount: 5000, credit_amount: 0 },
+        { account_number: '8423', debit_amount: 100, credit_amount: 0 },
+        { account_number: '1630', debit_amount: 0, credit_amount: 5100 },
+      ]),
+    ]
+  })
+
+  it('the plan assigns the November rows to October, although the cover stops at 30 September', async () => {
+    const s = await bridge()
+    expect(s.unexplained_difference).toBe(0)
+    expect(s.cover).toMatchObject({ through_date: '2026-09-30', event_ids: [R0.id] })
+    const proposed = s.items.proposed.filter((i) => i.proposal?.journal_entry_id === OCTOBER_ID).map((i) => i.item_id)
+    expect(proposed).toEqual([R1.id, R2.id])
+  })
+
+  it('"Bokför" on a November row is refused with the one verifikat that holds it', async () => {
+    const err = await bokforSkattekontoTransaction(supabase, COMPANY, USER, R1.id).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(SkattekontoBookingError)
+    const refusal = err as SkattekontoBookingError
+    expect(refusal.code).toBe('LEDGER_COVER_EXISTS')
+    expect(refusal.ledgerCover).toMatchObject({ kind: 'planned_link', event_ids: [R1.id, R2.id], event_total: -5100 })
+    expect(refusal.ledgerCover?.entries[0].journal_entry_id).toBe(OCTOBER_ID)
+    expect(refusal.message).toContain('verifikat B10 (2026-10-31) på konto 1630')
+    expect(vi.mocked(createDraftEntry)).not.toHaveBeenCalled()
+  })
+
+  it('a batch of every open row books only the one really missing, and 1630 still agrees for the rest', async () => {
+    const result = await bokforSkattekontoTransactionsBatch(supabase, COMPANY, USER, [R0.id, R1.id, R2.id, R3.id])
+
+    expect(result.results.map((r) => [r.id, r.ok, r.error_code])).toEqual([
+      [R0.id, false, 'LEDGER_COVER_EXISTS'],
+      [R1.id, false, 'LEDGER_COVER_EXISTS'],
+      [R2.id, false, 'LEDGER_COVER_EXISTS'],
+      [R3.id, true, undefined],
+    ])
+    expect(vi.mocked(createDraftEntry)).toHaveBeenCalledTimes(1)
+    // Nothing was booked twice: the ledger now equals Skatteverket.
+    const after = await bridge()
+    expect(after.ledger_balance).toBe(-5450)
+    expect(after.difference).toBe(0)
+  })
+
+  it('linking the proposals settles the rows without a new verifikat', async () => {
+    const linked = await matchPairs(supabase, COMPANY, USER, 'skattekonto', { use_proposals: true })
+    expect(linked?.applied.map((a) => a.external_id).sort()).toEqual([R0.id, R1.id, R2.id].sort())
+    expect(vi.mocked(createDraftEntry)).not.toHaveBeenCalled()
+    const s = await bridge()
+    expect(s.counts).toMatchObject({ matched: 3, unmatched_external: 1, proposed: 0, unmatched_ledger: 0 })
   })
 })

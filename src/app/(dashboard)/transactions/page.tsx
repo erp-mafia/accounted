@@ -23,7 +23,11 @@ import { Loader2, SlidersHorizontal, Check } from 'lucide-react'
 import { useUiState } from '@/lib/hooks/use-ui-state'
 import { persistUiState } from '@/lib/ui-state/client'
 import { TX_COLUMNS, resolveTxColumns, type TxColumnId } from '@/lib/transactions/columns-v2'
-import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
+import {
+  SKATTEKONTO_ACCOUNT_DEFAULT,
+  isSkattekontoLedgerAccount,
+  type SkattekontoLedgerAccount,
+} from '@/lib/skatteverket/skattekonto-account'
 import { CategoryPopover } from '@/components/transactions/CategoryPopover'
 import { cashAccountKontoLabel, cashAccountLogoUrl } from '@/lib/cash-accounts/labels'
 import type { RowProposal } from '@/components/transactions/TransactionInboxCard'
@@ -686,6 +690,9 @@ export default function TransactionsPage() {
   // Skatteverket extension is enabled and connected. 503/401 → silently
   // hidden (extension disabled or user not connected).
   const [skvRows, setSkvRows] = useState<SkattekontoTransactionWithSuggestion[]>([])
+  // The company's skattekonto account (1630, or 2012 for an enskild firma that
+  // runs it there), as the rows' list route reports it.
+  const [skvAccount, setSkvAccount] = useState<SkattekontoLedgerAccount>(SKATTEKONTO_ACCOUNT_DEFAULT)
   const [skvMatchTarget, setSkvMatchTarget] = useState<StoredSkattekontoTransaction | null>(
     null,
   )
@@ -1203,6 +1210,7 @@ export default function TransactionsPage() {
       const json = await res.json()
       if (skvFetchSeqRef.current !== seq) return
       const booked = (json.data?.booked ?? []) as SkattekontoTransactionWithSuggestion[]
+      if (isSkattekontoLedgerAccount(json.data?.skattekonto_account)) setSkvAccount(json.data.skattekonto_account)
       // Keep all booked SKV rows in state: inbox view filters to obokförda
       // (journal_entry_id null), history view shows all of them (matched
       // and unmatched) interleaved with bank tx by date.
@@ -4308,7 +4316,7 @@ export default function TransactionsPage() {
         ledgerSuggestionNotice
       ) : (skvLedgerProposals ?? 0) > 0 && skattekontoInSource(effectiveSourceFilter) ? (
         <AttnLine action={{ label: t('skv_ledger_attn_cta'), onClick: () => setSkvLinkAllOpen(true) }}>
-          {t('skv_ledger_attn_body', { count: skvLedgerProposals ?? 0 })}
+          {t('skv_ledger_attn_body', { count: skvLedgerProposals ?? 0, skattekonto: skvAccount })}
         </AttnLine>
       ) : suggestionItems.length > 0 && mode !== 'review' ? (
         // Migrated-history review nudge. Max one attn line per page
@@ -4614,7 +4622,7 @@ export default function TransactionsPage() {
                         onMatch={r => setSkvMatchTarget(r)}
                         onIgnore={handleSkvIgnore}
                         columns={txColumns}
-                        accountLabel={tSkvCard('account_label', { account: SKATTEKONTO_ACCOUNT })}
+                        accountLabel={tSkvCard('account_label', { account: skvAccount })}
                       />
                     ),
                   )}
@@ -5000,12 +5008,14 @@ export default function TransactionsPage() {
           open
           onClose={() => setSkvMatchTarget(null)}
           onMatched={handleSkvMatched}
+          skattekontoAccount={skvAccount}
         />
       )}
 
       {skvBookTarget && (
         <SkattekontoBookDialog
           row={skvBookTarget}
+          skattekontoAccount={skvAccount}
           open
           onOpenChange={(o) => {
             if (!o) setSkvBookTarget(null)
@@ -5026,6 +5036,7 @@ export default function TransactionsPage() {
             if (!o) setSkvLinkAllOpen(false)
           }}
           onLinked={handleSkvLinked}
+          skattekontoAccount={skvAccount}
         />
       )}
 

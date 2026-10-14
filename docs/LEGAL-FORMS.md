@@ -43,6 +43,8 @@ export interface LegalFormProfile {
     simplifiedRegelverk: 'K1' | 'K2'
     /** Which booking-template column the form reads: base (written for EF) or the `_ab` override. */
     templateColumn: 'base' | 'ab'
+    /** Skattekonto ledger accounts, default first: 1630 for every form, 2012 also for EF. */
+    skattekontoAccounts: readonly string[]
   }
   equity: {
     /** Account the year's result closes to, and the carry at next year start. */

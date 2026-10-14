@@ -29,6 +29,7 @@ import {
   partitionFileRows,
   type SkattekontoFileRowIdentity,
 } from '@/lib/skatteverket/skattekonto-dedup'
+import { ensureSkattekontoAccountDerived } from '@/lib/skatteverket/skattekonto-account'
 import { executeSkattekontoFileImport, fetchExistingSkattekontoRows } from './import-service'
 import { detectSkattekontoFile, parseSkattekontoFile } from './parser'
 
@@ -118,6 +119,15 @@ export async function recordSkattekontoFileImport(
     if (statusError) {
       // The rows are written; only the record would misreport "processing".
       log.error('failed to finalize skattekonto_file_imports record', statusError)
+    }
+
+    // The first rows arrived: derive the skattekonto account once from the
+    // books while the company has not chosen (an enskild firma whose imported
+    // books run 2012 books and matches on 2012, PH 175). Never throws.
+    if (outcome.imported > 0) {
+      await ensureSkattekontoAccountDerived(supabase, companyId, (err) =>
+        log.warn('skattekonto account not derived', { error: err instanceof Error ? err.message : String(err) }),
+      )
     }
 
     return {

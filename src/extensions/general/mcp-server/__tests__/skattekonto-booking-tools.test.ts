@@ -12,6 +12,13 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 import { OPERATION_RISK_TIERS } from '@/lib/pending-operations/risk-tiers'
 
+// The company's skattekonto account (lib/skatteverket/skattekonto-account.ts):
+// 1630 here, what every company resolved to before the setting existed.
+vi.mock('@/lib/skatteverket/skattekonto-account', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/skatteverket/skattekonto-account')>()),
+  resolveSkattekontoAccount: vi.fn(async () => '1630'),
+}))
+
 // Stage-time preview enrichment is mocked so the tests control the rule
 // outcome; the booking functions are mocked too so any call to them from the
 // staging path (which must never happen) is caught.
@@ -21,20 +28,29 @@ const mockBokforBatch = vi.fn()
 // The ledger-twin search is mocked so the tests control whether the ledger
 // already carries the event; the message builder stays real.
 const mockTwins = vi.fn()
-// The ledger cover (rows a summarised verifikat already holds, crm#1043) is
-// mocked the same way; its message and info builders stay real.
+// The ledger holding (rows a summarised verifikat already holds, crm#1043,
+// and rows the ledger plan assigns to one verifikat, PH 171) is mocked the
+// same way: the cover and the plan are given, the check (ledgerHoldOf) and
+// the message and info builders stay real.
 const mockCover = vi.fn()
+const mockPlanned = vi.fn()
 vi.mock('@/extensions/general/skatteverket/lib/skattekonto-booking', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/extensions/general/skatteverket/lib/skattekonto-booking')>()
   return {
     ledgerTwinMessage: actual.ledgerTwinMessage,
     ledgerCoverMessage: actual.ledgerCoverMessage,
     toLedgerCoverInfo: actual.toLedgerCoverInfo,
+    ledgerHoldOf: actual.ledgerHoldOf,
+    normaliseDuplicateReason: actual.normaliseDuplicateReason,
+    DUPLICATE_REASON_MAX_LENGTH: actual.DUPLICATE_REASON_MAX_LENGTH,
     // Real: the staged verifikat must be the executor's own lines.
     buildSkattekontoEntry: actual.buildSkattekontoEntry,
     attachBookingSuggestions: (...a: unknown[]) => mockAttach(...a),
     findSkattekontoLedgerTwins: (...a: unknown[]) => mockTwins(...a),
-    findSkattekontoLedgerCover: (...a: unknown[]) => mockCover(...a),
+    findSkattekontoLedgerHolding: async (...a: unknown[]) => {
+      const cover = (await mockCover(...a)) as { event_ids: string[] } | null
+      return { account: '1630', cover, covered: new Set(cover?.event_ids ?? []), planned: mockPlanned() }
+    },
     bokforSkattekontoTransaction: (...a: unknown[]) => mockBokforSingle(...a),
     bokforSkattekontoTransactionsBatch: (...a: unknown[]) => mockBokforBatch(...a),
   }
@@ -96,6 +112,7 @@ function twinsFor(...ids: string[]): void {
 /** A summarised year-end verifikat that already holds the given open rows (crm#1043). */
 function coverFor(...ids: string[]) {
   return {
+    account_number: '1630',
     through_date: '2026-12-31',
     kind: 'ledger_agrees' as const,
     event_ids: ids,
@@ -120,9 +137,32 @@ beforeEach(() => {
   vi.clearAllMocks()
   attachWithSuggestion()
   noTwins()
-  // Default: no unlinked verifikat on 1630 covers any row.
+  // Default: no unlinked verifikat on 1630 covers any row, none is planned.
   mockCover.mockResolvedValue(null)
+  mockPlanned.mockReturnValue(new Map())
 })
+
+const REASON = 'Räntan debiterades två gånger'
+
+/** The ledger plan: these rows held by one monthly verifikat (B7, 28 February). */
+function plannedFor(...ids: string[]) {
+  const hold = {
+    entry: {
+      journal_entry_id: 'je-february',
+      voucher_number: 7,
+      voucher_series: 'B',
+      entry_date: '2027-02-28',
+      description: 'Skattekonto februari',
+      status: 'posted' as const,
+      open_amount: -10000,
+    },
+    event_ids: ids,
+    total: -10000,
+    from_date: '2027-02-28',
+    to_date: '2027-03-12',
+  }
+  mockPlanned.mockReturnValue(new Map(ids.map((id) => [id, hold])))
+}
 
 describe('book skattekonto tools: registration', () => {
   it('both tools are registered, search-only, staged-schema, strict-input', () => {
@@ -396,13 +436,13 @@ describe('book skattekonto tools: ledger twin guard', () => {
     enqueue({ data: { id: 'op-3' } })      // pending_operations insert
 
     const result = (await single.execute(
-      { skattekonto_transaction_id: ROW.id, allow_duplicate: true },
+      { skattekonto_transaction_id: ROW.id, allow_duplicate: true, duplicate_reason: REASON },
       'company-1', 'user-1', supabase as never,
     )) as { staged: boolean; preview: Record<string, unknown> }
 
     expect(result.staged).toBe(true)
     const inserted = findCall('pending_operations', 'insert')?.[0] as { params: Record<string, unknown> }
-    expect(inserted.params).toEqual({ transaction_id: ROW.id, allow_duplicate: true })
+    expect(inserted.params).toEqual({ transaction_id: ROW.id, allow_duplicate: true, duplicate_reason: REASON })
     expect(result.preview.ledger_twins).toEqual([TWIN])
     expect(String(result.preview.compliance_warning)).toContain('DUPLICATE_OVERRIDE')
     expect(mockBokforSingle).not.toHaveBeenCalled()
@@ -416,7 +456,7 @@ describe('book skattekonto tools: ledger twin guard', () => {
     enqueue({ data: { id: 'op-5' } })      // pending_operations insert
 
     const result = (await single.execute(
-      { skattekonto_transaction_id: ROW.id, allow_duplicate: true },
+      { skattekonto_transaction_id: ROW.id, allow_duplicate: true, duplicate_reason: REASON },
       'company-1', 'user-1', supabase as never,
     )) as { staged: boolean; preview: Record<string, unknown> }
 
@@ -443,13 +483,14 @@ describe('book skattekonto tools: ledger twin guard', () => {
       {
         skattekonto_transaction_ids: ['skv-ok', 'skv-twin', 'skv-allowed'],
         allow_duplicate_ids: ['skv-allowed'],
+        duplicate_reason: REASON,
       },
       'company-1', 'user-1', supabase as never,
     )) as { staged: boolean; preview: Record<string, unknown> }
 
     expect(result.staged).toBe(true)
     const inserted = findCall('pending_operations', 'insert')?.[0] as { params: Record<string, unknown> }
-    expect(inserted.params).toEqual({ ids: ['skv-ok', 'skv-allowed'], allow_duplicate_ids: ['skv-allowed'] })
+    expect(inserted.params).toEqual({ ids: ['skv-ok', 'skv-allowed'], allow_duplicate_ids: ['skv-allowed'], duplicate_reason: REASON })
     expect(result.preview.skipped).toEqual([
       { skattekonto_transaction_id: 'skv-twin', reason: 'LEDGER_TWIN_EXISTS', ledger_twins: [TWIN] },
     ])
@@ -534,13 +575,13 @@ describe('book skattekonto tools: ledger cover guard (a summarised verifikat alr
     enqueue({ data: { id: 'op-c2' } })
 
     const result = (await single.execute(
-      { skattekonto_transaction_id: ROW.id, allow_duplicate: true },
+      { skattekonto_transaction_id: ROW.id, allow_duplicate: true, duplicate_reason: REASON },
       'company-1', 'user-1', supabase as never,
     )) as { staged: boolean; preview: Record<string, unknown> }
 
     expect(result.staged).toBe(true)
     const inserted = findCall('pending_operations', 'insert')?.[0] as { params: Record<string, unknown> }
-    expect(inserted.params).toEqual({ transaction_id: ROW.id, allow_duplicate: true })
+    expect(inserted.params).toEqual({ transaction_id: ROW.id, allow_duplicate: true, duplicate_reason: REASON })
     expect(result.preview.ledger_cover).toMatchObject({ through_date: '2026-12-31', entry_count: 1 })
     expect(String(result.preview.compliance_warning)).toContain('DUPLICATE_OVERRIDE')
     expect(mockBokforSingle).not.toHaveBeenCalled()
@@ -564,13 +605,14 @@ describe('book skattekonto tools: ledger cover guard (a summarised verifikat alr
       {
         skattekonto_transaction_ids: rows.map((r) => r.id),
         allow_duplicate_ids: ['skv-allowed'],
+        duplicate_reason: REASON,
       },
       'company-1', 'user-1', supabase as never,
     )) as { staged: boolean; preview: Record<string, unknown> }
 
     expect(result.staged).toBe(true)
     const inserted = findCall('pending_operations', 'insert')?.[0] as { params: Record<string, unknown> }
-    expect(inserted.params).toEqual({ ids: ['skv-fresh', 'skv-allowed'], allow_duplicate_ids: ['skv-allowed'] })
+    expect(inserted.params).toEqual({ ids: ['skv-fresh', 'skv-allowed'], allow_duplicate_ids: ['skv-allowed'], duplicate_reason: REASON })
     expect(result.preview.skipped).toEqual([
       { skattekonto_transaction_id: 'skv-covered-1', reason: 'LEDGER_COVER_EXISTS' },
       { skattekonto_transaction_id: 'skv-covered-2', reason: 'LEDGER_COVER_EXISTS' },
@@ -595,6 +637,118 @@ describe('book skattekonto tools: ledger cover guard (a summarised verifikat alr
     expect(err.remediation?.args?.pairs).toEqual([
       { external_ids: ['skv-a', 'skv-b'], journal_entry_ids: ['je-year-end'], allow_remainder: true },
     ])
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+})
+
+describe('book skattekonto tools: ledger plan guard (one monthly verifikat holds the rows, PH 171)', () => {
+  type Refusal = Error & {
+    code?: string
+    remediation?: {
+      tool?: string
+      args?: { account_key?: string; pairs?: Array<{ external_ids: string[]; journal_entry_ids: string[]; allow_remainder?: boolean }> }
+    }
+  }
+
+  it('row: refuses a planned row that no cover names, with the exact link (no remainder) to make', async () => {
+    mockCover.mockResolvedValue(coverFor('skv-december'))
+    plannedFor(ROW.id, 'skv-ranta-march')
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { ...ROW } })
+
+    const err = (await single
+      .execute({ skattekonto_transaction_id: ROW.id }, 'company-1', 'user-1', supabase as never)
+      .catch((e: unknown) => e)) as Refusal
+
+    expect(err.code).toBe('SKATTEKONTO_BOOK_LEDGER_COVER_EXISTS')
+    expect(err.message).toContain('verifikat B7 (2027-02-28) på konto 1630')
+    expect(err.remediation?.args).toEqual({
+      account_key: 'skattekonto',
+      pairs: [{ external_ids: [ROW.id, 'skv-ranta-march'], journal_entry_ids: ['je-february'] }],
+    })
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+
+  it('rows: a planned row is skipped with its own verifikat on the skipped entry; the rest is staged', async () => {
+    plannedFor('skv-planned')
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: [{ ...ROW, id: 'skv-fresh' }, { ...ROW, id: 'skv-planned' }] })
+    enqueue({ data: null })                // period check: company_settings
+    enqueue({ data: null })                // period check: fiscal_periods
+    enqueue({ data: { id: 'op-p1' } })     // pending_operations insert
+
+    const result = (await batch.execute(
+      { skattekonto_transaction_ids: ['skv-fresh', 'skv-planned'] },
+      'company-1', 'user-1', supabase as never,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    const inserted = findCall('pending_operations', 'insert')?.[0] as { params: Record<string, unknown> }
+    expect(inserted.params).toEqual({ ids: ['skv-fresh'] })
+    expect(result.preview.skipped).toEqual([
+      expect.objectContaining({
+        skattekonto_transaction_id: 'skv-planned',
+        reason: 'LEDGER_COVER_EXISTS',
+        ledger_cover: expect.objectContaining({ kind: 'planned_link', event_ids: ['skv-planned'] }),
+      }),
+    ])
+    // No aggregate cover to state for the batch.
+    expect(result.preview.ledger_cover).toBeUndefined()
+  })
+
+  it('rows: when every row is planned, the refusal is the first row\'s exact link', async () => {
+    plannedFor('skv-a', 'skv-b')
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ ...ROW, id: 'skv-a' }, { ...ROW, id: 'skv-b' }] })
+
+    const err = (await batch
+      .execute({ skattekonto_transaction_ids: ['skv-a', 'skv-b'] }, 'company-1', 'user-1', supabase as never)
+      .catch((e: unknown) => e)) as Refusal
+
+    expect(err.code).toBe('SKATTEKONTO_BOOK_LEDGER_COVER_EXISTS')
+    expect(err.remediation?.args?.pairs).toEqual([{ external_ids: ['skv-a', 'skv-b'], journal_entry_ids: ['je-february'] }])
+  })
+
+  it('row: the override for a planned row stages with the reason and a reviewer warning naming the verifikat', async () => {
+    plannedFor(ROW.id, 'skv-ranta-march')
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { ...ROW } })
+    enqueue({ data: null })
+    enqueue({ data: null })
+    enqueue({ data: { id: 'op-p2' } })
+
+    const result = (await single.execute(
+      { skattekonto_transaction_id: ROW.id, allow_duplicate: true, duplicate_reason: REASON },
+      'company-1', 'user-1', supabase as never,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    const inserted = findCall('pending_operations', 'insert')?.[0] as { params: Record<string, unknown> }
+    expect(inserted.params).toEqual({ transaction_id: ROW.id, allow_duplicate: true, duplicate_reason: REASON })
+    expect(String(result.preview.compliance_warning)).toContain('B7 on 1630 already holds this row exactly')
+  })
+})
+
+describe('book skattekonto tools: the override needs a reason', () => {
+  it('row: allow_duplicate without duplicate_reason is a bad argument, nothing staged', async () => {
+    twinsFor(ROW.id)
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { ...ROW } })
+    enqueue({ data: { ...ROW } })
+
+    for (const extra of [{}, { duplicate_reason: '  ' }]) {
+      await expect(
+        single.execute({ skattekonto_transaction_id: ROW.id, allow_duplicate: true, ...extra }, 'company-1', 'user-1', supabase as never),
+      ).rejects.toThrow(/duplicate_reason/)
+    }
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+
+  it('rows: allow_duplicate_ids without duplicate_reason is a bad argument, nothing staged', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: [{ ...ROW, id: 'skv-a' }] })
+
+    await expect(
+      batch.execute({ skattekonto_transaction_ids: ['skv-a'], allow_duplicate_ids: ['skv-a'] }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toThrow(/duplicate_reason/)
     expect(findCall('pending_operations', 'insert')).toBeUndefined()
   })
 })

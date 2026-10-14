@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { applyTemplate, convertLibraryToBookingTemplate, deriveTemplateLinesFromBooking, getTemplateScope, LIBRARY_TEMPLATE_PREFIX, templateShareLines } from '../template-library'
+import { applyTemplate, convertLibraryToBookingTemplate, deriveTemplateLinesFromBooking, getTemplateScope, LIBRARY_TEMPLATE_PREFIX, libraryLinesForSkattekonto, libraryLinesTouchSkattekonto, templateShareLines } from '../template-library'
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine } from '@/types'
 
 function makeLibraryTemplate(lines: BookingTemplateLibraryLine[], overrides: Partial<BookingTemplateLibrary> = {}): BookingTemplateLibrary {
@@ -522,5 +522,29 @@ describe('library mall books its literal accounts (regression)', () => {
     const sumCredit = result.reduce((s, l) => s + (parseFloat(l.credit_amount || '0') || 0), 0)
     expect(sumDebit).toBeCloseTo(sumCredit, 2)
     expect(sumDebit).toBeCloseTo(4999.99, 2)
+  })
+})
+
+describe('system templates on the company skattekonto account (PH 175)', () => {
+  const deposit: BookingTemplateLibraryLine[] = [
+    { account: '1630', label: 'Skattekonto', side: 'debit', type: 'business', ratio: 1 },
+    { account: '1930', label: 'Företagskonto', side: 'credit', type: 'settlement', ratio: 1 },
+  ]
+
+  it('moves only the skattekonto line to 2012', () => {
+    expect(libraryLinesTouchSkattekonto(deposit)).toBe(true)
+    expect(libraryLinesForSkattekonto(deposit, '2012').map((l) => l.account)).toEqual(['2012', '1930'])
+    expect(libraryLinesForSkattekonto(deposit, '2012')[0]).toMatchObject({ label: 'Skattekonto', side: 'debit' })
+  })
+
+  it('leaves the lines alone on 1630, without an account, or without a skattekonto line', () => {
+    expect(libraryLinesForSkattekonto(deposit, '1630')).toEqual(deposit)
+    expect(libraryLinesForSkattekonto(deposit, undefined)).toBe(deposit)
+    const sale: BookingTemplateLibraryLine[] = [
+      { account: '1930', label: 'Bank', side: 'debit', type: 'settlement' },
+      { account: '3001', label: 'Försäljning', side: 'credit', type: 'business', ratio: 1 },
+    ]
+    expect(libraryLinesTouchSkattekonto(sale)).toBe(false)
+    expect(libraryLinesForSkattekonto(sale, '2012')).toBe(sale)
   })
 })

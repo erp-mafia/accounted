@@ -175,9 +175,13 @@ export const POST = withRouteContext(
     // at stake. Invoices/proformas get their F-number below or at finalize.
     let invoiceNumber: string | null = null
     if (documentType === 'delivery_note') {
-      const { data: dnNumber } = await supabase.rpc('generate_delivery_note_number', {
+      const { data: dnNumber, error: dnNumberError } = await supabase.rpc('generate_delivery_note_number', {
         p_company_id: companyId,
       })
+      if (dnNumberError || !dnNumber) {
+        log.error('delivery note number allocation failed', dnNumberError ?? new Error('no number'))
+        return errorResponseFromCode('INVOICE_CREATE_NUMBER_ASSIGN_FAILED', log, { requestId })
+      }
       invoiceNumber = dnNumber
     } else if (documentType === 'quote') {
       const { data: quoteNumber, error: quoteNumberError } = await supabase.rpc('generate_quote_number', {

@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
+// The company's skattekonto account (lib/skatteverket/skattekonto-account.ts):
+// 1630 here, what every company resolved to before the setting existed.
+vi.mock('@/lib/skatteverket/skattekonto-account', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/skatteverket/skattekonto-account')>()),
+  resolveSkattekontoAccount: vi.fn(async () => '1630'),
+}))
+
 const statusMock = vi.fn()
 const openLedgerMock = vi.fn()
 const linkMock = vi.fn()
@@ -97,13 +104,29 @@ describe('splitSkattekontoRow', () => {
 
     expect(r).toMatchObject({ ok: true, primary_journal_entry_id: A77 })
     expect(r.ok && r.settlement_id).toEqual(expect.any(String))
-    expect(linkMock).toHaveBeenCalledWith(supabase, COMPANY, ROW, A77, { allowRemainder: true })
+    expect(linkMock).toHaveBeenCalledWith(supabase, COMPANY, ROW, A77, { allowRemainder: true, account: '1630' })
     const [inserted] = findCalls('account_reconciliation_settlements', 'insert')[0] as [Array<Record<string, unknown>>]
     expect(inserted.map((m) => [m.journal_entry_id, m.amount])).toEqual([
       [A77, 8],
       [A76, -8],
     ])
     expect(inserted.every((m) => m.account_number === '1630' && m.settled_by === USER)).toBe(true)
+  })
+
+  it('records the settlement on 2012 for an enskild firma that runs the skattekonto there (PH 175)', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueueFacts(enqueue)
+    enqueue({ data: null }) // settlement insert
+    openLedger({ [A77]: 37, [A76]: -8 })
+
+    const r = await splitSkattekontoRow(supabase as never, COMPANY, USER, ROW, [A77, A76], { account: '2012' })
+
+    expect(r).toMatchObject({ ok: true, primary_journal_entry_id: A77 })
+    expect(statusMock).toHaveBeenCalledWith(supabase, COMPANY, { account: '2012' })
+    expect(linkMock).toHaveBeenCalledWith(supabase, COMPANY, ROW, A77, { allowRemainder: true, account: '2012' })
+    const [inserted] = findCalls('account_reconciliation_settlements', 'insert')[0] as [Array<Record<string, unknown>>]
+    expect(inserted.every((m) => m.account_number === '2012')).toBe(true)
+    expect(findCalls('account_reconciliation_settlements', 'eq')).toContainEqual(['account_number', '2012'])
   })
 
   it('refuses when the open amounts do not sum exactly to the event, and writes nothing', async () => {

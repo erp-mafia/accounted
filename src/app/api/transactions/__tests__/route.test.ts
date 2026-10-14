@@ -7,7 +7,7 @@ import {
   makeTransaction,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset, findCall } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCall, findCalls } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -22,7 +22,12 @@ vi.mock('@/lib/auth/require-auth', () => ({
   requireAuth: vi.fn(),
 }))
 
-import { GET } from '../route'
+// POST is a write route: the role gate has its own suite.
+vi.mock('@/lib/auth/require-write', () => ({
+  requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
+}))
+
+import { GET, POST } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { NextResponse } from 'next/server'
 
@@ -269,5 +274,93 @@ describe('GET /api/transactions', () => {
 
     expect(status).toBe(500)
     expect(body.error).toBe('Något gick fel. Försök igen.')
+  })
+})
+
+describe('POST /api/transactions', () => {
+  const mockUser = { id: 'user-1', email: 'test@test.se' }
+  const body = { date: '2026-10-01', description: 'Kontantköp', amount: -120, currency: 'SEK' }
+  const post = (payload: unknown) =>
+    POST(createMockRequest('/api/transactions', { method: 'POST', body: payload }), createMockRouteParams({}))
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: mockUser as never,
+      supabase: mockSupabase as never,
+      error: null,
+    })
+  })
+
+  it('returns 401 when not authenticated', async () => {
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: null as never,
+      supabase: mockSupabase as never,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+    const { status } = await parseJsonResponse(await post(body))
+    expect(status).toBe(401)
+    expect(findCall('transactions', 'insert')).toBeUndefined()
+  })
+
+  it('returns 400 on an invalid payload and writes nothing', async () => {
+    const { status } = await parseJsonResponse(await post({ ...body, amount: 0 }))
+    expect(status).toBe(400)
+    expect(findCall('cash_accounts', 'select')).toBeUndefined()
+    expect(findCall('transactions', 'insert')).toBeUndefined()
+  })
+
+  // crm#1171: the manual form stored every row with cash_account_id NULL, so
+  // it fell outside per-account reconciliation. It now takes the default
+  // account in its currency, the rule the MCP and ingest doors use.
+  it('binds the row to the only enabled account in its currency', async () => {
+    enqueue({ data: [{ id: 'ca-1920', is_primary: false, bank_connection_id: null }] }) // default account
+    enqueue({ data: makeTransaction({ id: 'tx-1', cash_account_id: 'ca-1920' }) }) // insert
+
+    const { status } = await parseJsonResponse(await post(body))
+
+    expect(status).toBe(201)
+    expect(findCalls('cash_accounts', 'eq')).toEqual([
+      ['company_id', 'company-1'],
+      ['enabled', true],
+      ['currency', 'SEK'],
+    ])
+    expect(findCall('transactions', 'insert')?.[0]).toMatchObject({
+      company_id: 'company-1',
+      user_id: 'user-1',
+      cash_account_id: 'ca-1920',
+      amount: -120,
+    })
+  })
+
+  it('binds the primary when several accounts share the currency', async () => {
+    enqueue({
+      data: [
+        { id: 'ca-1940', is_primary: false, bank_connection_id: null },
+        { id: 'ca-1930', is_primary: true, bank_connection_id: 'bc-1' },
+      ],
+    })
+    enqueue({ data: makeTransaction({ id: 'tx-2' }) })
+
+    const { status } = await parseJsonResponse(await post(body))
+
+    expect(status).toBe(201)
+    expect(findCall('transactions', 'insert')?.[0]).toMatchObject({ cash_account_id: 'ca-1930' })
+  })
+
+  it('stores the row unbound when no single account answers, as before', async () => {
+    enqueue({
+      data: [
+        { id: 'ca-eur-1', is_primary: false, bank_connection_id: null },
+        { id: 'ca-eur-2', is_primary: false, bank_connection_id: null },
+      ],
+    })
+    enqueue({ data: makeTransaction({ id: 'tx-3', currency: 'EUR' }) })
+
+    const { status } = await parseJsonResponse(await post({ ...body, currency: 'EUR' }))
+
+    expect(status).toBe(201)
+    expect(findCall('transactions', 'insert')?.[0]).toMatchObject({ cash_account_id: null, currency: 'EUR' })
   })
 })

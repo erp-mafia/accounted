@@ -9,6 +9,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { settleAgiTaxPayments } from './agi-tax-settlement'
 import { refreshSkattekontoProposals } from './skattekonto-proposals'
 import { getSkattekontoReconciliationStatus } from '@/lib/reconciliation/skattekonto-reconciliation'
+import { ensureSkattekontoAccountDerived } from '@/lib/skatteverket/skattekonto-account'
 import {
   SKATTEKONTO_RECONCILIATION_LATEST_KEY,
   type SkattekontoReconciliationLatest,
@@ -524,10 +525,21 @@ export async function syncSkattekonto(
     saldo.saldoSkatteverket,
   )
 
+  // The skattekonto's ledger account (1630, or 2012 for an enskild firma
+  // that runs it there), derived once from the books while the company has
+  // not chosen: an imported K1/Fortnox chart on 2012 is matched on 2012 from
+  // its first sync (PH 175). Best effort inside (never throws).
+  const account = await ensureSkattekontoAccountDerived(ctx.supabase, ctx.companyId, (err) =>
+    log.warn('skattekonto account not derived', {
+      companyId: ctx.companyId,
+      message: err instanceof Error ? err.message : String(err),
+    }),
+  )
+
   // Exact-twin proposals for the open rows (migration 20260823120000): the
   // reconciliation page, the worklist and agents read them from the row
   // instead of recomputing per request. Best-effort inside (never throws).
-  const proposals = await refreshSkattekontoProposals(ctx.supabase, ctx.companyId)
+  const proposals = await refreshSkattekontoProposals(ctx.supabase, ctx.companyId, account)
   if (proposals.proposed > 0 || proposals.cleared > 0) {
     log.info('proposals refreshed', { companyId: ctx.companyId, ...proposals })
   }
@@ -544,7 +556,7 @@ export async function syncSkattekonto(
   // resource can read "skattekontot stämmer inte med bokföringen" cheaply
   // instead of recomputing the bridge on every render. Best effort.
   try {
-    const status = await getSkattekontoReconciliationStatus(ctx.supabase, ctx.companyId)
+    const status = await getSkattekontoReconciliationStatus(ctx.supabase, ctx.companyId, { account })
     if (status) {
       const latest: SkattekontoReconciliationLatest = {
         as_of: status.as_of,

@@ -18,6 +18,9 @@
  *   - the figures agree with get_trial_balance_aggregates on the same rows;
  *   - more than 1000 lines sum completely (the PostgREST page size the old
  *     path had to paginate around);
+ *   - skattekonto_account / ledger_skattekonto (20261015030000): the
+ *     company's skattekonto account and its balance, 2012 for an enskild
+ *     firma that runs it there; ledger_1630 keeps reading 1630;
  *   - SECURITY INVOKER: a member sees what the superuser sees, a stranger
  *     gets an empty summary, anon cannot execute.
  */
@@ -37,10 +40,20 @@ interface Summary {
   result: number | null
   vat_balance: number
   ledger_1630: number
+  skattekonto_account: string
+  ledger_skattekonto: number
 }
 
 const CALL_SQL = `SELECT public.get_onboarding_books_summary($1) AS payload`
-const EMPTY: Summary = { period_name: null, revenue: null, result: null, vat_balance: 0, ledger_1630: 0 }
+const EMPTY: Summary = {
+  period_name: null,
+  revenue: null,
+  result: null,
+  vat_balance: 0,
+  ledger_1630: 0,
+  skattekonto_account: '1630',
+  ledger_skattekonto: 0,
+}
 
 async function callRpc(companyId: string): Promise<Summary> {
   const { rows } = await getPool().query<{ payload: Summary }>(CALL_SQL, [companyId])
@@ -166,6 +179,41 @@ describe('get_onboarding_books_summary', () => {
       result: 400.5, // 800 - 400 + 0.5
       vat_balance: 100, // 250 - 50 - 100
       ledger_1630: 300.5,
+      skattekonto_account: '1630',
+      ledger_skattekonto: 300.5,
+    })
+  })
+
+  it('reads the skattekonto on 2012 for an enskild firma that runs it there', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId, entityType: 'enskild_firma' })
+    await insertCompanyMember({ companyId, userId, role: 'owner' })
+    await getPool().query(
+      `INSERT INTO public.company_settings (user_id, company_id, entity_type, skattekonto_account)
+       VALUES ($1, $2, 'enskild_firma', '2012')`,
+      [userId, companyId],
+    )
+    const ctx = { userId, companyId }
+    const fp = await period(ctx, 2026)
+    // F-skatt paid from the bank onto the skattekonto, then the owner's tax drawn.
+    await insertJournalEntry({
+      ...ctx, fiscalPeriodId: fp, entryDate: '2026-02-12',
+      lines: [
+        { account: '2012', debit: 3000, credit: 0 },
+        { account: '1930', debit: 0, credit: 3000 },
+      ],
+    })
+    await insertJournalEntry({
+      ...ctx, fiscalPeriodId: fp, entryDate: '2026-02-12',
+      lines: [
+        { account: '2013', debit: 2500, credit: 0 },
+        { account: '2012', debit: 0, credit: 2500 },
+      ],
+    })
+    expect(await callRpc(ctx.companyId)).toMatchObject({
+      ledger_1630: 0,
+      skattekonto_account: '2012',
+      ledger_skattekonto: 500,
     })
   })
 
@@ -208,6 +256,8 @@ describe('get_onboarding_books_summary', () => {
       result: 5000,
       vat_balance: 1275, // all three years: balances ignore periods
       ledger_1630: 0,
+      skattekonto_account: '1630',
+      ledger_skattekonto: 0,
     })
   })
 
@@ -279,6 +329,8 @@ describe('get_onboarding_books_summary', () => {
       result: 15015,
       vat_balance: 3735,
       ledger_1630: 0,
+      skattekonto_account: '1630',
+      ledger_skattekonto: 0,
     })
   })
 

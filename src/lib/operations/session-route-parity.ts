@@ -161,6 +161,8 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/settings/booking-templates/import': gap('P3', 'import templates exported from another company'),
   'PATCH /api/settings/counterparty-templates': gap('P3', 'rename a learned counterparty template (read via gnubok_get_counterparty_templates)'),
   'DELETE /api/settings/counterparty-templates': gap('P3'),
+  'PUT /api/settings/skattekonto-account': gap('P2', 'the skattekonto ledger account, 1630 or 2012 for an enskild firma (PH 175); read via the reconciliation status account_number'),
+  'POST /api/settings/skattekonto-account/transfer-draft': gap('P2', 'draft the transfer verifikat after a skattekonto account change; gnubok_create_voucher can book the same lines'),
   'POST /api/settings/peppol': covered([`POST ${V}/peppol/registration`, 'gnubok_register_peppol_participant']),
   'DELETE /api/settings/peppol': gap('P3', 'Peppol deregistration'),
   'POST /api/settings/peppol/access': covered([`POST ${V}/peppol/access-request`, 'gnubok_request_peppol_access']),
@@ -771,4 +773,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 131
+export const GAP_CEILING = 133

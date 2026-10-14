@@ -505,6 +505,15 @@ describe('previewProposalLines for a typed total', () => {
     expect(transfer.ok && shape(transfer.lines)).toEqual(rows([['debet', '1630', 5000], ['kredit', '1930', 5000, 's']]))
   })
 
+  it('books the skattekonto deposit on 2012 for an enskild firma that runs its skattekonto there (PH 175)', async () => {
+    const onTwentyTwelve = {
+      company_settings: { data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1, vat_registered: true }, error: null },
+      'rpc:company_skattekonto_account': { data: '2012', error: null },
+    }
+    const transfer = await totalOf({ amount: 5000, template_id: 'financial_tax_account' }, onTwentyTwelve)
+    expect(transfer.ok && shape(transfer.lines)).toEqual(rows([['debet', '2012', 5000], ['kredit', '1930', 5000, 's']]))
+  })
+
   it('settles a reverse-charge template with the company’s momskoder', async () => {
     const configured = { chart_of_accounts: { data: [{ account_number: '6540', default_vat_treatment: 'reverse_charge_non_eu_services', default_vat_rate: null }], error: null } }
     const services = await totalOf({ amount: 2000, template_id: 'it_services_foreign' }, configured)

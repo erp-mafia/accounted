@@ -2,6 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
+// The company's skattekonto account (lib/skatteverket/skattekonto-account.ts):
+// 1630 here, what every company resolved to before the setting existed.
+vi.mock('@/lib/skatteverket/skattekonto-account', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/skatteverket/skattekonto-account')>()),
+  resolveSkattekontoAccount: vi.fn(async () => '1630'),
+}))
+
 // The batch loop delegates all journal writes to the engine: stub the three
 // engine entry points so the tests exercise the batch/enrichment logic, not
 // the engine's own chains (those are covered by the engine's tests).
@@ -38,16 +45,20 @@ vi.mock('@/lib/reconciliation/gl-balance', async (importOriginal) => {
 // the reconciliation bridge's arithmetic, covered in
 // skattekonto-reconciliation.test.ts: stub the bridge here so these tests
 // keep exercising the booking flow. Default: nothing is covered.
+// The ledger plan (rows one verifikat holds, PH 171) rides beside the status:
+// stubbed the same way. Default: nothing planned.
 vi.mock('@/lib/reconciliation/skattekonto-reconciliation', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/reconciliation/skattekonto-reconciliation')>()
-  return { ...actual, getSkattekontoReconciliationStatus: vi.fn() }
+  return { ...actual, getSkattekontoReconciliationStatus: vi.fn(), skattekontoPlannedHolds: vi.fn() }
 })
 
 import { findFiscalPeriod, createDraftEntry, commitEntry } from '@/lib/bookkeeping/engine'
 import { findOpeningBalanceFloor, sumAccountBalance } from '@/lib/reconciliation/gl-balance'
 import {
   getSkattekontoReconciliationStatus,
+  skattekontoPlannedHolds,
   type SkattekontoLedgerCover,
+  type SkattekontoPlannedHold,
   type SkattekontoReconciliationResult,
 } from '@/lib/reconciliation/skattekonto-reconciliation'
 import {
@@ -61,8 +72,11 @@ import {
   bokforSkattekontoTransaction,
   bokforSkattekontoTransactionsBatch,
   ledgerCoverMessage,
+  ledgerHoldOf,
+  ledgerHoldOfRows,
   SkattekontoBookingError,
   toLedgerCoverInfo,
+  type SkattekontoLedgerHolding,
 } from '../lib/skattekonto-booking'
 
 /**
@@ -144,14 +158,43 @@ beforeEach(() => {
   vi.mocked(sumAccountBalance).mockResolvedValue(0)
   vi.mocked(findOpeningBalanceFloor).mockResolvedValue(null)
   bridgeCover(null)
+  bridgePlanned([])
 })
 
 /** What the reconciliation bridge answers for the company: the rows a summarised verifikat covers, or none. */
 function bridgeCover(cover: SkattekontoLedgerCover | null, ledgerReadFailed = false) {
   vi.mocked(getSkattekontoReconciliationStatus).mockResolvedValue({
+    account_number: '1630',
     ledger_read_failed: ledgerReadFailed,
     cover,
   } as unknown as SkattekontoReconciliationResult)
+}
+
+/** The ledger plan beside the status: these rows held by one monthly verifikat (B7, 28 February). */
+function bridgePlanned(rowIds: string[], total = -5100) {
+  const hold: SkattekontoPlannedHold = {
+    entry: {
+      journal_entry_id: 'je-february',
+      voucher_number: 7,
+      voucher_series: 'B',
+      entry_date: '2027-02-28',
+      description: 'Skattekonto februari',
+      status: 'posted',
+      open_amount: total,
+    },
+    event_ids: rowIds,
+    total,
+    from_date: '2027-02-28',
+    to_date: '2027-03-26',
+  }
+  vi.mocked(skattekontoPlannedHolds).mockReturnValue(new Map(rowIds.map((id) => [id, hold])))
+}
+
+const REASON = 'Räntan debiterades två gånger av Skatteverket'
+
+/** The notes of the n-th drafted verifikat. */
+function draftedNotes(n = 0): string | undefined {
+  return (vi.mocked(createDraftEntry).mock.calls[n]?.[3] as { notes?: string } | undefined)?.notes
 }
 
 describe('attachBookingSuggestions', () => {
@@ -840,13 +883,14 @@ describe('ledger twin guard (an SIE-imported or manual verifikat already carries
     expect(err.ledgerTwins?.[0].combined_with?.map((c) => c.id)).toEqual(['row-agavg'])
   })
 
-  it('books the row when allowDuplicate is set, without searching', async () => {
+  it('books a twin row on the override with a reason, and the verifikat notes what it booked over and why', async () => {
     const { supabase, enqueue } = makeSupabase()
     const row = makeSkvRow({ transaktionstext: 'Intäktsränta' })
     enqueue({ data: row })
     enqueue({ data: SEED_RULES })
     enqueue({ data: { entity_type: 'aktiebolag' } })
     enqueue({ data: [{ id: row.id }] }) // claim
+    vi.mocked(findLedgerTwinCandidates).mockResolvedValueOnce(new Map([[row.id, [twinCandidate()]]]))
 
     const entry = await bokforSkattekontoTransaction(
       supabase as unknown as SupabaseClient,
@@ -854,12 +898,41 @@ describe('ledger twin guard (an SIE-imported or manual verifikat already carries
       'user-1',
       row.id,
       undefined,
-      { allowDuplicate: true },
+      { duplicateReason: `  ${REASON}  ` },
     )
 
     expect(entry.id).toBe('je-draft-1')
-    expect(vi.mocked(findLedgerTwinCandidates)).not.toHaveBeenCalled()
     expect(vi.mocked(createDraftEntry)).toHaveBeenCalledTimes(1)
+    expect(draftedNotes()).toContain('Genererad från skattekonto-synk.')
+    expect(draftedNotes()).toContain(`Bokförd trots att bokföringen redan innehåller händelsen (A185). Skäl: ${REASON}`)
+  })
+
+  it('an override without a reason is no override: the twin still refuses', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Intäktsränta' })
+    enqueue({ data: row })
+    vi.mocked(findLedgerTwinCandidates).mockResolvedValueOnce(new Map([[row.id, [twinCandidate()]]]))
+
+    await expect(
+      bokforSkattekontoTransaction(supabase as unknown as SupabaseClient, 'company-1', 'user-1', row.id, undefined, {
+        duplicateReason: '   ',
+      }),
+    ).rejects.toMatchObject({ code: 'LEDGER_TWIN_EXISTS' })
+    expect(vi.mocked(createDraftEntry)).not.toHaveBeenCalled()
+  })
+
+  it('a reason on a row the ledger does not hold changes nothing: no note', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Intäktsränta' })
+    enqueue({ data: row })
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: [{ id: row.id }] })
+
+    await bokforSkattekontoTransaction(supabase as unknown as SupabaseClient, 'company-1', 'user-1', row.id, undefined, {
+      duplicateReason: REASON,
+    })
+    expect(draftedNotes()).not.toContain('Bokförd trots')
   })
 
   it('books a row with no twin unchanged', async () => {
@@ -942,13 +1015,35 @@ describe('ledger twin guard (an SIE-imported or manual verifikat already carries
       'company-1',
       'user-1',
       [approved.id, guarded.id],
-      { allowDuplicateIds: [approved.id] },
+      { allowDuplicateIds: [approved.id], duplicateReason: REASON },
     )
 
-    // The approved row is not even searched.
-    expect(vi.mocked(findLedgerTwinCandidatesForIds).mock.calls[0][2]).toEqual([guarded.id])
+    // Both are searched: the approved row's verifikat names what it overrode.
+    expect(vi.mocked(findLedgerTwinCandidatesForIds).mock.calls[0][2]).toEqual([approved.id, guarded.id])
     expect(result.results[0]).toMatchObject({ id: approved.id, ok: true })
     expect(result.results[1]).toMatchObject({ id: guarded.id, ok: false, error_code: 'LEDGER_TWIN_EXISTS' })
+    expect(draftedNotes()).toContain(`(A185). Skäl: ${REASON}`)
+  })
+
+  it('batch: allowDuplicateIds without a reason keeps the guard on for every row', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Intäktsränta' })
+    vi.mocked(findLedgerTwinCandidatesForIds).mockImplementationOnce(
+      async (_s, _c, ids) => new Map(ids.map((id) => [id, [twinCandidate()]])),
+    )
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: row })
+
+    const result = await bokforSkattekontoTransactionsBatch(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      [row.id],
+      { allowDuplicateIds: [row.id] },
+    )
+    expect(result.results[0]).toMatchObject({ id: row.id, ok: false, error_code: 'LEDGER_TWIN_EXISTS' })
+    expect(vi.mocked(createDraftEntry)).not.toHaveBeenCalled()
   })
 
   it('batch: a failed twin search books nothing (fails closed)', async () => {
@@ -1141,6 +1236,7 @@ describe('VAT refund routing (1650 receivable)', () => {
 describe('ledger cover guard (a summarised verifikat already holds the rows)', () => {
   function coverFor(ids: string[], kind: SkattekontoLedgerCover['kind'] = 'ledger_agrees'): SkattekontoLedgerCover {
     return {
+      account_number: '1630',
       through_date: '2026-12-31',
       kind,
       event_ids: ids,
@@ -1184,6 +1280,7 @@ describe('ledger cover guard (a summarised verifikat already holds the rows)', (
     expect(refusal.message).toContain('Matcha manuellt')
     expect(refusal.ledgerTwins).toBeUndefined()
     expect(refusal.ledgerCover).toEqual({
+      account_number: '1630',
       through_date: '2026-12-31',
       kind: 'ledger_agrees',
       event_count: 2,
@@ -1262,7 +1359,7 @@ describe('ledger cover guard (a summarised verifikat already holds the rows)', (
     expect(vi.mocked(getSkattekontoReconciliationStatus)).not.toHaveBeenCalled()
   })
 
-  it('books a covered row on the explicit override, without computing the cover', async () => {
+  it('books a covered row on the explicit override with a reason, and the verifikat names the cover', async () => {
     const { supabase, enqueue } = makeSupabase()
     const row = makeSkvRow({ transaktionstext: 'Intäktsränta' })
     enqueue({ data: row })
@@ -1277,10 +1374,10 @@ describe('ledger cover guard (a summarised verifikat already holds the rows)', (
       'user-1',
       row.id,
       undefined,
-      { allowDuplicate: true },
+      { duplicateReason: REASON },
     )
     expect(entry.id).toBe('je-draft-1')
-    expect(vi.mocked(getSkattekontoReconciliationStatus)).not.toHaveBeenCalled()
+    expect(draftedNotes()).toContain(`Bokförd trots att bokföringen redan innehåller händelsen (B1). Skäl: ${REASON}`)
   })
 
   it('refuses to book when the ledger cannot be read: no answer is safe', async () => {
@@ -1345,7 +1442,7 @@ describe('ledger cover guard (a summarised verifikat already holds the rows)', (
       'company-1',
       'user-1',
       [covered.id, overridden.id, fresh.id],
-      { allowDuplicateIds: [overridden.id] },
+      { allowDuplicateIds: [overridden.id], duplicateReason: REASON },
     )
 
     expect(result.results.map((r) => [r.id, r.ok, r.error_code])).toEqual([
@@ -1357,7 +1454,7 @@ describe('ledger cover guard (a summarised verifikat already holds the rows)', (
     expect(vi.mocked(commitEntry)).toHaveBeenCalledTimes(2)
   })
 
-  it('a batch where every row is overridden never asks the bridge', async () => {
+  it('a batch where every row is overridden still reads the bridge once, so each verifikat names what it overrode', async () => {
     const { supabase, enqueue } = makeSupabase()
     const row = makeSkvRow({ transaktionstext: 'Intäktsränta' })
     enqueue({ data: SEED_RULES })
@@ -1371,10 +1468,11 @@ describe('ledger cover guard (a summarised verifikat already holds the rows)', (
       'company-1',
       'user-1',
       [row.id],
-      { allowDuplicateIds: [row.id] },
+      { allowDuplicateIds: [row.id], duplicateReason: REASON },
     )
     expect(result.summary.succeeded).toBe(1)
-    expect(vi.mocked(getSkattekontoReconciliationStatus)).not.toHaveBeenCalled()
+    expect(vi.mocked(getSkattekontoReconciliationStatus)).toHaveBeenCalledTimes(1)
+    expect(draftedNotes()).toContain(`(B1). Skäl: ${REASON}`)
   })
 
   it('a company with nothing covered (no unlinked verifikat on 1630) books a batch exactly as before, for one bridge read', async () => {
@@ -1396,5 +1494,218 @@ describe('ledger cover guard (a summarised verifikat already holds the rows)', (
     )
     expect(result.summary).toEqual({ total: 2, succeeded: 2, failed: 0 })
     expect(vi.mocked(getSkattekontoReconciliationStatus)).toHaveBeenCalledTimes(1)
+  })
+})
+
+// PH 175: an enskild firma that runs its skattekonto on 2012 in eget kapital.
+describe('booking on the company skattekonto account', () => {
+  it('books the owner preliminärskatt 2013 against 2012, and searches twins and cover on 2012', async () => {
+    const { resolveSkattekontoAccount } = await import('@/lib/skatteverket/skattekonto-account')
+    vi.mocked(resolveSkattekontoAccount).mockResolvedValueOnce('2012')
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Debiterad preliminärskatt', belopp_skatteverket: -2500 })
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'enskild_firma' } })
+    enqueue({ data: row })
+    enqueue({ data: [{ id: row.id }] })
+
+    const result = await bokforSkattekontoTransactionsBatch(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      [row.id],
+    )
+
+    expect(result.results[0]).toMatchObject({ id: row.id, ok: true })
+    const input = vi.mocked(createDraftEntry).mock.calls[0][3]
+    expect(input.lines).toEqual([
+      expect.objectContaining({ account_number: '2013', debit_amount: 2500, credit_amount: 0 }),
+      expect.objectContaining({ account_number: '2012', debit_amount: 0, credit_amount: 2500 }),
+    ])
+    expect(vi.mocked(findLedgerTwinCandidatesForIds)).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      [row.id],
+      '2012',
+    )
+    expect(vi.mocked(getSkattekontoReconciliationStatus)).toHaveBeenCalledWith(expect.anything(), 'company-1', {
+      account: '2012',
+    })
+  })
+})
+
+describe('ledger plan guard (one monthly verifikat holds the rows, PH 171)', () => {
+  // A cover through 31 December names other rows; the planned rows are dated
+  // after it, in March, and the verifikat that holds them is February's.
+  const YEAR_END_COVER: SkattekontoLedgerCover = {
+    account_number: '1630',
+    through_date: '2026-12-31',
+    kind: 'events_equal',
+    event_ids: ['row-december'],
+    event_count: 1,
+    event_total: -300,
+    entries: [
+      {
+        journal_entry_id: 'je-december',
+        voucher_number: 3,
+        voucher_series: 'B',
+        entry_date: '2026-12-31',
+        description: 'Skattekonto december',
+        status: 'posted',
+        open_amount: -300,
+      },
+    ],
+    entry_total: -300,
+  }
+
+  it('refuses a planned row dated after the cover date, naming the one verifikat and the rows it holds', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Kostnadsränta', belopp_skatteverket: -100, transaktionsdatum: '2027-03-12' })
+    enqueue({ data: row })
+    bridgeCover(YEAR_END_COVER)
+    bridgePlanned([row.id, 'row-prelskatt-march'])
+
+    const err = await bokforSkattekontoTransaction(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      row.id,
+    ).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(SkattekontoBookingError)
+    const refusal = err as SkattekontoBookingError
+    expect(refusal.code).toBe('LEDGER_COVER_EXISTS')
+    expect(refusal.message).toContain('Händelsen finns redan i bokföringen: verifikat B7 (2027-02-28) på konto 1630')
+    expect(refusal.message).toContain('den här händelsen och en annan obokförd händelse')
+    expect(refusal.message).toContain('Koppla föreslagna')
+    expect(refusal.ledgerCover).toMatchObject({
+      kind: 'planned_link',
+      through_date: '2027-03-26',
+      event_count: 2,
+      event_total: -5100,
+      event_ids: [row.id, 'row-prelskatt-march'],
+      entry_count: 1,
+    })
+    expect(refusal.ledgerCover?.entries[0].journal_entry_id).toBe('je-february')
+    expect(vi.mocked(createDraftEntry)).not.toHaveBeenCalled()
+    expect(fromCount(supabase, 'skattekonto_rules')).toBe(0)
+  })
+
+  it('a row both covered and planned gets the exact answer: the one verifikat of the plan', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Kostnadsränta', belopp_skatteverket: -300, transaktionsdatum: '2026-12-14' })
+    enqueue({ data: row })
+    bridgeCover({ ...YEAR_END_COVER, event_ids: [row.id] })
+    bridgePlanned([row.id], -300)
+
+    await expect(
+      bokforSkattekontoTransaction(supabase as unknown as SupabaseClient, 'company-1', 'user-1', row.id),
+    ).rejects.toMatchObject({ code: 'LEDGER_COVER_EXISTS', ledgerCover: { kind: 'planned_link', event_count: 1 } })
+  })
+
+  it('a batch skips every planned row with its own verifikat, books the rest, for one bridge read', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const planned = makeSkvRow({ transaktionstext: 'Kostnadsränta', belopp_skatteverket: -100, transaktionsdatum: '2027-03-12' })
+    const fresh = makeSkvRow({ transaktionstext: 'Intäktsränta', transaktionsdatum: '2027-04-12' })
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: planned })
+    enqueue({ data: fresh })
+    enqueue({ data: [{ id: fresh.id }] })
+    bridgeCover(YEAR_END_COVER)
+    bridgePlanned([planned.id, 'row-prelskatt-march'])
+
+    const result = await bokforSkattekontoTransactionsBatch(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      [planned.id, fresh.id],
+    )
+
+    expect(result.results.map((r) => [r.id, r.ok, r.error_code])).toEqual([
+      [planned.id, false, 'LEDGER_COVER_EXISTS'],
+      [fresh.id, true, undefined],
+    ])
+    expect(result.results[0].ledger_cover).toMatchObject({ kind: 'planned_link', entries: [{ journal_entry_id: 'je-february' }] })
+    expect(vi.mocked(getSkattekontoReconciliationStatus)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(createDraftEntry)).toHaveBeenCalledTimes(1)
+  })
+
+  it('books a planned row only on the override with a reason, and the verifikat names the monthly verifikat', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Kostnadsränta', belopp_skatteverket: -100, transaktionsdatum: '2027-03-12' })
+    enqueue({ data: row })
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: [{ id: row.id }] })
+    bridgePlanned([row.id, 'row-prelskatt-march'])
+
+    await bokforSkattekontoTransaction(supabase as unknown as SupabaseClient, 'company-1', 'user-1', row.id, undefined, {
+      duplicateReason: REASON,
+    })
+    expect(draftedNotes()).toContain(`Bokförd trots att bokföringen redan innehåller händelsen (B7). Skäl: ${REASON}`)
+  })
+})
+
+describe('ledgerHoldOf / ledgerHoldOfRows (the one check every door runs)', () => {
+  const holding = (cover: string[], planned: string[]): SkattekontoLedgerHolding => ({
+    account: '1630',
+    cover: cover.length
+      ? {
+          account_number: '1630',
+          through_date: '2026-12-31',
+          kind: 'ledger_agrees',
+          event_ids: cover,
+          event_count: cover.length,
+          event_total: -1,
+          entries: [],
+          entry_total: -1,
+        }
+      : null,
+    covered: new Set(cover),
+    planned: new Map(
+      planned.map((id) => [
+        id,
+        {
+          entry: {
+            journal_entry_id: 'je-february',
+            voucher_number: 7,
+            voucher_series: 'B',
+            entry_date: '2027-02-28',
+            description: '',
+            status: 'posted' as const,
+            open_amount: -2,
+          },
+          event_ids: planned,
+          total: -2,
+          from_date: '2027-02-28',
+          to_date: '2027-03-12',
+        },
+      ]),
+    ),
+  })
+
+  it('answers null for a row the ledger does not hold, and for no skattekonto at all', () => {
+    expect(ledgerHoldOf(holding(['a'], ['b']), 'c')).toBeNull()
+    expect(ledgerHoldOf(null, 'a')).toBeNull()
+  })
+
+  it('answers the cover for a covered row and the plan for a planned one', () => {
+    expect(ledgerHoldOf(holding(['a'], ['b']), 'a')?.kind).toBe('ledger_agrees')
+    expect(ledgerHoldOf(holding(['a'], ['b']), 'b')?.kind).toBe('planned_link')
+  })
+
+  it('names the company skattekonto account in a planned hold, 2012 for a firm on 2012 (PH 175)', () => {
+    const on2012 = { ...holding([], ['b']), account: '2012' as const }
+    const held = ledgerHoldOf(on2012, 'b')
+    expect(held?.account_number).toBe('2012')
+    expect(ledgerCoverMessage(held!)).toContain('på konto 2012')
+    expect(ledgerHoldOf(holding([], ['b']), 'b')?.account_number).toBe('1630')
+  })
+
+  it('answers for several rows only when the ledger holds every one', () => {
+    expect(ledgerHoldOfRows(holding(['a'], ['b']), ['a', 'b'])).not.toBeNull()
+    expect(ledgerHoldOfRows(holding(['a'], ['b']), ['a', 'c'])).toBeNull()
+    expect(ledgerHoldOfRows(holding(['a'], []), [])).toBeNull()
   })
 })

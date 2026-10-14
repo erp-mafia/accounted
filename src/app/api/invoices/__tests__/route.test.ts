@@ -590,6 +590,81 @@ describe('POST /api/invoices (create invoice)', () => {
     // Never a soft-cancelled leftover: the row had no number to keep.
     expect(findCall('invoices', 'update')).toBeUndefined()
   })
+
+  // GitLab accounted #33: the delivery-note branch ignored the RPC error and
+  // inserted a note with a null number.
+  describe('delivery note numbering (#33)', () => {
+    function deliveryNoteRequest() {
+      return createMockRequest('/api/invoices', {
+        method: 'POST',
+        body: {
+          customer_id: VALID_UUID,
+          invoice_date: '2024-06-15',
+          due_date: '2024-07-15',
+          document_type: 'delivery_note',
+          currency: 'SEK',
+          items: [{ description: 'Leverans', quantity: 2, unit: 'st', unit_price: 500 }],
+        },
+      })
+    }
+
+    beforeEach(() => {
+      mockGetVatRules.mockReturnValue({
+        treatment: 'standard_25',
+        rate: 25,
+        momsRuta: '10',
+        reverseChargeText: null,
+      })
+      mockGetAvailableVatRates.mockReturnValue([
+        { rate: 25, label: '25%', treatment: 'standard_25' },
+      ])
+    })
+
+    it('numbers the note from the FS-series at insert', async () => {
+      const customer = makeCustomer({ id: VALID_UUID })
+      const createdNote = makeInvoice({
+        id: 'dn-1',
+        invoice_number: 'FS-20241000',
+        document_type: 'delivery_note',
+      })
+      // Fetch customer
+      enqueue({ data: customer, error: null })
+      // company_settings.vat_registered gate
+      enqueue({ data: { vat_registered: true }, error: null })
+      // generate_delivery_note_number RPC
+      enqueue({ data: 'FS-20241000', error: null })
+      // Insert note
+      enqueue({ data: createdNote, error: null })
+      // Insert items
+      enqueue({ data: null, error: null })
+      // Fetch complete note
+      enqueue({ data: { ...createdNote, customer, items: [] }, error: null })
+
+      const response = await POST(deliveryNoteRequest(), { params: Promise.resolve({}) })
+      const { status } = await parseJsonResponse(response)
+
+      expect(status).toBe(200)
+      expect(mockSupabase.rpc).toHaveBeenCalledWith('generate_delivery_note_number', { p_company_id: 'company-1' })
+      const inserted = findCall('invoices', 'insert')?.[0] as Record<string, unknown>
+      expect(inserted.invoice_number).toBe('FS-20241000')
+      expect(inserted.document_type).toBe('delivery_note')
+    })
+
+    it('returns 500 and inserts nothing when the number cannot be allocated', async () => {
+      const customer = makeCustomer({ id: VALID_UUID })
+      enqueue({ data: customer, error: null })
+      enqueue({ data: { vat_registered: true }, error: null })
+      // generate_delivery_note_number RPC fails
+      enqueue({ data: null, error: { message: 'Company settings not found', code: 'P0001' } })
+
+      const response = await POST(deliveryNoteRequest(), { params: Promise.resolve({}) })
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+      expect(status).toBe(500)
+      expect(body.error.code).toBe('INVOICE_CREATE_NUMBER_ASSIGN_FAILED')
+      expect(findCall('invoices', 'insert')).toBeUndefined()
+    })
+  })
 })
 
 describe('POST /api/invoices (create credit note)', () => {

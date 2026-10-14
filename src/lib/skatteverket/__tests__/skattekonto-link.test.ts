@@ -1,16 +1,40 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
-  entrySettlesAmount,
-  evaluateSkattekontoLink,
-  groupSettlesEntry,
+  entrySettlesAmount as entrySettlesAmountOn,
+  evaluateSkattekontoLink as evaluateSkattekontoLinkOn,
+  groupSettlesEntry as groupSettlesEntryOn,
   linkSkattekontoRow,
   linkSkattekontoRows,
   setSkattekontoRowIgnored,
-  skattekontoEntryNet,
+  skattekontoEntryNet as skattekontoEntryNetOn,
   SkattekontoLinkError,
   unlinkSkattekontoRow,
 } from '../skattekonto-link'
+import type { SkattekontoLedgerAccount } from '../skattekonto-account'
+
+// The pure helpers take the skattekonto account; the cases below are on 1630
+// unless they say otherwise (the 2012 cases at the end).
+type Lines = Parameters<typeof entrySettlesAmountOn>[0]
+const entrySettlesAmount = (lines: Lines, belopp: number, account: SkattekontoLedgerAccount = '1630') =>
+  entrySettlesAmountOn(lines, belopp, account)
+const groupSettlesEntry = (lines: Lines, belopps: number[], account: SkattekontoLedgerAccount = '1630') =>
+  groupSettlesEntryOn(lines, belopps, account)
+const skattekontoEntryNet = (lines: Lines, account: SkattekontoLedgerAccount = '1630') =>
+  skattekontoEntryNetOn(lines, account)
+const evaluateSkattekontoLink = (
+  lines: Lines,
+  linked: number[],
+  belopps: number[],
+  options: { allowRemainder?: boolean; account?: SkattekontoLedgerAccount } = {},
+) => evaluateSkattekontoLinkOn(lines, linked, belopps, { ...options, account: options.account ?? '1630' })
+
+// The company's skattekonto account (lib/skatteverket/skattekonto-account.ts):
+// 1630 here, what every company resolved to before the setting existed.
+vi.mock('@/lib/skatteverket/skattekonto-account', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/skatteverket/skattekonto-account')>()),
+  resolveSkattekontoAccount: vi.fn(async () => '1630'),
+}))
 
 const COMPANY = 'company-1'
 const ROW = 'row-1'
@@ -489,5 +513,48 @@ describe('linking with a remainder (a summarised verifikat, crm#1043)', () => {
       previous_journal_entry_id: ENTRY,
     })
     expect(findCalls('skattekonto_transactions', 'update')[0][0]).toEqual({ journal_entry_id: null })
+  })
+})
+
+describe('an enskild firma that runs the skattekonto on 2012 (PH 175)', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  const on = (account: string, debit: number, credit: number) => ({
+    account_number: account,
+    debit_amount: debit,
+    credit_amount: credit,
+  })
+
+  it('settles on the company account only: a 1630 line is no skattekonto line there', () => {
+    expect(entrySettlesAmount([on('2012', 3000, 0), on('1930', 0, 3000)], 3000, '2012')).toEqual({ ok: true, via: 'line' })
+    expect(entrySettlesAmount([on('1630', 3000, 0), on('1930', 0, 3000)], 3000, '2012').ok).toBe(false)
+    expect(entrySettlesAmount([on('2012', 3000, 0), on('1930', 0, 3000)], 3000, '1630').ok).toBe(false)
+    expect(skattekontoEntryNet([on('2013', 2500, 0), on('2012', 0, 2500)], '2012')).toEqual({ net: -2500, hasLine: true })
+    expect(groupSettlesEntry([on('2012', 0, 4521), on('2012', 0, 7704)], [-4521, -7704], '2012')).toEqual({
+      ok: true,
+      via: 'entry_total',
+    })
+  })
+
+  it('names the account in the refusal and links on 2012 when the setting says so', async () => {
+    const { resolveSkattekontoAccount } = await import('@/lib/skatteverket/skattekonto-account')
+    vi.mocked(resolveSkattekontoAccount).mockResolvedValueOnce('2012')
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: row({ belopp_skatteverket: -2500 }) })
+    enqueue({ data: entry([on('1630', 0, 2500), on('2013', 2500, 0)]) })
+    enqueue({ data: null })
+    await expect(linkSkattekontoRow(supabase as never, COMPANY, ROW, ENTRY)).rejects.toMatchObject({
+      code: 'INVALID_CANDIDATE',
+      message: expect.stringContaining('ingen rad på 2012'),
+    })
+
+    const second = createQueuedMockSupabase()
+    second.enqueue({ data: row({ belopp_skatteverket: -2500 }) })
+    second.enqueue({ data: entry([on('2012', 0, 2500), on('2013', 2500, 0)]) })
+    second.enqueue({ data: null })
+    second.enqueue({ data: [{ id: ROW }] })
+    expect(
+      await linkSkattekontoRow(second.supabase as never, COMPANY, ROW, ENTRY, { account: '2012' }),
+    ).toMatchObject({ via: 'line', remainder: 0 })
   })
 })

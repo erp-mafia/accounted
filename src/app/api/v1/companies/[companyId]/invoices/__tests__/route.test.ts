@@ -1415,6 +1415,89 @@ describe('POST /api/v1/companies/:companyId/invoices', () => {
   })
 })
 
+// GitLab accounted #33: the delivery-note branch ignored the RPC error and
+// inserted a note with a null number.
+describe('POST /api/v1/companies/:companyId/invoices: delivery note numbering (#33)', () => {
+  function deliveryNoteBody() {
+    return {
+      customer_id: CUSTOMER_ID,
+      invoice_date: '2026-05-12',
+      due_date: '2026-06-11',
+      document_type: 'delivery_note',
+      currency: 'SEK',
+      items: [{ description: 'Leverans', quantity: 2, unit: 'st', unit_price: 500 }],
+    }
+  }
+
+  function supabaseWithRpc(rpcResult: { data: unknown; error: unknown }, inserts: InsertCapture[]) {
+    const createdNote = {
+      id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      invoice_number: rpcResult.data,
+      customer_id: CUSTOMER_ID,
+      status: 'draft',
+      document_type: 'delivery_note',
+      currency: 'SEK',
+      subtotal: 0,
+      vat_amount: 0,
+      total: 0,
+    }
+    const rpc = vi.fn().mockResolvedValue(rpcResult)
+    return {
+      rpc,
+      client: {
+        ...makeFlexibleSupabase(
+          {
+            company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+            customers: { data: SWEDISH_BUSINESS_CUSTOMER, error: null },
+            invoices: { data: createdNote, error: null },
+            invoice_items: { data: null, error: null },
+          },
+          inserts,
+        ),
+        rpc,
+      },
+    }
+  }
+
+  it('numbers the note from the FS-series at insert', async () => {
+    withInvoiceWriteScope()
+    const inserts: InsertCapture[] = []
+    const { client, rpc } = supabaseWithRpc({ data: 'FS-20261000', error: null }, inserts)
+    mockServiceClient.mockReturnValue(client)
+
+    const res = await createInvoice(
+      makePostInvoice(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices`, deliveryNoteBody()),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(201)
+    expect(rpc).toHaveBeenCalledWith('generate_delivery_note_number', { p_company_id: COMPANY_ID })
+    const header = inserts.find((insert) => insert.table === 'invoices')?.payload as Record<string, unknown>
+    expect(header.invoice_number).toBe('FS-20261000')
+    expect(header.document_type).toBe('delivery_note')
+  })
+
+  it('returns 500 and inserts nothing when the number cannot be allocated', async () => {
+    withInvoiceWriteScope()
+    const inserts: InsertCapture[] = []
+    const { client } = supabaseWithRpc(
+      { data: null, error: { message: 'Company settings not found', code: 'P0001' } },
+      inserts,
+    )
+    mockServiceClient.mockReturnValue(client)
+
+    const res = await createInvoice(
+      makePostInvoice(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices`, deliveryNoteBody()),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_CREATE_NUMBER_ASSIGN_FAILED')
+    expect(inserts.find((insert) => insert.table === 'invoices')).toBeUndefined()
+  })
+})
+
 // ──────────────────────────────────────────────────────────────────
 // PATCH /api/v1/companies/:companyId/invoices/:id
 // ──────────────────────────────────────────────────────────────────

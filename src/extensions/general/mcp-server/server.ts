@@ -154,6 +154,7 @@ import {
 import { DEDUCTION_TYPES, isDeductionType, validateDeductionLines, type DeductionType } from '@/lib/invoices/rot-rut-rules'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
+import { creditNoteNumber, creditNoteOriginalReference } from '@/lib/invoices/build-credit-note'
 import { resolveSupplierInvoiceExchangeRate } from '@/lib/currency/supplier-invoice-rate'
 import { getBranding } from '@/lib/branding/service'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
@@ -555,14 +556,21 @@ import { suggestToolNames } from './tool-suggest'
 import {
   attachBookingSuggestions,
   buildSkattekontoEntry,
-  findSkattekontoLedgerCover,
+  DUPLICATE_REASON_MAX_LENGTH,
+  findSkattekontoLedgerHolding,
   findSkattekontoLedgerTwins,
   ledgerCoverMessage,
+  ledgerHoldOf,
   ledgerTwinMessage,
-  toLedgerCoverInfo,
+  normaliseDuplicateReason,
 } from '@/extensions/general/skatteverket/lib/skattekonto-booking'
 import type { SkattekontoBookingSuggestion, SkattekontoLedgerCoverInfo, SkattekontoLedgerTwin } from '@/types/skatteverket'
-import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
+import {
+  resolveSkattekontoAccount,
+  templateSkattekontoAccount,
+  templateTouchesSkattekonto,
+  type SkattekontoLedgerAccount,
+} from '@/lib/skatteverket/skattekonto-account'
 import { toEntryPreview, type EntryPreview } from '@/lib/bookkeeping/entry-preview'
 import { agiReportingPeriod, formatAgiPeriodCompact, formatAgiPeriodDashed } from '@/lib/salary/agi/reporting-period'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
@@ -1955,13 +1963,18 @@ interface SkattekontoStageRow {
 function skattekontoEntryPreview(
   row: SkattekontoStageRow,
   suggestion: SkattekontoBookingSuggestion,
+  skattekontoAccount: SkattekontoLedgerAccount,
 ): EntryPreview {
   return toEntryPreview(
-    buildSkattekontoEntry(row, {
-      account: suggestion.account,
-      label: suggestion.label ?? row.transaktionstext,
-      ...(suggestion.ore_rounding ? { oreRounding: suggestion.ore_rounding } : {}),
-    }),
+    buildSkattekontoEntry(
+      row,
+      {
+        account: suggestion.account,
+        label: suggestion.label ?? row.transaktionstext,
+        ...(suggestion.ore_rounding ? { oreRounding: suggestion.ore_rounding } : {}),
+      },
+      skattekontoAccount,
+    ),
   )
 }
 
@@ -2073,7 +2086,7 @@ async function stageSkattekontoRowIgnore(input: {
 }
 
 const SKATTEKONTO_TWIN_TAIL =
-  'A key without the reconciliation:write scope cannot call gnubok_reconcile_match: the user links the row with Koppla on the Skattekonto page in Accounted. Book it anyway (allow_duplicate=true, or allow_duplicate_ids for the batch tool) only when the user confirms the event really happened twice.'
+  'A key without the reconciliation:write scope cannot call gnubok_reconcile_match: the user links the row with Koppla on the Skattekonto page in Accounted. Book it anyway (allow_duplicate=true, or allow_duplicate_ids for the batch tool, with the reason in duplicate_reason) only when the user confirms the event really happened twice.'
 
 /**
  * The event of a skattekonto row is already in the ledger (a verifikat the
@@ -2083,6 +2096,7 @@ const SKATTEKONTO_TWIN_TAIL =
 function skattekontoLedgerTwinRefusal(
   rowId: string,
   twins: SkattekontoLedgerTwin[],
+  skattekontoAccount: SkattekontoLedgerAccount,
   rowCount = 1,
 ): Error {
   const ids = twins.map((t) => t.journal_entry_id)
@@ -2091,7 +2105,8 @@ function skattekontoLedgerTwinRefusal(
   // them, or it is refused.
   const companionIds = (twins[0]?.combined_with ?? []).map((c) => c.id)
   const lead = rowCount > 1 ? `Alla ${rowCount} rader finns redan i bokföringen. Första raden: ` : ''
-  return codedRefusal('SKATTEKONTO_BOOK_LEDGER_TWIN_EXISTS', `${lead}${ledgerTwinMessage(twins)}`, {
+  const message = `${lead}${ledgerTwinMessage(twins, { account: skattekontoAccount })}`
+  return codedRefusal('SKATTEKONTO_BOOK_LEDGER_TWIN_EXISTS', message, {
     description:
       ids.length > 1
         ? `Ask the user which of the named verifikat is the ledger side of this event and link the row to it with gnubok_reconcile_match (account_key "skattekonto"). ${SKATTEKONTO_TWIN_TAIL}`
@@ -2121,9 +2136,21 @@ function skattekontoLedgerCoverRefusal(
 ): Error {
   const lead = rowCount > 1 ? `Alla ${rowCount} rader ser redan ut att vara bokförda. ` : ''
   const target = cover.entries[0]?.journal_entry_id
+  if (cover.kind === 'planned_link' && target) {
+    // The ledger plan names the one verifikat and every row it holds: the
+    // exact link, no remainder, is the args.
+    return codedRefusal('SKATTEKONTO_BOOK_LEDGER_COVER_EXISTS', `${lead}${ledgerCoverMessage(cover)}`, {
+      description: `Do not book. The named verifikat holds exactly this row and the other rows in args (bucket proposed): link them as one pair with gnubok_reconcile_match, or every such proposal with use_proposals: true, dry_run first. ${SKATTEKONTO_TWIN_TAIL}`,
+      tool: 'gnubok_reconcile_match',
+      args: {
+        account_key: 'skattekonto',
+        pairs: [{ external_ids: cover.event_ids ?? rowIds.slice(0, 50), journal_entry_ids: [target] }],
+      },
+    })
+  }
   return codedRefusal('SKATTEKONTO_BOOK_LEDGER_COVER_EXISTS', `${lead}${ledgerCoverMessage(cover)}`, {
     description:
-      `Do not book. Rows that one verifikat holds exactly are already proposed (bucket proposed, a group named in external_ids): gnubok_reconcile_match with use_proposals: true links them all, dry_run first. Link the other open rows up to ${cover.through_date} to the unlinked verifikat on 1630 that already hold them (gnubok_list_reconciliation_items, account_key "skattekonto": rows with covered_by_ledger in unmatched_external, the verifikat in unmatched_ledger): gnubok_reconcile_match with pairs of at most 50 rows per verifikat, and allow_remainder: true on a pair whose rows do not sum to the verifikat (a summarised verifikat: the rest stays on it as its remainder). With several verifikat ask the user which rows belong to which. ${SKATTEKONTO_TWIN_TAIL}`,
+      `Do not book. Rows that one verifikat holds exactly are already proposed (bucket proposed, a group named in external_ids): gnubok_reconcile_match with use_proposals: true links them all, dry_run first. Link the other open rows up to ${cover.through_date} to the unlinked verifikat on ${cover.account_number} that already hold them (gnubok_list_reconciliation_items, account_key "skattekonto": rows with covered_by_ledger in unmatched_external, the verifikat in unmatched_ledger): gnubok_reconcile_match with pairs of at most 50 rows per verifikat, and allow_remainder: true on a pair whose rows do not sum to the verifikat (a summarised verifikat: the rest stays on it as its remainder). With several verifikat ask the user which rows belong to which. ${SKATTEKONTO_TWIN_TAIL}`,
     tool: 'gnubok_reconcile_match',
     args: {
       account_key: 'skattekonto',
@@ -2144,16 +2171,20 @@ function skattekontoCoverNote(cover: SkattekontoLedgerCoverInfo): string {
     .slice(0, 5)
     .map((t) => (t.voucher_number ? `${t.voucher_series ?? ''}${t.voucher_number}` : `no number ${t.entry_date}`))
     .join(', ')
-  return `DUPLICATE_OVERRIDE: unlinked verifikat on 1630 (${refs}) already hold the open rows up to ${cover.through_date}. Approving books them a second time; approve only if the events really are missing from the ledger, otherwise reject and link the rows instead.`
+  const held =
+    cover.kind === 'planned_link'
+      ? `unlinked verifikat ${refs} on ${cover.account_number} already holds this row exactly, with ${cover.event_count - 1} other open row(s)`
+      : `unlinked verifikat on ${cover.account_number} (${refs}) already hold the open rows up to ${cover.through_date}`
+  return `DUPLICATE_OVERRIDE: ${held}. Approving books them a second time; approve only if the events really are missing from the ledger, otherwise reject and link the rows instead.`
 }
 
 /** Reviewer warning when a staged booking was told to ignore a ledger twin. */
-function skattekontoDuplicateNote(twins: SkattekontoLedgerTwin[]): string {
+function skattekontoDuplicateNote(twins: SkattekontoLedgerTwin[], skattekontoAccount: SkattekontoLedgerAccount): string {
   const refs = twins
     .slice(0, 5)
     .map((t) => (t.voucher_number ? `${t.voucher_series ?? ''}${t.voucher_number}` : `draft ${t.entry_date}`))
     .join(', ')
-  return `DUPLICATE_OVERRIDE: verifikat ${refs} already carry this event on 1630. Approving books it a second time; approve only if the event really happened twice, otherwise reject and link the row instead.`
+  return `DUPLICATE_OVERRIDE: verifikat ${refs} already carry this event on ${skattekontoAccount}. Approving books it a second time; approve only if the event really happened twice, otherwise reject and link the row instead.`
 }
 
 /**
@@ -10354,6 +10385,14 @@ export const tools: McpTool[] = [
       const { data: companyRow } = await supabase.from('companies').select('entity_type').eq('id', companyId).maybeSingle()
       const entityType = (companyRow?.entity_type as EntityType | undefined) ?? undefined
       const { proposals: proposed } = await proposeForTransactions(supabase, companyId, transactions as Transaction[])
+      // A catalog template that names the skattekonto (1630) books the
+      // company's skattekonto account (2012 for an enskild firma that runs it
+      // there, PH 175): read once, only when a proposal names it.
+      const skattekontoAccount = Object.values(proposed)
+        .flat()
+        .some((p) => p.booking.kind === 'template' && templateTouchesSkattekonto([p.debit_account, p.credit_account]))
+        ? await resolveSkattekontoAccount(supabase, companyId)
+        : undefined
       const proposals: Record<string, unknown[]> = {}
       for (const tx of transactions as Transaction[]) {
         const offered = (proposed[tx.id] ?? []).filter((p) => p.source !== 'recent')
@@ -10368,9 +10407,12 @@ export const tools: McpTool[] = [
             confidence: p.confidence,
             books_without_review: booksWithoutReview(p),
             ...(p.contested ? { contested: true } : {}),
-            account: businessAccount(p),
+            account:
+              p.booking.kind === 'template'
+                ? templateSkattekontoAccount(businessAccount(p), skattekontoAccount)
+                : businessAccount(p),
             vat_treatment: p.booking.kind === 'account' ? p.booking.vat_treatment : (p.vat_treatment ?? null),
-            categorize_args: categorizeArgsFor(p, entityType),
+            categorize_args: categorizeArgsFor(p, entityType, skattekontoAccount),
           }))
       }
 
@@ -13619,6 +13661,11 @@ export const tools: McpTool[] = [
           description:
             'Book although the ledger already holds this event on 1630: one verifikat carries it, or unlinked (summarised) verifikat cover it (the refusal names them). Only when the user confirms it is really missing from the ledger; otherwise link the row with gnubok_reconcile_match.',
         },
+        duplicate_reason: {
+          type: 'string',
+          maxLength: DUPLICATE_REASON_MAX_LENGTH,
+          description: 'Required with allow_duplicate: the user\'s reason, written on the verifikat.',
+        },
         ...STAGING_ARGS_PROPERTIES,
       },
       required: ['skattekonto_transaction_id'],
@@ -13652,15 +13699,27 @@ export const tools: McpTool[] = [
 
       // The ledger may already carry the event (an SIE-imported or manual
       // verifikat): same guard as the commit path, surfaced before staging.
+      // The skattekonto account (1630, or 2012 for an enskild firma that
+      // runs it there) is read once for the guards and the preview.
+      const skattekontoAccount = await resolveSkattekontoAccount(supabase, companyId)
       const allowDuplicate = args.allow_duplicate === true
-      const twins = (await findSkattekontoLedgerTwins(supabase, companyId, [tx])).get(tx.id) ?? []
-      if (twins.length > 0 && !allowDuplicate) {
-        throw skattekontoLedgerTwinRefusal(tx.id, twins)
+      // The override needs the user's reason: the verifikat carries it.
+      const duplicateReason = allowDuplicate ? normaliseDuplicateReason(args.duplicate_reason) : null
+      if (allowDuplicate && !duplicateReason) {
+        throw badArgument('duplicate_reason', 'duplicate_reason is required with allow_duplicate: ask the user why the event is booked again')
       }
-      // No exact twin: unlinked verifikat on 1630 may still hold the event in
-      // aggregate (a summarised verifikat). Same guard as the commit path.
-      const ledgerCover = twins.length === 0 ? await findSkattekontoLedgerCover(supabase, companyId) : null
-      const cover = ledgerCover?.event_ids.includes(tx.id) ? toLedgerCoverInfo(ledgerCover) : null
+      const twins =
+        (await findSkattekontoLedgerTwins(supabase, companyId, [tx], skattekontoAccount)).get(tx.id) ?? []
+      if (twins.length > 0 && !allowDuplicate) {
+        throw skattekontoLedgerTwinRefusal(tx.id, twins, skattekontoAccount)
+      }
+      // No exact twin: unlinked verifikat on the account may still hold the
+      // event (a summarised verifikat, or the one the ledger plan assigns
+      // the row to). Same check as the commit path (ledgerHoldOf).
+      const cover =
+        twins.length === 0
+          ? ledgerHoldOf(await findSkattekontoLedgerHolding(supabase, companyId, skattekontoAccount), tx.id)
+          : null
       if (cover && !allowDuplicate) {
         throw skattekontoLedgerCoverRefusal([tx.id], cover)
       }
@@ -13683,7 +13742,10 @@ export const tools: McpTool[] = [
         // The override is stored only for the twins or the cover the
         // reviewer is warned about below; with none found the commit keeps
         // the guard on.
-        params: { transaction_id: tx.id, ...(allowDuplicate && (twins.length > 0 || cover) ? { allow_duplicate: true } : {}) },
+        params: {
+          transaction_id: tx.id,
+          ...(allowDuplicate && (twins.length > 0 || cover) ? { allow_duplicate: true, duplicate_reason: duplicateReason } : {}),
+        },
         preview: {
           skattekonto_transaction_id: tx.id,
           transaction_date: tx.transaktionsdatum,
@@ -13693,7 +13755,7 @@ export const tools: McpTool[] = [
           // Skatteverket is carried in the text + the Skatteverket-id note).
           verifikat_description: `Skattekonto: ${tx.transaktionstext}`,
           amount: Number(tx.belopp_skatteverket),
-          skattekonto_account: SKATTEKONTO_ACCOUNT,
+          skattekonto_account: skattekontoAccount,
           suggested_counter_account: enriched.booking_suggestion.account,
           suggested_counter_account_name: enriched.booking_suggestion.account_name,
           rule_label: enriched.booking_suggestion.label,
@@ -13704,7 +13766,7 @@ export const tools: McpTool[] = [
           ...(twins.length > 0 ? { ledger_twins: twins } : {}),
           ...(cover ? { ledger_cover: cover } : {}),
           // The verifikat itself, lines as the executor builds them.
-          journal_entry: skattekontoEntryPreview(tx, enriched.booking_suggestion),
+          journal_entry: skattekontoEntryPreview(tx, enriched.booking_suggestion, skattekontoAccount),
         },
         actor,
         next: {
@@ -13716,7 +13778,7 @@ export const tools: McpTool[] = [
         ...stagingOptions(args),
         dateForPeriodCheck: tx.transaktionsdatum,
         ...(twins.length > 0
-          ? { complianceNote: skattekontoDuplicateNote(twins) }
+          ? { complianceNote: skattekontoDuplicateNote(twins, skattekontoAccount) }
           : cover
             ? { complianceNote: skattekontoCoverNote(cover) }
             : {}),
@@ -13748,6 +13810,11 @@ export const tools: McpTool[] = [
           maxItems: 200,
           description:
             'Rows to book although the ledger already holds the event on 1630 (skipped as LEDGER_TWIN_EXISTS or LEDGER_COVER_EXISTS otherwise). Only rows the user confirms are really missing from the ledger; link the others with gnubok_reconcile_match.',
+        },
+        duplicate_reason: {
+          type: 'string',
+          maxLength: DUPLICATE_REASON_MAX_LENGTH,
+          description: 'Required with allow_duplicate_ids: the user\'s reason, written on each verifikat.',
         },
         ...STAGING_ARGS_PROPERTIES,
       },
@@ -13784,13 +13851,26 @@ export const tools: McpTool[] = [
         skattekonto_transaction_id: string
         reason: string
         ledger_twins?: SkattekontoLedgerTwin[]
+        ledger_cover?: SkattekontoLedgerCoverInfo
       }> = []
+      // The override needs the user's reason: each verifikat carries it.
+      const duplicateReason = allowDuplicate.size > 0 ? normaliseDuplicateReason(args.duplicate_reason) : null
+      if (allowDuplicate.size > 0 && !duplicateReason) {
+        throw badArgument('duplicate_reason', 'duplicate_reason is required with allow_duplicate_ids: ask the user why the events are booked again')
+      }
       // One bridge computation for the whole batch: the rows unlinked
-      // verifikat on 1630 already hold in aggregate (a summarised verifikat).
-      const ledgerCover = await findSkattekontoLedgerCover(supabase, companyId)
-      const coveredIds = new Set(ledgerCover?.event_ids ?? [])
-      const cover = ledgerCover ? toLedgerCoverInfo(ledgerCover) : null
+      // verifikat on the skattekonto account already hold, in aggregate or by
+      // the ledger plan. Same check as the commit path (ledgerHoldOf). The
+      // account is read once for the batch (PH 175).
+      const skattekontoAccount = await resolveSkattekontoAccount(supabase, companyId)
+      const holding = await findSkattekontoLedgerHolding(supabase, companyId, skattekontoAccount)
+      const holdOf = (id: string) => ledgerHoldOf(holding, id)
+      // The aggregate cover, stated once for the batch; a planned row's own
+      // verifikat rides on its skipped entry instead.
+      let cover: SkattekontoLedgerCoverInfo | null = null
+      const holdById = new Map<string, SkattekontoLedgerCoverInfo>()
       let approvedCover = false
+      let approvedHold: SkattekontoLedgerCoverInfo | null = null
       for (const id of ids) {
         if (!foundIds.has(id)) {
           skipped.push({ skattekonto_transaction_id: id, reason: 'TRANSACTION_NOT_FOUND' })
@@ -13805,12 +13885,16 @@ export const tools: McpTool[] = [
         supabase,
         companyId,
         found.filter((r) => !r.journal_entry_id && !r.is_ignored),
+        skattekontoAccount,
       )
       const bookable: typeof enriched = []
       const approvedTwins: SkattekontoLedgerTwin[] = []
       for (const r of enriched) {
         const twins = twinsByRow.get(r.id) ?? []
-        const covered = twins.length === 0 && coveredIds.has(r.id)
+        const hold = twins.length === 0 && r.status === 'booked' ? holdOf(r.id) : null
+        const covered = hold !== null
+        if (hold) holdById.set(r.id, hold)
+        if (hold && hold.kind !== 'planned_link') cover ??= hold
         const reason = r.journal_entry_id
           ? 'ALREADY_BOOKED'
           : r.is_ignored
@@ -13829,11 +13913,16 @@ export const tools: McpTool[] = [
             skattekonto_transaction_id: r.id,
             reason,
             ...(reason === 'LEDGER_TWIN_EXISTS' ? { ledger_twins: twins } : {}),
+            // A planned row's verifikat is its own: name it on the row.
+            ...(reason === 'LEDGER_COVER_EXISTS' && hold?.kind === 'planned_link' ? { ledger_cover: hold } : {}),
           })
           continue
         }
         approvedTwins.push(...twins)
-        if (covered) approvedCover = true
+        if (hold) {
+          approvedHold ??= hold
+          if (hold.kind !== 'planned_link') approvedCover = true
+        }
         bookable.push(r)
       }
       const coverSkips = skipped.filter((s) => s.reason === 'LEDGER_COVER_EXISTS')
@@ -13845,17 +13934,21 @@ export const tools: McpTool[] = [
           throw skattekontoLedgerTwinRefusal(
             twinSkips[0].skattekonto_transaction_id,
             twinSkips[0].ledger_twins ?? [],
+            skattekontoAccount,
             twinSkips.length,
           )
         }
-        if (cover && coverSkips.length > 0 && coverSkips.length + twinSkips.length === skipped.length) {
+        if (coverSkips.length > 0 && coverSkips.length + twinSkips.length === skipped.length) {
           // Every row is already in the ledger, at least one inside a
-          // summarised verifikat: name the link to make instead.
-          throw skattekontoLedgerCoverRefusal(
-            coverSkips.map((s) => s.skattekonto_transaction_id),
-            cover,
-            skipped.length,
-          )
+          // summarised verifikat: name the link to make instead. The
+          // aggregate's rows link to its verifikat with a remainder; with
+          // only planned rows, the first one's exact link.
+          const aggregateIds = coverSkips
+            .map((s) => s.skattekonto_transaction_id)
+            .filter((id) => holdById.get(id)?.kind !== 'planned_link')
+          const first = holdById.get(coverSkips[0].skattekonto_transaction_id)
+          if (cover && aggregateIds.length > 0) throw skattekontoLedgerCoverRefusal(aggregateIds, cover, skipped.length)
+          if (first) throw skattekontoLedgerCoverRefusal([coverSkips[0].skattekonto_transaction_id], first, skipped.length)
         }
         const reasons = [...new Set(skipped.map((s) => s.reason))].join(', ')
         throw new Error(`Inga bokförbara rader: alla ${ids.length} hoppades över (${reasons}).`)
@@ -13863,7 +13956,7 @@ export const tools: McpTool[] = [
 
       const bookableIds = bookable.map((r) => r.id)
       const approvedDuplicateIds = bookableIds.filter(
-        (id) => allowDuplicate.has(id) && ((twinsByRow.get(id)?.length ?? 0) > 0 || coveredIds.has(id)),
+        (id) => allowDuplicate.has(id) && ((twinsByRow.get(id)?.length ?? 0) > 0 || holdOf(id) !== null),
       )
       // Oldest row first: lock conflicts live in the past, so the period
       // check should probe the earliest affärshändelse date in the batch.
@@ -13879,12 +13972,12 @@ export const tools: McpTool[] = [
         title: `Bokför ${bookableIds.length} skattekontohändelser`,
         params: {
           ids: bookableIds,
-          ...(approvedDuplicateIds.length > 0 ? { allow_duplicate_ids: approvedDuplicateIds } : {}),
+          ...(approvedDuplicateIds.length > 0 ? { allow_duplicate_ids: approvedDuplicateIds, duplicate_reason: duplicateReason } : {}),
         },
         preview: {
           row_count: bookableIds.length,
           total_amount: totalAmount,
-          skattekonto_account: SKATTEKONTO_ACCOUNT,
+          skattekonto_account: skattekontoAccount,
           rows: bookable.slice(0, 50).map((r) => {
             const twins = twinsByRow.get(r.id) ?? []
             return {
@@ -13899,6 +13992,7 @@ export const tools: McpTool[] = [
                 ? { ore_rounding_account: '3740', ore_rounding_amount: r.booking_suggestion.ore_rounding }
                 : {}),
               ...(twins.length > 0 ? { ledger_twins: twins } : {}),
+              ...(holdById.get(r.id)?.kind === 'planned_link' ? { ledger_cover: holdById.get(r.id) } : {}),
             }
           }),
           ...(bookable.length > 50 ? { rows_truncated: true } : {}),
@@ -13906,7 +14000,9 @@ export const tools: McpTool[] = [
           // the approver is asked to post (crm#1104). Same 50-row cap.
           journal_entries: bookable
             .slice(0, 50)
-            .flatMap((r) => (r.booking_suggestion ? [skattekontoEntryPreview(r, r.booking_suggestion)] : [])),
+            .flatMap((r) =>
+              r.booking_suggestion ? [skattekontoEntryPreview(r, r.booking_suggestion, skattekontoAccount)] : [],
+            ),
           ...(skipped.length > 0 ? { skipped } : {}),
           // Stated once for the batch: the verifikat that already hold the
           // LEDGER_COVER_EXISTS rows, to link them to.
@@ -13922,9 +14018,9 @@ export const tools: McpTool[] = [
         ...stagingOptions(args),
         dateForPeriodCheck: earliestDate,
         ...(approvedTwins.length > 0
-          ? { complianceNote: skattekontoDuplicateNote(approvedTwins) }
-          : cover && approvedCover
-            ? { complianceNote: skattekontoCoverNote(cover) }
+          ? { complianceNote: skattekontoDuplicateNote(approvedTwins, skattekontoAccount) }
+          : approvedHold
+            ? { complianceNote: skattekontoCoverNote(approvedCover && cover ? cover : approvedHold) }
             : {}),
       })
     },
@@ -20636,6 +20732,10 @@ export const tools: McpTool[] = [
       // credited (that would reverse the same sale twice).
       const refusal = creditNoteRefusal(inv)
       if (refusal) throw registryError(refusal.code)
+      // The number the credit note refers to (ML 17 kap 22-23 §§): a
+      // self-billed original keeps it in external_invoice_number (#34). The
+      // refusal above already turned away an original with no number at all.
+      const originalReference = creditNoteOriginalReference(inv) as string
 
       const postsJournalEntry = creditNoteNeedsJournalEntry(
         (settings as { accounting_method?: string | null } | null)?.accounting_method || 'accrual',
@@ -20647,10 +20747,11 @@ export const tools: McpTool[] = [
         companyId,
         userId,
         type: 'credit_invoice',
-        title: `Kreditera faktura ${inv.invoice_number}`,
+        title: `Kreditera faktura ${originalReference}`,
         params: { invoice_id: id, reason },
         preview: {
-          invoice_number: inv.invoice_number,
+          invoice_number: originalReference,
+          credit_note_number: creditNoteNumber(originalReference),
           customer_name: (inv.customer as { name?: string } | null)?.name,
           total: inv.total,
           currency: inv.currency,

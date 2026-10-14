@@ -4,7 +4,9 @@ import type { Invoice } from '@/types'
  * The kreditfaktura of an issued invoice, as POST /api/invoices creates it
  * (createCreditNote) and as the editor previews it before it exists: one
  * derivation, so the preview prints exactly the credit note that is created.
- * Rows come from buildCreditNoteItem.
+ * The v1 credit route and the MCP credit_invoice commit take the same
+ * reference, number and header (accounted#34). Rows come from
+ * buildCreditNoteItem on the dashboard door only (see DECISIONS.md).
  */
 
 /** The original's number the credit note refers to (ML 17 kap 22-23 §§). */

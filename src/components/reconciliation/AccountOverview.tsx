@@ -28,6 +28,7 @@ import { ReconciliationSummary } from './ReconciliationSummary'
 import { PairRow, PairsHead } from './ReconciliationPairs'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { SKATTEKONTO_ACCOUNT_DEFAULT, isSkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 
 const SkattekontoBookDialog = dynamic(
   () => import('@/components/skattekonto/SkattekontoBookDialog'),
@@ -103,6 +104,10 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
   const locale = useLocale()
   const { toast } = useToast()
   const [status, setStatus] = useState<ReconciliationStatus | null>(null)
+  // The company's skattekonto account (1630, or 2012 for an enskild firma that
+  // runs it there): what the skattekonto texts name.
+  const skattekontoAccount =
+    status && isSkattekontoLedgerAccount(status.account_number) ? status.account_number : SKATTEKONTO_ACCOUNT_DEFAULT
   const [items, setItems] = useState<ItemsPayload | null>(null)
   const [loadError, setLoadError] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
@@ -290,7 +295,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         toast({
           title: failed > 0 ? t('toast_book_partial', { ok, failed }) : t('toast_booked', { count: ok }),
           ...(covered > 0
-            ? { description: t('toast_book_covered', { count: covered }) }
+            ? { description: t('toast_book_covered', { count: covered, skattekonto: skattekontoAccount }) }
             : twins > 0
               ? { description: t('toast_book_twins', { count: twins }) }
               : {}),
@@ -721,6 +726,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
           {t('covered_line', {
             count: status.skattekonto.covered.event_count,
             date: formatDate(status.skattekonto.covered.through_date),
+            skattekonto: skattekontoAccount,
           })}
         </AttnLine>
       ) : null}
@@ -928,6 +934,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
       {isSkv && (
         <SkattekontoBookDialog
           row={bookRow ? toDialogRow(bookRow) : null}
+          skattekontoAccount={skattekontoAccount}
           open={bookRow !== null}
           onOpenChange={(open) => {
             if (!open) setBookRow(null)
@@ -953,6 +960,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
           }}
           onLinked={() => void refresh()}
           onManual={onMatchManually}
+          skattekontoAccount={skattekontoAccount}
         />
       )}
 
@@ -962,6 +970,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
           open={matchRow !== null}
           onClose={() => setMatchRow(null)}
           onMatched={() => void refresh()}
+          skattekontoAccount={skattekontoAccount}
         />
       )}
 

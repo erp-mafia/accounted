@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { dbError } from '@/lib/errors/db-error'
 import { isUuid } from '@/lib/invariants/uuid'
 import { roundOre } from '@/lib/money'
-import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
+import { resolveSkattekontoAccount } from '@/lib/skatteverket/skattekonto-account'
 import { chunk } from '@/lib/utils'
 import type { ReconciliationPair } from './actions'
 import { parseAccountKey } from './schemas'
@@ -76,7 +76,7 @@ export interface PairPreview {
 }
 
 export interface MatchPairsPreview {
-  /** The ledger account the pairs are linked on: 1630, or the bank account's BAS account. */
+  /** The ledger account the pairs are linked on: the skattekonto account (1630, or 2012 for an enskild firma that runs it there), or the bank account's BAS account. */
   ledger_account: string
   pair_details: PairPreview[]
   /** Pairs with outside rows beyond PAIR_PREVIEW_MAX_PAIRS: staged, not described. */
@@ -125,8 +125,10 @@ export async function describeMatchPairs(
   const described = withRows.slice(0, PAIR_PREVIEW_MAX_PAIRS)
   if (described.length === 0) return null
 
-  let ledgerAccount: string = SKATTEKONTO_ACCOUNT
-  if (parsed.kind === 'bank') {
+  let ledgerAccount: string
+  if (parsed.kind === 'skattekonto') {
+    ledgerAccount = await resolveSkattekontoAccount(supabase, companyId)
+  } else {
     const { data: account, error } = await supabase
       .from('cash_accounts')
       .select('ledger_account')

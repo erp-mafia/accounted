@@ -175,6 +175,30 @@ describe('a Fortnox register refusal', () => {
     expect(providerRefusalReason(new FortnoxApiError('Fortnox API error: 403', 403))).toBe('permission')
     expect(providerRefusalReason(vismaError(403))).toBe('permission')
   })
+
+  it('reads a register the connecting user may not see as refused under HTTP 400 too (crm#1014)', () => {
+    // Fortnox answers some per-register user rights with 400, not 403. The
+    // migration job used to read these as unclassified and retry for ever,
+    // while the underlag import already called them refusals.
+    for (const err of [
+      new FortnoxApiError('Fortnox API error: 400', 400,
+        '{"ErrorInformation":{"error":1,"message":"Saknar behörighet för leverantörsfaktura.","code":2002182}}'),
+      new FortnoxApiError('Fortnox API error: 400', 400,
+        '{"ErrorInformation":{"error":1,"message":"Saknar behörighet för kundregister.","code":2001538}}'),
+    ]) {
+      expect(classifyProviderError(err)).toBe('PROVIDER_RESOURCE_FORBIDDEN')
+      expect(providerRefusalReason(err)).toBe('permission')
+    }
+    // An ordinary 400 stays unclassified.
+    expect(classifyProviderError(new FortnoxApiError('Fortnox API error: 400', 400,
+      '{"ErrorInformation":{"error":1,"message":"Kan inte hitta kontot.","code":2000423}}'))).toBeNull()
+  })
+
+  it('keeps the whole-account API licence apart from a refused register', () => {
+    const noApi = new FortnoxApiError('Fortnox API error: 400', 400,
+      '{"ErrorInformation":{"error":1,"message":"Api-licens saknas.","code":2001103}}')
+    expect(classifyProviderError(noApi)).toBe('PROVIDER_LICENSE_MISSING')
+  })
 })
 
 describe('isApiModuleInactiveError', () => {

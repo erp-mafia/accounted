@@ -21,6 +21,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { proposalPairsOf, type ProposalPairsSummary } from '@/lib/reconciliation/proposal-pairs'
 import type { ReconciliationItem } from '@/lib/reconciliation/schemas'
 import { formatCurrency, formatDate } from '@/lib/utils'
+import type { SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 
 const BASE = '/api/reconciliation/accounts/skattekonto'
 /** Where rows no proposal covers are linked by hand. */
@@ -58,8 +59,11 @@ export function SkattekontoLinkProposalsDialog({
   onLinked,
   focusRowId,
   onManual,
+  skattekontoAccount,
 }: {
   open: boolean
+  /** The company's skattekonto account (1630, or 2012), as the server reported it. */
+  skattekontoAccount: SkattekontoLedgerAccount
   onOpenChange: (open: boolean) => void
   /** Called after links were made or undone, so the caller reloads its rows. */
   onLinked?: () => void
@@ -191,11 +195,12 @@ export function SkattekontoLinkProposalsDialog({
                 count: summary.row_count,
                 total: formatCurrency(summary.total),
                 vouchers: summary.entry_count,
+                skattekonto: skattekontoAccount,
               })}
             </DialogDescription>
           )}
           {empty && (
-            <DialogDescription className="text-[13px] leading-relaxed">{t('empty_body')}</DialogDescription>
+            <DialogDescription className="text-[13px] leading-relaxed">{t('empty_body', { skattekonto: skattekontoAccount })}</DialogDescription>
           )}
         </DialogHeader>
 

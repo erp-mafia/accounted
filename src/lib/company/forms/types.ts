@@ -46,6 +46,13 @@ export interface LegalFormProfile {
      * written for an enskild firma, `_ab` overrides it for an aktiebolag.
      */
     templateColumn: 'base' | 'ab'
+    /**
+     * Ledger accounts the form may run its skattekonto on, the default first:
+     * 1630 for every form, 2012 (eget kapital) as the alternative for an
+     * enskild firma. The company's choice is company_settings.
+     * skattekonto_account, read through lib/skatteverket/skattekonto-account.ts.
+     */
+    skattekontoAccounts: readonly string[]
   }
   equity: {
     /** Account the year's net result is closed to. */

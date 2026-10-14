@@ -4,12 +4,18 @@ import { commitEntry, createDraftEntry, findFiscalPeriod } from '@/lib/bookkeepi
 import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { roundOre } from '@/lib/money'
-import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
+import {
+  SKATTEKONTO_ACCOUNT_DEFAULT,
+  resolveSkattekontoAccount,
+  type SkattekontoLedgerAccount,
+} from '@/lib/skatteverket/skattekonto-account'
 import { getPrimary as getPrimaryCashAccount } from '@/lib/cash-accounts/service'
 import { findOpeningBalanceFloor, sumAccountBalance } from '@/lib/reconciliation/gl-balance'
 import {
   getSkattekontoReconciliationStatus,
+  skattekontoPlannedHolds,
   type SkattekontoLedgerCover,
+  type SkattekontoPlannedHold,
 } from '@/lib/reconciliation/skattekonto-reconciliation'
 import { formatCurrency } from '@/lib/utils'
 import { VAT_REFUND_ACCOUNT, VAT_ROUNDING_ACCOUNT, VAT_SETTLEMENT_ACCOUNT } from '@/lib/reports/vat-settlement'
@@ -43,7 +49,9 @@ import { todayIsoStockholm } from '@/lib/dates/iso'
  * via the bookkeeping engine. The user reviews and commits the draft in
  * /bookkeeping/[id].
  *
- * Sign convention (BAS 1630, Skattekonto):
+ * Sign convention (BAS 1630, Skattekonto; 2012 for an enskild firma that runs
+ * the skattekonto in eget kapital, lib/skatteverket/skattekonto-account.ts,
+ * read as ctx.account):
  *   beloppSkatteverket > 0  (credit on tax account, e.g. payment in)
  *     → Debit 1630, Credit counter-account
  *   beloppSkatteverket < 0  (debit on tax account, e.g. F-tax charge)
@@ -391,6 +399,8 @@ export async function guessCounterAccount(
 export interface SkattekontoRuleContext {
   rules: SkattekontoRuleRow[]
   entityType: EntityType
+  /** The company's skattekonto account: the side every booked row takes. */
+  account: SkattekontoLedgerAccount
   /** (company_settings.employer_registered ?? pays_salaries) === true.
    *  Drives the requires_employer rule gate for enskild firma. */
   employerRegistered: boolean
@@ -400,31 +410,36 @@ export interface SkattekontoRuleContext {
 export async function loadRuleContext(
   supabase: SupabaseClient,
   companyId: string,
+  known?: { account?: SkattekontoLedgerAccount },
 ): Promise<SkattekontoRuleContext> {
   if (!SAFE_ID_PATTERN.test(companyId)) {
     // Same defence-in-depth refusal as guessCounterAccount: never interpolate
-    // an unvalidated id into the PostgREST .or() filter string.
+    // an unvalidated id into the PostgREST .or() filter string. No rules, so
+    // nothing is ever booked on the account.
     return {
       rules: [],
       entityType: 'aktiebolag',
+      account: SKATTEKONTO_ACCOUNT_DEFAULT,
       employerRegistered: false,
       resolvePrimarySek: async () => PRIMARY_SEK_FALLBACK,
     }
   }
 
-  const [rules, settingsResult] = await Promise.all([
+  const [rules, settingsResult, account] = await Promise.all([
     fetchSkattekontoRules(supabase, companyId),
     supabase
       .from('company_settings')
       .select('entity_type, employer_registered, pays_salaries')
       .eq('company_id', companyId)
       .single(),
+    known?.account ?? resolveSkattekontoAccount(supabase, companyId),
   ])
 
   let primary: string | null = null
   return {
     rules,
     entityType: await resolveCompanyEntityType(supabase, companyId, settingsResult.data?.entity_type),
+    account,
     // Same signal as lib/tax/deadline-config.ts: employer_registered is the
     // explicit attestation (nullable, 20260717151000; null = never attested)
     // and falls back to the onboarding pays_salaries answer. An explicit
@@ -453,7 +468,8 @@ export async function loadRuleContext(
  * receivable when suggesting.
  */
 async function resolveCounterAccount(
-  ctx: SkattekontoRuleContext,
+  // The counter side only: the skattekonto side is ctx.account at the builder.
+  ctx: Omit<SkattekontoRuleContext, 'account'>,
   event: { transaktionstext: string; belopp: number | undefined; transaktionsdatum: string | undefined },
   readBalance: VatReceivableBalanceReader,
 ): Promise<RuleMatchOutcome> {
@@ -504,6 +520,7 @@ export async function attachBookingSuggestions<
   supabase: SupabaseClient,
   companyId: string,
   rows: T[],
+  account?: SkattekontoLedgerAccount,
 ): Promise<
   (T & {
     booking_suggestion: SkattekontoBookingSuggestion | null
@@ -517,7 +534,7 @@ export async function attachBookingSuggestions<
     return rows.map(row => ({ ...row, booking_suggestion: null }))
   }
 
-  const ctx = await loadRuleContext(supabase, companyId)
+  const ctx = await loadRuleContext(supabase, companyId, { account })
   // One 1650 read per event date for the whole page. A suggestion posts
   // nothing, so the refunds already suggested onto 1650 are subtracted in row
   // order (the order the batch commits them): two refunds against one
@@ -620,8 +637,9 @@ export async function findSkattekontoLedgerTwins(
   supabase: SupabaseClient,
   companyId: string,
   rows: LedgerTwinProbe[],
+  account?: SkattekontoLedgerAccount,
 ): Promise<Map<string, SkattekontoLedgerTwin[]>> {
-  return toLedgerTwinMap(await findLedgerTwinCandidates(supabase, companyId, rows))
+  return toLedgerTwinMap(await findLedgerTwinCandidates(supabase, companyId, rows, account))
 }
 
 /**
@@ -633,7 +651,7 @@ export async function findSkattekontoLedgerTwins(
  */
 export function ledgerTwinMessage(
   twins: SkattekontoLedgerTwin[],
-  opts: { settled?: boolean } = {},
+  opts: { settled?: boolean; account: SkattekontoLedgerAccount },
 ): string {
   const ref = (t: SkattekontoLedgerTwin) =>
     t.voucher_number != null && t.voucher_number !== 0
@@ -661,39 +679,113 @@ export function ledgerTwinMessage(
       ? `Skatteverket har inte genomfört händelsen ännu: vänta tills den är genomförd och koppla då raden till ${target} i stället för att bokföra händelsen en gång till. `
       : `Koppla raden till ${target} i stället för att bokföra händelsen en gång till. `
   return (
-    `Händelsen finns redan i bokföringen: ${list} innehåller den redan på konto 1630. ` +
+    `Händelsen finns redan i bokföringen: ${list} innehåller den redan på konto ${opts.account}. ` +
     wayOut +
     'Bokför ändå bara om händelsen verkligen har inträffat två gånger.'
   )
 }
 
 /**
- * The open rows the ledger already holds through unlinked verifikat on 1630
- * (a summarised year-end or month-end verifikat, crm#1043): the
- * reconciliation's own arithmetic (findLedgerCoverPoint), so the
- * booking guard, the Avstämning page and the agent tools read one answer.
- * One bridge computation whatever the number of rows; null when nothing is
- * covered, which is every company without an unlinked verifikat on 1630.
- * Throws when the ledger cannot be read: without it no answer is safe, the
- * same posture as the twin search.
+ * What the ledger already holds of the open rows that have no verifikat of
+ * their own, by the reconciliation's own arithmetic, so the booking guard,
+ * the Avstämning page and the agent tools read one answer:
+ *
+ *   cover    the open rows up to a date that unlinked verifikat on 1630 hold
+ *            in aggregate (a summarised year-end verifikat, crm#1043,
+ *            findLedgerCoverPoint)
+ *   planned  the open rows the ledger plan assigns to one open verifikat (a
+ *            monthly summary from the previous system, PH 171), whatever
+ *            their date: a row dated after the cover date is held all the
+ *            same
  */
-export async function findSkattekontoLedgerCover(
+export interface SkattekontoLedgerHolding {
+  /** The skattekonto account the holding is on (1630, or 2012 for an enskild firma that runs it there). */
+  account: SkattekontoLedgerAccount
+  cover: SkattekontoLedgerCover | null
+  covered: Set<string>
+  planned: Map<string, SkattekontoPlannedHold>
+}
+
+/**
+ * The holding of a company: one bridge computation whatever the number of
+ * rows; null when the company has no skattekonto. Throws when the ledger
+ * cannot be read: without it no answer is safe, the same posture as the twin
+ * search.
+ */
+export async function findSkattekontoLedgerHolding(
   supabase: SupabaseClient,
   companyId: string,
-): Promise<SkattekontoLedgerCover | null> {
-  const status = await getSkattekontoReconciliationStatus(supabase, companyId)
+  account?: SkattekontoLedgerAccount,
+): Promise<SkattekontoLedgerHolding | null> {
+  const status = await getSkattekontoReconciliationStatus(supabase, companyId, { account })
   if (!status) return null
   if (status.ledger_read_failed) {
     throw new Error(
-      'Kunde inte kontrollera om händelsen redan finns i bokföringen: konto 1630 kunde inte läsas. Försök igen.',
+      `Kunde inte kontrollera om händelsen redan finns i bokföringen: konto ${status.account_number} kunde inte läsas. Försök igen.`,
     )
   }
-  return status.cover
+  return {
+    account: status.account_number as SkattekontoLedgerAccount,
+    cover: status.cover,
+    covered: new Set(status.cover?.event_ids ?? []),
+    planned: skattekontoPlannedHolds(status) ?? new Map(),
+  }
+}
+
+/**
+ * The one check every booking door runs: does the ledger already hold this
+ * open row? The refusal to give, or null. A planned row names the one
+ * verifikat and the rows it holds, which is the more exact answer, so it wins
+ * over the cover when both apply.
+ */
+export function ledgerHoldOf(
+  holding: SkattekontoLedgerHolding | null,
+  rowId: string,
+): SkattekontoLedgerCoverInfo | null {
+  if (!holding) return null
+  const planned = holding.planned.get(rowId)
+  if (planned) return toPlannedHoldInfo(planned, holding.account)
+  return holding.covered.has(rowId) && holding.cover ? toLedgerCoverInfo(holding.cover) : null
+}
+
+/** The same check for several rows taken together: the answer only when the ledger holds every one of them. */
+export function ledgerHoldOfRows(
+  holding: SkattekontoLedgerHolding | null,
+  rowIds: string[],
+): SkattekontoLedgerCoverInfo | null {
+  const holds = rowIds.map((id) => ledgerHoldOf(holding, id))
+  return holds.length > 0 && holds.every((h) => h !== null) ? holds[0] : null
+}
+
+/** A planned row as the refusal carries it: the one verifikat and the rows of the link. */
+function toPlannedHoldInfo(hold: SkattekontoPlannedHold, account: SkattekontoLedgerAccount): SkattekontoLedgerCoverInfo {
+  const e = hold.entry
+  return {
+    account_number: account,
+    through_date: hold.to_date,
+    kind: 'planned_link',
+    event_count: hold.event_ids.length,
+    event_total: hold.total,
+    event_ids: hold.event_ids,
+    entries: [
+      {
+        journal_entry_id: e.journal_entry_id,
+        voucher_series: e.voucher_series,
+        voucher_number: e.voucher_number,
+        entry_date: e.entry_date,
+        description: e.description,
+        status: e.status,
+        open_amount: e.open_amount,
+      },
+    ],
+    entry_count: 1,
+  }
 }
 
 /** The cover as a refusal carries it: the totals and the largest verifikat. */
 export function toLedgerCoverInfo(cover: SkattekontoLedgerCover): SkattekontoLedgerCoverInfo {
   return {
+    account_number: cover.account_number,
     through_date: cover.through_date,
     kind: cover.kind,
     event_count: cover.event_count,
@@ -727,16 +819,57 @@ export function ledgerCoverMessage(cover: SkattekontoLedgerCoverInfo): string {
   const rows =
     cover.event_count === 1 ? 'den obokförda händelsen' : `de ${cover.event_count} obokförda händelserna`
   const total = formatCurrency(cover.event_total, 'SEK', { minimumFractionDigits: 2 })
+  if (cover.kind === 'planned_link') {
+    const others = cover.event_count - 1
+    const held =
+      others === 0
+        ? 'den här händelsen'
+        : others === 1
+          ? 'den här händelsen och en annan obokförd händelse'
+          : `den här händelsen och ${others} andra obokförda händelser`
+    return (
+      `Händelsen finns redan i bokföringen: verifikat ${list} på konto ${cover.account_number} är inte kopplat till någon händelse och motsvarar på öret ${held} (${total}). ` +
+      'Koppla händelserna till verifikatet i stället för att bokföra dem en gång till (Avstämning, Skattekonto, Koppla föreslagna). ' +
+      'Bokför ändå bara om händelsen verkligen saknas i bokföringen.'
+    )
+  }
   const proof =
     cover.kind === 'events_equal'
-      ? `Verifikat på konto 1630 som inte är kopplade till någon händelse (${list}) motsvarar exakt ${rows} t.o.m. ${cover.through_date} (${total}).`
-      : `Konto 1630 stämmer redan med Skatteverket per ${cover.through_date} fast ${rows} t.o.m. det datumet (${total}) saknar egna verifikat: de ingår i verifikat som inte är kopplade till någon händelse (${list}).`
+      ? `Verifikat på konto ${cover.account_number} som inte är kopplade till någon händelse (${list}) motsvarar exakt ${rows} t.o.m. ${cover.through_date} (${total}).`
+      : `Konto ${cover.account_number} stämmer redan med Skatteverket per ${cover.through_date} fast ${rows} t.o.m. det datumet (${total}) saknar egna verifikat: de ingår i verifikat som inte är kopplade till någon händelse (${list}).`
   return (
     `Händelsen ser redan ut att vara bokförd. ${proof} ` +
     'Koppla händelserna till verifikatet i stället för att bokföra dem en gång till (Avstämning, Skattekonto, Matcha manuellt). ' +
     'Det verifikatet innehåller utöver händelserna står kvar som återstående belopp. ' +
     'Bokför ändå bara om händelsen verkligen saknas i bokföringen.'
   )
+}
+
+/** The longest reason an override keeps: what the verifikat notes carry. */
+export const DUPLICATE_REASON_MAX_LENGTH = 500
+
+/** The override's reason, trimmed and capped; null when none was given (no override). */
+export function normaliseDuplicateReason(reason: unknown): string | null {
+  if (typeof reason !== 'string') return null
+  const trimmed = reason.trim().replace(/\s+/g, ' ')
+  return trimmed ? trimmed.slice(0, DUPLICATE_REASON_MAX_LENGTH) : null
+}
+
+/**
+ * The verifikat note of a booking over the guard: what the ledger already
+ * held the event in, and the reason given. Plain Swedish, part of the
+ * verifikation, so an auditor reads the decision where the entry is.
+ */
+export function duplicateOverrideNote(
+  reason: string,
+  twins: SkattekontoLedgerTwin[],
+  held: SkattekontoLedgerCoverInfo | null,
+  account: SkattekontoLedgerAccount,
+): string {
+  const ref = (t: SkattekontoLedgerTwin) =>
+    t.voucher_number != null && t.voucher_number !== 0 ? formatVoucher(t) : `utkast ${t.entry_date}`
+  const refs = (twins.length > 0 ? twins : (held?.entries ?? [])).slice(0, 5).map(ref).join(', ')
+  return `Bokförd trots att bokföringen redan innehåller händelsen (${refs || `verifikat på konto ${account}`}). Skäl: ${reason}`
 }
 
 /**
@@ -773,6 +906,7 @@ export interface SkattekontoEntrySource {
 export function buildSkattekontoEntry(
   tx: SkattekontoEntrySource,
   guess: CounterAccountMatch,
+  account: SkattekontoLedgerAccount,
 ): Omit<CreateJournalEntryInput, 'fiscal_period_id'> {
   const amount = Math.abs(Number(tx.belopp_skatteverket))
   const isCreditToSkattekonto = Number(tx.belopp_skatteverket) > 0
@@ -795,7 +929,7 @@ export function buildSkattekontoEntry(
   const lines: CreateJournalEntryLineInput[] = isCreditToSkattekonto
     ? [
         {
-          account_number: SKATTEKONTO_ACCOUNT,
+          account_number: account,
           debit_amount: amount,
           credit_amount: 0,
           line_description: tx.transaktionstext,
@@ -816,7 +950,7 @@ export function buildSkattekontoEntry(
           line_description: guess.label,
         },
         {
-          account_number: SKATTEKONTO_ACCOUNT,
+          account_number: account,
           debit_amount: 0,
           credit_amount: amount,
           line_description: tx.transaktionstext,
@@ -840,9 +974,10 @@ export function buildSkattekontoEntry(
  *   - already-booked rows (journal_entry_id present, or a live verifikat for
  *     the row already exists: journal_entries_system_source_live_unique)
  *   - a ledger twin: another live verifikat already carries the event on
- *     1630 (LEDGER_TWIN_EXISTS), unless allowDuplicate
- *   - a ledger cover: unlinked verifikat on 1630 already hold the event in
- *     aggregate (LEDGER_COVER_EXISTS), unless allowDuplicate
+ *     1630 (LEDGER_TWIN_EXISTS), unless overridden with a reason
+ *   - a ledger hold: unlinked verifikat on 1630 already hold the event, in
+ *     aggregate or by the ledger plan (LEDGER_COVER_EXISTS, ledgerHoldOf),
+ *     unless overridden with a reason
  *   - missing/locked fiscal period for the transaktionsdatum
  *   - no rule match → user must categorize manually
  *
@@ -864,16 +999,19 @@ export async function bokforSkattekontoTransaction(
     // must never land in an immutable posted verifikat. The single-row draft
     // endpoint keeps its historical behaviour (draft for user review).
     requireSettled?: boolean
-    // allowDuplicate: book even though a ledger twin exists. Only an explicit
-    // per-row decision by the user or agent sets it (the event really
-    // happened twice); no caller defaults it.
-    allowDuplicate?: boolean
+    // duplicateReason: the override. Book even though the ledger already
+    // holds the event (a twin, or a hold), because of this stated reason,
+    // which the verifikat carries in its notes. Only an explicit per-row
+    // decision by the user or agent sets it (the event really happened twice,
+    // or really is missing from the books); no caller defaults it, and an
+    // empty reason is no override.
+    duplicateReason?: string
     // ledgerTwins: this row's twins, precomputed by a batch caller in one
     // search for all rows. Omitted → searched here for this row alone.
     ledgerTwins?: SkattekontoLedgerTwin[]
-    // ledgerCover: the company's cover (null = nothing covered), computed
+    // ledgerHolding: the company's holding (null = no skattekonto), computed
     // once by a batch caller. Omitted → computed here.
-    ledgerCover?: SkattekontoLedgerCover | null
+    ledgerHolding?: SkattekontoLedgerHolding | null
   },
 ): Promise<JournalEntry> {
   // 1. Load the transaction
@@ -927,44 +1065,55 @@ export async function bokforSkattekontoTransaction(
   // Skatteverket has not settled yet (the single-row draft path opens
   // kommande rows) cannot be linked either, so its refusal says to wait and
   // link once it is settled.
-  if (!options?.allowDuplicate) {
-    const twins =
-      options?.ledgerTwins ??
-      (await findSkattekontoLedgerTwins(supabase, companyId, [tx])).get(tx.id) ??
-      []
-    if (twins.length > 0) {
-      throw new SkattekontoBookingError(
-        ledgerTwinMessage(twins, { settled: tx.status === 'booked' }),
-        'LEDGER_TWIN_EXISTS',
-        twins,
-      )
-    }
-
-    // No verifikat carries exactly this event, yet the ledger may hold it
-    // inside a summarised one: a year-end verifikat that books every event
-    // of the year on 1630, some of them from before the fetched history
-    // (crm#1043). No amount search finds that. The reconciliation's
-    // arithmetic does: booking moves 1630 by the row's amount, and the cover
-    // says the unlinked verifikat on 1630 already account for this row. The
-    // answer is to link it there; the same override books it anyway. Only a
-    // settled row is ever covered (a kommande row is in no saldo yet).
-    if (tx.status === 'booked') {
-      const cover =
-        options?.ledgerCover !== undefined
-          ? options.ledgerCover
-          : await findSkattekontoLedgerCover(supabase, companyId)
-      if (cover && cover.event_ids.includes(tx.id)) {
-        const info = toLedgerCoverInfo(cover)
-        throw new SkattekontoBookingError(ledgerCoverMessage(info), 'LEDGER_COVER_EXISTS', undefined, info)
-      }
-    }
+  //
+  // The skattekonto account (1630, or 2012 for an enskild firma that runs it
+  // there) is resolved once: the twin search, the holding, the rule context
+  // and the verifikat all use the same account.
+  const account = ruleContext?.account ?? (await resolveSkattekontoAccount(supabase, companyId))
+  const reason = normaliseDuplicateReason(options?.duplicateReason)
+  const twins =
+    options?.ledgerTwins ??
+    (await findSkattekontoLedgerTwins(supabase, companyId, [tx], account)).get(tx.id) ??
+    []
+  if (twins.length > 0 && !reason) {
+    throw new SkattekontoBookingError(
+      ledgerTwinMessage(twins, { settled: tx.status === 'booked', account }),
+      'LEDGER_TWIN_EXISTS',
+      twins,
+    )
   }
+
+  // No verifikat carries exactly this event, yet the ledger may hold it
+  // inside a summarised one: a year-end verifikat that books every event of
+  // the year on 1630, some of them from before the fetched history
+  // (crm#1043), or a monthly summary the ledger plan assigns the row to
+  // (PH 171), whatever the row's date. No amount search finds that. The
+  // reconciliation's arithmetic does (ledgerHoldOf, the one check every
+  // booking door runs). The answer is to link it there; the same override
+  // books it anyway. Only a settled row is ever held (a kommande row is in
+  // no saldo yet).
+  const held =
+    twins.length === 0 && tx.status === 'booked'
+      ? ledgerHoldOf(
+          options?.ledgerHolding !== undefined
+            ? options.ledgerHolding
+            : await findSkattekontoLedgerHolding(supabase, companyId, account),
+          tx.id,
+        )
+      : null
+  if (held && !reason) {
+    throw new SkattekontoBookingError(ledgerCoverMessage(held), 'LEDGER_COVER_EXISTS', undefined, held)
+  }
+  // Booked over a twin or a hold: the verifikat itself says so, what it
+  // overrode and why, so the decision stays with the record (BFNAR 2013:2
+  // p. 9.16) whichever door booked it.
+  const overrideNote = reason && (twins.length > 0 || held) ? duplicateOverrideNote(reason, twins, held, account) : null
 
   // 2+3. Resolve counter-account via skattekonto_rules (entity_type decides
   // AB/EF-specific accounts; requires_employer gates payroll rules for a
   // non-employer enskild firma). The per-call path builds the same context
   // the batch path preloads, so both share one matcher and one gate.
-  const ctx = ruleContext ?? (await loadRuleContext(supabase, companyId))
+  const ctx = ruleContext ?? (await loadRuleContext(supabase, companyId, { account }))
   // The 1650 balance is read fresh for every row (no memo): a batch commits
   // row by row, so a refund booked earlier in the batch is already counted.
   const outcome = await resolveCounterAccount(
@@ -1024,8 +1173,10 @@ export async function bokforSkattekontoTransaction(
   }
 
   // 5. The verifikat, from the builder the staging preview shows too.
+  const built = buildSkattekontoEntry(tx, guess, ctx.account)
   const input: CreateJournalEntryInput = {
-    ...buildSkattekontoEntry(tx, guess),
+    ...built,
+    ...(overrideNote ? { notes: `${built.notes} ${overrideNote}` } : {}),
     fiscal_period_id: fiscalPeriodId,
   }
 
@@ -1106,33 +1257,34 @@ function isPeriodLockTriggerError(err: unknown): boolean {
  *
  * A row whose event the ledger already holds is skipped with
  * LEDGER_TWIN_EXISTS and its twins listed, or with LEDGER_COVER_EXISTS when
- * unlinked verifikat on 1630 hold it in aggregate, unless its id is in
- * `allowDuplicateIds`. The twins of all rows are searched once up front, and
- * the cover is one bridge computation for the whole batch: it does not move
- * while rows dated after it are booked.
+ * unlinked verifikat on 1630 hold it (ledgerHoldOf), unless its id is in
+ * `allowDuplicateIds` and a `duplicateReason` is given: then it is booked
+ * and the verifikat notes the reason. The twins of all rows are searched once
+ * up front, and the holding is one bridge computation for the whole batch:
+ * booking a row moves the same amount onto both sides of its date, so the
+ * holding does not move while the other rows are booked.
  */
 export async function bokforSkattekontoTransactionsBatch(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
   ids: string[],
-  options?: { allowDuplicateIds?: string[] },
+  options?: { allowDuplicateIds?: string[]; duplicateReason?: string },
 ): Promise<SkattekontoBatchResult> {
   const ruleContext = await loadRuleContext(supabase, companyId)
-  const allowDuplicate = new Set(options?.allowDuplicateIds ?? [])
-  // One candidate search for every open row the guard applies to. A row
-  // missing from the map (booked, ignored or gone at read time) searches for
-  // itself if it is still bookable when its turn comes.
+  // An override without a reason is no override: the guard stays on.
+  const reason = normaliseDuplicateReason(options?.duplicateReason)
+  const allowDuplicate = new Set(reason ? (options?.allowDuplicateIds ?? []) : [])
+  // One candidate search for every open row. A row missing from the map
+  // (booked, ignored or gone at read time) searches for itself if it is
+  // still bookable when its turn comes. Overridden rows are searched too:
+  // their verifikat names what they were booked over. Both read the
+  // company's skattekonto account (PH 175).
   const twinsByRow = toLedgerTwinMap(
-    await findLedgerTwinCandidatesForIds(
-      supabase,
-      companyId,
-      ids.filter(id => !allowDuplicate.has(id)),
-    ),
+    await findLedgerTwinCandidatesForIds(supabase, companyId, ids, ruleContext.account),
   )
-  const ledgerCover = ids.some(id => !allowDuplicate.has(id))
-    ? await findSkattekontoLedgerCover(supabase, companyId)
-    : null
+  const ledgerHolding =
+    ids.length > 0 ? await findSkattekontoLedgerHolding(supabase, companyId, ruleContext.account) : null
   // A one-row batch is the inline single-row flow: attribute it as a normal
   // user acceptance; real bulk runs are attributed as bulk_accept.
   const commitMethod = ids.length === 1 ? 'user_accept' : 'bulk_accept'
@@ -1151,9 +1303,9 @@ export async function bokforSkattekontoTransactionsBatch(
           // Batch rows commit immediately: never post an unsettled (kommande)
           // Skatteverket row into an immutable verifikat.
           requireSettled: true,
-          allowDuplicate: allowDuplicate.has(id),
+          ...(reason && allowDuplicate.has(id) ? { duplicateReason: reason } : {}),
           ledgerTwins: twinsByRow.get(id),
-          ledgerCover,
+          ledgerHolding,
         },
       )
     } catch (err) {

@@ -297,6 +297,9 @@ describe('POST /api/v1/companies/:companyId/imports/skattekonto-file', () => {
     const finalize = client.calls.find((c) => c.table === 'skattekonto_file_imports' && c.method === 'update')
     expect(finalize?.args[0]).toMatchObject({ imported_count: 9, status: 'completed' })
     expect(client.calls.some((c) => c.table === 'journal_entries')).toBe(false)
-    expect(client.rpc).not.toHaveBeenCalled()
+    // Only reads: the skattekonto account the first rows derive (PH 175),
+    // never a committing RPC.
+    const rpcs = (client.rpc as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => c[0])
+    expect(rpcs.every((fn) => fn === 'company_skattekonto_account' || fn === 'derive_skattekonto_account')).toBe(true)
   })
 })

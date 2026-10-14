@@ -2,6 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { roundOre } from '@/lib/money'
 
+// The company's skattekonto account (lib/skatteverket/skattekonto-account.ts):
+// 1630 here, what every company resolved to before the setting existed.
+vi.mock('@/lib/skatteverket/skattekonto-account', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/skatteverket/skattekonto-account')>()),
+  resolveSkattekontoAccount: vi.fn(async () => '1630'),
+}))
+
 const fetchEntryLinesMock = vi.fn()
 const sumAccountBalanceMock = vi.fn()
 const findOpeningBalanceFloorMock = vi.fn()
@@ -787,7 +794,7 @@ describe('getSkattekontoReconciliationStatus', () => {
 
       const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
       if (!s) throw new Error('expected status')
-      expect(loadImportedStornoPairsMock).toHaveBeenCalledWith(expect.anything(), COMPANY, '2026-08-03', '2026-08-03')
+      expect(loadImportedStornoPairsMock).toHaveBeenCalledWith(expect.anything(), COMPANY, '2026-08-03', '2026-08-03', '1630')
       expect(s.counts.unmatched_ledger).toBe(0)
       expect(s.items.unmatched_ledger).toEqual([])
       expect(s.ledger_balance).toBe(0)
@@ -848,7 +855,7 @@ describe('getSkattekontoReconciliationStatus', () => {
 
       const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
       if (!s) throw new Error('expected status')
-      expect(loadImportedStornoPairsMock).toHaveBeenCalledWith(expect.anything(), COMPANY, '2026-03-01', '2026-03-20')
+      expect(loadImportedStornoPairsMock).toHaveBeenCalledWith(expect.anything(), COMPANY, '2026-03-01', '2026-03-20', '1630')
       expect(s.items.unmatched_ledger.map((i) => i.item_id)).toEqual(['A10', 'A20'])
       expect(s.counts.unmatched_ledger).toBe(2)
       expect(s.unexplained_difference).toBe(0)
@@ -1606,5 +1613,58 @@ describe('getSkattekontoReconciliationStatus: one event over two verifikat (crm#
     expect(s?.counts).toMatchObject({ unmatched_external: 1, unmatched_ledger: 2 })
     expect(s?.items.unmatched_ledger.map((i) => i.settlement?.state)).toEqual(['broken', 'broken'])
     expect(s?.items.unmatched_ledger[0].actions).toContain('unmatch')
+  })
+})
+
+// PH 175: an enskild firma that runs its skattekonto on 2012 in eget kapital
+// (BAS K1, Fortnox, Björn Lundén) is reconciled on 2012, never on 1630.
+describe('getSkattekontoReconciliationStatus on 2012', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    fetchEntryLinesMock.mockReset()
+    sumAccountBalanceMock.mockReset()
+    findOpeningBalanceFloorMock.mockReset()
+    findOpeningBalanceFloorMock.mockResolvedValue(null)
+    loadImportedStornoPairsMock.mockReset()
+    loadImportedStornoPairsMock.mockResolvedValue([])
+  })
+
+  it('reads every ledger figure on the company account and says so', async () => {
+    const { resolveSkattekontoAccount } = await import('@/lib/skatteverket/skattekonto-account')
+    vi.mocked(resolveSkattekontoAccount).mockResolvedValueOnce('2012')
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const A5 = head('A5', '2026-07-12')
+    enqueueBase(enqueue, { saldo: 500, rows: [row('r-in', '2026-07-12', 3000), row('r-f', '2026-07-12', -2500)] })
+    const accountsRead: string[] = []
+    fetchEntryLinesMock.mockImplementation(async (opts: { filterLines?: (q: unknown) => unknown }) => {
+      opts.filterLines?.({
+        eq: (column: string, value: string) => {
+          if (column === 'account_number') accountsRead.push(value)
+        },
+      })
+      return [ledgerLine(A5, 3000)]
+    })
+    sumAccountBalanceMock.mockResolvedValue(3000)
+
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
+
+    expect(s?.account_number).toBe('2012')
+    expect(accountsRead.length).toBeGreaterThan(0)
+    expect(new Set(accountsRead)).toEqual(new Set(['2012']))
+    expect(sumAccountBalanceMock.mock.calls.every((c) => c[2] === '2012')).toBe(true)
+    expect(findOpeningBalanceFloorMock).toHaveBeenCalledWith(expect.anything(), COMPANY, '2012', expect.any(String))
+    const byKey = Object.fromEntries((s?.bridge ?? []).map((b) => [b.key, b]))
+    expect(byKey.ledger_balance.label_sv).toBe('Bokfört på 2012')
+    expect(byKey.unmatched_ledger.label_sv).toBe('Rader på 2012 utan händelse hos Skatteverket')
+  })
+
+  it('takes the account the caller already resolved without reading it again', async () => {
+    const { resolveSkattekontoAccount } = await import('@/lib/skatteverket/skattekonto-account')
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueBase(enqueue, { saldo: 0, rows: [row('r-1', '2026-07-12', 100)] })
+    ledger([], { cutoff: 0, before: 0 })
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY, account: '2012' })
+    expect(s?.account_number).toBe('2012')
+    expect(resolveSkattekontoAccount).not.toHaveBeenCalled()
   })
 })

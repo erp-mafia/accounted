@@ -62,6 +62,7 @@ import { currentSkvEnvironment, hasOmbudReadAccess, isSystemReadActive, resolveR
 import { probeCompanyGrants } from './lib/grant-probe'
 import { formatRedovisare } from '@/lib/skatteverket/format'
 import { isSkvSessionRefreshable } from '@/lib/skatteverket/session-lifetime'
+import { resolveSkattekontoAccount, type SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 import { createUtseOmbudDeepLink, OMBUD_ROLE_KEYS, OmbudApiError } from './lib/ombud-client'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import type {
@@ -89,9 +90,11 @@ import {
   attachBookingSuggestions,
   bokforSkattekontoTransaction,
   bokforSkattekontoTransactionsBatch,
-  findSkattekontoLedgerCover,
+  DUPLICATE_REASON_MAX_LENGTH,
+  findSkattekontoLedgerHolding,
+  ledgerHoldOfRows,
+  normaliseDuplicateReason,
   SkattekontoBookingError,
-  toLedgerCoverInfo,
 } from './lib/skattekonto-booking'
 import {
   findGroupMatchCandidates,
@@ -125,10 +128,11 @@ const SKV_SESSION_MISSING_MESSAGE =
 
 /**
  * For a candidates answer with nothing to offer: the unlinked verifikat on
- * 1630 that already hold every given row in aggregate (a summarised
- * verifikat, crm#1043), so the dialogs can point at "Matcha manuellt"
- * instead of telling the user to book the rows. Null when not all rows are
- * covered, and when the bridge cannot be read: this only informs, the
+ * 1630 that already hold every given row (a summarised verifikat, crm#1043,
+ * or the one verifikat the ledger plan assigns them to, PH 171), by the same
+ * check the booking guard runs (ledgerHoldOf), so the dialogs point at the
+ * link instead of telling the user to book the rows. Null when not all rows
+ * are held, and when the bridge cannot be read: this only informs, the
  * booking guard itself fails closed.
  */
 async function coverForRows(
@@ -137,8 +141,7 @@ async function coverForRows(
   ids: string[],
 ): Promise<SkattekontoLedgerCoverInfo | null> {
   try {
-    const cover = await findSkattekontoLedgerCover(supabase, companyId)
-    return cover && ids.every((id) => cover.event_ids.includes(id)) ? toLedgerCoverInfo(cover) : null
+    return ledgerHoldOfRows(await findSkattekontoLedgerHolding(supabase, companyId), ids)
   } catch {
     return null
   }
@@ -147,12 +150,18 @@ async function coverForRows(
 // Body for POST /skattekonto/transaktioner/bokfor-batch. Capped at 200 ids:
 // a full year of skattekonto events fits comfortably, and the sequential
 // draft+commit loop stays well inside the dispatcher's time budget.
-// allow_duplicate_ids: rows to book even though the ledger already holds a
-// verifikat for the event (LEDGER_TWIN_EXISTS); an explicit per-row choice.
-const SkattekontoBokforBatchSchema = z.object({
-  ids: z.array(z.string().uuid()).min(1).max(200),
-  allow_duplicate_ids: z.array(z.string().uuid()).max(200).optional(),
-})
+// allow_duplicate_ids: rows to book even though the ledger already holds the
+// event (LEDGER_TWIN_EXISTS, LEDGER_COVER_EXISTS); an explicit per-row
+// choice that needs duplicate_reason, which the verifikat notes carry.
+const SkattekontoBokforBatchSchema = z
+  .object({
+    ids: z.array(z.string().uuid()).min(1).max(200),
+    allow_duplicate_ids: z.array(z.string().uuid()).max(200).optional(),
+    duplicate_reason: z.string().max(DUPLICATE_REASON_MAX_LENGTH).optional(),
+  })
+  .refine((b) => !b.allow_duplicate_ids?.length || normaliseDuplicateReason(b.duplicate_reason) !== null, {
+    message: 'duplicate_reason',
+  })
 
 // Rows the user ticked together to match against ONE verifikat ("Matcha mot
 // verifikat"); linkSkattekontoRows caps a group at 50.
@@ -1992,6 +2001,16 @@ export const skatteverketExtension: Extension = {
         const today = todayIsoStockholm()
         const { booked, overdue, upcoming, ignored } = splitTransactions(rows, today)
 
+        // The skattekonto's ledger account (1630, or 2012 for an enskild
+        // firma that runs it there): the suggestions below and the page's
+        // labels use it.
+        let skattekontoAccount: SkattekontoLedgerAccount
+        try {
+          skattekontoAccount = await resolveSkattekontoAccount(ctx.supabase, ctx.companyId)
+        } catch (error) {
+          return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 })
+        }
+
         // Enrich obokförda rader with a single-best-candidate suggestion.
         // Only attached when there's exactly one match: avoids the UI
         // confidently pointing at the wrong verifikat.
@@ -2005,6 +2024,7 @@ export const skatteverketExtension: Extension = {
             belopp_skatteverket: Number(r.belopp_skatteverket),
             journal_entry_id: r.journal_entry_id,
           })),
+          skattekontoAccount,
         )
 
         // Deterministic booking suggestion per unbooked row (one hoisted
@@ -2014,6 +2034,7 @@ export const skatteverketExtension: Extension = {
           ctx.supabase,
           ctx.companyId,
           booked,
+          skattekontoAccount,
         )
 
         const bookedEnriched = withBookingSuggestions.map(r => ({
@@ -2028,6 +2049,7 @@ export const skatteverketExtension: Extension = {
             upcoming,
             ignored_count: ignored.length,
             ...(includeIgnored ? { ignored } : {}),
+            skattekonto_account: skattekontoAccount,
           },
         })
       },
@@ -2075,8 +2097,13 @@ export const skatteverketExtension: Extension = {
 
         const parsed = SkattekontoBokforBatchSchema.safeParse(parsedBody)
         if (!parsed.success) {
+          const missingReason = parsed.error.issues.some((i) => i.message === 'duplicate_reason')
           return NextResponse.json(
-            { error: 'Ogiltiga parametrar: ids måste vara en lista med 1-200 transaktions-id.' },
+            {
+              error: missingReason
+                ? 'Ange varför händelsen ska bokföras fast bokföringen redan innehåller den (duplicate_reason).'
+                : 'Ogiltiga parametrar: ids måste vara en lista med 1-200 transaktions-id.',
+            },
             { status: 400 },
           )
         }
@@ -2091,7 +2118,10 @@ export const skatteverketExtension: Extension = {
             ctx.companyId,
             ctx.userId,
             ids,
-            { allowDuplicateIds: parsed.data.allow_duplicate_ids ?? [] },
+            {
+              allowDuplicateIds: parsed.data.allow_duplicate_ids ?? [],
+              ...(parsed.data.allow_duplicate_ids?.length ? { duplicateReason: parsed.data.duplicate_reason } : {}),
+            },
           )
           return NextResponse.json({ data: result })
         } catch (err) {
@@ -2116,11 +2146,12 @@ export const skatteverketExtension: Extension = {
           return NextResponse.json({ error: 'Saknar transaktions-id' }, { status: 400 })
         }
 
-        // Optional body { allow_duplicate: true }: draft even though the
-        // ledger already holds a verifikat for the event. No body (the
-        // historical call) keeps the guard on.
+        // Optional body { allow_duplicate: true, duplicate_reason }: draft
+        // even though the ledger already holds the event, for the stated
+        // reason the verifikat notes carry. No body (the historical call)
+        // keeps the guard on.
         const rawBody = await request.text().catch(() => '')
-        let allowDuplicate = false
+        let duplicateReason: string | null = null
         if (rawBody.trim()) {
           let body: unknown
           try {
@@ -2128,14 +2159,31 @@ export const skatteverketExtension: Extension = {
           } catch {
             return NextResponse.json({ error: 'Ogiltig JSON i förfrågan.' }, { status: 400 })
           }
-          const allow = (body as { allow_duplicate?: unknown } | null)?.allow_duplicate
-          if (allow !== undefined && typeof allow !== 'boolean') {
+          const fields = (body ?? {}) as { allow_duplicate?: unknown; duplicate_reason?: unknown }
+          if (fields.allow_duplicate !== undefined && typeof fields.allow_duplicate !== 'boolean') {
             return NextResponse.json(
               { error: 'Ogiltiga parametrar: allow_duplicate måste vara true eller false.' },
               { status: 400 },
             )
           }
-          allowDuplicate = allow === true
+          if (
+            fields.duplicate_reason !== undefined &&
+            (typeof fields.duplicate_reason !== 'string' || fields.duplicate_reason.length > DUPLICATE_REASON_MAX_LENGTH)
+          ) {
+            return NextResponse.json(
+              { error: `Ogiltiga parametrar: duplicate_reason måste vara en text på högst ${DUPLICATE_REASON_MAX_LENGTH} tecken.` },
+              { status: 400 },
+            )
+          }
+          if (fields.allow_duplicate === true) {
+            duplicateReason = normaliseDuplicateReason(fields.duplicate_reason)
+            if (!duplicateReason) {
+              return NextResponse.json(
+                { error: 'Ange varför händelsen ska bokföras fast bokföringen redan innehåller den (duplicate_reason).' },
+                { status: 400 },
+              )
+            }
+          }
         }
 
         try {
@@ -2145,7 +2193,7 @@ export const skatteverketExtension: Extension = {
             ctx.userId,
             id,
             undefined,
-            { allowDuplicate },
+            duplicateReason ? { duplicateReason } : {},
           )
           return NextResponse.json({ data: { entry } })
         } catch (err) {
@@ -2641,15 +2689,19 @@ async function commitBookSkattekontoRows(
   }
 
   // Rows the reviewer approved booking although the ledger already holds a
-  // verifikat for the event (staged with allow_duplicate / allow_duplicate_ids).
+  // verifikat for the event (staged with allow_duplicate / allow_duplicate_ids
+  // and the duplicate_reason the verifikat notes carry). An op staged without
+  // a reason keeps the guard on for every row.
   const rawAllow = params.allow_duplicate_ids
   const allowDuplicateIds = Array.isArray(rawAllow)
     ? rawAllow.filter((v): v is string => typeof v === 'string' && ids.includes(v))
     : []
+  const duplicateReason = normaliseDuplicateReason(params.duplicate_reason)
 
   try {
     const result = await bokforSkattekontoTransactionsBatch(supabase, companyId, userId, ids, {
       allowDuplicateIds,
+      ...(duplicateReason ? { duplicateReason } : {}),
     })
     return { ok: true, ...result }
   } catch (err) {

@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createPagedMockSupabase, createQueuedMockSupabase, manyRows } from '@/tests/helpers'
 
+// The company's skattekonto account (lib/skatteverket/skattekonto-account.ts):
+// 1630 here, what every company resolved to before the setting existed.
+vi.mock('@/lib/skatteverket/skattekonto-account', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/skatteverket/skattekonto-account')>()),
+  resolveSkattekontoAccount: vi.fn(async () => '1630'),
+}))
+
 const linkMock = vi.fn()
 const linkGroupMock = vi.fn()
 const unlinkMock = vi.fn()
@@ -37,6 +44,14 @@ vi.mock('../skattekonto-reconciliation', () => ({
   getSkattekontoReconciliationStatus: (...args: unknown[]) => skvStatusMock(...args),
 }))
 vi.mock('@/lib/events/bus', () => ({ eventBus: { emit: (...args: unknown[]) => emitMock(...args) } }))
+// The bank-row ignore rule (lib/transactions/ignore.ts) runs for real; only
+// its suggestion-log side effect is observed here (record.ts has its suite).
+const snapshotSuggestionsMock = vi.fn()
+const recordDecisionsMock = vi.fn()
+vi.mock('@/lib/suggestion-log/record', () => ({
+  snapshotSuggestions: (...args: unknown[]) => snapshotSuggestionsMock(...args),
+  recordDecisions: (...args: unknown[]) => recordDecisionsMock(...args),
+}))
 // The settlement policy has its own suite (ledger-settlement.test.ts); here
 // only that a pair without outside rows reaches it, and what comes back.
 vi.mock('../ledger-settlement', () => ({
@@ -109,7 +124,7 @@ describe('matchPairs', () => {
     expect(result?.skipped[1].message).toMatch(/en händelse mot flera verifikat/)
     expect(splitMock).not.toHaveBeenCalled()
     expect(linkToVouchersMock).not.toHaveBeenCalled()
-    expect(linkGroupMock).toHaveBeenCalledWith(supabase, COMPANY, [R1, R2], E2)
+    expect(linkGroupMock).toHaveBeenCalledWith(supabase, COMPANY, [R1, R2], E2, { account: '1630' })
     expect(emitMock).toHaveBeenCalledTimes(3)
     expect(emitMock.mock.calls[0][0]).toMatchObject({
       type: 'reconciliation.matched',
@@ -200,7 +215,7 @@ describe('matchPairs', () => {
     const result = await matchPairs(supabase as never, COMPANY, USER, 'skattekonto', { use_proposals: true })
 
     expect(result?.considered).toBe(1)
-    expect(linkGroupMock).toHaveBeenCalledWith(supabase, COMPANY, [R1, R2], E1)
+    expect(linkGroupMock).toHaveBeenCalledWith(supabase, COMPANY, [R1, R2], E1, { account: '1630' })
     expect(linkMock).not.toHaveBeenCalled()
     expect(result?.applied.map((a) => a.external_id)).toEqual([R1, R2])
   })
@@ -841,7 +856,7 @@ describe('matchPairs: skattekonto rows against a summarised verifikat (allow_rem
     const { supabase } = createQueuedMockSupabase()
     linkGroupMock.mockRejectedValueOnce(new SkattekontoLinkError('motsvarar inte summan', 'INVALID_CANDIDATE'))
     const result = await matchPairs(supabase as never, COMPANY, USER, 'skattekonto', { pairs: [pair] })
-    expect(linkGroupMock).toHaveBeenCalledWith(supabase, COMPANY, [R1, R2, R3], E1)
+    expect(linkGroupMock).toHaveBeenCalledWith(supabase, COMPANY, [R1, R2, R3], E1, { account: '1630' })
     expect(result?.applied).toEqual([])
     expect(result?.skipped.map((s) => s.code)).toEqual(['PAIR_NOT_CLOSED'])
     expect(emitMock).not.toHaveBeenCalled()
@@ -858,7 +873,10 @@ describe('matchPairs: skattekonto rows against a summarised verifikat (allow_rem
     const result = await matchPairs(supabase as never, COMPANY, USER, 'skattekonto', {
       pairs: [{ ...pair, allow_remainder: true }],
     })
-    expect(linkGroupMock).toHaveBeenCalledWith(supabase, COMPANY, [R1, R2, R3], E1, { allowRemainder: true })
+    expect(linkGroupMock).toHaveBeenCalledWith(supabase, COMPANY, [R1, R2, R3], E1, {
+      allowRemainder: true,
+      account: '1630',
+    })
     expect(result?.applied).toEqual(
       [R1, R2, R3].map((id) => ({ external_id: id, journal_entry_id: E1, via: 'partial', remainder_amount: 17499.75 })),
     )
@@ -872,7 +890,7 @@ describe('matchPairs: skattekonto rows against a summarised verifikat (allow_rem
     const result = await matchPairs(supabase as never, COMPANY, USER, 'skattekonto', {
       pairs: [{ external_ids: [R1], journal_entry_ids: [E1], allow_remainder: true }],
     })
-    expect(linkMock).toHaveBeenCalledWith(supabase, COMPANY, R1, E1, { allowRemainder: true })
+    expect(linkMock).toHaveBeenCalledWith(supabase, COMPANY, R1, E1, { allowRemainder: true, account: '1630' })
     expect(result?.applied).toEqual([{ external_id: R1, journal_entry_id: E1, via: 'partial', remainder_amount: -62500.75 }])
   })
 
@@ -882,7 +900,7 @@ describe('matchPairs: skattekonto rows against a summarised verifikat (allow_rem
     const result = await matchPairs(supabase as never, COMPANY, USER, 'skattekonto', {
       pairs: [{ external_ids: [R1], journal_entry_ids: [E1] }],
     })
-    expect(linkMock).toHaveBeenCalledWith(supabase, COMPANY, R1, E1)
+    expect(linkMock).toHaveBeenCalledWith(supabase, COMPANY, R1, E1, { account: '1630' })
     expect(result?.applied).toEqual([{ external_id: R1, journal_entry_id: E1, via: 'line' }])
   })
 
@@ -1034,7 +1052,11 @@ describe('matchPairs: one skattekonto event over several verifikat (crm#1183)', 
       pairs: [{ external_ids: [R1], journal_entry_ids: [E1, E2], allocations }],
     })
 
-    expect(splitMock).toHaveBeenCalledWith(supabase, COMPANY, USER, R1, [E1, E2], { dryRun: false, allocations })
+    expect(splitMock).toHaveBeenCalledWith(supabase, COMPANY, USER, R1, [E1, E2], {
+      dryRun: false,
+      allocations,
+      account: '1630',
+    })
     expect(result?.applied).toEqual([
       { external_id: R1, journal_entry_id: E1, via: 'split', allocated_amount: 37 },
       { external_id: R1, journal_entry_id: E2, via: 'split', allocated_amount: -8 },
@@ -1054,7 +1076,7 @@ describe('matchPairs: one skattekonto event over several verifikat (crm#1183)', 
       { pairs: [{ external_ids: [R1], journal_entry_ids: [E1, E2] }] },
       { dryRun: true },
     )
-    expect(splitMock.mock.calls[0][5]).toEqual({ dryRun: true })
+    expect(splitMock.mock.calls[0][5]).toEqual({ dryRun: true, account: '1630' })
     expect(result?.applied).toHaveLength(2)
     expect(emitMock).not.toHaveBeenCalled()
   })
@@ -1171,17 +1193,6 @@ describe('unmatchLink / setItemIgnored', () => {
     expect(undoSettlementMock).not.toHaveBeenCalled()
   })
 
-  it('refuses to ignore a bank transaction anchored only through transaction_voucher_links (1:N split, bulk-book)', async () => {
-    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
-    enqueue({ data: { id: R1, journal_entry_id: null, is_ignored: false } })
-    junctionLinkedMock.mockResolvedValue(new Set([R1]))
-    await expect(setItemIgnored(supabase as never, COMPANY, `bank:${CASH}`, R1, true)).rejects.toMatchObject({
-      code: 'ALREADY_BOOKED',
-    })
-    expect(junctionLinkedMock).toHaveBeenCalledWith(supabase, COMPANY, [R1])
-    expect(findCalls('transactions', 'update')).toEqual([])
-  })
-
   it('ignores a skattekonto row via the core helper', async () => {
     const { supabase } = createQueuedMockSupabase()
     setIgnoredMock.mockResolvedValue({ skattekonto_transaction_id: R1, is_ignored: true })
@@ -1191,20 +1202,93 @@ describe('unmatchLink / setItemIgnored', () => {
     })
   })
 
-  it('refuses to ignore a booked bank transaction', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: R1, journal_entry_id: E1, is_ignored: false } })
-    await expect(setItemIgnored(supabase as never, COMPANY, `bank:${CASH}`, R1, true)).rejects.toMatchObject({
-      code: 'ALREADY_BOOKED',
-    })
-  })
+  // crm#1183: a bank row goes through the one ignore rule the dashboard, v1
+  // and MCP doors use, which refuses a row booked through ANY of its three
+  // anchors. This door's own copy checked journal_entry_id and voucher links
+  // only, so a row booked as a payment allocation (match_batch_allocate)
+  // could be ignored while its verifikat still carries it.
+  describe('a bank row: the shared ignore rule (crm#1183)', () => {
+    const unbookedRow = { data: { id: R1, journal_entry_id: null, is_ignored: false } }
 
-  it('ignores an unbooked bank transaction', async () => {
-    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
-    enqueue({ data: { id: R1, journal_entry_id: null, is_ignored: false } })
-    enqueue({ data: null }) // update
-    const result = await setItemIgnored(supabase as never, COMPANY, `bank:${CASH}`, R1, true)
-    expect(result).toEqual({ external_id: R1, is_ignored: true })
-    expect(findCalls('transactions', 'update')[0][0]).toEqual({ is_ignored: true })
+    it.each([
+      ['a voucher link (1:N split, bulk-book)', [{ transaction_id: R1 }], [], []],
+      ['a customer invoice payment allocation', [], [{ transaction_id: R1 }], []],
+      ['a supplier invoice payment allocation', [], [], [{ transaction_id: R1 }]],
+    ])('refuses a row booked only through %s, and writes nothing', async (_anchor, links, invoicePayments, supplierPayments) => {
+      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      enqueue(unbookedRow)
+      enqueue({ data: links })
+      enqueue({ data: invoicePayments })
+      enqueue({ data: supplierPayments })
+      await expect(setItemIgnored(supabase as never, COMPANY, `bank:${CASH}`, R1, true, USER)).rejects.toMatchObject({
+        code: 'ALREADY_BOOKED',
+      })
+      expect(findCalls('transactions', 'update')).toEqual([])
+    })
+
+    it('refuses a row booked on its journal_entry_id without reading the junctions', async () => {
+      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      enqueue({ data: { id: R1, journal_entry_id: E1, is_ignored: false } })
+      await expect(setItemIgnored(supabase as never, COMPANY, `bank:${CASH}`, R1, true)).rejects.toMatchObject({
+        code: 'ALREADY_BOOKED',
+      })
+      expect(findCalls('transaction_voucher_links', 'select')).toEqual([])
+    })
+
+    it('fails closed when an anchor read fails, where the copy read it as unbooked', async () => {
+      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      enqueue(unbookedRow)
+      enqueue({ data: null, error: { message: 'timeout' } })
+      enqueue({ data: [] })
+      enqueue({ data: [] })
+      await expect(setItemIgnored(supabase as never, COMPANY, `bank:${CASH}`, R1, true)).rejects.toBeTruthy()
+      expect(findCalls('transactions', 'update')).toEqual([])
+    })
+
+    it('reports an unknown row as TRANSACTION_NOT_FOUND', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: null })
+      await expect(setItemIgnored(supabase as never, COMPANY, `bank:${CASH}`, R1, true)).rejects.toMatchObject({
+        code: 'TRANSACTION_NOT_FOUND',
+      })
+    })
+
+    it('ignores an unbooked row and records the dismissed suggestions with who decided', async () => {
+      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      const snapshot = { companyId: COMPANY, byTransaction: new Map() }
+      snapshotSuggestionsMock.mockResolvedValue(snapshot)
+      enqueue(unbookedRow)
+      enqueue({ data: [] })
+      enqueue({ data: [] })
+      enqueue({ data: [] })
+      enqueue({ data: null }) // update
+      const result = await setItemIgnored(supabase as never, COMPANY, `bank:${CASH}`, R1, true, USER)
+      expect(result).toEqual({ external_id: R1, is_ignored: true })
+      expect(findCalls('transactions', 'update')[0][0]).toEqual({ is_ignored: true })
+      expect(recordDecisionsMock).toHaveBeenCalledWith(supabase, snapshot, [{ transactionId: R1, final: null }], USER)
+    })
+
+    it('restores an ignored row without an anchor check, and is a no-op when already in that state', async () => {
+      const restore = createQueuedMockSupabase()
+      restore.enqueue({ data: { id: R1, journal_entry_id: null, is_ignored: true } })
+      restore.enqueue({ data: null }) // update
+      expect(await setItemIgnored(restore.supabase as never, COMPANY, `bank:${CASH}`, R1, false)).toEqual({
+        external_id: R1,
+        is_ignored: false,
+      })
+      expect(restore.findCalls('transactions', 'update')[0][0]).toEqual({ is_ignored: false })
+      expect(restore.findCalls('transaction_voucher_links', 'select')).toEqual([])
+
+      const same = createQueuedMockSupabase()
+      same.enqueue({ data: { id: R1, journal_entry_id: null, is_ignored: true } })
+      same.enqueue({ data: [] })
+      same.enqueue({ data: [] })
+      same.enqueue({ data: [] })
+      expect(await setItemIgnored(same.supabase as never, COMPANY, `bank:${CASH}`, R1, true)).toEqual({
+        external_id: R1,
+        is_ignored: true,
+      })
+      expect(same.findCalls('transactions', 'update')).toEqual([])
+    })
   })
 })

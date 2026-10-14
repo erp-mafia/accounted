@@ -3,7 +3,7 @@ import type { StoredSkattekontoTransaction } from '../types'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
+import { resolveSkattekontoAccount, type SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 import { loadCancelledEntryIds } from '@/lib/skatteverket/skattekonto-cancelled-entries'
 import {
   evaluateSkattekontoLink,
@@ -312,7 +312,7 @@ function periodKey(year: number, month: number): string {
   return `${year}-${String(month).padStart(2, '0')}`
 }
 
-/** The 1630 lines of one candidate entry plus the SKV rows already linked to it. */
+/** The skattekonto-account lines of one candidate entry plus the SKV rows already linked to it. */
 type EntryHead = {
   id: string
   voucher_number: number | null
@@ -334,6 +334,7 @@ function buildEntryViews(
   lines: LineRow[],
   linkedRows: Array<{ journal_entry_id: string | null; belopp_skatteverket?: number | string | null }>,
   cancelled: Set<string>,
+  account: SkattekontoLedgerAccount,
 ): Map<string, EntryView> {
   const views = new Map<string, EntryView>()
   for (const line of lines) {
@@ -345,7 +346,7 @@ function buildEntryViews(
       views.set(e.id, view)
     }
     view.lines.push({
-      account_number: SKATTEKONTO_ACCOUNT,
+      account_number: account,
       debit_amount: roundOre(Number(line.debit_amount)),
       credit_amount: roundOre(Number(line.credit_amount)),
     })
@@ -475,6 +476,7 @@ function unambiguousCombinedMatches<R extends CombinableRow>(
   pool: R[],
   views: EntryView[],
   canTake: (view: EntryView) => boolean,
+  account: SkattekontoLedgerAccount,
 ): Array<{ rows: R[]; view: EntryView }> {
   // A group's window never reaches past the widest window of one of its
   // rows, so the verifikat a group can settle are read off once per pool.
@@ -493,7 +495,7 @@ function unambiguousCombinedMatches<R extends CombinableRow>(
     const window = combinedMatchWindow(subset[0].transaktionsdatum, subset)
     for (const view of reachable) {
       if (view.entry.entry_date < window.from || view.entry.entry_date > window.to) continue
-      if (groupSettlesEntry(view.lines, amounts).ok) found.push({ rows: subset, view })
+      if (groupSettlesEntry(view.lines, amounts, account).ok) found.push({ rows: subset, view })
     }
   }
   return found.filter(m => {
@@ -550,9 +552,17 @@ export async function findMatchSuggestionsBulk(
     belopp_skatteverket: number
     journal_entry_id: string | null
   }>,
+  skattekontoAccount?: SkattekontoLedgerAccount,
 ): Promise<Map<string, SkattekontoMatchCandidate>> {
   const unmatched = rows.filter(r => !r.journal_entry_id)
   if (unmatched.length === 0) return new Map()
+  let account: SkattekontoLedgerAccount
+  try {
+    account = skattekontoAccount ?? (await resolveSkattekontoAccount(supabase, companyId))
+  } catch {
+    // Same posture as a failed candidate search: no suggestions.
+    return new Map()
+  }
 
   const dates = unmatched.map(r => r.transaktionsdatum).sort()
   const widest = unmatched
@@ -578,7 +588,7 @@ export async function findMatchSuggestionsBulk(
           .gte('entry_date', from)
           .lte('entry_date', to)
           .in('status', LIVE_ENTRY_STATUSES),
-      filterLines: (q: EntryLinesQuery) => q.eq('account_number', SKATTEKONTO_ACCOUNT),
+      filterLines: (q: EntryLinesQuery) => q.eq('account_number', account),
     })
   } catch {
     // Unchanged posture: a candidate-search failure yields no suggestions.
@@ -612,7 +622,7 @@ export async function findMatchSuggestionsBulk(
   let cancelled: Set<string>
   try {
     cancelled = candidateEntryIds.length
-      ? await loadCancelledEntryIds(supabase, companyId, from, to)
+      ? await loadCancelledEntryIds(supabase, companyId, from, to, account)
       : new Set()
   } catch {
     // Without the storno check no candidate is safe to propose.
@@ -623,6 +633,7 @@ export async function findMatchSuggestionsBulk(
     lines,
     (linked ?? []) as Array<{ journal_entry_id: string | null; belopp_skatteverket?: number | string | null }>,
     cancelled,
+    account,
   )
 
   // Candidates per row, then a one-to-one assignment across rows: two rows
@@ -659,7 +670,7 @@ export async function findMatchSuggestionsBulk(
     for (const view of entryViews.values()) {
       const e = view.entry
       if (e.entry_date < rowFrom || e.entry_date > rowTo) continue
-      const settles = groupSettlesEntry(view.lines, [...view.linked, Number(row.belopp_skatteverket)])
+      const settles = groupSettlesEntry(view.lines, [...view.linked, Number(row.belopp_skatteverket)], account)
       if (!settles.ok) continue
       matches.push({
         journal_entry_id: e.id,
@@ -742,7 +753,7 @@ export async function findMatchSuggestionsBulk(
       if (pool.length < 2 || pool.length > MAX_COMBINED_POOL) continue
       // A day of one sign was searched in full by round one.
       if (mixed && !mixesSigns(amountsOf(pool))) continue
-      for (const m of unambiguousCombinedMatches(pool, viewList, canTake)) {
+      for (const m of unambiguousCombinedMatches(pool, viewList, canTake, account)) {
         if (mixed && (!mixesSigns(amountsOf(m.rows)) || m.rows.some(settlesAlone))) continue
         const e = m.view.entry
         const total = roundOre(m.rows.reduce((s, r) => s + Number(r.belopp_skatteverket), 0))
@@ -875,6 +886,7 @@ export async function findMatchCandidates(
   supabase: SupabaseClient,
   companyId: string,
   transactionId: string,
+  account?: SkattekontoLedgerAccount,
 ): Promise<{ tx: StoredSkattekontoTransaction; candidates: SkattekontoMatchCandidate[] }> {
   const { data: tx, error: txError } = await supabase
     .from('skattekonto_transactions')
@@ -897,7 +909,7 @@ export async function findMatchCandidates(
     )
   }
 
-  const byRow = await findLedgerTwinCandidates(supabase, companyId, [tx])
+  const byRow = await findLedgerTwinCandidates(supabase, companyId, [tx], account)
   return { tx, candidates: (byRow.get(tx.id) ?? []).slice(0, 25) }
 }
 
@@ -938,6 +950,7 @@ export async function findGroupMatchCandidates(
   supabase: SupabaseClient,
   companyId: string,
   transactionIds: string[],
+  skattekontoAccount?: SkattekontoLedgerAccount,
 ): Promise<{ candidates: SkattekontoMatchCandidate[] }> {
   const ids = [...new Set(transactionIds)]
   if (ids.length < 2 || ids.length > MAX_GROUP_EVENTS) {
@@ -982,6 +995,7 @@ export async function findGroupMatchCandidates(
   const total = roundOre(belopps.reduce((s, b) => s + b, 0))
   const earliest = rows.map(r => r.transaktionsdatum).sort()[0]
   const { from, to } = groupMatchWindow(rows)
+  const account = skattekontoAccount ?? (await resolveSkattekontoAccount(supabase, companyId))
 
   let lines: LineRow[]
   try {
@@ -995,7 +1009,7 @@ export async function findGroupMatchCandidates(
           .gte('entry_date', from)
           .lte('entry_date', to)
           .in('status', LIVE_ENTRY_STATUSES),
-      filterLines: (q: EntryLinesQuery) => q.eq('account_number', SKATTEKONTO_ACCOUNT),
+      filterLines: (q: EntryLinesQuery) => q.eq('account_number', account),
     })
   } catch (err) {
     throw searchFailed(err)
@@ -1019,14 +1033,14 @@ export async function findGroupMatchCandidates(
 
   let cancelled: Set<string>
   try {
-    cancelled = await loadCancelledEntryIds(supabase, companyId, from, to)
+    cancelled = await loadCancelledEntryIds(supabase, companyId, from, to, account)
   } catch (err) {
     throw searchFailed(err)
   }
 
   const candidates: SkattekontoMatchCandidate[] = []
-  for (const view of buildEntryViews(lines, linked, cancelled).values()) {
-    const settles = groupSettlesEntry(view.lines, [...view.linked, ...belopps])
+  for (const view of buildEntryViews(lines, linked, cancelled, account).values()) {
+    const settles = groupSettlesEntry(view.lines, [...view.linked, ...belopps], account)
     if (!settles.ok) continue
     const e = view.entry
     candidates.push({
@@ -1060,6 +1074,7 @@ export async function findLedgerTwinCandidatesForIds(
   supabase: SupabaseClient,
   companyId: string,
   ids: string[],
+  account?: SkattekontoLedgerAccount,
 ): Promise<Map<string, SkattekontoMatchCandidate[]>> {
   if (ids.length === 0) return new Map()
   const { data, error } = await supabase
@@ -1070,7 +1085,7 @@ export async function findLedgerTwinCandidatesForIds(
     .eq('is_ignored', false)
     .is('journal_entry_id', null)
   if (error) throw searchFailed(error.message)
-  return findLedgerTwinCandidates(supabase, companyId, (data ?? []) as LedgerTwinProbe[])
+  return findLedgerTwinCandidates(supabase, companyId, (data ?? []) as LedgerTwinProbe[], account)
 }
 
 /** The fields of an open Skatteverket row the candidate search reads. */
@@ -1130,10 +1145,12 @@ export async function findLedgerTwinCandidates(
   supabase: SupabaseClient,
   companyId: string,
   probes: LedgerTwinProbe[],
+  skattekontoAccount?: SkattekontoLedgerAccount,
 ): Promise<Map<string, SkattekontoMatchCandidate[]>> {
   const out = new Map<string, SkattekontoMatchCandidate[]>()
   for (const p of probes) out.set(p.id, [])
   if (probes.length === 0) return out
+  const account = skattekontoAccount ?? (await resolveSkattekontoAccount(supabase, companyId))
 
   // One window read per cluster of rows whose windows lie close together,
   // never one read across the whole span of a batch: two rows years apart
@@ -1141,7 +1158,7 @@ export async function findLedgerTwinCandidates(
   // inside its own window, so every row still sees all its candidates, and
   // an isolated row gets exactly the read the single-row search makes.
   for (const cluster of clusterProbesByWindow(probes)) {
-    const found = await searchLedgerTwinWindow(supabase, companyId, cluster)
+    const found = await searchLedgerTwinWindow(supabase, companyId, cluster, account)
     for (const [id, candidates] of found) out.set(id, candidates)
   }
   return out
@@ -1206,6 +1223,7 @@ function mixedGroupCompanions(
   probes: LedgerTwinProbe[],
   openByDate: ReadonlyMap<string, readonly LedgerTwinProbe[]>,
   views: ReadonlyMap<string, EntryView>,
+  account: SkattekontoLedgerAccount,
 ): Map<string, LedgerTwinProbe[]> {
   const out = new Map<string, LedgerTwinProbe[]>()
   const viewList = Array.from(views.values())
@@ -1220,7 +1238,7 @@ function mixedGroupCompanions(
       v =>
         v.entry.entry_date >= from &&
         v.entry.entry_date <= to &&
-        groupSettlesEntry(v.lines, [...v.linked, belopp]).ok,
+        groupSettlesEntry(v.lines, [...v.linked, belopp], account).ok,
     )
   }
   for (const date of new Set(probes.map(p => p.transaktionsdatum))) {
@@ -1230,7 +1248,7 @@ function mixedGroupCompanions(
     }
     const pool = Array.from(byId.values())
     if (pool.length < 2 || pool.length > MAX_COMBINED_POOL || !mixesSigns(amountsOf(pool))) continue
-    for (const m of unambiguousCombinedMatches(pool, viewList, v => v.linked.length === 0)) {
+    for (const m of unambiguousCombinedMatches(pool, viewList, v => v.linked.length === 0, account)) {
       if (!mixesSigns(amountsOf(m.rows)) || m.rows.some(settlesAlone)) continue
       for (const r of m.rows) out.set(`${r.id}|${m.view.entry.id}`, m.rows.filter(o => o.id !== r.id))
     }
@@ -1243,6 +1261,7 @@ async function searchLedgerTwinWindow(
   supabase: SupabaseClient,
   companyId: string,
   probes: LedgerTwinProbe[],
+  account: SkattekontoLedgerAccount,
 ): Promise<Map<string, SkattekontoMatchCandidate[]>> {
   const out = new Map<string, SkattekontoMatchCandidate[]>()
   for (const p of probes) out.set(p.id, [])
@@ -1274,7 +1293,7 @@ async function searchLedgerTwinWindow(
           .gte('entry_date', from)
           .lte('entry_date', to)
           .in('status', LIVE_ENTRY_STATUSES),
-      filterLines: (q: EntryLinesQuery) => q.eq('account_number', SKATTEKONTO_ACCOUNT),
+      filterLines: (q: EntryLinesQuery) => q.eq('account_number', account),
     })
   } catch (err) {
     throw searchFailed(err)
@@ -1344,13 +1363,13 @@ async function searchLedgerTwinWindow(
 
   let cancelled: Set<string>
   try {
-    cancelled = await loadCancelledEntryIds(supabase, companyId, from, to)
+    cancelled = await loadCancelledEntryIds(supabase, companyId, from, to, account)
   } catch (err) {
     throw searchFailed(err)
   }
 
-  const views = buildEntryViews(typedRows, linked, cancelled)
-  const mixedCompanions = mixedGroupCompanions(probes, openByDate, views)
+  const views = buildEntryViews(typedRows, linked, cancelled, account)
+  const mixedCompanions = mixedGroupCompanions(probes, openByDate, views, account)
 
   for (const p of probes) {
     const belopp = Number(p.belopp_skatteverket)
@@ -1419,7 +1438,7 @@ async function searchLedgerTwinWindow(
       }
       const nearby = e.entry_date >= singleFrom && e.entry_date <= singleTo
       if (nearby) {
-        const settles = groupSettlesEntry(view.lines, [...view.linked, belopp])
+        const settles = groupSettlesEntry(view.lines, [...view.linked, belopp], account)
         if (settles.ok) {
           candidates.push({
             ...base,
@@ -1439,8 +1458,8 @@ async function searchLedgerTwinWindow(
       // its lines, and that voucher has nothing left for them.
       const groupSettles = (g: CompanionGroup): boolean => {
         if (e.entry_date < g.window.from || e.entry_date > g.window.to) return false
-        if (view.linked.length === 0) return groupSettlesEntry(view.lines, g.amounts).ok
-        const joined = evaluateSkattekontoLink(view.lines, view.linked, g.amounts)
+        if (view.linked.length === 0) return groupSettlesEntry(view.lines, g.amounts, account).ok
+        const joined = evaluateSkattekontoLink(view.lines, view.linked, g.amounts, { account })
         return joined.ok && joined.remainder === 0
       }
       // Smallest same-sign group of the day first, else the day's mixed-sign
@@ -1508,11 +1527,14 @@ export async function matchSkattekontoToEntry(
   transactionId: string,
   journalEntryId: string,
   alsoTransactionIds: string[] = [],
+  skattekontoAccount?: SkattekontoLedgerAccount,
 ): Promise<void> {
   const others = [...new Set(alsoTransactionIds)].filter(id => id !== transactionId)
   if (others.length > 0) {
     try {
-      await linkSkattekontoRows(supabase, companyId, [transactionId, ...others], journalEntryId)
+      await linkSkattekontoRows(supabase, companyId, [transactionId, ...others], journalEntryId, {
+        account: skattekontoAccount,
+      })
       return
     } catch (err) {
       if (err instanceof SkattekontoLinkError) {
@@ -1594,10 +1616,12 @@ export async function matchSkattekontoToEntry(
     belopp_skatteverket?: number | string | null
   }>
   type Line = { account_number: string; debit_amount: number; credit_amount: number }
-  const settles = groupSettlesEntry(entry.lines as Line[] | null, [
-    ...linkedRows.map(r => Number(r.belopp_skatteverket)),
-    Number(tx.belopp_skatteverket),
-  ])
+  const account = skattekontoAccount ?? (await resolveSkattekontoAccount(supabase, companyId))
+  const settles = groupSettlesEntry(
+    entry.lines as Line[] | null,
+    [...linkedRows.map(r => Number(r.belopp_skatteverket)), Number(tx.belopp_skatteverket)],
+    account,
+  )
   if (!settles.ok) {
     if (linkedRows.length > 0) {
       throw new SkattekontoMatchError(
@@ -1606,7 +1630,7 @@ export async function matchSkattekontoToEntry(
       )
     }
     throw new SkattekontoMatchError(
-      'Verifikatet saknar en matchande rad på 1630.',
+      `Verifikatet saknar en matchande rad på ${account}.`,
       'INVALID_CANDIDATE',
     )
   }

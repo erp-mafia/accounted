@@ -100,21 +100,22 @@ describe('structured-errors registry', () => {
     expect(entry?.retryable).toBeFalsy()
   })
 
-  it('registers PROVIDER_RESOURCE_FORBIDDEN as a 403 that never tells the user to reconnect', () => {
-    // The provider refused one register on a grant that keeps working, so
-    // "Återanslut" is the one thing this message must not say: reconnecting
-    // re-mints the same grant and meets the same 403. This entry is also the
-    // single source of that copy (get-error-message.ts reads it for the toast,
-    // lib/docs/content/errors.ts publishes it), so it has to exist.
+  it('registers PROVIDER_RESOURCE_FORBIDDEN as a 403 that sends the user to another Fortnox user, not to a bare reconnect', () => {
+    // The provider refused one register on a grant that keeps working, so a
+    // bare "Återanslut" is the one thing this message must not say:
+    // reconnecting as the same user re-mints the same grant and meets the
+    // same refusal. Fortnox reads with the rights of the user who connected,
+    // so the way out is a user who has the right (crm#1014). This entry is
+    // also the single source of that copy (get-error-message.ts reads it for
+    // the toast, lib/docs/content/errors.ts publishes it), so it has to exist.
     const entry = getErrorEntry('PROVIDER_RESOURCE_FORBIDDEN')
     expect(entry).toBeDefined()
     expect(entry?.httpStatus).toBe(403)
-    // Says reconnecting does not help; never the "Återanslut för att
-    // fortsätta" imperative PROVIDER_AUTH_EXPIRED carries.
-    expect(entry?.message_sv).toMatch(/återansluta hjälper inte/i)
+    expect(entry?.message_sv).toMatch(/återansluta med samma användare hjälper inte/i)
     expect(entry?.message_sv).not.toMatch(/återanslut för att fortsätta/i)
-    expect(entry?.message_sv).toMatch(/behörighet/i)
-    expect(entry?.message_en).toBeTruthy()
+    expect(entry?.message_sv).toMatch(/användaren som kopplade Fortnox/)
+    expect(entry?.message_sv).toMatch(/redovisningsbyrå/)
+    expect(entry?.message_en).toMatch(/same user will not help/)
     // Retrying the same call hits the same permission gap: not transient.
     expect(entry?.retryable).toBeFalsy()
   })

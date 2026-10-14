@@ -1044,9 +1044,9 @@ const PROVIDER_REASON_PREFIX: Bilingual = {
 
 /**
  * The provider refused ONE register while the grant itself keeps working: a
- * Fortnox account without rights to leverantörsregistret, a Bokio token with a
- * narrower scope. Never say "återanslut" here, the reconnect re-mints the same
- * grant and hits the same 403.
+ * Fortnox user without rights to leverantörsregistret, a Bokio token with a
+ * narrower scope. A reconnect as the same user re-mints the same grant and
+ * hits the same refusal, so the copy names a different user instead.
  *
  * The base copy is the registry's PROVIDER_RESOURCE_FORBIDDEN entry, not a
  * second copy of it: the same sentence has to reach the toast, the API

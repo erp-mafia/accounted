@@ -322,15 +322,27 @@ export function migrationIssueReason(issue: Pick<ProviderMigrationIssue, 'error_
 const TOKEN_PERMISSION_PROVIDERS = new Set(['bokio'])
 
 /**
+ * What to say when the user who connected a provider may not read something:
+ * one sentence for every door (refused registers, a job stopped on a refusal,
+ * the SIE preview, supplier-invoice files), with `{provider}` and `{what}`,
+ * the refused thing in lower case. It names the two ways out (connect as a
+ * user who has the right, for example the accounting firm, or grant it for a
+ * while) because the customer reads "the integration has the permission" as
+ * enough (crm#1014).
+ */
+export const USER_RIGHT_REFUSAL_MESSAGE_KEY = 'ext_arcim_refused_user_right'
+
+/**
  * Translation key (extensions namespace) for what to do about a refused
  * register. A missing licence names the module: Fortnox requires Kundfaktura
  * or Order for customers and customer invoices, Bokföring for suppliers and
- * supplier invoices. A missing permission takes `{provider}`, and names the
- * token or the user who connected depending on the provider.
+ * supplier invoices (Fortnox developer docs, Scopes). A missing permission
+ * names the token or the user who connected depending on the provider; the
+ * user's one takes the values from migrationRefusalMessageValues.
  */
 export function migrationRefusalMessageKey(resource: MigrationResource, reason: ProviderRefusalReason, provider?: string | null): string {
   if (reason === 'permission') {
-    return TOKEN_PERMISSION_PROVIDERS.has(provider ?? '') ? 'ext_arcim_job_refused_token' : 'ext_arcim_job_refused_permission'
+    return TOKEN_PERMISSION_PROVIDERS.has(provider ?? '') ? 'ext_arcim_job_refused_token' : USER_RIGHT_REFUSAL_MESSAGE_KEY
   }
   return resource === 'customers' || resource === 'salesInvoices'
     ? 'ext_arcim_job_refused_license_sales'
@@ -340,13 +352,13 @@ export function migrationRefusalMessageKey(resource: MigrationResource, reason: 
 /**
  * Translation key (extensions namespace) for the code a job stopped on
  * (job.error_code), with `{provider}`. A refusal on a working connection
- * names the token or the user who connected, as migrationRefusalMessageKey.
+ * names the token or the user who connected, as migrationRefusalMessageKey;
+ * the user's one also takes `{what}`, which the stopped job cannot name.
  */
 export function migrationJobErrorMessageKey(job: Pick<ProviderMigrationJob, 'error_code'> & { provider?: string | null }): string {
   const kind = migrationIssueKind(job.error_code)
-  return kind === 'refused' && TOKEN_PERMISSION_PROVIDERS.has(job.provider ?? '')
-    ? 'ext_arcim_job_error_refused_token'
-    : `ext_arcim_job_error_${kind}`
+  if (kind !== 'refused') return `ext_arcim_job_error_${kind}`
+  return TOKEN_PERMISSION_PROVIDERS.has(job.provider ?? '') ? 'ext_arcim_job_error_refused_token' : USER_RIGHT_REFUSAL_MESSAGE_KEY
 }
 
 /**
@@ -364,4 +376,14 @@ export function migrationRefusals(job: Pick<ProviderMigrationJob, 'refused_resou
     groups.set(key, [...(groups.get(key) ?? []), resource])
   }
   return [...groups].map(([messageKey, resources]) => ({ messageKey, resources }))
+}
+
+/**
+ * The values a refusal group's message takes: `{provider}`, and `{what}`,
+ * the refused registers by their labels in lower case ("leverantörer,
+ * leverantörsfakturor").
+ */
+export function migrationRefusalMessageValues(resources: readonly MigrationResource[], provider: string,
+  label: (resource: MigrationResource) => string): { provider: string; what: string } {
+  return { provider, what: resources.map(resource => label(resource).toLowerCase()).join(', ') }
 }

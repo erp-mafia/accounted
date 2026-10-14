@@ -5,10 +5,13 @@ import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { stageSkvManualPrefill } from '@/lib/skatteverket/manual-verifikat-prefill'
+import type { SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 import { SkattekontoLinkProposalsDialog } from './SkattekontoLinkProposalsDialog'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
@@ -51,7 +54,8 @@ function toLedgerTwin(c: SkattekontoLedgerTwin): SkattekontoLedgerTwin {
  * carries the event on 1630, e.g. one imported by SIE), the dialog switches
  * to that answer: the twins are listed, Koppla (the match flow) is the
  * primary action and "Bokför ändå" repeats the same booking with the
- * per-row override for an event that really happened twice. A row
+ * per-row override for an event that really happened twice, once the user
+ * has written why (the verifikat notes carry the reason). A row
  * Skatteverket has not settled yet cannot be linked, so there the primary
  * action is to wait. "Skapa manuellt" asks the same candidate search first
  * (match-candidates) and shows the same answer.
@@ -73,9 +77,12 @@ export default function SkattekontoBookDialog({
   onBooked,
   onMatch,
   onLinkCovered,
+  skattekontoAccount,
   onLinked,
 }: {
   row: SkattekontoTransactionWithSuggestion | null
+  /** The company's skattekonto account (1630, or 2012), as the server reported it. */
+  skattekontoAccount: SkattekontoLedgerAccount
   open: boolean
   onOpenChange: (open: boolean) => void
   onBooked: (rowId: string, result: SkattekontoBatchRowResult) => void
@@ -111,10 +118,15 @@ export default function SkattekontoBookDialog({
   } | null>(null)
   // The cover answer's "Koppla händelserna" swaps this dialog for the bulk link.
   const [linkAllFor, setLinkAllFor] = useState<string | null>(null)
+  // "Bokför ändå" asks why first: the reason is the override, and the
+  // verifikat carries it. Shown once the user chose to book anyway.
+  const [anywayReason, setAnywayReason] = useState<{ rowId: string; text: string } | null>(null)
 
   if (!row) return null
   const twinState = twinRefusal?.rowId === row.id ? twinRefusal : null
   const coverState = coverRefusal?.rowId === row.id ? coverRefusal : null
+  const reasonState = anywayReason?.rowId === row.id ? anywayReason : null
+  const reasonText = reasonState?.text.trim() ?? ''
 
   // Closing forgets the refusal: a reopened dialog asks the server again.
   function handleOpenChange(next: boolean) {
@@ -122,6 +134,7 @@ export default function SkattekontoBookDialog({
       setTwinRefusal(null)
       setCoverRefusal(null)
       setLinkAllFor(null)
+      setAnywayReason(null)
     }
     onOpenChange(next)
   }
@@ -133,7 +146,8 @@ export default function SkattekontoBookDialog({
   // the draft endpoint would be a guaranteed 422 (NO_COUNTER_ACCOUNT).
   const noRuleMatched = suggestion === null
 
-  async function handleBook(allowDuplicate: boolean) {
+  // duplicateReason: the override, book although the ledger holds the event.
+  async function handleBook(duplicateReason: string | null) {
     if (!row) return
     setIsBooking(true)
     try {
@@ -144,7 +158,7 @@ export default function SkattekontoBookDialog({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             ids: [row.id],
-            ...(allowDuplicate ? { allow_duplicate_ids: [row.id] } : {}),
+            ...(duplicateReason ? { allow_duplicate_ids: [row.id], duplicate_reason: duplicateReason } : {}),
           }),
         },
       )
@@ -203,17 +217,17 @@ export default function SkattekontoBookDialog({
     }
   }
 
-  async function handleOpenDraft(allowDuplicate: boolean) {
+  async function handleOpenDraft(duplicateReason: string | null) {
     if (!row) return
     setIsOpeningDraft(true)
     try {
       const res = await fetch(
         `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${row.id}/bokfor`,
-        allowDuplicate
+        duplicateReason
           ? {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ allow_duplicate: true }),
+              body: JSON.stringify({ allow_duplicate: true, duplicate_reason: duplicateReason }),
             }
           : { method: 'POST' },
       )
@@ -263,12 +277,46 @@ export default function SkattekontoBookDialog({
     onMatch?.()
   }
 
-  function handleBookAnyway() {
-    if (!twinState) return
-    if (twinState.mode === 'book') void handleBook(true)
-    else if (twinState.mode === 'draft') void handleOpenDraft(true)
-    else void handleManualCreate(true)
+  // "Bokför ändå" (or "Öppna som utkast ändå"): the first press asks why,
+  // the second books with that reason. "Skapa manuellt ändå" opens the
+  // manual form, where the user writes the verifikat themselves.
+  function bookAnywayFor(mode: 'book' | 'draft' | 'manual') {
+    if (!row) return
+    if (mode === 'manual') {
+      void handleManualCreate(true)
+      return
+    }
+    if (!reasonState) {
+      setAnywayReason({ rowId: row.id, text: '' })
+      return
+    }
+    if (!reasonText) return
+    if (mode === 'book') void handleBook(reasonText)
+    else void handleOpenDraft(reasonText)
   }
+
+  function handleBookAnyway() {
+    if (twinState) bookAnywayFor(twinState.mode)
+  }
+
+  // Disabled while the reason is still empty: the override needs one.
+  const anywayBlocked = (mode: 'book' | 'draft' | 'manual') => mode !== 'manual' && reasonState !== null && !reasonText
+
+  const reasonField = reasonState ? (
+    <div className="space-y-1.5">
+      <Label htmlFor="skv-book-anyway-reason">{t('anyway_reason_label')}</Label>
+      <Textarea
+        id="skv-book-anyway-reason"
+        value={reasonState.text}
+        onChange={(e) => setAnywayReason({ rowId: reasonState.rowId, text: e.target.value })}
+        maxLength={500}
+        rows={2}
+        autoFocus
+        data-ph-mask
+      />
+      <p className="text-xs leading-5 text-muted-foreground">{t('anyway_reason_hint')}</p>
+    </div>
+  ) : null
 
   if (coverState && linkAllFor === row.id) {
     return (
@@ -280,6 +328,7 @@ export default function SkattekontoBookDialog({
         onLinked={onLinked}
         focusRowId={row.id}
         onManual={onLinkCovered}
+        skattekontoAccount={skattekontoAccount}
       />
     )
   }
@@ -287,12 +336,7 @@ export default function SkattekontoBookDialog({
   if (coverState) {
     const cover = coverState.cover
     const submitting = isBooking || isOpeningDraft
-    const bookAnyway = () =>
-      coverState.mode === 'book'
-        ? void handleBook(true)
-        : coverState.mode === 'draft'
-          ? void handleOpenDraft(true)
-          : void handleManualCreate(true)
+    const bookAnyway = () => bookAnywayFor(coverState.mode)
     return (
       <ConfirmationDialog
         open={open}
@@ -301,13 +345,13 @@ export default function SkattekontoBookDialog({
         isSubmitting={submitting}
         confirmLabel={t('cover_link_cta')}
         // The override records the event a second time: say so.
-        warningText={t('cover_warning')}
+        warningText={t('cover_warning', { skattekonto: skattekontoAccount })}
         onConfirm={() => setLinkAllFor(row.id)}
         extraActions={
           <Button
             variant="ghost"
             onClick={bookAnyway}
-            disabled={submitting}
+            disabled={submitting || anywayBlocked(coverState.mode)}
             loading={submitting}
             className="w-full sm:w-auto text-muted-foreground"
           >
@@ -318,12 +362,19 @@ export default function SkattekontoBookDialog({
         <div className="space-y-3 py-2 text-sm">
           <p className="leading-6">
             {cover
-              ? t(cover.kind === 'events_equal' ? 'cover_body_equal' : 'cover_body_agrees', {
-                  count: cover.event_count,
-                  total: formatCurrency(cover.event_total),
-                  date: formatDate(cover.through_date),
-                })
-              : t('cover_body_plain')}
+              ? cover.kind === 'planned_link'
+                ? t('cover_body_planned', {
+                    others: cover.event_count - 1,
+                    total: formatCurrency(cover.event_total),
+                    skattekonto: skattekontoAccount,
+                  })
+                : t(cover.kind === 'events_equal' ? 'cover_body_equal' : 'cover_body_agrees', {
+                    count: cover.event_count,
+                    total: formatCurrency(cover.event_total),
+                    date: formatDate(cover.through_date),
+                    skattekonto: skattekontoAccount,
+                  })
+              : t('cover_body_plain', { skattekonto: skattekontoAccount })}
           </p>
           {cover && cover.entries.length > 0 && (
             <ul className="divide-y divide-border rounded-lg border border-border">
@@ -349,6 +400,7 @@ export default function SkattekontoBookDialog({
             </ul>
           )}
           <p className="text-xs leading-5 text-muted-foreground">{t('cover_hint')}</p>
+          {reasonField}
         </div>
       </ConfirmationDialog>
     )
@@ -373,7 +425,7 @@ export default function SkattekontoBookDialog({
         }
         // The override records the event a second time: say so whichever
         // button carries it.
-        warningText={t('twin_warning')}
+        warningText={t('twin_warning', { skattekonto: skattekontoAccount })}
         onConfirm={
           primary === 'match'
             ? handleMatchInstead
@@ -381,12 +433,13 @@ export default function SkattekontoBookDialog({
               ? () => handleOpenChange(false)
               : handleBookAnyway
         }
+        confirmDisabled={primary === 'anyway' && anywayBlocked(twinState.mode)}
         extraActions={
           primary !== 'anyway' ? (
             <Button
               variant="ghost"
               onClick={handleBookAnyway}
-              disabled={isBooking || isOpeningDraft}
+              disabled={isBooking || isOpeningDraft || anywayBlocked(twinState.mode)}
               loading={isBooking || isOpeningDraft}
               className="w-full sm:w-auto text-muted-foreground"
             >
@@ -401,6 +454,7 @@ export default function SkattekontoBookDialog({
               text: row.transaktionstext,
               amount: formatCurrency(Math.abs(amount)),
               date: formatDate(row.transaktionsdatum),
+              skattekonto: skattekontoAccount,
             })}
           </p>
           {twinState.twins.length > 0 && (
@@ -424,6 +478,7 @@ export default function SkattekontoBookDialog({
             </ul>
           )}
           <p className="text-xs leading-5 text-muted-foreground">{t('twin_hint')}</p>
+          {reasonField}
         </div>
       </ConfirmationDialog>
     )
@@ -465,12 +520,12 @@ export default function SkattekontoBookDialog({
     }
     // Deep-link into /bookkeeping's Nytt verifikat dialog: the row payload is
     // staged in sessionStorage (only the opaque id rides in the URL) so the
-    // form opens prefilled (1630 + counter line) and the created verifikat is
+    // form opens prefilled (skattekonto account + counter line) and the created verifikat is
     // auto-linked back to this skattekonto row via the match endpoint. Plain
     // '/bookkeeping' here was a dead end: the user landed on the list with no
     // form, no prefill and no link.
     handleOpenChange(false)
-    router.push(stageSkvManualPrefill(row))
+    router.push(stageSkvManualPrefill(row, skattekontoAccount))
   }
 
   return (
@@ -493,18 +548,18 @@ export default function SkattekontoBookDialog({
       warningText={canBookDirectly ? t('commit_warning') : ''}
       onConfirm={
         canBookDirectly
-          ? () => void handleBook(false)
+          ? () => void handleBook(null)
           : noRuleMatched
             ? onMatch
               ? handleMatchInstead
               : () => void handleManualCreate(false)
-            : () => void handleOpenDraft(false)
+            : () => void handleOpenDraft(null)
       }
       extraActions={
         canBookDirectly ? (
           <Button
             variant="ghost"
-            onClick={() => void handleOpenDraft(false)}
+            onClick={() => void handleOpenDraft(null)}
             disabled={isBooking}
             loading={isOpeningDraft}
             className="w-full sm:w-auto text-muted-foreground"
@@ -545,6 +600,7 @@ export default function SkattekontoBookDialog({
             <dt className="text-muted-foreground">{t('posting_label')}</dt>
             <dd className="text-right tabular-nums">
               {t('posting_value', {
+                skattekonto: skattekontoAccount,
                 account: suggestion.account_name
                   ? `${suggestion.account} ${suggestion.account_name}`
                   : suggestion.account,

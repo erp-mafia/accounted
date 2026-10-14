@@ -6,7 +6,7 @@ import { isUuid } from '@/lib/invariants/uuid'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { formatCurrency } from '@/lib/utils'
-import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
+import { resolveSkattekontoAccount, type SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 import { linkSkattekontoRow, unlinkSkattekontoRow } from '@/lib/skatteverket/skattekonto-link'
 import {
   fetchLiveLedgerSettlements,
@@ -18,7 +18,9 @@ import { getSkattekontoReconciliationStatus, skattekontoOpenLedger } from './ska
 const log = createLogger('reconciliation/skattekonto-split')
 
 /**
- * ONE Skatteverket event over SEVERAL open verifikat on 1630 (crm#1183): the
+ * ONE Skatteverket event over SEVERAL open verifikat on 1630 (crm#1183; "1630"
+ * in this file is the company's skattekonto account, 2012 for an enskild firma
+ * that runs it there, lib/skatteverket/skattekonto-account.ts): the
  * skattekonto mirror of the bank's 1:N split (#1553). Typical shape: an
  * imported verifikat that booked the event at the wrong amount and a second
  * verifikat that corrected it (+37 and -8 for a +29 event), so no single
@@ -101,6 +103,8 @@ export async function splitSkattekontoRow(
     dryRun?: boolean
     /** The slices a staged preview showed; refused unless each still equals the open amount. */
     allocations?: Array<{ journal_entry_id: string; amount: number }>
+    /** The company's skattekonto account when the caller resolved it; read here otherwise. */
+    account?: SkattekontoLedgerAccount
   } = {},
 ): Promise<SplitSkattekontoResult> {
   const ids = [...new Set(journalEntryIds)]
@@ -131,9 +135,10 @@ export async function splitSkattekontoRow(
   if (row.is_ignored) return refuse('ROW_IGNORED', 'Händelsen är ignorerad. Återställ den innan du kopplar.')
   if (row.journal_entry_id) return refuse('ALREADY_LINKED', 'Händelsen är redan kopplad till ett verifikat.')
   if (row.status !== 'booked') return refuse('PAIR_NOT_CLOSED', 'En kommande händelse kan inte kopplas ännu.')
+  const account = options.account ?? (await resolveSkattekontoAccount(supabase, companyId))
   const eventOre = toOre(Number(row.belopp_skatteverket))
   if (!Number.isFinite(eventOre) || eventOre === 0) {
-    return refuse('PAIR_NOT_CLOSED', 'En händelse på 0 kr flyttar inget på 1630 och kopplas inte mot verifikat.')
+    return refuse('PAIR_NOT_CLOSED', `En händelse på 0 kr flyttar inget på ${account} och kopplas inte mot verifikat.`)
   }
 
   const { data: entryRows, error: entryError } = await supabase
@@ -161,20 +166,20 @@ export async function splitSkattekontoRow(
   }
   const label = (id: string) => formatVoucher(entries.get(id)!)
 
-  const live = await fetchLiveLedgerSettlements(supabase, companyId, SKATTEKONTO_ACCOUNT)
+  const live = await fetchLiveLedgerSettlements(supabase, companyId, account)
   const taken = live.find((m) => ids.includes(m.journal_entry_id))
   if (taken) {
     return refuse(
       'ALREADY_SETTLED',
-      `Verifikat ${label(taken.journal_entry_id)} ingår redan i en annan koppling på 1630. Koppla bort den först (${taken.settlement_id}).`,
+      `Verifikat ${label(taken.journal_entry_id)} ingår redan i en annan koppling på ${account}. Koppla bort den först (${taken.settlement_id}).`,
     )
   }
 
   // The engine's own open list, so "open" has one definition.
-  const status = await getSkattekontoReconciliationStatus(supabase, companyId)
+  const status = await getSkattekontoReconciliationStatus(supabase, companyId, { account })
   const openLedger = status ? skattekontoOpenLedger(status) : null
   if (!status || !openLedger) return refuse('NOT_FOUND', 'Skattekontot är inte hämtat för företaget.')
-  if (status.ledger_read_failed) throw new Error('Kunde inte läsa bokföringen på 1630. Försök igen.')
+  if (status.ledger_read_failed) throw new Error(`Kunde inte läsa bokföringen på ${account}. Försök igen.`)
 
   const slices: SkattekontoSplitSlice[] = []
   let totalOre = 0
@@ -183,7 +188,7 @@ export async function splitSkattekontoRow(
     if (!open) {
       return refuse(
         'ENTRY_NOT_OPEN',
-        `Verifikat ${label(id)} står inte bland verifikaten på 1630 utan händelse hos Skatteverket: det är redan förklarat av kopplade händelser, saknar rad på 1630, är en ingående balans eller en makulering, eller ligger före den hämtade historiken.`,
+        `Verifikat ${label(id)} står inte bland verifikaten på ${account} utan händelse hos Skatteverket: det är redan förklarat av kopplade händelser, saknar rad på ${account}, är en ingående balans eller en makulering, eller ligger före den hämtade historiken.`,
       )
     }
     slices.push({ journal_entry_id: id, amount: open.amount })
@@ -192,7 +197,7 @@ export async function splitSkattekontoRow(
   if (totalOre !== eventOre) {
     return refuse(
       'PAIR_NOT_CLOSED',
-      `Verifikaten har tillsammans ${kr(totalOre / 100)} öppet på 1630 och händelsen är ${kr(eventOre / 100)}. En händelse kopplas mot flera verifikat bara när de tillsammans är exakt händelsens belopp.`,
+      `Verifikaten har tillsammans ${kr(totalOre / 100)} öppet på ${account} och händelsen är ${kr(eventOre / 100)}. En händelse kopplas mot flera verifikat bara när de tillsammans är exakt händelsens belopp.`,
     )
   }
   if (options.allocations) {
@@ -205,7 +210,7 @@ export async function splitSkattekontoRow(
     if (changed) {
       return refuse(
         'PAIR_NOT_CLOSED',
-        `Verifikat ${label(changed.journal_entry_id)} har ${kr(changed.amount)} öppet på 1630, inte ${kr(Number(given.get(changed.journal_entry_id)))}. På skattekontot kopplas varje verifikat med hela sitt öppna belopp.`,
+        `Verifikat ${label(changed.journal_entry_id)} har ${kr(changed.amount)} öppet på ${account}, inte ${kr(Number(given.get(changed.journal_entry_id)))}. På skattekontot kopplas varje verifikat med hela sitt öppna belopp.`,
       )
     }
   }
@@ -221,7 +226,7 @@ export async function splitSkattekontoRow(
         a.journal_entry_id.localeCompare(b.journal_entry_id),
     )[0]
   if (!primary) {
-    return refuse('PAIR_NOT_CLOSED', 'Inget av verifikaten har händelsens tecken på 1630.')
+    return refuse('PAIR_NOT_CLOSED', `Inget av verifikaten har händelsens tecken på ${account}.`)
   }
   if (options.dryRun) {
     return { ok: true, slices, primary_journal_entry_id: primary.journal_entry_id, settlement_id: null }
@@ -238,11 +243,11 @@ export async function splitSkattekontoRow(
 
   // The row's guarded pointer first: a concurrent link of the row makes it
   // throw LINK_RACE before anything else is written.
-  await linkSkattekontoRow(supabase, companyId, rowId, primary.journal_entry_id, { allowRemainder: true })
+  await linkSkattekontoRow(supabase, companyId, rowId, primary.journal_entry_id, { allowRemainder: true, account })
   const settlementId = randomUUID()
   const written = await insertLedgerSettlement(supabase, companyId, {
     settlement_id: settlementId,
-    account_number: SKATTEKONTO_ACCOUNT,
+    account_number: account,
     settled_by: userId,
     entries: members,
   })
@@ -278,11 +283,13 @@ export async function releaseSkattekontoSettlementOf(
   companyId: string,
   userId: string,
   journalEntryId: string,
+  skattekontoAccount?: SkattekontoLedgerAccount,
 ): Promise<string | null> {
-  const live = await fetchLiveLedgerSettlements(supabase, companyId, SKATTEKONTO_ACCOUNT)
+  const account = skattekontoAccount ?? (await resolveSkattekontoAccount(supabase, companyId))
+  const live = await fetchLiveLedgerSettlements(supabase, companyId, account)
   const member = live.find((m) => m.journal_entry_id === journalEntryId)
   if (!member) return null
-  await stampLedgerSettlementUndone(supabase, companyId, SKATTEKONTO_ACCOUNT, member.settlement_id, userId)
+  await stampLedgerSettlementUndone(supabase, companyId, account, member.settlement_id, userId)
   return member.settlement_id
 }
 
@@ -297,9 +304,11 @@ export async function undoSkattekontoSettlement(
   companyId: string,
   userId: string,
   settlementId: string,
+  skattekontoAccount?: SkattekontoLedgerAccount,
 ): Promise<{ settlement_id: string; journal_entry_ids: string[] } | null> {
   if (!isUuid(settlementId)) return null
-  const journalEntryIds = await stampLedgerSettlementUndone(supabase, companyId, SKATTEKONTO_ACCOUNT, settlementId, userId)
+  const account = skattekontoAccount ?? (await resolveSkattekontoAccount(supabase, companyId))
+  const journalEntryIds = await stampLedgerSettlementUndone(supabase, companyId, account, settlementId, userId)
   if (journalEntryIds.length === 0) return null
   log.info('skattekonto settlement undone', { companyId, settlementId, entries: journalEntryIds.length })
   return { settlement_id: settlementId, journal_entry_ids: journalEntryIds }

@@ -437,7 +437,7 @@ export default function TransactionInboxCard({
             {skvCounterpartDate && (
               <Badge variant="warning" className="hidden h-4 shrink-0 gap-1 px-1.5 py-0 text-[11px] md:inline-flex">
                 <AlertCircle className="h-3 w-3" />
-                Möjlig 1930↔1630
+                Möjlig bank↔skattekonto
               </Badge>
             )}
             {/* Quiet pre-migration marker (muted text, not a chip: it is

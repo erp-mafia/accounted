@@ -723,10 +723,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // on failure to preserve sequence integrity per ML 17 kap 24§).
     let invoiceNumber: string | null = null
     if (documentType === 'delivery_note') {
-      const { data: dnNumber } = await ctx.supabase.rpc('generate_delivery_note_number', {
+      const { data: dnNumber, error: dnNumberError } = await ctx.supabase.rpc('generate_delivery_note_number', {
         p_company_id: ctx.companyId!,
       })
-      invoiceNumber = dnNumber as string | null
+      if (dnNumberError || !dnNumber) {
+        ctx.log.error('delivery note number allocation failed', dnNumberError ?? new Error('no number'))
+        return v1ErrorResponseFromCode('INVOICE_CREATE_NUMBER_ASSIGN_FAILED', ctx.log, {
+          requestId: ctx.requestId,
+        })
+      }
+      invoiceNumber = dnNumber as string
     } else if (documentType === 'quote') {
       // Quotes are numbered at insert from their own OF-series (never the
       // F-series): see generate_quote_number.

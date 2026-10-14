@@ -273,7 +273,8 @@ import AccountMappingStep from '@/components/import/AccountMappingStep'
 import ProviderMigrationProgress from './ProviderMigrationProgress'
 import ProviderMigrationIssues from './ProviderMigrationIssues'
 import {
-  MIGRATION_RESOURCES, migrationRefusals, type ProviderMigrationIssue, type ProviderMigrationStatus,
+  MIGRATION_RESOURCES, migrationRefusalMessageValues, migrationRefusals, USER_RIGHT_REFUSAL_MESSAGE_KEY,
+  type ProviderMigrationIssue, type ProviderMigrationStatus,
 } from '@/lib/providers/migration-contract'
 import ArcimMigrationTheater from '@/components/extensions/general/ArcimMigrationTheater'
 import TheaterCanvas from '@/components/import/TheaterCanvas'
@@ -1111,7 +1112,8 @@ function ConnectStep({
 
 /**
  * What a failed SIE fetch asks of the user: the sentence that names the cause
- * (ext_arcim_sie_error_<kind>), the one action, and where a SIE file would
+ * (ext_arcim_sie_error_<kind>, or for a permission the user-right sentence
+ * every refusal shares), the one action, and where a SIE file would
  * come from (null where reconnecting is the whole fix). The classification is
  * the server's (classifyProviderError, the same one /sie-data and the
  * migration job use); this only picks the remedy for it.
@@ -1176,7 +1178,9 @@ function SieFetchErrorNotice({
           {t('ext_arcim_sie_error_title', { provider: providerName })}
         </p>
         <p className="text-sm text-muted-foreground">
-          {t(`ext_arcim_sie_error_${kind}`, { provider: providerName })}
+          {kind === 'permission'
+            ? t(USER_RIGHT_REFUSAL_MESSAGE_KEY, { provider: providerName, what: t('ext_arcim_refused_what_bookkeeping') })
+            : t(`ext_arcim_sie_error_${kind}`, { provider: providerName })}
         </p>
       </div>
       {action === 'reconnect' ? (
@@ -2059,6 +2063,9 @@ function DocumentImportFollowUp({
         <div key={entry.scope} className="space-y-1">
           <p className="text-sm text-muted-foreground">
             {t(`ext_arcim_documents_supplier_files_${entry.reason}`, { scope })}
+            {entry.reason === 'permission' && <>
+              {' '}{t(USER_RIGHT_REFUSAL_MESSAGE_KEY, { provider: 'Fortnox', what: scope })}
+            </>}
           </p>
           {entry.providerMessage && (
             <p className="text-xs text-muted-foreground">
@@ -3993,7 +4000,8 @@ export default function ArcimMigrationWorkspace({
       // the result names it with the remedy, the same way /migrate reports one.
       const providerName = ARCIM_PROVIDERS.find(p => p.id === status.job.provider)?.name ?? status.job.provider
       const refused: MigrationStepError[] = migrationRefusals(status.job).flatMap(group => group.resources.map(resource => ({
-        step: resource, code: 'PROVIDER_RESOURCE_FORBIDDEN', message: t(group.messageKey, { provider: providerName }),
+        step: resource, code: 'PROVIDER_RESOURCE_FORBIDDEN', message: t(group.messageKey,
+          migrationRefusalMessageValues(group.resources, providerName, r => t(`ext_arcim_job_resource_${r}`))),
       })))
       if (refused.length) results.stepErrors = refused
       setMigrationResults(previous => mergeMigrationResults(previous ?? {}, results))

@@ -18,13 +18,14 @@ import {
   skattekontoLinkRefusal,
   unlinkSkattekontoRow,
 } from '@/lib/skatteverket/skattekonto-link'
+import { setTransactionIgnored } from '@/lib/transactions/ignore'
 import {
-  fetchJunctionLinkedTxIds,
   linkTransactionToVouchers,
   manualLink,
   unlinkReconciliation,
   type BankLinkRefusalCode,
 } from './bank-reconciliation'
+import { resolveSkattekontoAccount, type SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 import { getSkattekontoReconciliationStatus } from './skattekonto-reconciliation'
 import {
   releaseSkattekontoSettlementOf,
@@ -344,6 +345,7 @@ function skattekontoAmountCheck(
   externalIds: string[],
   journalEntryId: string,
   allowRemainder: boolean,
+  account: SkattekontoLedgerAccount,
 ):
   | { ok: true; via: 'line' | 'entry_total' | 'lines' | 'partial'; remainder: number }
   | { ok: false; code: PairSkipCode; message: string } {
@@ -353,15 +355,16 @@ function skattekontoAmountCheck(
   const lines = facts.entries.get(journalEntryId)?.lines ?? null
   const amounts = externalIds.map((id) => Number(facts.rows.get(id)?.amount))
   const linked = facts.linkedAmounts.get(journalEntryId) ?? []
-  const evaluation = evaluateSkattekontoLink(lines, linked, amounts, { allowRemainder })
+  const evaluation = evaluateSkattekontoLink(lines, linked, amounts, { allowRemainder, account })
   if (evaluation.ok && evaluation.via) {
     return { ok: true, via: evaluation.via, remainder: evaluation.remainder }
   }
   const refusal = skattekontoLinkRefusal(evaluation, {
-    entryNet: skattekontoEntryNet(lines).net,
+    entryNet: skattekontoEntryNet(lines, account).net,
     rowsTotal: roundOre(amounts.reduce((sum, a) => sum + a, 0)),
     rowCount: amounts.length,
     alreadyLinked: linked.length,
+    account,
   })
   return { ok: false, ...skipCodeFor(new SkattekontoLinkError(refusal.message, refusal.code)) }
 }
@@ -408,11 +411,14 @@ async function proposalsAsPairs(
   companyId: string,
   accountKey: string,
   threshold: number,
+  skattekontoAccount: SkattekontoLedgerAccount | null,
 ): Promise<ReconciliationPair[]> {
   const parsed = parseAccountKey(accountKey)
   if (!parsed) return []
   if (parsed.kind === 'skattekonto') {
-    const status = await getSkattekontoReconciliationStatus(supabase, companyId)
+    const status = await getSkattekontoReconciliationStatus(supabase, companyId, {
+      ...(skattekontoAccount ? { account: skattekontoAccount } : {}),
+    })
     if (!status) return []
     // Rows of one combined proposal become ONE pair so the group is linked
     // together (a single row alone does not settle the verifikat).
@@ -478,6 +484,10 @@ export async function matchPairs(
   const parsed = parseAccountKey(accountKey)
   if (!parsed || parsed.kind === 'manual') return null
   const dryRun = options.dryRun ?? false
+  // The skattekonto's ledger account (1630, or 2012 for an enskild firma that
+  // runs it there), resolved once for every pair, proposal and check below.
+  const skattekontoAccount =
+    parsed.kind === 'skattekonto' ? await resolveSkattekontoAccount(supabase, companyId) : null
 
   const pairs: ReconciliationPair[] = [...(input.pairs ?? [])]
   // The pairs the caller named (a person's or an agent's choice, a staged
@@ -487,7 +497,7 @@ export async function matchPairs(
   const namedPairs = new Set(pairs)
   if (input.use_proposals) {
     pairs.push(
-      ...(await proposalsAsPairs(supabase, companyId, accountKey, input.confidence_threshold ?? 0)),
+      ...(await proposalsAsPairs(supabase, companyId, accountKey, input.confidence_threshold ?? 0, skattekontoAccount)),
     )
   }
 
@@ -567,13 +577,14 @@ export async function matchPairs(
         })
         continue
       }
-      if (parsed.kind === 'skattekonto') {
+      if (parsed.kind === 'skattekonto' && skattekontoAccount) {
         // The whole policy, dry run included, is skattekonto-split.ts.
         const [externalId] = pair.external_ids
         try {
           const r = await splitSkattekontoRow(supabase, companyId, userId, externalId, journalEntryIds, {
             dryRun,
             ...(pair.allocations ? { allocations: pair.allocations } : {}),
+            account: skattekontoAccount,
           })
           if (!r.ok) {
             skipped.push({ pair, code: r.code, message: r.message })
@@ -660,7 +671,7 @@ export async function matchPairs(
         skipped.push({ pair, ...entryProblem })
         continue
       }
-      if (parsed.kind === 'skattekonto') {
+      if (parsed.kind === 'skattekonto' && skattekontoAccount) {
         // All or nothing, as linkSkattekontoRows: one bad row skips the group.
         const rowProblem = externalIds.map((id) => rowSkip(facts, 'skattekonto', id)).find((p) => p !== null)
         if (rowProblem) {
@@ -669,7 +680,13 @@ export async function matchPairs(
         }
         // The amounts, as the live link checks them: a pair that cannot
         // close is refused here, not after approval.
-        const amounts = skattekontoAmountCheck(facts, externalIds, journalEntryId, pair.allow_remainder === true)
+        const amounts = skattekontoAmountCheck(
+          facts,
+          externalIds,
+          journalEntryId,
+          pair.allow_remainder === true,
+          skattekontoAccount,
+        )
         if (!amounts.ok) {
           skipped.push({ pair, code: amounts.code, message: amounts.message })
           continue
@@ -703,14 +720,17 @@ export async function matchPairs(
     }
 
     try {
-      if (parsed.kind === 'skattekonto') {
-        // Only an explicit allow_remainder reaches the link helpers; every
-        // other pair is called exactly as before.
-        const linkOptions = pair.allow_remainder === true ? ([{ allowRemainder: true }] as const) : ([] as const)
+      if (parsed.kind === 'skattekonto' && skattekontoAccount) {
+        // Only an explicit allow_remainder allows a remainder; the account
+        // is the one resolved above for every pair.
+        const linkOptions = {
+          ...(pair.allow_remainder === true ? { allowRemainder: true } : {}),
+          account: skattekontoAccount,
+        }
         const remainderOf = (remainder: unknown) =>
           typeof remainder === 'number' && remainder !== 0 ? { remainder_amount: remainder } : {}
         if (externalIds.length === 1) {
-          const r = await linkSkattekontoRow(supabase, companyId, externalIds[0], journalEntryId, ...linkOptions)
+          const r = await linkSkattekontoRow(supabase, companyId, externalIds[0], journalEntryId, linkOptions)
           applied.push({
             external_id: externalIds[0],
             journal_entry_id: journalEntryId,
@@ -722,7 +742,7 @@ export async function matchPairs(
           // All-or-nothing: the group's sum must settle the verifikat (or the
           // pair allows a remainder), and a lost race rolls the whole group
           // back inside the link helper.
-          const r = await linkSkattekontoRows(supabase, companyId, externalIds, journalEntryId, ...linkOptions)
+          const r = await linkSkattekontoRows(supabase, companyId, externalIds, journalEntryId, linkOptions)
           for (const externalId of r.skattekonto_transaction_ids) {
             applied.push({
               external_id: externalId,
@@ -806,8 +826,8 @@ export async function unmatchLink(
     try {
       r = await unlinkSkattekontoRow(supabase, companyId, linkId)
     } catch (err) {
-      // No row of the company: the id may be a settlement on 1630 (an
-      // item's settlement.settlement_id), as on the bank.
+      // No row of the company: the id may be a settlement on the skattekonto
+      // account (an item's settlement.settlement_id), as on the bank.
       if (err instanceof SkattekontoLinkError && err.code === 'TRANSACTION_NOT_FOUND') {
         const undone = await undoSkattekontoSettlement(supabase, companyId, userId, linkId)
         if (undone) {
@@ -862,6 +882,13 @@ export async function unmatchLink(
 /**
  * Ignore / restore one outside row. Ignored rows leave the unmatched totals
  * and surface on the bridge's exclusion line (bank #1705 precedent).
+ *
+ * A bank row goes through the one ignore rule every other door uses
+ * (setTransactionIgnored, lib/transactions/ignore.ts): it refuses a row
+ * booked through any of the three anchors, journal_entry_id, a voucher link
+ * or a payment allocation (crm#1183). The copy this replaced checked the
+ * first two only, and let a failed link read through as "not booked". The
+ * refusals keep this door's error codes.
  */
 export async function setItemIgnored(
   supabase: SupabaseClient,
@@ -869,6 +896,8 @@ export async function setItemIgnored(
   accountKey: string,
   itemId: string,
   ignored: boolean,
+  /** Who decided: recorded with the dismissed suggestions, as on the other doors. */
+  userId?: string,
 ): Promise<{ external_id: string; is_ignored: boolean } | null> {
   const parsed = parseAccountKey(accountKey)
   if (!parsed || parsed.kind === 'manual') return null
@@ -876,34 +905,12 @@ export async function setItemIgnored(
     const r = await setSkattekontoRowIgnored(supabase, companyId, itemId, ignored)
     return { external_id: r.skattekonto_transaction_id, is_ignored: r.is_ignored }
   }
-  const { data: tx, error } = await supabase
-    .from('transactions')
-    .select('id, journal_entry_id, is_ignored')
-    .eq('company_id', companyId)
-    .eq('id', itemId)
-    .maybeSingle<{ id: string; journal_entry_id: string | null; is_ignored: boolean | null }>()
-  if (error) throw new Error(`Kunde inte hämta transaktionen: ${error.message}`)
-  if (!tx) throw new SkattekontoLinkError('Transaktionen hittades inte.', 'TRANSACTION_NOT_FOUND')
-  if (ignored && tx.journal_entry_id) {
-    throw new SkattekontoLinkError('En bokförd transaktion kan inte ignoreras.', 'ALREADY_BOOKED')
-  }
-  // A row anchored only through transaction_voucher_links (bulk-book, 1:N
-  // split) has two counterparts in the ledger; ignoring it would drop the
-  // bank side while the ledger keeps it and manufacture a difference of the
-  // full amount (issue #1553, field note).
-  if (ignored && !tx.journal_entry_id) {
-    const junctionLinked = await fetchJunctionLinkedTxIds(supabase, companyId, [itemId])
-    if (junctionLinked.has(itemId)) {
+  const outcome = await setTransactionIgnored(supabase, companyId, itemId, ignored, { userId })
+  if (!outcome.ok) {
+    if (outcome.code === 'TX_IGNORE_ALREADY_BOOKED') {
       throw new SkattekontoLinkError('En bokförd transaktion kan inte ignoreras.', 'ALREADY_BOOKED')
     }
-  }
-  if (Boolean(tx.is_ignored) !== ignored) {
-    const { error: updateError } = await supabase
-      .from('transactions')
-      .update({ is_ignored: ignored })
-      .eq('company_id', companyId)
-      .eq('id', itemId)
-    if (updateError) throw new Error(`Kunde inte uppdatera: ${updateError.message}`)
+    throw new SkattekontoLinkError('Transaktionen hittades inte.', 'TRANSACTION_NOT_FOUND')
   }
   return { external_id: itemId, is_ignored: ignored }
 }

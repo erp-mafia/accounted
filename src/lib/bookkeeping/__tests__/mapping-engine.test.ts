@@ -1059,7 +1059,8 @@ describe('mapping-engine', () => {
 
         await evaluateMappingRules(mockSupabase as never, 'company-1', tx, 'enskild_firma', undefined, false)
 
-        expect(templates.buildMappingResultFromTemplate).toHaveBeenCalledWith(template, tx, 'enskild_firma', false)
+        // No skattekonto account: the template names no 1630.
+        expect(templates.buildMappingResultFromTemplate).toHaveBeenCalledWith(template, tx, 'enskild_firma', false, undefined)
       })
     })
   })

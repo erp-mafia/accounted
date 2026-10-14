@@ -9,12 +9,11 @@
  * mapping.
  */
 
-// Fortnox is the one provider with a typed predicate for "this account may not
-// read this resource" (403, or 400 with a permission body). classifyProviderError
-// reuses it instead of pattern-matching the Swedish sentence in the body, which
-// changes with the provider's locale and copy; import-documents.ts already
-// treats a Fortnox 403 the same way.
-import { FortnoxApiError, fortnoxApiErrorCode, isFortnoxPermissionError } from './fortnox/client'
+// Fortnox is the one provider with a typed reading of "this account may not
+// read this resource" (fortnoxRefusal: documented codes, a 403, or a 400 with
+// a permission body). Every Fortnox door classifies through it, so the
+// migration job, the SIE preview and the underlag import cannot disagree.
+import { fortnoxRefusal } from './fortnox/client'
 import { FortnoxOAuthError } from './fortnox/oauth-error'
 
 export type ProviderCallErrorCode =
@@ -85,10 +84,13 @@ export interface ClassifyProviderErrorOptions {
  * (other clients) off the thrown error and maps:
  *
  *   401     → PROVIDER_AUTH_EXPIRED
- *   403     → PROVIDER_RESOURCE_FORBIDDEN when the provider answers 403 only
- *             for the resource (Fortnox, see isFortnoxPermissionError), or
- *             when `options.grantProven` says an earlier call in the same run
- *             already succeeded on this token; otherwise PROVIDER_AUTH_EXPIRED
+ *   Fortnox refusal (fortnoxRefusal: a documented code, a 403, or a 400
+ *           naming a missing right or licence) → PROVIDER_RESOURCE_FORBIDDEN,
+ *           or PROVIDER_LICENSE_MISSING when the whole account lacks the API
+ *           licence (2001103)
+ *   403     → PROVIDER_RESOURCE_FORBIDDEN when `options.grantProven` says an
+ *             earlier call in the same run already succeeded on this token;
+ *             otherwise PROVIDER_AUTH_EXPIRED
  *   429     → PROVIDER_RATE_LIMITED
  *   5xx     → PROVIDER_UPSTREAM_ERROR
  *   network → PROVIDER_UNREACHABLE
@@ -112,9 +114,8 @@ export function classifyProviderError(
     if (error.operation === 'refresh' && error.providerCode === 'invalid_grant') return 'PROVIDER_AUTH_EXPIRED'
     return 'PROVIDER_UPSTREAM_ERROR'
   }
-  const fortnoxCode = error instanceof FortnoxApiError && error.statusCode < 500 && error.statusCode !== 429 ? fortnoxApiErrorCode(error) : undefined
-  if (fortnoxCode === '2001103') return 'PROVIDER_LICENSE_MISSING'
-  if (fortnoxCode === '2001101' || fortnoxCode === '2000663') return 'PROVIDER_RESOURCE_FORBIDDEN'
+  const refusal = fortnoxRefusal(error)
+  if (refusal) return refusal.reason === 'api_license' ? 'PROVIDER_LICENSE_MISSING' : 'PROVIDER_RESOURCE_FORBIDDEN'
   if (error instanceof ProviderCallError) {
     // An error labelled from one response cannot know the run's history, so
     // a 403 already labelled AUTH_EXPIRED is re-read here with it.
@@ -144,10 +145,10 @@ export function classifyProviderError(
   if (typeof status === 'number') {
     // A 403 is only a dead grant when nothing else says otherwise: a provider
     // that reserves 403 for the resource and answers 401 for a dead token
-    // (Fortnox), or the same token having already answered earlier in this
-    // run, both mean the grant is alive and one register is closed. 401 is
-    // never downgraded: that IS a dead token.
-    if (status === 403 && (options.grantProven || isFortnoxPermissionError(error))) {
+    // (Fortnox, read above by fortnoxRefusal), or the same token having
+    // already answered earlier in this run, both mean the grant is alive and
+    // one register is closed. 401 is never downgraded: that IS a dead token.
+    if (status === 403 && options.grantProven) {
       return 'PROVIDER_RESOURCE_FORBIDDEN'
     }
     if (status === 401 || status === 403) return 'PROVIDER_AUTH_EXPIRED'
@@ -165,19 +166,22 @@ export type ProviderRefusalReason = 'license' | 'permission'
 /**
  * Why the provider refused a register that classifyProviderError reads as
  * PROVIDER_RESOURCE_FORBIDDEN. The two causes have different remedies, and
- * Fortnox names them with different codes:
+ * Fortnox tells them apart (fortnoxRefusal):
  *
  *   license     2001101 "Det finns ingen aktiv licens för önskat scope": the
  *               Fortnox company's plan lacks the module the register needs
  *               (customers and invoices need Kundfaktura or Order). No
  *               reconnect can change that; activating the module can.
  *   permission  everything else: 2000663 "Har inte behörighet för scope", or
- *               a per-register 403 ("Saknar behörighet för
- *               leverantörsregister."). The user who connected lacks the
- *               right; granting it, or connecting as a user who has it, does.
+ *               a register the user who connected may not see ("Saknar
+ *               behörighet för leverantörsregister.", 403 or 400). Granting
+ *               the right, or connecting as a user who has it, does.
+ *
+ * Other providers do not say, and read as permission.
  */
 export function providerRefusalReason(error: unknown): ProviderRefusalReason {
-  return error instanceof FortnoxApiError && fortnoxApiErrorCode(error) === '2001101' ? 'license' : 'permission'
+  const reason = fortnoxRefusal(error)?.reason
+  return reason === 'license' || reason === 'api_license' ? 'license' : 'permission'
 }
 
 /**

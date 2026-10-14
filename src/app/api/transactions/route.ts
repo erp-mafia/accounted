@@ -5,6 +5,7 @@ import { validateBody } from '@/lib/api/validate'
 import { CreateTransactionSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { transactionTextSearchFilter } from '@/lib/transactions/text-search'
+import { resolveDefaultCashAccount } from '@/lib/cash-accounts/service'
 
 const MAX_ROWS = 500
 
@@ -142,11 +143,17 @@ export const POST = withRouteContext(
     if (!validation.success) return validation.response
     const { date, description, amount, currency, category, notes } = validation.data
 
+    // The form names no bank account: the row takes the company's default
+    // account in its currency, the rule the MCP and v1 ingest doors use
+    // (crm#1171). Stored unbound it dropped out of every per-account view.
+    const cashAccountId = (await resolveDefaultCashAccount(supabase, companyId, currency))?.id ?? null
+
     const { data: transaction, error } = await supabase
       .from('transactions')
       .insert({
         company_id: companyId,
         user_id: user.id,
+        cash_account_id: cashAccountId,
         date,
         description,
         amount,

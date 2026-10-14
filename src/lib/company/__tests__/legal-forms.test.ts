@@ -30,6 +30,7 @@ function leaves(profile: LegalFormProfile): Record<string, unknown> {
     'bookkeeping.defaultMethod': profile.bookkeeping.defaultMethod,
     'bookkeeping.simplifiedRegelverk': profile.bookkeeping.simplifiedRegelverk,
     'bookkeeping.templateColumn': profile.bookkeeping.templateColumn,
+    'bookkeeping.skattekontoAccounts': JSON.stringify(profile.bookkeeping.skattekontoAccounts),
     'equity.closing': profile.equity.closing,
     'equity.priorYearCarry': profile.equity.priorYearCarry,
     'equity.retained': profile.equity.retained,
