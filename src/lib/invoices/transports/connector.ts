@@ -32,9 +32,10 @@ import {
  * only poll, fetch evidence for, or receive documents belonging to
  * participants and submissions it registered itself.
  *
- * Webhooks are not brokered: Qvalia posts to the hosted webhook, which only
- * knows hosted deliveries. The instance learns outbound status by polling
- * (`pollDeliveryStatus`, already driven by /api/peppol/outbound/status/cron).
+ * Webhooks are not brokered: Qvalia posts to the service's own webhook route,
+ * which keeps only failure reasons and attaches them to the polled status.
+ * The instance learns outbound status by polling (`pollDeliveryStatus`,
+ * already driven by /api/peppol/outbound/status/cron).
  */
 
 export const CONNECTOR_PROVIDER = CONNECTOR_PEPPOL_PROVIDER
