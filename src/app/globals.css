@@ -882,6 +882,10 @@ input[type="number"] {
     padding-right: 1.5rem;
   }
 }
+/* A lone title (no action for this user) stays on the left. */
+.page-header > :last-child:not(:first-child) {
+  margin-left: auto;
+}
 .page-header-lead {
   min-width: 0;
 }
