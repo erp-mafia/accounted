@@ -558,6 +558,61 @@ describe('account erasure (pg)', () => {
       expect(again[0]!.status).toBe('revoked')
     })
   })
+  it('erases the PSU-IDs kept for the person\'s connections and signings, and keeps everyone else\'s', async () => {
+    // bank_connection_psus and payment_batch_psus have no key to auth.users:
+    // their rows go with their connection or signing (ON DELETE CASCADE), and
+    // erasure deletes those of the connections the person owns and of the
+    // signings they submitted or signed (the connections are revoked anyway).
+    const userId = await insertAuthUser()
+    const otherId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: otherId, name: 'PSU Erasure AB' })
+    await insertCompanyMember({ companyId, userId: otherId, role: 'owner' })
+    await insertCompanyMember({ companyId, userId, role: 'member' })
+
+    await withUserContext(userId, async (client) => {
+      await client.query('RESET ROLE')
+      const connection = async (owner: string) => {
+        const { rows } = await client.query<{ id: string }>(
+          `INSERT INTO public.bank_connections (user_id, company_id, provider, status, session_id)
+           VALUES ($1, $2, 'seb-se', 'active', $3) RETURNING id`,
+          [owner, companyId, randomUUID()],
+        )
+        await client.query(
+          `INSERT INTO public.bank_connection_psus (connection_id, company_id, psu_id_enc, source) VALUES ($1, $2, '\\xc0ffee', 'typed')`,
+          [rows[0]!.id, companyId],
+        )
+        return rows[0]!.id
+      }
+      const signing = async (submittedBy: string, signedBy: string | null) => {
+        const { rows } = await client.query<{ id: string }>(
+          `INSERT INTO public.payment_order_batches (company_id, user_id, signer_user_id, provider, signing_target, order_count, total_amount, currency)
+           VALUES ($1, $2, $3, 'open_payments', 'payment', 1, 1000, 'SEK') RETURNING id`,
+          [companyId, submittedBy, signedBy],
+        )
+        await client.query(`INSERT INTO public.payment_batch_psus (batch_id, company_id, psu_id_enc) VALUES ($1, $2, '\\xc0ffee')`, [rows[0]!.id, companyId])
+        return rows[0]!.id
+      }
+      const own = await connection(userId)
+      const others = await connection(otherId)
+      const submitted = await signing(userId, null)
+      const signed = await signing(otherId, userId)
+      const unrelated = await signing(otherId, otherId)
+
+      await client.query('SELECT public.erase_user_personal_data($1)', [userId])
+
+      const left = async (table: string, key: string, id: string) =>
+        (await client.query<{ n: number }>(`SELECT count(*)::int AS n FROM public.${table} WHERE ${key} = $1`, [id])).rows[0]!.n
+      expect(await left('bank_connection_psus', 'connection_id', own)).toBe(0)
+      expect(await left('bank_connection_psus', 'connection_id', others)).toBe(1)
+      expect(await left('payment_batch_psus', 'batch_id', submitted)).toBe(0)
+      expect(await left('payment_batch_psus', 'batch_id', signed)).toBe(0)
+      expect(await left('payment_batch_psus', 'batch_id', unrelated)).toBe(1)
+      // The connection and the signings themselves stay: the company's records.
+      expect(await left('bank_connections', 'id', own)).toBe(1)
+      expect(await left('payment_order_batches', 'id', submitted)).toBe(1)
+    })
+  })
+
   it('revokes a bank consent in a migration-reset source company and keeps the archive otherwise immutable', async () => {
     const userId = await insertAuthUser()
     const sourceCompanyId = await insertCompany({ createdBy: userId, name: 'Reset Source AB' })

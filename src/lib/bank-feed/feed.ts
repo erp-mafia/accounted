@@ -261,8 +261,10 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
     return cooldown(now + SYNC_COOLDOWN_MS)
   }
 
-  // PSU-ID on every read, attended or not: the consent was signed by the
-  // connection's owner, so their number on file names the PSU at the bank.
+  // PSU-ID on every read, attended or not: the one the consent was created
+  // with (several banks require the same PSU-ID on every later call to it),
+  // else the connection owner's number on file. An unattended read sends no
+  // IP or user agent: that would claim a person is present.
   const party = await buildBankFeedParty(supabase, {
     companyId,
     bic: connection.bic,
@@ -270,6 +272,7 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
     psuType: connection.psu_type,
     signer: input.signer ?? UNATTENDED_SIGNER,
     userId: connection.user_id,
+    connectionId: connection.id,
   })
   if (!party.ok) {
     log.error('open payments sync has no organisationsnummer', { connectionId, code: party.outcome.code })

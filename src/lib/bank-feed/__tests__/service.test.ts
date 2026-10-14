@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   emit: vi.fn(),
   signerOnFile: vi.fn(),
   hasSigner: vi.fn(),
+  storedPsu: vi.fn(),
+  rememberPsu: vi.fn(),
 }))
 vi.mock('../door', () => ({ openBankFeedDoor: (...a: unknown[]) => mocks.door(...a) }))
 vi.mock('../connect', async (importOriginal) => ({
@@ -34,6 +36,10 @@ vi.mock('@/lib/auth/bankid-signer', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/auth/bankid-signer')>()),
   signerPersonalNumberOnFile: (...a: unknown[]) => mocks.signerOnFile(...a),
   hasSignerOnFile: (...a: unknown[]) => mocks.hasSigner(...a),
+}))
+vi.mock('@/lib/auth/resource-psu', () => ({
+  storedConnectionPsu: (...a: unknown[]) => mocks.storedPsu(...a),
+  rememberConnectionPsu: (...a: unknown[]) => mocks.rememberPsu(...a),
 }))
 
 import { createTableMockSupabase, type TableMockResult } from '@/tests/helpers'
@@ -107,6 +113,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   mocks.signerOnFile.mockResolvedValue('199001011239')
   mocks.hasSigner.mockResolvedValue(true)
+  mocks.storedPsu.mockResolvedValue(null)
+  mocks.rememberPsu.mockResolvedValue(undefined)
   mocks.emit.mockResolvedValue(undefined)
   mocks.resolveLedger.mockResolvedValue({ ledgerAccount: '1931', reuseCashAccountId: null, source: 'allocated' })
 })
@@ -549,6 +557,132 @@ describe('restartBankFeedConsent', () => {
     mocks.connect.mockReturnValue(fakeConnect())
     const { supabase } = stub({ bank_connections: [{ data: row({ status: 'active' }), error: null }] })
     expect(await restartBankFeedConsent({ ...ctx, supabase }, { connectionId: CONNECTION })).toEqual({ ok: false, code: 'BANK_CONSENT_CHANGED' })
+  })
+})
+
+describe('the PSU-ID a consent was created with', () => {
+  const STORED = '198001019879'
+  const startAnswers = () => ({
+    ...orgAnswers(),
+    companies: [{ data: { entity_type: 'aktiebolag' }, error: null }],
+    bank_connections: [{ data: [], error: null }, { data: row({ authorization_id: null }), error: null }, { data: null, error: null }],
+  })
+  const pending = (state: string) =>
+    fakeConnect({ pollConsentSigning: vi.fn().mockResolvedValue({ state, challenge: CHALLENGE, failureCode: null, scaStatus: 'started', consentStatus: null, validUntil: state === 'valid' ? '2027-04-10' : null }) })
+
+  it('a session start keeps the number the bank accepted the consent with, typed or on file, by connection id', async () => {
+    const connect = fakeConnect()
+    mocks.door.mockResolvedValue({ ok: true, connect })
+    const onFile = stub(startAnswers())
+    expect((await startBankFeedConsent({ ...ctx, supabase: onFile.supabase }, { bic: 'SWEDSESS', method: 'qr', signer, now: NOW })).ok).toBe(true)
+    expect(mocks.rememberPsu).toHaveBeenCalledWith({ connectionId: CONNECTION, companyId: 'co-1', personalNumber: '199001011239', source: 'on_file' })
+    // A new consent never reads a stored number: it is a new resource.
+    expect(mocks.storedPsu).not.toHaveBeenCalled()
+
+    // The e-mail-login person who typed their number: nothing on file, the typed one is kept.
+    mocks.signerOnFile.mockResolvedValue(null)
+    const typed = stub(startAnswers())
+    await startBankFeedConsent({ ...ctx, supabase: typed.supabase }, { bic: 'SWEDSESS', method: 'qr', signer: { ...signer, personalNumber: '900209-2386' }, now: NOW })
+    expect(mocks.rememberPsu).toHaveBeenLastCalledWith({ connectionId: CONNECTION, companyId: 'co-1', personalNumber: '199002092386', source: 'typed' })
+  })
+
+  it('the signatory link start keeps the firmatecknare\'s typed number, never the sender\'s', async () => {
+    mocks.door.mockResolvedValue({ ok: true, connect: fakeConnect() })
+    const { supabase } = stub(startAnswers())
+    const linkSigner = { ...signer, personalNumber: '900209-2386', lookupOnFile: false }
+    expect((await startBankFeedConsent({ ...ctx, userId: 'sender-1', supabase }, { bic: 'SWEDSESS', method: 'qr', signer: linkSigner, returnTo: 'koppla', returnOrigin: ORIGIN, returnToken: 'tok', now: NOW })).ok).toBe(true)
+    expect(mocks.rememberPsu).toHaveBeenCalledWith({ connectionId: CONNECTION, companyId: 'co-1', personalNumber: '199002092386', source: 'signatory_link' })
+    expect(mocks.signerOnFile).not.toHaveBeenCalled()
+  })
+
+  it('keeps nothing when the bank refused the consent', async () => {
+    mocks.door.mockResolvedValue({ ok: true, connect: fakeConnect({ createConsent: vi.fn().mockRejectedValue(new BankFeedRefusedError('no', { code: 'CONNECTOR_AIS_REFUSED', status: 400 })) }) })
+    const { supabase } = stub(startAnswers())
+    expect((await startBankFeedConsent({ ...ctx, supabase }, { bic: 'SWEDSESS', method: 'qr', signer, now: NOW })).ok).toBe(false)
+    expect(mocks.rememberPsu).not.toHaveBeenCalled()
+  })
+
+  it('a restart of the same consent sends the stored number, not the one on file, and keeps it', async () => {
+    const connect = fakeConnect({ startConsentSigning: vi.fn().mockResolvedValue({ providerAuthorisationId: 'auth-2', method: 'qr', state: 'pending', challenge: CHALLENGE, failureCode: null, scaStatus: null }) })
+    mocks.connect.mockReturnValue(connect)
+    mocks.storedPsu.mockResolvedValue({ personalNumber: STORED, source: 'typed' })
+    const { supabase } = stub({ bank_connections: [{ data: row({ consent_attempt: { method: 'qr', state: 'failed', failure_code: 'SIGNING_SESSION_EXPIRED' } }), error: null }, { data: null, error: null }], ...orgAnswers() })
+    expect((await restartBankFeedConsent({ ...ctx, supabase }, { connectionId: CONNECTION, signer, now: NOW })).ok).toBe(true)
+    expect(mocks.storedPsu).toHaveBeenCalledWith(CONNECTION)
+    expect(connect.startConsentSigning).toHaveBeenCalledWith('co-1', expect.objectContaining({ party: expect.objectContaining({ personalNumber: STORED, psuIpAddress: '203.0.113.1', psuUserAgent: 'UA' }) }))
+    expect(connect.createConsent).not.toHaveBeenCalled()
+    expect(mocks.rememberPsu).not.toHaveBeenCalled()
+  })
+
+  it('a restart that has to create a new consent overwrites the kept number with the one the new consent was created with', async () => {
+    const connect = fakeConnect({ startConsentSigning: vi.fn().mockRejectedValueOnce(new ConsentOverError('over')).mockResolvedValue({ providerAuthorisationId: 'auth-2', method: 'qr', state: 'pending', challenge: CHALLENGE, failureCode: null, scaStatus: null }) })
+    mocks.connect.mockReturnValue(connect)
+    // The kept number could not be read (null): the typed one creates the new consent and replaces it.
+    const { supabase, payload } = stub({
+      bank_connections: [{ data: row({ consent_attempt: { method: 'qr', state: 'failed', co_signing: true } }), error: null }, { data: null, error: null }, { data: null, error: null }],
+      ...orgAnswers(),
+    })
+    expect((await restartBankFeedConsent({ ...ctx, supabase }, { connectionId: CONNECTION, signer: { ...signer, personalNumber: '900209-2386' }, now: NOW })).ok).toBe(true)
+    expect(connect.createConsent).toHaveBeenCalledWith('co-1', expect.objectContaining({ party: expect.objectContaining({ personalNumber: '199002092386' }) }))
+    expect(mocks.rememberPsu).toHaveBeenCalledWith({ connectionId: CONNECTION, companyId: 'co-1', personalNumber: '199002092386', source: 'typed' })
+    // A new consent has no co-signer yet.
+    expect(payload('bank_connections', 'update')[0]).toMatchObject({ session_id: 'consent-1', consent_attempt: expect.objectContaining({ co_signing: false }) })
+  })
+
+  it('a second signatory on a partly signed consent signs with their own number and never overwrites the kept one; the consent\'s reads keep the kept one', async () => {
+    const connect = fakeConnect({ startConsentSigning: vi.fn().mockResolvedValue({ providerAuthorisationId: 'auth-2', method: 'qr', state: 'pending', challenge: CHALLENGE, failureCode: null, scaStatus: 'authenticationStarted' }) })
+    mocks.connect.mockReturnValue(connect)
+    mocks.storedPsu.mockResolvedValue({ personalNumber: STORED, source: 'signatory_link' })
+    const joint = row({ consent_attempt: { method: 'qr', state: 'partially_authorised', sca_status: 'finalised', started_at: '2026-10-10T09:00:00Z' } })
+    const second = { ...signer, personalNumber: '900209-2386', lookupOnFile: false }
+    const { supabase, payload } = stub({ bank_connections: [{ data: joint, error: null }, { data: null, error: null }], ...orgAnswers() })
+    expect((await restartBankFeedConsent({ ...ctx, userId: 'sender-1', supabase }, { connectionId: CONNECTION, method: 'qr', signer: second, now: NOW })).ok).toBe(true)
+    expect(connect.startConsentSigning).toHaveBeenCalledWith('co-1', expect.objectContaining({ consentId: 'consent-1', party: expect.objectContaining({ personalNumber: '199002092386' }) }))
+    expect(mocks.storedPsu).not.toHaveBeenCalled()
+    expect(mocks.rememberPsu).not.toHaveBeenCalled()
+    expect(payload('bank_connections', 'update')[0]).toMatchObject({ consent_attempt: expect.objectContaining({ state: 'pending', co_signing: true }) })
+
+    // The co-signer's poll: their number on the signing poll; the accounts read under the consent sends the kept one.
+    const valid = pending('valid')
+    mocks.connect.mockReturnValue(valid)
+    mocks.serviceRpc.mockResolvedValue({ data: { already_finalized: false, accounts: [], superseded: [] }, error: null })
+    const coSigning = row({ authorization_id: 'auth-2', consent_attempt: { method: 'qr', state: 'pending', co_signing: true } })
+    const polled = stub({ bank_connections: [{ data: coSigning, error: null }], ...orgAnswers() })
+    expect(await pollBankFeedConsent({ ...ctx, userId: 'sender-1', supabase: polled.supabase }, { connectionId: CONNECTION, signer: second })).toMatchObject({ ok: true, data: { state: 'valid' } })
+    expect(valid.pollConsentSigning).toHaveBeenCalledWith('co-1', expect.objectContaining({ party: expect.objectContaining({ personalNumber: '199002092386' }) }))
+    expect(valid.accounts).toHaveBeenCalledWith('co-1', expect.objectContaining({ party: expect.objectContaining({ personalNumber: STORED }) }))
+    expect(mocks.rememberPsu).not.toHaveBeenCalled()
+  })
+
+  it('an ordinary poll, Svea\'s second consent and the disconnect send the kept number; the second consent keeps it again', async () => {
+    mocks.storedPsu.mockResolvedValue({ personalNumber: STORED, source: 'on_file' })
+    const polling = pending('pending')
+    mocks.connect.mockReturnValue(polling)
+    const polled = stub({ bank_connections: [{ data: row(), error: null }, { data: null, error: null }], ...orgAnswers() })
+    await pollBankFeedConsent({ ...ctx, supabase: polled.supabase }, { connectionId: CONNECTION, signer })
+    expect(polling.pollConsentSigning).toHaveBeenCalledWith('co-1', expect.objectContaining({ party: expect.objectContaining({ personalNumber: STORED, psuIpAddress: '203.0.113.1' }) }))
+    expect(mocks.signerOnFile).not.toHaveBeenCalled()
+
+    const svea = fakeConnect({ bank: vi.fn().mockResolvedValue({ ...BANK, bic: 'SVEASESS', name: 'Svea Bank', affiliates: [] }) })
+    mocks.connect.mockReturnValue(svea)
+    const listing = row({
+      bic: 'SVEASESS', status: 'pending_selection', bank_name: 'Svea Bank',
+      accounts_data: [{ uid: 'ACC003', currency: 'SEK', iban: 'SE8050000000052131234567', enabled: true }],
+      consent_attempt: { method: 'qr', state: 'pending', selection: { listing_only: true } },
+    })
+    const selected = stub({ bank_connections: [{ data: listing, error: null }, { data: null, error: null }, { data: null, error: null }], ...orgAnswers() })
+    expect((await selectBankFeedAccounts({ ...ctx, supabase: selected.supabase }, { connectionId: CONNECTION, accounts: [{ uid: 'ACC003', enabled: true }], signer, now: NOW })).ok).toBe(true)
+    expect(svea.createConsent).toHaveBeenCalledWith('co-1', expect.objectContaining({ party: expect.objectContaining({ personalNumber: STORED }) }))
+    expect(mocks.rememberPsu).toHaveBeenCalledWith({ connectionId: CONNECTION, companyId: 'co-1', personalNumber: STORED, source: 'on_file' })
+
+    const revoking = fakeConnect()
+    mocks.connect.mockReturnValue(revoking)
+    mocks.readConfig.mockResolvedValue({ token: 'tok', connection: { id: CONNECTION, aggregator: 'open_payments' } })
+    mocks.disconnect.mockResolvedValue({ connection_id: CONNECTION, session_id: 'consent-1', bank_name: 'Swedbank', released_cash_accounts: 1 })
+    mocks.serviceRpc.mockImplementation(async (name: string) => (name === 'claim_bank_session_revocation' ? { data: { claimed: true, token: 'claim-1' }, error: null } : { data: true, error: null }))
+    const gone = stub({ bank_connections: [{ data: row({ status: 'active' }), error: null }], ...orgAnswers() })
+    expect((await disconnectBankFeedConnection({ ...ctx, supabase: gone.supabase }, CONNECTION)).ok).toBe(true)
+    expect(revoking.revokeConsent).toHaveBeenCalledWith('co-1', { party: expect.objectContaining({ personalNumber: STORED, psuIpAddress: null, psuUserAgent: null }), consentId: 'consent-1' })
   })
 })
 

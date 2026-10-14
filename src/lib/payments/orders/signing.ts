@@ -58,6 +58,7 @@ import {
 import { openPaymentsDoor } from './switched-on'
 import { paymentSigningReturnUrl } from './return-url'
 import { normalizeSignerPersonalNumber, rememberSignerPersonalNumber } from '@/lib/auth/bankid-signer'
+import { rememberBatchPsu } from '@/lib/auth/resource-psu'
 import { bankDayFor } from './lifecycle'
 import type { PaymentOrderEvent } from './types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -691,6 +692,7 @@ async function sendAndSign(
   let batch = claimed.batch
   const orders = claimed.orders
   const attempts = await createAttempts(writer, ctx.companyId, orders)
+  let psuKept = false
   for (const order of orders) {
     if (!(await beginCreate(writer, ctx, batch.id, order))) {
       // The order moved since the claim (the stale-claim sweep let it go):
@@ -749,6 +751,12 @@ async function sendAndSign(
     order.provider_payment_id = created.providerPaymentId
     order.provider_payment_product = created.product
     order.provider_status = created.providerStatus
+    // The bank holds a payment created with this PSU-ID: its status reads,
+    // a restart and a cancel send the same one (once per signing).
+    if (!psuKept) {
+      await rememberBatchPsu({ batchId: batch.id, companyId: ctx.companyId, personalNumber: party.signerPersonalNumber })
+      psuKept = true
+    }
   }
 
   if (batch.signing_target === 'basket') {
@@ -884,7 +892,8 @@ export async function restartPaymentSigning(
   const waiting = orders.filter(isWaiting)
   if (waiting.length === 0) return { ok: false, code: 'PAYMENT_SIGNING_NOTHING_TO_SIGN' }
 
-  const built = await buildPartyContext(ctx, waiting[0]!, input.signer, { requireSigner: true })
+  // The payments exist at the bank: the PSU-ID they were created with leads.
+  const built = await buildPartyContext(ctx, waiting[0]!, input.signer, { requireSigner: true, batchId: batch.id })
   if (!built.ok) return built.outcome
   // The plan first: the bank's own page needs the origin to come back to
   // before anything is read or moved.
@@ -941,6 +950,10 @@ export async function restartPaymentSigning(
     }
   }
   let next = moved.batch
+  // A new signing over the same payments: they keep the PSU-ID they were created with.
+  if (!moved.same && built.storedPsu) {
+    await rememberBatchPsu({ batchId: next.id, companyId: ctx.companyId, personalNumber: party.ctx.signerPersonalNumber })
+  }
   if (!moved.same && next.signing_target === 'basket') {
     const withBasket = await createBasket(ctx, provider, party.ctx, next, moved.orders)
     if (!withBasket.ok) return withBasket.outcome
@@ -1050,7 +1063,7 @@ export async function pollPaymentSigning(
   }
   const target = targetOf(batch, orders)
   if (!target) return { ok: false, code: 'PAYMENT_SIGNING_NOT_ACTIVE' }
-  const party = await buildPartyContext(ctx, orders[0]!, input.signer)
+  const party = await buildPartyContext(ctx, orders[0]!, input.signer, { batchId: batch.id })
   if (!party.ok) return party.outcome
 
   let progress

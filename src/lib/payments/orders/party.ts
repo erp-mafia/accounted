@@ -1,10 +1,14 @@
 /**
  * Who pays and who signs: the PaymentPartyContext every provider call needs.
  * The signer's personnummer comes from lib/auth/bankid-signer.ts and is never
- * stored on the order or logged.
+ * stored on the order or logged. A call to payments that already exist at the
+ * bank sends the number they were created with (payment_batch_psus,
+ * lib/auth/resource-psu.ts): several banks require the same PSU-ID on every
+ * later call to a payment, its status in a decoupled flow included.
  */
 
 import { normalizeSignerPersonalNumber, signerPersonalNumberOnFile } from '@/lib/auth/bankid-signer'
+import { storedBatchPsu } from '@/lib/auth/resource-psu'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { PaymentPartyContext } from '@/lib/payments/initiation/provider'
 import { paymentAccountContext, type DebtorSnapshot } from './debtor'
@@ -42,8 +46,12 @@ export async function buildPartyContext(
   ctx: OperationContext,
   order: { debtor_snapshot: DebtorSnapshot },
   signer: SignerInput,
-  options: { requireSigner?: boolean } = {},
-): Promise<{ ok: true; ctx: PaymentPartyContext } | { ok: false; outcome: OperationOutcome<never> }> {
+  options: {
+    requireSigner?: boolean
+    /** The signing whose payments the call reaches: the PSU-ID they were created with leads, before the typed number or the one on file. */
+    batchId?: string | null
+  } = {},
+): Promise<{ ok: true; ctx: PaymentPartyContext; storedPsu: boolean } | { ok: false; outcome: OperationOutcome<never> }> {
   const orgNumber = await companyOrgNumber(ctx)
   if (!orgNumber) return { ok: false, outcome: { ok: false, code: 'VALIDATION_ERROR', details: { field: 'org_number', reason: 'missing' } } }
 
@@ -51,13 +59,15 @@ export async function buildPartyContext(
   if (signer.personalNumber && !typed) {
     return { ok: false, outcome: { ok: false, code: 'PAYMENT_SIGNER_PERSONAL_NUMBER_REQUIRED', details: { reason: 'invalid' } } }
   }
-  const personalNumber = typed ?? (signer.lookupOnFile === false ? null : await signerPersonalNumberOnFile(ctx.userId))
+  const stored = options.batchId ? await storedBatchPsu(options.batchId) : null
+  const personalNumber = stored ?? typed ?? (signer.lookupOnFile === false ? null : await signerPersonalNumberOnFile(ctx.userId))
   if (options.requireSigner && !personalNumber) {
     return { ok: false, outcome: { ok: false, code: 'PAYMENT_SIGNER_PERSONAL_NUMBER_REQUIRED' } }
   }
 
   return {
     ok: true,
+    storedPsu: stored !== null,
     ctx: {
       companyId: ctx.companyId,
       companyOrgNumber: orgNumber,
