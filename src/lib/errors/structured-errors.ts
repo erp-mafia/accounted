@@ -8111,6 +8111,11 @@ const OPEN_BANKING: Record<string, StructuredErrorEntry> = {
     message_sv: 'Ange personnumret för den som loggar in med BankID.',
     message_en: 'Enter the personal identity number of the person logging in with BankID.',
   },
+  BANK_CONSENT_ORG_NUMBER_MISSING: {
+    httpStatus: 400,
+    message_sv: 'Företaget saknar organisationsnummer, och banken behöver det för kopplingen. Lägg in det under Inställningar och försök igen.',
+    message_en: 'The company has no organisation number, and the bank needs it for the connection. Add it under Settings and try again.',
+  },
   BANK_CONSENT_UNKNOWN_BANK: {
     httpStatus: 400,
     message_sv: 'Banken finns inte i listan över banker som kan kopplas.',
