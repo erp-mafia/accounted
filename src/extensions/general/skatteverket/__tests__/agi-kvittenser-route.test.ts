@@ -41,9 +41,13 @@ function findRoute() {
   return route
 }
 
-/** Supabase stub: records updates per table; the declaration lookup resolves to `latest`. */
-function makeContext(latest: Record<string, unknown> | null) {
+/**
+ * Supabase stub: records updates per table and the receipts written to
+ * agi_kvittenser; the declaration lookup resolves to `latest`.
+ */
+function makeContext(latest: Record<string, unknown> | null, opts: { historyError?: { message: string } } = {}) {
   const updates: Array<{ table: string; values: unknown }> = []
+  const recorded: Array<{ rows: unknown[]; options: unknown }> = []
   const supabase = {
     from: vi.fn((table: string) => {
       const chain: any = {}
@@ -54,11 +58,16 @@ function makeContext(latest: Record<string, unknown> | null) {
         updates.push({ table, values })
         return chain
       })
+      chain.upsert = vi.fn((rows: unknown[], options: unknown) => {
+        recorded.push({ rows, options })
+        return chain
+      })
       chain.maybeSingle = vi.fn().mockResolvedValue({
         data: table === 'agi_declarations' ? latest : null,
         error: null,
       })
-      chain.then = (resolve: (v: unknown) => void) => resolve({ data: null, error: null })
+      chain.then = (resolve: (v: unknown) => void) =>
+        resolve({ data: null, error: table === 'agi_kvittenser' ? opts.historyError ?? null : null })
       return chain
     }),
   }
@@ -73,7 +82,7 @@ function makeContext(latest: Record<string, unknown> | null) {
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn() },
     settings: { get: vi.fn().mockResolvedValue(null), set: settingsSet, clear: vi.fn() },
   } as unknown as ExtensionContext
-  return { ctx, updates, settingsSet }
+  return { ctx, updates, recorded, settingsSet }
 }
 
 const request = (qs = '?arbetsgivare=165561234567&period=202609') =>
@@ -201,5 +210,36 @@ describe('GET /agi/kvittenser', () => {
     expect(settingsSet).toHaveBeenCalledTimes(1)
     expect(updates.map(u => u.table)).toEqual(['agi_declarations', 'salary_runs'])
     expect(updates[0].values).toMatchObject({ status: 'submitted', kvittensnummer: 'uuid-1' })
+  })
+
+  it('keeps every receipt listed for the period before the declaration moves on to the newest', async () => {
+    const ORIGINAL = { ...KVITTENS, uuidKvittens: 'uuid-original', signeradTid: '2026-09-12T07:00:00Z' }
+    mockAgiGetKvittenser.mockResolvedValueOnce({ ok: true, status: 200, data: { kvittenser: [KVITTENS, ORIGINAL] } } as any)
+    const { ctx, updates, recorded } = makeContext({ id: 'decl-1', salary_run_id: 'run-2', status: 'submitted' })
+
+    const res = await findRoute().handler(request(), ctx)
+
+    expect(res.status).toBe(200)
+    expect(recorded).toHaveLength(1)
+    expect(recorded[0].options).toEqual({ onConflict: 'company_id,uuid_kvittens', ignoreDuplicates: true })
+    expect(recorded[0].rows).toEqual([
+      expect.objectContaining({ company_id: 'company-1', period_year: 2026, period_month: 9, uuid_kvittens: 'uuid-1', recorded_by: 'interactive', receipt: KVITTENS }),
+      expect.objectContaining({ uuid_kvittens: 'uuid-original', signerad_tid: '2026-09-12T07:00:00Z', receipt: ORIGINAL }),
+    ])
+    expect(updates[0]).toMatchObject({ table: 'agi_declarations', values: { kvittensnummer: 'uuid-1' } })
+  })
+
+  it("leaves a filed declaration's receipt in place when the receipts could not be kept", async () => {
+    mockAgiGetKvittenser.mockResolvedValueOnce({ ok: true, status: 200, data: { kvittenser: [KVITTENS] } } as any)
+    const { ctx, updates } = makeContext(
+      { id: 'decl-1', salary_run_id: 'run-2', status: 'submitted' },
+      { historyError: { message: 'connection reset' } },
+    )
+
+    const res = await findRoute().handler(request(), ctx)
+
+    expect(res.status).toBe(200)
+    expect(updates).toEqual([])
+    expect(ctx.log.warn).toHaveBeenCalledWith('kvittenser read but not recorded', expect.objectContaining({ message: 'connection reset' }))
   })
 })

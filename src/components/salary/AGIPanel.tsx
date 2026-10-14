@@ -979,10 +979,11 @@ export function AGIPanel(props: AGIPanelProps) {
         {/* Filed: the terminal state, stated first. Kvittensnummer + signature
             metadata come from the run-scoped record, which /agi/status serves
             from the in-flight cache or, once the kvittens reconciliation has
-            deleted that cache, from agi_declarations (#1597). A run stamped
-            only via agi_submitted_at (an original whose receipt a later
-            correction has replaced) still gets the lines, just without a
-            number: better than showing another declaration's. */}
+            deleted that cache, from agi_declarations (#1597). The original of
+            a corrected month shows its own receipt from the period's recorded
+            kvittenser (agi_kvittenser); a run stamped only via
+            agi_submitted_at with none recorded still gets the lines, just
+            without a number: better than showing another declaration's. */}
         {isSigned && (
           <div className="space-y-1 text-sm">
             <p className="font-medium">{t('success_card_title', { period: prettyPeriod })}</p>

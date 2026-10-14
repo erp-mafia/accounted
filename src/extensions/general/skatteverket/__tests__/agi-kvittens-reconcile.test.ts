@@ -60,11 +60,14 @@ const DECL = {
 function makeSupabase(opts: {
   claim?: { data?: unknown[] | null; error?: { message: string } | null }
   salaryRunError?: { message: string } | null
+  historyError?: { message: string } | null
 } = {}) {
   const mutatedTables: string[] = []
   const claimStatuses: unknown[] = []
+  const recorded: Array<{ rows: unknown[]; options: unknown }> = []
   return {
     claimStatuses,
+    recorded,
     supabase: {
       from(table: string) {
         let op: 'read' | 'mutate' = 'read'
@@ -82,6 +85,11 @@ function makeSupabase(opts: {
             return chain
           })
         }
+        chain.upsert = vi.fn((rows: unknown[], options: unknown) => {
+          op = 'mutate'
+          recorded.push({ rows, options })
+          return chain
+        })
         chain.single = vi.fn(async () => ({
           data:
             table === 'company_settings'
@@ -99,6 +107,9 @@ function makeSupabase(opts: {
           }
           if (table === 'salary_runs') {
             return resolve({ error: opts.salaryRunError ?? null })
+          }
+          if (table === 'agi_kvittenser') {
+            return resolve({ data: null, error: opts.historyError ?? null })
           }
           return resolve({ data: null, error: null })
         }
@@ -150,7 +161,7 @@ describe('reconcileAgiDeclaration: claim semantics', () => {
     const outcome = await reconcileAgiDeclaration(supabase, DECL, { reconciledBy: 'cron' })
 
     expect(outcome).toEqual({ status: 'signed', kvittensnummer: 'uuid-1' })
-    expect(mutatedTables).toEqual(['agi_declarations', 'salary_runs', 'extension_data'])
+    expect(mutatedTables).toEqual(['agi_kvittenser', 'agi_declarations', 'salary_runs', 'extension_data'])
     // Background runs only ever claim a declaration that is awaiting signature.
     expect(claimStatuses).toEqual([['pending_signature']])
     expect(mockCompleteTaxDeadline).toHaveBeenCalledTimes(1)
@@ -163,8 +174,8 @@ describe('reconcileAgiDeclaration: claim semantics', () => {
     const outcome = await reconcileAgiDeclaration(supabase, DECL, { reconciledBy: 'post-connect' })
 
     expect(outcome).toEqual({ status: 'already_claimed' })
-    // Only the claim attempt itself mutated anything.
-    expect(mutatedTables).toEqual(['agi_declarations'])
+    // The receipt is kept; past that, only the claim attempt mutated anything.
+    expect(mutatedTables).toEqual(['agi_kvittenser', 'agi_declarations'])
     expect(mockCompleteTaxDeadline).not.toHaveBeenCalled()
     expect(mockSendKvittensNotification).not.toHaveBeenCalled()
   })
@@ -178,7 +189,7 @@ describe('reconcileAgiDeclaration: claim semantics', () => {
 
     expect(outcome).toMatchObject({ status: 'error' })
     expect((outcome as { error: string }).error).toContain('connection reset')
-    expect(mutatedTables).toEqual(['agi_declarations'])
+    expect(mutatedTables).toEqual(['agi_kvittenser', 'agi_declarations'])
     expect(mockCompleteTaxDeadline).not.toHaveBeenCalled()
     expect(mockSendKvittensNotification).not.toHaveBeenCalled()
   })
@@ -193,6 +204,38 @@ describe('reconcileAgiDeclaration: claim semantics', () => {
     expect(mockSendKvittensNotification).toHaveBeenCalledTimes(1)
     const warned = warnRecorder.mock.calls.map(c => String(c[0]))
     expect(warned.some(m => m.includes('agi_submitted_at stamp failed'))).toBe(true)
+  })
+
+  it('keeps every receipt Skatteverket lists for the period before claiming, keyed for idempotent re-reads', async () => {
+    const original = { uuidKvittens: 'uuid-0', signeradAv: '191212121212', signeradTid: '2026-05-12T09:00:00Z' }
+    mockAgiGetKvittenser.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      data: { kvittenser: [kvittensResponse().data.kvittenser[0], original, original] },
+    } as any)
+    const { supabase, recorded } = makeSupabase()
+
+    const outcome = await reconcileAgiDeclaration(supabase, DECL, { reconciledBy: 'cron' })
+
+    expect(outcome).toEqual({ status: 'signed', kvittensnummer: 'uuid-1' })
+    expect(recorded).toHaveLength(1)
+    expect(recorded[0].options).toEqual({ onConflict: 'company_id,uuid_kvittens', ignoreDuplicates: true })
+    expect(recorded[0].rows).toEqual([
+      expect.objectContaining({ company_id: DECL.company_id, uuid_kvittens: 'uuid-1', recorded_by: 'cron' }),
+      expect.objectContaining({ uuid_kvittens: 'uuid-0', signerad_tid: '2026-05-12T09:00:00Z', receipt: original }),
+    ])
+  })
+
+  it('leaves the declaration pending, untouched, when the receipts could not be kept', async () => {
+    const { supabase, mutatedTables } = makeSupabase({ historyError: { message: 'connection reset' } })
+
+    const outcome = await reconcileAgiDeclaration(supabase, DECL, { reconciledBy: 'cron' })
+
+    expect(outcome).toMatchObject({ status: 'error' })
+    expect((outcome as { error: string }).error).toContain('connection reset')
+    expect(mutatedTables).toEqual(['agi_kvittenser'])
+    expect(mockCompleteTaxDeadline).not.toHaveBeenCalled()
+    expect(mockSendKvittensNotification).not.toHaveBeenCalled()
   })
 
   it('returns still_pending without attempting a claim when no kvittens exists', async () => {
@@ -289,7 +332,7 @@ describe('late kvittens: recorded in full, announced only while it is news', () 
     // Everything the books need: status + kvittens, salary run stamp, cache
     // cleanup and the period's AGI deadline confirmed, exactly once each.
     expect(outcome).toEqual({ status: 'signed', kvittensnummer: 'uuid-1' })
-    expect(mutatedTables).toEqual(['agi_declarations', 'salary_runs', 'extension_data'])
+    expect(mutatedTables).toEqual(['agi_kvittenser', 'agi_declarations', 'salary_runs', 'extension_data'])
     expect(mockCompleteTaxDeadline).toHaveBeenCalledTimes(1)
     expect(mockCompleteTaxDeadline).toHaveBeenCalledWith(
       supabase, 'comp-1', ['arbetsgivardeklaration'], '2026-05', 'confirmed',
@@ -331,7 +374,7 @@ describe('late kvittens: recorded in full, announced only while it is news', () 
     const outcome = await reconcileAgiDeclaration(second.supabase, DECL, { reconciledBy: 'cron' })
 
     expect(outcome).toEqual({ status: 'already_claimed' })
-    expect(second.mutatedTables).toEqual(['agi_declarations'])
+    expect(second.mutatedTables).toEqual(['agi_kvittenser', 'agi_declarations'])
     expect(mockCompleteTaxDeadline).toHaveBeenCalledTimes(1)
   })
 })

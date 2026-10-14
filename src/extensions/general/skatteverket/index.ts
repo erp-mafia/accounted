@@ -82,6 +82,7 @@ import { SKATTEKONTO_BALANCE_SNAPSHOT_KEY, SKATTEKONTO_LAST_SYNCED_AT_KEY } from
 import { fetchDeclarationView, fetchVatDeclarationStatus } from './lib/declaration-status'
 import { runPostConnectRefresh } from './lib/post-connect-refresh'
 import { promoteAgiDeclaration } from './lib/agi-kvittens-reconcile'
+import { recordAgiKvittenser } from './lib/agi-kvittens-history'
 import { readAgiSubmissionStatus } from './lib/agi-submission-status'
 import {
   attachBookingSuggestions,
@@ -1676,6 +1677,23 @@ export const skatteverketExtension: Extension = {
             const periodYear = parseInt(period.slice(0, 4))
             const periodMonth = parseInt(period.slice(4, 6))
 
+            // Every receipt listed for the period is kept first
+            // (agi-kvittens-history.ts): the period's declaration below
+            // follows the newest, and a correction's must not cost the
+            // original filing its receipt.
+            const recorded = await recordAgiKvittenser(
+              ctx.supabase,
+              ctx.companyId,
+              { year: periodYear, month: periodMonth },
+              result.data.kvittenser,
+              'interactive',
+            )
+            if (!recorded.ok) {
+              ctx.log.warn('kvittenser read but not recorded', {
+                companyId: ctx.companyId, period, message: recorded.error,
+              })
+            }
+
             // Pin the receipt to the most recent declaration for this period
             // so a correction chain doesn't get its kvittens written onto a
             // superseded row.
@@ -1729,7 +1747,9 @@ export const skatteverketExtension: Extension = {
               }
             } else {
               // No declaration row, or one that already carries a receipt (a
-              // correction filed on a submitted period): unchanged behaviour.
+              // correction filed on a submitted period): the period's state
+              // moves to the newest receipt; every earlier one stays in
+              // agi_kvittenser.
               await ctx.settings.set(
                 `agi_submission_${period}`,
                 JSON.stringify({
@@ -1755,7 +1775,10 @@ export const skatteverketExtension: Extension = {
                   companyId: ctx.companyId, period, uuidKvittens: kvittens.uuidKvittens,
                 })
               }
-              if (latest?.id) {
+              // The declaration already carries a receipt: replace it only
+              // once every receipt is kept, so the one it carries now is
+              // never lost.
+              if (latest?.id && recorded.ok) {
                 // submitted_by is the auth.users UUID we have on hand (the
                 // operator who polled the kvittens endpoint). The actual
                 // BankID signer is identified by kvittens.signeradAv (a

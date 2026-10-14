@@ -138,7 +138,7 @@ function makeSupabaseStub(tables: Record<string, { data: unknown; error?: unknow
       const result = tables[table] ?? { data: null, error: null }
       const resolved = { data: result.data, error: result.error ?? null }
       const chain: any = {}
-      for (const method of ['select', 'eq', 'in', 'order', 'limit', 'update', 'delete', 'insert']) {
+      for (const method of ['select', 'eq', 'in', 'order', 'limit', 'update', 'delete', 'insert', 'upsert']) {
         chain[method] = vi.fn(() => chain)
       }
       chain.maybeSingle = vi.fn().mockResolvedValue(resolved)

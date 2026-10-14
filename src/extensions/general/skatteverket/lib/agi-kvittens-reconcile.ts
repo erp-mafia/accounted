@@ -9,6 +9,7 @@ import { auditUserIdFor } from './audit'
 import { skatteverketConnectorMode } from './connector-mode'
 import { resolveReadAuth } from './resolve-auth'
 import { sendKvittensNotification } from './kvittens-notification'
+import { recordAgiKvittenser } from './agi-kvittens-history'
 import type { SkatteverketAGIKvittens } from '../types'
 
 /**
@@ -157,6 +158,20 @@ export async function reconcileAgiDeclaration(
   }
   if (!kvittRes.ok) {
     return { status: 'error', error: kvittRes.error }
+  }
+
+  // Every receipt Skatteverket lists for the period is kept before the
+  // declaration moves on (agi-kvittens-history.ts). A failed write leaves the
+  // declaration pending, so the next run records and promotes it together.
+  const recorded = await recordAgiKvittenser(
+    supabase,
+    companyId,
+    { year: decl.period_year, month: decl.period_month },
+    kvittRes.data.kvittenser,
+    opts.reconciledBy,
+  )
+  if (!recorded.ok) {
+    return { status: 'error', error: `Kunde inte spara kvittensen: ${recorded.error}` }
   }
 
   const kvittens = kvittRes.data.kvittenser?.[0]

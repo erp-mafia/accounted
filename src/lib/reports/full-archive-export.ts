@@ -1267,6 +1267,9 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   { name: 'salary_payment_files', file: 'salary_payment_files.json', orderBy: 'generated_at' },
   { name: 'shift_premium_rules', file: 'shift_premium_rules.json' },
   { name: 'agi_declarations', file: 'agi_declarations.json', orderBy: 'created_at' },
+  // Every AGI kvittens as received, an original's beside its correction's:
+  // the filing receipts, kept as received (BFL 7 kap. 1 §).
+  { name: 'agi_kvittenser', file: 'agi_kvittenser.json', orderBy: 'recorded_at' },
   // Körjournal: trip log underlag for milersättning verifikat (BFL 7-year
   // retention per Skatteverket's körjournal documentation requirement).
   { name: 'mileage_trips', file: 'mileage_trips.json', orderBy: 'trip_date' },
