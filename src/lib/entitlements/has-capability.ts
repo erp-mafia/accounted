@@ -114,6 +114,21 @@ function grantIsActive(expiresAt: string | null, now: number): boolean {
 }
 
 /**
+ * Which grants count. `excludeTrial` leaves out the 30-day trial every company
+ * is seeded with (source = 'trial'), so only a paid grant answers: Stripe
+ * (including a card entered during the trial, which Stripe keeps 'trialing'),
+ * or a manual, comp or team agreement. For services that cost Accounted per
+ * company, such as an Open Payments bank consent.
+ */
+export interface CapabilityGrantOptions {
+  excludeTrial?: boolean
+}
+
+function grantCounts(source: string | null | undefined, options: CapabilityGrantOptions): boolean {
+  return !(options.excludeTrial && source === 'trial')
+}
+
+/**
  * Resolve a cron or batch work list before applying its processing limit.
  *
  * This is the bulk counterpart to hasCapability(): company grants and firm
@@ -126,6 +141,7 @@ export async function getCompanyIdsWithCapability(
   supabase: SupabaseClient,
   companyIds: readonly string[],
   key: CapabilityKey,
+  options: CapabilityGrantOptions = {},
 ): Promise<Set<string>> {
   const validCompanyIds = [...new Set(companyIds.filter(isUuid))]
   if (validCompanyIds.length === 0) return new Set()
@@ -136,6 +152,7 @@ export async function getCompanyIdsWithCapability(
     company_id: string | null
     team_id: string | null
     expires_at: string | null
+    source: string | null
   }
   type DisabledConfig = { company_id: string }
 
@@ -167,7 +184,7 @@ export async function getCompanyIdsWithCapability(
   for (const chunk of chunksOf(validCompanyIds, CAPABILITY_SCOPE_CHUNK_SIZE)) {
     let companyGrantsQuery = supabase
       .from('capability_grants')
-      .select('company_id, team_id, expires_at')
+      .select('company_id, team_id, expires_at, source')
       .eq('capability_key', key)
       .in('company_id', chunk)
     if (onlyConnectorGrants) companyGrantsQuery = companyGrantsQuery.eq('source', 'connector')
@@ -179,7 +196,7 @@ export async function getCompanyIdsWithCapability(
   for (const chunk of chunksOf(teamIds, CAPABILITY_SCOPE_CHUNK_SIZE)) {
     let firmGrantsQuery = supabase
       .from('capability_grants')
-      .select('company_id, team_id, expires_at')
+      .select('company_id, team_id, expires_at, source')
       .eq('capability_key', key)
       .in('team_id', chunk)
     if (onlyConnectorGrants) firmGrantsQuery = firmGrantsQuery.eq('source', 'connector')
@@ -193,6 +210,7 @@ export async function getCompanyIdsWithCapability(
   const activeTeamGrants = new Set<string>()
   for (const grant of grants) {
     if (!grantIsActive(grant.expires_at, now)) continue
+    if (!grantCounts(grant.source, options)) continue
     if (grant.company_id) activeCompanyGrants.add(grant.company_id)
     if (grant.team_id) activeTeamGrants.add(grant.team_id)
   }
@@ -213,6 +231,7 @@ export async function hasCapability(
   supabase: SupabaseClient,
   companyId: string,
   key: CapabilityKey,
+  options: CapabilityGrantOptions = {},
 ): Promise<boolean> {
   if (isBypassedFor(key)) return true
   if (!isUuid(companyId)) return false // fail-closed: never interpolate a non-UUID
@@ -223,8 +242,8 @@ export async function hasCapability(
   if (grantsError) return false // fail-closed on any read error
   const now = Date.now()
   const entitled = (grants ?? []).some((g) => {
-    const exp = (g as { expires_at: string | null }).expires_at
-    return grantIsActive(exp, now)
+    const row = g as { expires_at: string | null; source?: string | null }
+    return grantIsActive(row.expires_at, now) && grantCounts(row.source, options)
   })
   if (!entitled) return false
 

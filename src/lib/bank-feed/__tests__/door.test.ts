@@ -62,11 +62,12 @@ describe('openBankFeedDoor', () => {
     expect(entitled).not.toHaveBeenCalled()
   })
 
-  it('with * asks the paid plan', async () => {
+  it('with * asks for a paid grant: the seeded trial does not open it, since every consent is billed', async () => {
     vi.stubEnv('OPENPAYMENTS_READING_COMPANY_IDS', '*')
     entitled.mockResolvedValueOnce(true).mockResolvedValueOnce(false)
     expect(await openBankFeedDoor({ supabase, companyId: COMPANY })).toEqual({ ok: true, connect: fake })
     expect(await openBankFeedDoor({ supabase, companyId: COMPANY })).toEqual({ ok: false, reason: 'subscription' })
-    expect(entitled).toHaveBeenCalledWith(supabase, COMPANY, 'bank_sync')
+    expect(entitled).toHaveBeenCalledWith(supabase, COMPANY, 'bank_sync', { excludeTrial: true })
+    expect(entitled).not.toHaveBeenCalledWith(supabase, COMPANY, 'bank_sync')
   })
 })

@@ -13,6 +13,10 @@
  *      comma-separated list of company ids opens the door for exactly those
  *      companies, whatever their plan; `*` opens it for every company on a
  *      paid plan (CAPABILITY.bank_sync, the paid key of the bank services).
+ *      The seeded 30-day trial does not count: Open Payments bills every
+ *      active consent, so only a paid grant opens it (a Stripe subscription,
+ *      including a card entered during the trial, or a manual, comp or team
+ *      agreement). A cardless trial keeps Enable Banking until a card is in.
  *      Read on every call so a redeploy with a new value needs no restart.
  *
  * Polling, syncing on the cron and disconnecting a connection that already
@@ -21,7 +25,7 @@
  * getBankFeedConnect() directly.
  */
 
-import { hasCapability } from '@/lib/entitlements/has-capability'
+import { hasCapability, type CapabilityGrantOptions } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { OperationContext } from '@/lib/operations/types'
 import { getBankFeedConnect, type BankFeedConnect } from './connect'
@@ -52,6 +56,9 @@ export function bankFeedPilot(env: BankFeedEnv = process.env): BankFeedPilot {
   return ids.length ? new Set(ids) : null
 }
 
+/** Which grants open the door under `*`: paid ones, never the seeded trial. */
+export const PAID_GRANTS_ONLY: CapabilityGrantOptions = { excludeTrial: true }
+
 /**
  * The adapter for a company that may read its bank through Open Payments, or
  * the reason it may not.
@@ -62,14 +69,16 @@ export async function openBankFeedDoor(ctx: Pick<OperationContext, 'supabase' | 
   const pilot = bankFeedPilot()
   if (!pilot) return { ok: false, reason: 'not_in_pilot' }
   if (pilot !== 'all') return pilot.has(ctx.companyId) ? { ok: true, connect } : { ok: false, reason: 'not_in_pilot' }
-  if (await hasCapability(ctx.supabase, ctx.companyId, CAPABILITY.bank_sync)) return { ok: true, connect }
+  if (await hasCapability(ctx.supabase, ctx.companyId, CAPABILITY.bank_sync, PAID_GRANTS_ONLY)) return { ok: true, connect }
   return { ok: false, reason: 'subscription' }
 }
 
 /**
  * The pilot's answer for a company without the plan check: the cron asks the
  * capability for a whole batch at once (getCompanyIdsWithCapability) and
- * combines it with this.
+ * combines it with this. A caller deciding who may START a connection passes
+ * PAID_GRANTS_ONLY to that batch read, like the door; the cron following a
+ * consent that already exists counts the trial too.
  */
 export function bankFeedPilotAdmits(companyId: string, env: BankFeedEnv = process.env): 'yes' | 'no' | 'with_capability' {
   const pilot = bankFeedPilot(env)
