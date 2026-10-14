@@ -41,6 +41,8 @@ import { RATE_LIMIT_COOLDOWN_MS, rateLimitHoldUntil } from '../lease'
 import {
   bankHistoryLimits,
   CONSENT_EXPIRED_MESSAGE,
+  EXTENDED_HISTORY_MARGIN_DAYS,
+  UNATTENDED_MAX_LOOKBACK_DAYS,
   DEFAULT_BANK_HISTORY_LIMITS,
   DEFAULT_TRANSACTION_HISTORY_MAX_DAYS,
   extendedHistoryWindowOpen,
@@ -123,6 +125,33 @@ describe('windows', () => {
     expect(initialWindow({ extendedHistoryDays: null, lastBookedDate: null }, NOW).fromDate).toBe('2025-10-12')
     expect(initialWindow({ extendedHistoryDays: 760, lastBookedDate: '2026-10-01' }, NOW)).toMatchObject({ fromDate: '2026-09-24', toDate: '2026-10-12', lookbackDays: 18 })
     expect(initialWindow({ extendedHistoryDays: 88, lastBookedDate: '2024-01-01' }, NOW).fromDate).toBe('2026-07-16')
+  })
+})
+
+describe('bank history limits (Länsförsäkringar)', () => {
+  it('never lets an ordinary read past 89 days, even when the bank details list more', async () => {
+    const lf = connectWithBank({ transactionHistoryMaxDays: 180, extendedTransactionHistoryAvailableWindowMinutes: 60 })
+    expect((await bankHistoryLimits(lf, 'co-1', 'ELLFSESS')).maxDays).toBe(UNATTENDED_MAX_LOOKBACK_DAYS)
+    expect(UNATTENDED_MAX_LOOKBACK_DAYS).toBeLessThan(90)
+    // Swedbank lists 88, under the cap: unchanged.
+    const swedbank = connectWithBank({ transactionHistoryMaxDays: 88, extendedTransactionHistoryAvailableWindowMinutes: 60 })
+    expect((await bankHistoryLimits(swedbank, 'co-1', 'SWEDSESS')).maxDays).toBe(88)
+    // A connection last read 150 days ago asks for 89 days, not 151.
+    const stale = { last_synced_at: new Date(NOW - 150 * 24 * 60 * 60_000).toISOString() }
+    expect(incrementalWindow(stale, NOW, (await bankHistoryLimits(lf, 'co-1', 'ELLFSESS')).maxDays).lookbackDays).toBe(89)
+  })
+
+  it('keeps the first import three days off the extended edge the bank lists (395 days refused as past 13 months)', async () => {
+    const lf = connectWithBank({ transactionHistoryMaxDays: 180, extendedTransactionHistoryAvailableWindowMinutes: 60 })
+    const { supabase } = stub({
+      bank_connections: [{ data: row({ bic: 'ELLFSESS', initial_sync_completed_at: null, last_synced_at: null, created_at: new Date(NOW - 5 * 60_000).toISOString(), consent_attempt: { selection: { extended_history_days: 395 } } }), error: null }],
+      transactions: [{ data: null, error: null }],
+      sie_imports: [{ data: null, error: null }],
+    })
+    const result = await run(supabase, { trigger: 'cron', unattended: true, connect: lf })
+    expect(result).toMatchObject({ ok: true, history_window: 'extended' })
+    expect(EXTENDED_HISTORY_MARGIN_DAYS).toBe(3)
+    expect(mocks.syncAccount).toHaveBeenCalledWith(supabase, expect.objectContaining({ fromDate: new Date(NOW - 392 * 24 * 60 * 60_000).toISOString().slice(0, 10) }))
   })
 })
 
@@ -237,7 +266,8 @@ describe('runOpenPaymentsSync', () => {
       transactions: [{ data: null, error: null }],
       sie_imports: [{ data: null, error: null }],
     })
-    expect(await run(soon.supabase, { trigger: 'cron', unattended: true, connect: bank })).toMatchObject({ ok: true, from_date: '2024-09-12', history_window: 'extended' })
+    // Three days off the bank's listed edge (760): a dateFrom exactly on it is refused by some banks.
+    expect(await run(soon.supabase, { trigger: 'cron', unattended: true, connect: bank })).toMatchObject({ ok: true, from_date: '2024-09-15', history_window: 'extended' })
   })
 
   it('clamps the incremental window to the bank\'s transactionHistoryMaxDays', async () => {
