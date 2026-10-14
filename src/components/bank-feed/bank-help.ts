@@ -84,10 +84,19 @@ export function resolveBankByName<T extends { name: string }>(banks: readonly T[
 }
 
 /**
- * Per-bank walkthrough films, keyed by BIC. Empty until the provider's
- * per-bank videos are in hand; nothing renders for a bank without one.
+ * Per-bank guides for the company (what to approve at the bank before
+ * BankID, with short films), keyed by BIC: Open Payments' own public
+ * pages (openpayments.io/integrera, named by their support 2026-10-14).
+ * Nothing renders for a bank without one.
  */
-export const BANK_GUIDE_URLS: Readonly<Record<string, string>> = {}
+export const BANK_GUIDE_URLS: Readonly<Record<string, string>> = {
+  DABASESX: 'https://www.openpayments.io/integrera/danske-bank-psd2',
+  DNBASESX: 'https://www.openpayments.io/integrera/dnb-psd2',
+  HANDSESS: 'https://www.openpayments.io/integrera/handelsbanken-psd2',
+  NDEASESS: 'https://www.openpayments.io/integrera/nordea-psd2',
+  ESSESESS: 'https://www.openpayments.io/integrera/seb-psd2',
+  SWEDSESS: 'https://www.openpayments.io/integrera/swedbank-psd2',
+}
 
 /** The film for this bank, or null. */
 export function bankGuideUrl(bank: Pick<OpenPaymentsBank, 'bic'>, urls: Readonly<Record<string, string>> = BANK_GUIDE_URLS): string | null {

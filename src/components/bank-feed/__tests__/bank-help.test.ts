@@ -12,9 +12,11 @@ describe('bankPrerequisiteKey', () => {
 })
 
 describe('bankGuideUrl', () => {
-  it('renders nothing while the map is empty and finds a film by BIC when one exists', () => {
-    expect(Object.keys(BANK_GUIDE_URLS)).toHaveLength(0)
-    expect(bankGuideUrl({ bic: 'SWEDSESS' })).toBeNull()
+  it('links each bank with a guide at Open Payments, case-insensitively by BIC, and nothing for a bank without one', () => {
+    expect(bankGuideUrl({ bic: 'SWEDSESS' })).toBe('https://www.openpayments.io/integrera/swedbank-psd2')
+    expect(bankGuideUrl({ bic: 'handsess' })).toBe('https://www.openpayments.io/integrera/handelsbanken-psd2')
+    expect(bankGuideUrl({ bic: 'ELLFSESS' })).toBeNull()
+    for (const url of Object.values(BANK_GUIDE_URLS)) expect(url).toMatch(/^https:\/\/www\.openpayments\.io\/integrera\/[a-z-]+-psd2$/)
     const films = { SWEDSESS: 'https://example.se/swedbank-1-min' }
     expect(bankGuideUrl({ bic: 'SWEDSESS' }, films)).toBe('https://example.se/swedbank-1-min')
     expect(bankGuideUrl({ bic: 'swedsess' }, films)).toBe('https://example.se/swedbank-1-min')
