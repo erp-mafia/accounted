@@ -93,10 +93,12 @@ interface FlowStepsProps {
   onCopyReminder?: () => void
   /** Hand the verification form to a signatory by mail; absent where the signatory is the one at the screen. */
   onSendToSignatory?: () => void
+  /** Hand the verification form to a signatory as a copied link; absent where the signatory is the one at the screen. */
+  onCopyForSignatory?: () => void
 }
 
 /** The step on screen, from the controller's state. The header (title, "?", step count) is the surface's own. */
-export function FlowSteps({ controller, session, banks, banksFailed, soleTrader, closeButton, onClose, onCopyReminder, onSendToSignatory }: FlowStepsProps) {
+export function FlowSteps({ controller, session, banks, banksFailed, soleTrader, closeButton, onClose, onCopyReminder, onSendToSignatory, onCopyForSignatory }: FlowStepsProps) {
   const { state, dispatch } = controller
   switch (state.step) {
     case 'intro':
@@ -139,8 +141,14 @@ export function FlowSteps({ controller, session, banks, banksFailed, soleTrader,
         <PaymentsStep
           state={state}
           busy={controller.paymentsBusy}
-          onVerifyNow={() => controller.openVerification('verify', (url) => window.open(url, '_blank', 'noopener,noreferrer'))}
+          onVerifyNow={() =>
+            controller.openVerification('verify', (url) => {
+              window.open(url, '_blank', 'noopener,noreferrer')
+            })
+          }
+          onOpenForm={state.verificationUrl ? () => window.open(state.verificationUrl!, '_blank', 'noopener,noreferrer') : undefined}
           onSendToSignatory={onSendToSignatory}
+          onCopyForSignatory={onCopyForSignatory}
           onSkip={() => dispatch({ type: 'payments_done' })}
         />
       )

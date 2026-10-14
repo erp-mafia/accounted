@@ -75,6 +75,7 @@ const RETAINED = new Set([
   'assets.user_id',
   'bank_file_imports.user_id',
   'bank_connect_invites.created_by', // Who sent the firmatecknare a signatory link; the company keeps the record.
+  'company_payment_verifications.started_by', // Who created the payment provider's verification form link; the company keeps the record.
   'bokslut_checklist_items.done_by',
   'bokslut_checklist_items.updated_by',
   'chart_of_accounts.user_id',

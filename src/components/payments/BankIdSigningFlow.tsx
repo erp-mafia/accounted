@@ -15,14 +15,17 @@ import { BankIdMark } from '@/components/bankid/BankIdMark'
 import { BankMark } from '@/components/banks/BankMark'
 import type { PaymentSigningReturn } from '@/lib/payments/orders/return-url'
 import { PAYMENT_ORDER_STATUS_BADGE, PERMANENT_SIGNING_FAILURES } from './payment-order-status'
+import { VerificationStateText } from './VerificationStateText'
 import {
   bankIdAutostartHref,
   PaymentsClientError,
   pollSigning,
   providerCodeText,
   restartSigning,
+  fetchCompanyVerification,
   startCompanyVerification,
   startSigning,
+  type CompanyVerification,
   type PaymentOrderStatus,
   type SigningMethod,
   type SigningStep,
@@ -113,6 +116,10 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
   const [busy, setBusy] = useState(false)
   const [signing, setSigning] = useState<SigningView | null>(resume ? resumedView(resume.batchId) : null)
   const [refusal, setRefusal] = useState<'verification' | 'redirect' | null>(null)
+  /** Where the verification stands when a signing was refused for it: the line names the state and the way out. */
+  const [verification, setVerification] = useState<CompanyVerification | null>(null)
+  /** The form opened from this refusal, so it can be opened again. */
+  const [verificationUrl, setVerificationUrl] = useState<string | null>(null)
   /** Set while the flow was reopened by a return from the bank's own page; cleared by the next start. */
   const [returned, setReturned] = useState<PaymentSigningReturn | null>(resume)
   const sentToBank = useRef(false)
@@ -192,7 +199,11 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
       setStage(signingFinished(view) ? 'done' : 'signing')
     } catch (error) {
       const code = error instanceof PaymentsClientError ? error.code : null
-      if (code === 'PAYMENT_COMPANY_VERIFICATION_REQUIRED') setRefusal('verification')
+      if (code === 'PAYMENT_COMPANY_VERIFICATION_REQUIRED') {
+        setRefusal('verification')
+        // Best-effort: without the state the line falls back to the plain sentence.
+        fetchCompanyVerification({ refresh: true }).then(setVerification, () => setVerification(null))
+      }
       else if (code === 'PAYMENT_SIGNING_REDIRECT_UNSUPPORTED') setRefusal('redirect')
       else {
         // The bank's own refusal code, as a sentence when we know it.
@@ -241,16 +252,41 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
   }
 
   async function openVerification() {
+    if (verificationUrl && verification && (verification.state === 'form_open' || verification.state === 'awaiting_signatory')) {
+      window.open(verificationUrl, '_blank', 'noopener,noreferrer')
+      return
+    }
     setBusy(true)
     try {
-      const { url } = await startCompanyVerification()
-      window.open(url, '_blank', 'noopener,noreferrer')
+      const started = await startCompanyVerification()
+      window.open(started.url, '_blank', 'noopener,noreferrer')
+      setVerificationUrl(started.url)
+      setVerification((current) => ({
+        status: current?.status ?? 'unknown',
+        valid_until: current?.valid_until ?? null,
+        checked_at: current?.checked_at ?? null,
+        state: started.state,
+        link_expires_at: started.expires_at,
+      }))
     } catch (error) {
       fail(t('verification_failed_title'), error)
     } finally {
       setBusy(false)
     }
   }
+
+  // The refusal's way out follows the state: a form already out is opened
+  // again (or waits for the firmatecknare), a lapsed one is renewed, a dead
+  // link is replaced. Without a state the first verification is offered.
+  const verificationAction = (() => {
+    const state = verification?.state ?? 'not_started'
+    if (verificationUrl && (state === 'form_open' || state === 'awaiting_signatory')) return { label: t('open_verification_form'), onClick: openVerification }
+    // With the firmatecknare: wait for the signature rather than replacing their form.
+    if (state === 'awaiting_signatory') return undefined
+    if (state === 'link_expired' || state === 'form_open') return { label: t('new_verification_link'), onClick: openVerification }
+    if (state === 'expired' || state === 'expiring') return { label: t('renew_company'), onClick: openVerification }
+    return { label: t('verify_company'), onClick: openVerification }
+  })()
 
   // Poll while the person signs. One request at a time (the next is scheduled
   // when the previous answered), aborted and stopped on unmount or when the
@@ -340,7 +376,13 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
           </label>
         )}
         {refusal === 'verification' && (
-          <AttnLine action={{ label: t('verify_company'), onClick: openVerification }}>{t('verify_required')}</AttnLine>
+          <AttnLine action={verificationAction}>
+            {verification && verification.state !== 'not_started' && verification.state !== 'valid' ? (
+              <VerificationStateText verification={verification} />
+            ) : (
+              t('verify_required')
+            )}
+          </AttnLine>
         )}
         {refusal === 'redirect' && <AttnLine>{t('signing_redirect_unsupported')}</AttnLine>}
         <DialogFooter>

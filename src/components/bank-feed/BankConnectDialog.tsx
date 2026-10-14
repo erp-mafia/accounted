@@ -53,12 +53,12 @@ function sessionBackend(): BankConnectBackend {
     payments: {
       async probe() {
         const availability = await fetchPaymentsAvailability()
-        if (!availability.available) return { offered: false, verification: null, validUntil: null }
+        if (!availability.available) return { offered: false, verification: null }
         try {
           const verification = await fetchCompanyVerification()
-          return { offered: verification.status !== 'valid', verification: verification.status, validUntil: verification.valid_until }
+          return { offered: verification.status !== 'valid', verification }
         } catch {
-          return { offered: true, verification: 'unknown', validUntil: null }
+          return { offered: true, verification: null }
         }
       },
       fetchVerification: fetchCompanyVerification,
@@ -119,6 +119,19 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
         lines: [t('mail_line_1', { company: company?.name ?? '' }), t('mail_line_2')],
         url,
       })
+    })
+  }
+
+  // For whoever has no mail client at hand: the same hand-off as a copied
+  // link, to paste into a chat or a text to the firmatecknare.
+  function copyForSignatory() {
+    void controller.openVerification('copy', async (url) => {
+      try {
+        await navigator.clipboard.writeText(url)
+        toast({ title: t('link_copied_title'), description: t('link_copied') })
+      } catch {
+        toast({ title: t('link_copy_failed_title'), variant: 'destructive' })
+      }
     })
   }
 
@@ -187,6 +200,7 @@ function BankConnectDialogInner({ session, onClose, onConnected }: { session: Ba
             onClose={onClose}
             onCopyReminder={copyReminder}
             onSendToSignatory={sendToSignatory}
+            onCopyForSignatory={copyForSignatory}
           />
         </DialogContent>
       </Dialog>

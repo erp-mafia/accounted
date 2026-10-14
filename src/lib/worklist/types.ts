@@ -234,9 +234,40 @@ export const WORKLIST_CATEGORIES = [
    * file import, said by the bank_switch_uncovered notice.
    */
   'bank_switch',
+  /**
+   * The company's verification (know your customer) at the payment provider
+   * is about to run out or has ("Förnya verifieringen för betalningar"), one
+   * item at most. Bank payments are refused once it lapses.
+   * Pending:  payments through the bank are open to the company
+   *           (lib/payments/orders/switched-on.ts) and the stored record
+   *           (company_payment_verifications, refreshed by the payment status
+   *           cron daily and by every read of the status) derives to expiring
+   *           (valid_until within 30 days) or expired (valid_until passed, or
+   *           invalid after having been valid): lib/payments/orders/
+   *           verification-state.ts.
+   * Done:     the provider answers valid with a new valid_until (a signatory
+   *           signed the renewal form), read by the dialog's poll, the page,
+   *           or the next sweep; or payments close for the company.
+   * A company that never verified is not counted: it has not switched
+   * payments on, and the Koppla banken step is where it starts.
+   */
+  'payments_verification_renewal',
 ] as const
 
 export type WorklistCategory = (typeof WORKLIST_CATEGORIES)[number]
+
+/**
+ * The payments verification a company must renew: the Att göra row "Förnya
+ * verifieringen för betalningar", which opens Betalningar, where the renewal
+ * form is started.
+ */
+export interface PaymentsVerificationDue {
+  state: 'expiring' | 'expired'
+  /** The date the provider holds the verification valid through (ISO date); null when it never said. */
+  valid_until: string | null
+  /** Whole days left; 0 on the day, negative after; null without a date. */
+  days_left: number | null
+}
 
 /**
  * One Enable Banking connection the switch campaign still waits for: the Att

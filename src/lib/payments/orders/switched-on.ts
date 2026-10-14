@@ -26,13 +26,11 @@
  * and retain), so those paths take the provider straight from the registry.
  */
 
-import { hasCapability } from '@/lib/entitlements/has-capability'
-import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { OperationContext } from '@/lib/operations/types'
 import { getPaymentInitiationProvider, type PaymentInitiationProvider } from '@/lib/payments/initiation/provider'
+import { paymentsAdmitted } from './pilot'
 
-/** The environment as a plain map: process.env, or a test's object. */
-export type PaymentsEnv = Readonly<Record<string, string | undefined>>
+export { paymentsPilot, type PaymentsEnv, type PaymentsPilot } from './pilot'
 
 /** Why a company cannot pay through the bank right now. */
 export type PaymentsUnavailableReason = 'no_provider' | 'not_in_pilot' | 'subscription' | 'sandbox'
@@ -43,20 +41,6 @@ export type PaymentsDoor =
   | { ok: true; provider: PaymentInitiationProvider }
   | { ok: false; reason: Exclude<PaymentsUnavailableReason, 'sandbox'> }
 
-/** The pilot switch, parsed: null = no pilot (the paid plan decides), 'all' = everyone, or the listed company ids. */
-export type PaymentsPilot = null | 'all' | ReadonlySet<string>
-
-export function paymentsPilot(env: PaymentsEnv = process.env): PaymentsPilot {
-  const raw = env.OPENPAYMENTS_COMPANY_IDS?.trim()
-  if (!raw) return null
-  if (raw === '*') return 'all'
-  const ids = raw
-    .split(',')
-    .map((v) => v.trim())
-    .filter(Boolean)
-  return ids.length ? new Set(ids) : null
-}
-
 /**
  * The provider for a company that may pay through the bank, or the reason it
  * may not. The sandbox check stays with the callers that need it: a sandbox
@@ -65,9 +49,6 @@ export function paymentsPilot(env: PaymentsEnv = process.env): PaymentsPilot {
 export async function openPaymentsDoor(ctx: Pick<OperationContext, 'supabase' | 'companyId'>): Promise<PaymentsDoor> {
   const provider = await getPaymentInitiationProvider(ctx.companyId)
   if (!provider) return { ok: false, reason: 'no_provider' }
-  const pilot = paymentsPilot()
-  if (pilot === 'all') return { ok: true, provider }
-  if (pilot) return pilot.has(ctx.companyId) ? { ok: true, provider } : { ok: false, reason: 'not_in_pilot' }
-  if (await hasCapability(ctx.supabase, ctx.companyId, CAPABILITY.bank_sync)) return { ok: true, provider }
-  return { ok: false, reason: 'subscription' }
+  const admitted = await paymentsAdmitted(ctx.supabase, ctx.companyId)
+  return admitted.ok ? { ok: true, provider } : admitted
 }

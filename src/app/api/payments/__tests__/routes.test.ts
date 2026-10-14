@@ -456,18 +456,22 @@ describe('payments routes with a provider registered', () => {
     expect(prepared.body.error.details?.reason).toBe('subscription')
   })
 
-  it('verification answers what the provider says about the company', async () => {
+  it('verification answers what the provider says about the company, stored and with its state', async () => {
     const getCompanyVerification = vi.fn().mockResolvedValue({ status: 'valid', validUntil: '2027-10-03' })
     registerPaymentInitiationProvider({ id: 'open_payments', isAvailableFor: () => true, getCompanyVerification } as unknown as PaymentInitiationProvider)
     enqueue({ data: { org_number: '5566778899' } })
+    // Nothing on file, so the provider is asked; its answer is the reply, and it is stored.
+    enqueue({ data: null })
+    enqueue({ data: null })
 
     const { status, body } = await parseJsonResponse<{ data: { status: string; valid_until: string | null } }>(
       await verificationStatus(createMockRequest('/api/payments/verification'), { params: Promise.resolve({}) }),
     )
 
     expect(status).toBe(200)
-    expect(body.data).toEqual({ status: 'valid', valid_until: '2027-10-03' })
+    expect(body.data).toEqual({ status: 'valid', valid_until: '2027-10-03', state: 'valid', link_expires_at: null, checked_at: expect.any(String) })
     expect(getCompanyVerification).toHaveBeenCalledWith(expect.objectContaining({ companyId: 'company-1', companyOrgNumber: '5566778899' }))
+    expect(findCall('company_payment_verifications', 'upsert')?.[0]).toMatchObject({ company_id: 'company-1', status: 'valid', valid_until: '2027-10-03' })
   })
 
   it('refuses to prepare bank payments in a sandbox company', async () => {

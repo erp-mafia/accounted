@@ -10,6 +10,7 @@ import {
   getWorklistCounts,
   listBankSwitchDue,
   listExpensePayoutsDue,
+  listPaymentsVerificationDue,
   listSkattekontoPaymentDue,
   listSuggestedMatches,
   SUGGESTED_MATCH_SCAN_CAP,
@@ -241,6 +242,9 @@ export async function HemPanesSection({
   // renders one row per connection with its deep link; the count is the
   // list's length.
   const bankSwitchPromise = listBankSwitchDue(supabase, companyId, now)
+  // And for the payments verification to renew: Hem renders it as one row
+  // with the days left; the count is 1 or 0 from the same read.
+  const paymentsVerificationPromise = listPaymentsVerificationDue(supabase, companyId, now)
   const [
     worklist,
     suggestedMatches,
@@ -248,6 +252,7 @@ export async function HemPanesSection({
     skattekontoPayment,
     missingUnderlag,
     bankSwitches,
+    paymentsVerification,
     resumeItems,
     bankConnectionsRes,
     postedEntries,
@@ -261,12 +266,14 @@ export async function HemPanesSection({
         skattekontoPaymentDue: skattekontoPaymentPromise,
         missingUnderlag: missingUnderlagPromise,
         bankSwitchDue: bankSwitchPromise,
+        paymentsVerificationDue: paymentsVerificationPromise,
       }),
       suggestedMatchesPromise,
       expensePayoutsPromise,
       skattekontoPaymentPromise,
       missingUnderlagPromise,
       bankSwitchPromise,
+      paymentsVerificationPromise,
       // In-progress work for the Fortsätt pane: pure draft-state derivation.
       listResumeItems(supabase, companyId, now),
       supabase.from('bank_connections').select('id, status, consent_expires, bank_name, last_sie_sweep').eq('company_id', companyId).eq('status', 'active'),
@@ -304,6 +311,7 @@ export async function HemPanesSection({
           skattekontoPayment={skattekontoPayment}
           missingUnderlag={missingUnderlag}
           bankSwitches={bankSwitches}
+          paymentsVerification={paymentsVerification}
           expiringBankConnections={expiringBankConnections}
           emptyLedger={emptyLedger}
           hasActiveBankConnection={hasActiveBankConnection}

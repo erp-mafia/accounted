@@ -308,21 +308,21 @@ describe('the accounts step', () => {
   it('an activation with payments on offer goes to the payments step, otherwise to Klart', () => {
     const connection = view()
     const sync = { imported: 42 }
-    const offered = run(atAccounts, { type: 'payments_offer', offered: true, verification: 'invalid', validUntil: null }, { type: 'activate' }, { type: 'activated', connection, sync, syncPending: false })
+    const offered = run(atAccounts, { type: 'payments_offer', offered: true, verification: { status: 'invalid', valid_until: null, state: 'not_started', link_expires_at: null } }, { type: 'activate' }, { type: 'activated', connection, sync, syncPending: false })
     expect(offered.step).toBe('payments')
     expect(offered.firstSync).toEqual(sync)
     expect(offered.syncPending).toBe(false)
     expect(offered.connection).toEqual(connection)
     expect(offered.activating).toBe(false)
 
-    const verified = run(atAccounts, { type: 'payments_offer', offered: true, verification: 'valid', validUntil: '2027-05-01' }, { type: 'activated', connection, sync, syncPending: false })
+    const verified = run(atAccounts, { type: 'payments_offer', offered: true, verification: { status: 'valid', valid_until: '2027-05-01', state: 'valid', link_expires_at: null } }, { type: 'activated', connection, sync, syncPending: false })
     expect(verified.step).toBe('done')
-    const notOffered = run(atAccounts, { type: 'payments_offer', offered: false, verification: null, validUntil: null }, { type: 'activated', connection, sync, syncPending: false })
+    const notOffered = run(atAccounts, { type: 'payments_offer', offered: false, verification: null }, { type: 'activated', connection, sync, syncPending: false })
     expect(notOffered.step).toBe('done')
   })
 
   it('a first import that runs on in the background is remembered as pending, without a count', () => {
-    const pending = run(atAccounts, { type: 'payments_offer', offered: false, verification: null, validUntil: null }, { type: 'activated', connection: view(), sync: null, syncPending: true })
+    const pending = run(atAccounts, { type: 'payments_offer', offered: false, verification: null }, { type: 'activated', connection: view(), sync: null, syncPending: true })
     expect(pending.step).toBe('done')
     expect(pending.firstSync).toBeNull()
     expect(pending.syncPending).toBe(true)
@@ -356,9 +356,14 @@ describe('the accounts step', () => {
 describe('the payments step', () => {
   it('records the opened form and the polled status, and ends on Klart', () => {
     const base = { ...openFlow('new'), step: 'payments' as const, paymentsOffered: true, verification: 'invalid' as const }
-    const opened = flowReducer(base, { type: 'verification_opened', url: 'https://verify.example.se/x' })
+    const opened = flowReducer(base, { type: 'verification_opened', url: 'https://verify.example.se/x', expiresAt: '2026-10-14T09:00:00.000Z', state: 'form_open' })
     expect(opened.verificationUrl).toBe('https://verify.example.se/x')
-    const polled = flowReducer(opened, { type: 'verification_polled', status: 'valid', validUntil: '2027-10-12' })
+    expect(opened.verificationState).toBe('form_open')
+    expect(opened.verificationLinkExpiresAt).toBe('2026-10-14T09:00:00.000Z')
+    const handed = flowReducer(base, { type: 'verification_opened', url: 'https://verify.example.se/y', expiresAt: '2026-10-14T09:00:00.000Z', state: 'awaiting_signatory' })
+    expect(handed.verificationState).toBe('awaiting_signatory')
+    const polled = flowReducer(opened, { type: 'verification_polled', verification: { status: 'valid', valid_until: '2027-10-12', state: 'valid', link_expires_at: '2026-10-14T09:00:00.000Z' } })
+    expect(polled.verificationState).toBe('valid')
     expect(polled.verification).toBe('valid')
     expect(polled.verificationUntil).toBe('2027-10-12')
     expect(flowReducer(polled, { type: 'payments_done' }).step).toBe('done')

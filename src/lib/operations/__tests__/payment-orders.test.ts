@@ -29,6 +29,8 @@ import {
   paymentsAvailability,
   paymentsSigningLink,
   paymentsUsage,
+  paymentsVerification,
+  paymentsVerificationStart,
   paymentsPageUrl,
   toOrderOut,
 } from '../payment-orders'
@@ -346,6 +348,50 @@ describe('payments.usage', () => {
   })
 })
 
+const VERIFIED_ROW = {
+  company_id: COMPANY,
+  status: 'valid',
+  valid_until: '2027-10-03',
+  // Fresh at test time: a stored answer under six hours old is served as is.
+  checked_at: new Date().toISOString(),
+  link_created_at: null,
+  link_expires_at: null,
+  handed_off_at: null,
+  started_by: null,
+  updated_at: '2026-10-13T10:00:00.000Z',
+}
+
+describe('payments.verification', () => {
+  it('answers the stored verification with its state and link expiry, asking the provider only when the record is stale', async () => {
+    db.setTable('company_payment_verifications', { data: VERIFIED_ROW })
+    const getCompanyVerification = vi.fn()
+    registerPaymentInitiationProvider({ ...provider, getCompanyVerification } as PaymentInitiationProvider)
+    const result = await run(paymentsVerification, {})
+    expect(result).toMatchObject({ ok: true, data: { status: 'valid', valid_until: '2027-10-03', state: 'valid', link_expires_at: null } })
+    expect(getCompanyVerification).not.toHaveBeenCalled()
+    if (!result.ok || result.dryRun) throw new Error('unexpected')
+    expect(paymentsVerification.output.parse(result.data)).toBeTruthy()
+  })
+
+  it('starts a form link, with the hand-off to a signatory when asked, and a dry run touches no bank', async () => {
+    const startCompanyVerification = vi.fn().mockResolvedValue({ url: 'https://kyc.openbankingplatform.com/?instanceId=abc' })
+    registerPaymentInitiationProvider({ ...provider, startCompanyVerification } as PaymentInitiationProvider)
+    // What was on file before: an earlier, expired form. The new link decides the state, not this row.
+    const earlier = { ...VERIFIED_ROW, status: 'invalid', valid_until: null, link_created_at: '2020-01-01T10:00:00.000Z', link_expires_at: '2020-01-02T10:00:00.000Z', handed_off_at: null }
+    db.setTable('company_payment_verifications', [{ data: earlier }, { data: null }])
+
+    expect(await run(paymentsVerificationStart, { handoff: true }, true)).toEqual({ ok: true, dryRun: true, preview: { action: 'start_company_verification', handoff: true } })
+    expect(startCompanyVerification).not.toHaveBeenCalled()
+
+    const result = await run(paymentsVerificationStart, { handoff: true })
+    expect(result).toMatchObject({ ok: true, data: { url: 'https://kyc.openbankingplatform.com/?instanceId=abc', state: 'awaiting_signatory' } })
+    if (!result.ok || result.dryRun) throw new Error('unexpected')
+    expect(result.data.expires_at).toMatch(/Z$/)
+    expect(paymentsVerificationStart.output.parse(result.data)).toBeTruthy()
+    expect(db.findCall('company_payment_verifications', 'upsert')![0]).toMatchObject({ link_url: 'https://kyc.openbankingplatform.com/?instanceId=abc', handed_off_at: expect.any(String) })
+  })
+})
+
 describe('payments.signing-link', () => {
   it('counts what waits, reads the verification best-effort and builds the page link', async () => {
     db.setTable('payment_orders', {
@@ -355,6 +401,7 @@ describe('payments.signing-link', () => {
         { id: 'x', status: 'submitted', outcome_unknown_at: '2026-10-10T10:00:00Z' },
       ],
     })
+    db.setTable('company_payment_verifications', { data: VERIFIED_ROW })
     const result = await run(paymentsSigningLink, { payment_order_ids: `${ORDER_A},${ORDER_B}` })
     if (!result.ok || result.dryRun) throw new Error('unexpected')
     expect(result.data).toMatchObject({
@@ -362,7 +409,7 @@ describe('payments.signing-link', () => {
       awaiting_signature: 1,
       at_bank: 1,
       outcome_unknown: 1,
-      verification: { status: 'valid', valid_until: '2027-10-03' },
+      verification: { status: 'valid', valid_until: '2027-10-03', state: 'valid', link_expires_at: null },
     })
     expect(result.data.url).toBe(paymentsPageUrl([ORDER_A, ORDER_B]))
     expect(result.data.note).toMatch(/person/)

@@ -15,6 +15,8 @@ import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { visibleWorklistTotal } from '@/lib/worklist/visible-total'
 import type { AiTaskCategory } from '@/lib/worklist/ai-task'
+import type { PaymentsVerificationDue } from '@/lib/worklist/types'
+import { PAYMENTS_PAGE_PATH } from '@/lib/payments/orders/page-path'
 import type { MissingUnderlagSample } from '@/lib/worklist/missing-underlag'
 import { NO_AI_CONNECTION, type AiConnection } from '@/lib/onboarding/ai-clients'
 import { AiTaskAction } from './AiTaskAction'
@@ -81,6 +83,12 @@ interface AttGoraSectionProps {
    * is far, at the top of the list inside 14 days and once it has passed.
    */
   bankSwitches?: BankSwitchDue[]
+  /**
+   * The payments verification (know your customer at the payment provider)
+   * to renew (lib/worklist payments_verification_renewal): one row, in Bevaka
+   * while it is expiring, at the top once it has lapsed and payments stop.
+   */
+  paymentsVerification?: PaymentsVerificationDue | null
   expiringBankConnections?: ExpiringBankConnection[]
   /**
    * True while the setup checklist is open and the company has zero posted
@@ -189,6 +197,7 @@ export default function AttGoraSection({
   expensePayouts = [],
   skattekontoPayment = null,
   bankSwitches = [],
+  paymentsVerification = null,
   expiringBankConnections = [],
   emptyLedger = false,
   hasActiveBankConnection = true,
@@ -337,14 +346,19 @@ export default function AttGoraSection({
   // time-driven items.
   const urgentSwitches = bankSwitches.filter((b) => b.urgent)
   const calmSwitches = bankSwitches.filter((b) => !b.urgent)
+  // The verification row follows the same split: expiring waits in Bevaka,
+  // expired (payments refused) leads the list.
+  const verificationExpired = paymentsVerification?.state === 'expired' ? paymentsVerification : null
+  const verificationExpiring = paymentsVerification?.state === 'expiring' ? paymentsVerification : null
   const bevakaRows =
     counts.overdue_invoice > 0 ||
     counts.deadline_action > 0 ||
     counts.agreement_payment_missed > 0 ||
     counts.reconciliation_due > 0 ||
     calmSwitches.length > 0 ||
+    verificationExpiring !== null ||
     expiringBankConnections.length > 0
-  const allClear = !bokforRows && !betalaRows && !granskaRows && !bevakaRows && urgentSwitches.length === 0
+  const allClear = !bokforRows && !betalaRows && !granskaRows && !bevakaRows && urgentSwitches.length === 0 && verificationExpired === null
 
   // The header total must equal what the section actually shows, computed off
   // the same visibleWorklistTotal helper as the dashboard KPI tile so the two
@@ -372,6 +386,26 @@ export default function AttGoraSection({
     topMissingUnderlag && topMissingUnderlag.kind !== 'mail'
       ? t(`missing_underlag_next_${topMissingUnderlag.kind}`, { count: topMissingUnderlag.count })
       : undefined
+
+  // The payments verification to renew: the deep link opens Betalningar,
+  // whose header starts the renewal form. A chip counts the days while it is
+  // expiring and says so once it has lapsed (an exception, so a chip; convention 5).
+  const verificationRow = (item: PaymentsVerificationDue) => (
+    <WorklistRow
+      key="payments-verification"
+      href={PAYMENTS_PAGE_PATH}
+      icon={ShieldCheck}
+      label={item.state === 'expired' ? t('row_payments_verification_expired') : t('row_payments_verification_expiring')}
+      detail={t('row_payments_verification_detail')}
+      badge={
+        item.state === 'expired' ? (
+          <Badge variant="destructive">{t('payments_verification_expired_badge')}</Badge>
+        ) : item.days_left !== null ? (
+          <Badge variant="warning">{t('payments_verification_days_left', { days: Math.max(item.days_left, 0) })}</Badge>
+        ) : undefined
+      }
+    />
+  )
 
   // One row per connection to switch: the deep link opens Koppla banken in
   // switch mode for exactly that row. Past the deadline the row says the
@@ -426,10 +460,13 @@ export default function AttGoraSection({
             </p>
           ) : (
             <div className="pb-2">
-              {urgentSwitches.length > 0 && (
+              {(urgentSwitches.length > 0 || verificationExpired) && (
                 <div>
                   <BandHeader>{t('band_now')}</BandHeader>
-                  <div>{urgentSwitches.map(switchRow)}</div>
+                  <div>
+                    {verificationExpired && verificationRow(verificationExpired)}
+                    {urgentSwitches.map(switchRow)}
+                  </div>
                 </div>
               )}
 
@@ -740,6 +777,7 @@ export default function AttGoraSection({
                       />
                     )}
                     {calmSwitches.map(switchRow)}
+                    {verificationExpiring && verificationRow(verificationExpiring)}
                     {expiringBankConnections.length > 0 && (
                       <WorklistRow
                         href="/settings/banking"

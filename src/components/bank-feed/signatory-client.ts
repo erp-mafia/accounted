@@ -6,7 +6,7 @@
  * travels in the path, never in a header or a log line.
  */
 
-import { PaymentsClientError, type CompanyVerification } from '@/components/payments/payments-client'
+import { PaymentsClientError, type CompanyVerification, type StartedVerification } from '@/components/payments/payments-client'
 import type { FlowState } from './connect-flow-reducer'
 import { createOpenPaymentsApi, openPaymentsSignatoryBase, type OpenPaymentsApi } from './open-payments-client'
 import { normalizePersonalNumber } from './personal-number'
@@ -29,8 +29,8 @@ async function send<T>(input: string, init?: RequestInit): Promise<T> {
 
 export interface SignatoryPaymentsApi {
   probe(): Promise<PaymentsOffer>
-  fetchVerification(): Promise<CompanyVerification>
-  startVerification(): Promise<{ url: string }>
+  fetchVerification(options?: { refresh?: boolean }): Promise<CompanyVerification>
+  startVerification(options?: { handoff?: boolean }): Promise<StartedVerification>
 }
 
 /**
@@ -40,22 +40,24 @@ export interface SignatoryPaymentsApi {
  * with an unknown status, as the dialog does.
  */
 export function createSignatoryPaymentsApi(base: string): SignatoryPaymentsApi {
-  const fetchVerification = () => send<CompanyVerification>(`${base}/verification`)
+  const fetchVerification = (options: { refresh?: boolean } = {}) =>
+    send<CompanyVerification>(options.refresh ? `${base}/verification?refresh=1` : `${base}/verification`)
   return {
     async probe() {
       try {
         const verification = await fetchVerification()
-        return { offered: verification.status !== 'valid', verification: verification.status, validUntil: verification.valid_until }
+        return { offered: verification.status !== 'valid', verification }
       } catch (error) {
         if (error instanceof PaymentsClientError && error.status !== 503 && error.status !== 502) {
-          return { offered: false, verification: null, validUntil: null }
+          return { offered: false, verification: null }
         }
-        return { offered: true, verification: 'unknown', validUntil: null }
+        return { offered: true, verification: null }
       }
     },
     fetchVerification,
+    // The firmatecknare is the one at the screen: the form is never handed off from here.
     startVerification() {
-      return send<{ url: string }>(`${base}/verification/start`, { method: 'POST', body: JSON.stringify({}) })
+      return send<StartedVerification>(`${base}/verification/start`, { method: 'POST', body: JSON.stringify({}) })
     },
   }
 }

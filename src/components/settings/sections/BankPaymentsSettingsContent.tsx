@@ -16,7 +16,6 @@ import {
   SettingsSectionHeader,
 } from '@/components/settings/SettingsRows'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { useFormat } from '@/lib/hooks/use-format'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import {
   fetchBankPaymentsUsage,
@@ -28,6 +27,8 @@ import {
   type CompanyVerification,
   type PaymentsAvailability,
 } from '@/components/payments/payments-client'
+import { VerificationStateText } from '@/components/payments/VerificationStateText'
+import { NEEDS_LINK_STATES } from '@/lib/payments/orders/verification-state'
 
 /**
  * Kopplingar → Betalningar via banken: whether the payment provider has
@@ -42,7 +43,6 @@ export function BankPaymentsSettingsContent() {
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
-  const { formatDateLong } = useFormat()
 
   const [availability, setAvailability] = useState<PaymentsAvailability | null>(null)
   const [verification, setVerification] = useState<CompanyVerification | null | 'failed'>(null)
@@ -51,10 +51,13 @@ export function BankPaymentsSettingsContent() {
   const [busy, setBusy] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
 
-  const loadVerification = useCallback(async () => {
+  // The stored answer serves the page (fresh within six hours); Uppdatera
+  // asks the provider. checked_at is when the provider was last asked.
+  const loadVerification = useCallback(async (refresh = false) => {
     try {
-      setVerification(await fetchCompanyVerification())
-      setCheckedAt(new Date())
+      const next = await fetchCompanyVerification({ refresh })
+      setVerification(next)
+      setCheckedAt(next.checked_at ? new Date(next.checked_at) : null)
     } catch {
       setVerification('failed')
     }
@@ -65,7 +68,7 @@ export function BankPaymentsSettingsContent() {
   async function refreshVerification() {
     setRefreshing(true)
     try {
-      await loadVerification()
+      await loadVerification(true)
       toast({ title: t('refreshed_title'), description: t('refreshed') })
     } finally {
       setRefreshing(false)
@@ -100,8 +103,11 @@ export function BankPaymentsSettingsContent() {
   async function startVerification() {
     setBusy(true)
     try {
-      const { url } = await startCompanyVerification()
-      window.open(url, '_blank', 'noopener,noreferrer')
+      const started = await startCompanyVerification()
+      window.open(started.url, '_blank', 'noopener,noreferrer')
+      setVerification((current) =>
+        current && current !== 'failed' ? { ...current, state: started.state, link_expires_at: started.expires_at } : current,
+      )
       toast({ title: t('verification_started_title'), description: t('verification_started') })
     } catch (error) {
       const body = error instanceof PaymentsClientError ? error.body : null
@@ -114,12 +120,11 @@ export function BankPaymentsSettingsContent() {
   const verificationText = (() => {
     if (verification === null) return null
     if (verification === 'failed') return t('verification_unknown')
-    if (verification.status === 'valid') {
-      return verification.valid_until ? t('verification_valid_until', { date: formatDateLong(verification.valid_until) }) : t('verification_valid')
-    }
-    return verification.status === 'invalid' ? t('verification_invalid') : t('verification_unknown')
+    return <VerificationStateText verification={verification} />
   })()
-  const verified = verification !== null && verification !== 'failed' && verification.status === 'valid'
+  const verified = verification !== null && verification !== 'failed' && verification.state === 'valid'
+  // A new form is offered when none is out: first time, a dead link, or a renewal.
+  const canStart = verification !== null && verification !== 'failed' && NEEDS_LINK_STATES.has(verification.state)
   const usageMonth = usage ? new Date(`${usage.period}-15T12:00:00Z`).toLocaleDateString(locale, { month: 'long' }) : ''
   const checkedAtText = checkedAt
     ? t('checked_at', { time: checkedAt.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' }) })
@@ -157,7 +162,7 @@ export function BankPaymentsSettingsContent() {
                 <Button variant="outline" size="sm" onClick={() => void refreshVerification()} loading={refreshing} disabled={busy}>
                   {t('refresh')}
                 </Button>
-                {canWrite && verification !== null && !verified && (
+                {canWrite && canStart && (
                   <Button size="sm" onClick={startVerification} loading={busy}>
                     {t('start_verification')}
                   </Button>

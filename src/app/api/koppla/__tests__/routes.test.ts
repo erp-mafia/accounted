@@ -297,4 +297,15 @@ describe('the signatory token routes act as the sender for the company the link 
     expect(started.body.data.url).toBe('https://verify.example/form')
     expect(payments.startCompanyPaymentVerification).toHaveBeenCalledWith(expect.objectContaining({ companyId: COMPANY, userId: SENDER }))
   })
+
+  it('the verification status asks the provider again only when the page polls with refresh', async () => {
+    const token = freshToken()
+    db.setTable('bank_connect_invites', { data: invite({ offer_payments: true }) })
+    payments.getCompanyPaymentVerification.mockResolvedValue({ ok: true, data: { status: 'invalid', valid_until: null, state: 'form_open', link_expires_at: '2026-10-15T09:00:00.000Z', checked_at: null } })
+    await verification(createMockRequest(`/api/koppla/${token}/verification`), tokenParams(token))
+    expect(payments.getCompanyPaymentVerification).toHaveBeenLastCalledWith(expect.objectContaining({ companyId: COMPANY }), { refresh: false })
+    const polled = await parseJsonResponse<{ data: { state: string } }>(await verification(createMockRequest(`/api/koppla/${token}/verification?refresh=1`), tokenParams(token)))
+    expect(polled.body.data.state).toBe('form_open')
+    expect(payments.getCompanyPaymentVerification).toHaveBeenLastCalledWith(expect.anything(), { refresh: true })
+  })
 })

@@ -13,6 +13,7 @@
  */
 
 import { initialSelection, setLedger, toggleAccount, type SelectionMap } from './account-selection'
+import type { VerificationState } from '@/lib/payments/orders/verification-state'
 import { bankSigningApproach, type SigningApproach } from './bank-help'
 import { firstStep, nextStep, type FlowMode, type FlowStep } from './flow-steps'
 import type {
@@ -50,6 +51,15 @@ export interface FlowReturn {
 }
 
 export type VerificationStatus = 'valid' | 'invalid' | 'unknown'
+
+/** The verification as the doors answer it (GET .../verification): the provider's status and the derived state. */
+export interface VerificationView {
+  status: VerificationStatus
+  valid_until: string | null
+  state: VerificationState
+  /** ISO instant the current form link runs out; null without a link. */
+  link_expires_at: string | null
+}
 
 export interface FlowState {
   mode: FlowMode
@@ -94,7 +104,11 @@ export interface FlowState {
   paymentsOffered: boolean | null
   verification: VerificationStatus | null
   verificationUntil: string | null
-  /** The provider's form, once opened: the dialog then polls the status. */
+  /** Where the verification stands (lib/payments/orders/verification-state); null until the doors answered. */
+  verificationState: VerificationState | null
+  /** ISO instant the current form link runs out; null without a link. */
+  verificationLinkExpiresAt: string | null
+  /** The provider's form, once opened in this sitting: the dialog then polls the status and can open or copy it again. */
   verificationUrl: string | null
 }
 
@@ -146,6 +160,8 @@ export function openFlow(mode: FlowMode, options: OpenFlowOptions = {}): FlowSta
     paymentsOffered: null,
     verification: null,
     verificationUntil: null,
+    verificationState: null,
+    verificationLinkExpiresAt: null,
     verificationUrl: null,
   }
 }
@@ -175,9 +191,9 @@ export type FlowAction =
   | { type: 'activated'; connection: ConnectionView; sync: { imported: number } | null; syncPending: boolean }
   | { type: 'second_consent'; attempt: ConnectionAttempt }
   | { type: 'activate_failed'; message: string }
-  | { type: 'payments_offer'; offered: boolean; verification: VerificationStatus | null; validUntil: string | null }
-  | { type: 'verification_opened'; url: string }
-  | { type: 'verification_polled'; status: VerificationStatus; validUntil: string | null }
+  | { type: 'payments_offer'; offered: boolean; verification: VerificationView | null }
+  | { type: 'verification_opened'; url: string; expiresAt: string; state: VerificationState }
+  | { type: 'verification_polled'; verification: VerificationView }
   | { type: 'payments_done' }
 
 /** Whether the bank is still working on the consent: the poll keeps asking. */
@@ -389,15 +405,23 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
       return {
         ...state,
         paymentsOffered: action.offered,
-        verification: action.verification,
-        verificationUntil: action.validUntil,
+        verification: action.verification?.status ?? (action.offered ? 'unknown' : null),
+        verificationUntil: action.verification?.valid_until ?? null,
+        verificationState: action.verification?.state ?? null,
+        verificationLinkExpiresAt: action.verification?.link_expires_at ?? null,
       }
 
     case 'verification_opened':
-      return { ...state, verificationUrl: action.url }
+      return { ...state, verificationUrl: action.url, verificationLinkExpiresAt: action.expiresAt, verificationState: action.state }
 
     case 'verification_polled':
-      return { ...state, verification: action.status, verificationUntil: action.validUntil }
+      return {
+        ...state,
+        verification: action.verification.status,
+        verificationUntil: action.verification.valid_until,
+        verificationState: action.verification.state,
+        verificationLinkExpiresAt: action.verification.link_expires_at,
+      }
 
     case 'payments_done':
       return state.step === 'payments' ? { ...state, step: nextStep('payments', state.mode, state.paymentsOffered) ?? 'done' } : state

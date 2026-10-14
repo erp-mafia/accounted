@@ -8544,7 +8544,12 @@
     "row_bank_switch_stopped": "Den gamla bankkopplingen för {bank} har upphört: byt till den nya kopplingen",
     "row_bank_switch_detail": "Ny koppling med BankID, cirka två minuter. Historiken behålls.",
     "bank_switch_days_left": "{days, plural, =0 {Sista dagen} =1 {1 dag kvar} other {# dagar kvar}}",
-    "bank_switch_stopped_badge": "Stoppad"
+    "bank_switch_stopped_badge": "Stoppad",
+    "row_payments_verification_expiring": "Förnya verifieringen för betalningar",
+    "row_payments_verification_expired": "Verifieringen för betalningar har gått ut: förnya den",
+    "row_payments_verification_detail": "En firmatecknare signerar förnyelsen med BankID, cirka fem minuter. Utan den stoppas betalningar via banken.",
+    "payments_verification_days_left": "{days, plural, =0 {Sista dagen} =1 {1 dag kvar} other {# dagar kvar}}",
+    "payments_verification_expired_badge": "Utgången"
   },
   "reports": {
     "title": "Rapporter",
@@ -12806,8 +12811,6 @@
     "verify_now": "Verifiera nu",
     "send_to_signatory": "Skicka till firmatecknare",
     "skip": "Hoppa över",
-    "verification_open": "Formuläret är öppet, länken gäller 24 timmar.",
-    "verification_valid": "Verifierat till {date}",
     "verification_valid_no_date": "Verifierat",
     "verification_failed_title": "Kunde inte öppna verifieringen",
     "mail_subject": "Verifiering för bankbetalningar",
@@ -12828,7 +12831,7 @@
     "abort_keep": "Fortsätt koppla",
     "title_bankid": "Signering med BankID hos {bank}",
     "help_accounts": "Historiken hämtas och nya transaktioner kommer automatiskt. Ett konto som redan bokförs behåller sitt bokföringskonto. Privata konton är avmarkerade och hämtas bara om du väljer dem.",
-    "help_payments_mechanics": "Verifiera nu öppnar betalningsleverantörens formulär i en ny flik; länken gäller 24 timmar och statusen uppdateras här när den är klar. Skicka till firmatecknare lägger länken i ett mejl.",
+    "help_payments_mechanics": "Verifiera nu öppnar betalningsleverantörens formulär i en ny flik; länken gäller 24 timmar och statusen uppdateras här när den är klar. Skicka till firmatecknare lägger en länk i ett mejl och Kopiera länk lägger den på urklipp, för den som ska signera. Har länken gått ut skapar du en ny.",
     "guide_link": "Så går det till hos {bank}, 1 min film",
     "bank_not_connectable": "Banken kan inte kopplas här ännu.",
     "redirect_intro": "Du skickas till {bank}. Signera där och kom tillbaka hit.",
@@ -12838,7 +12841,17 @@
     "help_redirect": "{bank} signerar på sin egen sida: du skickas dit, signerar med BankID och kommer tillbaka hit, där kopplingen fortsätter.",
     "affiliate_label": "Vilken sparbank?",
     "affiliate_search": "Sök sparbank",
-    "affiliate_no_matches": "Inga sparbanker matchar sökningen."
+    "affiliate_no_matches": "Inga sparbanker matchar sökningen.",
+    "new_link": "Skapa ny länk",
+    "renew_now": "Förnya nu",
+    "open_form": "Öppna formuläret",
+    "copy_link": "Kopiera länk till firmatecknare",
+    "send_again": "Skicka igen",
+    "link_copied_title": "Länken är kopierad",
+    "link_copied": "Klistra in den i ett meddelande till firmatecknaren, som fyller i och signerar med BankID. Länken gäller 24 timmar.",
+    "link_copy_failed_title": "Kunde inte kopiera länken",
+    "done_payments_awaiting": "Betalningar via banken: formuläret är hos firmatecknaren",
+    "done_payments_renew": "Betalningar via banken: verifieringen behöver förnyas"
   },
   "bank_payments": {
     "title": "Betala via banken",
@@ -12991,7 +13004,10 @@
     "registered_name_differs": "Namnet hos Bankgirot ({name}) skiljer sig från leverantören ({supplier})",
     "ocr_not_accepted": "OCR-numret godkänns inte av mottagaren",
     "registered_name_not_found": "Bankgirot känner inte till numret",
-    "registered_name_unavailable": "Namnet hos Bankgirot kunde inte hämtas just nu"
+    "registered_name_unavailable": "Namnet hos Bankgirot kunde inte hämtas just nu",
+    "renew_company": "Förnya verifieringen",
+    "new_verification_link": "Skapa ny länk",
+    "open_verification_form": "Öppna formuläret"
   },
   "payments_page": {
     "title": "Betalningar",
@@ -13034,7 +13050,12 @@
     "requires_subscription": "Betalningar via banken ingår i abonnemanget.",
     "empty_title": "Inga betalningar via banken",
     "empty_description": "Markera fakturor under Leverantörsfakturor och välj Betala via banken. Betalningarna hamnar här för godkännande och signering.",
-    "empty_action": "Till leverantörsfakturor"
+    "empty_action": "Till leverantörsfakturor",
+    "verification_verify": "Verifiera företaget",
+    "verification_renew": "Förnya verifieringen",
+    "verification_new_link": "Skapa ny länk",
+    "verification_open_form": "Öppna formuläret",
+    "verification_failed_title": "Kunde inte öppna verifieringen"
   },
   "settings_bank_payments": {
     "not_available": "Betalningar via banken är inte påslaget för företaget än.",
@@ -13048,9 +13069,6 @@
     "usage_over": "{count} utöver, debiteras separat",
     "verification_help": "Betalningsleverantören verifierar företaget en gång (kundkännedom). En firmatecknare fyller i formuläret och signerar med BankID; godkännandet gäller normalt ett år.",
     "verification_label": "Status",
-    "verification_valid": "Verifierat",
-    "verification_valid_until": "Verifierat till {date}",
-    "verification_invalid": "Inte verifierat",
     "verification_unknown": "Kunde inte läsas",
     "refresh": "Uppdatera",
     "refreshed_title": "Status uppdaterad",
@@ -13688,5 +13706,16 @@
       "UNEXPECTED_ERROR": "Okänt felmeddelande från banken. Försök igen."
     },
     "failure_generic": "BankID-signeringen kunde inte slutföras. Försök igen."
+  },
+  "payments_verification": {
+    "state_not_started": "Företaget är inte verifierat hos betalningsleverantören än. Verifieringen tar cirka fem minuter och signeras med BankID av en firmatecknare.",
+    "state_form_open": "Formuläret är öppet, länken gäller till {until}. Statusen uppdateras här när det är signerat.",
+    "state_awaiting_signatory": "Formuläret är hos firmatecknaren, länken gäller till {until}. Statusen uppdateras här när det är signerat.",
+    "state_link_expired": "Länken till formuläret har gått ut (24 timmar). Skapa en ny länk för att fortsätta.",
+    "state_valid": "Verifierat för betalningar till {date}.",
+    "state_valid_no_date": "Verifierat för betalningar.",
+    "state_expiring": "Verifierat till {date}: förnya innan dess så att betalningarna inte stoppas.",
+    "state_expired": "Verifieringen gick ut {date}. Förnya den för att betala via banken.",
+    "state_expired_no_date": "Verifieringen har gått ut. Förnya den för att betala via banken."
   }
 }

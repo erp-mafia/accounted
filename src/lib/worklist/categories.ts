@@ -32,8 +32,11 @@ import { COLLECTIONS_BATCH_TYPE } from '@/lib/collections/batch'
 import { resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
 import { listPeppolFailedInvoiceIds } from '@/lib/invoices/peppol-failed-invoices'
 import { switchStateFor } from '@/lib/bank-feed/switch-campaign'
+import { paymentsAdmitted } from '@/lib/payments/orders/pilot'
+import { readVerificationRecord } from '@/lib/payments/orders/verification-record'
+import { deriveVerificationState, RENEWAL_DUE_STATES } from '@/lib/payments/orders/verification-state'
 import { companyAttestsSupplierInvoices } from '@/lib/supplier-invoices/lifecycle'
-import type { BankSwitchDue, ExpensePayoutDue, SkattekontoPaymentDue, SuggestedMatch } from './types'
+import type { BankSwitchDue, ExpensePayoutDue, PaymentsVerificationDue, SkattekontoPaymentDue, SuggestedMatch } from './types'
 
 // Canonical home is lib/worklist/types.ts (dependency-free, client-safe);
 // re-exported here so existing server-side imports keep working.
@@ -924,6 +927,42 @@ export async function countBankSwitchDue(
   now: Date = new Date(),
 ): Promise<number> {
   return (await listBankSwitchDue(supabase, companyId, now)).length
+}
+
+/**
+ * The payments verification to renew, when one is due (see
+ * lib/worklist/types.ts payments_verification_renewal): the stored record
+ * alone, never a provider call (the status cron and every status read keep it
+ * fresh). Null for a company outside the pilot or the paid plan, or that
+ * never verified.
+ */
+export async function listPaymentsVerificationDue(
+  supabase: SupabaseClient,
+  companyId: string,
+  now: Date = new Date(),
+): Promise<PaymentsVerificationDue | null> {
+  try {
+    // The pilot and the plan, never the provider registry (this module is
+    // client-reachable): a record exists only where a provider once answered.
+    if (!(await paymentsAdmitted(supabase, companyId)).ok) return null
+    const record = await readVerificationRecord(supabase, companyId)
+    if (!record) return null
+    const derived = deriveVerificationState(record, now)
+    if (!RENEWAL_DUE_STATES.has(derived.state)) return null
+    return { state: derived.state as PaymentsVerificationDue['state'], valid_until: derived.valid_until, days_left: derived.days_left }
+  } catch (err) {
+    logAndZero('payments_verification_renewal', companyId, err as { message?: string })
+    return null
+  }
+}
+
+/** 1 when the payments verification is due for renewal, else 0 (see listPaymentsVerificationDue). */
+export async function countPaymentsVerificationDue(
+  supabase: SupabaseClient,
+  companyId: string,
+  now: Date = new Date(),
+): Promise<number> {
+  return (await listPaymentsVerificationDue(supabase, companyId, now)) ? 1 : 0
 }
 
 /**

@@ -200,6 +200,18 @@ describe('startPaymentSigning', () => {
     })
     expect(db.supabase.rpc).not.toHaveBeenCalled()
     expect(unverified.createPayment).not.toHaveBeenCalled()
+    // The provider's answer is stored, so the pages and the worklist know it without asking again.
+    expect(db.findCall('company_payment_verifications', 'upsert')?.[0]).toMatchObject({ company_id: ctx.companyId, status: 'invalid', valid_until: null })
+  })
+
+  it('signs on when storing the verification answer fails', async () => {
+    registerPaymentInitiationProvider(fakeProvider())
+    db.setTable('company_payment_verifications', { error: { message: 'boom' } })
+    db.setTable('payment_orders', { data: [order('o1')] })
+    db.setTable('rpc:claim_payment_orders_for_signing', { data: { ok: false, code: 'not_approved' } })
+    // Past the verification gate: the claim was reached (and refused by the fixture).
+    expect(await startPaymentSigning(ctx, { orderIds: ['o1'], method: 'qr', signer: SIGNER })).toMatchObject({ ok: false, code: 'PAYMENT_ORDERS_WRONG_STATUS' })
+    expect(ctx.log.warn).toHaveBeenCalledWith('payments verification not stored at signing', { err: 'boom' })
   })
 
   it('asks for the company verification in the corporate context only (DECISIONS.md 2026-10-12)', async () => {

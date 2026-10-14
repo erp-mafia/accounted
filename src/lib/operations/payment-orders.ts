@@ -22,6 +22,8 @@ import {
   getPaymentsAvailability,
   startCompanyPaymentVerification,
 } from '@/lib/payments/orders/availability'
+import { PAYMENTS_PAGE_PATH } from '@/lib/payments/orders/page-path'
+import { VERIFICATION_STATES } from '@/lib/payments/orders/verification-state'
 import { approvePaymentOrders, cancelPaymentOrder, unapprovePaymentOrders } from '@/lib/payments/orders/lifecycle'
 import { preparePaymentOrders } from '@/lib/payments/orders/prepare'
 import { BANK_ACCOUNTS_INCLUDED_PER_MONTH, BANK_PAYMENTS_INCLUDED_PER_MONTH, getBankPaymentsUsage } from '@/lib/payments/usage'
@@ -32,7 +34,7 @@ import { maskIban } from './supplier-payment-batches'
 import { defineOperation, type OperationContext } from './types'
 
 /** The Betalningar page: where a person approves and signs with BankID. */
-export const PAYMENTS_PAGE_PATH = '/payments'
+export { PAYMENTS_PAGE_PATH } from '@/lib/payments/orders/page-path'
 
 const ORDER_ID = z
   .string()
@@ -898,11 +900,21 @@ export const paymentsUsage = defineOperation({
   run: async (ctx, input) => ({ ok: true, data: await getBankPaymentsUsage(ctx.supabase, ctx.companyId, input.period) }),
 })
 
+const VERIFICATION_STATE = z
+  .enum(VERIFICATION_STATES)
+  .describe(
+    'not_started: no form yet. form_open: a form link exists (24 h). awaiting_signatory: that form was handed to a firmatecknare. ' +
+      'link_expired: the link ran out unsigned; start again. valid: payments allowed until valid_until. expiring: valid_until within 30 days; renew. ' +
+      'expired: valid_until passed or the verification lapsed; renew.',
+  )
+
 const Verification = z.object({
   status: z
     .enum(['valid', 'invalid', 'unknown'])
     .describe('valid: payments are allowed. invalid: not verified, or the verification failed or lapsed. unknown: the provider gave no answer.'),
   valid_until: z.string().nullable().describe('YYYY-MM-DD, when the provider reports it.'),
+  state: VERIFICATION_STATE,
+  link_expires_at: z.string().nullable().describe('ISO instant the current form link runs out (24 h after it was created); null without a link.'),
 })
 
 export const paymentsVerification = defineOperation({
@@ -912,14 +924,20 @@ export const paymentsVerification = defineOperation({
   risk: 'low',
   reversible: false,
   docs: {
-    summary: 'The company\'s verification (know your customer) at the payment provider.',
+    summary: 'The company\'s verification (know your customer) at the payment provider, and where it stands.',
     description:
-      'Asks the provider whether it has verified the company. Payments are refused until the status is valid. A missing or lapsed ' +
-      'verification is started with POST /payment-orders/verification/start, which answers a form a signatory fills in and signs.',
-    useWhen: 'Bank payments are available but signing is refused for the company, or before the first payment.',
+      'Answers whether the provider has verified the company (status, valid_until) and the derived state: not_started, form_open, ' +
+      'awaiting_signatory, link_expired, valid, expiring (within 30 days of valid_until), expired. Payments are refused until the status is ' +
+      'valid. The stored answer is used when it is under six hours old; the provider is asked again when it is older or a form is out. ' +
+      'A missing, expired or expiring verification is started or renewed with POST /payment-orders/verification/start, which answers a ' +
+      'form link (valid 24 h) a signatory fills in and signs.',
+    useWhen: 'Bank payments are available but signing is refused for the company, before the first payment, or to see whether a renewal is due.',
     doNotUseFor: 'Whether payments are switched on at all (GET /payment-orders/availability).',
-    pitfalls: ['PAYMENT_PROVIDER_UNAVAILABLE is transient: the provider did not answer; try again shortly.'],
-    example: { response: { data: { status: 'valid', valid_until: '2027-10-03' }, meta: META } },
+    pitfalls: [
+      'PAYMENT_PROVIDER_UNAVAILABLE is transient: the provider did not answer and nothing was on file; try again shortly.',
+      'state link_expired: the 24-hour form link ran out unsigned; start again rather than re-sending the old link.',
+    ],
+    example: { response: { data: { status: 'valid', valid_until: '2027-10-03', state: 'valid', link_expires_at: null }, meta: META } },
   },
   input: z.object({}),
   output: Verification,
@@ -935,23 +953,36 @@ export const paymentsVerificationStart = defineOperation({
   risk: 'low',
   reversible: true,
   docs: {
-    summary: 'Start the company\'s verification at the payment provider and get the form link.',
+    summary: 'Start or renew the company\'s verification at the payment provider and get the form link.',
     description:
-      'Creates a verification at the provider and answers the link to its form, which a signatory of the company fills in and ' +
-      'signs with BankID (valid for a limited time; starting again makes a new form). The provider approves afterwards; read the ' +
-      'result with GET /payment-orders/verification. Changes nothing in the books.',
-    useWhen: 'GET /payment-orders/verification answers invalid.',
+      'Creates a verification form at the provider and answers its link, which a person fills in and a signatory of the company ' +
+      'signs with BankID. The link is valid 24 hours (expires_at); starting again makes a new form and a new link. The state is then ' +
+      'form_open, or awaiting_signatory with handoff true (the link goes to a firmatecknare rather than the caller). The provider ' +
+      'approves afterwards; read the result with GET /payment-orders/verification. Changes nothing in the books.',
+    useWhen: 'GET /payment-orders/verification answers a state of not_started, link_expired, expiring or expired.',
     doNotUseFor: 'Checking the status (GET /payment-orders/verification).',
-    pitfalls: ['The link is for a person who may sign for the company; it is not an API.'],
-    example: { response: { data: { url: 'https://kyc.openbankingplatform.com/…' }, meta: META } },
+    pitfalls: [
+      'The link is for a person who may sign for the company; it is not an API. Hand it over once and do not store it.',
+      'A non-signatory can fill the form in and share it with a signatory to sign; pass handoff true when the link is for the signatory.',
+    ],
+    example: {
+      request: { handoff: true },
+      response: { data: { url: 'https://kyc.openbankingplatform.com/…', expires_at: '2026-10-14T09:00:00.000Z', state: 'awaiting_signatory' }, meta: META },
+    },
   },
-  input: z.object({}),
-  output: z.object({ url: z.string() }),
+  input: z.object({
+    handoff: z.boolean().optional().describe('True when the link is handed to a firmatecknare rather than opened by the caller: the state reads awaiting_signatory.'),
+  }),
+  output: z.object({
+    url: z.string(),
+    expires_at: z.string().describe('ISO instant the form link runs out (24 hours).'),
+    state: VERIFICATION_STATE,
+  }),
   errorCodes: ['PAYMENTS_UNAVAILABLE', 'PAYMENT_PROVIDER_UNAVAILABLE', 'PAYMENT_PROVIDER_REFUSED'],
   http: { method: 'POST', path: '/api/v1/companies/:companyId/payment-orders/verification/start', requireIdempotencyKey: false },
-  run: async (ctx, _input, { dryRun }) => {
-    if (dryRun) return { ok: true, dryRun: true, preview: { action: 'start_company_verification' } }
-    return startCompanyPaymentVerification(ctx)
+  run: async (ctx, input, { dryRun }) => {
+    if (dryRun) return { ok: true, dryRun: true, preview: { action: 'start_company_verification', handoff: input.handoff === true } }
+    return startCompanyPaymentVerification(ctx, { handoff: input.handoff === true })
   },
 })
 
@@ -976,7 +1007,10 @@ export const paymentsSigningLink = defineOperation({
       'does them.',
     useWhen: 'After preparing payments, to hand the person the place where they sign; or to report what is waiting.',
     doNotUseFor: 'The orders themselves (GET /payment-orders).',
-    pitfalls: ['verification is null when the provider did not answer in time; it is informational here.'],
+    pitfalls: [
+      'verification is null when the provider did not answer in time; it is informational here.',
+      'verification.state says what to do: not_started, link_expired, expiring or expired call for POST /payment-orders/verification/start.',
+    ],
     example: {
       response: {
         data: {
@@ -985,7 +1019,7 @@ export const paymentsSigningLink = defineOperation({
           awaiting_signature: 0,
           at_bank: 0,
           outcome_unknown: 0,
-          verification: { status: 'valid', valid_until: '2027-10-03' },
+          verification: { status: 'valid', valid_until: '2027-10-03', state: 'valid', link_expires_at: null },
           note: SIGNING_NOTE,
         },
         meta: META,
@@ -1012,8 +1046,8 @@ export const paymentsSigningLink = defineOperation({
     name: 'gnubok_get_payments_signing_link',
     title: 'Get Payments Signing Link',
     description:
-      'The link to the Betalningar page where a person approves and signs bank payments with BankID, with how many orders wait for ' +
-      'approval, for signing or at the bank, and the company\'s provider verification. Agents hand out the link; a person signs.',
+      'The Betalningar page link where a person approves and signs bank payments with BankID, how many orders wait for approval, ' +
+      'signing or the bank, and the verification state (valid, expiring, expired, form_open, ...). Agents hand out the link; a person signs.',
     keywords: ['signera betalningar', 'bankid signering', 'betalningar att signera', 'länk betalningar', 'godkänn betalningar', 'betalningssida'],
   },
   run: async (ctx, input) => {

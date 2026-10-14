@@ -63,6 +63,7 @@ import type { PaymentOrderEvent } from './types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { createServiceClient } from '@/lib/supabase/server'
 import { applyProviderState } from './apply-state'
+import { recordVerificationCheck } from './verification-record'
 import { buildPartyContext, type SignerInput } from './party'
 import { cancelAndRelease, cancelForClosedInvoice, releasePaymentOrder, unpayableOrders } from './release'
 import { logPaymentOrderEvents, sanitizedProviderMessage, type PaymentOrderBatchRow, type PaymentOrderRow } from './types'
@@ -798,6 +799,14 @@ export async function startPaymentSigning(
   if (party.ctx.accountContext === 'corporate') {
     try {
       const verification = await provider.getCompanyVerification(party.ctx)
+      // Every provider answer is stored (verification-record.ts), so the
+      // worklist and the pages know a company that verified once and pays.
+      // Best-effort: a failed write never stands in the way of a signing.
+      await recordVerificationCheck(createServiceClient(), ctx.companyId, {
+        status: verification.status,
+        validUntil: verification.validUntil,
+        checkedAt: new Date(),
+      }).catch((err: { message?: string }) => ctx.log.warn('payments verification not stored at signing', { err: err?.message ?? 'unknown' }))
       if (verification.status !== 'valid') return { ok: false, code: 'PAYMENT_COMPANY_VERIFICATION_REQUIRED' }
     } catch (error) {
       return { ok: false, code: readFailure(error), details: { provider_code: errorCodeOf(error) } }

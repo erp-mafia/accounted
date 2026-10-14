@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { BankSwitchDue, ExpensePayoutDue, SkattekontoPaymentDue, SuggestedMatch } from './types'
+import type { BankSwitchDue, ExpensePayoutDue, PaymentsVerificationDue, SkattekontoPaymentDue, SuggestedMatch } from './types'
 import type { WorklistCounts } from './types'
 import type { MissingUnderlagSample } from './missing-underlag'
 import { isArkivBrainEnabled, isArkivSectionEnabled } from '@/lib/arkiv/flag'
@@ -18,6 +18,7 @@ import {
   countCollectionBatchItems,
   countCollectionDecisions,
   countOverdueInvoices,
+  countPaymentsVerificationDue,
   countPendingOperations,
   countReconciliationDue,
   countSkattekontoPaymentDue,
@@ -71,6 +72,12 @@ export interface GetWorklistCountsOptions {
    * list's length instead of a second read of bank_connections.
    */
   bankSwitchDue?: BankSwitchDue[] | Promise<BankSwitchDue[]>
+  /**
+   * The payments verification to renew the caller is already fetching (Hem
+   * renders it as one row): the count is 1 or 0 from it instead of a second
+   * read. Pass null for "nothing due".
+   */
+  paymentsVerificationDue?: PaymentsVerificationDue | null | Promise<PaymentsVerificationDue | null>
 }
 
 export async function getWorklistCounts(
@@ -105,6 +112,7 @@ export async function getWorklistCounts(
     collectionAttention,
     collectionBatchReady,
     bankSwitch,
+    paymentsVerificationRenewal,
   ] = await Promise.all([
     countUnbookedTransactions(supabase, companyId),
     countUnbookedSkattekontoRows(supabase, companyId),
@@ -138,6 +146,9 @@ export async function getWorklistCounts(
     options.bankSwitchDue
       ? Promise.resolve(options.bankSwitchDue).then((b) => b.length)
       : countBankSwitchDue(supabase, companyId),
+    options.paymentsVerificationDue !== undefined
+      ? Promise.resolve(options.paymentsVerificationDue).then((v) => (v ? 1 : 0))
+      : countPaymentsVerificationDue(supabase, companyId),
   ])
 
   return {
@@ -164,6 +175,7 @@ export async function getWorklistCounts(
       collection_attention: collectionAttention,
       collection_batch_ready: collectionBatchReady,
       bank_switch: bankSwitch,
+      payments_verification_renewal: paymentsVerificationRenewal,
     },
     total:
       bookTransaction +
@@ -186,6 +198,7 @@ export async function getWorklistCounts(
       collectionDecision +
       collectionAttention +
       collectionBatchReady +
-      bankSwitch,
+      bankSwitch +
+      paymentsVerificationRenewal,
   }
 }

@@ -38,15 +38,24 @@ import {
 import {
   providerCodeText,
   cancelPaymentOrder,
+  fetchCompanyVerification,
   fetchPaymentsAvailability,
   listPaymentOrders,
   orderInvoiceLabel,
   payeeLabel,
   PaymentsClientError,
+  startCompanyVerification,
   unapprovePaymentOrders,
+  type CompanyVerification,
   type PaymentOrder,
   type PaymentsAvailability,
 } from './payments-client'
+import { VerificationStateText } from './VerificationStateText'
+import { FORM_OUT_STATES } from '@/lib/payments/orders/verification-state'
+import { startPollLoop } from '@/components/bank-feed/poll-loop'
+
+/** The provider's form is filled in by hand: a quarter minute between looks while one is open. */
+const VERIFICATION_POLL_MS = 15_000
 
 /**
  * Betalningar: every bank payment the company asked its bank to make, by where
@@ -64,6 +73,11 @@ export function PaymentOrdersPage() {
   const { dialogProps, confirm } = useDestructiveConfirm()
 
   const [availability, setAvailability] = useState<PaymentsAvailability | null>(null)
+  /** Where the company's verification at the provider stands; null until read, or when payments are not available. */
+  const [verification, setVerification] = useState<CompanyVerification | null>(null)
+  /** The form link opened from this page in this sitting, so it can be opened again. */
+  const [verificationUrl, setVerificationUrl] = useState<string | null>(null)
+  const [verificationBusy, setVerificationBusy] = useState(false)
   const [orders, setOrders] = useState<PaymentOrder[] | null>(null)
   const [approving, setApproving] = useState<PaymentOrder[] | null>(null)
   const [signing, setSigning] = useState<PaymentOrder[] | null>(null)
@@ -82,9 +96,56 @@ export function PaymentOrdersPage() {
 
   const load = useCallback(async () => {
     const [avail, list] = await Promise.allSettled([fetchPaymentsAvailability(), listPaymentOrders()])
-    setAvailability(avail.status === 'fulfilled' ? avail.value : { available: false, reason: null, provider: null, accounts: [], signer_known: false })
+    const availabilityValue = avail.status === 'fulfilled' ? avail.value : { available: false, reason: null, provider: null, accounts: [], signer_known: false }
+    setAvailability(availabilityValue)
     setOrders(list.status === 'fulfilled' ? list.value : [])
+    // The verification line is informational: a failed read leaves it out rather than blocking the page.
+    if (availabilityValue.available) {
+      try {
+        setVerification(await fetchCompanyVerification())
+      } catch {
+        setVerification(null)
+      }
+    }
   }, [])
+
+  // A form is out (opened here, or earlier by someone, or with the
+  // firmatecknare): ask the provider every 15 s until it answers valid, so
+  // the line turns to "Verifierat till" without a reload.
+  const verificationFormOut = verification !== null && FORM_OUT_STATES.has(verification.state)
+  useEffect(() => {
+    if (!verificationFormOut) return
+    return startPollLoop({
+      poll: () => fetchCompanyVerification({ refresh: true }),
+      onResult: (next) => {
+        setVerification(next)
+        return FORM_OUT_STATES.has(next.state)
+      },
+      intervalMs: VERIFICATION_POLL_MS,
+    })
+  }, [verificationFormOut])
+
+  // Verifiera / Förnya / Skapa ny länk: a fresh 24-hour form in a new tab; the
+  // line then says the form is open and the poll above watches for the answer.
+  async function startVerification() {
+    setVerificationBusy(true)
+    try {
+      const started = await startCompanyVerification()
+      window.open(started.url, '_blank', 'noopener,noreferrer')
+      setVerificationUrl(started.url)
+      setVerification((current) => ({
+        status: current?.status ?? 'unknown',
+        valid_until: current?.valid_until ?? null,
+        checked_at: current?.checked_at ?? null,
+        state: started.state,
+        link_expires_at: started.expires_at,
+      }))
+    } catch (error) {
+      fail(t('verification_failed_title'), error)
+    } finally {
+      setVerificationBusy(false)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -196,6 +257,41 @@ export function PaymentOrdersPage() {
   const loading = orders === null || availability === null
   const hasOrders = (orders?.length ?? 0) > 0
 
+  // One line under the header: where the verification stands and the one
+  // thing to do about it. Quiet while valid; the attention tone otherwise.
+  const verificationLine = (() => {
+    if (!available || !verification) return null
+    if (verification.state === 'valid') {
+      return (
+        <p className="text-[12.5px] text-muted-foreground">
+          <VerificationStateText verification={verification} />
+        </p>
+      )
+    }
+    // A form this page opened is opened again; one with the firmatecknare is
+    // waited for; one opened elsewhere, or none, gets a fresh link.
+    const action = verificationBusy
+      ? undefined
+      : verificationUrl && FORM_OUT_STATES.has(verification.state)
+        ? { label: t('verification_open_form'), onClick: () => window.open(verificationUrl, '_blank', 'noopener,noreferrer') }
+        : verification.state === 'awaiting_signatory'
+          ? undefined
+          : {
+              label:
+                verification.state === 'not_started'
+                  ? t('verification_verify')
+                  : verification.state === 'link_expired' || verification.state === 'form_open'
+                    ? t('verification_new_link')
+                    : t('verification_renew'),
+              onClick: () => void startVerification(),
+            }
+    return (
+      <AttnLine action={canWrite ? action : undefined}>
+        <VerificationStateText verification={verification} />
+      </AttnLine>
+    )
+  })()
+
   const header = (
     <PageHeader
       title={t('title')}
@@ -235,6 +331,8 @@ export function PaymentOrdersPage() {
   return (
     <div className="space-y-8">
       {header}
+
+      {verificationLine}
 
       {/* Select-all lives on the section head: it picks only the orders that
           can share one signing, which a plain "Markera alla" would not. */}

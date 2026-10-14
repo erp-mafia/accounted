@@ -8544,7 +8544,12 @@
     "row_bank_switch_stopped": "The old bank connection for {bank} has ended: switch to the new connection",
     "row_bank_switch_detail": "New connection with BankID, about two minutes. The history is kept.",
     "bank_switch_days_left": "{days, plural, =0 {Last day} =1 {1 day left} other {# days left}}",
-    "bank_switch_stopped_badge": "Stopped"
+    "bank_switch_stopped_badge": "Stopped",
+    "row_payments_verification_expiring": "Renew the verification for payments",
+    "row_payments_verification_expired": "The verification for payments has lapsed: renew it",
+    "row_payments_verification_detail": "A signatory signs the renewal with BankID, about five minutes. Without it, bank payments stop.",
+    "payments_verification_days_left": "{days, plural, =0 {Last day} =1 {1 day left} other {# days left}}",
+    "payments_verification_expired_badge": "Expired"
   },
   "reports": {
     "title": "Reports",
@@ -12806,8 +12811,6 @@
     "verify_now": "Verify now",
     "send_to_signatory": "Send to a signatory",
     "skip": "Skip",
-    "verification_open": "The form is open; the link is valid for 24 hours.",
-    "verification_valid": "Verified until {date}",
     "verification_valid_no_date": "Verified",
     "verification_failed_title": "Could not open the verification",
     "mail_subject": "Verification for bank payments",
@@ -12828,7 +12831,7 @@
     "abort_keep": "Keep connecting",
     "title_bankid": "Signing with BankID at {bank}",
     "help_accounts": "The history is fetched and new transactions arrive automatically. An account already in the books keeps its ledger account. Private accounts start unticked and are fetched only if you choose them.",
-    "help_payments_mechanics": "Verify now opens the payment provider's form in a new tab; the link is valid for 24 hours and the status updates here once it is done. Send to a signatory puts the link in an email.",
+    "help_payments_mechanics": "Verify now opens the payment provider's form in a new tab; the link is valid for 24 hours and the status updates here once it is done. Send to a signatory puts a link in an email and Copy link puts it on the clipboard, for the person who signs. If the link has expired, create a new one.",
     "guide_link": "How it works at {bank}, 1 min video",
     "bank_not_connectable": "This bank cannot be connected here yet.",
     "redirect_intro": "You will be sent to {bank}. Sign there and come back here.",
@@ -12838,7 +12841,17 @@
     "help_redirect": "{bank} signs on its own page: you are sent there, sign with BankID and come back here, where the connection continues.",
     "affiliate_label": "Which savings bank?",
     "affiliate_search": "Search savings bank",
-    "affiliate_no_matches": "No savings banks match the search."
+    "affiliate_no_matches": "No savings banks match the search.",
+    "new_link": "Create a new link",
+    "renew_now": "Renew now",
+    "open_form": "Open the form",
+    "copy_link": "Copy link for a signatory",
+    "send_again": "Send again",
+    "link_copied_title": "Link copied",
+    "link_copied": "Paste it into a message to the signatory, who fills in the form and signs with BankID. The link is valid for 24 hours.",
+    "link_copy_failed_title": "Could not copy the link",
+    "done_payments_awaiting": "Bank payments: the form is with the signatory",
+    "done_payments_renew": "Bank payments: the verification needs renewing"
   },
   "bank_payments": {
     "title": "Pay through the bank",
@@ -12991,7 +13004,10 @@
     "registered_name_differs": "The name at Bankgirot ({name}) differs from the supplier ({supplier})",
     "ocr_not_accepted": "The OCR number is not accepted by the payee",
     "registered_name_not_found": "Bankgirot does not know this number",
-    "registered_name_unavailable": "The name at Bankgirot could not be fetched right now"
+    "registered_name_unavailable": "The name at Bankgirot could not be fetched right now",
+    "renew_company": "Renew the verification",
+    "new_verification_link": "Create a new link",
+    "open_verification_form": "Open the form"
   },
   "payments_page": {
     "title": "Payments",
@@ -13034,7 +13050,12 @@
     "requires_subscription": "Bank payments are part of the subscription.",
     "empty_title": "No bank payments",
     "empty_description": "Select invoices under Supplier invoices and choose Pay through the bank. The payments land here for approval and signing.",
-    "empty_action": "To supplier invoices"
+    "empty_action": "To supplier invoices",
+    "verification_verify": "Verify the company",
+    "verification_renew": "Renew the verification",
+    "verification_new_link": "Create a new link",
+    "verification_open_form": "Open the form",
+    "verification_failed_title": "Could not open the verification"
   },
   "settings_bank_payments": {
     "not_available": "Bank payments are not switched on for this company yet.",
@@ -13048,9 +13069,6 @@
     "usage_over": "{count} beyond, charged separately",
     "verification_help": "The payment provider verifies the company once (know your customer). A signatory fills in the form and signs with BankID; the approval normally holds for a year.",
     "verification_label": "Status",
-    "verification_valid": "Verified",
-    "verification_valid_until": "Verified until {date}",
-    "verification_invalid": "Not verified",
     "verification_unknown": "Could not be read",
     "refresh": "Refresh",
     "refreshed_title": "Status refreshed",
@@ -13688,5 +13706,16 @@
       "UNEXPECTED_ERROR": "Unknown error message from the bank. Try again."
     },
     "failure_generic": "The BankID signing could not be completed. Try again."
+  },
+  "payments_verification": {
+    "state_not_started": "The company is not yet verified with the payment provider. The verification takes about five minutes and is signed with BankID by a signatory.",
+    "state_form_open": "The form is open; the link is valid until {until}. The status updates here once it is signed.",
+    "state_awaiting_signatory": "The form is with the signatory; the link is valid until {until}. The status updates here once it is signed.",
+    "state_link_expired": "The form link has expired (24 hours). Create a new link to continue.",
+    "state_valid": "Verified for payments until {date}.",
+    "state_valid_no_date": "Verified for payments.",
+    "state_expiring": "Verified until {date}: renew before then so payments are not stopped.",
+    "state_expired": "The verification expired on {date}. Renew it to pay through the bank.",
+    "state_expired_no_date": "The verification has lapsed. Renew it to pay through the bank."
   }
 }

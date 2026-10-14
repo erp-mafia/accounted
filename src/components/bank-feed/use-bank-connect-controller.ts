@@ -4,11 +4,12 @@ import { useEffect, useReducer, useRef, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { useToast } from '@/components/ui/use-toast'
 import { useQrCountdown } from '@/components/bankid/use-qr-countdown'
-import { PaymentsClientError, type CompanyVerification } from '@/components/payments/payments-client'
+import { PaymentsClientError, type CompanyVerification, type StartedVerification } from '@/components/payments/payments-client'
+import { FORM_OUT_STATES } from '@/lib/payments/orders/verification-state'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useMediaQuery } from '@/lib/hooks/use-media-query'
 import { resolveBankByName, type SigningApproach } from './bank-help'
-import { displayBankName, flowReducer, openFlow, pollingActive, redirectInFlight, signingApproach, type FlowAction, type FlowState, type VerificationStatus } from './connect-flow-reducer'
+import { displayBankName, flowReducer, openFlow, pollingActive, redirectInFlight, signingApproach, type FlowAction, type FlowState } from './connect-flow-reducer'
 import {
   isBankBusy,
   isSecondConsent,
@@ -39,9 +40,12 @@ const MOBILE_QUERY = '(max-width: 639px)'
 /** Whether the payments offer stands at open: available to the company and not yet verified. */
 export interface PaymentsOffer {
   offered: boolean
-  verification: VerificationStatus | null
-  validUntil: string | null
+  /** The doors' answer, when they gave one; null when the offer stands with an unknown status (a provider hiccup). */
+  verification: CompanyVerification | null
 }
+
+/** How a verification form is started: opened here, mailed to a firmatecknare, or copied for one. The last two hand it off. */
+export type VerificationStartKind = 'verify' | 'mail' | 'copy'
 
 /**
  * The doors one Koppla banken talks through. The dialog binds them to the
@@ -54,8 +58,8 @@ export interface BankConnectBackend {
   /** Null: payments are never offered on this surface. */
   payments: {
     probe(): Promise<PaymentsOffer>
-    fetchVerification(): Promise<CompanyVerification>
-    startVerification(): Promise<{ url: string }>
+    fetchVerification(options?: { refresh?: boolean }): Promise<CompanyVerification>
+    startVerification(options?: { handoff?: boolean }): Promise<StartedVerification>
   } | null
   /**
    * Whether the person signing has a personnummer on file (nothing to type).
@@ -86,7 +90,7 @@ export interface BankConnectController {
   dispatch: (action: FlowAction) => void
   signerKnown: boolean
   personalNumberInvalid: boolean
-  paymentsBusy: 'verify' | 'mail' | null
+  paymentsBusy: VerificationStartKind | null
   /** The QR's 30 seconds, counted from the bank's step; null when no QR is on screen. */
   secondsLeft: number | null
   /** How the chosen bank signs: our screen, its own page, both, or neither. */
@@ -110,7 +114,7 @@ export interface BankConnectController {
    * Start the payments verification and hand its URL to `deliver` (a new
    * tab, a mailto); the status is then polled while the offer step stays.
    */
-  openVerification: (kind: 'verify' | 'mail', deliver: (url: string) => void) => Promise<void>
+  openVerification: (kind: VerificationStartKind, deliver: (url: string) => void | Promise<void>) => Promise<void>
   /** Remove a half-made connection (a BankID that was closed over, an unsaved selection). A resumed second-signatory connection stays. */
   abandon: () => Promise<void>
 }
@@ -131,7 +135,7 @@ export function useBankConnectController({ session, backend, banks, banksFailed,
   const [state, dispatch] = useReducer(flowReducer, session, (s) => openFlow(s.mode, s.options))
   const [signerKnown, setSignerKnown] = useState(false)
   const [personalNumberInvalid, setPersonalNumberInvalid] = useState(false)
-  const [paymentsBusy, setPaymentsBusy] = useState<'verify' | 'mail' | null>(null)
+  const [paymentsBusy, setPaymentsBusy] = useState<VerificationStartKind | null>(null)
   const connectedReported = useRef(false)
   const backendRef = useRef(backend)
   backendRef.current = backend
@@ -157,7 +161,7 @@ export function useBankConnectController({ session, backend, banks, banksFailed,
     })
     const payments = backendRef.current.payments
     if (!payments) {
-      dispatch({ type: 'payments_offer', offered: false, verification: null, validUntil: null })
+      dispatch({ type: 'payments_offer', offered: false, verification: null })
     } else {
       payments
         .probe()
@@ -165,7 +169,7 @@ export function useBankConnectController({ session, backend, banks, banksFailed,
           if (!cancelled) dispatch({ type: 'payments_offer', ...offer })
         })
         .catch(() => {
-          if (!cancelled) dispatch({ type: 'payments_offer', offered: false, verification: null, validUntil: null })
+          if (!cancelled) dispatch({ type: 'payments_offer', offered: false, verification: null })
         })
     }
     return () => {
@@ -302,15 +306,20 @@ export function useBankConnectController({ session, backend, banks, banksFailed,
     onConnectedRef.current?.(connection, firstSync)
   }, [connection, firstSync])
 
-  // The verification form is open somewhere: look every 15 s while the offer step stays.
-  const verifying = state.step === 'payments' && state.verificationUrl !== null && state.verification !== 'valid'
+  // A verification form is out (opened here, or earlier by someone, or with
+  // the firmatecknare): look every 15 s while the offer step stays, asking
+  // the provider each time, until it answers valid.
+  const verifying =
+    state.step === 'payments' &&
+    state.verification !== 'valid' &&
+    (state.verificationUrl !== null || (state.verificationState !== null && FORM_OUT_STATES.has(state.verificationState)))
   useEffect(() => {
     const payments = backendRef.current.payments
     if (!verifying || !payments) return
     return startPollLoop({
-      poll: () => payments.fetchVerification(),
+      poll: () => payments.fetchVerification({ refresh: true }),
       onResult: (verification) => {
-        dispatch({ type: 'verification_polled', status: verification.status, validUntil: verification.valid_until })
+        dispatch({ type: 'verification_polled', verification })
         return verification.status !== 'valid'
       },
       intervalMs: VERIFICATION_POLL_MS,
@@ -426,13 +435,16 @@ export function useBankConnectController({ session, backend, banks, banksFailed,
     }
   }
 
-  async function openVerification(kind: 'verify' | 'mail', deliver: (url: string) => void) {
+  // Every start makes a fresh 24-hour link at the provider. A mail or a copy
+  // hands the form to a firmatecknare, and the state says so (awaiting_signatory)
+  // until the provider answers valid or the link runs out.
+  async function openVerification(kind: VerificationStartKind, deliver: (url: string) => void | Promise<void>) {
     if (!backend.payments) return
     setPaymentsBusy(kind)
     try {
-      const { url } = await backend.payments.startVerification()
-      deliver(url)
-      dispatch({ type: 'verification_opened', url })
+      const started = await backend.payments.startVerification({ handoff: kind !== 'verify' })
+      await deliver(started.url)
+      dispatch({ type: 'verification_opened', url: started.url, expiresAt: started.expires_at, state: started.state })
     } catch (error) {
       toast({ title: t('verification_failed_title'), description: describe(error, t('verification_failed_title')), variant: 'destructive' })
     } finally {

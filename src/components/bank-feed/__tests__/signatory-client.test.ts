@@ -59,28 +59,34 @@ describe('the Open Payments api bound to the signatory base', () => {
 describe('the signatory payments api', () => {
   const base = openPaymentsSignatoryBase(TOKEN)
 
-  it('offers the verification while the company is not verified', async () => {
-    vi.stubGlobal('fetch', answering(200, { data: { status: 'invalid', valid_until: null } }))
-    expect(await createSignatoryPaymentsApi(base).probe()).toEqual({ offered: true, verification: 'invalid', validUntil: null })
+  const NOT_VERIFIED = { status: 'invalid', valid_until: null, state: 'link_expired', link_expires_at: '2026-10-12T09:00:00.000Z', checked_at: null }
+
+  it('offers the verification while the company is not verified, with the state the door answered', async () => {
+    vi.stubGlobal('fetch', answering(200, { data: NOT_VERIFIED }))
+    expect(await createSignatoryPaymentsApi(base).probe()).toEqual({ offered: true, verification: NOT_VERIFIED })
   })
 
   it('makes no offer when the company is verified or may not pay through the bank', async () => {
-    vi.stubGlobal('fetch', answering(200, { data: { status: 'valid', valid_until: '2027-01-01' } }))
+    vi.stubGlobal('fetch', answering(200, { data: { status: 'valid', valid_until: '2027-01-01', state: 'valid', link_expires_at: null, checked_at: null } }))
     expect((await createSignatoryPaymentsApi(base).probe()).offered).toBe(false)
     vi.stubGlobal('fetch', answering(403, { error: { code: 'PAYMENTS_UNAVAILABLE', message: 'x' } }))
-    expect(await createSignatoryPaymentsApi(base).probe()).toEqual({ offered: false, verification: null, validUntil: null })
+    expect(await createSignatoryPaymentsApi(base).probe()).toEqual({ offered: false, verification: null })
   })
 
-  it('keeps the offer with an unknown status when the provider is down', async () => {
+  it('keeps the offer without a status when the provider is down', async () => {
     vi.stubGlobal('fetch', answering(503, { error: { code: 'PAYMENT_PROVIDER_UNAVAILABLE', message: 'x' } }))
-    expect(await createSignatoryPaymentsApi(base).probe()).toEqual({ offered: true, verification: 'unknown', validUntil: null })
+    expect(await createSignatoryPaymentsApi(base).probe()).toEqual({ offered: true, verification: null })
   })
 
-  it('starts the form through the token door', async () => {
-    const fetchMock = answering(200, { data: { url: 'https://verify.example/form' } })
+  it('polls with refresh and starts the form through the token door, never as a hand-off', async () => {
+    const started = { url: 'https://verify.example/form', expires_at: '2026-10-15T09:00:00.000Z', state: 'form_open' }
+    const fetchMock = answering(200, { data: started })
     vi.stubGlobal('fetch', fetchMock)
-    expect(await createSignatoryPaymentsApi(base).startVerification()).toEqual({ url: 'https://verify.example/form' })
+    expect(await createSignatoryPaymentsApi(base).startVerification()).toEqual(started)
     expect(fetchMock.mock.calls[0][0]).toBe(`/api/koppla/${TOKEN}/verification/start`)
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({})
+    await createSignatoryPaymentsApi(base).fetchVerification({ refresh: true })
+    expect(fetchMock.mock.calls[1][0]).toBe(`/api/koppla/${TOKEN}/verification?refresh=1`)
   })
 })
 

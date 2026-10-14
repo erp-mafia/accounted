@@ -8,8 +8,9 @@
  */
 
 import type { PaymentOrderStatus } from '@/lib/payments/orders/status'
+import type { VerificationState } from '@/lib/payments/orders/verification-state'
 
-export type { PaymentOrderStatus }
+export type { PaymentOrderStatus, VerificationState }
 
 export interface PayableAccount {
   id: string
@@ -32,9 +33,21 @@ export interface PaymentsAvailability {
   signer_known: boolean
 }
 
+/** GET /api/payments/verification: the provider's answer and where the verification stands (lib/payments/orders/verification-state). */
 export interface CompanyVerification {
   status: 'valid' | 'invalid' | 'unknown'
   valid_until: string | null
+  state: VerificationState
+  /** ISO instant the current form link runs out; null without a link. */
+  link_expires_at: string | null
+  checked_at: string | null
+}
+
+/** POST /api/payments/verification: a fresh form link, valid 24 hours. Shown or handed over once; never stored by the browser. */
+export interface StartedVerification {
+  url: string
+  expires_at: string
+  state: VerificationState
 }
 
 export type PayeeType = 'bankgiro' | 'plusgiro' | 'bank_account' | 'iban'
@@ -233,12 +246,14 @@ export function fetchPaymentsAvailability(): Promise<PaymentsAvailability> {
   return send<PaymentsAvailability>('/api/payments/availability')
 }
 
-export function fetchCompanyVerification(): Promise<CompanyVerification> {
-  return send<CompanyVerification>('/api/payments/verification')
+/** `refresh` asks the provider even when the stored answer is fresh: the poll while a form is open. */
+export function fetchCompanyVerification(options: { refresh?: boolean } = {}): Promise<CompanyVerification> {
+  return send<CompanyVerification>(options.refresh ? '/api/payments/verification?refresh=1' : '/api/payments/verification')
 }
 
-export function startCompanyVerification(): Promise<{ url: string }> {
-  return send<{ url: string }>('/api/payments/verification', { method: 'POST' })
+/** `handoff` when the link is for a firmatecknare (mailed or copied for them): the state then reads awaiting_signatory. */
+export function startCompanyVerification(options: { handoff?: boolean } = {}): Promise<StartedVerification> {
+  return send<StartedVerification>('/api/payments/verification', { method: 'POST', body: JSON.stringify({ handoff: options.handoff === true }) })
 }
 
 export function listPaymentOrders(params: { status?: PaymentOrderStatus[]; supplierInvoiceId?: string } = {}): Promise<PaymentOrder[]> {

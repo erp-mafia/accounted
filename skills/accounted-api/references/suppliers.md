@@ -950,6 +950,7 @@ Answers the URL of the Betalningar page in Accounted (optionally with orders pre
 
 **Pitfalls:**
 - verification is null when the provider did not answer in time; it is informational here.
+- verification.state says what to do: not_started, link_expired, expiring or expired call for POST /payment-orders/verification/start.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -965,7 +966,7 @@ Response `200`:
     awaiting_signature: number,
     at_bank: number,
     outcome_unknown: number,
-    verification: { status: "valid" | "invalid" | "unknown", valid_until: string | null } | null,
+    verification: { status: "valid" | "invalid" | "unknown", valid_until: string | null, state: "not_started" | "form_open" | "awaiting_signatory" | "link_expired" | "valid" | "expiring" | "expired", link_expires_at: string | null } | null,
     note: string
   },
   meta: {
@@ -991,7 +992,9 @@ Example response `200`:
     "outcome_unknown": 0,
     "verification": {
       "status": "valid",
-      "valid_until": "2027-10-03"
+      "valid_until": "2027-10-03",
+      "state": "valid",
+      "link_expires_at": null
     },
     "note": "Approval and BankID signing happen in Accounted, by a person: open the url. No API or MCP door signs a payment."
   },
@@ -1134,16 +1137,17 @@ Example response `200`:
 
 ### `GET /api/v1/companies/{companyId}/payment-orders/verification`
 
-**The company's verification (know your customer) at the payment provider.**
+**The company's verification (know your customer) at the payment provider, and where it stands.**
 `scope:suppliers:read · risk:low · idempotent`
 
-Asks the provider whether it has verified the company. Payments are refused until the status is valid. A missing or lapsed verification is started with POST /payment-orders/verification/start, which answers a form a signatory fills in and signs.
+Answers whether the provider has verified the company (status, valid_until) and the derived state: not_started, form_open, awaiting_signatory, link_expired, valid, expiring (within 30 days of valid_until), expired. Payments are refused until the status is valid. The stored answer is used when it is under six hours old; the provider is asked again when it is older or a form is out. A missing, expired or expiring verification is started or renewed with POST /payment-orders/verification/start, which answers a form link (valid 24 h) a signatory fills in and signs.
 
-**Use when:** Bank payments are available but signing is refused for the company, or before the first payment.
+**Use when:** Bank payments are available but signing is refused for the company, before the first payment, or to see whether a renewal is due.
 **Do not use for:** Whether payments are switched on at all (GET /payment-orders/availability).
 
 **Pitfalls:**
-- PAYMENT_PROVIDER_UNAVAILABLE is transient: the provider did not answer; try again shortly.
+- PAYMENT_PROVIDER_UNAVAILABLE is transient: the provider did not answer and nothing was on file; try again shortly.
+- state link_expired: the 24-hour form link ran out unsigned; start again rather than re-sending the old link.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -1152,7 +1156,12 @@ Asks the provider whether it has verified the company. Payments are refused unti
 Response `200`:
 ```ts
 {
-  data: { status: "valid" | "invalid" | "unknown", valid_until: string | null },
+  data: {
+    status: "valid" | "invalid" | "unknown",
+    valid_until: string | null,
+    state: "not_started" | "form_open" | "awaiting_signatory" | "link_expired" | "valid" | "expiring" | "expired",
+    link_expires_at: string | null
+  },
   meta: {
     request_id: string,
     api_version: string,
@@ -1170,7 +1179,9 @@ Example response `200`:
 {
   "data": {
     "status": "valid",
-    "valid_until": "2027-10-03"
+    "valid_until": "2027-10-03",
+    "state": "valid",
+    "link_expires_at": null
   },
   "meta": {
     "request_id": "req_…",
@@ -1183,26 +1194,43 @@ Example response `200`:
 
 ### `POST /api/v1/companies/{companyId}/payment-orders/verification/start`
 
-**Start the company's verification at the payment provider and get the form link.**
+**Start or renew the company's verification at the payment provider and get the form link.**
 `scope:suppliers:write · risk:low · dry-run · reversible`
 
-Creates a verification at the provider and answers the link to its form, which a signatory of the company fills in and signs with BankID (valid for a limited time; starting again makes a new form). The provider approves afterwards; read the result with GET /payment-orders/verification. Changes nothing in the books.
+Creates a verification form at the provider and answers its link, which a person fills in and a signatory of the company signs with BankID. The link is valid 24 hours (expires_at); starting again makes a new form and a new link. The state is then form_open, or awaiting_signatory with handoff true (the link goes to a firmatecknare rather than the caller). The provider approves afterwards; read the result with GET /payment-orders/verification. Changes nothing in the books.
 
-**Use when:** GET /payment-orders/verification answers invalid.
+**Use when:** GET /payment-orders/verification answers a state of not_started, link_expired, expiring or expired.
 **Do not use for:** Checking the status (GET /payment-orders/verification).
 
 **Pitfalls:**
-- The link is for a person who may sign for the company; it is not an API.
+- The link is for a person who may sign for the company; it is not an API. Hand it over once and do not store it.
+- A non-signatory can fill the form in and share it with a signatory to sign; pass handoff true when the link is for the signatory.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
+Request body:
+```ts
+{ handoff?: boolean }
+```
+
+Example request:
+```json
+{
+  "handoff": true
+}
+```
+
 Response `200`:
 ```ts
 {
-  data: { url: string },
+  data: {
+    url: string,
+    expires_at: string,
+    state: "not_started" | "form_open" | "awaiting_signatory" | "link_expired" | "valid" | "expiring" | "expired"
+  },
   meta: {
     request_id: string,
     api_version: string,
@@ -1219,7 +1247,9 @@ Example response `200`:
 ```json
 {
   "data": {
-    "url": "https://kyc.openbankingplatform.com/…"
+    "url": "https://kyc.openbankingplatform.com/…",
+    "expires_at": "2026-10-14T09:00:00.000Z",
+    "state": "awaiting_signatory"
   },
   "meta": {
     "request_id": "req_…",
