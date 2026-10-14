@@ -67,19 +67,30 @@ export function psuTypeOf(accountContext: AisParty['accountContext']): PsuType {
   return accountContext === 'private' ? 'personal' : 'business'
 }
 
-/** The company's organisationsnummer as the contract wants it (10 digits), or null when the company has none. */
+/**
+ * An organisationsnummer as the contract wants it (10 digits), or null. A
+ * 12-digit form drops its two leading digits: 16 for a legal entity, 19 or
+ * 20 for an enskild firma, whose organisationsnummer is the owner's
+ * personnummer and is often stored with its century (19751130XXXX).
+ */
+export function tenDigitOrgNumber(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  const digits = raw.replace(/\D/g, '')
+  const ten = digits.length === 12 && /^(16|19|20)/.test(digits) ? digits.slice(2) : digits
+  return /^\d{10}$/.test(ten) ? ten : null
+}
+
+/**
+ * The company's organisationsnummer as the contract wants it (10 digits), or
+ * null when the company has none: the settings row first, the company row
+ * when the settings have none or one that does not read as a number.
+ */
 export async function companyOrgNumber(supabase: SupabaseClient, companyId: string): Promise<string | null> {
   const { data: settings } = await supabase.from('company_settings').select('org_number').eq('company_id', companyId).maybeSingle()
-  let raw = (settings as { org_number?: string | null } | null)?.org_number ?? null
-  if (!raw) {
-    const { data: company } = await supabase.from('companies').select('org_number').eq('id', companyId).maybeSingle()
-    raw = (company as { org_number?: string | null } | null)?.org_number ?? null
-  }
-  if (!raw) return null
-  // A 12-digit form (16XXXXXXXXXX) drops the century prefix.
-  const digits = raw.replace(/\D/g, '')
-  const ten = digits.length === 12 && digits.startsWith('16') ? digits.slice(2) : digits
-  return /^\d{10}$/.test(ten) ? ten : null
+  const fromSettings = tenDigitOrgNumber((settings as { org_number?: string | null } | null)?.org_number ?? null)
+  if (fromSettings) return fromSettings
+  const { data: company } = await supabase.from('companies').select('org_number').eq('id', companyId).maybeSingle()
+  return tenDigitOrgNumber((company as { org_number?: string | null } | null)?.org_number ?? null)
 }
 
 export interface PartyInput {
@@ -113,7 +124,7 @@ export type PartyResult =
 
 export async function buildBankFeedParty(supabase: SupabaseClient, input: PartyInput): Promise<PartyResult> {
   const orgNumber = await companyOrgNumber(supabase, input.companyId)
-  if (!orgNumber) return { ok: false, outcome: { ok: false, code: 'VALIDATION_ERROR', details: { field: 'org_number', reason: 'missing' } } }
+  if (!orgNumber) return { ok: false, outcome: { ok: false, code: 'BANK_CONSENT_ORG_NUMBER_MISSING', details: { field: 'org_number', reason: 'missing' } } }
   const typed = normalizeSignerPersonalNumber(input.signer.personalNumber)
   if (input.signer.personalNumber && !typed) {
     return { ok: false, outcome: { ok: false, code: 'BANK_CONSENT_PERSONAL_NUMBER_REQUIRED', details: { reason: 'invalid' } } }
