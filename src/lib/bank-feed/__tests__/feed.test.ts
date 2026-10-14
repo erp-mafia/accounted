@@ -170,11 +170,17 @@ describe('runOpenPaymentsSync', () => {
     expect(mocks.syncAccount.mock.calls[0][1]).not.toHaveProperty('includeEnrichment')
 
     // The rule on its own: missing or older than today's UTC date asks; today's does not; a person never.
-    expect(shouldAskForEnrichment({ last_enriched_at: null }, true, NOW)).toBe(true)
-    expect(shouldAskForEnrichment({ last_enriched_at: '2026-10-11T23:59:59+00:00' }, true, NOW)).toBe(true)
-    expect(shouldAskForEnrichment({ last_enriched_at: '2026-10-12T00:00:01+00:00' }, true, NOW)).toBe(false)
-    expect(shouldAskForEnrichment({ last_enriched_at: '2026-10-12T02:00:00+02:00' }, true, NOW)).toBe(false)
-    expect(shouldAskForEnrichment({ last_enriched_at: null }, false, NOW)).toBe(false)
+    const yesterday = '2026-10-11T14:40:00+00:00'
+    expect(shouldAskForEnrichment({ last_enriched_at: null, last_synced_at: yesterday }, true, NOW)).toBe(true)
+    expect(shouldAskForEnrichment({ last_enriched_at: null, last_synced_at: null }, true, NOW)).toBe(true)
+    expect(shouldAskForEnrichment({ last_enriched_at: '2026-10-11T23:59:59+00:00', last_synced_at: yesterday }, true, NOW)).toBe(true)
+    expect(shouldAskForEnrichment({ last_enriched_at: '2026-10-12T00:00:01+00:00', last_synced_at: yesterday }, true, NOW)).toBe(false)
+    expect(shouldAskForEnrichment({ last_enriched_at: '2026-10-12T02:00:00+02:00', last_synced_at: yesterday }, true, NOW)).toBe(false)
+    expect(shouldAskForEnrichment({ last_enriched_at: null, last_synced_at: yesterday }, false, NOW)).toBe(false)
+    // Only the first sync of the UTC day asks: a bank that never stamps (Swedbank) is asked once a day, not on every run.
+    expect(shouldAskForEnrichment({ last_enriched_at: null, last_synced_at: '2026-10-12T02:40:00+00:00' }, true, NOW)).toBe(false)
+    expect(shouldAskForEnrichment({ last_enriched_at: '2026-10-10T04:00:00+00:00', last_synced_at: '2026-10-12T00:00:00+00:00' }, true, NOW)).toBe(false)
+    expect(shouldAskForEnrichment({ last_enriched_at: null, last_synced_at: '2026-10-11T23:59:59+00:00' }, true, NOW)).toBe(true)
   })
 
   it('reads every enabled account through the route, persists, emits and answers the window', async () => {

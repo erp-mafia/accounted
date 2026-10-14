@@ -78,17 +78,24 @@ export const FEED_CONNECTION_COLUMNS =
 
 /**
  * Whether an unattended sync asks the service for the account's enrichment
- * facts (one details read at the bank per account): only while the stored
- * last_enriched_at is missing or older than today's UTC date, so a day costs
- * at most one such read on top of the two transaction reads. A sync a person
- * triggered never asks: the cron picks the facts up on its next run.
+ * facts (one details read at the bank per account). Only the first sync of
+ * a UTC day may ask, and only while the stored last_enriched_at is missing
+ * or older than today: a bank that reports no stamp at all (Swedbank) would
+ * otherwise be asked on every run, and two details reads a day on top of the
+ * two transaction reads is the whole of the four unattended reads per
+ * account and day Open Payments allows. The stamp is informational (the
+ * seven-day re-read takes the enrichment either way), so one ask a day is
+ * enough. A sync a person triggered never asks.
  */
-export function shouldAskForEnrichment(connection: Pick<FeedConnection, 'last_enriched_at'>, unattended: boolean, now: number): boolean {
+export function shouldAskForEnrichment(connection: Pick<FeedConnection, 'last_enriched_at' | 'last_synced_at'>, unattended: boolean, now: number): boolean {
   if (!unattended) return false
+  const today = isoDay(now)
+  const synced = connection.last_synced_at ? new Date(connection.last_synced_at).getTime() : Number.NaN
+  if (Number.isFinite(synced) && isoDay(synced) >= today) return false
   if (!connection.last_enriched_at) return true
   const stamped = new Date(connection.last_enriched_at).getTime()
   if (!Number.isFinite(stamped)) return true
-  return isoDay(stamped) < isoDay(now)
+  return isoDay(stamped) < today
 }
 
 /** When the bank does not say how far back it serves right after a consent, a year is asked for. */
