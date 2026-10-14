@@ -10,6 +10,7 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 import { formatCurrency } from '@/lib/utils'
 import { approvePaymentOrders, orderInvoiceLabel, payeeLabel, PaymentsClientError, type PaymentOrder } from './payments-client'
 import { RequestSigningLinkButton } from './RequestSigningLinkDialog'
+import { DocumentCheckLine, InvoiceDocumentButton, InvoiceDocumentSheet, PaymentBesideDocument, paymentFromOrder } from './InvoiceDocumentPreview'
 
 interface ApprovePaymentOrdersDialogProps {
   orders: PaymentOrder[]
@@ -23,7 +24,9 @@ interface ApprovePaymentOrdersDialogProps {
  * Godkänn: attest drafts before anyone signs them (convention 10, confirm up
  * front). An order to an account that is new for the supplier or differs from
  * the supplier card is confirmed one by one; the server refuses the approval
- * without those confirmations.
+ * without those confirmations. Drafts are often prepared by someone else (an
+ * agent, the byrå), so the approver sees each invoice's document beside the
+ * payment: beside it for one order, behind a document icon per row for several.
  */
 export function ApprovePaymentOrdersDialog({ orders, onOpenChange, onApproved, onRequestSignature }: ApprovePaymentOrdersDialogProps) {
   const t = useTranslations('bank_payments')
@@ -32,6 +35,8 @@ export function ApprovePaymentOrdersDialog({ orders, onOpenChange, onApproved, o
   const [confirmed, setConfirmed] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
   const [then, setThen] = useState<'close' | 'request'>('close')
+  const [documentKey, setDocumentKey] = useState<string | null>(null)
+  const payments = useMemo(() => orders.map(paymentFromOrder), [orders])
 
   const toConfirm = useMemo(() => orders.filter((o) => o.payee_check === 'new' || o.payee_check === 'changed'), [orders])
   const total = useMemo(() => orders.reduce((sum, o) => sum + Number(o.amount), 0), [orders])
@@ -55,22 +60,31 @@ export function ApprovePaymentOrdersDialog({ orders, onOpenChange, onApproved, o
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className={payments.length === 1 ? 'max-w-4xl' : undefined}>
         <DialogHeader>
           <DialogTitle>{t('approve_title', { count: orders.length })}</DialogTitle>
           <DialogDescription>{t('approve_description', { total: formatCurrency(total, orders[0]?.currency ?? 'SEK') })}</DialogDescription>
         </DialogHeader>
-        <ul className="max-h-64 space-y-2 overflow-y-auto text-[13px]">
-          {orders.map((o) => (
-            <li key={o.id} className="flex items-center justify-between gap-3 border-b border-border py-2">
-              <span className="min-w-0">
-                <span className="block truncate">{orderInvoiceLabel(o)}</span>
-                <span className="block truncate text-[11px] text-muted-foreground tabular-nums">{payeeLabel(o)}</span>
-              </span>
-              <span className="shrink-0 tabular-nums">{formatCurrency(Number(o.amount), o.currency)}</span>
-            </li>
-          ))}
-        </ul>
+        {payments.length === 1 ? (
+          <PaymentBesideDocument payment={payments[0]} />
+        ) : (
+          <ul className="max-h-64 space-y-2 overflow-y-auto text-[13px]">
+            {orders.map((o, index) => (
+              <li key={o.id} className="flex items-center justify-between gap-3 border-b border-border py-2">
+                <div className="min-w-0">
+                  <span className="block truncate">{orderInvoiceLabel(o)}</span>
+                  <span className="block truncate text-[11px] text-muted-foreground tabular-nums">{payeeLabel(o)}</span>
+                  <DocumentCheckLine payment={payments[index]} />
+                </div>
+                <span className="flex shrink-0 items-center gap-1 tabular-nums">
+                  <InvoiceDocumentButton payment={payments[index]} onOpen={setDocumentKey} />
+                  {formatCurrency(Number(o.amount), o.currency)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <InvoiceDocumentSheet payment={payments.find((p) => p.key === documentKey) ?? null} onClose={() => setDocumentKey(null)} />
         {toConfirm.length > 0 && (
           <div className="space-y-2">
             <p className="text-[12.5px] text-muted-foreground">{t('confirm_payees_intro')}</p>

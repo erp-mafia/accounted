@@ -6,6 +6,7 @@ import { sessionFailureResponse } from '@/lib/operations/session'
 import { preparePaymentOrders } from '@/lib/payments/orders/prepare'
 import { PAYMENT_ORDER_STATUSES } from '@/lib/payments/orders/status'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { INVOICE_DOCUMENT_COLUMNS } from '@/lib/payments/orders/invoice-document'
 
 const PrepareSchema = z.object({
   supplier_invoice_ids: z.array(z.uuid()).min(1).max(100),
@@ -30,10 +31,12 @@ export const GET = withRouteContext('payment_orders.list', async (request, { sup
 
   // Named columns: what a person needs to follow a payment, never internals
   // such as the idempotency key. provider_error_message is a sanitised text.
+  // The invoice brings what its document states, so the approver checks the
+  // payment against the supplier's own invoice.
   let query = supabase
     .from('payment_orders')
     .select(
-      'id, supplier_invoice_id, batch_id, status, amount, currency, requested_execution_date, cash_account_id, payee_type, payee_bankgiro, payee_plusgiro, payee_clearing, payee_account, payee_iban, payee_name, payee_source, payee_check, reference_type, reference, end_to_end_id, provider, provider_status, provider_status_at, provider_error_code, provider_error_message, create_started_at, outcome_unknown_at, approved_by, approved_at, submitted_at, signed_at, executed_at, cancelled_at, matched_at, created_at, updated_at, supplier_invoice:supplier_invoices(id, supplier_invoice_number, due_date, supplier:suppliers(name))',
+      `id, supplier_invoice_id, batch_id, status, amount, currency, requested_execution_date, cash_account_id, payee_type, payee_bankgiro, payee_plusgiro, payee_clearing, payee_account, payee_iban, payee_name, payee_source, payee_check, reference_type, reference, end_to_end_id, provider, provider_status, provider_status_at, provider_error_code, provider_error_message, create_started_at, outcome_unknown_at, approved_by, approved_at, submitted_at, signed_at, executed_at, cancelled_at, matched_at, created_at, updated_at, supplier_invoice:supplier_invoices(supplier_invoice_number, supplier:suppliers(name), ${INVOICE_DOCUMENT_COLUMNS})`,
     )
     .eq('company_id', companyId)
     .order('created_at', { ascending: false })

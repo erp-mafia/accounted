@@ -26,6 +26,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { loadAttestBlockedInvoiceIds } from '@/lib/supplier-invoices/attest-policy-read'
 import { resolveDebtor } from './debtor'
 import { resolveOrderPayee } from './payee'
+import { loadInvoiceDocumentFacts, withInvoiceDocument } from './invoice-document'
 import { isOpenPaymentOrder } from './status'
 import { logPaymentOrderEvents, type PaymentOrderRow } from './types'
 
@@ -295,13 +296,16 @@ export async function preparePaymentOrders(
   if (input.dryRun) {
     // Every rule above ran; only the database's payee_check (decided inside
     // create_payment_orders) and the rows themselves are missing.
+    // Each line carries its invoice's document, so the person checks the
+    // payment against what the supplier actually wrote before signing.
+    const documents = await loadInvoiceDocumentFacts(supabase, companyId, previewLines.map((line) => String(line.supplier_invoice_id)))
     return {
       ok: true,
       dryRun: true,
       preview: {
         cash_account_id: input.cashAccountId,
         debtor: { bank_name: debtor.debtor.bank_name, bic: debtor.debtor.bic },
-        lines: previewLines,
+        lines: previewLines.map((line) => withInvoiceDocument(line, documents)),
         skipped,
         total_amount: Math.round(previewLines.reduce((sum, line) => sum + Number(line.amount), 0) * 100) / 100,
         currency: previewLines.length ? String(previewLines[0].currency) : 'SEK',

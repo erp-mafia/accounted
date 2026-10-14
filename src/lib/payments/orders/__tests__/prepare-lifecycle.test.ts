@@ -306,6 +306,59 @@ describe('preparePaymentOrders', () => {
       await preparePaymentOrders(ctx, { supplierInvoiceIds: ['a'], cashAccountId: 'acct-1', executionDate: '2026-09-01', today: '2026-09-30' }),
     ).toMatchObject({ ok: false, code: 'VALIDATION_ERROR' })
   })
+
+  it('answers each dry-run line with its invoice document beside the payment', async () => {
+    const DOC = '5b1f4b8e-8f0e-4d3a-9b7c-2a1e6f0c9d11'
+    const documentFacts = { document_id: DOC, total: 737.5, document: { mime_type: 'application/pdf', file_name: 'derome.pdf' } }
+    db.setTable('supplier_invoices', {
+      data: [
+        // The document states another account than the card (the card is paid) and an OCR that fails its check.
+        invoice('a', { ...documentFacts, payee_bankgiro: '5402-0102', payment_reference: '4400112234' }),
+        // The document states the card's account and the OCR that is paid.
+        invoice('b', { ...documentFacts, payee_bankgiro: '5050-1055' }),
+        // No document, nothing stated beyond the OCR.
+        invoice('c', { document_id: null, total: 737.5, document: null }),
+      ],
+    })
+    // A person confirmed the invoice's account for the supplier, so it is not held back.
+    db.setTable('supplier_payee_confirmations', {
+      data: [{ supplier_id: 'sup-1', payee_key: 'bankgiro:54020102', decision: 'confirmed', decided_at: '2026-09-29T10:00:00Z' }],
+    })
+
+    const preview = await preparePaymentOrders(ctx, { supplierInvoiceIds: ['a', 'b', 'c'], cashAccountId: 'acct-1', today: '2026-09-30', dryRun: true })
+
+    if (!preview.ok || !preview.dryRun) throw new Error('unexpected')
+    const lines = (preview.preview as { lines: Array<Record<string, unknown>> }).lines
+    expect(lines.map((l) => l.supplier_invoice_id)).toEqual(['a', 'b', 'c'])
+    expect(lines[0]).toMatchObject({
+      payee: { label: 'BG 5050-1055' },
+      reference: { type: 'message', value: 'F-a' },
+      document: {
+        document_id: DOC,
+        mime_type: 'application/pdf',
+        file_name: 'derome.pdf',
+        payee: 'BG 5402-0102',
+        reference: '4400112234',
+        amount: 737.5,
+        currency: 'SEK',
+        due_date: '2026-10-20',
+        checks: { payee: 'differs', reference: 'differs' },
+      },
+    })
+    expect(lines[1]).toMatchObject({ document: { payee: 'BG 5050-1055', checks: { payee: 'same', reference: 'same' } } })
+    expect(lines[2]).toMatchObject({ document: { document_id: null, payee: null, checks: { payee: 'missing', reference: 'same' } } })
+    // Read under the company, and nothing is written.
+    expect(db.findCalls('supplier_invoices', 'eq')).toContainEqual(['company_id', COMPANY])
+    expect(db.findCall('rpc:create_payment_orders', 'rpc')).toBeUndefined()
+  })
+
+  it('reads no documents when it creates the drafts: the document is for the preview', async () => {
+    db.setTable('supplier_invoices', { data: [invoice('a')] })
+    db.setTable('rpc:create_payment_orders', { data: { ok: true, orders: [{ id: 'order-a', supplier_invoice_id: 'a', payee_check: 'known' }] } })
+    await preparePaymentOrders(ctx, { supplierInvoiceIds: ['a'], cashAccountId: 'acct-1', today: '2026-09-30' })
+    const selects = db.findCalls('supplier_invoices', 'select').map(([columns]) => String(columns))
+    expect(selects.some((columns) => columns.includes('document_attachments'))).toBe(false)
+  })
 })
 
 describe('approvePaymentOrders', () => {

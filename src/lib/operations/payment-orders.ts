@@ -462,7 +462,9 @@ export const paymentOrdersPrepare = defineOperation({
       '(POST /payment-orders/approve) and then signed with BankID on the Betalningar page in Accounted. The database decides each ' +
       'order\'s payee check (known, new, changed) from the supplier card, the invoice and payments a person already approved; new and ' +
       'changed accounts need that person\'s confirmation at approval. Invoices that cannot be paid are skipped with a reason; the ' +
-      'request fails only when nothing is payable. Dry-runnable: ?dry_run=true answers the lines without creating anything.',
+      'request fails only when nothing is payable. Dry-runnable: ?dry_run=true answers the lines without creating anything; each ' +
+      'line carries document: what the invoice document states (document_id, the account and the OCR read off it, its total and due ' +
+      'date) and checks (same, differs or missing) for the account and the reference against what would be paid.',
     useWhen:
       'The user wants to pay approved supplier invoices from their bank account in Accounted instead of a payment file. Call with the ' +
       'invoices and the account; then hand the person the Betalningar link (GET /payment-orders/signing-link).',

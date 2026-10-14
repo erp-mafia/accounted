@@ -12934,6 +12934,27 @@
     "done_payments_awaiting": "Bank payments: the form is with the person who signs",
     "done_payments_renew": "Bank payments: the verification needs renewing"
   },
+  "bank_payments_document": {
+    "open_document": "Open document",
+    "no_document": "No invoice attached",
+    "not_previewable": "The invoice cannot be previewed here",
+    "document_label": "Supplier invoice",
+    "show_document": "Show the invoice from {supplier}",
+    "sheet_kicker": "Supplier invoice",
+    "close": "Close",
+    "states": "The invoice states {value}",
+    "states_no_payee": "The invoice states no account",
+    "states_no_reference": "The invoice states no OCR",
+    "payee_same": "Same account as on the invoice",
+    "reference_same": "Same reference as on the invoice",
+    "both_same": "Account and reference match the invoice",
+    "on_document": "On the invoice: {amount}, due {date}",
+    "label_supplier": "Supplier",
+    "label_payee": "To account",
+    "label_reference": "Reference",
+    "label_date": "Payment date",
+    "label_amount": "Amount"
+  },
   "bank_payments": {
     "payee_alert_badge": "New bank details",
     "skip_payee_unconfirmed": "the invoice states new bank details nobody has approved (review them under Att göra)",
