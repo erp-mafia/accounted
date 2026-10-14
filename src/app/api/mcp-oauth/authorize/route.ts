@@ -116,11 +116,17 @@ function verifyScopeBinding(scopeParam: string, signature: string): boolean {
   return crypto.timingSafeEqual(expectedBuf, presentedBuf)
 }
 
+// The login and step-up redirects are built on the same base as the iss this
+// route returns (resolveDiscoveryBaseUrl), never on request.url's origin.
+// Behind a reverse proxy the standalone Next.js server sees its own bind
+// address in request.url (http://0.0.0.0:3000 by default), so an
+// origin-relative redirect sends the browser to an unreachable host and the
+// connector's OAuth popup dies on the first unauthenticated hit.
 function buildLoginRedirect(request: Request): Response {
   const url = new URL(request.url)
   const next = `${url.pathname}${url.search}`
   return NextResponse.redirect(
-    new URL(`/login?next=${encodeURIComponent(next)}`, url.origin)
+    new URL(`/login?next=${encodeURIComponent(next)}`, resolveDiscoveryBaseUrl(request))
   )
 }
 
@@ -152,7 +158,9 @@ async function requireAal2(
   const url = new URL(request.url)
   const returnTo = `${url.pathname}${url.search}`
   const stepUp = (page: '/mfa/verify' | '/mfa/enroll') =>
-    NextResponse.redirect(new URL(`${page}?returnTo=${encodeURIComponent(returnTo)}`, url.origin))
+    NextResponse.redirect(
+      new URL(`${page}?returnTo=${encodeURIComponent(returnTo)}`, resolveDiscoveryBaseUrl(request)),
+    )
 
   // Only a positive "this session is AAL2" answer lets consent through. A
   // failed or empty assurance lookup is treated as AAL1 (verify page), never
