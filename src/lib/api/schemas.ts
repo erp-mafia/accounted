@@ -35,6 +35,11 @@ import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
 import { validateJamkning } from '@/lib/salary/jamkning-rules'
 import { VACATION_DAYS_MINIMUM, vacationDaysBelowMinimum } from '@/lib/salary/employee-update-rules'
 import { SalaryCalculationPolicySchema } from '@/lib/salary/calculation-policy'
+import {
+  RECURRING_LINE_ITEM_TYPES,
+  validateRecurringLineAmount,
+  type RecurringLineItemType,
+} from '@/lib/salary/recurring-lines'
 import { EXPENSE_CLAIM_REVERSE_CHARGE_KINDS } from '@/lib/expenses/expense-claim-vat'
 import { VOUCHER_LINE_VAT_KINDS, VOUCHER_LINE_VAT_RATES } from '@/lib/bookkeeping/voucher-line-vat-code'
 import { MAX_INVOICE_EMAIL_COPY_RECIPIENTS } from '@/lib/invoices/email-recipients'
@@ -4004,6 +4009,8 @@ export const SalaryLineItemTypeSchema = z.enum([
   'net_deduction_other',
   'oresavrundning',
   'correction', 'other',
+  // Textrad: words only, no money (lib/salary/text-rows.ts, migration 20261014233000).
+  'text',
 ])
 
 // Base employee object (no refinements, safe for .partial())
@@ -4389,13 +4396,7 @@ export const UpdateEmployeeBenefitSchema = z.object({
   }
 })
 
-export const RecurringLineItemTypeSchema = z.enum([
-  'gross_deduction_pension',
-  'gross_deduction_other',
-  'net_deduction_union',
-  'net_deduction_benefit_payment',
-  'net_deduction_other',
-])
+export const RecurringLineItemTypeSchema = z.enum(RECURRING_LINE_ITEM_TYPES)
 
 /** Same inclusive-bound semantics as BENEFIT_PERIOD_ORDER_MESSAGE, for
  * employee_recurring_lines (migration 20260902140000). */
@@ -4406,15 +4407,15 @@ const recurringLineAmountIssue = (
   data: { item_type?: string; amount?: number },
   ctx: z.RefinementCtx,
 ) => {
-  // Mirrors the employee_recurring_lines_amount_sign CHECK: every supported
-  // type is a deduction and must be negative. Kept in the schema so the
+  // Mirrors the employee_recurring_lines_amount_sign and _text_row CHECKs:
+  // a deduction is negative, a text row is 0. Kept in the schema so the
   // violation is a field-level 400 instead of a Postgres 23514.
-  if (data.amount === undefined || data.item_type === undefined) return
-  const bad = data.amount >= 0
-  if (bad) {
+  if (data.item_type === undefined) return
+  const message = validateRecurringLineAmount(data.item_type as RecurringLineItemType, data.amount)
+  if (message) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: 'Avdragsrader måste ha negativt belopp och tilläggsrader positivt belopp.',
+      message,
       path: ['amount'],
     })
   }
@@ -4423,7 +4424,8 @@ const recurringLineAmountIssue = (
 export const CreateEmployeeRecurringLineSchema = z.object({
   item_type: RecurringLineItemTypeSchema,
   description: z.string().min(1).max(200),
-  amount: z.number(),
+  // A text row has no amount: omitted means 0 (lib/salary/text-rows.ts).
+  amount: z.number().optional(),
   account_number: accountNumberSchema.optional(),
   valid_from: isoDate,
   valid_to: isoDate.optional(),
@@ -4516,7 +4518,11 @@ export const CreateSalaryLineItemSchema = z.object({
   description: z.string().min(1).max(500),
   quantity: z.number().optional(),
   unit_price: z.number().optional(),
-  amount: z.number(),
+  // Required on every row but a text row (item_type 'text', words only),
+  // which has no amount. The shared line commands
+  // (lib/salary/payslip-lines.ts) refuse a missing or 0 kr amount on any
+  // other row, except a vacation row that carries days in quantity.
+  amount: z.number().optional(),
   is_taxable: z.boolean().default(true),
   is_avgift_basis: z.boolean().default(true),
   is_vacation_basis: z.boolean().default(true),

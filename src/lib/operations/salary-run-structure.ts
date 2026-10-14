@@ -32,6 +32,7 @@ import { correctSalaryRun, type CorrectSalaryRunFailure } from '@/lib/salary/cor
 import { listSalaryRuns, SalaryRunListFiltersSchema, SalaryRunStatusSchema } from '@/lib/salary/list-runs'
 import { markSalaryRunPaid } from '@/lib/salary/mark-paid'
 import { createPayslipLine, deletePayslipLine, type SalaryLineItemRow } from '@/lib/salary/payslip-lines'
+import { isTextRow, normalizeTextRow, TEXT_ROW_MAX_LENGTH } from '@/lib/salary/text-rows'
 import { addEmployeeToRun, removeEmployeeFromRun } from '@/lib/salary/run-employees'
 import { defineOperation, type OperationOutcome } from './types'
 
@@ -423,9 +424,9 @@ export const salaryRunsLinesCreate = defineOperation({
   docs: {
     summary: 'Add a payslip line for one employee on a draft salary run.',
     description:
-      'Creates a payslip line (bonus, provision, övertid, traktamente, milersättning, bruttolöneavdrag, nettolöneavdrag, förskott, förmån or semesterdagar) for one employee on a draft run. account_number defaults from item_type. Amounts are rounded to whole öre. one_off_tax_percent (engångsskatt) taxes the line at that verified flat percentage instead of the monthly table; allowed on a positive taxable bonus, commission, other, correction or semesterersattning line. A vacation line (item_type vacation, quantity = days) may carry vacation_category to say which days are taken: paid (Betalda, the default), extra_paid (Extra betalda), saved (Sparade, optionally one origin year in vacation_saved_year), unpaid (Obetalda) or advance (Förskott). Tax and totals change only when the run is recalculated. Dry-runnable: the preview is the line as it would be stored.',
+      'Creates a payslip line (bonus, provision, övertid, traktamente, milersättning, bruttolöneavdrag, nettolöneavdrag, förskott, förmån, semesterdagar or a text row) for one employee on a draft run. account_number defaults from item_type. Amounts are rounded to whole öre, and every line but a text row needs a non-zero amount (a vacation line may carry only its days). A text row (item_type text, Textrad) carries words only: no amount, quantity or unit_price, every flag false and no account, so it explains the payslip without reaching tax, AGI or the booking. one_off_tax_percent (engångsskatt) taxes the line at that verified flat percentage instead of the monthly table; allowed on a positive taxable bonus, commission, other, correction or semesterersattning line. A vacation line (item_type vacation, quantity = days) may carry vacation_category to say which days are taken: paid (Betalda, the default), extra_paid (Extra betalda), saved (Sparade, optionally one origin year in vacation_saved_year), unpaid (Obetalda) or advance (Förskott). Tax and totals change only when the run is recalculated. Dry-runnable: the preview is the line as it would be stored.',
     useWhen:
-      'A one-off pay component before calculating: a bonus or provision, övertid, traktamente or milersättning, a deduction or förskott, or vacation days taken. A bonus or final-settlement semesterersättning that Skatteverket taxes as an engångsbelopp: send one_off_tax_percent with the percentage you verified for the employee.',
+      'A one-off pay component before calculating: a bonus or provision, övertid, traktamente or milersättning, a deduction or förskott, or vacation days taken. Words on this payslip without money (how the salary is built up): item_type text. A bonus or final-settlement semesterersättning that Skatteverket taxes as an engångsbelopp: send one_off_tax_percent with the percentage you verified for the employee.',
     doNotUseFor:
       'This month\'s base salary (gnubok_set_run_salary: the calculation rebuilds the Grundlön line), absence (gnubok_register_absence: the calculation derives sick, VAB and parental lines), utlägg (gnubok_attach_salary_expense_claims links the claim so booking settles it) or changing a line (gnubok_update_payslip_line).',
     pitfalls: [
@@ -433,6 +434,8 @@ export const salaryRunsLinesCreate = defineOperation({
       'The calculation owns every sick_*, vab, parental_leave, unpaid_leave, overtime_50, overtime_100 and ob_* line (it rebuilds them from registered absence and from worked hours under the company\'s OB and övertid rules), so those types are refused with SALARY_LINE_CALCULATED. Put a one-off övertid amount on item_type overtime and a one-off OB amount on item_type other.',
       'The flags are not derived from item_type: send them. Pay (bonus, commission, overtime, other, correction) keeps the defaults. Skattefri traktamente or milersättning: is_taxable, is_avgift_basis and is_vacation_basis false. Skattepliktig traktamente or milersättning: is_vacation_basis false. Bruttolöneavdrag: is_gross_deduction true, is_vacation_basis false. Nettolöneavdrag and förskott: is_net_deduction true, is_taxable, is_avgift_basis and is_vacation_basis false.',
       'Deductions carry a negative amount, as the dashboard stores them: the booking credits a nettolöneavdrag\'s account only when its amount is negative.',
+      'A 0 kr line is refused with VALIDATION_ERROR (details.field amount), also when the amount rounds to 0 at whole öre: every line but a text row needs a non-zero amount, except a vacation line carrying its days in quantity. For words without money use item_type text.',
+      `A text row (item_type text): description is the whole row, at most ${TEXT_ROW_MAX_LENGTH} characters, line breaks become spaces. Omit amount (0 is accepted), quantity and unit_price, otherwise VALIDATION_ERROR. The flags and account_number are ignored: the row is stored with every flag false and no account. A standing text on every payslip is a recurring line (gnubok_add_employee_recurring_line).`,
       'account_number defaults as for an employee (bonus "7210") even when the employee is a company owner, whose Grundlön books on "7220": send account_number on an owner\'s line.',
       'one_off_tax_percent is the percentage YOU verified against Skatteverket\'s engångsbelopp table for the employee\'s yearly income; it is never estimated. It is refused (VALIDATION_ERROR) on deductions, benefits, non-taxable rows and non-positive amounts. A valid jämkning decision on the employee overrides it. Equal percentages are summed before the öre are dropped, so splitting one bonus over two rows never changes the withholding.',
       'vacation_category is only valid on item_type vacation (VALIDATION_ERROR otherwise) and vacation_saved_year only with category saved. Omitted category = paid. The vacation ledger splits the booked run\'s days by category: saved consumes the named origin year, or the oldest saved year first when omitted; unpaid and advance consume their own pools.',
@@ -468,6 +471,7 @@ export const salaryRunsLinesCreate = defineOperation({
     ...LINE,
     item_type: LINE.item_type.describe(
       'Pay: bonus, commission (provision), overtime (övertid, quantity = hours), other, correction. ' +
+        'text: a text row (Textrad), words only on the payslip, no amount. ' +
         'Travel: traktamente_taxfree or traktamente_taxable (quantity = days), mileage_taxfree or mileage_taxable (milersättning, quantity = mil). ' +
         'Deductions: gross_deduction_pension or gross_deduction_other (bruttolöneavdrag); net_deduction_advance (förskott), net_deduction_union, net_deduction_benefit_payment or net_deduction_other (nettolöneavdrag). ' +
         'vacation: semesterdagar taken (quantity = days). benefit_*: förmånsvärde (registered benefits are added at calculation). ' +
@@ -475,13 +479,15 @@ export const salaryRunsLinesCreate = defineOperation({
         'so a one-off OB amount goes on other. Not for the base salary (gnubok_set_run_salary), absence (gnubok_register_absence) ' +
         'or utlägg (gnubok_attach_salary_expense_claims).',
     ),
-    description: LINE.description.describe('Text on the payslip, e.g. "Kvartalsbonus Q2".'),
-    quantity: LINE.quantity.describe(
-      'Hours (övertid), days (traktamente, vacation) or mil (milersättning). For item_type vacation: the vacation days taken.',
+    description: LINE.description.describe(
+      `Text on the payslip, e.g. "Kvartalsbonus Q2". On a text row it is the whole row, at most ${TEXT_ROW_MAX_LENGTH} characters.`,
     ),
-    unit_price: LINE.unit_price.describe('SEK per unit, shown on the payslip; amount is not derived from it.'),
+    quantity: LINE.quantity.describe(
+      'Hours (övertid), days (traktamente, vacation) or mil (milersättning). For item_type vacation: the vacation days taken. Not on a text row.',
+    ),
+    unit_price: LINE.unit_price.describe('SEK per unit, shown on the payslip; amount is not derived from it. Not on a text row.'),
     amount: LINE.amount.describe(
-      'SEK, rounded to whole öre. Positive for pay and reimbursements, negative for a deduction (is_gross_deduction or is_net_deduction).',
+      'SEK, rounded to whole öre. Positive for pay and reimbursements, negative for a deduction (is_gross_deduction or is_net_deduction). Required and non-zero on every line but a text row (omit it) and a vacation line carrying days; 0 kr is refused.',
     ),
     is_taxable: LINE.is_taxable.describe('Default true. False on skattefri traktamente or milersättning and on nettolöneavdrag.'),
     is_avgift_basis: LINE.is_avgift_basis.describe(
@@ -516,7 +522,7 @@ export const salaryRunsLinesCreate = defineOperation({
     name: 'gnubok_add_payslip_line',
     title: 'Add Payslip Line',
     description:
-      'Stage a payslip line for one employee on a draft salary run: bonus, provision, övertid, traktamente, milersättning, avdrag, förskott or semesterdagar (vacation, quantity = days). Deductions are negative; absence and OB/övertid-rule types are refused. Recalculate after.',
+      'Stage a payslip line on a draft salary run: bonus, provision, övertid, traktamente, milersättning, avdrag, förskott, semesterdagar (vacation, quantity = days) or text (words, no amount). Deductions are negative; 0 kr, absence and OB types are refused. Recalculate after.',
     keywords: [
       'lönerad',
       'lönebeskedsrad',
@@ -533,11 +539,17 @@ export const salaryRunsLinesCreate = defineOperation({
       'förskott',
       'semesterdagar',
       'engångsskatt',
+      'textrad',
     ],
     stage: {
       pendingType: 'add_payslip_line',
-      title: (input) =>
-        `Lägg till lönebeskedsrad: ${String(input.description)} (${roundOre(Number(input.amount))} kr)`,
+      // A text row has no amount: name its words instead, never "NaN kr".
+      title: (input) => {
+        if (isTextRow(input)) return `Lägg till lönebeskedsrad: Textrad "${normalizeTextRow(String(input.description ?? ''))}"`
+        const amount = Number(input.amount)
+        const label = `Lägg till lönebeskedsrad: ${String(input.description)}`
+        return Number.isFinite(amount) ? `${label} (${roundOre(amount)} kr)` : label
+      },
     },
   },
   run: async (ctx, input, { dryRun }) => {

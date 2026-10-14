@@ -181,3 +181,106 @@ describe('POST /api/salary/employees/[id]/recurring-lines', () => {
     expect(response.status).toBe(500)
   })
 })
+
+// Text rows (item_type 'text', lib/salary/text-rows.ts): a standing row of
+// words on every payslip, no amount and no account.
+describe('POST /api/salary/employees/[id]/recurring-lines: text rows', () => {
+  const textLine = {
+    item_type: 'text',
+    description: 'Grundlön 40 000 kr + personligt tillägg 2 000 kr',
+    valid_from: '2026-01-01',
+  }
+
+  function authedWithCalls() {
+    const mock = createQueuedMockSupabase()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: mock.supabase })
+    return mock
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireWriteMock.mockResolvedValue({ ok: true })
+  })
+
+  it('returns 401 for a text row when unauthenticated', async () => {
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+    const response = await POST(post(textLine), params)
+    expect(response.status).toBe(401)
+  })
+
+  it('creates a text row with no amount: amount 0, no account, words normalised (201)', async () => {
+    const { enqueue: enqueueOwn, findCall } = authedWithCalls()
+    enqueueOwn({ data: { id: 'emp-1' } }) // employee ownership check
+    enqueueOwn({ data: { id: 'line-text', item_type: 'text', amount: 0 } }) // insert
+
+    const response = await POST(
+      post({ ...textLine, description: ' Grundlön 40 000 kr\n + personligt tillägg 2 000 kr ', account_number: '7210' }),
+      params,
+    )
+    const { status, body } = await parseJsonResponse<{ data: { id: string } }>(response)
+
+    expect(status).toBe(201)
+    expect(body.data.id).toBe('line-text')
+    expect(findCall('employee_recurring_lines', 'insert')?.[0]).toMatchObject({
+      employee_id: 'emp-1',
+      company_id: 'company-1',
+      item_type: 'text',
+      description: 'Grundlön 40 000 kr + personligt tillägg 2 000 kr',
+      amount: 0,
+      account_number: null,
+    })
+  })
+
+  it('accepts an explicit 0 on a text row', async () => {
+    const { enqueue: enqueueOwn } = authedWithCalls()
+    enqueueOwn({ data: { id: 'emp-1' } })
+    enqueueOwn({ data: { id: 'line-text' } })
+    const response = await POST(post({ ...textLine, amount: 0 }), params)
+    expect(response.status).toBe(201)
+  })
+
+  it('returns a field-level 400 for a text row with an amount, before any database call', async () => {
+    const mock = authedWithCalls()
+    for (const amount of [500, -500]) {
+      const response = await POST(post({ ...textLine, amount }), params)
+      const { status, body } = await parseJsonResponse<{ errors: { field: string; message: string }[] }>(response)
+      expect(status).toBe(400)
+      expect(body.errors).toEqual(
+        expect.arrayContaining([expect.objectContaining({ field: 'amount', message: expect.stringMatching(/textrad har inget belopp/) })]),
+      )
+    }
+    expect(mock.supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 for a text row with no words', async () => {
+    const mock = authedWithCalls()
+    const response = await POST(post({ ...textLine, description: ' \n ' }), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    expect(status).toBe(400)
+    expect(body.error).toBe('En textrad måste ha en text.')
+    expect(mock.supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 for a deduction row without an amount (0 kr money row)', async () => {
+    const mock = authedWithCalls()
+    const response = await POST(
+      post({ item_type: 'gross_deduction_other', description: 'Bruttolöneavdrag', valid_from: '2026-01-01' }),
+      params,
+    )
+    expect(response.status).toBe(400)
+    expect(mock.supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('returns 404 for a text row on an employee outside the company', async () => {
+    const { enqueue: enqueueOwn, findCall } = authedWithCalls()
+    enqueueOwn({ data: null })
+    const response = await POST(post(textLine), params)
+    expect(response.status).toBe(404)
+    expect(findCall('employee_recurring_lines', 'insert')).toBeUndefined()
+  })
+})

@@ -130,3 +130,148 @@ describe('POST /api/salary/runs/[id]/lines', () => {
     expect(response.status).toBe(201)
   })
 })
+
+// Text rows (item_type 'text', lib/salary/text-rows.ts) and the 0 kr rule
+// every door shares (crm#1076).
+describe('POST /api/salary/runs/[id]/lines: text rows and 0 kr rows', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(requireWritePermission).mockResolvedValue({ ok: true } as never)
+  })
+
+  function authedWithCalls() {
+    const mock = createQueuedMockSupabase()
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: mockUser as never,
+      supabase: mock.supabase as never,
+      error: null,
+    })
+    return mock
+  }
+
+  const textBody = {
+    salary_run_employee_id: SRE_UUID,
+    item_type: 'text',
+    description: 'Lön enligt kollektivavtal',
+  }
+
+  async function post(body: unknown) {
+    const response = await POST(
+      createMockRequest('/api/salary/runs/run-1/lines', { method: 'POST', body }),
+      createMockRouteParams({ id: 'run-1' }),
+    )
+    return parseJsonResponse<{ data?: { id: string }; error?: string; code?: string }>(response)
+  }
+
+  it('returns 401 for a text row when not authenticated', async () => {
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: null,
+      supabase: null as never,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+    const { status } = await post(textBody)
+    expect(status).toBe(401)
+  })
+
+  it('creates a text row with no amount: words only, amount 0, no account, every flag false (201)', async () => {
+    const { enqueueMany, findCall } = authedWithCalls()
+    enqueueMany([
+      { data: { id: 'run-1', status: 'draft' } },
+      { data: { id: SRE_UUID, employee_id: 'emp-1' } },
+      { data: { id: 'li-text' } },
+    ])
+
+    // Schema defaults (is_taxable true, ...) and a caller-sent account never
+    // reach the stored row; a pasted line break collapses to one space.
+    const { status, body } = await post({ ...textBody, description: '  Lön enligt\n  kollektivavtal  ', account_number: '7210' })
+
+    expect(status).toBe(201)
+    expect(body.data?.id).toBe('li-text')
+    expect(findCall('salary_line_items', 'insert')?.[0]).toMatchObject({
+      salary_run_employee_id: SRE_UUID,
+      company_id: 'company-1',
+      item_type: 'text',
+      description: 'Lön enligt kollektivavtal',
+      quantity: null,
+      unit_price: null,
+      amount: 0,
+      account_number: null,
+      is_taxable: false,
+      is_avgift_basis: false,
+      is_vacation_basis: false,
+      is_gross_deduction: false,
+      is_net_deduction: false,
+    })
+  })
+
+  it('accepts an explicit 0 kr amount on a text row', async () => {
+    const { enqueueMany } = authedWithCalls()
+    enqueueMany([
+      { data: { id: 'run-1', status: 'draft' } },
+      { data: { id: SRE_UUID, employee_id: 'emp-1' } },
+      { data: { id: 'li-text' } },
+    ])
+    const { status } = await post({ ...textBody, amount: 0 })
+    expect(status).toBe(201)
+  })
+
+  it('returns 400 for a text row with an amount, and writes nothing', async () => {
+    const { enqueueMany, findCall } = authedWithCalls()
+    enqueueMany([
+      { data: { id: 'run-1', status: 'draft' } },
+      { data: { id: SRE_UUID, employee_id: 'emp-1' } },
+    ])
+    const { status, body } = await post({ ...textBody, amount: 500 })
+    expect(status).toBe(400)
+    expect(body.code).toBe('VALIDATION_ERROR')
+    expect(body.error).toBe('En textrad har inget belopp. Lägg beloppet på en egen rad.')
+    expect(findCall('salary_line_items', 'insert')).toBeUndefined()
+  })
+
+  it('returns 400 for a text row with a quantity or no words', async () => {
+    for (const [extra, message] of [
+      [{ quantity: 2 }, 'En textrad har inget antal eller á-pris.'],
+      [{ description: '  \n ' }, 'En textrad måste ha en text.'],
+    ] as const) {
+      const { enqueueMany } = authedWithCalls()
+      enqueueMany([
+        { data: { id: 'run-1', status: 'draft' } },
+        { data: { id: SRE_UUID, employee_id: 'emp-1' } },
+      ])
+      const { status, body } = await post({ ...textBody, ...extra })
+      expect(status).toBe(400)
+      expect(body.error).toBe(message)
+    }
+  })
+
+  it('returns 400 for a 0 kr money row and for a money row without an amount', async () => {
+    for (const amount of [0, 0.004, undefined]) {
+      const { enqueueMany, findCall } = authedWithCalls()
+      enqueueMany([
+        { data: { id: 'run-1', status: 'draft' } },
+        { data: { id: SRE_UUID, employee_id: 'emp-1' } },
+      ])
+      const { status, body } = await post({ ...validBody, amount })
+      expect(status, `amount ${amount}`).toBe(400)
+      expect(body.code).toBe('VALIDATION_ERROR')
+      expect(body.error).toMatch(/inte är 0 kr/)
+      expect(findCall('salary_line_items', 'insert')).toBeUndefined()
+    }
+  })
+
+  it('returns 404 for an unknown run', async () => {
+    const { enqueueMany } = authedWithCalls()
+    enqueueMany([{ data: null }])
+    const { status, body } = await post(textBody)
+    expect(status).toBe(404)
+    expect(body.code).toBe('SALARY_RUN_NOT_FOUND')
+  })
+
+  it('returns 404 for an employee who is not on the run', async () => {
+    const { enqueueMany } = authedWithCalls()
+    enqueueMany([{ data: { id: 'run-1', status: 'draft' } }, { data: null }])
+    const { status, body } = await post(textBody)
+    expect(status).toBe(404)
+    expect(body.code).toBe('SALARY_RUN_EMPLOYEE_NOT_FOUND')
+  })
+})

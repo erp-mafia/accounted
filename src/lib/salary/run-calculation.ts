@@ -57,8 +57,9 @@ import {
 import { fetchAllTaxTableRatesForRun, TaxTableUnavailableError } from './tax-tables'
 import { deriveEmployeeAbsence, loadRunAbsence } from './derive-absence-line-items'
 import { monthWindow, runDeviationWindow } from './deviation-period'
-import { getLineItemAccount } from './account-mapping'
+import { getLineItemAccount, type MoneyLineItemType } from './account-mapping'
 import { recurringLineFlags, type RecurringLineItemType } from './recurring-lines'
+import { RECURRING_TEXT_SORT_ORDER, isTextRow } from './text-rows'
 import { computePremiumLines } from './shift-premium-engine'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -96,7 +97,7 @@ function effectiveHourlyRate(emp: {
 }
 
 /** Benefit-type → line-item-type mapping for the derived benefit rows. */
-const BENEFIT_TYPE_TO_LINE_ITEM: Record<string, SalaryLineItemType> = {
+const BENEFIT_TYPE_TO_LINE_ITEM: Record<string, MoneyLineItemType> = {
   bike: 'benefit_bike',
   car: 'benefit_car',
   meals: 'benefit_meals',
@@ -694,27 +695,32 @@ export async function runSalaryCalculation(
     //      lifecycle as the benefit rows (deleted by back-link, re-derived for
     //      rows whose validity window covers the payment date). Flags come
     //      from the item type so a stored row can never contradict the
-    //      payslip math.
+    //      payslip math. A recurring text row is copied as words only (no
+    //      quantity, amount 0, no account) and sorts directly under the base
+    //      salary row; it is stored on the run, so the payslip keeps the text
+    //      it was issued with even if the recurring line changes later.
     const activeRecurring = (recurringByEmployee.get(emp.id) ?? []).filter(
       (r) => !r.valid_to || r.valid_to >= run.payment_date,
     )
+    let textIdx = 0
     const derivedRecurringRows = activeRecurring.map((r, idx) => {
       const itemType = r.item_type as RecurringLineItemType
       const flags = recurringLineFlags(itemType)
+      const text = itemType === 'text'
       return {
         salary_run_employee_id: sre.id,
         company_id: companyId,
         item_type: itemType,
         description: r.description,
-        quantity: 1,
-        amount: roundOre(r.amount),
+        quantity: text ? null : 1,
+        amount: text ? 0 : roundOre(r.amount),
         is_taxable: flags.is_taxable,
         is_avgift_basis: flags.is_avgift_basis,
         is_vacation_basis: flags.is_vacation_basis,
         is_gross_deduction: flags.is_gross_deduction,
         is_net_deduction: flags.is_net_deduction,
-        account_number: r.account_number || getLineItemAccount(itemType, emp.employment_type),
-        sort_order: 250 + idx,
+        account_number: itemType === 'text' ? null : r.account_number || getLineItemAccount(itemType, emp.employment_type),
+        sort_order: text ? RECURRING_TEXT_SORT_ORDER + textIdx++ : 250 + idx,
         source_recurring_line_id: r.id,
       }
     })
@@ -801,8 +807,9 @@ export async function runSalaryCalculation(
       // Everything the calculation derives is re-derived above; the rest are
       // manual lines (only the engine's own semesterersättning row counts as
       // derived: a manually entered one is a wage the operator decided on).
-      // The line commands refuse hand edits to exactly these rows.
-      .filter((li: Record<string, unknown>) => !isCalculatedLine(li))
+      // The line commands refuse hand edits to exactly these rows. A text row
+      // is words only and never reaches the engine.
+      .filter((li: Record<string, unknown>) => !isCalculatedLine(li) && !isTextRow(li))
       .map((li: Record<string, unknown>) => ({
         itemType: li.item_type as SalaryLineItemType,
         amount: li.amount as number,
@@ -840,7 +847,7 @@ export async function runSalaryCalculation(
       isGrossDeduction: false,
       isNetDeduction: false,
     }))
-    const derivedRecurringLineItems = derivedRecurringRows.map((row) => ({
+    const derivedRecurringLineItems = derivedRecurringRows.filter((row) => !isTextRow(row)).map((row) => ({
       itemType: row.item_type as SalaryLineItemType,
       amount: row.amount,
       isTaxable: row.is_taxable,

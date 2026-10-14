@@ -15,6 +15,9 @@
  * övertid or OB amount goes on Övertid or Övrigt, which carry the same flags
  * and account; the line commands refuse the calculated types from every door.
  *
+ * Textrad is a row of words only (text-rows.ts): no amount, no quantity, no
+ * flags. It explains the payslip and never reaches the pay.
+ *
  * Utlägg are deliberately absent: an expense claim reaches the payslip
  * through "Lägg till utlägg" on the run page, linked to the claim
  * (expense-claim-lines.ts), so it is settled when the run is booked. A free
@@ -22,6 +25,7 @@
  */
 import { roundOre } from '@/lib/money'
 import type { SalaryLineItemType } from '@/types'
+import { TEXT_ROW_FLAGS, TEXT_ROW_MAX_LENGTH, isTextRow, normalizeTextRow } from '@/lib/salary/text-rows'
 
 export type ManualPayslipLineType =
   | 'mileage_taxfree'
@@ -36,6 +40,7 @@ export type ManualPayslipLineType =
   | 'gross_deduction_other'
   | 'net_deduction_advance'
   | 'net_deduction_other'
+  | 'text'
 
 export interface ManualLineFlags {
   is_taxable: boolean
@@ -45,8 +50,8 @@ export interface ManualLineFlags {
   is_net_deduction: boolean
 }
 
-/** How the entered magnitude is signed on the row. */
-export type ManualLineSign = 'addition' | 'deduction' | 'signed'
+/** How the entered magnitude is signed on the row; 'none' = a text row, no amount. */
+export type ManualLineSign = 'addition' | 'deduction' | 'signed' | 'none'
 
 export interface ManualLineSpec {
   /** Swedish default description written to the row (stored data stays Swedish). */
@@ -111,6 +116,7 @@ export const MANUAL_PAYSLIP_LINE_SPECS: Record<ManualPayslipLineType, ManualLine
   gross_deduction_other: { label: 'Bruttolöneavdrag', flags: GROSS_DEDUCTION, sign: 'deduction' },
   net_deduction_advance: { label: 'Avdrag förskott', flags: NET_DEDUCTION, sign: 'deduction' },
   net_deduction_other: { label: 'Nettolöneavdrag', flags: NET_DEDUCTION, sign: 'deduction' },
+  text: { label: 'Textrad', flags: TEXT_ROW_FLAGS, sign: 'none' },
 }
 
 export const MANUAL_PAYSLIP_LINE_TYPES = Object.keys(MANUAL_PAYSLIP_LINE_SPECS) as ManualPayslipLineType[]
@@ -153,6 +159,7 @@ export interface ManualLineCaps {
 export type ManualLineBuild =
   | { ok: true; body: ManualLineBody }
   | { ok: false; reason: 'no_amount' }
+  | { ok: false; reason: 'no_text' }
   | { ok: false; reason: 'above_tax_free_cap'; cap: number; unit: 'mil' | 'dagar' }
 
 /**
@@ -161,10 +168,17 @@ export type ManualLineBuild =
  * when both are given, else from amount; deductions are stored negative,
  * additions positive, a correction keeps the sign typed. Refuses a zero or
  * missing amount, and a tax-free reimbursement priced above its schablon.
+ * A text row takes only its words (normalised, at most TEXT_ROW_MAX_LENGTH
+ * characters); quantity, unit price and amount are ignored.
  */
 export function buildManualPayslipLine(input: ManualLineInput, caps: ManualLineCaps = {}): ManualLineBuild {
   const spec = MANUAL_PAYSLIP_LINE_SPECS[input.item_type]
   if (!spec) return { ok: false, reason: 'no_amount' }
+  if (isTextRow(input)) {
+    const text = normalizeTextRow(input.description ?? '')
+    if (text === '' || text.length > TEXT_ROW_MAX_LENGTH) return { ok: false, reason: 'no_text' }
+    return { ok: true, body: { item_type: input.item_type, description: text, amount: 0, ...TEXT_ROW_FLAGS } }
+  }
   const quantity = finite(input.quantity)
   const unitPrice = finite(input.unit_price)
   const typed = finite(input.amount)

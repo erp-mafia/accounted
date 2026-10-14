@@ -4389,6 +4389,8 @@ export type SalaryLineItemType =
   | 'net_deduction_other'
   | 'oresavrundning'
   | 'correction' | 'other'
+  /** A row of words only, no money (lib/salary/text-rows.ts). */
+  | 'text'
 
 export type ShiftPremiumItemType =
   | 'overtime_50' | 'overtime_100'

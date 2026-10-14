@@ -505,6 +505,9 @@ const PEPPOL_ROWS: Record<string, Record<string, unknown>> = {
 }
 
 const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
+  // amount is optional in the schema (a text row has none) but a money row
+  // needs one, so the synthesized arguments carry it (crm#1076).
+  gnubok_add_payslip_line: { args: { amount: 100 } },
   // Exactly one id: the outside row's (external_id), or, for verifikat
   // settled against each other, the settlement's (crm#1074). Neither is
   // required by the schema any more, so the synthesized arguments carry

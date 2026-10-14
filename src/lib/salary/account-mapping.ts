@@ -22,8 +22,15 @@ export function isTaxFreeReimbursementType(itemType: string): boolean {
   return (TAX_FREE_REIMBURSEMENT_TYPES as readonly string[]).includes(itemType)
 }
 
-/** Default BAS account for each salary line item type */
-const LINE_ITEM_ACCOUNTS: Record<SalaryLineItemType, string> = {
+/**
+ * A line type that books money. A text row (item_type 'text',
+ * lib/salary/text-rows.ts) carries words only and never reaches the
+ * booking, so it has no account.
+ */
+export type MoneyLineItemType = Exclude<SalaryLineItemType, 'text'>
+
+/** Default BAS account for each salary line item type that books money. */
+const LINE_ITEM_ACCOUNTS: Record<MoneyLineItemType, string> = {
   // Salary components
   monthly_salary: '7210',
   hourly_salary: '7210',
@@ -92,7 +99,7 @@ const LINE_ITEM_ACCOUNTS: Record<SalaryLineItemType, string> = {
  * Can be overridden per line item via account_number field.
  */
 export function getLineItemAccount(
-  itemType: SalaryLineItemType,
+  itemType: MoneyLineItemType,
   employmentType: string = 'employee'
 ): string {
   // Company owner uses 7220 instead of 7210

@@ -16,6 +16,10 @@
  *   - A line the calculation owns is never added, edited or deleted by hand
  *     (SALARY_LINE_CALCULATED): the next calculation, which every run needs
  *     before booking, would silently undo it (#3185, calculated-line-items.ts).
+ *   - A text row carries words and no money; every other row needs a non-zero
+ *     amount, except a vacation row carrying days (text-rows.ts). A text row
+ *     is forced to amount 0, every flag false and no account, and a row is
+ *     never turned into or out of a text row.
  *
  * Result-object convention mirrors lib/salary/run-calculation.ts:
  * `{ ok: true, data } | { ok: false, code, details? }` where `code` is a key
@@ -25,14 +29,20 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { z } from 'zod'
 import type { CreateSalaryLineItemSchema, UpdateSalaryLineItemSchema } from '@/lib/api/schemas'
-import { getLineItemAccount } from '@/lib/salary/account-mapping'
+import { getLineItemAccount, type MoneyLineItemType } from '@/lib/salary/account-mapping'
 import { validateOneOffTaxLine } from '@/lib/salary/one-off-tax'
 import { validateVacationCategoryLine } from '@/lib/salary/vacation-category'
 import { roundOre } from '@/lib/money'
 import { isCalculatedLine, isCalculatedLineType } from '@/lib/salary/calculated-line-items'
 import { ADDITION_ITEM_TYPES } from '@/lib/salary/calculation-engine'
 import { isBenefitItemType } from '@/lib/salary/benefit-payments'
-import type { SalaryLineItemType } from '@/types'
+import {
+  TEXT_ROW_FLAGS,
+  TEXT_ROW_RETYPE_MESSAGE,
+  isTextRow,
+  normalizeTextRow,
+  validatePayslipLineContent,
+} from '@/lib/salary/text-rows'
 
 export type PayslipLineResult<T> =
   | { ok: true; data: T }
@@ -249,10 +259,21 @@ export async function createPayslipLine(
   if (!sre.ok) return sre
 
   const input = args.input
+  const text = isTextRow(input)
+  // Words and no money on a text row; a non-zero amount on any other row
+  // (the dialog's rule, now every door's: a 0 kr row printed "0,00").
+  // Judged on the amount as stored: 0,004 kr rounds to a 0 kr row.
+  const contentIssue = validatePayslipLineContent({
+    ...input,
+    amount: typeof input.amount === 'number' ? roundOre(input.amount) : input.amount,
+  })
+  if (contentIssue) {
+    return { ok: false, code: 'VALIDATION_ERROR', details: { field: contentIssue.field, message: contentIssue.message } }
+  }
   // Engångsskatt only on a positive taxable addition of an eligible type;
   // the same rule the DB CHECK enforces, answered here as a 400 with a
   // Swedish reason instead of a 23514.
-  const oneOffError = validateOneOffTaxLine(input)
+  const oneOffError = validateOneOffTaxLine({ ...input, amount: input.amount ?? 0 })
   if (oneOffError) {
     return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'one_off_tax_percent', message: oneOffError } }
   }
@@ -266,22 +287,31 @@ export async function createPayslipLine(
   if (avgiftBasisError) {
     return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'is_avgift_basis', message: avgiftBasisError } }
   }
-  const accountNumber =
-    input.account_number || getLineItemAccount(input.item_type as SalaryLineItemType)
+  // A text row has no account and no flags to choose: the schema defaults
+  // (is_taxable true, ...) are overridden, never stored.
+  const accountNumber = text
+    ? null
+    : input.account_number || getLineItemAccount(input.item_type as MoneyLineItemType)
+  const flags = text
+    ? TEXT_ROW_FLAGS
+    : {
+        is_taxable: input.is_taxable,
+        is_avgift_basis: input.is_avgift_basis,
+        is_vacation_basis: input.is_vacation_basis,
+        is_gross_deduction: input.is_gross_deduction,
+        is_net_deduction: input.is_net_deduction,
+      }
 
   const row = {
     salary_run_employee_id: sre.data.id,
     company_id: args.companyId,
     item_type: input.item_type,
-    description: input.description,
+    description: text ? normalizeTextRow(input.description) : input.description,
     quantity: input.quantity ?? null,
     unit_price: input.unit_price ?? null,
-    amount: roundOre(input.amount),
-    is_taxable: input.is_taxable,
-    is_avgift_basis: input.is_avgift_basis,
-    is_vacation_basis: input.is_vacation_basis,
-    is_gross_deduction: input.is_gross_deduction,
-    is_net_deduction: input.is_net_deduction,
+    // validatePayslipLineContent guaranteed a finite amount on a money row.
+    amount: text ? 0 : roundOre(input.amount as number),
+    ...flags,
     account_number: accountNumber,
     sort_order: input.sort_order,
     one_off_tax_percent: input.one_off_tax_percent ?? null,
@@ -329,10 +359,20 @@ export async function updatePayslipLine(
     return calculatedLineRefusal({ salary_line_item_id: args.lineId, item_type: loaded.data.line.item_type })
   }
   const existing = { data: loaded.data.line }
+  const text = isTextRow(existing.data)
+  if (args.patch.item_type !== undefined && isTextRow(args.patch) !== text) {
+    return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'item_type', message: TEXT_ROW_RETYPE_MESSAGE } }
+  }
 
   const updates: Record<string, unknown> = { ...args.patch }
   if (typeof updates.amount === 'number') {
     updates.amount = roundOre(updates.amount)
+  }
+  if (text) {
+    // A text row stays words only whatever the patch says about flags or
+    // account; an amount in the patch must be 0 (checked below).
+    Object.assign(updates, TEXT_ROW_FLAGS, { account_number: null })
+    if (typeof updates.description === 'string') updates.description = normalizeTextRow(updates.description)
   }
   // Moving the category off 'saved' (null returns the line to paid days)
   // retires the origin year with it unless the caller sets the year itself.
@@ -346,6 +386,14 @@ export async function updatePayslipLine(
   // Validate the row as it will read after the patch: a sparse update that
   // flips a flag or the sign can invalidate a percentage set earlier.
   const merged = { ...existing.data, ...updates } as SalaryLineItemRow
+  // The content rule on the merged row, but only when the patch touches what
+  // decides it, so an unrelated edit of a 0 kr row stored before the rule
+  // existed still goes through. A text row is always checked.
+  const touchesContent = text || ['amount', 'quantity', 'item_type'].some((key) => key in updates)
+  const contentIssue = touchesContent ? validatePayslipLineContent(merged) : null
+  if (contentIssue) {
+    return { ok: false, code: 'VALIDATION_ERROR', details: { field: contentIssue.field, message: contentIssue.message } }
+  }
   const oneOffError = validateOneOffTaxLine(merged)
   if (oneOffError) {
     return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'one_off_tax_percent', message: oneOffError } }

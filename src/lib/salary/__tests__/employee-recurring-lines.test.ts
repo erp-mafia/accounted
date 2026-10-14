@@ -12,6 +12,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { RECURRING_LINE_PERIOD_ORDER_MESSAGE } from '@/lib/api/schemas'
 import { RECURRING_LINE_AMOUNT_SIGN_MESSAGE } from '@/lib/salary/recurring-lines'
+import { TEXT_ROW_AMOUNT_MESSAGE } from '@/lib/salary/text-rows'
 import {
   createEmployeeRecurringLine,
   deleteEmployeeRecurringLine,
@@ -474,6 +475,74 @@ describe('deleteEmployeeRecurringLine', () => {
       const result = await deleteEmployeeRecurringLine(supabase, { ...base, dryRun: true })
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.code).toBe('NOT_FOUND')
+    })
+  })
+})
+
+describe('recurring text rows', () => {
+  const TEXT_STORED: EmployeeRecurringLineRow = {
+    ...STORED,
+    item_type: 'text',
+    description: 'Lönen består av grundlön och personligt tillägg',
+    amount: 0,
+  }
+  const create = (input: Record<string, unknown>) =>
+    createEmployeeRecurringLine(supabase, {
+      companyId: COMPANY_ID,
+      employeeId: EMPLOYEE_ID,
+      userId: USER_ID,
+      input: input as never,
+    })
+
+  it('stores a text row with no amount as amount 0, no account and normalised text', async () => {
+    mock.enqueue({ data: { id: EMPLOYEE_ID } })
+    mock.enqueue({ data: TEXT_STORED })
+    const result = await create({
+      item_type: 'text',
+      description: ' Lönen består av grundlön\noch personligt tillägg ',
+      account_number: '7210',
+      valid_from: '2026-01-01',
+    })
+    expect(result.ok).toBe(true)
+    expect(mock.findCall('employee_recurring_lines', 'insert')?.[0]).toMatchObject({
+      item_type: 'text',
+      description: 'Lönen består av grundlön och personligt tillägg',
+      amount: 0,
+      account_number: null,
+    })
+  })
+
+  it('refuses an amount on a text row, and blank text, before touching the database', async () => {
+    expect(await create({ item_type: 'text', description: 'Text', amount: 500, valid_from: '2026-01-01' })).toMatchObject({
+      ok: false,
+      code: 'VALIDATION_ERROR',
+      details: { issues: [{ field: 'amount', message: TEXT_ROW_AMOUNT_MESSAGE }] },
+    })
+    expect(await create({ item_type: 'text', description: '  \n ', valid_from: '2026-01-01' })).toMatchObject({
+      ok: false,
+      code: 'VALIDATION_ERROR',
+      details: { issues: [{ field: 'description' }] },
+    })
+    expect(mock.supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('a deduction still needs a negative amount', async () => {
+    expect(await create({ ...validInput, amount: undefined })).toMatchObject({ ok: false, code: 'VALIDATION_ERROR' })
+  })
+
+  it('a patch keeps a text row without an account and refuses an amount', async () => {
+    const base = { companyId: COMPANY_ID, employeeId: EMPLOYEE_ID, lineId: LINE_ID }
+    mock.enqueue({ data: TEXT_STORED })
+    mock.enqueue({ data: TEXT_STORED })
+    await updateEmployeeRecurringLine(supabase, { ...base, patch: { description: 'Ny\ntext', account_number: '7210' } })
+    const written = mock.findCall('employee_recurring_lines', 'update')?.[0] as Record<string, unknown>
+    expect(written.description).toBe('Ny text')
+    expect(written.account_number).toBeUndefined()
+
+    mock.enqueue({ data: TEXT_STORED })
+    expect(await updateEmployeeRecurringLine(supabase, { ...base, patch: { amount: -100 } })).toMatchObject({
+      ok: false,
+      code: 'VALIDATION_ERROR',
     })
   })
 })
