@@ -2,19 +2,26 @@
  * What a company has used of its bank payments in a month, counted the way
  * the payment initiation provider bills: every payment that reached the
  * provider (an order with a provider payment id) and every account one left
- * from. The plan includes a number of each per company and month; the rest
- * is charged separately. The counter is read from the orders the ledger
- * already keeps: no second ledger of usage.
+ * from. The counter is read from the orders the ledger already keeps: no
+ * second ledger of usage.
+ *
+ * Payments are capped (founder decision 2026-10-14, while the provider
+ * prices per payment and our own pricing is not set): a company may send
+ * BANK_PAYMENTS_INCLUDED_PER_MONTH a month, or the number a founder set for
+ * it in company_bank_payment_allowances, and a signing that would pass it is
+ * refused (lib/payments/allowance.ts). Accounts are counted for display only.
+ * Payment files (betalfil) never reach the provider and are not counted.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
-/** Included per company and month (the provider's allowance, mirrored one to one until the pricing work sets our own). */
-export const BANK_PAYMENTS_INCLUDED_PER_MONTH = 30
+/** Payments per company and Stockholm calendar month, unless company_bank_payment_allowances says otherwise. A hard cap. */
+export const BANK_PAYMENTS_INCLUDED_PER_MONTH = 10
+/** Accounts per company and month the plan includes: display only, never enforced. */
 export const BANK_ACCOUNTS_INCLUDED_PER_MONTH = 2
 
-/** Rows read per month; a company sending more bank payments than this in a month is not a case the counter is built for. */
+/** Rows read per month; a company sending more bank payments than this in a month is not a case the counter (or the cap) is built for. */
 const USAGE_ROW_CAP = 1000
 
 export interface BankPaymentsUsage {
@@ -22,10 +29,21 @@ export interface BankPaymentsUsage {
   period: string
   payments_sent: number
   accounts_used: number
+  /** The cap: the company's allowance, or the default. */
   included_payments: number
   included_accounts: number
+  /** Payments the company may still send this month (0 when the cap is reached). */
+  remaining_payments: number
+  /** Beyond the cap: two signings racing each other, or an allowance lowered mid-month. */
   extra_payments: number
   extra_accounts: number
+}
+
+/** The month's orders that reached the provider, and the company's cap: what the counter and the cap are read from. */
+export interface BankPaymentsMonth {
+  period: string
+  sent: Array<{ id: string; cash_account_id: string | null }>
+  included_payments: number
 }
 
 const PERIOD = /^\d{4}-(0[1-9]|1[0-2])$/
@@ -69,28 +87,56 @@ export function usagePeriodBounds(period: string): { start: string; end: string 
   return { start: stockholmMidnightIso(year, month, 1), end: stockholmMidnightIso(next.year, next.month, 1) }
 }
 
-export async function getBankPaymentsUsage(supabase: SupabaseClient, companyId: string, period?: string): Promise<BankPaymentsUsage> {
+/**
+ * The table not existing yet: hosted deploys a merge before main's pipeline
+ * applies its migration, and a self-host may run the code a moment before
+ * its migrations. Read as "no allowance set" so payments keep the default cap
+ * in that window instead of every signing failing.
+ */
+const MISSING_TABLE_CODES = new Set(['42P01', 'PGRST205'])
+
+/** The payments a company may send a month: the allowance a founder set for it, else the default. */
+export async function includedBankPayments(supabase: SupabaseClient, companyId: string): Promise<number> {
+  const { data, error } = await supabase
+    .from('company_bank_payment_allowances')
+    .select('monthly_payments')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (error && MISSING_TABLE_CODES.has((error as { code?: string }).code ?? '')) return BANK_PAYMENTS_INCLUDED_PER_MONTH
+  if (error) throw error
+  const monthly = (data as { monthly_payments: number | null } | null)?.monthly_payments
+  return typeof monthly === 'number' ? monthly : BANK_PAYMENTS_INCLUDED_PER_MONTH
+}
+
+export async function readBankPaymentsMonth(supabase: SupabaseClient, companyId: string, period?: string): Promise<BankPaymentsMonth> {
   const month = period && isUsagePeriod(period) ? period : currentUsagePeriod()
   const { start, end } = usagePeriodBounds(month)
   const { data, error } = await supabase
     .from('payment_orders')
-    .select('cash_account_id')
+    .select('id, cash_account_id')
     .eq('company_id', companyId)
     .not('provider_payment_id', 'is', null)
     .gte('created_at', start)
     .lt('created_at', end)
     .limit(USAGE_ROW_CAP)
   if (error) throw error
-  const rows = (data ?? []) as Array<{ cash_account_id: string | null }>
-  const paymentsSent = rows.length
-  const accountsUsed = new Set(rows.map((r) => r.cash_account_id).filter((id): id is string => !!id)).size
+  const included = await includedBankPayments(supabase, companyId)
+  return { period: month, sent: (data ?? []) as BankPaymentsMonth['sent'], included_payments: included }
+}
+
+export async function getBankPaymentsUsage(supabase: SupabaseClient, companyId: string, period?: string): Promise<BankPaymentsUsage> {
+  const month = await readBankPaymentsMonth(supabase, companyId, period)
+  const paymentsSent = month.sent.length
+  const accountsUsed = new Set(month.sent.map((r) => r.cash_account_id).filter((id): id is string => !!id)).size
+  const included = month.included_payments
   return {
-    period: month,
+    period: month.period,
     payments_sent: paymentsSent,
     accounts_used: accountsUsed,
-    included_payments: BANK_PAYMENTS_INCLUDED_PER_MONTH,
+    included_payments: included,
     included_accounts: BANK_ACCOUNTS_INCLUDED_PER_MONTH,
-    extra_payments: Math.max(0, paymentsSent - BANK_PAYMENTS_INCLUDED_PER_MONTH),
+    remaining_payments: Math.max(0, included - paymentsSent),
+    extra_payments: Math.max(0, paymentsSent - included),
     extra_accounts: Math.max(0, accountsUsed - BANK_ACCOUNTS_INCLUDED_PER_MONTH),
   }
 }

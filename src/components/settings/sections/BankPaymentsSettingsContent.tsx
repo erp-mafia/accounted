@@ -28,13 +28,16 @@ import {
   type PaymentsAvailability,
 } from '@/components/payments/payments-client'
 import { VerificationStateText } from '@/components/payments/VerificationStateText'
+import { RequestMorePaymentsDialog } from '@/components/payments/BankPaymentsAllowance'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { NEEDS_LINK_STATES } from '@/lib/payments/orders/verification-state'
 
 /**
  * Kopplingar → Betalningar via banken: whether the payment provider has
  * verified the company (know your customer, done once with BankID by a
- * signatory) and which of the company's accounts a payment can leave from.
- * Shown only for companies where bank payments are switched on.
+ * signatory), this month's bank payments against the monthly cap (with
+ * Begär fler betalningar), and which of the company's accounts a payment can
+ * leave from. Shown only for companies where bank payments are switched on.
  */
 export function BankPaymentsSettingsContent() {
   const t = useTranslations('settings_bank_payments')
@@ -50,6 +53,7 @@ export function BankPaymentsSettingsContent() {
   const [usage, setUsage] = useState<BankPaymentsUsage | null>(null)
   const [busy, setBusy] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
+  const [requesting, setRequesting] = useState(false)
 
   // The stored answer serves the page (fresh within six hours); Uppdatera
   // asks the provider. checked_at is when the provider was last asked.
@@ -126,6 +130,8 @@ export function BankPaymentsSettingsContent() {
   // A new form is offered when none is out: first time, a dead link, or a renewal.
   const canStart = verification !== null && verification !== 'failed' && NEEDS_LINK_STATES.has(verification.state)
   const usageMonth = usage ? new Date(`${usage.period}-15T12:00:00Z`).toLocaleDateString(locale, { month: 'long' }) : ''
+  // The cap is hard: at it, no bank payment goes out this month until it is raised.
+  const capReached = usage !== null && usage.payments_sent >= usage.included_payments
   const checkedAtText = checkedAt
     ? t('checked_at', { time: checkedAt.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' }) })
     : null
@@ -174,10 +180,23 @@ export function BankPaymentsSettingsContent() {
           {usage && (
             <SettingsGroup label={t('group_usage')} help={t('usage_help')}>
               <SettingsRow label={t('usage_payments_label', { month: usageMonth })}>
-                <SettingsRowNote className={usage.extra_payments > 0 ? 'text-attn' : 'text-foreground'}>
+                <SettingsRowNote className={capReached ? 'text-attn' : 'text-foreground'}>
                   {t('usage_of', { used: usage.payments_sent, included: usage.included_payments })}
-                  {usage.extra_payments > 0 ? `, ${t('usage_over', { count: usage.extra_payments })}` : ''}
+                  {capReached ? `, ${t('usage_limit_reached')}` : ''}
                 </SettingsRowNote>
+                {canWrite && (
+                  <SettingsRowEnd>
+                    {capReached ? (
+                      <Button size="sm" onClick={() => setRequesting(true)}>
+                        {t('request_more')}
+                      </Button>
+                    ) : (
+                      <button type="button" className={QUIET_LINK_CLASS} onClick={() => setRequesting(true)}>
+                        {t('request_more')}
+                      </button>
+                    )}
+                  </SettingsRowEnd>
+                )}
               </SettingsRow>
               <SettingsRow label={t('usage_accounts_label', { month: usageMonth })}>
                 <SettingsRowNote className={usage.extra_accounts > 0 ? 'text-attn' : 'text-foreground'}>
@@ -187,6 +206,8 @@ export function BankPaymentsSettingsContent() {
               </SettingsRow>
             </SettingsGroup>
           )}
+
+          {requesting && <RequestMorePaymentsDialog included={usage?.included_payments ?? null} onOpenChange={setRequesting} />}
 
           <SettingsGroup label={t('group_accounts')} help={t('accounts_help')}>
             {availability.accounts.length === 0 ? (

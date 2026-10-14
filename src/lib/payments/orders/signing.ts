@@ -1,8 +1,9 @@
 /**
  * Signing approved payment orders with BankID.
  *
- *   start:   the bank's signing capabilities and the company's verification
- *            are checked before anything changes -> the orders are claimed
+ *   start:   the month's cap on bank payments (allowance.ts), the bank's
+ *            signing capabilities and the company's verification are
+ *            checked before anything changes -> the orders are claimed
  *            (approved -> submitted, one signing batch, one RPC) -> each
  *            payment is created at the bank ONCE: the write-ahead marker
  *            first, then the create, then its id stored at once -> a signing
@@ -55,6 +56,7 @@ import {
   type SigningStep,
   type SigningTarget,
 } from '@/lib/payments/initiation/provider'
+import { bankPaymentsAllowanceRefusal } from '@/lib/payments/allowance'
 import { openPaymentsDoor } from './switched-on'
 import { paymentSigningReturnUrl } from './return-url'
 import { normalizeSignerPersonalNumber, rememberSignerPersonalNumber } from '@/lib/auth/bankid-signer'
@@ -789,6 +791,11 @@ export async function startPaymentSigning(
   if (previewOrders.some((o) => o.status !== 'approved')) return { ok: false, code: 'PAYMENT_ORDERS_WRONG_STATUS' }
   if (new Set(previewOrders.map((o) => o.cash_account_id)).size > 1) return { ok: false, code: 'PAYMENT_ORDERS_MIXED_ACCOUNTS' }
   if (new Set(previewOrders.map((o) => o.currency)).size > 1) return { ok: false, code: 'PAYMENT_ORDERS_MIXED_CURRENCY' }
+  // The month's cap on bank payments, before anything moves or reaches the
+  // bank (lib/payments/allowance.ts). Read outside the claim: two signings
+  // started at the same moment can pass it by a few payments, accepted.
+  const overCap = await bankPaymentsAllowanceRefusal(createServiceClient(), ctx.companyId, ids)
+  if (overCap) return overCap
   const reattested = await reattestWithBankDay(ctx, previewOrders, input.today ?? todayIsoStockholm())
   if (!reattested.ok) return reattested
 
@@ -891,6 +898,13 @@ export async function restartPaymentSigning(
   if (orders.some(isCreateUnfinished)) return { ok: false, code: 'PAYMENT_ORDER_CREATE_IN_PROGRESS' }
   const waiting = orders.filter(isWaiting)
   if (waiting.length === 0) return { ok: false, code: 'PAYMENT_SIGNING_NOTHING_TO_SIGN' }
+  // The month's cap, before the bank is asked anything. The payments of this
+  // signing are counted once (they reached the bank this month already), so
+  // signing what waits at the bank is refused only when the month is already
+  // past the cap (an allowance lowered, or two signings that raced). Payments
+  // created in an earlier month count as this month's.
+  const overCap = await bankPaymentsAllowanceRefusal(writer, ctx.companyId, waiting.map((o) => o.id))
+  if (overCap) return overCap
 
   // The payments exist at the bank: the PSU-ID they were created with leads.
   const built = await buildPartyContext(ctx, waiting[0]!, input.signer, { requireSigner: true, batchId: batch.id })

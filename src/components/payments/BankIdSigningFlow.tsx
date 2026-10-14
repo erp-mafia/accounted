@@ -18,8 +18,11 @@ import { normalizePsuAuthoriserId, takesPsuAuthoriserId } from '@/lib/bank-feed/
 import type { PaymentSigningReturn } from '@/lib/payments/orders/return-url'
 import { PAYMENT_ORDER_STATUS_BADGE, PERMANENT_SIGNING_FAILURES } from './payment-order-status'
 import { VerificationStateText } from './VerificationStateText'
+import { BankPaymentsAllowanceLine } from './BankPaymentsAllowance'
 import {
+  allowanceRefusalOf,
   bankIdAutostartHref,
+  fetchBankPaymentsUsage,
   PaymentsClientError,
   pollSigning,
   providerCodeText,
@@ -27,6 +30,8 @@ import {
   fetchCompanyVerification,
   startCompanyVerification,
   startSigning,
+  type BankPaymentsAllowanceRefusal,
+  type BankPaymentsUsage,
   type CompanyVerification,
   type PaymentOrderStatus,
   type SigningMethod,
@@ -69,9 +74,22 @@ export interface SigningClient {
   restart(input: { batchId: string; method: SigningMethod; personalNumber: string | null; psuAuthoriserId?: string | null }): Promise<SigningView>
   poll(input: { batchId: string; personalNumber: string | null; psuAuthoriserId?: string | null }, signal?: AbortSignal): Promise<SigningView>
   verification?: boolean
+  /**
+   * This month's bank payments against the cap, for a session that can read
+   * them and ask for more (Begär fler betalningar). Absent on the payment
+   * signing link: the firmatecknare has no login, and a refusal at the cap
+   * names who can ask instead.
+   */
+  usage?: () => Promise<BankPaymentsUsage>
 }
 
-const SESSION_SIGNING_CLIENT: SigningClient = { start: startSigning, restart: restartSigning, poll: pollSigning, verification: true }
+const SESSION_SIGNING_CLIENT: SigningClient = {
+  start: startSigning,
+  restart: restartSigning,
+  poll: pollSigning,
+  verification: true,
+  usage: () => fetchBankPaymentsUsage(),
+}
 
 interface BankIdSigningFlowProps {
   /** Approved orders to sign, all from one account and one currency (the server refuses otherwise). */
@@ -159,6 +177,10 @@ export function BankIdSigningFlow({
   const [busy, setBusy] = useState(false)
   const [signing, setSigning] = useState<SigningView | null>(resume ? resumedView(resume.batchId) : null)
   const [refusal, setRefusal] = useState<'verification' | 'redirect' | null>(null)
+  /** A signing refused at the month's cap on bank payments: the numbers it carried. */
+  const [allowance, setAllowance] = useState<BankPaymentsAllowanceRefusal | null>(null)
+  /** This month's bank payments against the cap; null until read, or where it cannot be (the signing link). */
+  const [usage, setUsage] = useState<BankPaymentsUsage | null>(null)
   /** Where the verification stands when a signing was refused for it: the line names the state and the way out. */
   const [verification, setVerification] = useState<CompanyVerification | null>(null)
   /** The form opened from this refusal, so it can be opened again. */
@@ -187,6 +209,23 @@ export function BankIdSigningFlow({
     announcedResume.current = true
     onStageChange?.('signing')
   }, [resume, onStageChange])
+
+  // What the month still takes, read once: informational, the server decides.
+  useEffect(() => {
+    if (!client.usage) return
+    let cancelled = false
+    client.usage().then(
+      (u) => {
+        if (!cancelled) setUsage(u)
+      },
+      () => {
+        // Without the counter the flow stands; a refusal at the cap still names the numbers.
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [client])
 
   const total = useMemo(() => orders.reduce((sum, o) => sum + Number(o.amount), 0), [orders])
   const currency = orders[0]?.currency ?? 'SEK'
@@ -243,6 +282,7 @@ export function BankIdSigningFlow({
     if (authoriserRefused()) return
     setMethod(chosen)
     setRefusal(null)
+    setAllowance(null)
     setReturned(null)
     resetSteps()
     setBusy(true)
@@ -259,7 +299,9 @@ export function BankIdSigningFlow({
       setStage(signingFinished(view) ? 'done' : 'signing')
     } catch (error) {
       const code = error instanceof PaymentsClientError ? error.code : null
-      if (code === 'PAYMENT_COMPANY_VERIFICATION_REQUIRED') {
+      const overCap = allowanceRefusalOf(error)
+      if (overCap) setAllowance(overCap)
+      else if (code === 'PAYMENT_COMPANY_VERIFICATION_REQUIRED') {
         setRefusal('verification')
         // Best-effort: without the state the line falls back to the plain sentence.
         if (client.verification !== false) fetchCompanyVerification({ refresh: true }).then(setVerification, () => setVerification(null))
@@ -286,10 +328,13 @@ export function BankIdSigningFlow({
     setBusy(true)
     try {
       const view = await client.restart({ batchId: signing.batch_id, method: chosen, personalNumber: typedNumber, psuAuthoriserId: typedAuthoriser })
+      setAllowance(null)
       adoptMethod(chosen, view)
       applyView(view)
     } catch (error) {
-      fail(t('signing_start_failed_title'), error)
+      const overCap = allowanceRefusalOf(error)
+      if (overCap) setAllowance(overCap)
+      else fail(t('signing_start_failed_title'), error)
     } finally {
       setBusy(false)
     }
@@ -447,6 +492,7 @@ export function BankIdSigningFlow({
           </AttnLine>
         )}
         {refusal === 'redirect' && <AttnLine>{t('signing_redirect_unsupported')}</AttnLine>}
+        <BankPaymentsAllowanceLine usage={usage} count={orders.length} refusal={allowance} canRequest={Boolean(client.usage)} />
         <DialogFooter>
           {closeButton}
           <Button variant="secondary" onClick={() => begin('same_device')} loading={busy && method === 'same_device'} disabled={disabled}>
@@ -531,9 +577,13 @@ export function BankIdSigningFlow({
         )}
         {!waiting && (failure || signing.status === 'created') && (
           <div className="space-y-3">
-            <AttnLine>
-              {permanent && failure ? (providerCodeText(t, failure) ?? t('signing_failed_permanent', { code: failure })) : (providerCodeText(t, failure) ?? t('signing_failed'))}
-            </AttnLine>
+            {allowance ? (
+              <BankPaymentsAllowanceLine usage={usage} count={signing.orders.length} refusal={allowance} canRequest={Boolean(client.usage)} />
+            ) : (
+              <AttnLine>
+                {permanent && failure ? (providerCodeText(t, failure) ?? t('signing_failed_permanent', { code: failure })) : (providerCodeText(t, failure) ?? t('signing_failed'))}
+              </AttnLine>
+            )}
             {!permanent && signing.status === 'created' && psuAuthoriserField && <div className="text-left">{psuAuthoriserField}</div>}
             {!permanent && signing.status === 'created' && redirect && (
               <div className="flex justify-center">

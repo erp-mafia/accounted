@@ -1074,16 +1074,17 @@ Example response `200`:
 
 ### `GET /api/v1/companies/{companyId}/payment-orders/usage`
 
-**Bank payments sent and accounts used in a month, against what the plan includes.**
+**Bank payments sent and accounts used in a month, against the monthly cap.**
 `scope:suppliers:read · risk:low · idempotent`
 
-Counts the payments that reached the provider (an order with a provider payment id) and the accounts they left from, in one month in Stockholm time, and answers what the plan includes per month and what lies beyond it. Payment files are not counted. The month defaults to the current one.
+Counts the payments that reached the provider (an order with a provider payment id) and the accounts they left from, in one month in Stockholm time, against what the company may send per month. Payments are capped: included_payments is the cap (10 a month unless raised for the company), remaining_payments what the month still takes, and a BankID signing that would pass the cap is refused with BANK_PAYMENTS_ALLOWANCE_EXCEEDED. Accounts are counted, not capped. Payment files are not counted. The month defaults to the current one.
 
-**Use when:** Before a batch of bank payments, to see whether it passes the included number for the month.
-**Do not use for:** Payment files (pain.001): they are not bank payments and are not counted.
+**Use when:** Before a batch of bank payments, to see how many the month still takes.
+**Do not use for:** Payment files (pain.001): they are not bank payments and are neither counted nor capped.
 
 **Pitfalls:**
-- extra_payments and extra_accounts are what the company is charged for beyond the plan; the counter is read from the orders, never edited.
+- A person asks for a higher cap under Settings, Connections, Bank payments; no API raises it.
+- extra_payments is non-zero only when two signings raced past the cap or the cap was lowered mid-month; the counter is read from the orders, never edited.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -1099,6 +1100,7 @@ Response `200`:
     accounts_used: number,
     included_payments: number,
     included_accounts: number,
+    remaining_payments: number,
     extra_payments: number,
     extra_accounts: number
   },
@@ -1121,8 +1123,9 @@ Example response `200`:
     "period": "2026-10",
     "payments_sent": 4,
     "accounts_used": 1,
-    "included_payments": 30,
+    "included_payments": 10,
     "included_accounts": 2,
+    "remaining_payments": 6,
     "extra_payments": 0,
     "extra_accounts": 0
   },

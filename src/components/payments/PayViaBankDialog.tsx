@@ -17,10 +17,12 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { BankIdSigningFlow, type SigningFlowStage } from './BankIdSigningFlow'
 import { BankMark } from '@/components/banks/BankMark'
 import { RequestSigningLinkButton, RequestSigningLinkPanel } from './RequestSigningLinkDialog'
+import { BankPaymentsAllowanceLine } from './BankPaymentsAllowance'
 import { DocumentCheckLine, InvoiceDocumentButton, InvoiceDocumentSheet, PaymentBesideDocument, paymentFromPreviewLine } from './InvoiceDocumentPreview'
 import { earliestExecutionDateIso } from '@/lib/payments/bank-days'
 import {
   approvePaymentOrders,
+  fetchBankPaymentsUsage,
   fetchPaymentsAvailability,
   lookupCreditorName,
   orderGiroForLookup,
@@ -32,6 +34,8 @@ import {
   type PaymentOrder,
   type PaymentsAvailability,
   type PreparedPreview,
+  type BankPaymentsUsage,
+  remainingBankPayments,
 } from './payments-client'
 
 /**
@@ -134,6 +138,8 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
 
   const [phase, setPhase] = useState<Phase>('preview')
   const [availability, setAvailability] = useState<PaymentsAvailability | null>(null)
+  /** This month's bank payments against the cap; null until read (informational, the server decides). */
+  const [usage, setUsage] = useState<BankPaymentsUsage | null>(null)
   const [accountId, setAccountId] = useState('')
   const [executionDate, setExecutionDate] = useState('')
   const [editingDate, setEditingDate] = useState(false)
@@ -170,6 +176,16 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
         const remembered = rememberedAccount()
         const pick = payable.find((a) => a.id === remembered) ?? payable[0]
         if (pick) setAccountId(pick.id)
+        if (data.available) {
+          fetchBankPaymentsUsage().then(
+            (u) => {
+              if (!cancelled) setUsage(u)
+            },
+            () => {
+              // Without the counter the dialog stands; a signing past the cap is refused with the numbers.
+            },
+          )
+        }
       })
       .catch(() => {
         if (!cancelled) setAvailability({ available: false, reason: null, provider: null, accounts: [], signer_known: false })
@@ -211,6 +227,9 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
   const payableAccounts = useMemo(() => availability?.accounts.filter((a) => a.payable) ?? [], [availability])
   const account = payableAccounts.find((a) => a.id === accountId) ?? null
   const lines = preview?.lines ?? []
+  // More invoices than the month's cap still takes: nothing is prepared or
+  // approved that could not go to the bank this month.
+  const overCap = usage !== null && lines.length > remainingBankPayments(usage)
   // Each line beside what its invoice document states (the dry run carries it).
   const payments = useMemo(
     () => (preview?.lines ?? []).map((line) => paymentFromPreviewLine(line, invoiceLabelById?.get(line.supplier_invoice_id))),
@@ -543,15 +562,16 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
                   <p className="text-[12.5px] text-muted-foreground">{t('replaces_drafts', { count: preview.replaces_drafts })}</p>
                 )}
                 {lines.length > 0 && <p className="text-[12.5px] text-muted-foreground">{t('sign_hint')}</p>}
+                {lines.length > 0 && <BankPaymentsAllowanceLine usage={usage} count={lines.length} canRequest />}
               </>
             )}
             <DialogFooter>
               {closeButton}
               {lines.length > 0 && (
-                <RequestSigningLinkButton onClick={() => signNow('request')} loading={busy && intent === 'request'} disabled={busy || previewing || !accountId} />
+                <RequestSigningLinkButton onClick={() => signNow('request')} loading={busy && intent === 'request'} disabled={busy || previewing || !accountId || overCap} />
               )}
               {lines.length > 0 && (
-                <Button onClick={() => signNow('sign')} loading={busy && intent === 'sign'} disabled={busy || previewing || !accountId}>
+                <Button onClick={() => signNow('sign')} loading={busy && intent === 'sign'} disabled={busy || previewing || !accountId || overCap}>
                   {t('sign_now', { count: lines.length })}
                 </Button>
               )}

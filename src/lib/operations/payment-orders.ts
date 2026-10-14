@@ -864,14 +864,19 @@ export const paymentsUsage = defineOperation({
   risk: 'low',
   reversible: false,
   docs: {
-    summary: 'Bank payments sent and accounts used in a month, against what the plan includes.',
+    summary: 'Bank payments sent and accounts used in a month, against the monthly cap.',
     description:
       'Counts the payments that reached the provider (an order with a provider payment id) and the accounts they left from, ' +
-      'in one month in Stockholm time, and answers what the plan includes per month and what lies beyond it. Payment files ' +
+      'in one month in Stockholm time, against what the company may send per month. Payments are capped: included_payments is ' +
+      'the cap (10 a month unless raised for the company), remaining_payments what the month still takes, and a BankID signing ' +
+      'that would pass the cap is refused with BANK_PAYMENTS_ALLOWANCE_EXCEEDED. Accounts are counted, not capped. Payment files ' +
       'are not counted. The month defaults to the current one.',
-    useWhen: 'Before a batch of bank payments, to see whether it passes the included number for the month.',
-    doNotUseFor: 'Payment files (pain.001): they are not bank payments and are not counted.',
-    pitfalls: ['extra_payments and extra_accounts are what the company is charged for beyond the plan; the counter is read from the orders, never edited.'],
+    useWhen: 'Before a batch of bank payments, to see how many the month still takes.',
+    doNotUseFor: 'Payment files (pain.001): they are not bank payments and are neither counted nor capped.',
+    pitfalls: [
+      'A person asks for a higher cap under Settings, Connections, Bank payments; no API raises it.',
+      'extra_payments is non-zero only when two signings raced past the cap or the cap was lowered mid-month; the counter is read from the orders, never edited.',
+    ],
     example: {
       response: {
         data: {
@@ -880,6 +885,7 @@ export const paymentsUsage = defineOperation({
           accounts_used: 1,
           included_payments: BANK_PAYMENTS_INCLUDED_PER_MONTH,
           included_accounts: BANK_ACCOUNTS_INCLUDED_PER_MONTH,
+          remaining_payments: BANK_PAYMENTS_INCLUDED_PER_MONTH - 4,
           extra_payments: 0,
           extra_accounts: 0,
         },
@@ -900,6 +906,7 @@ export const paymentsUsage = defineOperation({
     accounts_used: z.number().int(),
     included_payments: z.number().int(),
     included_accounts: z.number().int(),
+    remaining_payments: z.number().int(),
     extra_payments: z.number().int(),
     extra_accounts: z.number().int(),
   }),
