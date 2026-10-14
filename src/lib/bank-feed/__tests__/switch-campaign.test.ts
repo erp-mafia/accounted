@@ -241,6 +241,9 @@ describe('admittedCompanyIds and switchStatesForCompanies', () => {
     expect(await admittedCompanyIds(supabase, ['a', 'b', 'b'], { OPENPAYMENTS_READING_COMPANY_IDS: '*' })).toEqual(new Set(['b']))
     expect(capability.batch).toHaveBeenCalledTimes(1)
     expect(capability.batch.mock.calls[0][1]).toEqual(['a', 'b'])
+    // Paid grants only, like the door: a cardless trial is not invited to switch.
+    expect(capability.batch.mock.calls[0][2]).toBe('bank_sync')
+    expect(capability.batch.mock.calls[0][3]).toEqual({ excludeTrial: true })
     expect(await admittedCompanyIds(supabase, ['a'], {})).toEqual(new Set())
   })
 

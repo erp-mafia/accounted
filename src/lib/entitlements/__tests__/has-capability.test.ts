@@ -149,6 +149,48 @@ describe('hasCapability', () => {
     expect(await hasCapability(supabase, '11111111-1111-4111-8111-111111111111', CAPABILITY.bank_sync)).toBe(true)
   })
 
+  it('excludeTrial: the seeded trial alone does not entitle, a paid grant beside it does', async () => {
+    const company = '11111111-1111-4111-8111-111111111111'
+    const trialOnly = makeSupabase({
+      capability_grants: { data: [{ capability_key: 'bank_sync', expires_at: iso(60_000), source: 'trial', team_id: null }] },
+      company_capability_config: { data: null },
+    })
+    expect(await hasCapability(trialOnly, company, CAPABILITY.bank_sync)).toBe(true)
+    expect(await hasCapability(trialOnly, company, CAPABILITY.bank_sync, { excludeTrial: true })).toBe(false)
+
+    // A card entered during the trial: Stripe keeps the subscription
+    // 'trialing' and writes a stripe grant next to the trial row.
+    const carded = makeSupabase({
+      capability_grants: {
+        data: [
+          { capability_key: 'bank_sync', expires_at: iso(60_000), source: 'trial', team_id: null },
+          { capability_key: 'bank_sync', expires_at: null, source: 'stripe', team_id: null },
+        ],
+      },
+      company_capability_config: { data: null },
+    })
+    expect(await hasCapability(carded, company, CAPABILITY.bank_sync, { excludeTrial: true })).toBe(true)
+
+    for (const source of ['manual', 'comp']) {
+      const agreement = makeSupabase({
+        capability_grants: { data: [{ capability_key: 'bank_sync', expires_at: null, source, team_id: null }] },
+        company_capability_config: { data: null },
+      })
+      expect(await hasCapability(agreement, company, CAPABILITY.bank_sync, { excludeTrial: true })).toBe(true)
+    }
+
+    const expiredPaid = makeSupabase({
+      capability_grants: {
+        data: [
+          { capability_key: 'bank_sync', expires_at: iso(60_000), source: 'trial', team_id: null },
+          { capability_key: 'bank_sync', expires_at: iso(-60_000), source: 'stripe', team_id: null },
+        ],
+      },
+      company_capability_config: { data: null },
+    })
+    expect(await hasCapability(expiredPaid, company, CAPABILITY.bank_sync, { excludeTrial: true })).toBe(false)
+  })
+
   it('fails closed when there is no grant', async () => {
     const supabase = makeSupabase({
       companies: { data: { team_id: null } },
@@ -284,6 +326,33 @@ describe('getCompanyIdsWithCapability', () => {
     )
 
     expect([...result].sort()).toEqual([directCompanyId, firmCompanyId].sort())
+  })
+
+  it('excludeTrial leaves out companies covered by the seeded trial alone', async () => {
+    const supabase = makeSupabase({
+      companies: {
+        data: [
+          { id: directCompanyId, team_id: null },
+          { id: firmCompanyId, team_id: teamId },
+          { id: expiredCompanyId, team_id: null },
+        ],
+      },
+      capability_grants: {
+        data: [
+          { company_id: directCompanyId, team_id: null, expires_at: iso(60_000), source: 'trial' },
+          { company_id: directCompanyId, team_id: null, expires_at: null, source: 'stripe' },
+          { company_id: null, team_id: teamId, expires_at: null, source: 'manual' },
+          { company_id: expiredCompanyId, team_id: null, expires_at: iso(60_000), source: 'trial' },
+        ],
+      },
+      company_capability_config: { data: [] },
+    })
+    const ids = [directCompanyId, firmCompanyId, expiredCompanyId]
+
+    const all = await getCompanyIdsWithCapability(supabase, ids, CAPABILITY.bank_sync)
+    expect([...all].sort()).toEqual(ids.slice().sort())
+    const paid = await getCompanyIdsWithCapability(supabase, ids, CAPABILITY.bank_sync, { excludeTrial: true })
+    expect([...paid].sort()).toEqual([directCompanyId, firmCompanyId].sort())
   })
 
   it('returns every valid requested company when the paywall is bypassed (self-hosted, local capability)', async () => {

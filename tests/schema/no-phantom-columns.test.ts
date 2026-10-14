@@ -262,7 +262,16 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // Bankgirot split (+1): lib/transactions/parts-store.ts storeTransactionParts,
 // the one insert site for bank_transaction_parts, inserts one row per part
 // built by a map, the same shape as the payment_order_events entry above.
-const UNRESOLVED_CEILING = 431
+// Payee change alert (+5, fitted in the headroom) and the invoice beside the
+// payment (+2, over it): both read shared column lists so every payment path
+// selects the same payee and document columns. lib/payments/payee-alerts.ts
+// (two selects and the card update), payee-registration.ts
+// CARD_PAYEE_COLUMNS and the MCP supplier invoice read; then
+// lib/payments/orders/invoice-document.ts INVOICE_DOCUMENT_COLUMNS, read on
+// its own and embedded in the payment order list of
+// app/api/payments/orders/route.ts. Each MR fitted alone; together they are
+// one over, so the ceiling rises by exactly that one site.
+const UNRESOLVED_CEILING = 432
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change
