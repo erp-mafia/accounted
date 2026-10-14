@@ -33,6 +33,7 @@ import { getCompanyEntityType } from '@/lib/company/context'
 import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/lib/salary/employment-rules'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
 import { jamkningIssueFromDbError, validateJamkning, type JamkningFields } from '@/lib/salary/jamkning-rules'
+import { extraTaxIssueFromDbError, validateExtraTax } from '@/lib/salary/extra-tax'
 import { validateEmployeeUpdate, type EmployeeUpdateIssue } from '@/lib/salary/employee-update-rules'
 
 export type EmployeeCommandResult<T> =
@@ -264,6 +265,8 @@ export async function createEmployee(
   // the engine silently ignores it (#2058).
   const jamkningIssues = validateJamkning(fields)
   if (jamkningIssues.length > 0) return issuesRefusal(jamkningIssues)
+  const extraTaxIssues = validateExtraTax(fields)
+  if (extraTaxIssues.length > 0) return issuesRefusal(extraTaxIssues)
 
   const insert = {
     company_id: args.companyId,
@@ -395,6 +398,10 @@ export async function updateEmployee(
     // sentence as that check, derived from the merged row.
     const jamkningIssue = jamkningIssueFromDbError(error, merged as JamkningFields)
     if (jamkningIssue) return issuesRefusal([jamkningIssue])
+    // employees_extra_tax_one_form_check: a concurrent edit stored the other
+    // form after the merged-state check above read the row.
+    const extraTaxIssue = extraTaxIssueFromDbError(error)
+    if (extraTaxIssue) return issuesRefusal([extraTaxIssue])
     return { ok: false, code: 'INTERNAL_ERROR', details: { message: error.message }, cause: error }
   }
 

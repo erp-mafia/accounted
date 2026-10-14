@@ -17079,7 +17079,7 @@ export const tools: McpTool[] = [
         personnummer_masked: { type: 'string' },
         employment: { type: 'object', description: 'Type, start/end, degree' },
         pay: { type: 'object', description: 'Salary type + amounts' },
-        tax: { type: 'object', description: 'Table, column, municipality, jamkning, F-skatt, sidoinkomst' },
+        tax: { type: 'object', description: 'Table, column, municipality, jamkning, extra tax, F-skatt, sidoinkomst' },
         vacation: { type: 'object', description: 'Rule, paid days/year, days off/year, saved days, tillagg rate' },
         vaxa_stod: { type: 'object', description: 'Eligibility window: refund to apply for, never a reduced avgift' },
         bank: { type: 'object', description: 'Clearing + account (payment routing)' },
@@ -17096,7 +17096,7 @@ export const tools: McpTool[] = [
       const { data: e, error } = await supabase
         .from('employees')
         .select(
-          'id, first_name, last_name, personnummer, employment_type, employment_start, employment_end, employment_degree, hours_per_week, workdays_per_week, salary_type, monthly_salary, hourly_rate, tax_table_number, tax_column, tax_municipality, is_sidoinkomst, f_skatt_status, f_skatt_verified_at, jamkning_percentage, jamkning_valid_from, jamkning_valid_to, clearing_number, bank_account_number, vacation_rule, vacation_days_per_year, vacation_days_saved, semestertillagg_rate, vacation_pay_rate, vaxa_stod_eligible, vaxa_stod_start, vaxa_stod_end, email, phone, address_line1, postal_code, city, default_dimensions, is_active',
+          'id, first_name, last_name, personnummer, employment_type, employment_start, employment_end, employment_degree, hours_per_week, workdays_per_week, salary_type, monthly_salary, hourly_rate, tax_table_number, tax_column, tax_municipality, is_sidoinkomst, f_skatt_status, f_skatt_verified_at, jamkning_percentage, jamkning_valid_from, jamkning_valid_to, extra_tax_amount, extra_tax_percentage, clearing_number, bank_account_number, vacation_rule, vacation_days_per_year, vacation_days_saved, semestertillagg_rate, vacation_pay_rate, vaxa_stod_eligible, vaxa_stod_start, vaxa_stod_end, email, phone, address_line1, postal_code, city, default_dimensions, is_active',
         )
         .eq('id', employeeId)
         .eq('company_id', companyId)
@@ -17133,6 +17133,8 @@ export const tools: McpTool[] = [
           jamkning_percentage: e.jamkning_percentage,
           jamkning_valid_from: e.jamkning_valid_from,
           jamkning_valid_to: e.jamkning_valid_to,
+          extra_tax_amount: e.extra_tax_amount,
+          extra_tax_percentage: e.extra_tax_percentage,
         },
         vacation: {
           vacation_rule: e.vacation_rule,
@@ -17231,6 +17233,8 @@ export const tools: McpTool[] = [
           benefit_values: sre.benefit_values,
           taxable_income: sre.taxable_income,
           tax_withheld: sre.tax_withheld,
+          // The requested förhöjt skatteavdrag inside tax_withheld.
+          extra_tax_withheld: sre.extra_tax_withheld ?? 0,
           net_deductions: sre.net_deductions,
           net_salary: sre.net_salary,
           avgifter_rate: sre.avgifter_rate,
@@ -17826,6 +17830,8 @@ export const tools: McpTool[] = [
         jamkning_percentage: { type: 'number', description: 'Requires both dates, else rejected' },
         jamkning_valid_from: { type: 'string' },
         jamkning_valid_to: { type: 'string' },
+        extra_tax_amount: { type: 'integer', description: 'Requested extra tax, kr per run on top of table tax' },
+        extra_tax_percentage: { type: 'number', description: 'Or requested total tax %: max(table tax, % of pay)' },
         default_dimensions: {
           type: 'object',
           additionalProperties: { type: 'string' },
@@ -17943,6 +17949,8 @@ export const tools: McpTool[] = [
         jamkning_percentage: { type: ['number', 'null'], description: 'Requires both dates' },
         jamkning_valid_from: { type: ['string', 'null'] },
         jamkning_valid_to: { type: ['string', 'null'] },
+        extra_tax_amount: { type: ['integer', 'null'] },
+        extra_tax_percentage: { type: ['number', 'null'] },
         default_dimensions: {
           type: 'object',
           additionalProperties: { type: 'string' },

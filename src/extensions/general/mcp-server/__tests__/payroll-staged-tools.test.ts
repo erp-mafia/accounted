@@ -945,6 +945,34 @@ describe('gnubok_update_employee', () => {
     ).rejects.toThrow(/jamkning_valid_to/)
   })
 
+  it('stages a requested extra tax percentage', async () => {
+    const supabaseMock = makeCapturingSupabase({
+      employees: { data: { ...EXISTING, extra_tax_amount: null, extra_tax_percentage: null } },
+      fiscal_periods: { data: null },
+      company_settings: { data: null },
+      pending_operations: { data: { id: 'op-extra-tax' }, error: null },
+    })
+
+    const result = (await updateEmployee.execute(
+      { employee_id: 'emp-1', extra_tax_percentage: 45 },
+      'company-1', 'user-1', supabaseMock as never, { type: 'user' },
+    )) as { staged: boolean; preview: { changes: Array<{ field: string; from: unknown; to: unknown }> } }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.changes).toContainEqual({ field: 'extra_tax_percentage', from: null, to: 45 })
+  })
+
+  it('refuses kronor sent while a percentage is stored, at staging time', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...EXISTING, extra_tax_amount: null, extra_tax_percentage: 45 } })
+    await expect(
+      updateEmployee.execute(
+        { employee_id: 'emp-1', extra_tax_amount: 500 },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/extra_tax_percentage|kronor eller i procent/)
+  })
+
   it('stages an unrelated edit on a legacy row that lacks valid_to (touched gate)', async () => {
     const supabaseMock = makeCapturingSupabase({
       employees: { data: { ...EXISTING, jamkning_percentage: 15, jamkning_valid_from: '2026-01-01', jamkning_valid_to: null } },

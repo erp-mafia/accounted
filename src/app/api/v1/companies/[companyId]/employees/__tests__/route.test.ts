@@ -1545,3 +1545,113 @@ describe('DELETE /api/v1/companies/:companyId/employees/:id', () => {
     expect(mock.updates.employees).toBeUndefined()
   })
 })
+
+describe('förhöjt skatteavdrag on the v1 employee doors', () => {
+  const url = `https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`
+  const NONE = { ...SAMPLE_EMPLOYEE, extra_tax_amount: null, extra_tax_percentage: null }
+
+  function patch(body: Record<string, unknown>) {
+    return updateEmployee(
+      makeRequest(url, { method: 'PATCH', body: JSON.stringify(body) }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+  }
+
+  function useRows(existing: Record<string, unknown> | null, updated: Record<string, unknown> | null = existing) {
+    const mock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      employees: [{ data: existing, error: null }, { data: updated, error: null }],
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock)
+    return mock.updates
+  }
+
+  it('401 for a key that does not validate, and writes nothing', async () => {
+    const updates = useRows(NONE)
+    mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
+
+    const res = await patch({ extra_tax_percentage: 45 })
+
+    expect(res.status).toBe(401)
+    expect(updates.employees).toBeUndefined()
+  })
+
+  it.each([
+    ['both forms at once', { extra_tax_amount: 500, extra_tax_percentage: 45 }],
+    ['fractional kronor', { extra_tax_amount: 500.5 }],
+    ['101 %', { extra_tax_percentage: 101 }],
+  ])('400 VALIDATION_ERROR for %s, and writes nothing', async (_name, body) => {
+    const updates = useRows(NONE)
+
+    const res = await patch(body)
+
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('VALIDATION_ERROR')
+    expect(updates.employees).toBeUndefined()
+  })
+
+  it('400 when a percentage is sent while kronor are stored', async () => {
+    const updates = useRows({ ...NONE, extra_tax_amount: 500 })
+
+    const res = await patch({ extra_tax_percentage: 45 })
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(JSON.stringify(body.error)).toContain('extra_tax_percentage')
+    expect(updates.employees).toBeUndefined()
+  })
+
+  it('404 EMPLOYEE_NOT_FOUND when the row is missing', async () => {
+    const updates = useRows(null)
+
+    const res = await patch({ extra_tax_percentage: 45 })
+
+    expect(res.status).toBe(404)
+    expect((await res.json()).error.code).toBe('EMPLOYEE_NOT_FOUND')
+    expect(updates.employees).toBeUndefined()
+  })
+
+  it('200 and writes only the percentage (happy path)', async () => {
+    const updates = useRows(NONE, { ...NONE, extra_tax_percentage: 45 })
+
+    const res = await patch({ extra_tax_percentage: 45 })
+
+    expect(res.status).toBe(200)
+    expect(updates.employees).toEqual([{ extra_tax_percentage: 45 }])
+    expect((await res.json()).data.extra_tax_percentage).toBe(45)
+  })
+
+  it('400 on create with both forms', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: { data: SAMPLE_EMPLOYEE, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await createEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees`, {
+        method: 'POST',
+        body: JSON.stringify({
+          first_name: 'Anna',
+          last_name: 'Andersson',
+          personnummer: SAMPLE_PERSONNUMMER,
+          employment_start: '2024-01-15',
+          salary_type: 'monthly',
+          monthly_salary: 35000,
+          tax_table_number: 33,
+          tax_municipality: 'Stockholm',
+          extra_tax_amount: 500,
+          extra_tax_percentage: 45,
+        }),
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(400)
+    expect(JSON.stringify((await res.json()).error)).toContain('extra_tax_percentage')
+  })
+})

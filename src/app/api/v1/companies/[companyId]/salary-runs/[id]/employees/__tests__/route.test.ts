@@ -338,6 +338,7 @@ describe('GET /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId
     expect(body.data.effective).toEqual({
       gross_salary: 35000,
       tax_withheld: 8200,
+      extra_tax_withheld: 0,
       net_salary: 26800,
       avgifter_amount: 10997,
       vacation_accrual: 4200,
@@ -376,6 +377,27 @@ describe('GET /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId
       tax_overridden: true,
       avgifter_overridden: true,
     })
+  })
+
+  it('reads the requested förhöjt skatteavdrag from the row into the payslip detail and effective', async () => {
+    const mock = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      salary_run_employees: { data: { ...SAMPLE_SRE, tax_withheld: 11200, extra_tax_withheld: 3000 }, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock.supabase)
+
+    const res = await getPayslip(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/employees/${EMPLOYEE_ID}`,
+      ),
+      detailParams(COMPANY_ID, RUN_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.extra_tax_withheld).toBe(3000)
+    expect(body.data.effective).toMatchObject({ tax_withheld: 11200, extra_tax_withheld: 3000 })
+    expect(String(mock.findCall('salary_run_employees', 'select')?.[0])).toContain('extra_tax_withheld')
   })
 
   it('returns 404 SALARY_RUN_NOT_FOUND when the run itself is missing', async () => {

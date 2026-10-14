@@ -1,6 +1,7 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 import { swedishMonthName } from '@/lib/dates/swedish-months'
 import { pdfNumberText, pdfText } from '@/lib/pdf/number-text'
+import { roundOre } from '@/lib/money'
 import { getBranding } from '@/lib/branding/service'
 
 /**
@@ -226,7 +227,10 @@ export interface PayslipData {
 
   // Summary
   grossSalary: number
+  /** Total preliminary tax, the extra included. */
   taxWithheld: number
+  /** The requested förhöjt skatteavdrag inside taxWithheld (SFL 11 kap. 22 §), printed on its own row. */
+  extraTaxWithheld?: number
   netSalary: number
   taxReference: string // e.g. "Tabell 33, kolumn 1"
 
@@ -278,6 +282,7 @@ function fmt(amount: number): string {
 
 export function PayslipPDF({ data }: { data: PayslipData }) {
   const periodLabel = `${swedishMonthName(data.periodMonth)} ${data.periodYear}`
+  const extraTax = data.extraTaxWithheld ?? 0
 
   return (
     <Document>
@@ -361,8 +366,14 @@ export function PayslipPDF({ data }: { data: PayslipData }) {
           </View>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Preliminär skatt ({data.taxReference})</Text>
-            <Text style={styles.summaryValue}>-{fmt(data.taxWithheld)}</Text>
+            <Text style={styles.summaryValue}>-{fmt(roundOre(data.taxWithheld - extraTax))}</Text>
           </View>
+          {extraTax > 0 && (
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Extra skatteavdrag (begärt)</Text>
+              <Text style={styles.summaryValue}>-{fmt(extraTax)}</Text>
+            </View>
+          )}
           <View style={styles.totalRow}>
             <Text style={styles.totalLabel}>Nettolön (utbetalas)</Text>
             <Text style={styles.totalValue}>{fmt(data.netSalary)}</Text>

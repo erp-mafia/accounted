@@ -266,6 +266,9 @@ export function buildPayslipData(params: {
     lineItems,
     grossSalary: effective.gross_salary,
     taxWithheld: effective.tax_withheld,
+    // The requested förhöjt skatteavdrag frozen on the row at calculation,
+    // printed as its own row under the statutory tax; 0 under an override.
+    extraTaxWithheld: effective.extra_tax_withheld,
     netSalary: effective.net_salary,
     taxReference,
     employerCost: sections.employerCost

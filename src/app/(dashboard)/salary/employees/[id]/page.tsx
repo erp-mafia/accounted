@@ -37,6 +37,7 @@ import { EmployeeRecurringLinesPanel } from '@/components/salary/EmployeeRecurri
 import { OpeningBalancesPanel } from '@/components/salary/OpeningBalancesPanel'
 import EmployeeTaxCard, { type EmployeeTaxValue } from '@/components/salary/EmployeeTaxCard'
 import { jamkningPatch } from '@/lib/salary/jamkning-patch'
+import { extraTaxPatch } from '@/lib/salary/extra-tax'
 import { clearableField } from '@/lib/salary/clearable-field'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 
@@ -191,6 +192,8 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       // phone number never wipes a stored beslut. Guarded on `tax` so a card
       // that has not reported yet sends nothing.
       ...(tax ? jamkningPatch(tax) : {}),
+      // Förhöjt skatteavdrag: same rule, sent only when visible and edited.
+      ...(tax ? extraTaxPatch(tax) : {}),
       // Contact and bank inputs are always rendered and seeded from the row,
       // so emptying one clears it (null), like the slutdatum above. The tax
       // card's municipality/table stay sparse: they are hidden outside
@@ -549,6 +552,19 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
             <DefEmpty />
           )}
         </DefRow>
+        <DefRow label={t('tax_extra_label')}>
+          {employee.extra_tax_amount != null ? (
+            <span className="tabular-nums">
+              {t('tax_extra_detail_amount', { amount: employee.extra_tax_amount.toLocaleString('sv-SE') })}
+            </span>
+          ) : employee.extra_tax_percentage != null ? (
+            <span className="tabular-nums">
+              {t('tax_extra_detail_percentage', { percentage: employee.extra_tax_percentage })}
+            </span>
+          ) : (
+            <DefEmpty />
+          )}
+        </DefRow>
       </DetailSection>
 
       <DetailSection kicker={t('form_bank_account')}>
@@ -803,6 +819,8 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
                       jamkning_percentage: employee.jamkning_percentage ?? null,
                       jamkning_valid_from: employee.jamkning_valid_from ?? null,
                       jamkning_valid_to: employee.jamkning_valid_to ?? null,
+                      extra_tax_amount: employee.extra_tax_amount ?? null,
+                      extra_tax_percentage: employee.extra_tax_percentage ?? null,
                     }}
                   />
                   {fSkattVerifiedLabel && (

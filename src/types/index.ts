@@ -4438,6 +4438,10 @@ export interface Employee {
   jamkning_percentage: number | null
   jamkning_valid_from: string | null
   jamkning_valid_to: string | null
+  /** Förhöjt skatteavdrag (SFL 11 kap. 22 §), whole kronor per run. Exclusive with extra_tax_percentage. */
+  extra_tax_amount: number | null
+  /** Förhöjt skatteavdrag as a requested total percentage of taxable income. Exclusive with extra_tax_amount. */
+  extra_tax_percentage: number | null
   is_sidoinkomst: boolean
   f_skatt_status: FSkattStatus
   f_skatt_verified_at: string | null
@@ -4548,6 +4552,8 @@ export interface SalaryRunEmployee {
   benefit_values: number
   taxable_income: number
   tax_withheld: number
+  /** The part of tax_withheld that is the employee's requested förhöjt skatteavdrag (0 when none). */
+  extra_tax_withheld: number
   tax_withheld_override: number | null
   net_deductions: number
   net_salary: number

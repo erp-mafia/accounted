@@ -115,6 +115,12 @@ export default async function PayslipPage({
             <dt className="text-muted-foreground">Skatteavdrag</dt>
             <dd className="tabular-nums">−{formatCurrency(figures.tax_withheld)}</dd>
           </div>
+          {figures.extra_tax_withheld > 0 && (
+            <div className="flex items-center justify-between pl-3 text-xs">
+              <dt className="text-muted-foreground">varav extra skatteavdrag (begärt)</dt>
+              <dd className="tabular-nums text-muted-foreground">−{formatCurrency(figures.extra_tax_withheld)}</dd>
+            </div>
+          )}
           <div className="flex items-center justify-between border-t border-border pt-3">
             <dt className="font-medium">Nettolön</dt>
             <dd className="font-display text-xl tabular-nums">{formatCurrency(figures.net_salary)}</dd>

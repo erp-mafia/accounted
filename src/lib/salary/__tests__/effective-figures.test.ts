@@ -30,6 +30,7 @@ describe('effectiveRow', () => {
     expect(eff).toEqual({
       gross_salary: 30000,
       tax_withheld: 7000,
+      extra_tax_withheld: 0,
       net_salary: 23000,
       avgifter_amount: 9426,
       vacation_accrual: 3600,
@@ -46,6 +47,13 @@ describe('effectiveRow', () => {
     expect(eff.tax_overridden).toBe(true)
     // Tax does not change the employer cost.
     expect(eff.employer_cost).toBe(44157.12)
+  })
+
+  it('passes the frozen förhöjt skatteavdrag through, and drops it under a tax override', () => {
+    expect(effectiveRow(row({ tax_withheld: 10000, extra_tax_withheld: 3000 })).extra_tax_withheld).toBe(3000)
+    const overridden = effectiveRow(row({ tax_withheld: 10000, extra_tax_withheld: 3000, tax_withheld_override: 9000 }))
+    expect(overridden.tax_withheld).toBe(9000)
+    expect(overridden.extra_tax_withheld).toBe(0)
   })
 
   it('applies a zero tax override (0 is an override, not absent)', () => {

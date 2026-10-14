@@ -719,7 +719,7 @@ Returns one row per employee in the run with the calculated aggregates: gross sa
 Response `200`:
 ```ts
 {
-  data: { salary_run_employee_id: string, employee_id: string, first_name: string, last_name: string, personnummer_masked: string, salary_type: string, employment_degree: number, monthly_salary: number | null, hours_worked: number | null, gross_salary: number, taxable_income: number, tax_withheld: number, tax_withheld_override: number | null, net_salary: number, avgifter_basis: number, avgifter_amount: number, avgifter_amount_override: number | null, avgifter_category: string | null, vacation_accrual: number, sick_days: number, vab_days: number, parental_days: number, vacation_days_taken: number, effective: { gross_salary: number, tax_withheld: number, net_salary: number, avgifter_amount: number, vacation_accrual: number, employer_cost: number, tax_overridden: boolean, avgifter_overridden: boolean }, created_at: string, updated_at: string }[],
+  data: { salary_run_employee_id: string, employee_id: string, first_name: string, last_name: string, personnummer_masked: string, salary_type: string, employment_degree: number, monthly_salary: number | null, hours_worked: number | null, gross_salary: number, taxable_income: number, tax_withheld: number, tax_withheld_override: number | null, net_salary: number, avgifter_basis: number, avgifter_amount: number, avgifter_amount_override: number | null, avgifter_category: string | null, vacation_accrual: number, sick_days: number, vab_days: number, parental_days: number, vacation_days_taken: number, effective: { gross_salary: number, tax_withheld: number, extra_tax_withheld: number, net_salary: number, avgifter_amount: number, vacation_accrual: number, employer_cost: number, tax_overridden: boolean, avgifter_overridden: boolean }, created_at: string, updated_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -877,6 +877,7 @@ Response `200`:
     benefit_values: number,
     taxable_income: number,
     tax_withheld: number,
+    extra_tax_withheld: number,
     tax_withheld_override: number | null,
     net_deductions: number,
     net_salary: number,
@@ -899,7 +900,7 @@ Response `200`:
     ytd_gross: number,
     ytd_tax: number,
     ytd_net: number,
-    effective: { gross_salary: number, tax_withheld: number, net_salary: number, avgifter_amount: number, vacation_accrual: number, employer_cost: number, tax_overridden: boolean, avgifter_overridden: boolean },
+    effective: { gross_salary: number, tax_withheld: number, extra_tax_withheld: number, net_salary: number, avgifter_amount: number, vacation_accrual: number, employer_cost: number, tax_overridden: boolean, avgifter_overridden: boolean },
     calculation_breakdown?: unknown,
     line_items: { salary_line_item_id: string, item_type: string, description: string, quantity: number | null, unit_price: number | null, amount: number, is_taxable: boolean, is_avgift_basis: boolean, is_vacation_basis: boolean, is_gross_deduction: boolean, is_net_deduction: boolean, account_number: string | null, sort_order: number }[],
     created_at: string,

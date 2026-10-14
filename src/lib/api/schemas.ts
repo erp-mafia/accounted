@@ -33,6 +33,13 @@ import { ORE_ROUNDING_ACCOUNT } from '@/lib/money'
 import { DIMENSION_RULE_TYPES, ruleValueProblem } from '@/lib/dimensions/rule-value'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
 import { validateJamkning } from '@/lib/salary/jamkning-rules'
+import {
+  EXTRA_TAX_AMOUNT_MAX,
+  EXTRA_TAX_AMOUNT_RANGE,
+  EXTRA_TAX_PERCENTAGE_RANGE,
+  isStorableExtraTaxPercentage,
+  validateExtraTax,
+} from '@/lib/salary/extra-tax'
 import { VACATION_DAYS_MINIMUM, vacationDaysBelowMinimum } from '@/lib/salary/employee-update-rules'
 import { SalaryCalculationPolicySchema } from '@/lib/salary/calculation-policy'
 import {
@@ -4063,6 +4070,11 @@ const EmployeeSchemaBase = z.object({
   jamkning_percentage: z.number().min(0).max(100).nullable().optional(),
   jamkning_valid_from: isoDate.nullable().optional(),
   jamkning_valid_to: isoDate.nullable().optional(),
+  // Förhöjt skatteavdrag (SFL 11 kap. 22 §, lib/salary/extra-tax.ts): the
+  // employee's request to withhold more, whole kronor per run or a requested
+  // total percentage of taxable income. At most one is set; null clears.
+  extra_tax_amount: z.number().int(EXTRA_TAX_AMOUNT_RANGE).min(1, EXTRA_TAX_AMOUNT_RANGE).max(EXTRA_TAX_AMOUNT_MAX, EXTRA_TAX_AMOUNT_RANGE).nullable().optional(),
+  extra_tax_percentage: z.number().refine(isStorableExtraTaxPercentage, EXTRA_TAX_PERCENTAGE_RANGE).nullable().optional(),
   // Dimensions PR8: bag applied to the employee's P&L cost lines when a
   // salary run is booked. {} clears (the UI always sends the field).
   default_dimensions: DimensionsBagSchema.optional(),
@@ -4144,6 +4156,11 @@ export const CreateEmployeeSchema = EmployeeSchemaBase.superRefine((data, ctx) =
   // both a start and an end date on every write path (#2058). The create body
   // is the whole row, so the shared validator sees the final state here.
   for (const issue of validateJamkning(data)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue.message, path: [issue.field] })
+  }
+
+  // Förhöjt skatteavdrag: kronor or percentage, never both.
+  for (const issue of validateExtraTax(data)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue.message, path: [issue.field] })
   }
 
@@ -4301,6 +4318,13 @@ export const UpdateEmployeeSchema = EmployeeSchemaPatchBase.partial().superRefin
   // merged state. Within-body date ordering is checkable here: pass the
   // percentage as null so only the ordering rule fires.
   for (const issue of validateJamkning({ ...data, jamkning_percentage: null })) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue.message, path: [issue.field] })
+  }
+
+  // Förhöjt skatteavdrag: both forms in one body is refused here; one form
+  // sent while the other is stored is the merged-row check in
+  // lib/salary/employee-update-rules.ts.
+  for (const issue of validateExtraTax(data)) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue.message, path: [issue.field] })
   }
 })

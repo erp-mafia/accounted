@@ -908,6 +908,8 @@ export async function runSalaryCalculation(
         jamkningValidFrom: emp.jamkning_valid_from,
         jamkningValidTo: emp.jamkning_valid_to,
         fSkattStatus: emp.f_skatt_status,
+        extraTaxAmount: emp.extra_tax_amount ?? null,
+        extraTaxPercentage: emp.extra_tax_percentage ?? null,
         personnummer: emp.personnummer,
         paymentDate: run.payment_date,
         vacationRule: emp.vacation_rule,
@@ -980,6 +982,9 @@ export async function runSalaryCalculation(
       benefit_values: result.benefitValues,
       taxable_income: result.taxableIncome,
       tax_withheld: result.taxWithheld,
+      // The förhöjt skatteavdrag part of tax_withheld, frozen so a payslip
+      // downloaded again later prints the same split (lib/salary/extra-tax.ts).
+      extra_tax_withheld: result.extraTaxWithheld,
       net_deductions: result.netDeductions,
       net_salary: result.netSalary,
       avgifter_rate: result.avgifterRate,

@@ -10,6 +10,7 @@ import { groupOneOffBasesByRate, oneOffTaxForGroup, validateOneOffTaxLine } from
 import { isBenefitItemType, resolveTaxableBenefits } from './benefit-payments'
 import { degreeAdjustedMonthlySalary } from './work-schedule'
 import { isVaxaStodRefundMonth, VAXA_STOD_CONFIGURED_CAP_FROM, VAXA_STOD_REFUND_STEP_LABEL } from './vaxa-stod'
+import { computeExtraTax, type StatutoryTaxBranch } from './extra-tax'
 import type { SalaryLineItemType } from '@/types'
 
 // ============================================================
@@ -33,6 +34,13 @@ export interface SalaryCalculationInput {
   jamkningValidFrom: string | null
   jamkningValidTo: string | null
   fSkattStatus: string
+  /**
+   * Förhöjt skatteavdrag the employee asked for (lib/salary/extra-tax.ts):
+   * whole kronor per run, or a requested total percentage of the taxable
+   * income. At most one is set. Omitted = none.
+   */
+  extraTaxAmount?: number | null
+  extraTaxPercentage?: number | null
 
   /** Age (from personnummer) */
   personnummer: string // encrypted, will be decrypted for age calc
@@ -147,7 +155,10 @@ export interface SalaryCalculationResult {
    */
   benefitValues: number
   taxableIncome: number
+  /** Total preliminary tax, the extra included: what 2710 and AGI field 001 carry. */
   taxWithheld: number
+  /** The part of taxWithheld that is the requested förhöjt skatteavdrag. */
+  extraTaxWithheld: number
   netDeductions: number
   /**
    * Kostnadsersättning paid out with the salary (utlägg, skattefritt
@@ -596,10 +607,12 @@ export function calculateSalary(
   const regularTaxableIncome = oneOffByRate.size > 0 ? Math.max(0, r(taxableIncome - oneOffBasis)) : taxableIncome
 
   let taxWithheld: number
+  let taxBranch: StatutoryTaxBranch
   const paymentYear = parseInt(input.paymentDate.split('-')[0])
 
   if (input.fSkattStatus === 'f_skatt') {
     // F-skatt holder: no withholding
+    taxBranch = 'f_skatt'
     taxWithheld = 0
     steps.push({
       label: 'Skatteavdrag (F-skatt)',
@@ -609,6 +622,7 @@ export function calculateSalary(
     })
   } else if (input.fSkattStatus === 'not_verified') {
     // Unverified: flat 30%, whole kronor (SFF 22 kap. 1 §)
+    taxBranch = 'not_verified'
     taxWithheld = calculateSidoinkomstTax(taxableIncome)
     steps.push({
       label: 'Skatteavdrag (ej verifierad)',
@@ -618,6 +632,7 @@ export function calculateSalary(
     })
   } else if (input.isSidoinkomst) {
     // Sidoinkomst: flat 30%
+    taxBranch = 'sidoinkomst'
     taxWithheld = calculateSidoinkomstTax(taxableIncome)
     steps.push({
       label: 'Skatteavdrag (sidoinkomst 30 %)',
@@ -627,6 +642,7 @@ export function calculateSalary(
     })
   } else if (input.jamkningPercentage !== null && isJamkningValid(input.jamkningValidFrom, input.jamkningValidTo, input.paymentDate)) {
     // Jämkning
+    taxBranch = 'jamkning'
     taxWithheld = calculateJamkningTax(taxableIncome, input.jamkningPercentage)
     steps.push({
       label: `Skatteavdrag (jämkning ${input.jamkningPercentage} %)`,
@@ -637,6 +653,7 @@ export function calculateSalary(
   } else if (input.taxTableNumber) {
     // Normal tax table lookup on the regular part of the income; one-off
     // bases are taxed per rate group below.
+    taxBranch = 'table'
     taxWithheld = lookupTaxAmount(input.taxTableNumber, input.taxColumn, regularTaxableIncome, taxRates)
     steps.push({
       label: `Skatteavdrag (tabell ${input.taxTableNumber}, kolumn ${input.taxColumn})`,
@@ -659,6 +676,7 @@ export function calculateSalary(
     }
   } else {
     // Fallback: flat 30%, whole kronor (SFF 22 kap. 1 §)
+    taxBranch = 'fallback'
     taxWithheld = calculateSidoinkomstTax(taxableIncome)
     steps.push({
       label: 'Skatteavdrag (30 % schablon)',
@@ -668,10 +686,28 @@ export function calculateSalary(
     })
   }
 
-  // ─── Step 7: Net salary ───
   const netDeductionItems = input.lineItems.filter(li => li.isNetDeduction)
   const totalNetDeductions = r(Math.abs(netDeductionItems.reduce((sum, li) => sum + li.amount, 0)))
 
+  // ─── Step 6b: Förhöjt skatteavdrag (SFL 11 kap. 22 §) ───
+  // The extra the employee asked for, on top of the statutory tax above, in
+  // the table and jämkning branches only, capped at the cash pay left after
+  // that tax and the net deductions (lib/salary/extra-tax.ts). No row at all
+  // when nothing is requested, so such a payslip's breakdown is unchanged.
+  const extraTax = computeExtraTax({
+    amount: input.extraTaxAmount,
+    percentage: input.extraTaxPercentage,
+    branch: taxBranch,
+    taxableIncome,
+    grossSalary,
+    netDeductions: totalNetDeductions,
+    statutoryTax: taxWithheld,
+  })
+  if (extraTax.step) steps.push(extraTax.step)
+  const extraTaxWithheld = extraTax.extra
+  taxWithheld += extraTaxWithheld
+
+  // ─── Step 7: Net salary ───
   let netSalary = r(grossSalary - taxWithheld - totalNetDeductions)
   steps.push({
     label: 'Nettolön',
@@ -855,6 +891,7 @@ export function calculateSalary(
     benefitValues: totalBenefits,
     taxableIncome,
     taxWithheld,
+    extraTaxWithheld,
     netDeductions: totalNetDeductions,
     taxFreeReimbursements,
     netSalary,

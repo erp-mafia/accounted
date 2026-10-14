@@ -10,6 +10,7 @@ export const EffectiveFiguresSchema = z
   .object({
     gross_salary: z.number(),
     tax_withheld: z.number(),
+    extra_tax_withheld: z.number(),
     net_salary: z.number(),
     avgifter_amount: z.number(),
     vacation_accrual: z.number(),
@@ -18,5 +19,5 @@ export const EffectiveFiguresSchema = z
     avgifter_overridden: z.boolean(),
   })
   .describe(
-    'The figures the booking, the AGI and the bank file use once the review overrides apply: tax = the tax override when set; net moves by the same amount; avgifter = the avgifter override when set, except for an F-skatt payee (no avgifter underlag, the override is ignored); employer_cost = gross + avgifter + vacation accrual and its avgifter.',
+    'The figures the booking, the AGI and the bank file use once the review overrides apply: tax = the tax override when set; extra_tax_withheld = the employee-requested förhöjt skatteavdrag inside that tax, 0 under a tax override; net moves by the same amount; avgifter = the avgifter override when set, except for an F-skatt payee (no avgifter underlag, the override is ignored); employer_cost = gross + avgifter + vacation accrual and its avgifter.',
   ) satisfies z.ZodType<EffectiveFigures>

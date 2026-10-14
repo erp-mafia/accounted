@@ -14,6 +14,7 @@ import {
   validateEmployeeUpdate,
 } from '../employee-update-rules'
 import { JAMKNING_END_REQUIRED } from '../jamkning-rules'
+import { EXTRA_TAX_ONE_FORM } from '../extra-tax'
 import { BANK_ISSUE_MESSAGES_SV } from '../payment/bank-account'
 
 const VALID_ROW = {
@@ -156,5 +157,23 @@ describe('validateEmployeeUpdate: vacation days (agent feedback seq 828138)', ()
 
   it('does not block an unrelated edit', () => {
     expect(validateEmployeeUpdate({ ...ROW, vacation_days_per_year: 20 }, { email: 'x@example.test' })).toEqual([])
+  })
+})
+
+describe('validateEmployeeUpdate: förhöjt skatteavdrag', () => {
+  it('refuses a percentage sent while kronor are stored', () => {
+    expect(validateEmployeeUpdate({ ...VALID_ROW, extra_tax_amount: 500 }, { extra_tax_percentage: 45 })).toEqual([
+      { field: 'extra_tax_percentage', message: EXTRA_TAX_ONE_FORM },
+    ])
+  })
+
+  it('accepts switching the form in one patch', () => {
+    expect(
+      validateEmployeeUpdate({ ...VALID_ROW, extra_tax_amount: 500 }, { extra_tax_amount: null, extra_tax_percentage: 45 }),
+    ).toEqual([])
+  })
+
+  it('does not look at the extra tax on an unrelated edit', () => {
+    expect(validateEmployeeUpdate({ ...VALID_ROW, extra_tax_amount: 500 }, { email: 'a@b.se' })).toEqual([])
   })
 })

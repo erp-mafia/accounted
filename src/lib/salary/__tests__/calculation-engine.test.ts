@@ -1981,3 +1981,142 @@ describe('calculation policy: partial_month = annual_calendar_days', () => {
     })
   })
 })
+
+describe('förhöjt skatteavdrag (SFL 11 kap. 22 §)', () => {
+  // Table 33 column 1 around Do the North's gross; the bottom bracket is
+  // zero tax so a benefit-only payslip has no statutory tax.
+  const rates: TaxTableRate[] = [
+    { tableYear: 2026, tableNumber: 33, columnNumber: 1, incomeFrom: 0, incomeTo: 5000, kind: 'amount', taxAmount: 0 },
+    { tableYear: 2026, tableNumber: 33, columnNumber: 1, incomeFrom: 5001, incomeTo: 26000, kind: 'amount', taxAmount: 4000 },
+    { tableYear: 2026, tableNumber: 33, columnNumber: 1, incomeFrom: 26001, incomeTo: 26200, kind: 'amount', taxAmount: 5217 },
+    { tableYear: 2026, tableNumber: 33, columnNumber: 1, incomeFrom: 26201, incomeTo: 9999999, kind: 'amount', taxAmount: 8000 },
+  ]
+  const doTheNorth = (overrides = {}) =>
+    makeBasicInput({ taxTableNumber: 33, taxColumn: 1, monthlySalary: 26161.27, ...overrides })
+  const extraStep = (steps: Array<{ label: string }>) => steps.find((s) => s.label === 'Extra skatteavdrag (begärt)')
+
+  it("withholds 45 % in total on Do the North's figures: 11 772 kr, 6 555 kr of it extra", () => {
+    const r = calculateSalary(doTheNorth({ extraTaxPercentage: 45 }), config2026, rates)
+    expect(r.grossSalary).toBe(26161.27)
+    expect(r.taxWithheld).toBe(11772)
+    expect(r.extraTaxWithheld).toBe(6555)
+    expect(r.netSalary).toBe(14389.27)
+    expect(extraStep(r.steps)).toMatchObject({ output: 6555 })
+    // The statutory row still shows the table tax; the extra is its own row.
+    expect(r.steps.find((s) => s.label.startsWith('Skatteavdrag (tabell'))?.output).toBe(5217)
+  })
+
+  it('adds the kronor form on top of the table tax', () => {
+    const r = calculateSalary(doTheNorth({ extraTaxAmount: 500 }), config2026, rates)
+    expect(r.taxWithheld).toBe(5717)
+    expect(r.extraTaxWithheld).toBe(500)
+    expect(r.netSalary).toBe(20444.27)
+  })
+
+  it('withholds the table tax only when the percentage is below it', () => {
+    const r = calculateSalary(doTheNorth({ extraTaxPercentage: 15 }), config2026, rates)
+    expect(r.taxWithheld).toBe(5217)
+    expect(r.extraTaxWithheld).toBe(0)
+    expect(extraStep(r.steps)).toMatchObject({ output: 0 })
+  })
+
+  it('leaves the breakdown untouched when nothing is requested', () => {
+    const r = calculateSalary(doTheNorth(), config2026, rates)
+    expect(r.taxWithheld).toBe(5217)
+    expect(r.extraTaxWithheld).toBe(0)
+    expect(extraStep(r.steps)).toBeUndefined()
+  })
+
+  describe('with engångsskatt', () => {
+    const bonus = {
+      itemType: 'bonus' as const,
+      amount: 2500,
+      oneOffTaxPercent: 20,
+      isTaxable: true,
+      isAvgiftBasis: true,
+      isVacationBasis: false,
+      isGrossDeduction: false,
+      isNetDeduction: false,
+    }
+
+    it('adds the kronor form once', () => {
+      const r = calculateSalary(doTheNorth({ extraTaxAmount: 500, lineItems: [bonus] }), config2026, rates)
+      // 5 217 table + 500 engångsskatt + 500 extra
+      expect(r.taxWithheld).toBe(6217)
+      expect(r.extraTaxWithheld).toBe(500)
+    })
+
+    it('applies the percentage to the whole income, the one-off part included', () => {
+      const r = calculateSalary(doTheNorth({ extraTaxPercentage: 45, lineItems: [bonus] }), config2026, rates)
+      // 45 % of 28 661,27 = 12 897; statutory 5 217 + 500 = 5 717
+      expect(r.taxWithheld).toBe(12897)
+      expect(r.extraTaxWithheld).toBe(7180)
+    })
+  })
+
+  describe('with jämkning', () => {
+    const jamkning = { jamkningPercentage: 20, jamkningValidFrom: '2026-01-01', jamkningValidTo: '2026-12-31' }
+
+    it('adds the kronor form on top of the jämkning tax', () => {
+      const r = calculateSalary(doTheNorth({ ...jamkning, extraTaxAmount: 400 }), config2026, rates)
+      // 20 % of 26 161,27 = 5 232
+      expect(r.taxWithheld).toBe(5632)
+      expect(r.extraTaxWithheld).toBe(400)
+    })
+
+    it('tops the jämkning tax up to the requested percentage', () => {
+      const r = calculateSalary(doTheNorth({ ...jamkning, extraTaxPercentage: 45 }), config2026, rates)
+      expect(r.taxWithheld).toBe(11772)
+      expect(r.extraTaxWithheld).toBe(6540)
+    })
+  })
+
+  it.each([
+    ['F-skatt', { fSkattStatus: 'f_skatt' }, 0],
+    ['sidoinkomst', { isSidoinkomst: true }, 7848],
+    ['an unverified status', { fSkattStatus: 'not_verified' }, 7848],
+    ['no tax table', { taxTableNumber: null }, 7848],
+  ])('does not apply with %s, and the row says so', (_name, overrides, statutory) => {
+    const r = calculateSalary(doTheNorth({ ...overrides, extraTaxAmount: 500 }), config2026, rates)
+    expect(r.taxWithheld).toBe(statutory)
+    expect(r.extraTaxWithheld).toBe(0)
+    expect(extraStep(r.steps)).toMatchObject({ output: 0 })
+  })
+
+  it('caps the extra at the cash left after the table tax and the net deductions', () => {
+    const advance = {
+      itemType: 'net_deduction_advance' as const,
+      amount: -18000,
+      isTaxable: false,
+      isAvgiftBasis: false,
+      isVacationBasis: false,
+      isGrossDeduction: false,
+      isNetDeduction: true,
+    }
+    const r = calculateSalary(doTheNorth({ extraTaxAmount: 5000, lineItems: [advance] }), config2026, rates)
+    // 26 161 - 18 000 - 5 217 = 2 944 kr of cash left
+    expect(r.extraTaxWithheld).toBe(2944)
+    expect(r.taxWithheld).toBe(8161)
+    expect(r.netSalary).toBe(0.27)
+  })
+
+  it('withholds nothing extra without cash pay', () => {
+    const meals = {
+      itemType: 'benefit_meals' as const,
+      amount: 3000,
+      isTaxable: true,
+      isAvgiftBasis: true,
+      isVacationBasis: false,
+      isGrossDeduction: false,
+      isNetDeduction: false,
+    }
+    const r = calculateSalary(
+      makeBasicInput({ taxTableNumber: 33, taxColumn: 1, monthlySalary: 0, extraTaxPercentage: 45, lineItems: [meals] }),
+      config2026,
+      rates,
+    )
+    expect(r.grossSalary).toBe(0)
+    expect(r.taxWithheld).toBe(0)
+    expect(r.extraTaxWithheld).toBe(0)
+  })
+})
