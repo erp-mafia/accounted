@@ -15,7 +15,8 @@ import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { visibleWorklistTotal } from '@/lib/worklist/visible-total'
 import type { AiTaskCategory } from '@/lib/worklist/ai-task'
-import type { PaymentsVerificationDue } from '@/lib/worklist/types'
+import type { PaymentsVerificationDue, SupplierPayeeChangeDue } from '@/lib/worklist/types'
+import { PayeeChangeDialog } from '@/components/payments/PayeeChangeDialog'
 import { PAYMENTS_PAGE_PATH } from '@/lib/payments/orders/page-path'
 import type { MissingUnderlagSample } from '@/lib/worklist/missing-underlag'
 import { NO_AI_CONNECTION, type AiConnection } from '@/lib/onboarding/ai-clients'
@@ -37,6 +38,7 @@ import {
   ReceiptText,
   Scale,
   Send,
+  ShieldAlert,
   ShieldCheck,
   Stamp,
   FileQuestion,
@@ -96,6 +98,13 @@ interface AttGoraSectionProps {
    * while it is expiring, at the top once it has lapsed and payments stop.
    */
   paymentsVerification?: PaymentsVerificationDue | null
+  /**
+   * Supplier invoices stating bank details the supplier card lacks, that
+   * nobody has decided on (lib/worklist supplier_payee_change): one row each
+   * at the top of the list, with the decision behind "Granska". Payment of
+   * each is held until it is decided.
+   */
+  supplierPayeeChanges?: SupplierPayeeChangeDue[]
   expiringBankConnections?: ExpiringBankConnection[]
   /**
    * True while the setup checklist is open and the company has zero posted
@@ -206,6 +215,7 @@ export default function AttGoraSection({
   skattekontoPayment = null,
   bankSwitches = [],
   paymentsVerification = null,
+  supplierPayeeChanges = [],
   expiringBankConnections = [],
   emptyLedger = false,
   hasActiveBankConnection = true,
@@ -230,6 +240,8 @@ export default function AttGoraSection({
   const [matches, setMatches] = useState(suggestedMatches)
   const [leavingIds, setLeavingIds] = useState<Set<string>>(new Set())
   const [confirmingId, setConfirmingId] = useState<string | null>(null)
+  const [payeeChanges, setPayeeChanges] = useState(supplierPayeeChanges)
+  const [reviewingPayeeId, setReviewingPayeeId] = useState<string | null>(null)
   // A confirmed match books a journal entry, so the server-derived
   // emptyLedger flag goes stale the moment one succeeds in this session.
   const [postedSinceLoad, setPostedSinceLoad] = useState(false)
@@ -242,6 +254,7 @@ export default function AttGoraSection({
     setCounts(worklist.counts)
     setTotal(worklist.total)
     setMatches(suggestedMatches)
+    setPayeeChanges(supplierPayeeChanges)
     setPostedSinceLoad(false)
   }
 
@@ -368,7 +381,14 @@ export default function AttGoraSection({
     calmSwitches.length > 0 ||
     verificationExpiring !== null ||
     expiringBankConnections.length > 0
-  const allClear = !bokforRows && !betalaRows && !granskaRows && !bevakaRows && urgentSwitches.length === 0 && verificationExpired === null
+  const allClear =
+    !bokforRows &&
+    !betalaRows &&
+    !granskaRows &&
+    !bevakaRows &&
+    urgentSwitches.length === 0 &&
+    verificationExpired === null &&
+    payeeChanges.length === 0
 
   // The header total must equal what the section actually shows, computed off
   // the same visibleWorklistTotal helper as the dashboard KPI tile so the two
@@ -413,6 +433,28 @@ export default function AttGoraSection({
         ) : item.days_left !== null ? (
           <Badge variant="warning">{t('payments_verification_days_left', { days: Math.max(item.days_left, 0) })}</Badge>
         ) : undefined
+      }
+    />
+  )
+
+  // One row per supplier invoice whose bank details wait for a decision: the
+  // label opens the invoice, "Granska" the decision itself. A changed account
+  // is the classic invoice fraud, so the rows lead the list (band Nu).
+  const payeeChangeRow = (item: SupplierPayeeChangeDue) => (
+    <WorklistRow
+      key={`payee-${item.supplier_invoice_id}`}
+      href={`/supplier-invoices/${item.supplier_invoice_id}`}
+      icon={ShieldAlert}
+      label={t('row_supplier_payee_change', { supplier: item.supplier_name })}
+      detail={
+        item.old_payee
+          ? t('row_supplier_payee_change_detail', { invoice: item.supplier_invoice_number ?? `#${item.arrival_number ?? ''}`, payee: item.new_payee, card: item.old_payee })
+          : t('row_supplier_payee_new_detail', { invoice: item.supplier_invoice_number ?? `#${item.arrival_number ?? ''}`, payee: item.new_payee })
+      }
+      action={
+        <Button size="sm" variant="outline" onClick={() => setReviewingPayeeId(item.supplier_invoice_id)}>
+          {t('supplier_payee_review')}
+        </Button>
       }
     />
   )
@@ -470,10 +512,11 @@ export default function AttGoraSection({
             </p>
           ) : (
             <div className="pb-2">
-              {(urgentSwitches.length > 0 || verificationExpired) && (
+              {(urgentSwitches.length > 0 || verificationExpired || payeeChanges.length > 0) && (
                 <div>
                   <BandHeader>{t('band_now')}</BandHeader>
                   <div>
+                    {payeeChanges.map(payeeChangeRow)}
                     {verificationExpired && verificationRow(verificationExpired)}
                     {urgentSwitches.map(switchRow)}
                   </div>
@@ -831,6 +874,21 @@ export default function AttGoraSection({
           hasBank={hasActiveBankConnection}
           hasSkatteverket={hasSkatteverketConnection}
           skvOmbudEnabled={skvOmbudEnabled}
+        />
+      )}
+      {reviewingPayeeId && (
+        <PayeeChangeDialog
+          supplierInvoiceId={reviewingPayeeId}
+          onOpenChange={(open) => {
+            if (!open) setReviewingPayeeId(null)
+          }}
+          onDecided={() => {
+            // Decided either way: the row is done (a rejection keeps the
+            // payment held and says so on the invoice).
+            const decidedId = reviewingPayeeId
+            setPayeeChanges((prev) => prev.filter((row) => row.supplier_invoice_id !== decidedId))
+            void refetchCounts()
+          }}
         />
       )}
     </section>

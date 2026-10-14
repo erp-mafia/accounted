@@ -51,9 +51,9 @@ import { parseEntityType } from '@/lib/company/entity-type'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import {
   backfillSupplierPaymentDetails,
-  statedPayeeColumns,
   type SupplierPaymentDetails,
 } from '@/lib/supplier-invoices/payment-details-backfill'
+import { assessRegisteredPayee, payeeAlertWarning } from '@/lib/payments/payee-registration'
 import type { Logger } from '@/lib/logger'
 import { rejectSupersededInboxConversions } from '@/lib/pending-operations/supersede'
 import type { Currency, EntityType, SupplierInvoice, SupplierInvoiceItem } from '@/types'
@@ -546,10 +546,16 @@ export async function createSupplierInvoice(
 
   // The scan read the supplier's giro or IBAN along with everything else;
   // a supplier that lacks them takes them now, so the invoice can go into
-  // a betalfil without a detour to the supplier card.
+  // a betalfil without a detour to the supplier card. Compared with the card
+  // first: an account the card does not have is an alert, and the card stays
+  // as it is until a person approves the new one (lib/payments/payee-alerts.ts).
   const scannedSupplier = (inboxItem?.extracted_data as { supplier?: SupplierPaymentDetails } | null)?.supplier
-  const statedPayee = statedPayeeColumns(scannedSupplier)
-  if (scannedSupplier) {
+  const payeeAssessment = await assessRegisteredPayee(supabase, companyId, supplier.id as string, scannedSupplier)
+  const statedPayee = payeeAssessment.stated
+  if (payeeAssessment.alert) {
+    log.info('supplier invoice states bank details the supplier card lacks', { supplierId: supplier.id, alert: payeeAssessment.alert })
+  }
+  if (scannedSupplier && payeeAssessment.backfill) {
     const written = await backfillSupplierPaymentDetails(supabase, companyId, supplier.id as string, scannedSupplier)
     if (Object.keys(written).length > 0) {
       log.info('supplier payment details filled from the scanned invoice', {
@@ -579,6 +585,8 @@ export async function createSupplierInvoice(
   // VAT; a non-blocking warning lets the user adjust. Every registration
   // path books that VAT, so every path warns.
   const warnings: SupplierInvoiceWarning[] = []
+  // Only an invoice someone will pay: a privately paid one is settled here.
+  if (payeeAssessment.alert && !paidPrivately) warnings.push(payeeAlertWarning(payeeAssessment.alert))
   if (!reverseCharge && items.some((i) => /^607\d$/.test(i.account_number) && i.vat_amount > 0)) {
     warnings.push({
       code: 'REPRESENTATION_VAT_CAP',

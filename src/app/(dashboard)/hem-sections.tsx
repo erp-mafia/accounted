@@ -14,6 +14,7 @@ import {
   listSkattekontoPaymentDue,
   listSuggestedMatches,
   listSupplierInvoiceAttestsDue,
+  listSupplierPayeeChangesDue,
   SUGGESTED_MATCH_SCAN_CAP,
 } from '@/lib/worklist'
 import { listResumeItems } from '@/lib/worklist/resume'
@@ -249,6 +250,9 @@ export async function HemPanesSection({
   // And the invoices waiting for this person's attest under the attest
   // policy: one row each, a per-person view of the company's attest count.
   const attestsDuePromise = user ? listSupplierInvoiceAttestsDue(supabase, companyId, user.id) : Promise.resolve([])
+  // And for supplier invoices with bank details nobody approved: one row per
+  // invoice, the count is the list's length.
+  const supplierPayeeChangesPromise = listSupplierPayeeChangesDue(supabase, companyId)
   const [
     worklist,
     suggestedMatches,
@@ -257,6 +261,7 @@ export async function HemPanesSection({
     missingUnderlag,
     bankSwitches,
     paymentsVerification,
+    supplierPayeeChanges,
     resumeItems,
     bankConnectionsRes,
     postedEntries,
@@ -272,6 +277,7 @@ export async function HemPanesSection({
         missingUnderlag: missingUnderlagPromise,
         bankSwitchDue: bankSwitchPromise,
         paymentsVerificationDue: paymentsVerificationPromise,
+        supplierPayeeChangesDue: supplierPayeeChangesPromise,
       }),
       suggestedMatchesPromise,
       expensePayoutsPromise,
@@ -279,6 +285,7 @@ export async function HemPanesSection({
       missingUnderlagPromise,
       bankSwitchPromise,
       paymentsVerificationPromise,
+      supplierPayeeChangesPromise,
       // In-progress work for the Fortsätt pane: pure draft-state derivation.
       listResumeItems(supabase, companyId, now),
       supabase.from('bank_connections').select('id, status, consent_expires, bank_name, last_sie_sweep').eq('company_id', companyId).eq('status', 'active'),
@@ -319,6 +326,7 @@ export async function HemPanesSection({
           missingUnderlag={missingUnderlag}
           bankSwitches={bankSwitches}
           paymentsVerification={paymentsVerification}
+          supplierPayeeChanges={supplierPayeeChanges}
           expiringBankConnections={expiringBankConnections}
           emptyLedger={emptyLedger}
           hasActiveBankConnection={hasActiveBankConnection}

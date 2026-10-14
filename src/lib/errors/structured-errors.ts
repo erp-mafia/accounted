@@ -7898,6 +7898,17 @@ const PAYMENT_ORDERS: Record<string, StructuredErrorEntry> = {
     message_sv: 'Betalningen hittades inte.',
     message_en: 'The payment was not found.',
   },
+  // Changed supplier bank details (lib/payments/payee-alerts.ts).
+  SUPPLIER_PAYEE_NOTHING_TO_DECIDE: {
+    httpStatus: 409,
+    message_sv: 'Fakturan anger inga nya bankuppgifter att godkänna eller neka.',
+    message_en: 'The invoice states no new bank details to approve or reject.',
+  },
+  SUPPLIER_PAYEE_DECISION_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Beslutet om bankuppgifterna kunde inte sparas. Försök igen.',
+    message_en: 'The decision on the bank details could not be saved. Try again.',
+  },
   PAYMENT_ORDERS_INELIGIBLE: {
     httpStatus: 409,
     message_sv: 'En eller flera fakturor kan inte betalas via banken just nu.',

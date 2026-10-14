@@ -17,6 +17,7 @@
 import { randomUUID } from 'node:crypto'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { evaluateInvoiceForBatch, type BatchExclusionReason } from '@/lib/payments/batch-eligibility'
+import { holdFor, loadPayeeHolds } from '@/lib/payments/payee-alerts'
 import { openPaymentsDoor } from './switched-on'
 import { executionDateFor } from '@/lib/payments/bank-days'
 import { formatPayeeLabel, type SupplierPayee } from '@/lib/payments/supplier-payee'
@@ -79,6 +80,7 @@ interface InvoiceRow {
   payee_plusgiro: string | null
   payee_clearing: string | null
   payee_account: string | null
+  payee_iban: string | null
 }
 
 interface SupplierRow {
@@ -89,6 +91,7 @@ interface SupplierRow {
   bank_account: string | null
   clearing_number: string | null
   account_number: string | null
+  iban: string | null
 }
 
 function payeeColumns(payee: SupplierPayee) {
@@ -151,7 +154,7 @@ export async function preparePaymentOrders(
   const { data: invoiceData, error: invoiceError } = await supabase
     .from('supplier_invoices')
     .select(
-      'id, supplier_id, status, approved_at, due_date, remaining_amount, currency, is_credit_note, payment_reference, supplier_invoice_number, payee_bankgiro, payee_plusgiro, payee_clearing, payee_account',
+      'id, supplier_id, status, approved_at, due_date, remaining_amount, currency, is_credit_note, payment_reference, supplier_invoice_number, payee_bankgiro, payee_plusgiro, payee_clearing, payee_account, payee_iban',
     )
     .eq('company_id', companyId)
     .in('id', ids)
@@ -162,12 +165,15 @@ export async function preparePaymentOrders(
   const { data: supplierData, error: supplierError } = supplierIds.length
     ? await supabase
         .from('suppliers')
-        .select('id, name, bankgiro, plusgiro, bank_account, clearing_number, account_number')
+        .select('id, name, bankgiro, plusgiro, bank_account, clearing_number, account_number, iban')
         .eq('company_id', companyId)
         .in('id', supplierIds)
     : { data: [], error: null }
   if (supplierError) throw supplierError
   const suppliers = new Map(((supplierData ?? []) as SupplierRow[]).map((s) => [s.id, s]))
+  // An account the invoice states that nobody confirmed for the supplier
+  // (or that a person rejected) holds the invoice back, as in the payment file.
+  const payeeHolds = await loadPayeeHolds(supabase, companyId, invoices, suppliers)
 
   // Open file batches and open orders are refused by the database too; reading
   // them here turns a whole-call refusal into a per-invoice skip.
@@ -225,7 +231,7 @@ export async function preparePaymentOrders(
       continue
     }
     const evaluation = evaluateInvoiceForBatch(
-      { ...invoice, remaining_amount: Number(invoice.remaining_amount) },
+      { ...invoice, remaining_amount: Number(invoice.remaining_amount), payee_hold: holdFor(payeeHolds, id) },
       supplier,
       { today: input.today, attestBlocked },
     )

@@ -31,6 +31,7 @@ import type { StatusChip } from '@/lib/status-display'
 const PaymentFileDialog = dynamic(() => import('@/components/supplier-invoices/PaymentFileDialog'), { ssr: false })
 const PayViaBankDialog = dynamic(() => import('@/components/payments/PayViaBankDialog'), { ssr: false })
 import { fetchPaymentsAvailability } from '@/components/payments/payments-client'
+import { SupplierPayeeAlertLine } from '@/components/payments/SupplierPayeeAlertLine'
 import { AccountChip } from '@/components/ui/account-chip'
 import { CategoryPopover } from '@/components/transactions/CategoryPopover'
 import TemplatePicker from '@/components/transactions/TemplatePicker'
@@ -752,6 +753,8 @@ export default function SupplierInvoiceDetailPage() {
           }}
         />
       )}
+      {/* Bank details the invoice states that hold its payment back. */}
+      {!invoice.is_credit_note && <SupplierPayeeAlertLine supplierInvoiceId={invoice.id} />}
 
       {/* The invoice head is one line of facts. The number is the title, the
           dates that moved are on the strip, so only the supplier and the

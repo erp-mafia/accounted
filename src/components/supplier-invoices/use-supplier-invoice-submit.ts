@@ -179,6 +179,14 @@ export function useSupplierInvoiceSubmit({
         variant: 'destructive',
       })
     }
+    // The invoice states bank details the supplier card lacks: registered,
+    // but its payment waits for a person's approval (lib/payments/payee-alerts.ts).
+    if (
+      res.ok &&
+      (result as CreateResult).warnings?.some((warning) => warning.code === 'SUPPLIER_PAYEE_CHANGED' || warning.code === 'SUPPLIER_PAYEE_NEW')
+    ) {
+      toast({ title: t('payee_alert_toast_title'), description: t('payee_alert_toast_description') })
+    }
     return { ok: res.ok, status: res.status, result }
   }
 

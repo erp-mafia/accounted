@@ -410,6 +410,8 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_request_payment_signature: 'suppliers:write',
   // The attest policy for supplier invoices (lib/operations/supplier-invoice-attest.ts).
   gnubok_get_attest_policy: 'suppliers:read',
+  // Changed supplier bank details: stages a person's approval (web UI only).
+  gnubok_confirm_supplier_payee: 'suppliers:write',
   // Bankgiro Lookup (lib/operations/bankgiro-lookup.ts): the registered name
   // behind a payee's giro, and the company's own registered giro numbers.
   gnubok_lookup_bankgiro_creditor: 'suppliers:read',

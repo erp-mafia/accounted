@@ -254,6 +254,7 @@ import { z } from 'zod'
 import { operationForPendingType } from '@/lib/operations/registry'
 import { rejectSupersededInboxConversions } from './supersede'
 import { backfillSupplierPaymentDetails, type SupplierPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
+import { assessRegisteredPayee } from '@/lib/payments/payee-registration'
 import { COLLECTIONS_BATCH_TYPE } from '@/lib/collections/batch'
 import { batchApprovalRefusal, commitCollectionsDailyBatch } from '@/lib/collections/batch-commit'
 import type { AnyOperation, OperationOutcome } from '@/lib/operations/types'
@@ -4430,6 +4431,15 @@ async function commitCreateSupplierInvoiceFromInbox(
     extracted_data: inbox.extracted_data,
   })
 
+  // The supplier's giro, IBAN or BIC the scan read and staging showed the
+  // approver: what the invoice states, compared with the supplier card before
+  // the card is touched (lib/payments/payee-alerts.ts).
+  const paymentDetails = params.supplier_payment_details as SupplierPaymentDetails | undefined
+  const payeeAssessment = await assessRegisteredPayee(supabase, companyId, supplierId, paymentDetails)
+  if (payeeAssessment.alert) {
+    log.info('Inbox invoice states bank details the supplier card lacks', { companyId, supplierId, alert: payeeAssessment.alert })
+  }
+
   const { data: arrivalNum, error: arrivalErr } = await supabase
     .rpc('get_next_arrival_number', { p_company_id: companyId })
 
@@ -4468,6 +4478,11 @@ async function commitCreateSupplierInvoiceFromInbox(
       // The OCR the extraction read (feedback seq 869949): a betalfil
       // references the payment by it.
       payment_reference: paymentReference,
+      // What the document itself says to pay to, validated.
+      payee_bankgiro: payeeAssessment.stated.payee_bankgiro,
+      payee_plusgiro: payeeAssessment.stated.payee_plusgiro,
+      payee_iban: payeeAssessment.stated.payee_iban,
+      payee_bic: payeeAssessment.stated.payee_bic,
       notes,
       default_dimensions: defaultDimensions ?? {},
     })
@@ -4664,11 +4679,11 @@ async function commitCreateSupplierInvoiceFromInbox(
   // still-pending twins are rejected (crm#1074).
   await rejectSupersededInboxConversions(supabase, companyId, inboxItemId, invoice.id as string)
 
-  // The supplier's giro, IBAN or BIC the scan read and staging showed the
-  // approver: written now, after approval and once the invoice exists, and
-  // only into columns the supplier still lacks. Never throws.
-  const paymentDetails = params.supplier_payment_details as SupplierPaymentDetails | undefined
-  if (paymentDetails) {
+  // The same details written to the card now, after approval and once the
+  // invoice exists, and only into columns the supplier still lacks; never
+  // when the invoice names an account the card does not have (a person
+  // approves that one first). Never throws.
+  if (paymentDetails && payeeAssessment.backfill) {
     await backfillSupplierPaymentDetails(supabase, companyId, supplierId, paymentDetails)
   }
 

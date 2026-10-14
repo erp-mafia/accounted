@@ -239,6 +239,14 @@ import {
 } from './tool-namespace'
 import { getRiskLevel, requiresWebApproval } from '@/lib/pending-operations/risk-tiers'
 import {
+  CARD_PAYEE_COLUMNS,
+  loadPayeeHolds,
+  STATED_PAYEE_COLUMNS,
+  type PayeeAlertState,
+  type PayeeInvoiceFacts,
+} from '@/lib/payments/payee-alerts'
+import type { CardPayeeSource } from '@/lib/payments/payee-change'
+import {
   normalizeVatRateToDecimal,
   normalizeVatRateToFraction,
   treatmentDeductsInputVat,
@@ -10096,7 +10104,11 @@ export const tools: McpTool[] = [
       // listing reads as complete (same contract as gnubok_list_invoices).
       let query = supabase
         .from('supplier_invoices')
-        .select('id, supplier_invoice_number, invoice_date, due_date, status, total, total_sek, currency, vat_treatment, remaining_amount, default_dimensions, supplier:suppliers(id, name)', { count: 'exact' })
+        .select(
+          'id, supplier_id, supplier_invoice_number, invoice_date, due_date, status, total, total_sek, currency, vat_treatment, remaining_amount, is_credit_note, default_dimensions, ' +
+            `${STATED_PAYEE_COLUMNS}, supplier:suppliers(id, name, ${CARD_PAYEE_COLUMNS})`,
+          { count: 'exact' },
+        )
         .eq('company_id', companyId)
 
       if (status !== 'all') {
@@ -10123,7 +10135,48 @@ export const tools: McpTool[] = [
 
       if (error) throw dbError(error)
 
-      const invoices = data ?? []
+      // payee_alert: the invoice states bank details the supplier card lacks
+      // and payment is held until a person decides (changed), or a person
+      // rejected them (rejected); null otherwise. The account columns
+      // themselves stay out of the answer.
+      type ListedInvoice = PayeeInvoiceFacts & {
+        is_credit_note: boolean
+        remaining_amount: number
+        status: string
+        supplier: (CardPayeeSource & { id: string; name: string }) | null
+      } & Record<string, unknown>
+      const rows = (data ?? []) as unknown as ListedInvoice[]
+      const unpaid = rows.filter((row) => !row.is_credit_note && Number(row.remaining_amount) > 0 && row.status !== 'paid')
+      let payeeStates = new Map<string, PayeeAlertState>()
+      try {
+        payeeStates = await loadPayeeHolds(
+          supabase,
+          companyId,
+          unpaid,
+          new Map(unpaid.flatMap((row) => (row.supplier ? [[row.supplier_id, row.supplier] as const] : []))),
+        )
+      } catch (alertError) {
+        log.warn('payee alerts for the supplier invoice list failed', { error: alertError instanceof Error ? alertError.message : String(alertError) })
+      }
+      const invoices = rows.map((row) => {
+        const {
+          payee_bankgiro: _bg,
+          payee_plusgiro: _pg,
+          payee_clearing: _clearing,
+          payee_account: _account,
+          payee_iban: _iban,
+          supplier_id: _supplierId,
+          is_credit_note: _creditNote,
+          supplier,
+          ...rest
+        } = row
+        const hold = payeeStates.get(row.id)?.hold ?? null
+        return {
+          ...rest,
+          supplier: supplier ? { id: supplier.id, name: supplier.name } : null,
+          payee_alert: hold === 'payee_rejected' ? 'rejected' : hold === 'payee_unconfirmed' ? 'changed' : null,
+        }
+      })
       const totalCount = count ?? invoices.length
       return {
         invoices,

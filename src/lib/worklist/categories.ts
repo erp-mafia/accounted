@@ -38,6 +38,7 @@ import { deriveVerificationState, RENEWAL_DUE_STATES } from '@/lib/payments/orde
 import { companyAttestsSupplierInvoices } from '@/lib/supplier-invoices/lifecycle'
 import { currentRound, invoiceNeedsAttest, mayAttest } from '@/lib/supplier-invoices/attest-policy'
 import { loadAttestPolicy } from '@/lib/supplier-invoices/attest-policy-read'
+import { listSupplierPayeeAlerts } from '@/lib/payments/payee-alerts'
 import type {
   BankSwitchDue,
   ExpensePayoutDue,
@@ -45,6 +46,7 @@ import type {
   SkattekontoPaymentDue,
   SuggestedMatch,
   SupplierInvoiceAttestDue,
+  SupplierPayeeChangeDue,
 } from './types'
 
 // Canonical home is lib/worklist/types.ts (dependency-free, client-safe);
@@ -1059,6 +1061,29 @@ export async function listPaymentsVerificationDue(
     logAndZero('payments_verification_renewal', companyId, err as { message?: string })
     return null
   }
+}
+
+/**
+ * Supplier invoices whose stated bank details nobody has decided on (see
+ * lib/worklist/types.ts supplier_payee_change): one row per invoice, oldest
+ * due date first. A rejected account leaves the list (the invoice says so);
+ * a confirmed one never alerts. Soft-fails to none.
+ */
+export async function listSupplierPayeeChangesDue(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<SupplierPayeeChangeDue[]> {
+  try {
+    return (await listSupplierPayeeAlerts(supabase, companyId)).filter((row) => row.decision === null)
+  } catch (err) {
+    logAndZero('supplier_payee_change', companyId, err as { message?: string })
+    return []
+  }
+}
+
+/** How many supplier invoices wait for a decision on their bank details (see listSupplierPayeeChangesDue). */
+export async function countSupplierPayeeChangesDue(supabase: SupabaseClient, companyId: string): Promise<number> {
+  return (await listSupplierPayeeChangesDue(supabase, companyId)).length
 }
 
 /** 1 when the payments verification is due for renewal, else 0 (see listPaymentsVerificationDue). */

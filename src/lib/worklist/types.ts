@@ -252,9 +252,50 @@ export const WORKLIST_CATEGORIES = [
    * payments on, and the Koppla banken step is where it starts.
    */
   'payments_verification_renewal',
+  /**
+   * Supplier invoices that state bank details the supplier card does not
+   * have ("Nya bankuppgifter hos {leverantör}"), one item per invoice: the
+   * classic invoice fraud, shown to whoever books invoices, not only to the
+   * person who pays. Payment of the invoice is held until it is done.
+   * Pending:  an unpaid supplier invoice (registered, approved, partially
+   *           paid or overdue; not a credit note) whose stated account
+   *           (payee_*) is on none of the supplier card's accounts while the
+   *           card has some, or names an account for a supplier the company
+   *           has paid before while the card has none, and no person has
+   *           decided on that account for that supplier
+   *           (lib/payments/payee-alerts.ts listSupplierPayeeAlerts).
+   * Done:     a person confirms the account (supplier_payee_confirmations,
+   *           which also covers later invoices with it) or rejects it (the
+   *           payment then stays held, shown on the invoice), the card is
+   *           given the account, or the invoice is paid or credited.
+   */
+  'supplier_payee_change',
 ] as const
 
 export type WorklistCategory = (typeof WORKLIST_CATEGORIES)[number]
+
+/**
+ * One supplier invoice whose stated bank details wait for a person: the Att
+ * göra row "Nya bankuppgifter hos {leverantör}", whose action opens the
+ * decision (approve, optionally onto the supplier card, or reject).
+ */
+export interface SupplierPayeeChangeDue {
+  supplier_invoice_id: string
+  supplier_id: string
+  supplier_name: string
+  supplier_invoice_number: string | null
+  arrival_number: number | null
+  due_date: string
+  /** changed: the card has other accounts; new_supplier_account: the card has none, for a supplier paid before. */
+  alert: 'changed' | 'new_supplier_account'
+  /** Null while nobody decided; rejected keeps the payment held (and the row gone). */
+  decision: 'confirmed' | 'rejected' | null
+  hold: 'payee_unconfirmed' | 'payee_rejected' | null
+  /** The account the supplier card pays today, as a label; null for an empty card. */
+  old_payee: string | null
+  /** The account the invoice states, as a label. */
+  new_payee: string
+}
 
 /**
  * The payments verification a company must renew: the Att göra row "Förnya

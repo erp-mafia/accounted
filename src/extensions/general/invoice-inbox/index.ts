@@ -1884,6 +1884,8 @@ export const invoiceInboxExtension: Extension = {
             registration_journal_entry_id: outcome.data.registration_journal_entry_id,
             inbox_item_id: outcome.data.inbox_item_id,
           },
+          // A non-blocking note, e.g. bank details the supplier card lacks (lib/payments/payee-alerts.ts).
+          ...(outcome.warnings?.length ? { warnings: outcome.warnings.map((w) => ({ code: w.code, message: w.message_sv })) } : {}),
         })
       },
     },

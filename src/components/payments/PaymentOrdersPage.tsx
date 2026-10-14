@@ -53,6 +53,7 @@ import {
   type PaymentsAvailability,
 } from './payments-client'
 import { VerificationStateText } from './VerificationStateText'
+import { fetchPayeeAlertMarkers, type PayeeAlertMarker } from './payee-change-client'
 import { FORM_OUT_STATES } from '@/lib/payments/orders/verification-state'
 import { startPollLoop } from '@/components/bank-feed/poll-loop'
 
@@ -91,6 +92,11 @@ export function PaymentOrdersPage() {
   /** Open signing links, so an approved row says whose signature it waits for. */
   const [openLinks, setOpenLinks] = useState<OpenSigningLink[]>([])
   const [busyId, setBusyId] = useState<string | null>(null)
+  /** Invoices whose stated bank details nobody approved (or a person rejected): marked on their payment rows. */
+  const [payeeMarkers, setPayeeMarkers] = useState<Map<string, PayeeAlertMarker>>(new Map())
+  useEffect(() => {
+    fetchPayeeAlertMarkers().then(setPayeeMarkers, () => setPayeeMarkers(new Map()))
+  }, [])
 
   const fail = useCallback(
     (title: string, error: unknown) => {
@@ -457,7 +463,11 @@ export function PaymentOrdersPage() {
                           </td>
                           <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>
                             {payeeLabel(order)}
-                            {(order.payee_check === 'new' || order.payee_check === 'changed') && order.status === 'draft' && (
+                            {order.supplier_invoice_id && payeeMarkers.has(order.supplier_invoice_id) && (order.status === 'draft' || order.status === 'approved') ? (
+                              <Badge variant="warning" className="ml-2 font-normal">
+                                {tStatus('payee_alert_badge')}
+                              </Badge>
+                            ) : (order.payee_check === 'new' || order.payee_check === 'changed') && order.status === 'draft' && (
                               <Badge variant={order.payee_check === 'changed' ? 'warning' : 'outline'} className="ml-2 font-normal">
                                 {tStatus(order.payee_check === 'changed' ? 'payee_changed' : 'payee_new')}
                               </Badge>

@@ -426,6 +426,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/supplier-invoices/:id/uncredit': covered([`POST ${V}/supplier-invoices/:id/uncredit`, 'gnubok_uncredit_supplier_invoice']),
   'POST /api/supplier-invoices/:id/link-to-voucher': covered(['gnubok_link_supplier_invoice_to_voucher']),
   'POST /api/supplier-invoices/:id/bank-entered': covered([`POST ${V}/supplier-invoices/:id/bank-entered`]),
+  'POST /api/supplier-invoices/:id/payee': covered(['gnubok_confirm_supplier_payee'], 'an agent stages the approval of new bank details, a person approves it in the web UI; rejecting is the person\'s own act there, and neither has a v1 door (a person vouches for the account)'),
   'PATCH /api/supplier-invoices/:id/items/:itemId': covered([`PATCH ${V}/supplier-invoices/:id/items/:itemId`, 'gnubok_update_supplier_invoice_item_account']),
   'POST /api/supplier-invoices/payment-batches': covered([`POST ${V}/supplier-payment-batches`, 'gnubok_create_supplier_payment_batch']),
   'POST /api/supplier-invoices/payment-batches/:id/cancel': covered([`POST ${V}/supplier-payment-batches/:id/cancel`, 'gnubok_cancel_supplier_payment_batch']),

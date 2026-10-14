@@ -45,6 +45,18 @@ describe('evaluateInvoiceForBatch', () => {
     }
   })
 
+  it('excludes an invoice its stated bank details hold back, before the supplier card is read', () => {
+    expect(evaluateInvoiceForBatch(invoice({ payee_hold: 'payee_unconfirmed' }), supplier, { today: TODAY })).toEqual({
+      eligible: false,
+      reason: 'payee_unconfirmed',
+    })
+    // Even with an empty card, the reason a person acts on is the hold.
+    expect(
+      evaluateInvoiceForBatch(invoice({ payee_hold: 'payee_rejected' }), { ...supplier, bankgiro: null }, { today: TODAY }),
+    ).toEqual({ eligible: false, reason: 'payee_rejected' })
+    expect(evaluateInvoiceForBatch(invoice({ payee_hold: null }), supplier, { today: TODAY }).eligible).toBe(true)
+  })
+
   it('rejects credit notes before anything else', () => {
     const result = evaluateInvoiceForBatch(
       invoice({ is_credit_note: true, status: 'paid' }),

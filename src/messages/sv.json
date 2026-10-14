@@ -699,6 +699,7 @@
     "read_more_skv": "Läs mer på Skatteverket"
   },
   "pending": {
+    "type_confirm_supplier_payee": "Godkänn leverantörs nya bankuppgifter",
     "type_connect_pos_venue": "Koppla kassasystem",
     "type_disconnect_pos_connection": "Koppla från kassasystem",
     "type_update_pos_sales_settings": "Ändra konton för kassasystem",
@@ -995,6 +996,9 @@
     "preview_link_lines_failed": "Verifikatets rader kunde inte hämtas.",
     "preview_link_open_voucher": "Öppna verifikatet",
     "preview_field": {
+      "current_supplier_account": "Konto på leverantörskortet",
+      "invoice_account": "Konto på fakturan",
+      "updates_supplier_card": "Uppdaterar leverantörskortet",
       "voucher": "Verifikat",
       "voucher_label": "Verifikat",
       "voucher_date": "Verifikatdatum",
@@ -1166,6 +1170,7 @@
     "confirm_done_title": "Markera som klar?"
   },
   "supplier_invoices": {
+    "payee_alert_badge": "Nya bankuppgifter",
     "stage_incoming": "Inkommen",
     "stage_registered": "Registrerad",
     "stage_approved": "Attesterad",
@@ -1233,6 +1238,8 @@
     "bank_entered_failed_title": "Kunde inte spara markeringen"
   },
   "supplier_payment_files": {
+    "excluded_reason_payee_unconfirmed": "fakturan anger nya bankuppgifter som ingen har godkänt (granska dem under Att göra)",
+    "excluded_reason_payee_rejected": "fakturans bankuppgifter har nekats",
     "dialog_title": "Skapa betalfil",
     "th_supplier": "Leverantör",
     "th_payee": "Mottagare",
@@ -5794,6 +5801,8 @@
     "link_failed_title": "Kunde inte länka verifikationen"
   },
   "supplier_invoice_editor": {
+    "payee_alert_toast_title": "Nya bankuppgifter på fakturan",
+    "payee_alert_toast_description": "Fakturan anger andra bankuppgifter än leverantörskortet. Den betalas inte förrän någon har godkänt dem under Att göra.",
     "section_underlag": "Underlag",
     "section_supplier": "Leverantör",
     "section_details": "Fakturauppgifter",
@@ -8419,6 +8428,10 @@
       "review_rows": "{count} rader"
   },
   "dashboard": {
+    "row_supplier_payee_change": "Nya bankuppgifter hos {supplier}",
+    "row_supplier_payee_change_detail": "Faktura {invoice} anger {payee}, kortet har {card}",
+    "row_supplier_payee_new_detail": "Faktura {invoice} anger {payee}, kortet saknar bankuppgifter",
+    "supplier_payee_review": "Granska",
     "row_document_relevance": "Dokument som kanske inte rör bolaget",
     "row_document_relevance_detail": "Svara ja eller nej innan de sparas",
     "row_document_unclassified": "Dokument som saknar typ",
@@ -12922,6 +12935,9 @@
     "done_payments_renew": "Betalningar via banken: verifieringen behöver förnyas"
   },
   "bank_payments": {
+    "payee_alert_badge": "Nya bankuppgifter",
+    "skip_payee_unconfirmed": "fakturan anger nya bankuppgifter som ingen har godkänt (granska dem under Att göra)",
+    "skip_payee_rejected": "fakturans bankuppgifter har nekats",
     "title": "Betala via banken",
     "title_sign": "Signera betalningarna",
     "title_done": "Betalningarna är skickade",
@@ -13885,5 +13901,30 @@
     "row_label": "Attestera {supplier} {amount}",
     "row_detail": "Förfaller {date}",
     "supplier_fallback": "leverantörsfaktura"
+  },
+  "supplier_payee_change": {
+    "title": "Nya bankuppgifter hos {supplier}",
+    "title_loading": "Nya bankuppgifter",
+    "description": "Fakturan anger bankuppgifter som inte finns på leverantörskortet. Fakturan betalas inte förrän någon har godkänt dem.",
+    "load_failed": "Uppgifterna kunde inte läsas. Försök igen.",
+    "on_card": "På leverantörskortet",
+    "card_empty": "Inga bankuppgifter",
+    "on_invoice": "På fakturan",
+    "registered_name": "Registrerat hos Bankgirot",
+    "registered_name_differs": "Bankgirot har {name} registrerat på kontot, inte {supplier}.",
+    "rejected_before": "Uppgifterna har nekats tidigare. Godkänn dem bara om leverantören har bekräftat dem.",
+    "check_advice": "Kontrollera uppgifterna med leverantören på ett nummer ni redan har, aldrig via fakturan eller dess e-post. Ändrade bankuppgifter är det vanligaste fakturabedrägeriet.",
+    "update_card": "Uppdatera leverantörskortet med de nya uppgifterna när du godkänner",
+    "note_label": "Hur kontrollerades uppgifterna? (valfritt)",
+    "note_placeholder": "Till exempel: ringde leverantören på känt nummer",
+    "reject": "Neka",
+    "confirm": "Godkänn nya uppgifter",
+    "confirmed_toast": "De nya bankuppgifterna är godkända",
+    "rejected_toast": "Bankuppgifterna nekades. Fakturan betalas inte till dem.",
+    "decide_failed_title": "Beslutet kunde inte sparas",
+    "line_changed": "Fakturan anger {payee}, men leverantörskortet har {card}. Betalningen är spärrad tills någon har godkänt de nya uppgifterna.",
+    "line_new": "Fakturan anger {payee}, men leverantörskortet saknar bankuppgifter fast ni har betalat leverantören förut. Betalningen är spärrad tills någon har godkänt dem.",
+    "line_rejected": "Bankuppgifterna {payee} på fakturan nekades. Betalningen är spärrad tills någon godkänner dem eller ger leverantörskortet rätt konto.",
+    "review": "Granska"
   }
 }
