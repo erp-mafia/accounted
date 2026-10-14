@@ -78,6 +78,8 @@ export type SigningMethod = 'same_device' | 'qr' | 'redirect'
  */
 export interface SigningReturnOrigin {
   origin: string
+  /** The page to come back to when it is not Betalningar: the payment signing link's own (/betala/<token>). */
+  path?: string | null
 }
 
 const RETURN_ORIGIN_REQUIRED: OperationOutcome<never> = { ok: false, code: 'VALIDATION_ERROR', details: { field: 'return_origin', reason: 'required_for_redirect' } }
@@ -518,7 +520,8 @@ async function beginSca(
   // The bank's own page needs a way back: Betalningar on the app origin, the
   // batch named, the batch id as the state the bank echoes.
   if (method === 'redirect' && !ret) return RETURN_ORIGIN_REQUIRED
-  const redirect: SigningRedirectReturn | null = method === 'redirect' && ret ? { returnUrl: paymentSigningReturnUrl(ret.origin, batch.id), returnState: batch.id } : null
+  const redirect: SigningRedirectReturn | null =
+    method === 'redirect' && ret ? { returnUrl: paymentSigningReturnUrl(ret.origin, batch.id, ret.path ?? undefined), returnState: batch.id } : null
   const writer = createServiceClient()
   // Every order of this signing must still be waiting at the bank in it: a
   // late answer must never start BankID over an order that moved on.
@@ -759,7 +762,7 @@ async function sendAndSign(
 
 export async function startPaymentSigning(
   ctx: OperationContext,
-  input: { orderIds: string[]; method: SigningMethod; signer: SignerInput; returnOrigin?: string | null; today?: string },
+  input: { orderIds: string[]; method: SigningMethod; signer: SignerInput; returnOrigin?: string | null; returnPath?: string | null; today?: string },
 ): Promise<OperationOutcome<SigningView>> {
   const ids = [...new Set(input.orderIds)]
   if (ids.length === 0) return { ok: false, code: 'PAYMENT_ORDERS_EMPTY_SELECTION' }
@@ -793,7 +796,7 @@ export async function startPaymentSigning(
   // payment is tried, and the bank's own TPP_KYC_INVALID is shown if it comes.
   const plan = await planSigning(provider, built.ctx, ids.length, input.method)
   if (!plan.ok) return plan.outcome
-  const ret: SigningReturnOrigin | null = input.returnOrigin ? { origin: input.returnOrigin } : null
+  const ret: SigningReturnOrigin | null = input.returnOrigin ? { origin: input.returnOrigin, path: input.returnPath ?? null } : null
   if (plan.method === 'redirect' && !ret) return RETURN_ORIGIN_REQUIRED
   const party = { ...built, ctx: planParty(built.ctx, plan) }
   if (party.ctx.accountContext === 'corporate') {
@@ -840,9 +843,12 @@ export async function startPaymentSigning(
 /**
  * A number the person typed is remembered once the bank accepted a signing
  * start with it, so the next payment asks for nothing. Best effort: a failed
- * write costs one more typing, never the signing.
+ * write costs one more typing, never the signing. Never on the payment
+ * signing link (lookupOnFile false): the number is the firmatecknare's, and
+ * the context's user is the sender.
  */
 async function rememberTypedSigner(ctx: OperationContext, signer: SignerInput): Promise<void> {
+  if (signer.lookupOnFile === false) return
   const typed = normalizeSignerPersonalNumber(signer.personalNumber)
   if (!typed) return
   try {
@@ -864,7 +870,7 @@ async function rememberTypedSigner(ctx: OperationContext, signer: SignerInput): 
  */
 export async function restartPaymentSigning(
   ctx: OperationContext,
-  input: { batchId: string; method: SigningMethod; signer: SignerInput; returnOrigin?: string | null },
+  input: { batchId: string; method: SigningMethod; signer: SignerInput; returnOrigin?: string | null; returnPath?: string | null },
 ): Promise<OperationOutcome<SigningView>> {
   const provider = await getPaymentInitiationProvider(ctx.companyId)
   if (!provider) return { ok: false, code: 'PAYMENTS_UNAVAILABLE' }
@@ -884,7 +890,7 @@ export async function restartPaymentSigning(
   // before anything is read or moved.
   let plan = await planSigning(provider, built.ctx, waiting.length, input.method)
   if (!plan.ok) return plan.outcome
-  const ret: SigningReturnOrigin | null = input.returnOrigin ? { origin: input.returnOrigin } : null
+  const ret: SigningReturnOrigin | null = input.returnOrigin ? { origin: input.returnOrigin, path: input.returnPath ?? null } : null
   if (plan.method === 'redirect' && !ret) return RETURN_ORIGIN_REQUIRED
   const party = { ...built, ctx: planParty(built.ctx, plan) }
 

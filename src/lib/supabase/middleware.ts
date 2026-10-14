@@ -323,6 +323,14 @@ async function updateSessionInner(
     return supabaseResponse
   }
 
+  // The payment signing link: a firmatecknare opens /betala/<token> to sign a
+  // basket of approved bank payments for a company without an account (the
+  // token is resolved server-side against payment_signing_links). See
+  // app/betala/[token]/page.tsx.
+  if (pathname.startsWith('/betala')) {
+    return supabaseResponse
+  }
+
   // Reset-password is reachable in both auth states. The recovery flow lands
   // here with a fresh session (created by the OTP exchange in /auth/callback)
   // precisely so the user can call supabase.auth.updateUser({ password }). If

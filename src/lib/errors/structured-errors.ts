@@ -8065,6 +8065,31 @@ const OPEN_BANKING: Record<string, StructuredErrorEntry> = {
   },
 }
 
+// The payment signing link (lib/payments/orders/signing-links.ts): a basket
+// of approved bank payments a firmatecknare signs at /betala/<token>.
+const PAYMENT_SIGNING_LINKS: Record<string, StructuredErrorEntry> = {
+  PAYMENT_SIGNING_LINK_ALREADY_OPEN: {
+    httpStatus: 409,
+    message_sv: 'En eller flera av betalningarna väntar redan på signering via en annan länk. Avbryt den länken först.',
+    message_en: 'One or more of the payments already wait for a signature through another link. Cancel that link first.',
+  },
+  PAYMENT_SIGNING_LINK_ORDERS_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Betalningarna har ändrats sedan länken skickades, så inget signerades. Be den som skickade länken om en ny.',
+    message_en: 'The payments changed after the link was sent, so nothing was signed. Ask the sender for a new link.',
+  },
+  PAYMENT_SIGNING_LINK_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Signeringslänken finns inte.',
+    message_en: 'The signing link does not exist.',
+  },
+  PAYMENT_SIGNING_LINK_NOT_OPEN: {
+    httpStatus: 409,
+    message_sv: 'Länken har redan använts för att signera betalningarna och kan inte avbrytas.',
+    message_en: 'The link was already used to sign the payments and cannot be cancelled.',
+  },
+}
+
 const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...GENERIC,
   ...DB_CONFLICTS,
@@ -8122,6 +8147,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...PAYMENT_ORDERS,
   ...COLLECTIONS,
   ...OPEN_BANKING,
+  ...PAYMENT_SIGNING_LINKS,
 }
 
 export function getErrorEntry(code: string): StructuredErrorEntry | undefined {

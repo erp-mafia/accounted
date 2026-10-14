@@ -761,6 +761,16 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   },
   // A draft the bank does not have: cancelled here, so the preview asks no bank.
   gnubok_cancel_payment_order: { rows: { payment_orders: { status: 'draft', provider_payment_id: null, outcome_unknown_at: null } } },
+  // The payment signing link: approved orders from one account, an owner
+  // asking, no open link over them; the preview mints nothing and asks no bank.
+  gnubok_request_payment_signature: {
+    rows: {
+      'rpc:company_capability_grant_rows': { expires_at: null },
+      company_members: { role: 'owner' },
+      payment_orders: { status: 'approved', amount: 737.5, currency: 'SEK', cash_account_id: SOME_UUID, payee_name: 'Derome Bygg AB', outcome_unknown_at: null },
+    },
+    empty: ['payment_signing_links'],
+  },
   // The signatory link is owners' and admins'; the preview reads the role and
   // the live Enable Banking row the link replaces, and mints nothing.
   gnubok_bank_feed_connect_link: {

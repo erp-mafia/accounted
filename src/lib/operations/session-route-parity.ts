@@ -73,6 +73,7 @@ const CONNECTOR = 'machine endpoint: self-hosted connector proxy, authenticated 
 const PAYMENT_SIGNING = 'BankID signing of a bank payment: the account holder signs money out in person, no machine door signs'
 const BANK_CONSENT = 'BankID consent to read a bank account: the account holder gives it in person, no machine door consents'
 const SIGNATORY_LINK = 'token route of the signatory link (/koppla/<token>): the firmatecknare gives the bank consent in person, authenticated by the link, no machine door consents'
+const PAYMENT_SIGNING_LINK = 'token route of the payment signing link (/betala/<token>): the firmatecknare signs the payments in person with BankID, authenticated by the link, no machine door signs'
 const PREVIEW = 'preview/parse helper for an unsaved form or import wizard; the API takes structured input'
 const EXT_SYNC = 'webshop/payment integration sync is cron-driven; manual trigger has no API'
 const COLLECTIONS_AGREEMENT = "entering or ending the company's agreement with a collection provider: a person consents, accepts and signs"
@@ -435,6 +436,13 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/payments/signing/:id/restart': uiOnly(PAYMENT_SIGNING),
   'POST /api/payments/verification': covered([`POST ${V}/payment-orders/verification/start`], 'answers the provider\'s know-your-customer form link, which a signatory fills in and signs'),
   'POST /api/payments/orders/status/cron': machine(CRON),
+  'POST /api/payments/signing-links': covered([`POST ${V}/payments/signing-links`, 'gnubok_request_payment_signature'], 'agents and API clients request the link; the firmatecknare still signs in person with BankID'),
+  'DELETE /api/payments/signing-links/:id': gap('P3', 'cancel an open payment signing link (Avbryt länken on Betalningar)'),
+
+  // ── The payment signing link (lib/payments/orders/signing-links): token routes a firmatecknare reaches without a login ──
+  'POST /api/betala/:token/signing': uiOnly(PAYMENT_SIGNING_LINK),
+  'POST /api/betala/:token/signing/:id/poll': uiOnly(PAYMENT_SIGNING_LINK),
+  'POST /api/betala/:token/signing/:id/restart': uiOnly(PAYMENT_SIGNING_LINK),
 
   // ── Bank connections through Open Payments (lib/bank-feed) ──────────
   'POST /api/bank/open-payments/connections': uiOnly(BANK_CONSENT),
@@ -754,4 +762,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 129
+export const GAP_CEILING = 130

@@ -8,6 +8,10 @@ describe('paymentSigningReturnUrl', () => {
     expect(paymentSigningReturnUrl('https://app.accounted.se', 'batch-1')).toBe('https://app.accounted.se/payments?signing=batch-1')
     expect(paymentSigningReturnUrl('https://books.example.se/', 'b/2')).toBe('https://books.example.se/payments?signing=b%2F2')
   })
+
+  it("names the signing on the payment signing link's own page when the token route gives it", () => {
+    expect(paymentSigningReturnUrl('https://app.accounted.se', 'batch-1', '/betala/tok_en-1')).toBe('https://app.accounted.se/betala/tok_en-1?signing=batch-1')
+  })
 })
 
 describe('parsePaymentSigningReturn', () => {

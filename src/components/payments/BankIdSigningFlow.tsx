@@ -55,6 +55,21 @@ export interface SigningOrderSummary {
 
 export type SigningFlowStage = 'method' | 'signing' | 'done'
 
+/**
+ * The three calls the flow makes. The session routes by default; the payment
+ * signing link's page (/betala/<token>) passes its token routes, which answer
+ * the same shapes. `verification` false: the page has no session, so a
+ * verification refusal names the problem and offers no form.
+ */
+export interface SigningClient {
+  start(input: { orderIds: string[]; method: SigningMethod; personalNumber: string | null }): Promise<SigningView>
+  restart(input: { batchId: string; method: SigningMethod; personalNumber: string | null }): Promise<SigningView>
+  poll(input: { batchId: string; personalNumber: string | null }, signal?: AbortSignal): Promise<SigningView>
+  verification?: boolean
+}
+
+const SESSION_SIGNING_CLIENT: SigningClient = { start: startSigning, restart: restartSigning, poll: pollSigning, verification: true }
+
 interface BankIdSigningFlowProps {
   /** Approved orders to sign, all from one account and one currency (the server refuses otherwise). */
   orders: SigningOrderSummary[]
@@ -76,6 +91,16 @@ interface BankIdSigningFlowProps {
    * code while the poll settles, then offers to try again.
    */
   resume?: PaymentSigningReturn | null
+  /** Where the calls go; the session routes when absent. */
+  client?: SigningClient
+  /**
+   * A signing of these orders the bank already holds, unsigned (an abandoned
+   * BankID on the payment signing link): the method step signs it again
+   * instead of starting a new one.
+   */
+  pendingBatchId?: string | null
+  /** A personnummer typed before the page reloaded (the bank's own page in between). */
+  initialPersonalNumber?: string | null
 }
 
 /** The signing is over, one way or the other: show where each payment stands. */
@@ -105,14 +130,26 @@ function resumedView(batchId: string): SigningView {
  * The flow never approves anything: it only signs orders that are already
  * approved (Godkänn and Signera are never one button).
  */
-export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBank, onStageChange, autoStart = false, bankName = null, resume = null }: BankIdSigningFlowProps) {
+export function BankIdSigningFlow({
+  orders,
+  signerKnown,
+  closeButton,
+  onSentToBank,
+  onStageChange,
+  autoStart = false,
+  bankName = null,
+  resume = null,
+  client = SESSION_SIGNING_CLIENT,
+  pendingBatchId = null,
+  initialPersonalNumber = null,
+}: BankIdSigningFlowProps) {
   const t = useTranslations('bank_payments')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
 
   const [stage, setStageState] = useState<SigningFlowStage>(resume ? 'signing' : 'method')
   const [method, setMethod] = useState<SigningMethod>(resume ? 'redirect' : 'qr')
-  const [personalNumber, setPersonalNumber] = useState('')
+  const [personalNumber, setPersonalNumber] = useState(initialPersonalNumber ?? '')
   const [busy, setBusy] = useState(false)
   const [signing, setSigning] = useState<SigningView | null>(resume ? resumedView(resume.batchId) : null)
   const [refusal, setRefusal] = useState<'verification' | 'redirect' | null>(null)
@@ -189,7 +226,9 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
     resetSteps()
     setBusy(true)
     try {
-      const view = await startSigning({ orderIds: orders.map((o) => o.id), method: chosen, personalNumber: typedNumber })
+      const view = pendingBatchId
+        ? await client.restart({ batchId: pendingBatchId, method: chosen, personalNumber: typedNumber })
+        : await client.start({ orderIds: orders.map((o) => o.id), method: chosen, personalNumber: typedNumber })
       if (!sentToBank.current) {
         sentToBank.current = true
         onSentToBank?.()
@@ -202,7 +241,7 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
       if (code === 'PAYMENT_COMPANY_VERIFICATION_REQUIRED') {
         setRefusal('verification')
         // Best-effort: without the state the line falls back to the plain sentence.
-        fetchCompanyVerification({ refresh: true }).then(setVerification, () => setVerification(null))
+        if (client.verification !== false) fetchCompanyVerification({ refresh: true }).then(setVerification, () => setVerification(null))
       }
       else if (code === 'PAYMENT_SIGNING_REDIRECT_UNSUPPORTED') setRefusal('redirect')
       else {
@@ -224,7 +263,7 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
     resetSteps()
     setBusy(true)
     try {
-      const view = await restartSigning({ batchId: signing.batch_id, method: chosen, personalNumber: typedNumber })
+      const view = await client.restart({ batchId: signing.batch_id, method: chosen, personalNumber: typedNumber })
       adoptMethod(chosen, view)
       applyView(view)
     } catch (error) {
@@ -300,7 +339,7 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
     let stopped = false
     const tick = async () => {
       try {
-        const view = await pollSigning({ batchId, personalNumber: typedNumber }, controller.signal)
+        const view = await client.poll({ batchId, personalNumber: typedNumber }, controller.signal)
         if (stopped) return
         setSigning((prev) => merge(prev, view))
         if (signingFinished(view)) {
@@ -320,7 +359,7 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
       controller.abort()
       if (timer) clearTimeout(timer)
     }
-  }, [polling, batchId, typedNumber, setStage])
+  }, [polling, batchId, typedNumber, setStage, client])
 
   // A new step from the bank: note when it began and that it happened.
   const step = signing?.status === 'awaiting_signature' ? (signing.step ?? null) : null
@@ -376,7 +415,7 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
           </label>
         )}
         {refusal === 'verification' && (
-          <AttnLine action={verificationAction}>
+          <AttnLine action={client.verification === false ? undefined : verificationAction}>
             {verification && verification.state !== 'not_started' && verification.state !== 'valid' ? (
               <VerificationStateText verification={verification} />
             ) : (
@@ -467,10 +506,10 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
         {waiting && !redirect && !signing.challenge?.qrData && !signing.challenge?.qrImage && !signing.challenge?.autostartToken && (
           <p className="text-[13px] text-muted-foreground">{t('signing_waiting')}</p>
         )}
-        {!waiting && failure && (
+        {!waiting && (failure || signing.status === 'created') && (
           <div className="space-y-3">
             <AttnLine>
-              {permanent ? (providerCodeText(t, failure) ?? t('signing_failed_permanent', { code: failure })) : (providerCodeText(t, failure) ?? t('signing_failed'))}
+              {permanent && failure ? (providerCodeText(t, failure) ?? t('signing_failed_permanent', { code: failure })) : (providerCodeText(t, failure) ?? t('signing_failed'))}
             </AttnLine>
             {!permanent && signing.status === 'created' && redirect && (
               <div className="flex justify-center">
@@ -491,7 +530,7 @@ export function BankIdSigningFlow({ orders, signerKnown, closeButton, onSentToBa
             )}
           </div>
         )}
-        {!waiting && !failure && <p className="text-[13px] text-muted-foreground">{redirect ? t('redirect_waiting', { bank: bankLabel }) : t('signing_waiting')}</p>}
+        {!waiting && !failure && signing.status !== 'created' && <p className="text-[13px] text-muted-foreground">{redirect ? t('redirect_waiting', { bank: bankLabel }) : t('signing_waiting')}</p>}
         <DialogFooter>
           {closeButton}
           {waiting && redirect && !redirectWaiting && redirectUrl && <Button onClick={() => continueToBank(redirectUrl)}>{t('redirect_continue', { bank: bankLabel })}</Button>}

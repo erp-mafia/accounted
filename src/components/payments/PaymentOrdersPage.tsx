@@ -27,6 +27,8 @@ import { parsePaymentSigningReturn, stripPaymentSigningReturn, type PaymentSigni
 import { ApprovePaymentOrdersDialog } from './ApprovePaymentOrdersDialog'
 import { ResolvePaymentOrderDialog } from './ResolvePaymentOrderDialog'
 import { SignPaymentOrdersDialog } from './SignPaymentOrdersDialog'
+import { RequestSigningLinkButton, RequestSigningLinkDialog, SigningLinkRowNote } from './RequestSigningLinkDialog'
+import { listOpenSigningLinks, openLinksByOrder, type OpenSigningLink } from './signing-links-client'
 import {
   canCancel,
   needsResolution,
@@ -84,6 +86,10 @@ export function PaymentOrdersPage() {
   /** Set when the signing dialog was reopened by a return from the bank's own page. */
   const [resume, setResume] = useState<PaymentSigningReturn | null>(null)
   const [resolving, setResolving] = useState<PaymentOrder | null>(null)
+  /** Be någon annan signera: the approved orders a signing link is being made for. */
+  const [requesting, setRequesting] = useState<PaymentOrder[] | null>(null)
+  /** Open signing links, so an approved row says whose signature it waits for. */
+  const [openLinks, setOpenLinks] = useState<OpenSigningLink[]>([])
   const [busyId, setBusyId] = useState<string | null>(null)
 
   const fail = useCallback(
@@ -95,10 +101,11 @@ export function PaymentOrdersPage() {
   )
 
   const load = useCallback(async () => {
-    const [avail, list] = await Promise.allSettled([fetchPaymentsAvailability(), listPaymentOrders()])
+    const [avail, list, links] = await Promise.allSettled([fetchPaymentsAvailability(), listPaymentOrders(), listOpenSigningLinks()])
     const availabilityValue = avail.status === 'fulfilled' ? avail.value : { available: false, reason: null, provider: null, accounts: [], signer_known: false }
     setAvailability(availabilityValue)
     setOrders(list.status === 'fulfilled' ? list.value : [])
+    setOpenLinks(links.status === 'fulfilled' ? links.value : [])
     // The verification line is informational: a failed read leaves it out rather than blocking the page.
     if (availabilityValue.available) {
       try {
@@ -187,6 +194,7 @@ export function PaymentOrdersPage() {
   }, [load])
 
   const available = availability?.available ?? false
+  const linkByOrder = useMemo(() => openLinksByOrder(openLinks), [openLinks])
   const bySection = useMemo(() => {
     const groups = new Map<PaymentOrderSection, PaymentOrder[]>()
     for (const section of PAYMENT_ORDER_SECTIONS) groups.set(section, [])
@@ -342,6 +350,7 @@ export function PaymentOrdersPage() {
         countLabel={t('selected_count', { count: selectedOrders.length })}
         clearLabel={t('clear_selection')}
       >
+        <RequestSigningLinkButton size="sm" onClick={() => setRequesting(selectedOrders)} />
         <Button size="sm" onClick={() => setSigning(selectedOrders)}>
           {t('sign_selected', { count: selectedOrders.length })}
         </Button>
@@ -467,6 +476,9 @@ export function PaymentOrdersPage() {
                             ) : (
                               <span className="text-muted-foreground">{statusLabel(order.status)}</span>
                             )}
+                            {order.status === 'approved' && linkByOrder.has(order.id) && (
+                              <SigningLinkRowNote link={linkByOrder.get(order.id)!} canCancel={canWrite} onCancelled={refresh} />
+                            )}
                             {order.provider_error_code && (order.status === 'failed' || order.status === 'rejected') && (
                               <span className="ml-2 text-[11px] text-muted-foreground">{providerCodeText(tStatus, order.provider_error_code) ?? order.provider_error_code}</span>
                             )}
@@ -534,6 +546,16 @@ export function PaymentOrdersPage() {
             if (!open) setApproving(null)
           }}
           onApproved={refresh}
+          onRequestSignature={available ? setRequesting : undefined}
+        />
+      )}
+      {requesting && (
+        <RequestSigningLinkDialog
+          orders={requesting.map((o) => ({ id: o.id, payee_name: o.payee_name, amount: Number(o.amount), currency: o.currency }))}
+          onOpenChange={(open) => {
+            if (!open) setRequesting(null)
+          }}
+          onIssued={refresh}
         />
       )}
       {signing && availability && (

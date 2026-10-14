@@ -9,11 +9,14 @@ import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { formatCurrency } from '@/lib/utils'
 import { approvePaymentOrders, orderInvoiceLabel, payeeLabel, PaymentsClientError, type PaymentOrder } from './payments-client'
+import { RequestSigningLinkButton } from './RequestSigningLinkDialog'
 
 interface ApprovePaymentOrdersDialogProps {
   orders: PaymentOrder[]
   onOpenChange: (open: boolean) => void
   onApproved: () => void
+  /** Godkänn och be någon annan signera: called with the approved orders when the person chose that. */
+  onRequestSignature?: (orders: PaymentOrder[]) => void
 }
 
 /**
@@ -22,23 +25,26 @@ interface ApprovePaymentOrdersDialogProps {
  * the supplier card is confirmed one by one; the server refuses the approval
  * without those confirmations.
  */
-export function ApprovePaymentOrdersDialog({ orders, onOpenChange, onApproved }: ApprovePaymentOrdersDialogProps) {
+export function ApprovePaymentOrdersDialog({ orders, onOpenChange, onApproved, onRequestSignature }: ApprovePaymentOrdersDialogProps) {
   const t = useTranslations('bank_payments')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [confirmed, setConfirmed] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
+  const [then, setThen] = useState<'close' | 'request'>('close')
 
   const toConfirm = useMemo(() => orders.filter((o) => o.payee_check === 'new' || o.payee_check === 'changed'), [orders])
   const total = useMemo(() => orders.reduce((sum, o) => sum + Number(o.amount), 0), [orders])
   const allConfirmed = toConfirm.every((o) => o.supplier_invoice_id && confirmed.has(o.supplier_invoice_id))
 
-  async function approve() {
+  async function approve(next: 'close' | 'request' = 'close') {
+    setThen(next)
     setBusy(true)
     try {
-      await approvePaymentOrders({ orderIds: orders.map((o) => o.id), confirmedPayeeInvoiceIds: [...confirmed] })
+      const { approved } = await approvePaymentOrders({ orderIds: orders.map((o) => o.id), confirmedPayeeInvoiceIds: [...confirmed] })
       onApproved()
       onOpenChange(false)
+      if (next === 'request') onRequestSignature?.(orders.filter((o) => approved.includes(o.id)).map((o) => ({ ...o, status: 'approved' as const })))
     } catch (error) {
       const body = error instanceof PaymentsClientError ? error.body : null
       toast({ title: t('approve_failed_title'), description: getErrorMessage(body, { locale }), variant: 'destructive' })
@@ -94,7 +100,10 @@ export function ApprovePaymentOrdersDialog({ orders, onOpenChange, onApproved }:
           <Button variant="secondary" onClick={() => onOpenChange(false)} disabled={busy}>
             {t('cancel')}
           </Button>
-          <Button onClick={approve} loading={busy} disabled={!allConfirmed}>
+          {onRequestSignature && (
+            <RequestSigningLinkButton label="approve_and_request" onClick={() => approve('request')} loading={busy && then === 'request'} disabled={busy || !allConfirmed} />
+          )}
+          <Button onClick={() => approve()} loading={busy && then === 'close'} disabled={busy || !allConfirmed}>
             {t('approve', { count: orders.length })}
           </Button>
         </DialogFooter>

@@ -1373,6 +1373,7 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   api_keys: 'secrets',
   api_key_companies: 'per-key company allowlist (API access control), not räkenskapsinformation',
   bank_connect_invites: 'signatory link tokens (secrets, hashed) for a bank consent; expire in 7 days, not räkenskapsinformation',
+  payment_signing_links: 'signing link tokens (secrets, hashed) for a basket of bank payments; expire in 72 hours, not räkenskapsinformation (the payment orders and their events, who approved and who signed, are exported)',
   bank_connections: 'PSD2 connection state and tokens, not portable',
   company_payment_verifications: 'the payment provider\'s KYC status of the company as last read plus a 24-hour form link (sensitive); re-readable from the provider, not räkenskapsinformation',
   bolagsverket_avtal_acceptances: 'service agreement acceptance state',

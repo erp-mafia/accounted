@@ -33,9 +33,13 @@ export interface PaymentSigningReturn {
   code: string | null
 }
 
-/** The return URL for a signing: Betalningar on `origin` with the batch named. */
-export function paymentSigningReturnUrl(origin: string, batchId: string): string {
-  const url = new URL(PAYMENT_SIGNING_RETURN_PATH, origin)
+/**
+ * The return URL for a signing: Betalningar on `origin` with the batch named.
+ * `path` is the payment signing link's own page (/betala/<token>), built by
+ * the token routes from the link and never from a request body.
+ */
+export function paymentSigningReturnUrl(origin: string, batchId: string, path: string = PAYMENT_SIGNING_RETURN_PATH): string {
+  const url = new URL(path, origin)
   url.searchParams.set(PAYMENT_SIGNING_RETURN_PARAM, batchId)
   return url.toString()
 }

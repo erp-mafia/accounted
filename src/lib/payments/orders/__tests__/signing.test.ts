@@ -319,6 +319,43 @@ describe('startPaymentSigning', () => {
       // Only a bank that signs nowhere else is told to prefer its page.
       expect(provider.createPayment).toHaveBeenCalledWith(expect.not.objectContaining({ redirectPreferred: true }), expect.anything())
     })
+
+    it("comes back to the payment signing link's own page when the token route names it", async () => {
+      const provider = fakeProvider({
+        startSigning: vi.fn().mockResolvedValue({ providerAuthorisationId: 'auth-1', method: 'redirect', state: 'pending', challenge: { ...redirectChallenge, approach: 'redirect' }, failureCode: null }),
+      })
+      sendsOne(provider)
+
+      await startPaymentSigning(ctx, { orderIds: ['o1'], method: 'redirect', signer: SIGNER, returnOrigin: 'https://app.accounted.se', returnPath: '/betala/tok' })
+
+      expect(provider.startSigning).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'redirect', { returnUrl: 'https://app.accounted.se/betala/tok?signing=batch-1', returnState: 'batch-1' })
+    })
+
+    it('on the payment signing link signs with the typed number only, and never remembers it for the sender', async () => {
+      const provider = fakeProvider()
+      sendsOne(provider)
+
+      const result = await startPaymentSigning(ctx, { orderIds: ['o1'], method: 'qr', signer: { ...SIGNER, lookupOnFile: false }, returnOrigin: 'https://app.accounted.se' })
+
+      expect(result.ok).toBe(true)
+      expect(provider.startSigning).toHaveBeenCalledWith(expect.objectContaining({ signerPersonalNumber: '199001011239' }), expect.anything(), 'qr', null)
+      expect(db.tables()).not.toContain('payment_signers')
+      expect(db.tables()).not.toContain('bankid_identities')
+    })
+  })
+
+  it("never lets the sender's number on file stand in on the payment signing link", async () => {
+    registerPaymentInitiationProvider(fakeProvider())
+    db.setTable('payment_orders', { data: [order('o1')] })
+    expect(await startPaymentSigning(ctx, { orderIds: ['o1'], method: 'qr', signer: { ...SIGNER, personalNumber: null, lookupOnFile: false } })).toMatchObject({
+      ok: false,
+      code: 'PAYMENT_SIGNER_PERSONAL_NUMBER_REQUIRED',
+    })
+    expect(db.tables()).not.toContain('bankid_identities')
+    expect(db.tables()).not.toContain('payment_signers')
+    // A session looks the person's own number up.
+    await startPaymentSigning(ctx, { orderIds: ['o1'], method: 'qr', signer: { ...SIGNER, personalNumber: null } })
+    expect(db.tables()).toContain('bankid_identities')
   })
 
   it('on a definitive refusal mid-basket, cancels the payments already created at the bank, then releases them', async () => {

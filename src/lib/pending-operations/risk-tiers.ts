@@ -128,6 +128,9 @@ const RISK_TIERS = {
   // The signatory link mints a 7-day credential URL (and may mail it); the
   // consent itself is still signed by the firmatecknare with BankID.
   bank_feed_invite: 'medium',
+  // The payment signing link mints a 72-hour credential URL (and may mail it); the
+  // payments are still signed by the firmatecknare with BankID at the bank.
+  request_payment_signature: 'medium',
   book_invoice: 'high',
   bulk_book_invoices: 'high',
   book_supplier_invoice: 'high',

@@ -1389,6 +1389,88 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/payments/signing-links`
+
+**Ask someone without an Accounted login to sign approved bank payments with BankID: a signing link.**
+`scope:suppliers:write · risk:medium · idempotent · dry-run`
+
+Creates a link, valid 72 hours, to a page at /betala/<token> where the company's firmatecknare sees the basket (payee, amount, date and reference per payment, the account paying, who asked, the note) and signs it with BankID at their bank, without logging in to Accounted. The orders must be approved, from one account and in one currency; if any of them leaves approved before the signing (cancelled, signed or un-approved elsewhere) the page says so and signs nothing. The link is consumed when the signing finalises. With recipient_email it is mailed (template payment_signing_request); the url is answered either way. Owners and admins, or the person who prepared every order. Dry-runnable: ?dry_run=true answers the basket and mints nothing.
+
+**Use when:** A byrå or an agent prepared supplier payments and a person approved them, but the client's firmatecknare signs at the bank.
+**Do not use for:** Signing in person (the Betalningar page), approving drafts (POST /payment-orders/approve) or payment files.
+
+**Pitfalls:**
+- The url carries the credential: hand it to the signer only, once, and do not store it.
+- PAYMENT_ORDERS_WRONG_STATUS: an order is not approved (details.orders); approve it first.
+- PAYMENT_SIGNING_LINK_ALREADY_OPEN: another open link covers an order (details.signing_link_ids); it is cancelled on the Betalningar page.
+- PAYMENT_ORDERS_MIXED_ACCOUNTS / PAYMENT_ORDERS_MIXED_CURRENCY: one link is one signing, from one account in one currency.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ payment_order_ids: string[], recipient_email?: string | null, note?: string | null }
+```
+
+Example request:
+```json
+{
+  "payment_order_ids": [
+    "7c2e…"
+  ],
+  "recipient_email": "anna@example.se",
+  "note": "Leverantörsbetalningar för oktober."
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    signing_link_id: string,
+    url: string,
+    expires_at: string,
+    email_sent: boolean,
+    order_count: number,
+    total_amount: number,
+    currency: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "signing_link_id": "5d1a…",
+    "url": "https://app.accounted.se/betala/…",
+    "expires_at": "2026-10-17T09:00:00.000Z",
+    "email_sent": true,
+    "order_count": 1,
+    "total_amount": 737.5,
+    "currency": "SEK"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `GET /api/v1/companies/{companyId}/supplier-invoices`
 
 **List supplier invoices for a company.**

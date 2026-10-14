@@ -16,6 +16,7 @@ import { creditorNameMatches } from '@/lib/payments/creditor-name-match'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { BankIdSigningFlow, type SigningFlowStage } from './BankIdSigningFlow'
 import { BankMark } from '@/components/banks/BankMark'
+import { RequestSigningLinkButton, RequestSigningLinkPanel } from './RequestSigningLinkDialog'
 import { earliestExecutionDateIso } from '@/lib/payments/bank-days'
 import {
   approvePaymentOrders,
@@ -55,7 +56,8 @@ import {
  * second attempt never fails on the first one's leftovers.
  */
 
-type Phase = 'preview' | 'confirm' | 'sign'
+/** request: Be någon annan signera; the approved orders get a signing link instead of a BankID here. */
+type Phase = 'preview' | 'confirm' | 'sign' | 'request'
 
 /** The account paid from last time, per browser: the one the person most likely wants again. */
 const ACCOUNT_MEMORY_KEY = 'accounted.bank_payments.account'
@@ -142,6 +144,8 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
   const [confirmed, setConfirmed] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
   const [signingStage, setSigningStage] = useState<SigningFlowStage>('method')
+  /** What follows the approval: a BankID here (sign), or a link for someone else (request). */
+  const [intent, setIntent] = useState<'sign' | 'request'>('sign')
   const changed = useRef(false)
 
   const fail = useCallback(
@@ -215,10 +219,10 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
     [orders, lookupOn],
   )
 
-  async function approveAndSign(list: PaymentOrder[], confirmedInvoiceIds: string[]) {
+  async function approveAndSign(list: PaymentOrder[], confirmedInvoiceIds: string[], next: 'sign' | 'request' = intent) {
     await approvePaymentOrders({ orderIds: list.map((o) => o.id), confirmedPayeeInvoiceIds: confirmedInvoiceIds })
     setOrders(list.map((o) => ({ ...o, status: 'approved' as const })))
-    setPhase('sign')
+    setPhase(next)
   }
 
   /** The first payment to an account the company never paid: the person saw it on the line and signs it. */
@@ -226,8 +230,9 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
     return list.filter((o) => o.payee_check === 'new' && o.supplier_invoice_id).map((o) => o.supplier_invoice_id as string)
   }
 
-  async function signNow() {
+  async function signNow(next: 'sign' | 'request' = 'sign') {
     if (!preview || lines.length === 0) return
+    setIntent(next)
     setBusy(true)
     try {
       rememberAccount(accountId)
@@ -241,7 +246,7 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
         setPhase('confirm')
         return
       }
-      await approveAndSign(result.orders, firstTimePayees(result.orders))
+      await approveAndSign(result.orders, firstTimePayees(result.orders), next)
     } catch (error) {
       const skippedNow = skippedFromError(error)
       if (skippedNow) {
@@ -316,10 +321,12 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
   return (
     <Dialog open={open} onOpenChange={close}>
       <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-          <DialogDescription className="sr-only">{t('title')}</DialogDescription>
-        </DialogHeader>
+        {phase !== 'request' && (
+          <DialogHeader>
+            <DialogTitle>{title}</DialogTitle>
+            <DialogDescription className="sr-only">{t('title')}</DialogDescription>
+          </DialogHeader>
+        )}
 
         {phase === 'preview' && (
           <div className="space-y-4">
@@ -494,7 +501,10 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
             <DialogFooter>
               {closeButton}
               {lines.length > 0 && (
-                <Button onClick={signNow} loading={busy} disabled={busy || previewing || !accountId}>
+                <RequestSigningLinkButton onClick={() => signNow('request')} loading={busy && intent === 'request'} disabled={busy || previewing || !accountId} />
+              )}
+              {lines.length > 0 && (
+                <Button onClick={() => signNow('sign')} loading={busy && intent === 'sign'} disabled={busy || previewing || !accountId}>
                   {t('sign_now', { count: lines.length })}
                 </Button>
               )}
@@ -534,11 +544,23 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
             })}
             <DialogFooter>
               {closeButton}
-              <Button onClick={confirmAndSign} loading={busy} disabled={busy || !allConfirmed}>
-                {t('confirm_and_sign')}
-              </Button>
+              {intent === 'request' ? (
+                <RequestSigningLinkButton variant="default" label="approve_and_request" onClick={confirmAndSign} loading={busy} disabled={busy || !allConfirmed} />
+              ) : (
+                <Button onClick={confirmAndSign} loading={busy} disabled={busy || !allConfirmed}>
+                  {t('confirm_and_sign')}
+                </Button>
+              )}
             </DialogFooter>
           </div>
+        )}
+
+        {phase === 'request' && (
+          <RequestSigningLinkPanel
+            orders={orders.map((o) => ({ id: o.id, payee_name: o.payee_name, amount: Number(o.amount), currency: o.currency }))}
+            onClose={() => close(false)}
+            withHeader
+          />
         )}
 
         {phase === 'sign' && availability && (

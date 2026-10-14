@@ -14,6 +14,15 @@ export interface SignerInput {
   personalNumber: string | null
   ipAddress: string | null
   userAgent: string | null
+  /**
+   * Whether the number on file for the context's user may stand in when none
+   * was typed, and be remembered for them after a signing start. True (the
+   * default) for a session: the person signs for themselves. False on the
+   * payment signing link (lib/payments/orders/signing-link-route.ts): the
+   * context's user is the sender, whose number must never name the
+   * firmatecknare's BankID, and the firmatecknare's number is never kept.
+   */
+  lookupOnFile?: boolean
 }
 
 /** The company's organisationsnummer as stored: the settings row first, the company row as fallback; null when neither has one. */
@@ -42,7 +51,7 @@ export async function buildPartyContext(
   if (signer.personalNumber && !typed) {
     return { ok: false, outcome: { ok: false, code: 'PAYMENT_SIGNER_PERSONAL_NUMBER_REQUIRED', details: { reason: 'invalid' } } }
   }
-  const personalNumber = typed ?? (await signerPersonalNumberOnFile(ctx.userId))
+  const personalNumber = typed ?? (signer.lookupOnFile === false ? null : await signerPersonalNumberOnFile(ctx.userId))
   if (options.requireSigner && !personalNumber) {
     return { ok: false, outcome: { ok: false, code: 'PAYMENT_SIGNER_PERSONAL_NUMBER_REQUIRED' } }
   }
