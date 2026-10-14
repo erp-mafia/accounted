@@ -93,11 +93,12 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'suppliers.md',
     title: 'Suppliers (AP)',
-    members: ['suppliers', 'supplier-invoices', 'supplier-payment-batches', 'payment-orders', 'expense-claims'],
+    members: ['suppliers', 'supplier-invoices', 'supplier-payment-batches', 'payment-orders', 'payments', 'expense-claims'],
     blurb:
       'Accounts payable: supplier register, received supplier invoices ' +
       '(register -> approve -> book if deferred -> pay via a supplier payment file, ' +
       'a bank payment order signed with BankID in Accounted, or mark-paid, or credit), ' +
+      'the Bankgiro Lookup checks (the registered name behind a payee giro, the company\'s own giro numbers), ' +
       'and expense claims (utlägg) with their payouts.',
   },
   {

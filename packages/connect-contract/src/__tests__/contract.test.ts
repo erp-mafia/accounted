@@ -25,6 +25,11 @@ import {
   paymentsSigningStartRequestSchema,
   paymentsSigningStartedSchema,
   paymentsVerificationStartRequestSchema,
+  PAYMENTS_LOOKUP_OPERATIONS,
+  paymentsCreditorLookupRequestSchema,
+  paymentsCreditorLookupSchema,
+  paymentsGiroNumbersRequestSchema,
+  paymentsGiroNumbersSchema,
 } from '../index'
 
 const participant = { scheme: '0007', identifier: '5561234567' }
@@ -215,11 +220,11 @@ describe('payments family', () => {
     expect(PAYMENTS_SCOPE).toBe('payments')
     expect(CONNECTOR_HEADERS.contractVersion).toBe('X-Connect-Contract-Version')
     expect(CONNECTOR_HEADERS.connection).toBe('X-Connector-Connection')
-    expect(CONTRACT_VERSION).toBe('2026-10-15')
+    expect(CONTRACT_VERSION).toBe('2026-10-16')
   })
 
   it('lists every operation as a company POST with schemas, and the writes among them', () => {
-    expect(Object.keys(PAYMENTS_OPERATIONS)).toHaveLength(10)
+    expect(Object.keys(PAYMENTS_OPERATIONS)).toHaveLength(12)
     for (const [name, op] of Object.entries(PAYMENTS_OPERATIONS)) {
       expect(op.method, name).toBe('POST')
       expect(op.company, name).toBe(true)
@@ -233,6 +238,29 @@ describe('payments family', () => {
     for (const code of ['CONNECTOR_PAYMENTS_OUTCOME_UNKNOWN', 'CONNECTOR_PAYMENTS_REFUSED', 'CONNECTOR_PAYMENTS_NOT_FOUND', 'CONNECTOR_IDEMPOTENCY_IN_FLIGHT']) {
       expect(CONNECTOR_ERROR_CODES).toContain(code)
     }
+  })
+
+  it('carries the Bankgiro Lookup reads: the lighter party, a typed availability, never a write', () => {
+    expect([...PAYMENTS_LOOKUP_OPERATIONS]).toEqual(['lookupCreditor', 'lookupGiroNumbers'])
+    for (const read of PAYMENTS_LOOKUP_OPERATIONS) expect(PAYMENTS_WRITE_OPERATIONS as readonly string[]).not.toContain(read)
+    expect(PAYMENTS_OPERATIONS.lookupCreditor.path).toBe('/creditor-lookup')
+    expect(PAYMENTS_OPERATIONS.lookupGiroNumbers.path).toBe('/giro-numbers')
+    const lookupParty = { orgNumber: '5595386219', signerPersonalNumber: null }
+    const base = { party: lookupParty, giroNumber: '5050-1055', giroType: 'BANKGIRO' }
+    expect(paymentsCreditorLookupRequestSchema.safeParse({ ...base, ocrRef: '4400112233' }).success).toBe(true)
+    expect(paymentsCreditorLookupRequestSchema.safeParse({ ...base, invoiceRef: 'INV-20250073' }).success).toBe(true)
+    expect(paymentsCreditorLookupRequestSchema.safeParse({ ...base, party }).success).toBe(true)
+    expect(paymentsCreditorLookupRequestSchema.safeParse({ ...base, giroType: 'bankgiro' }).success).toBe(false)
+    expect(paymentsCreditorLookupRequestSchema.safeParse({ ...base, giroNumber: '1234' }).success).toBe(false)
+    expect(paymentsCreditorLookupRequestSchema.safeParse({ ...base, ocrRef: 'ABC' }).success).toBe(false)
+    expect(paymentsGiroNumbersRequestSchema.safeParse({ party: lookupParty }).success).toBe(true)
+    expect(paymentsCreditorLookupSchema.safeParse({ available: true, creditorName: 'Acme AB', ocrValid: false, warnings: [{ code: 'OCR_REF_INVALID', text: null }] }).success).toBe(true)
+    for (const reason of ['premium_not_enabled', 'provider_refused', 'not_found']) {
+      expect(paymentsCreditorLookupSchema.safeParse({ available: false, reason }).success).toBe(true)
+      expect(paymentsGiroNumbersSchema.safeParse({ available: false, reason }).success).toBe(true)
+    }
+    expect(paymentsCreditorLookupSchema.safeParse({ available: false, reason: 'unknown' }).success).toBe(false)
+    expect(paymentsGiroNumbersSchema.safeParse({ available: true, giroNumbers: [{ number: '1234-5678', type: 'bankgiro', name: 'Acme AB' }] }).success).toBe(true)
   })
 
   it('validates the party: digits-only identifiers, a BIC, nullable signer details', () => {

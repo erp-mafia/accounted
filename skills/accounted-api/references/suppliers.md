@@ -2,7 +2,7 @@
 
 # Suppliers (AP) endpoints
 
-Accounts payable: supplier register, received supplier invoices (register -> approve -> book if deferred -> pay via a supplier payment file, a bank payment order signed with BankID in Accounted, or mark-paid, or credit), and expense claims (utlägg) with their payouts.
+Accounts payable: supplier register, received supplier invoices (register -> approve -> book if deferred -> pay via a supplier payment file, a bank payment order signed with BankID in Accounted, or mark-paid, or credit), the Bankgiro Lookup checks (the registered name behind a payee giro, the company's own giro numbers), and expense claims (utlägg) with their payouts.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -1220,6 +1220,135 @@ Example response `200`:
 {
   "data": {
     "url": "https://kyc.openbankingplatform.com/…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/payments/creditor-lookup`
+
+**The name Bankgirot has registered for a bankgiro or plusgiro number, and whether an OCR passes its check.**
+`scope:suppliers:read · risk:low · idempotent`
+
+Asks Bankgirot (through the payment provider's premium Bankgiro Lookup) which name is registered for a bankgiro or plusgiro number before money goes there: the check against invoice fraud and typos. With the payment's OCR, ocr_valid says whether the creditor accepts it. Enabled only when the installation has switched the lookups on (OPENPAYMENTS_BANKGIRO_LOOKUP); otherwise enabled is false and nothing is asked. Advice, never a gate: a refusal is a typed reason, and the payment may still be prepared.
+
+**Use when:** Before paying a supplier for the first time, when an invoice states another account than the supplier card, or when a new supplier card carries a giro: compare creditor_name with the supplier name.
+**Do not use for:** The company's own giro numbers (GET /payments/giro-numbers). Bank accounts (clearing + account) or IBANs: Bankgirot does not register them.
+
+**Pitfalls:**
+- Every enabled call may cost a premium fee at the provider; answers are cached for ten minutes per company and question.
+- A name that differs from the supplier card is a reason for a person to check with the supplier, not proof of fraud: companies register trade names.
+- reason not_found means Bankgirot knows no such number: check the digits before paying.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `giro` | query | `string` | yes | The bankgiro or plusgiro number, as typed or stored (digits, spaces and dashes). |
+| `type` | query | `"bankgiro" \| "plusgiro"` | yes | Which kind of giro number `giro` is. |
+| `ocr` | query | `string` | no | The payment's OCR reference, when it has one: the creditor's OCR check runs on it and ocr_valid answers. |
+| `invoice_ref` | query | `string` | no | The payment's free reference (the invoice number) when it has no OCR. Ignored when ocr is given. |
+
+Response `200`:
+```ts
+{
+  data: {
+    enabled: boolean,
+    available: boolean,
+    reason: "premium_not_enabled" | "provider_refused" | "not_found" | "invalid_number" | "org_number_missing" | null,
+    creditor_name: string | null,
+    ocr_valid: boolean | null,
+    warnings: { code: string, text: string | null }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "enabled": true,
+    "available": true,
+    "reason": null,
+    "creditor_name": "Derome Bygg AB",
+    "ocr_valid": true,
+    "warnings": []
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/payments/giro-numbers`
+
+**The bankgiro and plusgiro numbers Bankgirot has registered to the company's own organisationsnummer.**
+`scope:companies:read · risk:low · idempotent`
+
+Asks Bankgirot (through the payment provider's premium Bankgiro Lookup) which giro numbers are registered to the company, so the invoice payee (the bankgiro printed on the company's invoices) can be picked from the registry instead of typed. Enabled only when the installation has switched the lookups on (OPENPAYMENTS_BANKGIRO_LOOKUP); otherwise enabled is false and nothing is asked.
+
+**Use when:** Setting up or checking the bankgiro the company prints on its invoices (cash account payee details).
+**Do not use for:** A supplier's giro (GET /payments/creditor-lookup). Reading the payee details already saved (GET /cash-accounts).
+
+**Pitfalls:**
+- Every enabled call may cost a premium fee at the provider; the answer is cached for ten minutes per company.
+- An empty list with available true means Bankgirot has no giro registered to this organisationsnummer.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    enabled: boolean,
+    available: boolean,
+    reason: "premium_not_enabled" | "provider_refused" | "not_found" | "invalid_number" | "org_number_missing" | null,
+    giro_numbers: { number: string, type: "bankgiro" | "plusgiro", name: string | null }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "enabled": true,
+    "available": true,
+    "reason": null,
+    "giro_numbers": [
+      {
+        "number": "5050-1055",
+        "type": "bankgiro",
+        "name": "Derome Bygg AB"
+      }
+    ]
   },
   "meta": {
     "request_id": "req_…",

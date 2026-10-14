@@ -1744,7 +1744,16 @@
     "submit_saving": "Saving...",
     "viewer_disabled_tooltip": "You only have viewer access in this company",
     "address_line2_label": "Address line 2",
-    "address_line2_placeholder": "c/o"
+    "address_line2_placeholder": "c/o",
+    "check_giro": "Check",
+    "check_giro_checking": "Checking with Bankgirot",
+    "giro_registered_name_bankgiro": "The bankgiro is registered to {name}",
+    "giro_registered_name_plusgiro": "The plusgiro is registered to {name}",
+    "giro_registered_name_differs": "The name at Bankgirot ({name}) differs from the supplier ({supplier})",
+    "giro_no_supplier_name": "no name entered",
+    "giro_not_found": "Bankgirot does not know this number",
+    "giro_invalid": "The number is not valid",
+    "giro_check_unavailable": "The name at Bankgirot could not be fetched right now"
   },
   "initial_setup": {
     "completed_verdict": "Your bookkeeping is up and running.",
@@ -2923,7 +2932,9 @@
     "saved_default": "Invoices in {currency} now show {account}.",
     "cleared_default": "Invoices in {currency} no longer have a default account.",
     "save_failed_title": "Could not save",
-    "iban_prefill": "Use the IBAN from your bank connection: {value}"
+    "iban_prefill": "Use the IBAN from your bank connection: {value}",
+    "giro_registered_pick": "Registered at Bankgirot: {value}",
+    "giro_registered_pick_named": "Registered at Bankgirot: {value} ({name})"
   },
   "settings_period_locking": {
     "heading": "Period locking",
@@ -12973,7 +12984,14 @@
     "status_rejected": "Rejected by the bank",
     "status_cancelled": "Cancelled",
     "status_failed": "Failed",
-    "status_outcome_unknown": "No answer from the bank"
+    "status_outcome_unknown": "No answer from the bank",
+    "new_payee_row": "{supplier}: first payment to {payee}",
+    "registered_name_bankgiro": "The bankgiro is registered to {name}",
+    "registered_name_plusgiro": "The plusgiro is registered to {name}",
+    "registered_name_differs": "The name at Bankgirot ({name}) differs from the supplier ({supplier})",
+    "ocr_not_accepted": "The OCR number is not accepted by the payee",
+    "registered_name_not_found": "Bankgirot does not know this number",
+    "registered_name_unavailable": "The name at Bankgirot could not be fetched right now"
   },
   "payments_page": {
     "title": "Payments",

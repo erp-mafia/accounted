@@ -16,22 +16,26 @@ export interface SignerInput {
   userAgent: string | null
 }
 
+/** The company's organisationsnummer as stored: the settings row first, the company row as fallback; null when neither has one. */
+export async function companyOrgNumber(ctx: Pick<OperationContext, 'supabase' | 'companyId'>): Promise<string | null> {
+  const { data: settings } = await ctx.supabase
+    .from('company_settings')
+    .select('org_number')
+    .eq('company_id', ctx.companyId)
+    .maybeSingle()
+  const fromSettings = (settings as { org_number?: string | null } | null)?.org_number ?? null
+  if (fromSettings) return fromSettings
+  const { data: company } = await ctx.supabase.from('companies').select('org_number').eq('id', ctx.companyId).maybeSingle()
+  return (company as { org_number?: string | null } | null)?.org_number ?? null
+}
+
 export async function buildPartyContext(
   ctx: OperationContext,
   order: { debtor_snapshot: DebtorSnapshot },
   signer: SignerInput,
   options: { requireSigner?: boolean } = {},
 ): Promise<{ ok: true; ctx: PaymentPartyContext } | { ok: false; outcome: OperationOutcome<never> }> {
-  const { data: settings } = await ctx.supabase
-    .from('company_settings')
-    .select('org_number')
-    .eq('company_id', ctx.companyId)
-    .maybeSingle()
-  let orgNumber = (settings as { org_number?: string | null } | null)?.org_number ?? null
-  if (!orgNumber) {
-    const { data: company } = await ctx.supabase.from('companies').select('org_number').eq('id', ctx.companyId).maybeSingle()
-    orgNumber = (company as { org_number?: string | null } | null)?.org_number ?? null
-  }
+  const orgNumber = await companyOrgNumber(ctx)
   if (!orgNumber) return { ok: false, outcome: { ok: false, code: 'VALIDATION_ERROR', details: { field: 'org_number', reason: 'missing' } } }
 
   const typed = normalizeSignerPersonalNumber(signer.personalNumber)

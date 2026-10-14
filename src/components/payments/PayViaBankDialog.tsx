@@ -12,6 +12,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { creditorNameMatches } from '@/lib/payments/creditor-name-match'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { BankIdSigningFlow, type SigningFlowStage } from './BankIdSigningFlow'
 import { BankMark } from '@/components/banks/BankMark'
@@ -19,10 +20,13 @@ import { earliestExecutionDateIso } from '@/lib/payments/bank-days'
 import {
   approvePaymentOrders,
   fetchPaymentsAvailability,
+  lookupCreditorName,
+  orderGiroForLookup,
   payeeLabel,
   PaymentsClientError,
   preparePaymentOrders,
   previewPaymentOrders,
+  type CreditorLookupResult,
   type PaymentOrder,
   type PaymentsAvailability,
   type PreparedPreview,
@@ -35,8 +39,14 @@ import {
  *            invoice unless the person changes it), one line per invoice with
  *            the payee it goes to, and what cannot be paid and why. Nothing is
  *            written: the lines are the server's dry run.
- *   confirm: only when an invoice states another account than the supplier
- *            card: the person confirms each such payee before signing.
+ *   confirm: when an invoice states another account than the supplier
+ *            card: the person confirms each such payee before signing. Also,
+ *            with the Bankgiro Lookup switched on (OPENPAYMENTS_BANKGIRO_LOOKUP
+ *            on the server), for every first payment to a bankgiro or
+ *            plusgiro: the name Bankgirot has registered for the number is
+ *            shown under the payee (quiet when it is the supplier's name,
+ *            an attention line when it differs or the OCR is refused), and
+ *            the person signs with that in view. Advice, never a gate.
  *   sign:    one button creates the drafts, approves them and starts the
  *            BankID signing at once. The signature is the approval: a person
  *            who may approve and sign does both in one step. Orders left
@@ -78,6 +88,35 @@ interface PayViaBankDialogProps {
 
 type Skipped = Array<{ supplier_invoice_id: string; reason: string }>
 
+/** Orders to a giro the company never paid, or whose account differs from the card: the ones Bankgirot's name is asked for. */
+function unconfirmedGiroOrders(list: PaymentOrder[]): PaymentOrder[] {
+  return list.filter((o) => (o.payee_check === 'new' || o.payee_check === 'changed') && orderGiroForLookup(o) !== null)
+}
+
+/**
+ * The registered name per order id, asked in parallel. A lookup that fails
+ * in the browser is left out: the payment goes on without the note.
+ */
+async function lookupRegisteredNames(list: PaymentOrder[]): Promise<Map<string, CreditorLookupResult>> {
+  const answers = await Promise.all(
+    unconfirmedGiroOrders(list).map(async (o) => {
+      const giro = orderGiroForLookup(o)
+      if (!giro) return null
+      try {
+        const result = await lookupCreditorName({
+          ...giro,
+          ocr: o.reference_type === 'ocr' ? o.reference : null,
+          invoiceRef: o.reference_type === 'message' ? o.reference : null,
+        })
+        return [o.id, result] as const
+      } catch {
+        return null
+      }
+    }),
+  )
+  return new Map(answers.filter((a): a is readonly [string, CreditorLookupResult] => a !== null))
+}
+
 function skippedFromError(error: unknown): Skipped | null {
   if (!(error instanceof PaymentsClientError) || error.code !== 'PAYMENT_ORDERS_INELIGIBLE') return null
   const body = error.body as { error?: { details?: { skipped?: unknown } } } | null
@@ -99,6 +138,7 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
   const [previewing, setPreviewing] = useState(false)
   const [nothingToPay, setNothingToPay] = useState<Skipped | null>(null)
   const [orders, setOrders] = useState<PaymentOrder[]>([])
+  const [lookups, setLookups] = useState<Map<string, CreditorLookupResult>>(new Map())
   const [confirmed, setConfirmed] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
   const [signingStage, setSigningStage] = useState<SigningFlowStage>('method')
@@ -167,6 +207,13 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
   const skipped = nothingToPay ?? preview?.skipped ?? []
   const toConfirm = useMemo(() => orders.filter((o) => o.payee_check === 'changed'), [orders])
   const allConfirmed = toConfirm.every((o) => o.supplier_invoice_id && confirmed.has(o.supplier_invoice_id))
+  // The lookup is on when the server answered any order with enabled: the
+  // first payments to a giro are then reviewed with Bankgirot's name in view.
+  const lookupOn = useMemo(() => [...lookups.values()].some((l) => l.enabled), [lookups])
+  const toReview = useMemo(
+    () => orders.filter((o) => o.payee_check === 'changed' || (lookupOn && o.payee_check === 'new' && orderGiroForLookup(o) !== null)),
+    [orders, lookupOn],
+  )
 
   async function approveAndSign(list: PaymentOrder[], confirmedInvoiceIds: string[]) {
     await approvePaymentOrders({ orderIds: list.map((o) => o.id), confirmedPayeeInvoiceIds: confirmedInvoiceIds })
@@ -187,7 +234,10 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
       const result = await preparePaymentOrders({ supplierInvoiceIds: invoiceIds, cashAccountId: accountId, executionDate: executionDate || null })
       changed.current = true
       setOrders(result.orders)
-      if (result.orders.some((o) => o.payee_check === 'changed')) {
+      const names = await lookupRegisteredNames(result.orders)
+      setLookups(names)
+      const nameReview = [...names.values()].some((l) => l.enabled)
+      if (result.orders.some((o) => o.payee_check === 'changed') || nameReview) {
         setPhase('confirm')
         return
       }
@@ -237,6 +287,31 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
         : t('title')
 
   const accountText = account ? `${account.ledger_account} ${account.name ?? ''}`.trim() : ''
+
+  /** What Bankgirot says about the payee's giro: one quiet line, or an attention line when it does not read as the supplier. */
+  function registeredNameLines(order: PaymentOrder) {
+    const lookup = lookups.get(order.id)
+    const giro = orderGiroForLookup(order)
+    if (!lookup || !lookup.enabled || !giro) return null
+    if (!lookup.available || !lookup.creditor_name) {
+      return (
+        <p className="text-[12.5px] text-muted-foreground">
+          {lookup.reason === 'not_found' ? t('registered_name_not_found') : t('registered_name_unavailable')}
+        </p>
+      )
+    }
+    const name = lookup.creditor_name
+    return (
+      <>
+        {creditorNameMatches(name, order.payee_name) ? (
+          <p className="text-[12.5px] text-muted-foreground">{t(giro.type === 'bankgiro' ? 'registered_name_bankgiro' : 'registered_name_plusgiro', { name })}</p>
+        ) : (
+          <AttnLine>{t('registered_name_differs', { name, supplier: order.payee_name })}</AttnLine>
+        )}
+        {lookup.ocr_valid === false && <AttnLine>{t('ocr_not_accepted')}</AttnLine>}
+      </>
+    )
+  }
 
   return (
     <Dialog open={open} onOpenChange={close}>
@@ -430,24 +505,31 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
         {phase === 'confirm' && (
           <div className="space-y-4">
             <p className="text-[12.5px] text-muted-foreground">{t('confirm_payees_intro')}</p>
-            {toConfirm.map((order) => {
+            {toReview.map((order) => {
               const invoiceId = order.supplier_invoice_id as string
               return (
-                <label key={order.id} className="flex items-center gap-2 text-[13px]">
-                  <Checkbox
-                    className="border-foreground"
-                    checked={confirmed.has(invoiceId)}
-                    onCheckedChange={(v) =>
-                      setConfirmed((prev) => {
-                        const next = new Set(prev)
-                        if (v === true) next.add(invoiceId)
-                        else next.delete(invoiceId)
-                        return next
-                      })
-                    }
-                  />
-                  <span>{t('confirm_payee_row', { supplier: order.payee_name, payee: payeeLabel(order) })}</span>
-                </label>
+                <div key={order.id} className="space-y-1">
+                  {order.payee_check === 'changed' ? (
+                    <label className="flex items-center gap-2 text-[13px]">
+                      <Checkbox
+                        className="border-foreground"
+                        checked={confirmed.has(invoiceId)}
+                        onCheckedChange={(v) =>
+                          setConfirmed((prev) => {
+                            const next = new Set(prev)
+                            if (v === true) next.add(invoiceId)
+                            else next.delete(invoiceId)
+                            return next
+                          })
+                        }
+                      />
+                      <span>{t('confirm_payee_row', { supplier: order.payee_name, payee: payeeLabel(order) })}</span>
+                    </label>
+                  ) : (
+                    <p className="text-[13px]">{t('new_payee_row', { supplier: order.payee_name, payee: payeeLabel(order) })}</p>
+                  )}
+                  <div className="pl-6">{registeredNameLines(order)}</div>
+                </div>
               )
             })}
             <DialogFooter>

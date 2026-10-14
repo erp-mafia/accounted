@@ -20,7 +20,8 @@ import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { createClient } from '@/lib/supabase/client'
 import { formatIbanGroups } from '@/lib/company/connection-iban'
 import { bankgiroFromTicSnapshot } from '@/lib/company/snapshot-bank'
-import { formatBankgiroNumber, validateBankgiroNumber, validatePlusgiroNumber } from '@/lib/bankgiro/luhn'
+import { formatBankgiroNumber, formatPlusgiroNumber, validateBankgiroNumber, validatePlusgiroNumber } from '@/lib/bankgiro/luhn'
+import { fetchCompanyGiroNumbers, type RegisteredGiroNumber } from '@/components/payments/payments-client'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import {
   INVOICE_PAYMENT_ACCOUNT_CURRENCIES,
@@ -161,6 +162,11 @@ export function InvoicePaymentAccountsSettings({
   const [currencyToAdd, setCurrencyToAdd] = useState<Currency | ''>('')
   const [extraCurrencies, setExtraCurrencies] = useState<Currency[]>([])
   const [snapshotBankgiro, setSnapshotBankgiro] = useState<string | null>(null)
+  // Bankgirot's own register (premium, behind OPENPAYMENTS_BANKGIRO_LOOKUP on
+  // the server): the giro numbers registered to the company, offered as picks
+  // while no account carries a bankgiro yet. Null until asked; asked only when
+  // a form is open, since every answer may cost the provider's fee.
+  const [registeredGiros, setRegisteredGiros] = useState<RegisteredGiroNumber[] | null>(null)
 
   const load = useCallback(async () => {
     const res = await fetch('/api/cash-accounts/payee-defaults')
@@ -207,6 +213,24 @@ export function InvoicePaymentAccountsSettings({
       cancelled = true
     }
   }, [company?.id])
+
+  const noAccountHasBankgiro = accounts.every((a) => !a.bankgiro)
+  const formOpen = editingId !== null || isAdding
+  useEffect(() => {
+    if (!formOpen || !noAccountHasBankgiro || registeredGiros !== null) return
+    let cancelled = false
+    fetchCompanyGiroNumbers()
+      .then((answer) => {
+        if (!cancelled) setRegisteredGiros(answer.enabled && answer.available ? answer.giro_numbers : [])
+      })
+      .catch(() => {
+        // Quiet: the picks are a convenience, the fields still take a typed number.
+        if (!cancelled) setRegisteredGiros([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [formOpen, noAccountHasBankgiro, registeredGiros])
 
   const defaultByCurrency = useMemo(
     () => new Map(defaults.map((d) => [d.currency, d.cash_account_id] as const)),
@@ -467,6 +491,26 @@ export function InvoicePaymentAccountsSettings({
     }
   }
 
+  /** One pick per registered giro of a type, while the field is empty: "Registrerat hos Bankgirot: 5050-1055 (Acme AB)". */
+  function registeredGiroPicks(type: 'bankgiro' | 'plusgiro', currency: string, current: string, skipDigits: string | null) {
+    if (currency !== 'SEK' || current || !registeredGiros) return null
+    const picks = registeredGiros.filter((g) => g.type === type && g.number.replace(/\D/g, '') !== skipDigits)
+    if (picks.length === 0) return null
+    return picks.map((g) => {
+      const value = type === 'bankgiro' ? formatBankgiroNumber(g.number) : formatPlusgiroNumber(g.number)
+      return (
+        <button
+          key={g.number}
+          type="button"
+          onClick={() => updateField(type, value)}
+          className="text-xs text-muted-foreground underline underline-offset-2 transition-colors duration-150 hover:text-foreground"
+        >
+          {g.name ? t('giro_registered_pick_named', { value, name: g.name }) : t('giro_registered_pick', { value })}
+        </button>
+      )
+    })
+  }
+
   function renderPayeeFields(currency: string, idPrefix: string, bankIban: string | null = null) {
     const showBankgiroPrefill = currency === 'SEK' && !form.bankgiro && !!snapshotBankgiro
     return (
@@ -517,6 +561,7 @@ export function InvoicePaymentAccountsSettings({
               {t('bankgiro_prefill', { value: formatBankgiroNumber(snapshotBankgiro) })}
             </button>
           )}
+          {registeredGiroPicks('bankgiro', currency, form.bankgiro, showBankgiroPrefill && snapshotBankgiro ? snapshotBankgiro.replace(/\D/g, '') : null)}
         </SettingsRow>
         <SettingsRow label={t('plusgiro_label')} htmlFor={`${idPrefix}-plusgiro`} align="baseline">
           <SettingsInput
@@ -525,6 +570,7 @@ export function InvoicePaymentAccountsSettings({
             onChange={(event) => updateField('plusgiro', event.target.value)}
             className="max-w-40 flex-none tabular-nums"
           />
+          {registeredGiroPicks('plusgiro', currency, form.plusgiro, null)}
         </SettingsRow>
         <SettingsRow label={t('swish_label')} htmlFor={`${idPrefix}-swish`} align="baseline">
           <SettingsInput

@@ -29,8 +29,8 @@ const party = {
 }
 
 describe('AIS family', () => {
-  it('is the 2026-10-15 contract under /api/connect/ais with the bank_sync scope', () => {
-    expect(CONTRACT_VERSION).toBe('2026-10-15')
+  it('is the 2026-10-16 contract under /api/connect/ais with the bank_sync scope', () => {
+    expect(CONTRACT_VERSION).toBe('2026-10-16')
     expect(AIS_BASE_PATH).toBe('/api/connect/ais')
     expect(AIS_SCOPE).toBe('bank_sync')
   })

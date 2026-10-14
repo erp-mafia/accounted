@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useAccounts } from '@/lib/reference-data/hooks'
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -13,6 +13,9 @@ import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Lock, X } from 'lucide-react'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import { AttnLine } from '@/components/ui/attn-line'
+import { lookupCreditorName, probeCreditorLookup, type CreditorLookupResult } from '@/components/payments/payments-client'
+import { creditorNameMatches } from '@/lib/payments/creditor-name-match'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getCountryOptions, normalizeCountryCode } from '@/lib/vat/country-codes'
 import { formatOrgNumberDisplay } from '@/lib/invariants/org-number'
@@ -26,6 +29,13 @@ interface SupplierFormProps {
   isLoading: boolean
   initialData?: Partial<CreateSupplierInput>
 }
+
+type GiroField = 'bankgiro' | 'plusgiro'
+
+/** One check of a typed giro against Bankgirot's register: what was asked, and the answer once it came. */
+type GiroCheck = { field: GiroField; giro: string; state: 'checking' } | { field: GiroField; giro: string; state: 'done'; result: CreditorLookupResult }
+
+const CHECK_FAILED: CreditorLookupResult = { enabled: true, available: false, reason: 'provider_refused', creditor_name: null, ocr_valid: null, warnings: [] }
 
 export default function SupplierForm({
   onSubmit,
@@ -156,6 +166,60 @@ export default function SupplierForm({
       return Object.keys(patch)
     },
   })
+
+  // Bankgiro Lookup (premium, behind OPENPAYMENTS_BANKGIRO_LOOKUP on the
+  // server): a "Kontrollera" beside the giro fields shows the name Bankgirot
+  // has registered for the number, so a typo or a fraudulent card is caught
+  // when it is saved. The probe says whether the installation offers it.
+  const [giroLookupEnabled, setGiroLookupEnabled] = useState(false)
+  const [giroCheck, setGiroCheck] = useState<GiroCheck | null>(null)
+  useEffect(() => {
+    if (!canWrite) return
+    let cancelled = false
+    probeCreditorLookup()
+      .then((enabled) => {
+        if (!cancelled) setGiroLookupEnabled(enabled)
+      })
+      .catch(() => {
+        // Quiet: without the probe's answer the check is simply not offered.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [canWrite])
+
+  async function checkGiro(field: GiroField) {
+    const giro = (getValues(field) ?? '').trim()
+    if (!giro) return
+    setGiroCheck({ field, giro, state: 'checking' })
+    try {
+      const result = await lookupCreditorName({ giro, type: field })
+      setGiroCheck({ field, giro, state: 'done', result })
+    } catch {
+      setGiroCheck({ field, giro, state: 'done', result: CHECK_FAILED })
+    }
+  }
+
+  const bankgiroValue = watch('bankgiro')
+  const plusgiroValue = watch('plusgiro')
+  const supplierName = watch('name')
+
+  /** The check's answer under its field, as long as the field still holds the number that was checked. */
+  function giroCheckLine(field: GiroField, current: string | undefined) {
+    if (!giroCheck || giroCheck.field !== field || giroCheck.giro !== (current ?? '').trim()) return null
+    if (giroCheck.state === 'checking') return <p className="text-[12.5px] text-muted-foreground">{t('check_giro_checking')}</p>
+    const result = giroCheck.result
+    if (!result.enabled) return null
+    if (!result.available || !result.creditor_name) {
+      const key = result.reason === 'not_found' ? 'giro_not_found' : result.reason === 'invalid_number' ? 'giro_invalid' : 'giro_check_unavailable'
+      return <p className="text-[12.5px] text-muted-foreground">{t(key)}</p>
+    }
+    const name = result.creditor_name
+    if (creditorNameMatches(name, supplierName ?? '')) {
+      return <p className="text-[12.5px] text-muted-foreground">{t(field === 'bankgiro' ? 'giro_registered_name_bankgiro' : 'giro_registered_name_plusgiro', { name })}</p>
+    }
+    return <AttnLine>{t('giro_registered_name_differs', { name, supplier: supplierName?.trim() || t('giro_no_supplier_name') })}</AttnLine>
+  }
 
   const countryValue = watch('country')
   // A stored value the picker does not list (an unmapped legacy name, or a
@@ -319,11 +383,27 @@ export default function SupplierForm({
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label htmlFor="bankgiro">{t('bankgiro_label')}</Label>
-            <Input id="bankgiro" placeholder={t('bankgiro_placeholder')} {...register('bankgiro')} />
+            <div className="flex items-center gap-2">
+              <Input id="bankgiro" placeholder={t('bankgiro_placeholder')} {...register('bankgiro')} />
+              {giroLookupEnabled && (
+                <Button type="button" variant="outline" size="sm" onClick={() => checkGiro('bankgiro')} disabled={!bankgiroValue?.trim()}>
+                  {t('check_giro')}
+                </Button>
+              )}
+            </div>
+            {giroCheckLine('bankgiro', bankgiroValue)}
           </div>
           <div className="space-y-2">
             <Label htmlFor="plusgiro">{t('plusgiro_label')}</Label>
-            <Input id="plusgiro" placeholder="XXXXXXX-X" {...register('plusgiro')} />
+            <div className="flex items-center gap-2">
+              <Input id="plusgiro" placeholder="XXXXXXX-X" {...register('plusgiro')} />
+              {giroLookupEnabled && (
+                <Button type="button" variant="outline" size="sm" onClick={() => checkGiro('plusgiro')} disabled={!plusgiroValue?.trim()}>
+                  {t('check_giro')}
+                </Button>
+              )}
+            </div>
+            {giroCheckLine('plusgiro', plusgiroValue)}
           </div>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

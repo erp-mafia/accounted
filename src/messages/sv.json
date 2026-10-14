@@ -1744,7 +1744,16 @@
     "submit_saving": "Sparar...",
     "viewer_disabled_tooltip": "Du har endast läsbehörighet i detta företag",
     "address_line2_label": "Adressrad 2",
-    "address_line2_placeholder": "c/o"
+    "address_line2_placeholder": "c/o",
+    "check_giro": "Kontrollera",
+    "check_giro_checking": "Kontrollerar hos Bankgirot",
+    "giro_registered_name_bankgiro": "Bankgirot är registrerat på {name}",
+    "giro_registered_name_plusgiro": "Plusgirot är registrerat på {name}",
+    "giro_registered_name_differs": "Namnet hos Bankgirot ({name}) skiljer sig från leverantören ({supplier})",
+    "giro_no_supplier_name": "inget namn angivet",
+    "giro_not_found": "Bankgirot känner inte till numret",
+    "giro_invalid": "Numret är inte giltigt",
+    "giro_check_unavailable": "Namnet hos Bankgirot kunde inte hämtas just nu"
   },
   "initial_setup": {
     "completed_verdict": "Bokföringen är igång.",
@@ -2923,7 +2932,9 @@
     "saved_default": "Fakturor i {currency} visar nu {account}.",
     "cleared_default": "Fakturor i {currency} har inget standardkonto längre.",
     "save_failed_title": "Kunde inte spara",
-    "iban_prefill": "Hämta från bankkopplingen: {value}"
+    "iban_prefill": "Hämta från bankkopplingen: {value}",
+    "giro_registered_pick": "Registrerat hos Bankgirot: {value}",
+    "giro_registered_pick_named": "Registrerat hos Bankgirot: {value} ({name})"
   },
   "settings_period_locking": {
     "heading": "Periodlåsning",
@@ -12973,7 +12984,14 @@
     "status_rejected": "Avvisad av banken",
     "status_cancelled": "Avbruten",
     "status_failed": "Misslyckad",
-    "status_outcome_unknown": "Svar saknas från banken"
+    "status_outcome_unknown": "Svar saknas från banken",
+    "new_payee_row": "{supplier}: första betalningen till {payee}",
+    "registered_name_bankgiro": "Bankgirot är registrerat på {name}",
+    "registered_name_plusgiro": "Plusgirot är registrerat på {name}",
+    "registered_name_differs": "Namnet hos Bankgirot ({name}) skiljer sig från leverantören ({supplier})",
+    "ocr_not_accepted": "OCR-numret godkänns inte av mottagaren",
+    "registered_name_not_found": "Bankgirot känner inte till numret",
+    "registered_name_unavailable": "Namnet hos Bankgirot kunde inte hämtas just nu"
   },
   "payments_page": {
     "title": "Betalningar",

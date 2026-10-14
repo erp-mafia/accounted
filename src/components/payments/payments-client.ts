@@ -342,6 +342,59 @@ export async function fetchSupplierInvoicePayments(supplierInvoiceId: string): P
   return invoice.payments ?? []
 }
 
+// Bankgiro Lookup (premium, behind OPENPAYMENTS_BANKGIRO_LOOKUP on the server):
+// the name Bankgirot has registered for a giro, and the company's own giros.
+
+export type CreditorLookupReason = 'premium_not_enabled' | 'provider_refused' | 'not_found' | 'invalid_number' | 'org_number_missing'
+
+/** GET /api/payments/creditor-lookup with a giro: flat, `enabled` false means the installation never asks. */
+export interface CreditorLookupResult {
+  enabled: boolean
+  available: boolean
+  reason: CreditorLookupReason | null
+  creditor_name: string | null
+  /** With an OCR: whether the creditor accepts it; null when nothing was checked. */
+  ocr_valid: boolean | null
+  warnings: Array<{ code: string; text: string | null }>
+}
+
+export interface RegisteredGiroNumber {
+  number: string
+  type: 'bankgiro' | 'plusgiro'
+  name: string | null
+}
+
+export interface CompanyGiroNumbersResult {
+  enabled: boolean
+  available: boolean
+  reason: CreditorLookupReason | null
+  giro_numbers: RegisteredGiroNumber[]
+}
+
+/** Whether the premium lookups are switched on, without asking anything: the probe form of the route. */
+export async function probeCreditorLookup(): Promise<boolean> {
+  const answer = await send<{ enabled: boolean }>('/api/payments/creditor-lookup')
+  return answer.enabled === true
+}
+
+export function lookupCreditorName(input: { giro: string; type: 'bankgiro' | 'plusgiro'; ocr?: string | null; invoiceRef?: string | null }): Promise<CreditorLookupResult> {
+  const search = new URLSearchParams({ giro: input.giro, type: input.type })
+  if (input.ocr) search.set('ocr', input.ocr)
+  else if (input.invoiceRef) search.set('invoice_ref', input.invoiceRef)
+  return send<CreditorLookupResult>(`/api/payments/creditor-lookup?${search.toString()}`)
+}
+
+export function fetchCompanyGiroNumbers(): Promise<CompanyGiroNumbersResult> {
+  return send<CompanyGiroNumbersResult>('/api/payments/giro-numbers')
+}
+
+/** The giro of a payment order as the lookup takes it, or null for a bank account or IBAN payee (Bankgirot registers neither). */
+export function orderGiroForLookup(order: Pick<PaymentOrder, 'payee_type' | 'payee_bankgiro' | 'payee_plusgiro'>): { giro: string; type: 'bankgiro' | 'plusgiro' } | null {
+  if (order.payee_type === 'bankgiro' && order.payee_bankgiro) return { giro: order.payee_bankgiro, type: 'bankgiro' }
+  if (order.payee_type === 'plusgiro' && order.payee_plusgiro) return { giro: order.payee_plusgiro, type: 'plusgiro' }
+  return null
+}
+
 /** "BG 5050-1055", "PG 123456-7", "1234 567890" or an IBAN: the account a payment goes to. */
 export function payeeLabel(order: Pick<PaymentOrder, 'payee_type' | 'payee_bankgiro' | 'payee_plusgiro' | 'payee_clearing' | 'payee_account' | 'payee_iban'>): string {
   switch (order.payee_type) {

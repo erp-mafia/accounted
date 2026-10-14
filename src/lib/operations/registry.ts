@@ -130,6 +130,7 @@ import {
   paymentsVerification,
   paymentsVerificationStart,
 } from './payment-orders'
+import { paymentsCompanyGiroNumbers, paymentsLookupCreditor } from './bankgiro-lookup'
 import {
   documentsDelete,
   documentsGet,
@@ -338,6 +339,9 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   paymentOrdersApprove,
   paymentOrdersUnapprove,
   paymentOrdersCancel,
+  // Bankgiro Lookup (premium, behind OPENPAYMENTS_BANKGIRO_LOOKUP): reads only.
+  paymentsLookupCreditor,
+  paymentsCompanyGiroNumbers,
   paymentsAvailability,
   paymentsUsage,
   paymentsVerification,

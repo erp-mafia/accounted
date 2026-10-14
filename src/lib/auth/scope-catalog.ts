@@ -407,6 +407,10 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_prepare_payments: 'suppliers:write',
   gnubok_cancel_payment_order: 'suppliers:write',
   gnubok_get_payments_signing_link: 'suppliers:read',
+  // Bankgiro Lookup (lib/operations/bankgiro-lookup.ts): the registered name
+  // behind a payee's giro, and the company's own registered giro numbers.
+  gnubok_lookup_bankgiro_creditor: 'suppliers:read',
+  gnubok_list_company_giro_numbers: 'companies:read',
   // Bank reading through Open Payments (lib/operations/bank-feed.ts): the
   // reads and the signatory link; the BankID act itself has no tool.
   gnubok_list_bank_feed_banks: 'transactions:read',

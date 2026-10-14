@@ -26,9 +26,15 @@ import { z } from 'zod'
  *
  * This file depends on nothing but `zod`: other repositories consume an exact
  * copy of `src/` pinned to a commit, so it must stay self-contained.
+ *
+ * 2026-10-16 added two reads to the payments family, Bankgiro Lookup:
+ * `lookupCreditor` (the name Bankgirot has registered for a bankgiro or
+ * plusgiro number, and whether an OCR reference passes the creditor's
+ * check) and `lookupGiroNumbers` (the giro numbers registered to a company).
+ * New operations only: nothing existing changed shape.
  */
 
-export const CONTRACT_VERSION = '2026-10-15'
+export const CONTRACT_VERSION = '2026-10-16'
 
 // ---------------------------------------------------------------------------
 // Keys, headers and paths
@@ -859,6 +865,19 @@ export type PeppolOperation = keyof typeof PEPPOL_OPERATIONS
  *   them for the wire.
  * - Status values are the installation's payment order lifecycle; the
  *   provider's own code travels beside them verbatim (providerStatus).
+ * - Bankgiro Lookup (2026-10-16, PAYMENTS_LOOKUP_OPERATIONS): two reads on a
+ *   premium product of the provider, asked before a person signs a payment to
+ *   an account the company never paid, when a supplier's giro is saved, and
+ *   when the company sets up its own invoice payee. They involve no PSU
+ *   consent and count against no consent cap or daily read budget (only the
+ *   service's own payments budget); every call may cost the provider's
+ *   premium fee, so the installation gates them behind its own flag. The
+ *   party is the lighter paymentsLookupPartySchema: the company's
+ *   organisationsnummer (PSU-Corporate-ID, which the provider requires in the
+ *   corporate context) and the signer's personnummer when known (PSU-ID); no
+ *   bank is involved. When the provider refuses the premium scope or the
+ *   endpoint, the answer is a typed `{ available: false, reason }`, never an
+ *   error envelope: a lookup that cannot be made must not stop a payment.
  */
 
 /** Base path of the payments family. */
@@ -1192,6 +1211,89 @@ export const paymentsSigningPollRequestSchema = z.object({
 })
 export type PaymentsSigningPollRequest = z.infer<typeof paymentsSigningPollRequestSchema>
 
+// Bankgiro Lookup (premium reads, 2026-10-16)
+
+/** The giro type as the provider names it. */
+export const paymentsGiroTypeSchema = z.enum(['BANKGIRO', 'PLUSGIRO'])
+export type PaymentsGiroType = z.infer<typeof paymentsGiroTypeSchema>
+
+/**
+ * The party of a lookup: no bank, no account. The organisationsnummer is
+ * forwarded as PSU-Corporate-ID (mandatory in the corporate context), the
+ * signer's personnummer as PSU-ID when the installation knows it. Never
+ * stored at the service.
+ */
+export const paymentsLookupPartySchema = paymentsPartySchema.pick({ orgNumber: true, signerPersonalNumber: true })
+export type PaymentsLookupParty = z.infer<typeof paymentsLookupPartySchema>
+
+/** A bankgiro or plusgiro number as the provider takes it: digits and dashes, 5 to 35 characters. */
+const paymentsGiroNumberSchema = z.string().trim().regex(/^[0-9-]{5,35}$/, 'giro number: digits and dashes, 5 to 35 characters')
+
+export const paymentsCreditorLookupRequestSchema = z.object({
+  party: paymentsLookupPartySchema,
+  giroNumber: paymentsGiroNumberSchema,
+  giroType: paymentsGiroTypeSchema,
+  /** The OCR reference of the invoice about to be paid: the creditor's OCR check is run on it when given. */
+  ocrRef: z.string().trim().regex(/^\d{2,25}$/, 'OCR reference: 2 to 25 digits').optional(),
+  /** A free reference (the invoice number) when the payment carries no OCR. */
+  invoiceRef: z.string().trim().min(1).max(25).optional(),
+})
+export type PaymentsCreditorLookupRequest = z.infer<typeof paymentsCreditorLookupRequestSchema>
+
+/**
+ * Why a lookup has no answer: `premium_not_enabled` (the provider refused the
+ * premium product or its scope for this service; an operator decides whether
+ * to buy it), `provider_refused` (the provider failed or refused the request;
+ * the provider's words are logged at the service), `not_found` (the provider
+ * knows no such giro number, or no registration for the company).
+ */
+export const PAYMENTS_LOOKUP_UNAVAILABLE_REASONS = ['premium_not_enabled', 'provider_refused', 'not_found'] as const
+export const paymentsLookupUnavailableReasonSchema = z.enum(PAYMENTS_LOOKUP_UNAVAILABLE_REASONS)
+export type PaymentsLookupUnavailableReason = z.infer<typeof paymentsLookupUnavailableReasonSchema>
+
+const paymentsLookupUnavailableSchema = z.object({
+  available: z.literal(false),
+  reason: paymentsLookupUnavailableReasonSchema,
+})
+
+/** A provider message on a successful lookup, verbatim: the code (OCR_REF_INVALID, ...) and its text when the provider sent one. */
+export const paymentsLookupWarningSchema = z.object({ code: z.string(), text: z.string().nullable() })
+
+export const paymentsCreditorLookupSchema = z.discriminatedUnion('available', [
+  z.object({
+    available: z.literal(true),
+    /** The name Bankgirot has registered for the giro number. */
+    creditorName: z.string(),
+    /** With an ocrRef: whether the creditor accepts it; null when no ocrRef was given (nothing to check). */
+    ocrValid: z.boolean().nullable(),
+    warnings: z.array(paymentsLookupWarningSchema),
+  }),
+  paymentsLookupUnavailableSchema,
+])
+export type PaymentsCreditorLookup = z.infer<typeof paymentsCreditorLookupSchema>
+
+export const paymentsGiroNumbersRequestSchema = z.object({ party: paymentsLookupPartySchema })
+export type PaymentsGiroNumbersRequest = z.infer<typeof paymentsGiroNumbersRequestSchema>
+
+export const paymentsRegisteredGiroSchema = z.object({
+  /** As the provider gives it (digits, possibly with a dash). */
+  number: z.string(),
+  type: z.enum(['bankgiro', 'plusgiro']),
+  /** The name registered for the number, when the provider gives one. */
+  name: z.string().nullable(),
+})
+export type PaymentsRegisteredGiro = z.infer<typeof paymentsRegisteredGiroSchema>
+
+export const paymentsGiroNumbersSchema = z.discriminatedUnion('available', [
+  z.object({
+    available: z.literal(true),
+    /** The giro numbers registered to the party's organisation; [] when it has none. */
+    giroNumbers: z.array(paymentsRegisteredGiroSchema),
+  }),
+  paymentsLookupUnavailableSchema,
+])
+export type PaymentsGiroNumbers = z.infer<typeof paymentsGiroNumbersSchema>
+
 /**
  * The operation table: method, path under PAYMENTS_BASE_PATH, whether the
  * call carries X-Connector-Company, and the request and response schemas.
@@ -1208,11 +1310,20 @@ export const PAYMENTS_OPERATIONS = {
   basketStatus: { method: 'POST', path: '/baskets/status', company: true, request: paymentsBasketStatusRequestSchema, response: paymentsStateSchema },
   startSigning: { method: 'POST', path: '/signings', company: true, request: paymentsSigningStartRequestSchema, response: paymentsSigningStartedSchema },
   pollSigning: { method: 'POST', path: '/signings/poll', company: true, request: paymentsSigningPollRequestSchema, response: paymentsSigningProgressSchema },
+  lookupCreditor: { method: 'POST', path: '/creditor-lookup', company: true, request: paymentsCreditorLookupRequestSchema, response: paymentsCreditorLookupSchema },
+  lookupGiroNumbers: { method: 'POST', path: '/giro-numbers', company: true, request: paymentsGiroNumbersRequestSchema, response: paymentsGiroNumbersSchema },
 } as const
 export type PaymentsOperation = keyof typeof PAYMENTS_OPERATIONS
 
 /** Writes: they carry an idempotency key and are never sent to the provider twice. */
 export const PAYMENTS_WRITE_OPERATIONS = ['createPayment', 'cancelPayment', 'createBasket', 'startSigning'] as const satisfies readonly PaymentsOperation[]
+
+/**
+ * Bankgiro Lookup reads (2026-10-16): premium at the provider, no PSU consent
+ * involved, counted against no consent cap or daily read budget, answered
+ * with a typed `available: false` when the provider refuses them.
+ */
+export const PAYMENTS_LOOKUP_OPERATIONS = ['lookupCreditor', 'lookupGiroNumbers'] as const satisfies readonly PaymentsOperation[]
 
 // ---------------------------------------------------------------------------
 // AIS (bank reading through an account information provider: consents,

@@ -455,7 +455,7 @@ describe('toPaymentProviderError', () => {
 
   it('maps every operation of the contract to a write or a read', () => {
     const operations = Object.keys(PAYMENTS_OPERATIONS) as PaymentsOperation[]
-    expect(operations).toHaveLength(10)
+    expect(operations).toHaveLength(12)
     const unreachable = new ConnectorCallError('x', { code: CONNECTOR_UNREACHABLE_CODE, retryable: true })
     const writes = operations.filter((op) => toPaymentProviderError(unreachable, op).outcomeUnknown)
     expect(writes.sort()).toEqual(['cancelPayment', 'createBasket', 'createPayment', 'startSigning'])
