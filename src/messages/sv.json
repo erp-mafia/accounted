@@ -12906,6 +12906,27 @@
     "done_payments_awaiting": "Betalningar via banken: formuläret är hos firmatecknaren",
     "done_payments_renew": "Betalningar via banken: verifieringen behöver förnyas"
   },
+  "bank_payments_document": {
+    "open_document": "Öppna dokument",
+    "no_document": "Ingen faktura bifogad",
+    "not_previewable": "Fakturan kan inte förhandsvisas här",
+    "document_label": "Leverantörsfaktura",
+    "show_document": "Visa fakturan från {supplier}",
+    "sheet_kicker": "Leverantörsfaktura",
+    "close": "Stäng",
+    "states": "Fakturan anger {value}",
+    "states_no_payee": "Fakturan anger inget konto",
+    "states_no_reference": "Fakturan anger ingen OCR",
+    "payee_same": "Samma konto som på fakturan",
+    "reference_same": "Samma referens som på fakturan",
+    "both_same": "Konto och referens stämmer med fakturan",
+    "on_document": "Enligt fakturan: {amount}, förfaller {date}",
+    "label_supplier": "Leverantör",
+    "label_payee": "Till konto",
+    "label_reference": "Referens",
+    "label_date": "Betalningsdag",
+    "label_amount": "Belopp"
+  },
   "bank_payments": {
     "title": "Betala via banken",
     "title_sign": "Signera betalningarna",

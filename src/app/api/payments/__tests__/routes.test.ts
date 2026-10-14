@@ -152,6 +152,9 @@ describe('payment orders before the bank has them', () => {
     expect(columns).toContain('outcome_unknown_at')
     expect(columns).not.toContain('idempotency_key')
     expect(columns).not.toContain('*')
+    // The invoice brings what its document states, for the approve dialog.
+    expect(columns).toContain('payment_reference')
+    expect(columns).toContain('document:document_attachments!supplier_invoices_document_id_fkey(mime_type, file_name)')
     expect(findCall('payment_orders', 'eq')).toEqual(['company_id', 'company-1'])
     expect(findCall('payment_orders', 'in')).toEqual(['status', ['draft']])
   })

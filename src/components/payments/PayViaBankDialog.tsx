@@ -17,6 +17,7 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { BankIdSigningFlow, type SigningFlowStage } from './BankIdSigningFlow'
 import { BankMark } from '@/components/banks/BankMark'
 import { RequestSigningLinkButton, RequestSigningLinkPanel } from './RequestSigningLinkDialog'
+import { DocumentCheckLine, InvoiceDocumentButton, InvoiceDocumentSheet, PaymentBesideDocument, paymentFromPreviewLine } from './InvoiceDocumentPreview'
 import { earliestExecutionDateIso } from '@/lib/payments/bank-days'
 import {
   approvePaymentOrders,
@@ -146,6 +147,8 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
   const [signingStage, setSigningStage] = useState<SigningFlowStage>('method')
   /** What follows the approval: a BankID here (sign), or a link for someone else (request). */
   const [intent, setIntent] = useState<'sign' | 'request'>('sign')
+  /** The invoice whose document is open in the side sheet, when several are paid. */
+  const [documentKey, setDocumentKey] = useState<string | null>(null)
   const changed = useRef(false)
 
   const fail = useCallback(
@@ -208,6 +211,14 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
   const payableAccounts = useMemo(() => availability?.accounts.filter((a) => a.payable) ?? [], [availability])
   const account = payableAccounts.find((a) => a.id === accountId) ?? null
   const lines = preview?.lines ?? []
+  // Each line beside what its invoice document states (the dry run carries it).
+  const payments = useMemo(
+    () => (preview?.lines ?? []).map((line) => paymentFromPreviewLine(line, invoiceLabelById?.get(line.supplier_invoice_id))),
+    [preview, invoiceLabelById],
+  )
+  const paymentByKey = useMemo(() => new Map(payments.map((p) => [p.key, p])), [payments])
+  // One invoice: the document beside the payment, so the dialog widens for it.
+  const single = phase === 'preview' && lines.length === 1 && payments.length === 1
   const skipped = nothingToPay ?? preview?.skipped ?? []
   const toConfirm = useMemo(() => orders.filter((o) => o.payee_check === 'changed'), [orders])
   const allConfirmed = toConfirm.every((o) => o.supplier_invoice_id && confirmed.has(o.supplier_invoice_id))
@@ -320,7 +331,7 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
 
   return (
     <Dialog open={open} onOpenChange={close}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className={single ? 'max-w-4xl' : 'max-w-2xl'}>
         {phase !== 'request' && (
           <DialogHeader>
             <DialogTitle>{title}</DialogTitle>
@@ -403,6 +414,33 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
                     <Skeleton className="h-4 w-2/3" />
                     <Skeleton className="h-4 w-1/2" />
                   </div>
+                ) : single ? (
+                  <div className={previewing ? 'opacity-60' : undefined}>
+                    <PaymentBesideDocument
+                      payment={payments[0]}
+                      payeeExtra={
+                        (lines[0].alternative_payee || lines[0].warnings.includes('unattested')) && (
+                          <span className="mt-1 flex flex-wrap justify-end gap-2">
+                            {lines[0].alternative_payee && (
+                              <Badge variant="warning" className="font-normal" title={t('payee_changed_detail', { alternative: lines[0].alternative_payee })}>
+                                {t('payee_changed')}
+                              </Badge>
+                            )}
+                            {lines[0].warnings.includes('unattested') && (
+                              <Badge variant="outline" className="font-normal">
+                                {t('unattested')}
+                              </Badge>
+                            )}
+                          </span>
+                        )
+                      }
+                      dateExtra={
+                        lines[0].date_moved_from && (
+                          <span className="block text-[11px] text-muted-foreground">{t('date_moved', { from: formatDate(lines[0].date_moved_from) })}</span>
+                        )
+                      }
+                    />
+                  </div>
                 ) : lines.length > 0 ? (
                   <div className={previewing ? 'overflow-x-auto opacity-60' : 'overflow-x-auto'}>
                     <table className="w-full border-collapse text-[13px]">
@@ -417,11 +455,17 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
                       <tbody>
                         {lines.map((line) => {
                           const label = invoiceLabelById?.get(line.supplier_invoice_id) ?? line.supplier_invoice_number
+                          const payment = paymentByKey.get(line.supplier_invoice_id)
                           return (
                             <tr key={line.supplier_invoice_id} className="border-b border-border align-middle">
                               <td className="w-1/3 max-w-0 py-2 pr-3">
-                                <span className="block truncate">{line.supplier_name}</span>
-                                <span className="block truncate text-[11px] text-muted-foreground">{label}</span>
+                                <div className="flex items-center gap-1">
+                                  <div className="min-w-0 flex-1">
+                                    <span className="block truncate">{line.supplier_name}</span>
+                                    <span className="block truncate text-[11px] text-muted-foreground">{label}</span>
+                                  </div>
+                                  {payment && <InvoiceDocumentButton payment={payment} onOpen={setDocumentKey} />}
+                                </div>
                               </td>
                               <td className="whitespace-nowrap py-2 pr-3 tabular-nums">
                                 <span>{line.payee.label}</span>
@@ -442,6 +486,7 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
                                 <span className="block text-[11px] text-muted-foreground">
                                   {line.reference.type === 'ocr' ? `OCR ${line.reference.value}` : line.reference.value}
                                 </span>
+                                {payment && <DocumentCheckLine payment={payment} className="whitespace-normal" />}
                               </td>
                               <td className="whitespace-nowrap py-2 pr-3 tabular-nums">
                                 {formatDate(line.requested_execution_date)}
@@ -491,6 +536,8 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
                     </ul>
                   </div>
                 )}
+
+                <InvoiceDocumentSheet payment={documentKey ? (paymentByKey.get(documentKey) ?? null) : null} onClose={() => setDocumentKey(null)} />
 
                 {preview && preview.replaces_drafts > 0 && (
                   <p className="text-[12.5px] text-muted-foreground">{t('replaces_drafts', { count: preview.replaces_drafts })}</p>

@@ -9,6 +9,7 @@
 
 import type { PaymentOrderStatus } from '@/lib/payments/orders/status'
 import type { VerificationState } from '@/lib/payments/orders/verification-state'
+import type { DocumentChecks, InvoiceDocumentFacts, InvoiceDocumentSource } from '@/lib/payments/orders/invoice-document'
 
 export type { PaymentOrderStatus, VerificationState }
 
@@ -91,12 +92,13 @@ export interface PaymentOrder {
   matched_at: string | null
   created_at: string
   updated_at: string
-  supplier_invoice: {
+  /** The invoice paid, with what its document states (lib/payments/orders/invoice-document). */
+  supplier_invoice: (InvoiceDocumentSource & {
     id: string
     supplier_invoice_number: string | null
     due_date: string | null
     supplier: { name: string } | null
-  } | null
+  }) | null
 }
 
 export interface PreparedOrders {
@@ -128,6 +130,8 @@ export interface PreparedPreviewLine {
   warnings: Array<'unattested' | 'ocr_invalid'>
   /** The other account when the supplier card and the invoice disagree; the card is paid unless the person chooses otherwise. */
   alternative_payee: string | null
+  /** What the invoice document states, and whether this line pays it. Absent from servers before it. */
+  document?: InvoiceDocumentFacts & { checks: DocumentChecks }
 }
 
 export interface PreparedPreview {
