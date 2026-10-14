@@ -315,6 +315,18 @@ export function isSessionExpiredResponse(status: number, body: string): boolean 
 }
 
 /**
+ * Whether a failed response is a credential-level refusal: 401/403 WITHOUT a
+ * session-dead signal in the body. Enable Banking answers that way when the
+ * application itself is no longer let in (the contract ended, a revoked app
+ * key), never for one consent: it says nothing about any PSD2 session, so no
+ * row may be flipped or told to renew on it, and once two connections in a
+ * run have seen it the rest of the run would see it too (provider-circuit.ts).
+ */
+export function isCredentialRejection(status: number, body: string): boolean {
+  return (status === 401 || status === 403) && !isSessionExpiredResponse(status, body)
+}
+
+/**
  * User-facing (Swedish) messages persisted to bank_connections.error_message
  * and returned to the settings UI. error_message is a literal string in the
  * DB, not an i18n key, matching the extension's other user-facing strings.
@@ -348,6 +360,33 @@ export class SessionExpiredError extends Error {
   ) {
     super(`Bank session expired (${status}): ${body}`)
     this.name = 'SessionExpiredError'
+  }
+}
+
+/**
+ * User-facing message when Enable Banking refused the application's
+ * credentials (ProviderCredentialError): about us, not the consent, so it
+ * says explicitly that the connection does NOT need renewing.
+ */
+export const PROVIDER_CREDENTIALS_REFUSED_MESSAGE =
+  'Bankleverantören släppte inte in oss just nu. Försök igen om en stund. Anslutningen behöver inte förnyas.'
+
+/**
+ * Thrown when Enable Banking (or the connector in front of it) refused OUR
+ * credentials: a 401/403 that names no session (isCredentialRejection). Not
+ * a dead consent and not a bank problem: the row is left exactly as it is
+ * (no status flip, no error_message, no renewal advice), the caller answers
+ * "try again later", and the cron's circuit breaker stops the run once two
+ * connections have seen it (provider-circuit.ts). Carries the raw body for
+ * the server log only.
+ */
+export class ProviderCredentialError extends Error {
+  constructor(
+    readonly status: number,
+    readonly body: string
+  ) {
+    super(`Enable Banking refused the application credentials (${status})`)
+    this.name = 'ProviderCredentialError'
   }
 }
 
@@ -1291,6 +1330,13 @@ export async function getAllTransactionsWithRaw(
       if (sessionExpired) {
         console.warn('[enable-banking] getAllTransactionsWithRaw: bank session expired', logLine)
         throw new SessionExpiredError(response.status, body)
+      }
+      // A 401/403 naming no session is the application being refused, not
+      // this consent: typed so no caller flips the row or asks for a renewal,
+      // and so the cron can stop a run that would only repeat it.
+      if (isCredentialRejection(response.status, body)) {
+        console.warn('[enable-banking] getAllTransactionsWithRaw: application credentials refused', logLine)
+        throw new ProviderCredentialError(response.status, body)
       }
       if (response.status === 429) {
         console.warn('[enable-banking] getAllTransactionsWithRaw: bank rate limit', logLine)

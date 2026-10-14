@@ -34,6 +34,8 @@ import { applyRateLimitCooldown, claimSyncLease } from '@/extensions/general/ena
 import { sendConsentExpiryNotification } from '@/extensions/general/enable-banking/lib/consent-expiry-notification'
 import { mapWithConcurrency } from '@/lib/concurrency'
 import { ENABLE_BANKING_AGGREGATOR } from '@/lib/bank-sync/aggregator'
+import { enableBankingSunset } from '@/lib/bank-feed/switch-campaign'
+import { createProviderCircuit, isCredentialRejectionError } from '@/extensions/general/enable-banking/lib/provider-circuit'
 
 // Without this export the route runs under the platform default (60s), which
 // is why the sync loop used to self-limit to 50s and starve the queue: ~17
@@ -67,6 +69,14 @@ const REPORT_DEADLINE_MS = 280_000
  * never double up. Deduplication via external_id makes repeats safe anyway.
  *
  * Session health probes live in ../../health-probe/cron: daily, not hourly.
+ *
+ * Two ends of Enable Banking are handled here. After the switch campaign's
+ * deadline (lib/bank-feed/switch-campaign.ts enableBankingSunset) the plan
+ * puts every connection in its `sunset` bucket and the run calls nobody. And
+ * should Enable Banking cut us off before that, the circuit breaker
+ * (lib/provider-circuit.ts) stops the run once the first two connections
+ * tried were refused at the credential level: no more calls, no error row on
+ * any connection, one warn line, providerUnavailable in the summary.
  */
 export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -125,7 +135,8 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
   // The batch limit applies only after entitlement filtering (inside the
   // plan). Otherwise old free-tier rows can permanently occupy the head of the
   // queue and prevent every paying connection behind them from syncing.
-  const plan = planBankSyncRun(candidateConnections, entitledCompanyIds, startTime, MAX_CONNECTIONS_PER_RUN)
+  const sunset = enableBankingSunset()
+  const plan = planBankSyncRun(candidateConnections, entitledCompanyIds, startTime, MAX_CONNECTIONS_PER_RUN, { sunset })
   const connections = plan.selected
 
   ctx.log.info('bank sync work list built', plan.stats)
@@ -155,6 +166,10 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
   // Claimed by someone else between the plan and the claim (an agent-triggered
   // sync, an overlapping run): theirs to sync, not a failure.
   let leaseLost = 0
+
+  // Enable Banking refusing the application (not a consent): after the first
+  // two connections tried answer that way the run starts no further one.
+  const circuit = createProviderCircuit()
 
   const syncConnection = async (connection: (typeof connections)[number]) => {
     const syncStartedAt = new Date().toISOString()
@@ -276,7 +291,9 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
         status: expiringSoon ? 'expiring_soon' : 'synced',
         daysUntilExpiry: daysLeft,
       })
+      circuit.record(null)
     } catch (error) {
+      circuit.record(error)
       // A dead PSD2 session (closed/expired/invalid consent) is a re-auth
       // condition, not a transient failure: flip it to 'expired' (same state
       // the consent-elapsed branch uses) so the UI offers a reconnect instead
@@ -292,8 +309,12 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
       // with SYNC_FAILED_MESSAGE told users to renew a consent that was fine
       // (four canary companies on 2026-09-04). The probe below still checks
       // the session, so a dead one is caught anyway.
+      // Enable Banking refusing OUR credentials (a 401/403 naming no session)
+      // is about the application, not this consent: the row is left alone too,
+      // and the circuit breaker above decides whether the run goes on.
+      const isCredentialRejected = isCredentialRejectionError(error)
       const isTransient = error instanceof AspspUnavailableError || error instanceof ConnectorSyncError
-        || error instanceof BankSyncResultObsoleteError || isBankRoutingConflict(error)
+        || error instanceof BankSyncResultObsoleteError || isBankRoutingConflict(error) || isCredentialRejected
       const failureStatus = isSessionDead ? 'expired' : 'error'
       // A 429 holds the lease of every connection on the session for hours:
       // retrying next run would only spend another refused call.
@@ -328,6 +349,12 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
         ctx.log.warn('bank session expired for connection', {
           ...failureContext,
           reason: error instanceof Error ? error.message : String(error),
+        })
+      } else if (isCredentialRejected) {
+        // Never the body: a provider refusal can quote request details.
+        ctx.log.warn('enable banking refused the application credentials, connection left untouched', {
+          ...failureContext,
+          status: isCredentialRejectionError(error) ? error.status : undefined,
         })
       } else if (isTransient) {
         ctx.log.warn('transient bank sync failure, connection left untouched', {
@@ -402,8 +429,9 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
   const syncCompanyGroup = async (group: typeof connections) => {
     for (const connection of group) {
       // Checked before every connection, not every company: a company with
-      // many connections must not run past the budget either.
-      if (budgetSpent()) return
+      // many connections must not run past the budget either. A tripped
+      // circuit stops the run the same way: nothing more is started.
+      if (budgetSpent() || circuit.tripped) return
       await syncConnection(connection)
     }
   }
@@ -427,7 +455,12 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
   const totalRateLimited = results.filter(r => r.status === 'rate_limited').length
   // Selected but never finished: not started before the budget ran out, or
   // still in flight at the report deadline. Due again next run either way.
-  const deferredByTimeBudget = connections.length - results.length - leaseLost
+  // With the circuit tripped the unstarted ones were skipped on purpose and
+  // are reported as such, not as a budget problem.
+  const notFinished = connections.length - results.length - leaseLost
+  const providerUnavailable = circuit.tripped
+  const skippedByCircuit = providerUnavailable ? notFinished : 0
+  const deferredByTimeBudget = providerUnavailable ? 0 : notFinished
 
   const summary = {
     ...plan.stats,
@@ -441,8 +474,18 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
     leaseLost,
     deferredByTimeBudget,
     hitReportDeadline: outcome === 'deadline',
+    providerUnavailable,
+    credentialFailures: circuit.credentialFailures,
+    skippedByCircuit,
   }
-  if (deferredByTimeBudget > 0 || plan.stats.deferredByBatchLimit > 0) {
+  if (providerUnavailable) {
+    // The one line for the whole run: the per-connection failures above are
+    // the two that tripped it (and whatever was already in flight).
+    ctx.log.warn('enable banking refused the application credentials on the first connections tried; run stopped', {
+      credentialFailures: circuit.credentialFailures,
+      skippedByCircuit,
+    })
+  } else if (deferredByTimeBudget > 0 || plan.stats.deferredByBatchLimit > 0) {
     ctx.log.warn('bank sync run did not reach every due connection', summary)
   }
   ctx.log.info('bank sync summary', summary)

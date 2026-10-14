@@ -39,6 +39,8 @@ export type TriggerSyncFailureCode =
   | 'BANK_THROTTLED'
   | 'BANK_SESSION_EXPIRED'
   | 'BANK_SYNC_FAILED'
+  /** The Enable Banking feed is over (lib/bank-feed/switch-campaign.ts enableBankingSunset): switch, do not retry. */
+  | 'ENABLE_BANKING_SUNSET'
 
 export type TriggerSyncResult =
   | {

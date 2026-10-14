@@ -498,6 +498,7 @@ import { runOpenPaymentsSync } from '@/lib/bank-feed/feed'
 import { openBankFeedDoor } from '@/lib/bank-feed/door'
 import { matchBankByName } from '@/lib/bank-feed/bank-match'
 import { switchDeepLink } from '@/lib/bank-feed/switch-link'
+import { enableBankingSunset } from '@/lib/bank-feed/switch-campaign'
 import { aggregatorOf } from '@/lib/bank-sync/aggregator'
 import {
   completePendingDocumentUpload,
@@ -5001,6 +5002,9 @@ export const tools: McpTool[] = [
               consent_expires: { type: ['string', 'null'] },
               error_message: { type: ['string', 'null'] },
               switch_url: { type: 'string' },
+              // sunset: true rides on Enable Banking rows once that feed has
+              // ended, undeclared: the tools/list ceiling has no room for it,
+              // and the instructions string names it at runtime.
             },
           },
         },
@@ -5057,6 +5061,13 @@ export const tools: McpTool[] = [
         connectUrl = requestedBank ? `${base}/import?mode=psd2&bank=${encodeURIComponent(requestedBank)}` : `${base}/import?mode=psd2`
       }
       const enableBankingRows = connections.filter((c) => aggregatorOf(c) === 'enable_banking')
+      // The Enable Banking feed is over (lib/bank-feed/switch-campaign.ts):
+      // its rows are kept for their history and flagged, whatever the door
+      // says, since the feed stopped for everyone at once.
+      const sunset = enableBankingRows.length > 0 && enableBankingSunset()
+      const sunsetNote = sunset
+        ? ' ENABLE BANKING HAS ENDED: every connection with sunset=true fetches nothing any more and gnubok_sync_bank refuses it (ENABLE_BANKING_SUNSET); do not ask the user to renew it. The person switches from its switch_url (BankID, about two minutes, the history is kept), or imports bank statements as files where the new provider does not reach the bank (Wise, PayPal, Bank Norwegian, Nordea First Card, Juni).'
+        : ''
       const openPaymentsNote = door.ok
         ? ' The link opens Koppla banken in Accounted (Open Payments): the person signs with BankID (consent up to 180 days, the bank may clamp it), then CONFIRMS WHICH ACCOUNTS to sync; paying through the bank needs a one-time know-your-customer form offered after the consent. A person without an Accounted login (the firmatecknare holds the bank access): gnubok_bank_feed_connect_link stages a 7-day signatory link instead.' +
           (enableBankingRows.length > 0
@@ -5075,6 +5086,7 @@ export const tools: McpTool[] = [
           consent_expires: c.consent_expires,
           error_message: c.error_message,
           ...(door.ok && aggregatorOf(c) === 'enable_banking' ? { switch_url: `${base}${switchDeepLink(c.id)}` } : {}),
+          ...(sunset && aggregatorOf(c) === 'enable_banking' ? { sunset: true } : {}),
         })),
         connect_url: connectUrl,
         instructions:
@@ -5084,7 +5096,8 @@ export const tools: McpTool[] = [
                 ? ''
                 : 'BETTER LINK AVAILABLE: if you know (or can ask) which bank the company uses, call this tool again with bank=<name>; the link then opens that bank directly instead of a picker. ') +
               'On claude.ai/Claude Desktop a connect card with an open-in-browser button is rendered with this result; on other clients give the user the connect_url as a link. They must be logged in to Accounted there. They approve with BankID (consent up to 180 days), then CONFIRM WHICH ACCOUNTS to sync in the dialog that opens; the first transactions arrive within a minute of that save. Banks cap PSD2 history (often ~90 days): older history comes via SIE import, not the bank. When the user is back, call this tool again to verify status=active, then continue straight to gnubok_list_uncategorized_transactions without asking.') +
-          openPaymentsNote,
+          openPaymentsNote +
+          sunsetNote,
       }
     },
   },

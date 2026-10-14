@@ -19,6 +19,7 @@ import {
   REAUTH_REQUIRED_MESSAGE,
   SYNC_FAILED_MESSAGE,
   ConnectorSyncError,
+  ProviderCredentialError,
 } from '../api-client'
 import { DAILY_QUOTA_COOLDOWN_MS } from '../sync-lease'
 import { SYNC_COOLDOWN_MS, triggerConnectionSync } from '../trigger-sync'
@@ -255,6 +256,38 @@ describe('triggerConnectionSync', () => {
     const result = await run()
     expect(result.ok).toBe(true)
     expect(state.leaseUntil).toBe(new Date(NOW + SYNC_COOLDOWN_MS).toISOString())
+  })
+
+  it('refuses with ENABLE_BANKING_SUNSET once the feed has ended: no lease, no bank call, row untouched', async () => {
+    vi.stubEnv('OPENPAYMENTS_SWITCH_DEADLINE', '2026-01-01')
+    try {
+      expect(await run()).toEqual({ ok: false, code: 'ENABLE_BANKING_SUNSET', connection_id: CONNECTION_ID, status: 'active' })
+      expect(mocks.syncAccountTransactions).not.toHaveBeenCalled()
+      expect(mocks.rpc).not.toHaveBeenCalled()
+      expect(state.updates).toEqual([])
+      expect(state.leaseUntil).toBe(EPOCH)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('syncs as before while the deadline is ahead', async () => {
+    vi.stubEnv('OPENPAYMENTS_SWITCH_DEADLINE', '2099-01-01')
+    try {
+      expect(await run()).toMatchObject({ ok: true, imported: 2 })
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('answers retryable and leaves the row alone when Enable Banking refuses the application credentials', async () => {
+    state.connection = connection({ status: 'error', error_message: 'old' })
+    mocks.syncAccountTransactions.mockRejectedValue(new ProviderCredentialError(401, '{"error":"Unauthorized"}'))
+    expect(await run()).toMatchObject({ ok: false, code: 'BANK_SYNC_FAILED', status: 'error' })
+    // No status flip, no error_message: only the lease claim was written.
+    expect(mocks.rpc).not.toHaveBeenCalled()
+    expect(state.updates.every(update => Object.keys(update).join() === 'sync_lease_until')).toBe(true)
+    expect(log.warn).toHaveBeenCalledWith('agent-triggered bank sync: application credentials refused', { connectionId: CONNECTION_ID, status: 401 })
   })
 
   it('answers NOT_FOUND for a connection outside the company or a non-uuid id', async () => {

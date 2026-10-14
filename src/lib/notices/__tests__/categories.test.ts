@@ -202,6 +202,32 @@ describe('bank switch notices', () => {
     })
   })
 
+  it('says past the deadline that the old connection to an unreachable bank has ended, under a new id', () => {
+    const notice = bankSwitchUncoveredNotice(state({ state: 'uncovered', pending: [], uncovered: [{ connection_id: 'c9', bank_name: 'Wise' }], passed: true, days_left: -1 }) as never)
+    expect(notice).toEqual({
+      id: 'bank_switch_uncovered:c9:stopped',
+      category: 'bank_switch_uncovered',
+      severity: 'warning',
+      messageKey: 'bank_uncovered_stopped_one',
+      messageParams: { bank: 'Wise' },
+      actionKey: 'bank_uncovered_action',
+      actionHref: '/import',
+    })
+    expect(bankSwitchUncoveredNotice(state({ passed: true, uncovered: [{ connection_id: 'a', bank_name: '' }] }) as never)?.messageKey).toBe('bank_uncovered_stopped_one_unnamed')
+    expect(bankSwitchUncoveredNotice(state({ passed: true, uncovered: [{ connection_id: 'a', bank_name: 'Wise' }, { connection_id: 'b', bank_name: 'PayPal' }] }) as never)?.messageKey).toBe('bank_uncovered_stopped_many')
+  })
+
+  it('has every past-deadline wording in both locales, saying the connection has ended', async () => {
+    const sv = (await import('@/messages/sv.json')).default as { notices: Record<string, string>; dashboard: Record<string, string> }
+    const en = (await import('@/messages/en.json')).default as { notices: Record<string, string>; dashboard: Record<string, string> }
+    for (const key of ['bank_switch_stopped_one', 'bank_switch_stopped_one_unnamed', 'bank_switch_stopped_many', 'bank_uncovered_stopped_one', 'bank_uncovered_stopped_one_unnamed', 'bank_uncovered_stopped_many']) {
+      expect(sv.notices[key]).toContain('upphört')
+      expect(en.notices[key]).toContain('ended')
+    }
+    expect(sv.dashboard.row_bank_switch_stopped).toContain('har upphört')
+    expect(en.dashboard.row_bank_switch_stopped).toContain('has ended')
+  })
+
   it('derives both notices from one read of the state', async () => {
     switchStateMock.mockResolvedValue(state({ uncovered: [{ connection_id: 'c9', bank_name: 'Wise' }] }))
     const notices = await detectBankSwitchNotices(supabase, COMPANY, NOW)

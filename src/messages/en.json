@@ -8258,13 +8258,16 @@
     "bank_switch_one": "The bank connection to {bank} is changing provider: make the switch by {deadline, date, long}.",
     "bank_switch_one_unnamed": "A bank connection is changing provider: make the switch by {deadline, date, long}.",
     "bank_switch_many": "{count} bank connections are changing provider: make the switches by {deadline, date, long}.",
-    "bank_switch_stopped_one": "The {bank} bank connection has stopped working and no longer fetches transactions.",
-    "bank_switch_stopped_one_unnamed": "A bank connection has stopped working and no longer fetches transactions.",
-    "bank_switch_stopped_many": "{count} bank connections have stopped working and no longer fetch transactions.",
+    "bank_switch_stopped_one": "The old bank connection to {bank} has ended and fetches no transactions. Switch to the new connection to continue.",
+    "bank_switch_stopped_one_unnamed": "An old bank connection has ended and fetches no transactions. Switch to the new connection to continue.",
+    "bank_switch_stopped_many": "{count} old bank connections have ended and fetch no transactions. Switch to the new connections to continue.",
     "bank_switch_action": "Switch to the new connection",
     "bank_uncovered_one": "The new provider does not reach {bank}: import bank statements as files.",
     "bank_uncovered_one_unnamed": "The new provider does not reach one of the banks: import bank statements as files.",
     "bank_uncovered_many": "The new provider does not reach {count} banks: import bank statements as files.",
+    "bank_uncovered_stopped_one": "The old bank connection to {bank} has ended, and the new provider does not reach the bank yet: import bank statements as files.",
+    "bank_uncovered_stopped_one_unnamed": "An old bank connection has ended, and the new provider does not reach the bank yet: import bank statements as files.",
+    "bank_uncovered_stopped_many": "{count} old bank connections have ended, and the new provider does not reach those banks yet: import bank statements as files.",
     "bank_uncovered_action": "Import a file"
   },
   "att_gora_v2": {
@@ -8527,7 +8530,7 @@
     "rel_days": "{count} days ago",
     "band_now": "Do now",
     "row_bank_switch": "Switch the bank connection for {bank} by {date}",
-    "row_bank_switch_stopped": "The bank connection for {bank} has stopped: switch to the new connection",
+    "row_bank_switch_stopped": "The old bank connection for {bank} has ended: switch to the new connection",
     "row_bank_switch_detail": "New connection with BankID, about two minutes. The history is kept.",
     "bank_switch_days_left": "{days, plural, =0 {Last day} =1 {1 day left} other {# days left}}",
     "bank_switch_stopped_badge": "Stopped"
@@ -12643,7 +12646,10 @@
     "disconnected_title": "The connection is removed",
     "disconnect_failed_title": "Could not disconnect",
     "switch_by": "Switch by {date}",
-    "switch_stopped": "Fetching has stopped: switch to the new connection"
+    "switch_stopped": "Fetching has stopped: switch to the new connection",
+    "switch_stopped_uncovered": "Fetching has stopped: the new provider does not reach this bank yet, import bank statements as files (SIE or CSV)",
+    "switch_replaced": "Fetching has stopped: replaced by the new connection",
+    "import_statements": "Import bank statements"
   },
   "skatteverket_ombud": {
     "appoint": "Appoint {appName} as ombud at Skatteverket",

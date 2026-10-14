@@ -134,6 +134,26 @@ describe('v1 bank-connections list', () => {
     expect(body.meta.request_id).toMatch(/^req_/)
   })
 
+  it('flags enable_banking rows with sunset once that feed has ended, and only them', async () => {
+    vi.stubEnv('OPENPAYMENTS_SWITCH_DEADLINE', '2026-01-01')
+    try {
+      authOk(['companies:read'])
+      const legacy = { ...CONNECTION_ROW, id: '22222222-2222-4222-8222-222222222222', aggregator: 'enable_banking' }
+      mockServiceClient.mockReturnValue(
+        createTableMockSupabase({
+          company_members: { data: { role: 'owner' } },
+          bank_connections: { data: [CONNECTION_ROW, legacy] },
+        }).supabase,
+      )
+      const res = await GET(req(), params)
+      const body = (await res.json()) as { data: { bank_connections: Array<Record<string, unknown>> } }
+      expect(body.data.bank_connections[0]).not.toHaveProperty('sunset')
+      expect(body.data.bank_connections[1]).toMatchObject({ aggregator: 'enable_banking', sunset: true })
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('answers enable_banking for a row that predates the aggregator column', async () => {
     authOk(['companies:read'])
     const { aggregator: _aggregator, ...legacy } = CONNECTION_ROW

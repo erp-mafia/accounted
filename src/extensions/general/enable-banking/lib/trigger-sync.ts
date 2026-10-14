@@ -31,9 +31,11 @@ import {
   SessionExpiredError,
   AspspUnavailableError,
   ConnectorSyncError,
+  ProviderCredentialError,
   REAUTH_REQUIRED_MESSAGE,
   SYNC_FAILED_MESSAGE,
 } from './api-client'
+import { enableBankingSunset } from '@/lib/bank-feed/switch-campaign'
 import { incrementalLookbackDays } from './cron-lookback'
 import { emitBankSyncFailed } from './sync-failure-event'
 import { applyRateLimitCooldown, claimSyncLease, rateLimitHoldUntil } from './sync-lease'
@@ -98,6 +100,17 @@ export async function triggerConnectionSync(
   if (connectionError) throw connectionError
   if (!connection) {
     return { ok: false, code: 'NOT_FOUND', connection_id: connectionId }
+  }
+
+  // The Enable Banking feed is over (lib/bank-feed/switch-campaign.ts): the
+  // typed refusal, before any lease or bank call; the row is left as it is.
+  if (enableBankingSunset()) {
+    return {
+      ok: false,
+      code: 'ENABLE_BANKING_SUNSET',
+      connection_id: connectionId,
+      status: connection.status as string,
+    }
   }
 
   // 'error' is retryable (a transient upstream failure parks the row there
@@ -304,6 +317,18 @@ export async function triggerConnectionSync(
         dateFrom: error.dateFrom,
         status: error.status,
       })
+      return {
+        ok: false,
+        code: 'BANK_SYNC_FAILED',
+        connection_id: connectionId,
+        status: connection.status as string,
+      }
+    }
+
+    if (error instanceof ProviderCredentialError) {
+      // Enable Banking refused the application's credentials: about us, not
+      // this consent. The row is left alone and the answer is retryable.
+      log.warn('agent-triggered bank sync: application credentials refused', { connectionId, status: error.status })
       return {
         ok: false,
         code: 'BANK_SYNC_FAILED',

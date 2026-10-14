@@ -14,7 +14,8 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { cn, formatDate } from '@/lib/utils'
 import { ChevronRight, Loader2, MoreHorizontal } from 'lucide-react'
-import { getConnectionUiState, offersAccountChoice } from '../lib/connection-state'
+import { switchDeepLink } from '@/lib/bank-feed/switch-link'
+import { getConnectionUiState, offersAccountChoice, type SunsetPath } from '../lib/connection-state'
 import { describeClaimedElsewhere, describeMirrorCards, partitionAccounts } from '../lib/claimed-accounts'
 import type { BankConnection } from '@/types'
 
@@ -28,6 +29,10 @@ interface BankConnectionStatusProps {
    *  bank (abandoned 'pending' row). The connect route sweeps that row. */
   onRetry?: (connection: BankConnection) => void
   isSyncing?: boolean
+  /** The Enable Banking feed has ended for this row (lib/connection-state.ts
+   *  SunsetPath): 'switch' offers the switch to the new connection, 'import'
+   *  the bank file import. Null while the feed runs. */
+  sunset?: SunsetPath | null
 }
 
 /**
@@ -48,11 +53,12 @@ export function BankConnectionStatus({
   onManageAccounts,
   onRetry,
   isSyncing = false,
+  sunset = null,
 }: BankConnectionStatusProps) {
   const [now] = useState(() => Date.now())
   const [detailsOpen, setDetailsOpen] = useState(false)
 
-  const uiState = getConnectionUiState(connection, now)
+  const uiState = getConnectionUiState({ ...connection, sunset }, now)
 
   // Parse accounts from connection
   const accounts = (connection.accounts_data as Array<{
@@ -143,6 +149,8 @@ export function BankConnectionStatus({
     | { kind: 'badge'; label: string; variant: 'warning' | 'destructive' | 'secondary' }
   const statusDisplay: StatusEntry = (() => {
     switch (uiState) {
+      case 'sunset':
+        return { kind: 'badge', label: 'Upphört', variant: 'destructive' }
       case 'pending_selection':
         return { kind: 'badge', label: 'Välj konton', variant: 'warning' }
       case 'error':
@@ -159,12 +167,27 @@ export function BankConnectionStatus({
   })()
 
   const isExpired = uiState === 'expired'
-  const canReconnect = !!onReconnect
-  const canSync = connection.status === 'active' || connection.status === 'error'
+  const isSunset = uiState === 'sunset'
+  // The old provider is gone: nothing to sync, no consent worth renewing.
+  const canReconnect = !!onReconnect && !isSunset
+  const canSync = (connection.status === 'active' || connection.status === 'error') && !isSunset
 
   // Exactly ONE primary action per state; everything else goes in the menu.
   function renderPrimaryAction() {
     switch (uiState) {
+      case 'sunset':
+        // The switch is done on Kopplingar (the deep link opens Koppla banken
+        // in switch mode for exactly this row); where the new provider does
+        // not reach the bank, bank statements come in as files.
+        return sunset === 'import' ? (
+          <Button size="sm" asChild>
+            <Link href="/import?mode=bank">Importera kontoutdrag</Link>
+          </Button>
+        ) : (
+          <Button size="sm" asChild>
+            <Link href={switchDeepLink(connection.id)}>Byt till ny koppling</Link>
+          </Button>
+        )
       case 'pending_selection':
       case 'needs_configuration':
         return onManageAccounts ? (
@@ -239,7 +262,7 @@ export function BankConnectionStatus({
                 Synkad {formatDate(connection.last_synced_at)}
               </span>
             )}
-            {connection.consent_expires && !isExpired && (
+            {connection.consent_expires && !isExpired && !isSunset && (
               <span className="text-xs text-muted-foreground tabular-nums">
                 Samtycke till {formatDate(connection.consent_expires)}
               </span>
@@ -272,7 +295,7 @@ export function BankConnectionStatus({
                 </DropdownMenuItem>
               ) : (
                 <>
-                  {onManageAccounts && uiState !== 'needs_configuration' && (
+                  {onManageAccounts && uiState !== 'needs_configuration' && !isSunset && (
                     <DropdownMenuItem onSelect={() => onManageAccounts(connection.id)}>
                       Välj konton
                     </DropdownMenuItem>
@@ -320,6 +343,17 @@ export function BankConnectionStatus({
           </DropdownMenu>
         </span>
       </div>
+
+      {/* The feed has ended: one quiet line on what the row offers now. The
+          page-level .attn owns the ochre sentence (the worst row only), so
+          every other sunset row still says where to go. */}
+      {isSunset && (
+        <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
+          {sunset === 'import'
+            ? 'Den gamla leverantören har stängts och banken nås inte än genom den nya. Importera kontoutdrag som fil (SIE eller CSV) tills vidare; historiken behålls.'
+            : 'Den gamla leverantören har stängts. Bytet signeras med BankID och tar cirka två minuter; historiken behålls.'}
+        </p>
+      )}
 
       {/* Error detail: the page-level .attn owns the ochre sentence; the
           row's own message stays quiet. */}

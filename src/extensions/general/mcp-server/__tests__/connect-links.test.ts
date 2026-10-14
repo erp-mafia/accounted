@@ -131,6 +131,35 @@ describe('onboarding connect-link tools', () => {
     expect(result.instructions).not.toContain('Open Payments')
   })
 
+  describe('once the Enable Banking feed has ended', () => {
+    const rows = [
+      { id: 'c1', bank_name: 'Swedbank', aggregator: 'enable_banking', status: 'active', created_at: '2026-08-01T00:00:00Z', last_synced_at: '2026-11-09T05:00:00Z', consent_expires: '2027-01-01T00:00:00Z', error_message: null },
+      { id: 'c2', bank_name: 'SEB', aggregator: 'open_payments', status: 'active', created_at: '2026-11-01T00:00:00Z', last_synced_at: '2026-11-10T05:00:00Z', consent_expires: '2027-04-01T00:00:00Z', error_message: null },
+    ]
+
+    it('flags the Enable Banking rows with sunset and tells the agent what the person does instead', async () => {
+      vi.stubEnv('OPENPAYMENTS_SWITCH_DEADLINE', '2026-01-01')
+      openDoor()
+      const { from } = listClient(rows)
+      const result = (await bankTool.execute({}, COMPANY_ID, 'user-1', { from } as never)) as { connections: Array<Record<string, unknown>>; instructions: string }
+      expect(result.connections[0]).toMatchObject({ connection_id: 'c1', sunset: true, switch_url: expect.stringContaining('bank_connect_switch=c1') })
+      expect(result.connections[1]).not.toHaveProperty('sunset')
+      expect(result.instructions).toContain('ENABLE BANKING HAS ENDED')
+      expect(result.instructions).toContain('ENABLE_BANKING_SUNSET')
+    })
+
+    it('says nothing about it while the deadline is ahead, or when no Enable Banking row is left', async () => {
+      vi.stubEnv('OPENPAYMENTS_SWITCH_DEADLINE', '2099-01-01')
+      openDoor()
+      const ahead = (await bankTool.execute({}, COMPANY_ID, 'user-1', { from: listClient(rows).from } as never)) as { connections: Array<Record<string, unknown>>; instructions: string }
+      expect(ahead.connections.every((c) => !('sunset' in c))).toBe(true)
+      expect(ahead.instructions).not.toContain('ENABLE BANKING HAS ENDED')
+      vi.stubEnv('OPENPAYMENTS_SWITCH_DEADLINE', '2026-01-01')
+      const onlyNew = (await bankTool.execute({}, COMPANY_ID, 'user-1', { from: listClient([rows[1]]).from } as never)) as { instructions: string }
+      expect(onlyNew.instructions).not.toContain('ENABLE BANKING HAS ENDED')
+    })
+  })
+
   describe('with the Open Payments door open', () => {
     const ENABLE_BANKING_ROW = {
       id: 'c1',

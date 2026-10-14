@@ -29,10 +29,21 @@ export interface PlannableConnection {
   accounts_data?: unknown
 }
 
+export interface BankSyncPlanOptions {
+  /**
+   * The Enable Banking feed is over (lib/bank-feed/switch-campaign.ts
+   * enableBankingSunset): every connection lands in the sunset bucket and
+   * nothing is selected, so the run makes no provider call.
+   */
+  sunset?: boolean
+}
+
 export interface BankSyncPlan<T> {
   /** Due, lease free, within the batch limit. Never-synced first, then oldest sync. */
   selected: T[]
   stats: {
+    /** Set aside because the Enable Banking feed has ended: the people switch, the cron does not call. */
+    sunset: number
     /** Active connections of companies holding the bank_sync capability. */
     eligible: number
     /** Active connections excluded by design: no bank_sync grant. */
@@ -57,7 +68,25 @@ export function planBankSyncRun<T extends PlannableConnection>(
   entitledCompanyIds: ReadonlySet<string>,
   now: number,
   maxConnections: number,
+  options: BankSyncPlanOptions = {},
 ): BankSyncPlan<T> {
+  if (options.sunset) {
+    return {
+      selected: [],
+      stats: {
+        sunset: connections.length,
+        eligible: 0,
+        notEntitled: 0,
+        noAccounts: 0,
+        fresh: 0,
+        coolingDown: 0,
+        due: 0,
+        selected: 0,
+        deferredByBatchLimit: 0,
+        oldestOverdueHours: 0,
+      },
+    }
+  }
   const dueBefore = now - SYNC_DUE_AFTER_MS
   const due: T[] = []
   let notEntitled = 0
@@ -99,6 +128,7 @@ export function planBankSyncRun<T extends PlannableConnection>(
   return {
     selected,
     stats: {
+      sunset: 0,
       eligible: connections.length - notEntitled,
       notEntitled,
       noAccounts,

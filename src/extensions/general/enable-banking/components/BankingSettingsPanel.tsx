@@ -22,6 +22,8 @@ import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { useBankLedgerSuggestionNotice } from '@/components/transactions/BankLedgerSuggestionNotice'
+import { useBankSwitchCampaign } from '@/components/bank-feed/use-bank-switch-campaign'
+import { bankCoveredByOpenPayments } from '@/lib/bank-feed/bank-coverage'
 import {
   SettingsGroup,
   SettingsRow,
@@ -37,6 +39,7 @@ import {
   nextScheduledSyncFrom,
   selectPageAttention,
   sortConnectionsByPrecedence,
+  type SunsetPath,
 } from '../lib/connection-state'
 import { sameBankWarning } from '../lib/connection-warning'
 import { hasSelectableAccounts } from '../lib/claimed-accounts'
@@ -117,6 +120,18 @@ export default function BankingSettingsPanel() {
 
   // Must match STALE_THRESHOLD_MS in extensions/general/enable-banking/index.ts
   const PENDING_LOCK_MS = 30 * 1000
+
+  // The switch campaign (lib/bank-feed/switch-campaign.ts) as the server
+  // computed it for this company. Once its deadline has passed the Enable
+  // Banking feed is over: every row here gets the sunset state, offering the
+  // switch where Open Payments reaches the bank and the file import where it
+  // does not (the campaign's list, lib/bank-feed/bank-coverage.ts). Only
+  // where the campaign applies (the door is open, so the switch can be
+  // made): elsewhere nothing changes.
+  const switchCampaign = useBankSwitchCampaign()
+  const sunsetActive = Boolean(switchCampaign.progress?.campaign.passed && switchCampaign.progress.company)
+  const sunsetFor = (connection: { bank_name: string | null }): SunsetPath | null =>
+    sunsetActive ? (bankCoveredByOpenPayments(connection.bank_name) ? 'switch' : 'import') : null
 
   useEffect(() => {
     fetchConnections()
@@ -766,7 +781,7 @@ export default function BankingSettingsPanel() {
   // Revoked rows stay hidden, exactly as before.
   const stateNow = Date.now()
   const visibleConnections = sortConnectionsByPrecedence(
-    bankConnections.filter((c) => c.status !== 'revoked'),
+    bankConnections.filter((c) => c.status !== 'revoked').map((c) => ({ ...c, sunset: sunsetFor(c) })),
     stateNow,
   )
   const hasVisibleConnections = visibleConnections.length > 0
@@ -905,6 +920,7 @@ export default function BankingSettingsPanel() {
             <BankConnectionStatus
               key={connection.id}
               connection={connection}
+              sunset={connection.sunset}
               onSync={handleSyncTransactions}
               onDisconnect={handleDisconnectBank}
               onReconnect={handleReconnect}

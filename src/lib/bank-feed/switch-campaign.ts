@@ -30,6 +30,7 @@ import { getCompanyIdsWithCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { chunk } from '@/lib/utils'
+import { bankCoveredByOpenPayments, UNCOVERED_BANK_NEEDLES } from './bank-coverage'
 import { matchBankByName } from './bank-match'
 import { getBankFeedConnect } from './connect'
 import { bankFeedPilotAdmits, openBankFeedDoor, type BankFeedEnv } from './door'
@@ -66,20 +67,28 @@ export function switchDaysLeft(deadline: string, now: Date = new Date()): number
 }
 
 /**
- * Banks Open Payments does not reach at all, as substrings of the Enable
- * Banking bank name (lower-cased). Checked BEFORE the name match against the
- * Open Payments list: "Nordea First Card" would otherwise match "Nordea".
- * The SQL counter (bank_switch_progress) takes this same list as its
- * argument, so it is defined once.
+ * The Enable Banking sunset: the campaign is on and its deadline has passed
+ * (Stockholm calendar day). From that day the Enable Banking feed is over for
+ * every company at once: the cron plans no Enable Banking connection, the
+ * health probe stays home, the consent mails stop, and a sync asked for by a
+ * person or an agent is refused with ENABLE_BANKING_SUNSET instead of a
+ * provider call. Nothing changes on the deadline day itself (days_left 0) or
+ * before it. Read from the environment on every call, like the campaign.
  */
-export const UNCOVERED_BANK_NEEDLES: readonly string[] = ['wise', 'paypal', 'norwegian', 'first card', 'juni']
-
-/** Whether Open Payments reaches this bank (every bank not on the uncovered list counts as covered). */
-export function bankCoveredByOpenPayments(bankName: string | null | undefined): boolean {
-  const name = (bankName ?? '').trim().toLowerCase()
-  if (!name) return true
-  return !UNCOVERED_BANK_NEEDLES.some((needle) => name.includes(needle))
+export function enableBankingSunset(env: BankFeedEnv = process.env, now: Date = new Date()): boolean {
+  const campaign = switchCampaign(env)
+  return campaign.on && switchDaysLeft(campaign.deadline, now) < 0
 }
+
+/**
+ * What a refused sync says (ENABLE_BANKING_SUNSET): the same sentence the
+ * structured error registry carries as message_sv, pinned equal by test.
+ */
+export const ENABLE_BANKING_SUNSET_MESSAGE =
+  'Den gamla bankkopplingen har upphört. Byt till ny koppling för att fortsätta hämta transaktioner.'
+
+// The uncovered-bank list lives in ./bank-coverage (dependency-free, read in the browser too).
+export { UNCOVERED_BANK_NEEDLES, bankCoveredByOpenPayments } from './bank-coverage'
 
 /** The bank_connections columns the state is computed from. */
 export const SWITCH_ROW_COLUMNS = 'id, company_id, bank_name, provider, aggregator, status, superseded_by'

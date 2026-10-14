@@ -73,6 +73,22 @@ describe('listBankSwitchDue', () => {
     await expect(countBankSwitchDue(supabase, COMPANY, NOW)).resolves.toBe(2)
   })
 
+  it('keeps the row past the deadline, marked passed and urgent, so it says the connection has ended', async () => {
+    switchStateMock.mockResolvedValue({
+      state: 'pending',
+      pending: [{ connection_id: 'c1', bank_name: 'Swedbank' }],
+      uncovered: [],
+      open_payments: 0,
+      deadline: '2026-11-09',
+      days_left: -3,
+      passed: true,
+      urgent: true,
+    })
+    await expect(listBankSwitchDue(supabase, COMPANY, NOW)).resolves.toEqual([
+      { connection_id: 'c1', bank_name: 'Swedbank', deadline: '2026-11-09', days_left: -3, passed: true, urgent: true },
+    ])
+  })
+
   it('soft-fails to empty when the state cannot be read', async () => {
     switchStateMock.mockRejectedValue(new Error('boom'))
     await expect(listBankSwitchDue(supabase, COMPANY, NOW)).resolves.toEqual([])

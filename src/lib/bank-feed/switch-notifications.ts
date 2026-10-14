@@ -5,8 +5,13 @@
  *   - The daily cron (runBankSwitchReminderCron) sends every pending company
  *     the announcement once, then one reminder per threshold (14, 7, 3 and 1
  *     days before the deadline; a run that missed a day sends the reminder
- *     of the threshold it is now inside, never two in one day). After the
- *     deadline the 1-day reminder, if it never went, says the feed stopped.
+ *     of the threshold it is now inside, never two in one day). On the
+ *     first run after the deadline day, the day the Enable Banking feed
+ *     stops (switch-campaign.ts enableBankingSunset), one final mail,
+ *     `sunset`, says that from today the old connection fetches nothing:
+ *     once per company, whatever reminders went before, and nothing after
+ *     it. The deadline day itself keeps its "i dag är sista dagen" reminder,
+ *     since the feed still runs that day.
  *   - A byrå nudges one client (sendByraNudge): the announcement mail to the
  *     client's own owners and admins, at most once per 7 days per client.
  *   - Nothing is sent unless BOTH the campaign is on and
@@ -38,7 +43,7 @@ import {
   type CompanySwitchState,
 } from './switch-campaign'
 
-export type BankSwitchMailKind = 'announcement' | 'reminder_14' | 'reminder_7' | 'reminder_3' | 'reminder_1' | 'byra_nudge'
+export type BankSwitchMailKind = 'announcement' | 'reminder_14' | 'reminder_7' | 'reminder_3' | 'reminder_1' | 'sunset' | 'byra_nudge'
 
 /** A byrå may nudge the same client again after this many days. */
 export const BYRA_NUDGE_COOLDOWN_DAYS = 7
@@ -62,6 +67,19 @@ export function reminderKindDue(daysLeft: number, sent: ReadonlySet<string>): Ba
   if (due.length === 0) return null
   const kind = `reminder_${Math.min(...due)}` as BankSwitchMailKind
   return sent.has(kind) ? null : kind
+}
+
+/**
+ * Which campaign mail a pending company is due today, given the days left
+ * and the mails it already got. Once the deadline day has gone by (the old
+ * feed has stopped: enableBankingSunset), the one final `sunset` mail and
+ * nothing else, once; until then, the announcement first, then the reminder
+ * of the threshold the day is inside (reminderKindDue), the deadline day
+ * included. Null when nothing is due.
+ */
+export function campaignMailDue(daysLeft: number, sent: ReadonlySet<string>): BankSwitchMailKind | null {
+  if (daysLeft < 0) return sent.has('sunset') ? null : 'sunset'
+  return sent.has('announcement') ? reminderKindDue(daysLeft, sent) : 'announcement'
 }
 
 /** Whether the company belongs to a byrå team: the mail then says the client's own BankID signs the switch. */
@@ -95,7 +113,7 @@ export async function sendBankSwitchMail(
       service.from('company_settings').select('company_name').eq('company_id', companyId).maybeSingle(),
     ])
     const data = {
-      kind: kind === 'announcement' || kind === 'byra_nudge' ? ('announcement' as const) : ('reminder' as const),
+      kind: kind === 'sunset' ? ('sunset' as const) : kind === 'announcement' || kind === 'byra_nudge' ? ('announcement' as const) : ('reminder' as const),
       bankNames: state.pending.map((p) => p.bank_name).filter(Boolean),
       deadline: state.deadline,
       daysLeft: state.days_left,
@@ -176,7 +194,7 @@ export interface BankSwitchCronResult {
   deadline: string | null
   days_left: number | null
   companies: { pending: number; uncovered: number; done: number }
-  sent: { announcement: number; reminder: number }
+  sent: { announcement: number; reminder: number; sunset: number }
   skipped: { no_recipient: number; not_configured: number; already: number }
   failed: number
   /** The founders' counter, when the RPC answered. */
@@ -218,7 +236,7 @@ export async function runBankSwitchReminderCron(
     deadline: campaign.deadline,
     days_left: null,
     companies: { pending: 0, uncovered: 0, done: 0 },
-    sent: { announcement: 0, reminder: 0 },
+    sent: { announcement: 0, reminder: 0, sunset: 0 },
     skipped: { no_recipient: 0, not_configured: 0, already: 0 },
     failed: 0,
     totals: null,
@@ -244,7 +262,7 @@ export async function runBankSwitchReminderCron(
   const sentByCompany = await sentKindsByCompany(service, pending.map(([id]) => id))
   for (const [companyId, state] of pending) {
     const sent = sentByCompany.get(companyId) ?? new Set<string>()
-    const kind: BankSwitchMailKind | null = sent.has('announcement') ? reminderKindDue(state.days_left, sent) : 'announcement'
+    const kind = campaignMailDue(state.days_left, sent)
     if (!kind) {
       result.skipped.already++
       continue
@@ -252,6 +270,7 @@ export async function runBankSwitchReminderCron(
     const outcome = await sendBankSwitchMail(service, { companyId, kind, state, log })
     if (outcome.outcome === 'sent') {
       if (kind === 'announcement') result.sent.announcement++
+      else if (kind === 'sunset') result.sent.sunset++
       else result.sent.reminder++
     } else if (outcome.outcome === 'no_recipient') result.skipped.no_recipient++
     else if (outcome.outcome === 'not_configured') result.skipped.not_configured++

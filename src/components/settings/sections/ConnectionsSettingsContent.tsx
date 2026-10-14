@@ -16,6 +16,7 @@ import { useOpenPaymentsAvailability } from '@/components/bank-feed/use-open-pay
 import { useOpenPaymentsConnections } from '@/components/bank-feed/use-open-payments-connections'
 import { useBankSwitchCampaign } from '@/components/bank-feed/use-bank-switch-campaign'
 import { SWITCH_DEEP_LINK_PARAM } from '@/lib/bank-feed/switch-link'
+import { bankCoveredByOpenPayments } from '@/lib/bank-feed/bank-coverage'
 import { useFormat } from '@/lib/hooks/use-format'
 import { bankLogoUrl } from '@/lib/reconciliation/bank-logos'
 import { collectionsEntryShown, useCollectionsAvailability } from '@/components/collections/collections-client'
@@ -358,9 +359,25 @@ export function ConnectionsSettingsContent() {
         {bankConnections.enableBanking.map((connection) => {
           const logo = bankLogoUrl(connection.bank_name)
           // A row the campaign waits for says so in the one attention line;
-          // past the deadline, that its feed has stopped.
+          // past the deadline, that its feed has stopped. Once the old feed
+          // has stopped, a bank the new provider does not reach offers the
+          // file import instead of the switch (the campaign's own list,
+          // lib/bank-feed/bank-coverage.ts), and an active row the campaign
+          // no longer waits for already has its new connection: it says it
+          // was replaced and offers neither.
+          const stoppedFeed = Boolean(switchDeadline) && switchPassed
           const pendingSwitch = pendingSwitchIds.has(connection.id)
-          const state = pendingSwitch && switchDeadline ? (switchPassed ? t('switch_stopped') : t('switch_by', { date: formatDateLong(switchDeadline) })) : t('connected')
+          const uncoveredStopped = stoppedFeed && !bankCoveredByOpenPayments(connection.bank_name)
+          const replacedStopped = stoppedFeed && !uncoveredStopped && !pendingSwitch && connection.status === 'active'
+          const state = uncoveredStopped
+            ? t('switch_stopped_uncovered')
+            : replacedStopped
+              ? t('switch_replaced')
+              : stoppedFeed
+                ? t('switch_stopped')
+                : pendingSwitch && switchDeadline
+                  ? t('switch_by', { date: formatDateLong(switchDeadline) })
+                  : t('connected')
           return (
             <div key={connection.id}>
               {row({
@@ -371,18 +388,24 @@ export function ConnectionsSettingsContent() {
                 state,
                 href: '/settings/banking',
                 connected: true,
-                attention: pendingSwitch,
+                attention: pendingSwitch || (stoppedFeed && !replacedStopped),
                 actions: (
                   <>
                     <Button variant="outline" size="sm" asChild>
                       <Link href="/settings/banking">{t('manage')}</Link>
                     </Button>
-                    <Button
-                      size="sm"
-                      onClick={() => bankFlow.open('switch', { bank: { bic: '', name: connection.bank_name ?? '' }, replaceConnectionId: connection.id, deadline: switchDeadline })}
-                    >
-                      {t('switch_connection')}
-                    </Button>
+                    {uncoveredStopped ? (
+                      <Button size="sm" asChild>
+                        <Link href="/import?mode=bank">{t('import_statements')}</Link>
+                      </Button>
+                    ) : replacedStopped ? null : (
+                      <Button
+                        size="sm"
+                        onClick={() => bankFlow.open('switch', { bank: { bic: '', name: connection.bank_name ?? '' }, replaceConnectionId: connection.id, deadline: switchDeadline })}
+                      >
+                        {t('switch_connection')}
+                      </Button>
+                    )}
                     {/* The signatory link is the byrå's path; it sits behind the row's menu so three buttons never clip the primary one. */}
                     {canInvite && (
                       <DropdownMenu>

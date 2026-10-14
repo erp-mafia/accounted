@@ -25,6 +25,7 @@ function conn(overrides: {
   created_at?: string
   bank_name?: string
   error_message?: string | null
+  sunset?: 'switch' | 'import' | null
 }) {
   return {
     status: 'active',
@@ -93,6 +94,42 @@ describe('getConnectionUiState', () => {
 
   it('handles a row with no consent date', () => {
     expect(getConnectionUiState(conn({ consent_expires: null }), NOW)).toBe('active')
+  })
+})
+
+describe('the sunset state (the Enable Banking feed has ended)', () => {
+  it('outranks every other state of a row, except an attempt still at the bank', () => {
+    expect(getConnectionUiState(conn({ sunset: 'switch' }), NOW)).toBe('sunset')
+    expect(getConnectionUiState(conn({ sunset: 'import', status: 'expired' }), NOW)).toBe('sunset')
+    expect(getConnectionUiState(conn({ sunset: 'switch', status: 'error', error_message: 'x' }), NOW)).toBe('sunset')
+    expect(getConnectionUiState(conn({ sunset: 'switch', consent_expires: iso(2) }), NOW)).toBe('sunset')
+    expect(getConnectionUiState(conn({ sunset: 'switch', status: 'pending_selection' }), NOW)).toBe('sunset')
+    expect(getConnectionUiState(conn({ sunset: 'switch', status: 'pending', created_at: iso(0) }), NOW)).toBe('pending')
+    expect(getConnectionUiState(conn({ sunset: null }), NOW)).toBe('active')
+  })
+
+  it('sorts sunset rows first and makes them the page attention, worst first', () => {
+    const rows = [conn({ bank_name: 'Healthy' }), conn({ bank_name: 'Errored', status: 'error' }), conn({ bank_name: 'Gone', sunset: 'switch' })]
+    expect(sortConnectionsByPrecedence(rows, NOW).map((r) => r.bank_name)).toEqual(['Gone', 'Errored', 'Healthy'])
+    expect(selectPageAttention(rows, NOW)).toMatchObject({ state: 'sunset', connection: { bank_name: 'Gone' } })
+  })
+
+  it('says the old provider has stopped and offers the switch, or the file import for a bank the new one does not reach', () => {
+    const covered = selectPageAttention([conn({ bank_name: 'Swedbank', sunset: 'switch' })], NOW)!
+    expect(buildPageAttentionSentence(covered, NOW)).toBe(
+      'Swedbank: den gamla bankkopplingen har upphört och hämtar inga transaktioner. Byt till ny koppling för att fortsätta.',
+    )
+    const uncovered = selectPageAttention([conn({ bank_name: 'Wise', sunset: 'import' })], NOW)!
+    expect(buildPageAttentionSentence(uncovered, NOW)).toBe(
+      'Wise: den gamla bankkopplingen har upphört, och banken nås inte än genom den nya leverantören. Importera kontoutdrag som fil (SIE eller CSV) tills vidare.',
+    )
+  })
+
+  it('offers no account choice and no next scheduled sync for a row whose feed has ended', () => {
+    const savingsOff = { uid: 'b', name: 'Sparkonto', iban: 'SE2', enabled: false }
+    expect(offersAccountChoice(conn({}), [savingsOff], NOW)).toBe(true)
+    expect(offersAccountChoice(conn({ sunset: 'switch' }), [savingsOff], NOW)).toBe(false)
+    expect(nextScheduledSyncFrom(conn({ sunset: 'import' }), NOW)).toBeNull()
   })
 })
 

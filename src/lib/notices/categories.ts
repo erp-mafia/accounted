@@ -286,7 +286,9 @@ export function bankSwitchNeededNotice(state: CompanySwitchState): Notice | null
 /**
  * bank_switch_uncovered: Enable Banking connections at banks Open Payments
  * does not reach. Their path once Enable Banking ends is the file import, so
- * the line says so and links to /import. Stable per set of connections.
+ * the line says so and links to /import. Stable per set of connections;
+ * past the deadline the wording says the old connection has ended, under a
+ * new id so a dismissal before the deadline resurfaces.
  */
 export async function detectBankSwitchUncovered(
   supabase: SupabaseClient,
@@ -302,11 +304,12 @@ export function bankSwitchUncoveredNotice(state: CompanySwitchState): Notice | n
   if (state.uncovered.length === 0) return null
   const one = state.uncovered.length === 1 ? state.uncovered[0] : null
   const bankName = one ? one.bank_name || null : null
+  const stopped = state.passed ? '_stopped' : ''
   return {
-    id: `bank_switch_uncovered:${boundedDiscriminator(state.uncovered.map((u) => u.connection_id))}`,
+    id: `bank_switch_uncovered:${boundedDiscriminator(state.uncovered.map((u) => u.connection_id))}${state.passed ? ':stopped' : ''}`,
     category: 'bank_switch_uncovered',
     severity: 'warning',
-    messageKey: one ? (bankName ? 'bank_uncovered_one' : 'bank_uncovered_one_unnamed') : 'bank_uncovered_many',
+    messageKey: one ? (bankName ? `bank_uncovered${stopped}_one` : `bank_uncovered${stopped}_one_unnamed`) : `bank_uncovered${stopped}_many`,
     messageParams: one ? (bankName ? { bank: bankName } : undefined) : { count: state.uncovered.length },
     actionKey: 'bank_uncovered_action',
     actionHref: '/import',

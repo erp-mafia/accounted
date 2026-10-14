@@ -94,6 +94,19 @@ describe('bank_switch_notifications', () => {
     await client.query('ROLLBACK TO SAVEPOINT bad_kind')
   })
 
+  it('logs the sunset mail (the day the old feed stops) under its own kind (migration 20261014130000)', async () => {
+    await asRole('service_role', a.userId)
+    const inserted = await client.query(
+      `INSERT INTO bank_switch_notifications(company_id, kind, recipient_count) VALUES ($1, 'sunset', 1) RETURNING kind`,
+      [a.companyId],
+    )
+    expect(inserted.rows[0].kind).toBe('sunset')
+    // The restated CHECK still lists every earlier kind.
+    for (const kind of ['announcement', 'reminder_14', 'reminder_7', 'reminder_3', 'reminder_1', 'byra_nudge']) {
+      await client.query(`INSERT INTO bank_switch_notifications(company_id, kind) VALUES ($1, $2)`, [a.companyId, kind])
+    }
+  })
+
   it('refuses an authenticated member even of the company itself', async () => {
     await asRole('authenticated', a.userId)
     await expect(

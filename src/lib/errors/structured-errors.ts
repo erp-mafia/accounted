@@ -3608,6 +3608,19 @@ const BANK_SYNC: Record<string, StructuredErrorEntry> = {
     message_en: 'The bank sync failed upstream. Retry after the cooldown; if it keeps failing the user should renew the connection.',
     retryable: true,
   },
+  // The Enable Banking feed is over (lib/bank-feed/switch-campaign.ts
+  // enableBankingSunset): the campaign deadline has passed, so a sync of an
+  // Enable Banking connection is refused before any provider call. 410: the
+  // resource is gone for good, no retry and no renewal at the old provider.
+  ENABLE_BANKING_SUNSET: {
+    httpStatus: 410,
+    message_sv: 'Den gamla bankkopplingen har upphört. Byt till ny koppling för att fortsätta hämta transaktioner.',
+    message_en: 'The old bank connection (Enable Banking) has ended and fetches nothing any more. The person switches to the new connection from switch_url in gnubok_connect_bank (BankID in a browser); where the new provider does not reach the bank, bank statements are imported as files. Do not retry.',
+    remediation: {
+      description: 'Give the user the switch_url of this connection from gnubok_connect_bank (or GET /bank-connections); only they can sign the new consent with BankID.',
+      tool: 'gnubok_connect_bank',
+    },
+  },
   // The Enable Banking to Open Payments switch campaign (lib/bank-feed/switch-campaign.ts).
   BANK_SWITCH_CAMPAIGN_OFF: {
     httpStatus: 409,

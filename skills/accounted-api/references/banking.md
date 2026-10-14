@@ -22,6 +22,7 @@ Returns every bank connection for the company with its aggregator (enable_bankin
 - A connection can hold status=active with a stale last_synced_at (older than ~36 hours): treat the data as suspect, but do NOT assume re-authorisation fixes it. Common causes are a lapsed subscription (this endpoint then answers with a capability error) or every account deselected in settings.
 - status=expired means the PSD2 consent is dead: only the user can fix it, with BankID in a browser. An open_payments row is renewed from the Kopplingar page or from a signatory link (POST /bank-feed/invites with replace_connection_id).
 - error_message is Swedish and user-facing: show it verbatim rather than translating.
+- sunset=true on an enable_banking row means the old provider has ended: the row is kept for its history but fetches nothing, and a sync is refused with 410 ENABLE_BANKING_SUNSET. Do not ask the user to renew it; they switch to the new connection on the Kopplingar page (GET /bank-feed/switch-progress has the state) or import bank statements as files where the new provider does not reach the bank.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -31,7 +32,7 @@ Response `200`:
 ```ts
 {
   data: {
-    bank_connections: { connection_id: string, bank: string | null, aggregator: "enable_banking" | "open_payments", status: "pending" | "pending_selection" | "active" | "expired" | "error", since: string, last_synced_at: string | null, consent_expires: string | null, error_message: string | null }[]
+    bank_connections: { connection_id: string, bank: string | null, aggregator: "enable_banking" | "open_payments", status: "pending" | "pending_selection" | "active" | "expired" | "error", since: string, last_synced_at: string | null, consent_expires: string | null, error_message: string | null, sunset?: boolean }[]
   },
   meta: {
     request_id: string,
@@ -88,6 +89,7 @@ Fetches new transactions and balances for one PSD2 bank connection right away. T
 - 409 BANK_SESSION_EXPIRED means the bank reported the consent dead during the sync; the connection is now status=expired. Hand the user the connect link; no API call revives it.
 - imported: 0 is normal on a quiet account. Banks report with up to 48 hours of delay, so today's transactions often arrive tomorrow.
 - Costs one Enable Banking call per enabled account: 403 CAPABILITY_BLOCKED when the company has no bank_sync entitlement.
+- 410 ENABLE_BANKING_SUNSET means the old provider (enable_banking rows) has ended and the connection fetches nothing any more: no retry helps. GET /bank-connections marks these rows with sunset=true; the person switches to the new connection from the Kopplingar page (or imports bank statements as files where the new provider does not reach the bank).
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

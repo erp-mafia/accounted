@@ -15,6 +15,7 @@ import { v1ErrorResponse } from '@/lib/api/v1/errors'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { aggregatorOf } from '@/lib/bank-sync/aggregator'
+import { enableBankingSunset } from '@/lib/bank-feed/switch-campaign'
 
 const BankConnection = z.object({
   connection_id: z.string(),
@@ -27,6 +28,10 @@ const BankConnection = z.object({
   last_synced_at: z.string().nullable(),
   consent_expires: z.string().nullable(),
   error_message: z.string().nullable(),
+  sunset: z
+    .boolean()
+    .optional()
+    .describe('Present and true on an enable_banking row once that provider has ended: the connection fetches nothing any more and POST .../sync answers 410 ENABLE_BANKING_SUNSET. The person switches to the new connection (Kopplingar) or imports bank statements as files.'),
 })
 
 const BankConnectionsResponse = dataEnvelope(
@@ -49,6 +54,7 @@ registerEndpoint({
     'A connection can hold status=active with a stale last_synced_at (older than ~36 hours): treat the data as suspect, but do NOT assume re-authorisation fixes it. Common causes are a lapsed subscription (this endpoint then answers with a capability error) or every account deselected in settings.',
     'status=expired means the PSD2 consent is dead: only the user can fix it, with BankID in a browser. An open_payments row is renewed from the Kopplingar page or from a signatory link (POST /bank-feed/invites with replace_connection_id).',
     'error_message is Swedish and user-facing: show it verbatim rather than translating.',
+    'sunset=true on an enable_banking row means the old provider has ended: the row is kept for its history but fetches nothing, and a sync is refused with 410 ENABLE_BANKING_SUNSET. Do not ask the user to renew it; they switch to the new connection on the Kopplingar page (GET /bank-feed/switch-progress has the state) or import bank statements as files where the new provider does not reach the bank.',
   ],
   example: {
     response: {
@@ -107,6 +113,8 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
         consent_expires: string | null
         error_message: string | null
       }
+      // The Enable Banking feed is over: its rows are kept (history) and flagged.
+      const sunset = enableBankingSunset()
       const bank_connections = ((data ?? []) as Row[]).map((c) => ({
         connection_id: c.id,
         bank: c.bank_name,
@@ -116,6 +124,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
         last_synced_at: c.last_synced_at,
         consent_expires: c.consent_expires,
         error_message: c.error_message,
+        ...(sunset && aggregatorOf(c) === 'enable_banking' ? { sunset: true } : {}),
       }))
       return ok({ bank_connections }, { requestId: ctx.requestId })
     } catch (error) {

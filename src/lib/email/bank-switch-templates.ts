@@ -2,16 +2,18 @@ import { getBranding } from '@/lib/branding/service'
 import { formatDateLong } from '@/lib/utils'
 
 /**
- * The switch campaign's two mails: the announcement (once per company) and
- * the reminder (at 14, 7, 3 and 1 days before the deadline, and once after
- * it). Swedish, short, what to do: one button to the switch, a line that the
- * history is kept, the deadline, and for a byrå-managed company the note that
- * the client's own BankID is what signs the switch. Same calm chrome as the
- * consent expiry mail (lib/email/consent-notification-templates.ts): no red,
- * the destination URL in plain text beside the button, signed by the app.
+ * The switch campaign's three mails: the announcement (once per company),
+ * the reminder (at 14, 7, 3 and 1 days before the deadline) and the sunset
+ * mail on the day the old feed stops, the first day after the deadline
+ * (once: from today the old connection fetches nothing). Swedish, short, what to do: one button to the switch, a line
+ * that the history is kept, the deadline, and for a byrå-managed company the
+ * note that the client's own BankID is what signs the switch. Same calm
+ * chrome as the consent expiry mail (lib/email/consent-notification-
+ * templates.ts): no red, the destination URL in plain text beside the
+ * button, signed by the app.
  */
 
-export type BankSwitchEmailKind = 'announcement' | 'reminder'
+export type BankSwitchEmailKind = 'announcement' | 'reminder' | 'sunset'
 
 export interface BankSwitchEmailData {
   kind: BankSwitchEmailKind
@@ -66,7 +68,10 @@ function lines(data: BankSwitchEmailData): Lines {
 
   let title: string
   let intro: string
-  if (passed) {
+  if (data.kind === 'sunset') {
+    title = `Från i dag hämtar den gamla kopplingen inga transaktioner`
+    intro = `Den tidigare leverantören av ${koppling} till ${banks} har stängts, så inga nya transaktioner hämtas förrän banken är kopplad igen genom den nya. Koppla banken igen så fortsätter hämtningen, och det som hänt sedan stoppet hämtas ikapp.`
+  } else if (passed) {
     title = `Hämtningen från ${banks} har stoppats`
     intro = `Den tidigare leverantören har stängts och inga nya transaktioner hämtas från ${banks}. Koppla banken igen så fortsätter hämtningen, och det som hänt sedan stoppet hämtas ikapp.`
   } else if (data.kind === 'announcement') {

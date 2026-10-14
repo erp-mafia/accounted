@@ -6,7 +6,9 @@ import {
   SessionExpiredError,
   AspspUnavailableError,
   ConnectorSyncError,
+  ProviderCredentialError,
   bankRateLimited,
+  isCredentialRejection,
 } from './api-client'
 import { historyWindowDays } from './history-window'
 import { bankSyncResponseSchema, connectorErrorSchema } from '@accounted/connect-contract'
@@ -200,6 +202,13 @@ async function fetchBookedViaConnector(
     // failure.
     if (code === 'CONNECTOR_BANK_RATE_LIMITED') {
       throw bankRateLimited(response, text, args.fromDate)
+    }
+    // The connector refused this installation's key (or relayed Enable
+    // Banking refusing ours): every call of the run would answer the same,
+    // so it is the credential-level error the circuit breaker reads, never a
+    // dead session.
+    if (isCredentialRejection(response.status, text)) {
+      throw new ProviderCredentialError(response.status, text.slice(0, 500))
     }
     throw new ConnectorSyncError(response.status, code, text.slice(0, 500))
   }

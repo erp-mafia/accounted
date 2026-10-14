@@ -119,6 +119,23 @@ describe('GET /api/extensions/enable-banking/health-probe/cron', () => {
     expect(mocks.probeSessionHealth).not.toHaveBeenCalled()
   })
 
+  it('stays home once the Enable Banking feed has ended: no probe, no write, no mail', async () => {
+    vi.stubEnv('OPENPAYMENTS_SWITCH_DEADLINE', '2026-01-01')
+    try {
+      state.candidates = [connection()]
+      mocks.probeSessionHealth.mockResolvedValue('dead')
+
+      const response = await GET(createCronRequest('/api/extensions/enable-banking/health-probe/cron'))
+
+      expect(response.status).toBe(200)
+      await expect(response.json()).resolves.toEqual({ sunset: true, candidates: 0, sessions: 0, probed: 0, probedDead: 0, probeResults: [] })
+      expect(mocks.probeSessionHealth).not.toHaveBeenCalled()
+      expect(state.updates).toEqual([])
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('expires a connection whose session the bank has killed', async () => {
     state.candidates = [connection()]
     mocks.probeSessionHealth.mockResolvedValue('dead')

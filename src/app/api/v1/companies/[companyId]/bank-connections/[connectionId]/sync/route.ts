@@ -73,6 +73,7 @@ registerEndpoint({
     '409 BANK_SESSION_EXPIRED means the bank reported the consent dead during the sync; the connection is now status=expired. Hand the user the connect link; no API call revives it.',
     'imported: 0 is normal on a quiet account. Banks report with up to 48 hours of delay, so today\'s transactions often arrive tomorrow.',
     'Costs one Enable Banking call per enabled account: 403 CAPABILITY_BLOCKED when the company has no bank_sync entitlement.',
+    '410 ENABLE_BANKING_SUNSET means the old provider (enable_banking rows) has ended and the connection fetches nothing any more: no retry helps. GET /bank-connections marks these rows with sunset=true; the person switches to the new connection from the Kopplingar page (or imports bank statements as files where the new provider does not reach the bank).',
   ],
   example: {
     response: {
@@ -103,6 +104,7 @@ registerEndpoint({
       'BANK_SYNC_NO_ACCOUNTS',
       'BANK_SESSION_EXPIRED',
       'BANK_SYNC_FAILED',
+      'ENABLE_BANKING_SUNSET',
       'CAPABILITY_BLOCKED',
       'EXTENSION_DISABLED',
       'NOT_FOUND',

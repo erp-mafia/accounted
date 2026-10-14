@@ -6,6 +6,7 @@ import {
 } from '@/extensions/general/enable-banking/lib/api-client'
 import { sendConsentExpiryNotification } from '@/extensions/general/enable-banking/lib/consent-expiry-notification'
 import { ENABLE_BANKING_AGGREGATOR } from '@/lib/bank-sync/aggregator'
+import { enableBankingSunset } from '@/lib/bank-feed/switch-campaign'
 
 export const maxDuration = 300
 
@@ -30,6 +31,15 @@ const PROVEN_ALIVE_MS = 24 * 60 * 60 * 1000
  * the probes (and the expiry mail a dead session sends) are a daily job.
  */
 export const GET = withServiceCronContext('cron.bank_session_probe', async (_request, ctx) => {
+  // The Enable Banking feed is over: a session probe would only spend a call
+  // at a provider that is gone, and a 'dead' verdict would tell the person to
+  // renew a consent nobody can use. The rows keep their state; the switch
+  // campaign says what to do (lib/bank-feed/switch-campaign.ts).
+  if (enableBankingSunset()) {
+    ctx.log.info('enable banking sunset: session probe skipped')
+    return NextResponse.json({ sunset: true, candidates: 0, sessions: 0, probed: 0, probedDead: 0, probeResults: [] })
+  }
+
   const supabase = ctx.supabase
   const startTime = Date.now()
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'

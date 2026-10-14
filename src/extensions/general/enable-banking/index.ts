@@ -49,6 +49,9 @@ import { attachSharedBankSession, readBankConfiguration, saveBankAccountSelectio
 import { bankAccountLabel, ibanLast4, ledgerSyncedElsewhereMessage } from '@/lib/cash-accounts/selection-refusal'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { aggregatorOf, ENABLE_BANKING_AGGREGATOR } from '@/lib/bank-sync/aggregator'
+import { enableBankingSunset, ENABLE_BANKING_SUNSET_MESSAGE } from '@/lib/bank-feed/switch-campaign'
+import { switchDeepLink } from '@/lib/bank-feed/switch-link'
+import { ProviderCredentialError, PROVIDER_CREDENTIALS_REFUSED_MESSAGE } from './lib/api-client'
 
 // Per-user limits keep one tenant from spamming any single bank handler.
 // Sliding 60s windows: generous enough for legitimate retry, tight enough
@@ -774,6 +777,22 @@ export const enableBankingExtension: Extension = {
           return NextResponse.json({ error: 'Connection not found' }, { status: 404 })
         }
 
+        // The Enable Banking feed is over (lib/bank-feed/switch-campaign.ts):
+        // one typed refusal, no provider call, the row left as it is. The
+        // sentence is the toast; switch_url is where the person continues.
+        if (enableBankingSunset()) {
+          return NextResponse.json(
+            {
+              error: ENABLE_BANKING_SUNSET_MESSAGE,
+              code: 'ENABLE_BANKING_SUNSET',
+              retryable: false,
+              connection_id: connection.id,
+              switch_url: switchDeepLink(connection.id),
+            },
+            { status: 410 }
+          )
+        }
+
         // 'error' is retryable: a transient upstream failure (e.g. ASPSP_ERROR)
         // parks the connection in 'error' while the PSD2 session is still
         // alive, so the UI's "Försök igen" must be allowed through; a
@@ -936,6 +955,28 @@ export const enableBankingExtension: Extension = {
               {
                 error: BANK_UNAVAILABLE_MESSAGE,
                 code: 'BANK_UNAVAILABLE',
+                retryable: true,
+                connection_id: connection.id,
+              },
+              { status: 503 }
+            )
+          }
+
+          // Enable Banking refused the application's credentials (a 401/403
+          // naming no session): about us, not this consent. The row keeps its
+          // status and gets no renewal advice; the person is told to try
+          // again later. Never the body in the log.
+          if (error instanceof ProviderCredentialError) {
+            log.warn('[enable-banking] Sync: application credentials refused', {
+              status: error.status,
+              user_id: ctx.userId,
+              connection_id,
+              bankName: connection.bank_name,
+            })
+            return NextResponse.json(
+              {
+                error: PROVIDER_CREDENTIALS_REFUSED_MESSAGE,
+                code: 'BANK_PROVIDER_UNAVAILABLE',
                 retryable: true,
                 connection_id: connection.id,
               },

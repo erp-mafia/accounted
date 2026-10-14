@@ -9,10 +9,13 @@ vi.mock('@/lib/entitlements/has-capability', () => ({
 import { createTableMockSupabase } from '@/tests/helpers'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { setBankFeedConnectForTests } from '../connect'
+import { getStructuredError } from '@/lib/errors/get-structured-error'
 import {
   admittedCompanyIds,
   bankCoveredByOpenPayments,
   bankSwitchProgressTotals,
+  enableBankingSunset,
+  ENABLE_BANKING_SUNSET_MESSAGE,
   getBankSwitchProgress,
   switchCampaign,
   switchDaysLeft,
@@ -77,6 +80,38 @@ describe('switchDaysLeft', () => {
     expect(switchDaysLeft('2026-10-11', NOW)).toBe(-1)
     // 23:30 UTC on the 11th is already the 12th in Stockholm.
     expect(switchDaysLeft('2026-10-12', new Date('2026-10-11T23:30:00Z'))).toBe(0)
+  })
+})
+
+describe('enableBankingSunset', () => {
+  it('is off while the campaign is off, whatever the date', () => {
+    expect(enableBankingSunset({}, new Date('2030-01-01T12:00:00Z'))).toBe(false)
+    expect(enableBankingSunset({ OPENPAYMENTS_SWITCH_DEADLINE: 'soon' }, new Date('2030-01-01T12:00:00Z'))).toBe(false)
+  })
+
+  it('stays off before and on the deadline day, and is on from the Swedish day after', () => {
+    const env = { OPENPAYMENTS_SWITCH_DEADLINE: DEADLINE }
+    expect(enableBankingSunset(env, NOW)).toBe(false)
+    expect(enableBankingSunset(env, new Date('2026-11-09T12:00:00Z'))).toBe(false)
+    // 23:30Z on the 9th is already the 10th in Stockholm (UTC+1 in November).
+    expect(enableBankingSunset(env, new Date('2026-11-09T22:30:00Z'))).toBe(false)
+    expect(enableBankingSunset(env, new Date('2026-11-09T23:30:00Z'))).toBe(true)
+    expect(enableBankingSunset(env, new Date('2026-11-10T07:00:00Z'))).toBe(true)
+    expect(enableBankingSunset(env, new Date('2027-03-01T07:00:00Z'))).toBe(true)
+  })
+
+  it('reads the environment by default', () => {
+    vi.stubEnv('OPENPAYMENTS_SWITCH_DEADLINE', '2026-01-01')
+    expect(enableBankingSunset(undefined, NOW)).toBe(true)
+    vi.stubEnv('OPENPAYMENTS_SWITCH_DEADLINE', '2099-01-01')
+    expect(enableBankingSunset(undefined, NOW)).toBe(false)
+  })
+
+  it('refuses with the same sentence the error registry carries', () => {
+    const entry = getStructuredError(Object.assign(new Error('x'), { code: 'ENABLE_BANKING_SUNSET' }))
+    expect(entry.code).toBe('ENABLE_BANKING_SUNSET')
+    expect(entry.message_sv).toBe(ENABLE_BANKING_SUNSET_MESSAGE)
+    expect(entry.retryable).toBe(false)
   })
 })
 

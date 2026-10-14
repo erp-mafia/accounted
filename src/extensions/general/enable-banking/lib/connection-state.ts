@@ -35,8 +35,19 @@ export const PENDING_ABANDON_MS = PENDING_ABANDON_MINUTES * 60 * 1000
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
+/**
+ * What an Enable Banking row offers once the feed has ended
+ * (lib/bank-feed/switch-campaign.ts enableBankingSunset): 'switch' when Open
+ * Payments reaches the bank (the existing switch is the way on), 'import'
+ * when it does not (Wise, PayPal, Bank Norwegian, Nordea First Card, Juni:
+ * bank statements come in as files). The panel reads it from the campaign
+ * state the server computed; null or absent means the feed is still running.
+ */
+export type SunsetPath = 'switch' | 'import'
+
 /** Presentation state, from most to least urgent (see STATE_PRECEDENCE). */
 export type ConnectionUiState =
+  | 'sunset'
   | 'pending_selection'
   | 'pending'
   | 'abandoned'
@@ -62,12 +73,18 @@ export interface ConnectionStateInput {
    *  account selection (BANK_INGEST_ROUTE_UNRESOLVED); the next successful
    *  sync clears it. Optional for callers that never render it. */
   error_message?: string | null
+  /** The Enable Banking feed has ended for this row, and what the row offers
+   *  instead (SunsetPath). Outranks every other state: a consent that is
+   *  expiring, a sync that is stale or a stored error no longer matter when
+   *  the provider is gone. An in-flight 'pending' attempt keeps its own UI. */
+  sunset?: SunsetPath | null
 }
 
 export function getConnectionUiState(
   connection: ConnectionStateInput,
   now: number = Date.now(),
 ): ConnectionUiState {
+  if (connection.sunset && connection.status !== 'pending') return 'sunset'
   switch (connection.status) {
     case 'pending_selection':
       return 'pending_selection'
@@ -121,7 +138,10 @@ export function offersAccountChoice(
   now: number = Date.now(),
 ): boolean {
   if (connection.status !== 'active') return false
-  if (getConnectionUiState(connection, now) === 'needs_configuration') return false
+  const state = getConnectionUiState(connection, now)
+  // A row whose feed has ended offers the switch or the file import, never a
+  // choice of accounts nothing will fetch.
+  if (state === 'needs_configuration' || state === 'sunset') return false
   return partitionAccounts(accounts).own.some((account) => account.enabled === false)
 }
 
@@ -145,7 +165,8 @@ export function nextScheduledSyncFrom(
   now: number = Date.now(),
 ): string | null {
   if (connection.status !== 'active') return null
-  if (getConnectionUiState(connection, now) === 'needs_configuration') return null
+  const state = getConnectionUiState(connection, now)
+  if (state === 'needs_configuration' || state === 'sunset') return null
   const days = cronLookbackDays(connection, now)
   return new Date(now - days * DAY_MS).toISOString().split('T')[0]
 }
@@ -153,16 +174,17 @@ export function nextScheduledSyncFrom(
 /** Sort order for the single "Dina bankkopplingar" group: the row that needs
  *  the user first sits first. */
 const STATE_PRECEDENCE: Record<ConnectionUiState, number> = {
-  pending_selection: 0,
-  pending: 1,
-  abandoned: 2,
-  error: 3,
-  needs_configuration: 4,
-  expired: 5,
-  expiring: 6,
-  stale: 7,
-  never_synced: 8,
-  active: 9,
+  sunset: 0,
+  pending_selection: 1,
+  pending: 2,
+  abandoned: 3,
+  error: 4,
+  needs_configuration: 5,
+  expired: 6,
+  expiring: 7,
+  stale: 8,
+  never_synced: 9,
+  active: 10,
 }
 
 export function sortConnectionsByPrecedence<
@@ -181,6 +203,7 @@ export function sortConnectionsByPrecedence<
 /** States that earn the page's one .attn sentence (design convention 6:
  *  attention is ONE ochre sentence per page). Worst first. */
 export type PageAttentionState =
+  | 'sunset'
   | 'error'
   | 'needs_configuration'
   | 'abandoned'
@@ -190,6 +213,7 @@ export type PageAttentionState =
   | 'never_synced'
 
 const ATTENTION_PRECEDENCE: PageAttentionState[] = [
+  'sunset',
   'error',
   'needs_configuration',
   'abandoned',
@@ -225,6 +249,12 @@ export function buildPageAttentionSentence(
 ): string {
   const bank = attention.connection.bank_name
   switch (attention.state) {
+    case 'sunset':
+      // The old provider is gone. Where the new one reaches the bank the row
+      // offers the switch; where it does not, the file import is the way.
+      return attention.connection.sunset === 'import'
+        ? `${bank}: den gamla bankkopplingen har upphört, och banken nås inte än genom den nya leverantören. Importera kontoutdrag som fil (SIE eller CSV) tills vidare.`
+        : `${bank}: den gamla bankkopplingen har upphört och hämtar inga transaktioner. Byt till ny koppling för att fortsätta.`
     case 'error':
       return `${bank}: anslutningen har ett fel. Försök igen eller förnya samtycket.`
     case 'needs_configuration':

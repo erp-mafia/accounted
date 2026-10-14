@@ -64,6 +64,7 @@ import {
   SessionExpiredError,
   AspspUnavailableError,
   ConnectorSyncError,
+  ProviderCredentialError,
 } from '@/extensions/general/enable-banking/lib/api-client'
 import { BANK_ROUTE_NEEDS_CONFIGURATION_MESSAGE } from '@/lib/bank-sync/ingest-route'
 import { GET } from '../route'
@@ -649,6 +650,107 @@ describe('GET /api/extensions/enable-banking/sync/cron: transient failures leave
     expect(errorLines.some(line => line.includes('sync failed for connection'))).toBe(false)
     consoleError.mockRestore()
     consoleWarn.mockRestore()
+  })
+})
+
+describe('GET /api/extensions/enable-banking/sync/cron: the Enable Banking sunset', () => {
+  afterEach(() => vi.unstubAllEnvs())
+
+  it('plans every connection into the sunset bucket and calls nobody once the deadline has passed', async () => {
+    vi.stubEnv('OPENPAYMENTS_SWITCH_DEADLINE', '2026-01-01')
+    state.active = fleet(5)
+
+    const response = await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
+
+    expect(mocks.syncAccountTransactions).not.toHaveBeenCalled()
+    expect(state.updates).toEqual([])
+    expect(state.leaseWrites).toEqual([])
+    await expect(response.json()).resolves.toMatchObject({
+      sunset: 5,
+      eligible: 0,
+      due: 0,
+      selected: 0,
+      processed: 0,
+      providerUnavailable: false,
+    })
+  })
+
+  it('runs as before while the deadline is ahead', async () => {
+    vi.stubEnv('OPENPAYMENTS_SWITCH_DEADLINE', '2099-01-01')
+    state.active = fleet(2)
+
+    const body = await (await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))).json()
+
+    expect(mocks.syncAccountTransactions).toHaveBeenCalledTimes(2)
+    expect(body).toMatchObject({ sunset: 0, processed: 2, completed: 2 })
+  })
+})
+
+describe('GET /api/extensions/enable-banking/sync/cron: circuit breaker for an early cut-off', () => {
+  it('stops the run after the first two connections were refused at the credential level, writing nothing on any row', async () => {
+    // The logger drops warn under NODE_ENV=test; the one trip line is the
+    // point of this test, so it runs with the development output.
+    vi.stubEnv('NODE_ENV', 'development')
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    // Serialised: one company, so the pool tries one connection at a time.
+    state.active = Array.from({ length: 12 }, (_, index) => connection({ id: `conn-${index}`, company_id: companyId(1), last_synced_at: hoursAgo(30 + index) }))
+    mocks.syncAccountTransactions.mockRejectedValue(new ProviderCredentialError(401, '{"error":"Unauthorized"}'))
+
+    const response = await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
+    const body = await response.json()
+
+    expect(mocks.syncAccountTransactions).toHaveBeenCalledTimes(2)
+    expect(body).toMatchObject({
+      providerUnavailable: true,
+      credentialFailures: 2,
+      skippedByCircuit: 10,
+      deferredByTimeBudget: 0,
+      processed: 2,
+      totalFailed: 2,
+    })
+    // No error_message, no status flip on any connection: only the two lease claims.
+    expect(state.updates).toEqual([])
+    expect(state.leaseWrites).toHaveLength(2)
+    expect(state.active.every(row => row.status === 'active' && row.error_message === null)).toBe(true)
+    // One warn line for the run, none at error level.
+    const tripLines = consoleWarn.mock.calls.filter(call => String(call[0]).includes('run stopped'))
+    expect(tripLines).toHaveLength(1)
+    expect(String(tripLines[0][0])).toContain('skippedByCircuit=10')
+    expect(String(tripLines[0][0])).toContain('credentialFailures=2')
+    expect(consoleError.mock.calls.some(call => String(call[0]).includes('sync failed for connection'))).toBe(false)
+    vi.restoreAllMocks()
+    vi.unstubAllEnvs()
+  })
+
+  it('does not trip on dead consents: two expired sessions in a row are two people to re-authorise', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    state.active = fleet(6)
+    mocks.syncAccountTransactions.mockRejectedValue(new SessionExpiredError(401, '{"error":"CLOSED_SESSION"}'))
+
+    const body = await (await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))).json()
+
+    expect(mocks.syncAccountTransactions).toHaveBeenCalledTimes(6)
+    expect(body).toMatchObject({ providerUnavailable: false, credentialFailures: 0, skippedByCircuit: 0, totalExpired: 6 })
+    expect(state.active.every(row => row.status === 'expired' && row.error_message === REAUTH_REQUIRED_MESSAGE)).toBe(true)
+    vi.restoreAllMocks()
+  })
+
+  it('keeps going when only one of the first two connections was refused', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    state.active = Array.from({ length: 4 }, (_, index) => connection({ id: `conn-${index}`, company_id: companyId(1), last_synced_at: hoursAgo(30 + index) }))
+    mocks.syncAccountTransactions
+      .mockRejectedValueOnce(new ProviderCredentialError(403, 'Forbidden'))
+      .mockResolvedValue({ imported: 1, duplicates: 0, errors: 0 })
+
+    const body = await (await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))).json()
+
+    expect(mocks.syncAccountTransactions).toHaveBeenCalledTimes(4)
+    expect(body).toMatchObject({ providerUnavailable: false, credentialFailures: 1, skippedByCircuit: 0, processed: 4, completed: 3 })
+    // The refused connection kept its row as it was.
+    expect(state.active[0]).toMatchObject({ status: 'active', error_message: null })
+    vi.restoreAllMocks()
   })
 })
 

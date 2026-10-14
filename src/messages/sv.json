@@ -8258,13 +8258,16 @@
     "bank_switch_one": "Bankkopplingen till {bank} byter leverantör, gör bytet senast {deadline, date, long}.",
     "bank_switch_one_unnamed": "En bankkoppling byter leverantör, gör bytet senast {deadline, date, long}.",
     "bank_switch_many": "{count} bankkopplingar byter leverantör, gör bytena senast {deadline, date, long}.",
-    "bank_switch_stopped_one": "Bankkopplingen till {bank} har slutat fungera och hämtar inte längre transaktioner.",
-    "bank_switch_stopped_one_unnamed": "En bankkoppling har slutat fungera och hämtar inte längre transaktioner.",
-    "bank_switch_stopped_many": "{count} bankkopplingar har slutat fungera och hämtar inte längre transaktioner.",
+    "bank_switch_stopped_one": "Den gamla bankkopplingen till {bank} har upphört och hämtar inga transaktioner. Byt till ny koppling för att fortsätta.",
+    "bank_switch_stopped_one_unnamed": "En gammal bankkoppling har upphört och hämtar inga transaktioner. Byt till ny koppling för att fortsätta.",
+    "bank_switch_stopped_many": "{count} gamla bankkopplingar har upphört och hämtar inga transaktioner. Byt till ny koppling för att fortsätta.",
     "bank_switch_action": "Byt till ny koppling",
     "bank_uncovered_one": "Banken {bank} nås inte av den nya leverantören: importera kontoutdrag som fil.",
     "bank_uncovered_one_unnamed": "En av bankerna nås inte av den nya leverantören: importera kontoutdrag som fil.",
     "bank_uncovered_many": "{count} banker nås inte av den nya leverantören: importera kontoutdrag som fil.",
+    "bank_uncovered_stopped_one": "Den gamla bankkopplingen till {bank} har upphört, och banken nås inte än genom den nya leverantören: importera kontoutdrag som fil.",
+    "bank_uncovered_stopped_one_unnamed": "En gammal bankkoppling har upphört, och banken nås inte än genom den nya leverantören: importera kontoutdrag som fil.",
+    "bank_uncovered_stopped_many": "{count} gamla bankkopplingar har upphört, och bankerna nås inte än genom den nya leverantören: importera kontoutdrag som fil.",
     "bank_uncovered_action": "Importera fil"
   },
   "att_gora_v2": {
@@ -8527,7 +8530,7 @@
     "rel_days": "för {count} dagar sedan",
     "band_now": "Gör nu",
     "row_bank_switch": "Byt bankkopplingen för {bank} senast {date}",
-    "row_bank_switch_stopped": "Bankkopplingen för {bank} har stoppats: byt till den nya kopplingen",
+    "row_bank_switch_stopped": "Den gamla bankkopplingen för {bank} har upphört: byt till den nya kopplingen",
     "row_bank_switch_detail": "Ny koppling med BankID, cirka två minuter. Historiken behålls.",
     "bank_switch_days_left": "{days, plural, =0 {Sista dagen} =1 {1 dag kvar} other {# dagar kvar}}",
     "bank_switch_stopped_badge": "Stoppad"
@@ -12643,7 +12646,10 @@
     "disconnected_title": "Kopplingen är borttagen",
     "disconnect_failed_title": "Kunde inte koppla bort",
     "switch_by": "Byt senast {date}",
-    "switch_stopped": "Hämtningen har stoppats: byt till ny koppling"
+    "switch_stopped": "Hämtningen har stoppats: byt till ny koppling",
+    "switch_stopped_uncovered": "Hämtningen har stoppats: banken nås inte än genom den nya leverantören, importera kontoutdrag som fil (SIE eller CSV)",
+    "switch_replaced": "Hämtningen har stoppats: ersatt av den nya kopplingen",
+    "import_statements": "Importera kontoutdrag"
   },
   "skatteverket_ombud": {
     "appoint": "Utse {appName} som ombud hos Skatteverket",

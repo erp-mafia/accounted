@@ -55,6 +55,16 @@ describe('bank switch email templates', () => {
     expect(generateBankSwitchEmailText(stopped)).toContain('hämtas ikapp')
   })
 
+  it('says on the day the feed stops that from today the old connection fetches nothing, and still points at the switch', () => {
+    const sunset: BankSwitchEmailData = { ...announcement, kind: 'sunset', daysLeft: -1 }
+    expect(generateBankSwitchEmailSubject(sunset)).toBe('Från i dag hämtar den gamla kopplingen inga transaktioner - Glimworks AB')
+    const text = generateBankSwitchEmailText(sunset)
+    expect(text).toContain('Den tidigare leverantören av bankkopplingen till Swedbank har stängts')
+    expect(text).toContain('hämtas ikapp')
+    expect(text).toContain(`Byt bankkoppling: ${announcement.switchUrl}`)
+    expect(generateBankSwitchEmailHtml(sunset)).toContain('Historiken behålls')
+  })
+
   it('tells a byrå-managed company that its own BankID signs the switch', () => {
     const data = { ...announcement, byraManaged: true }
     expect(generateBankSwitchEmailHtml(data)).toContain('inte av byrån')
