@@ -16,6 +16,7 @@
  */
 
 import { ORE_TOLERANCE, roundOre } from '@/lib/money'
+import type { PayeeHold } from './payee-change'
 import {
   resolvePaymentReference,
   resolveSupplierPayee,
@@ -49,6 +50,10 @@ export type BatchExclusionReason =
   | 'reference_missing'
   // The attest policy requires attest for the invoice and it has not been given.
   | 'attest_required'
+  // The invoice states an account the company does not have for the supplier
+  // and nobody has confirmed it (lib/payments/payee-alerts.ts), or a person
+  // rejected it: no payment until a person decides.
+  | PayeeHold
 
 export type BatchItemWarning =
   | 'unattested'
@@ -69,6 +74,11 @@ export interface BatchInvoiceFacts {
   is_credit_note: boolean
   payment_reference: string | null
   supplier_invoice_number: string | null
+  /**
+   * What holds a payment of the invoice back until a person decides on the
+   * account it states (loadPayeeHolds); absent or null when nothing does.
+   */
+  payee_hold?: PayeeHold | null
 }
 
 export interface BatchEvaluationOptions {
@@ -104,6 +114,9 @@ export function evaluateInvoiceForBatch(
     return { eligible: false, reason: 'nothing_remaining' }
   }
   if (invoice.currency !== 'SEK') return { eligible: false, reason: 'foreign_currency' }
+  // Before the payee: the card may be the old account or empty, and the
+  // reason a person must act on is the account the invoice states.
+  if (invoice.payee_hold) return { eligible: false, reason: invoice.payee_hold }
   if (options.attestBlocked?.has(invoice.id)) return { eligible: false, reason: 'attest_required' }
 
   const resolution = resolveSupplierPayee(supplier)

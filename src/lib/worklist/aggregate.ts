@@ -1,5 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { BankSwitchDue, ExpensePayoutDue, PaymentsVerificationDue, SkattekontoPaymentDue, SuggestedMatch } from './types'
+import type {
+  BankSwitchDue,
+  ExpensePayoutDue,
+  PaymentsVerificationDue,
+  SkattekontoPaymentDue,
+  SuggestedMatch,
+  SupplierPayeeChangeDue,
+} from './types'
 import type { WorklistCounts } from './types'
 import type { MissingUnderlagSample } from './missing-underlag'
 import { isArkivBrainEnabled, isArkivSectionEnabled } from '@/lib/arkiv/flag'
@@ -24,6 +31,7 @@ import {
   countSkattekontoPaymentDue,
   countSuggestedMatches,
   countSupplierInvoicesAwaitingApproval,
+  countSupplierPayeeChangesDue,
   countUnbookedSkattekontoRows,
   countUnbookedTransactions,
   countVerifikatMissingDocument,
@@ -78,6 +86,12 @@ export interface GetWorklistCountsOptions {
    * read. Pass null for "nothing due".
    */
   paymentsVerificationDue?: PaymentsVerificationDue | null | Promise<PaymentsVerificationDue | null>
+  /**
+   * The supplier invoices whose bank details wait for a decision the caller
+   * is already fetching (Hem renders one row each): the count is the list's
+   * length instead of a second read.
+   */
+  supplierPayeeChangesDue?: SupplierPayeeChangeDue[] | Promise<SupplierPayeeChangeDue[]>
 }
 
 export async function getWorklistCounts(
@@ -113,6 +127,7 @@ export async function getWorklistCounts(
     collectionBatchReady,
     bankSwitch,
     paymentsVerificationRenewal,
+    supplierPayeeChange,
   ] = await Promise.all([
     countUnbookedTransactions(supabase, companyId),
     countUnbookedSkattekontoRows(supabase, companyId),
@@ -149,6 +164,9 @@ export async function getWorklistCounts(
     options.paymentsVerificationDue !== undefined
       ? Promise.resolve(options.paymentsVerificationDue).then((v) => (v ? 1 : 0))
       : countPaymentsVerificationDue(supabase, companyId),
+    options.supplierPayeeChangesDue
+      ? Promise.resolve(options.supplierPayeeChangesDue).then((rows) => rows.length)
+      : countSupplierPayeeChangesDue(supabase, companyId),
   ])
 
   return {
@@ -176,6 +194,7 @@ export async function getWorklistCounts(
       collection_batch_ready: collectionBatchReady,
       bank_switch: bankSwitch,
       payments_verification_renewal: paymentsVerificationRenewal,
+      supplier_payee_change: supplierPayeeChange,
     },
     total:
       bookTransaction +
@@ -199,6 +218,7 @@ export async function getWorklistCounts(
       collectionAttention +
       collectionBatchReady +
       bankSwitch +
-      paymentsVerificationRenewal,
+      paymentsVerificationRenewal +
+      supplierPayeeChange,
   }
 }

@@ -169,6 +169,37 @@ describe('previewSupplierPaymentBatch', () => {
     expect(preview.excluded).toEqual([{ id: 'inv-1', reason: 'in_bank_payment' }])
   })
 
+  it('leaves out an invoice that states bank details nobody approved for the supplier, as payee_unconfirmed', async () => {
+    const mock = createQueuedMockSupabase()
+    // from() order: supplier_invoices, batch items, companies, settings, open payment orders, the attest policy, then the decisions.
+    mock.enqueueMany([
+      {
+        data: [
+          invoiceRow({ supplier_id: 'sup-1', payee_bankgiro: '9020-0007' }),
+          invoiceRow({ id: 'inv-2', supplier_id: 'sup-1', payee_bankgiro: '5402-0102' }),
+          invoiceRow({ id: 'inv-3', supplier_id: 'sup-1', payee_bankgiro: '5050-1055' }),
+        ],
+      },
+      { data: [] },
+      { data: companyRow },
+      { data: settingsRow },
+      { data: [] },
+      { data: null }, // attest policy: none
+      { data: [{ supplier_id: 'sup-1', payee_key: 'bankgiro:54020102', decision: 'confirmed', decided_at: '2026-10-14T09:00:00Z' }] },
+    ])
+
+    const preview = await previewSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, {
+      ids: ['inv-1', 'inv-2', 'inv-3'],
+    })
+
+    expect(preview.excluded).toEqual([{ id: 'inv-1', reason: 'payee_unconfirmed' }])
+    // A confirmed account pays as today: the file pays the card's account.
+    expect(preview.eligible.map((line) => [line.id, line.payee.label])).toEqual([
+      ['inv-2', 'BG 5050-1055'],
+      ['inv-3', 'BG 5050-1055'],
+    ])
+  })
+
   it('excludes ineligible invoices with a reason and unknown ids as not_found', async () => {
     const mock = createQueuedMockSupabase()
     mock.enqueueMany([
@@ -715,6 +746,27 @@ describe('createSupplierPaymentBatch', () => {
       code: 'ineligible',
       details: [{ id: 'inv-2', reason: 'foreign_currency' }],
     })
+    expect(mock.supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('refuses a create naming an invoice whose stated bank details a person rejected', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: companyRow },
+      { data: settingsRow },
+      { data: [invoiceRow({ supplier_id: 'sup-1', payee_bankgiro: '9020-0007' })] },
+      { data: [] },
+      { data: [] }, // open bank payment orders: none
+      { data: null }, // attest policy: none
+      { data: [{ supplier_id: 'sup-1', payee_key: 'bankgiro:90200007', decision: 'rejected', decided_at: '2026-10-14T09:00:00Z' }] },
+    ])
+
+    const result = await createSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, USER_ID, {
+      format: 'pain001',
+      items: [{ supplier_invoice_id: 'inv-1' }],
+    })
+
+    expect(result).toEqual({ ok: false, code: 'ineligible', details: [{ id: 'inv-1', reason: 'payee_rejected' }] })
     expect(mock.supabase.rpc).not.toHaveBeenCalled()
   })
 

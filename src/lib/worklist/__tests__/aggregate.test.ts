@@ -25,6 +25,7 @@ vi.mock('../categories', () => ({
   countCollectionBatchItems: vi.fn().mockResolvedValue(0),
   countBankSwitchDue: vi.fn().mockResolvedValue(0),
   countPaymentsVerificationDue: vi.fn().mockResolvedValue(0),
+  countSupplierPayeeChangesDue: vi.fn().mockResolvedValue(0),
 }))
 
 import { getWorklistCounts } from '../aggregate'
@@ -73,6 +74,7 @@ describe('getWorklistCounts', () => {
       collection_batch_ready: 0,
       bank_switch: 0,
       payments_verification_renewal: 0,
+      supplier_payee_change: 0,
     })
   })
 

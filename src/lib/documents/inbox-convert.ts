@@ -43,6 +43,7 @@ import type { z } from 'zod'
 import type { CoreEvent } from '@/lib/events/types'
 import { eventBus } from '@/lib/events'
 import { backfillSupplierPaymentDetails, type SupplierPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
+import { assessRegisteredPayee, payeeAlertWarning, type RegisteredPayeeAssessment } from '@/lib/payments/payee-registration'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import {
   resolveSupplierInvoiceExchangeRate,
@@ -126,12 +127,23 @@ export async function convertInboxItemToSupplierInvoice(
     body,
   )
 
-  // The scan read the supplier's giro or IBAN with everything else: a
-  // supplier that lacks them takes them now, so the invoice can go into a
-  // betalfil without a detour to the supplier card. A write: commit only.
+  // The scan (or Peppol's PaymentMeans) read the supplier's giro or IBAN with
+  // everything else. The invoice keeps what it states (payee_*), compared
+  // with the supplier card before the card is touched: a card that lacks
+  // them takes them now, so the invoice can go into a betalfil without a
+  // detour to the supplier card, unless the invoice names an account the
+  // card does not have, which waits for a person (lib/payments/payee-alerts.ts).
+  // A write: commit only.
   const scannedSupplier = (item.extracted_data as { supplier?: SupplierPaymentDetails } | null)?.supplier
-  if (scannedSupplier && !options.dryRun) {
-    await backfillSupplierPaymentDetails(supabase, companyId, supplier.id as string, scannedSupplier)
+  let payeeAssessment: RegisteredPayeeAssessment | null = null
+  if (!options.dryRun) {
+    payeeAssessment = await assessRegisteredPayee(supabase, companyId, supplier.id as string, scannedSupplier)
+    if (payeeAssessment.alert) {
+      log.info('inbox invoice states bank details the supplier card lacks', { supplierId: supplier.id, alert: payeeAssessment.alert })
+    }
+    if (scannedSupplier && payeeAssessment.backfill) {
+      await backfillSupplierPaymentDetails(supabase, companyId, supplier.id as string, scannedSupplier)
+    }
   }
 
   // Särskild löneskatt (SLP): the 7533/2514 pair is only lawful on 741x
@@ -323,6 +335,12 @@ export async function convertInboxItemToSupplierInvoice(
       vat_treatment: vatTreatment,
       reverse_charge: reverseCharge,
       payment_reference: body.payment_reference || null,
+      // What the document itself says to pay to, validated: a payment
+      // compares it with the supplier card instead of trusting either.
+      payee_bankgiro: payeeAssessment?.stated.payee_bankgiro ?? null,
+      payee_plusgiro: payeeAssessment?.stated.payee_plusgiro ?? null,
+      payee_iban: payeeAssessment?.stated.payee_iban ?? null,
+      payee_bic: payeeAssessment?.stated.payee_bic ?? null,
       subtotal: roundOre(subtotal),
       subtotal_sek: subtotalSek,
       vat_amount: roundOre(totalVat),
@@ -531,5 +549,6 @@ export async function convertInboxItemToSupplierInvoice(
       registration_journal_entry_id: registrationJournalEntryId,
       inbox_item_id: inboxItemId,
     },
+    ...(payeeAssessment?.alert ? { warnings: [payeeAlertWarning(payeeAssessment.alert)] } : {}),
   }
 }

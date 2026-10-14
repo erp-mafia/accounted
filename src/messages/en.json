@@ -699,6 +699,7 @@
     "read_more_skv": "Read more at Skatteverket"
   },
   "pending": {
+    "type_confirm_supplier_payee": "Approve a supplier's new bank details",
     "type_connect_pos_venue": "Connect point of sale",
     "type_disconnect_pos_connection": "Disconnect point of sale",
     "type_update_pos_sales_settings": "Change point-of-sale accounts",
@@ -995,6 +996,9 @@
     "preview_link_lines_failed": "The voucher's lines could not be loaded.",
     "preview_link_open_voucher": "Open the voucher",
     "preview_field": {
+      "current_supplier_account": "Account on the supplier card",
+      "invoice_account": "Account on the invoice",
+      "updates_supplier_card": "Updates the supplier card",
       "voucher": "Voucher",
       "voucher_label": "Voucher",
       "voucher_date": "Voucher date",
@@ -1166,6 +1170,7 @@
     "confirm_done_title": "Mark as done?"
   },
   "supplier_invoices": {
+    "payee_alert_badge": "New bank details",
     "stage_incoming": "Received",
     "stage_registered": "Registered",
     "stage_approved": "Approved",
@@ -1233,6 +1238,8 @@
     "bank_entered_failed_title": "Could not save the mark"
   },
   "supplier_payment_files": {
+    "excluded_reason_payee_unconfirmed": "the invoice states new bank details nobody has approved (review them under Att göra)",
+    "excluded_reason_payee_rejected": "the bank details on the invoice were rejected",
     "dialog_title": "Create payment file",
     "th_supplier": "Supplier",
     "th_payee": "Payee",
@@ -5794,6 +5801,8 @@
     "link_failed_title": "Could not link the journal entry"
   },
   "supplier_invoice_editor": {
+    "payee_alert_toast_title": "New bank details on the invoice",
+    "payee_alert_toast_description": "The invoice states other bank details than the supplier card. It is not paid until someone approves them under Att göra.",
     "section_underlag": "Source document",
     "section_supplier": "Supplier",
     "section_details": "Invoice details",
@@ -8419,6 +8428,10 @@
       "review_rows": "{count} rows"
   },
   "dashboard": {
+    "row_supplier_payee_change": "New bank details at {supplier}",
+    "row_supplier_payee_change_detail": "Invoice {invoice} states {payee}, the card has {card}",
+    "row_supplier_payee_new_detail": "Invoice {invoice} states {payee}, the card has no bank details",
+    "supplier_payee_review": "Review",
     "row_document_relevance": "Documents that may not concern the company",
     "row_document_relevance_detail": "Answer yes or no before they are stored",
     "row_document_unclassified": "Documents without a type",
@@ -12912,6 +12925,9 @@
     "done_payments_renew": "Bank payments: the verification needs renewing"
   },
   "bank_payments": {
+    "payee_alert_badge": "New bank details",
+    "skip_payee_unconfirmed": "the invoice states new bank details nobody has approved (review them under Att göra)",
+    "skip_payee_rejected": "the bank details on the invoice were rejected",
     "title": "Pay through the bank",
     "title_sign": "Sign the payments",
     "title_done": "The payments were sent",
@@ -13875,5 +13891,30 @@
     "row_label": "Attest {supplier} {amount}",
     "row_detail": "Due {date}",
     "supplier_fallback": "supplier invoice"
+  },
+  "supplier_payee_change": {
+    "title": "New bank details at {supplier}",
+    "title_loading": "New bank details",
+    "description": "The invoice states bank details that are not on the supplier card. The invoice is not paid until someone approves them.",
+    "load_failed": "The details could not be read. Try again.",
+    "on_card": "On the supplier card",
+    "card_empty": "No bank details",
+    "on_invoice": "On the invoice",
+    "registered_name": "Registered at Bankgirot",
+    "registered_name_differs": "Bankgirot has {name} registered on the account, not {supplier}.",
+    "rejected_before": "The details were rejected before. Approve them only if the supplier has confirmed them.",
+    "check_advice": "Check the details with the supplier on a number you already have, never through the invoice or its email. Changed bank details are the most common invoice fraud.",
+    "update_card": "Update the supplier card with the new details on approval",
+    "note_label": "How were the details checked? (optional)",
+    "note_placeholder": "For example: called the supplier on a known number",
+    "reject": "Reject",
+    "confirm": "Approve new details",
+    "confirmed_toast": "The new bank details are approved",
+    "rejected_toast": "The bank details were rejected. The invoice is not paid to them.",
+    "decide_failed_title": "The decision could not be saved",
+    "line_changed": "The invoice states {payee}, but the supplier card has {card}. Payment is held until someone approves the new details.",
+    "line_new": "The invoice states {payee}, but the supplier card has no bank details although you have paid the supplier before. Payment is held until someone approves them.",
+    "line_rejected": "The bank details {payee} on the invoice were rejected. Payment is held until someone approves them or gives the supplier card the right account.",
+    "review": "Review"
   }
 }

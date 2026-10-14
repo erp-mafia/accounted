@@ -214,6 +214,9 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
     enqueue({ data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' }, error: null }) // inbox fetch
     enqueue({ data: { id: 'supplier-1', name: 'Acme AB', supplier_type: 'swedish_business' }, error: null }) // supplier fetch
     enqueue({ data: { accounting_method: 'accrual' }, error: null }) // company_settings
+    // The payee check before the card is touched: an empty card, a supplier never paid.
+    enqueue({ data: { bankgiro: null, plusgiro: null, bank_account: null, clearing_number: null, account_number: null, iban: null }, error: null })
+    enqueue({ data: [], error: null }) // the supplier's paid invoices: none
     enqueue({ data: 42, error: null }) // get_next_arrival_number RPC
     enqueue({ data: makeSupplierInvoice({ id: 'inv-1', supplier_invoice_number: 'INV-100' }), error: null }) // supplier_invoices insert
     enqueue({ data: null, error: null }) // supplier_invoice_items insert
@@ -234,6 +237,41 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
 
     expect(result.status).toBe('committed')
     expect(findCall('suppliers', 'update')).toEqual([{ bankgiro: '5050-1055', plusgiro: null, iban: null, bic: null }])
+    // The invoice keeps what the document states.
+    expect(findCall('supplier_invoices', 'insert')![0]).toMatchObject({ payee_bankgiro: '5050-1055' })
+  })
+
+  it('approval leaves the supplier card alone when the staged bankgiro differs from it, and the invoice keeps it', async () => {
+    vi.mocked(createSupplierInvoiceRegistrationEntry).mockResolvedValueOnce(
+      makeJournalEntry({ id: 'je-100', voucher_number: 7, voucher_series: 'L' })
+    )
+
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // dispatcher CAS claim
+    enqueue({ data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' }, error: null }) // inbox fetch
+    enqueue({ data: { id: 'supplier-1', name: 'Acme AB', supplier_type: 'swedish_business' }, error: null }) // supplier fetch
+    enqueue({ data: { accounting_method: 'accrual' }, error: null }) // company_settings
+    // The card pays another bankgiro: changed, so no backfill and no paid-history read.
+    enqueue({ data: { bankgiro: '5402-0102', plusgiro: null, bank_account: null, clearing_number: null, account_number: null, iban: null }, error: null })
+    enqueue({ data: 42, error: null }) // get_next_arrival_number RPC
+    enqueue({ data: makeSupplierInvoice({ id: 'inv-1', supplier_invoice_number: 'INV-100' }), error: null }) // supplier_invoices insert
+    enqueue({ data: null, error: null }) // supplier_invoice_items insert
+    enqueue({ data: null, error: null }) // supplier_invoices update with JE id
+    enqueue({ data: null, error: null }) // invoice_inbox_items update
+    enqueue({ data: [], error: null }) // still-pending twins of the same item
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const base = makePendingOp()
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({ params: { ...base.params, supplier_payment_details: { bankgiro: '5050-1055' } } }),
+    )
+
+    expect(result.status).toBe('committed')
+    expect(findCall('suppliers', 'update')).toBeUndefined()
+    expect(findCall('supplier_invoices', 'insert')![0]).toMatchObject({ payee_bankgiro: '5050-1055' })
   })
 
   it('idempotency: re-fired commit on an already-converted inbox returns the existing invoice without rework', async () => {

@@ -38,6 +38,8 @@ import {
   type BatchItemWarning,
 } from './batch-eligibility'
 import { formatPayeeLabel, type SupplierPayee, type SupplierPayeeSource } from './supplier-payee'
+import { holdFor, loadPayeeHolds, type PayeeAlertState } from './payee-alerts'
+import type { StatedPayeeSource } from './payee-change'
 import { isOpenPaymentOrder, OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES } from './orders/status'
 import { generateSupplierPain001, type SupplierPain001Payment } from './pain001-supplier'
 import { resolveSwedbankFileIds, swedbankIso2PaysPayee } from './swedbank'
@@ -46,14 +48,30 @@ import type { SupplierPaymentBatch, SupplierPaymentBatchItem } from '@/types'
 
 const log = createLogger('payments/batch-service')
 
-type InvoiceRow = BatchInvoiceFacts & {
-  supplier: (SupplierPayeeSource & { id: string; name: string; city: string | null }) | null
-}
+type InvoiceRow = BatchInvoiceFacts &
+  StatedPayeeSource & {
+    supplier_id: string
+    supplier: (SupplierPayeeSource & { id: string; name: string; city: string | null; iban: string | null }) | null
+  }
 
 const INVOICE_SELECT =
-  'id, status, approved_at, due_date, remaining_amount, currency, is_credit_note, ' +
-  'payment_reference, supplier_invoice_number, ' +
-  'supplier:suppliers(id, name, city, bankgiro, plusgiro, bank_account, clearing_number, account_number)'
+  'id, supplier_id, status, approved_at, due_date, remaining_amount, currency, is_credit_note, ' +
+  'payment_reference, supplier_invoice_number, payee_bankgiro, payee_plusgiro, payee_clearing, payee_account, payee_iban, ' +
+  'supplier:suppliers(id, name, city, bankgiro, plusgiro, bank_account, clearing_number, account_number, iban)'
+
+/**
+ * What holds each invoice back on the account it states (lib/payments/
+ * payee-alerts.ts): the same derivation the bank payment preparation uses, so
+ * the file and the bank refuse the same invoices.
+ */
+function loadBatchPayeeHolds(
+  supabase: SupabaseClient,
+  companyId: string,
+  rows: InvoiceRow[],
+): Promise<Map<string, PayeeAlertState>> {
+  const cards = new Map(rows.flatMap((row) => (row.supplier ? [[row.supplier_id, row.supplier] as const] : [])))
+  return loadPayeeHolds(supabase, companyId, rows, cards)
+}
 
 export interface BatchDebtor {
   name: string
@@ -265,6 +283,7 @@ export async function previewSupplierPaymentBatch(
   const rows = (invoices ?? []) as unknown as InvoiceRow[]
   const byId = new Map(rows.map((row) => [row.id, row]))
   const swedbankIso2 = paysThroughSwedbankIso2(debtorResolution)
+  const payeeHolds = await loadBatchPayeeHolds(supabase, companyId, rows)
 
   const eligible: BatchPreviewLine[] = []
   const excluded: BatchPreview['excluded'] = []
@@ -279,7 +298,7 @@ export async function previewSupplierPaymentBatch(
       excluded.push({ id, reason: 'in_bank_payment' })
       continue
     }
-    const evaluation = evaluateInvoiceForBatch(invoice, invoice.supplier, {
+    const evaluation = evaluateInvoiceForBatch({ ...invoice, payee_hold: holdFor(payeeHolds, id) }, invoice.supplier, {
       today,
       activeBatchIdByInvoice,
       attestBlocked,
@@ -430,6 +449,7 @@ export async function planSupplierPaymentBatch(
   ])
   const rows = (invoices ?? []) as unknown as InvoiceRow[]
   const byId = new Map(rows.map((row) => [row.id, row]))
+  const payeeHolds = await loadBatchPayeeHolds(supabase, companyId, rows)
 
   const ineligible: Array<{ id: string; reason: string }> = []
   const excessive: Array<{ id: string }> = []
@@ -450,7 +470,7 @@ export async function planSupplierPaymentBatch(
       ineligible.push({ id: invoice.id, reason: 'in_bank_payment' })
       continue
     }
-    const evaluation = evaluateInvoiceForBatch(invoice, invoice.supplier, {
+    const evaluation = evaluateInvoiceForBatch({ ...invoice, payee_hold: holdFor(payeeHolds, invoice.id) }, invoice.supplier, {
       today,
       activeBatchIdByInvoice,
       attestBlocked,

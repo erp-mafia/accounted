@@ -131,6 +131,10 @@ const RISK_TIERS = {
   // The payment signing link mints a 72-hour credential URL (and may mail it); the
   // payments are still signed by the firmatecknare with BankID at the bank.
   request_payment_signature: 'medium',
+  // Approving new bank details an invoice states releases payment to that
+  // account (and by default writes it on the supplier card): the step an
+  // invoice fraud needs. High, and approvable in the web UI only.
+  confirm_supplier_payee: 'high',
   book_invoice: 'high',
   bulk_book_invoices: 'high',
   book_supplier_invoice: 'high',
@@ -475,13 +479,19 @@ function paramEscalatedRisk(
  * Staged operations that only a person in the web UI may approve: the
  * approver attests something an agent cannot (that the invoice was
  * delivered, that the bank shows no payment, that a customer's answer was
- * handled), or the operation escalates against a customer. The MCP approve
+ * handled, that a supplier's new bank details are real), or the operation
+ * escalates against a customer. The MCP approve
  * tool refuses them and commitPendingOperation refuses every commit that is
  * not a web user's own approval. Depends on the params for case actions:
  * pausing or withdrawing a case is agent-approvable, approving the next step
  * is not.
  */
-export const WEB_ONLY_APPROVAL_TYPES: ReadonlySet<string> = new Set(['open_collection_case', 'collections_daily_batch'])
+export const WEB_ONLY_APPROVAL_TYPES: ReadonlySet<string> = new Set([
+  'open_collection_case',
+  'collections_daily_batch',
+  // A person vouches that the supplier's new bank details are real.
+  'confirm_supplier_payee',
+])
 
 export function requiresWebApproval(operationType: string, params?: Record<string, unknown> | null): boolean {
   if (WEB_ONLY_APPROVAL_TYPES.has(operationType)) return true

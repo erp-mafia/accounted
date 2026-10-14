@@ -81,6 +81,7 @@ const RETAINED = new Set([
   'supplier_invoice_attest_links.attester_user_id', // The attester an attest link speaks for; the link refuses anyone no longer a member.
   'supplier_invoices.approved_by', // Who gave the attest; the company keeps the record.
   'company_payment_verifications.started_by', // Who created the payment provider's verification form link; the company keeps the record.
+  'supplier_payee_confirmations.decided_by', // Who confirmed or rejected a supplier account; the company keeps the payment control record.
   'bokslut_checklist_items.done_by',
   'bokslut_checklist_items.updated_by',
   'chart_of_accounts.user_id',

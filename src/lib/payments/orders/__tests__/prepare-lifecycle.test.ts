@@ -137,6 +137,10 @@ describe('preparePaymentOrders', () => {
 
   it('warns from what the database decided: a changed account names the other one, a new one asks for a check', async () => {
     db.setTable('supplier_invoices', { data: [invoice('a', { payee_bankgiro: '5402-0102' }), invoice('b')] })
+    // A person confirmed the invoice's account for the supplier; the card still pays the old one.
+    db.setTable('supplier_payee_confirmations', {
+      data: [{ supplier_id: 'sup-1', payee_key: 'bankgiro:54020102', decision: 'confirmed', decided_at: '2026-09-29T10:00:00Z' }],
+    })
     db.setTable('rpc:create_payment_orders', {
       data: {
         ok: true,
@@ -155,6 +159,40 @@ describe('preparePaymentOrders', () => {
     const [args] = db.findCall('rpc:create_payment_orders', 'rpc') as [{ p_orders: Array<Record<string, unknown>> }]
     // The card is paid unless a person chose the invoice's account.
     expect(args.p_orders[0]).toMatchObject({ payee_bankgiro: '50501055', payee_source: 'supplier' })
+  })
+
+  it('holds an invoice whose stated account nobody confirmed, or a person rejected, and pays the rest', async () => {
+    db.setTable('supplier_invoices', {
+      data: [invoice('a', { payee_bankgiro: '5402-0102' }), invoice('b', { payee_bankgiro: '9020-0001' }), invoice('c')],
+    })
+    db.setTable('supplier_payee_confirmations', {
+      data: [
+        // The latest decision wins: rejected after an earlier confirmation.
+        { supplier_id: 'sup-1', payee_key: 'bankgiro:90200001', decision: 'rejected', decided_at: '2026-09-29T12:00:00Z' },
+        { supplier_id: 'sup-1', payee_key: 'bankgiro:90200001', decision: 'confirmed', decided_at: '2026-09-28T12:00:00Z' },
+      ],
+    })
+    db.setTable('rpc:create_payment_orders', { data: { ok: true, orders: [{ id: 'order-c', supplier_invoice_id: 'c', payee_check: 'known' }] } })
+
+    const result = await preparePaymentOrders(ctx, { supplierInvoiceIds: ['a', 'b', 'c'], cashAccountId: 'acct-1', today: '2026-09-30' })
+
+    if (!result.ok || result.dryRun) throw new Error('unexpected')
+    expect(result.data.skipped).toEqual([
+      { supplier_invoice_id: 'a', reason: 'payee_unconfirmed' },
+      { supplier_invoice_id: 'b', reason: 'payee_rejected' },
+    ])
+    const [args] = db.findCall('rpc:create_payment_orders', 'rpc') as [{ p_orders: Array<Record<string, unknown>> }]
+    expect(args.p_orders.map((o) => o.supplier_invoice_id)).toEqual(['c'])
+    // Only the supplier's own decisions are read, under the company.
+    expect(db.findCall('supplier_payee_confirmations', 'eq')).toEqual(['company_id', COMPANY])
+    expect(db.findCall('supplier_payee_confirmations', 'in')).toEqual(['supplier_id', ['sup-1']])
+  })
+
+  it('reads no decisions when no invoice states an account the card lacks', async () => {
+    db.setTable('supplier_invoices', { data: [invoice('a', { payee_bankgiro: '5050-1055' }), invoice('b')] })
+    db.setTable('rpc:create_payment_orders', { data: { ok: true, orders: [] } })
+    await preparePaymentOrders(ctx, { supplierInvoiceIds: ['a', 'b'], cashAccountId: 'acct-1', today: '2026-09-30' })
+    expect(db.tables()).not.toContain('supplier_payee_confirmations')
   })
 
   it('skips invoices in an open payment file or an open order before calling the database', async () => {

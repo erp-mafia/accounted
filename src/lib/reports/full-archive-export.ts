@@ -1141,6 +1141,9 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   { name: 'payment_orders', file: 'payment_orders.json', orderBy: 'created_at' },
   { name: 'payment_order_batches', file: 'payment_order_batches.json', orderBy: 'created_at' },
   { name: 'payment_order_events', file: 'payment_order_events.json', orderBy: 'occurred_at' },
+  // Who confirmed or rejected a supplier account an invoice stated, and when:
+  // the payment control behind which account a supplier was paid to.
+  { name: 'supplier_payee_confirmations', file: 'supplier_payee_confirmations.json', orderBy: 'decided_at' },
   // Underlag intake: the chat answers behind a verifikat.
   //
   // A projection, not the whole table. `channel_context` holds the human

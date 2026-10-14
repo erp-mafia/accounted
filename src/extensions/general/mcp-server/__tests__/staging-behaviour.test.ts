@@ -771,6 +771,18 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
     },
     empty: ['payment_signing_links'],
   },
+  // An invoice that states another bankgiro than the supplier card: the
+  // preview reads the invoice, the card and the decisions, and writes nothing.
+  gnubok_confirm_supplier_payee: {
+    rows: {
+      supplier_invoices: {
+        supplier_id: SOME_UUID, status: 'approved', is_credit_note: false, remaining_amount: 1000,
+        payee_bankgiro: '9020-0007', payee_plusgiro: null, payee_clearing: null, payee_account: null, payee_iban: null,
+        supplier: { id: SOME_UUID, name: 'Derome Bygg AB', bankgiro: '5050-1055', plusgiro: null, bank_account: null, clearing_number: null, account_number: null, iban: null },
+      },
+    },
+    empty: ['supplier_payee_confirmations'],
+  },
   // The signatory link is owners' and admins'; the preview reads the role and
   // the live Enable Banking row the link replaces, and mints nothing.
   gnubok_bank_feed_connect_link: {

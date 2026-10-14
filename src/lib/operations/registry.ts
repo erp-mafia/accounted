@@ -131,6 +131,7 @@ import {
   paymentsVerificationStart,
 } from './payment-orders'
 import { paymentsCompanyGiroNumbers, paymentsLookupCreditor } from './bankgiro-lookup'
+import { supplierPayeesConfirm } from './supplier-payees'
 import {
   documentsDelete,
   documentsGet,
@@ -349,6 +350,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   paymentsVerification,
   paymentsVerificationStart,
   paymentsSigningLink,
+  // changed supplier bank details: MCP stages the approval, a person gives it in the web UI
+  supplierPayeesConfirm,
   // documents
   documentsList,
   documentsGet,

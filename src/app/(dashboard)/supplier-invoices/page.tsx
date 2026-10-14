@@ -7,6 +7,7 @@ import { useLocale, useTranslations } from 'next-intl'
 import { groupRows } from '@/lib/lists/group-rows'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
+import { fetchPayeeAlertMarkers, type PayeeAlertMarker } from '@/components/payments/payee-change-client'
 import { Button } from '@/components/ui/button'
 import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -208,9 +209,21 @@ export default function SupplierInvoicesPage() {
     }
   }
 
+  // Invoices whose stated bank details hold their payment back: a marker per
+  // row (lib/payments/payee-alerts.ts). Marker data only, like the batch chips.
+  const [payeeMarkers, setPayeeMarkers] = useState<Map<string, PayeeAlertMarker>>(new Map())
+  async function fetchPayeeMarkers() {
+    try {
+      setPayeeMarkers(await fetchPayeeAlertMarkers())
+    } catch {
+      // The list stays functional without it.
+    }
+  }
+
   useEffect(() => {
     fetchInvoices()
     fetchActiveBatchMembership()
+    fetchPayeeMarkers()
     // Mount-only fetch (same pattern as /invoices): fetchInvoices reads state
     // only to decide skeleton vs background refresh.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -752,7 +765,14 @@ export default function SupplierInvoicesPage() {
                       </td>
                     )}
                     <td className={cn(TD_CLASS, 'max-w-0 w-full')}>
-                      <span className="block truncate">{inv.supplier?.name || '-'}</span>
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span className="truncate">{inv.supplier?.name || '-'}</span>
+                        {payeeMarkers.has(inv.id) && (
+                          <Badge variant="warning" className="shrink-0 font-normal">
+                            {t('payee_alert_badge')}
+                          </Badge>
+                        )}
+                      </span>
                     </td>
                     <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>
                       <Link
