@@ -1386,6 +1386,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   bank_connection_psus: 'the personnummer (encrypted) a bank consent was created with, kept only to send it again on later calls to that consent; operational personal data, never exported, not räkenskapsinformation',
   payment_batch_psus: 'the personnummer (encrypted) a signing\'s bank payments were created with, kept only to send it again on their status reads and cancels; operational personal data, never exported, not räkenskapsinformation (the payment orders and their events are exported)',
   company_payment_verifications: 'the payment provider\'s KYC status of the company as last read plus a 24-hour form link (sensitive); re-readable from the provider, not räkenskapsinformation',
+  company_bank_payment_allowances: 'platform configuration: how many bank payments a month the company may send through the payment provider; not räkenskapsinformation (the payment orders and their events are exported)',
+  bank_payment_allowance_requests: 'support requests for more included bank payments a month; platform correspondence, not räkenskapsinformation',
   bolagsverket_avtal_acceptances: 'service agreement acceptance state',
   bolagsverket_subscriptions: 'integration subscription state',
   booking_template_hidden: 'per-company UI preference (hidden system templates); no bookkeeping content',

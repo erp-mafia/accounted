@@ -8049,6 +8049,30 @@ const PAYMENT_ORDERS: Record<string, StructuredErrorEntry> = {
     message_sv: 'Banken tar emot färre betalningar per signering. Dela upp betalningarna i mindre omgångar.',
     message_en: 'The bank takes fewer payments per signing. Split the payments into smaller rounds.',
   },
+  // The monthly cap on bank payments (lib/payments/allowance.ts). The thrower
+  // composes the Swedish text with the numbers and the month; details carry
+  // { period, used, included, remaining, requested } for the screen.
+  BANK_PAYMENTS_ALLOWANCE_EXCEEDED: {
+    httpStatus: 409,
+    message_sv: 'Månadens bankbetalningar som ingår är använda. Välj färre betalningar, eller begär fler under Inställningar, Kopplingar, Betalningar via banken.',
+    message_en: 'The bank payments included this month are used up. Choose fewer payments, or ask for more under Settings, Connections, Bank payments.',
+    remediation: {
+      description:
+        'Sign at most details.remaining payments this month (details.used of details.included are used in details.period), or ask for more under Settings, Connections, Bank payments. Payment files are not capped.',
+    },
+    thrown_message_sv: true,
+  },
+  BANK_PAYMENTS_ALLOWANCE_REQUEST_OPEN: {
+    httpStatus: 409,
+    message_sv: 'Ni har redan en förfrågan om fler betalningar som vi inte har svarat på. Vi hör av oss så snart vi kan.',
+    message_en: 'You already have a request for more payments that we have not answered yet. We will get back to you as soon as we can.',
+  },
+  BANK_PAYMENTS_ALLOWANCE_REQUEST_NOT_SENT: {
+    httpStatus: 503,
+    message_sv: 'Förfrågan kunde inte skickas just nu. Försök igen om en stund.',
+    message_en: 'The request could not be sent right now. Try again in a moment.',
+    retryable: true,
+  },
   PAYMENT_SIGNING_REDIRECT_UNSUPPORTED: {
     httpStatus: 409,
     message_sv: 'Banken kräver signering på sin egen webbsida, vilket inte stöds här ännu. Betala fakturorna med en betalfil i stället.',

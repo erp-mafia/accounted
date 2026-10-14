@@ -231,19 +231,58 @@ async function send<T>(input: string, init?: RequestInit): Promise<T> {
   return (body as { data: T }).data
 }
 
-/** Bank payments sent and accounts used in a month, against what the plan includes (GET /api/payments/usage). */
+/** Bank payments sent and accounts used in a month, against the monthly cap (GET /api/payments/usage). */
 export interface BankPaymentsUsage {
   period: string
   payments_sent: number
   accounts_used: number
+  /** The cap: payments a month the company may send. */
   included_payments: number
   included_accounts: number
+  /** Payments the month still takes. Absent from servers before the cap. */
+  remaining_payments?: number
   extra_payments: number
   extra_accounts: number
 }
 
 export function fetchBankPaymentsUsage(period?: string): Promise<BankPaymentsUsage> {
   return send<BankPaymentsUsage>(period ? `/api/payments/usage?period=${encodeURIComponent(period)}` : '/api/payments/usage')
+}
+
+/** What the month still takes, from a usage answer of any server version. */
+export function remainingBankPayments(usage: BankPaymentsUsage): number {
+  return usage.remaining_payments ?? Math.max(0, usage.included_payments - usage.payments_sent)
+}
+
+/** A signing refused at the monthly cap (BANK_PAYMENTS_ALLOWANCE_EXCEEDED): the numbers the refusal carries. */
+export interface BankPaymentsAllowanceRefusal {
+  period: string
+  used: number
+  included: number
+  remaining: number
+  requested: number
+}
+
+/** The cap's numbers when `error` is that refusal; null for anything else. */
+export function allowanceRefusalOf(error: unknown): BankPaymentsAllowanceRefusal | null {
+  if (!(error instanceof PaymentsClientError) || error.code !== 'BANK_PAYMENTS_ALLOWANCE_EXCEEDED') return null
+  const details = (error.body as { error?: { details?: Partial<BankPaymentsAllowanceRefusal> } } | null)?.error?.details
+  if (!details || typeof details.period !== 'string' || typeof details.used !== 'number' || typeof details.included !== 'number') return null
+  return {
+    period: details.period,
+    used: details.used,
+    included: details.included,
+    remaining: typeof details.remaining === 'number' ? details.remaining : Math.max(0, details.included - details.used),
+    requested: typeof details.requested === 'number' ? details.requested : 0,
+  }
+}
+
+/** Begär fler betalningar (POST /api/payments/allowance-requests): support is mailed, a founder answers. */
+export function requestMoreBankPayments(input: { monthlyPaymentsWanted: number; message: string | null }): Promise<{ request_id: string; created_at: string }> {
+  return send<{ request_id: string; created_at: string }>('/api/payments/allowance-requests', {
+    method: 'POST',
+    body: JSON.stringify({ monthly_payments_wanted: input.monthlyPaymentsWanted, message: input.message }),
+  })
 }
 
 export function fetchPaymentsAvailability(): Promise<PaymentsAvailability> {

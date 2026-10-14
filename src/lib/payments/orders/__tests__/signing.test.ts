@@ -9,8 +9,15 @@ import type { OperationContext } from '@/lib/operations/types'
 import { sanitizedProviderMessage } from '../types'
 import { batch, claimedOrder, COMPANY, fakeProvider, invoiceFor, order, SIGNER, USER, waitingOrder } from './fixtures'
 
-const mock = vi.hoisted(() => ({ supabase: null as unknown, storedBatchPsu: vi.fn(), rememberBatchPsu: vi.fn() }))
+const mock = vi.hoisted(() => ({ supabase: null as unknown, storedBatchPsu: vi.fn(), rememberBatchPsu: vi.fn(), readMonth: vi.fn() }))
 vi.mock('@/lib/supabase/server', () => ({ createServiceClient: () => mock.supabase }))
+// The month's sent payments and cap (usage.ts), answered here so the queued
+// payment_orders answers below stay the signing's own; the cap's decision
+// (allowance.ts) runs for real.
+vi.mock('@/lib/payments/usage', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/payments/usage')>()),
+  readBankPaymentsMonth: (...a: unknown[]) => mock.readMonth(...a),
+}))
 vi.mock('@/lib/auth/resource-psu', () => ({
   storedBatchPsu: (...a: unknown[]) => mock.storedBatchPsu(...a),
   rememberBatchPsu: (...a: unknown[]) => mock.rememberBatchPsu(...a),
@@ -37,7 +44,14 @@ beforeEach(() => {
   ctx = { supabase: db.supabase as never, companyId: COMPANY, userId: USER, log: log as never }
   mock.storedBatchPsu.mockReset().mockResolvedValue(null)
   mock.rememberBatchPsu.mockReset().mockResolvedValue(undefined)
+  mock.readMonth.mockReset().mockResolvedValue({ period: '2026-10', sent: [], included_payments: 10 })
 })
+
+/** The month as usage.ts reads it: `others` payments sent outside the signing, plus the signing's own ids already at the bank. */
+function month(others: number, atBank: string[] = [], included = 10) {
+  const sent = [...Array.from({ length: others }, (_, i) => ({ id: `sent-${i}`, cash_account_id: 'acct-1' })), ...atBank.map((id) => ({ id, cash_account_id: 'acct-1' }))]
+  return { period: '2026-10', sent, included_payments: included }
+}
 
 /** The PSU-ID a signing's payments were created with, as the earlier signing kept it. */
 const KEPT_PSU = '198001019879'
@@ -648,6 +662,94 @@ describe('startPaymentSigning', () => {
 
   it('is unavailable without a registered provider', async () => {
     expect(await startPaymentSigning(ctx, { orderIds: ['o1'], method: 'qr', signer: SIGNER })).toMatchObject({ ok: false, code: 'PAYMENTS_UNAVAILABLE' })
+  })
+})
+
+describe('the monthly cap on bank payments', () => {
+  const start = () => startPaymentSigning(ctx, { orderIds: ['o1', 'o2'], method: 'qr', signer: SIGNER })
+  const restart = () => restartPaymentSigning(ctx, { batchId: 'batch-1', method: 'qr', signer: SIGNER })
+
+  it.each([
+    ['under the cap', 5],
+    ['landing exactly on the cap', 8],
+  ])('starts a signing %s', async (_name, others) => {
+    const provider = fakeProvider()
+    registerPaymentInitiationProvider(provider)
+    mock.readMonth.mockResolvedValue(month(others))
+    db.setTable('payment_orders', { data: [order('o1'), order('o2')] })
+    db.setTable('rpc:claim_payment_orders_for_signing', { data: { ok: false, code: 'not_approved' } })
+
+    // Past the cap: the claim was reached (and refused by the fixture).
+    expect(await start()).toMatchObject({ ok: false, code: 'PAYMENT_ORDERS_WRONG_STATUS' })
+    expect(db.supabase.rpc).toHaveBeenCalledWith('claim_payment_orders_for_signing', expect.anything())
+    expect(mock.readMonth).toHaveBeenCalledWith(db.supabase, COMPANY, expect.stringMatching(/^\d{4}-\d{2}$/))
+  })
+
+  it('refuses a signing over the cap before anything moves or reaches the bank', async () => {
+    const provider = fakeProvider()
+    registerPaymentInitiationProvider(provider)
+    mock.readMonth.mockResolvedValue(month(9))
+    db.setTable('payment_orders', { data: [order('o1', { requested_execution_date: '2026-10-11' }), order('o2')] })
+
+    const result = await start()
+
+    expect(result).toEqual({
+      ok: false,
+      code: 'BANK_PAYMENTS_ALLOWANCE_EXCEEDED',
+      details: { period: '2026-10', used: 9, included: 10, remaining: 1, requested: 2 },
+      messageSv: 'Ni har använt 9 av 10 betalningar som ingår i oktober. Välj högst 1 betalning, eller begär fler under Inställningar, Kopplingar, Betalningar via banken.',
+    })
+    expect(db.supabase.rpc).not.toHaveBeenCalled()
+    expect(provider.getBankCapabilities).not.toHaveBeenCalled()
+    expect(provider.createPayment).not.toHaveBeenCalled()
+    // Not even the re-attest of a weekend date ran.
+    expect(orderPatches()).toEqual([])
+  })
+
+  it('follows a raised allowance', async () => {
+    registerPaymentInitiationProvider(fakeProvider())
+    mock.readMonth.mockResolvedValue(month(30, [], 40))
+    db.setTable('payment_orders', { data: [order('o1'), order('o2')] })
+    db.setTable('rpc:claim_payment_orders_for_signing', { data: { ok: false, code: 'not_approved' } })
+    expect(await start()).toMatchObject({ ok: false, code: 'PAYMENT_ORDERS_WRONG_STATUS' })
+  })
+
+  it.each([
+    ['under the cap', 3],
+    ['landing exactly on the cap', 8],
+  ])('signs again what waits at the bank %s, counting the waiting payments once', async (_name, others) => {
+    const provider = fakeProvider()
+    registerPaymentInitiationProvider(provider)
+    const same = batch({ provider_batch_id: 'basket-old' })
+    const both = [waitingOrder('o1', 1), waitingOrder('o2', 2)]
+    // o1 and o2 reached the bank this month: they are in the month's count already.
+    mock.readMonth.mockResolvedValue(month(others, ['o1', 'o2']))
+    db.setTable('payment_order_batches', { data: same })
+    db.setTable('payment_orders', { data: both })
+    db.setTable('rpc:rebatch_payment_orders_for_signing', { data: { ok: false, code: 'ineligible', details: [{ id: 'o2', reason: 'not_payable' }] } })
+
+    // Past the cap: the rebatch was reached (and refused by the fixture).
+    expect(await restart()).toMatchObject({ ok: false, code: 'PAYMENT_ORDERS_INELIGIBLE' })
+    expect(db.supabase.rpc).toHaveBeenCalledWith('rebatch_payment_orders_for_signing', expect.anything())
+  })
+
+  it('refuses to sign again when the month is already past the cap, before the bank is asked anything', async () => {
+    const provider = fakeProvider()
+    registerPaymentInitiationProvider(provider)
+    const same = batch({ provider_batch_id: 'basket-old' })
+    mock.readMonth.mockResolvedValue(month(9, ['o1', 'o2']))
+    db.setTable('payment_order_batches', { data: same })
+    db.setTable('payment_orders', { data: [waitingOrder('o1', 1), waitingOrder('o2', 2)] })
+
+    expect(await restart()).toMatchObject({
+      ok: false,
+      code: 'BANK_PAYMENTS_ALLOWANCE_EXCEEDED',
+      details: { period: '2026-10', used: 9, included: 10, remaining: 1, requested: 2 },
+    })
+    expect(db.supabase.rpc).not.toHaveBeenCalled()
+    expect(provider.getBankCapabilities).not.toHaveBeenCalled()
+    expect(provider.getPaymentState).not.toHaveBeenCalled()
+    expect(provider.startSigning).not.toHaveBeenCalled()
   })
 })
 

@@ -332,7 +332,7 @@ describe('payments.availability', () => {
 })
 
 describe('payments.usage', () => {
-  it('counts the month and names what lies beyond the plan', async () => {
+  it('counts the month against the cap and names what remains', async () => {
     db.setTable('payment_orders', { data: [{ cash_account_id: ACCOUNT }, { cash_account_id: ACCOUNT }] })
     const result = await run(paymentsUsage, { period: '2026-10' })
     if (!result.ok || result.dryRun) throw new Error('unexpected')
@@ -340,8 +340,9 @@ describe('payments.usage', () => {
       period: '2026-10',
       payments_sent: 2,
       accounts_used: 1,
-      included_payments: 30,
+      included_payments: 10,
       included_accounts: 2,
+      remaining_payments: 8,
       extra_payments: 0,
       extra_accounts: 0,
     })

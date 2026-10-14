@@ -311,7 +311,7 @@ POST /companies/{companyId}/payment-orders/approve : Approve (attest) draft bank
 GET /companies/{companyId}/payment-orders/availability : Whether the company can pay through its bank from Accounted, and from which accounts [scope:suppliers:read risk:low idempotent]
 GET /companies/{companyId}/payment-orders/signing-link : The Betalningar page link where a person approves and signs bank payments, with what is waiting there [scope:suppliers:read risk:low idempotent]
 POST /companies/{companyId}/payment-orders/unapprove : Take approved bank payments back to draft [scope:suppliers:write risk:low idempotent dry-run reversible]
-GET /companies/{companyId}/payment-orders/usage : Bank payments sent and accounts used in a month, against what the plan includes [scope:suppliers:read risk:low idempotent]
+GET /companies/{companyId}/payment-orders/usage : Bank payments sent and accounts used in a month, against the monthly cap [scope:suppliers:read risk:low idempotent]
 GET /companies/{companyId}/payment-orders/verification : The company's verification (know your customer) at the payment provider, and where it stands [scope:suppliers:read risk:low idempotent]
 POST /companies/{companyId}/payment-orders/verification/start : Start or renew the company's verification at the payment provider and get the form link [scope:suppliers:write risk:low dry-run reversible]
 GET /companies/{companyId}/payments/creditor-lookup : The name Bankgirot has registered for a bankgiro or plusgiro number, and whether an OCR passes its check [scope:suppliers:read risk:low idempotent]
