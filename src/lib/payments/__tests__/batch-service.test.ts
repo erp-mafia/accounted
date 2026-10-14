@@ -331,6 +331,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: [invoiceRow()] },
       { data: [] },
       { data: [] }, // open bank payment orders: none
+      { data: null }, // attest policy: none
       { data: { ok: true, batch: batchRow() } },
     ])
 
@@ -401,6 +402,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: [invoiceRow()] },
       { data: [] },
       { data: [] }, // open bank payment orders: none
+      { data: null }, // attest policy: none
       {
         data: {
           ok: false,
@@ -432,12 +434,14 @@ describe('createSupplierPaymentBatch', () => {
       { data: [invoiceRow()] },
       { data: [] },
       { data: [] }, // open bank payment orders: none
+      { data: null }, // attest policy: none
       { data: { ok: false, code: 'ineligible', details: [{ id: 'inv-1', reason: 'not_payable' }] } },
       { data: companyRow },
       { data: settingsRow },
       { data: [invoiceRow()] },
       { data: [] },
       { data: [] }, // open bank payment orders: none
+      { data: null }, // attest policy: none
       { data: { ok: false, code: 'amount_exceeds_remaining', details: [{ id: 'inv-1' }] } },
     ])
     const input = { format: 'pain001' as const, items: [{ supplier_invoice_id: 'inv-1' }] }
@@ -482,6 +486,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: [invoiceRow()] },
       { data: [] },
       { data: [] }, // open bank payment orders: none
+      { data: null }, // attest policy: none
       { error: rpcError },
     ])
 
@@ -529,6 +534,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: [invoiceRow()] },
       { data: [] },
       { data: [] }, // open bank payment orders: none
+      { data: null }, // attest policy: none
       { error: rpcError },
     ])
 
@@ -569,6 +575,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: [invoiceRow()] },
       { data: [] },
       { data: [] }, // open bank payment orders: none
+      { data: null }, // attest policy: none
       { error: rpcError },
     ])
 
@@ -598,12 +605,14 @@ describe('createSupplierPaymentBatch', () => {
       { data: [invoiceRow()] },
       { data: [] },
       { data: [] }, // open bank payment orders: none
+      { data: null }, // attest policy: none
       { data: { ok: false, code: 'something_new' } },
       { data: companyRow },
       { data: settingsRow },
       { data: [invoiceRow()] },
       { data: [] },
       { data: [] }, // open bank payment orders: none
+      { data: null }, // attest policy: none
       { data: null },
     ])
     const input = { format: 'pain001' as const, items: [{ supplier_invoice_id: 'inv-1' }] }
@@ -651,12 +660,14 @@ describe('createSupplierPaymentBatch', () => {
       { data: [invoiceRow()] },
       { data: [] },
       { data: [] }, // open bank payment orders: none
+      { data: null }, // attest policy: none
       { data: { ok: true, batch: batchRow() } },
       { data: companyRow },
       { data: settingsRow },
       { data: [invoiceRow()] },
       { data: [] },
       { data: [] }, // open bank payment orders: none
+      { data: null }, // attest policy: none
       { data: { ok: false, code: 'already_batched', details: [{ id: 'inv-1', batch_id: 'b' }] } },
     ])
     const input = { format: 'pain001' as const, items: [{ supplier_invoice_id: 'inv-1' }] }
@@ -686,6 +697,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: [invoiceRow(), invoiceRow({ id: 'inv-2', currency: 'EUR' })] },
       { data: [] },
       { data: [] }, // open bank payment orders: none
+      { data: null }, // attest policy: none
     ])
 
     const result = await createSupplierPaymentBatch(
@@ -714,6 +726,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: [invoiceRow()] },
       { data: [] },
       { data: [] }, // open bank payment orders: none
+      { data: null }, // attest policy: none
     ])
 
     const result = await createSupplierPaymentBatch(
@@ -742,6 +755,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: [invoiceRow()] },
       { data: activeItems },
       { data: [] }, // open bank payment orders: none
+      { data: null }, // attest policy: none
     ])
 
     const result = await createSupplierPaymentBatch(
@@ -770,6 +784,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: [invoiceRow()] },
       { data: activeItems },
       { data: [] }, // open bank payment orders: none
+      { data: null }, // attest policy: none
       { data: { ok: true, batch: batchRow() } },
     ])
 
@@ -832,6 +847,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: [invoiceRow()] },
       { data: [] },
       { data: [] }, // open bank payment orders: none
+      { data: null }, // attest policy: none
       { data: { ok: true, batch: batchRow() } },
     ])
 
@@ -894,6 +910,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: [invoiceRow()] },
       { data: [] },
       { data: [] }, // open bank payment orders: none
+      { data: null }, // attest policy: none
       { data: { ok: true, batch: batchRow() } },
     ])
 
@@ -970,6 +987,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: [invoiceRow({ supplier: supplierPaying({ clearing_number: '6000', account_number: '123456789' }) })] },
       { data: [] },
       { data: [] }, // open bank payment orders: none
+      { data: null }, // attest policy: none
       { data: { ok: true, batch: batchRow() } },
     ])
 
@@ -1018,6 +1036,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: invoicesToEveryPayeeType() },
       { data: [] },
       { data: [] }, // open bank payment orders: none
+      { data: null }, // attest policy: none
     ])
 
     const result = await createSupplierPaymentBatch(
@@ -1045,6 +1064,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: [invoiceRow()] },
       { data: [] },
       { data: [] }, // open bank payment orders: none
+      { data: null }, // attest policy: none
       { data: { ok: true, batch: batchRow() } },
     ])
 

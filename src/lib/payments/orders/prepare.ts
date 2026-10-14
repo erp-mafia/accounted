@@ -22,6 +22,7 @@ import { executionDateFor } from '@/lib/payments/bank-days'
 import { formatPayeeLabel, type SupplierPayee } from '@/lib/payments/supplier-payee'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { createServiceClient } from '@/lib/supabase/server'
+import { loadAttestBlockedInvoiceIds } from '@/lib/supplier-invoices/attest-policy-read'
 import { resolveDebtor } from './debtor'
 import { resolveOrderPayee } from './payee'
 import { isOpenPaymentOrder } from './status'
@@ -196,6 +197,8 @@ export async function preparePaymentOrders(
     staleDrafts.set(o.supplier_invoice_id, [...(staleDrafts.get(o.supplier_invoice_id) ?? []), o.id])
   }
 
+  // The attest policy's exclusion: the same read the payment file makes.
+  const attestBlocked = await loadAttestBlockedInvoiceIds(supabase, companyId, ids)
   const useStated = new Set(input.useStatedPayeeFor ?? [])
   const skipped: PreparePaymentOrdersResult['skipped'] = []
   const warnings: PreparedOrderWarning[] = []
@@ -224,7 +227,7 @@ export async function preparePaymentOrders(
     const evaluation = evaluateInvoiceForBatch(
       { ...invoice, remaining_amount: Number(invoice.remaining_amount) },
       supplier,
-      { today: input.today },
+      { today: input.today, attestBlocked },
     )
     if (!evaluation.eligible) {
       skipped.push({ supplier_invoice_id: id, reason: evaluation.reason })

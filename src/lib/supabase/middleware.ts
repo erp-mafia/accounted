@@ -331,6 +331,14 @@ async function updateSessionInner(
     return supabaseResponse
   }
 
+  // The attest mail's link: an attester opens /attest/<token> to approve or
+  // reject a supplier invoice without signing in (the token is resolved
+  // server-side against supplier_invoice_attest_links). See
+  // app/attest/[token]/page.tsx.
+  if (pathname.startsWith('/attest/')) {
+    return supabaseResponse
+  }
+
   // Reset-password is reachable in both auth states. The recovery flow lands
   // here with a fresh session (created by the OTP exchange in /auth/callback)
   // precisely so the user can call supabase.auth.updateUser({ password }). If

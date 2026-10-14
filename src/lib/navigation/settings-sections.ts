@@ -72,6 +72,8 @@ export function visibleSettingsSections(scope: SettingsSectionScope): SettingsSe
     section('members', '/settings/members', 'company', hasCompany),
     section('billing', '/settings/billing', 'company', !byraScope),
     section('bookkeeping', '/settings/bookkeeping', 'accounting', hasCompany),
+    // Attest of supplier invoices (who attests, from what amount, one or all).
+    section('attest', '/settings/attest', 'accounting', hasCompany),
     section('fiscal-years', '/settings/fiscal-years', 'accounting', hasCompany),
     section('tax', '/settings/tax', 'accounting', hasCompany),
     section('salary', '/settings/salary', 'accounting', hasCompany),

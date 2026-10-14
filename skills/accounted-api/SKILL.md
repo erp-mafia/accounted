@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 323 endpoints.
+  pagination, scopes), and all 327 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -152,7 +152,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 323 operations. Paths are shown without
+API version `2026-05-12`, 327 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (12)
@@ -293,7 +293,7 @@ DELETE /companies/{companyId}/customers/{id} : Archive a customer (soft-delete) 
 POST /companies/{companyId}/customers/bulk-create : Create up to 50 customers in one call (partial-success) [scope:customers:write risk:low idempotent dry-run reversible]
 ```
 
-### Suppliers (AP) (43)
+### Suppliers (AP) (47)
 
 Full detail: [references/suppliers.md](references/suppliers.md)
 
@@ -323,12 +323,16 @@ GET /companies/{companyId}/supplier-invoices/{id} : Retrieve a single supplier i
 PATCH /companies/{companyId}/supplier-invoices/{id} : Update a registered supplier invoice [scope:suppliers:write risk:low idempotent dry-run reversible]
 DELETE /companies/{companyId}/supplier-invoices/{id} : Delete an unbooked, unpaid supplier invoice (no verifikat, no payment) [scope:suppliers:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/supplier-invoices/{id}/approve : Approve a registered or overdue supplier invoice [scope:suppliers:write risk:low idempotent dry-run]
+GET /companies/{companyId}/supplier-invoices/{id}/attestations : Where the attest of one supplier invoice stands: who attested, who is left, every decision [scope:suppliers:read risk:low idempotent]
 POST /companies/{companyId}/supplier-invoices/{id}/bank-entered : Mark a supplier invoice as entered in the internet bank ("inlagd i banken"), or clear the mark [scope:suppliers:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/supplier-invoices/{id}/book : Book a registered supplier invoice that was registered without a verifikat (the deferred Bokför step) [scope:suppliers:write risk:high idempotent dry-run]
 POST /companies/{companyId}/supplier-invoices/{id}/credit : Issue a credit note for a supplier invoice [scope:suppliers:write risk:high idempotent dry-run]
 PATCH /companies/{companyId}/supplier-invoices/{id}/items/{itemId} : Move one supplier-invoice line to another account, correcting the registration verifikat inline [scope:suppliers:write risk:high idempotent dry-run reversible]
 POST /companies/{companyId}/supplier-invoices/{id}/mark-paid : Record a payment against a supplier invoice [scope:suppliers:write risk:medium idempotent dry-run]
+POST /companies/{companyId}/supplier-invoices/{id}/reject : Reject (neka) the attest of a supplier invoice that waits for it, with an optional comment [scope:suppliers:write risk:low idempotent dry-run]
 POST /companies/{companyId}/supplier-invoices/{id}/uncredit : Undo the credit of a supplier invoice ("Ångra kreditering"): storno the credit note's verifikat and restore the invoice [scope:suppliers:write risk:high idempotent dry-run]
+GET /companies/{companyId}/supplier-invoices/attest-policy : Read the company's attest policy for supplier invoices [scope:suppliers:read risk:low idempotent]
+PUT /companies/{companyId}/supplier-invoices/attest-policy : Save the company's attest policy for supplier invoices [scope:suppliers:write risk:high idempotent dry-run reversible]
 GET /companies/{companyId}/supplier-payment-batches : List supplier payment batches (betalfiler), newest first, with settlement progress [scope:suppliers:read risk:low idempotent]
 POST /companies/{companyId}/supplier-payment-batches : Create a supplier payment file (betalfil, pain.001) for one or more supplier invoices [scope:suppliers:write risk:high idempotent dry-run]
 GET /companies/{companyId}/supplier-payment-batches/{id} : Read one supplier payment batch (betalfil) with its lines and live settlement [scope:suppliers:read risk:low idempotent]

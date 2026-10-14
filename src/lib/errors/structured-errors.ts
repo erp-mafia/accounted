@@ -2505,6 +2505,36 @@ const SUPPLIER_INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Fakturan är redan godkänd eller kan inte godkännas i nuvarande status.',
     message_en: 'The invoice is already approved, or cannot be approved in its current status.',
   },
+  // The attest policy (lib/supplier-invoices/attest-policy.ts).
+  ATTEST_NOT_ALLOWED: {
+    httpStatus: 403,
+    message_sv: 'Du kan inte attestera den här fakturan. Företagets attestregler bestämmer vem som attesterar, och den som registrerade fakturan attesterar den inte själv.',
+    message_en: 'You may not attest this invoice. The company\'s attest policy decides who attests, and the person who registered the invoice does not attest it.',
+    remediation: {
+      description: 'Ask one of the attesters named by gnubok_get_attest_policy (GET /supplier-invoices/attest-policy) to attest the invoice.',
+      tool: 'gnubok_get_attest_policy',
+    },
+  },
+  ATTEST_ALREADY_GIVEN: {
+    httpStatus: 409,
+    message_sv: 'Du har redan attesterat fakturan. Den väntar på de andra attestanterna.',
+    message_en: 'You have already attested this invoice. It waits for the other attesters.',
+  },
+  ATTEST_NOT_PENDING: {
+    httpStatus: 409,
+    message_sv: 'Fakturan väntar inte på attest.',
+    message_en: 'The invoice is not waiting for attest.',
+  },
+  ATTEST_POLICY_NO_ATTESTERS: {
+    httpStatus: 400,
+    message_sv: 'Välj minst en attestant innan attestreglerna slås på.',
+    message_en: 'Choose at least one attester before switching the attest policy on.',
+  },
+  ATTEST_POLICY_ATTESTER_NOT_MEMBER: {
+    httpStatus: 400,
+    message_sv: 'En attestant måste vara medlem i företaget med behörighet att ändra, inte bara läsa.',
+    message_en: 'An attester must be a member of the company who may write, not a viewer.',
+  },
   SI_EDIT_CONFLICT: {
     httpStatus: 409,
     message_sv:

@@ -408,6 +408,8 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_cancel_payment_order: 'suppliers:write',
   gnubok_get_payments_signing_link: 'suppliers:read',
   gnubok_request_payment_signature: 'suppliers:write',
+  // The attest policy for supplier invoices (lib/operations/supplier-invoice-attest.ts).
+  gnubok_get_attest_policy: 'suppliers:read',
   // Bankgiro Lookup (lib/operations/bankgiro-lookup.ts): the registered name
   // behind a payee's giro, and the company's own registered giro numbers.
   gnubok_lookup_bankgiro_creditor: 'suppliers:read',

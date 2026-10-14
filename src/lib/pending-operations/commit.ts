@@ -59,10 +59,7 @@ import { buildInvoiceMatchClearingLines } from '@/lib/bookkeeping/invoice-paymen
 import { booksInvoicesOnIssue, cashPartialBlockReason, creditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { ensureManualCashAccount, resolveDefaultCashAccountId } from '@/lib/cash-accounts/service'
 import { createJournalEntry, findFiscalPeriod, getSwedishLocalDate, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
-import {
-  canApproveSupplierInvoice,
-  resolveUnsettledStatus,
-} from '@/lib/supplier-invoices/lifecycle'
+import { approveSupplierInvoice } from '@/lib/supplier-invoices/attest-service'
 import { CreditSupplierInvoiceInputSchema, creditSupplierInvoice } from '@/lib/supplier-invoices/credit'
 import { resolveInboxKind } from '@/lib/documents/inbox-kind'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
@@ -4230,55 +4227,33 @@ async function commitApproveSupplierInvoice(
   const id = params.supplier_invoice_id as string
   if (!id) return { error: 'supplier_invoice_id is required', status: 400 }
 
-  const { data: invoice } = await supabase
-    .from('supplier_invoices').select('*').eq('id', id).eq('company_id', companyId).single()
-
-  if (!invoice) return { error: 'Supplier invoice not found', status: 404 }
-  // 'overdue' is approvable: the daily cron flips unbooked invoices there just
-  // by aging, and a registered-only gate left an aged invoice with no way
-  // through attest (#1206). approved_at makes the approval idempotent.
-  if (!canApproveSupplierInvoice(invoice)) {
-    return {
-      error: 'Fakturan är redan godkänd eller kan inte godkännas i nuvarande status',
-      status: 400,
-    }
-  }
-
-  // A still-past-due invoice keeps the 'overdue' label after attest: that is
-  // what the cron would do on its next run.
-  const approvedAt = new Date().toISOString()
-  const nextStatus = resolveUnsettledStatus(
-    { ...invoice, approved_at: approvedAt },
-    getSwedishLocalDate(),
+  // The approving person attests: the company's attest policy (who may
+  // attest, four eyes, any or all) is applied to them, in the same service
+  // as the dashboard and v1 (lib/supplier-invoices/attest-service.ts).
+  // Staged operations can be committed twice (retry, two approvers): the
+  // service's optimistic guard sets approved_at and emits the event once.
+  const outcome = await approveSupplierInvoice(
+    { supabase, companyId, userId, log: createLogger('pending-operations/approve-supplier-invoice') },
+    { invoiceId: id, source: 'mcp' },
   )
-
-  const { data, error } = await supabase
-    .from('supplier_invoices')
-    .update({ status: nextStatus, approved_at: approvedAt })
-    .eq('id', id)
-    .eq('company_id', companyId)
-    // Optimistic concurrency on the pre-approval state, same guard as the web
-    // and v1 approve routes. Staged operations can be committed twice (retry,
-    // two approvers): without this both writes would land and both would emit
-    // supplier_invoice.approved.
-    .in('status', ['registered', 'overdue'])
-    .is('approved_at', null)
-    .select()
-    .maybeSingle()
-
-  if (error) return { error: error.message, status: 500 }
-  if (!data) {
-    return { error: 'Fakturan godkändes av någon annan medan operationen väntade', status: 409 }
+  if (!outcome.ok) {
+    const entry = getErrorEntry(outcome.code)
+    if (outcome.code === 'SI_APPROVE_NOT_REGISTERED' && (outcome.details as { reason?: string } | undefined)?.reason === 'race') {
+      return { error: 'Fakturan godkändes av någon annan medan operationen väntade', status: 409 }
+    }
+    return { error: entry?.message_sv ?? outcome.code, status: entry?.httpStatus ?? 400, errorCode: outcome.code }
   }
-
-  try {
-    await eventBus.emit({
-      type: 'supplier_invoice.approved',
-      payload: { supplierInvoice: data, companyId, userId },
-    })
-  } catch { /* non-blocking */ }
-
-  return { data: { supplier_invoice_id: id, status: nextStatus, approved_at: approvedAt } }
+  if (outcome.dryRun) return { data: outcome.preview }
+  const { invoice, approved, attest } = outcome.data
+  return {
+    data: {
+      supplier_invoice_id: id,
+      status: invoice.status,
+      approved_at: invoice.approved_at ?? null,
+      attested: approved || !!invoice.approved_at,
+      attest_remaining_user_ids: attest.remaining,
+    },
+  }
 }
 
 /**

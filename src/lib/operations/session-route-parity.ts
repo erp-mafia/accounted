@@ -73,6 +73,7 @@ const CONNECTOR = 'machine endpoint: self-hosted connector proxy, authenticated 
 const PAYMENT_SIGNING = 'BankID signing of a bank payment: the account holder signs money out in person, no machine door signs'
 const BANK_CONSENT = 'BankID consent to read a bank account: the account holder gives it in person, no machine door consents'
 const SIGNATORY_LINK = 'token route of the signatory link (/koppla/<token>): the firmatecknare gives the bank consent in person, authenticated by the link, no machine door consents'
+const ATTEST_LINK = 'token route of the attest mail\'s link (/attest/<token>): the attester decides in person, authenticated by the link; the same decision is POST /api/v1/.../supplier-invoices/:id/approve or /reject'
 const PAYMENT_SIGNING_LINK = 'token route of the payment signing link (/betala/<token>): the firmatecknare signs the payments in person with BankID, authenticated by the link, no machine door signs'
 const PREVIEW = 'preview/parse helper for an unsaved form or import wizard; the API takes structured input'
 const EXT_SYNC = 'webshop/payment integration sync is cron-driven; manual trigger has no API'
@@ -414,6 +415,10 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'PUT /api/supplier-invoices/:id': covered([`PATCH ${V}/supplier-invoices/:id`]),
   'DELETE /api/supplier-invoices/:id': covered([`DELETE ${V}/supplier-invoices/:id`, 'gnubok_delete_supplier_invoice']),
   'POST /api/supplier-invoices/:id/approve': covered([`POST ${V}/supplier-invoices/:id/approve`, 'gnubok_approve_supplier_invoice']),
+  'POST /api/supplier-invoices/:id/reject': covered([`POST ${V}/supplier-invoices/:id/reject`]),
+  'PUT /api/supplier-invoices/attest-policy': covered([`PUT ${V}/supplier-invoices/attest-policy`], 'owners and admins; no MCP tool: who controls payments is a person\'s decision'),
+  'PUT /api/supplier-invoices/attest-policy/mail': uiOnly(PREFS),
+  'POST /api/attest/:token/decision': uiOnly(ATTEST_LINK),
   'POST /api/supplier-invoices/:id/book': covered([`POST ${V}/supplier-invoices/:id/book`, 'gnubok_book_supplier_invoice']),
   'POST /api/supplier-invoices/:id/mark-paid': covered([`POST ${V}/supplier-invoices/:id/mark-paid`]),
   'POST /api/supplier-invoices/:id/credit': covered([`POST ${V}/supplier-invoices/:id/credit`, 'gnubok_credit_supplier_invoice']),

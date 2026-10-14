@@ -157,7 +157,7 @@ export const supplierPaymentBatchesPreview = defineOperation({
     doNotUseFor:
       'Creating the batch (POST /supplier-payment-batches) or listing unpaid supplier invoices (GET /supplier-invoices).',
     pitfalls: [
-      'Excluded reasons: not_payable (draft, paid, credited...), nothing_remaining, credit_note, foreign_currency (only SEK), payee_missing / payee_invalid (fix the supplier\'s bankgiro, plusgiro or clearing + account number), reference_missing (no valid OCR and no supplier invoice number: add one of them to the invoice), not_found, in_bank_payment, swedbank_iso2_giro_payee (the company pays through Swedbank, whose ISO 2.0 file agreement pays to bank accounts only: a supplier with a bankgiro or plusgiro is left out; pay those invoices with a bank payment or in the internet bank).',
+      'Excluded reasons: not_payable (draft, paid, credited...), nothing_remaining, credit_note, foreign_currency (only SEK), payee_missing / payee_invalid (fix the supplier\'s bankgiro, plusgiro or clearing + account number), reference_missing (no valid OCR and no supplier invoice number: add one of them to the invoice), attest_required (the attest policy of the company requires attest for the invoice and it has not been given: an attester approves it first), not_found, in_bank_payment, swedbank_iso2_giro_payee (the company pays through Swedbank, whose ISO 2.0 file agreement pays to bank accounts only: a supplier with a bankgiro or plusgiro is left out; pay those invoices with a bank payment or in the internet bank).',
       'debtor_ok false means create will refuse with SI_BATCH_DEBTOR_INCOMPLETE: debtor_missing names the company setting to fill in (iban, bic, org_number, or swedbank_ids: a Swedbank company\'s swedbank_signer_id and swedbank_corporate_pay_id, which Swedbank assigns and refuses a file without).',
       'already_batched is a warning here but a refusal at create unless confirm_already_batched is true: paying the same invoice twice is the risk.',
       'Only SEK invoices; at most 100 per call.',
@@ -223,6 +223,7 @@ export const supplierPaymentBatchesPreview = defineOperation({
           'payee_missing',
           'payee_invalid',
           'reference_missing',
+          'attest_required',
           'not_found',
           'in_bank_payment',
           'swedbank_iso2_giro_payee',

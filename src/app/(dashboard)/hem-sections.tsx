@@ -13,6 +13,7 @@ import {
   listPaymentsVerificationDue,
   listSkattekontoPaymentDue,
   listSuggestedMatches,
+  listSupplierInvoiceAttestsDue,
   SUGGESTED_MATCH_SCAN_CAP,
 } from '@/lib/worklist'
 import { listResumeItems } from '@/lib/worklist/resume'
@@ -223,7 +224,7 @@ export async function HemPanesSection({
   /** See AttGoraSection.aiConnection. */
   aiConnection: AiConnection
 }) {
-  const { supabase } = await getDashboardAuthContext()
+  const { supabase, user } = await getDashboardAuthContext()
   // Fetched once at the scan cap: the Att göra pane shows the first five and
   // the worklist count is the list's length (it used to scan the same rows
   // twice). Everything else runs in the same wave.
@@ -245,6 +246,9 @@ export async function HemPanesSection({
   // And for the payments verification to renew: Hem renders it as one row
   // with the days left; the count is 1 or 0 from the same read.
   const paymentsVerificationPromise = listPaymentsVerificationDue(supabase, companyId, now)
+  // And the invoices waiting for this person's attest under the attest
+  // policy: one row each, a per-person view of the company's attest count.
+  const attestsDuePromise = user ? listSupplierInvoiceAttestsDue(supabase, companyId, user.id) : Promise.resolve([])
   const [
     worklist,
     suggestedMatches,
@@ -256,6 +260,7 @@ export async function HemPanesSection({
     resumeItems,
     bankConnectionsRes,
     postedEntries,
+    attestsDue,
   ] =
     await Promise.all([
       // Pending-work counts come from lib/worklist: the same source as the
@@ -280,6 +285,7 @@ export async function HemPanesSection({
       // Posted entries distinguish "brand-new empty ledger" from "all caught
       // up" in the Att göra empty state (hits the partial posted/reversed index).
       supabase.from('journal_entries').select('*', { count: 'exact', head: true }).eq('company_id', companyId).in('status', ['posted', 'reversed']),
+      attestsDuePromise,
     ])
 
   // "Empty ledger" only matters while the setup checklist is still open; once
@@ -308,6 +314,7 @@ export async function HemPanesSection({
           worklist={worklist}
           suggestedMatches={suggestedMatches.slice(0, 5)}
           expensePayouts={expensePayouts}
+          attestsDue={attestsDue}
           skattekontoPayment={skattekontoPayment}
           missingUnderlag={missingUnderlag}
           bankSwitches={bankSwitches}

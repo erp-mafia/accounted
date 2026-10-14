@@ -565,7 +565,7 @@ Response `200`:
 {
   data: {
     payment_orders: { payment_order_id: string, supplier_invoice_id: string | null, payment_order_batch_id: string | null, status: "draft" | "approved" | "submitted" | "awaiting_signature" | "awaiting_second_signer" | "accepted" | "executed" | "rejected" | "cancelled" | "failed", amount: number, currency: string, requested_execution_date: string, cash_account_id: string, payee: { type: "bankgiro" | "plusgiro" | "bank_account" | "iban", label: string, name: string, source: "invoice" | "supplier", check: "unchecked" | "known" | "new" | "changed" }, reference: { type: "ocr" | "message", value: string }, end_to_end_id: string, provider_status: string | null, provider_error_code: string | null, outcome_unknown: boolean, approved_at: string | null, submitted_at: string | null, signed_at: string | null, executed_at: string | null, cancelled_at: string | null, matched_at: string | null, created_at: string, updated_at: string, supplier_invoice: { supplier_invoice_number: string | null, due_date: string | null, supplier_name: string | null } | null }[],
-    skipped: { supplier_invoice_id: string, reason: "not_payable" | "nothing_remaining" | "credit_note" | "foreign_currency" | "payee_missing" | "payee_invalid" | "reference_missing" | "not_found" | "in_bank_payment" | "in_payment_file" | "already_in_payment" }[],
+    skipped: { supplier_invoice_id: string, reason: "not_payable" | "nothing_remaining" | "credit_note" | "foreign_currency" | "payee_missing" | "payee_invalid" | "reference_missing" | "attest_required" | "not_found" | "in_bank_payment" | "in_payment_file" | "already_in_payment" }[],
     warnings: { supplier_invoice_id: string, code: "unattested" | "ocr_invalid" | "payee_changed" | "payee_new" | "date_moved", alternative_payee?: string | null, from?: string, to?: string }[],
     next: { approve: string, sign_in_app: string }
   },
@@ -1923,14 +1923,15 @@ Example response `200`:
 **Approve a registered or overdue supplier invoice.**
 `scope:suppliers:write · risk:low · idempotent · dry-run`
 
-Attests a supplier invoice that has not been approved yet (status `registered` or `overdue`). The resulting status is `approved`, or `overdue` when the invoice is still past its due date. No journal entry is posted here: the registration JE was already booked at :create under accrual (or, under defer_invoice_booking, is posted by POST /supplier-invoices/{id}/book), or is deferred to :mark-paid under cash. Idempotent. Dry-runnable.
+Attests a supplier invoice that has not been approved yet (status `registered` or `overdue`) as the API key's user. With the company's attest policy on (GET /supplier-invoices/attest-policy) only its attesters may attest, the registrant not unless the policy allows it, and in mode `all` the invoice is attested only when every attester has approved: until then the status stays and `attest.remaining_user_ids` names who is left. The resulting status is `approved`, or `overdue` when the invoice is still past its due date. No journal entry is posted here: the registration JE was already booked at :create under accrual (or, under defer_invoice_booking, is posted by POST /supplier-invoices/{id}/book), or is deferred to :mark-paid under cash. Idempotent. Dry-runnable.
 
-**Use when:** A registered SI has been reviewed and you want to mark it ready for payment. Many AP workflows gate :mark-paid behind an explicit approval step.
+**Use when:** A registered SI has been reviewed and you want to mark it ready for payment. With the attest policy on, payments leave an unattested invoice out (attest_required).
 **Do not use for:** Posting a journal entry (already done at :create under accrual). Paying the SI (use :mark-paid). Re-approving an already-approved SI (returns 400 SI_APPROVE_NOT_REGISTERED).
 
 **Pitfalls:**
 - Idempotency-Key is mandatory.
 - Returns 400 SI_APPROVE_NOT_REGISTERED when the invoice is already approved (approved_at set) or sits in a settled status. Use the detail endpoint to inspect status first if unsure.
+- Returns 403 ATTEST_NOT_ALLOWED when the attest policy does not let this user attest the invoice (not an attester, or the registrant), and 409 ATTEST_ALREADY_GIVEN when the user already attested it in this round.
 - A still-past-due invoice comes back with status "overdue", not "approved": approved_at is the attest marker, the status is derived from the due date.
 
 | Parameter | In | Type | Required | Notes |
@@ -1944,9 +1945,11 @@ Response `200`:
 {
   data: {
     id: string,
-    status: "approved" | "overdue",
+    status: "approved" | "overdue" | "registered",
     arrival_number: number,
-    supplier_invoice_number: string | null
+    supplier_invoice_number: string | null,
+    approved_at: string | null,
+    attest: { approved: boolean, required: boolean, remaining_user_ids: string[] }
   },
   meta: {
     request_id: string,
@@ -1967,7 +1970,94 @@ Example response `200`:
     "id": "0e9c…",
     "status": "approved",
     "arrival_number": 42,
-    "supplier_invoice_number": "2026-1234"
+    "supplier_invoice_number": "2026-1234",
+    "approved_at": "2026-10-14T09:00:00.000Z",
+    "attest": {
+      "approved": true,
+      "required": true,
+      "remaining_user_ids": []
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/supplier-invoices/{id}/attestations`
+
+**Where the attest of one supplier invoice stands: who attested, who is left, every decision.**
+`scope:suppliers:read · risk:low · idempotent`
+
+Answers whether the attest policy requires attest for the invoice, whether it is satisfied, the attesters who approved in the current round and those still missing, the latest rejection with its comment, every decision (approved or rejected, who, when, source app / email_link / api / mcp) and whether the API key's user may approve or reject it now. A rejection starts a new round: approvals before it no longer count.
+
+**Use when:** An invoice is left out of payment with attest_required, or before attesting.
+**Do not use for:** The policy itself (GET /supplier-invoices/attest-policy).
+
+**Pitfalls:**
+- An invoice of another company answers 404 SI_NOT_FOUND.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    supplier_invoice_id: string,
+    required: boolean,
+    satisfied: boolean,
+    blocked: boolean,
+    approved_at: string | null,
+    approved_by: { user_id: string, name: string | null, email: string | null } | null,
+    approved: { user_id: string, name: string | null, email: string | null }[],
+    remaining: { user_id: string, name: string | null, email: string | null }[],
+    latest_rejection: { user: { user_id: string, name: string | null, email: string | null }, comment: string | null, decided_at: string } | null,
+    attestations: { attestation_id: string, user: { user_id: string, name: string | null, email: string | null }, decision: "approved" | "rejected", comment: string | null, source: "app" | "email_link" | "api" | "mcp", decided_at: string }[],
+    viewer: { may_approve: boolean, may_reject: boolean, reason: string | null }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "supplier_invoice_id": "0e9c…",
+    "required": true,
+    "satisfied": false,
+    "blocked": false,
+    "approved_at": null,
+    "approved_by": null,
+    "approved": [],
+    "remaining": [
+      {
+        "user_id": "3f0c…",
+        "name": "Anna Ek",
+        "email": "anna@example.se"
+      }
+    ],
+    "latest_rejection": null,
+    "attestations": [],
+    "viewer": {
+      "may_approve": false,
+      "may_reject": false,
+      "reason": "registrant"
+    }
   },
   "meta": {
     "request_id": "req_…",
@@ -2361,6 +2451,71 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/supplier-invoices/{id}/reject`
+
+**Reject (neka) the attest of a supplier invoice that waits for it, with an optional comment.**
+`scope:suppliers:write · risk:low · idempotent · dry-run`
+
+Records the rejection and its comment in the attest trail as the API key's user. The attest round starts over: approvals given so far no longer count, and the attest mail's links for the invoice stop working. The invoice stays registered (or overdue past its due date); nothing is booked or paid. Whoever may approve may reject: with the attest policy on only its attesters, not the registrant unless the policy allows it. Idempotency-Key is mandatory: a replay answers the first call. Dry-runnable.
+
+**Use when:** An attester does not accept the invoice (wrong amount, not ordered, wrong supplier) and the registrant should look again.
+**Do not use for:** Withdrawing a booked invoice (POST /supplier-invoices/{id}/credit) or deleting an unbooked one.
+
+**Pitfalls:**
+- ATTEST_NOT_PENDING: the invoice is already attested or settled.
+- ATTEST_NOT_ALLOWED: the attest policy does not let this user decide on the invoice.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ comment?: string | null }
+```
+
+Example request:
+```json
+{
+  "comment": "Fel belopp, kontakta leverantören."
+}
+```
+
+Response `200`:
+```ts
+{
+  data: { supplier_invoice_id: string, attestation_id: string, status: string },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "supplier_invoice_id": "0e9c…",
+    "attestation_id": "9a1b…",
+    "status": "registered"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/supplier-invoices/{id}/uncredit`
 
 **Undo the credit of a supplier invoice ("Ångra kreditering"): storno the credit note's verifikat and restore the invoice.**
@@ -2422,6 +2577,165 @@ Example response `200`:
     "reversal_entry_id": "9a8b…",
     "reversed_credit_note_id": "5c6d…",
     "changed": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/supplier-invoices/attest-policy`
+
+**Read the company's attest policy for supplier invoices.**
+`scope:suppliers:read · risk:low · idempotent`
+
+Whether the policy is on, the amount in SEK from which attest is required (null = every invoice), the attesters, mode any (one attester is enough) or all (every attester who may attest the invoice), and whether the person who registered an invoice may attest it. With the policy on, an invoice that needs attest is left out of bank payments and payment files until the policy is satisfied. Kontantmetoden has no attest step and the policy does not apply there.
+
+**Use when:** Before attesting or preparing payments: who may attest, and why an invoice waits.
+**Do not use for:** Where one invoice's attest stands (GET /supplier-invoices/{id}/attestations).
+
+**Pitfalls:**
+- A company that never saved a policy answers enabled false with no attesters.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    enabled: boolean,
+    threshold_amount: number | null,
+    mode: "any" | "all",
+    attesters: { user_id: string, name: string | null, email: string | null }[],
+    preparer_may_attest: boolean,
+    updated_at: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "enabled": true,
+    "threshold_amount": 5000,
+    "mode": "any",
+    "attesters": [
+      {
+        "user_id": "3f0c…",
+        "name": "Anna Ek",
+        "email": "anna@example.se"
+      }
+    ],
+    "preparer_may_attest": false,
+    "updated_at": "2026-10-14T09:00:00.000Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PUT /api/v1/companies/{companyId}/supplier-invoices/attest-policy`
+
+**Save the company's attest policy for supplier invoices.**
+`scope:suppliers:write · risk:high · idempotent · dry-run · reversible`
+
+Replaces the policy: enabled, threshold_amount (SEK, null = every invoice), mode any or all, the attesters (company members who may write) and preparer_may_attest. With it on, POST /supplier-invoices/{id}/approve only accepts the attesters (not the registrant unless preparer_may_attest), approved_at is set when the policy is satisfied, and payments leave an invoice out until then (attest_required). Owners and admins only. Idempotent. Dry-runnable.
+
+**Use when:** Setting up or changing who attests supplier invoices.
+**Do not use for:** Attesting an invoice (POST /supplier-invoices/{id}/approve).
+
+**Pitfalls:**
+- ATTEST_POLICY_NO_ATTESTERS: a policy that is on needs at least one attester.
+- ATTEST_POLICY_ATTESTER_NOT_MEMBER: every attester must be a member who may write; details.user_ids names the others.
+- FORBIDDEN: only an owner or admin saves the policy.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  enabled: boolean,
+  threshold_amount: number | null,
+  mode: "any" | "all",
+  attesters: string[],
+  preparer_may_attest?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "enabled": true,
+  "threshold_amount": 5000,
+  "mode": "any",
+  "attesters": [
+    "3f0c…"
+  ],
+  "preparer_may_attest": false
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    enabled: boolean,
+    threshold_amount: number | null,
+    mode: "any" | "all",
+    attesters: { user_id: string, name: string | null, email: string | null }[],
+    preparer_may_attest: boolean,
+    updated_at: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "enabled": true,
+    "threshold_amount": 5000,
+    "mode": "any",
+    "attesters": [
+      {
+        "user_id": "3f0c…",
+        "name": "Anna Ek",
+        "email": "anna@example.se"
+      }
+    ],
+    "preparer_may_attest": false,
+    "updated_at": "2026-10-14T09:00:00.000Z"
   },
   "meta": {
     "request_id": "req_…",
@@ -2860,7 +3174,7 @@ Evaluates the given supplier invoices exactly as create will: eligible lines wit
 **Do not use for:** Creating the batch (POST /supplier-payment-batches) or listing unpaid supplier invoices (GET /supplier-invoices).
 
 **Pitfalls:**
-- Excluded reasons: not_payable (draft, paid, credited...), nothing_remaining, credit_note, foreign_currency (only SEK), payee_missing / payee_invalid (fix the supplier's bankgiro, plusgiro or clearing + account number), reference_missing (no valid OCR and no supplier invoice number: add one of them to the invoice), not_found, in_bank_payment, swedbank_iso2_giro_payee (the company pays through Swedbank, whose ISO 2.0 file agreement pays to bank accounts only: a supplier with a bankgiro or plusgiro is left out; pay those invoices with a bank payment or in the internet bank).
+- Excluded reasons: not_payable (draft, paid, credited...), nothing_remaining, credit_note, foreign_currency (only SEK), payee_missing / payee_invalid (fix the supplier's bankgiro, plusgiro or clearing + account number), reference_missing (no valid OCR and no supplier invoice number: add one of them to the invoice), attest_required (the attest policy of the company requires attest for the invoice and it has not been given: an attester approves it first), not_found, in_bank_payment, swedbank_iso2_giro_payee (the company pays through Swedbank, whose ISO 2.0 file agreement pays to bank accounts only: a supplier with a bankgiro or plusgiro is left out; pay those invoices with a bank payment or in the internet bank).
 - debtor_ok false means create will refuse with SI_BATCH_DEBTOR_INCOMPLETE: debtor_missing names the company setting to fill in (iban, bic, org_number, or swedbank_ids: a Swedbank company's swedbank_signer_id and swedbank_corporate_pay_id, which Swedbank assigns and refuses a file without).
 - already_batched is a warning here but a refusal at create unless confirm_already_batched is true: paying the same invoice twice is the risk.
 - Only SEK invoices; at most 100 per call.
@@ -2888,7 +3202,7 @@ Response `200`:
 {
   data: {
     eligible: { supplier_invoice_id: string, supplier_name: string, supplier_invoice_number: string | null, amount: number, payment_date: string, payee: { type: "bankgiro" | "plusgiro" | "bank_account", label: string }, reference: { type: "ocr" | "invoice_number", value: string }, warnings: ("unattested" | "already_batched" | "ocr_invalid" | "payee_city_missing")[], active_supplier_payment_batch_id: string | null }[],
-    excluded: { supplier_invoice_id: string, reason: "not_payable" | "nothing_remaining" | "credit_note" | "foreign_currency" | "payee_missing" | "payee_invalid" | "reference_missing" | "not_found" | "in_bank_payment" | "swedbank_iso2_giro_payee" }[],
+    excluded: { supplier_invoice_id: string, reason: "not_payable" | "nothing_remaining" | "credit_note" | "foreign_currency" | "payee_missing" | "payee_invalid" | "reference_missing" | "attest_required" | "not_found" | "in_bank_payment" | "swedbank_iso2_giro_payee" }[],
     total_amount: number,
     currency: "SEK",
     debtor_ok: boolean,

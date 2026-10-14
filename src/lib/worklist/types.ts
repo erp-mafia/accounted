@@ -308,6 +308,24 @@ export interface ExpensePayoutDue {
 }
 
 /**
+ * One supplier invoice waiting for the signed-in user's attest under the
+ * company's attest policy: the Att göra row "Attestera {leverantör}
+ * {belopp}". Per person, not per company: only an attester the policy lets
+ * attest the invoice, who has not approved it in the current round, gets it.
+ * A view of supplier_invoice_approval for one person, so it is not added to
+ * the total (the company count already holds the invoice).
+ */
+export interface SupplierInvoiceAttestDue {
+  supplier_invoice_id: string
+  supplier_name: string | null
+  supplier_invoice_number: string | null
+  arrival_number: number
+  total: number
+  currency: string
+  due_date: string
+}
+
+/**
  * The next charge Skatteverket will draw that the skattekonto balance does
  * not cover: the Att göra row "Betala in till Skatteverket". Same math as the
  * /skattekonto page's Nästa dragning line and its payment dialog.

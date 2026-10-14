@@ -121,6 +121,19 @@ describe('evaluateInvoiceForBatch', () => {
     expect(result.eligible && result.warnings).toContain('unattested')
   })
 
+  it('excludes an invoice the attest policy waits on (attest_required), and only that one', () => {
+    const blocked = evaluateInvoiceForBatch(invoice({ status: 'registered', approved_at: null }), supplier, {
+      today: TODAY,
+      attestBlocked: new Set(['inv-1']),
+    })
+    expect(blocked).toEqual({ eligible: false, reason: 'attest_required' })
+    const other = evaluateInvoiceForBatch(invoice({ status: 'registered', approved_at: null }), supplier, {
+      today: TODAY,
+      attestBlocked: new Set(['inv-2']),
+    })
+    expect(other.eligible && other.warnings).toContain('unattested')
+  })
+
   it('warns when the invoice already sits in an active batch', () => {
     const result = evaluateInvoiceForBatch(invoice(), supplier, {
       today: TODAY,

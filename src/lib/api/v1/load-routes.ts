@@ -314,6 +314,10 @@ import '@/app/api/v1/companies/[companyId]/payments/creditor-lookup/route'
 import '@/app/api/v1/companies/[companyId]/payments/giro-numbers/route'
 // The payment signing link: someone without a login signs approved payments with BankID (operation payment-signing-links.create).
 import '@/app/api/v1/companies/[companyId]/payments/signing-links/route'
+// The attest policy for supplier invoices and one invoice's attest trail (lib/operations/supplier-invoice-attest.ts).
+import '@/app/api/v1/companies/[companyId]/supplier-invoices/attest-policy/route'
+import '@/app/api/v1/companies/[companyId]/supplier-invoices/[id]/attestations/route'
+import '@/app/api/v1/companies/[companyId]/supplier-invoices/[id]/reject/route'
 import '@/app/api/v1/companies/[companyId]/invoices/[id]/book/route'
 import '@/app/api/v1/companies/[companyId]/invoices/bulk-book/route'
 import '@/app/api/v1/companies/[companyId]/supplier-invoices/[id]/book/route'

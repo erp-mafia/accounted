@@ -13,6 +13,7 @@ describe('visibleSettingsSections', () => {
       'members',
       'billing',
       'bookkeeping',
+      'attest',
       'fiscal-years',
       'tax',
       'salary',
