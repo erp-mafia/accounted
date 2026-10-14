@@ -50,6 +50,12 @@ vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({
   clearSettledInvoiceSuggestions: mockClearSuggestions,
 }))
 
+// A posted payment voucher the invoice update then refuses is makulerad.
+const { mockCancelOrphan } = vi.hoisted(() => ({ mockCancelOrphan: vi.fn() }))
+vi.mock('@/lib/bookkeeping/cancel-orphaned-entry', () => ({
+  cancelOrphanedPaymentEntry: mockCancelOrphan,
+}))
+
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import {
   createInvoicePaymentJournalEntry as mockedPayment,
@@ -588,6 +594,63 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
     expect(body.error.code).toBe('INVOICE_PAID_NOT_PAYABLE')
   })
 
+  // #1717: a partially_paid invoice is payable on every door, as on the
+  // dashboard; the remaining amount is booked against 1510.
+  it('books the remaining amount of a partially_paid invoice', async () => {
+    const { supabase, calls } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      invoices: [
+        {
+          data: {
+            ...SENT_INVOICE,
+            status: 'partially_paid',
+            journal_entry_id: 'rrrrrrrr-rrrr-4rrr-8rrr-rrrrrrrrrrrr',
+            paid_amount: 5000,
+            remaining_amount: 7500,
+          },
+          error: null,
+        },
+        { data: PAID_INVOICE, error: null },
+      ],
+      company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+      invoice_payments: { data: { id: 'ip-1' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await markPaid(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`,
+        { payment_date: '2026-05-12' },
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect(mockPayment).toHaveBeenCalledTimes(1)
+    const update = calls.find((c) => c.table === 'invoices' && c.method === 'update')
+    expect(update?.args[0]).toMatchObject({ status: 'paid', paid_amount: 12500, remaining_amount: 0 })
+  })
+
+  it.each(['paid', 'credited', 'cancelled'])('still refuses a %s invoice', async (status) => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: { ...SENT_INVOICE, status }, error: null },
+      }).supabase,
+    )
+
+    const res = await markPaid(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`,
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('INVOICE_PAID_NOT_PAYABLE')
+    expect(mockPayment).not.toHaveBeenCalled()
+  })
+
   it('rejects credit notes', async () => {
     mockServiceClient.mockReturnValue(
       createTableMockSupabase({
@@ -1116,3 +1179,176 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid: custom line 
     expect(mockedCreateJournalEntry).not.toHaveBeenCalled()
   })
 })
+
+// The v1 door books through settleInvoicePayment, the dashboard's write path.
+describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid: the shared settlement', () => {
+  it('loads every item column the booking builders read (ROT/RUT share, override accounts)', async () => {
+    // A kontantmetod ROT invoice books Dr 1930 share + Dr 1513 only when the
+    // items carry deduction_type/_amount; an override revenue account books
+    // on that account only when the item carries revenue_account.
+    const { supabase, calls } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      invoices: [
+        { data: SENT_INVOICE, error: null },
+        { data: [{ id: INVOICE_ID }], error: null },
+        { data: PAID_INVOICE, error: null },
+      ],
+      company_settings: { data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null },
+      invoice_payments: { data: { id: 'ip-1' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await markPaid(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`,
+        { payment_date: '2026-05-12' },
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect(mockCash).toHaveBeenCalledTimes(1)
+    const preflight = String(calls.find((c) => c.table === 'invoices' && c.method === 'select')?.args[0])
+    const items = preflight.slice(preflight.indexOf('items:invoice_items('))
+    for (const column of ['deduction_type', 'deduction_amount', 'work_type', 'revenue_account', 'line_type', 'article_id', 'accrual_period_start']) {
+      expect(items).toContain(column)
+    }
+  })
+
+  it('makulerar the posted voucher when the invoice update loses the race', async () => {
+    const { supabase, calls } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      invoices: [
+        { data: SENT_INVOICE, error: null },
+        // CAS update matched no row: a concurrent payment or credit won.
+        { data: [], error: null },
+      ],
+      company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+      invoice_payments: { data: { id: 'ip-1' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await markPaid(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`,
+        { payment_date: '2026-05-12' },
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(409)
+    expect((await res.json()).error.code).toBe('INVOICE_PAID_RACE')
+    expect(mockCancelOrphan).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      USER_ID,
+      'jjjjjjjj-jjjj-4jjj-8jjj-jjjjjjjjjjjj',
+      expect.any(String),
+    )
+    expect(calls.some((c) => c.table === 'invoice_payments' && c.method === 'delete')).toBe(true)
+  })
+
+  it('makulerar the posted voucher when the invoice update fails', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: [
+          { data: SENT_INVOICE, error: null },
+          { data: null, error: { message: 'boom', code: 'XX000' } },
+        ],
+        company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+        invoice_payments: { data: { id: 'ip-1' }, error: null },
+      }).supabase,
+    )
+
+    const res = await markPaid(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`,
+        { payment_date: '2026-05-12' },
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(500)
+    expect((await res.json()).error.code).toBe('INVOICE_PAID_BOOK_FAILED')
+    expect(mockCancelOrphan).toHaveBeenCalledTimes(1)
+  })
+
+  it('tags custom lines on a never-booked kontantmetod invoice as a cash payment', async () => {
+    const { supabase } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      invoices: [
+        { data: SENT_INVOICE, error: null },
+        { data: [{ id: INVOICE_ID }], error: null },
+        { data: PAID_INVOICE, error: null },
+      ],
+      company_settings: { data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null },
+      invoice_payments: { data: { id: 'ip-1' }, error: null },
+      transactions: { data: [], error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await markPaid(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`,
+        {
+          payment_date: '2026-05-12',
+          force: true,
+          lines: [
+            { account_number: '1930', debit_amount: 12500, credit_amount: 0 },
+            { account_number: '3001', debit_amount: 0, credit_amount: 10000 },
+            { account_number: '2611', debit_amount: 0, credit_amount: 2500 },
+          ],
+        },
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const input = (mockedCreateJournalEntry as ReturnType<typeof vi.fn>).mock.calls[0][3] as {
+      source_type: string
+    }
+    expect(input.source_type).toBe('invoice_cash_payment')
+  })
+
+  it('answers with the invoice as stored after the payment', async () => {
+    const { supabase, calls } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      invoices: [
+        { data: SENT_INVOICE, error: null },
+        { data: [{ id: INVOICE_ID }], error: null },
+        { data: PAID_INVOICE, error: null },
+      ],
+      company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+      invoice_payments: { data: { id: 'ip-1' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await markPaid(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`,
+        { payment_date: '2026-05-12' },
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data).toMatchObject({
+      id: INVOICE_ID,
+      invoice_number: '2026-0042',
+      status: 'paid',
+      paid_amount: 12500,
+      remaining_amount: 0,
+      journal_entry_id: 'jjjjjjjj-jjjj-4jjj-8jjj-jjjjjjjjjjjj',
+    })
+    // The re-read is the public projection: no items, customer or
+    // registration journal_entry_id.
+    const selects = calls.filter((c) => c.table === 'invoices' && c.method === 'select')
+    const reread = String(selects[selects.length - 1].args[0])
+    expect(reread).not.toContain('items:')
+    expect(reread).not.toContain('customer:')
+    expect(reread).not.toContain('journal_entry_id')
+  })
+})
+

@@ -1057,14 +1057,15 @@ Example response `200`:
 **Storno a posted journal entry.**
 `scope:bookkeeping:write · risk:high · idempotent · dry-run`
 
-Creates a reversing journal entry that nullifies the original. The original remains posted and visible: the reversal links via reverses_id and the original is annotated reversed_by_id. The reversal carries its own voucher_number in the same series so the löpnummer chain stays unbroken (BFL 5 kap 5-7 §§).
+Creates a reversing journal entry that nullifies the original. The original remains posted and visible: the reversal links via reverses_id and the original is annotated reversed_by_id. The reversal carries its own voucher_number in the same series and is booked into the original's fiscal year, so the löpnummer chain stays unbroken (BFL 5 kap 5-7 §§).
 
 **Use when:** A posted entry needs to be cancelled and there is no replacement coming: e.g. a duplicate booking, an entry posted to the wrong period. Use /correct instead when you need to replace the entry with corrected lines.
 **Do not use for:** Cancelling a draft (drafts have no voucher_number: use DELETE /journal-entries/{id}). Reversing an already-reversed entry (returns ENTRY_ALREADY_REVERSED).
 
 **Pitfalls:**
 - Idempotency-Key is mandatory.
-- reversal_date defaults to today; the reversal is posted in the fiscal period covering that date. If today's period is locked the call returns PERIOD_LOCKED.
+- reversal_date defaults to the original entry's date. The reversal is numbered and booked in the original's fiscal year, so a reversal_date outside that year returns 400 ENTRY_DATE_OUTSIDE_FISCAL_PERIOD.
+- A locked or closed fiscal year, or a date on or before the company lock date, returns PERIOD_LOCKED (details.reason) before any voucher number is drawn; a dry run gives the same verdict. Unlock a locked year with POST /fiscal-periods/{id}/unlock. A closed year stays as it is: book a correcting entry in the open year instead (POST /journal-entries).
 - You cannot reverse a draft (status must be posted). Use /correct after commit if the original needs replacing.
 - Reversing an entry 3+ links deep in a correction chain returns CORRECTION_CHAIN_TOO_DEEP (409). Book ONE net-effect correction instead, or pass allow_deep_chain=true to override.
 
@@ -1406,7 +1407,8 @@ Records an explanation for one or more missing voucher numbers in a series. Requ
 **Pitfalls:**
 - Idempotency-Key is mandatory.
 - gap_end must be >= gap_start; a single-number gap has gap_start = gap_end.
-- voucher_series is a single uppercase letter (A-Z); the same series + period + numeric range must not already exist.
+- voucher_series is a single uppercase letter (A-Z). explanation is 1-500 characters after trimming.
+- An explanation is write-once: the same series + period + numeric range already explained returns 409 VOUCHER_GAP_ALREADY_EXPLAINED (dry run included). A fiscal_period_id outside the company returns 404.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

@@ -540,16 +540,17 @@ Example response `200`:
 **Issue a credit note (kreditfaktura) against an invoice.**
 `scope:invoices:write · risk:high · idempotent · dry-run`
 
-Creates a credit note referencing the original invoice. The credit note carries reversed-sign amounts (matching the original line for line) and gets invoice_number=KR-<original>. The original invoice transitions to status=credited. Posts a reversing journal entry (Debit revenue + Debit output VAT / Credit AR 1510) whenever the original sale reached the ledger: always under faktureringsmetoden, and under kontantmetoden once the original was paid or otherwise booked (status paid, a linked verifikat, a payment date, or a non-zero paid amount). Only a kontantmetod invoice carrying none of those signals is credited without an entry, because nothing has been recognised yet. The credit note is dated today (Europe/Stockholm); a locked or closed period returns 400 INVOICE_CREDIT_PERIOD_LOCKED. Idempotent and dry-runnable. Emits credit_note.created.
+Creates and issues a credit note referencing the original invoice. The credit note mirrors the original line for line with reversed-sign amounts (the same VAT, revenue accounts, ROT/RUT and periodisering fields, and payee) and gets invoice_number=KR-<original> (a self-billed original: KR-<its external number>). Posts a reversing journal entry (Debit revenue + Debit output VAT / Credit AR 1510; on ROT/RUT Credit 1513 for Skatteverket's share and 1510 for the customer's; Debit 29xx where revenue is still deferred, and the accrual schedule stops) whenever the original sale reached the ledger: always under faktureringsmetoden, and under kontantmetoden once the original was paid or otherwise booked (status paid, a linked verifikat, a payment date, or a non-zero paid amount). Only a kontantmetod invoice carrying none of those signals is credited without an entry, because nothing has been recognised yet. The original transitions to status=credited once the entry exists. The credit note is dated today (Europe/Stockholm); a locked or closed period, or no fiscal period for today, returns 400 INVOICE_CREDIT_PERIOD_LOCKED before anything is written. Idempotent and dry-runnable. Emits credit_note.created.
 
 **Use when:** You need to legally cancel an issued invoice (ML 17 kap 22-23§). The original invoice cannot be edited once issued: credit it and reissue corrected.
 **Do not use for:** Cancelling a draft (DELETE the draft instead). Refunding a partial payment without invalidating the whole invoice (book the refund manually via the journal-entries API in a future PR).
 
 **Pitfalls:**
 - Idempotency-Key is mandatory. Retried credits with the same key replay the cached response: no duplicate credit note is created.
-- The original invoice must be in sent / paid / overdue status. Drafts, cancelled invoices, and already-credited invoices are rejected with specific error codes.
+- The original invoice must be in sent / paid / overdue status. Drafts, cancelled invoices, and already-credited invoices are rejected with specific error codes. A credit note cannot itself be credited (400 INVOICE_CREDIT_NOT_INVOICE).
+- Fails closed: when the reversing entry cannot be posted the request fails (500 INVOICE_CREDIT_ISSUE_INCOMPLETE with details.failure_steps), the credit note stays a draft and the original is untouched; retry once the cause is fixed and the same credit note is issued. 500 INVOICE_CREDIT_REPAIR_REQUIRED means the entry posted but a later step did not finish: retrying completes it.
 - Credit-note items mirror the original's lines with negated values. To credit only part of an invoice (line-level), credit the full invoice first then reissue with the corrected lines.
-- Under kontantmetoden a journal entry is posted only when the original carries a booking signal (status paid, a linked verifikat, a payment date, or a non-zero paid amount): crediting an invoice with none of those creates the row without an entry, and no `JOURNAL_ENTRY_NOT_POSTED` warning is emitted (the deferral is correct, not a failure). Use the dry run to read `would_create_journal_entry` before committing.
+- Under kontantmetoden a journal entry is posted only when the original carries a booking signal (status paid, a linked verifikat, a payment date, or a non-zero paid amount): crediting an invoice with none of those creates the row without an entry (the deferral is correct, not a failure). Use the dry run to read `would_create_journal_entry` before committing.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -618,7 +619,7 @@ Example response `200`:
 **Record a payment against an invoice.**
 `scope:invoices:write · risk:medium · idempotent · dry-run`
 
-Marks a sent / overdue invoice as paid (or partially_paid). Books the payment via Debit 1930 / Credit 1510 under faktureringsmetoden, or Debit 1930 / Credit revenue + Credit output VAT under kontantmetoden. Optional body supports partial payments via custom balanced journal lines and exchange-rate adjustments for foreign-currency invoices. Idempotent and dry-runnable. Emits invoice.paid.
+Marks a sent / overdue / partially_paid invoice as paid (or partially_paid). Books the payment via Debit 1930 / Credit 1510 under faktureringsmetoden, or Debit 1930 / Credit revenue + Credit output VAT under kontantmetoden. Optional body supports partial payments via custom balanced journal lines and exchange-rate adjustments for foreign-currency invoices. Idempotent and dry-runnable. Emits invoice.paid.
 
 **Use when:** A customer paid an invoice via a channel other than the synced bank account (cash, manual transfer, separate processor). Use dry-run to confirm the booking before committing.
 **Do not use for:** Reverting a payment: the public API does not expose unmark-paid. Issue a credit note via POST /:id/credit to cancel the underlying invoice instead. Bank-matched payments: those flow through the transactions endpoints.
@@ -666,8 +667,7 @@ Response `200`:
     paid_amount: number,
     remaining_amount: number,
     paid_at: string | null,
-    journal_entry_id: string | null,
-    warnings?: { code: string, message: string }[]
+    journal_entry_id: string | null
   },
   meta: {
     request_id: string,
@@ -718,6 +718,7 @@ Marks a draft invoice as sent: for invoices delivered outside Accounted (an exte
 - Allocation is atomic. If a concurrent transition beats the agent's request to the same draft, the runner-up gets 409 INVOICE_UPDATE_NOT_DRAFT and no number is consumed.
 - Delivery notes (document_type=delivery_note) don't transition to sent: they were never drafts in the f-series sense. This endpoint will reject them with 400 VALIDATION_ERROR.
 - Idempotency-Key is mandatory. A retried mark-sent with the same key replays the cached response.
+- Fails closed: when the invoice's verifikat cannot be posted (no open or a locked period, a required dimension, an account outside the chart) the invoice stays a draft, keeps any number already allocated, and the request fails with the engine's code or 500 INVOICE_MARK_SENT_BOOK_FAILED (details.reason in Swedish). Fix the cause and retry.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

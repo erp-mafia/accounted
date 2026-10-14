@@ -1,11 +1,30 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+
+// The approval stores each row through ingestTransactions; the staging asks
+// the same dedup decision first (previewIngestDedup).
+vi.mock('@/lib/transactions/dedup-preview', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/transactions/dedup-preview')>('@/lib/transactions/dedup-preview')
+  return { ...actual, previewIngestDedup: vi.fn() }
+})
+
 import { tools } from '../server'
+import { previewIngestDedup } from '@/lib/transactions/dedup-preview'
 
 const tool = tools.find((t) => t.name === 'gnubok_create_transactions')!
+const mockPreview = vi.mocked(previewIngestDedup)
+
+const NOT_STORED = {
+  external_id: 'x',
+  would_skip: false,
+  skip_reason: null,
+  matched_external_id: null,
+  matched_transaction_id: null,
+}
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mockPreview.mockResolvedValue([NOT_STORED])
 })
 
 describe('gnubok_create_transactions', () => {
@@ -18,6 +37,9 @@ describe('gnubok_create_transactions', () => {
 
   it('stages one pending_operation per input item and returns operation ids', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
+    // Neither row names ledger_account: the dedup preview reads each row's default account first.
+    enqueue({ data: [], error: null }) // row 1: default cash account
+    enqueue({ data: [], error: null }) // row 2: default cash account
     // Each staged op now also runs resolvePeriodStatusForDate (company_settings + fiscal_periods).
     enqueue({ data: null, error: null }) // op 1: company_settings
     enqueue({ data: null, error: null }) // op 1: fiscal_periods
@@ -44,6 +66,83 @@ describe('gnubok_create_transactions', () => {
     expect(result.operations[0].operation_id).toBe('op-1')
     expect(result.operations[1].operation_id).toBe('op-2')
     expect(result.operations[0].risk_level).toBe('medium')
+  })
+
+  it('asks the ingest dedup per row with the commit\'s fields and settlement account', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'op-1' }, error: null })
+
+    await tool.execute(
+      { transactions: [{ date: '2026-05-01', amount: -50, description: 'Wise', currency: 'eur', ledger_account: '1935' }] },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' },
+    )
+
+    expect(mockPreview).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      [expect.objectContaining({ date: '2026-05-01', amount: -50, description: 'Wise', currency: 'EUR', import_source: 'mcp' })],
+      { settlementAccount: '1935' },
+    )
+  })
+
+  it('without ledger_account, previews on the default account the commit settles on (crm#1171)', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: 'ca-eur', ledger_account: '1932', is_primary: false, bank_connection_id: null }], error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'op-1' }, error: null })
+
+    await tool.execute(
+      { transactions: [{ date: '2026-05-01', amount: -50, description: 'Card', currency: 'eur' }] },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' },
+    )
+
+    expect(findCalls('cash_accounts', 'eq')).toEqual([['company_id', 'company-1'], ['enabled', true], ['currency', 'EUR']])
+    expect(mockPreview).toHaveBeenCalledWith(supabase, 'company-1', [expect.objectContaining({ currency: 'EUR' })], {
+      settlementAccount: '1932',
+    })
+  })
+
+  it('refuses with TX_CREATE_DUPLICATE, staging nothing, when a row is already stored', async () => {
+    const { supabase, findCalls } = createQueuedMockSupabase()
+    mockPreview
+      .mockResolvedValueOnce([NOT_STORED])
+      .mockResolvedValueOnce([
+        {
+          external_id: 'mcp:staging-preview',
+          would_skip: true,
+          skip_reason: 'content_match_unbooked',
+          matched_external_id: 'eb-77',
+          matched_transaction_id: 'tx-feed-1',
+        },
+      ])
+
+    const error = await tool
+      .execute(
+        {
+          transactions: [
+            { date: '2026-05-01', amount: 100, description: 'Inflow' },
+            { date: '2026-05-02', amount: -50, description: 'Card' },
+          ],
+        },
+        'company-1',
+        'user-1',
+        supabase as never,
+        { type: 'api_key' },
+      )
+      .catch((err: unknown) => err)
+
+    expect(error).toMatchObject({ code: 'TX_CREATE_DUPLICATE' })
+    expect(String((error as Error).message)).toMatch(/transactions\[1\].*tx-feed-1/)
+    expect(findCalls('pending_operations', 'insert')).toHaveLength(0)
   })
 
   it('rejects empty arrays', async () => {

@@ -22,6 +22,7 @@ vi.mock('@/lib/salary/create-run', () => ({ createSalaryRunWithEmployees: vi.fn(
 vi.mock('@/lib/salary/run-calculation', () => ({ runSalaryCalculation: vi.fn() }))
 
 import { POST } from '../route'
+import { eventBus } from '@/lib/events'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { createSalaryRunWithEmployees } from '@/lib/salary/create-run'
 import { runSalaryCalculation } from '@/lib/salary/run-calculation'
@@ -86,13 +87,8 @@ describe('POST /api/salary/runs — one-click creation', () => {
     authed(supabase)
 
     enqueueMany([
-      // settings: pay day 27, salary series L
-      {
-        data: {
-          salary_pay_day: 27,
-          default_voucher_series_per_source_type: { salary_payment: 'L' },
-        },
-      },
+      // settings: pay day 27
+      { data: { salary_pay_day: 27 } },
       // latest non-corrected run: 2026-06 → defaults resolve to 2026-07
       { data: { period_year: 2026, period_month: 6 } },
       // conflict pre-check: none
@@ -112,13 +108,16 @@ describe('POST /api/salary/runs — one-click creation', () => {
     // Calculation succeeded → recalculated row is returned
     expect(body.data.total_gross).toBe(105000)
 
+    // No series in the body: the lib resolves the company's salary series,
+    // the same rule v1 and MCP use, and emits salary_run.created itself.
     expect(createSalaryRunWithEmployees).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', {
       periodYear: 2026,
       periodMonth: 7,
       paymentDate: '2026-07-27',
-      voucherSeries: 'L',
+      voucherSeries: undefined,
       notes: undefined,
     })
+    expect(eventBus.emit).not.toHaveBeenCalled()
   })
 
   it('rolls December forward into January of the next year', async () => {
@@ -126,7 +125,7 @@ describe('POST /api/salary/runs — one-click creation', () => {
     authed(supabase)
 
     enqueueMany([
-      { data: null }, // no settings row → pay day 25, series 'A'
+      { data: null }, // no settings row → pay day 25
       { data: { period_year: 2026, period_month: 12 } },
       { data: null },
     ])
@@ -137,7 +136,7 @@ describe('POST /api/salary/runs — one-click creation', () => {
       expect.anything(),
       'company-1',
       'user-1',
-      expect.objectContaining({ periodYear: 2027, periodMonth: 1, paymentDate: '2027-01-25', voucherSeries: 'A' }),
+      expect.objectContaining({ periodYear: 2027, periodMonth: 1, paymentDate: '2027-01-25', voucherSeries: undefined }),
     )
   })
 
@@ -172,7 +171,7 @@ describe('POST /api/salary/runs — one-click creation', () => {
     authed(supabase)
 
     enqueueMany([
-      { data: { salary_pay_day: 27, default_voucher_series_per_source_type: { salary_payment: 'L' } } },
+      { data: { salary_pay_day: 27 } },
       // no latest-run lookup — period was explicit
       { data: null }, // conflict pre-check
     ])
@@ -200,7 +199,7 @@ describe('POST /api/salary/runs — one-click creation', () => {
     authed(supabase)
 
     enqueueMany([
-      { data: { salary_pay_day: 27, default_voucher_series_per_source_type: null } },
+      { data: { salary_pay_day: 27 } },
       // no latest-run lookup: the period was chosen
       { data: null }, // conflict pre-check: the month is free
     ])

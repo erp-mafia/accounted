@@ -317,7 +317,7 @@ describe('gnubok_approve_pending_operation', () => {
 describe('gnubok_reject_pending_operation', () => {
   it('flips status to rejected and never invokes the executor', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: 'op-1', status: 'pending' }, error: null }) // fetch
+    enqueue({ data: [{ id: 'op-1', status: 'pending', operation_type: 'categorize_transaction', risk_level: 'low' }], error: null }) // fetch
     enqueue({ data: [{ id: 'op-1' }], error: null }) // update CAS: returns rows
 
     const result = (await rejectTool.execute(
@@ -334,7 +334,7 @@ describe('gnubok_reject_pending_operation', () => {
 
   it('stores the category and reason in the rejection columns, where the dashboard keeps them', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
-    enqueue({ data: { id: 'op-1', status: 'pending' }, error: null })
+    enqueue({ data: [{ id: 'op-1', status: 'pending', operation_type: 'categorize_transaction', risk_level: 'low' }], error: null })
     enqueue({ data: [{ id: 'op-1' }], error: null })
 
     await rejectTool.execute(
@@ -353,7 +353,7 @@ describe('gnubok_reject_pending_operation', () => {
 
   it('leaves the category empty when the user gave none, and refuses one outside the list', async () => {
     const plain = createQueuedMockSupabase()
-    plain.enqueue({ data: { id: 'op-1', status: 'pending' }, error: null })
+    plain.enqueue({ data: [{ id: 'op-1', status: 'pending', operation_type: 'categorize_transaction', risk_level: 'low' }], error: null })
     plain.enqueue({ data: [{ id: 'op-1' }], error: null })
     await rejectTool.execute({ operation_id: 'op-1' }, 'company-1', 'user-1', plain.supabase as never)
     expect(plain.findCalls('pending_operations', 'update')[0]?.[0]).not.toHaveProperty('rejection_category')
@@ -367,7 +367,7 @@ describe('gnubok_reject_pending_operation', () => {
 
   it('throws when the CAS update affects 0 rows (concurrent claim)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: 'op-1', status: 'pending' }, error: null }) // fetch
+    enqueue({ data: [{ id: 'op-1', status: 'pending', operation_type: 'categorize_transaction', risk_level: 'low' }], error: null }) // fetch
     enqueue({ data: [], error: null }) // update CAS: 0 rows (lost race)
 
     await expect(
@@ -377,7 +377,7 @@ describe('gnubok_reject_pending_operation', () => {
 
   it('throws 409-style error if the op is already resolved', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: 'op-1', status: 'committed' }, error: null })
+    enqueue({ data: [{ id: 'op-1', status: 'committed', operation_type: 'x', risk_level: 'low' }], error: null })
 
     await expect(
       rejectTool.execute({ operation_id: 'op-1' }, 'company-1', 'user-1', supabase as never)
@@ -386,10 +386,35 @@ describe('gnubok_reject_pending_operation', () => {
 
   it('throws when the op is missing', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: null, error: { message: 'not found' } })
+    enqueue({ data: [], error: null })
 
     await expect(
       rejectTool.execute({ operation_id: 'missing' }, 'company-1', 'user-1', supabase as never)
     ).rejects.toThrow(/not found/i)
+
+    // A malformed id fails the read with 22P02: still a plain not found.
+    const malformed = createQueuedMockSupabase()
+    malformed.enqueue({ data: null, error: { code: '22P02', message: 'invalid input syntax for type uuid' } })
+    await expect(
+      rejectTool.execute({ operation_id: 'not-a-uuid' }, 'company-1', 'user-1', malformed.supabase as never)
+    ).rejects.toThrow(/not found/i)
+  })
+
+  it('records the agent actor in result_data, as the app rejections now do', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: 'op-1', status: 'pending', operation_type: 'x', risk_level: 'low' }], error: null })
+    enqueue({ data: [{ id: 'op-1' }], error: null })
+
+    await rejectTool.execute(
+      { operation_id: 'op-1', reason: 'fel konto' },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key', id: 'key-1' },
+    )
+
+    expect(findCalls('pending_operations', 'update')[0]?.[0]).toMatchObject({
+      result_data: { rejected_by: 'user-1', rejected_via: 'api_key', actor_id: 'key-1', reason: 'fel konto' },
+    })
   })
 })

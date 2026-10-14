@@ -198,12 +198,20 @@ describe('issueAndBookInvoice', () => {
 
   it('restores the draft and fails closed when the journal entry cannot be created', async () => {
     enqueue({ data: [{ id: 'inv-1' }], error: null }) // CAS flip
-    mockCreateInvoiceJournalEntry.mockRejectedValue(new Error('Period locked'))
+    const refusal = new Error('Period locked')
+    mockCreateInvoiceJournalEntry.mockRejectedValue(refusal)
     enqueue({ data: null, error: null }) // rollback update
 
     const result = await issue()
 
-    expect(result).toEqual({ ok: false, errorCode: 'INVOICE_MARK_SENT_BOOK_FAILED' })
+    // The engine's refusal and its Swedish reason reach the door, so it can
+    // answer with the engine's own code (v1, MCP) instead of a generic one.
+    expect(result).toEqual({
+      ok: false,
+      errorCode: 'INVOICE_MARK_SENT_BOOK_FAILED',
+      reason: expect.any(String),
+      bookingError: refusal,
+    })
     // Two invoice updates: the CAS flip and the rollback to draft.
     expect(findCalls('invoices', 'update')).toEqual([
       [{ status: 'sent' }],

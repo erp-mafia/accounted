@@ -211,6 +211,27 @@ describe('POST .../opening-balances/manual', () => {
     expect(wrote(client)).toBe(false)
   })
 
+  // An IB booked as a voucher (gnubok_create_voucher) carries no pointer: the
+  // flag check alone posted a second IB on top of it (ÅRL 2:4, one IB per year).
+  it('409 OB_PERIOD_ALREADY_HAS_BALANCES for a posted IB without a pointer, dry run included', async () => {
+    for (const query of ['', '?dry_run=true']) {
+      const client = makeClient({
+        company_members: OWNER,
+        fiscal_periods: { data: OPEN_YEAR, error: null },
+        journal_entries: { data: [{ id: OLD_ENTRY_ID, voucher_series: 'A', voucher_number: 4 }], error: null },
+        company_settings: NO_LOCK,
+      })
+      mockServiceClient.mockReturnValue(client)
+      const res = await post({ lines: LINES }, query)
+      expect(res.status).toBe(409)
+      const body = await res.json()
+      expect(body.error.code).toBe('OB_PERIOD_ALREADY_HAS_BALANCES')
+      expect(body.error.details.existingEntryId).toBe(OLD_ENTRY_ID)
+      expect(createJournalEntryMock).not.toHaveBeenCalled()
+      expect(wrote(client)).toBe(false)
+    }
+  })
+
   it('400 OB_PERIOD_LOCKED for a locked year', async () => {
     mockServiceClient.mockReturnValue(
       makeClient({ company_members: OWNER, fiscal_periods: { data: { ...OPEN_YEAR, locked_at: '2026-02-01T00:00:00Z' }, error: null } }),

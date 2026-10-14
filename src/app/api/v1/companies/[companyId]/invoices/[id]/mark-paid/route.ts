@@ -18,12 +18,11 @@
  *
  * Idempotent (mandatory Idempotency-Key). Dry-runnable.
  *
- * On commit:
- *   1. Build journal entry (default 1930/1510 split, or custom lines).
- *   2. Post via createInvoicePaymentJournalEntry / createJournalEntry.
- *   3. Update invoice: status → 'paid' (or 'partially_paid' for partial),
- *      remaining_amount decremented, paid_at set, paid_amount accumulated.
- *   4. Emit invoice.paid.
+ * On commit the payment goes through settleInvoicePayment, the write path
+ * the dashboard and the Stripe sync use (journal entry, invoice_payments row,
+ * CAS-guarded status update that makulerar the voucher on a lost race,
+ * invoice.paid). This route owns parsing, the payable guards, the FX and
+ * settlement-amount derivation, the duplicate guard and the dry run.
  */
 
 import { z } from 'zod'
@@ -33,27 +32,20 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { MarkInvoicePaidSchema } from '@/lib/api/schemas'
-import {
-  createInvoiceCashEntry,
-  createInvoicePaymentJournalEntry,
-} from '@/lib/bookkeeping/invoice-entries'
 import { resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
-import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
-import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
-import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplicate-payment-candidates'
 import {
   deriveCustomerSettlementAmount,
   planInvoicePaymentForLines,
 } from '@/lib/invoices/apply-invoice-payment'
-import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
-import { recordInvoicePaymentRow, removeInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
+import { isMatchableInvoiceStatus } from '@/lib/invoices/matchable-statuses'
+import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
+import { INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { roundOre } from '@/lib/money'
-import type { CreateJournalEntryInput, EntityType, Invoice } from '@/types'
+import type { EntityType, Invoice } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
 // default_dimensions must stay in this projection: the fetched row feeds the
@@ -71,9 +63,6 @@ const InvoiceMarkPaidResponse = z.object({
   remaining_amount: z.number(),
   paid_at: z.string().nullable(),
   journal_entry_id: z.string().uuid().nullable(),
-  warnings: z
-    .array(z.object({ code: z.string(), message: z.string() }))
-    .optional(),
 })
 
 registerEndpoint({
@@ -82,7 +71,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/:id/mark-paid',
   summary: 'Record a payment against an invoice.',
   description:
-    'Marks a sent / overdue invoice as paid (or partially_paid). Books the payment via Debit 1930 / Credit 1510 under faktureringsmetoden, or Debit 1930 / Credit revenue + Credit output VAT under kontantmetoden. Optional body supports partial payments via custom balanced journal lines and exchange-rate adjustments for foreign-currency invoices. Idempotent and dry-runnable. Emits invoice.paid.',
+    'Marks a sent / overdue / partially_paid invoice as paid (or partially_paid). Books the payment via Debit 1930 / Credit 1510 under faktureringsmetoden, or Debit 1930 / Credit revenue + Credit output VAT under kontantmetoden. Optional body supports partial payments via custom balanced journal lines and exchange-rate adjustments for foreign-currency invoices. Idempotent and dry-runnable. Emits invoice.paid.',
   useWhen:
     'A customer paid an invoice via a channel other than the synced bank account (cash, manual transfer, separate processor). Use dry-run to confirm the booking before committing.',
   doNotUseFor:
@@ -177,12 +166,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // Pre-flight: fetch invoice with relations needed for journal entry.
     // journal_entry_id (booking-state routing) and deduction_total (ROT/RUT
     // settlement derivation) are fetched ad hoc: they stay out of
-    // INVOICE_MARK_PAID_RESPONSE_COLUMNS so the response contract and the
-    // invoice.paid event payload are unchanged.
+    // INVOICE_MARK_PAID_RESPONSE_COLUMNS so the response contract is
+    // unchanged. The items carry every column the booking builders read
+    // (INVOICE_ITEM_FULL_COLUMNS, pinned by its test): without
+    // deduction_type/_amount a kontantmetod ROT/RUT payment books no 1513 leg
+    // and debits the bank for the full total, and without revenue_account an
+    // override account lands on the default 30xx.
     const { data: invoice, error: fetchErr } = await ctx.supabase
       .from('invoices')
       .select(
-        `${INVOICE_MARK_PAID_RESPONSE_COLUMNS}, journal_entry_id, deduction_total, customer:customers(id, name, customer_type), items:invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, vat_rate, vat_amount, dimensions)`,
+        `${INVOICE_MARK_PAID_RESPONSE_COLUMNS}, journal_entry_id, deduction_total, customer:customers(id, name, customer_type), items:invoice_items(${INVOICE_ITEM_FULL_COLUMNS})`,
       )
       .eq('company_id', ctx.companyId!)
       .eq('id', invoiceId)
@@ -226,7 +219,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    if (typed.status !== 'sent' && typed.status !== 'overdue') {
+    // partially_paid is payable (#1717), as on the dashboard: the remaining
+    // amount is booked. One list for every door and the CAS guard below.
+    if (!isMatchableInvoiceStatus(typed.status)) {
       return v1ErrorResponseFromCode('INVOICE_PAID_NOT_PAYABLE', ctx.log, {
         requestId: ctx.requestId,
         details: { current_status: typed.status },
@@ -267,7 +262,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // VAT double-count. Only true kontantmetoden invoices (never booked)
     // recognise revenue + VAT here.
     const invoiceAlreadyBooked = !!(typed as { journal_entry_id?: string | null }).journal_entry_id
-    const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash'
 
     // Unit contract: total / paid_amount / remaining_amount are stored in the
     // INVOICE currency (total_sek carries the SEK view of total, and there is
@@ -450,246 +444,106 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       )
     }
 
-    const warnings: { code: string; message: string }[] = []
+    // Commit: the dashboard's write path. Journal entry (custom lines | cash
+    // entry for a never-booked kontantmetod invoice | clearing entry against
+    // 1510), invoice_payments row, CAS-guarded status update (a lost race or a
+    // failed update makulerar the voucher and removes the row), suggestion
+    // cleanup and invoice.paid. The generated debit lands on the bank account
+    // the invoice asked to be paid to (1930 when none was chosen).
+    const settlementAccountNumber = await resolveInvoiceSettlementAccount(ctx.supabase, ctx.companyId!, typed)
+    const result = await settleInvoicePayment(ctx.supabase, ctx.companyId!, ctx.userId, {
+      invoice: typed,
+      paymentAmountInInvoiceCurrency,
+      paymentDate,
+      accountingMethod,
+      entityType,
+      exchangeRateDifference,
+      customLines,
+      settlementAccountNumber,
+      paymentSource: 'manual',
+    })
 
-    // Commit path. Step 1: book the journal entry. Three flavors:
-    //   - Custom lines (partial payment etc.) → createJournalEntry directly
-    //   - Cash basis → createInvoiceCashEntry (recognizes revenue here)
-    //   - Accrual basis → createInvoicePaymentJournalEntry (settles AR)
-    let journalEntryId: string | null = null
-    const isRealInvoice = !typed.document_type || typed.document_type === 'invoice'
-    if (isRealInvoice) {
-      try {
-        if (customLines) {
-          const fiscalPeriodId = await findFiscalPeriod(
-            ctx.supabase,
-            ctx.companyId!,
-            paymentDate,
-          )
-          if (!fiscalPeriodId) {
-            return v1ErrorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', ctx.log, {
-              requestId: ctx.requestId,
-              details: { payment_date: paymentDate },
-            })
-          }
-          const input: CreateJournalEntryInput = {
-            fiscal_period_id: fiscalPeriodId,
-            entry_date: paymentDate,
-            description: `Delbetalning faktura ${typed.invoice_number ?? typed.id}`,
-            source_type: 'invoice_paid',
-            source_id: invoiceId,
-            lines: customLines.map((l) => ({
-              account_number: l.account_number,
-              debit_amount: l.debit_amount,
-              credit_amount: l.credit_amount,
-              line_description: l.line_description ?? undefined,
-              // The line's own tags (DimensionsBagSchema-validated), as the
-              // dashboard mark-paid passes them through.
-              dimensions: l.dimensions,
-            })),
-          }
-          const entry = await createJournalEntry(
-            ctx.supabase,
-            ctx.companyId!,
-            ctx.userId,
-            input,
-          )
-          journalEntryId = entry?.id ?? null
-        } else if (useCashEntry) {
-          const settlementAccountNumber = await resolveInvoiceSettlementAccount(ctx.supabase, ctx.companyId!, typed)
-          const entry = await createInvoiceCashEntry(
-            ctx.supabase,
-            ctx.companyId!,
-            ctx.userId,
-            typed as Invoice,
-            paymentDate,
-            entityType,
-            typed.customer?.name,
-            settlementAccountNumber,
-          )
-          journalEntryId = entry?.id ?? null
-        } else {
-          const settlementAccountNumber = await resolveInvoiceSettlementAccount(ctx.supabase, ctx.companyId!, typed)
-          const entry = await createInvoicePaymentJournalEntry(
-            ctx.supabase,
-            ctx.companyId!,
-            ctx.userId,
-            typed as Invoice,
-            paymentDate,
-            exchangeRateDifference,
-            typed.customer?.name,
-            // Pass full or partial amount depending on path.
-            customLines ? paymentAmount : undefined,
-            settlementAccountNumber,
-          )
-          journalEntryId = entry?.id ?? null
-        }
-
-        if (!journalEntryId) {
-          // Fail closed: a real invoice must produce a posted payment voucher.
-          // A null here (e.g. no open fiscal period) means nothing was booked,
-          // so flipping the invoice to paid/partially_paid would diverge the GL
-          // from the AR sub-ledger. Abort BEFORE the invoice update below:
-          // mirrors the v1 match-invoice strict mode.
-          ctx.log.error('mark-paid: no payment journal entry produced: aborting before state mutation', undefined, {
+    if (!result.ok) {
+      switch (result.code) {
+        case 'BOOKKEEPING_ERROR':
+          return v1ErrorResponse(result.error, ctx.log, { requestId: ctx.requestId })
+        case 'UPDATE_FAILED':
+          ctx.log.error('mark-paid: invoice update failed', result.error as Error, {
             invoiceId,
             companyId: ctx.companyId,
           })
           return v1ErrorResponseFromCode('INVOICE_PAID_BOOK_FAILED', ctx.log, {
             requestId: ctx.requestId,
-            details: { reason: 'no_journal_entry_created' },
+          })
+        case 'INVOICE_PAID_BOOK_FAILED': {
+          // The raw driver text stays in the server log; API callers get the
+          // reason code, or the engine's message in Swedish.
+          ctx.log.error('mark-paid: payment not booked', undefined, {
+            invoiceId,
+            companyId: ctx.companyId,
+            details: result.details,
+          })
+          const reason = String(result.details.reason ?? '')
+          return v1ErrorResponseFromCode('INVOICE_PAID_BOOK_FAILED', ctx.log, {
+            requestId: ctx.requestId,
+            details: {
+              reason:
+                reason === 'no_journal_entry_created' || reason === 'payment_row_insert_failed'
+                  ? reason
+                  : getErrorMessage({ message: reason }, { context: 'invoice' }),
+            },
           })
         }
-      } catch (err) {
-        if (err instanceof AccountsNotInChartError) {
-          return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
-        }
-        ctx.log.error('mark-paid: payment JE creation failed: aborting before state mutation', err as Error, {
-          invoiceId,
-          companyId: ctx.companyId,
-        })
-        return v1ErrorResponseFromCode('INVOICE_PAID_BOOK_FAILED', ctx.log, {
-          requestId: ctx.requestId,
-          details: { reason: getErrorMessage(err, { context: 'invoice' }) },
-        })
+        case 'INVOICE_PAID_NO_FISCAL_PERIOD':
+          return v1ErrorResponseFromCode(result.code, ctx.log, {
+            requestId: ctx.requestId,
+            details: { payment_date: paymentDate },
+          })
+        case 'INVOICE_PAID_RACE':
+          // Status transitioned (concurrent mark-paid / credit) between
+          // pre-flight and the update; the voucher is already makulerad.
+          return v1ErrorResponseFromCode(result.code, ctx.log, { requestId: ctx.requestId })
+        default:
+          return v1ErrorResponseFromCode(result.code, ctx.log, {
+            requestId: ctx.requestId,
+            details: result.details,
+          })
       }
     }
+    const { newStatus: settledStatus, journalEntryId } = result
 
-    // Step 2: AR sub-ledger row (#2019). The kontantmetod cut-off reads
-    // invoice_payments only, so a paid invoice without it is re-booked as a
-    // fordran at bokslut. Written before the CAS update so the failure
-    // branches undo it with the voucher. See lib/invoices/invoice-payment-row.ts.
-    let paymentRowId: string | null = null
-    if (isRealInvoice) {
-      const recorded = await recordInvoicePaymentRow(ctx.supabase, {
-        userId: ctx.userId,
-        companyId: ctx.companyId!,
-        invoice: typed,
-        paymentDate,
-        newPaidAmount,
-        journalEntryId,
-        source: 'manual',
-      })
-      if (!recorded.ok) {
-        ctx.log.error('mark-paid: invoice_payments insert failed: cancelling the payment voucher', undefined, {
-          invoiceId,
-          companyId: ctx.companyId,
-          error: recorded.error,
-        })
-        if (journalEntryId) {
-          await cancelOrphanedPaymentEntry(
-            ctx.supabase,
-            ctx.companyId!,
-            ctx.userId,
-            journalEntryId,
-            'Automatiskt makulerad: betalningsraden kunde inte sparas efter bokförd betalning',
-          )
-        }
-        // The raw driver text stays in the server log above; API callers get
-        // the reason code only.
-        return v1ErrorResponseFromCode('INVOICE_PAID_BOOK_FAILED', ctx.log, {
-          requestId: ctx.requestId,
-          details: { reason: 'payment_row_insert_failed' },
-        })
-      }
-      paymentRowId = recorded.id
-    }
-
-    // Step 3: update the invoice row.
-    const updatePayload: Record<string, unknown> = {
-      status: newStatus,
-      remaining_amount: newRemaining,
-      paid_amount: newPaidAmount,
-      updated_at: new Date().toISOString(),
-    }
-    if (newStatus === 'paid') {
-      updatePayload.paid_at = paidAt
-    }
-    // Deliberately NOT writing journal_entry_id here: that column means "the
-    // registration entry that booked this invoice at issuance" and drives the
-    // invoiceAlreadyBooked routing above. Writing the payment/cash entry id
-    // would make a kontantmetoden invoice look registered, so a later partial
-    // payment would clear a 1510 that was never debited. The payment entry id
-    // is returned in the response body instead.
-
-    const { data: updated, error: updateErr } = await ctx.supabase
+    // The response is the row as stored (the public projection, never the
+    // pre-flight's items or customer).
+    const { data: stored } = await ctx.supabase
       .from('invoices')
-      .update(updatePayload)
+      .select(INVOICE_MARK_PAID_RESPONSE_COLUMNS)
       .eq('company_id', ctx.companyId!)
       .eq('id', invoiceId)
-      // Race guard: only flip from a payable status.
-      .in('status', ['sent', 'overdue', 'partially_paid'])
-      .select(INVOICE_MARK_PAID_RESPONSE_COLUMNS)
       .maybeSingle()
-
-    if (updateErr) {
-      await removeInvoicePaymentRow(ctx.supabase, ctx.companyId!, paymentRowId)
-      ctx.log.error('mark-paid: invoice update failed', updateErr as Error, {
-        invoiceId,
-        companyId: ctx.companyId,
-        pgCode: (updateErr as { code?: string }).code,
-      })
-      return v1ErrorResponseFromCode('INVOICE_PAID_BOOK_FAILED', ctx.log, {
-        requestId: ctx.requestId,
-      })
-    }
-    if (!updated) {
-      // Race: status transitioned (concurrent mark-paid / credit) between
-      // pre-flight and our update. Surface as 409.
-      await removeInvoicePaymentRow(ctx.supabase, ctx.companyId!, paymentRowId)
-      ctx.log.warn('mark-paid: race: invoice status transitioned during request', {
-        invoiceId,
-        companyId: ctx.companyId,
-      })
-      return v1ErrorResponseFromCode('INVOICE_PAID_RACE', ctx.log, {
-        requestId: ctx.requestId,
-      })
-    }
-
-    // Fully settled: retire every transaction's suggestion pointer at this
-    // invoice (issue #1259). No exceptTransactionId: this flow is not driven by
-    // a bank transaction, so any pointer at it is now dead.
-    if (newStatus === 'paid') {
-      await clearSettledInvoiceSuggestions(ctx.supabase, ctx.companyId!, 'invoice', invoiceId)
-    }
-
-    // Step 3: emit invoice.paid when this payment settled the invoice in full
-    // (never on a partial; best-effort, surfaces in warnings on fail).
-    const paidEvent = await emitInvoicePaidIfSettled({
-      newStatus,
-      invoice: updated as unknown as Invoice,
-      companyId: ctx.companyId!,
-      userId: ctx.userId,
-      paymentAmount,
-      paymentDate,
-    })
-    if (paidEvent === 'emit_failed') {
-      ctx.log.error('invoice.paid emit failed', undefined, {
-        invoiceId,
-        companyId: ctx.companyId,
-      })
-      warnings.push({
-        code: 'EVENT_EMIT_FAILED',
-        message: 'invoice.paid event did not reach the bus; downstream subscribers may miss this transition.',
-      })
+    const { items: _items, customer: _customer, journal_entry_id: _registration, deduction_total: _deduction, ...header } =
+      typed as Invoice & { deduction_total?: number | null }
+    const updated = stored ?? {
+      ...header,
+      status: settledStatus,
+      paid_amount: result.newPaidAmount,
+      remaining_amount: result.newRemaining,
+      paid_at: result.paidAt ?? typed.paid_at,
     }
 
     ctx.log.info('invoices.mark-paid success', {
       invoiceId,
       companyId: ctx.companyId,
       userId: ctx.userId,
-      newStatus,
+      newStatus: settledStatus,
       journalEntryId,
       paymentAmount,
       isPartial,
-      hadWarnings: warnings.length > 0,
     })
 
     return ok(
       {
         ...(updated as object),
         journal_entry_id: journalEntryId,
-        ...(warnings.length > 0 ? { warnings } : {}),
       },
       { requestId: ctx.requestId },
     )

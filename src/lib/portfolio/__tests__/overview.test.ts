@@ -263,6 +263,7 @@ describe('fetchPortfolioOverview', () => {
     truncated: false,
     remainingCompanyIds: [],
     unresolved: [],
+    dormant: [],
     team: { id: 'team-1', name: 'Siffra' },
   }
 

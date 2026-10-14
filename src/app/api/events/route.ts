@@ -14,6 +14,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { minimisePayload } from '@/lib/webhooks/handler'
+import { isMembershipActive } from '@/lib/entitlements/multi-user'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('api/events')
@@ -154,7 +155,7 @@ export async function GET(request: Request) {
   if (keyCompanyId !== null) {
     const { data: membership, error: membershipError } = await supabase
       .from('company_members')
-      .select('company_id, companies!inner(archived_at)')
+      .select('company_id, role, companies!inner(archived_at)')
       .eq('user_id', userId)
       .eq('company_id', companyId)
       .is('companies.archived_at', null)
@@ -171,6 +172,23 @@ export async function GET(request: Request) {
       // 404 rather than 403, matching v1 and MCP: do not confirm the company
       // exists to a caller who is no longer allowed to see it.
       return errorResponseFromCode('NOT_FOUND', log, { details: { companyId } })
+    }
+
+    // Multi-user seat gate, as with-api-v1.ts and MCP apply it: a non-owner
+    // membership in a frozen company (multi_user lapsed past its grace) gets
+    // no events either. Owners pass without a read; no read while the gate
+    // is off.
+    const role = (membership as { role?: string }).role ?? ''
+    if (!(await isMembershipActive(supabase, companyId, role))) {
+      log.warn('multi-user seat gate refused frozen membership', { companyId })
+      return errorResponseFromCode('FORBIDDEN', log, {
+        reason: 'multi_user_frozen',
+        details: {
+          companyId,
+          capability: 'multi_user',
+          message: 'Company is paused for this account: multiple users require a paid plan. Ask the company owner to upgrade.',
+        },
+      })
     }
   }
 

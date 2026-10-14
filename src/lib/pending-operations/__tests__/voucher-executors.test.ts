@@ -317,12 +317,13 @@ describe('commitPendingOperation: create_voucher', () => {
       makeJournalEntry({ id: 'je-ib', voucher_number: 1, voucher_series: 'A' })
     )
 
-    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { period_start: '2026-01-01', name: '2026' }, error: null }) // fiscal_periods lookup
     // existing-IB check: no pointer on the year, no posted IB entry in it
     enqueue({ data: { opening_balances_set: false, opening_balance_entry_id: null, opening_balance_entry: null }, error: null })
     enqueue({ data: [], error: null })
+    enqueue({ data: null, error: null }) // the year's pointer to the new IB
     enqueue({ data: null, error: null }) // dispatcher's commit update
 
     const op = makePendingOp({
@@ -348,6 +349,11 @@ describe('commitPendingOperation: create_voucher', () => {
       expect.objectContaining({ source_type: 'opening_balance' }),
       'user_accept'
     )
+    // The year points at its IB, as after every other IB writer, so
+    // gnubok_correct_opening_balances can replace it (it reads the pointer).
+    expect(findCalls('fiscal_periods', 'update')).toContainEqual([
+      { opening_balance_entry_id: 'je-ib', opening_balances_set: true },
+    ])
   })
 
   // Agent feedback seqs 892914, 897234, 897844: a second IB voucher in a year
@@ -829,6 +835,112 @@ describe('commitPendingOperation: create_voucher', () => {
 
 // ─── correct_entry ──────────────────────────────────────────────────
 
+describe('commitPendingOperation: set_opening_balances (one IB per year)', () => {
+  const op = () =>
+    makePendingOp({
+      operation_type: 'set_opening_balances',
+      // The params shape staged before and after this change.
+      params: { closed_period_id: 'fp-2025', next_period_id: 'fp-2026' },
+    })
+
+  it('refuses with 409 OB_PERIOD_ALREADY_HAS_BALANCES when the next year has a pointer-less IB, posting nothing', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { opening_balances_set: false, opening_balance_entry_id: null, opening_balance_entry: null }, error: null })
+    enqueue({ data: [{ id: 'je-ib-voucher', voucher_series: 'A', voucher_number: 4 }], error: null })
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op())
+
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(result.code).toBe('OB_PERIOD_ALREADY_HAS_BALANCES')
+    expect(result.error).toMatch(/redan en ingående balans \(verifikation A-4\)/)
+    expect(createJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('refuses with 409 when the next year already points at its IB (year-end ran)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        opening_balances_set: true,
+        opening_balance_entry_id: 'je-ib-1',
+        opening_balance_entry: { voucher_series: 'A', voucher_number: 1 },
+      },
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op())
+
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(result.code).toBe('OB_PERIOD_ALREADY_HAS_BALANCES')
+    expect(createJournalEntry).not.toHaveBeenCalled()
+  })
+})
+
+describe('commitPendingOperation: explain_voucher_gap (one write, write-once)', () => {
+  const PERIOD = '7b3a1c2d-0000-4000-8000-000000000001'
+  // The params shape staged before and after the shared write.
+  const op = (params: Record<string, unknown>) =>
+    makePendingOp({ operation_type: 'explain_voucher_gap', params })
+
+  it('commits a row staged in the old shape through the shared write', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { id: PERIOD }, error: null }) // the company's year
+    enqueue({ data: { id: 'exp-1', fiscal_period_id: PERIOD, voucher_series: 'A', gap_start: 5, gap_end: 7, explanation: 'Avbruten bokning', created_at: '2026-10-13' }, error: null })
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      op({ fiscal_period_id: PERIOD, voucher_series: 'A', gap_start: '5', gap_end: 7, explanation: 'Avbruten bokning' }),
+    )
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ explanation_id: 'exp-1' })
+    expect(findCall('voucher_gap_explanations', 'insert')?.[0]).toMatchObject({ company_id: 'company-1', gap_start: 5, gap_end: 7 })
+  })
+
+  it('refuses an explained gap with 409 VOUCHER_GAP_ALREADY_EXPLAINED instead of a raw 500', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: { id: PERIOD }, error: null })
+    enqueue({ data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint' } })
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      op({ fiscal_period_id: PERIOD, voucher_series: 'A', gap_start: 5, gap_end: 7, explanation: 'Avbruten bokning' }),
+    )
+
+    expect(result.http_status).toBe(409)
+    expect(result.code).toBe('VOUCHER_GAP_ALREADY_EXPLAINED')
+  })
+
+  it('refuses an explanation over 500 characters with 400 before any write', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      op({ fiscal_period_id: PERIOD, voucher_series: 'A', gap_start: 5, gap_end: 7, explanation: 'x'.repeat(501) }),
+    )
+
+    expect(result.http_status).toBe(400)
+    expect(result.code).toBe('VALIDATION_ERROR')
+    expect(findCall('voucher_gap_explanations', 'insert')).toBeUndefined()
+  })
+})
+
 describe('commitPendingOperation: correct_entry', () => {
   it('happy path: posts storno + corrected for a posted entry in an open period', async () => {
     vi.mocked(correctEntry).mockResolvedValueOnce({
@@ -881,6 +993,42 @@ describe('commitPendingOperation: correct_entry', () => {
       ]),
       { allowDeepChain: false }
     )
+    // A row staged without a description keeps correctEntry's default text.
+    expect(vi.mocked(correctEntry).mock.calls[0][5]?.description).toBeUndefined()
+  })
+
+  it('passes a staged description through to correctEntry (#1031 on the MCP door)', async () => {
+    vi.mocked(correctEntry).mockResolvedValueOnce({
+      reversal: makeJournalEntry({ id: 'je-storno', voucher_number: 50 }),
+      corrected: makeJournalEntry({ id: 'je-corrected', voucher_number: 51 }),
+    })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: { id: 'je-original', status: 'posted', fiscal_period_id: 'fp-1', fiscal_periods: { is_closed: false } },
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp({
+      operation_type: 'correct_entry',
+      params: {
+        entry_id: 'je-original',
+        lines: [
+          { account_number: '5410', debit_amount: 1000, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+        ],
+        description: 'Förbrukningsinventarier, rätt leverantör',
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(vi.mocked(correctEntry).mock.calls[0][5]).toEqual({
+      allowDeepChain: false,
+      description: 'Förbrukningsinventarier, rätt leverantör',
+    })
   })
 
   it('returns 404 when the original entry does not exist', async () => {

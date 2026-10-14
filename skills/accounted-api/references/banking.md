@@ -1035,6 +1035,7 @@ Accepts a SIE4 file (CP437 / Windows-1252 / UTF-8 auto-detected, up to 50 MB) as
 - A file whose #ORGNR is not the company's organisation number answers 409 SIE_IMPORT_ORG_NUMBER_MISMATCH with both numbers in details. Check with the user, then resend with options.confirmOrgNumberMismatch=true to import it anyway. A file without #ORGNR is not checked.
 - The operation can take 1-5 minutes for multi-year files. The HTTP response returns immediately with operation_id; poll /operations/{id} every ~2s for status.
 - Chunks are visible while importing. Filing and export are held until completion. Undo uses batch storno and retains accounting history.
+- options (a JSON string field) takes createFiscalPeriod, importOpeningBalances, importTransactions, updateAccountNames (each default true), voucherSeries (for vouchers the file gives no series; default B, as the dashboard), openingBalanceSeries (default: a series the file does not use), markImportedNoDocRequired (default false), onExistingPeriod, supersedesImportId and confirmOrgNumberMismatch; any other key is 400.
 - Account mappings are generated server-side from the file's #KONTO records (plus stored per-company overrides), by the same rules as the dashboard upload: a class 9 account carrying amounts is mapped to 2999 OBS-konto, also over a stored class 9 mapping. By default the file's account names are carried into the chart, renaming existing accounts whose names differ: pass options.updateAccountNames=false to keep BAS default names.
 
 | Parameter | In | Type | Required | Notes |
@@ -3221,13 +3222,13 @@ Cursor-paginated transaction list ordered by created_at DESC, id ASC (newest-imp
 
 **Pitfalls:**
 - Default page size is 50. Pass ?limit=100 for the maximum. Cursor pagination: pass ?cursor=<next_cursor> from the previous response.
-- A booked transaction has a non-null journal_entry_id. is_business / category live on the transaction row even before booking.
+- Filter on status rather than journal_entry_id: a bulk-booked, split or batch-allocated transaction is booked with journal_entry_id null. status=unbooked leaves out ignored and private rows; without status every row is listed. is_business / category live on the transaction row even before booking.
 - reverse-charge or storno entries can leave a transaction with journal_entry_id pointing at a cancelled JE: check status on the JE separately.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
-| `status` | query | `"booked" \| "unbooked"` | no | booked: linked to a verifikat (journal_entry_id set). unbooked: not yet booked. Default: both. |
+| `status` | query | `"booked" \| "unbooked"` | no | booked: anchored to a verifikat (journal_entry_id, a bulk booking or split, or a batch allocation). unbooked: the work queue, not ignored, not private and anchored to no verifikat. Default: every row. |
 | `currency` | query | `string` | no | Only transactions in this currency code (e.g. SEK). |
 | `date_from` | query | `string` | no | YYYY-MM-DD. Transactions dated on or after this date. |
 | `date_to` | query | `string` | no | YYYY-MM-DD. Transactions dated on or before this date. |
@@ -4083,6 +4084,7 @@ Confirms an invoice match for a transaction. Storno any conflicting auto-categor
 - Proforma + delivery notes are rejected (MATCH_INVOICE_NOT_INVOICE_TYPE): only document_type='invoice' can be matched.
 - Transaction must be positive (amount > 0): negative transactions return MATCH_INVOICE_NOT_INCOME.
 - Invoice must be in sent / overdue / partially_paid status: paid or draft invoices return MATCH_INVOICE_NOT_OPEN.
+- Kontantmetoden: an invoice never booked at issue is matched only by one payment of its whole amount. A partial payment, or the final payment of an invoice already part-paid, returns INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED (details.reason partial_payment | previously_partially_paid); book that payment as a manual journal entry.
 - Idempotency-Key is mandatory.
 
 | Parameter | In | Type | Required | Notes |

@@ -163,18 +163,16 @@ describe('MCP capability gate', () => {
       },
     ],
     ['gnubok_upload_document', { file_name: 'faktura.pdf', file_content_base64: 'JVBERi0=' }],
-  ])('blocks %s when ai is not entitled', async (toolName, args) => {
-    // The central dispatch map is the paywall for every MCP document-upload
-    // step, so a free-tier connector key can never reach the paid OCR flow.
+  ])('does not block %s at dispatch when ai is not entitled: the underlag is archived on any tier', async (toolName, args) => {
+    // Like the dashboard upload and v1 POST /documents, an MCP upload stores
+    // the document without the AI capability and skips only the paid OCR
+    // (createDocumentInboxItem checks `ai` at the OCR call).
     mockHasCapability.mockResolvedValue(false)
 
     const response = await handleMcpRequest(mcpToolCall(toolName, args))
-    const { isError, payload } = await parsedToolResult(response)
+    const { payload } = await parsedToolResult(response)
 
-    expect(isError).toBe(true)
-    expect((payload.error as Record<string, unknown>).capability_blocked).toBe(true)
-    expect((payload.error as Record<string, unknown>).capability).toBe('ai')
-    expect(mockHasCapability).toHaveBeenCalledWith(expect.anything(), '11111111-1111-4111-8111-111111111111', 'ai')
+    expect((payload.error as Record<string, unknown> | undefined)?.capability_blocked).toBeUndefined()
   })
 
   it('lets a free tool through without consulting the capability gate', async () => {

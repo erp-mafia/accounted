@@ -1233,4 +1233,34 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
       transaction_id: null,
     })
   })
+
+  it('defaults the payment date to the Swedish calendar day, not the UTC one', async () => {
+    // 00:30 in Stockholm on 15 June is still 14 June in UTC.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-06-14T22:30:00Z'))
+    try {
+      const invoice = makeInvoice({
+        id: 'inv-1',
+        status: 'sent',
+        total: 12500,
+        currency: 'SEK',
+        customer: makeCustomer(),
+      })
+      enqueue({ data: invoice, error: null })
+      enqueue({ data: [], error: null }) // duplicate guard: one counterparty probe
+      enqueue({ data: [], error: null }) // duplicate guard: aggregate sweep
+      enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
+      enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
+      enqueue({ data: [{ id: 'inv-1' }], error: null }) // CAS update matched
+      mockCreateInvoiceCashEntry.mockResolvedValue({ id: 'je-cash' })
+
+      const request = createMockRequest('/api/invoices/inv-1/mark-paid', { method: 'POST' })
+      const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+
+      expect(response.status).toBe(200)
+      expect(findCalls('invoice_payments', 'insert')[0][0]).toMatchObject({ payment_date: '2026-06-15' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

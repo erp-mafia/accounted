@@ -142,6 +142,7 @@ describe('gnubok_get_trial_balance: dimensions filter', () => {
       ],
       totalDebit: 8000,
       totalCredit: 0,
+      isBalanced: false,
     } as never)
 
     const result = (await trialBalance.execute(

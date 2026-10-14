@@ -36,7 +36,8 @@ import {
   buildMomsuppgift,
   type VatDeclarationPrep,
 } from './lib/declaration-prep'
-import { submitVatDeclarationChain } from './lib/vat-submit'
+import { submitVatDeclarationChain, vatDeclarationIncompleteFailure } from './lib/vat-submit'
+import { vatFilingVerdict } from '@/lib/reports/vat-close-check'
 import {
   agiRunTarget,
   createAgiSigningLink,
@@ -1155,8 +1156,28 @@ export const skatteverketExtension: Extension = {
         if (roleBlocked) return roleBlocked
 
         try {
-          const { redovisare, redovisningsperiod, momsuppgift } =
-            await parseDeclarationRequest(request, ctx)
+          const input = await parseDeclarationInput(request)
+          const { redovisare, redovisningsperiod, momsuppgift, declaration } =
+            await buildMomsuppgift(ctx.supabase, ctx.companyId, input)
+
+          // The "Kontroll av underlaget" gate on the server, before anything
+          // reaches Eget utrymme: the panel's own check is no gate for a
+          // caller that posts here directly.
+          const verdict = await vatFilingVerdict(ctx.supabase, ctx.companyId, declaration, {
+            fiscalPeriodId: input.fiscalPeriodId,
+          })
+          if (verdict.blocked) {
+            const refused = vatDeclarationIncompleteFailure(verdict.checks)
+            return NextResponse.json(
+              {
+                error: refused.error,
+                code: 'VAT_DECLARATION_INCOMPLETE',
+                stage: refused.stage,
+                completeness_checks: refused.completenessChecks,
+              },
+              { status: refused.httpStatus }
+            )
+          }
 
           const response = await skvRequest(
             ctx.supabase,
@@ -1417,6 +1438,9 @@ export const skatteverketExtension: Extension = {
                 stage: result.stage,
                 draft_saved: result.draftSaved,
                 kontrollResultat: result.kontrollresultat,
+                ...(result.completenessChecks
+                  ? { code: 'VAT_DECLARATION_INCOMPLETE', completeness_checks: result.completenessChecks }
+                  : {}),
               },
               { status: result.httpStatus }
             )
@@ -2390,6 +2414,13 @@ async function parseDeclarationRequest(
   request: Request,
   ctx: ExtensionContext
 ): Promise<VatDeclarationPrep> {
+  return buildMomsuppgift(ctx.supabase, ctx.companyId, await parseDeclarationInput(request))
+}
+
+/** The period a declaration request names, checked for the required fields. */
+async function parseDeclarationInput(
+  request: Request,
+): Promise<{ periodType: VatPeriodType; year: number; period: number; fiscalPeriodId?: string }> {
   const body = await request.json()
   const { periodType, year, period, fiscalPeriodId } = body as {
     periodType: VatPeriodType
@@ -2402,7 +2433,7 @@ async function parseDeclarationRequest(
     throw new Error('Saknar obligatoriska fält: periodType, year, period')
   }
 
-  return buildMomsuppgift(ctx.supabase, ctx.companyId, { periodType, year, period, fiscalPeriodId })
+  return { periodType, year, period, fiscalPeriodId }
 }
 
 /**
@@ -2686,8 +2717,19 @@ async function commitSubmitVatDeclaration(
 
   try {
     // The staged figures were already reviewed at approval time, so the
-    // chain starts at the utkast write (no kontrollera pre-step here).
+    // chain starts at the utkast write (no kontrollera pre-step here). The
+    // chain still runs the completeness verdict on the books as they are
+    // now: an op staged before they changed is refused, not filed.
     const result = await submitVatDeclarationChain(ctx, { periodType, year, period, fiscalPeriodId })
+    if (!result.ok && result.stage === 'completeness') {
+      // Non-recoverable by design: the op's reviewed figures no longer pass,
+      // so it is consumed; the user fixes the findings and stages anew.
+      return {
+        ok: false, code: 'VAT_DECLARATION_INCOMPLETE', http_status: result.httpStatus,
+        recoverable: false, error: result.error,
+        details: { completeness_checks: result.completenessChecks ?? [] },
+      }
+    }
     if (!result.ok) {
       return {
         ok: false, code: 'SKATTEVERKET_SUBMIT_REJECTED', http_status: result.httpStatus,

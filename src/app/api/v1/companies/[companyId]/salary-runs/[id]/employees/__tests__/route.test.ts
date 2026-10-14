@@ -172,6 +172,46 @@ describe('GET /api/v1/companies/:companyId/salary-runs/:id/employees', () => {
     expect(body.meta.next_cursor ?? null).toBeNull()
   })
 
+  it('adds the effective figures: what is booked, declared and paid once overrides apply', async () => {
+    const taxOverridden = { ...SAMPLE_SRE, tax_withheld_override: 7000 }
+    const fSkattPayee = {
+      ...SAMPLE_SRE,
+      id: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+      employee_id: '99999999-9999-4999-8999-999999999999',
+      avgifter_amount_override: 5000,
+      employee: { ...SAMPLE_SRE.employee, f_skatt_status: 'f_skatt' },
+    }
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        salary_runs: { data: { id: RUN_ID }, error: null },
+        salary_run_employees: { data: [taxOverridden, fSkattPayee], error: null },
+      }).supabase,
+    )
+
+    const res = await listRunEmployees(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/employees`),
+      listParams(COMPANY_ID, RUN_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    // A lower tax override raises the payout by the same amount (the bank
+    // file's figure), which COALESCE(override, calculated) on net never shows.
+    expect(body.data[0].net_salary).toBe(26800)
+    expect(body.data[0].effective).toMatchObject({
+      tax_withheld: 7000,
+      net_salary: 28000,
+      tax_overridden: true,
+    })
+    // An F-skatt payee forms no avgifter underlag: the override is ignored.
+    expect(body.data[1].effective).toMatchObject({
+      avgifter_amount: 10997,
+      avgifter_overridden: false,
+      employer_cost: 51516.64,
+    })
+  })
+
   it('returns 404 SALARY_RUN_NOT_FOUND when the run is missing', async () => {
     mockServiceClient.mockReturnValue(
       createTableMockSupabase({
@@ -294,6 +334,48 @@ describe('GET /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId
     expect(JSON.stringify(body)).not.toContain(SAMPLE_PERSONNUMMER)
     expect(body.data.line_items[0].id).toBeUndefined()
     expect(body.data.id).toBeUndefined()
+    // No override: the effective figures equal the calculation's.
+    expect(body.data.effective).toEqual({
+      gross_salary: 35000,
+      tax_withheld: 8200,
+      net_salary: 26800,
+      avgifter_amount: 10997,
+      vacation_accrual: 4200,
+      employer_cost: 51516.64,
+      tax_overridden: false,
+      avgifter_overridden: false,
+    })
+  })
+
+  it('applies the tax override to the effective net on the payslip detail', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        salary_run_employees: {
+          data: { ...SAMPLE_SRE, tax_withheld_override: 9000, avgifter_amount_override: 11000 },
+          error: null,
+        },
+      }).supabase,
+    )
+
+    const res = await getPayslip(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/employees/${EMPLOYEE_ID}`,
+      ),
+      detailParams(COMPANY_ID, RUN_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.tax_withheld).toBe(8200)
+    expect(body.data.effective).toMatchObject({
+      tax_withheld: 9000,
+      net_salary: 26000,
+      avgifter_amount: 11000,
+      employer_cost: 51519.64,
+      tax_overridden: true,
+      avgifter_overridden: true,
+    })
   })
 
   it('returns 404 SALARY_RUN_NOT_FOUND when the run itself is missing', async () => {

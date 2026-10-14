@@ -165,6 +165,37 @@ export function summarizeOverview(
   }
 }
 
+function portfolioDeadlineToWire(deadline: ClientDeadline) {
+  return {
+    title: deadline.title,
+    due_date: deadline.dueDate,
+    tax_deadline_type: deadline.taxDeadlineType,
+    urgency: deadline.urgency,
+  }
+}
+
+/**
+ * One overview row on the wire (snake_case): the v1 portfolio endpoint and
+ * the MCP client_overview tool return this same shape, deadlines[] included,
+ * so a deadline_kind filter shows the deadline that matched on both doors
+ * (next_deadline is the earliest of any kind).
+ */
+export function portfolioRowToWire(row: PortfolioCompanyRow) {
+  return {
+    company_id: row.companyId,
+    name: row.name,
+    org_number: row.orgNumber,
+    entity_type: row.entityType,
+    role: row.role,
+    team_id: row.teamId,
+    unbooked_count: row.unbookedCount,
+    inbox_count: row.inboxCount,
+    next_deadline: row.nextDeadline ? portfolioDeadlineToWire(row.nextDeadline) : null,
+    last_booked_date: row.lastBookedDate,
+    deadlines: (row.deadlines ?? []).map(portfolioDeadlineToWire),
+  }
+}
+
 /**
  * The overview for a resolved scope. The scope is the authorization
  * boundary (membership-checked in resolveCompanyScope); this function

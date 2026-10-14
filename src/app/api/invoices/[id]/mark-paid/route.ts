@@ -8,6 +8,8 @@ import { findDuplicatePaymentCandidatesForInvoice } from '@/lib/invoices/duplica
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
 import { resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
 import { roundOre } from '@/lib/money'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { isMatchableInvoiceStatus } from '@/lib/invoices/matchable-statuses'
 import type { EntityType, Invoice } from '@/types'
 
 /**
@@ -70,11 +72,7 @@ export const POST = withRouteContext(
       return errorResponseFromCode('INVOICE_QUOTE_NOT_PAYABLE', opLog, { requestId })
     }
 
-    if (
-      invoice.status !== 'sent' &&
-      invoice.status !== 'overdue' &&
-      invoice.status !== 'partially_paid'
-    ) {
+    if (!isMatchableInvoiceStatus(invoice.status)) {
       return errorResponseFromCode('INVOICE_PAID_NOT_PAYABLE', opLog, {
         requestId,
         details: { currentStatus: invoice.status },
@@ -111,8 +109,9 @@ export const POST = withRouteContext(
       force = parsed.data.force === true
     }
 
-    const now = new Date().toISOString()
-    const paymentDate = bodyPaymentDate || now.split('T')[0]
+    // The Swedish calendar day, as on the v1 and agent doors: near midnight
+    // the UTC date is still yesterday (possibly last month or a closed period).
+    const paymentDate = bodyPaymentDate || todayIsoStockholm()
 
     // Duplicate-payment guard: surface a likely-matching unlinked inbound bank
     // transaction before booking. Skipped on partial payments (explicit,

@@ -547,7 +547,7 @@ Generalised pre-flight that consolidates the Accounted pre-close validators unde
 - year_end_readiness and voucher_gaps require fiscal_period_id (UUID); vat_close requires period_type, year and period.
 - voucher_gaps covers EVERY voucher series registered for the period (A, B, F, ...), not only series A.
 - A passing check is a SNAPSHOT: the state can change between the check and the action. The same blocker logic runs again on commit.
-- vat_close: details carries the rutor (ruta49 = to pay, negative = refund), the payment block with the deadline, and the sanity ratios.
+- vat_close: details carries the rutor signed exactly as the momsdeklaration files them (ruta49 = to pay, negative = refund; a box whose credit notes exceed its sales is negative), the payment block with the deadline, and the sanity ratios.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -2540,9 +2540,9 @@ Example response `200`:
 **Close a fiscal period (IRREVERSIBLE per BFL 5 kap 8 §).**
 `scope:bookkeeping:write · risk:high · idempotent`
 
-Sets is_closed=true + closed_at on the period. Pre-requisites: period must be locked (call /lock first) AND year-end closing must have been executed (call /year-end first). Sync. The DB blocks any subsequent JE inserts.
+Sets is_closed=true + closed_at on the period. /year-end already locks and closes the period, so this is a recovery path only: it finalizes a year-end that posted its closing entry and locked the period but stopped before the close. Pre-requisites: locked AND closing_entry_id set. Sync. The DB blocks any subsequent JE inserts.
 
-**Use when:** Final step in the year-end flow: lock → year-end → close. Closing freezes the period for BFL 7 kap retention.
+**Use when:** Recovery only: a /year-end that posted its closing entry and locked the period but did not reach the close. In the normal flow /year-end closes the period itself, and a later /close returns 409 PERIOD_ALREADY_CLOSED. Closing freezes the period for BFL 7 kap retention.
 **Do not use for:** Locking a period (use /lock). Running the year-end closing entry (use /year-end). UNDOING a close (not supported, irreversible).
 
 **Pitfalls:**
@@ -2721,7 +2721,7 @@ Example response `200`:
   "data": {
     "operation_id": "0e9c…",
     "type": "fiscal_periods.currency_revaluation",
-    "status": "succeeded",
+    "status": "queued",
     "poll_url": "/api/v1/operations/0e9c…",
     "webhook_event": "operation.completed"
   },
@@ -2739,9 +2739,9 @@ Example response `200`:
 **Lock a fiscal period (no new entries can be posted into it).**
 `scope:bookkeeping:write · risk:high · idempotent · reversible`
 
-Sets locked_at on the period. Refuses if uncategorised business transactions remain in the period: they must be bokfört first. The DB trigger blocks JE inserts into locked periods; locking is the application-level pre-step before /close. Sync.
+Sets locked_at on the period. Refuses if uncategorised business transactions remain in the period: they must be bokfört first. The DB trigger blocks JE inserts into locked periods. /year-end locks and closes a fiscal year itself, so this is for interim locks. Sync.
 
-**Use when:** Finishing a period and you want to stop new postings. Step 1 of a three-step year-end flow: lock → year-end → close.
+**Use when:** Freezing a finished period you are NOT year-end closing (an interim month or quarter). Do not lock a fiscal year before /year-end: year-end posts its closing entry into the open period, then locks and closes it itself, and refuses a locked one.
 **Do not use for:** Locking an already-closed period (no-op). Bypassing the uncategorised-transactions guard: categorise or mark-private first.
 
 **Pitfalls:**
@@ -2796,12 +2796,12 @@ Example response `200`:
 
 Reads the closed period's trial balance, filters to BAS class 1-2 accounts with non-zero closing balance, and posts an opening verifikation (status=posted) onto the next_period_id. Sync. The path id is the CLOSED period; body.next_period_id is the target.
 
-**Use when:** After /year-end + /close on a period, generate the IB into the next period so the new year starts with the correct balance sheet.
-**Do not use for:** Posting opening balances on a manually-edited basis (use POST /journal-entries with source_type=manual). Re-running on the same target period (will produce duplicate IB entries).
+**Use when:** Rarely: /year-end already generates the next year's IB. Use this only to carry a closed period's UB into a next year that has no IB yet (e.g. a year closed outside the year-end flow).
+**Do not use for:** Typing opening balances by hand (POST /fiscal-periods/{id}/opening-balances/manual) or correcting an IB (POST /fiscal-periods/{id}/opening-balances/correct). Re-running on the same target period (refused with 409 CONFLICT, details.reason opening_balance_already_posted).
 
 **Pitfalls:**
 - Idempotency-Key is mandatory.
-- next_period_id must reference the SAME company and must NOT already have an IB entry. The engine throws if it does.
+- next_period_id must reference the SAME company and must NOT already have an IB: the period's linked IB or any posted source_type=opening_balance verifikat. Otherwise 409 CONFLICT with details.reason opening_balance_already_posted and details.existing_entry_id; nothing is posted. A reversed (stornoed) IB does not count.
 - Only class 1 (assets) and 2 (equity/liabilities) flow into the IB; class 3-8 are zeroed by the closing entry.
 
 | Parameter | In | Type | Required | Notes |
@@ -3448,14 +3448,15 @@ Example response `200`:
 **Execute year-end closing (currency revaluation + closing entry).**
 `scope:bookkeeping:write · risk:high · idempotent`
 
-Async-operation endpoint. Runs the year-end closing flow: currency revaluation (FX gains/losses to 3960/7960), then posts the closing entry that zeroes class 3-8 onto årets resultat (2099 for AB, the relevant eget-kapital account in the 2010-2019 range for enskild firma: the engine resolves which based on company.entity_type). Returns 202 with operation_id; subscribe to operation.completed or poll /v1/operations/{id}.
+Async-operation endpoint. Runs the year-end closing flow: currency revaluation (FX gains/losses to 3960/7960), then posts the closing entry that zeroes class 3-8 onto årets resultat (2099 for AB, the relevant eget-kapital account in the 2010-2019 range for enskild firma: the engine resolves which based on company.entity_type). It then locks and closes the period and posts the next year's opening balances itself. Returns 202 with operation_id: poll GET /api/v1/operations/{id}; the period.year_closed webhook fires when the closing completes.
 
-**Use when:** After /lock and a passing /compliance/check?type=year_end_readiness, you want to run the closing entry. This is step 2 of the lock → year-end → close flow.
-**Do not use for:** Re-running year-end (per-period idempotent: fails if closing_entry_id is already set). Closing the period (use /close after year-end succeeds).
+**Use when:** The period has ended and GET /compliance/check?type=year_end_readiness passes. Run it on an UNLOCKED period: it posts the closing entry, then locks and closes the period and generates the next year's IB itself, so there is no separate /lock, /close or /opening-balances step.
+**Do not use for:** Re-running year-end (per-period idempotent: fails if closing_entry_id is already set). Locking or closing the period first (/close is only a recovery path for a year-end that stopped after its closing entry).
 
 **Pitfalls:**
 - Idempotency-Key is mandatory.
 - Period must pass year_end_readiness checks (no drafts, no unexplained voucher gaps, trial balance balanced). The engine re-validates and aborts if not.
+- A locked period fails the operation (YEAR_END_FAILED, the message names the lock): unlock it with POST /fiscal-periods/{id}/unlock and run year-end on the open period. Do not call /lock first.
 - Closing entry is itself a verifikation (posted): the period must NOT already be closed.
 
 | Parameter | In | Type | Required | Notes |
@@ -3491,7 +3492,7 @@ Example response `200`:
   "data": {
     "operation_id": "0e9c…",
     "type": "fiscal_periods.year_end",
-    "status": "succeeded",
+    "status": "queued",
     "poll_url": "/api/v1/operations/0e9c…",
     "webhook_event": "operation.completed"
   },

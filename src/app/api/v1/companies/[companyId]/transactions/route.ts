@@ -1,7 +1,8 @@
 /**
  * GET /api/v1/companies/{companyId}/transactions
  *
- * Cursor-paginated transaction list. Filters: status (booked/unbooked),
+ * Cursor-paginated transaction list. Filters: status (booked/unbooked, the
+ * definitions in lib/transactions/unbooked.ts),
  * date range, currency, cash_account_id (one bank account), search
  * (description ilike). Default sort: (date DESC, id ASC): newest first,
  * deterministic tie-break.
@@ -17,6 +18,7 @@ import {
 import { registerEndpoint, listEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ValidationError } from '@/lib/api/v1/errors'
+import { applyBookedFilter, applyUnbookedFilter } from '@/lib/transactions/unbooked'
 
 const TransactionSummary = z.object({
   id: z.string().uuid(),
@@ -49,7 +51,9 @@ const ListFilters = z.object({
   status: z
     .enum(['booked', 'unbooked'])
     .optional()
-    .describe('booked: linked to a verifikat (journal_entry_id set). unbooked: not yet booked. Default: both.'),
+    .describe(
+      'booked: anchored to a verifikat (journal_entry_id, a bulk booking or split, or a batch allocation). unbooked: the work queue, not ignored, not private and anchored to no verifikat. Default: every row.',
+    ),
   currency: z.string().min(1).max(8).optional().describe('Only transactions in this currency code (e.g. SEK).'),
   date_from: z
     .string()
@@ -89,7 +93,7 @@ registerEndpoint({
     'Looking up one transaction by id (use the detail endpoint). Reconciliation status (use /reconciliation/bank/status).',
   pitfalls: [
     'Default page size is 50. Pass ?limit=100 for the maximum. Cursor pagination: pass ?cursor=<next_cursor> from the previous response.',
-    'A booked transaction has a non-null journal_entry_id. is_business / category live on the transaction row even before booking.',
+    'Filter on status rather than journal_entry_id: a bulk-booked, split or batch-allocated transaction is booked with journal_entry_id null. status=unbooked leaves out ignored and private rows; without status every row is listed. is_business / category live on the transaction row even before booking.',
     'reverse-charge or storno entries can leave a transaction with journal_entry_id pointing at a cancelled JE: check status on the JE separately.',
   ],
   example: {
@@ -152,8 +156,11 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       .order('id', { ascending: true })
       .limit(limit + 1)
 
-    if (f.status === 'booked') query = query.not('journal_entry_id', 'is', null)
-    else if (f.status === 'unbooked') query = query.is('journal_entry_id', null)
+    // The same definitions as the MCP list, the period-lock guard and the VAT
+    // close check (lib/transactions/unbooked.ts), read server-side through
+    // the is_booked computed column so the cursor never skips a row.
+    if (f.status === 'booked') query = applyBookedFilter(query)
+    else if (f.status === 'unbooked') query = applyUnbookedFilter(query)
     if (f.currency) query = query.eq('currency', f.currency)
     if (f.cash_account_id) query = query.eq('cash_account_id', f.cash_account_id)
     if (f.date_from) query = query.gte('date', f.date_from)

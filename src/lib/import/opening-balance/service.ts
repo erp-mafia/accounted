@@ -9,7 +9,8 @@
  *
  *   - the year must be the company's, open and unlocked, and its start must
  *     be after the company lock date (the IB verifikat is dated on it);
- *   - set: the year must not already have an IB (opening_balances_set);
+ *   - set: the year must not already have an IB (findExistingOpeningBalance:
+ *     the year's pointer, or a posted IB verifikat booked without one);
  *     correct: it must have one, and no bokslut may be posted on top;
  *   - lines: zero rows dropped, at least two left, no resultatkonto (class
  *     3-8), debit equals credit. The API doors additionally refuse class 0
@@ -41,6 +42,7 @@ import {
   fetchEntryOpeningBalanceLines,
   type CascadeResult,
 } from './cascade'
+import { findExistingOpeningBalance, linkOpeningBalance } from './existing'
 import {
   activateMissingAccounts,
   buildOpeningBalanceEntryLines,
@@ -173,11 +175,16 @@ export async function setOpeningBalances(
 
     if (row.is_closed) return { ok: false, code: 'OB_PERIOD_CLOSED' }
     if (row.locked_at) return { ok: false, code: 'OB_PERIOD_LOCKED' }
-    if (row.opening_balances_set) {
+    // One IB per year, asked the way every IB writer asks it: the pointer
+    // alone missed an IB booked as a voucher (no pointer), and this posted a
+    // second one on top. A failed read throws into the catch below and
+    // refuses (OB_EXECUTE_FAILED), never posts.
+    const existing = await findExistingOpeningBalance(supabase, companyId, fiscal_period_id)
+    if (existing) {
       return {
         ok: false,
         code: 'OB_PERIOD_ALREADY_HAS_BALANCES',
-        details: { existingEntryId: row.opening_balance_entry_id },
+        details: { existingEntryId: existing.journal_entry_id },
       }
     }
 
@@ -226,17 +233,12 @@ export async function setOpeningBalances(
 
     const entry = await createJournalEntry(supabase, companyId, userId, entryInput)
 
-    const { error: linkError } = await supabase
-      .from('fiscal_periods')
-      .update({
-        opening_balance_entry_id: entry.id,
-        opening_balances_set: true,
-      })
-      .eq('id', fiscal_period_id)
-      .eq('company_id', companyId)
+    const linkError = await linkOpeningBalance(supabase, companyId, fiscal_period_id, entry.id)
     if (linkError) {
       // The IB is posted; only the year's pointer to it is missing. Loud,
-      // because a year without the link accepts a second IB.
+      // because a year without the link cannot be corrected through
+      // correctOpeningBalances (a second IB is still refused: the posted
+      // entry itself counts).
       log.error('audit: opening balance posted but the period link failed', {
         audit: true,
         event: 'opening_balance.link_failed',

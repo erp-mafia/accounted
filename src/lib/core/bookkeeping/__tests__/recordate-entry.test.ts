@@ -55,6 +55,11 @@ vi.mock('@/lib/core/bookkeeping/period-service', () => ({
   resolvePeriodStatusForDate: (...args: unknown[]) => mockResolve(...args),
 }))
 
+// The storno target check has its own tests (storno-target.test.ts).
+vi.mock('@/lib/core/bookkeeping/storno-target', () => ({
+  assertStornoTarget: vi.fn(async (_s: unknown, _c: string, original: { entry_date: string }, date?: string) => date ?? original.entry_date),
+}))
+
 import { recordateEntry } from '../storno-service'
 import { validateBalance, allocateVoucherNumber } from '@/lib/bookkeeping/engine'
 

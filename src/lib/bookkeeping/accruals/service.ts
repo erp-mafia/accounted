@@ -594,6 +594,11 @@ export async function dissolveScheduleNow(
  * the un-reversed remainder instead of remaining=0 while 17xx/29xx is still
  * unbalanced) and the stuck installments get a descriptive last_error.
  * Callers should surface `failedReversals > 0` as a warning.
+ *
+ * `options.reversalDate` (the credit note's date) dates a dissolution's
+ * storno only when it lies inside that dissolution's own fiscal year: a
+ * storno is numbered and booked in its original's year (storno-target.ts),
+ * so a dissolution from an earlier year is stornoed on its own date instead.
  */
 export async function cancelSchedulesForSource(
   supabase: SupabaseClient,
@@ -640,26 +645,37 @@ export async function cancelSchedulesForSource(
       .eq('schedule_id', schedule.id)
       .eq('status', 'pending')
 
+    // The dissolution's own fiscal year rides along: its storno may take the
+    // credit date only inside that year.
     const { data: postedData } = await supabase
       .from('accrual_schedule_installments')
-      .select('id, journal_entry_id')
+      .select(
+        'id, journal_entry_id, journal_entry:journal_entries!journal_entry_id(fiscal_period:fiscal_periods!journal_entries_fiscal_period_id_fkey(period_start, period_end))',
+      )
       .eq('company_id', companyId)
       .eq('schedule_id', schedule.id)
       .eq('status', 'posted')
 
     let scheduleFailures = 0
-    for (const installment of (postedData ?? []) as Array<{
+    for (const installment of (postedData ?? []) as unknown as Array<{
       id: string
       journal_entry_id: string | null
+      journal_entry?: { fiscal_period?: { period_start: string; period_end: string } | null } | null
     }>) {
       if (!installment.journal_entry_id) continue
+      const ownYear = installment.journal_entry?.fiscal_period
+      const reversalDate =
+        options.reversalDate && ownYear &&
+        options.reversalDate >= ownYear.period_start && options.reversalDate <= ownYear.period_end
+          ? options.reversalDate
+          : undefined
       try {
         await reverseEntry(
           supabase,
           companyId,
           userId,
           installment.journal_entry_id,
-          options.reversalDate,
+          reversalDate,
         )
         reversedEntries++
       } catch (error) {

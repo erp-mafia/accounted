@@ -15,6 +15,13 @@ vi.mock('@/lib/reports/full-archive-export', () => ({
   estimateArchiveSize: vi.fn(),
 }))
 
+// The caller's role in the company, read by the shared owner/admin gate.
+const mockGetCompanyRole = vi.fn()
+vi.mock('@/lib/auth/require-write', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/require-write')>()
+  return { ...actual, getCompanyRole: (...a: unknown[]) => mockGetCompanyRole(...a) }
+})
+
 import {
   generateFullArchive,
   estimateArchiveSize,
@@ -58,9 +65,65 @@ function makePeriodMock(period: Record<string, unknown> | null) {
   } as never
 }
 
+describe('gnubok_audit_package: owner or admin only', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  // The archive carries the period's whole audit log (full snapshots of
+  // settings, bank details, suppliers); the dashboard refuses it below
+  // owner/admin, and a reports:read key held by a member or viewer did not.
+  it.each(['member', 'viewer'])('refuses a %s with FORBIDDEN before any read, estimate or archive', async (role) => {
+    mockGetCompanyRole.mockResolvedValue({ ok: true, role, companyId: 'company-1' })
+    const tool = tools.find((t) => t.name === 'gnubok_audit_package')!
+    const supabase = makePeriodMock({ id: 'p1', name: '2026', period_start: '2026-01-01', period_end: '2026-12-31' })
+
+    await expect(
+      tool.execute({ fiscal_period_id: 'p1' }, 'company-1', 'user-1', supabase),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: expect.stringMatching(/ägare eller en administratör/) })
+    await expect(
+      tool.execute({ fiscal_period_id: 'p1', estimate_only: true }, 'company-1', 'user-1', supabase),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' })
+
+    expect(mockGetCompanyRole).toHaveBeenCalledWith(supabase, 'user-1', { companyId: 'company-1' })
+    expect((supabase as unknown as { from: ReturnType<typeof vi.fn> }).from).not.toHaveBeenCalled()
+    expect(estimateArchiveSize).not.toHaveBeenCalled()
+    expect(generateFullArchive).not.toHaveBeenCalled()
+  })
+
+  it('refuses a caller with no membership in the company', async () => {
+    mockGetCompanyRole.mockResolvedValue({ ok: false, response: new Response(null, { status: 403 }) })
+    const tool = tools.find((t) => t.name === 'gnubok_audit_package')!
+
+    await expect(
+      tool.execute({ fiscal_period_id: 'p1', estimate_only: true }, 'company-1', 'user-1', makePeriodMock(null)),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' })
+    expect(estimateArchiveSize).not.toHaveBeenCalled()
+  })
+
+  it.each(['owner', 'admin'])('lets an %s through', async (role) => {
+    mockGetCompanyRole.mockResolvedValue({ ok: true, role, companyId: 'company-1' })
+    vi.mocked(estimateArchiveSize).mockResolvedValue({ total_bytes: 1024, breakdown: {} as never } as never)
+    const tool = tools.find((t) => t.name === 'gnubok_audit_package')!
+    const supabase = makePeriodMock({ id: 'p1', name: '2026', period_start: '2026-01-01', period_end: '2026-12-31' })
+
+    const result = (await tool.execute(
+      { fiscal_period_id: 'p1', estimate_only: true }, 'company-1', 'user-1', supabase,
+    )) as { estimate_only: boolean }
+
+    expect(result.estimate_only).toBe(true)
+    expect(estimateArchiveSize).toHaveBeenCalled()
+  })
+
+  it('says so in the description', () => {
+    expect(tools.find((t) => t.name === 'gnubok_audit_package')!.description).toMatch(/Owner or admin only/)
+  })
+})
+
 describe('gnubok_audit_package: execute', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockGetCompanyRole.mockResolvedValue({ ok: true, role: 'owner', companyId: 'company-1' })
   })
 
   it('estimate_only=true returns size estimate without uploading', async () => {
@@ -144,6 +207,7 @@ describe('gnubok_audit_package: an archive Storage refuses as too large', () => 
 
   beforeEach(() => {
     vi.clearAllMocks()
+    mockGetCompanyRole.mockResolvedValue({ ok: true, role: 'admin', companyId: 'company-1' })
     vi.mocked(estimateArchiveSize).mockResolvedValue({ total_bytes: 60 * 1024 * 1024 } as never) // under the 80 MB gate
     vi.mocked(generateFullArchive).mockResolvedValue({ byteLength: 57 * 1024 * 1024 } as never)
   })

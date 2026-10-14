@@ -1,29 +1,16 @@
 import { NextResponse } from 'next/server'
-import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { ensureInvoiceNumber, invoiceNumberingFailure } from '@/lib/invoices/ensure-invoice-number'
-import {
-  creditNoteNeedsJournalEntry,
-  issueCreditNote,
-  type CreditNoteOriginalInvoice,
-} from '@/lib/invoices/issue-credit-note'
-import {
-  archiveIssuedInvoicePdf,
-  issueAndBookInvoice,
-  type IssuePartialFailure,
-} from '@/lib/invoices/issue-and-book-invoice'
+import { issueAndBookInvoice } from '@/lib/invoices/issue-and-book-invoice'
+import { issueCreditNoteDraft } from '@/lib/invoices/credit-invoice'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { parseCustomIssuanceLines } from '@/lib/invoices/issuance-custom-lines'
-import { recordManualInvoiceDelivery } from '@/lib/invoices/invoice-deliveries'
 import { hasRequiredInvoicePaymentAccount } from '@/lib/invoices/payment-accounts'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type {
-  AccountingMethod,
   CompanySettings,
   CreditNote,
-  EntityType,
   Invoice,
 } from '@/types'
-import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
 
 /**
  * POST /api/invoices/[id]/mark-sent
@@ -33,7 +20,8 @@ import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
  * Under kontantmetoden (cash): no journal entry; booking happens at payment.
  *
  * The non-credit-note core lives in lib/invoices/issue-and-book-invoice.ts,
- * shared with POST /api/invoices/bulk-book; credit notes stay inline here.
+ * shared with POST /api/invoices/bulk-book; the credit-note issue step in
+ * lib/invoices/credit-invoice.ts, shared with the v1 and MCP credit doors.
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'invoice.mark_sent',
@@ -161,60 +149,6 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     })
   }
 
-  const accountingMethod = (settings.accounting_method || 'accrual') as AccountingMethod
-  const entityType = await resolveCompanyEntityType(supabase, companyId, settings.entity_type)
-
-  const { data: original } = await supabase
-    .from('invoices')
-    .select('id, invoice_number, external_invoice_number, status, journal_entry_id, paid_at, paid_amount, total')
-    .eq('id', invoice.credited_invoice_id)
-    .eq('company_id', companyId)
-    .single()
-
-  if (!original) {
-    return errorResponseFromCode('INVOICE_CREDIT_ORIGINAL_NOT_FOUND', log, { requestId })
-  }
-
-  const originalInvoice = original as CreditNoteOriginalInvoice
-  // Self-billed originals carry their number in external_invoice_number
-  // (invoice_number is null by design); without the fallback the credit-note
-  // PDF loses its ML 17 kap 22 reference to the original (issue #1820).
-  const originalInvoiceNumber =
-    original.invoice_number ?? original.external_invoice_number ?? undefined
-
-  const journalEntryRequired = creditNoteNeedsJournalEntry(accountingMethod, originalInvoice)
-  const isRecovery = invoice.status === 'sent'
-
-  if (
-    isRecovery &&
-    originalInvoice.status === 'credited' &&
-    (!journalEntryRequired || !!invoice.journal_entry_id)
-  ) {
-    return errorResponseFromCode('INVOICE_CREDIT_ALREADY_ISSUED', log, { requestId })
-  }
-
-  // Compare-and-set prevents two concurrent requests from posting two journal
-  // entries for the same draft.
-  let statusFlipped = false
-  if (!isRecovery) {
-    const { data: updatedRows, error: updateError } = await supabase
-      .from('invoices')
-      .update({ status: 'sent' })
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .eq('status', 'draft')
-      .select('id')
-
-    if (updateError) {
-      log.error('invoice mark-sent status update failed', updateError)
-      return errorResponseFromCode('INVOICE_MARK_SENT_STATUS_FAILED', log, { requestId })
-    }
-    if (!updatedRows || updatedRows.length === 0) {
-      return errorResponseFromCode('INVOICE_MARK_SENT_RACE', log, { requestId })
-    }
-    statusFlipped = true
-  }
-
   // Custom lines never apply to credit notes; log the mismatch so it stays
   // visible in audit review instead of vanishing silently (documented in
   // MarkInvoiceSentSchema).
@@ -225,82 +159,25 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     })
   }
 
-  const partialFailures: IssuePartialFailure[] = []
-
-  const issueResult = await issueCreditNote({
+  // The issue step every credit door shares (lib/invoices/credit-invoice.ts):
+  // compare-and-set to sent, the reversing verifikat and the original's flip,
+  // the draft restored when no verifikat could be posted, the PDF archived.
+  const issued = await issueCreditNoteDraft({
     supabase,
     companyId,
     userId: user.id,
     creditNote: invoice as CreditNote,
-    originalInvoice,
-    entityType,
-    accountingMethod,
+    settings: settings as CompanySettings,
     log,
+    recordDelivery: true,
   })
-  // Issued: when the credited invoice is under collection, a database trigger
-  // queued the credit note for the provider.
-  scheduleCollectionForwardDrain(companyId)
-  const journalEntryId = issueResult.journalEntryId
-  partialFailures.push(...issueResult.failures)
-
-  if (!issueResult.complete) {
-    // If no immutable entry was created, restoring the draft is safe and
-    // lets the user fix the period/account issue before trying again.
-    if (statusFlipped && issueResult.journalEntryRequired && !issueResult.journalEntryId) {
-      await supabase
-        .from('invoices')
-        .update({ status: 'draft' })
-        .eq('id', id)
-        .eq('company_id', companyId)
-        .eq('status', 'sent')
-        .is('journal_entry_id', null)
-    }
-    return errorResponseFromCode(
-      issueResult.repairRequired
-        ? 'INVOICE_CREDIT_REPAIR_REQUIRED'
-        : 'INVOICE_CREDIT_ISSUE_INCOMPLETE',
-      log,
-      {
-        requestId,
-        details: { failure_steps: issueResult.failures.map((failure) => failure.step) },
-      },
-    )
-  }
-
-  // Render and archive the PDF as underlag so it remains retrievable even if
-  // the invoice row is later cancelled. Credit notes are real invoices
-  // (document_type 'invoice'), so this mirrors the non-credit path.
-  const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
-  if (isRealInvoice) {
-    const pdfFailure = await archiveIssuedInvoicePdf({
-      supabase,
-      companyId,
-      userId: user.id,
-      invoice: invoice as Invoice,
-      settings: settings as CompanySettings,
-      journalEntryId,
-      originalInvoiceNumber,
-      log,
+  if (!issued.ok) {
+    return errorResponseFromCode(issued.code, log, {
+      requestId,
+      ...(issued.details ? { details: issued.details } : {}),
     })
-    if (pdfFailure) partialFailures.push(pdfFailure)
   }
-
-  if (statusFlipped) {
-    try {
-      await recordManualInvoiceDelivery({
-        supabase,
-        companyId,
-        userId: user.id,
-        invoiceId: id,
-      })
-    } catch (err) {
-      log.error('failed to record manual invoice delivery', err as Error)
-      partialFailures.push({
-        step: 'delivery_history',
-        reason: 'Utskicket kunde inte sparas i fakturans historik.',
-      })
-    }
-  }
+  const { journalEntryId, partialFailures } = issued
 
   return NextResponse.json(
     {

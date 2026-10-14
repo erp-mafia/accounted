@@ -26,6 +26,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { ownsFiscalPeriod } from '@/lib/api/v1/owns-fiscal-period'
 import { validateYearEndReadiness } from '@/lib/core/bookkeeping/year-end-service'
+import { listVoucherGaps } from '@/lib/core/bookkeeping/voucher-gaps'
 import { computeVatCloseCheck } from '@/lib/reports/vat-close-check'
 
 // --------------------------------------------------------------------
@@ -159,63 +160,21 @@ async function runVoucherGapsCheck(
     return { error: 'fiscal_period_id not found in this company.' }
   }
 
-  // `detect_voucher_gaps` checks ONE series per call (p_series defaults to
-  // 'A'), so the series have to be enumerated first: a company booking into
-  // B / F / ... would otherwise be told "no gaps" while a real break sits in
-  // another series. Same source and same ['A'] fallback as
-  // `validateYearEndReadiness` and GET /api/bookkeeping/voucher-gaps.
-  const { data: seriesRows, error: seriesError } = await supabase
-    .from('voucher_sequences')
-    .select('voucher_series')
-    .eq('company_id', companyId)
-    .eq('fiscal_period_id', fiscalPeriodId)
-  if (seriesError) throw seriesError
-
-  const seriesToCheck =
-    seriesRows && seriesRows.length > 0
-      ? (seriesRows as Array<{ voucher_series: string }>).map((r) => r.voucher_series)
-      : ['A']
-
-  // The RPC returns ONLY (gap_start, gap_end). The series is what we passed
-  // in; whether the gap is documented comes from voucher_gap_explanations
-  // below. Never read those off the RPC row.
-  const gaps: Array<{ voucher_series: string; gap_start: number; gap_end: number }> = []
-  for (const series of seriesToCheck) {
-    const { data, error } = await supabase.rpc('detect_voucher_gaps', {
-      p_company_id: companyId,
-      p_fiscal_period_id: fiscalPeriodId,
-      p_series: series,
-    })
-    // A failed detection must surface: silently dropping a series would
-    // report "clean" for books whose continuity was never checked.
-    if (error) throw error
-    for (const g of (data ?? []) as Array<{ gap_start: number; gap_end: number }>) {
-      gaps.push({ voucher_series: series, gap_start: g.gap_start, gap_end: g.gap_end })
-    }
-  }
-
-  // Explanations are keyed exactly like the table's UNIQUE constraint
-  // (company_id, fiscal_period_id, voucher_series, gap_start, gap_end).
-  // A failed lookup throws rather than defaulting gaps to "explained".
-  const explainedKeys = new Set<string>()
-  if (gaps.length > 0) {
-    const { data: explanations, error: explError } = await supabase
-      .from('voucher_gap_explanations')
-      .select('voucher_series, gap_start, gap_end')
-      .eq('company_id', companyId)
-      .eq('fiscal_period_id', fiscalPeriodId)
-    if (explError) throw explError
-    for (const e of (explanations ?? []) as Array<{
-      voucher_series: string
-      gap_start: number
-      gap_end: number
-    }>) {
-      explainedKeys.add(`${e.voucher_series}:${e.gap_start}:${e.gap_end}`)
-    }
-  }
+  // The listing every door shares (lib/core/bookkeeping/voucher-gaps.ts):
+  // every series the year has a sequence for, else series A, and a failed
+  // read throws rather than reporting "clean" for books whose continuity was
+  // never checked or defaulting a gap to "explained".
+  const listing = await listVoucherGaps(supabase, companyId, fiscalPeriodId)
+  const seriesToCheck = listing.series
+  const gaps = listing.gaps.map((g) => ({
+    voucher_series: g.series,
+    gap_start: g.gap_start,
+    gap_end: g.gap_end,
+    explained: g.explanation !== null,
+  }))
 
   const findings: FindingShape[] = gaps.map((g) => {
-    const hasExplanation = explainedKeys.has(`${g.voucher_series}:${g.gap_start}:${g.gap_end}`)
+    const hasExplanation = g.explained
     return {
       severity: hasExplanation ? 'info' : 'blocker',
       code: hasExplanation ? 'VOUCHER_GAP_EXPLAINED' : 'VOUCHER_GAP_UNEXPLAINED',
@@ -338,7 +297,7 @@ registerEndpoint({
     'year_end_readiness and voucher_gaps require fiscal_period_id (UUID); vat_close requires period_type, year and period.',
     'voucher_gaps covers EVERY voucher series registered for the period (A, B, F, ...), not only series A.',
     'A passing check is a SNAPSHOT: the state can change between the check and the action. The same blocker logic runs again on commit.',
-    'vat_close: details carries the rutor (ruta49 = to pay, negative = refund), the payment block with the deadline, and the sanity ratios.',
+    'vat_close: details carries the rutor signed exactly as the momsdeklaration files them (ruta49 = to pay, negative = refund; a box whose credit notes exceed its sales is negative), the payment block with the deadline, and the sanity ratios.',
   ],
   example: {
     response: {

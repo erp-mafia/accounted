@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { linkToJournalEntry } from '@/lib/core/documents/document-service'
+import { linkDocumentToVoucher } from '@/lib/documents/link-document'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode, isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 import { LinkDocumentSchema } from '@/lib/api/schemas'
@@ -10,13 +10,13 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
  *
  * Body: { journal_entry_id: string, journal_entry_line_id?: string, inbox_item_id?: string, transaction_id?: string }
  *
- * When `inbox_item_id` is supplied (the "choose from inbox" flow), the inbox
- * item is stamped with the verifikat id after a successful link so it drops out
- * of the active inbox into "Bokförda": reusing the inbox's own
- * created_journal_entry_id lifecycle. The document link is the legally-relevant
- * write and happens first; the inbox stamp is operational housekeeping, so a
- * stamp failure is logged but does not fail the request (the doc is correctly
- * attached and the DB immutability trigger still blocks any double-link).
+ * The rules are lib/documents/link-document.ts, shared with v1 and the MCP
+ * tools: ownership, the line belonging to the verifikat, a set link never
+ * moving, the period lock, and the stamp of the inbox item that carries the
+ * document so it drops out of the active inbox into "Bokförda" (with or
+ * without `inbox_item_id`, which no longer decides the stamp: an item that
+ * does not carry the document is never touched). The stamp is best-effort;
+ * the document link is the legally relevant write.
  *
  * When `transaction_id` is supplied (booking-flow callers that link underlag
  * right after booking a bank transaction), the doc is also pinned to the
@@ -48,41 +48,29 @@ export const POST = withRouteContext(
     const body = parsed.data
 
     try {
-      const document = await linkToJournalEntry(
-        supabase,
-        companyId!,
-        id,
-        body.journal_entry_id,
-        body.journal_entry_line_id,
-      )
-
-      if (body.inbox_item_id) {
-        const { data: stamped, error: inboxError } = await supabase
-          .from('invoice_inbox_items')
-          .update({ created_journal_entry_id: body.journal_entry_id })
-          .eq('id', body.inbox_item_id)
-          .eq('company_id', companyId!)
-          // Only stamp the inbox item that actually owns this document: a
-          // mismatched pairing becomes a safe no-op rather than mis-marking an
-          // unrelated item as consumed.
-          .eq('document_id', id)
-          .select('id')
-        if (inboxError) {
-          // Non-fatal: the verifikat ↔ underlag link already succeeded.
-          opLog.warn('inbox item stamp after link failed', {
-            inboxItemId: body.inbox_item_id,
-            reason: getUserErrorMessage(inboxError),
-          })
-        } else if (!stamped || stamped.length === 0) {
-          // Zero rows updated means the supplied inbox_item_id / document_id
-          // pairing did not match (wrong company, wrong document, or a stale
-          // id). The doc link itself still succeeded; surface the cross-resource
-          // mismatch as an observable warning rather than silently ignoring it.
-          opLog.warn('inbox item stamp matched no rows (cross-resource mismatch)', {
-            inboxItemId: body.inbox_item_id,
+      const outcome = await linkDocumentToVoucher(supabase, companyId!, {
+        document_id: id,
+        journal_entry_id: body.journal_entry_id,
+        journal_entry_line_id: body.journal_entry_line_id,
+        inbox_item_id: body.inbox_item_id,
+      })
+      if (!outcome.ok) {
+        if (outcome.code === 'NOT_FOUND' && outcome.details.resource === 'journal_entry') {
+          return errorResponseFromCode('DOC_LINK_ENTRY_NOT_FOUND', opLog, { requestId })
+        }
+        if (outcome.code === 'DOC_LINK_ALREADY_LINKED') {
+          return errorResponseFromCode('DOC_LINK_ALREADY_LINKED', opLog, {
+            requestId,
+            details: { current_journal_entry_id: outcome.details.current_journal_entry_id },
           })
         }
+        if (outcome.code === 'PERIOD_LOCKED') {
+          return errorResponseFromCode('PERIOD_LOCKED', opLog, { requestId })
+        }
+        return errorResponseFromCode('NOT_FOUND', opLog, { requestId, details: outcome.details })
       }
+      if (outcome.dryRun) throw new Error('document link: unexpected dry-run outcome')
+      const document = outcome.document
 
       if (body.transaction_id) {
         const { error: pinError } = await supabase

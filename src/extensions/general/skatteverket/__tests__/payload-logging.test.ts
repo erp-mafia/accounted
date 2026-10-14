@@ -30,9 +30,11 @@ vi.mock('../lib/agi-client', async (importOriginal) => {
 
 vi.mock('../lib/declaration-prep', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/declaration-prep')>()
+  const { COMPLETE_VAT_DECLARATION } = await import('./vat-declaration-fixture')
   return {
     ...actual,
     buildMomsuppgift: vi.fn(async () => ({
+      declaration: COMPLETE_VAT_DECLARATION,
       redovisare: PERSONNUMMER,
       redovisningsperiod: '202606',
       momsuppgift: { momspliktigForsaljning: PAYLOAD_MARKER, momsUtgHog: PAYLOAD_MARKER },
@@ -47,6 +49,10 @@ vi.mock('../lib/declaration-prep', async (importOriginal) => {
     })),
   }
 })
+
+// The completeness verdict runs over the declaration above; its per-verifikat
+// ledger scan is stubbed.
+vi.mock('@/lib/reports/rc-basis-gaps', () => ({ findRcBasisGaps: vi.fn(async () => []) }))
 
 vi.mock('../lib/audit', () => ({
   writeSkatteverketAudit: vi.fn(),

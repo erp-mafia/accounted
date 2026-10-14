@@ -38,6 +38,12 @@ import { formatCurrency } from '@/lib/utils'
 import { overDisposedAmount, resultAccountLeftover, resultAccountResidual } from './prior-result-guard'
 import { priorResultCarry } from './prior-result-carry'
 import { buildOpeningBalanceLines, fetchObjectClosingBalances } from './opening-balance-split'
+import { listVoucherGaps } from './voucher-gaps'
+import {
+  assertNoOpeningBalance,
+  findExistingOpeningBalance,
+  linkOpeningBalance,
+} from '@/lib/import/opening-balance/existing'
 import type { ObjectBalanceSplit } from '@/lib/bookkeeping/dimension-carry'
 import type {
   YearEndValidation,
@@ -163,53 +169,19 @@ export async function validateYearEndReadiness(
     })
   }
 
-  // Check: voucher continuity across all series
+  // Check: voucher continuity across all series. Unexplained gaps block
+  // year-end (BFNAR 2013:2 punkt 5.8), and so does a check that did not
+  // complete: a failed read used to skip the series and pass the gate.
   const voucherGaps: VoucherGap[] = []
-  const { data: seriesRows } = await supabase
-    .from('voucher_sequences')
-    .select('voucher_series')
-    .eq('company_id', companyId)
-    .eq('fiscal_period_id', fiscalPeriodId)
-
-  const seriesToCheck = seriesRows && seriesRows.length > 0
-    ? seriesRows.map((r: { voucher_series: string }) => r.voucher_series)
-    : ['A']
-
-  for (const series of seriesToCheck) {
-    const { data: gaps, error: gapsError } = await supabase.rpc('detect_voucher_gaps', {
-      p_company_id: companyId,
-      p_fiscal_period_id: fiscalPeriodId,
-      p_series: series,
-    })
-
-    if (!gapsError && gaps && gaps.length > 0) {
-      const tagged = (gaps as Array<{ gap_start: number; gap_end: number }>).map((g) => ({
-        ...g,
-        series,
-      }))
-      voucherGaps.push(...tagged)
-    }
-  }
-
-  // Check gap explanations: unexplained gaps block year-end (BFNAR 2013:2 punkt 5.8)
   const unexplainedGaps: VoucherGap[] = []
-  if (voucherGaps.length > 0) {
-    const { data: explanations } = await supabase
-      .from('voucher_gap_explanations')
-      .select('voucher_series, gap_start, gap_end')
-      .eq('company_id', companyId)
-      .eq('fiscal_period_id', fiscalPeriodId)
-
-    const explanationSet = new Set(
-      (explanations ?? []).map(
-        (e: { voucher_series: string; gap_start: number; gap_end: number }) =>
-          `${e.voucher_series}:${e.gap_start}:${e.gap_end}`
-      )
-    )
-
-    for (const gap of voucherGaps) {
-      const key = `${gap.series}:${gap.gap_start}:${gap.gap_end}`
-      if (explanationSet.has(key)) {
+  let sequenceSeries: string[] = []
+  try {
+    const listing = await listVoucherGaps(supabase, companyId, fiscalPeriodId)
+    sequenceSeries = listing.sequenceSeries
+    for (const listed of listing.gaps) {
+      const gap: VoucherGap = { series: listed.series, gap_start: listed.gap_start, gap_end: listed.gap_end }
+      voucherGaps.push(gap)
+      if (listed.explanation) {
         warnings.push(
           `Verifikationsnummerglapp i serie ${gap.series} (${gap.gap_start}-${gap.gap_end}): dokumenterat`
         )
@@ -221,18 +193,24 @@ export async function validateYearEndReadiness(
         })
       }
     }
+  } catch (err) {
+    log.error('year-end readiness: voucher gap check failed, blocking', err as Error, { companyId, fiscalPeriodId })
+    blockers.push({
+      code: 'VOUCHER_GAP_CHECK_FAILED',
+      message: 'Kontrollen av luckor i verifikationsnummerserierna kunde inte genomföras: försök igen',
+    })
   }
 
   // Check: sequence counter reconciliation
   const sequenceMismatches: SequenceMismatch[] = []
-  if (seriesRows && seriesRows.length > 0) {
-    for (const row of seriesRows as Array<{ voucher_series: string }>) {
+  if (sequenceSeries.length > 0) {
+    for (const series of sequenceSeries) {
       const { data: seqData } = await supabase
         .from('voucher_sequences')
         .select('last_number')
         .eq('company_id', companyId)
         .eq('fiscal_period_id', fiscalPeriodId)
-        .eq('voucher_series', row.voucher_series)
+        .eq('voucher_series', series)
         .single()
 
       const { data: maxData } = await supabase
@@ -240,7 +218,7 @@ export async function validateYearEndReadiness(
         .select('voucher_number')
         .eq('company_id', companyId)
         .eq('fiscal_period_id', fiscalPeriodId)
-        .eq('voucher_series', row.voucher_series)
+        .eq('voucher_series', series)
         .neq('status', 'draft')
         .order('voucher_number', { ascending: false })
         .limit(1)
@@ -251,7 +229,7 @@ export async function validateYearEndReadiness(
 
       if (sequenceCounter !== actualMax) {
         sequenceMismatches.push({
-          series: row.voucher_series,
+          series,
           sequenceCounter,
           actualMax,
         })
@@ -259,11 +237,11 @@ export async function validateYearEndReadiness(
         if (sequenceCounter < actualMax) {
           blockers.push({
             code: 'SEQUENCE_COUNTER_BEHIND',
-            message: `Nummerserien i serie ${row.voucher_series} stämmer inte: räknaren står på ${sequenceCounter} men högsta verifikationsnummer är ${actualMax}`,
+            message: `Nummerserien i serie ${series} stämmer inte: räknaren står på ${sequenceCounter} men högsta verifikationsnummer är ${actualMax}`,
           })
         } else {
           warnings.push(
-            `Nummerräknaren ligger före bokförda verifikationer i serie ${row.voucher_series}: räknare=${sequenceCounter}, högsta verifikationsnummer=${actualMax}`
+            `Nummerräknaren ligger före bokförda verifikationer i serie ${series}: räknare=${sequenceCounter}, högsta verifikationsnummer=${actualMax}`
           )
         }
       }
@@ -444,7 +422,10 @@ export async function validateYearEndReadiness(
   // Check: next period state. A pre-existing next period (from SIE import,
   // manual creation, or a prior partial run) is fine (we'll reuse it), but
   // one with opening balances already booked blocks closing because we
-  // can't post a second IB on top.
+  // can't post a second IB on top. "Already booked" is the pointer OR a
+  // posted IB verifikat without one (findExistingOpeningBalance): an IB
+  // booked as a voucher carries no pointer, and reading the pointer alone
+  // let the close run and post a second IB after the irreversible step 8.
   //
   // The period name is not interpolated into the message: although the
   // name is user-supplied at create time and confined to the company,
@@ -453,7 +434,7 @@ export async function validateYearEndReadiness(
   // to escape (text rendering and aria-label propagation differ).
   const nextPeriod = await findNextPeriod(supabase, companyId, fiscalPeriodId)
   if (nextPeriod) {
-    if (nextPeriod.opening_balance_entry_id) {
+    if (await findExistingOpeningBalance(supabase, companyId, nextPeriod.id)) {
       blockers.push({
         code: 'NEXT_PERIOD_HAS_IB',
         message: 'Nästa räkenskapsperiod har redan ingående balanser bokförda',
@@ -899,7 +880,8 @@ export async function executeYearEndClosing(
   const existingNextPeriod = await findNextPeriod(supabase, companyId, fiscalPeriodId)
   let nextPeriod
   if (existingNextPeriod) {
-    if (existingNextPeriod.opening_balance_entry_id) {
+    // The pointer or a posted IB without one, as in readiness.
+    if (await findExistingOpeningBalance(supabase, companyId, existingNextPeriod.id)) {
       throw new Error(
         'Next fiscal period already has opening balance entry posted; reverse it before re-running year-end'
       )
@@ -1043,6 +1025,11 @@ export async function generateOpeningBalances(
   nextPeriodId: string
 ): Promise<JournalEntry> {
 
+  // One IB per year (ÅRL 2:4: IB is the previous year's UB). Refused before
+  // anything is read or posted: a second IB verifikat doubles every balance.
+  // Throws OpeningBalanceExistsError, or the read's error (fail closed).
+  await assertNoOpeningBalance(supabase, companyId, nextPeriodId)
+
   // Get next period for the entry date
   const { data: nextPeriod } = await supabase
     .from('fiscal_periods')
@@ -1150,14 +1137,7 @@ export async function generateOpeningBalances(
   }
 
   // Mark next period with opening balance entry
-  const { error: updateError } = await supabase
-    .from('fiscal_periods')
-    .update({
-      opening_balance_entry_id: openingEntry.id,
-      opening_balances_set: true,
-    })
-    .eq('id', nextPeriodId)
-    .eq('company_id', companyId)
+  const updateError = await linkOpeningBalance(supabase, companyId, nextPeriodId, openingEntry.id)
 
   if (updateError) {
     throw new Error(`Failed to set opening_balance_entry_id: ${updateError.message}`)

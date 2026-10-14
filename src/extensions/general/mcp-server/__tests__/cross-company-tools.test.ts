@@ -22,10 +22,10 @@ vi.mock('@/lib/portfolio/scope', () => ({
   resolveCompanyScope: (...args: unknown[]) => mocks.resolveCompanyScope(...args),
   SCOPE_MAX_COMPANIES: 25,
 }))
-vi.mock('@/lib/portfolio/overview', () => ({
-  fetchPortfolioOverview: (...args: unknown[]) => mocks.fetchPortfolioOverview(...args),
-  DEADLINE_KIND_FILTERS: ['vat', 'agi', 'f_skatt', 'inkomstdeklaration', 'arsredovisning', 'any'],
-}))
+vi.mock('@/lib/portfolio/overview', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/portfolio/overview')>()
+  return { ...actual, fetchPortfolioOverview: (...args: unknown[]) => mocks.fetchPortfolioOverview(...args) }
+})
 vi.mock('@/lib/pending-operations/commit', () => ({
   commitPendingOperation: (...args: unknown[]) => mocks.commit(...args),
 }))
@@ -57,7 +57,7 @@ const scoped = (companyId: string, name: string, role = 'owner') => ({
 })
 
 function scopeOf(...companies: Array<ReturnType<typeof scoped>>) {
-  return { companies, truncated: false, remainingCompanyIds: [], unresolved: [], team: null }
+  return { companies, truncated: false, remainingCompanyIds: [], unresolved: [], dormant: [], team: null }
 }
 
 /**
@@ -199,8 +199,14 @@ describe('gnubok_client_overview', () => {
           teamId: null,
           unbookedCount: 3,
           inboxCount: 0,
-          nextDeadline: { title: 'Moms', dueDate: '2026-10-12', taxDeadlineType: 'moms_quarterly', urgency: 'action_needed' },
+          // The earliest open deadline of any kind is the AGI; the row
+          // matched deadline_kind vat on the later VAT deadline.
+          nextDeadline: { title: 'AGI', dueDate: '2026-10-12', taxDeadlineType: 'arbetsgivardeklaration', urgency: 'action_needed' },
           lastBookedDate: '2026-09-01',
+          deadlines: [
+            { title: 'AGI', dueDate: '2026-10-12', taxDeadlineType: 'arbetsgivardeklaration', urgency: 'action_needed' },
+            { title: 'Moms', dueDate: '2026-10-26', taxDeadlineType: 'moms_quarterly', urgency: 'upcoming' },
+          ],
         },
       ],
     })
@@ -229,8 +235,13 @@ describe('gnubok_client_overview', () => {
         team_id: null,
         unbooked_count: 3,
         inbox_count: 0,
-        next_deadline: { title: 'Moms', due_date: '2026-10-12', tax_deadline_type: 'moms_quarterly', urgency: 'action_needed' },
+        next_deadline: { title: 'AGI', due_date: '2026-10-12', tax_deadline_type: 'arbetsgivardeklaration', urgency: 'action_needed' },
         last_booked_date: '2026-09-01',
+        // The same row shape as v1: the deadline that matched the filter is readable.
+        deadlines: [
+          { title: 'AGI', due_date: '2026-10-12', tax_deadline_type: 'arbetsgivardeklaration', urgency: 'action_needed' },
+          { title: 'Moms', due_date: '2026-10-26', tax_deadline_type: 'moms_quarterly', urgency: 'upcoming' },
+        ],
       },
     ])
     expect(result.scope).toEqual({ resolved: 1, truncated: false, remaining_company_ids: [], unresolved: [], dormant: [], team: null })

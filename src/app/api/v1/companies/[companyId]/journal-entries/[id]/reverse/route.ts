@@ -8,7 +8,9 @@
  * with `reversed_by_id`. Both entries remain visible in the verifikationsserie.
  *
  * Optional body: `{ reversal_date?: ISO date, allow_deep_chain?: boolean }`.
- * reversal_date defaults to today; allow_deep_chain overrides the
+ * reversal_date defaults to the original's entry_date and must lie inside the
+ * original's fiscal year (the storno is numbered and booked there, see
+ * lib/core/bookkeeping/storno-target.ts); allow_deep_chain overrides the
  * correction-chain depth guard (CORRECTION_CHAIN_TOO_DEEP at 3+ levels).
  *
  * Idempotent (mandatory Idempotency-Key).
@@ -21,10 +23,16 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
+import type { ApiV1Context } from '@/lib/api/v1/with-api-v1'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
-import { CorrectionChainTooDeepError, isBookkeepingError } from '@/lib/bookkeeping/errors'
-import { todayIsoStockholm } from '@/lib/dates/iso'
+import { assertStornoTarget } from '@/lib/core/bookkeeping/storno-target'
+import {
+  CorrectionChainTooDeepError,
+  isBookkeepingError,
+  TargetPeriodClosedError,
+  TargetPeriodLockedError,
+} from '@/lib/bookkeeping/errors'
 
 const ReverseRequest = z
   .object({
@@ -51,14 +59,15 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/journal-entries/:id/reverse',
   summary: 'Storno a posted journal entry.',
   description:
-    'Creates a reversing journal entry that nullifies the original. The original remains posted and visible: the reversal links via reverses_id and the original is annotated reversed_by_id. The reversal carries its own voucher_number in the same series so the löpnummer chain stays unbroken (BFL 5 kap 5-7 §§).',
+    'Creates a reversing journal entry that nullifies the original. The original remains posted and visible: the reversal links via reverses_id and the original is annotated reversed_by_id. The reversal carries its own voucher_number in the same series and is booked into the original\'s fiscal year, so the löpnummer chain stays unbroken (BFL 5 kap 5-7 §§).',
   useWhen:
     'A posted entry needs to be cancelled and there is no replacement coming: e.g. a duplicate booking, an entry posted to the wrong period. Use /correct instead when you need to replace the entry with corrected lines.',
   doNotUseFor:
     'Cancelling a draft (drafts have no voucher_number: use DELETE /journal-entries/{id}). Reversing an already-reversed entry (returns ENTRY_ALREADY_REVERSED).',
   pitfalls: [
     'Idempotency-Key is mandatory.',
-    'reversal_date defaults to today; the reversal is posted in the fiscal period covering that date. If today\'s period is locked the call returns PERIOD_LOCKED.',
+    'reversal_date defaults to the original entry\'s date. The reversal is numbered and booked in the original\'s fiscal year, so a reversal_date outside that year returns 400 ENTRY_DATE_OUTSIDE_FISCAL_PERIOD.',
+    'A locked or closed fiscal year, or a date on or before the company lock date, returns PERIOD_LOCKED (details.reason) before any voucher number is drawn; a dry run gives the same verdict. Unlock a locked year with POST /fiscal-periods/{id}/unlock. A closed year stays as it is: book a correcting entry in the open year instead (POST /journal-entries).',
     'You cannot reverse a draft (status must be posted). Use /correct after commit if the original needs replacing.',
     'Reversing an entry 3+ links deep in a correction chain returns CORRECTION_CHAIN_TOO_DEEP (409). Book ONE net-effect correction instead, or pass allow_deep_chain=true to override.',
   ],
@@ -113,23 +122,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       bodyAllowDeepChain = parsed.data.allow_deep_chain === true
     }
 
-    const today = todayIsoStockholm()
-    const reversalDate = bodyReversalDate || today
-
-    // Period-lock on the reversal date. Engine + DB trigger are still
-    // authoritative; this gives a structured error instead of a 500.
-    const lockVerdict = await checkPeriodLock(ctx.supabase, ctx.companyId!, reversalDate)
-    if (lockVerdict.locked) {
-      return v1ErrorResponseFromCode('PERIOD_LOCKED', ctx.log, {
-        requestId: ctx.requestId,
-        details: { reason: lockVerdict.reason, fiscal_period_id: lockVerdict.fiscal_period_id, reversal_date: reversalDate },
-      })
-    }
-
     // Pre-flight: confirm the original exists, is posted, and not already reversed.
     const { data: original, error: fetchErr } = await ctx.supabase
       .from('journal_entries')
-      .select('id, status, reversed_by_id, voucher_series, voucher_number, correction_of_id, reverses_id')
+      .select('id, status, entry_date, fiscal_period_id, reversed_by_id, voucher_series, voucher_number, correction_of_id, reverses_id')
       .eq('company_id', ctx.companyId!)
       .eq('id', entryId)
       .maybeSingle()
@@ -141,6 +137,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const typed = original as {
       id: string
       status: string
+      entry_date: string
+      fiscal_period_id: string
       reversed_by_id: string | null
       correction_of_id: string | null
       reverses_id: string | null
@@ -156,6 +154,22 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         requestId: ctx.requestId,
         details: { existing_reversal_id: typed.reversed_by_id },
       })
+    }
+
+    // Where the storno lands: the original's year, on the original's date
+    // unless one inside that year is asked for, and the year must be open.
+    // The engine's own check (reverseEntry), run here too so the dry run gives
+    // the real verdict. It used to default to today and lock-check today's
+    // period: a storno numbered in last year's series came out dated this
+    // year, and a locked year burned a voucher number at the trigger.
+    let reversalDate: string
+    try {
+      reversalDate = await assertStornoTarget(ctx.supabase, ctx.companyId!, typed, bodyReversalDate)
+    } catch (err) {
+      const refused = await periodLockedResponse(ctx, err, typed.fiscal_period_id)
+      if (refused) return refused
+      if (isBookkeepingError(err)) return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
+      throw err
     }
 
     // Chain-depth guard BEFORE the dry-run return: a dry run must give the
@@ -199,6 +213,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         { requestId: ctx.requestId },
       )
     } catch (err) {
+      // The year was locked between the pre-flight and the engine's own check.
+      const refused = await periodLockedResponse(ctx, err, typed.fiscal_period_id)
+      if (refused) return refused
       if (isBookkeepingError(err)) {
         return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
       }
@@ -211,3 +228,22 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
   },
   { requireIdempotencyKey: true },
 )
+
+/**
+ * The storno target check's lock refusals in v1's documented PERIOD_LOCKED
+ * shape (details.reason from checkPeriodLock, the layer that locked the date).
+ * Null for any other error.
+ */
+async function periodLockedResponse(ctx: ApiV1Context, err: unknown, fiscalPeriodId: string) {
+  if (!(err instanceof TargetPeriodClosedError) && !(err instanceof TargetPeriodLockedError)) return null
+  const verdict = await checkPeriodLock(ctx.supabase, ctx.companyId!, err.date)
+  const fallback = err instanceof TargetPeriodClosedError ? 'period_is_closed' : 'period_locked_at_set'
+  return v1ErrorResponseFromCode('PERIOD_LOCKED', ctx.log, {
+    requestId: ctx.requestId,
+    details: {
+      reason: verdict.locked ? verdict.reason : fallback,
+      fiscal_period_id: fiscalPeriodId,
+      reversal_date: err.date,
+    },
+  })
+}

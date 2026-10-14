@@ -103,7 +103,7 @@ describe('NOT_FOUND and CONFLICT: pending operations', () => {
 
   it('reject: an operation already rejected is CONFLICT (REST answers 409), not retryable', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: OP_ID, status: 'rejected', operation_type: 'create_voucher', risk_level: 'medium' } })
+    enqueue({ data: [{ id: OP_ID, status: 'rejected', operation_type: 'create_voucher', risk_level: 'medium' }] })
     expect(await refusal('gnubok_reject_pending_operation', { operation_id: OP_ID }, supabase)).toMatchObject({
       code: 'CONFLICT',
       retryable: false,
@@ -113,7 +113,7 @@ describe('NOT_FOUND and CONFLICT: pending operations', () => {
 
   it('reject: losing the claim to a parallel approval is CONFLICT as well', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: OP_ID, status: 'pending', operation_type: 'create_voucher', risk_level: 'medium' } })
+    enqueue({ data: [{ id: OP_ID, status: 'pending', operation_type: 'create_voucher', risk_level: 'medium' }] })
     enqueue({ data: [] }) // CAS update: 0 rows
     expect((await refusal('gnubok_reject_pending_operation', { operation_id: OP_ID }, supabase)).code).toBe('CONFLICT')
   })

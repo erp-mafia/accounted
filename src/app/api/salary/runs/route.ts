@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
 import { validateBody } from '@/lib/api/validate'
 import { CreateSalaryRunWithDefaultsSchema } from '@/lib/api/schemas'
-import { eventBus } from '@/lib/events'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -9,7 +8,6 @@ import { createSalaryRunWithEmployees } from '@/lib/salary/create-run'
 import { SalaryDeviationPeriodError } from '@/lib/salary/deviation-period'
 import { defaultRunPaymentDate, formatRunPeriod, nextRunPeriod } from '@/lib/salary/next-run-period'
 import { runSalaryCalculation } from '@/lib/salary/run-calculation'
-import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
 
 export const GET = withRouteContext(
   'salary_run.list',
@@ -48,11 +46,13 @@ export const GET = withRouteContext(
  * server-side so the dashboard button can POST {}:
  *   period       → month after the latest non-corrected run, else current month
  *   payment_date → company_settings.salary_pay_day (default 25) in the period month
- *   series       → per-source-type map entry for 'salary_payment'
+ *   series       → the company's salary series (lib resolveSalaryRunSeries,
+ *                  the same rule v1 and MCP use)
  *   deviation    → company_settings.salary_deviation_period unless
  *                  deviation_period_start/end are passed explicitly
- * The run is seeded with every active employee (shared lib — same behavior as
- * the MCP tool) and calculated immediately; a calculation failure is
+ * The run is seeded with every active employee (shared lib: same behavior as
+ * the MCP tool, which also emits salary_run.created) and calculated
+ * immediately; a calculation failure is
  * non-fatal (201 with calculation.ok=false, user lands on the draft).
  * A month that already has a live run answers 409 SALARY_RUN_DUPLICATE_PERIOD
  * (the v1 route's code) naming the month, with the existing run's id.
@@ -72,7 +72,7 @@ export const POST = withRouteContext(
     // Settings drive the defaults; tolerate a missing row (fresh company).
     const { data: settings } = await supabase
       .from('company_settings')
-      .select('salary_pay_day, default_voucher_series_per_source_type')
+      .select('salary_pay_day')
       .eq('company_id', companyId)
       .maybeSingle()
 
@@ -100,9 +100,6 @@ export const POST = withRouteContext(
     const paymentDate =
       body.payment_date ??
       defaultRunPaymentDate({ period_year: periodYear, period_month: periodMonth }, settings?.salary_pay_day)
-
-    const voucherSeries =
-      body.voucher_series ?? resolveDefaultSeriesForSource(settings ?? null, 'salary_payment')
 
     // A clear refusal for a month that already has a live run: the registered
     // code reads the same in every surface (v1 sends it too), and the Swedish
@@ -140,7 +137,7 @@ export const POST = withRouteContext(
         periodYear,
         periodMonth,
         paymentDate,
-        voucherSeries,
+        voucherSeries: body.voucher_series,
         notes: body.notes,
         deviationPeriodStart: body.deviation_period_start,
         deviationPeriodEnd: body.deviation_period_end,
@@ -192,17 +189,6 @@ export const POST = withRouteContext(
     } else {
       log.warn('chained salary calculation failed', { code: calcResult.code })
     }
-
-    await eventBus.emit({
-      type: 'salary_run.created',
-      payload: {
-        salaryRunId: run.id as string,
-        periodYear,
-        periodMonth,
-        userId: user.id,
-        companyId: companyId!,
-      },
-    })
 
     return NextResponse.json(
       { data: run, employee_count: employeeCount, calculation },

@@ -48,7 +48,7 @@ registerEndpoint({
   useWhen:
     'You need to discover which company IDs an API key has access to before calling company-scoped endpoints.',
   doNotUseFor:
-    'Fetching a single company you already know the id of: use GET /api/v1/companies/{companyId} for that.',
+    'Reading one company\'s settings: GET /api/v1/companies/{companyId}/settings. There is no single-company GET: this list already carries each company\'s name, org number, form and role.',
   pitfalls: [
     'Multi-company keys (e.g. consultants) will see >1 result. Always pass the correct companyId in subsequent paths.',
     'Archived companies are excluded; if a company disappears the user has been removed from it or it was archived.',
@@ -100,7 +100,7 @@ registerEndpoint({
     'automatic tax deadlines. A 30-day trial with every paid capability starts immediately. ' +
     'Intended for partner platforms provisioning client companies (byrå/vertical SaaS) and for agents onboarding a user.',
   useWhen:
-    'A platform or agent needs to provision a company that does not exist in Accounted yet. The caller becomes its owner; invite the end customer afterwards.',
+    'A platform or agent needs to provision a company that does not exist in Accounted yet. The caller becomes its owner. Members and invitations have no API: the owner invites people in the app under Settings > Members (/settings/members).',
   doNotUseFor:
     'Companies that already exist (list them with GET /api/v1/companies), or changing settings on an existing company (PATCH /api/v1/companies/{companyId}/settings).',
   pitfalls: [

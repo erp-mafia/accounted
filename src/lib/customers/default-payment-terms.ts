@@ -7,14 +7,15 @@ import type { SupabaseClient } from '@supabase/supabase-js'
  * (company_settings.invoice_default_days, the same setting the invoice
  * flow reads), then 30 as the last resort. Best-effort on the settings
  * read: a missing row or query error falls back to 30 rather than
- * failing the create.
+ * failing the create. A provided value is any whole number of days from 0:
+ * 0 is betalning direkt (#2070), a choice, not "unset".
  */
 export async function resolveDefaultPaymentTerms(
   supabase: SupabaseClient,
   companyId: string,
   provided: number | null | undefined,
 ): Promise<number> {
-  if (typeof provided === 'number' && Number.isFinite(provided) && provided > 0) {
+  if (typeof provided === 'number' && Number.isInteger(provided) && provided >= 0) {
     return provided
   }
 

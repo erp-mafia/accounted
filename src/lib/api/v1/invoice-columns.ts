@@ -42,4 +42,4 @@ export const INVOICE_PDF_COLUMNS =
   'qr_mode, payment_link_url'
 
 export const INVOICE_ITEM_FULL_COLUMNS =
-  'id, sort_order, line_type, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, vat_amount, article_id, revenue_account, deduction_type, deduction_amount, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, dimensions, sales_order_item_id, created_at'
+  'id, sort_order, line_type, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, vat_amount, article_id, revenue_account, deduction_type, deduction_amount, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions, sales_order_item_id, created_at'

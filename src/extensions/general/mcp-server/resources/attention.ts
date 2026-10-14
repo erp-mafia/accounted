@@ -12,6 +12,7 @@ import {
 } from '@/lib/worklist/categories'
 import { countUnbookedBankTransactions, fetchAnchoredTransactionIds } from '@/lib/transactions/unbooked'
 import { createLogger } from '@/lib/logger'
+import { listVoucherGaps } from '@/lib/core/bookkeeping/voucher-gaps'
 
 type Severity = 'critical' | 'warning' | 'info'
 
@@ -313,60 +314,50 @@ export const attentionResource: McpResource = {
     }
 
     // ── Voucher gaps without explanations ──────────────────────────
+    // The listing every door shares (lib/core/bookkeeping/voucher-gaps.ts),
+    // per (year, series). A series whose check fails is skipped and logged,
+    // as the unbooked count is: this summary is advisory, and the year-end
+    // gate itself blocks on a failed check (VOUCHER_GAP_CHECK_FAILED).
     const seriesRows = (voucherSeriesRows.data ?? []) as Array<{ voucher_series: string; fiscal_period_id: string }>
-    const allGaps: Array<{ series: string; gap_start: number; gap_end: number; fiscal_period_id: string }> = []
+    const unexplained: Array<{ series: string; gap_start: number; gap_end: number; fiscal_period_id: string }> = []
     for (const row of seriesRows) {
-      const { data: gaps } = await supabase.rpc('detect_voucher_gaps', {
-        p_company_id: companyId,
-        p_fiscal_period_id: row.fiscal_period_id,
-        p_series: row.voucher_series,
-      })
-      if (gaps && Array.isArray(gaps)) {
-        for (const g of gaps as Array<{ gap_start: number; gap_end: number }>) {
-          allGaps.push({
-            series: row.voucher_series,
-            gap_start: g.gap_start,
-            gap_end: g.gap_end,
-            fiscal_period_id: row.fiscal_period_id,
-          })
+      try {
+        const listing = await listVoucherGaps(supabase, companyId, row.fiscal_period_id, { series: row.voucher_series })
+        for (const g of listing.gaps) {
+          if (!g.explanation) {
+            unexplained.push({ series: g.series, gap_start: g.gap_start, gap_end: g.gap_end, fiscal_period_id: row.fiscal_period_id })
+          }
         }
-      }
-    }
-    if (allGaps.length > 0) {
-      const { data: explanations } = await supabase
-        .from('voucher_gap_explanations')
-        .select('voucher_series, gap_start, gap_end, fiscal_period_id')
-        .eq('company_id', companyId)
-      const explainedKeys = new Set(
-        (explanations ?? []).map(
-          (e) => `${e.fiscal_period_id}:${e.voucher_series}:${e.gap_start}:${e.gap_end}`
-        )
-      )
-      const unexplained = allGaps.filter(
-        (g) => !explainedKeys.has(`${g.fiscal_period_id}:${g.series}:${g.gap_start}:${g.gap_end}`)
-      )
-      if (unexplained.length > 0) {
-        const first = unexplained[0]
-        categories.push({
-          key: 'voucher_gaps_unexplained',
-          label_sv: 'Verifikationshål utan förklaring (BFNAR 2013:2)',
-          severity: 'critical',
-          count: unexplained.length,
-          samples: unexplained.slice(0, SAMPLE_LIMIT),
-          next: {
-            description: 'Dokumentera hålet i verifikationsserien.',
-            tool: 'gnubok_explain_voucher_gap',
-            args: first
-              ? {
-                  fiscal_period_id: first.fiscal_period_id,
-                  voucher_series: first.series,
-                  gap_start: first.gap_start,
-                  gap_end: first.gap_end,
-                }
-              : undefined,
-          },
+      } catch (err) {
+        log.warn('attention voucher gap check unavailable', {
+          companyId,
+          fiscalPeriodId: row.fiscal_period_id,
+          series: row.voucher_series,
+          reason: failureReason(err),
         })
       }
+    }
+    if (unexplained.length > 0) {
+      const first = unexplained[0]
+      categories.push({
+        key: 'voucher_gaps_unexplained',
+        label_sv: 'Verifikationshål utan förklaring (BFNAR 2013:2)',
+        severity: 'critical',
+        count: unexplained.length,
+        samples: unexplained.slice(0, SAMPLE_LIMIT),
+        next: {
+          description: 'Dokumentera hålet i verifikationsserien.',
+          tool: 'gnubok_explain_voucher_gap',
+          args: first
+            ? {
+                fiscal_period_id: first.fiscal_period_id,
+                voucher_series: first.series,
+                gap_start: first.gap_start,
+                gap_end: first.gap_end,
+              }
+            : undefined,
+        },
+      })
     }
 
     // ── Deadlines upcoming (within 14 days) ─────────────────────────

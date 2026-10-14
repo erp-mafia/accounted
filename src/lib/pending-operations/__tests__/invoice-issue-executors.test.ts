@@ -229,6 +229,50 @@ describe('commitPendingOperation: mark_invoice_sent issues fail closed', () => {
     expect(mocks.recordManualInvoiceDelivery).toHaveBeenCalledTimes(1)
   })
 
+  // The dashboard's issue step (issueAndBookInvoice) ends with the tail this
+  // executor used to skip: the issued PDF archived as underlag on the
+  // verifikat (BFL 7 kap) and invoice.sent for webhook subscribers.
+  it('archives the issued PDF on the verifikat and emits invoice.sent', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: draftInvoice(), error: null })
+    enqueue({ data: SETTINGS, error: null })
+    enqueue({ data: [{ id: 'invoice-1' }], error: null }) // status flip draft -> sent
+    enqueue({ data: null, error: null }) // journal_entry_id link
+    enqueue({ data: null, error: null }) // dispatcher finalize
+    const sentHandler = vi.fn()
+    eventBus.on('invoice.sent', sentHandler)
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op('mark_invoice_sent'))
+
+    expect(result.status).toBe('committed')
+    expect(mocks.uploadDocument).toHaveBeenCalledWith(
+      expect.anything(),
+      'user-1',
+      'company-1',
+      expect.objectContaining({ type: 'application/pdf' }),
+      expect.objectContaining({ journal_entry_id: 'je-1' }),
+    )
+    expect(sentHandler).toHaveBeenCalledTimes(1)
+    expect(sentHandler).toHaveBeenCalledWith(
+      expect.objectContaining({ invoice: expect.objectContaining({ id: 'invoice-1', status: 'sent' }) }),
+    )
+  })
+
+  it('reads the company settings in full: the archived PDF renders from them', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: draftInvoice(), error: null })
+    enqueue({ data: SETTINGS, error: null })
+    enqueue({ data: [{ id: 'invoice-1' }], error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+
+    await commitPendingOperation(supabase as never, 'user-1', 'company-1', op('mark_invoice_sent'))
+
+    expect(findCalls('company_settings', 'select')[0]).toEqual(['*'])
+  })
+
   it('a refused verifikat never marks the invoice sent: draft restored, no delivery recorded', async () => {
     mocks.createInvoiceJournalEntry.mockRejectedValue(refusal())
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()

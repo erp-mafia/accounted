@@ -14,6 +14,10 @@
  *   - särskild löneskatt only on 741x pension lines and never with
  *     periodisering; periodisering never with reverse charge and only under
  *     faktureringsmetoden;
+ *   - reverse charge follows createSupplierInvoice's rules, imported from
+ *     lib/supplier-invoices/create.ts: a foreign supplier defaults to it,
+ *     vat_treatment follows the flag, every line carries rate 0 and the
+ *     payable is the net (omvänd skattskyldighet, ML 16 kap 6-16 §§);
  *   - a non-SEK invoice gets Riksbanken's rate for the invoice date unless a
  *     rate is given, and is refused when none can be had (never a NULL rate);
  *   - a company that is not VAT-registered books each line's VAT as part of
@@ -57,7 +61,12 @@ import { resolveInboxKind } from '@/lib/documents/inbox-kind'
 import { resolveInboxCreditTarget } from '@/lib/supplier-invoices/credit-target'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { rejectSupersededInboxConversions } from '@/lib/pending-operations/supersede'
-import type { ComputedSupplierInvoiceItem } from '@/lib/supplier-invoices/create'
+import {
+  resolveSupplierInvoiceReverseCharge,
+  reverseChargeLineRateRefusal,
+  supplierInvoicePayableTotal,
+  type ComputedSupplierInvoiceItem,
+} from '@/lib/supplier-invoices/create'
 import { loadEntryLines, recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
 import { resultAccounts } from '@/lib/suggestion-log/inbox-classify'
 import type { InboxChannelContext, InvoiceInboxItem, SupplierInvoice, SupplierInvoiceItem } from '@/types'
@@ -109,6 +118,14 @@ export async function convertInboxItemToSupplierInvoice(
     .single()
   if (supplierError || !supplier) return { ok: false, code: 'SUPPLIER_NOT_FOUND' }
 
+  // The stored treatment decides what a line that omits vat_rate falls back
+  // to (#2553). A foreign supplier defaults to reverse charge and the
+  // treatment follows the flag: the same resolution as POST /supplier-invoices.
+  const { reverseCharge, vatTreatment } = resolveSupplierInvoiceReverseCharge(
+    supplier.supplier_type as string | null,
+    body,
+  )
+
   // The scan read the supplier's giro or IBAN with everything else: a
   // supplier that lacks them takes them now, so the invoice can go into a
   // betalfil without a detour to the supplier card. A write: commit only.
@@ -135,7 +152,7 @@ export async function convertInboxItemToSupplierInvoice(
   // charge invoice: the expense line carries the VAT base for rutor 20-32,
   // so deferring the net to a 17xx account would corrupt the momsdeklaration.
   const hasAccrualItems = body.items.some((line) => line.accrual_period_start && line.accrual_period_end)
-  if (hasAccrualItems && body.reverse_charge) {
+  if (hasAccrualItems && reverseCharge) {
     return { ok: false, code: 'SI_CREATE_ACCRUAL_REVERSE_CHARGE' }
   }
   // The accounting method (periodisering, booking on issue) and the VAT
@@ -166,10 +183,6 @@ export async function convertInboxItemToSupplierInvoice(
     return { ok: false, code: 'SI_FX_RATE_MISSING', details: { currency: fx.currency, invoice_date: fx.invoiceDate } }
   }
 
-  // The stored treatment decides what a line that omits vat_rate falls back
-  // to (#2553): exempt, export and reverse_charge carry no Swedish moms.
-  const vatTreatment = body.vat_treatment || 'standard_25'
-
   // Kostnadsställe/projekt (dimensions PR7): the invoice-level bag lands on
   // every generated line, a line's own bag merges over it on the expense
   // line that item books to. Normalized through the same gate the MCP door
@@ -197,7 +210,7 @@ export async function convertInboxItemToSupplierInvoice(
       vat_rate: vatRate,
       vat_amount: vatAmount,
       // Self-assessed RC rate or null: the engine defaults to 25 % huvudregeln.
-      reverse_charge_rate: body.reverse_charge ? (line.reverse_charge_rate ?? null) : null,
+      reverse_charge_rate: reverseCharge ? (line.reverse_charge_rate ?? null) : null,
       // Periodisering frozen onto the line; the balance account defaults
       // from the cost account's BAS convention.
       accrual_period_start: accrues ? (line.accrual_period_start ?? null) : null,
@@ -209,12 +222,16 @@ export async function convertInboxItemToSupplierInvoice(
       apply_slp: line.apply_slp === true,
     }
   })
+  // Reverse charge: the seller charged no Swedish moms, so no line may carry a rate.
+  const reverseChargeRefusal = reverseChargeLineRateRefusal(reverseCharge, pricedItems)
+  if (reverseChargeRefusal) return reverseChargeRefusal
+
   // Icke momsregistrerad (feedback seq 708521): amounts arrive excluding VAT
   // with the seller's rate, and a company with no avdragsrätt owes the
   // seller the VAT as part of the cost. The editor folds it before it
   // submits; any other caller is folded here, so a line never books 2641 the
   // company can never reclaim (lib/bookkeeping/vat-registration.ts).
-  const sellerVatFold = sellerVatIsCost(settings?.vat_registered, body.reverse_charge === true)
+  const sellerVatFold = sellerVatIsCost(settings?.vat_registered, reverseCharge)
     ? foldSellerVatIntoCost(pricedItems)
     : null
   const items = sellerVatFold ? sellerVatFold.lines : pricedItems
@@ -222,8 +239,8 @@ export async function convertInboxItemToSupplierInvoice(
   const subtotal = items.reduce((sum, i) => sum + i.line_total, 0)
   const totalVat = items.reduce((sum, i) => sum + i.vat_amount, 0)
   // `total` and `total_sek` must round identically or a SEK invoice ends up
-  // one öre apart.
-  const total = roundOre(subtotal + totalVat)
+  // one öre apart. Reverse charge: the payable is the net.
+  const total = supplierInvoicePayableTotal(subtotal, totalVat, reverseCharge)
   const {
     subtotal_sek: subtotalSek,
     vat_amount_sek: vatAmountSek,
@@ -253,7 +270,7 @@ export async function convertInboxItemToSupplierInvoice(
         exchange_rate: fx.rate.exchangeRate,
         exchange_rate_date: fx.rate.exchangeRateDate,
         vat_treatment: vatTreatment,
-        reverse_charge: body.reverse_charge || false,
+        reverse_charge: reverseCharge,
         subtotal: roundOre(subtotal),
         vat_amount: roundOre(totalVat),
         total,
@@ -304,7 +321,7 @@ export async function convertInboxItemToSupplierInvoice(
       // Which day's kurs the SEK amounts were translated at (BFL 5 kap).
       exchange_rate_date: fx.rate.exchangeRateDate,
       vat_treatment: vatTreatment,
-      reverse_charge: body.reverse_charge || false,
+      reverse_charge: reverseCharge,
       payment_reference: body.payment_reference || null,
       subtotal: roundOre(subtotal),
       subtotal_sek: subtotalSek,

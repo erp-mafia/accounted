@@ -5,12 +5,12 @@ import type { ApiKeyScope } from '@/lib/auth/api-keys'
 import { scopeKind } from '@/lib/auth/scope-catalog'
 import { getMultiUserState, isMembershipDormant } from '@/lib/entitlements/multi-user'
 import { getUserCompanies } from '@/lib/company/context'
+import { resolveDormantCompanyIds } from '@/lib/company/active-company'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import {
   resolveCompanyScope,
   type CompanyScopeInput,
   type ResolvedCompanyScope,
-  type ScopedCompany,
 } from '@/lib/portfolio/scope'
 import type { CompanyRole } from '@/types'
 import { COMPANY_PIN_QUERY_PARAM } from './tool-namespace'
@@ -289,9 +289,11 @@ export function companyEchoPayload(result: unknown, company: CompanyEcho): unkno
 
 /**
  * Companies the caller could have meant, for a NOT_FOUND / FORBIDDEN company
- * answer: the same set gnubok_list_companies returns, reduced to id and
- * name. Best effort: a lookup failure yields an empty list, never an error
- * on top of the error being reported.
+ * answer, and the cross-company pending list: the same set
+ * gnubok_list_companies returns, reduced to id and name, minus companies the
+ * multi-user seat gate pauses for this user (the shared rule,
+ * resolveDormantCompanyIds). Best effort: a lookup failure yields an empty
+ * list, never an error on top of the error being reported.
  */
 export async function listAccessibleCompanies(
   supabase: SupabaseClient,
@@ -301,17 +303,22 @@ export async function listAccessibleCompanies(
   try {
     type MembershipRow = {
       company_id: string
+      role: string
       companies:
         | { id: string; name: string; archived_at: string | null }
         | Array<{ id: string; name: string; archived_at: string | null }>
         | null
     }
     const memberships = (await getUserCompanies(supabase, userId)) as unknown as MembershipRow[]
+    const dormant = await resolveDormantCompanyIds(supabase, memberships)
     const accessible = memberships.flatMap((membership) => {
       const company = Array.isArray(membership.companies)
         ? membership.companies[0]
         : membership.companies
-      return company && company.archived_at === null && isCompanyAllowed(allowedCompanyIds, company.id)
+      return company &&
+        company.archived_at === null &&
+        isCompanyAllowed(allowedCompanyIds, company.id) &&
+        !dormant.has(membership.company_id)
         ? [company]
         : []
     })
@@ -532,18 +539,15 @@ function displayNameFromMembership(embedded: unknown, companyId: string): string
   return companyId
 }
 
-export interface McpCompanyScope extends ResolvedCompanyScope {
-  /** Companies dropped by the multi-user seat gate (non-owner in a frozen company). */
-  dormant: string[]
-}
+/** The MCP door's scope: the lib's, which carries `dormant` (the seat gate) itself. */
+export type McpCompanyScope = ResolvedCompanyScope
 
 /**
  * Resolve a scope (all | team | explicit ids) for the MCP surface: the lib
- * resolver intersects with memberships and archived state; this wrapper adds
- * the multi-user seat gate per company, the same gate resolveMcpCompanyContext
- * applies to a single company. Owners always pass. Explicit ids that are not
- * accessible come back in `unresolved` (the tool decides whether that is an
- * error); companies frozen for this user come back in `dormant`.
+ * resolver intersects with memberships, archived state and the multi-user
+ * seat gate (frozen companies come back in `dormant`); this wrapper maps the
+ * key's company allowlist onto it. Explicit ids that are not accessible come
+ * back in `unresolved` (the tool decides whether that is an error).
  */
 export async function resolveMcpCompanyScope(args: {
   supabase: SupabaseClient
@@ -553,25 +557,11 @@ export async function resolveMcpCompanyScope(args: {
   allowedCompanyIds?: CompanyAllowlist
 }): Promise<McpCompanyScope> {
   const input: CompanyScopeInput = args.scope ?? {}
-  const resolved = await resolveCompanyScope(
+  return resolveCompanyScope(
     args.supabase,
     args.userId,
     args.allowedCompanyIds ? { ...input, restrictTo: [...args.allowedCompanyIds] } : input
   )
-  const dormant: string[] = []
-  const kept: ScopedCompany[] = []
-  const gates = await Promise.all(
-    resolved.companies.map(async (company) => {
-      if (company.role === 'owner') return { company, dormant: false }
-      const access = await getMultiUserState(args.supabase, company.companyId)
-      return { company, dormant: isMembershipDormant(company.role, access.state) }
-    })
-  )
-  for (const gate of gates) {
-    if (gate.dormant) dormant.push(gate.company.companyId)
-    else kept.push(gate.company)
-  }
-  return { ...resolved, companies: kept, dormant }
 }
 
 /**

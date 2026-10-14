@@ -4,13 +4,16 @@
  * GET   : list with filters (period_year, status). Cursor pagination on
  *         (created_at ASC, id ASC). The query is lib/salary/list-runs.ts,
  *         shared with the MCP tool gnubok_list_salary_runs.
- * POST  : create a new monthly salary run. New runs start in `draft` status.
- *         The line items and per-employee calculations are populated by
- *         POST /salary-runs/{id}/calculate. Idempotent (mandatory Idempotency-Key).
- *         Dry-runnable.
+ * POST  : create a new monthly salary run. New runs start in `draft` status,
+ *         empty: employees are added with POST /salary-runs/{id}/employees and
+ *         the calculations populated by POST /salary-runs/{id}/calculate.
+ *         Created through lib/salary/create-run.ts, the dashboard and MCP
+ *         service (series rule, avvikelseperiod guard, salary_run.created).
+ *         Idempotent (mandatory Idempotency-Key). Dry-runnable.
  *
- * The `(company_id, period_year, period_month)` tuple is uniquely indexed at
- * the DB layer; duplicate creation returns 409 SALARY_RUN_DUPLICATE_PERIOD.
+ * At most one live run per (company_id, period_year, period_month) is
+ * enforced by a partial unique index; duplicate creation returns 409
+ * SALARY_RUN_DUPLICATE_PERIOD.
  */
 
 import { z } from 'zod'
@@ -19,10 +22,15 @@ import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { parsePaginationParams, PaginationQueryShape } from '@/lib/api/v1/pagination'
 import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
+import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { CreateSalaryRunSchema } from '@/lib/api/schemas'
 import { v1OutcomeResponse } from '@/lib/operations/v1'
+import {
+  createSalaryRunWithEmployees,
+  resolveSalaryRunSeries,
+  SalaryRunExistsError,
+} from '@/lib/salary/create-run'
 import {
   assertNoDeviationOverlap,
   resolveDeviationWindowForNewRun,
@@ -33,7 +41,6 @@ import {
   SalaryRunListFiltersSchema,
   SalaryRunStatusSchema as SalaryRunStatus,
 } from '@/lib/salary/list-runs'
-import { eventBus } from '@/lib/events'
 
 const SalaryRunSummary = z.object({
   id: z.string().uuid(),
@@ -142,8 +149,18 @@ const SalaryRunCreated = SalaryRunSummary.extend({
   updated_at: z.string(),
 })
 
-const SALARY_RUN_DETAIL_COLUMNS =
-  'id, period_year, period_month, payment_date, deviation_period_start, deviation_period_end, status, voucher_series, total_gross, total_tax, total_net, total_avgifter, total_vacation_accrual, total_employer_cost, salary_entry_id, avgifter_entry_id, vacation_entry_id, agi_generated_at, agi_submitted_at, calculation_params, approved_by, approved_at, paid_at, booked_at, booked_by, notes, created_at, updated_at'
+/** The columns the create response returns: the created row projected to them. */
+const SALARY_RUN_DETAIL_KEYS = [
+  'id', 'period_year', 'period_month', 'payment_date', 'deviation_period_start', 'deviation_period_end',
+  'status', 'voucher_series', 'total_gross', 'total_tax', 'total_net', 'total_avgifter',
+  'total_vacation_accrual', 'total_employer_cost', 'salary_entry_id', 'avgifter_entry_id',
+  'vacation_entry_id', 'agi_generated_at', 'agi_submitted_at', 'calculation_params', 'approved_by',
+  'approved_at', 'paid_at', 'booked_at', 'booked_by', 'notes', 'created_at', 'updated_at',
+] as const
+
+function projectRunDetail(row: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(SALARY_RUN_DETAIL_KEYS.map((key) => [key, row[key] ?? null]))
+}
 
 registerEndpoint({
   operation: 'salary-runs.create',
@@ -151,7 +168,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/salary-runs',
   summary: 'Create a salary run.',
   description:
-    'Creates a draft salary run for the given period (period_year, period_month). The run starts empty: add employees via the internal /salary/runs/{id}/employees endpoints, then POST /salary-runs/{id}/calculate. Requires Idempotency-Key. Dry-runnable.',
+    'Creates a draft salary run for the given period (period_year, period_month). The run starts empty: add employees with POST /salary-runs/{id}/employees, then POST /salary-runs/{id}/calculate. Requires Idempotency-Key. Dry-runnable.',
   useWhen:
     'You are starting a new month\'s payroll. Use dry-run first to validate the period + voucher_series choice without committing.',
   doNotUseFor:
@@ -161,7 +178,7 @@ registerEndpoint({
     'Duplicate (period_year, period_month) for the same company returns 409 SALARY_RUN_DUPLICATE_PERIOD.',
     'Avvikelseperiod: absence and worked days are read from deviation_period_start..deviation_period_end, NOT necessarily from the pay month. Omit both to use the company setting (salary_deviation_period: same_month by default, previous_month for "innevarande månads lön, föregående månads avvikelser"), or pass both explicitly. A window that overlaps another live run returns 409 SALARY_RUN_DEVIATION_PERIOD_OVERLAP (the same day would be deducted twice); one date without the other, or a span over 62 days, returns 400 SALARY_RUN_DEVIATION_PERIOD_INVALID.',
     'period_month is 1-12. The DB CHECK enforces this: a 0 or 13 returns 400 VALIDATION_ERROR before reaching the DB.',
-    'voucher_series defaults to "A". If the company uses a dedicated salary voucher series, set it explicitly.',
+    'voucher_series omitted: the company\'s salary series (its voucher series setting for salary_payment, K on the standard set, A when the company has none), the series the dashboard and MCP use. A dry run previews it. Send a letter only to override it for this run.',
     'A newly-created run has no employees: :calculate without employees returns 400 SALARY_RUN_NO_EMPLOYEES.',
   ],
   example: {
@@ -207,30 +224,28 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     if (!parsed.success) return v1ValidationError(ctx, parsed.error)
     const body = parsed.data
 
-    // Avvikelseperiod: explicit dates win, else the company setting. Refused
-    // when it overlaps another live run (same absence day deducted twice).
-    // Resolved before the dry-run branch so a dry run surfaces the 409 too.
-    let deviationWindow: { start: string; end: string }
-    try {
-      const resolved = await resolveDeviationWindowForNewRun(ctx.supabase, ctx.companyId!, {
-        periodYear: body.period_year,
-        periodMonth: body.period_month,
-        explicitStart: body.deviation_period_start,
-        explicitEnd: body.deviation_period_end,
-      })
-      deviationWindow = resolved.window
-      await assertNoDeviationOverlap(ctx.supabase, ctx.companyId!, deviationWindow)
-    } catch (err) {
-      if (err instanceof SalaryDeviationPeriodError) {
-        return v1ErrorResponseFromCode(err.code, ctx.log, {
-          requestId: ctx.requestId,
-          details: err.details,
-        })
-      }
-      throw err
-    }
+    const deviationError = (err: SalaryDeviationPeriodError) =>
+      v1ErrorResponseFromCode(err.code, ctx.log, { requestId: ctx.requestId, details: err.details })
 
     if (ctx.dryRun) {
+      // Same resolution the create service runs: explicit dates win, else the
+      // company setting; an overlap with another live run is a 409 here too.
+      let deviationWindow: { start: string; end: string }
+      try {
+        const resolved = await resolveDeviationWindowForNewRun(ctx.supabase, ctx.companyId!, {
+          periodYear: body.period_year,
+          periodMonth: body.period_month,
+          explicitStart: body.deviation_period_start,
+          explicitEnd: body.deviation_period_end,
+        })
+        deviationWindow = resolved.window
+        await assertNoDeviationOverlap(ctx.supabase, ctx.companyId!, deviationWindow)
+      } catch (err) {
+        if (err instanceof SalaryDeviationPeriodError) return deviationError(err)
+        throw err
+      }
+      const voucherSeries = await resolveSalaryRunSeries(ctx.supabase, ctx.companyId!, body.voucher_series)
+
       return dryRunPreview(
         {
           id: null,
@@ -240,7 +255,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           deviation_period_start: deviationWindow.start,
           deviation_period_end: deviationWindow.end,
           status: 'draft' as const,
-          voucher_series: body.voucher_series,
+          voucher_series: voucherSeries,
           total_gross: 0,
           total_tax: 0,
           total_net: 0,
@@ -263,60 +278,37 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       )
     }
 
-    const { data, error } = await ctx.supabase
-      .from('salary_runs')
-      .insert({
-        user_id: ctx.userId,
-        company_id: ctx.companyId!,
-        period_year: body.period_year,
-        period_month: body.period_month,
-        payment_date: body.payment_date,
-        deviation_period_start: deviationWindow.start,
-        deviation_period_end: deviationWindow.end,
-        voucher_series: body.voucher_series,
-        notes: body.notes ?? null,
-        status: 'draft',
-      })
-      .select(SALARY_RUN_DETAIL_COLUMNS)
-      .single()
-
-    if (error) {
-      // Disambiguate 23505 by constraint name. The salary_runs table has one
-      // unique index today: (company_id, period_year, period_month). A future
-      // migration could add another; mapping every 23505 here to
-      // SALARY_RUN_DUPLICATE_PERIOD would be misleading once that happens.
-      if (error.code === '23505') {
-        const constraint = (error as { constraint?: string }).constraint
-        if (constraint && constraint.includes('period_year')) {
-          return v1ErrorResponseFromCode('SALARY_RUN_DUPLICATE_PERIOD', ctx.log, {
-            requestId: ctx.requestId,
-            details: {
-              field: 'period',
-              period_year: body.period_year,
-              period_month: body.period_month,
-            },
-          })
-        }
-      }
-      return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
-    }
-
+    let run: Record<string, unknown>
     try {
-      await eventBus.emit({
-        type: 'salary_run.created',
-        payload: {
-          salaryRunId: (data as { id: string }).id,
-          periodYear: body.period_year,
-          periodMonth: body.period_month,
-          userId: ctx.userId,
-          companyId: ctx.companyId!,
-        },
+      const createdRun = await createSalaryRunWithEmployees(ctx.supabase, ctx.companyId!, ctx.userId, {
+        periodYear: body.period_year,
+        periodMonth: body.period_month,
+        paymentDate: body.payment_date,
+        voucherSeries: body.voucher_series,
+        notes: body.notes,
+        deviationPeriodStart: body.deviation_period_start,
+        deviationPeriodEnd: body.deviation_period_end,
+        // v1 documents an empty run, filled with POST /salary-runs/{id}/employees.
+        seedEmployees: false,
       })
+      run = createdRun.run
     } catch (err) {
-      ctx.log.warn('salary_run.created emit failed', err as Error)
+      if (err instanceof SalaryDeviationPeriodError) return deviationError(err)
+      if (err instanceof SalaryRunExistsError) {
+        return v1ErrorResponseFromCode('SALARY_RUN_DUPLICATE_PERIOD', ctx.log, {
+          requestId: ctx.requestId,
+          details: {
+            field: 'period',
+            period_year: body.period_year,
+            period_month: body.period_month,
+            ...(err.existingId ? { existing_id: err.existingId, existing_status: err.existingStatus } : {}),
+          },
+        })
+      }
+      throw err
     }
 
-    return created(data, { requestId: ctx.requestId })
+    return created(projectRunDetail(run), { requestId: ctx.requestId })
   },
   { requireIdempotencyKey: true },
 )

@@ -51,6 +51,13 @@ export type IssueAndBookResult =
       /** A sentence written for the user (the series refusal names its numbers). */
       messageSv?: string
       messageEn?: string
+      /**
+       * INVOICE_MARK_SENT_BOOK_FAILED only: why no verifikat was posted, in
+       * Swedish, and the engine's thrown refusal (see MarkSentAndBookResult),
+       * so a door can answer with the engine's own code.
+       */
+      reason?: string
+      bookingError?: unknown
     }
 
 export interface IssueAndBookOptions {
@@ -426,7 +433,14 @@ export async function issueAndBookInvoice(
   }
 
   const issued = await markInvoiceSentAndBook(opts)
-  if (!issued.ok) return { ok: false, errorCode: issued.errorCode }
+  if (!issued.ok) {
+    return {
+      ok: false,
+      errorCode: issued.errorCode,
+      ...(issued.reason !== undefined ? { reason: issued.reason } : {}),
+      ...(issued.bookingError !== undefined ? { bookingError: issued.bookingError } : {}),
+    }
+  }
   const { journalEntryId, partialFailures } = issued
 
   if (partialFailures.some((failure) => failure.step === 'journal_link')) {

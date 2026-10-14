@@ -557,3 +557,171 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: no v
     expect(businessWrites(calls)).toEqual([])
   })
 })
+
+describe('POST /api/v1/companies/:companyId/transactions/:id/match-invoice: kontantmetod and refusal order', () => {
+  function businessWrites(calls: RecordedCall[]) {
+    return calls.filter(
+      (c) => c.table !== 'idempotency_keys' && (c.method === 'update' || c.method === 'insert'),
+    )
+  }
+
+  function cashSupabase(invoice: Record<string, unknown>, tx: Record<string, unknown> = TRANSACTION) {
+    return createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: { data: tx, error: null },
+      invoices: [
+        { data: invoice, error: null },
+        { data: [{ id: INVOICE_ID }], error: null },
+      ],
+      company_settings: {
+        data: { accounting_method: 'cash', entity_type: 'enskild_firma' },
+        error: null,
+      },
+      invoice_payments: [
+        { data: [], error: null },
+        { data: { id: 'ip-1' }, error: null },
+      ],
+    })
+  }
+
+  it('refuses the final payment of a never-booked part-paid kontantmetod invoice instead of booking the whole invoice again', async () => {
+    // 5 000 already received and recognised by a manual verifikat; the cash
+    // entry would book revenue and moms on the full 12 500 a second time.
+    const { supabase, calls } = cashSupabase(
+      { ...SENT_INVOICE, status: 'partially_paid', paid_amount: 5000, remaining_amount: 7500 },
+      { ...TRANSACTION, amount: 7500, journal_entry_id: 'je-categorised' },
+    )
+    mockServiceClient.mockReturnValue(supabase)
+
+    const response = await matchInvoice(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-invoice`,
+        { invoice_id: INVOICE_ID },
+      ),
+      detailParams(COMPANY_ID, TX_ID),
+    )
+    const body = await response.json()
+
+    expect(response.status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED')
+    expect(body.error.details).toMatchObject({ reason: 'previously_partially_paid' })
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockedReverseEntry).not.toHaveBeenCalled()
+    expect(businessWrites(calls)).toEqual([])
+  })
+
+  it('refuses a partial payment of a never-booked kontantmetod invoice with the same code, before the storno', async () => {
+    const { supabase, calls } = cashSupabase(SENT_INVOICE, {
+      ...TRANSACTION,
+      amount: 5000,
+      journal_entry_id: 'je-categorised',
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const response = await matchInvoice(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-invoice`,
+        { invoice_id: INVOICE_ID },
+      ),
+      detailParams(COMPANY_ID, TX_ID),
+    )
+    const body = await response.json()
+
+    expect(response.status).toBe(400)
+    expect(body.error.code).toBe('INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED')
+    expect(body.error.details).toMatchObject({ reason: 'partial_payment' })
+    expect(mockedReverseEntry).not.toHaveBeenCalled()
+    expect(businessWrites(calls)).toEqual([])
+  })
+
+  it('still clears 1510 for a partial payment of an invoice booked at issue', async () => {
+    const { supabase } = cashSupabase(
+      { ...SENT_INVOICE, journal_entry_id: 'je-issue' },
+      { ...TRANSACTION, amount: 5000 },
+    )
+    mockServiceClient.mockReturnValue(supabase)
+
+    const response = await matchInvoice(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-invoice`,
+        { invoice_id: INVOICE_ID },
+      ),
+      detailParams(COMPANY_ID, TX_ID),
+    )
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body.data.invoice_status).toBe('partially_paid')
+    const input = mockCreateJournalEntry.mock.calls[0][3] as {
+      source_type: string
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }
+    expect(input.source_type).toBe('invoice_paid')
+    expect(input.lines.find((l) => l.account_number === '1510')?.credit_amount).toBe(5000)
+  })
+
+  it('refuses unbalanced custom lines before reversing the transaction voucher', async () => {
+    const { supabase, calls } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: { data: { ...TRANSACTION, journal_entry_id: 'je-categorised' }, error: null },
+      invoices: { data: SENT_INVOICE, error: null },
+      company_settings: {
+        data: { accounting_method: 'accrual', entity_type: 'enskild_firma' },
+        error: null,
+      },
+      invoice_payments: { data: [], error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const response = await matchInvoice(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-invoice`,
+        {
+          invoice_id: INVOICE_ID,
+          lines: [
+            { account_number: '1930', debit_amount: 12500, credit_amount: 0 },
+            { account_number: '1510', debit_amount: 0, credit_amount: 12000 },
+          ],
+        },
+      ),
+      detailParams(COMPANY_ID, TX_ID),
+    )
+
+    expect(response.status).toBe(400)
+    expect((await response.json()).error.code).toBe('INVOICE_PAID_LINES_UNBALANCED')
+    expect(mockedReverseEntry).not.toHaveBeenCalled()
+    expect(businessWrites(calls)).toEqual([])
+  })
+
+  it('refuses an inactive settlement account before reversing the transaction voucher', async () => {
+    const { supabase, calls } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: { data: { ...TRANSACTION, journal_entry_id: 'je-categorised' }, error: null },
+      invoices: { data: SENT_INVOICE, error: null },
+      company_settings: {
+        data: { accounting_method: 'accrual', entity_type: 'enskild_firma' },
+        error: null,
+      },
+      invoice_payments: { data: [], error: null },
+      // No active 1930, and an inactive row blocks the BAS backfill.
+      chart_of_accounts: [
+        { data: [], error: null },
+        { data: [{ account_number: '1930' }], error: null },
+      ],
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const response = await matchInvoice(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-invoice`,
+        { invoice_id: INVOICE_ID },
+      ),
+      detailParams(COMPANY_ID, TX_ID),
+    )
+
+    expect(response.status).toBe(400)
+    expect((await response.json()).error.code).toBe('ACCOUNTS_NOT_IN_CHART')
+    expect(mockedReverseEntry).not.toHaveBeenCalled()
+    expect(businessWrites(calls)).toEqual([])
+  })
+})

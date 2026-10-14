@@ -12,7 +12,10 @@
  *
  * The momsuppgift is recomputed here via buildMomsuppgift (recompute-at-
  * commit): the figures filed always equal what the preview showed for the
- * same ledger state.
+ * same ledger state. The completeness verdict (vatFilingVerdict, the web
+ * UI's "Kontroll av underlaget" gate) runs on those figures before any call
+ * to Skatteverket, on both callers: a blocked declaration stops at stage
+ * `completeness` with nothing sent.
  *
  * SkatteverketAuthError propagates to the caller: the route maps it through
  * handleSkvError, the commit service through mapServiceError.
@@ -24,7 +27,9 @@
  * signature at Skatteverket after the lock, not a call we make.
  */
 import type { ExtensionContext } from '@/lib/extensions/types'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
+import { toCompletenessFindings, type VatCompletenessFinding, vatFilingVerdict } from '@/lib/reports/vat-close-check'
 import type { VatPeriodType } from '@/types'
 import { skvRequest } from './api-client'
 import { buildMomsuppgift } from './declaration-prep'
@@ -49,18 +54,36 @@ export type VatSubmitChainResult =
   | {
       ok: false
       /**
-       * Where the chain stopped. `validation` failures happen before any
-       * write at Skatteverket; `draft` failures leave nothing worth keeping
-       * (utkast overwrites, so retrying the whole chain is safe); `lock`
-       * failures leave a saved draft in Eget utrymme (`draftSaved: true`),
-       * so the retry only needs the lock step.
+       * Where the chain stopped. `completeness` is our own gate refusing
+       * before any call to Skatteverket (`completenessChecks` names the
+       * findings); `validation` failures happen before any write at
+       * Skatteverket; `draft` failures leave nothing worth keeping (utkast
+       * overwrites, so retrying the whole chain is safe); `lock` failures
+       * leave a saved draft in Eget utrymme (`draftSaved: true`), so the
+       * retry only needs the lock step.
        */
-      stage: 'validation' | 'draft' | 'lock'
+      stage: 'completeness' | 'validation' | 'draft' | 'lock'
       httpStatus: number
       error: string
       kontrollresultat: SkatteverketKontrollResultat | null
       draftSaved: boolean
+      completenessChecks?: VatCompletenessFinding[]
     }
+
+/**
+ * The failure every filing path answers when vatFilingVerdict blocks: the
+ * registry's VAT_DECLARATION_INCOMPLETE sentence, with the findings attached.
+ */
+export function vatDeclarationIncompleteFailure(
+  checks: Parameters<typeof toCompletenessFindings>[0],
+): Extract<VatSubmitChainResult, { ok: false }> {
+  return {
+    ok: false, stage: 'completeness', httpStatus: 422,
+    error: getErrorEntry('VAT_DECLARATION_INCOMPLETE')!.message_sv,
+    kontrollresultat: null, draftSaved: false,
+    completenessChecks: toCompletenessFindings(checks),
+  }
+}
 
 export async function submitVatDeclarationChain(
   ctx: ExtensionContext,
@@ -71,8 +94,23 @@ export async function submitVatDeclarationChain(
   // Validate and release the read lease before any external write. The filed
   // payload is this complete snapshot; a late response cannot turn a successful
   // submission into an apparent failure merely because the read lease expired.
-  const { redovisare, redovisningsperiod, momsuppgift } =
-    await withSIEPeriodRead(supabase,companyId,'vat_submission',() => buildMomsuppgift(supabase,companyId,params))
+  // The completeness verdict reads inside the same lease, so it judges the
+  // same ledger state the figures describe.
+  const { redovisare, redovisningsperiod, momsuppgift, verdict } =
+    await withSIEPeriodRead(supabase, companyId, 'vat_submission', async () => {
+      const prep = await buildMomsuppgift(supabase, companyId, params)
+      return {
+        ...prep,
+        verdict: await vatFilingVerdict(supabase, companyId, prep.declaration, {
+          fiscalPeriodId: params.fiscalPeriodId,
+        }),
+      }
+    })
+
+  // The web UI's "Kontroll av underlaget" gate, on the server: an incomplete
+  // declaration (an ERROR finding, e.g. fiktiv moms without its basbelopp, the
+  // FK004 shape Skatteverket rejects) is never sent, by any caller.
+  if (verdict.blocked) return vatDeclarationIncompleteFailure(verdict.checks)
 
   // 0. Optional kontrollera pre-step: SKV validates the arithmetic without
   //    saving anything. ERROR-level findings abort the chain here, before

@@ -138,6 +138,56 @@ describe('GET /api/v1/companies/:companyId/transactions', () => {
     expect(res.status).toBe(400)
   })
 
+  it('401 when the API key is rejected', async () => {
+    mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
+    mockServiceClient.mockReturnValue(createTableMockSupabase({}).supabase)
+    const res = await listTransactions(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions?status=unbooked`),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+    expect(res.status).toBe(401)
+  })
+
+  // "Unbooked" is the work queue (decision 4): not ignored, not private, and
+  // anchored to no verifikat. A bulk-booked (transaction_voucher_links) or
+  // allocation-settled row keeps journal_entry_id NULL, so the pointer alone
+  // listed it as unbooked and left it out of status=booked.
+  async function listWithStatus(status: 'booked' | 'unbooked') {
+    const { supabase, calls } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: { data: [], error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+    const res = await listTransactions(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions?status=${status}`),
+      { params: Promise.resolve({ companyId: COMPANY_ID }) },
+    )
+    const filters = calls
+      .filter((c) => c.table === 'transactions' && ['eq', 'not', 'is'].includes(c.method))
+      .map((c) => [c.method, ...c.args])
+    return { res, filters }
+  }
+
+  it('status=unbooked lists the work queue: no ignored, no private, no row anchored to a verifikat', async () => {
+    const { res, filters } = await listWithStatus('unbooked')
+    expect(res.status).toBe(200)
+    expect(filters).toEqual(
+      expect.arrayContaining([
+        ['eq', 'is_ignored', false],
+        ['not', 'is_business', 'is', false],
+        ['eq', 'is_booked', false],
+      ]),
+    )
+    expect(filters).not.toContainEqual(['is', 'journal_entry_id', null])
+  })
+
+  it('status=booked lists every row anchored to a verifikat, not only the journal_entry_id pointer', async () => {
+    const { res, filters } = await listWithStatus('booked')
+    expect(res.status).toBe(200)
+    expect(filters).toContainEqual(['eq', 'is_booked', true])
+    expect(filters).not.toContainEqual(['not', 'journal_entry_id', 'is', null])
+  })
+
   it('rejects keys without transactions:read scope', async () => {
     mockValidate.mockResolvedValue({
       userId: USER_ID,

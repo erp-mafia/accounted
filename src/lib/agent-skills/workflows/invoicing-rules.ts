@@ -138,7 +138,7 @@ If the customer requires an e-invoice (public sector, or a buyer asking for Pepp
 ### Step 5: Record payment
 
 - Money in the bank feed: \`gnubok_match_transaction_to_invoice({ transaction_id, invoice_id })\`. Partial payments are supported. For a whole month, use \`bank-reconciliation\`.
-- Paid but not in the feed yet: \`gnubok_mark_invoice_as_paid({ invoice_id, payment_date })\`. Status must be sent or overdue. If it refuses because a bank transaction already looks like the payment, match that transaction instead; set \`allow_duplicate\` only after the user confirms it is a different payment.
+- Paid but not in the feed yet: \`gnubok_mark_invoice_as_paid({ invoice_id, payment_date })\`. Status must be sent, overdue or partially paid (the remaining amount is booked). If it refuses because a bank transaction already looks like the payment, match that transaction instead; set \`allow_duplicate\` only after the user confirms it is a different payment.
 - Kontantmetoden: a partial payment on an invoice not yet booked is refused (\`INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED\`). Stop and tell the user; do not split the invoice.
 
 ## E-invoicing via Peppol (including B2G)

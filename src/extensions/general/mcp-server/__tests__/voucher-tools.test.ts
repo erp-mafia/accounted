@@ -898,6 +898,79 @@ describe('gnubok_correct_entry: registration', () => {
   })
 })
 
+// #1031 on the MCP door: v1 and the app let a rättelse carry its own text,
+// the tool did not, so a verifikat whose text was the error could only be
+// corrected to "Rättelse: <the wrong text>".
+describe('gnubok_correct_entry: the corrected entry\'s text', () => {
+  const original = {
+    id: '11111111-1111-4111-8111-111111111111',
+    status: 'posted',
+    entry_date: '2026-05-12',
+    description: 'Fel leverantör',
+    voucher_number: 12,
+    voucher_series: 'A',
+    fiscal_period_id: 'fp-1',
+    correction_of_id: null,
+    reverses_id: null,
+    fiscal_periods: { name: '2026', is_closed: false, locked_at: null },
+    lines: [
+      { account_number: '5420', debit_amount: 1000, credit_amount: 0, line_description: null, currency: null, amount_in_currency: null, exchange_rate: null, tax_code: null, dimensions: null, cost_center: null, project: null },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1000, line_description: null, currency: null, amount_in_currency: null, exchange_rate: null, tax_code: null, dimensions: null, cost_center: null, project: null },
+    ],
+  }
+  const lines = [
+    { account_number: '5410', debit_amount: 1000, credit_amount: 0 },
+    { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+  ]
+  const staging = () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({ data: original, error: null })
+    mock.enqueue({ data: { bookkeeping_locked_through: null }, error: null })
+    mock.enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null })
+    mock.enqueue({ data: { id: 'op-correct-text' }, error: null })
+    return mock
+  }
+  const stagedParams = (mock: ReturnType<typeof createQueuedMockSupabase>) =>
+    (mock.findCall('pending_operations', 'insert')?.[0] as { params: Record<string, unknown> }).params
+
+  it('stages a trimmed description and previews it', async () => {
+    const mock = staging()
+    const result = (await correctEntry.execute(
+      { entry_id: original.id, lines, description: '  Förbrukningsinventarier, rätt leverantör  ' },
+      'company-1',
+      'user-1',
+      mock.supabase as never,
+    )) as { preview: { correction: { description: string } } }
+
+    expect(stagedParams(mock).description).toBe('Förbrukningsinventarier, rätt leverantör')
+    expect(result.preview.correction.description).toBe('Förbrukningsinventarier, rätt leverantör')
+  })
+
+  it('stages no description when it is absent or blank, and previews the default text', async () => {
+    for (const description of [undefined, '   ']) {
+      const mock = staging()
+      const result = (await correctEntry.execute(
+        { entry_id: original.id, lines, ...(description === undefined ? {} : { description }) },
+        'company-1',
+        'user-1',
+        mock.supabase as never,
+      )) as { preview: { correction: { description: string } } }
+
+      expect(stagedParams(mock)).not.toHaveProperty('description')
+      expect(result.preview.correction.description).toBe('Rättelse: Fel leverantör')
+    }
+  })
+
+  it('refuses a non-string or an over-long description', async () => {
+    for (const description of [42, 'x'.repeat(501)]) {
+      const { supabase } = createQueuedMockSupabase()
+      await expect(
+        correctEntry.execute({ entry_id: original.id, lines, description }, 'company-1', 'user-1', supabase as never),
+      ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+    }
+  })
+})
+
 describe('gnubok_correct_entry / gnubok_reverse_journal_entry: chain-depth guard', () => {
   // Base row for a posted correction that already sits 3 links deep:
   // c3 → c2 → c1 → orig-0 (root, voucher A7).
@@ -973,6 +1046,10 @@ describe('gnubok_correct_entry / gnubok_reverse_journal_entry: chain-depth guard
   it('refuses to stage a storno on a chain 3 levels deep', async () => {
     const { supabase, enqueue, enqueueMany } = createQueuedMockSupabase()
     enqueue({ data: deepTarget, error: null })
+    // The storno target check: the original's open 2026, no company lock date.
+    enqueue({ data: { name: '2026', period_start: '2026-01-01', period_end: '2026-12-31' }, error: null })
+    enqueue({ data: { bookkeeping_locked_through: null }, error: null })
+    enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null })
     enqueueMany(walkerRows)
 
     await expect(
@@ -1066,6 +1143,9 @@ describe('gnubok_reverse_journal_entry: staging gates', () => {
       },
       error: null,
     })
+    enqueue({ data: { name: '2025', period_start: '2025-01-01', period_end: '2025-12-31' }, error: null })
+    enqueue({ data: { bookkeeping_locked_through: null }, error: null }) // company lock date
+    enqueue({ data: { id: 'fp-closed', is_closed: true, locked_at: '2026-02-01T00:00:00Z' }, error: null })
     await expect(
       reverseEntry.execute(
         { entry_id: '22222222-2222-2222-2222-222222222222' },
@@ -1074,6 +1154,38 @@ describe('gnubok_reverse_journal_entry: staging gates', () => {
         supabase as never,
       ),
     ).rejects.toThrow(/closed/i)
+  })
+
+  // The storno is numbered and booked in the original's year, so its date
+  // must lie there too (BFL 5 kap 5 §, BFNAR 2013:2 p. 2.17-2.18). An outside
+  // date used to stage, and the storno was posted dated in another year.
+  it('refuses a reversal_date outside the original\'s fiscal year, staging nothing', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        id: '22222222-2222-2222-2222-222222222222',
+        status: 'posted',
+        entry_date: '2025-11-15',
+        description: 'Test',
+        voucher_number: 42,
+        voucher_series: 'A',
+        fiscal_period_id: 'fp-2025',
+        fiscal_periods: { name: '2025', is_closed: false, locked_at: null },
+        lines: [],
+      },
+      error: null,
+    })
+    enqueue({ data: { name: '2025', period_start: '2025-01-01', period_end: '2025-12-31' }, error: null })
+
+    await expect(
+      reverseEntry.execute(
+        { entry_id: '22222222-2222-2222-2222-222222222222', reversal_date: '2026-01-10' },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toMatchObject({ code: 'ENTRY_DATE_OUTSIDE_FISCAL_PERIOD' })
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
   })
 })
 
@@ -1182,6 +1294,135 @@ describe('entry_id resolution: voucher refs and hallucinated UUIDs', () => {
         supabase as never,
       ),
     ).rejects.toThrow(new RegExp(`id=${hallucinated}`))
+  })
+})
+
+describe('gnubok_set_opening_balances: one IB per year at staging', () => {
+  const setOpeningBalances = tools.find((t) => t.name === 'gnubok_set_opening_balances')!
+
+  // The executor used to post a second IB at approval and land the op as
+  // failed while the duplicate stayed in the books (ÅRL 2:4, one IB per year).
+  it('refuses to stage when the next year has a posted IB without a pointer', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { name: '2025', period_end: '2025-12-31' }, error: null }) // closed period name
+    enqueue({ data: { name: '2026', period_start: '2026-01-01' }, error: null }) // next period name
+    enqueue({ data: { opening_balances_set: false, opening_balance_entry_id: null, opening_balance_entry: null }, error: null })
+    enqueue({ data: [{ id: 'je-ib-voucher', voucher_series: 'A', voucher_number: 4 }], error: null })
+
+    await expect(
+      setOpeningBalances.execute(
+        { closed_period_id: 'fp-2025', next_period_id: 'fp-2026' },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toMatchObject({
+      code: 'OB_PERIOD_ALREADY_HAS_BALANCES',
+      message: expect.stringMatching(/redan en ingående balans \(verifikation A-4\)/),
+    })
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+})
+
+describe('gnubok_list_voucher_gaps: a failed check is an error, never 0 gaps', () => {
+  const listGaps = tools.find((t) => t.name === 'gnubok_list_voucher_gaps')!
+
+  it('checks series A when the year has no sequence row (it answered 0 gaps unchecked)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [], error: null }) // voucher_sequences: none
+    enqueue({ data: [{ gap_start: 4, gap_end: 4 }], error: null }) // detect_voucher_gaps('A')
+    enqueue({ data: [], error: null }) // explanations
+
+    const result = (await listGaps.execute({ fiscal_period_id: 'fp-1' }, 'company-1', 'user-1', supabase as never)) as {
+      gaps: Array<{ series: string; explanation: unknown }>
+      total_gaps: number
+      unexplained_gaps: number
+    }
+
+    expect(result.total_gaps).toBe(1)
+    expect(result.unexplained_gaps).toBe(1)
+    expect(result.gaps[0]).toMatchObject({ series: 'A', gap_start: 4, gap_end: 4, explanation: null })
+  })
+
+  it('keeps the explanation row shape it always returned', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ voucher_series: 'A' }], error: null })
+    enqueue({ data: [{ gap_start: 4, gap_end: 4 }], error: null })
+    enqueue({
+      data: [{ id: 'exp-1', voucher_series: 'A', gap_start: 4, gap_end: 4, explanation: 'Avbruten bokning', user_id: 'user-1', created_at: '2026-01-01' }],
+      error: null,
+    })
+
+    const result = (await listGaps.execute({ fiscal_period_id: 'fp-1' }, 'company-1', 'user-1', supabase as never)) as {
+      gaps: Array<{ explanation: unknown }>
+      unexplained_gaps: number
+    }
+
+    expect(result.unexplained_gaps).toBe(0)
+    expect(result.gaps[0].explanation).toEqual({
+      id: 'exp-1',
+      voucher_series: 'A',
+      gap_start: 4,
+      gap_end: 4,
+      explanation: 'Avbruten bokning',
+      created_at: '2026-01-01',
+    })
+  })
+
+  it('throws when gap detection fails', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ voucher_series: 'A' }], error: null })
+    enqueue({ data: null, error: { message: 'statement timeout' } })
+
+    await expect(
+      listGaps.execute({ fiscal_period_id: 'fp-1' }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toThrow(/Voucher gap check failed at detect_voucher_gaps/)
+  })
+})
+
+describe('gnubok_explain_voucher_gap: the approval\'s checks run at staging', () => {
+  const explainGap = tools.find((t) => t.name === 'gnubok_explain_voucher_gap')!
+  const PERIOD = '7b3a1c2d-0000-4000-8000-000000000001'
+  const ARGS = { fiscal_period_id: PERIOD, voucher_series: 'A', gap_start: 5, gap_end: 7, explanation: '  Avbruten bokning  ' }
+
+  it.each([
+    ['a lowercase series', { voucher_series: 'a' }],
+    ['a reversed range', { gap_start: 9 }],
+    ['an explanation over 500 characters', { explanation: 'x'.repeat(501) }],
+  ])('refuses %s, staging nothing', async (_label, patch) => {
+    const { supabase, findCall } = createQueuedMockSupabase()
+    await expect(
+      explainGap.execute({ ...ARGS, ...patch }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+
+  it('refuses another company\'s year and an explained gap before approval', async () => {
+    const foreign = createQueuedMockSupabase()
+    foreign.enqueue({ data: null, error: null }) // fiscal_periods: not the company's
+    await expect(explainGap.execute(ARGS, 'company-1', 'user-1', foreign.supabase as never)).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    })
+
+    const explained = createQueuedMockSupabase()
+    explained.enqueue({ data: { id: PERIOD }, error: null })
+    explained.enqueue({ data: { id: 'exp-1' }, error: null }) // already explained
+    await expect(explainGap.execute(ARGS, 'company-1', 'user-1', explained.supabase as never)).rejects.toMatchObject({
+      code: 'VOUCHER_GAP_ALREADY_EXPLAINED',
+    })
+    expect(explained.findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+
+  it('stages the trimmed explanation in the params shape the executor reads', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: PERIOD }, error: null }) // the company's year
+    enqueue({ data: null, error: null }) // not explained yet
+    enqueue({ data: { id: 'op-gap' }, error: null }) // pending_operations insert
+
+    await explainGap.execute(ARGS, 'company-1', 'user-1', supabase as never)
+
+    const insert = findCall('pending_operations', 'insert')?.[0] as { params?: Record<string, unknown> } | undefined
+    expect(insert?.params).toEqual({ fiscal_period_id: PERIOD, voucher_series: 'A', gap_start: 5, gap_end: 7, explanation: 'Avbruten bokning' })
   })
 })
 

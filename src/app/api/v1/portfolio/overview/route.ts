@@ -25,10 +25,9 @@ import {
 import {
   DEADLINE_KIND_FILTERS,
   fetchPortfolioOverview,
-  type PortfolioCompanyRow,
+  portfolioRowToWire,
   type PortfolioOverviewFilters,
 } from '@/lib/portfolio/overview'
-import type { ClientDeadline } from '@/lib/clients/aggregate'
 
 const Query = z
   .object({
@@ -108,6 +107,11 @@ const PortfolioOverviewData = z.object({
     truncated: z.boolean(),
     remaining_company_ids: z.array(z.string().uuid()),
     unresolved: z.array(z.string()),
+    dormant: z
+      .array(z.string().uuid())
+      .describe(
+        'Companies paused for the key user by the multi-user seat gate (a non-owner in a company whose multi-user plan lapsed): left out of companies, as every per-company endpoint refuses them.',
+      ),
   }),
   summary: z.object({
     companies: z.number().int(),
@@ -141,9 +145,10 @@ registerEndpoint({
   useWhen:
     'The key reaches several companies and you need to know where to work first: which companies have VAT due this week, who has unbooked transactions piling up, whose inbox is waiting.',
   doNotUseFor:
-    'A single company (GET /api/v1/companies/{companyId} plus its per-resource lists), or discovering company ids: GET /api/v1/companies lists them without the numbers.',
+    'A single company (its per-resource lists, and GET /api/v1/companies/{companyId}/settings for its settings), or discovering company ids: GET /api/v1/companies lists them without the numbers.',
   pitfalls: [
     'Unknown, archived or non-member ids in companies do not fail the call: they come back in scope.unresolved with a 200. Check it before trusting an empty result.',
+    'A company paused for the key user (multi-user plan lapsed, the user is not its owner) is left out of the rows and listed in scope.dormant; its per-company endpoints answer 403 for the same key.',
     'team=true with no byrå team returns an empty scope and team: null, not an error. A byrå member without client companies also gets an empty scope, with team set.',
     `More than ${SCOPE_MAX_COMPANIES} companies in scope: the response is truncated (scope.truncated) and scope.remaining_company_ids carries the ids beyond the cap. Call again with companies=<those ids>.`,
     'deadline_kind matches deadlines.tax_deadline_type, so custom deadlines (no tax type) never match a kind; deadline_within_days alone looks at the next deadline of any kind, custom included.',
@@ -154,7 +159,7 @@ registerEndpoint({
     response: {
       data: {
         team: { id: '2a7a9e8c-4c2e-4a68-9a1a-4f0f6f3f2a10', name: 'Siffra Redovisning' },
-        scope: { truncated: false, remaining_company_ids: [], unresolved: [] },
+        scope: { truncated: false, remaining_company_ids: [], unresolved: [], dormant: [] },
         summary: {
           companies: 2,
           matched: 2,
@@ -231,31 +236,6 @@ function splitIds(raw: string | undefined): string[] {
     .filter((id) => id.length > 0)
 }
 
-function serializeDeadline(deadline: ClientDeadline) {
-  return {
-    title: deadline.title,
-    due_date: deadline.dueDate,
-    tax_deadline_type: deadline.taxDeadlineType,
-    urgency: deadline.urgency,
-  }
-}
-
-function serializeRow(row: PortfolioCompanyRow) {
-  return {
-    company_id: row.companyId,
-    name: row.name,
-    org_number: row.orgNumber,
-    entity_type: row.entityType,
-    role: row.role,
-    team_id: row.teamId,
-    unbooked_count: row.unbookedCount,
-    inbox_count: row.inboxCount,
-    next_deadline: row.nextDeadline ? serializeDeadline(row.nextDeadline) : null,
-    last_booked_date: row.lastBookedDate,
-    deadlines: (row.deadlines ?? []).map(serializeDeadline),
-  }
-}
-
 export const GET = withApiV1('portfolio.overview', async (request, ctx) => {
   const url = new URL(request.url)
   const parsed = Query.safeParse({
@@ -315,9 +295,10 @@ export const GET = withApiV1('portfolio.overview', async (request, ctx) => {
         truncated: scope.truncated,
         remaining_company_ids: scope.remainingCompanyIds,
         unresolved: scope.unresolved,
+        dormant: scope.dormant,
       },
       summary: overview.summary,
-      companies: overview.companies.map(serializeRow),
+      companies: overview.companies.map(portfolioRowToWire),
     },
     { requestId: ctx.requestId },
   )

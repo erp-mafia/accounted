@@ -84,6 +84,28 @@ afterEach(() => {
 })
 
 describe('buildInvoiceWriteData exchange rate', () => {
+  it('stores the SEK twins in whole öre', async () => {
+    vi.stubGlobal('fetch', vi.fn())
+    const { supabase } = createRecordingSupabase((q) => {
+      if (q.table === 'company_settings') return { data: { vat_registered: true }, error: null }
+      if (q.table === 'exchange_rates') {
+        return { data: { rate: 11.2345, observation_date: '2026-06-15' }, error: null }
+      }
+      return { data: null, error: null }
+    })
+
+    // 10 x 100.01 = 1000.10 EUR; x 11.2345 = 11235.62345 SEK unrounded.
+    const result = await build(supabase, {
+      items: [{ description: 'Konsult', quantity: 10, unit: 'tim', unit_price: 100.01, vat_rate: 0 }],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.invoiceFields.subtotal_sek).toBe(11235.62)
+    expect(result.invoiceFields.vat_amount_sek).toBe(0)
+    expect(result.invoiceFields.total_sek).toBe(11235.62)
+  })
+
   it('reads the taxable-event rate from the exchange_rates cache instead of calling Riksbanken', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)

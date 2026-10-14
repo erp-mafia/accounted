@@ -89,6 +89,7 @@ const scope: ResolvedCompanyScope = {
   truncated: true,
   remainingCompanyIds: [COMPANY_C],
   unresolved: [COMPANY_B],
+  dormant: [],
   team: { id: TEAM_ID, name: 'Siffra' },
 }
 
@@ -220,7 +221,7 @@ describe('GET /api/v1/portfolio/overview', () => {
     expect(body.meta.request_id).toMatch(/^req_/)
     expect(body.data).toEqual({
       team: { id: TEAM_ID, name: 'Siffra' },
-      scope: { truncated: true, remaining_company_ids: [COMPANY_C], unresolved: [COMPANY_B] },
+      scope: { truncated: true, remaining_company_ids: [COMPANY_C], unresolved: [COMPANY_B], dormant: [] },
       summary: { companies: 1, matched: 1, unbooked_total: 11, inbox_total: 3, overdue: 1, action_needed: 0 },
       companies: [
         {
@@ -307,6 +308,7 @@ describe('GET /api/v1/portfolio/overview', () => {
       truncated: false,
       remainingCompanyIds: [],
       unresolved: [],
+      dormant: [],
       team: null,
     })
     mocks.fetchPortfolioOverview.mockResolvedValue({
@@ -319,6 +321,15 @@ describe('GET /api/v1/portfolio/overview', () => {
     const body = await res.json()
     expect(body.data.team).toBeNull()
     expect(body.data.companies).toEqual([])
-    expect(body.data.scope).toEqual({ truncated: false, remaining_company_ids: [], unresolved: [] })
+    expect(body.data.scope).toEqual({ truncated: false, remaining_company_ids: [], unresolved: [], dormant: [] })
+  })
+
+  it('reports companies paused by the multi-user seat gate in scope.dormant, never as rows', async () => {
+    mocks.resolveCompanyScope.mockResolvedValue({ ...scope, dormant: [COMPANY_B] })
+    const res = await GET(makeRequest(), staticRouteContext())
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.scope.dormant).toEqual([COMPANY_B])
+    expect(body.data.companies.map((row: { company_id: string }) => row.company_id)).not.toContain(COMPANY_B)
   })
 })

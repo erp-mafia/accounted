@@ -154,6 +154,31 @@ describe('commitPendingOperation: submit_vat_declaration / submit_agi', () => {
     expect(result.error).toMatch(/rejected/i)
   })
 
+  // The submit chain's completeness verdict refused the books as they are at
+  // approval: the op is consumed with the findings, never released.
+  it('VAT books incomplete at approval → op rejected (consumed) with the completeness findings', async () => {
+    const findings = [{ code: 'RC_BASIS_MISSING', status: 'ERROR', message: 'Basbelopp saknas', rutor: ['ruta21'] }]
+    const vat = vi.fn().mockResolvedValue({
+      ok: false, code: 'VAT_DECLARATION_INCOMPLETE', http_status: 422, recoverable: false,
+      error: 'Momsdeklarationen är ofullständig.', details: { completeness_checks: findings },
+    } satisfies SkvSubmitResult)
+    registerFakeSkatteverket({ commitSubmitVatDeclaration: vat, commitSubmitAgi: vi.fn() })
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null })           // reject update
+
+    // The params shape every already-staged submit_vat_declaration carries.
+    const op = makePendingOp({ params: { period_type: 'monthly', year: 2025, period: 3 } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result).toMatchObject({
+      status: 'failed', http_status: 422, code: 'VAT_DECLARATION_INCOMPLETE', operation_status: 'rejected',
+      data: { completeness_checks: findings },
+    })
+    const persisted = findCalls('pending_operations', 'update').at(-1)?.[0] as { result_data: Record<string, unknown> }
+    expect(persisted.result_data.error_code).toBe('VAT_DECLARATION_INCOMPLETE')
+  })
+
   it('AGI rejected at kontroll → details carry the kontrollrapport, personnummer masked (agent feedback seq 948847)', async () => {
     // Synthetic personnummer; the employer id (16 + org nr) must survive.
     const PNR = '190001010000'

@@ -5,10 +5,11 @@
  * posts the closing entry (zeroes class 3-8 onto årets resultat: 2099 for AB, eget kapital range 2010-2019 for EF).
  * Wraps lib/core/bookkeeping/year-end-service.executeYearEndClosing.
  *
- * Records an operation row and returns 202 + operation_id so callers can
- * subscribe to operation.completed (Phase 6 webhook) or poll
- * GET /v1/operations/{id}. The work itself runs synchronously inside this
- * request (typical year-end is <30s); a future Vercel cron worker can
+ * Records an operation row and returns 202 + operation_id; callers poll
+ * GET /api/v1/operations/{id}, or subscribe to the period.year_closed webhook,
+ * which fires when the closing completes (operation.completed in the envelope
+ * is not a deliverable webhook). The work itself runs synchronously inside
+ * this request (typical year-end is <30s); a future Vercel cron worker can
  * dispatch it out-of-band by changing the initialStatus to 'queued' in
  * startOperation.
  */
@@ -37,21 +38,22 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/fiscal-periods/:id/year-end',
   summary: 'Execute year-end closing (currency revaluation + closing entry).',
   description:
-    'Async-operation endpoint. Runs the year-end closing flow: currency revaluation (FX gains/losses to 3960/7960), then posts the closing entry that zeroes class 3-8 onto årets resultat (2099 for AB, the relevant eget-kapital account in the 2010-2019 range for enskild firma: the engine resolves which based on company.entity_type). Returns 202 with operation_id; subscribe to operation.completed or poll /v1/operations/{id}.',
+    'Async-operation endpoint. Runs the year-end closing flow: currency revaluation (FX gains/losses to 3960/7960), then posts the closing entry that zeroes class 3-8 onto årets resultat (2099 for AB, the relevant eget-kapital account in the 2010-2019 range for enskild firma: the engine resolves which based on company.entity_type). It then locks and closes the period and posts the next year\'s opening balances itself. Returns 202 with operation_id: poll GET /api/v1/operations/{id}; the period.year_closed webhook fires when the closing completes.',
   useWhen:
-    'After /lock and a passing /compliance/check?type=year_end_readiness, you want to run the closing entry. This is step 2 of the lock → year-end → close flow.',
+    'The period has ended and GET /compliance/check?type=year_end_readiness passes. Run it on an UNLOCKED period: it posts the closing entry, then locks and closes the period and generates the next year\'s IB itself, so there is no separate /lock, /close or /opening-balances step.',
   doNotUseFor:
-    'Re-running year-end (per-period idempotent: fails if closing_entry_id is already set). Closing the period (use /close after year-end succeeds).',
+    'Re-running year-end (per-period idempotent: fails if closing_entry_id is already set). Locking or closing the period first (/close is only a recovery path for a year-end that stopped after its closing entry).',
   pitfalls: [
     'Idempotency-Key is mandatory.',
     'Period must pass year_end_readiness checks (no drafts, no unexplained voucher gaps, trial balance balanced). The engine re-validates and aborts if not.',
+    'A locked period fails the operation (YEAR_END_FAILED, the message names the lock): unlock it with POST /fiscal-periods/{id}/unlock and run year-end on the open period. Do not call /lock first.',
     'Closing entry is itself a verifikation (posted): the period must NOT already be closed.',
   ],
   example: {
     response: {
       data: {
         operation_id: '0e9c…', type: 'fiscal_periods.year_end',
-        status: 'succeeded',
+        status: 'queued',
         poll_url: '/api/v1/operations/0e9c…',
         webhook_event: 'operation.completed',
       },

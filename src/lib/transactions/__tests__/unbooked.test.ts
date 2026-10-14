@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { countUnbookedBankTransactions, fetchAnchoredTransactionIds } from '../unbooked'
+import { applyBookedFilter, applyUnbookedFilter, countUnbookedBankTransactions, fetchAnchoredTransactionIds } from '../unbooked'
 
 /**
  * Table-routed double that records every builder call. The untriaged leg is
@@ -155,5 +155,32 @@ describe('fetchAnchoredTransactionIds', () => {
     const { supabase, find } = makeSupabase({})
     expect((await fetchAnchoredTransactionIds(supabase, 'co-1', [])).size).toBe(0)
     expect(find('transaction_voucher_links', 'in')).toEqual([])
+  })
+})
+
+describe('applyUnbookedFilter / applyBookedFilter', () => {
+  function recorder() {
+    const calls: unknown[][] = []
+    const chain = {
+      eq: (...args: unknown[]) => (calls.push(['eq', ...args]), chain),
+      not: (...args: unknown[]) => (calls.push(['not', ...args]), chain),
+    }
+    return { chain, calls }
+  }
+
+  it('the work queue: not ignored, not private, anchored to no verifikat (is_booked computed column)', () => {
+    const { chain, calls } = recorder()
+    expect(applyUnbookedFilter(chain)).toBe(chain)
+    expect(calls).toEqual([
+      ['eq', 'is_ignored', false],
+      ['not', 'is_business', 'is', false],
+      ['eq', 'is_booked', false],
+    ])
+  })
+
+  it('booked: anchored to a verifikat in any of the four ways', () => {
+    const { chain, calls } = recorder()
+    expect(applyBookedFilter(chain)).toBe(chain)
+    expect(calls).toEqual([['eq', 'is_booked', true]])
   })
 })

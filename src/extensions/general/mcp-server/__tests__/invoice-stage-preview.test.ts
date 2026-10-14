@@ -97,6 +97,36 @@ beforeEach(() => {
 })
 
 describe('gnubok_mark_invoice_as_paid: the preview shows the entry the method books', () => {
+  // #1717: a partially_paid invoice is payable on every door, as on the
+  // dashboard; the remaining amount clears 1510.
+  it('stages a partially_paid invoice for its remaining amount', async () => {
+    const { supabase, findCall } = setup(
+      { accounting_method: 'accrual' },
+      sentInvoice({ status: 'partially_paid', journal_entry_id: 'je-issue', paid_amount: 5000, remaining_amount: 7500 }),
+    )
+
+    const result = (await markPaid.execute(
+      { invoice_id: INVOICE_ID, payment_date: '2026-09-15' },
+      'company-1', 'user-1', supabase as never, { type: 'api_key' } as never,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    const entry = result.preview.journal_entry_preview as { lines: PreviewLine[] }
+    const byAccount = Object.fromEntries(entry.lines.map((l) => [l.account_number, l]))
+    expect(byAccount['1510']).toMatchObject({ debit_amount: 0, credit_amount: 7500 })
+    expect(stagedInsert(findCall)).toBeDefined()
+  })
+
+  it.each(['paid', 'credited', 'draft'])('refuses a %s invoice at staging', async (status) => {
+    const { supabase } = setup({ accounting_method: 'accrual' }, sentInvoice({ status }))
+    await expect(
+      markPaid.execute(
+        { invoice_id: INVOICE_ID, payment_date: '2026-09-15' },
+        'company-1', 'user-1', supabase as never, { type: 'api_key' } as never,
+      ),
+    ).rejects.toThrow(/sent, overdue or partially paid/)
+  })
+
   it('kontantmetoden, unbooked SEK invoice: bank debit, revenue and output VAT credit, no 1510', async () => {
     const { supabase, findCall } = setup({ accounting_method: 'cash' }, sentInvoice())
 

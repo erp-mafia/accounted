@@ -393,7 +393,7 @@ export default function CustomerDetailPage({
           </DefRow>
         )}
         <DefRow label={t('def_payment_terms')}>
-          {t('payment_terms_value', { days: customer.default_payment_terms || 30 })}
+          {t('payment_terms_value', { days: customer.default_payment_terms ?? 30 })}
         </DefRow>
       </DetailSection>
 
@@ -501,7 +501,7 @@ export default function CustomerDetailPage({
               // Must round-trip: the form defaults omitted values ('sv') and
               // submits every field, so leaving language out resets it on save.
               language: customer.language,
-              default_payment_terms: customer.default_payment_terms || undefined,
+              default_payment_terms: customer.default_payment_terms ?? undefined,
               notes: customer.notes || undefined,
             }}
           />

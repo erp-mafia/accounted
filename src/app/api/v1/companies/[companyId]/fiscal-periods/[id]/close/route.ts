@@ -28,9 +28,9 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/fiscal-periods/:id/close',
   summary: 'Close a fiscal period (IRREVERSIBLE per BFL 5 kap 8 §).',
   description:
-    'Sets is_closed=true + closed_at on the period. Pre-requisites: period must be locked (call /lock first) AND year-end closing must have been executed (call /year-end first). Sync. The DB blocks any subsequent JE inserts.',
+    'Sets is_closed=true + closed_at on the period. /year-end already locks and closes the period, so this is a recovery path only: it finalizes a year-end that posted its closing entry and locked the period but stopped before the close. Pre-requisites: locked AND closing_entry_id set. Sync. The DB blocks any subsequent JE inserts.',
   useWhen:
-    'Final step in the year-end flow: lock → year-end → close. Closing freezes the period for BFL 7 kap retention.',
+    'Recovery only: a /year-end that posted its closing entry and locked the period but did not reach the close. In the normal flow /year-end closes the period itself, and a later /close returns 409 PERIOD_ALREADY_CLOSED. Closing freezes the period for BFL 7 kap retention.',
   doNotUseFor:
     'Locking a period (use /lock). Running the year-end closing entry (use /year-end). UNDOING a close (not supported, irreversible).',
   pitfalls: [

@@ -14,6 +14,7 @@ import {
 } from '@/lib/bookkeeping/dimension-resolver'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
+import { assertStornoTarget } from '@/lib/core/bookkeeping/storno-target'
 import { postedLineAsInput } from '@/lib/core/bookkeeping/posted-line-input'
 import {
   correctionChainDepth,
@@ -296,6 +297,12 @@ export async function correctEntry(
       throw new AccountsNotInChartError(missingAccounts)
     }
   }
+
+  // The storno lands on the original's date in the original's year, which
+  // must be open: refused before the first voucher number is drawn, so a
+  // correction in a locked or closed year burns no number (the period-lock
+  // trigger only refused the insert, after the sequence had moved on).
+  await assertStornoTarget(supabase, companyId, original)
 
   // ===== Step 1: Create storno (reversal) entry =====
   // No note on the storno: the note describes the affärshändelse, which the

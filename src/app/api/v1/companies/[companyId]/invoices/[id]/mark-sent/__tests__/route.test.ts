@@ -46,7 +46,24 @@ vi.mock('@/lib/invoices/invoice-deliveries', () => ({
   recordManualInvoiceDelivery: (...args: unknown[]) => mockRecordManualInvoiceDelivery(...args),
 }))
 
+// The issue step's tail: accrual schedules, the PDF archived as underlag.
+const { mockCreateSchedules, mockRenderPdf, mockUploadDocument } = vi.hoisted(() => ({
+  mockCreateSchedules: vi.fn(),
+  mockRenderPdf: vi.fn(),
+  mockUploadDocument: vi.fn(),
+}))
+vi.mock('@/lib/bookkeeping/accruals/from-invoices', () => ({
+  createSchedulesForCustomerInvoice: mockCreateSchedules,
+}))
+vi.mock('@/lib/invoices/render-invoice-pdf', () => ({
+  renderInvoicePdfBuffer: mockRenderPdf,
+}))
+vi.mock('@/lib/core/documents/document-service', () => ({
+  uploadDocument: mockUploadDocument,
+}))
+
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import {
   createInvoiceJournalEntry as mockedCreateEntry,
 } from '@/lib/bookkeeping/invoice-entries'
@@ -110,6 +127,9 @@ beforeEach(() => {
     mode: 'live',
   })
   mockRecordManualInvoiceDelivery.mockResolvedValue({ id: 'delivery-1' })
+  mockCreateSchedules.mockResolvedValue({ created: 0, failed: 0 })
+  mockRenderPdf.mockResolvedValue({ buffer: Buffer.from('pdf') })
+  mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
 })
 
 describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
@@ -331,12 +351,179 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
     expect(body.error.details.field).toBe('moms_ruta')
   })
 
-  it('surfaces a warning in the response when journal entry creation fails', async () => {
+  // Fail closed (founder decision 2026-10-13): no sent invoice without its
+  // verifikat. The draft is restored, the number kept, nothing delivered.
+  it('fails closed when the journal entry cannot be created: back to draft, no delivery', async () => {
+    const { supabase, calls } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      invoices: [
+        { data: DRAFT_INVOICE, error: null }, // pre-flight
+        { data: DRAFT_INVOICE, error: null }, // booking row
+        { data: [{ id: INVOICE_ID }], error: null }, // compare-and-set to sent
+        { data: [{ id: INVOICE_ID }], error: null }, // restore to draft
+      ],
+      company_settings: {
+        data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567' },
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+    mockCreateJournalEntry.mockRejectedValueOnce(new Error('Period closed'))
+
+    const res = await markSent(
+      makeMarkSentRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-sent`,
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_MARK_SENT_BOOK_FAILED')
+    expect(body.error.details.reason).toEqual(expect.any(String))
+    const updates = calls.filter((c) => c.table === 'invoices' && c.method === 'update').map((c) => c.args[0])
+    expect(updates).toEqual([{ status: 'sent' }, { status: 'draft' }])
+    expect(mockRecordManualInvoiceDelivery).not.toHaveBeenCalled()
+    expect(mockUploadDocument).not.toHaveBeenCalled()
+  })
+
+  it('answers an engine refusal with its own code and restores the draft', async () => {
+    const { supabase, calls } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      invoices: [
+        { data: DRAFT_INVOICE, error: null },
+        { data: DRAFT_INVOICE, error: null },
+        { data: [{ id: INVOICE_ID }], error: null },
+        { data: [{ id: INVOICE_ID }], error: null },
+      ],
+      company_settings: {
+        data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567' },
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+    mockCreateJournalEntry.mockRejectedValueOnce(new AccountsNotInChartError(['3001']))
+
+    const res = await markSent(
+      makeMarkSentRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-sent`,
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('ACCOUNTS_NOT_IN_CHART')
+    const updates = calls.filter((c) => c.table === 'invoices' && c.method === 'update').map((c) => c.args[0])
+    expect(updates).toEqual([{ status: 'sent' }, { status: 'draft' }])
+  })
+
+  it('fails closed when no open period takes the verifikat', async () => {
     mockServiceClient.mockReturnValue(
       createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         invoices: [
           { data: DRAFT_INVOICE, error: null },
+          { data: DRAFT_INVOICE, error: null },
+          { data: [{ id: INVOICE_ID }], error: null },
+          { data: [{ id: INVOICE_ID }], error: null },
+        ],
+        company_settings: {
+          data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567' },
+          error: null,
+        },
+      }).supabase,
+    )
+    mockCreateJournalEntry.mockResolvedValueOnce(null)
+
+    const res = await markSent(
+      makeMarkSentRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-sent`,
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.error.code).toBe('INVOICE_MARK_SENT_BOOK_FAILED')
+    expect(body.error.details.reason).toMatch(/period/i)
+  })
+
+  it('books from the full row: ROT/RUT items reach the entry builder and periodised lines get their schedule', async () => {
+    const ROT_ITEM = {
+      id: 'iiiiiiii-iiii-4iii-8iii-iiiiiiiiiiii',
+      sort_order: 0,
+      line_type: 'labor',
+      description: 'Arbete',
+      quantity: 10,
+      unit: 'tim',
+      unit_price: 1000,
+      line_total: 10000,
+      vat_rate: 25,
+      vat_amount: 2500,
+      deduction_type: 'rot',
+      deduction_amount: 3000,
+      work_type: 'bygg',
+      accrual_period_start: '2026-06-01',
+      accrual_period_end: '2026-11-30',
+      accrual_balance_account: '2970',
+    }
+    const draft = { ...DRAFT_INVOICE, deduction_total: 3000, items: [ROT_ITEM] }
+    const { supabase, calls } = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      invoices: [
+        { data: draft, error: null },
+        { data: draft, error: null },
+        { data: [{ id: INVOICE_ID }], error: null }, // compare-and-set
+        { data: null, error: null }, // journal_entry_id link
+        { data: SENT_INVOICE, error: null }, // response re-read
+      ],
+      company_settings: {
+        data: { accounting_method: 'accrual', entity_type: 'enskild_firma', bankgiro: '123-4567' },
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await markSent(
+      makeMarkSentRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-sent`,
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const selects = calls.filter((c) => c.table === 'invoices' && c.method === 'select').map((c) => String(c.args[0]))
+    expect(selects).toContain('*, customer:customers(*), items:invoice_items(*)')
+    const bookedInvoice = mockCreateJournalEntry.mock.calls[0][3] as { items: Array<Record<string, unknown>> }
+    expect(bookedInvoice.items[0]).toMatchObject({ deduction_type: 'rot', deduction_amount: 3000 })
+    expect(mockCreateSchedules).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      USER_ID,
+      expect.objectContaining({ id: INVOICE_ID }),
+      [expect.objectContaining({ accrual_balance_account: '2970' })],
+      'jjjjjjjj-jjjj-4jjj-8jjj-jjjjjjjjjjjj',
+      'enskild_firma',
+    )
+    // The issued PDF is archived as underlag on the verifikat (BFL 7 kap).
+    expect(mockUploadDocument).toHaveBeenCalledWith(
+      expect.anything(),
+      USER_ID,
+      COMPANY_ID,
+      expect.objectContaining({ type: 'application/pdf' }),
+      expect.objectContaining({ journal_entry_id: 'jjjjjjjj-jjjj-4jjj-8jjj-jjjjjjjjjjjj' }),
+    )
+  })
+
+  it('reports a failed PDF archive as a warning, the invoice issued', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: [
+          { data: DRAFT_INVOICE, error: null },
+          { data: DRAFT_INVOICE, error: null },
+          { data: [{ id: INVOICE_ID }], error: null },
+          { data: null, error: null },
           { data: SENT_INVOICE, error: null },
         ],
         company_settings: {
@@ -345,8 +532,7 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
         },
       }).supabase,
     )
-    // Force the journal-entry generator to throw.
-    mockCreateJournalEntry.mockRejectedValueOnce(new Error('Period closed'))
+    mockRenderPdf.mockRejectedValueOnce(new Error('render failed'))
 
     const res = await markSent(
       makeMarkSentRequest(
@@ -357,12 +543,8 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-sent', () => {
 
     expect(res.status).toBe(200)
     const body = await res.json()
-    // Status STILL flips to sent.
     expect(body.data.status).toBe('sent')
-    expect(body.data.journal_entry_id).toBeNull()
-    // But the caller is warned.
-    expect(body.data.warnings).toBeDefined()
-    expect(body.data.warnings[0].code).toBe('JOURNAL_ENTRY_NOT_POSTED')
+    expect(body.data.warnings).toEqual([{ code: 'PDF_ARCHIVE_FAILED', message: expect.any(String) }])
   })
 
   it('returns 404 when the invoice does not belong to the company', async () => {

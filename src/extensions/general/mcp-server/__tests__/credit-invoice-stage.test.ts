@@ -25,10 +25,16 @@ function original(overrides: Record<string, unknown> = {}) {
 async function stage(
   invoiceRow: Record<string, unknown>,
   accountingMethod: string,
+  postsJournalEntry = false,
 ): Promise<{ staged: boolean; preview: Record<string, unknown>; next?: { description?: string } }> {
   const { supabase, enqueue } = createQueuedMockSupabase()
   enqueue({ data: invoiceRow })
   enqueue({ data: { accounting_method: accountingMethod } })
+  if (postsJournalEntry) {
+    // The reversal is dated today: staging reads that date's period status.
+    enqueue({ data: { bookkeeping_locked_through: null } })
+    enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null } })
+  }
   enqueue({ data: { id: 'op-credit-1' } })
 
   return (await tool().execute(
@@ -63,6 +69,7 @@ describe('gnubok_credit_invoice: staging preview (#2552)', () => {
         paid_amount: 12500,
       }),
       'cash',
+      true,
     )
 
     expect(result.staged).toBe(true)
@@ -80,8 +87,54 @@ describe('gnubok_credit_invoice: staging preview (#2552)', () => {
   })
 
   it('always posts under faktureringsmetoden, paid or not', async () => {
-    const result = await stage(original(), 'accrual')
+    const result = await stage(original(), 'accrual', true)
 
     expect(result.preview.posts_journal_entry).toBe(true)
+  })
+})
+
+// The guard list every credit door runs (creditNoteRefusal): staging used to
+// accept a credit note as the original and the approval then posted a second
+// reversal of the same sale.
+describe('gnubok_credit_invoice: refusals at staging', () => {
+  async function refusal(invoiceRow: Record<string, unknown>) {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: invoiceRow })
+    enqueue({ data: { accounting_method: 'accrual' } })
+    return tool().execute({ invoice_id: INVOICE_ID }, 'company-1', 'user-1', supabase as never)
+  }
+
+  it('refuses a credit note', async () => {
+    await expect(
+      refusal(original({ invoice_number: 'KR-F-2026041', credited_invoice_id: 'other-invoice' })),
+    ).rejects.toMatchObject({ code: 'INVOICE_CREDIT_NOT_INVOICE' })
+  })
+
+  it.each([
+    [{ status: 'credited' }, 'INVOICE_CREDIT_ALREADY_CREDITED'],
+    [{ status: 'draft' }, 'INVOICE_CREDIT_NOT_SENT'],
+    [{ document_type: 'proforma' }, 'INVOICE_CREDIT_NOT_INVOICE'],
+    [{ deduction_reclaimed_total: 500 }, 'INVOICE_CREDIT_ROT_RUT_RECLAIMED'],
+  ])('refuses %o with %s', async (overrides, code) => {
+    await expect(refusal(original(overrides))).rejects.toMatchObject({ code })
+  })
+
+  it('shows the period of today the reversal will be booked in', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: original() })
+    enqueue({ data: { accounting_method: 'accrual' } })
+    enqueue({ data: { bookkeeping_locked_through: null } }) // period check: lock date
+    enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null } }) // period check: period
+    enqueue({ data: { id: 'op-credit-2' } })
+
+    const result = (await tool().execute(
+      { invoice_id: INVOICE_ID },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; period_status?: { status: string } }
+
+    expect(result.staged).toBe(true)
+    expect(result.period_status?.status).toBe('open')
   })
 })
