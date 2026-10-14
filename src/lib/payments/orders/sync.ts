@@ -25,6 +25,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { storedBatchPsu } from '@/lib/auth/resource-psu'
 import type { Logger } from '@/lib/logger'
 import {
   getPaymentInitiationProvider,
@@ -102,17 +103,38 @@ async function orgNumberFor(writer: SupabaseClient, companyId: string): Promise<
   return (company as { org_number?: string | null } | null)?.org_number ?? null
 }
 
-/** Reading a payment's status needs the company and the debtor bank, never a signer. */
-function statusParty(order: PaymentOrderRow, orgNumber: string): PaymentPartyContext {
+/**
+ * Reading a payment's status (or cancelling it) unattended: the company, the
+ * debtor bank and the PSU-ID the payment was created with (several banks
+ * require the same one on every later call to it, payment_batch_psus); null
+ * when none is kept. No person is present, so no IP address or user agent.
+ */
+function statusParty(order: PaymentOrderRow, orgNumber: string, psuId: string | null): PaymentPartyContext {
   return {
     companyId: order.company_id,
     companyOrgNumber: orgNumber,
     accountContext: paymentAccountContext(order.debtor_snapshot.psu_type),
     debtorBic: order.debtor_snapshot.bic,
     affiliatedAspspId: order.debtor_snapshot.affiliated_aspsp_id ?? null,
-    signerPersonalNumber: null,
+    signerPersonalNumber: psuId,
     psuIpAddress: null,
     psuUserAgent: null,
+  }
+}
+
+/** The PSU-ID each signing's payments were created with, read once per signing and run. */
+type BatchPsuOf = (batchId: string | null) => Promise<string | null>
+
+function batchPsuReader(): BatchPsuOf {
+  const read = new Map<string, Promise<string | null>>()
+  return (batchId) => {
+    if (!batchId) return Promise.resolve(null)
+    let psu = read.get(batchId)
+    if (!psu) {
+      psu = storedBatchPsu(batchId)
+      read.set(batchId, psu)
+    }
+    return psu
   }
 }
 
@@ -131,6 +153,7 @@ async function settleAbandonedSignings(
   log: Logger,
   result: PaymentStatusSyncResult,
   orgNumbers: Map<string, string | null>,
+  psuOf: BatchPsuOf,
 ): Promise<void> {
   const abandonedBefore = new Date(Date.now() - ABANDONED_SIGNING_MINUTES * 60_000).toISOString()
   const { data: batches, error } = await writer
@@ -172,7 +195,7 @@ async function settleAbandonedSignings(
       }
       result.checked += 1
       try {
-        const state = await provider.getPaymentState(statusParty(order, orgNumber), order.provider_payment_id, order.provider_payment_product ?? 'domestic')
+        const state = await provider.getPaymentState(statusParty(order, orgNumber, await psuOf(batch.id)), order.provider_payment_id, order.provider_payment_product ?? 'domestic')
         const next = await applyProviderState(writer, order, state, null, log)
         if (next !== order.status) result.moved += 1
         statuses.push(next)
@@ -298,7 +321,8 @@ export async function syncPaymentOrderStatuses(writer: SupabaseClient, log: Logg
   if (!(await hasPaymentInitiationProviders())) return { ...result, noProvider: true }
 
   const orgNumbers = new Map<string, string | null>()
-  await settleAbandonedSignings(writer, log, result, orgNumbers)
+  const psuOf = batchPsuReader()
+  await settleAbandonedSignings(writer, log, result, orgNumbers, psuOf)
 
   const { data, error } = await writer
     .from('payment_orders')
@@ -322,9 +346,10 @@ export async function syncPaymentOrderStatuses(writer: SupabaseClient, log: Logg
     const orgNumber = orgNumbers.get(order.company_id)
     if (!orgNumber) continue
     result.checked += 1
+    const party = statusParty(order, orgNumber, await psuOf(order.batch_id))
     let next: PaymentOrderStatus
     try {
-      const state = await provider.getPaymentState(statusParty(order, orgNumber), order.provider_payment_id, order.provider_payment_product ?? 'domestic')
+      const state = await provider.getPaymentState(party, order.provider_payment_id, order.provider_payment_product ?? 'domestic')
       next = await applyProviderState(writer, order, state, null, log)
       if (next !== order.status) result.moved += 1
     } catch (err) {
@@ -333,7 +358,7 @@ export async function syncPaymentOrderStatuses(writer: SupabaseClient, log: Logg
       continue
     }
     if (next !== 'submitted' || !unpayable.has(order.id) || asked.has(`${order.id}:${order.provider_payment_id}`)) continue
-    const outcome = await cancelForClosedInvoice(writer, { userId: null, log }, provider, statusParty(order, orgNumber), order)
+    const outcome = await cancelForClosedInvoice(writer, { userId: null, log }, provider, party, order)
     if (outcome === 'cancelled' || outcome === 'released') result.cancelledForClosedInvoice += 1
     else if (outcome === 'held') result.heldForPerson += 1
   }

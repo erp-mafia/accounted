@@ -612,6 +612,8 @@ async function syncOpenPaymentsAccountAsEnableBanking(
     affiliatedAspspId: connection.affiliated_aspsp_id ?? null,
     psuType: connection.psu_type ?? null,
     signer: syncOptions?.signer ?? UNATTENDED_SIGNER,
+    // The PSU-ID the consent was created with, when one is kept.
+    connectionId,
   })
   if (!party.ok) throw new Error(`Open Payments sync: ${party.outcome.code}`)
   try {

@@ -21,6 +21,8 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
 vi.mock('@/lib/events/bus', () => ({ eventBus: { emit: vi.fn() } }))
 vi.mock('@/lib/core/documents/supplier-invoice-underlag', () => ({ anchorSupplierInvoiceDocument: vi.fn() }))
 vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({ clearSettledInvoiceSuggestions: vi.fn() }))
+const mockStoredBatchPsu = vi.fn()
+vi.mock('@/lib/auth/resource-psu', () => ({ storedBatchPsu: (...args: unknown[]) => mockStoredBatchPsu(...args) }))
 
 import { syncPaymentOrderStatuses } from '../sync'
 import type { PaymentOrderBatchRow, PaymentOrderRow } from '../types'
@@ -78,6 +80,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   resetPaymentInitiationProviders()
   mockCreateJournalEntry.mockResolvedValue({ id: 'je-payment' })
+  mockStoredBatchPsu.mockResolvedValue(null)
   db = createTableMockSupabase({
     company_settings: { data: { org_number: '556677-8899', accounting_method: 'accrual' } },
     cash_accounts: { data: { ledger_account: '1930' } },
@@ -108,6 +111,44 @@ describe('syncPaymentOrderStatuses', () => {
       'pay-o1',
       'swedish-giro',
     )
+  })
+
+  it('sends the PSU-ID the payments were created with on every status read and cancel, read once per signing, with no IP or user agent', async () => {
+    mockStoredBatchPsu.mockImplementation(async (batchId: string) => (batchId === 'batch-1' ? '198001019879' : null))
+    const getPaymentState = vi.fn().mockResolvedValue({ providerStatus: 'RCVD', status: 'submitted', messages: [] })
+    const cancelPayment = vi.fn().mockResolvedValue({ outcome: 'cancelled', providerStatus: 'CANC' })
+    registerPaymentInitiationProvider(provider(getPaymentState, cancelPayment))
+    db.setTable('supplier_invoices', { data: [{ id: 'inv-o1', ...PAID }, { id: 'inv-o2', ...UNPAID }, { id: 'inv-o3', ...UNPAID }] })
+    db.setTable('payment_orders', [
+      { data: [order('o1', { status: 'submitted' }), order('o2', { status: 'submitted' }), order('o3', { status: 'submitted', batch_id: 'batch-old' })] },
+      { data: [{ id: 'o1' }] },
+      { data: { id: 'o1' } },
+      { data: [{ id: 'o2' }] },
+      { data: [{ id: 'o3' }] },
+    ])
+
+    await run()
+
+    const kept = expect.objectContaining({ signerPersonalNumber: '198001019879', psuIpAddress: null, psuUserAgent: null })
+    expect(getPaymentState).toHaveBeenCalledWith(kept, 'pay-o1', 'swedish-giro')
+    expect(getPaymentState).toHaveBeenCalledWith(kept, 'pay-o2', 'swedish-giro')
+    expect(cancelPayment).toHaveBeenCalledWith(kept, 'pay-o1', 'swedish-giro')
+    // A signing without a kept number reads as before: no PSU-ID.
+    expect(getPaymentState).toHaveBeenCalledWith(expect.objectContaining({ signerPersonalNumber: null }), 'pay-o3', 'swedish-giro')
+    expect(mockStoredBatchPsu.mock.calls.map(([id]) => id).sort()).toEqual(['batch-1', 'batch-old'])
+  })
+
+  it('reads an abandoned signing\'s payments with the PSU-ID they were created with', async () => {
+    mockStoredBatchPsu.mockResolvedValue('198001019879')
+    const getPaymentState = vi.fn().mockResolvedValue({ providerStatus: 'ACSP', status: 'accepted', messages: [] })
+    registerPaymentInitiationProvider(provider(getPaymentState))
+    db.setTable('payment_order_batches', [{ data: [SIGNING] }, { data: [{ id: 'batch-1' }] }])
+    db.setTable('payment_orders', [{ data: [order('o1')] }, { data: [{ id: 'o1' }] }, { data: [] }])
+
+    await run()
+
+    expect(mockStoredBatchPsu).toHaveBeenCalledWith('batch-1')
+    expect(getPaymentState).toHaveBeenCalledWith(expect.objectContaining({ signerPersonalNumber: '198001019879', psuIpAddress: null }), 'pay-o1', 'swedish-giro')
   })
 
   it('sweeps claims nobody finished in one database call, before anything else and even with no provider registered', async () => {

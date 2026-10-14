@@ -34,12 +34,18 @@
  *              under the revocation claim of the 'openpayments' namespace.
  *
  * The signer's personnummer comes from their BankID login or the number they
- * typed; it is sent to the bank and never stored or logged.
+ * typed; it is sent to the bank and never logged. The number a consent was
+ * created with is kept encrypted (bank_connection_psus,
+ * lib/auth/resource-psu.ts) and sent on every later call to that consent:
+ * several banks require the same PSU-ID throughout. A co-signer's own
+ * authorisation on a partly signed consent carries the co-signer's number
+ * and never replaces the kept one.
  */
 
 import type { AisAccount, AisBankDetails, AisConsentSigningProgress, AisConsentSigningStarted, AisParty } from '@accounted/connect-contract'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { hasSignerOnFile } from '@/lib/auth/bankid-signer'
+import { rememberConnectionPsu, type ConnectionPsuSource } from '@/lib/auth/resource-psu'
 import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { aggregatorOf, AGGREGATOR_SESSION_NAMESPACE, OPEN_PAYMENTS_AGGREGATOR, OPEN_PAYMENTS_PROVIDER_SLUG } from '@/lib/bank-sync/aggregator'
 import { disconnectBankConnection, readBankConfiguration, saveBankAccountSelection, type BankAccountSelection } from '@/lib/cash-accounts/configuration'
@@ -171,6 +177,12 @@ export interface ConsentAttempt {
   return_to?: BankConnectReturnTarget | null
   /** Svea: the listing consent, ended once the second consent (naming the chosen accounts) is valid. */
   listing_consent_id?: string | null
+  /**
+   * The consent is partly signed and a co-signer signs now: their own
+   * BankID, so the signing calls carry their number, not the one the consent
+   * was created with. Cleared when a new consent is created for the row.
+   */
+  co_signing?: boolean
   /** Kept through finalize for the selection step (listing_only, replace_connection_id, extended_history_days, and Svea's chosen accounts). */
   selection?: {
     listing_only?: boolean
@@ -343,7 +355,18 @@ async function loadRow(ctx: OperationContext, connectionId: string): Promise<Row
   return (data as Row | null) ?? null
 }
 
-async function partyFor(ctx: OperationContext, row: Pick<Row, 'bic' | 'affiliated_aspsp_id' | 'psu_type'>, signer: BankFeedSignerInput, requireSigner: boolean) {
+/**
+ * The party for a call to the row's consent: the PSU-ID the consent was
+ * created with first (bank_connection_psus), else the typed number or the one
+ * on file. coSigner: a co-signer's own authorisation, carrying their number.
+ */
+async function partyFor(
+  ctx: OperationContext,
+  row: Pick<Row, 'id' | 'bic' | 'affiliated_aspsp_id' | 'psu_type'>,
+  signer: BankFeedSignerInput,
+  requireSigner: boolean,
+  options: { coSigner?: boolean } = {},
+) {
   return buildBankFeedParty(ctx.supabase, {
     companyId: ctx.companyId,
     bic: row.bic ?? '',
@@ -352,7 +375,20 @@ async function partyFor(ctx: OperationContext, row: Pick<Row, 'bic' | 'affiliate
     signer,
     userId: ctx.userId,
     requireSigner,
+    connectionId: row.id,
+    coSigner: options.coSigner === true,
   })
+}
+
+/** Whether the row's attempt is a co-signer's: the consent was partly signed before this BankID. */
+function isCoSigning(attempt: ConsentAttempt | null): boolean {
+  return attempt?.state === 'partially_authorised' || attempt?.co_signing === true
+}
+
+/** Keep the number a consent for the row was just created with (a new consent overwrites). */
+async function rememberConsentPsu(ctx: OperationContext, connectionId: string, party: { party: AisParty; source: ConnectionPsuSource | null }): Promise<void> {
+  if (!party.party.personalNumber) return
+  await rememberConnectionPsu({ connectionId, companyId: ctx.companyId, personalNumber: party.party.personalNumber, source: party.source ?? 'typed' })
 }
 
 async function writeAttempt(ctx: OperationContext, row: Row, patch: Record<string, unknown>): Promise<void> {
@@ -494,7 +530,9 @@ async function startSigning(
   party: AisParty,
   method: ConsentMethod,
   ret: SigningReturn | null,
+  options: { coSigning?: boolean } = {},
 ): Promise<OperationOutcome<StartView>> {
+  const coSigning = options.coSigning === true ? { co_signing: true } : {}
   if (method === 'redirect' && !ret) return RETURN_REQUIRED
   let started: AisConsentSigningStarted
   try {
@@ -512,7 +550,7 @@ async function startSigning(
   if (started.method === 'redirect' && method !== 'redirect') {
     await writeAttempt(ctx, row, {
       authorization_id: started.providerAuthorisationId,
-      consent_attempt: { ...(row.consent_attempt ?? {}), method, state: 'failed', sca_status: started.scaStatus, failure_code: 'SCA_REDIRECT_UNSUPPORTED', started_at: new Date().toISOString() },
+      consent_attempt: { ...(row.consent_attempt ?? {}), ...coSigning, method, state: 'failed', sca_status: started.scaStatus, failure_code: 'SCA_REDIRECT_UNSUPPORTED', started_at: new Date().toISOString() },
     })
     return { ok: false, code: 'BANK_CONSENT_REDIRECT_UNSUPPORTED' }
   }
@@ -525,6 +563,7 @@ async function startSigning(
     authorization_id: started.providerAuthorisationId,
     consent_attempt: {
       ...(row.consent_attempt ?? {}),
+      ...coSigning,
       method: effective,
       state: attempt.state,
       sca_status: started.scaStatus,
@@ -672,6 +711,8 @@ export async function startBankFeedConsent(ctx: OperationContext, input: StartIn
     await connect.revokeConsent(ctx.companyId, { party: party.party, consentId: created.consentId }).catch(() => {})
     return { ok: false, code: 'INTERNAL_ERROR', error: insertError ?? new Error('Bank connection attempt not stored') }
   }
+  // The bank accepted the consent with this PSU-ID: every later call to it sends the same one.
+  await rememberConsentPsu(ctx, (inserted as Row).id, party)
   return startSigning(ctx, connect, inserted as Row, party.party, method, ret)
 }
 
@@ -700,11 +741,15 @@ export async function restartBankFeedConsent(
   // the browser said where to come back to, whatever method it asked for.
   const imposed = row.consent_attempt?.state === 'failed' && row.consent_attempt.failure_code === 'SCA_REDIRECT_UNSUPPORTED'
   const method: ConsentMethod = imposed && ret ? 'redirect' : input.method ?? row.consent_attempt?.method ?? 'qr'
-  const party = await partyFor(ctx, row, input.signer ?? UNATTENDED_SIGNER, false)
+  // A partly signed consent waits for a co-signer: their own BankID, their
+  // number. Any other restart is the same consent again, with the PSU-ID it
+  // was created with.
+  const coSigning = isCoSigning(row.consent_attempt)
+  const party = await partyFor(ctx, row, input.signer ?? UNATTENDED_SIGNER, false, { coSigner: coSigning })
   if (!party.ok) return party.outcome
   // A consent whose signing window closed is created anew; the attempt record
   // (listing-only, the row a switch replaces, the return) carries over.
-  const started = await startSigning(ctx, connect, row, party.party, method, ret)
+  const started = await startSigning(ctx, connect, row, party.party, method, ret, { coSigning })
   if (!started.ok && started.code === 'BANK_CONSENT_OVER') {
     const now = input.now ?? Date.now()
     let created
@@ -719,8 +764,12 @@ export async function restartBankFeedConsent(
     } catch (error) {
       return providerFailure(error)
     }
-    await writeAttempt(ctx, row, { session_id: created.consentId, consent_expires: consentExpiresAt(created.validUntil), authorization_id: null })
-    return startSigning(ctx, connect, { ...row, session_id: created.consentId }, party.party, method, ret)
+    // A new consent, created with this party's PSU-ID and signed from the
+    // start: it replaces the kept number, and nobody co-signs it yet.
+    const attempt: ConsentAttempt = { ...(row.consent_attempt ?? {}), co_signing: false }
+    await writeAttempt(ctx, row, { session_id: created.consentId, consent_expires: consentExpiresAt(created.validUntil), authorization_id: null, consent_attempt: attempt })
+    await rememberConsentPsu(ctx, row.id, party)
+    return startSigning(ctx, connect, { ...row, session_id: created.consentId, consent_attempt: attempt }, party.party, method, ret)
   }
   return started
 }
@@ -795,11 +844,19 @@ export async function pollBankFeedConsent(
     return base('failed', { failure_code: failure, failure_text: consentFailureText(failure).sv })
   }
 
+  // The consent's own calls carry the PSU-ID it was created with; a
+  // co-signer's authorisation is polled with the co-signer's number.
   const party = await partyFor(ctx, row, input.signer ?? UNATTENDED_SIGNER, false)
   if (!party.ok) return party.outcome
+  let signingParty = party.party
+  if (isCoSigning(row.consent_attempt)) {
+    const coSigner = await partyFor(ctx, row, input.signer ?? UNATTENDED_SIGNER, false, { coSigner: true })
+    if (!coSigner.ok) return coSigner.outcome
+    signingParty = coSigner.party
+  }
   let progress: AisConsentSigningProgress
   try {
-    progress = await connect.pollConsentSigning(ctx.companyId, { party: party.party, consentId: row.session_id, providerAuthorisationId: row.authorization_id, method })
+    progress = await connect.pollConsentSigning(ctx.companyId, { party: signingParty, consentId: row.session_id, providerAuthorisationId: row.authorization_id, method })
   } catch (error) {
     return providerFailure(error)
   }
@@ -1101,6 +1158,7 @@ export async function selectBankFeedAccounts(
     } catch (error) {
       return providerFailure(error)
     }
+    await rememberConsentPsu(ctx, row.id, party)
     // The listing consent stays until the second one is valid: should the
     // second signing fail, the accounts can still be listed and chosen again.
     const attempt: ConsentAttempt = {

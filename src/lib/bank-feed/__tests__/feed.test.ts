@@ -274,10 +274,19 @@ describe('runOpenPaymentsSync', () => {
     const cron = stub({ bank_connections: [{ data: row(), error: null }], sie_imports: [{ data: null, error: null }], transactions: [{ data: [], error: null }] })
     expect(await run(cron.supabase, { trigger: 'cron', unattended: true })).toMatchObject({ ok: true })
     expect(cron.from).not.toHaveBeenCalledWith('company_members')
-    // Unattended, but never anonymous: the owner's number on file is the PSU-ID.
-    expect(mocks.party).toHaveBeenCalledWith(cron.supabase, expect.objectContaining({ userId: 'owner-1', signer: { personalNumber: null, ipAddress: null, userAgent: null } }))
+    // Unattended, but never anonymous: the PSU-ID the consent was created with (by connection), else the owner's number on file.
+    expect(mocks.party).toHaveBeenCalledWith(cron.supabase, expect.objectContaining({ userId: 'owner-1', connectionId: 'conn-1', signer: { personalNumber: null, ipAddress: null, userAgent: null } }))
     const stranger = stub({ bank_connections: [{ data: row(), error: null }], company_members: [{ data: null, error: null }] })
     expect(await run(stranger.supabase)).toEqual({ ok: false, code: 'NOT_FOUND', connection_id: 'conn-1' })
+  })
+
+  it('an unattended read sends the PSU-ID the consent was created with, and no IP address or user agent', async () => {
+    const kept = { orgNumber: '5595386219', accountContext: 'corporate', bic: 'SWEDSESS', personalNumber: '198001019879', psuIpAddress: null, psuUserAgent: null, affiliatedAspspId: null }
+    mocks.party.mockResolvedValueOnce({ ok: true, source: 'signatory_link', party: kept })
+    const cron = stub({ bank_connections: [{ data: row(), error: null }], sie_imports: [{ data: null, error: null }], transactions: [{ data: [], error: null }] })
+    expect(await run(cron.supabase, { trigger: 'cron', unattended: true })).toMatchObject({ ok: true })
+    expect(mocks.party).toHaveBeenCalledWith(cron.supabase, expect.objectContaining({ connectionId: 'conn-1', signer: { personalNumber: null, ipAddress: null, userAgent: null } }))
+    expect(mocks.syncAccount).toHaveBeenCalledWith(cron.supabase, expect.objectContaining({ party: kept }))
   })
 
   it('flips the row to expired when the consent is over', async () => {
