@@ -226,7 +226,12 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
         />
       ) : null}
       {phase === 'done' ? (
-        <SkvSaldo saldo={saldo} ledger={findings?.skv.ledger1630 ?? null} next={findings?.skv.nextDeadlines[0] ?? null} />
+        <SkvSaldo
+          saldo={saldo}
+          ledger={findings?.skv.ledgerSkattekonto ?? null}
+          account={findings?.skv.skattekontoAccount ?? '1630'}
+          next={findings?.skv.nextDeadlines[0] ?? null}
+        />
       ) : null}
       <div className="jny-qactions">
         {phase === 'done' ? (
@@ -246,9 +251,21 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
 /**
  * The success under the stamp, every line centred and unmarked: the tax
  * account's balance counting up (or, before the first fetch, one line that
- * it is on its way), how it sits against 1630, the next deadline.
+ * it is on its way), how it sits against the skattekonto account (1630, or
+ * 2012), the next deadline.
  */
-function SkvSaldo({ saldo, ledger, next }: { saldo: number | null; ledger: number | null; next: { type: string; dueDate: string } | null }) {
+function SkvSaldo({
+  saldo,
+  ledger,
+  account,
+  next,
+}: {
+  saldo: number | null
+  ledger: number | null
+  /** The skattekonto account the ledger figure is on: 1630, or 2012. */
+  account: string
+  next: { type: string; dueDate: string } | null
+}) {
   const t = useTranslations('books')
   const { locale, formatDateLong } = useFormat()
   const shown = useCountUp(saldo ?? 0, 700)
@@ -265,7 +282,7 @@ function SkvSaldo({ saldo, ledger, next }: { saldo: number | null; ledger: numbe
       )}
       {saldo !== null && ledger !== null ? (
         differs ? (
-          <a href="/skattekonto" className="skv-line is-attn">{t('skv_diff_short', { ledger: fmtKr(ledger, locale) })}</a>
+          <a href="/skattekonto" className="skv-line is-attn">{t('skv_diff_short', { ledger: fmtKr(ledger, locale), account })}</a>
         ) : (
           <p className="skv-line">{t('skv_reconciled_short')}</p>
         )

@@ -21,6 +21,14 @@ vi.mock('@/lib/suggestion-log/record', async (importOriginal) => ({
   recordDecisions: vi.fn(async () => undefined),
 }))
 
+// The company's skattekonto account (PH 175): read only for a template that
+// names 1630; no queued read is spent on it.
+const resolveSkattekontoMock = vi.fn(async () => '1630')
+vi.mock('@/lib/skatteverket/skattekonto-account', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/skatteverket/skattekonto-account')>()),
+  resolveSkattekontoAccount: () => resolveSkattekontoMock(),
+}))
+
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -593,6 +601,38 @@ describe('POST /api/transactions/[id]/categorize', () => {
     const eqArgs = findCalls('cash_accounts', 'eq')
     expect(eqArgs).toContainEqual(['enabled', true])
     expect(eqArgs).toContainEqual(['currency', 'SEK'])
+  })
+
+  it('books "Insättning skattekonto" on 2012 for an enskild firma that runs its skattekonto there (PH 175)', async () => {
+    resolveSkattekontoMock.mockResolvedValueOnce('2012')
+    const tx = makeTransaction({
+      id: 'tx-1',
+      amount: -3000,
+      merchant_name: 'Skatteverket',
+      journal_entry_id: null,
+      cash_account_id: null,
+    })
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [{ ledger_account: '1930' }], error: null })
+    enqueue({ data: [{ id: 'period-1' }], error: null })
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    mockSaveUserMappingRule.mockResolvedValue(undefined)
+    enqueue({ data: [{ id: 'tx-1' }], error: null })
+    enqueue({ data: [], error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/categorize', {
+      method: 'POST',
+      body: { is_business: true, template_id: 'financial_tax_account' },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    expect(response.status).toBe(200)
+    const mappingArg = mockCreateTransactionJournalEntry.mock.calls[0][4] as {
+      debit_account: string
+      credit_account: string
+    }
+    expect([mappingArg.debit_account, mappingArg.credit_account]).toEqual(['2012', '1930'])
+    expect(resolveSkattekontoMock).toHaveBeenCalledTimes(1)
   })
 
   it('books a transaction dated before the first fiscal year without minting a period (pre-FY, issue #1825)', async () => {

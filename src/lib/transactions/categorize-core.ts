@@ -38,6 +38,7 @@ import {
   validateTemplateForEntity,
   type BookingTemplate,
 } from '@/lib/bookkeeping/booking-templates'
+import { resolveSkattekontoAccount, templateTouchesSkattekonto } from '@/lib/skatteverket/skattekonto-account'
 import { reconcileRcBasisWithChart } from '@/lib/bookkeeping/rc-basis-reconcile'
 import { chartVatTreatmentsLoader, type ChartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import { applySettlementAccount, saveUserMappingRule } from '@/lib/bookkeeping/mapping-engine'
@@ -442,7 +443,17 @@ export async function buildCategorizeMapping(
     }
     mappingResult = buildMappingResultFromCounterpartyTemplate(match, transaction, entityType, vatRegistered)
   } else if (template) {
-    mappingResult = buildMappingResultFromTemplate(template, transaction, entityType, vatRegistered)
+    // A template that names the skattekonto (1630) books the company's
+    // skattekonto account: 2012 for an enskild firma that runs it there.
+    const skattekontoAccount = templateTouchesSkattekonto([
+      template.debit_account,
+      template.credit_account,
+      template.debit_account_ab,
+      template.credit_account_ab,
+    ])
+      ? await resolveSkattekontoAccount(supabase, companyId)
+      : undefined
+    mappingResult = buildMappingResultFromTemplate(template, transaction, entityType, vatRegistered, skattekontoAccount)
     if (input.vat_amount != null) {
       // The underlag's moms replaces the template's rate-based line; the
       // helper refuses a treatment it cannot apply to.

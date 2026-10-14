@@ -28,6 +28,7 @@ import {
 } from '@/lib/transactions/categorize-core'
 import { buildMappingResultFromTemplate, type BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import { reconcileRcBasisWithChart } from '@/lib/bookkeeping/rc-basis-reconcile'
+import { resolveSkattekontoAccount, templateTouchesSkattekonto } from '@/lib/skatteverket/skattekonto-account'
 import { chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import { buildTransactionEntryLines } from '@/lib/bookkeeping/transaction-entries'
 import { TransactionMissingSekValueError } from '@/lib/bookkeeping/errors'
@@ -176,8 +177,19 @@ async function previewForTotal(
     cash_account_id: null,
   } as unknown as Transaction
 
+  // A template that names the skattekonto (1630) books the company's
+  // skattekonto account, as buildCategorizeMapping does: 2012 for an enskild
+  // firma that runs it there (PH 175).
+  const skattekontoAccount = templateTouchesSkattekonto([
+    template.debit_account,
+    template.credit_account,
+    template.debit_account_ab,
+    template.credit_account_ab,
+  ])
+    ? await resolveSkattekontoAccount(supabase, companyId)
+    : undefined
   const mapping = await reconcileRcBasisWithChart(
-    buildMappingResultFromTemplate(template, transaction, context.entityType, context.vatRegistered),
+    buildMappingResultFromTemplate(template, transaction, context.entityType, context.vatRegistered, skattekontoAccount),
     chartVatTreatmentsLoader(supabase, companyId),
   )
   return { ok: true, lines: toProposalLines(transaction, buildTransactionEntryLines(transaction, mapping)) }

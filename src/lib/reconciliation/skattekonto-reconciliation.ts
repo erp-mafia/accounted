@@ -2,7 +2,7 @@ import { chunk } from '@/lib/utils'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
-import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
+import { resolveSkattekontoAccount, type SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 import { loadImportedStornoPairs } from '@/lib/skatteverket/skattekonto-cancelled-entries'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
@@ -89,6 +89,13 @@ export interface SkattekontoReconciliationOptions {
    */
   windowFrom?: string | null
   windowTo?: string | null
+  /**
+   * The company's skattekonto account when the caller already resolved it
+   * (lib/skatteverket/skattekonto-account.ts); read here otherwise. "1630"
+   * in this file means that account: 2012 for an enskild firma that runs the
+   * skattekonto in eget kapital.
+   */
+  account?: SkattekontoLedgerAccount
 }
 
 export interface SkattekontoReconciliationItems {
@@ -113,7 +120,8 @@ export interface SkattekontoReconciliationResult extends ReconciliationStatus {
   /**
    * The open rows the ledger already holds through unlinked verifikat on
    * 1630 (see findLedgerCoverPoint), complete and unwindowed: what the
-   * booking guard reads. Null when nothing is covered.
+   * booking guard reads, with the ledger plan (skattekontoPlannedHolds).
+   * Null when nothing is covered.
    */
   cover: SkattekontoLedgerCover | null
 }
@@ -131,6 +139,8 @@ export interface SkattekontoCoveringEntry {
 }
 
 export interface SkattekontoLedgerCover {
+  /** The skattekonto account the covering verifikat are on. */
+  account_number: SkattekontoLedgerAccount
   /** Every open row dated on or before this date is covered. */
   through_date: string
   kind: 'events_equal' | 'ledger_agrees'
@@ -169,6 +179,37 @@ export function skattekontoOpenLedger(
   status: SkattekontoReconciliationResult,
 ): Map<string, SkattekontoOpenLedgerEntry> | null {
   return openLedgerOfStatus.get(status) ?? null
+}
+
+/**
+ * One open row the ledger plan (skattekonto-ledger-plan.ts, PH 171) assigns
+ * to an open verifikat: the verifikat holds it, with the other rows of the
+ * link, exactly to the öre.
+ */
+export interface SkattekontoPlannedHold {
+  /** The verifikat that holds the row, as the cover lists its verifikat. */
+  entry: SkattekontoCoveringEntry
+  /** Every row of the link, this one included, in date order. */
+  event_ids: string[]
+  /** Their sum, Skatteverket sign: the verifikat's open amount. */
+  total: number
+  /** The earliest and latest date among the rows and the verifikat. */
+  from_date: string
+  to_date: string
+}
+
+/**
+ * The ledger plan behind a status, by row id: complete and unwindowed, so
+ * the booking guard reads every planned row whatever its date, not only the
+ * ones the proposed bucket lists. Kept beside the result for the same reason
+ * as the open ledger above.
+ */
+const plannedHoldsOfStatus = new WeakMap<SkattekontoReconciliationResult, Map<string, SkattekontoPlannedHold>>()
+
+export function skattekontoPlannedHolds(
+  status: SkattekontoReconciliationResult,
+): Map<string, SkattekontoPlannedHold> | null {
+  return plannedHoldsOfStatus.get(status) ?? null
 }
 
 /**
@@ -307,6 +348,7 @@ async function fetchLedgerEntries(
   companyId: string,
   fromDate: string | null,
   cutoffDate: string,
+  account: SkattekontoLedgerAccount,
 ): Promise<Map<string, { head: EntryHead; amount: number }>> {
   const lines = await fetchEntryLines<LedgerLineRow>({
     supabase,
@@ -320,7 +362,7 @@ async function fetchLedgerEntries(
       if (fromDate) query = query.gte('entry_date', fromDate)
       return query
     },
-    filterLines: (q: EntryLinesQuery) => q.eq('account_number', SKATTEKONTO_ACCOUNT),
+    filterLines: (q: EntryLinesQuery) => q.eq('account_number', account),
   })
   const byEntry = new Map<string, { head: EntryHead; amount: number }>()
   for (const line of lines) {
@@ -346,6 +388,7 @@ async function fetchEntryIdsOnAccount(
   supabase: SupabaseClient,
   companyId: string,
   entryIds: string[],
+  account: SkattekontoLedgerAccount,
 ): Promise<Set<string>> {
   const onAccount = new Set<string>()
   for (const part of chunk(entryIds, ENTRY_ID_CHUNK)) {
@@ -355,7 +398,7 @@ async function fetchEntryIdsOnAccount(
       lineColumns: 'debit_amount, credit_amount',
       filterEntries: (q: EntryLinesQuery) =>
         q.eq('company_id', companyId).in('status', [...LEDGER_BALANCE_STATUSES]).in('id', part),
-      filterLines: (q: EntryLinesQuery) => q.eq('account_number', SKATTEKONTO_ACCOUNT),
+      filterLines: (q: EntryLinesQuery) => q.eq('account_number', account),
     })
     for (const line of lines) {
       if (line.journal_entries?.id) onAccount.add(line.journal_entries.id)
@@ -377,6 +420,7 @@ async function findSettledAnnulmentIds(
   supabase: SupabaseClient,
   companyId: string,
   open: Array<{ head: EntryHead; amount: number }>,
+  account: SkattekontoLedgerAccount,
 ): Promise<Set<string>> {
   const settled = new Set<string>()
   const oreAmounts = new Set(open.map((e) => Math.round(e.amount * 100)))
@@ -385,7 +429,7 @@ async function findSettledAnnulmentIds(
   const dates = mirrored.map((e) => e.head.entry_date).sort()
   let pairs: Array<[string, string]>
   try {
-    pairs = await loadImportedStornoPairs(supabase, companyId, dates[0], dates[dates.length - 1])
+    pairs = await loadImportedStornoPairs(supabase, companyId, dates[0], dates[dates.length - 1], account)
   } catch (err) {
     log.warn('imported storno pairs read failed', {
       companyId,
@@ -404,7 +448,12 @@ async function findSettledAnnulmentIds(
   return settled
 }
 
-function proposalFrom(head: EntryHead, row: SkattekontoRow, groupIds: string[]): ReconciliationProposal {
+function proposalFrom(
+  head: EntryHead,
+  row: SkattekontoRow,
+  groupIds: string[],
+  account: SkattekontoLedgerAccount,
+): ReconciliationProposal {
   const combined = groupIds.length > 1
   return {
     journal_entry_id: head.id,
@@ -415,7 +464,7 @@ function proposalFrom(head: EntryHead, row: SkattekontoRow, groupIds: string[]):
     entry_status: head.status,
     confidence: head.status === 'posted' ? (combined ? 0.9 : 0.95) : 0.8,
     reasons: [
-      combined ? `summan av ${groupIds.length} händelser är exakt beloppet på 1630` : 'exakt belopp på 1630',
+      combined ? `summan av ${groupIds.length} händelser är exakt beloppet på ${account}` : `exakt belopp på ${account}`,
       `${Math.abs(daysBetweenIso(row.transaktionsdatum, head.entry_date))} dagars avstånd`,
     ],
     ...(combined ? { external_ids: groupIds } : {}),
@@ -435,8 +484,9 @@ function proposeLedgerPlan(input: {
   heads: Map<string, EntryHead>
   items: SkattekontoReconciliationItems
   counts: { proposed: number; unmatched_external: number }
+  account: SkattekontoLedgerAccount
 }): void {
-  const { planned, heads, items, counts } = input
+  const { planned, heads, items, counts, account } = input
   const proposalByRow = new Map<string, ReconciliationProposal>()
   for (const link of planned) {
     const head = heads.get(link.journal_entry_id)
@@ -451,7 +501,7 @@ function proposeLedgerPlan(input: {
       entry_status: head.status,
       confidence: 0.9,
       reasons: [
-        count > 1 ? `summan av ${count} händelser är exakt verifikatets belopp på 1630` : 'exakt belopp på 1630',
+        count > 1 ? `summan av ${count} händelser är exakt verifikatets belopp på ${account}` : `exakt belopp på ${account}`,
         link.from_date === link.to_date ? `samma dag, ${link.from_date}` : `${link.from_date} till ${link.to_date}`,
       ],
       ...(count > 1 ? { external_ids: link.event_ids } : {}),
@@ -555,6 +605,7 @@ export async function getSkattekontoReconciliationStatus(
     fetchRows(supabase, companyId),
   ])
   if (!snapshot && rows.length === 0) return null
+  const account = options.account ?? (await resolveSkattekontoAccount(supabase, companyId))
 
   const cutoffDate = snapshot ? toIsoDate(snapshot.fetchedAt) : today
   const asOf = snapshot ? snapshot.fetchedAt.toISOString() : new Date(today + 'T00:00:00Z').toISOString()
@@ -565,7 +616,7 @@ export async function getSkattekontoReconciliationStatus(
   let ledgerReadFailed = false
   let floor: OpeningBalanceFloor | null = null
   try {
-    floor = await findOpeningBalanceFloor(supabase, companyId, SKATTEKONTO_ACCOUNT, cutoffDate)
+    floor = await findOpeningBalanceFloor(supabase, companyId, account, cutoffDate)
   } catch (err) {
     ledgerReadFailed = true
     log.warn('opening balance read failed', {
@@ -618,7 +669,7 @@ export async function getSkattekontoReconciliationStatus(
   // a fabricated 0 (same posture as the drift check).
   let ledgerEntries = new Map<string, { head: EntryHead; amount: number }>()
   try {
-    ledgerEntries = await fetchLedgerEntries(supabase, companyId, historyStart, cutoffDate)
+    ledgerEntries = await fetchLedgerEntries(supabase, companyId, historyStart, cutoffDate, account)
   } catch (err) {
     ledgerReadFailed = true
     log.warn('ledger entries read failed', {
@@ -651,16 +702,16 @@ export async function getSkattekontoReconciliationStatus(
   const [ledgerBalance, ledgerBeforeByDate, beforeStartOnAccount] = await Promise.all([
     floorReadFailed
       ? null
-      : sumAccountBalance(supabase, companyId, SKATTEKONTO_ACCOUNT, { ...sinceFloor, cutoffDate }),
+      : sumAccountBalance(supabase, companyId, account, { ...sinceFloor, cutoffDate }),
     floorReadFailed
       ? null
       : !historyStart
         ? 0
         : floor && historyStart === floor.date
           ? floor.amount
-          : sumAccountBalance(supabase, companyId, SKATTEKONTO_ACCOUNT, { ...sinceFloor, beforeDate: historyStart }),
+          : sumAccountBalance(supabase, companyId, account, { ...sinceFloor, beforeDate: historyStart }),
     linkedBeforeStartIds.length > 0
-      ? fetchEntryIdsOnAccount(supabase, companyId, linkedBeforeStartIds).catch((err) => {
+      ? fetchEntryIdsOnAccount(supabase, companyId, linkedBeforeStartIds, account).catch((err) => {
           log.warn('linked entries before history start read failed', {
             companyId,
             error: err instanceof Error ? err.message : String(err),
@@ -798,6 +849,7 @@ export async function getSkattekontoReconciliationStatus(
             suggestedHead,
             row,
             row.journal_entry_id ? [row.id] : openRowsBySuggestion.get(suggestedHead.id) ?? [row.id],
+            account,
           )
         : null
 
@@ -867,6 +919,7 @@ export async function getSkattekontoReconciliationStatus(
         !settledStornoIds.has(head.id) &&
         !floorIds.has(head.id),
     ),
+    account,
   )
 
   // Ledger entries in the comparable history that no storno settles and no
@@ -908,7 +961,7 @@ export async function getSkattekontoReconciliationStatus(
       ? await resolveLedgerSettlements(
           supabase,
           companyId,
-          SKATTEKONTO_ACCOUNT,
+          account,
           new Map(openCandidates.map((c) => [c.head.id, c.amount])),
           // The skattekonto ledger is not windowed: a member outside this
           // list is not open, so the settlement does not hold.
@@ -1029,7 +1082,7 @@ export async function getSkattekontoReconciliationStatus(
       linked_journal_entry_id: null,
       proposal:
         suggestedHead && suggestedHead.status !== 'reversed' && !linkedEntryIds.has(suggestedHead.id)
-          ? proposalFrom(suggestedHead, row, beforeHistoryBySuggestion.get(suggestedHead.id) ?? [row.id])
+          ? proposalFrom(suggestedHead, row, beforeHistoryBySuggestion.get(suggestedHead.id) ?? [row.id], account)
           : null,
       before_history: true,
       actions: ['match', 'ignore'],
@@ -1052,21 +1105,46 @@ export async function getSkattekontoReconciliationStatus(
 
   // Rows that exactly one open verifikat holds (a monthly summary from the
   // previous system, PH 171) become proposals, so every door that links
-  // proposals links them in one action. Not on a failed ledger read.
+  // proposals links them in one action, and the booking guard refuses them
+  // (plannedHolds). Not on a failed ledger read.
+  const plannedHolds = new Map<string, SkattekontoPlannedHold>()
   if (!ledgerReadFailed) {
+    const planned = planSkattekontoLedgerLinks({
+      rows: openEvents
+        .filter((e) => !proposedRowIds.has(e.id))
+        .map((e) => ({ ...e, linkable: !deadLinkRowIds.has(e.id) })),
+      entries: openEntries
+        .filter((e) => !proposedEntryIds.has(e.head.id))
+        .map(({ head, amount }) => ({ id: head.id, date: head.entry_date, amount, linkable: head.status === 'posted' })),
+    })
+    const openById = new Map(openEntries.map((e) => [e.head.id, e]))
     proposeLedgerPlan({
-      planned: planSkattekontoLedgerLinks({
-        rows: openEvents
-          .filter((e) => !proposedRowIds.has(e.id))
-          .map((e) => ({ ...e, linkable: !deadLinkRowIds.has(e.id) })),
-        entries: openEntries
-          .filter((e) => !proposedEntryIds.has(e.head.id))
-          .map(({ head, amount }) => ({ id: head.id, date: head.entry_date, amount, linkable: head.status === 'posted' })),
-      }),
+      planned,
       heads: new Map(openEntries.map((e) => [e.head.id, e.head])),
       items,
       counts,
+      account,
     })
+    for (const link of planned) {
+      const open = openById.get(link.journal_entry_id)
+      if (!open) continue
+      const hold: SkattekontoPlannedHold = {
+        entry: {
+          journal_entry_id: open.head.id,
+          voucher_number: open.head.voucher_number,
+          voucher_series: open.head.voucher_series,
+          entry_date: open.head.entry_date,
+          description: open.head.description ?? '',
+          status: open.head.status,
+          open_amount: open.amount,
+        },
+        event_ids: link.event_ids,
+        total: link.total,
+        from_date: link.from_date,
+        to_date: link.to_date,
+      }
+      for (const id of link.event_ids) plannedHolds.set(id, hold)
+    }
   }
 
   // Open rows the ledger already holds through open verifikat (see
@@ -1087,6 +1165,7 @@ export async function getSkattekontoReconciliationStatus(
       .filter((e) => e.head.entry_date <= coverPoint.through_date)
       .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))
     cover = {
+      account_number: account,
       through_date: coverPoint.through_date,
       kind: coverPoint.kind,
       event_ids: coveredEvents.map((e) => e.id),
@@ -1137,8 +1216,8 @@ export async function getSkattekontoReconciliationStatus(
     },
     {
       key: 'unmatched_ledger',
-      label_sv: 'Rader på 1630 utan händelse hos Skatteverket',
-      label_en: '1630 lines without a Skatteverket event',
+      label_sv: `Rader på ${account} utan händelse hos Skatteverket`,
+      label_en: `${account} lines without a Skatteverket event`,
       amount: unlinkedLedgerTotal,
       count: counts.unmatched_ledger,
       items_bucket: 'unmatched_ledger',
@@ -1166,8 +1245,8 @@ export async function getSkattekontoReconciliationStatus(
   }
   bridge.push({
     key: 'ledger_balance',
-    label_sv: 'Bokfört på 1630',
-    label_en: 'Booked on 1630',
+    label_sv: `Bokfört på ${account}`,
+    label_en: `Booked on ${account}`,
     amount: ledgerBalance ?? 0,
     count: null,
     items_bucket: null,
@@ -1180,7 +1259,7 @@ export async function getSkattekontoReconciliationStatus(
   const result: SkattekontoReconciliationResult = {
     account_key: SKATTEKONTO_ACCOUNT_KEY,
     kind: 'skattekonto',
-    account_number: SKATTEKONTO_ACCOUNT,
+    account_number: account,
     currency: 'SEK',
     window: { from: options.windowFrom ?? null, to: options.windowTo ?? null },
     as_of: asOf,
@@ -1221,5 +1300,6 @@ export async function getSkattekontoReconciliationStatus(
     cover,
   }
   openLedgerOfStatus.set(result, openLedger)
+  plannedHoldsOfStatus.set(result, plannedHolds)
   return result
 }

@@ -12,6 +12,11 @@ export const SE_ENSKILD_FIRMA: LegalFormProfile = {
     // BFNAR 2006:1 (K1, förenklat årsbokslut).
     simplifiedRegelverk: 'K1',
     templateColumn: 'base',
+    // 1630 by default (full BAS 2026); 2012 Avräkning för skatter och
+    // avgifter (skattekonto) in eget kapital when the firm runs it there
+    // (BAS K1 chart, Fortnox, Björn Lundén): the firm shares its skattekonto
+    // with the owner (PH 175).
+    skattekontoAccounts: ['1630', '2012'],
   },
   equity: {
     closing: '2010',

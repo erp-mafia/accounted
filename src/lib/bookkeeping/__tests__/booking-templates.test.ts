@@ -385,6 +385,17 @@ describe('milersättning routing', () => {
     expect(matches[0]?.template.id).toBe('personnel_mileage_taxfree')
   })
 
+  it('books "Insättning skattekonto" on the company skattekonto account (PH 175)', () => {
+    const template = getTemplateById('financial_tax_account')!
+    const payment = makeTransaction({ amount: -5000, description: 'Skatteverket' })
+    const on2012 = buildMappingResultFromTemplate(template, payment, 'enskild_firma', true, '2012')
+    expect([on2012.debit_account, on2012.credit_account]).toEqual(['2012', '1930'])
+    const on1630 = buildMappingResultFromTemplate(template, payment, 'enskild_firma', true, '1630')
+    expect([on1630.debit_account, on1630.credit_account]).toEqual(['1630', '1930'])
+    // Without an account (no caller resolved one) the catalog's own 1630.
+    expect(buildMappingResultFromTemplate(template, payment, 'aktiebolag').debit_account).toBe('1630')
+  })
+
   it('emits no VAT lines for milersättning (employee reimbursement, not a purchase)', () => {
     const template = getTemplateById('personnel_mileage_taxfree')
     expect(template).toBeDefined()

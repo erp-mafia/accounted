@@ -35,6 +35,17 @@ describe('resolveTemplateAccountsForEntity', () => {
       creditAccount: '1930',
     })
   })
+
+  it('books the skattekonto on 2012 for an enskild firma that runs it there, and moves nothing else (PH 175)', () => {
+    const deposit = { debit_account: '1630', credit_account: '1930' }
+    expect(resolveTemplateAccountsForEntity(deposit, 'enskild_firma', '2012')).toEqual({
+      debitAccount: '2012',
+      creditAccount: '1930',
+    })
+    expect(resolveTemplateAccountsForEntity(template, 'enskild_firma', '2012')).toEqual(
+      resolveTemplateAccountsForEntity(template, 'enskild_firma'),
+    )
+  })
 })
 
 describe('proposalLinesToFormLines', () => {

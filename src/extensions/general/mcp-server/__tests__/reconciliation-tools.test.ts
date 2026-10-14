@@ -7,6 +7,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
+// The company's skattekonto account (lib/skatteverket/skattekonto-account.ts):
+// 1630 here, what every company resolved to before the setting existed.
+vi.mock('@/lib/skatteverket/skattekonto-account', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/skatteverket/skattekonto-account')>()),
+  resolveSkattekontoAccount: vi.fn(async () => '1630'),
+}))
+
 const statusMock = vi.fn()
 const itemsMock = vi.fn()
 const matchMock = vi.fn()

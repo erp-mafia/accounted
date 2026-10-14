@@ -27,6 +27,7 @@ import type {
 import { createLogger } from '@/lib/logger'
 import { ownerSettlementAccount } from '@/lib/company/entity-type'
 import { vatTreatmentForRegistration, type VatRegistration } from './vat-registration'
+import { resolveSkattekontoAccount, templateTouchesSkattekonto } from '@/lib/skatteverket/skattekonto-account'
 
 const log = createLogger('mapping-engine')
 
@@ -176,7 +177,7 @@ async function evaluateMappingRulesUnsettled(
     )
     if (counterpartyResult) return applySettlementAccount(counterpartyResult, bankAccount, transaction.amount)
 
-    const templateResult = evaluateTemplateRules(transaction, entityType, vatRegistered)
+    const templateResult = await evaluateTemplateRules(supabase, companyId, transaction, entityType, vatRegistered)
     if (templateResult) return applySettlementAccount(templateResult, bankAccount, transaction.amount)
     return getDefaultResult(transaction, bankAccount)
   }
@@ -200,7 +201,7 @@ async function evaluateMappingRulesUnsettled(
   if (counterpartyResult) return applySettlementAccount(counterpartyResult, bankAccount, transaction.amount)
 
   // Try template-based matching before default fallback
-  const templateResult = evaluateTemplateRules(transaction, entityType, vatRegistered)
+  const templateResult = await evaluateTemplateRules(supabase, companyId, transaction, entityType, vatRegistered)
   if (templateResult) return applySettlementAccount(templateResult, bankAccount, transaction.amount)
 
   return getDefaultResult(transaction, bankAccount)
@@ -210,20 +211,35 @@ async function evaluateMappingRulesUnsettled(
  * Evaluate booking templates as a fallback when no DB mapping rule matches.
  * Returns the best template match if confidence >= 0.3, otherwise null.
  */
-function evaluateTemplateRules(
+async function evaluateTemplateRules(
+  supabase: SupabaseClient,
+  companyId: string,
   transaction: Transaction,
   entityType: EntityType,
   vatRegistered?: VatRegistration
-): MappingResult | null {
+): Promise<MappingResult | null> {
   const matches = findMatchingTemplates(transaction, entityType)
   if (matches.length === 0 || matches[0].confidence < 0.3) return null
 
   const best = matches[0]
+  // "Insättning skattekonto" names 1630: it books the company's skattekonto
+  // account (2012 for an enskild firma that runs it there, PH 175).
+  const t = best.template
+  let skattekontoAccount: Awaited<ReturnType<typeof resolveSkattekontoAccount>> | undefined
+  if (templateTouchesSkattekonto([t.debit_account, t.credit_account, t.debit_account_ab, t.credit_account_ab])) {
+    try {
+      skattekontoAccount = await resolveSkattekontoAccount(supabase, companyId)
+    } catch {
+      // No suggestion beats one on the wrong account.
+      return null
+    }
+  }
   const result = buildMappingResultFromTemplate(
     best.template,
     transaction,
     entityType,
-    vatRegistered
+    vatRegistered,
+    skattekontoAccount,
   )
   // Override the confidence with the auto-match confidence (not 1.0)
   result.confidence = best.confidence

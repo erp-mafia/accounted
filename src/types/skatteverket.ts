@@ -133,13 +133,22 @@ export interface SkattekontoLedgerTwin {
  * a row would record it a second time, so the booking refuses with
  * LEDGER_COVER_EXISTS and names these instead; the rows are linked to the
  * verifikat (with a remainder when the sums differ).
+ *
+ * 'planned_link' is the same refusal for a row the ledger plan assigns to one
+ * verifikat (PH 171), whatever its date: that verifikat holds exactly this
+ * row and the other rows in `event_ids`, and the reconciliation proposes the
+ * link. `through_date` is then the latest date of the link.
  */
 export interface SkattekontoLedgerCoverInfo {
+  /** The skattekonto account the covering verifikat are on: 1630, or 2012 for an enskild firma that runs it there. */
+  account_number: string
   through_date: string
-  kind: 'events_equal' | 'ledger_agrees'
-  /** Open rows up to through_date, this one included. */
+  kind: 'events_equal' | 'ledger_agrees' | 'planned_link'
+  /** Open rows up to through_date, this one included ('planned_link': the rows of the link). */
   event_count: number
   event_total: number
+  /** 'planned_link' only: every row of the link, this one included. */
+  event_ids?: string[]
   /** The covering verifikat, largest open amount first (at most 5). */
   entries: Array<SkattekontoLedgerTwin & { open_amount: number }>
   entry_count: number

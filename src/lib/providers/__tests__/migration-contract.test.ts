@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   MIGRATION_RESOURCES, isTransientIssueCode, migrationIssueHref, migrationIssueKind, migrationIssueReason,
-  migrationJobErrorMessageKey, migrationRefusalMessageKey, migrationRefusals,
+  migrationJobErrorMessageKey, migrationRefusalMessageKey, migrationRefusalMessageValues, migrationRefusals,
+  USER_RIGHT_REFUSAL_MESSAGE_KEY,
 } from '../migration-contract'
 import sv from '@/messages/sv.json'
 import en from '@/messages/en.json'
@@ -40,7 +41,7 @@ describe('migrationJobErrorMessageKey', () => {
   it('points a refusal on a working Bokio connection at the integration token, elsewhere at the user (crm#1081)', () => {
     expect(migrationJobErrorMessageKey({ error_code: 'PROVIDER_RESOURCE_FORBIDDEN', provider: 'bokio' })).toBe('ext_arcim_job_error_refused_token')
     for (const provider of ['fortnox', 'visma', 'briox', 'bjornlunden', 'wint']) {
-      expect(migrationJobErrorMessageKey({ error_code: 'PROVIDER_RESOURCE_FORBIDDEN', provider })).toBe('ext_arcim_job_error_refused')
+      expect(migrationJobErrorMessageKey({ error_code: 'PROVIDER_RESOURCE_FORBIDDEN', provider })).toBe(USER_RIGHT_REFUSAL_MESSAGE_KEY)
     }
   })
 
@@ -58,8 +59,8 @@ describe('refused registers', () => {
     expect(migrationRefusalMessageKey('suppliers', 'license')).toBe('ext_arcim_job_refused_license_purchase')
     expect(migrationRefusalMessageKey('supplierInvoices', 'license')).toBe('ext_arcim_job_refused_license_purchase')
     for (const resource of ['customers', 'suppliers', 'salesInvoices', 'supplierInvoices'] as const) {
-      expect(migrationRefusalMessageKey(resource, 'permission')).toBe('ext_arcim_job_refused_permission')
-      expect(migrationRefusalMessageKey(resource, 'permission', 'fortnox')).toBe('ext_arcim_job_refused_permission')
+      expect(migrationRefusalMessageKey(resource, 'permission')).toBe(USER_RIGHT_REFUSAL_MESSAGE_KEY)
+      expect(migrationRefusalMessageKey(resource, 'permission', 'fortnox')).toBe(USER_RIGHT_REFUSAL_MESSAGE_KEY)
       // A Bokio integration token carries its own read permissions.
       expect(migrationRefusalMessageKey(resource, 'permission', 'bokio')).toBe('ext_arcim_job_refused_token')
     }
@@ -68,7 +69,7 @@ describe('refused registers', () => {
   it('groups the registers one remedy covers, in register order', () => {
     expect(migrationRefusals({ refused_resources: { salesInvoices: 'license', suppliers: 'permission', customers: 'license' } })).toEqual([
       { messageKey: 'ext_arcim_job_refused_license_sales', resources: ['customers', 'salesInvoices'] },
-      { messageKey: 'ext_arcim_job_refused_permission', resources: ['suppliers'] },
+      { messageKey: USER_RIGHT_REFUSAL_MESSAGE_KEY, resources: ['suppliers'] },
     ])
   })
 
@@ -84,8 +85,29 @@ describe('refused registers', () => {
     expect(migrationRefusals({ refused_resources: { customers: 'timeout' } as never })).toEqual([])
   })
 
+  it('names the refused registers in the user-right sentence, in lower case (crm#1014)', () => {
+    const label = (resource: string) => (sv.extensions as Record<string, string>)[`ext_arcim_job_resource_${resource}`]
+    expect(migrationRefusalMessageValues(['suppliers', 'supplierInvoices'], 'Fortnox', label))
+      .toEqual({ provider: 'Fortnox', what: 'leverantörer, leverantörsfakturor' })
+  })
+
+  it('says in both languages that the connecting user decides, and the two ways out', () => {
+    const svText = (sv.extensions as Record<string, string>)[USER_RIGHT_REFUSAL_MESSAGE_KEY]
+    const enText = (en.extensions as Record<string, string>)[USER_RIGHT_REFUSAL_MESSAGE_KEY]
+    for (const text of [svText, enText]) {
+      expect(text).toContain('{provider}')
+      expect(text).toContain('{what}')
+    }
+    expect(svText).toMatch(/användaren som kopplade \{provider\}/)
+    expect(svText).toMatch(/redovisningsbyrå/)
+    expect(svText).toMatch(/en stund/)
+    expect(enText).toMatch(/accounting firm/)
+    expect(enText).toMatch(/for a while/)
+  })
+
   it('has every message it can point at in both languages', () => {
-    const keys = ['ext_arcim_job_refused', ...(['bokio', 'fortnox'] as const).flatMap(provider => [
+    const keys = ['ext_arcim_job_refused', 'ext_arcim_refused_what_part', 'ext_arcim_refused_what_bookkeeping',
+      ...(['bokio', 'fortnox'] as const).flatMap(provider => [
       migrationJobErrorMessageKey({ error_code: 'PROVIDER_RESOURCE_FORBIDDEN', provider }),
       ...(['license', 'permission'] as const)
         .flatMap(reason => (['customers', 'suppliers'] as const).map(resource => migrationRefusalMessageKey(resource, reason, provider))),

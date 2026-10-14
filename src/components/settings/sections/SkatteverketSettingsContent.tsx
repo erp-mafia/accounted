@@ -4,6 +4,7 @@ import { useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { SkatteverketConnectPanel } from '@/components/settings/SkatteverketConnectPanel'
+import { SkattekontoAccountSetting } from '@/components/settings/SkattekontoAccountSetting'
 import { SettingsBackLink, SettingsSectionHeader } from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
 
@@ -11,7 +12,9 @@ import { useToast } from '@/components/ui/use-toast'
  * Kopplingar → Skatteverket: the connection (ombud, BankID consent) on its own
  * page. It sat at the top of Skatt until 2026-09-24; Moms och skatt keeps a
  * row that links here, so the pages that send users to /settings/tax to
- * (re)connect still find it.
+ * (re)connect still find it. Below the connection: the skattekonto's ledger
+ * account (an enskild firma chooses 1630 or 2012), so the choice sits where
+ * the skattekonto is connected.
  */
 export function SkatteverketSettingsContent() {
   const t = useTranslations('settings_skatteverket')
@@ -46,6 +49,7 @@ export function SkatteverketSettingsContent() {
       <SettingsBackLink href="/settings/connections" label={tNav('connections')} />
       <SettingsSectionHeader title={tNav('skatteverket')} intro={tIntro('skatteverket')} />
       <SkatteverketConnectPanel />
+      <SkattekontoAccountSetting />
     </div>
   )
 }

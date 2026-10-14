@@ -1,13 +1,15 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { formatCurrency } from '@/lib/utils'
-import { SKATTEKONTO_ACCOUNT } from './manual-verifikat-prefill'
+import { resolveSkattekontoAccount, type SkattekontoLedgerAccount } from './skattekonto-account'
 
 /**
  * Link semantics for a skattekonto row (core).
  *
- * A link pairs SKV-posted rows with ONE verifikat whose 1630 movement the
- * rows settle on the expected side (positive belopp = money into the
+ * A link pairs SKV-posted rows with ONE verifikat whose movement on the
+ * skattekonto account (1630, or 2012 for an enskild firma that runs it there:
+ * lib/skatteverket/skattekonto-account.ts; "1630" below means that account)
+ * the rows settle on the expected side (positive belopp = money into the
  * skattekonto = debit 1630). Several rows may share one verifikat (one
  * combined AGI line for avdragen skatt + arbetsgivaravgift, or a payment and
  * a debit booked in the same voucher); see groupSettlesEntry for the rule.
@@ -77,10 +79,11 @@ function expectedSide(belopp: number): 'debit' | 'credit' {
 export function entrySettlesAmount(
   lines: EntryForLink['lines'],
   belopp: number,
+  account: SkattekontoLedgerAccount,
 ): { ok: boolean; via: 'line' | 'entry_total' | null } {
   const amount = roundOre(Math.abs(belopp))
   const side = expectedSide(belopp)
-  const onAccount = (lines ?? []).filter((l) => l.account_number === SKATTEKONTO_ACCOUNT)
+  const onAccount = (lines ?? []).filter((l) => l.account_number === account)
   if (onAccount.length === 0) return { ok: false, via: null }
   const single = onAccount.some((l) => {
     const debit = roundOre(Number(l.debit_amount))
@@ -120,9 +123,10 @@ function toOre(value: number | string | null | undefined): number {
 function assignsToLines(
   lines: EntryForLink['lines'],
   belopps: number[],
+  account: SkattekontoLedgerAccount,
 ): boolean {
   const lineOre = (lines ?? [])
-    .filter((l) => l.account_number === SKATTEKONTO_ACCOUNT)
+    .filter((l) => l.account_number === account)
     .map((l) => toOre(l.debit_amount) - toOre(l.credit_amount))
     .filter((v) => v !== 0)
   const events = belopps.map((b) => toOre(b))
@@ -169,15 +173,16 @@ function assignsToLines(
 export function groupSettlesEntry(
   lines: EntryForLink['lines'],
   belopps: number[],
+  account: SkattekontoLedgerAccount,
 ): { ok: boolean; via: SkattekontoSettleVia | null } {
   if (belopps.length === 0) return { ok: false, via: null }
-  if (belopps.length === 1) return entrySettlesAmount(lines, belopps[0])
+  if (belopps.length === 1) return entrySettlesAmount(lines, belopps[0], account)
   const sum = roundOre(belopps.reduce((s, b) => s + Number(b), 0))
   if (sum !== 0) {
-    const bySum = entrySettlesAmount(lines, sum)
+    const bySum = entrySettlesAmount(lines, sum, account)
     if (bySum.ok) return bySum
   }
-  if (assignsToLines(lines, belopps)) return { ok: true, via: 'lines' }
+  if (assignsToLines(lines, belopps, account)) return { ok: true, via: 'lines' }
   return { ok: false, via: null }
 }
 
@@ -186,8 +191,11 @@ export function groupSettlesEntry(
  * all (at least one line with an amount). Ledger sign: debit positive, the
  * same sign as a Skatteverket amount.
  */
-export function skattekontoEntryNet(lines: EntryForLink['lines']): { net: number; hasLine: boolean } {
-  const onAccount = (lines ?? []).filter((l) => l.account_number === SKATTEKONTO_ACCOUNT)
+export function skattekontoEntryNet(
+  lines: EntryForLink['lines'],
+  account: SkattekontoLedgerAccount,
+): { net: number; hasLine: boolean } {
+  const onAccount = (lines ?? []).filter((l) => l.account_number === account)
   const ore = onAccount.reduce((s, l) => s + toOre(l.debit_amount) - toOre(l.credit_amount), 0)
   const hasLine = onAccount.some((l) => toOre(l.debit_amount) !== 0 || toOre(l.credit_amount) !== 0)
   return { net: ore / 100, hasLine }
@@ -225,12 +233,12 @@ export function evaluateSkattekontoLink(
   lines: EntryForLink['lines'],
   linkedBelopps: number[],
   newBelopps: number[],
-  options: { allowRemainder?: boolean } = {},
+  options: { allowRemainder?: boolean; account: SkattekontoLedgerAccount },
 ): SkattekontoLinkEvaluation {
   const all = [...linkedBelopps, ...newBelopps]
-  const { net, hasLine } = skattekontoEntryNet(lines)
+  const { net, hasLine } = skattekontoEntryNet(lines, options.account)
   const remainder = roundOre(net - all.reduce((s, b) => s + Number(b), 0))
-  const settles = newBelopps.length > 0 ? groupSettlesEntry(lines, all) : { ok: false, via: null }
+  const settles = newBelopps.length > 0 ? groupSettlesEntry(lines, all, options.account) : { ok: false, via: null }
   if (settles.ok && settles.via) return { ok: true, via: settles.via, remainder, reason: null }
   if (!hasLine) return { ok: false, via: null, remainder, reason: 'no_account_line' }
   const readable = newBelopps.length > 0 && all.every((b) => Number.isFinite(Number(b)))
@@ -249,11 +257,18 @@ function kr(amount: number): string {
  */
 export function skattekontoLinkRefusal(
   evaluation: SkattekontoLinkEvaluation,
-  facts: { entryNet: number; rowsTotal: number; rowCount: number; alreadyLinked: number },
+  facts: {
+    entryNet: number
+    rowsTotal: number
+    rowCount: number
+    alreadyLinked: number
+    account: SkattekontoLedgerAccount
+  },
 ): { message: string; code: SkattekontoLinkErrorCode } {
+  const account = facts.account
   if (evaluation.reason === 'no_account_line') {
     return {
-      message: 'Verifikatet har ingen rad på 1630 och kan inte kopplas till en händelse på skattekontot.',
+      message: `Verifikatet har ingen rad på ${account} och kan inte kopplas till en händelse på skattekontot.`,
       code: 'INVALID_CANDIDATE',
     }
   }
@@ -261,10 +276,10 @@ export function skattekontoLinkRefusal(
     facts.alreadyLinked > 0
       ? 'Verifikatet är redan kopplat till en annan skattekonto-transaktion.'
       : facts.rowCount > 1
-        ? 'Verifikatets rader på 1630 motsvarar inte summan av de valda händelserna.'
-        : 'Verifikatet saknar en matchande rad på 1630.'
+        ? `Verifikatets rader på ${account} motsvarar inte summan av de valda händelserna.`
+        : `Verifikatet saknar en matchande rad på ${account}.`
   const sums = Number.isFinite(evaluation.remainder)
-    ? ` Verifikatet har ${kr(facts.entryNet)} på 1630 och ${facts.rowCount > 1 ? 'händelserna' : 'händelsen'} är ${kr(facts.rowsTotal)}.` +
+    ? ` Verifikatet har ${kr(facts.entryNet)} på ${account} och ${facts.rowCount > 1 ? 'händelserna' : 'händelsen'} är ${kr(facts.rowsTotal)}.` +
       ` Är det ett samlingsverifikat som täcker fler händelser kan du koppla ändå med allow_remainder: ${kr(evaluation.remainder)} står då kvar på verifikatet under "I bokföringen, saknas hos Skatteverket".`
     : ''
   return { message: `${lead}${sums}`, code: facts.alreadyLinked > 0 ? 'ENTRY_ALREADY_LINKED' : 'INVALID_CANDIDATE' }
@@ -280,6 +295,8 @@ export interface SkattekontoLinkOptions {
    * choice, made with the remainder in view.
    */
   allowRemainder?: boolean
+  /** The company's skattekonto account when the caller resolved it; read here otherwise. */
+  account?: SkattekontoLedgerAccount
 }
 
 /** Rows already linked to an entry, with the amounts the group check needs. */
@@ -352,20 +369,22 @@ export async function linkSkattekontoRow(
   // it when the whole group still settles the 1630 movement (crm#104,
   // crm#128). Otherwise the verifikat is taken, unless the caller links with
   // a remainder (a summarised verifikat, crm#1043).
+  const account = options.account ?? (await resolveSkattekontoAccount(supabase, companyId))
   const linkedRows = await fetchLinkedRows(supabase, companyId, journalEntryId)
   const belopp = Number(row.belopp_skatteverket)
   const settles = evaluateSkattekontoLink(
     entry.lines,
     linkedRows.map((r) => Number(r.belopp_skatteverket)),
     [belopp],
-    options,
+    { allowRemainder: options.allowRemainder, account },
   )
   if (!settles.ok || !settles.via) {
     const refusal = skattekontoLinkRefusal(settles, {
-      entryNet: skattekontoEntryNet(entry.lines).net,
+      entryNet: skattekontoEntryNet(entry.lines, account).net,
       rowsTotal: belopp,
       rowCount: 1,
       alreadyLinked: linkedRows.length,
+      account,
     })
     throw new SkattekontoLinkError(refusal.message, refusal.code)
   }
@@ -547,6 +566,7 @@ export async function linkSkattekontoRows(
     throw new SkattekontoLinkError('Verifikatet är makulerat och kan inte kopplas.', 'INVALID_CANDIDATE')
   }
 
+  const account = options.account ?? (await resolveSkattekontoAccount(supabase, companyId))
   const groupSet = new Set(ids)
   const outside = (await fetchLinkedRows(supabase, companyId, journalEntryId)).filter(
     (r) => !groupSet.has(r.id),
@@ -556,14 +576,15 @@ export async function linkSkattekontoRows(
     entry.lines,
     outside.map((r) => Number(r.belopp_skatteverket)),
     belopps,
-    options,
+    { allowRemainder: options.allowRemainder, account },
   )
   if (!settles.ok || !settles.via) {
     const refusal = skattekontoLinkRefusal(settles, {
-      entryNet: skattekontoEntryNet(entry.lines).net,
+      entryNet: skattekontoEntryNet(entry.lines, account).net,
       rowsTotal: roundOre(belopps.reduce((s, b) => s + b, 0)),
       rowCount: belopps.length,
       alreadyLinked: outside.length,
+      account,
     })
     throw new SkattekontoLinkError(refusal.message, refusal.code)
   }

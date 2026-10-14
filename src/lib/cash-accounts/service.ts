@@ -1249,6 +1249,12 @@ export async function ensureManualCashAccount(
  * connection's accounts are candidates, so a row the caller tied to one bank
  * is never bound to another. Null when that leaves no single answer.
  *
+ * The one rule for every door that creates a transaction without naming an
+ * account: the dashboard's manual form (app/api/transactions), the MCP
+ * create_transactions executor (lib/pending-operations/commit.ts) and an
+ * ingest batch without a settlement account (lib/transactions/ingest.ts: the
+ * v1 ingest and bank-file endpoints).
+ *
  * Every bank-feed and bank-file row is bound to an account at ingest; a row
  * staged by gnubok_create_transactions without ledger_account was stored with
  * cash_account_id NULL (crm#1171). The rule picks what the NULL row already

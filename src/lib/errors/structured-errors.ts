@@ -5765,14 +5765,16 @@ const PROVIDER: Record<string, StructuredErrorEntry> = {
   },
   // The provider refused ONE register while the same access token keeps
   // answering for the rest (Fortnox: "Saknar behörighet för
-  // leverantörsregister.", code 2003275). Never "återanslut" here: the
-  // reconnect re-mints the same grant and meets the same 403.
+  // leverantörsregister.", code 2003275). Reconnecting as the same user
+  // re-mints the same grant and meets the same refusal; Fortnox reads with
+  // the rights of the user who connected, so connecting as a user who has
+  // the right (for example the accounting firm) does help (crm#1014).
   PROVIDER_RESOURCE_FORBIDDEN: {
     httpStatus: 403,
     message_sv:
-      'Leverantören nekade åtkomst till en del av uppgifterna, men anslutningen fungerar. Att återansluta hjälper inte: kontrollera behörigheterna för det registret hos leverantören (i Fortnox användarens rättigheter och licens, i Bokio rättigheterna på integrationstoken) och försök igen.',
+      'Leverantören nekade åtkomst till en del av uppgifterna, men anslutningen fungerar. Att återansluta med samma användare hjälper inte. Fortnox lämnar bara ut det som användaren som kopplade Fortnox själv får se: koppla om och logga in som en användare som har behörigheten, till exempel er redovisningsbyrå, eller ge användaren behörigheten en stund och koppla om. Saknar Fortnox-abonnemanget licensen för registret, aktivera den. I Bokio styrs det av rättigheterna på integrationstoken. Försök sedan igen.',
     message_en:
-      'The provider refused access to part of the data, but the connection itself works. Reconnecting will not help: check that register\'s permissions with the provider (in Fortnox the user rights and licence, in Bokio the integration token rights) and try again.',
+      'The provider refused access to part of the data, but the connection itself works. Reconnecting as the same user will not help. Fortnox only hands out what the user who connected Fortnox may see: reconnect and sign in as a user who has the permission, your accounting firm for example, or give the user the permission for a while and reconnect. If the Fortnox plan lacks the licence for that register, activate it. In Bokio the integration token\'s rights decide. Then try again.',
   },
   PROVIDER_LICENSE_MISSING: {
     httpStatus: 403,
@@ -6574,37 +6576,58 @@ const SKATTEVERKET: Record<string, StructuredErrorEntry> = {
     },
     thrown_message_sv: true,
   },
-  // A skattekonto row whose event a live verifikat already carries on 1630
-  // (typically imported by SIE from the previous system): booking it would
-  // record the event twice. The thrown Swedish text names the verifikat.
+  // The skattekonto's ledger account (lib/skatteverket/skattekonto-account.ts):
+  // 1630 for every form, 2012 (eget kapital, BAS K1) also for an enskild firma.
+  SKATTEKONTO_ACCOUNT_NOT_ALLOWED: {
+    httpStatus: 400,
+    message_sv:
+      'Skattekontot kan föras på 1630 Avräkning för skatter och avgifter, och i en enskild firma också på 2012 i eget kapital. Andra konton går inte.',
+    message_en:
+      'The skattekonto can run on 1630 Avräkning för skatter och avgifter, and in an enskild firma also on 2012 in equity. No other account is allowed.',
+    retryable: false,
+  },
+  // A transfer verifikat between the two skattekonto accounts was asked for,
+  // but the account the company no longer uses holds no balance.
+  SKATTEKONTO_TRANSFER_NOTHING_TO_MOVE: {
+    httpStatus: 409,
+    message_sv: 'Det finns inget saldo kvar på det tidigare skattekontokontot att föra över.',
+    message_en: 'The account the skattekonto ran on before holds no balance to transfer.',
+    retryable: false,
+  },
+  // A skattekonto row whose event a live verifikat already carries on the
+  // skattekonto account (1630, or 2012 for an enskild firma that runs it
+  // there; typically imported by SIE from the previous system): booking it
+  // would record the event twice. The thrown Swedish text names the
+  // verifikat and the account.
   SKATTEKONTO_BOOK_LEDGER_TWIN_EXISTS: {
     httpStatus: 409,
     message_sv:
-      'Händelsen finns redan i bokföringen: ett verifikat innehåller den redan på konto 1630. Koppla raden till verifikatet i stället för att bokföra den en gång till.',
+      'Händelsen finns redan i bokföringen: ett verifikat innehåller den redan på skattekontots konto. Koppla raden till verifikatet i stället för att bokföra den en gång till.',
     message_en:
-      'The event is already in the ledger: a live verifikat carries it on account 1630. Link the row to that verifikat instead of booking it a second time.',
+      'The event is already in the ledger: a live verifikat carries it on the skattekonto account. Link the row to that verifikat instead of booking it a second time.',
     retryable: false,
     remediation: {
       description:
-        'Link the row to the verifikat the message names with gnubok_reconcile_match (account_key "skattekonto", pairs [{ external_ids: [row id, plus any other open rows the verifikat carries with it], journal_entry_ids: [verifikat id] }]). Book it anyway (allow_duplicate / allow_duplicate_ids) only when the user confirms the event really happened twice.',
+        'Link the row to the verifikat the message names with gnubok_reconcile_match (account_key "skattekonto", pairs [{ external_ids: [row id, plus any other open rows the verifikat carries with it], journal_entry_ids: [verifikat id] }]). Book it anyway (allow_duplicate / allow_duplicate_ids, with the reason the user gives in duplicate_reason) only when the user confirms the event really happened twice.',
       tool: 'gnubok_reconcile_match',
     },
     thrown_message_sv: true,
   },
   // Skattekonto rows no single verifikat carries, but that unlinked verifikat
-  // on 1630 already hold in aggregate (one summarised year-end or month-end
-  // verifikat, crm#1043): booking them would record the events twice. The
-  // thrown Swedish text names the verifikat and the date they cover through.
+  // on the skattekonto account already hold in aggregate (one summarised
+  // year-end or month-end verifikat, crm#1043): booking them would record the
+  // events twice. The thrown Swedish text names the verifikat, the account and
+  // the date they cover through.
   SKATTEKONTO_BOOK_LEDGER_COVER_EXISTS: {
     httpStatus: 409,
     message_sv:
-      'Händelsen ser redan ut att vara bokförd: verifikat på konto 1630 som inte är kopplade till någon händelse täcker den redan. Koppla händelserna till verifikatet i stället för att bokföra dem en gång till.',
+      'Händelsen ser redan ut att vara bokförd: verifikat på skattekontots konto som inte är kopplade till någon händelse täcker den redan. Koppla händelserna till verifikatet i stället för att bokföra dem en gång till.',
     message_en:
-      'The event already appears to be booked: verifikat on account 1630 that no Skatteverket row is linked to already cover it. Link the rows to that verifikat instead of booking them a second time.',
+      'The event already appears to be booked: verifikat on the skattekonto account that no Skatteverket row is linked to already cover it. Link the rows to that verifikat instead of booking them a second time.',
     retryable: false,
     remediation: {
       description:
-        'Rows one verifikat holds exactly are already proposed: link them with gnubok_reconcile_match use_proposals: true, dry_run first. Link the other covered rows (covered_by_ledger in gnubok_list_reconciliation_items, account_key "skattekonto") to the unlinked verifikat with gnubok_reconcile_match, at most 50 rows per pair, with allow_remainder: true when the rows do not sum to the verifikat: the rest stays on it as its remainder. Book anyway (allow_duplicate / allow_duplicate_ids) only when the user confirms the event is really missing from the ledger.',
+        'Rows one verifikat holds exactly are already proposed: link them with gnubok_reconcile_match use_proposals: true, dry_run first. Link the other covered rows (covered_by_ledger in gnubok_list_reconciliation_items, account_key "skattekonto") to the unlinked verifikat with gnubok_reconcile_match, at most 50 rows per pair, with allow_remainder: true when the rows do not sum to the verifikat: the rest stays on it as its remainder. Book anyway (allow_duplicate / allow_duplicate_ids, with the reason the user gives in duplicate_reason) only when the user confirms the event is really missing from the ledger.',
       tool: 'gnubok_reconcile_match',
     },
     thrown_message_sv: true,

@@ -47,6 +47,7 @@ import { VAT_TREATMENT_OPTIONS } from './transaction-types'
 import type { TransactionWithInvoice } from './transaction-types'
 import type { VatTreatment, EntityType } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { useSkattekontoAccount } from '@/components/skattekonto/use-skattekonto-account'
 
 interface QuickReviewDialogProps {
   open: boolean
@@ -116,6 +117,9 @@ export default function QuickReviewDialog({
   activateOnBooking = null,
 }: QuickReviewDialogProps) {
   const t = useTranslations('tx_quick_review')
+  // A catalog template's 1630 books the company's skattekonto account
+  // (2012 for an enskild firma that runs it there, PH 175): the preview too.
+  const skattekontoAccount = useSkattekontoAccount()
   const tCat = useTranslations('tx_categories')
   const tJournal = useTranslations('journal_form')
   const tUnderlag = useTranslations('tx_booking_underlag')
@@ -553,7 +557,7 @@ export default function QuickReviewDialog({
 
   // The account this review books to, for the assistant's agree check: a
   // static template's AB account when the company is one.
-  const entityAccounts = resolveTemplateAccountsForEntity(catalogTemplate ?? {}, entityType)
+  const entityAccounts = resolveTemplateAccountsForEntity(catalogTemplate ?? {}, entityType, skattekontoAccount)
   const currentAccount = catalogTemplate
     ? businessAccount({ debit_account: entityAccounts.debitAccount ?? catalogTemplate.debit_account, credit_account: entityAccounts.creditAccount ?? catalogTemplate.credit_account })
     : businessAccount(proposal)

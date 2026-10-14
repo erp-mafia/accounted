@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
   combinedMatchWindow,
@@ -10,6 +10,13 @@ import {
   parseAgiPeriod,
   type SkattekontoMatchCandidate,
 } from '../lib/skattekonto-match'
+
+// The company's skattekonto account (lib/skatteverket/skattekonto-account.ts):
+// 1630 here, what every company resolved to before the setting existed.
+vi.mock('@/lib/skatteverket/skattekonto-account', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/skatteverket/skattekonto-account')>()),
+  resolveSkattekontoAccount: vi.fn(async () => '1630'),
+}))
 
 /**
  * crm#128: an imported AGI voucher books avdragen skatt + arbetsgivaravgift

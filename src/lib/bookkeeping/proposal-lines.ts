@@ -13,6 +13,7 @@ import { buildCurrencyMetadata } from '@/lib/bookkeeping/currency-utils'
 import { roundOre } from '@/lib/money'
 import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
 import { templateAccountForForm } from '@/lib/company/entity-type'
+import { templateSkattekontoAccount, type SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import type { EntityType } from '@/types'
@@ -35,7 +36,9 @@ export interface ProposalLine {
  * Resolve a static template's accounts for the company's entity type: the
  * same substitution buildMappingResultFromTemplate performs before booking.
  * Exposed so the proposal dialog resolves the accounts it shows and hands
- * over, instead of previewing EF accounts to an aktiebolag.
+ * over, instead of previewing EF accounts to an aktiebolag. With the
+ * company's skattekonto account, a template's 1630 becomes that account
+ * (2012 for an enskild firma that runs it there, PH 175), as at booking.
  */
 export function resolveTemplateAccountsForEntity(
   template: {
@@ -45,11 +48,15 @@ export function resolveTemplateAccountsForEntity(
     credit_account_ab?: string
   },
   entityType: EntityType | undefined,
+  skattekontoAccount?: SkattekontoLedgerAccount,
 ): { debitAccount?: string; creditAccount?: string } {
-  if (!entityType) return { debitAccount: template.debit_account, creditAccount: template.credit_account }
+  const forCompany = (a: string | undefined) => (a ? templateSkattekontoAccount(a, skattekontoAccount) : a)
+  if (!entityType) {
+    return { debitAccount: forCompany(template.debit_account), creditAccount: forCompany(template.credit_account) }
+  }
   return {
-    debitAccount: templateAccountForForm(entityType, template.debit_account, template.debit_account_ab),
-    creditAccount: templateAccountForForm(entityType, template.credit_account, template.credit_account_ab),
+    debitAccount: forCompany(templateAccountForForm(entityType, template.debit_account, template.debit_account_ab)),
+    creditAccount: forCompany(templateAccountForForm(entityType, template.credit_account, template.credit_account_ab)),
   }
 }
 

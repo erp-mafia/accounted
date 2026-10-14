@@ -1,6 +1,13 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { describeMatchPairs, PAIR_PREVIEW_MAX_PAIRS, PAIR_PREVIEW_MAX_ROWS } from '../pair-preview'
+
+// The company's skattekonto account (lib/skatteverket/skattekonto-account.ts):
+// 1630 here, what every company resolved to before the setting existed.
+vi.mock('@/lib/skatteverket/skattekonto-account', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/skatteverket/skattekonto-account')>()),
+  resolveSkattekontoAccount: vi.fn(async () => '1630'),
+}))
 
 /**
  * crm#1147: a staged reconciliation_match showed the reviewer a pair count

@@ -27,6 +27,7 @@ import { roundOre } from '@/lib/money'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { StoredSkattekontoTransaction } from '@/types/skatteverket'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import type { SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 
 interface MatchCandidate {
   journal_entry_id: string
@@ -77,12 +78,15 @@ export function SkattekontoMatchDialog({
   open,
   onClose,
   onMatched,
+  skattekontoAccount,
 }: {
   row: StoredSkattekontoTransaction | null
   rows?: StoredSkattekontoTransaction[] | null
   open: boolean
   onClose: () => void
   onMatched: () => void
+  /** The company's skattekonto account (1630, or 2012), as the server reported it. */
+  skattekontoAccount: SkattekontoLedgerAccount
 }) {
   const t = useTranslations('tx_skattekonto_match')
   const { toast } = useToast()
@@ -239,7 +243,7 @@ export function SkattekontoMatchDialog({
 
         {!loading && candidates && candidates.length === 0 && covered && (
           <div className="space-y-2 py-4 text-sm">
-            <p>{t('covered_title', { count: group ? group.length : 1 })}</p>
+            <p>{t('covered_title', { count: group ? group.length : 1, skattekonto: skattekontoAccount })}</p>
             <p className="text-muted-foreground">{t('covered_help', { count: group ? group.length : 1 })}</p>
             <p>
               <Link href={MANUAL_MATCH_HREF} className="underline underline-offset-4" onClick={onClose}>
@@ -251,7 +255,11 @@ export function SkattekontoMatchDialog({
 
         {!loading && candidates && candidates.length === 0 && !covered && (
           <div className="space-y-2 py-4 text-sm">
-            <p>{group ? t('group_no_candidates_title') : t('no_candidates_title')}</p>
+            <p>
+              {group
+                ? t('group_no_candidates_title', { skattekonto: skattekontoAccount })
+                : t('no_candidates_title', { skattekonto: skattekontoAccount })}
+            </p>
             <p className="text-muted-foreground">
               {group
                 ? t.rich('group_no_candidates_help', {
@@ -259,6 +267,7 @@ export function SkattekontoMatchDialog({
                   })
                 : t.rich('no_candidates_help', {
                     strong: (chunks) => <strong>{chunks}</strong>,
+                    skattekonto: skattekontoAccount,
                   })}
             </p>
           </div>
@@ -291,6 +300,7 @@ export function SkattekontoMatchDialog({
                           {t('combined_note', {
                             count: c.combined_with.length,
                             total: formatCurrency(c.combined_total ?? 0),
+                            skattekonto: skattekontoAccount,
                           })}
                           {c.combined_with.map((o) => (
                             <span key={o.id} className="block truncate tabular-nums">
@@ -302,7 +312,7 @@ export function SkattekontoMatchDialog({
                       )}
                       {!!c.joins_linked_count && (
                         <span className="mt-1 block text-xs text-muted-foreground">
-                          {t('joins_linked_note', { count: c.joins_linked_count })}
+                          {t('joins_linked_note', { count: c.joins_linked_count, skattekonto: skattekontoAccount })}
                         </span>
                       )}
                     </TableCell>

@@ -3102,6 +3102,21 @@ function swedbankFileIdSchema(pattern: RegExp, message: string) {
     .optional()
 }
 
+/**
+ * PUT /api/settings/skattekonto-account: the skattekonto's ledger account
+ * (lib/skatteverket/skattekonto-account-service.ts). Which account the form
+ * allows (2012 only for an enskild firma) is the service's rule, not the
+ * schema's, so the refusal names the allowed accounts.
+ */
+export const SetSkattekontoAccountSchema = z.object({
+  account: z.enum(['1630', '2012']),
+})
+
+/** POST /api/settings/skattekonto-account/transfer-draft: the draft's date, today when omitted. */
+export const SkattekontoTransferDraftSchema = z.object({
+  entry_date: saneIsoDate.optional(),
+})
+
 export const UpdateSettingsSchema = z.object({
   entity_type: EntityTypeSchema.optional(),
   company_name: z.string().optional(),

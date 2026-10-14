@@ -77,10 +77,13 @@ function render(data: Preview, locale: 'sv' | 'en' = 'sv', props: Partial<StepPr
   )
 }
 
-/** A wizard string as rendered for a Fortnox connection. */
+/**
+ * A wizard string as rendered for a Fortnox connection. `{what}` only occurs
+ * in the user-right sentence, which the SIE step fills with the bookkeeping.
+ */
 function text(key: Key, locale: 'sv' | 'en' = 'sv'): string {
   const messages = (locale === 'en' ? en : sv).extensions as Record<string, string>
-  return messages[key].replace(/\{provider\}/g, 'Fortnox')
+  return messages[key].replace(/\{provider\}/g, 'Fortnox').replace(/\{what\}/g, messages.ext_arcim_refused_what_bookkeeping)
 }
 
 /** A button's visible text. */
@@ -116,7 +119,7 @@ describe('PreviewStep, a SIE fetch that failed (crm#1118)', () => {
     [
       'a missing permission',
       { code: 'PROVIDER_RESOURCE_FORBIDDEN', reason: 'permission' },
-      'ext_arcim_sie_error_permission',
+      'ext_arcim_refused_user_right',
       'reconnect',
       'ext_arcim_sie_error_file',
     ],
@@ -179,9 +182,9 @@ describe('PreviewStep, a SIE fetch that failed (crm#1118)', () => {
     const html = render(preview({ sieError: { code: 'PROVIDER_RESOURCE_FORBIDDEN', reason: 'permission' } }), 'en')
 
     expect(html).toContain(text('ext_arcim_sie_error_title', 'en'))
-    expect(html).toContain(text('ext_arcim_sie_error_permission', 'en'))
+    expect(html).toContain(text('ext_arcim_refused_user_right', 'en'))
     expect(html).toContain(text('ext_arcim_sie_error_reconnect_action', 'en'))
-    expect(html).not.toContain(text('ext_arcim_sie_error_permission'))
+    expect(html).not.toContain(text('ext_arcim_refused_user_right'))
   })
 
   it('leaves the cause to the error block when a reload of the preview failed', () => {
@@ -258,7 +261,6 @@ describe('PreviewStep error copy', () => {
     const keys = [
       'title',
       'reconnect',
-      'permission',
       'module',
       'license',
       'rate_limited',
@@ -273,6 +275,10 @@ describe('PreviewStep error copy', () => {
     for (const messages of [sv, en]) {
       const extensions = messages.extensions as Record<string, string>
       for (const key of keys) expect(extensions[`ext_arcim_sie_error_${key}`], key).toEqual(expect.any(String))
+      // A permission reads the user-right sentence every refusal shares.
+      for (const key of ['ext_arcim_refused_user_right', 'ext_arcim_refused_what_bookkeeping']) {
+        expect(extensions[key], key).toEqual(expect.any(String))
+      }
     }
   })
 })

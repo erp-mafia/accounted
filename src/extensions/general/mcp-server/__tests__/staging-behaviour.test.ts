@@ -197,6 +197,9 @@ const READ_ONLY_RPCS = new Set([
   // gnubok_undo_sie_import refuses at stage time what the undo RPC would,
   // crm#1022.
   'sie_undo_lock_refusal',
+  // The company's skattekonto account (1630, or 2012 for an enskild firma,
+  // PH 175): STABLE SQL, the skattekonto booking and sign-off previews read it.
+  'company_skattekonto_account',
 ])
 
 /**

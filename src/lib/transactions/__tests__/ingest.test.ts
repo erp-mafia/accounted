@@ -51,6 +51,21 @@ vi.mock('@/lib/invoices/rot-rut-payout-candidates', () => ({
 // survives beforeEach; tests that need a pool override it.
 mockLoadOpenRotRutPayoutRequests.mockResolvedValue([])
 
+// Mocked for the same reason: a batch without a settlement account binds each
+// row to the company's default account (crm#1171). The rule has its own suite
+// (lib/cash-accounts, the MCP door); here only when ingest asks and what it
+// stores. Default: no single account answers, the row stays unbound.
+const mockResolveDefaultCashAccountId = vi.fn()
+vi.mock('@/lib/cash-accounts/service', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/cash-accounts/service')>()),
+  // The mock answers the account's id; the resolver answers the account.
+  resolveDefaultCashAccount: async (...args: unknown[]) => {
+    const id = await mockResolveDefaultCashAccountId(...args)
+    return id ? { id, ledger_account: '1930' } : null
+  },
+}))
+mockResolveDefaultCashAccountId.mockResolvedValue(null)
+
 // Mocked for the same reason: the open bank payment orders are read once per
 // batch, and the settle itself (the booking, the order link) is pinned in
 // lib/payments/orders/__tests__/auto-settle.test.ts. The matcher runs for real.
@@ -315,7 +330,7 @@ describe('ingestTransactions', () => {
     expect(updates['cash_accounts'] ?? []).toHaveLength(0)
   })
 
-  it('inserts cash_account_id null when no settlementAccount is given', async () => {
+  it('inserts cash_account_id null when no settlementAccount is given and no default account answers', async () => {
     const { supabase, enqueue, inserts } = createQueueMockSupabase()
     const raw = makeRaw({ amount: -100 })
     const inserted = makeTransaction({ id: 'tx-1', external_id: raw.external_id })
@@ -324,7 +339,7 @@ describe('ingestTransactions', () => {
     enqueue({ data: [], error: null }) // unbooked map
     enqueue({ data: [], error: null }) // supplier invoices
     enqueue({ data: [], error: null }) // external_id dedup
-    // No cash_accounts lookup: settlementAccount omitted.
+    // No batch cash_accounts lookup: settlementAccount omitted.
     enqueue({ data: inserted, error: null }) // insert
     mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
@@ -332,8 +347,60 @@ describe('ingestTransactions', () => {
 
     expect(result.imported).toBe(1)
     expect(supabase.from).not.toHaveBeenCalledWith('cash_accounts')
+    expect(mockResolveDefaultCashAccountId).toHaveBeenCalledWith(supabase, COMPANY_ID, 'SEK', null)
     const txInserts = inserts['transactions'] ?? []
     expect((txInserts[0] as { cash_account_id?: string | null }).cash_account_id).toBeNull()
+  })
+
+  // crm#1171: the v1 ingest and bank-file endpoints called without a
+  // settlement account stored every row unbound; they now take the default
+  // account in the row's currency, the rule the manual form and MCP use.
+  it('binds each row to the default account of its currency when no settlementAccount is given, read once per currency', async () => {
+    const { supabase, enqueue, inserts } = createQueueMockSupabase()
+    const sek1 = makeRaw({ amount: -100, description: 'Avgift' })
+    const sek2 = makeRaw({ amount: -200, description: 'Hyra' })
+    const eur = makeRaw({ amount: -30, currency: 'eur', description: 'Domain' })
+    mockResolveDefaultCashAccountId.mockImplementation(async (_s: unknown, _c: unknown, currency: string) =>
+      currency === 'SEK' ? 'ca-1930' : 'ca-1932',
+    )
+    mockFetchExchangeRate.mockResolvedValue({ rate: 11.5, date: '2024-06-15' })
+
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({ data: [], error: null }) // unbooked map
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup
+    enqueue({ data: makeTransaction({ id: 'tx-1', amount: -100 }), error: null })
+    enqueue({ data: makeTransaction({ id: 'tx-2', amount: -200 }), error: null })
+    enqueue({ data: makeTransaction({ id: 'tx-3', amount: -30, currency: 'EUR' }), error: null })
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [sek1, sek2, eur])
+
+    expect(result.imported).toBe(3)
+    const bound = (inserts['transactions'] ?? []).map((row) => (row as { cash_account_id: string | null }).cash_account_id)
+    expect(bound).toEqual(['ca-1930', 'ca-1930', 'ca-1932'])
+    expect(mockResolveDefaultCashAccountId.mock.calls.map((call) => call[2])).toEqual(['SEK', 'EUR'])
+    mockResolveDefaultCashAccountId.mockResolvedValue(null)
+  })
+
+  it('never takes the default account when a settlementAccount is named, even one that resolves to no row', async () => {
+    const { supabase, enqueue, inserts } = createQueueMockSupabase()
+    const raw = makeRaw({ amount: -100 })
+    mockResolveDefaultCashAccountId.mockResolvedValue('ca-primary')
+
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({ data: [], error: null }) // unbooked map
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup
+    enqueue({ data: cashAccountRows('ca-1930', '1930'), error: null }) // batch account: no 1580 row
+    enqueue({ data: makeTransaction({ id: 'tx-1', external_id: raw.external_id }), error: null }) // insert
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw], { settlementAccount: '1580' })
+
+    expect(mockResolveDefaultCashAccountId).not.toHaveBeenCalled()
+    expect((inserts['transactions']?.[0] as { cash_account_id?: string | null }).cash_account_id).toBeNull()
+    mockResolveDefaultCashAccountId.mockResolvedValue(null)
   })
 
   // -----------------------------------------------------------------------

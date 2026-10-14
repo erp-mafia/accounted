@@ -278,6 +278,6 @@ describe('dashboard reconciliation routes', () => {
 
     const ign = await ignorePOST(createMockRequest(`/api/reconciliation/accounts/skattekonto/items/${ROW}/ignore`, { method: 'POST', body: { ignored: false } }), p({ accountKey: 'skattekonto', itemId: ROW }))
     expect(ign.status).toBe(200)
-    expect(ignoreMock).toHaveBeenCalledWith(supabase, 'company-1', 'skattekonto', ROW, false)
+    expect(ignoreMock).toHaveBeenCalledWith(supabase, 'company-1', 'skattekonto', ROW, false, 'user-1')
   })
 })

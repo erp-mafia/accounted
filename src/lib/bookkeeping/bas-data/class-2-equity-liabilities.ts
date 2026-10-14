@@ -25,9 +25,13 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
   },
   // 2012 is deliberately absent: the official BAS kontoplan (bas.se, BAS 2026 v2)
   // has no 2012; the enskild firma equity block runs 2010, 2011, 2013, 2017,
-  // 2018, 2019. "Avräkning för skatter och avgifter" as 2012 is a program
-  // convention (Visma, Bokio, Björn Lundén), not standard BAS; owner taxes are
-  // booked as eget uttag on 2013. Verified against the primary source in #1409.
+  // 2018, 2019. "Avräkning för skatter och avgifter (skattekonto)" as 2012 is
+  // the BAS K1 chart and a program convention (Fortnox, Björn Lundén, Bokio),
+  // not BAS 2026; owner taxes are booked as eget uttag on 2013. Verified
+  // against the primary source in #1409. An enskild firma that runs its
+  // skattekonto on 2012 chooses it (company_settings.skattekonto_account,
+  // PH 175) and the account is then added to its chart with the K1 name
+  // (lib/skatteverket/skattekonto-account-service.ts), not from this list.
   {
     account_number: '2013',
     account_name: 'Övriga egna uttag',

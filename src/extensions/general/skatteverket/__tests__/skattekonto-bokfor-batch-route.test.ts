@@ -118,14 +118,14 @@ describe('POST /skattekonto/transaktioner/bokfor-batch', () => {
     )
   })
 
-  it('passes allow_duplicate_ids through as the per-row ledger-twin override', async () => {
+  it('passes allow_duplicate_ids with the reason through as the per-row override', async () => {
     vi.mocked(bokforSkattekontoTransactionsBatch).mockResolvedValue({
       results: [{ id: UUID_A, ok: true }],
       summary: { total: 1, succeeded: 1, failed: 0 },
     })
 
     await findRoute().handler(
-      makeRequest({ ids: [UUID_A, UUID_B], allow_duplicate_ids: [UUID_A] }),
+      makeRequest({ ids: [UUID_A, UUID_B], allow_duplicate_ids: [UUID_A], duplicate_reason: 'Debiterades två gånger' }),
       makeContext(),
     )
     expect(vi.mocked(bokforSkattekontoTransactionsBatch)).toHaveBeenCalledWith(
@@ -133,8 +133,20 @@ describe('POST /skattekonto/transaktioner/bokfor-batch', () => {
       'company-1',
       'user-1',
       [UUID_A, UUID_B],
-      { allowDuplicateIds: [UUID_A] },
+      { allowDuplicateIds: [UUID_A], duplicateReason: 'Debiterades två gånger' },
     )
+  })
+
+  it('refuses allow_duplicate_ids without a reason with 400: the override needs one', async () => {
+    for (const body of [
+      { ids: [UUID_A], allow_duplicate_ids: [UUID_A] },
+      { ids: [UUID_A], allow_duplicate_ids: [UUID_A], duplicate_reason: '   ' },
+    ]) {
+      const res = await findRoute().handler(makeRequest(body), makeContext())
+      expect(res.status).toBe(400)
+      expect((await res.json()).error).toContain('duplicate_reason')
+    }
+    expect(vi.mocked(bokforSkattekontoTransactionsBatch)).not.toHaveBeenCalled()
   })
 
   it('rejects non-uuid allow_duplicate_ids with 400', async () => {
@@ -223,13 +235,21 @@ describe('commitBookSkattekontoRows (approved MCP op): ledger-twin override', ()
     )
   })
 
-  it('passes only overrides for ids in the op', async () => {
+  it('passes only overrides for ids in the op, with the staged reason', async () => {
     await service()({}, 'user-1', 'company-1', {
       ids: [UUID_A, UUID_B],
       allow_duplicate_ids: [UUID_B, 'not-in-this-op'],
+      duplicate_reason: 'Debiterades två gånger',
     })
     expect(vi.mocked(bokforSkattekontoTransactionsBatch)).toHaveBeenCalledWith(
-      {}, 'company-1', 'user-1', [UUID_A, UUID_B], { allowDuplicateIds: [UUID_B] },
+      {}, 'company-1', 'user-1', [UUID_A, UUID_B], { allowDuplicateIds: [UUID_B], duplicateReason: 'Debiterades två gånger' },
+    )
+  })
+
+  it('passes no reason for an op staged before the reason existed: the batch keeps the guard on', async () => {
+    await service()({}, 'user-1', 'company-1', { ids: [UUID_A], allow_duplicate_ids: [UUID_A] })
+    expect(vi.mocked(bokforSkattekontoTransactionsBatch)).toHaveBeenCalledWith(
+      {}, 'company-1', 'user-1', [UUID_A], { allowDuplicateIds: [UUID_A] },
     )
   })
 })

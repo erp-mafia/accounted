@@ -75,7 +75,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; accountKey:
       if (ctx.dryRun) {
         return dryRunPreview({ external_id: itemId, would_set_ignored: ignored }, { requestId: ctx.requestId, log: ctx.log })
       }
-      const result = await setItemIgnored(ctx.supabase, ctx.companyId!, accountKey, itemId, ignored)
+      const result = await setItemIgnored(ctx.supabase, ctx.companyId!, accountKey, itemId, ignored, ctx.userId)
       if (!result) {
         return v1ErrorResponseFromCode('NOT_FOUND', ctx.log, {
           requestId: ctx.requestId,

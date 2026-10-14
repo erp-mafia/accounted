@@ -1,6 +1,7 @@
 import { getTemplateById, type BookingTemplate, type TemplateGroup } from './booking-templates'
 import { isLibraryTemplateId } from './template-library'
 import { resolveTemplateAccountsForEntity } from './proposal-lines'
+import type { SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 import { accountHue, templateGroupHue, type TemplateHue } from './template-group-colors'
 import { getDefaultAccountForCategory, getDefaultVatTreatmentForCategory } from './category-mapping'
 import { REVERSE_CHARGE_TREATMENT_KINDS, type ReverseChargeKind } from './vat-entries'
@@ -335,6 +336,7 @@ export function categoryForAccount(
 export function agentBookingFor(
   p: BookingProposal,
   entityType?: EntityType,
+  skattekontoAccount?: SkattekontoLedgerAccount,
 ): { category: TransactionCategory; account_override: string; vat_treatment: VatTreatment } | null {
   if (p.booking.kind === 'account') {
     return { category: p.booking.category, account_override: p.booking.account, vat_treatment: p.booking.vat_treatment }
@@ -342,7 +344,7 @@ export function agentBookingFor(
   if (p.booking.kind === 'template') {
     const t = getTemplateById(p.booking.template_id)
     if (!t) return null
-    const accounts = resolveTemplateAccountsForEntity(t, entityType)
+    const accounts = resolveTemplateAccountsForEntity(t, entityType, skattekontoAccount)
     const resolved = { debit_account: accounts.debitAccount ?? t.debit_account, credit_account: accounts.creditAccount ?? t.credit_account }
     return { category: p.booking.category, account_override: businessAccount(resolved), vat_treatment: t.vat_treatment ?? 'exempt' }
   }
@@ -374,8 +376,9 @@ function toolVatTreatment(p: BookingProposal, vat: VatTreatment): CategorizeTool
 export function categorizeArgsFor(
   p: BookingProposal,
   entityType?: EntityType,
+  skattekontoAccount?: SkattekontoLedgerAccount,
 ): { category: TransactionCategory; account_override: string; vat_treatment: CategorizeToolVatTreatment; proposal_id: string } | null {
-  const booking = agentBookingFor(p, entityType)
+  const booking = agentBookingFor(p, entityType, skattekontoAccount)
   return booking
     ? { ...booking, vat_treatment: toolVatTreatment(p, booking.vat_treatment), proposal_id: p.template_id }
     : null

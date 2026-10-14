@@ -17,6 +17,7 @@ import { resolveSekAmount } from './currency-utils'
 import { getOutputVatAccount } from './invoice-accounts'
 import { grossVat } from '@/lib/vat/gross-split'
 import { templateAccountForForm } from '@/lib/company/entity-type'
+import { templateSkattekontoAccount, type SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 import { vatTreatmentForRegistration, type VatRegistration } from './vat-registration'
 
 // ============================================================
@@ -2551,7 +2552,13 @@ export function buildMappingResultFromTemplate(
   template: BookingTemplate,
   transaction: Transaction,
   entityType: EntityType,
-  vatRegistered?: VatRegistration
+  vatRegistered?: VatRegistration,
+  /**
+   * The company's skattekonto account (lib/skatteverket/skattekonto-account.ts):
+   * the template's 1630 books on it, 2012 for an enskild firma that runs the
+   * skattekonto there (PH 175). Callers pass it for a template that names 1630.
+   */
+  skattekontoAccount?: SkattekontoLedgerAccount,
 ): MappingResult {
   const isExpense = transaction.amount < 0
   const isBusiness = !template.default_private
@@ -2562,8 +2569,14 @@ export function buildMappingResultFromTemplate(
 
   // Resolve entity-specific accounts (EF base, AB override, förening: base
   // with owner accounts translated to the member settlement account).
-  const debitAccount = templateAccountForForm(entityType, template.debit_account, template.debit_account_ab)!
-  const creditAccount = templateAccountForForm(entityType, template.credit_account, template.credit_account_ab)!
+  const debitAccount = templateSkattekontoAccount(
+    templateAccountForForm(entityType, template.debit_account, template.debit_account_ab)!,
+    skattekontoAccount,
+  )
+  const creditAccount = templateSkattekontoAccount(
+    templateAccountForForm(entityType, template.credit_account, template.credit_account_ab)!,
+    skattekontoAccount,
+  )
 
   // Always work in SEK. For non-SEK transactions, resolve the SEK-equivalent
   // (via amount_sek or amount * exchange_rate); for SEK rows this is a no-op.

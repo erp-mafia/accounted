@@ -60,6 +60,7 @@ import {
   fetchCustomersDirect,
   fetchSuppliersDirect,
   fetchSalesInvoicesDirect,
+  fetchSupplierInvoicesDirect,
   hydrateSalesInvoices,
 } from '@/lib/providers/provider-data-fetcher'
 import { FortnoxApiError } from '@/lib/providers/fortnox/client'
@@ -175,6 +176,21 @@ describe('executeMigration: step error surfacing', () => {
     // The steps after the closed register still ran.
     expect(fetchSalesInvoicesDirect).toHaveBeenCalledTimes(1)
     expect(results.salesInvoices).toBeDefined()
+  })
+
+  it('names a register Fortnox refuses with HTTP 400 for the connecting user, not a bare 400 (crm#1014)', async () => {
+    // The live answer for a Fortnox user who may not see supplier invoices.
+    // It used to land as "Leverantören svarade med ett fel: Fortnox API
+    // error: 400 Bad Request", which says nothing about what to do.
+    ;(fetchCustomersDirect as Mock).mockResolvedValue([])
+    ;(fetchSupplierInvoicesDirect as Mock).mockRejectedValue(new FortnoxApiError('Fortnox API error: 400', 400,
+      '{"ErrorInformation":{"error":1,"message":"Saknar beh\u00f6righet f\u00f6r leverant\u00f6rsfaktura.","code":2002182}}'))
+
+    const results = await executeMigration(baseOptions({ importCustomers: true, importSupplierInvoices: true }))
+
+    expect(results.stepErrors).toEqual([expect.objectContaining({ step: 'supplierInvoices', code: 'PROVIDER_RESOURCE_FORBIDDEN' })])
+    expect(results.stepErrors![0].message).toContain('användaren som kopplade Fortnox')
+    expect(results.stepErrors![0].message).toContain('Saknar behörighet för leverantörsfaktura.')
   })
 
   it('does not treat a step that never called the provider as proof of the grant', async () => {

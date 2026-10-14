@@ -26,6 +26,7 @@ export const SE_EKONOMISK_FORENING: LegalFormProfile = {
     // utbildning, 3004 momsfri försäljning); owner accounts in that column
     // become 2890 because a förening has no owner.
     templateColumn: 'ab',
+    skattekontoAccounts: ['1630'],
   },
   equity: {
     closing: '2099',

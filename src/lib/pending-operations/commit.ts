@@ -6272,17 +6272,20 @@ async function commitBookSkattekontoRows(
   }
   // Rows approved for booking although the ledger already holds a verifikat
   // for the event: the batch op stores allow_duplicate_ids, the single-row op
-  // allow_duplicate. Anything else keeps the ledger-twin guard on.
+  // allow_duplicate, both with the duplicate_reason the verifikat notes
+  // carry. Without a reason the service keeps the guard on.
   const allowDuplicateIds = Array.isArray(params.allow_duplicate_ids)
     ? params.allow_duplicate_ids.filter((v): v is string => typeof v === 'string' && v.length > 0)
     : params.allow_duplicate === true
       ? ids
       : []
+  const duplicateReason = typeof params.duplicate_reason === 'string' ? params.duplicate_reason : null
 
   const services = await getSkattekontoBookingService()
   const result = await services.commitBookSkattekontoRows(supabase, userId, companyId, {
     ids,
     ...(allowDuplicateIds.length > 0 ? { allow_duplicate_ids: allowDuplicateIds } : {}),
+    ...(allowDuplicateIds.length > 0 && duplicateReason ? { duplicate_reason: duplicateReason } : {}),
   })
   if (!result.ok) {
     if (result.recoverable) {

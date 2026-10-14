@@ -1,6 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase, testRoutes } from '@/tests/helpers'
 
+// The company's skattekonto account (lib/skatteverket/skattekonto-account.ts):
+// 1630 here, what every company resolved to before the setting existed.
+vi.mock('@/lib/skatteverket/skattekonto-account', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/skatteverket/skattekonto-account')>()),
+  resolveSkattekontoAccount: vi.fn(async () => '1630'),
+}))
+
 // The ledger cover (rows a summarised verifikat already holds, crm#1043) is
 // the reconciliation bridge's arithmetic, covered in its own tests: stubbed
 // here. Default: the bridge has nothing (no cover), as before.
@@ -81,6 +88,7 @@ function coverFor(...ids: string[]) {
   return {
     ledger_read_failed: false,
     cover: {
+      account_number: '1630',
       through_date: '2026-12-31',
       kind: 'ledger_agrees',
       event_ids: ids,

@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { AttnLine } from '@/components/ui/attn-line'
-import { migrationProgress, migrationIssueKind, migrationJobErrorMessageKey, migrationRefusals, type ProviderMigrationStatus } from '@/lib/providers/migration-contract'
+import { migrationProgress, migrationIssueKind, migrationJobErrorMessageKey, migrationRefusalMessageValues, migrationRefusals, type ProviderMigrationStatus } from '@/lib/providers/migration-contract'
 import ProviderMigrationIssues, { migrationProviderName } from './ProviderMigrationIssues'
 
 const ROOT = '/api/extensions/ext/arcim-migration/migration-jobs'
@@ -101,7 +101,8 @@ export default function ProviderMigrationProgress({ jobId, onResult, onReconnect
           <p>{t('ext_arcim_job_refused', {
             resources: group.resources.map(resource => t(`ext_arcim_job_resource_${resource}`)).join(', '),
           })}</p>
-          <p className="text-muted-foreground">{t(group.messageKey, { provider })}</p>
+          <p className="text-muted-foreground">{t(group.messageKey, migrationRefusalMessageValues(group.resources, provider,
+            resource => t(`ext_arcim_job_resource_${resource}`)))}</p>
         </div>)}
         {/* The job counts skipped records but not why (agent feedback seq 939430). */}
         {status.counts.some(row => row.skipped > 0) && (
@@ -131,7 +132,9 @@ export default function ProviderMigrationProgress({ jobId, onResult, onReconnect
       </div>}
       {needsAttention && !review && <div className="space-y-3">
         <p className="text-sm text-muted-foreground">{t('ext_arcim_job_attention_detail')}</p>
-        {status?.job.error_code && <p className="text-sm">{t(migrationJobErrorMessageKey(status.job), { provider })}</p>}
+        {status?.job.error_code && <p className="text-sm">{t(migrationJobErrorMessageKey(status.job), {
+          provider, what: t('ext_arcim_refused_what_part'),
+        })}</p>}
         {status?.issues.length ? <ProviderMigrationIssues issues={status.issues} provider={status.job.provider}
           total={status.review.total} truncated={status.review.truncated} /> : null}
         {actionFailed === 'retry' && <p className="text-sm text-destructive">{t('ext_arcim_review_retry_failed')}</p>}

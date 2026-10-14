@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
   clusterProbesByWindow,
@@ -7,6 +7,13 @@ import {
   findMatchSuggestionsBulk,
 } from '../lib/skattekonto-match'
 import { findSkattekontoLedgerTwins, ledgerTwinMessage } from '../lib/skattekonto-booking'
+
+// The company's skattekonto account (lib/skatteverket/skattekonto-account.ts):
+// 1630 here, what every company resolved to before the setting existed.
+vi.mock('@/lib/skatteverket/skattekonto-account', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/skatteverket/skattekonto-account')>()),
+  resolveSkattekontoAccount: vi.fn(async () => '1630'),
+}))
 
 /**
  * accounted#1300: a company migrates in by SIE (its 1630 events come along as
@@ -226,7 +233,7 @@ describe('findLedgerTwinCandidates', () => {
     const twins = await findSkattekontoLedgerTwins(supabase as never, COMPANY, [skv('five', -5)])
 
     expect(twins.get('five')?.map((t) => t.journal_entry_id)).toEqual(['imp-5a', 'imp-5b'])
-    const message = ledgerTwinMessage(twins.get('five') ?? [])
+    const message = ledgerTwinMessage(twins.get('five') ?? [], { account: '1630' })
     expect(message).toContain('verifikat A185 (2026-02-01) och verifikat A186 (2026-02-05)')
     expect(message).toContain('Koppla raden till rätt verifikat')
   })
@@ -380,5 +387,41 @@ describe('findMatchSuggestionsBulk: interchangeable identical rows', () => {
       skv('r3', -1, '2026-02-04'),
     ])
     expect(out.size).toBe(0)
+  })
+})
+
+// PH 175: an enskild firma whose imported books run the skattekonto on 2012.
+describe('ledger twins on 2012', () => {
+  it('finds the imported verifikat on 2012 and reads only 2012 lines', async () => {
+    const fskatt: E = { id: 'imp-f', voucher: 12, date: '2026-02-12', lines: [['2012', 3000, 0], ['1930', 0, 3000]] }
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [head(fskatt)] })
+    enqueue({ data: [{ id: 'l-f', journal_entry_id: fskatt.id, debit_amount: 3000, credit_amount: 0 }] })
+    enqueue({ data: [] }) // none linked
+    enqueue({ data: [] }) // open rows on the probes' dates
+    enqueue({ data: [head(fskatt)] }) // storno read: entries
+    enqueue({ data: [{ id: 'l-f2', journal_entry_id: fskatt.id, debit_amount: 3000, credit_amount: 0 }] })
+    enqueue({
+      data: fskatt.lines.map(([account_number, d, c], j) => ({
+        id: `a-${j}`,
+        journal_entry_id: fskatt.id,
+        account_number,
+        debit_amount: d,
+        credit_amount: c,
+      })),
+    })
+
+    const out = await findLedgerTwinCandidates(
+      supabase as never,
+      COMPANY,
+      [skv('pay-in', 3000, '2026-02-13', 'Inbetalning bokförd')],
+      '2012',
+    )
+
+    expect(out.get('pay-in')?.map((c) => c.journal_entry_id)).toEqual(['imp-f'])
+    const accountFilters = findCalls('journal_entry_lines', 'eq').filter(([column]) => column === 'account_number')
+    expect(accountFilters.length).toBeGreaterThan(0)
+    expect(accountFilters.every(([, value]) => value === '2012')).toBe(true)
+    expect(ledgerTwinMessage(out.get('pay-in') ?? [], { account: '2012' })).toContain('på konto 2012')
   })
 })

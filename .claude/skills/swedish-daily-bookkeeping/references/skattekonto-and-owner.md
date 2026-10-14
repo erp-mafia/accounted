@@ -2,7 +2,7 @@
 
 Two of the highest-error bank lines in Swedish day-to-day bookkeeping: the lump payment to Skatteverket, and money moving between the company and the person who owns it. Both look like one simple transfer on the bank statement and are almost never one simple transaction in the ledger.
 
-All account numbers below are verified against **BAS 2026** (the full chart; see §3.2 for the K1 exception). Law is cited inline.
+All account numbers below are verified against **BAS 2026** (the full chart; see §3.2 for the enskild firma alternative on 2012). Law is cited inline.
 
 Route elsewhere for: moms mechanics and rutor → `swedish-vat`; AGI, skattetabeller and förmånsvärdering → `swedish-payroll`; bokslut netting of 2510/2518/2512 → `swedish-year-end-closing`; lön-vs-utdelning optimisation for AB → `swedish-tax-planning`; räntefördelning/expansionsfond for EF → `swedish-ef-skatteplanering`.
 
@@ -49,6 +49,8 @@ That entry is always correct, needs no information beyond the bank statement, an
 | **1650** | Momsfordran | Överskjutande ingående moms at bokslut, if not yet credited. |
 
 Run 1630 all year regardless of sign; reclassify to 2850 only in the bokslut.
+
+An **enskild firma** may instead run the whole skattekonto on **2012** in eget kapital (§3.2). Then read "2012" for "1630" in every entry of §1.3 and §1.8; nothing else changes.
 
 ### 1.3 What lands on the skattekonto, and which account each entry clears
 
@@ -181,6 +183,8 @@ Credit 2018  Övriga egna insättningar
 ```
 
 Everything else on an EF skattekonto: personalskatt (2710), arbetsgivaravgifter (2731), moms (2650), is the *firm's* liability and clears exactly as in §1.3. Only the preliminär-/slutskatt part is private.
+
+A firm that runs the skattekonto on 2012 (§3.2) books the same charge D 2013 / K 2012: 2012 mirrors the saldo at Skatteverket, so every event on the utdrag is booked against it.
 
 If the owner instead pays the preliminärskatt from a private account, nothing is booked in the firm at all.
 
@@ -405,16 +409,20 @@ Which mix is optimal is a planning question, not a bookkeeping one: **AB → `sw
 
 1630, 2850, 2852, 1640, 1650, 1685, 1930, 2010-2019 (and the 2020/2030/2040 delägare series), 2091, 2093, 2098, 2099, 2393, 2510, 2512, 2514, 2518, 2610-series, 2640/2641, 2650, 2710, 2730/2731/2732, 2893, 2898, 7210, 7220, 7389, 7510/7511/7512, 7533, 8314, 8423, 8910, 8920.
 
-### 3.2 The 2012 trap
+### 3.2 Enskild firma: the skattekonto on 1630 or on 2012
 
-Older material books an enskild firma's preliminärskatt to **2012 Avräkning för skatter och avgifter (skattekonto)** under eget kapital. **There is no 2012 in BAS 2026.** The full BAS 2026 chart is published "för alla typer av företag utom de som upprättar förenklat årsbokslut", and its 201x block is 2010, 2011, 2013, 2017, 2018, 2019 only.
+Both practices exist, and a firm's books follow one of them:
 
-2012 belongs to the separate, smaller **BAS-kontoplan för förenklat årsbokslut (K1)**, whose latest published version is the 2018 chart: that chart also numbers egna insättningar differently (2017). So:
+- **1630 Avräkning för skatter och avgifter** (full BAS 2026, this reference's default): the skattekonto is an asset or, at bokslut, a liability (2850); only the owner's own preliminär- and slutskatt goes to eget kapital (2013/2018, §1.8).
+- **2012 Avräkning för skatter och avgifter (skattekonto)** under eget kapital: the whole skattekonto in equity. It is account 2012 in the **BAS-kontoplan för förenklat årsbokslut (K1)** (B10 on the NE-bilaga) and the practice of the common programs for an enskild firma:
+  - Fortnox, *Skattekonto* (fortnox.se/fortnox-foretagsguide/bokforingstips/skattekonto): "Aktiebolag använder konto 1630 och enskild firma konto 2012. Båda kontona heter Avräkning för skatter och avgifter." An enskild firma shares its skattekonto with the owner, so it holds both the firm's and the owner's private taxes.
+  - Björn Lundén, *Bokföra skattekonto* (bjornlunden.com/se/bjornkoll/blogg/bokfora-skattekonto-konteringar-och-exempel/): an enskild firma has no skattekonto of its own; F-skatt and kvarskatt paid with the firm's money are booked against 2012 as an eget uttag (D 2012 / K 1930).
 
-- Full BAS 2026 chart → the EF preliminärskatt goes to **2013 Övriga egna uttag**.
-- K1 förenklat årsbokslut chart → **2012** is available and correct there.
+**There is no 2012 in BAS 2026.** The full chart is published "för alla typer av företag utom de som upprättar förenklat årsbokslut", and its 201x block is 2010, 2011, 2013, 2017, 2018, 2019 only. A firm on the full chart that wants 2012 adds it as an own account; BAS is not legally mandated (`swedish-accounting-compliance`, BAS kontoplan).
 
-Check which chart the company runs before booking. Both roll up to **B10** on the NE-bilaga.
+When the skattekonto runs on 2012 and every event on the utdrag is booked, 2012 mirrors the saldo at Skatteverket exactly as 1630 would: payments D 2012 / K 1930, moms D 2650 / K 2012, AGI D 2710 + D 2731 / K 2012, the owner's preliminärskatt D 2013 / K 2012. Björn Lundén's guide books the payments on 2012 continuously and the firm's own taxes (fastighetsskatt, for example) against 2012 at year-end; in that variant 2012 differs from the saldo during the year and is reconciled against the skattekontoutdrag only after the year-end entries.
+
+Check which account the company's books already use before booking (a 2012 line in imported books is the signal), and keep one account per period: a switch moves the old account's balance with one omföringsverifikat, never by editing posted verifikat. On the NE-bilaga 2012 rolls up to **B10** like 2013; 1630 sits with the övriga fordringar.
 
 ---
 

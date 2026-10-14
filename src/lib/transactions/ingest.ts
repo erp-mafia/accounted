@@ -37,7 +37,7 @@ import { findOrderForDebit, type OrderDebit } from '@/lib/payments/orders/debit-
 import { loadOpenPaymentOrders, PAYMENT_ORDER_MATCH_METHOD, settleOrderWithDebit } from '@/lib/payments/orders/auto-settle'
 import type { PaymentOrderRow } from '@/lib/payments/orders/types'
 import { scheduleCollectionSweep } from '@/lib/collections/sweep-hook'
-import { physicalAccountKey, reenableIfUnused, sameCashAccount } from '@/lib/cash-accounts/service'
+import { physicalAccountKey, reenableIfUnused, resolveDefaultCashAccount, sameCashAccount } from '@/lib/cash-accounts/service'
 import type { Transaction, RawTransaction, IngestResult, IngestOptions, IngestSkipReason, IngestSkippedRow, SupplierInvoice, Currency, ExchangeRate } from '@/types'
 import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
 import { roundOre } from '@/lib/money'
@@ -1209,6 +1209,25 @@ export async function ingestTransactions(
   // The company's momskoder for auto-categorized reverse-charge rows: read
   // once for the whole ingestion, and only if such a row is booked.
   const loadChart = chartVatTreatmentsLoader(supabase, companyId)
+  // A batch that names no settlement account (the v1 ingest and bank-file
+  // endpoints called without one) binds each inserted row to the company's
+  // default account in its currency: the rule the manual form and the MCP
+  // door use (crm#1171). Read once per currency and connection. A named
+  // account that resolves to no row (Stripe's 1580) stays unbound, and the
+  // dedup above still treats the batch as unbound.
+  const defaultCashAccountIds = new Map<string, Promise<string | null>>()
+  const rowCashAccountId = (raw: RawTransaction): Promise<string | null> => {
+    if (options?.settlementAccount) return Promise.resolve(cashAccountId)
+    const currency = (raw.currency || 'SEK').toUpperCase()
+    const connectionId = raw.bank_connection_id || null
+    const key = `${currency}|${connectionId ?? ''}`
+    let pending = defaultCashAccountIds.get(key)
+    if (!pending) {
+      pending = resolveDefaultCashAccount(supabase, companyId, currency, connectionId).then((account) => account?.id ?? null)
+      defaultCashAccountIds.set(key, pending)
+    }
+    return pending
+  }
 
   /**
    * The suggestion passes a stored row gets: the customer invoice match (3),
@@ -1672,7 +1691,7 @@ export async function ingestTransactions(
         company_id: companyId,
         user_id: userId,
         bank_connection_id: raw.bank_connection_id || null,
-        cash_account_id: cashAccountId,
+        cash_account_id: await rowCashAccountId(raw),
         external_id: raw.external_id,
         date: raw.date,
         // Working title: the source description with the trailing channel
