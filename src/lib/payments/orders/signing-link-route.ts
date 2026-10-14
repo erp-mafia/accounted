@@ -44,8 +44,8 @@ export interface SigningLinkRouteContext {
   op: OperationContext
   log: Logger
   requestId: string
-  /** The firmatecknare's typed personnummer with the request's IP and user agent; never the sender's number on file. */
-  signer: (personalNumber: string | null | undefined) => SignerInput
+  /** The firmatecknare's typed personnummer (and Nordea Corporate Netbank logon id, when typed) with the request's IP and user agent; never the sender's number on file. */
+  signer: (personalNumber: string | null | undefined, psuAuthoriserId?: string | null) => SignerInput
   /** 400 PAYMENT_SIGNER_PERSONAL_NUMBER_REQUIRED: a signing call without a typed personnummer. */
   signerRequired: () => NextResponse
   /** This link's page: where a signing on the bank's own page comes back. */
@@ -94,7 +94,7 @@ export function withSigningLinkToken<P extends { token: string }>(operation: str
       op: { supabase: service, companyId: link.company_id, userId: link.created_by, log: linkLog },
       log: linkLog,
       requestId,
-      signer: (personalNumber) => ({ ...signerFromRequest(request, typedPersonalNumber(personalNumber)), lookupOnFile: false }),
+      signer: (personalNumber, psuAuthoriserId) => ({ ...signerFromRequest(request, typedPersonalNumber(personalNumber), psuAuthoriserId), lookupOnFile: false }),
       signerRequired: () => errorResponseFromCode('PAYMENT_SIGNER_PERSONAL_NUMBER_REQUIRED', linkLog, { requestId, reason: 'signing link call without a typed personnummer' }),
       returnPath: signingLinkPath(token),
     }

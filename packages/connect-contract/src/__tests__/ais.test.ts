@@ -29,8 +29,8 @@ const party = {
 }
 
 describe('AIS family', () => {
-  it('is the 2026-10-16 contract under /api/connect/ais with the bank_sync scope', () => {
-    expect(CONTRACT_VERSION).toBe('2026-10-16')
+  it('is the 2026-10-17 contract under /api/connect/ais with the bank_sync scope', () => {
+    expect(CONTRACT_VERSION).toBe('2026-10-17')
     expect(AIS_BASE_PATH).toBe('/api/connect/ais')
     expect(AIS_SCOPE).toBe('bank_sync')
   })
@@ -67,6 +67,18 @@ describe('AIS family', () => {
     expect(aisPartySchema.safeParse({ ...party, orgNumber: '559538-6219' }).success).toBe(false)
     expect(aisPartySchema.safeParse({ ...party, personalNumber: '9001011239' }).success).toBe(false)
     expect(aisCreateConsentRequestSchema.safeParse({ party, accounts: [{ iban: 'SE8050000000052131234567' }] }).success).toBe(true)
+  })
+
+  it('takes the signer\'s Nordea Corporate Netbank logon id (2026-10-17): trimmed, 1 to 64 letters, digits, - or _, or null', () => {
+    const parsed = aisPartySchema.safeParse({ ...party, bic: 'NDEASESS', psuAuthoriserId: '  ab-12_CD  ' })
+    expect(parsed.success && parsed.data.psuAuthoriserId).toBe('ab-12_CD')
+    expect(aisPartySchema.safeParse({ ...party, psuAuthoriserId: null }).success).toBe(true)
+    expect(aisPartySchema.safeParse({ ...party, psuAuthoriserId: 'x'.repeat(64) }).success).toBe(true)
+    expect(aisPartySchema.safeParse({ ...party, psuAuthoriserId: 'x'.repeat(65) }).success).toBe(false)
+    expect(aisPartySchema.safeParse({ ...party, psuAuthoriserId: '' }).success).toBe(false)
+    expect(aisPartySchema.safeParse({ ...party, psuAuthoriserId: 'ab cd' }).success).toBe(false)
+    // A party without it is the previous version's party.
+    expect('psuAuthoriserId' in aisPartySchema.parse(party)).toBe(false)
   })
 
   it('starts a signing in our screen without a return, and on the bank\'s page only with an https returnUrl and a returnState', () => {

@@ -10,6 +10,7 @@
 import { normalizeSignerPersonalNumber, signerPersonalNumberOnFile } from '@/lib/auth/bankid-signer'
 import { storedBatchPsu } from '@/lib/auth/resource-psu'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
+import { psuAuthoriserIdFor } from '@/lib/bank-feed/psu-authoriser'
 import type { PaymentPartyContext } from '@/lib/payments/initiation/provider'
 import { paymentAccountContext, type DebtorSnapshot } from './debtor'
 
@@ -27,6 +28,8 @@ export interface SignerInput {
    * firmatecknare's BankID, and the firmatecknare's number is never kept.
    */
   lookupOnFile?: boolean
+  /** Typed in the signing dialog for Nordea Corporate Netbank; sent with a Nordea signing only, never stored. */
+  psuAuthoriserId?: string | null
 }
 
 /** The company's organisationsnummer as stored: the settings row first, the company row as fallback; null when neither has one. */
@@ -64,6 +67,8 @@ export async function buildPartyContext(
   if (options.requireSigner && !personalNumber) {
     return { ok: false, outcome: { ok: false, code: 'PAYMENT_SIGNER_PERSONAL_NUMBER_REQUIRED' } }
   }
+  const authoriser = psuAuthoriserIdFor(order.debtor_snapshot.bic, signer.psuAuthoriserId)
+  if (!authoriser.ok) return { ok: false, outcome: { ok: false, code: 'VALIDATION_ERROR', details: { field: 'psu_authoriser_id', reason: 'invalid' } } }
 
   return {
     ok: true,
@@ -77,6 +82,7 @@ export async function buildPartyContext(
       signerPersonalNumber: personalNumber,
       psuIpAddress: signer.ipAddress,
       psuUserAgent: signer.userAgent,
+      ...(authoriser.value ? { psuAuthoriserId: authoriser.value } : {}),
     },
   }
 }

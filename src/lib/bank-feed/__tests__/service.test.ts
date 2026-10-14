@@ -792,3 +792,41 @@ describe('disconnectBankFeedConnection', () => {
     expect(await disconnectBankFeedConnection({ ...ctx, supabase: none.supabase }, CONNECTION)).toEqual({ ok: false, code: 'NOT_FOUND' })
   })
 })
+
+describe('startBankFeedConsent at Nordea Corporate Netbank', () => {
+  const NORDEA = { ...BANK, bic: 'NDEASESS', name: 'Nordea', decoupled: true, redirect: true, affiliates: [] }
+  const answers = () => ({
+    ...orgAnswers(),
+    companies: [{ data: { entity_type: 'aktiebolag' }, error: null }],
+    bank_connections: [
+      { data: [], error: null },
+      { data: row({ bic: 'NDEASESS', bank_name: 'Nordea', authorization_id: null }), error: null },
+      { data: null, error: null },
+    ],
+  })
+
+  it('sends the typed logon id in the party of the consent and its BankID start', async () => {
+    const connect = fakeConnect({ bank: vi.fn().mockResolvedValue(NORDEA) })
+    mocks.door.mockResolvedValue({ ok: true, connect })
+    const { supabase } = stub(answers())
+    const result = await startBankFeedConsent({ ...ctx, supabase }, { bic: 'NDEASESS', method: 'qr', signer: { ...signer, psuAuthoriserId: ' corp-user-1 ' }, now: NOW })
+    expect(result.ok).toBe(true)
+    expect(connect.startConsentSigning).toHaveBeenCalledWith('co-1', expect.objectContaining({ party: expect.objectContaining({ bic: 'NDEASESS', psuAuthoriserId: 'corp-user-1' }) }))
+  })
+
+  it('names the missing logon id in the bank\'s words when the bank refuses the start for it', async () => {
+    const connect = fakeConnect({
+      bank: vi.fn().mockResolvedValue(NORDEA),
+      startConsentSigning: vi.fn().mockRejectedValue(new BankFeedRefusedError('refused', { code: 'CONNECTOR_AIS_REFUSED', status: 422, providerCode: 'PSU_AUTHORISER_ID_MISSING' })),
+    })
+    mocks.door.mockResolvedValue({ ok: true, connect })
+    const { supabase } = stub(answers())
+    const sentence = 'Nordea Corporate Netbank behöver ert inloggnings-ID. Fyll i det och försök igen.'
+    expect(await startBankFeedConsent({ ...ctx, supabase }, { bic: 'NDEASESS', method: 'qr', signer, now: NOW })).toEqual({
+      ok: false,
+      code: 'BANK_PROVIDER_REFUSED',
+      details: { provider_code: 'PSU_AUTHORISER_ID_MISSING', provider_text: sentence },
+      messageSv: sentence,
+    })
+  })
+})

@@ -51,6 +51,11 @@ describe('isTwoStepBank, bankSigningApproach and bankSelectable', () => {
     expect(bankSelectable({ decoupled: false, redirect: false })).toBe(false)
     expect(bankSelectable({ decoupled: null, redirect: null })).toBe(true)
   })
+
+  it('signs Svea on its own page now that Connect\'s entry says redirect only (Open Payments support, 2026-10-14)', () => {
+    expect(bankSigningApproach({ decoupled: false, redirect: true })).toBe('redirect')
+    expect(bankSelectable({ decoupled: false, redirect: true })).toBe(true)
+  })
 })
 
 describe('resolveBankByName', () => {

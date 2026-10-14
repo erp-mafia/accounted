@@ -13,6 +13,8 @@ import { cn, formatCurrency } from '@/lib/utils'
 import { BankIdChallengeQr } from './BankIdChallengeQr'
 import { BankIdMark } from '@/components/bankid/BankIdMark'
 import { BankMark } from '@/components/banks/BankMark'
+import { PsuAuthoriserField } from '@/components/bankid/PsuAuthoriserField'
+import { normalizePsuAuthoriserId, takesPsuAuthoriserId } from '@/lib/bank-feed/psu-authoriser'
 import type { PaymentSigningReturn } from '@/lib/payments/orders/return-url'
 import { PAYMENT_ORDER_STATUS_BADGE, PERMANENT_SIGNING_FAILURES } from './payment-order-status'
 import { VerificationStateText } from './VerificationStateText'
@@ -62,9 +64,10 @@ export type SigningFlowStage = 'method' | 'signing' | 'done'
  * verification refusal names the problem and offers no form.
  */
 export interface SigningClient {
-  start(input: { orderIds: string[]; method: SigningMethod; personalNumber: string | null }): Promise<SigningView>
-  restart(input: { batchId: string; method: SigningMethod; personalNumber: string | null }): Promise<SigningView>
-  poll(input: { batchId: string; personalNumber: string | null }, signal?: AbortSignal): Promise<SigningView>
+  /** `psuAuthoriserId`: the Nordea Corporate Netbank logon id, when typed (Nordea only; never stored). */
+  start(input: { orderIds: string[]; method: SigningMethod; personalNumber: string | null; psuAuthoriserId?: string | null }): Promise<SigningView>
+  restart(input: { batchId: string; method: SigningMethod; personalNumber: string | null; psuAuthoriserId?: string | null }): Promise<SigningView>
+  poll(input: { batchId: string; personalNumber: string | null; psuAuthoriserId?: string | null }, signal?: AbortSignal): Promise<SigningView>
   verification?: boolean
 }
 
@@ -121,7 +124,8 @@ function resumedView(batchId: string): SigningView {
 
 /**
  * Signera: one BankID for the selected payments. Three stages:
- *   method:  choose QR or this device (and type a personnummer when none is on file)
+ *   method:  choose QR or this device (and type a personnummer when none is on file;
+ *            at Nordea, optionally the Corporate Netbank logon id beneath it)
  *   signing: the challenge, polled every second; an abandoned signing offers to start again.
  *            A bank that signs on its own page gets one line and one button,
  *            Fortsätt till {bank}; coming back from it (resume), the stage
@@ -150,6 +154,8 @@ export function BankIdSigningFlow({
   const [stage, setStageState] = useState<SigningFlowStage>(resume ? 'signing' : 'method')
   const [method, setMethod] = useState<SigningMethod>(resume ? 'redirect' : 'qr')
   const [personalNumber, setPersonalNumber] = useState(initialPersonalNumber ?? '')
+  const [psuAuthoriserId, setPsuAuthoriserId] = useState('')
+  const [psuAuthoriserIdInvalid, setPsuAuthoriserIdInvalid] = useState(false)
   const [busy, setBusy] = useState(false)
   const [signing, setSigning] = useState<SigningView | null>(resume ? resumedView(resume.batchId) : null)
   const [refusal, setRefusal] = useState<'verification' | 'redirect' | null>(null)
@@ -186,6 +192,20 @@ export function BankIdSigningFlow({
   const currency = orders[0]?.currency ?? 'SEK'
   const needsPersonalNumber = !signerKnown
   const typedNumber = personalNumber.trim() || null
+  // The paying account's bank is known by name here: Nordea gets the optional
+  // Corporate Netbank logon id, sent with each call of this signing, never kept.
+  const asksPsuAuthoriserId = takesPsuAuthoriserId({ name: bankName })
+  const authoriser = asksPsuAuthoriserId ? normalizePsuAuthoriserId(psuAuthoriserId) : null
+  const typedAuthoriser = authoriser?.ok ? authoriser.value : null
+  /** A typed logon id the bank could not take: flagged before anything is sent. */
+  function authoriserRefused(): boolean {
+    const refused = authoriser !== null && !authoriser.ok
+    setPsuAuthoriserIdInvalid(refused)
+    return refused
+  }
+  const psuAuthoriserField = asksPsuAuthoriserId && (
+    <PsuAuthoriserField value={psuAuthoriserId} onChange={setPsuAuthoriserId} invalid={psuAuthoriserIdInvalid} disabled={busy} />
+  )
 
   const fail = useCallback(
     (title: string, error: unknown) => {
@@ -220,6 +240,7 @@ export function BankIdSigningFlow({
   }
 
   async function begin(chosen: SigningMethod) {
+    if (authoriserRefused()) return
     setMethod(chosen)
     setRefusal(null)
     setReturned(null)
@@ -227,8 +248,8 @@ export function BankIdSigningFlow({
     setBusy(true)
     try {
       const view = pendingBatchId
-        ? await client.restart({ batchId: pendingBatchId, method: chosen, personalNumber: typedNumber })
-        : await client.start({ orderIds: orders.map((o) => o.id), method: chosen, personalNumber: typedNumber })
+        ? await client.restart({ batchId: pendingBatchId, method: chosen, personalNumber: typedNumber, psuAuthoriserId: typedAuthoriser })
+        : await client.start({ orderIds: orders.map((o) => o.id), method: chosen, personalNumber: typedNumber, psuAuthoriserId: typedAuthoriser })
       if (!sentToBank.current) {
         sentToBank.current = true
         onSentToBank?.()
@@ -258,12 +279,13 @@ export function BankIdSigningFlow({
 
   async function restart(chosen: SigningMethod) {
     if (!signing) return
+    if (authoriserRefused()) return
     setMethod(chosen)
     setReturned(null)
     resetSteps()
     setBusy(true)
     try {
-      const view = await client.restart({ batchId: signing.batch_id, method: chosen, personalNumber: typedNumber })
+      const view = await client.restart({ batchId: signing.batch_id, method: chosen, personalNumber: typedNumber, psuAuthoriserId: typedAuthoriser })
       adoptMethod(chosen, view)
       applyView(view)
     } catch (error) {
@@ -339,7 +361,7 @@ export function BankIdSigningFlow({
     let stopped = false
     const tick = async () => {
       try {
-        const view = await client.poll({ batchId, personalNumber: typedNumber }, controller.signal)
+        const view = await client.poll({ batchId, personalNumber: typedNumber, psuAuthoriserId: typedAuthoriser }, controller.signal)
         if (stopped) return
         setSigning((prev) => merge(prev, view))
         if (signingFinished(view)) {
@@ -359,7 +381,7 @@ export function BankIdSigningFlow({
       controller.abort()
       if (timer) clearTimeout(timer)
     }
-  }, [polling, batchId, typedNumber, setStage, client])
+  }, [polling, batchId, typedNumber, typedAuthoriser, setStage, client])
 
   // A new step from the bank: note when it began and that it happened.
   const step = signing?.status === 'awaiting_signature' ? (signing.step ?? null) : null
@@ -414,6 +436,7 @@ export function BankIdSigningFlow({
             />
           </label>
         )}
+        {psuAuthoriserField}
         {refusal === 'verification' && (
           <AttnLine action={client.verification === false ? undefined : verificationAction}>
             {verification && verification.state !== 'not_started' && verification.state !== 'valid' ? (
@@ -511,6 +534,7 @@ export function BankIdSigningFlow({
             <AttnLine>
               {permanent && failure ? (providerCodeText(t, failure) ?? t('signing_failed_permanent', { code: failure })) : (providerCodeText(t, failure) ?? t('signing_failed'))}
             </AttnLine>
+            {!permanent && signing.status === 'created' && psuAuthoriserField && <div className="text-left">{psuAuthoriserField}</div>}
             {!permanent && signing.status === 'created' && redirect && (
               <div className="flex justify-center">
                 <Button onClick={() => restart('redirect')} loading={busy} disabled={busy}>

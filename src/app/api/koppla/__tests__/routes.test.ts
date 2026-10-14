@@ -213,6 +213,20 @@ describe('the signatory token routes act as the sender for the company the link 
     expect((await bankDetails(createMockRequest(`/api/koppla/${token}/banks/nope`), bicParams(token, 'nope'))).status).toBe(400)
   })
 
+  it('POST start, restart and poll carry the firmatecknare\'s own Nordea Corporate Netbank logon id, and no key without one', async () => {
+    const token = freshToken()
+    db.setTable('bank_connect_invites', { data: invite() })
+    await start(post(`/api/koppla/${token}/connections`, { bic: 'NDEASESS', method: 'redirect', personal_number: '199001011239', psu_authoriser_id: 'firmatecknare-1' }), tokenParams(token))
+    expect(service.startBankFeedConsent).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ signer: expect.objectContaining({ psuAuthoriserId: 'firmatecknare-1', lookupOnFile: false }) }))
+    // The second signatory types their own on the restart that starts their BankID.
+    await restart(post(`/api/koppla/${token}/connections/${ID}/restart`, { method: 'redirect', personal_number: '198501011234', psu_authoriser_id: 'second-signer' }), idParams(token, ID))
+    expect(service.restartBankFeedConsent).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ signer: expect.objectContaining({ personalNumber: '198501011234', psuAuthoriserId: 'second-signer' }) }))
+    await poll(post(`/api/koppla/${token}/connections/${ID}/poll`, { personal_number: '198501011234', psu_authoriser_id: 'second-signer' }), idParams(token, ID))
+    expect(service.pollBankFeedConsent).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ signer: expect.objectContaining({ psuAuthoriserId: 'second-signer' }) }))
+    await poll(post(`/api/koppla/${token}/connections/${ID}/poll`, { personal_number: '198501011234' }), idParams(token, ID))
+    expect(service.pollBankFeedConsent.mock.lastCall?.[1].signer).not.toHaveProperty('psuAuthoriserId')
+  })
+
   it('POST poll, restart and sync mirror the session routes, require the typed personnummer and never look the sender\'s up, with a 404 for a malformed connection id', async () => {
     const token = freshToken()
     db.setTable('bank_connect_invites', { data: invite() })

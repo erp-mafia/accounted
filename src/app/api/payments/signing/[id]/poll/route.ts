@@ -11,7 +11,11 @@ import { pollPaymentSigning } from '@/lib/payments/orders/signing'
 // an unknown outcome, never failed (lib/payments/orders/signing.ts).
 export const maxDuration = 300
 
-const PollSchema = z.object({ personal_number: z.string().max(20).nullish() })
+const PollSchema = z.object({
+  personal_number: z.string().max(20).nullish(),
+  /** Nordea Corporate Netbank: the signer's own logon id, when they use it. Sent with a Nordea signing only, never stored. */
+  psu_authoriser_id: z.string().max(100).nullish(),
+})
 
 /**
  * POST /api/payments/signing/:id/poll: where the BankID signing stands. While
@@ -26,7 +30,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     if (!validation.success) return validation.response
     const outcome = await pollPaymentSigning(
       { supabase, companyId, userId: user.id, log },
-      { batchId: id, signer: signerFromRequest(request, validation.data.personal_number) },
+      { batchId: id, signer: signerFromRequest(request, validation.data.personal_number, validation.data.psu_authoriser_id) },
     )
     if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
     if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })

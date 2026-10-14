@@ -7,6 +7,7 @@ import { AttnLine } from '@/components/ui/attn-line'
 import { DialogFooter } from '@/components/ui/dialog'
 import { BankIdChallengeView } from '@/components/bankid/BankIdChallengeView'
 import { BankIdMark } from '@/components/bankid/BankIdMark'
+import { PsuAuthoriserField } from '@/components/bankid/PsuAuthoriserField'
 import { isPermanentConsentFailure } from '@/lib/bank-feed/failure-text'
 import type { SigningApproach } from '../bank-help'
 import { redirectInFlight, type FlowAction, type FlowState } from '../connect-flow-reducer'
@@ -20,6 +21,10 @@ interface BankIdStepProps {
   signerKnown: boolean
   /** The typed personnummer was refused when the person tried to start. */
   personalNumberInvalid: boolean
+  /** The bank is Nordea: the optional Corporate Netbank logon id goes under the personnummer. */
+  asksPsuAuthoriserId: boolean
+  /** The typed logon id was refused when the person tried to start. */
+  psuAuthoriserIdInvalid: boolean
   secondsLeft: number | null
   /** How the chosen bank signs: decides whether the start is our screen, the bank's page, or the person's choice. */
   approach: SigningApproach
@@ -52,13 +57,17 @@ interface BankIdStepProps {
  * link (resume), the second signatory gets the personnummer field and
  * Signera som firmatecknare, which starts their own BankID on the same
  * consent (the bank's partiallyAuthorised: "some but not all mandated
- * authorisations have been performed").
+ * authorisations have been performed"). At Nordea an optional Corporate
+ * Netbank logon id sits under the personnummer wherever a BankID starts
+ * (the second signatory types their own), and beside Försök igen.
  */
 export function BankIdStep({
   state,
   dispatch,
   signerKnown,
   personalNumberInvalid,
+  asksPsuAuthoriserId,
+  psuAuthoriserIdInvalid,
   secondsLeft,
   approach,
   mobile,
@@ -90,6 +99,14 @@ export function BankIdStep({
       </span>
     </label>
   )
+  const psuAuthoriserField = asksPsuAuthoriserId && (
+    <PsuAuthoriserField
+      value={state.psuAuthoriserId}
+      onChange={(value) => dispatch({ type: 'psu_authoriser_id_set', value })}
+      invalid={psuAuthoriserIdInvalid}
+      disabled={state.starting}
+    />
+  )
 
   // Before the start (never for a resumed connection: the bank already holds it).
   if (state.attempt === null && state.mode !== 'resume') {
@@ -100,6 +117,7 @@ export function BankIdStep({
           <BankIdMark className="mx-auto" size={24} />
           <p className="text-center text-[13px] leading-relaxed">{t('redirect_intro', { bank: bankName })}</p>
           {personalNumberField}
+          {psuAuthoriserField}
           {state.startError && <AttnLine>{state.startError}</AttnLine>}
           <DialogFooter>
             {closeButton}
@@ -114,6 +132,7 @@ export function BankIdStep({
       <div className="space-y-4">
         <BankIdMark className="mx-auto" size={24} />
         {personalNumberField}
+        {psuAuthoriserField}
         {state.startError && <AttnLine>{state.startError}</AttnLine>}
         {/* Three ways in can outgrow one line: let the footer wrap instead of clipping the first button. */}
         <DialogFooter className="sm:flex-wrap">
@@ -164,6 +183,7 @@ export function BankIdStep({
         <div className="space-y-3 text-center">
           {/* One attention line: a restart that failed replaces the bank's earlier refusal. */}
           <AttnLine className="text-center">{state.startError ?? failureText}</AttnLine>
+          {!permanent && psuAuthoriserField && <div className="text-left">{psuAuthoriserField}</div>}
           {!permanent && (
             <Button onClick={onRestart} loading={state.starting}>
               {t('try_again')}
@@ -175,6 +195,7 @@ export function BankIdStep({
           <BankIdMark className="mx-auto" size={24} />
           <p className="text-center text-[13px] leading-relaxed">{t('partially_authorised_sign')}</p>
           {personalNumberField}
+          {psuAuthoriserField}
           {state.startError && <AttnLine>{state.startError}</AttnLine>}
           {onCopyReminder && (
             <div className="text-center">

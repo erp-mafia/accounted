@@ -54,6 +54,12 @@ describe('providerCodeText', () => {
     expect(missing).toEqual([])
   })
 
+  it.each(['sv', 'en'] as const)('asks for the Nordea Corporate Netbank logon id when the bank refused a signing for it (%s)', (locale) => {
+    const text = providerCodeText(tFor(locale), 'PSU_AUTHORISER_ID_MISSING')
+    expect(text).toContain('Nordea Corporate Netbank')
+    expect(PERMANENT_SIGNING_FAILURES.has('PSU_AUTHORISER_ID_MISSING')).toBe(false)
+  })
+
   it('answers null for an unknown or missing code, so the caller falls back to its generic sentence', () => {
     const t = tFor('sv')
     expect(providerCodeText(t, 'SOMETHING_NEW')).toBeNull()

@@ -76,6 +76,8 @@ export interface CreateConnectionInput {
   account_context?: AccountContext
   method: ConnectMethod
   personal_number?: string
+  /** Nordea Corporate Netbank: the signer's logon id, when typed (never stored server-side). */
+  psu_authoriser_id?: string
   /** The connection this one takes over from (a switch from Enable Banking, or a renewal). */
   replace_connection_id?: string
   /** Redirect: the page to come back to after signing at the bank. */
@@ -91,6 +93,8 @@ export interface CreateConnectionResult {
 export interface SignerInput {
   method?: ConnectMethod
   personal_number?: string
+  /** Nordea Corporate Netbank: the signer's own logon id, when typed. */
+  psu_authoriser_id?: string
   /** Redirect: the page to come back to after signing at the bank. */
   return_to?: ReturnSurface
 }
@@ -280,8 +284,8 @@ export interface OpenPaymentsApi {
   fetchBankDetails(bic: string, signal?: AbortSignal): Promise<OpenPaymentsBankDetails>
   fetchConnection(connectionId: string, signal?: AbortSignal): Promise<ConnectionView>
   createConnection(input: CreateConnectionInput): Promise<CreateConnectionResult>
-  /** The poll repeats the typed personnummer: the bank wants the PSU named on every call about the consent. */
-  pollConnection(connectionId: string, signal?: AbortSignal, signer?: Pick<SignerInput, 'personal_number'>): Promise<ConnectionPoll>
+  /** The poll repeats the typed personnummer (and a Nordea logon id): the bank wants the PSU named on every call about the consent. */
+  pollConnection(connectionId: string, signal?: AbortSignal, signer?: Pick<SignerInput, 'personal_number' | 'psu_authoriser_id'>): Promise<ConnectionPoll>
   restartConnection(connectionId: string, signer?: SignerInput): Promise<CreateConnectionResult>
   selectAccounts(connectionId: string, accounts: AccountSelection[], signer?: SignerInput): Promise<SelectAccountsResult>
   syncConnection(connectionId: string): Promise<SyncResult>
@@ -318,7 +322,10 @@ export function createOpenPaymentsApi(base: string): OpenPaymentsApi {
     pollConnection(connectionId, signal, signer = {}) {
       return send<ConnectionPoll>(`${connection(connectionId)}/poll`, {
         method: 'POST',
-        body: JSON.stringify(signer.personal_number ? { personal_number: signer.personal_number } : {}),
+        body: JSON.stringify({
+          ...(signer.personal_number ? { personal_number: signer.personal_number } : {}),
+          ...(signer.psu_authoriser_id ? { psu_authoriser_id: signer.psu_authoriser_id } : {}),
+        }),
         signal,
       })
     },
@@ -396,7 +403,7 @@ export function createOpenPaymentsConnection(input: CreateConnectionInput): Prom
 }
 
 /** The poll repeats the typed personnummer: the bank wants the PSU named on every call about the consent. */
-export function pollOpenPaymentsConnection(connectionId: string, signal?: AbortSignal, signer: Pick<SignerInput, 'personal_number'> = {}): Promise<ConnectionPoll> {
+export function pollOpenPaymentsConnection(connectionId: string, signal?: AbortSignal, signer: Pick<SignerInput, 'personal_number' | 'psu_authoriser_id'> = {}): Promise<ConnectionPoll> {
   return sessionOpenPaymentsApi.pollConnection(connectionId, signal, signer)
 }
 

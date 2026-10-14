@@ -18,6 +18,8 @@ const StartSchema = z.object({
   method: z.enum(['same_device', 'qr', 'redirect']),
   /** The signer's personnummer, when they have no BankID login on file. Never stored. */
   personal_number: z.string().max(20).nullish(),
+  /** Nordea Corporate Netbank: the signer's own logon id, when they use it. Sent with a Nordea signing only, never stored. */
+  psu_authoriser_id: z.string().max(100).nullish(),
 })
 
 /**
@@ -38,7 +40,7 @@ export const POST = withRouteContext(
       {
         orderIds: validation.data.order_ids,
         method: validation.data.method,
-        signer: signerFromRequest(request, validation.data.personal_number),
+        signer: signerFromRequest(request, validation.data.personal_number, validation.data.psu_authoriser_id),
         // Where a signing on the bank's own page comes back: the trusted app origin this request came to.
         returnOrigin: await resolveRequestAppOrigin(request, { onLookupFailure: 'canonical' }),
       },

@@ -21,6 +21,8 @@ const StartSchema = z.object({
   /** BankID in our screen (same_device, qr) or on the bank's own page (redirect); a bank that signs only there gets redirect whatever is asked. */
   method: z.enum(['same_device', 'qr', 'redirect']),
   personal_number: z.string().max(20).nullish(),
+  /** Nordea Corporate Netbank: the signer's own logon id, when they use it. Sent with a Nordea signing only, never stored. */
+  psu_authoriser_id: z.string().max(100).nullish(),
 })
 
 /**
@@ -43,7 +45,7 @@ export const POST = withSigningLinkToken<{ token: string }>('payment_signing.sta
   const outcome = await startPaymentSigning(op, {
     orderIds: link.order_ids,
     method: validation.data.method,
-    signer: signer(personalNumber),
+    signer: signer(personalNumber, validation.data.psu_authoriser_id),
     returnOrigin: await resolveRequestAppOrigin(request, { onLookupFailure: 'canonical' }),
     returnPath,
   })

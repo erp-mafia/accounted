@@ -42,9 +42,10 @@ export interface InviteRouteContext {
    * the request's IP and user agent, and never the sender's number on file
    * (lookupOnFile false). Null when nothing was typed: the service then
    * refuses the calls that need a PSU, and routes that always need one answer
-   * signerRequired() first.
+   * signerRequired() first. A Nordea Corporate Netbank logon id the
+   * firmatecknare typed comes along.
    */
-  signer: (personalNumber: string | null | undefined) => BankFeedSignerInput
+  signer: (personalNumber: string | null | undefined, psuAuthoriserId?: string | null) => BankFeedSignerInput
   /** 400 BANK_CONSENT_PERSONAL_NUMBER_REQUIRED: a signatory call without a typed personnummer. */
   signerRequired: () => NextResponse
 }
@@ -97,7 +98,7 @@ export function withInviteToken<P extends { token: string }>(operation: string, 
       op: { supabase: service, companyId: invite.company_id, userId: invite.created_by, log: inviteLog },
       log: inviteLog,
       requestId,
-      signer: (personalNumber) => ({ ...signerFromRequest(request, typedPersonalNumber(personalNumber)), lookupOnFile: false }),
+      signer: (personalNumber, psuAuthoriserId) => ({ ...signerFromRequest(request, typedPersonalNumber(personalNumber), psuAuthoriserId), lookupOnFile: false }),
       signerRequired: () => errorResponseFromCode('BANK_CONSENT_PERSONAL_NUMBER_REQUIRED', inviteLog, { requestId, reason: 'signatory call without a typed personnummer' }),
     }
     try {

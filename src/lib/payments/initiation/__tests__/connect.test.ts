@@ -157,6 +157,12 @@ describe('toConnectorParty: the affiliated bank', () => {
     expect(toConnectorParty(CTX)).not.toHaveProperty('redirectPreferred')
   })
 
+  it('carries the signer\'s Nordea Corporate Netbank logon id when there is one, and no key otherwise', () => {
+    expect(toConnectorParty({ ...CTX, debtorBic: 'NDEASESS', psuAuthoriserId: 'corp-user-1' })).toMatchObject({ debtorBic: 'NDEASESS', psuAuthoriserId: 'corp-user-1' })
+    expect(toConnectorParty(CTX)).not.toHaveProperty('psuAuthoriserId')
+    expect(toConnectorParty({ ...CTX, psuAuthoriserId: null })).not.toHaveProperty('psuAuthoriserId')
+  })
+
   it('sends the affiliated bank on every operation that carries a party', async () => {
     const affiliated = { ...CTX, affiliatedAspspId: '08999' }
     const calls: Array<[string, (p: PaymentInitiationProvider) => Promise<unknown>, unknown]> = [

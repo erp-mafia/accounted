@@ -11,6 +11,8 @@ import { signerFromRequest } from '@/lib/payments/orders/request-signer'
 const RestartSchema = z.object({
   method: z.enum(['same_device', 'qr', 'redirect']).nullish(),
   personal_number: z.string().max(20).nullish(),
+  /** Nordea Corporate Netbank: the signer's own logon id, when they use it. Sent with a Nordea signing only, never stored. */
+  psu_authoriser_id: z.string().max(100).nullish(),
   return_to: z.enum(BANK_CONNECT_RETURN_SURFACES).nullish(),
 })
 
@@ -44,7 +46,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         method: body.method ?? null,
         returnTo: body.return_to ?? null,
         returnOrigin: await returnOriginFor(request),
-        signer: signerFromRequest(request, body.personal_number),
+        signer: signerFromRequest(request, body.personal_number, body.psu_authoriser_id),
       },
     )
     if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)

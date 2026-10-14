@@ -6,6 +6,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { useQrCountdown } from '@/components/bankid/use-qr-countdown'
 import { PaymentsClientError, type CompanyVerification, type StartedVerification } from '@/components/payments/payments-client'
 import { FORM_OUT_STATES } from '@/lib/payments/orders/verification-state'
+import { normalizePsuAuthoriserId, takesPsuAuthoriserId } from '@/lib/bank-feed/psu-authoriser'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useMediaQuery } from '@/lib/hooks/use-media-query'
 import { resolveBankByName, type SigningApproach } from './bank-help'
@@ -90,6 +91,10 @@ export interface BankConnectController {
   dispatch: (action: FlowAction) => void
   signerKnown: boolean
   personalNumberInvalid: boolean
+  /** The chosen bank is Nordea: the optional Corporate Netbank logon id is offered under the personnummer. */
+  asksPsuAuthoriserId: boolean
+  /** The typed logon id was refused when the person tried to start. */
+  psuAuthoriserIdInvalid: boolean
   paymentsBusy: VerificationStartKind | null
   /** The QR's 30 seconds, counted from the bank's step; null when no QR is on screen. */
   secondsLeft: number | null
@@ -135,6 +140,7 @@ export function useBankConnectController({ session, backend, banks, banksFailed,
   const [state, dispatch] = useReducer(flowReducer, session, (s) => openFlow(s.mode, s.options))
   const [signerKnown, setSignerKnown] = useState(false)
   const [personalNumberInvalid, setPersonalNumberInvalid] = useState(false)
+  const [psuAuthoriserIdInvalid, setPsuAuthoriserIdInvalid] = useState(false)
   const [paymentsBusy, setPaymentsBusy] = useState<VerificationStartKind | null>(null)
   const connectedReported = useRef(false)
   const backendRef = useRef(backend)
@@ -239,10 +245,19 @@ export function useBankConnectController({ session, backend, banks, banksFailed,
   const secondSigner = state.pollState === 'partially_authorised'
   const pollAtOnce = state.attempt === null
   const typedPersonalNumber = signerKnown ? null : normalizePersonalNumber(state.personalNumber)
+  // Nordea Corporate Netbank's logon id rides along the same way (Connect puts
+  // it on the authorisation poll only); never kept beyond this page.
+  const asksPsuAuthoriserId = takesPsuAuthoriserId({ bic: state.bank?.bic ?? null })
+  const typedAuthoriser = asksPsuAuthoriserId ? normalizePsuAuthoriserId(state.psuAuthoriserId) : null
+  const typedPsuAuthoriserId = typedAuthoriser?.ok ? typedAuthoriser.value : null
   useEffect(() => {
     if (!polling || !connectionId) return
     return startPollLoop({
-      poll: (signal) => backendRef.current.bank.pollConnection(connectionId, signal, typedPersonalNumber ? { personal_number: typedPersonalNumber } : {}),
+      poll: (signal) =>
+        backendRef.current.bank.pollConnection(connectionId, signal, {
+          ...(typedPersonalNumber ? { personal_number: typedPersonalNumber } : {}),
+          ...(typedPsuAuthoriserId ? { psu_authoriser_id: typedPsuAuthoriserId } : {}),
+        }),
       onResult: (poll) => {
         dispatch({ type: 'polled', poll })
         return poll.state === 'pending' || poll.state === 'partially_authorised'
@@ -250,7 +265,7 @@ export function useBankConnectController({ session, backend, banks, banksFailed,
       intervalMs: secondSigner ? SECOND_SIGNER_POLL_MS : CONSENT_POLL_MS,
       immediate: pollAtOnce,
     })
-  }, [polling, connectionId, secondSigner, pollAtOnce, typedPersonalNumber])
+  }, [polling, connectionId, secondSigner, pollAtOnce, typedPersonalNumber, typedPsuAuthoriserId])
 
   // Svea's second round went through: the connection is live, run the first
   // sync, then read the connection as the routes describe it. A 429 (synced
@@ -349,6 +364,13 @@ export function useBankConnectController({ session, backend, banks, banksFailed,
     }
   }
 
+  /** A typed logon id the bank could not take: flagged before anything starts. */
+  function authoriserRefused(): boolean {
+    const refused = typedAuthoriser !== null && !typedAuthoriser.ok
+    setPsuAuthoriserIdInvalid(refused)
+    return refused
+  }
+
   async function start(method: ConnectMethod) {
     if (!state.bank) return
     let personalNumber: string | undefined
@@ -361,6 +383,7 @@ export function useBankConnectController({ session, backend, banks, banksFailed,
       personalNumber = normalized
     }
     setPersonalNumberInvalid(false)
+    if (authoriserRefused()) return
     dispatch({ type: 'method_set', method })
     dispatch({ type: 'start' })
     try {
@@ -370,6 +393,7 @@ export function useBankConnectController({ session, backend, banks, banksFailed,
         account_context: state.context ?? 'corporate',
         method,
         personal_number: personalNumber,
+        ...(typedPsuAuthoriserId ? { psu_authoriser_id: typedPsuAuthoriserId } : {}),
         replace_connection_id: state.replaceConnectionId ?? undefined,
         // Always named when the surface has a page: the server picks the bank's
         // page for a bank that signs only there, whatever was asked for.
@@ -391,12 +415,14 @@ export function useBankConnectController({ session, backend, banks, banksFailed,
     return {
       method,
       ...(typed ? { personal_number: typed } : {}),
+      ...(typedPsuAuthoriserId ? { psu_authoriser_id: typedPsuAuthoriserId } : {}),
       ...(returnTo ? { return_to: returnTo } : {}),
     }
   }
 
   async function restart(method: ConnectMethod = state.method) {
     if (!connectionId) return
+    if (authoriserRefused()) return
     dispatch({ type: 'start' })
     try {
       const result = await backend.bank.restartConnection(connectionId, signerInput(method))
@@ -408,8 +434,9 @@ export function useBankConnectController({ session, backend, banks, banksFailed,
   }
 
   // The second signatory of a partially authorised consent: their own BankID
-  // on the same consent, with their personnummer when none is on file. The
-  // bank then has both mandated authorisations and the consent turns valid.
+  // on the same consent, with their personnummer when none is on file (and
+  // at Nordea Corporate Netbank their own logon id, typed on their screen).
+  // The bank then has both mandated authorisations and the consent turns valid.
   async function signAsSignatory(method: ConnectMethod) {
     if (!signerKnown && !normalizePersonalNumber(state.personalNumber)) {
       setPersonalNumberInvalid(true)
@@ -472,6 +499,8 @@ export function useBankConnectController({ session, backend, banks, banksFailed,
     dispatch,
     signerKnown,
     personalNumberInvalid,
+    asksPsuAuthoriserId,
+    psuAuthoriserIdInvalid,
     paymentsBusy,
     secondsLeft,
     approach,

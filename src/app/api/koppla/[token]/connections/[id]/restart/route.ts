@@ -11,6 +11,8 @@ import { sessionFailureResponse } from '@/lib/operations/session'
 const RestartSchema = z.object({
   method: z.enum(['same_device', 'qr', 'redirect']).nullish(),
   personal_number: z.string().max(20).nullish(),
+  /** Nordea Corporate Netbank: the signer's own logon id, when they use it. Sent with a Nordea signing only, never stored. */
+  psu_authoriser_id: z.string().max(100).nullish(),
 })
 
 async function readOptionalBody(request: Request): Promise<z.infer<typeof RestartSchema>> {
@@ -42,7 +44,7 @@ export const POST = withInviteToken<{ token: string; id: string }>('bank_feed.re
     returnTo: BANK_CONNECT_SIGNATORY_TARGET,
     returnOrigin: await returnOriginFor(request),
     returnToken: token,
-    signer: signer(personalNumber),
+    signer: signer(personalNumber, body.psu_authoriser_id),
   })
   if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
   if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })

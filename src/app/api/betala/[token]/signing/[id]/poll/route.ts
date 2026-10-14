@@ -11,7 +11,11 @@ import { consumePaymentSigningLink, signingBelongsToLink, SIGNING_LINK_FINAL_BAT
 export const maxDuration = 300
 
 /** The typed personnummer, so the bank sees the PSU on the poll too. On the link it is the only PSU there is. */
-const PollSchema = z.object({ personal_number: z.string().max(20).nullish() })
+const PollSchema = z.object({
+  personal_number: z.string().max(20).nullish(),
+  /** Nordea Corporate Netbank: the signer's own logon id, when they use it. Sent with a Nordea signing only, never stored. */
+  psu_authoriser_id: z.string().max(100).nullish(),
+})
 
 /**
  * POST /api/betala/:token/signing/:id/poll: where the firmatecknare's BankID
@@ -28,7 +32,7 @@ export const POST = withSigningLinkToken<{ token: string; id: string }>('payment
   if (!validation.success) return validation.response
   const personalNumber = typedPersonalNumber(validation.data.personal_number)
   if (!personalNumber) return signerRequired()
-  const outcome = await pollPaymentSigning(op, { batchId: id, signer: signer(personalNumber) })
+  const outcome = await pollPaymentSigning(op, { batchId: id, signer: signer(personalNumber, validation.data.psu_authoriser_id) })
   if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
   if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
   if (!link.consumed_at && SIGNING_LINK_FINAL_BATCH_STATUSES.has(outcome.data.status)) {

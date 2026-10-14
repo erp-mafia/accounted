@@ -122,6 +122,8 @@ export function FlowSteps({ controller, session, banks, banksFailed, soleTrader,
           dispatch={dispatch}
           signerKnown={controller.signerKnown}
           personalNumberInvalid={controller.personalNumberInvalid}
+          asksPsuAuthoriserId={controller.asksPsuAuthoriserId}
+          psuAuthoriserIdInvalid={controller.psuAuthoriserIdInvalid}
           secondsLeft={controller.secondsLeft}
           approach={controller.approach}
           mobile={controller.mobile}

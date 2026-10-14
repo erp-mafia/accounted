@@ -18,6 +18,8 @@ const StartSchema = z.object({
   method: z.enum(['same_device', 'qr', 'redirect']),
   /** The signer's personnummer, when they have none on file. Never stored. */
   personal_number: z.string().max(20).nullish(),
+  /** Nordea Corporate Netbank: the signer's own logon id, when they use it. Sent with a Nordea signing only, never stored. */
+  psu_authoriser_id: z.string().max(100).nullish(),
   /** Switch mode: the Enable Banking connection this one replaces at account selection. */
   replace_connection_id: z.uuid().nullish(),
   /** The entry point the browser comes back to after signing at the bank; the origin is the one this request came to. */
@@ -58,7 +60,7 @@ export const POST = withRouteContext(
         replaceConnectionId: validation.data.replace_connection_id ?? null,
         returnTo,
         returnOrigin: returnTo ? await returnOriginFor(request) : null,
-        signer: signerFromRequest(request, validation.data.personal_number),
+        signer: signerFromRequest(request, validation.data.personal_number, validation.data.psu_authoriser_id),
       },
     )
     if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
