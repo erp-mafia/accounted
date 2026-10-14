@@ -50,6 +50,21 @@ export const DEFAULT_TRANSACTION_HISTORY_MAX_DAYS = 88
 export const MAX_INCREMENTAL_LOOKBACK_DAYS = DEFAULT_TRANSACTION_HISTORY_MAX_DAYS
 /** How long after the consent was created the extended history is served, when the bank does not say (Swedbank: 60). */
 export const DEFAULT_EXTENDED_HISTORY_WINDOW_MINUTES = 60
+/**
+ * The most an ordinary read asks for, whatever the bank details say. PSD2
+ * (RTS article 10a) guarantees 90 days without the person present, and a
+ * bank may refuse more: Länsförsäkringar answers FORMAT_ERROR "Only 90 days
+ * old transactions can be fetched without active session" although Open
+ * Payments lists its transactionHistoryMaxDays as 180. One day of margin.
+ */
+export const UNATTENDED_MAX_LOOKBACK_DAYS = 89
+/**
+ * Days kept off the edge of the extended history a first import asks for.
+ * Länsförsäkringar lists 395 days and refuses a dateFrom exactly 395 days back
+ * ("Max history is limited to 13 months"); counting in UTC against a bank's
+ * Stockholm calendar can also land a day past the edge.
+ */
+export const EXTENDED_HISTORY_MARGIN_DAYS = 3
 const DAY_MS = 24 * 60 * 60 * 1000
 
 export interface FeedConnection {
@@ -109,13 +124,13 @@ export interface BankHistoryLimits {
 
 export const DEFAULT_BANK_HISTORY_LIMITS: BankHistoryLimits = { maxDays: DEFAULT_TRANSACTION_HISTORY_MAX_DAYS, extendedWindowMinutes: DEFAULT_EXTENDED_HISTORY_WINDOW_MINUTES }
 
-/** The bank's history limits from the adapter's cached details; the defaults when the bank or the adapter cannot say. */
+/** The bank's history limits from the adapter's cached details, an ordinary read never past UNATTENDED_MAX_LOOKBACK_DAYS; the defaults when the bank or the adapter cannot say. */
 export async function bankHistoryLimits(connect: BankFeedConnect, companyId: string, bic: string): Promise<BankHistoryLimits> {
   if (typeof connect.getBankDetails !== 'function') return DEFAULT_BANK_HISTORY_LIMITS
   try {
     const bank = await connect.getBankDetails(companyId, bic)
     return {
-      maxDays: bank.transactionHistoryMaxDays && bank.transactionHistoryMaxDays > 0 ? bank.transactionHistoryMaxDays : DEFAULT_TRANSACTION_HISTORY_MAX_DAYS,
+      maxDays: Math.min(UNATTENDED_MAX_LOOKBACK_DAYS, bank.transactionHistoryMaxDays && bank.transactionHistoryMaxDays > 0 ? bank.transactionHistoryMaxDays : DEFAULT_TRANSACTION_HISTORY_MAX_DAYS),
       extendedWindowMinutes: bank.extendedTransactionHistoryAvailableWindowMinutes ?? DEFAULT_EXTENDED_HISTORY_WINDOW_MINUTES,
     }
   } catch {
@@ -298,9 +313,10 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
     // refused or narrowed, so it asks for the ordinary window and says so.
     const extended = extendedHistoryWindowOpen(connection, limits.extendedWindowMinutes, now)
     historyWindow = extended ? 'extended' : 'ordinary'
+    const listedExtended = connection.consent_attempt?.selection?.extended_history_days ?? connection.consent_attempt?.extended_history_days ?? null
     window = initialWindow({
       extendedHistoryDays: extended
-        ? connection.consent_attempt?.selection?.extended_history_days ?? connection.consent_attempt?.extended_history_days ?? null
+        ? listedExtended && listedExtended > EXTENDED_HISTORY_MARGIN_DAYS ? listedExtended - EXTENDED_HISTORY_MARGIN_DAYS : null
         : limits.maxDays,
       lastBookedDate: (latest as { date?: string } | null)?.date ?? null,
     }, now)
