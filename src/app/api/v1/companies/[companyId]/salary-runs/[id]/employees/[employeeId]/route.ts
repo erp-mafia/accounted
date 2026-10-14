@@ -57,6 +57,8 @@ const PayslipDetail = z.object({
   benefit_values: z.number(),
   taxable_income: z.number(),
   tax_withheld: z.number(),
+  /** The employee's requested förhöjt skatteavdrag inside tax_withheld (0 when none). */
+  extra_tax_withheld: z.number(),
   tax_withheld_override: z.number().nullable(),
   net_deductions: z.number(),
   net_salary: z.number(),
@@ -89,7 +91,7 @@ const PayslipDetail = z.object({
 
 const PAYSLIP_DETAIL_COLUMNS =
   'id, salary_run_id, employee_id, salary_type, employment_degree, monthly_salary, hours_worked, ' +
-  'gross_salary, gross_deductions, benefit_values, taxable_income, tax_withheld, tax_withheld_override, ' +
+  'gross_salary, gross_deductions, benefit_values, taxable_income, tax_withheld, extra_tax_withheld, tax_withheld_override, ' +
   'net_deductions, net_salary, avgifter_rate, avgifter_basis, avgifter_amount, avgifter_basis_override, ' +
   'avgifter_amount_override, avgifter_category, override_reason, vacation_accrual, vacation_accrual_avgifter, ' +
   'tax_table_number, tax_column, tax_table_year, sick_days, vab_days, parental_days, vacation_days_taken, ' +

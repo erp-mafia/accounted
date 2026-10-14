@@ -71,7 +71,7 @@ const RunEmployeeSummary = z.object({
 // the masked form; the full value never leaves this projection.
 const RUN_EMPLOYEE_SUMMARY_COLUMNS =
   'id, employee_id, salary_type, employment_degree, monthly_salary, hours_worked, ' +
-  'gross_salary, taxable_income, tax_withheld, tax_withheld_override, net_salary, ' +
+  'gross_salary, taxable_income, tax_withheld, extra_tax_withheld, tax_withheld_override, net_salary, ' +
   'avgifter_basis, avgifter_amount, avgifter_amount_override, avgifter_category, ' +
   'vacation_accrual, vacation_accrual_avgifter, sick_days, vab_days, parental_days, vacation_days_taken, ' +
   'created_at, updated_at, employee:employees(first_name, last_name, personnummer, f_skatt_status)'
@@ -181,6 +181,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
       gross_salary: number
       taxable_income: number
       tax_withheld: number
+      extra_tax_withheld: number
       tax_withheld_override: number | null
       net_salary: number
       avgifter_basis: number

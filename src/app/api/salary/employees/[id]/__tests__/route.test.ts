@@ -22,6 +22,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { JAMKNING_END_REQUIRED, JAMKNING_ROW_INCOMPLETE } from '@/lib/salary/jamkning-rules'
+import { EXTRA_TAX_ONE_FORM } from '@/lib/salary/extra-tax'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
@@ -730,5 +731,94 @@ describe('is_active on PATCH /api/salary/employees/[id] (crm#1133)', () => {
     expect(status).toBe(400)
     expect(body.error).toBe(JAMKNING_END_REQUIRED)
     expect(captured.updates).toEqual({ is_active: true })
+  })
+})
+
+describe('förhöjt skatteavdrag on PATCH /api/salary/employees/[id]', () => {
+  function useRow(existing: Record<string, unknown> | null, updateError: { code: string; message: string } | null = null) {
+    const mock = employeeSupabase(existing as Record<string, unknown>, updateError)
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: mock.supabase })
+    return mock.captured
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireWriteMock.mockResolvedValue({ ok: true })
+  })
+
+  it('401 when unauthenticated', async () => {
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+
+    const response = await PATCH(patchRequest({ extra_tax_percentage: 45 }), params)
+    expect(response.status).toBe(401)
+  })
+
+  it.each([
+    ['both forms at once', { extra_tax_amount: 500, extra_tax_percentage: 45 }],
+    ['fractional kronor', { extra_tax_amount: 500.5 }],
+    ['101 %', { extra_tax_percentage: 101 }],
+    ['0 %', { extra_tax_percentage: 0 }],
+    ['a third decimal', { extra_tax_percentage: 33.333 }],
+  ])('400 for %s, and nothing is written', async (_name, body) => {
+    const captured = useRow({ ...EXISTING_ROW, extra_tax_amount: null, extra_tax_percentage: null })
+
+    const response = await PATCH(patchRequest(body), params)
+
+    expect(response.status).toBe(400)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('400 when one form is sent while the other is stored (merged row)', async () => {
+    const captured = useRow({ ...EXISTING_ROW, extra_tax_amount: 500, extra_tax_percentage: null })
+
+    const response = await PATCH(patchRequest({ extra_tax_percentage: 45 }), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toBe(EXTRA_TAX_ONE_FORM)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('400 with the same sentence when the CHECK constraint catches a concurrent edit', async () => {
+    const captured = useRow(
+      { ...EXISTING_ROW, extra_tax_amount: null, extra_tax_percentage: null },
+      {
+        code: '23514',
+        message: 'new row for relation "employees" violates check constraint "employees_extra_tax_one_form_check"',
+      },
+    )
+
+    const response = await PATCH(patchRequest({ extra_tax_percentage: 45 }), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toBe(EXTRA_TAX_ONE_FORM)
+    expect(captured.updates).toEqual({ extra_tax_percentage: 45 })
+  })
+
+  it('404 when the employee does not exist', async () => {
+    const captured = useRow(null)
+
+    const response = await PATCH(patchRequest({ extra_tax_percentage: 45 }), params)
+
+    expect(response.status).toBe(404)
+    expect(captured.updates).toBeNull()
+  })
+
+  it('200 and switches the form in one PATCH (happy path)', async () => {
+    const captured = useRow({ ...EXISTING_ROW, extra_tax_amount: 500, extra_tax_percentage: null })
+
+    const response = await PATCH(patchRequest({ extra_tax_amount: null, extra_tax_percentage: 45 }), params)
+    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(response)
+
+    expect(status).toBe(200)
+    expect(captured.updates).toEqual({ extra_tax_amount: null, extra_tax_percentage: 45 })
+    expect(body.data.extra_tax_percentage).toBe(45)
+    expect(body.data.extra_tax_amount).toBeNull()
   })
 })

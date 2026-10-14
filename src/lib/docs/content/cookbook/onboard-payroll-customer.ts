@@ -87,7 +87,7 @@ curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/employees" \\
   }'
 \`\`\`
 
-Hourly staff: \`"salary_type": "hourly", "hourly_rate": 210\` and no \`monthly_salary\`; their gross derives from the worked days you register in step 5. Jämkning (\`jamkning_percentage\` with \`valid_from\` and \`valid_to\`), växa-stöd and part-time schedules (\`workdays_per_week\`) are fields on the same record. \`personnummer\` is masked on the list, full on the detail endpoint.
+Hourly staff: \`"salary_type": "hourly", "hourly_rate": 210\` and no \`monthly_salary\`; their gross derives from the worked days you register in step 5. Jämkning (\`jamkning_percentage\` with \`valid_from\` and \`valid_to\`), an extra tax deduction the employee asked for (\`extra_tax_amount\` in kronor per run, or \`extra_tax_percentage\` as a total, one of them), växa-stöd and part-time schedules (\`workdays_per_week\`) are fields on the same record. \`personnummer\` is masked on the list, full on the detail endpoint.
 
 ## 4. Cutover balances (only when you take over mid-year)
 

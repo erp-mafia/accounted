@@ -93,6 +93,17 @@ describe('gnubok_get_employee', () => {
     expect(result.id).toBeUndefined()
   })
 
+  it('returns the requested extra tax in the tax group', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...EMPLOYEE_ROW, extra_tax_amount: null, extra_tax_percentage: 45 } })
+
+    const result = (await getEmployee.execute(
+      { employee_id: EMPLOYEE_ROW.id }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as { tax: Record<string, unknown> }
+
+    expect(result.tax).toMatchObject({ extra_tax_amount: null, extra_tax_percentage: 45 })
+  })
+
   it('throws for an unknown employee', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: null })
@@ -321,6 +332,38 @@ describe('gnubok_get_payslip', () => {
     expect(result.line_items[0].salary_line_item_id).toBe('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee')
     expect(result.line_items[0].id).toBeUndefined()
     expect(JSON.stringify(result)).not.toContain(SAMPLE_PERSONNUMMER)
+  })
+
+  it('reports the requested extra tax in amounts and effective, and drops it from effective under an override', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...SRE_ROW, tax_withheld: 11200, extra_tax_withheld: 3000, net_salary: 23800 } })
+    const result = (await getPayslip.execute(
+      { salary_run_id: 'run-1', employee_id: 'emp-1' },
+      'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as { amounts: Record<string, number>; effective: Record<string, number> }
+    expect(result.amounts).toMatchObject({ tax_withheld: 11200, extra_tax_withheld: 3000 })
+    expect(result.effective).toMatchObject({ tax_withheld: 11200, extra_tax_withheld: 3000 })
+
+    const overridden = createQueuedMockSupabase()
+    overridden.enqueue({
+      data: { ...SRE_ROW, tax_withheld: 11200, extra_tax_withheld: 3000, net_salary: 23800, tax_withheld_override: 9000 },
+    })
+    const withOverride = (await getPayslip.execute(
+      { salary_run_id: 'run-1', employee_id: 'emp-1' },
+      'company-1', 'user-1', overridden.supabase as never, { type: 'api_key' },
+    )) as { amounts: Record<string, number>; effective: Record<string, number> }
+    expect(withOverride.amounts.extra_tax_withheld).toBe(3000)
+    expect(withOverride.effective).toMatchObject({ tax_withheld: 9000, extra_tax_withheld: 0 })
+  })
+
+  it('reads a payslip calculated before the column existed as no extra', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: SRE_ROW })
+    const result = (await getPayslip.execute(
+      { salary_run_id: 'run-1', employee_id: 'emp-1' },
+      'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as { amounts: Record<string, number> }
+    expect(result.amounts.extra_tax_withheld).toBe(0)
   })
 
   it('reports the effective tax and net when a tax override is set (agent feedback seq 911374)', async () => {

@@ -315,6 +315,7 @@ describe('cutover parity: payslip data with a known net', () => {
           "vacationAccrualAvgifter": 1319.74,
         },
         "employmentType": "Anställd",
+        "extraTaxWithheld": 0,
         "grossSalary": 35000,
         "lineItems": [
           {

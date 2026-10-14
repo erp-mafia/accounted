@@ -233,6 +233,35 @@ describe('buildPayslipData: tax table the run used (#3400)', () => {
   })
 })
 
+describe('buildPayslipData: förhöjt skatteavdrag', () => {
+  const company = { name: 'Bolaget AB', org_number: null }
+
+  it('carries the frozen extra next to the total tax', () => {
+    const data = buildPayslipData({ run, sre: sre({ tax_withheld: 11000, extra_tax_withheld: 3000, net_salary: 24000 }), employee, company, audience: EMPLOYER })
+    expect(data.taxWithheld).toBe(11000)
+    expect(data.extraTaxWithheld).toBe(3000)
+    expect(data.netSalary).toBe(24000)
+  })
+
+  it('drops the split under a per-run tax override: the override is one figure', () => {
+    const data = buildPayslipData({
+      run,
+      sre: sre({ tax_withheld: 11000, extra_tax_withheld: 3000, net_salary: 24000, tax_withheld_override: 9000 }),
+      employee,
+      company,
+      audience: EMPLOYER,
+    })
+    expect(data.taxWithheld).toBe(9000)
+    expect(data.extraTaxWithheld).toBe(0)
+    expect(data.netSalary).toBe(26000)
+  })
+
+  it('reads a row calculated before the column existed as no extra', () => {
+    const data = buildPayslipData({ run, sre: sre(), employee, company, audience: EMPLOYER })
+    expect(data.extraTaxWithheld).toBe(0)
+  })
+})
+
 describe('payslipFileName', () => {
   it('builds the period-stamped filename', () => {
     expect(payslipFileName(run, employee)).toBe('lonespec_Exempelsson_Anna_2026-06.pdf')

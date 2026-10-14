@@ -209,6 +209,42 @@ describe('runSalaryCalculation: run totals use the effective figures', () => {
   })
 })
 
+describe('runSalaryCalculation: förhöjt skatteavdrag (SFL 11 kap. 22 §)', () => {
+  beforeEach(() => {
+    vi.mocked(calculateSalary).mockReset()
+  })
+
+  it("passes the employee's request to the engine and freezes the extra on the row", async () => {
+    vi.mocked(calculateSalary).mockReturnValue(
+      engineResult({ taxWithheld: 11772, extraTaxWithheld: 6555, netSalary: 18228 }) as never,
+    )
+    const mock = client([rosterRow({ employee: { ...EMPLOYEE, extra_tax_amount: null, extra_tax_percentage: 45 } })])
+
+    const result = await calculate(mock)
+
+    expect(result.ok).toBe(true)
+    expect(vi.mocked(calculateSalary).mock.calls[0][0]).toMatchObject({
+      extraTaxAmount: null,
+      extraTaxPercentage: 45,
+    })
+    expect(rosterWrite(mock)).toMatchObject({ tax_withheld: 11772, extra_tax_withheld: 6555 })
+    expect(runTotalsWrite(mock)).toMatchObject({ total_tax: 11772, total_net: 18228 })
+  })
+
+  it('reads an employee row without the columns as no request', async () => {
+    vi.mocked(calculateSalary).mockReturnValue(engineResult({ extraTaxWithheld: 0 }) as never)
+    const mock = client([rosterRow()])
+
+    await calculate(mock)
+
+    expect(vi.mocked(calculateSalary).mock.calls[0][0]).toMatchObject({
+      extraTaxAmount: null,
+      extraTaxPercentage: null,
+    })
+    expect(rosterWrite(mock)).toMatchObject({ extra_tax_withheld: 0 })
+  })
+})
+
 describe('runSalaryCalculation: a stale salary_type snapshot (agent feedback seq 869949)', () => {
   beforeEach(() => {
     vi.mocked(calculateSalary).mockReset()

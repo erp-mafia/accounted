@@ -3,7 +3,7 @@ import { tools, deriveToolMeta, isDefaultCatalogTool } from '../server'
 import { isMultiCompanyOnlyTool, projectToolInputSchema } from '../company-routing'
 
 // Ceiling for the catalog a single-company key is served (see the second case).
-const SIMPLE_CATALOG_CEILING = 60_800
+const SIMPLE_CATALOG_CEILING = 60_900
 import { projectToolReferences } from '../tool-namespace'
 
 // Mirror the real tools/list serializer, including the derived staging _meta
@@ -683,7 +683,14 @@ describe('tools/list payload size guard', () => {
     //     dry_run and idempotency_key are STAGING_ARGS_PROPERTIES. Tools that
     //     declared a bare dry_run gain the shared note, those with a longer
     //     one lose theirs: +21. Measured 65 775. Ceiling unchanged.
-    expect(approxTokens).toBeLessThan(65_800)
+    //   * 65.8K to 65.9K (and the single-company catalog 60.8K to 60.9K),
+    //     2026-10-14: förhöjt skatteavdrag per employee (crm#1073, SFL 11
+    //     kap. 22 §). gnubok_create_employee gains extra_tax_amount and
+    //     extra_tax_percentage with one short note each (the percentage is a
+    //     requested TOTAL, which an agent cannot guess), gnubok_update_employee
+    //     the same two as bare nullable types. Main had ~25 tokens of
+    //     headroom. Measured 65 871 (single-company 60 862).
+    expect(approxTokens).toBeLessThan(65_900)
   })
 
   it('serves a single-company key a smaller catalog than the multi-company one', () => {
@@ -735,6 +742,8 @@ describe('tools/list payload size guard', () => {
     // above): measured 60 542. Ceiling unchanged.
     // 2026-10-12, the shared staging arguments (see the case above): measured
     // 60 563. Ceiling unchanged.
+    // 60 800 to 60 900 on 2026-10-14, for the extra tax fields in the 65 900
+    // note above: measured 60 862.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

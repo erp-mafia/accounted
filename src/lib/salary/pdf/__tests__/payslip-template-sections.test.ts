@@ -58,3 +58,19 @@ describe('PayslipPDF optional sections', () => {
     expect(out).toContain('27 000,00')
   }, RENDER_TIMEOUT)
 })
+
+describe('PayslipPDF förhöjt skatteavdrag', () => {
+  it('prints the statutory tax and the requested extra as two rows', async () => {
+    const out = await text(payslip({ taxWithheld: 8000, extraTaxWithheld: 3000 }))
+    expect(out).toContain('Extra skatteavdrag')
+    expect(out).toContain('-5 000,00')
+    expect(out).toContain('-3 000,00')
+    expect(out).not.toContain('-8 000,00')
+  }, RENDER_TIMEOUT)
+
+  it('prints one tax row when nothing extra was withheld', async () => {
+    const out = await text(payslip({ taxWithheld: 8000, extraTaxWithheld: 0 }))
+    expect(out).not.toContain('Extra skatteavdrag')
+    expect(out).toContain('-8 000,00')
+  }, RENDER_TIMEOUT)
+})

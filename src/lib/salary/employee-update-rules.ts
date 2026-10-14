@@ -17,6 +17,8 @@
  *     the patch names vacation_rule or vacation_days_per_year.
  *   - jämkning: only when the patch names a jämkning key (#2058), so a
  *     legacy row with an incomplete beslut stays editable in unrelated ways.
+ *   - förhöjt skatteavdrag (kronor or percentage, never both): only when the
+ *     patch names either key.
  *   - bank details: only when the patch changes one of them, so legacy
  *     free-text bank data stays editable in unrelated ways.
  * The EF-owner rule is not here: it needs the company's entity type, and the
@@ -24,6 +26,7 @@
  */
 
 import { touchesJamkning, validateJamkning, type JamkningFields } from '@/lib/salary/jamkning-rules'
+import { touchesExtraTax, validateExtraTax, type ExtraTaxFields } from '@/lib/salary/extra-tax'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
 
 export interface EmployeeUpdateIssue {
@@ -52,7 +55,7 @@ export function vacationDaysBelowMinimum(rule: unknown, days: unknown): boolean 
 
 /**
  * Every issue with the row an update would store, in a stable order (salary,
- * tax table, Växa-stöd, jämkning, bank). Empty when the update may be written.
+ * tax table, Växa-stöd, jämkning, extra tax, bank). Empty when the update may be written.
  * Keys whose value is undefined count as absent, per the sparse contract.
  */
 export function validateEmployeeUpdate(
@@ -91,6 +94,10 @@ export function validateEmployeeUpdate(
 
   if (touchesJamkning(sent)) {
     for (const issue of validateJamkning(merged as JamkningFields)) issues.push(issue)
+  }
+
+  if (touchesExtraTax(sent)) {
+    for (const issue of validateExtraTax(merged as ExtraTaxFields)) issues.push(issue)
   }
 
   if (changes(existing, sent, 'clearing_number') || changes(existing, sent, 'bank_account_number')) {

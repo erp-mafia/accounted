@@ -94,6 +94,23 @@ export function truncateToWholeKronor(n: number): number {
 }
 
 /**
+ * A percentage of an amount in whole kronor, öretal dropped: how every
+ * percentage-based skatteavdrag is stated (SFF 2011:1261 22 kap. 1 §).
+ * Computed in integer öre and hundredths of a percent: truncating the raw
+ * float product would lose a whole krona when float noise lands an exact
+ * result just below an integer (1000 × 0.007 === 6.999999999999999, so
+ * 0.7 % of 1 000 kr would come out as 6 kr instead of 7 kr). Math.trunc, not
+ * Math.floor: a negative amount (deductions exceeding pay) must not gain an
+ * extra negative krona; the -0 it leaves on small negatives is normalized.
+ */
+export function wholeKronaPercentage(amount: number, percentage: number): number {
+  const amountOre = Math.round(amount * 100)
+  const percentageHundredths = Math.round(percentage * 100)
+  const wholeKronor = Math.trunc((amountOre * percentageHundredths) / 1_000_000)
+  return wholeKronor === 0 ? 0 : wholeKronor
+}
+
+/**
  * Tolerance for comparing two öre-rounded amounts.
  *
  * Half an öre is the strictest meaningful threshold: any difference larger than

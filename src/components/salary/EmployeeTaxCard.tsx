@@ -29,7 +29,17 @@ export interface EmployeeTaxValue {
    * unrelated edits instead of re-sending or wiping it.
    */
   jamkning_touched: boolean
+  /**
+   * Förhöjt skatteavdrag the employee asked for (lib/salary/extra-tax.ts):
+   * whole kronor per run or a requested total percentage, at most one set.
+   */
+  extra_tax_amount: number | null
+  extra_tax_percentage: number | null
+  /** True once the user edited the extra-tax inputs this session (extraTaxPatch). */
+  extra_tax_touched: boolean
 }
+
+type ExtraTaxForm = 'none' | 'amount' | 'percentage'
 
 interface EmployeeTaxCardProps {
   /** Live personnummer (full or masked): drives the column suggestion. */
@@ -94,6 +104,19 @@ export default function EmployeeTaxCard({
   // the schema) must not block the form's native validation on an unrelated
   // edit, and must not be re-sent either (see jamkningPatch).
   const [jamkningTouched, setJamkningTouched] = useState(false)
+  // Förhöjt skatteavdrag: one form at a time, so the switch picks which
+  // column the single input fills and the other is reported as null.
+  const [extraTaxForm, setExtraTaxForm] = useState<ExtraTaxForm>(
+    initial?.extra_tax_amount != null ? 'amount' : initial?.extra_tax_percentage != null ? 'percentage' : 'none'
+  )
+  const [extraTaxInput, setExtraTaxInput] = useState(
+    initial?.extra_tax_amount != null
+      ? String(initial.extra_tax_amount)
+      : initial?.extra_tax_percentage != null
+        ? String(initial.extra_tax_percentage)
+        : ''
+  )
+  const [extraTaxTouched, setExtraTaxTouched] = useState(false)
 
   const requiresTable = fSkatt === 'a_skatt' && !sido
 
@@ -112,6 +135,15 @@ export default function EmployeeTaxCard({
   // native `required` on both dates takes over.
   const jamkningIncomplete =
     !jamkningTouched && jamkningValue !== null && (!jamkningFrom || !jamkningTo)
+
+  const extraTaxValue = (() => {
+    const n = parseFloat(extraTaxInput)
+    return Number.isFinite(n) ? n : null
+  })()
+  // Reported as null outside the A-skatt branch like jämkning; hosts route
+  // the value through extraTaxPatch, which omits the keys when hidden.
+  const extraTaxAmount = requiresTable && extraTaxForm === 'amount' ? extraTaxValue : null
+  const extraTaxPercentage = requiresTable && extraTaxForm === 'percentage' ? extraTaxValue : null
 
   const derivedColumn = useMemo(
     () => deriveTaxColumn(personnummer, incomeYear),
@@ -141,6 +173,9 @@ export default function EmployeeTaxCard({
       jamkning_valid_from: hasJamkning ? jamkningFrom || null : null,
       jamkning_valid_to: hasJamkning ? jamkningTo || null : null,
       jamkning_touched: jamkningTouched,
+      extra_tax_amount: extraTaxAmount,
+      extra_tax_percentage: extraTaxPercentage,
+      extra_tax_touched: extraTaxTouched,
     })
   }, [
     fSkatt,
@@ -154,6 +189,9 @@ export default function EmployeeTaxCard({
     jamkningFrom,
     jamkningTo,
     jamkningTouched,
+    extraTaxAmount,
+    extraTaxPercentage,
+    extraTaxTouched,
   ])
 
   const body = (
@@ -387,6 +425,67 @@ export default function EmployeeTaxCard({
                 )}
               </div>
             )}
+
+            {/* Förhöjt skatteavdrag (SFL 11 kap. 22 §): the employee's own
+                request, on top of the table or the jämkning. Kronor per run
+                or a requested total percentage, never both, so one switch
+                picks the form and one input holds the value. */}
+            <div className="space-y-2">
+              <Label htmlFor="extra_tax_form">
+                <InfoTooltip content={t('tax_extra_tooltip')}>
+                  {t('tax_extra_label')}
+                </InfoTooltip>
+              </Label>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Select
+                  value={extraTaxForm}
+                  onValueChange={(v) => {
+                    setExtraTaxForm(v as ExtraTaxForm)
+                    if (v === 'none') setExtraTaxInput('')
+                    setExtraTaxTouched(true)
+                  }}
+                  disabled={disabled}
+                >
+                  <SelectTrigger id="extra_tax_form">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">{t('tax_extra_form_none')}</SelectItem>
+                    <SelectItem value="amount">{t('tax_extra_form_amount')}</SelectItem>
+                    <SelectItem value="percentage">{t('tax_extra_form_percentage')}</SelectItem>
+                  </SelectContent>
+                </Select>
+                {extraTaxForm !== 'none' && (
+                  <Input
+                    id="extra_tax_value"
+                    aria-label={
+                      extraTaxForm === 'amount' ? t('tax_extra_amount_label') : t('tax_extra_percentage_label')
+                    }
+                    placeholder={
+                      extraTaxForm === 'amount' ? t('tax_extra_amount_label') : t('tax_extra_percentage_label')
+                    }
+                    type="number"
+                    min={extraTaxForm === 'amount' ? '1' : '0.01'}
+                    max={extraTaxForm === 'amount' ? '1000000' : '100'}
+                    step={extraTaxForm === 'amount' ? '1' : '0.01'}
+                    inputMode={extraTaxForm === 'amount' ? 'numeric' : 'decimal'}
+                    value={extraTaxInput}
+                    onChange={(e) => {
+                      setExtraTaxInput(e.target.value)
+                      setExtraTaxTouched(true)
+                    }}
+                    required={extraTaxTouched}
+                    disabled={disabled}
+                  />
+                )}
+              </div>
+              {extraTaxForm !== 'none' && (
+                <p className="text-xs text-muted-foreground">
+                  {extraTaxForm === 'amount' ? t('tax_extra_amount_hint') : t('tax_extra_percentage_hint')}
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">{t('tax_extra_restriction_hint')}</p>
+            </div>
           </>
         ) : (
           <p className="rounded-lg border border-dashed border-input px-3 py-3 text-sm text-muted-foreground">

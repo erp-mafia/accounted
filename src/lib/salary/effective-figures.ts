@@ -13,6 +13,9 @@ import { effectiveNetPayout } from './payment/effective-net'
  * The rules mirror salaryRunDataFromRows (salary-entries.ts), which feeds
  * the booking:
  *  - tax = tax_withheld_override ?? tax_withheld
+ *  - extra tax = the förhöjt skatteavdrag inside that tax
+ *    (extra_tax_withheld), 0 when an override replaced the tax: the
+ *    override is one figure and has no split
  *  - net moves by the same amount the tax override moves it
  *    (effectiveNetPayout, the figure written into the payment file)
  *  - avgifter = avgifter_amount_override ?? avgifter_amount, except for
@@ -27,6 +30,8 @@ import { effectiveNetPayout } from './payment/effective-net'
 export interface EffectiveFiguresInput {
   gross_salary: number
   tax_withheld: number
+  /** Rows calculated before the column existed read as 0. */
+  extra_tax_withheld?: number | null
   tax_withheld_override?: number | null
   net_salary: number
   avgifter_amount: number
@@ -39,6 +44,8 @@ export interface EffectiveFiguresInput {
 export interface EffectiveFigures {
   gross_salary: number
   tax_withheld: number
+  /** The part of tax_withheld that is the requested förhöjt skatteavdrag. */
+  extra_tax_withheld: number
   net_salary: number
   avgifter_amount: number
   vacation_accrual: number
@@ -67,6 +74,7 @@ export function effectiveRow(sre: EffectiveFiguresInput): EffectiveFigures {
   return {
     gross_salary: gross,
     tax_withheld: tax,
+    extra_tax_withheld: taxOverride === null ? Number(sre.extra_tax_withheld) || 0 : 0,
     net_salary: net,
     avgifter_amount: avgifter,
     vacation_accrual: vacationAccrual,

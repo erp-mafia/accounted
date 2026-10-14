@@ -3468,6 +3468,8 @@ describe('UpdateEmployeeSchema clearing optional fields', () => {
     'jamkning_percentage',
     'jamkning_valid_from',
     'jamkning_valid_to',
+    'extra_tax_amount',
+    'extra_tax_percentage',
   ]
 
   it.each(CLEARABLE)('accepts null for %s and keeps it in the parsed patch', (field) => {
