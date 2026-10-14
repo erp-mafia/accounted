@@ -305,6 +305,7 @@ describe('dimension rule policy per source type', () => {
     'vat_settlement',
     'rot_rut_payout',
     'rot_rut_reclaim',
+    'rot_rut_reclassification',
     'expense_payout',
     'stripe_payout',
   ]

@@ -30,6 +30,7 @@ export const CANNOT_CORRECT_NON_POSTED = 'CANNOT_CORRECT_NON_POSTED' as const
 export const CANNOT_EDIT_NON_DRAFT = 'CANNOT_EDIT_NON_DRAFT' as const
 export const CANNOT_CANCEL_NON_DRAFT = 'CANNOT_CANCEL_NON_DRAFT' as const
 export const ENTRY_ALREADY_REVERSED = 'ENTRY_ALREADY_REVERSED' as const
+export const MIGRATED_DEDUCTION_HELD_BY_REQUEST = 'MIGRATED_DEDUCTION_HELD_BY_REQUEST' as const
 export const CURRENCY_REVALUATION_ALREADY_EXISTS = 'CURRENCY_REVALUATION_ALREADY_EXISTS' as const
 export const ASSET_DEPRECIATION_REFUSED = 'ASSET_DEPRECIATION_REFUSED' as const
 export const INVALID_MAPPING_RESULT = 'INVALID_MAPPING_RESULT' as const
@@ -248,6 +249,21 @@ export class EntryAlreadyReversedError extends Error {
   constructor() {
     super('Entry was already reversed by a concurrent operation')
     this.name = 'EntryAlreadyReversedError'
+  }
+}
+
+/**
+ * Raised when the reclassification voucher of a migrated invoice's household
+ * deduction (source_type rot_rut_reclassification) would be reversed while a
+ * begäran made here holds that invoice. The storno would put the deduction
+ * back on 1510 while the begäran still asks Skatteverket for it: the begäran
+ * must be cancelled first (lib/invoices/migrated-deduction-reversal.ts).
+ */
+export class MigratedDeductionHeldByRequestError extends Error {
+  readonly code = MIGRATED_DEDUCTION_HELD_BY_REQUEST
+  constructor(public readonly invoiceId: string) {
+    super('The invoice is held by a ROT/RUT request; cancel the request before reversing')
+    this.name = 'MigratedDeductionHeldByRequestError'
   }
 }
 
@@ -518,6 +534,7 @@ export function isBookkeepingError(err: unknown): boolean {
     err instanceof CannotEditNonDraftError ||
     err instanceof CannotCancelNonDraftError ||
     err instanceof EntryAlreadyReversedError ||
+    err instanceof MigratedDeductionHeldByRequestError ||
     err instanceof CurrencyRevaluationAlreadyExistsError ||
     err instanceof InvalidMappingResultError ||
     err instanceof TransactionMissingSekValueError ||
@@ -724,6 +741,13 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
   if (err instanceof EntryAlreadyReversedError) {
     return NextResponse.json(
       { error: { code: err.code, message: err.message } },
+      { status: 409 }
+    )
+  }
+
+  if (err instanceof MigratedDeductionHeldByRequestError) {
+    return NextResponse.json(
+      { error: { code: err.code, message: err.message, details: { invoiceId: err.invoiceId } } },
       { status: 409 }
     )
   }

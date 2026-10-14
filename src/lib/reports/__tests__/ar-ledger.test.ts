@@ -10,7 +10,7 @@ let calls: Array<{ method: string; args: unknown[] }>
 
 function makeBuilder() {
   const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'lte', 'order', 'range']) {
+  for (const m of ['select', 'eq', 'in', 'or', 'not', 'lte', 'order', 'range']) {
     b[m] = vi.fn().mockImplementation((...args: unknown[]) => {
       calls.push({ method: m, args })
       return b
@@ -723,7 +723,9 @@ describe('generateARLedger: partially paid invoices (feedback seq 817399)', () =
 
     const report = await generateARLedger(supabase, 'company-1')
 
-    expect(invoiceStatusFilter()).toContain('partially_paid')
+    // The live population is filtered with .or() (paid invoices awaiting
+    // Skatteverket join the open ones).
+    expect(calls.find((c) => c.method === 'or')?.args[0]).toContain('partially_paid')
     expect(report.entries).toHaveLength(1)
     expect(report.entries[0].customer_name).toBe('Kunden AB')
     expect(report.entries[0].invoices[0]).toMatchObject({
@@ -1026,5 +1028,173 @@ describe('generateARLedger: a credit note set off against a new invoice (crm#105
 
     expect(report.entries).toEqual([])
     expect(report.total_outstanding).toBe(0)
+  })
+})
+
+describe('generateARLedger: ROT/RUT invoices awaiting Skatteverket', () => {
+  // RUT invoice: 10 000 invoiced, deduction 3 000 on 1513, the buyer paid
+  // their 7 000 on 2025-03-01. Skatteverket's 3 000 stays open on 1513 until
+  // the begäran's payout voucher (dated 2025-05-10) clears it.
+  const customer = { customer_id: 'cust-r', customer: { id: 'cust-r', name: 'Hushållet' } }
+  const rut = {
+    ...customer,
+    id: 'inv-rut',
+    invoice_number: 'F-RUT',
+    invoice_date: '2025-02-01',
+    due_date: '2025-03-01',
+    total: 10000,
+    paid_amount: 7000,
+    paid_at: '2025-03-01T12:00:00Z',
+    deduction_total: 3000,
+    deduction_reclaimed_total: 0,
+    currency: 'SEK',
+    status: 'paid',
+  }
+  const plain = {
+    ...customer,
+    id: 'inv-plain',
+    invoice_number: 'F-PLAIN',
+    invoice_date: '2025-02-01',
+    due_date: '2025-03-01',
+    total: 1250,
+    paid_amount: 0,
+    deduction_total: 0,
+    currency: 'SEK',
+    status: 'sent',
+  }
+  const item = (status: string, decided: number | null) => ({
+    id: `item-${status}`,
+    invoice_id: 'inv-rut',
+    decided_amount: decided,
+    request: { status, settlement: { entry_date: '2025-05-10' } },
+  })
+  const payment = { invoice_id: 'inv-rut', amount: 7000, payment_date: '2025-03-01' }
+  const rows = (report: Awaited<ReturnType<typeof generateARLedger>>) =>
+    Object.fromEntries(report.entries.flatMap((e) => e.invoices).map((i) => [i.invoice_id, i]))
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2025-09-01T12:00:00Z'))
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('live view reads paid invoices with a deduction into the population', async () => {
+    results = [{ data: [], error: null }]
+
+    await generateARLedger(supabase, 'company-1')
+
+    expect(calls.find((c) => c.method === 'or')?.args[0]).toBe(
+      'status.in.(sent,overdue,partially_paid,credited),and(status.eq.paid,deduction_total.gt.0)'
+    )
+  })
+
+  it('live view lists a paid invoice whose begäran is not settled with the deduction outstanding', async () => {
+    results = [
+      { data: [rut, plain], error: null },
+      // No settled begäran item.
+      { data: [], error: null },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1')
+
+    expect(calls).toContainEqual({ method: 'in', args: ['invoice_id', ['inv-rut']] })
+    expect(rows(report)['inv-rut']).toMatchObject({ total: 10000, paid_amount: 7000, outstanding: 3000, outstanding_sek: 3000 })
+    // The invoice without a deduction reads as it always did.
+    expect(rows(report)['inv-plain']).toMatchObject({ total: 1250, paid_amount: 0, outstanding: 1250 })
+    expect(report.total_outstanding).toBe(4250)
+    expect(report.unpaid_count).toBe(2)
+  })
+
+  it('live view leaves out a paid invoice whose begäran is settled in full', async () => {
+    results = [
+      { data: [rut, plain], error: null },
+      { data: [item('paid', 3000)], error: null },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1')
+
+    expect(Object.keys(rows(report))).toEqual(['inv-plain'])
+    expect(report.total_outstanding).toBe(1250)
+    expect(report.unpaid_count).toBe(1)
+  })
+
+  it('live view keeps the refused remainder of a partly paid begäran', async () => {
+    results = [
+      { data: [rut], error: null },
+      { data: [item('partially_paid', 2000)], error: null },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1')
+
+    expect(rows(report)['inv-rut']).toMatchObject({ outstanding: 1000, paid_amount: 9000 })
+    expect(report.total_outstanding).toBe(1000)
+  })
+
+  it('live view counts a reclaimed remainder once, as the buyer\'s again', async () => {
+    // The refused 1 000 moved onto the buyer: partially_paid until they pay it.
+    const reclaimed = { ...rut, deduction_reclaimed_total: 1000, status: 'partially_paid', paid_at: null }
+    results = [
+      { data: [reclaimed], error: null },
+      { data: [item('partially_paid', 2000)], error: null },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1')
+
+    expect(rows(report)['inv-rut']).toMatchObject({ outstanding: 1000 })
+    expect(report.total_outstanding).toBe(1000)
+  })
+
+  it('live view leaves out a paid invoice whose reclaimed remainder the buyer has paid', async () => {
+    const settled = { ...rut, paid_amount: 8000, deduction_reclaimed_total: 1000 }
+    results = [
+      { data: [settled], error: null },
+      { data: [item('partially_paid', 2000)], error: null },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1')
+
+    expect(report.entries).toEqual([])
+    expect(report.total_outstanding).toBe(0)
+  })
+
+  it('historical view before the payout date keeps the deduction outstanding', async () => {
+    results = [
+      { data: [rut], error: null },
+      { data: [item('paid', 3000)], error: null },
+      { data: [payment], error: null },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1', '2025-05-09')
+
+    expect(rows(report)['inv-rut']).toMatchObject({ outstanding: 3000, paid_amount: 7000 })
+    expect(report.total_outstanding).toBe(3000)
+  })
+
+  it('historical view on the payout date leaves the invoice out', async () => {
+    results = [
+      { data: [rut], error: null },
+      { data: [item('paid', 3000)], error: null },
+      { data: [payment], error: null },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1', '2025-05-10')
+
+    expect(report.entries).toEqual([])
+    expect(report.total_outstanding).toBe(0)
+  })
+
+  it('historical view before the buyer paid shows the whole invoice', async () => {
+    results = [
+      { data: [rut], error: null },
+      { data: [item('paid', 3000)], error: null },
+      { data: [payment], error: null },
+    ]
+
+    const report = await generateARLedger(supabase, 'company-1', '2025-02-15')
+
+    expect(rows(report)['inv-rut']).toMatchObject({ outstanding: 10000, paid_amount: 0 })
   })
 })

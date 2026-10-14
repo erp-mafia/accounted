@@ -44,6 +44,10 @@ import { buildStornoLines } from '@/lib/bookkeeping/line-side'
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { syncInvoiceStatusFromPaymentEntry, isPaymentSourceType } from '@/lib/bookkeeping/payment-sync'
 import { syncRotRutReclaimAfterReversal } from '@/lib/invoices/rot-rut-reclaim-reversal'
+import {
+  assertMigratedDeductionReversible,
+  syncMigratedDeductionAfterReversal,
+} from '@/lib/invoices/migrated-deduction-reversal'
 import { defaultCommitMethod, getActor } from '@/lib/bookkeeping/actor-context'
 import type {
   AssetDisposalType,
@@ -1817,6 +1821,12 @@ export async function reverseEntry(
     }
   }
 
+  // A migrated invoice's deduction reclassification is refused while a
+  // begäran holds the invoice: checked before a voucher number is spent.
+  if (original.source_type === 'rot_rut_reclassification') {
+    await assertMigratedDeductionReversible(supabase, companyId, original)
+  }
+
   const lines = (original.lines as JournalEntryLine[]) || []
 
   // Create reversed lines (buildStornoLines: the opposite side, swapped on
@@ -2218,6 +2228,12 @@ export async function reverseEntry(
   // sync above, skeptic #2397 R3).
   if (original.source_type === 'rot_rut_reclaim') {
     await syncRotRutReclaimAfterReversal(supabase, companyId, original.id)
+  }
+
+  // A reversed deduction reclassification puts the deduction back on 1510:
+  // the migrated invoice reads it as the buyer's again.
+  if (original.source_type === 'rot_rut_reclassification') {
+    await syncMigratedDeductionAfterReversal(supabase, companyId, original)
   }
 
   // Fetch complete reversal entry with lines

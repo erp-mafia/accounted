@@ -73,6 +73,7 @@ export const INVOICE_ENGINE_SOURCE_TYPES = [
   'reminder_fee',
   'rot_rut_payout',
   'rot_rut_reclaim',
+  'rot_rut_reclassification',
   'storno',
   'correction',
 ] as const

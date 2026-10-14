@@ -17,6 +17,7 @@ import {
 import { parseSourceVoucherRef } from '../source-voucher';
 import { creditNoteTypeCode } from '../dto';
 import { roundOre } from '@/lib/money';
+import { vismaDeductionKind, vismaHouseholdDeduction, vismaHouseholdWork } from './housework';
 
 function amount(value: number | undefined | null, currency: string = 'SEK'): AmountType {
   return { value: value ?? 0, currencyCode: currency };
@@ -159,6 +160,10 @@ export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
   const paid = ps != null
     ? ps === CUSTOMER_PS_PAID
     : remaining === 0 && total !== 0;
+  // A kreditfaktura carries no deduction here: crediting a ROT, RUT or grön
+  // teknik invoice is outside what the migrated deduction step handles.
+  const isCredit = raw['IsCreditInvoice'] === true;
+  const greenTechnology = !isCredit && vismaDeductionKind(raw) === 'gron_teknik';
 
   const rows = (raw['Rows'] as Record<string, unknown>[] | undefined) ?? [];
   const lines: SalesInvoiceLineDto[] = rows.map((row, idx) => {
@@ -180,6 +185,7 @@ export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
       taxAmount: lineVat !== undefined ? amount(lineVat, currency) : undefined,
       accountNumber: row['AccountNumber'] != null ? String(row['AccountNumber']) : undefined,
       articleNumber: row['ArticleNumber'] as string | undefined,
+      householdWork: isCredit ? undefined : vismaHouseholdWork(row, greenTechnology),
     };
   });
 
@@ -220,6 +226,7 @@ export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
     taxTotal: vat.vat !== undefined ? { taxAmount: amount(vat.vat, currency) } : undefined,
     legalMonetaryTotal,
     paymentStatus,
+    householdDeduction: isCredit ? undefined : vismaHouseholdDeduction(raw),
     // eAccounting names the booking voucher on the invoice itself
     // (`VoucherNumber`, "A329"). Kept only when it parses cleanly.
     sourceVoucher: parseSourceVoucherRef(raw['VoucherNumber']) ?? undefined,

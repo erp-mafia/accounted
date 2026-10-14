@@ -154,6 +154,7 @@ export const STANDARD_VOUCHER_SERIES_MAP: Readonly<Record<JournalEntrySourceType
   invoice_cash_payment: 'C',
   rot_rut_payout: 'C',
   rot_rut_reclaim: 'C',
+  rot_rut_reclassification: 'C',
   supplier_invoice_registered: 'D',
   supplier_credit_note: 'D',
   supplier_invoice_privately_paid: 'D',

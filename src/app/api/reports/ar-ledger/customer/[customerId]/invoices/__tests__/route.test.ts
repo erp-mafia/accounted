@@ -31,17 +31,32 @@ function buildSupabase(
   /** The second journal_entries read: the verifikat invoices are linked to. */
   linkedEntriesResult?: QueryResult,
   /** Payment rows naming a credit note's verifikat (crm#1059). */
-  paymentsResult: QueryResult = { data: [], error: null }
+  paymentsResult: QueryResult = { data: [], error: null },
+  /** Settled begäran items of ROT/RUT invoices. */
+  payoutItemsResult: QueryResult = { data: [], error: null }
 ) {
   const invoicesIn = vi.fn().mockReturnThis()
+  const invoicesOr = vi.fn().mockReturnThis()
   const entriesIn = vi.fn().mockReturnThis()
   const paymentsIn = vi.fn().mockReturnThis()
   let entryReads = 0
   return {
     invoicesIn,
+    invoicesOr,
     entriesIn,
     paymentsIn,
     from: vi.fn().mockImplementation((table: string) => {
+      if (table === 'rot_rut_payout_request_items') {
+        return {
+          select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          in: vi.fn().mockReturnThis(),
+          not: vi.fn().mockReturnThis(),
+          order: vi.fn().mockReturnThis(),
+          range: vi.fn().mockReturnThis(),
+          then: (resolve: (v: QueryResult) => void) => resolve(payoutItemsResult),
+        }
+      }
       if (table === 'invoice_payments') {
         return {
           select: vi.fn().mockReturnThis(),
@@ -64,6 +79,7 @@ function buildSupabase(
           select: vi.fn().mockReturnThis(),
           eq: vi.fn().mockReturnThis(),
           in: invoicesIn,
+          or: invoicesOr,
           order: vi.fn().mockReturnThis(),
           limit: vi.fn().mockReturnThis(),
           then: (resolve: (v: QueryResult) => void) => resolve(invoicesResult),
@@ -206,11 +222,12 @@ describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices', () => {
     expect(res.status).toBe(200)
 
     // Same population as the aggregate it drills into.
-    expect(supabase.invoicesIn).toHaveBeenCalledWith('status', [...AR_LEDGER_STATUSES])
-    expect(supabase.invoicesIn).toHaveBeenCalledWith(
-      'status',
-      expect.arrayContaining(['partially_paid'])
-    )
+    // Same population as the aggregate: every live status, plus paid invoices
+    // with a deduction. The filter is a literal for the schema guard, so this
+    // holds it to AR_LEDGER_STATUSES.
+    const filter = `status.in.(${AR_LEDGER_STATUSES.join(',')}),and(status.eq.paid,deduction_total.gt.0)`
+    expect(supabase.invoicesOr).toHaveBeenCalledWith(filter)
+    expect(supabase.invoicesOr).toHaveBeenCalledWith(expect.stringContaining('partially_paid'))
 
     const body = (await res.json()) as {
       data: { lines: Array<Record<string, unknown>> }
@@ -344,5 +361,59 @@ describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices: credit note
     const req = createMockRequest('/api/reports/ar-ledger/customer/cust-1/invoices')
     const res = await GET(req, createMockRouteParams({ customerId: 'cust-1' }))
     expect(res.status).toBe(500)
+  })
+})
+
+describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices: ROT/RUT awaiting Skatteverket', () => {
+  // RUT invoice: 10 000 invoiced, deduction 3 000 on 1513, the buyer's 7 000
+  // paid, Skatteverket's share not yet paid out.
+  const row = { currency: 'SEK', exchange_rate: null, notes: null, invoice_date: '2026-05-01', due_date: '2026-06-01' }
+  const rut = {
+    ...row, id: 'inv-rut', invoice_number: 'F-RUT', total: 10000, paid_amount: 7000, remaining_amount: 0,
+    deduction_total: 3000, deduction_reclaimed_total: 0, status: 'paid',
+  }
+  const plain = {
+    ...row, id: 'inv-plain', invoice_number: 'F-PLAIN', total: 1250, paid_amount: 0, remaining_amount: 1250,
+    deduction_total: 0, deduction_reclaimed_total: 0, status: 'sent',
+  }
+  const item = (status: string, decided: number) => ({
+    id: `item-${status}`, invoice_id: 'inv-rut', decided_amount: decided,
+    request: { status, settlement: { entry_date: '2026-07-01' } },
+  })
+
+  async function linesFor(payoutItems: unknown[]) {
+    authWith(
+      buildSupabase(
+        { id: 'cust-1', name: 'Hushållet' },
+        { data: [rut, plain], error: null },
+        { data: [], error: null },
+        undefined,
+        { data: [], error: null },
+        { data: payoutItems, error: null }
+      )
+    )
+    const req = createMockRequest('/api/reports/ar-ledger/customer/cust-1/invoices')
+    const res = await GET(req, createMockRouteParams({ customerId: 'cust-1' }))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      data: { lines: Array<{ invoice_id: string; outstanding: number; debit: number; paid_amount: number }> }
+    }
+    return Object.fromEntries(body.data.lines.map((line) => [line.invoice_id, line]))
+  }
+
+  it('lists a paid invoice whose begäran is not settled with the deduction outstanding, like the aggregate', async () => {
+    const lines = await linesFor([])
+    expect(lines['inv-rut']).toMatchObject({ outstanding: 3000, debit: 3000, paid_amount: 7000 })
+    expect(lines['inv-plain']).toMatchObject({ outstanding: 1250, debit: 1250, paid_amount: 0 })
+  })
+
+  it('keeps the refused remainder of a partly paid begäran', async () => {
+    const lines = await linesFor([item('partially_paid', 2000)])
+    expect(lines['inv-rut']).toMatchObject({ outstanding: 1000, debit: 1000 })
+  })
+
+  it('leaves out a paid invoice whose begäran is settled in full', async () => {
+    const lines = await linesFor([item('paid', 3000)])
+    expect(Object.keys(lines)).toEqual(['inv-plain'])
   })
 })

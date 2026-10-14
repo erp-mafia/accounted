@@ -37,6 +37,7 @@ import {
   type DeductionType,
 } from '@/lib/invoices/rot-rut-rules'
 import { readyTileOf } from '@/lib/invoices/rot-rut-overview'
+import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 
 const RotRutPayoutDialog = dynamic(() => import('@/components/invoices/RotRutPayoutDialog'), {
   ssr: false,
@@ -44,6 +45,12 @@ const RotRutPayoutDialog = dynamic(() => import('@/components/invoices/RotRutPay
 const RotRutLinkVoucherDialog = dynamic(() => import('@/components/invoices/RotRutLinkVoucherDialog'), {
   ssr: false,
 })
+// Points companies that moved from Visma at the deduction step on /import;
+// renders nothing for everyone else.
+const MigratedDeductionPointer = dynamic(
+  () => import('@/components/extensions/general/MigratedDeductionPointer'),
+  { ssr: false },
+)
 
 type RequestStatus = 'generated' | 'submitted' | 'paid' | 'partially_paid' | 'rejected' | 'cancelled'
 
@@ -499,6 +506,8 @@ export default function RotRutOverviewPage() {
           )}
         </div>
       </div>
+
+      {ENABLED_EXTENSION_IDS.has('arcim-migration') && <MigratedDeductionPointer />}
 
       {isLoading ? (
         <div className="space-y-3" role="status" aria-label={t('loading')}>

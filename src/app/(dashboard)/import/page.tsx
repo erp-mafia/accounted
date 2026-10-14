@@ -80,6 +80,12 @@ const MigrationWizard = dynamic(
   () => import('@/components/extensions/general/ArcimMigrationWorkspace'),
   { ssr: false, loading: () => <div className="flex items-center gap-3 text-muted-foreground p-6"><Loader2 className="h-5 w-5 animate-spin" />Laddar migreringsverktyg...</div> }
 )
+// Renders nothing unless the company moved invoices from Visma, so no
+// loading placeholder: it would flash on every other company's landing.
+const MigratedDeductionCard = dynamic(
+  () => import('@/components/extensions/general/MigratedDeductionCard'),
+  { ssr: false }
+)
 
 function ImportStepLoading() {
   return (
@@ -1709,6 +1715,7 @@ export default function ImportPage() {
 
           {view === 'import' ? (
             <div>
+              {hasMigrationExtension && <MigratedDeductionCard className="mb-8" />}
               <div className="stagger-enter">
                 {hasBankingExtension && (
                   <ImportRow

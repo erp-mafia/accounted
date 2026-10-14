@@ -166,6 +166,7 @@ export const SOURCE_TYPE_LABELS_SV: Readonly<Record<JournalEntrySourceType, stri
   invoice_cash_payment: 'Kundbetalning (kontantmetoden)',
   rot_rut_payout: 'ROT/RUT-utbetalning från Skatteverket',
   rot_rut_reclaim: 'ROT/RUT-återkrav',
+  rot_rut_reclassification: 'Omföring av ROT/RUT-avdrag på migrerad faktura',
   supplier_invoice_registered: 'Leverantörsfaktura',
   supplier_credit_note: 'Kreditfaktura från leverantör',
   supplier_invoice_paid: 'Leverantörsbetalning',

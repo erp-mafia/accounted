@@ -59,6 +59,7 @@ export const PROCESSING_EVENT_TYPES = [
   'DocumentIngested',
   'InboundMailReceived',
   'InboxUnderlagReconciled',
+  'InvoiceDeductionMigrated',
   'InvoiceDuplicatePaymentDismissed',
   'InvoiceJournalEntrySkipped',
   'InvoicePaymentRowBackfilled',

@@ -10,7 +10,7 @@ let calls: Array<{ method: string; args: unknown[] }>
 
 function makeBuilder() {
   const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'order', 'range']) {
+  for (const m of ['select', 'eq', 'in', 'or', 'not', 'order', 'range']) {
     b[m] = vi.fn().mockImplementation((...args: unknown[]) => {
       calls.push({ method: m, args })
       return b
@@ -231,9 +231,9 @@ describe('generateARReconciliation', () => {
   })
 
   it('sums 1510 + 1513 in the GL balance for ROT/RUT fakturamodellen', async () => {
-    // Forward-looking: today no postings hit 1513, but if a fakturamodellen
-    // invoice ever splits the AR receivable across 1510 (customer portion)
-    // and 1513 (Skatteverket claim), both must be included to reconcile.
+    // A fakturamodellen invoice splits the AR receivable across 1510
+    // (customer portion) and 1513 (Skatteverket claim): both must be
+    // included to reconcile.
     results = [
       // 0: invoices: single 1 500 SEK invoice
       {
@@ -323,8 +323,8 @@ describe('generateARReconciliation', () => {
 
     const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
 
-    // The first status filter recorded is the open invoices query.
-    const invoiceStatuses = calls.find((c) => c.method === 'in' && c.args[0] === 'status')?.args[1]
+    // The open invoices query filters its population with .or().
+    const invoiceStatuses = calls.find((c) => c.method === 'or')?.args[0]
     expect(invoiceStatuses).toContain('partially_paid')
     expect(result.ar_ledger_total).toBe(625)
     expect(result.account_1510_balance).toBe(625)
@@ -403,6 +403,162 @@ describe('generateARReconciliation: a credit note set off against a new invoice 
     expect(result.ar_ledger_total).toBe(10000)
     expect(result.account_1510_balance).toBe(10000)
     expect(result.difference).toBe(0)
+    expect(result.is_reconciled).toBe(true)
+  })
+})
+
+describe('generateARReconciliation: ROT/RUT invoices awaiting Skatteverket', () => {
+  // RUT invoice: 10 000 invoiced, deduction 3 000 on 1513, the buyer's 7 000
+  // paid. The invoice is 'paid' while Skatteverket's 3 000 is still open.
+  const rut = {
+    id: 'inv-rut', total: 10000, paid_amount: 7000, deduction_total: 3000, deduction_reclaimed_total: 0,
+    currency: 'SEK', exchange_rate: null, journal_entry_id: 'je-rut', status: 'paid',
+  }
+  const plain = {
+    id: 'inv-plain', total: 1250, paid_amount: 0, deduction_total: 0, deduction_reclaimed_total: 0,
+    currency: 'SEK', exchange_rate: null, journal_entry_id: 'je-plain', status: 'sent',
+  }
+  const item = (status: string, decided: number | null) => ({
+    id: `item-${status}`, invoice_id: 'inv-rut', decided_amount: decided,
+    request: { status, settlement: { entry_date: '2026-05-10' } },
+  })
+  // Invoice voucher (1510 7 000, 1513 3 000), the buyer's payment, the plain
+  // invoice; `rest1513` is what Skatteverket has not paid out.
+  const ledger = (rest1513: number) => [
+    { data: [{ id: 'entry-1' }], error: null },
+    {
+      data: [
+        { debit_amount: 7000, credit_amount: 0, journal_entry_id: 'je-rut' },
+        { debit_amount: 3000, credit_amount: 0, journal_entry_id: 'je-rut' },
+        { debit_amount: 0, credit_amount: 7000, journal_entry_id: 'je-pay' },
+        { debit_amount: 0, credit_amount: 3000 - rest1513, journal_entry_id: 'je-payout' },
+        { debit_amount: 1250, credit_amount: 0, journal_entry_id: 'je-plain' },
+      ],
+      error: null,
+    },
+  ]
+
+  it('reads paid invoices with a deduction into the population', async () => {
+    results = [{ data: [], error: null }]
+
+    await generateARReconciliation(supabase, 'company-1', 'period-1')
+
+    const filter = calls.find((c) => c.method === 'or')?.args[0]
+    expect(filter).toBe('status.in.(sent,overdue,partially_paid),and(status.eq.paid,deduction_total.gt.0)')
+  })
+
+  it('counts the deduction of a paid invoice whose begäran is not settled', async () => {
+    results = [
+      { data: [rut, plain], error: null },
+      // No settled begäran item.
+      { data: [], error: null },
+      ...ledger(3000),
+    ]
+
+    const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
+
+    expect(calls).toContainEqual({ method: 'in', args: ['invoice_id', ['inv-rut']] })
+    expect(result.ar_ledger_total).toBe(4250)
+    expect(result.account_1510_balance).toBe(4250)
+    expect(result.is_reconciled).toBe(true)
+  })
+
+  it('counts nothing once the begäran is settled in full', async () => {
+    results = [
+      { data: [rut, plain], error: null },
+      { data: [item('paid', 3000)], error: null },
+      ...ledger(0),
+    ]
+
+    const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
+
+    expect(result.ar_ledger_total).toBe(1250)
+    expect(result.account_1510_balance).toBe(1250)
+    expect(result.is_reconciled).toBe(true)
+  })
+
+  it('counts the refused remainder of a partly paid begäran', async () => {
+    results = [
+      { data: [rut, plain], error: null },
+      { data: [item('partially_paid', 2000)], error: null },
+      ...ledger(1000),
+    ]
+
+    const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
+
+    expect(result.ar_ledger_total).toBe(2250)
+    expect(result.account_1510_balance).toBe(2250)
+    expect(result.is_reconciled).toBe(true)
+  })
+
+  it('counts a reclaimed remainder once, as the buyer\'s again', async () => {
+    // The refused 1 000 moved onto the buyer (debit 1510 / credit 1513): the
+    // invoice is partially_paid again and owes it as total - paid - payout.
+    const reclaimed = { ...rut, deduction_reclaimed_total: 1000, status: 'partially_paid' }
+    results = [
+      { data: [reclaimed, plain], error: null },
+      { data: [item('partially_paid', 2000)], error: null },
+      { data: [{ id: 'entry-1' }], error: null },
+      {
+        data: [
+          { debit_amount: 7000, credit_amount: 0, journal_entry_id: 'je-rut' },
+          { debit_amount: 3000, credit_amount: 0, journal_entry_id: 'je-rut' },
+          { debit_amount: 0, credit_amount: 7000, journal_entry_id: 'je-pay' },
+          { debit_amount: 0, credit_amount: 2000, journal_entry_id: 'je-payout' },
+          { debit_amount: 1000, credit_amount: 0, journal_entry_id: 'je-reclaim' },
+          { debit_amount: 0, credit_amount: 1000, journal_entry_id: 'je-reclaim' },
+          { debit_amount: 1250, credit_amount: 0, journal_entry_id: 'je-plain' },
+        ],
+        error: null,
+      },
+    ]
+
+    const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
+
+    expect(result.ar_ledger_total).toBe(2250)
+    expect(result.account_1510_balance).toBe(2250)
+    expect(result.is_reconciled).toBe(true)
+  })
+
+  it('counts nothing for a paid invoice whose reclaimed remainder the buyer has paid', async () => {
+    const settled = { ...rut, paid_amount: 8000, deduction_reclaimed_total: 1000 }
+    results = [
+      { data: [settled, plain], error: null },
+      { data: [item('partially_paid', 2000)], error: null },
+      { data: [{ id: 'entry-1' }], error: null },
+      {
+        data: [
+          { debit_amount: 7000, credit_amount: 0, journal_entry_id: 'je-rut' },
+          { debit_amount: 3000, credit_amount: 0, journal_entry_id: 'je-rut' },
+          { debit_amount: 0, credit_amount: 7000, journal_entry_id: 'je-pay' },
+          { debit_amount: 0, credit_amount: 2000, journal_entry_id: 'je-payout' },
+          { debit_amount: 1000, credit_amount: 0, journal_entry_id: 'je-reclaim' },
+          { debit_amount: 0, credit_amount: 1000, journal_entry_id: 'je-reclaim' },
+          { debit_amount: 0, credit_amount: 1000, journal_entry_id: 'je-pay-2' },
+          { debit_amount: 1250, credit_amount: 0, journal_entry_id: 'je-plain' },
+        ],
+        error: null,
+      },
+    ]
+
+    const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
+
+    expect(result.ar_ledger_total).toBe(1250)
+    expect(result.account_1510_balance).toBe(1250)
+    expect(result.is_reconciled).toBe(true)
+  })
+
+  it('reads no begäran items when no invoice has a deduction', async () => {
+    results = [
+      { data: [plain], error: null },
+      { data: [{ id: 'entry-1' }], error: null },
+      { data: [{ debit_amount: 1250, credit_amount: 0, journal_entry_id: 'je-plain' }], error: null },
+    ]
+
+    const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
+
+    expect(supabase.from).not.toHaveBeenCalledWith('rot_rut_payout_request_items')
+    expect(result.ar_ledger_total).toBe(1250)
     expect(result.is_reconciled).toBe(true)
   })
 })
