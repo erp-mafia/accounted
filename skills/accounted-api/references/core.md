@@ -88,7 +88,7 @@ Example response `200`:
 Returns every non-archived company the API key user is a member of, together with their role. Use the returned `id` as `{companyId}` in subsequent endpoints.
 
 **Use when:** You need to discover which company IDs an API key has access to before calling company-scoped endpoints.
-**Do not use for:** Fetching a single company you already know the id of: use GET /api/v1/companies/{companyId} for that.
+**Do not use for:** Reading one company's settings: GET /api/v1/companies/{companyId}/settings. There is no single-company GET: this list already carries each company's name, org number, form and role.
 
 **Pitfalls:**
 - Multi-company keys (e.g. consultants) will see >1 result. Always pass the correct companyId in subsequent paths.
@@ -145,7 +145,7 @@ Example response `200`:
 
 Creates a new company owned by the API key user (or attached to one of their teams) and sets it up in one call: owner membership, BAS chart of accounts for the company form, compliance settings, the first fiscal period and the automatic tax deadlines. A 30-day trial with every paid capability starts immediately. Intended for partner platforms provisioning client companies (byrå/vertical SaaS) and for agents onboarding a user.
 
-**Use when:** A platform or agent needs to provision a company that does not exist in Accounted yet. The caller becomes its owner; invite the end customer afterwards.
+**Use when:** A platform or agent needs to provision a company that does not exist in Accounted yet. The caller becomes its owner. Members and invitations have no API: the owner invites people in the app under Settings > Members (/settings/members).
 **Do not use for:** Companies that already exist (list them with GET /api/v1/companies), or changing settings on an existing company (PATCH /api/v1/companies/{companyId}/settings).
 
 **Pitfalls:**
@@ -1330,7 +1330,7 @@ Example response `200`:
 
 Returns the current snapshot of a v1 async operation: status (queued / running / succeeded / failed / cancelled), progress (jsonb, free-form), result (on success), and error (on failure). The operation_id is returned by the POST endpoints that initiate async work (period close, year-end, currency revaluation, SIE import).
 
-**Use when:** You started an async operation and need to know whether it has finished. Poll every 5-30 seconds until a terminal status. (The 202 response advertises `operation.completed` as the eventual push signal, but that webhook event is not deliverable yet — polling is the only supported completion signal today.)
+**Use when:** You started an async operation and need to know whether it has finished. Poll every 5-30 seconds until a terminal status. (The 202 response names `operation.completed` in webhook_event as the eventual push signal, but that webhook event is not deliverable yet: polling is the only supported completion signal today.)
 **Do not use for:** Fetching the resource the operation produced: once status=succeeded, read the result field or call the resource-specific GET endpoint. Cancelling a running operation (no cancel endpoint exists in v1).
 
 **Pitfalls:**

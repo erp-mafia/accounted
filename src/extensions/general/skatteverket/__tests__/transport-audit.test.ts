@@ -21,6 +21,10 @@ vi.mock('@/lib/logger', async (importOriginal) => {
   return { ...actual, createLogger: (module: string) => actual.createTestLogger(module, records) }
 })
 
+// The completeness verdict runs over the declaration above; its per-verifikat
+// ledger scan is stubbed.
+vi.mock('@/lib/reports/rc-basis-gaps', () => ({ findRcBasisGaps: vi.fn(async () => []) }))
+
 vi.mock('../lib/audit', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/audit')>()
   return { ...actual, writeSkatteverketAudit: (...a: unknown[]) => auditMock(...a) }
@@ -51,9 +55,11 @@ const PERIOD = '202606'
 
 vi.mock('../lib/declaration-prep', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/declaration-prep')>()
+  const { COMPLETE_VAT_DECLARATION } = await import('./vat-declaration-fixture')
   return {
     ...actual,
     buildMomsuppgift: vi.fn(async () => ({
+      declaration: COMPLETE_VAT_DECLARATION,
       redovisare: REDOVISARE,
       redovisningsperiod: PERIOD,
       momsuppgift: { momsUtgHog: 2500 },

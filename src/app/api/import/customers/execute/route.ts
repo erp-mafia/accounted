@@ -174,7 +174,7 @@ export const POST = withRouteContext(
             // Stored as ciphertext (customers_personal_number_check).
             personal_number: encryptCustomerPersonalNumber(row.personal_number),
             vat_number: row.vat_number,
-            default_payment_terms: row.default_payment_terms || 30,
+            default_payment_terms: row.default_payment_terms ?? 30,
             notes: row.notes,
           })
           .select()

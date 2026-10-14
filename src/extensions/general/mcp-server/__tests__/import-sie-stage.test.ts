@@ -76,8 +76,64 @@ describe('gnubok_import_sie: stage-time validation', () => {
     expect(result.preview.account_count).toBe(3)
     expect(result.preview.fiscal_year).toMatchObject({ start: '2024-01-01', end: '2024-12-31' })
     expect(result.preview.opening_balance).toMatchObject({ total: 0, is_balanced: true })
-    expect(result.preview.accounts_mapped).toMatchObject({ covered: 2, total: 2 })
+    // The IB is imported by default, so its 2081 counts (unmapped here).
+    expect(result.preview.accounts_mapped).toMatchObject({ covered: 2, total: 3 })
     expect(result.preview.would_skip_all_vouchers).toBe(false)
+  })
+
+  // Omitted flags take the job's defaults (import everything), as on the
+  // dashboard and v1. They used to stage Boolean(undefined) = false, so an
+  // omitted set imported nothing (refused after approval) or a first year
+  // without its IB (decision 5, 2026-10-13).
+  it('stages the job\'s defaults for omitted flags, and explicit ones as given', async () => {
+    const omitted = createQueuedMockSupabase()
+    omitted.enqueue({ data: { org_number: '5566778899' }, error: null })
+    omitted.enqueue({ data: { id: 'op-sie' }, error: null })
+    const staged = (await importSie.execute(
+      { file_content: VALID_SIE, filename: 'bok.se', mappings: COVER_VALID_SIE },
+      'company-1',
+      'user-1',
+      omitted.supabase as never,
+      { type: 'api_key' },
+    )) as { preview: Record<string, unknown> }
+    const params = (omitted.findCall('pending_operations', 'insert')?.[0] as { params: Record<string, unknown> }).params
+    expect(params).toMatchObject({ create_fiscal_period: true, import_opening_balances: true, import_transactions: true, update_account_names: true })
+    expect(staged.preview).toMatchObject({ create_fiscal_period: true, import_opening_balances: true, import_transactions: true })
+
+    const explicit = createQueuedMockSupabase()
+    explicit.enqueue({ data: { org_number: '5566778899' }, error: null })
+    explicit.enqueue({ data: { id: 'op-sie-2' }, error: null })
+    await importSie.execute(
+      { file_content: VALID_SIE, filename: 'bok.se', mappings: COVER_VALID_SIE, import_opening_balances: false },
+      'company-1',
+      'user-1',
+      explicit.supabase as never,
+      { type: 'api_key' },
+    )
+    expect((explicit.findCall('pending_operations', 'insert')?.[0] as { params: Record<string, unknown> }).params).toMatchObject({
+      import_opening_balances: false,
+      import_transactions: true,
+    })
+  })
+
+  it('refuses at staging what the job would refuse after approval: nothing to import', async () => {
+    const { supabase, findCall } = createQueuedMockSupabase()
+    await expect(
+      importSie.execute(
+        {
+          file_content: VALID_SIE,
+          filename: 'bok.se',
+          mappings: COVER_VALID_SIE,
+          import_opening_balances: false,
+          import_transactions: false,
+        },
+        'company-1',
+        'user-1',
+        supabase as never,
+        { type: 'api_key' },
+      ),
+    ).rejects.toThrow(/Välj vad som ska importeras/)
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
   })
 
   it('rejects an unbalanced file at stage time (no blind staging)', async () => {
@@ -142,7 +198,8 @@ describe('gnubok_import_sie: stage-time validation', () => {
   it('rejects when targetAccount is null on every mapping (Lookma shape)', async () => {
     const { supabase } = createQueuedMockSupabase()
     // The original Lookma agent sent #KONTO rows formatted as mapping objects
-    // but with no targetAccount resolved. Coverage check ignores those.
+    // but with no targetAccount resolved. The job's mapping schema refuses
+    // them at staging, as submitSIEJob would after approval.
     const halfBakedMappings = [
       { sourceAccount: '6110', sourceName: 'Kontorsmaterial', targetAccount: null, targetName: '', confidence: 0, matchType: 'manual', isOverride: false },
       { sourceAccount: '1930', sourceName: 'Företagskonto', targetAccount: null, targetName: '', confidence: 0, matchType: 'manual', isOverride: false },
@@ -155,7 +212,7 @@ describe('gnubok_import_sie: stage-time validation', () => {
         supabase as never,
         { type: 'api_key' },
       ),
-    ).rejects.toThrow(/täcker inga konton/i)
+    ).rejects.toThrow(/targetAccount/)
   })
 
   it('stages when partial overlap exists (1 of 2 accounts mapped)', async () => {
@@ -175,7 +232,7 @@ describe('gnubok_import_sie: stage-time validation', () => {
     )) as { staged: boolean; preview: Record<string, unknown> }
 
     expect(result.staged).toBe(true)
-    expect(result.preview.accounts_mapped).toMatchObject({ covered: 1, total: 2 })
+    expect(result.preview.accounts_mapped).toMatchObject({ covered: 1, total: 3 })
     expect(result.preview.would_skip_all_vouchers).toBe(false)
   })
 })

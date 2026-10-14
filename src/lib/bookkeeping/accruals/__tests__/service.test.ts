@@ -580,7 +580,15 @@ describe('cancelSchedulesForSource', () => {
     enqueueMany([
       { data: [makeSchedule()] }, // schedules for source
       { data: null }, // pending -> cancelled
-      { data: [{ id: 'inst-1', journal_entry_id: 'je-jan' }] }, // posted rows
+      {
+        data: [
+          {
+            id: 'inst-1',
+            journal_entry_id: 'je-jan',
+            journal_entry: { fiscal_period: { period_start: '2026-01-01', period_end: '2026-12-31' } },
+          },
+        ],
+      }, // posted rows
       { data: null }, // schedule -> cancelled
     ])
 
@@ -600,6 +608,44 @@ describe('cancelSchedulesForSource', () => {
       'je-jan',
       '2026-05-01',
     )
+  })
+
+  // A storno is numbered and booked in its original's year (BFL 5 kap 5 §,
+  // BFNAR 2013:2 p. 2.17-2.18): a 2025 dissolution credited in 2026 is
+  // stornoed on its own date, while the 2026 one takes the credit date.
+  it('dates a dissolution from an earlier year on its own date, not the credit date', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: [makeSchedule({ period_start: '2025-07-01', period_end: '2026-06-30' })] },
+      { data: null }, // pending -> cancelled
+      {
+        data: [
+          {
+            id: 'inst-dec',
+            journal_entry_id: 'je-dec-2025',
+            journal_entry: { fiscal_period: { period_start: '2025-01-01', period_end: '2025-12-31' } },
+          },
+          {
+            id: 'inst-jan',
+            journal_entry_id: 'je-jan-2026',
+            journal_entry: { fiscal_period: { period_start: '2026-01-01', period_end: '2026-12-31' } },
+          },
+        ],
+      },
+      { data: null }, // schedule -> cancelled
+    ])
+
+    const result = await cancelSchedulesForSource(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      USER,
+      { supplierInvoiceId: 'si-1' },
+      { reversalDate: '2026-03-10' },
+    )
+
+    expect(result).toEqual({ cancelledSchedules: 1, reversedEntries: 2, failedReversals: 0 })
+    expect(mockReverseEntry).toHaveBeenNthCalledWith(1, expect.anything(), COMPANY, USER, 'je-dec-2025', undefined)
+    expect(mockReverseEntry).toHaveBeenNthCalledWith(2, expect.anything(), COMPANY, USER, 'je-jan-2026', '2026-03-10')
   })
 
   it('leaves the schedule active and reports the failure when a storno fails', async () => {

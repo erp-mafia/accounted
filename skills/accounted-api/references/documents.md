@@ -372,16 +372,18 @@ Example response `200`:
 **Link a document to a journal entry.**
 `scope:documents:write · risk:medium · idempotent · dry-run`
 
-Sets journal_entry_id (and optionally journal_entry_line_id) on an existing document. Optionally stamps the originating invoice_inbox_items row as consumed via inbox_item_id. Use this after /documents upload when the link target was unknown at upload time, or to re-link a stray document. Once the target JE is posted, the document row is effectively immutable per BFL 7 kap retention.
+Sets journal_entry_id (and optionally journal_entry_line_id) on an existing document, and marks the invoice-inbox item that carries the document as handled. Use this after /documents upload when the link target was unknown at upload time. A link is permanent once set (BFL 5 kap 6 §): a document already linked to another verifikat cannot be moved.
 
-**Use when:** A document was uploaded without a journal_entry_id (e.g. bulk import) and you now want to attach it to a posted verifikation. Pass inbox_item_id when the document came from the invoice inbox so the item is marked resolved in one call.
+**Use when:** A document was uploaded without a journal_entry_id (e.g. bulk import) and you now want to attach it to a verifikation. A document that came from the invoice inbox marks its item handled in the same call.
 **Do not use for:** Unlinking: no v1 unlink endpoint. The dashboard exposes a manual override; v1 keeps the WORM contract by refusing to revert posted-JE links.
 
 **Pitfalls:**
 - Idempotency-Key is mandatory.
 - Both the document and the journal_entry_id must belong to the caller's company. NOT_FOUND on mismatch (enumeration hardening).
-- Re-linking an already-linked document overwrites the previous journal_entry_id: confirm the old target is what you intend to break.
-- inbox_item_id stamping is best-effort: if the stamp fails the document link still succeeds. Use POST /api/v1/companies/:companyId/inbox-items/:id/stamp to stamp independently.
+- A document already linked to another verifikat (posted, draft or reversed) answers 409 DOC_LINK_ALREADY_LINKED with details.current_journal_entry_id, on the dry run too; so does a change of a line already set. Re-linking to the same verifikat is allowed. If the holding verifikat is wrong, correct it with POST /journal-entries/{id}/correct: the underlag moves to the correction.
+- journal_entry_line_id must be a line of journal_entry_id: NOT_FOUND otherwise.
+- A verifikat in a closed or locked period answers PERIOD_LOCKED, on the dry run too.
+- The inbox item that carries the document (and is not yet handled) is stamped whether or not inbox_item_id is sent; an inbox_item_id that does not carry the document is not stamped. The stamp is best-effort: if it fails the document link still succeeds.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -795,6 +797,7 @@ Registers a supplier invoice (status registered, next ankomstnummer) from the gi
 - An item already converted returns 409 INBOX_ITEM_ALREADY_CONVERTED; a supplier invoice number the supplier already has returns 409 SI_CREATE_DUPLICATE_INVOICE_NUMBER with details.existing.
 - A credit note (read as one, or with a negative net or VAT) returns 409 INBOX_ITEM_IS_CREDIT_NOTE with details.credit_target: the invoice it credits, or the candidates to choose from.
 - amount is per line EXCLUDING VAT; VAT is computed from vat_rate. Per-line vat_amount and private-payment fields are not accepted here.
+- Reverse charge follows POST /supplier-invoices: an EU or non-EU supplier without reverse_charge defaults to it, vat_treatment follows the flag, the payable is the net, and a line with a vat_rate other than 0 returns 400 VALIDATION_ERROR. Send reverse_charge: false for a foreign supplier that charged its own or no VAT.
 - With dimensions enabled, an unknown or archived code in default_dimensions or items[].dimensions returns DIMENSION_VALIDATION_FAILED and registers nothing when the company books on registration; a company that defers booking meets it when the invoice is booked.
 - No fiscal year for invoice_date returns SI_CREATE_NO_FISCAL_PERIOD and registers nothing.
 - account_number is a STRING ("6110"), never a number.

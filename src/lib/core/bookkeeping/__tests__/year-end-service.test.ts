@@ -242,6 +242,14 @@ vi.mock('../period-service', () => ({
   findNextPeriod: vi.fn().mockResolvedValue(null),
 }))
 
+// Default: the next year has no IB. The one-IB-per-year tests override; the
+// read itself is covered in lib/import/opening-balance/__tests__/existing.test.ts.
+vi.mock('@/lib/import/opening-balance/existing', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/import/opening-balance/existing')>()),
+  findExistingOpeningBalance: vi.fn().mockResolvedValue(null),
+  assertNoOpeningBalance: vi.fn().mockResolvedValue(undefined),
+}))
+
 // Default: nothing carried. Guard tests override (PostHog PH 120 / PH 108).
 // carryAfterDispositions stays real: the preview's omföring runs through it.
 vi.mock('../prior-result-carry', async (importOriginal) => ({
@@ -249,7 +257,18 @@ vi.mock('../prior-result-carry', async (importOriginal) => ({
   priorResultCarry: vi.fn().mockResolvedValue(null),
 }))
 
-import { validateYearEndReadiness, previewYearEndClosing } from '../year-end-service'
+import {
+  validateYearEndReadiness,
+  previewYearEndClosing,
+  executeYearEndClosing,
+  generateOpeningBalances,
+} from '../year-end-service'
+import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import {
+  assertNoOpeningBalance,
+  findExistingOpeningBalance,
+  OpeningBalanceExistsError,
+} from '@/lib/import/opening-balance/existing'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { previewCurrencyRevaluation } from '@/lib/bookkeeping/currency-revaluation'
 import { priorResultCarry } from '../prior-result-carry'
@@ -831,6 +850,75 @@ describe('validateYearEndReadiness', () => {
     expect(result.unexplainedGaps[0]).toEqual({ gap_start: 5, gap_end: 7, series: 'A' })
   })
 
+  // BFNAR 2013:2: the gate must not pass on a series it could not check. A
+  // failed detection used to skip the series, so year-end ran past a gap.
+  it('blocks with VOUCHER_GAP_CHECK_FAILED when gap detection fails', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+    const builder = makeBuilder()
+    const supabase = {
+      from: vi.fn().mockImplementation(() => builder),
+      rpc: vi.fn().mockResolvedValue({ data: null, error: { message: 'statement timeout' } }),
+    }
+    resultIdx = 0
+    results = [
+      { data: period, error: null },                                           // fetch period
+      { data: null, error: null, count: 0 },                                   // count drafts
+      { data: [{ voucher_series: 'A' }], error: null },                        // voucher_sequences
+      // detect_voucher_gaps fails (custom rpc mock)
+      { data: { last_number: 10 }, error: null },                              // reconciliation: last_number
+      { data: { voucher_number: 10 }, error: null },                           // reconciliation: max voucher
+      { data: null, error: null, count: 5 },                                   // count posted
+      { data: null, error: null, count: 0 },                                   // count revaluation
+      { data: null, error: null, count: 0 },                                   // fx receivables
+      { data: null, error: null, count: 0 },                                   // fx payables
+    ]
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [],
+      isBalanced: true,
+      totalDebit: 10000,
+      totalCredit: 10000,
+    } as never)
+
+    const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(result.ready).toBe(false)
+    expect(result.blockers.some((b) => b.code === 'VOUCHER_GAP_CHECK_FAILED')).toBe(true)
+  })
+
+  it('blocks with VOUCHER_GAP_CHECK_FAILED when the explanations cannot be read', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+    const builder = makeBuilder()
+    const supabase = {
+      from: vi.fn().mockImplementation(() => builder),
+      rpc: vi.fn().mockResolvedValue({ data: [{ gap_start: 5, gap_end: 7 }], error: null }),
+    }
+    resultIdx = 0
+    results = [
+      { data: period, error: null },                                           // fetch period
+      { data: null, error: null, count: 0 },                                   // count drafts
+      { data: [{ voucher_series: 'A' }], error: null },                        // voucher_sequences
+      { data: null, error: { message: 'connection reset' } },                  // gap_explanations fail
+      { data: { last_number: 10 }, error: null },                              // reconciliation: last_number
+      { data: { voucher_number: 10 }, error: null },                           // reconciliation: max voucher
+      { data: null, error: null, count: 5 },                                   // count posted
+      { data: null, error: null, count: 0 },                                   // count revaluation
+      { data: null, error: null, count: 0 },                                   // fx receivables
+      { data: null, error: null, count: 0 },                                   // fx payables
+    ]
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [],
+      isBalanced: true,
+      totalDebit: 10000,
+      totalCredit: 10000,
+    } as never)
+
+    const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(result.ready).toBe(false)
+    expect(result.blockers.some((b) => b.code === 'VOUCHER_GAP_CHECK_FAILED')).toBe(true)
+    expect(result.blockers.some((b) => b.code === 'UNEXPLAINED_VOUCHER_GAP')).toBe(false)
+  })
+
   it('detects gaps across multiple voucher series', async () => {
     const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
 
@@ -986,12 +1074,90 @@ describe('validateYearEndReadiness', () => {
       name: 'FY 2025',
       opening_balance_entry_id: 'ib-1',
     } as never)
+    vi.mocked(findExistingOpeningBalance).mockResolvedValueOnce({
+      journal_entry_id: 'ib-1',
+      voucher_label: 'A1',
+      linked: true,
+    })
 
     const supabase = makeClient()
     const result = await validateYearEndReadiness(supabase as never, 'company-1', 'user-1', 'fp-1')
     expect(result.ready).toBe(false)
     expect(result.errors.some((e: string) => e.includes('redan ingående balanser bokförda'))).toBe(true)
     expect(result.blockers.some((b) => b.code === 'NEXT_PERIOD_HAS_IB')).toBe(true)
+    expect(findExistingOpeningBalance).toHaveBeenCalledWith(supabase, 'company-1', 'fp-2')
+  })
+
+  // An IB booked as a voucher (gnubok_create_voucher with is_opening_balance)
+  // carries no pointer. Reading the pointer alone let the close run and post
+  // a second IB on top, after the irreversible close (ÅRL 2:4: one IB = UB).
+  it('blocks on a posted IB the next period has no pointer to', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+    results = noGapResults(period)
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [],
+      isBalanced: true,
+      totalDebit: 10000,
+      totalCredit: 10000,
+    } as never)
+    vi.mocked(findNextPeriod).mockResolvedValueOnce({
+      id: 'fp-2',
+      name: 'FY 2025',
+      opening_balance_entry_id: null,
+    } as never)
+    vi.mocked(findExistingOpeningBalance).mockResolvedValueOnce({
+      journal_entry_id: 'ib-voucher',
+      voucher_label: 'A4',
+      linked: false,
+    })
+
+    const result = await validateYearEndReadiness(makeClient() as never, 'company-1', 'user-1', 'fp-1')
+
+    expect(result.ready).toBe(false)
+    expect(result.blockers.some((b) => b.code === 'NEXT_PERIOD_HAS_IB')).toBe(true)
+  })
+
+  it('executeYearEndClosing posts nothing when the next period has a pointer-less IB', async () => {
+    const period = makeFiscalPeriod({ id: 'fp-1', is_closed: false, closing_entry_id: null })
+    results = noGapResults(period)
+    vi.mocked(generateTrialBalance).mockResolvedValue({
+      rows: [],
+      isBalanced: true,
+      totalDebit: 10000,
+      totalCredit: 10000,
+    } as never)
+    vi.mocked(findNextPeriod).mockResolvedValueOnce({
+      id: 'fp-2',
+      name: 'FY 2025',
+      opening_balance_entry_id: null,
+    } as never)
+    vi.mocked(findExistingOpeningBalance).mockResolvedValueOnce({
+      journal_entry_id: 'ib-voucher',
+      voucher_label: 'A4',
+      linked: false,
+    })
+
+    await expect(
+      executeYearEndClosing(makeClient() as never, 'company-1', 'user-1', 'fp-1'),
+    ).rejects.toThrow(/Bokslutet kan inte verkställas/)
+    expect(createJournalEntry).not.toHaveBeenCalled()
+  })
+})
+
+describe('generateOpeningBalances: one IB per year', () => {
+  it('refuses before reading or posting anything when the next year has an IB', async () => {
+    vi.mocked(assertNoOpeningBalance).mockRejectedValueOnce(
+      new OpeningBalanceExistsError({ journal_entry_id: 'ib-voucher', voucher_label: 'A4', linked: false }),
+    )
+    const supabase = makeClient()
+
+    await expect(
+      generateOpeningBalances(supabase as never, 'company-1', 'user-1', 'fp-1', 'fp-2'),
+    ).rejects.toBeInstanceOf(OpeningBalanceExistsError)
+    expect(assertNoOpeningBalance).toHaveBeenCalledWith(supabase, 'company-1', 'fp-2')
+    expect(supabase.from).not.toHaveBeenCalled()
+    expect(generateTrialBalance).not.toHaveBeenCalled()
+    expect(createJournalEntry).not.toHaveBeenCalled()
   })
 })
 

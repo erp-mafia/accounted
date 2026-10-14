@@ -18,6 +18,7 @@ import { suggestSIEMappings } from '@/lib/import/sie-preview-mappings'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
 import type { SIEAccountMappingRecord } from '@/lib/import/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { SIEJobOptionsSchema } from '@/lib/api/schemas'
 
 const SieImportAccepted = z.object({
   operation_id: z.string().uuid(),
@@ -48,6 +49,7 @@ registerEndpoint({
     'A file whose #ORGNR is not the company\'s organisation number answers 409 SIE_IMPORT_ORG_NUMBER_MISMATCH with both numbers in details. Check with the user, then resend with options.confirmOrgNumberMismatch=true to import it anyway. A file without #ORGNR is not checked.',
     'The operation can take 1-5 minutes for multi-year files. The HTTP response returns immediately with operation_id; poll /operations/{id} every ~2s for status.',
     'Chunks are visible while importing. Filing and export are held until completion. Undo uses batch storno and retains accounting history.',
+    'options (a JSON string field) takes createFiscalPeriod, importOpeningBalances, importTransactions, updateAccountNames (each default true), voucherSeries (for vouchers the file gives no series; default B, as the dashboard), openingBalanceSeries (default: a series the file does not use), markImportedNoDocRequired (default false), onExistingPeriod, supersedesImportId and confirmOrgNumberMismatch; any other key is 400.',
     'Account mappings are generated server-side from the file\'s #KONTO records (plus stored per-company overrides), by the same rules as the dashboard upload: a class 9 account carrying amounts is mapped to 2999 OBS-konto, also over a stored class 9 mapping. By default the file\'s account names are carried into the chart, renaming existing accounts whose names differ: pass options.updateAccountNames=false to keep BAS default names.',
   ],
   example: {
@@ -101,9 +103,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       })
     }
 
-    // Optional execution flags. Defaults mirror the dashboard's "import all"
-    // behavior. The schema is permissive: agents can omit and get sane
-    // defaults.
+    // Optional execution flags: the job's own options schema, the one the
+    // dashboard and the MCP tool use, so an omitted flag gets the same
+    // default on every door ("import all", series-less vouchers to series B).
+    // This route used to keep its own copy, with series-less vouchers to A.
     const optionsRaw = formData.get('options')
     let parsedOptions: unknown = {}
     if (typeof optionsRaw === 'string') {
@@ -119,28 +122,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         })
       }
     }
-    const optionsParse = z
-      .object({
-        createFiscalPeriod: z.boolean().optional().default(true),
-        importOpeningBalances: z.boolean().optional().default(true),
-        importTransactions: z.boolean().optional().default(true),
-        voucherSeries: z.string().min(1).max(2).optional().default('A'),
-        // Series for the Ingående balanser voucher (issue #1882). No default
-        // here: the SIE job picks a series the file's vouchers do not
-        // use, so the IB entry never shifts the file's own numbering.
-        openingBalanceSeries: z.string().min(1).max(2).optional(),
-        updateAccountNames: z.boolean().optional().default(true),
-        onExistingPeriod:z.enum(['block','replace']).default('block'),
-        supersedesImportId:z.string().uuid().optional(),
-        // The file's #ORGNR is not the company's and the user confirmed it.
-        confirmOrgNumberMismatch:z.boolean().optional(),
-      })
-      // OWASP V4.5: reject unknown keys so a future schema-extension
-      // (or a careless edit) doesn't silently pass mass-assigned fields
-      // through. Zod's default is to strip unknowns: `.strict()` is
-      // belt-and-suspenders.
-      .strict()
-      .safeParse(parsedOptions)
+    // OWASP V4.5: unknown keys are refused, so a careless edit cannot pass
+    // mass-assigned fields through (zod's default is to strip them).
+    const optionsParse = SIEJobOptionsSchema.strict().safeParse(parsedOptions)
     if (!optionsParse.success) return v1ValidationError(ctx, optionsParse.error)
     const options = optionsParse.data
 
@@ -212,13 +196,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     let job
     try {
-      job = await submitSIEJob(ctx.supabase,ctx.companyId!,ctx.userId,content,mappings,{
-        filename:file.name,createFiscalPeriod:options.createFiscalPeriod,
-        importOpeningBalances:options.importOpeningBalances,importTransactions:options.importTransactions,
-        voucherSeries:options.voucherSeries,openingBalanceSeries:options.openingBalanceSeries,
-        updateAccountNames:options.updateAccountNames,onExistingPeriod:options.onExistingPeriod,
-        supersedesImportId:options.supersedesImportId,confirmOrgNumberMismatch:options.confirmOrgNumberMismatch,
-      },file)
+      job = await submitSIEJob(ctx.supabase,ctx.companyId!,ctx.userId,content,mappings,{filename:file.name,...options},file)
     } catch (err) {
       // Both numbers travel in details so the caller can show them; every
       // other refusal keeps the wrapper's mapping.

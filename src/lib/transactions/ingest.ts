@@ -40,6 +40,7 @@ import { scheduleCollectionSweep } from '@/lib/collections/sweep-hook'
 import { physicalAccountKey, reenableIfUnused, sameCashAccount } from '@/lib/cash-accounts/service'
 import type { Transaction, RawTransaction, IngestResult, IngestOptions, IngestSkipReason, IngestSkippedRow, SupplierInvoice, Currency, ExchangeRate } from '@/types'
 import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
+import { roundOre } from '@/lib/money'
 
 /**
  * Sentinel for a (date, öre) bucket whose incoming rows carry more than one
@@ -1656,9 +1657,9 @@ export async function ingestTransactions(
     const rateInfo = raw.currency && raw.currency !== 'SEK'
       ? exchangeRatesByDate.get(`${raw.currency}|${raw.date}`)
       : undefined
-    const amountSek = rateInfo
-      ? Math.round(raw.amount * rateInfo.rate * 100) / 100
-      : null
+    // roundOre, never Math.round(x * 100) / 100: the naive form rounds an
+    // exact half-öre by its binary representation (CLAUDE.md hard rule 6).
+    const amountSek = rateInfo ? roundOre(raw.amount * rateInfo.rate) : null
     // A purchase made in another currency than the account's (the bank's
     // enrichment): the instructed amount and currency travel on any account;
     // the bank's rate only on a SEK account, where exchange_rate has no

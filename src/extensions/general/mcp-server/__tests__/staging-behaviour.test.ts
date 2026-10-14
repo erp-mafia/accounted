@@ -886,8 +886,9 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
     empty: ['arsredovisning_signature_requests'],
   },
   // Ingående balanser by hand (wave 4): an open, unlocked 2026 without an IB
-  // and no company lock date; the preview reads the chart for the accounts
-  // it would activate and never reaches the engine.
+  // (no pointer and no posted IB verifikat) and no company lock date; the
+  // preview reads the chart for the accounts it would activate and never
+  // reaches the engine.
   gnubok_set_opening_balances_manual: {
     args: { lines: [{ account_number: '1930', amount: 1000 }, { account_number: '2099', amount: -1000 }] },
     rows: {
@@ -895,6 +896,7 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
       company_settings: { bookkeeping_locked_through: null },
       chart_of_accounts: { account_number: '1930' },
     },
+    empty: ['journal_entries'],
   },
   // The same year with its IB (A1) and no bokslut: the storno preview reads
   // the original lines for the per-account change, writes nothing.

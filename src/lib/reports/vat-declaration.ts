@@ -565,6 +565,19 @@ export function revenueAccountsWithoutRuta(
 }
 
 /**
+ * The declaration plus what a reader of it needs and the declaration itself
+ * does not carry: which branch of resolvePeriodDates produced the range, and
+ * the untagged verifikat the totals left out as momsredovisning. The agent VAT
+ * report and close check (./vat-close-check.ts) read these, so they show the
+ * filed rutor instead of projecting the aggregate a second time.
+ */
+export interface ComputedVatDeclaration {
+  declaration: VatDeclaration
+  periodSource: VatPeriodSource
+  settlementShapedEntries: VatSettlementShapedEntry[]
+}
+
+/**
  * Calculate VAT declaration from the general ledger.
  *
  * Sums posted journal entry lines on the BAS accounts in ACCOUNT_RUTA per the
@@ -581,24 +594,24 @@ export function revenueAccountsWithoutRuta(
  * parameter existed until 2026-07-23 and was silently ignored; it was removed
  * so no future code path can branch on a value that callers hard-code.
  */
-export async function calculateVatDeclaration(
+export async function computeVatDeclaration(
   supabase: SupabaseClient,
   companyId: string,
   periodType: VatPeriodType,
   year: number,
   period: number,
   options: { fiscalPeriodId?: string } = {}
-): Promise<VatDeclaration> {
+): Promise<ComputedVatDeclaration> {
   // For yearly VAT this resolves to the räkenskapsår bounds (when a fiscal
   // period is supplied), not the calendar year: see resolvePeriodDates.
-  const { start, end } = await resolvePeriodDates(
+  const { start, end, source: periodSource } = await resolvePeriodDates(
     supabase, companyId, periodType, year, period, options.fiscalPeriodId
   )
 
   // The rutor, the per-account totals behind them and the per-source_type
   // entry counts for the metadata, from the one definition the settlement
   // proposal reads too (loadVatDeclarationLedger).
-  const { totals, sourceTypeCounts, dynamicVatAccounts, rutor } =
+  const { totals, sourceTypeCounts, settlementShapedEntries, dynamicVatAccounts, rutor } =
     await loadVatDeclarationLedger(supabase, companyId, start, end)
 
   // Compute per-rate base amounts from individual revenue accounts. The
@@ -654,7 +667,7 @@ export async function calculateVatDeclaration(
     else if (sourceType === 'bank_transaction') transactionCount += n
   }
 
-  return {
+  const declaration: VatDeclaration = {
     period: { type: periodType, year, period, start, end },
     rutor,
     // The 2645/2647 pair travels with the declaration so an HTTP caller can run
@@ -697,6 +710,22 @@ export async function calculateVatDeclaration(
       },
     },
   }
+  return { declaration, periodSource, settlementShapedEntries }
+}
+
+/**
+ * The momsdeklaration as filed (computeVatDeclaration's declaration), for callers
+ * that only need the declaration itself.
+ */
+export async function calculateVatDeclaration(
+  supabase: SupabaseClient,
+  companyId: string,
+  periodType: VatPeriodType,
+  year: number,
+  period: number,
+  options: { fiscalPeriodId?: string } = {}
+): Promise<VatDeclaration> {
+  return (await computeVatDeclaration(supabase, companyId, periodType, year, period, options)).declaration
 }
 
 /**

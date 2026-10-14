@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { VatPeriodType } from '@/types'
+import type { VatDeclaration, VatPeriodType } from '@/types'
 import { calculateVatDeclaration, resolvePeriodDates } from '@/lib/reports/vat-declaration'
 import { rutorToMomsuppgift, formatRedovisare, formatRedovisningsperiod } from './mappers'
 import type { SkatteverketMomsuppgift } from '../types'
@@ -22,6 +22,12 @@ export interface VatDeclarationPrep {
   redovisare: string
   redovisningsperiod: string
   momsuppgift: SkatteverketMomsuppgift
+  /**
+   * The declaration the momsuppgift was mapped from. Every filing path hands
+   * it to vatFilingVerdict (lib/reports/vat-close-check.ts) before its first
+   * Skatteverket call, so the verdict judges exactly the figures filed.
+   */
+  declaration: VatDeclaration
 }
 
 export interface AgiUnderlagPrep {
@@ -126,7 +132,7 @@ export async function buildMomsuppgift(
 
   const momsuppgift = rutorToMomsuppgift(declaration.rutor)
 
-  return { redovisare, redovisningsperiod, momsuppgift }
+  return { redovisare, redovisningsperiod, momsuppgift, declaration }
 }
 
 /**

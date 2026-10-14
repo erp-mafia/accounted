@@ -33,6 +33,7 @@ vi.mock('@/lib/api/v1/check-period-lock', () => ({
 }))
 
 import { tools } from '../server'
+import { toToolError } from '../tool-result'
 
 const categorize = tools.find((t) => t.name === 'gnubok_categorize_transaction')!
 
@@ -176,5 +177,23 @@ describe('gnubok_categorize_transaction on a foreign row without a SEK value', (
     expect((err as Error & { code?: string }).code).toBe('TX_MISSING_SEK_VALUE')
     expect(mockDetectDup).toHaveBeenCalledTimes(1)
     expect(findCalls('pending_operations', 'insert')).toEqual([])
+  })
+
+  it('names a way out an MCP agent can take: the v1 rate refresh has no MCP tool', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: coreTxRow({ amount: -200, currency: 'CAD' }), error: null })
+    enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null })
+    mockDetectDup.mockResolvedValue(null)
+
+    const { error } = toToolError(await runCategorize(supabase))
+
+    expect(error.code).toBe('TX_MISSING_SEK_VALUE')
+    const remediation = (error.remediation as { description: string }).description
+    // The v1 door's step stays, and the steps without the v1 API follow it.
+    expect(remediation).toContain('refresh-exchange-rate')
+    expect(remediation).toContain('open the transaction in Accounted')
+    expect(remediation).toContain('gnubok_create_voucher')
+    expect(remediation).toContain('gnubok_link_transaction_to_journal_entry')
   })
 })

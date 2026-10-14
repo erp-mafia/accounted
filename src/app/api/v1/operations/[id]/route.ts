@@ -12,12 +12,12 @@
  * company gate on it (`ctx.checkCompanyAccess`): membership and the key's
  * company allowlist, exactly as a /companies/{companyId}/ URL gets.
  *
- * Webhook alternative (Phase 6): subscribe to `operation.completed` instead
- * of polling.
+ * Polling is the completion signal: `webhook_event: operation.completed` is
+ * a reserved name, not a deliverable webhook (OperationWebhookEventField).
  */
 
 import { z } from 'zod'
-import { ok } from '@/lib/api/v1/response'
+import { ok, OperationWebhookEventField } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
@@ -37,7 +37,7 @@ const OperationDetail = z.object({
   started_at: z.string().nullable(),
   completed_at: z.string().nullable(),
   poll_url: z.string(),
-  webhook_event: z.literal('operation.completed'),
+  webhook_event: OperationWebhookEventField,
 })
 
 registerEndpoint({
@@ -48,7 +48,7 @@ registerEndpoint({
   description:
     'Returns the current snapshot of a v1 async operation: status (queued / running / succeeded / failed / cancelled), progress (jsonb, free-form), result (on success), and error (on failure). The operation_id is returned by the POST endpoints that initiate async work (period close, year-end, currency revaluation, SIE import).',
   useWhen:
-    'You started an async operation and need to know whether it has finished. Poll every 5-30 seconds until a terminal status. (The 202 response advertises `operation.completed` as the eventual push signal, but that webhook event is not deliverable yet — polling is the only supported completion signal today.)',
+    'You started an async operation and need to know whether it has finished. Poll every 5-30 seconds until a terminal status. (The 202 response names `operation.completed` in webhook_event as the eventual push signal, but that webhook event is not deliverable yet: polling is the only supported completion signal today.)',
   doNotUseFor:
     'Fetching the resource the operation produced: once status=succeeded, read the result field or call the resource-specific GET endpoint. Cancelling a running operation (no cancel endpoint exists in v1).',
   pitfalls: [

@@ -79,7 +79,7 @@ Example response `200`:
 **Create a salary run.**
 `scope:payroll:write · risk:low · idempotent · dry-run · reversible`
 
-Creates a draft salary run for the given period (period_year, period_month). The run starts empty: add employees via the internal /salary/runs/{id}/employees endpoints, then POST /salary-runs/{id}/calculate. Requires Idempotency-Key. Dry-runnable.
+Creates a draft salary run for the given period (period_year, period_month). The run starts empty: add employees with POST /salary-runs/{id}/employees, then POST /salary-runs/{id}/calculate. Requires Idempotency-Key. Dry-runnable.
 
 **Use when:** You are starting a new month's payroll. Use dry-run first to validate the period + voucher_series choice without committing.
 **Do not use for:** Adding employees to an existing run (POST /salary-runs/{id}/employees).
@@ -89,7 +89,7 @@ Creates a draft salary run for the given period (period_year, period_month). The
 - Duplicate (period_year, period_month) for the same company returns 409 SALARY_RUN_DUPLICATE_PERIOD.
 - Avvikelseperiod: absence and worked days are read from deviation_period_start..deviation_period_end, NOT necessarily from the pay month. Omit both to use the company setting (salary_deviation_period: same_month by default, previous_month for "innevarande månads lön, föregående månads avvikelser"), or pass both explicitly. A window that overlaps another live run returns 409 SALARY_RUN_DEVIATION_PERIOD_OVERLAP (the same day would be deducted twice); one date without the other, or a span over 62 days, returns 400 SALARY_RUN_DEVIATION_PERIOD_INVALID.
 - period_month is 1-12. The DB CHECK enforces this: a 0 or 13 returns 400 VALIDATION_ERROR before reaching the DB.
-- voucher_series defaults to "A". If the company uses a dedicated salary voucher series, set it explicitly.
+- voucher_series omitted: the company's salary series (its voucher series setting for salary_payment, K on the standard set, A when the company has none), the series the dashboard and MCP use. A dry run previews it. Send a letter only to override it for this run.
 - A newly-created run has no employees: :calculate without employees returns 400 SALARY_RUN_NO_EMPLOYEES.
 
 | Parameter | In | Type | Required | Notes |
@@ -706,7 +706,7 @@ Returns one row per employee in the run with the calculated aggregates: gross sa
 
 **Pitfalls:**
 - Aggregates are 0 until POST /calculate has advanced the run to review.
-- tax_withheld_override / avgifter_amount_override are review-stage manual adjustments; the effective value is COALESCE(override, calculated).
+- effective is what is booked, declared and paid; the plain columns are the calculation's values. tax_withheld_override / avgifter_amount_override are review-stage manual adjustments: a tax override also moves the net payout, and an avgifter override is ignored for an F-skatt payee, so do not apply the overrides yourself.
 - personnummer is masked on all payslip-shaped responses (GDPR Art.5(1)(c)); the employee detail endpoint returns the full value.
 
 | Parameter | In | Type | Required | Notes |
@@ -719,7 +719,7 @@ Returns one row per employee in the run with the calculated aggregates: gross sa
 Response `200`:
 ```ts
 {
-  data: { salary_run_employee_id: string, employee_id: string, first_name: string, last_name: string, personnummer_masked: string, salary_type: string, employment_degree: number, monthly_salary: number | null, hours_worked: number | null, gross_salary: number, taxable_income: number, tax_withheld: number, tax_withheld_override: number | null, net_salary: number, avgifter_basis: number, avgifter_amount: number, avgifter_amount_override: number | null, avgifter_category: string | null, vacation_accrual: number, sick_days: number, vab_days: number, parental_days: number, vacation_days_taken: number, created_at: string, updated_at: string }[],
+  data: { salary_run_employee_id: string, employee_id: string, first_name: string, last_name: string, personnummer_masked: string, salary_type: string, employment_degree: number, monthly_salary: number | null, hours_worked: number | null, gross_salary: number, taxable_income: number, tax_withheld: number, tax_withheld_override: number | null, net_salary: number, avgifter_basis: number, avgifter_amount: number, avgifter_amount_override: number | null, avgifter_category: string | null, vacation_accrual: number, sick_days: number, vab_days: number, parental_days: number, vacation_days_taken: number, effective: { gross_salary: number, tax_withheld: number, net_salary: number, avgifter_amount: number, vacation_accrual: number, employer_cost: number, tax_overridden: boolean, avgifter_overridden: boolean }, created_at: string, updated_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -849,7 +849,7 @@ Returns the full payslip for one employee in a run: gross/tax/net aggregates, ar
 **Pitfalls:**
 - calculation_breakdown is null and aggregates are 0 until POST /calculate has run.
 - line_items include engine-derived rows (absence, benefits) that are regenerated on every :calculate; manual rows survive recalculation.
-- The effective tax is COALESCE(tax_withheld_override, tax_withheld); same for avgifter overrides.
+- effective is what is booked, declared and paid; the plain columns are the calculation's values. A tax override also moves the net payout, and an avgifter override is ignored for an F-skatt payee, so read effective instead of applying the overrides yourself.
 - personnummer is masked here (GDPR Art.5(1)(c)); GET /employees/{id} is the identity drill-in.
 
 | Parameter | In | Type | Required | Notes |
@@ -899,6 +899,7 @@ Response `200`:
     ytd_gross: number,
     ytd_tax: number,
     ytd_net: number,
+    effective: { gross_salary: number, tax_withheld: number, net_salary: number, avgifter_amount: number, vacation_accrual: number, employer_cost: number, tax_overridden: boolean, avgifter_overridden: boolean },
     calculation_breakdown?: unknown,
     line_items: { salary_line_item_id: string, item_type: string, description: string, quantity: number | null, unit_price: number | null, amount: number, is_taxable: boolean, is_avgift_basis: boolean, is_vacation_basis: boolean, is_gross_deduction: boolean, is_net_deduction: boolean, account_number: string | null, sort_order: number }[],
     created_at: string,

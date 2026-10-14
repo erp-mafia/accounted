@@ -155,6 +155,67 @@ function invalid(reason: string): CreateSupplierInvoiceFailure {
   return { ok: false, code: 'SI_CREATE_INVALID_INPUT', details: { reason } }
 }
 
+// ── The reverse-charge rules of a supplier invoice ──────────────────────
+// Shared by every door that registers one from a request body: this module
+// and the inbox convert (lib/documents/inbox-convert.ts). The convert used to
+// carry a copy without the reverse-charge leg, so a reverse-charge invoice
+// converted from the inbox registered net + 25 % as the payable while the
+// registration verifikat credited 2440 with the net.
+
+/**
+ * The invoice's reverse-charge flag and vat_treatment. The treatment is a
+ * booking contract, not metadata: the engine reads `reverse_charge` for the
+ * fiktiv-moms route and `vat_treatment` for whether any ingående moms may be
+ * deducted at all (#2553), and it decides the rate a line that omits vat_rate
+ * falls back to. An EU or non-EU supplier defaults to reverse charge when the
+ * caller does not say, and `vat_treatment` is forced to follow the resolved
+ * flag so the two can never disagree (the engine books on one, the
+ * momsdeklaration reads the other).
+ */
+export function resolveSupplierInvoiceReverseCharge(
+  supplierType: string | null | undefined,
+  body: { reverse_charge?: boolean; vat_treatment?: string },
+): { reverseCharge: boolean; vatTreatment: string } {
+  const foreignSupplier = supplierType === 'eu_business' || supplierType === 'non_eu_business'
+  const reverseCharge = body.reverse_charge ?? foreignSupplier
+  return { reverseCharge, vatTreatment: reverseCharge ? 'reverse_charge' : (body.vat_treatment ?? 'standard_25') }
+}
+
+/**
+ * Reverse charge: the supplier charges no Swedish VAT, the buyer
+ * self-assesses (ML 1 kap 2 § p.4b, 16 kap 6 § and 13 §). A line rate other
+ * than 0 would book a phantom ingående moms in rutor 30 / 48. Null when every
+ * line carries 0 or the invoice is not reverse charge.
+ */
+export function reverseChargeLineRateRefusal(
+  reverseCharge: boolean,
+  items: ReadonlyArray<{ vat_rate: number }>,
+): CreateSupplierInvoiceFailure | null {
+  if (!reverseCharge) return null
+  const offending = items.findIndex((it) => it.vat_rate !== 0)
+  if (offending === -1) return null
+  return {
+    ok: false,
+    code: 'VALIDATION_ERROR',
+    details: {
+      field: `items[${offending}].vat_rate`,
+      message:
+        'reverse_charge invoices must have vat_rate=0 on every line item: the buyer self-assesses VAT.',
+      attempted_rate: items[offending].vat_rate,
+      reverse_charge: true,
+    },
+  }
+}
+
+/**
+ * What the company owes the supplier. Reverse charge: the supplier never
+ * invoices VAT, so the payable equals the net; the VAT is still tracked
+ * (vat_amount) for the declaration.
+ */
+export function supplierInvoicePayableTotal(subtotal: number, vatAmount: number, reverseCharge: boolean): number {
+  return roundOre(subtotal + (reverseCharge ? 0 : vatAmount))
+}
+
 /**
  * Register a supplier invoice. With `dryRun` every check runs and the result
  * is the row that would be written, but no ankomstnummer is drawn and nothing
@@ -257,18 +318,9 @@ export async function createSupplierInvoice(
     return { ok: false, code: 'SUPPLIER_NOT_FOUND' }
   }
 
-  // The treatment is a booking contract, not metadata: the engine reads
-  // `reverse_charge` for the fiktiv-moms route and `vat_treatment` for
-  // whether any ingående moms may be deducted at all (#2553), and it decides
-  // the rate a line that omits vat_rate falls back to. An EU or non-EU
-  // supplier defaults to reverse charge when the caller does not say, and
-  // `vat_treatment` is forced to follow the resolved flag so the two can
-  // never disagree (the engine books on one, the momsdeklaration reads the
-  // other).
-  const foreignSupplier =
-    supplier.supplier_type === 'eu_business' || supplier.supplier_type === 'non_eu_business'
-  const reverseCharge = body.reverse_charge ?? foreignSupplier
-  const vatTreatment = reverseCharge ? 'reverse_charge' : (body.vat_treatment ?? 'standard_25')
+  // A foreign supplier defaults to reverse charge; the treatment follows the
+  // flag (resolveSupplierInvoiceReverseCharge).
+  const { reverseCharge, vatTreatment } = resolveSupplierInvoiceReverseCharge(supplier.supplier_type, body)
 
   if (paidPrivately && reverseCharge) {
     // RC invoices come from registered businesses with formal invoices and
@@ -363,25 +415,8 @@ export async function createSupplierInvoice(
     }
   })
 
-  // Reverse charge: the Swedish supplier charges no VAT, the buyer
-  // self-assesses (ML 1 kap 2 § p.4b, 16 kap 6 § and 13 §). A line rate
-  // other than 0 would book a phantom ingående moms in rutor 30 / 48.
-  if (reverseCharge) {
-    const offending = items.findIndex((it) => it.vat_rate !== 0)
-    if (offending !== -1) {
-      return {
-        ok: false,
-        code: 'VALIDATION_ERROR',
-        details: {
-          field: `items[${offending}].vat_rate`,
-          message:
-            'reverse_charge invoices must have vat_rate=0 on every line item: the buyer self-assesses VAT.',
-          attempted_rate: items[offending].vat_rate,
-          reverse_charge: true,
-        },
-      }
-    }
-  }
+  const reverseChargeRefusal = reverseChargeLineRateRefusal(reverseCharge, items)
+  if (reverseChargeRefusal) return reverseChargeRefusal
 
   // Exempt (ML 10 kap) and export purchases carry no Swedish moms, so there
   // is no debiterad ingående moms to deduct: a line claiming a rate or an
@@ -405,9 +440,7 @@ export async function createSupplierInvoice(
 
   const subtotal = roundOre(items.reduce((sum, i) => sum + i.line_total, 0))
   const vatAmount = roundOre(items.reduce((sum, i) => sum + i.vat_amount, 0))
-  // Reverse charge: the supplier never invoices VAT, so the payable total
-  // equals the net. VAT is still tracked (vat_amount) for the declaration.
-  const total = roundOre(subtotal + (reverseCharge ? 0 : vatAmount))
+  const total = supplierInvoicePayableTotal(subtotal, vatAmount, reverseCharge)
 
   // A verifikat dated invoice_date is posted now when the company books at
   // registration or a person paid (the utlägg verifikat). Answer a locked

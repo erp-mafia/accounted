@@ -30,6 +30,15 @@ vi.mock('@/extensions/general/skatteverket/lib/declaration-prep', async (importO
   }
 })
 
+// gnubok_vat_declaration_status is the shared read service's door: the
+// service itself (company-scoped auth, räkenskapsår resolution, upstream
+// errors) is covered in skatteverket/__tests__/declaration-status.test.ts.
+const mockFetchVatDeclarationStatus = vi.fn()
+vi.mock('@/extensions/general/skatteverket/lib/declaration-status', async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>
+  return { ...actual, fetchVatDeclarationStatus: (...a: unknown[]) => mockFetchVatDeclarationStatus(...a) }
+})
+
 const mockKvittenser = vi.fn()
 vi.mock('@/extensions/general/skatteverket/lib/agi-client', () => ({
   agiGetKvittenser: (...a: unknown[]) => mockKvittenser(...a),
@@ -41,8 +50,16 @@ vi.mock('@/extensions/general/skatteverket/lib/audit', () => ({
   writeSkatteverketAudit: vi.fn(),
 }))
 
+// The completeness verdict runs for real over the declaration buildMomsuppgift
+// returns; only its per-verifikat ledger scan is stubbed.
+vi.mock('@/lib/reports/rc-basis-gaps', () => ({ findRcBasisGaps: vi.fn(async () => []) }))
+
 import { tools } from '../server'
 import { SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
+import {
+  COMPLETE_VAT_DECLARATION,
+  INCOMPLETE_VAT_DECLARATION,
+} from '@/extensions/general/skatteverket/__tests__/vat-declaration-fixture'
 
 const validate = tools.find((t) => t.name === 'gnubok_vat_declaration_validate')!
 const vatSubmit = tools.find((t) => t.name === 'gnubok_vat_declaration_submit')!
@@ -140,20 +157,22 @@ describe('VAT tools: period arguments are checked before Skatteverket is called'
   }
 
   it('accepts yearly without a period number: helårsmoms has one period per year', async () => {
-    mockResolveRedovisare.mockResolvedValue('165560000000')
-    mockSkvRequest.mockResolvedValue({ ok: false, status: 404, text: async () => '', json: async () => ({}) })
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { period_start: '2026-01-01', period_end: '2026-12-31' } })
-    const result = await vatStatus.execute(
+    mockFetchVatDeclarationStatus.mockResolvedValue({
+      ok: true, redovisare: '165560000000', redovisningsperiod: '202612', submitted: null, decided: null,
+    })
+    const { supabase } = createQueuedMockSupabase()
+    await vatStatus.execute(
       { period_type: 'yearly', year: 2026 }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
     )
-    expect((result as { redovisningsperiod: string }).redovisningsperiod).toBe('202612')
+    expect(mockFetchVatDeclarationStatus).toHaveBeenCalledWith(
+      supabase, 'user-1', 'company-1', { periodType: 'yearly', year: 2026, period: 1, state: 'both' },
+    )
   })
 })
 
 describe('gnubok_vat_declaration_validate', () => {
   it('maps a SkatteverketAuthError(NOT_CONNECTED) to SKATTEVERKET_NOT_CONNECTED', async () => {
-    mockBuildMomsuppgift.mockResolvedValue({ redovisare: '165560000000', redovisningsperiod: '202503', momsuppgift: {} })
+    mockBuildMomsuppgift.mockResolvedValue({ redovisare: '165560000000', redovisningsperiod: '202503', momsuppgift: {}, declaration: COMPLETE_VAT_DECLARATION })
     mockSkvRequest.mockRejectedValue(new SkatteverketAuthError('ingen anslutning', 'NOT_CONNECTED'))
     const { supabase } = createQueuedMockSupabase()
     let thrown: unknown
@@ -166,7 +185,7 @@ describe('gnubok_vat_declaration_validate', () => {
   })
 
   it('happy path returns kontrollresultat', async () => {
-    mockBuildMomsuppgift.mockResolvedValue({ redovisare: '165560000000', redovisningsperiod: '202503', momsuppgift: { summaMoms: 100 } })
+    mockBuildMomsuppgift.mockResolvedValue({ redovisare: '165560000000', redovisningsperiod: '202503', momsuppgift: { summaMoms: 100 }, declaration: COMPLETE_VAT_DECLARATION })
     mockSkvRequest.mockResolvedValue({ ok: true, status: 200, json: async () => ({ status: 'OK', resultat: [] }) })
     const { supabase } = createQueuedMockSupabase()
     const result = (await validate.execute(
@@ -186,7 +205,7 @@ describe('gnubok_vat_declaration_validate', () => {
 
 describe('gnubok_vat_declaration_submit', () => {
   it('validates via /kontrollera then stages: never touches /utkast', async () => {
-    mockBuildMomsuppgift.mockResolvedValue({ redovisare: '165560000000', redovisningsperiod: '202503', momsuppgift: { summaMoms: 100 } })
+    mockBuildMomsuppgift.mockResolvedValue({ redovisare: '165560000000', redovisningsperiod: '202503', momsuppgift: { summaMoms: 100 }, declaration: COMPLETE_VAT_DECLARATION })
     mockSkvRequest.mockResolvedValue({ ok: true, status: 200, json: async () => ({ status: 'OK' }) })
     const { supabase, enqueue } = createQueuedMockSupabase()
     // stagePendingOperation: resolvePeriodStatusForDate (company_settings + fiscal_periods) then insert
@@ -204,6 +223,28 @@ describe('gnubok_vat_declaration_submit', () => {
     // Exactly one SKV call (the stage-time /kontrollera); no /utkast.
     expect(mockSkvRequest).toHaveBeenCalledTimes(1)
     expect(mockSkvRequest.mock.calls[0][4]).toMatch(/^\/kontrollera\//)
+  })
+})
+
+describe('gnubok_vat_declaration_submit: completeness gate', () => {
+  // The approval commit runs the same verdict (the submit chain) and would
+  // consume the op; refusing here means nothing is staged that cannot file.
+  it('refuses an incomplete declaration with VAT_DECLARATION_INCOMPLETE: nothing staged, no Skatteverket call', async () => {
+    mockBuildMomsuppgift.mockResolvedValue({
+      redovisare: '165560000000', redovisningsperiod: '202503', momsuppgift: { summaMoms: 0 },
+      declaration: INCOMPLETE_VAT_DECLARATION,
+    })
+    const { supabase, findCalls } = createQueuedMockSupabase()
+
+    const thrown = await vatSubmit
+      .execute({ period_type: 'monthly', year: 2025, period: 3 }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
+      .then(() => null, (err: unknown) => err as Error & { code?: string; remediation?: { tool?: string } })
+
+    expect(thrown?.code).toBe('VAT_DECLARATION_INCOMPLETE')
+    expect(thrown?.message).toMatch(/RC_BASIS_MISSING/)
+    expect(thrown?.remediation?.tool).toBe('gnubok_vat_declaration_validate')
+    expect(mockSkvRequest).not.toHaveBeenCalled()
+    expect(findCalls('pending_operations', 'insert')).toEqual([])
   })
 })
 
@@ -460,78 +501,43 @@ describe('gnubok_agi_status: run-scoped filing state', () => {
   })
 })
 
-describe('gnubok_vat_declaration_status: redovisningsperiod follows the räkenskapsår', () => {
-  // Helårsmoms is filed per räkenskapsår (SFL 26 kap 10-11 §§). The MCP
-  // handler used to inline formatRedovisningsperiod without the fiscal-year
-  // end and polled 202612 for a company whose räkenskapsår 2025-04-01..
-  // 2026-03-31 had been filed under 202603 (feedback seq 330091). Same
-  // resolution as the HTTP status service and the submit path now.
-  const notOnFile = { ok: false, status: 404, json: async () => ({}), text: async () => '' }
-
-  it('yearly for a broken FY (Apr-Mar) polls the FY-end month, not December', async () => {
-    mockResolveRedovisare.mockResolvedValue('165560000000')
-    mockSkvRequest.mockResolvedValue(notOnFile)
-    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
-    // fiscal_periods: the räkenskapsår ending in 2026.
-    enqueue({ data: { period_start: '2025-04-01', period_end: '2026-03-31' } })
-
-    const result = await vatStatus.execute(
-      { period_type: 'yearly', year: 2026, period: 1 }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
-    ) as { redovisningsperiod: string; submitted: unknown; decided: unknown }
-
-    expect(result.redovisningsperiod).toBe('202603')
-    expect(result).toMatchObject({ submitted: null, decided: null })
-    // The lookup is "the fiscal year ending in `year`", not a calendar guess.
-    expect(findCalls('fiscal_periods', 'gte')).toEqual([['period_end', '2026-01-01']])
-    expect(findCalls('fiscal_periods', 'lte')).toEqual([['period_end', '2026-12-31']])
-    expect(mockSkvRequest.mock.calls.map((c) => c[4])).toEqual([
-      '/inlamnat/165560000000/202603',
-      '/beslutat/165560000000/202603',
-    ])
-  })
-
-  it('yearly for a calendar FY still maps to YYYY12', async () => {
-    mockResolveRedovisare.mockResolvedValue('165560000000')
-    mockSkvRequest.mockResolvedValue(notOnFile)
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { period_start: '2026-01-01', period_end: '2026-12-31' } })
+describe('gnubok_vat_declaration_status: the company-scoped read the v1 route and dashboard make', () => {
+  // The tool used to read with the caller's own Skatteverket token only, so a
+  // member who had not connected BankID personally got NOT_CONNECTED for a
+  // company whose declaration v1 and the dashboard read fine (through another
+  // member's token or the ombud grant). It now calls the same service.
+  it('calls fetchVatDeclarationStatus with the period and state, and returns its answer', async () => {
+    mockFetchVatDeclarationStatus.mockResolvedValue({
+      ok: true, redovisare: '165560000000', redovisningsperiod: '202603',
+      submitted: { kvittensnummer: 'K1' }, decided: null,
+    })
+    const { supabase } = createQueuedMockSupabase()
 
     const result = await vatStatus.execute(
       { period_type: 'yearly', year: 2026, period: 1, state: 'submitted' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
-    ) as { redovisningsperiod: string }
+    )
 
-    expect(result.redovisningsperiod).toBe('202612')
-    expect(mockSkvRequest.mock.calls.map((c) => c[4])).toEqual(['/inlamnat/165560000000/202612'])
-    // 404 is "nothing on file", audited as ok.
-    expect(mockSkvRequest.mock.calls[0][5]).toEqual({
-      endpoint: 'inlamnat', agRegistreradId: '165560000000', redovisningsperiod: '202612', okStatuses: [404],
+    expect(mockFetchVatDeclarationStatus).toHaveBeenCalledWith(
+      supabase, 'user-1', 'company-1', { periodType: 'yearly', year: 2026, period: 1, state: 'submitted' },
+    )
+    expect(result).toEqual({
+      redovisare: '165560000000', redovisningsperiod: '202603', submitted: { kvittensnummer: 'K1' }, decided: null,
     })
+    // No door-local Skatteverket call or token read.
+    expect(mockSkvRequest).not.toHaveBeenCalled()
   })
 
-  it('yearly with no fiscal year ending in `year` keeps the calendar fallback', async () => {
-    mockResolveRedovisare.mockResolvedValue('165560000000')
-    mockSkvRequest.mockResolvedValue(notOnFile)
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: null }) // fiscal_periods: nothing ends in 2026
+  it.each([
+    ['SKATTEVERKET_NOT_CONNECTED', 401, 'Inte ansluten till Skatteverket.'],
+    ['SKATTEVERKET_API_ERROR', 502, 'Skatteverket svarade med 500.'],
+    ['VALIDATION_ERROR', 400, 'Organisationsnummer saknas i företagsinställningar'],
+  ])('throws the service failure under its structured code: %s', async (code, httpStatus, error) => {
+    mockFetchVatDeclarationStatus.mockResolvedValue({ ok: false, code, http_status: httpStatus, error })
+    const { supabase } = createQueuedMockSupabase()
 
-    const result = await vatStatus.execute(
-      { period_type: 'yearly', year: 2026, period: 1, state: 'decided' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
-    ) as { redovisningsperiod: string }
-
-    expect(result.redovisningsperiod).toBe('202612')
-  })
-
-  it('monthly and quarterly are calendar periods: no fiscal_periods lookup', async () => {
-    mockResolveRedovisare.mockResolvedValue('165560000000')
-    mockSkvRequest.mockResolvedValue(notOnFile)
-    const { supabase, findCalls } = createQueuedMockSupabase()
-
-    const result = await vatStatus.execute(
-      { period_type: 'quarterly', year: 2026, period: 1, state: 'submitted' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
-    ) as { redovisningsperiod: string }
-
-    expect(result.redovisningsperiod).toBe('202603')
-    expect(findCalls('fiscal_periods', 'select')).toEqual([])
+    await expect(
+      vatStatus.execute({ period_type: 'quarterly', year: 2026, period: 1 }, 'company-1', 'user-1', supabase as never, { type: 'api_key' }),
+    ).rejects.toMatchObject({ code, message: error })
   })
 })
 
@@ -561,9 +567,10 @@ describe('gnubok_vat_declaration_status: output schema matches what Skatteverket
   })
 
   it('passes an array answer through unchanged', async () => {
-    mockResolveRedovisare.mockResolvedValue('165560000000')
     const submissions = [{ kvittensnummer: 'K1' }, { kvittensnummer: 'K2' }]
-    mockSkvRequest.mockResolvedValue({ ok: true, status: 200, json: async () => submissions, text: async () => '' })
+    mockFetchVatDeclarationStatus.mockResolvedValue({
+      ok: true, redovisare: '165560000000', redovisningsperiod: '202606', submitted: submissions, decided: null,
+    })
     const { supabase } = createQueuedMockSupabase()
 
     const result = await vatStatus.execute(

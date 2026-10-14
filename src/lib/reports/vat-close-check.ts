@@ -4,12 +4,14 @@
  * gnubok_get_vat_report, gnubok_vat_review_widget and gnubok_vat_close_check,
  * and the v1 compliance check (type=vat_close).
  *
- * The rutor come from the same aggregate the web momsdeklaration, its exports
- * and the Skatteverket submission read (get_vat_declaration_totals through
- * fetchVatAccountTotals in ./vat-declaration.ts); the completeness checks are
- * ./vat-declaration-checks.ts through the filing gate the web UI's Skicka
- * button reads (./vat-filing-gate.ts). Moved here from the MCP server, where
- * the v1 door could not reach it (core never imports an extension).
+ * The rutor ARE the declaration the web momsdeklaration, its exports and the
+ * Skatteverket submission file (computeVatDeclaration in ./vat-declaration.ts),
+ * signed as filed; the completeness checks are ./vat-declaration-checks.ts
+ * through the filing gate the web UI's Skicka button reads
+ * (./vat-filing-gate.ts), and vatFilingVerdict below is that gate on the
+ * server, which every path that sends a declaration to Skatteverket runs
+ * first. Moved here from the MCP server, where the v1 door could not reach it
+ * (core never imports an extension).
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { type EntryLinesQuery, fetchLinesByEntryIds } from '@/lib/bookkeeping/entry-lines'
@@ -19,18 +21,18 @@ import { codedRefusal } from '@/lib/errors/refusal'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
 import { findRcBasisGaps } from '@/lib/reports/rc-basis-gaps'
-import { fetchVatAccountTotals, type MomsredovisningDetection, resolvePeriodDates, revenueAccountsWithoutRuta, rutorFromTotals, VAT_SETTLEMENT_NET_ACCOUNTS, type VatPeriodSource, type VatSettlementShapedEntry } from '@/lib/reports/vat-declaration'
-import { runVatDeclarationChecks, type VatCheckAccountTotals, type VatDeclarationCheck, type VatDeclarationCheckStatus } from '@/lib/reports/vat-declaration-checks'
-import { isFilingBlocked, type RcBasisGapScan, rcBasisTotalsByRate, withRcBasisGapFindings } from '@/lib/reports/vat-filing-gate'
-import { fetchDynamicVatAccounts } from '@/lib/reports/vat-revenue-accounts'
+import { computeVatDeclaration, type MomsredovisningDetection, rcInputTotalsFromDeclaration, VAT_SETTLEMENT_NET_ACCOUNTS, type VatPeriodSource, type VatSettlementShapedEntry } from '@/lib/reports/vat-declaration'
+import { revenueAccountWithoutRutaFinding, runVatDeclarationChecks, type VatDeclarationCheck, type VatDeclarationCheckStatus } from '@/lib/reports/vat-declaration-checks'
+import { isFilingBlocked, type RcBasisGapScan, withRcBasisGapFindings } from '@/lib/reports/vat-filing-gate'
 import { buildFiledAmounts } from '@/lib/reports/vat-manual-filing'
 import { euTradeInRutor, formatEuTradeBoxes } from '@/lib/vat/eu-trade'
+import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getVatDeadlineForPeriod, type VatDeadlineCalculationSettings } from '@/lib/tax/deadline-config'
 import { adjustDeadlineToNextBankingDay } from '@/lib/tax/swedish-holidays'
 import { formatVoucherLabel } from '@/lib/transactions/link-journal-entry'
 import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
-import type { VatDeclarationRutor, VatPeriodType, VatRevenueAccountWithoutRuta } from '@/types'
+import type { VatDeclaration, VatDeclarationRutor } from '@/types'
 import { createLogger } from '@/lib/logger'
 import { parseVatPeriodArgs } from './vat-period-args'
 
@@ -45,21 +47,15 @@ export const AGENT_AMOUNT_FORMAT = new Intl.NumberFormat('en-US', {
 
 // ── VAT report computation (shared by gnubok_get_vat_report + gnubok_vat_review_widget) ──
 //
-// Maps posted journal entry lines to SKV 4700 rutor. ruta49 covers domestic
-// output VAT (10/11/12) AND reverse-charge output VAT (30/31/32) per
-// ML 2023:200: both must be displayed and netted against ruta48 (input VAT).
-//
-// Account → ruta map:
-//   3001-3008, 3041-3048, 3051-3058, 3071-3078 → ruta05  (all domestic taxable sales, common BAS revenue accounts)
-//   2611           → ruta10  (output VAT 25%)
-//   2621           → ruta11  (output VAT 12%)
-//   2631           → ruta12  (output VAT 6%)
-//   2614           → ruta30  (reverse-charge output VAT 25%)
-//   2624           → ruta31  (reverse-charge output VAT 12%)
-//   2634           → ruta32  (reverse-charge output VAT 6%)
-//   3308           → ruta39  (EU services sold)
-//   3305           → ruta40  (export outside EU)
-//   2641/2645/2647 → ruta48  (all input VAT)
+// The report is the momsdeklaration itself: computeVatDeclaration, the one
+// projection of the ledger onto the SKV 4700 rutor (ACCOUNT_RUTA plus the
+// company's own classified accounts), signed exactly as rutorToMomsuppgift
+// files it. ruta49 covers domestic output VAT (10/11/12), reverse-charge
+// output VAT (30/31/32) and import VAT (60/61/62) less ruta48, per
+// ML 2023:200. A class 3 account the declaration puts in no ruta is named in
+// the warnings instead of being widened into ruta 05 here: a ruta 05 the
+// filing does not carry is a figure the agent cannot check against
+// Skatteverket (the compatibility list that did that was removed 2026-10-13).
 //
 // Posted+reversed status filter: a "reversed" original entry is still part of
 // its period's books: Skatteverket files VAT period-by-period under
@@ -71,18 +67,6 @@ export const AGENT_AMOUNT_FORMAT = new Intl.NumberFormat('en-US', {
 // (the original sale's VAT silently disappears) and over-credit Period N+M
 // (a reversal with no original), incorrect per ML 2023:200.
 
-// Keep the MCP report's historical ruta 05 widening for accounts that do not
-// have an explicit treatment. The effective resolver adds custom ruta 05
-// accounts and removes any of these when the company overrides their treatment.
-const RUTA_05_COMPATIBILITY_ACCOUNTS = [
-  '3000',
-  '3001', '3002', '3003', '3005', '3006', '3007', '3008',
-  '3106',
-  '3041', '3042', '3043', '3044', '3045', '3046', '3047', '3048',
-  '3051', '3052', '3053', '3054', '3055', '3056', '3057', '3058',
-  '3071', '3072', '3073', '3074', '3075', '3076', '3077', '3078',
-] as const
-
 interface VatReportResult {
   period: { type: string; year: number; period: number; start: string; end: string }
   period_label: string
@@ -90,7 +74,8 @@ interface VatReportResult {
    * Every box of the SKV 4700 declaration, keyed exactly like
    * VatDeclarationRutor, so no box the Skatteverket filing carries can be
    * missing from what the agent reads (agent feedback seq 911266: ruta 50 was
-   * filed but never shown). Absolute values except the signed ruta 49.
+   * filed but never shown). Signed as filed: a box whose credit notes
+   * exceed its sales is negative here as it is in the filing.
    */
   rutor: VatDeclarationRutor
   summary: string
@@ -209,28 +194,12 @@ async function listExcludedSettlementEntries(
 
 interface VatReportWithRutor {
   report: VatReportResult
-  dynamicVatAccounts: Awaited<ReturnType<typeof fetchDynamicVatAccounts>>
   /**
-   * The FULL SKV 4700 projection of the same ledger aggregate, via core's
-   * `rutorFromTotals`, signed as filed. `report.rutor` carries the same boxes
-   * (it is built from this object's keys) as absolute values for display.
-   *
-   * The two differ on ruta 05 by design: `report.rutor.ruta05` sums the
-   * widened RUTA_05_ACCOUNTS list for display, while this one is the canonical
-   * ACCOUNT_RUTA projection, i.e. what would actually be filed. Checks run on
-   * the filed shape, never on the display shape. The company's own ruta 05
-   * accounts feed BOTH: they are part of the filing, not a display widening.
+   * The declaration the report shows, as computeVatDeclaration returned it:
+   * the completeness verdict runs on this object (vatFilingVerdict), so the
+   * close check judges exactly what would be filed.
    */
-  declarationRutor: VatDeclarationRutor
-  /**
-   * The per-account debit/credit totals both projections above are built from,
-   * exactly the shape `runVatDeclarationChecks` takes as its optional second
-   * argument. Threaded through so the completeness checks compare rutor 30-32
-   * against the reverse-charge INPUT accounts (2645/2647) rather than the ruta
-   * 48 aggregate, which ordinary debiterad ingående moms on 2641 masks. Internal
-   * to the server: no tool puts this map on the wire.
-   */
-  accountTotals: VatCheckAccountTotals
+  declaration: VatDeclaration
   /**
    * Which branch of resolvePeriodDates produced `report.period`. Kept off the
    * report itself: gnubok_get_vat_report declares its period object closed
@@ -266,42 +235,20 @@ async function computeVatReportWithRutor(
 ): Promise<VatReportWithRutor> {
   const { periodType, year, period } = parseVatPeriodArgs(args)
 
-  const { start: startDate, end: endDate, source: periodSource } = await resolvePeriodDates(
+  // The declaration the web momsdeklaration, its exports and the Skatteverket
+  // submission file, computed by the same function: get_vat_declaration_totals
+  // through fetchVatAccountTotals, minus the bokslutsverifikat, the marked
+  // kontantmetod vändningar and every momsredovisning (crm#1139, #2805). This
+  // report used to project that aggregate a second time, with its own ruta 05
+  // account list and absolute values, and so showed figures nobody files.
+  const { declaration, periodSource, settlementShapedEntries } = await computeVatDeclaration(
     supabase,
     companyId,
     periodType,
     year,
     period,
   )
-
-  const dynamicVatAccounts = await fetchDynamicVatAccounts(supabase, companyId)
-
-  // The per-account totals come from the SAME aggregate the web momsdeklaration,
-  // its exports and the Skatteverket submission read: get_vat_declaration_totals
-  // via fetchVatAccountTotals. That RPC is the one definition of which ledger
-  // lines a momsdeklaration counts: posted and reversed entries in the period,
-  // minus the posted bokslutsverifikat (fiscal_periods.closing_entry_id), the
-  // marked kontantmetod vändningar and every momsredovisning (tagged or
-  // recognised by shape). This report used to scan the journal itself and
-  // mirror only the momsredovisning rule, so after year-end closing the
-  // bokslutsverifikat that zeroes class 3-8 against equity (2099/2010) zeroed
-  // ruta 05 and rutor 20-24 here while the filing stayed correct (crm#1139).
-  //
-  // The extra accounts are measured, never shape detectors (see
-  // fetchVatAccountTotals): the company's own ruta 05 accounts, the class 3
-  // accounts with no momskod (REVENUE_ACCOUNT_WITHOUT_RUTA) and this report's
-  // historical ruta 05 display widening.
-  const { totals: accountTotals, settlementShapedEntries } = await fetchVatAccountTotals(
-    supabase,
-    companyId,
-    startDate,
-    endDate,
-    [
-      ...dynamicVatAccounts.accounts,
-      ...dynamicVatAccounts.unconfiguredRevenueAccounts.keys(),
-      ...RUTA_05_COMPATIBILITY_ACCOUNTS,
-    ],
-  )
+  const { start: startDate, end: endDate } = declaration.period
   const excludedEntries = await listExcludedSettlementEntries(
     supabase,
     companyId,
@@ -310,31 +257,16 @@ async function computeVatReportWithRutor(
     settlementShapedEntries,
   )
 
-  function debitBalance(acc: string): number {
-    const t = accountTotals.get(acc)
-    return t ? Math.round((t.debit - t.credit) * 100) / 100 : 0
-  }
-
-  function creditBalance(acc: string): number {
-    return -debitBalance(acc)
-  }
-
-  const declarationRutor = rutorFromTotals(accountTotals, dynamicVatAccounts)
-  const { ruta30, ruta31, ruta32 } = declarationRutor
-  const filedNet = buildFiledAmounts(declarationRutor).net
-  const reportRuta05Accounts = new Set<string>(
-    RUTA_05_COMPATIBILITY_ACCOUNTS.filter(
-      (account) => !dynamicVatAccounts.explicitAccounts.has(account),
-    ),
-  )
-  for (const [account, mapping] of dynamicVatAccounts.mappingByAccount) {
-    if (mapping.box === 'ruta05') reportRuta05Accounts.add(account)
-  }
-  const ruta05 = [...reportRuta05Accounts]
-    .reduce((sum, account) => sum + creditBalance(account), 0)
+  const rutor: VatDeclarationRutor = { ...declaration.rutor }
+  const { ruta30, ruta31, ruta32 } = rutor
+  const filedNet = buildFiledAmounts(rutor).net
   // Import VAT (since 2015 declared via momsdeklaration, not Tullverket): the
   // importer books output VAT to 2615/2625/2635 (ruta 60/61/62) and the
-  // matching deductible input to 2645 (rolls into ruta 48 below).
+  // matching deductible input to 2645 (rolls into ruta 48).
+  const debitBalance = (account: string): number => {
+    const t = declaration.rcInputAccountTotals?.[account]
+    return t ? roundOre(t.debit - t.credit) : 0
+  }
   const calculatedInput2645 = debitBalance('2645')
   const calculatedInput2647 = debitBalance('2647')
 
@@ -362,19 +294,12 @@ async function computeVatReportWithRutor(
       'motsvarande ingående bokningen finns: båda sidor krävs enligt ML 2023:200.'
     )
   }
-
-  // Derived from the declaration's own keys rather than hand-listed: a
-  // hand-listed copy is how ruta 50 (and 06-08, 36-38, 41, 42) went missing
-  // from this view while the Skatteverket mapper filed them. Every box is an
-  // absolute value except ruta 49, which keeps its pay/refund sign; ruta 05
-  // keeps the display widening above.
-  const rutor = Object.fromEntries(
-    Object.entries(declarationRutor).map(([box, value]) => [
-      box,
-      box === 'ruta49' ? value : Math.abs(value),
-    ]),
-  ) as unknown as VatDeclarationRutor
-  rutor.ruta05 = Math.abs(ruta05)
+  // Class 3 balances the declaration puts in no ruta (#3387): the same
+  // finding, in the same words, the completeness checks give.
+  const revenueWithoutRuta = declaration.revenueAccountsWithoutRuta ?? []
+  if (revenueWithoutRuta.length > 0) {
+    warnings.push(revenueAccountWithoutRutaFinding(revenueWithoutRuta).message)
+  }
 
   const report: VatReportResult = {
     period: { type: periodType, year, period, start: startDate, end: endDate },
@@ -396,86 +321,74 @@ async function computeVatReportWithRutor(
     },
   }
 
-  // Same `accountTotals` the report is built from, projected through core's
-  // ACCOUNT_RUTA map: the completeness checks run on the signed, filed shape
-  // (canonical ruta 05), never on the absolute display view.
   return {
     report,
-    declarationRutor,
-    dynamicVatAccounts,
-    accountTotals,
+    declaration,
     periodSource,
     excludedSettlementEntries: excludedEntries,
   }
 }
 
 /**
- * Momsdeklaration completeness pre-flight, shared by gnubok_vat_close_check
- * and gnubok_vat_declaration_validate.
+ * The momsdeklaration completeness verdict, on the server: the "Kontroll av
+ * underlaget" gate the web filing UI computes in the browser
+ * (VatDeclarationView: runVatDeclarationChecks over the declaration, folded
+ * through withRcBasisGapFindings with the per-verifikat scan, then
+ * isFilingBlocked), composed the same way over the same declaration.
  *
- * Runs core's `runVatDeclarationChecks` (period aggregates, proportional) and
- * folds in the per-verifikat FK004 scan through the SAME gate helper the web
- * UI's "Kontroll av underlaget" banner and its Skicka button read
- * (lib/reports/vat-filing-gate.ts). One check list, one verdict: the MCP
- * surface can no longer give a green light the UI would refuse.
+ * Every path that sends a declaration to Skatteverket runs this before its
+ * first call there and refuses when `blocked` (the dashboard draft and
+ * one-click submit routes, the submit chain an approved MCP operation
+ * commits through, MCP staging), because the browser check alone is no gate
+ * for a caller that never loads the page. gnubok_vat_close_check and
+ * gnubok_vat_declaration_validate report the same verdict. The manual
+ * eSKD/PDF filing stays ungated on purpose (vat-filing-gate.ts). Lives here,
+ * not in vat-filing-gate.ts, because that module is imported by the client.
  *
  * The per-verifikat scan is allowed to degrade: a failure becomes
  * `{ status: 'unavailable' }`, which the gate turns into an explicit WARNING
  * finding rather than silence, because an empty list reads as "no problems"
  * and that claim is not earned when the scan never answered.
  *
- * `accountTotals` is the per-account debit/credit aggregate the rutor were
- * projected from. Passing it switches RC_INPUT_VAT_MISMATCH from the ruta 48
- * aggregate to the reverse-charge input accounts (2645/2647). Both call sites
- * have it in hand, so both pass it; the parameter stays optional only because
- * the check itself degrades gracefully without it.
- *
- * `revenueWithoutRuta` feeds REVENUE_ACCOUNT_WITHOUT_RUTA (#3387). The validate
- * tool passes the list its declaration carries; the close check passes nothing
- * and it is derived here from the same account totals and dynamic account
- * resolution its rutor came from, through core's revenueAccountsWithoutRuta.
+ * `fiscalPeriodId` scans the räkenskapsår the declaration was computed for
+ * (helårsmoms on a broken fiscal year); pass what the declaration got.
  */
-export async function runVatCompletenessChecks(
+export interface VatFilingVerdict {
+  checks: VatDeclarationCheck[]
+  /** isFilingBlocked(checks): an ERROR finding, the state the UI disables Skicka on. */
+  blocked: boolean
+}
+
+export async function vatFilingVerdict(
   supabase: SupabaseClient,
   companyId: string,
-  rutor: VatDeclarationRutor,
-  periodType: VatPeriodType,
-  year: number,
-  period: number,
-  accountTotals?: VatCheckAccountTotals,
-  dynamicVatAccounts?: Awaited<ReturnType<typeof fetchDynamicVatAccounts>>,
-  rcBasisByRate?: { r25: number; r12: number; r6: number },
-  revenueWithoutRuta?: VatRevenueAccountWithoutRuta[],
-): Promise<VatDeclarationCheck[]> {
+  declaration: VatDeclaration,
+  options: { fiscalPeriodId?: string } = {},
+): Promise<VatFilingVerdict> {
+  const { type: periodType, year, period } = declaration.period
   let scan: RcBasisGapScan
   try {
-    const gaps = await findRcBasisGaps(supabase, companyId, periodType, year, period)
+    const gaps = await findRcBasisGaps(supabase, companyId, periodType, year, period, {
+      fiscalPeriodId: options.fiscalPeriodId,
+    })
     scan = { status: 'scanned', gapCount: gaps.length }
   } catch {
     scan = { status: 'unavailable' }
   }
-  // Downgrade evidence (per-momssats 44xx/45xx balances) only exists when the
-  // caller supplied the account totals; without them the per-voucher gaps
-  // keep their blocking ERROR tier rather than guessing.
-  const evidence = accountTotals
-    ? {
-        rutor,
-        rcBasisByRate: rcBasisByRate ?? rcBasisTotalsByRate(accountTotals, dynamicVatAccounts),
-      }
-    : undefined
-  const revenueAccounts = revenueWithoutRuta ??
-    (accountTotals && dynamicVatAccounts
-      ? revenueAccountsWithoutRuta(accountTotals, dynamicVatAccounts)
-      : undefined)
-  return withRcBasisGapFindings(
-    runVatDeclarationChecks(rutor, accountTotals, { revenueAccountsWithoutRuta: revenueAccounts }),
+  const checks = withRcBasisGapFindings(
+    runVatDeclarationChecks(declaration.rutor, rcInputTotalsFromDeclaration(declaration), {
+      revenueAccountsWithoutRuta: declaration.revenueAccountsWithoutRuta,
+    }),
     scan,
-    evidence,
+    declaration.rcBasisByRate
+      ? { rutor: declaration.rutor, rcBasisByRate: declaration.rcBasisByRate }
+      : undefined,
   )
+  return { checks, blocked: isFilingBlocked(checks) }
 }
 
 /** Wire shape for a completeness finding on the MCP surface. */
-interface VatCompletenessFinding {
+export interface VatCompletenessFinding {
   code: VatDeclarationCheck['code']
   status: VatDeclarationCheckStatus
   message: string
@@ -866,19 +779,15 @@ export async function computeVatCloseCheck(
   supabase: SupabaseClient
 ): Promise<VatCloseCheckResult> {
   // 1) VAT report (validates inputs + gives us figures + period dates). The
-  //    full SKV 4700 projection rides along for the completeness checks in
-  //    step 4b: they need the signed, filed rutor (the report view is absolute
-  //    values with a widened ruta 05), plus
-  //    the per-account totals so the RC input comparison reads 2645/2647
-  //    instead of the ruta 48 aggregate.
+  //    declaration it shows rides along for the completeness checks in step
+  //    4b, which judge exactly the rutor that would be filed.
   const {
     report: vatReport,
-    declarationRutor,
-    dynamicVatAccounts,
-    accountTotals,
+    declaration,
     periodSource,
     excludedSettlementEntries,
   } = await computeVatReportWithRutor(args, companyId, supabase)
+  const declarationRutor = declaration.rutor
   const { start, end, type: periodType, year, period } = vatReport.period
 
   // 2) Company settings: deadline inputs come from the same fields used by
@@ -1168,15 +1077,10 @@ export async function computeVatCloseCheck(
   //     Now the shared core checks run instead, over the full SKV 4700
   //     projection, so the MCP verdict is the SAME verdict the web UI's
   //     "Kontroll av underlaget" gate gives. Never re-derive these locally.
-  const declarationChecks = await runVatCompletenessChecks(
+  const { checks: declarationChecks, blocked: declarationBlocked } = await vatFilingVerdict(
     supabase,
     companyId,
-    declarationRutor,
-    periodType as VatPeriodType,
-    Number(year),
-    Number(period),
-    accountTotals,
-    dynamicVatAccounts,
+    declaration,
   )
 
   // Zero deductible input VAT against self-assessed utgående moms is
@@ -1186,7 +1090,7 @@ export async function computeVatCloseCheck(
   // partial-deduction story that explains it.
   //
   // The shared RC_INPUT_VAT_MISMATCH now isolates the RC share exactly (it reads
-  // 2645/2647, see the accountTotals argument above) and still stays a WARNING,
+  // the declaration's 2645/2647 pair, rcInputAccountTotals) and still stays a WARNING,
   // deliberately: limited avdragsrätt (blandad verksamhet, ML 13 kap 18/24-25 §§)
   // makes a shortfall legally correct for some filers, and no SKV gateway rule
   // rejects it. Both halves of this escalation survive that sharpening:
@@ -1301,12 +1205,11 @@ export async function computeVatCloseCheck(
   }
 
   const highBlockers = blockers.filter((b) => b.severity === 'high').length
-  // Two gates, one verdict. `isFilingBlocked` over the SAME check array the web
-  // UI gates "Skicka till Skatteverket" on is authoritative for the declaration
-  // itself; the blocker scan covers the bookkeeping around it. An ERROR finding
-  // is already a high blocker, so this is belt and braces on purpose: the
-  // readiness answer must never come from a narrower source than the UI's.
-  const declarationBlocked = isFilingBlocked(declarationChecks)
+  // Two gates, one verdict. vatFilingVerdict's `blocked`, the same verdict every
+  // filing path refuses on, is authoritative for the declaration itself; the
+  // blocker scan covers the bookkeeping around it. An ERROR finding is already
+  // a high blocker, so this is belt and braces on purpose: the readiness answer
+  // must never come from a narrower source than the filing gate's.
   const readyToClose = highBlockers === 0 && !declarationBlocked
   // What reaches the skattekonto is ruta 49 as filed: every ruta in whole
   // kronor and 49 their net (buildFiledAmounts), the amount the momsverifikat

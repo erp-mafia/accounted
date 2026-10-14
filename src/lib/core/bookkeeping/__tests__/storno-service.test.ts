@@ -6,6 +6,7 @@ import {
   BookkeepingDatabaseError,
   CorrectionChainTooDeepError,
   MeaninglessCorrectionError,
+  TargetPeriodLockedError,
 } from '@/lib/bookkeeping/errors'
 
 // ============================================================
@@ -43,6 +44,16 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
   // The gated cleanup door (cancel_orphaned_entry RPC). Consumes no queued
   // result: rollbacks no longer issue client-side UPDATE/DELETE statements.
   cancelOrphanedEntry: vi.fn(async () => ({ error: null })),
+}))
+
+// The storno target check has its own tests (storno-target.test.ts); here it
+// passes, and the locked-year test below makes it refuse.
+const mockAssertStornoTarget = vi.fn(
+  async (_supabase: unknown, _companyId: string, original: { entry_date: string }, date?: string) =>
+    date ?? original.entry_date,
+)
+vi.mock('@/lib/core/bookkeeping/storno-target', () => ({
+  assertStornoTarget: (...args: Parameters<typeof mockAssertStornoTarget>) => mockAssertStornoTarget(...args),
 }))
 
 // On-demand BAS backfill, default: nothing seedable. Tests override.
@@ -130,6 +141,28 @@ describe('correctEntry', () => {
     const result = await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines)
     expect(result.reversal).toBeDefined()
     expect(result.reversal.reverses_id).toBe('orig-1')
+  })
+
+  // A rättelse in a locked or closed year: the period-lock trigger refused the
+  // storno insert only after next_voucher_number had moved on, leaving an
+  // undocumented gap (BFNAR 2013:2). Now refused before any number is drawn.
+  it('refuses a correction in a locked year before drawing a voucher number', async () => {
+    setupResults()
+    const refusal = new TargetPeriodLockedError(originalEntry.entry_date, '2026-01-20T10:00:00Z')
+    mockAssertStornoTarget.mockRejectedValueOnce(refusal)
+    const supabase = makeClient()
+
+    await expect(
+      correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines),
+    ).rejects.toBe(refusal)
+
+    expect(mockAssertStornoTarget).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      expect.objectContaining({ id: 'orig-1', fiscal_period_id: 'fp-1' }),
+    )
+    expect(allocateVoucherNumber).not.toHaveBeenCalled()
+    expect(inserts.filter((i) => i.table === 'journal_entries')).toEqual([])
   })
 
   // A line booked before the non-negative CHECK (debit -0.25) used to be

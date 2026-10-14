@@ -168,10 +168,11 @@ export function isConnectorCapability(key: CapabilityKey): boolean {
  * read/local SKV tools (generate_agi, vat_declaration_validate/status, agi_status)
  * stay free: the §4 carve-out forbids blocking a statutory filing obligation.
  *
- * The document upload tools invoke AI (Bedrock document OCR via
- * extractInvoiceFields), so they are gated on CAPABILITY.ai: the same paywall
- * the HTTP inbox upload/attach/retry paths enforce. Without these entries a
- * free-tier API key could trigger paid AI extraction. bank_sync gates
+ * The document upload tools are not gated: like the HTTP inbox upload they
+ * store the underlag on any tier and run the paid AI OCR (Bedrock, via
+ * extractInvoiceFields) only when the company has CAPABILITY.ai, checked at
+ * the OCR call, so a free-tier key can archive underlag but never trigger
+ * paid extraction. bank_sync gates
  * gnubok_connect_bank (the onboarding connect link) and gnubok_sync_bank
  * (the agent-triggered PSD2 sync, a paid Enable Banking call per account).
  */
@@ -186,10 +187,9 @@ export const MCP_TOOL_CAPABILITY_MAP: Readonly<Partial<Record<string, Capability
   // Agent-triggered PSD2 sync: a paid Enable Banking call per account.
   gnubok_sync_bank: CAPABILITY.bank_sync,
   gnubok_connect_skatteverket: CAPABILITY.skatteverket,
-  // AI document OCR (Bedrock): the inbox's paid extraction, reachable via MCP.
-  gnubok_create_document_upload: CAPABILITY.ai,
-  gnubok_complete_document_upload: CAPABILITY.ai,
-  gnubok_upload_document: CAPABILITY.ai,
+  // The MCP document uploads are not here: they archive the underlag on any
+  // tier and skip only the paid OCR without `ai` (createDocumentInboxItem in
+  // the MCP server), as the dashboard upload and v1 POST /documents do.
 } as const
 
 /**

@@ -21,10 +21,21 @@ vi.mock('../lib/declaration-prep', async (importOriginal) => {
 
 vi.mock('../lib/audit', () => ({ writeSkatteverketAudit: vi.fn() }))
 
+// The completeness verdict runs for real over the declaration the prep
+// returns; only its per-verifikat ledger scan is stubbed.
+const mockFindRcBasisGaps = vi.fn()
+vi.mock('@/lib/reports/rc-basis-gaps', () => ({
+  findRcBasisGaps: (...a: unknown[]) => mockFindRcBasisGaps(...a),
+}))
+
 import { submitVatDeclarationChain } from '../lib/vat-submit'
 import type { ExtensionContext } from '@/lib/extensions/types'
+import { COMPLETE_VAT_DECLARATION, INCOMPLETE_VAT_DECLARATION } from './vat-declaration-fixture'
 
 const PARAMS = { periodType: 'monthly' as const, year: 2026, period: 6 }
+
+const COMPLETE = COMPLETE_VAT_DECLARATION
+const INCOMPLETE = INCOMPLETE_VAT_DECLARATION
 
 function makeCtx() {
   return {
@@ -42,6 +53,51 @@ beforeEach(() => {
     redovisare: '165560000000',
     redovisningsperiod: '202606',
     momsuppgift: { summaMoms: 150 },
+    declaration: COMPLETE,
+  })
+  mockFindRcBasisGaps.mockResolvedValue([])
+})
+
+describe('submitVatDeclarationChain: completeness gate', () => {
+  it.each([
+    ['the one-click route (with kontrollera)', { validate: true }],
+    ['the approval commit (no kontrollera)', {}],
+  ])('an incomplete declaration stops before any call to Skatteverket: %s', async (_label, options) => {
+    mockBuildMomsuppgift.mockResolvedValueOnce({
+      redovisare: '165560000000',
+      redovisningsperiod: '202606',
+      momsuppgift: { summaMoms: 0 },
+      declaration: INCOMPLETE,
+    })
+
+    const ctx = makeCtx()
+    const result = await submitVatDeclarationChain(ctx, PARAMS, options)
+
+    expect(result).toMatchObject({
+      ok: false,
+      stage: 'completeness',
+      httpStatus: 422,
+      draftSaved: false,
+      kontrollresultat: null,
+    })
+    if (result.ok) throw new Error('unreachable')
+    expect(result.error).toMatch(/ofullständig/)
+    expect(result.completenessChecks).toContainEqual(
+      expect.objectContaining({ code: 'RC_BASIS_MISSING', status: 'ERROR' }),
+    )
+    expect(mockSkvRequest).not.toHaveBeenCalled()
+    expect((ctx.settings.set as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled()
+  })
+
+  it('scans the räkenskapsår the declaration was computed for', async () => {
+    mockSkvRequest
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({}) }) // utkast
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ signeringsLank: 'https://skv.test/s' }) }) // lås
+
+    await submitVatDeclarationChain(makeCtx(), { ...PARAMS, fiscalPeriodId: 'fp-1' })
+
+    expect(mockBuildMomsuppgift).toHaveBeenCalledWith(expect.anything(), 'company-1', { ...PARAMS, fiscalPeriodId: 'fp-1' })
+    expect(mockFindRcBasisGaps).toHaveBeenCalledWith(expect.anything(), 'company-1', 'monthly', 2026, 6, { fiscalPeriodId: 'fp-1' })
   })
 })
 

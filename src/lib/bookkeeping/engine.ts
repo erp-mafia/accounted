@@ -26,6 +26,7 @@ import {
   correctionChainDepth,
   CORRECTION_CHAIN_GUARD_DEPTH,
 } from '@/lib/core/bookkeeping/correction-chain'
+import { assertStornoTarget } from '@/lib/core/bookkeeping/storno-target'
 import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
 import {
   normalizeLineDimensions,
@@ -1834,7 +1835,12 @@ export async function reverseEntry(
     project: line.project || undefined,
   }))
 
-  const entryDate = reversalDate ?? original.entry_date
+  // The storno is numbered in the original's series and booked into the
+  // original's fiscal year, so its date must lie inside that year and the year
+  // must be open (BFL 5 kap 5 §, BFNAR 2013:2 p. 2.17-2.18). Checked before the
+  // number is drawn: the period-lock trigger only refused the insert, after
+  // the sequence had moved on, and left an undocumented gap.
+  const entryDate = await assertStornoTarget(supabase, companyId, original, reversalDate)
 
   // Get voucher number for the reversal
   const voucherNumber = await allocateVoucherNumber(

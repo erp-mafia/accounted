@@ -23,9 +23,13 @@ vi.mock('@/lib/salary/agi/generate-declaration', () => ({
 }))
 
 const mockCreateRun = vi.fn()
-vi.mock('@/lib/salary/create-run', () => ({
-  createSalaryRunWithEmployees: (...a: unknown[]) => mockCreateRun(...a),
-}))
+vi.mock('@/lib/salary/create-run', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/salary/create-run')>('@/lib/salary/create-run')
+  return {
+    ...actual,
+    createSalaryRunWithEmployees: (...a: unknown[]) => mockCreateRun(...a),
+  }
+})
 
 import { tools } from '../server'
 
@@ -120,17 +124,19 @@ describe('gnubok_generate_agi', () => {
 
 describe('gnubok_create_salary_run', () => {
   it('stages without calling the transactional helper', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     // 1. company_settings.salary_deviation_period (avvikelseperiod)
     enqueue({ data: { salary_deviation_period: 'previous_month' } })
     // 2. salary_runs overlap guard
     enqueue({ data: [] })
-    // 3. employees count head
+    // 3. company_settings: the company's salary series (standard set: K)
+    enqueue({ data: { default_voucher_series_per_source_type: { salary_payment: 'K' } } })
+    // 4. employees count head
     enqueue({ data: null, count: 3 })
-    // 4-5. resolvePeriodStatusForDate calls company_settings + fiscal_periods
+    // 5-6. resolvePeriodStatusForDate calls company_settings + fiscal_periods
     enqueue({ data: null })
     enqueue({ data: null })
-    // 6. pending_operations.insert
+    // 7. pending_operations.insert
     enqueue({ data: { id: 'op-2' }, error: null })
 
     const result = (await createSalaryRun.execute(
@@ -145,6 +151,7 @@ describe('gnubok_create_salary_run', () => {
         deviation_period_start: string
         deviation_period_end: string
         deviation_period_source: string
+        voucher_series: string
       }
     }
 
@@ -156,6 +163,11 @@ describe('gnubok_create_salary_run', () => {
     expect(result.preview.deviation_period_start).toBe('2026-02-01')
     expect(result.preview.deviation_period_end).toBe('2026-02-28')
     expect(result.preview.deviation_period_source).toBe('setting')
+    // The approver sees the series the run books into, and the executor
+    // gets the same letter: the company's salary series, not the DB 'A'.
+    expect(result.preview.voucher_series).toBe('K')
+    const inserted = findCalls('pending_operations', 'insert')[0]?.[0] as { params: Record<string, unknown> }
+    expect(inserted.params.voucher_series).toBe('K')
     expect(mockCreateRun).not.toHaveBeenCalled()
   })
 

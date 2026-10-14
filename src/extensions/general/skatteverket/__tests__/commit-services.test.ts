@@ -21,6 +21,10 @@ vi.mock('../lib/declaration-prep', async (importOriginal) => {
 
 vi.mock('../lib/audit', () => ({ writeSkatteverketAudit: vi.fn() }))
 
+// The chain's completeness verdict runs for real; only its per-verifikat
+// ledger scan is stubbed.
+vi.mock('@/lib/reports/rc-basis-gaps', () => ({ findRcBasisGaps: vi.fn(async () => []) }))
+
 vi.mock('@/lib/extensions/context-factory', () => ({
   createExtensionContext: () => ({
     supabase: {rpc:vi.fn().mockResolvedValue({data:'read-lease-token',error:null})},
@@ -33,10 +37,16 @@ vi.mock('@/lib/extensions/context-factory', () => ({
 
 import { skatteverketExtension } from '../index'
 import { SkatteverketAuthError } from '../lib/api-client'
+import { vatDeclarationFixture } from './vat-declaration-fixture'
+
+const MARCH = { type: 'monthly' as const, year: 2025, period: 3, start: '2025-03-01', end: '2025-03-31' }
 
 type SkvSubmitFn = (
   supabase: unknown, userId: string, companyId: string, params: Record<string, unknown>,
-) => Promise<{ ok: boolean; code?: string; recoverable?: boolean; signing_url?: string }>
+) => Promise<{
+  ok: boolean; code?: string; recoverable?: boolean; signing_url?: string; error?: string
+  details?: Record<string, unknown>
+}>
 
 const commitSubmitVatDeclaration = skatteverketExtension.services!.commitSubmitVatDeclaration as unknown as SkvSubmitFn
 const VAT_PARAMS = { period_type: 'monthly', year: 2025, period: 3 }
@@ -48,6 +58,7 @@ beforeEach(() => {
   process.env.SKATTEVERKET_ENABLED = 'true'
   mockBuildMomsuppgift.mockResolvedValue({
     redovisare: '165560000000', redovisningsperiod: '202503', momsuppgift: { summaMoms: 150 },
+    declaration: vatDeclarationFixture({ ruta05: 600, ruta10: 150, ruta49: 150 }, { period: MARCH }),
   })
 })
 afterEach(() => {
@@ -84,6 +95,28 @@ describe('commitSubmitVatDeclaration', () => {
     const result = await commitSubmitVatDeclaration({}, 'user-1', 'company-1', VAT_PARAMS)
     expect(result).toMatchObject({ ok: false, recoverable: false, http_status: 400 })
     expect(mockSkvRequest).toHaveBeenCalledTimes(1) // never reached /las
+  })
+
+  // An op staged while the books passed, approved after they changed: the
+  // chain's completeness verdict refuses it before any call to Skatteverket,
+  // and the op is consumed (non-recoverable), not released back to pending.
+  // VAT_PARAMS is the params shape every op already staged carries.
+  it('books now incomplete → non-recoverable VAT_DECLARATION_INCOMPLETE with the findings, zero SKV calls', async () => {
+    mockBuildMomsuppgift.mockResolvedValueOnce({
+      redovisare: '165560000000', redovisningsperiod: '202503', momsuppgift: { summaMoms: 0 },
+      declaration: vatDeclarationFixture({ ruta30: 250, ruta48: 250, ruta49: 0 }, { rc2645: 250, period: MARCH }),
+    })
+
+    const result = await commitSubmitVatDeclaration({}, 'user-1', 'company-1', VAT_PARAMS)
+
+    expect(result).toMatchObject({
+      ok: false, code: 'VAT_DECLARATION_INCOMPLETE', http_status: 422, recoverable: false,
+    })
+    expect(result.error).toMatch(/ofullständig/)
+    expect(result.details?.completeness_checks).toContainEqual(
+      expect.objectContaining({ code: 'RC_BASIS_MISSING', status: 'ERROR' }),
+    )
+    expect(mockSkvRequest).not.toHaveBeenCalled()
   })
 
   it('SkatteverketAuthError → recoverable SKATTEVERKET_NOT_CONNECTED', async () => {

@@ -406,4 +406,30 @@ describe('gnubok_create_customer: payment terms', () => {
     const inserted = findCall('pending_operations', 'insert')?.[0] as StagedInsert
     expect(inserted.params.default_payment_terms).toBe(14)
   })
+
+  // #2070: 0 days (betalning direkt) is a valid choice, not "unset".
+  it('keeps an explicit payment_terms of 0 without reading the company setting', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-pt-4' } }) // only the insert: no settings read
+
+    const result = (await tool().execute(
+      { name: 'Kund AB', customer_type: 'swedish_business', payment_terms: 0 },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.default_payment_terms).toBe(0)
+    const inserted = findCall('pending_operations', 'insert')?.[0] as StagedInsert
+    expect(inserted.params.default_payment_terms).toBe(0)
+  })
+
+  it('gnubok_update_customer accepts 0 to 365 days', () => {
+    const update = tools.find((t) => t.name === 'gnubok_update_customer')!
+    const property = (update.inputSchema.properties as Record<string, { minimum?: number; maximum?: number }>)
+      .default_payment_terms
+    expect(property.minimum).toBe(0)
+    expect(property.maximum).toBe(365)
+  })
 })

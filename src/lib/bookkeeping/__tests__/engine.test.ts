@@ -13,8 +13,11 @@ import {
   AccountsNotInChartError,
   BookkeepingDatabaseError,
   CannotReverseStornoError,
+  EntryDateOutsideFiscalPeriodError,
   JournalLineBothSidesNonZeroError,
   JournalLineNegativeAmountError,
+  TargetPeriodClosedError,
+  TargetPeriodLockedError,
   getUnusedVoucherAllocation,
 } from '../errors'
 import type { CreateJournalEntryLineInput, JournalEntryStatus } from '@/types'
@@ -36,6 +39,17 @@ function createMockChain(overrides: Record<string, unknown> = {}) {
   }
   return chain
 }
+
+// The storno target check (date inside the original's year, year open) has
+// its own tests (lib/core/bookkeeping/__tests__/storno-target.test.ts) and is
+// a pass-through here; the reverseEntry tests below that refuse override it.
+const mockAssertStornoTarget = vi.fn(
+  async (_supabase: unknown, _companyId: string, original: { entry_date: string }, date?: string) =>
+    date ?? original.entry_date,
+)
+vi.mock('@/lib/core/bookkeeping/storno-target', () => ({
+  assertStornoTarget: (...args: Parameters<typeof mockAssertStornoTarget>) => mockAssertStornoTarget(...args),
+}))
 
 // Mock event bus
 vi.mock('@/lib/events', () => ({
@@ -886,9 +900,77 @@ describe('reverseEntry: entry_date defaults to original entry date', () => {
       }),
     }
 
-    await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1', '2025-01-01')
+    // A date inside the original's fiscal year (2024): a storno is numbered
+    // and attributed there, so the target check refuses any other year.
+    await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1', '2024-12-31')
 
-    expect(insertedEntryDate).toBe('2025-01-01')
+    expect(insertedEntryDate).toBe('2024-12-31')
+    expect(mockAssertStornoTarget).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      expect.objectContaining({ fiscal_period_id: 'period-1', entry_date: '2024-11-15' }),
+      '2024-12-31',
+    )
+  })
+})
+
+// BFL 5 kap 5 §, BFNAR 2013:2 p. 2.17-2.18: the storno is its own verifikation
+// in the original's series and year. A date outside that year, or a locked or
+// closed year, is refused before next_voucher_number is called, so a refused
+// storno never burns a number (the period-lock trigger refused only the
+// insert, after the sequence had moved on).
+describe('reverseEntry: refused targets draw no voucher number', () => {
+  const original = {
+    id: 'entry-1',
+    company_id: 'company-1',
+    status: 'posted',
+    fiscal_period_id: 'period-2025',
+    voucher_series: 'A',
+    voucher_number: 3,
+    entry_date: '2025-11-15',
+    description: 'Hyra november',
+    source_type: 'manual',
+    source_id: null,
+    lines: [
+      { account_number: '5010', debit_amount: 10000, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 10000 },
+    ],
+  }
+
+  function client() {
+    const inserts: unknown[] = []
+    const supabase = {
+      rpc: vi.fn().mockResolvedValue({ data: 4, error: null }),
+      from: vi.fn().mockImplementation(() => {
+        const b: Record<string, unknown> = {}
+        for (const m of ['select', 'eq', 'in', 'update']) b[m] = vi.fn().mockReturnValue(b)
+        b.insert = vi.fn().mockImplementation((payload: unknown) => {
+          inserts.push(payload)
+          return b
+        })
+        b.single = vi.fn().mockResolvedValue({ data: original, error: null })
+        b.maybeSingle = vi.fn().mockResolvedValue({ data: null, error: null })
+        b.then = (resolve: (v: unknown) => void) => resolve({ data: [], error: null })
+        return b
+      }),
+    }
+    return { supabase, inserts }
+  }
+
+  it.each([
+    ['a date in another fiscal year', new EntryDateOutsideFiscalPeriodError('2026-01-10', '2025', '2025-01-01', '2025-12-31')],
+    ['a locked year', new TargetPeriodLockedError('2025-11-15', '2026-01-20T10:00:00Z')],
+    ['a closed year', new TargetPeriodClosedError('2025-11-15')],
+  ])('%s', async (_label, refusal) => {
+    mockAssertStornoTarget.mockRejectedValueOnce(refusal)
+    const { supabase, inserts } = client()
+
+    await expect(
+      reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1', '2026-01-10'),
+    ).rejects.toBe(refusal)
+
+    expect(supabase.rpc).not.toHaveBeenCalledWith('next_voucher_number', expect.anything())
+    expect(inserts).toEqual([])
   })
 })
 

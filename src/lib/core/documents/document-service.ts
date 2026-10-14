@@ -1235,6 +1235,22 @@ export async function linkToJournalEntry(
     throw new Error('Failed to link document: journal entry not found')
   }
 
+  // The line FK, like the entry's, only requires existence (and bypasses
+  // RLS), and the immutability trigger makes a set line pin permanent: a line
+  // of another verifikat, or of another company's, must never be pinned here.
+  // The entry is company-checked above, so a line on it is the company's.
+  if (journalEntryLineId) {
+    const { data: line, error: lineError } = await supabase
+      .from('journal_entry_lines')
+      .select('id')
+      .eq('id', journalEntryLineId)
+      .eq('journal_entry_id', journalEntryId)
+      .maybeSingle()
+    if (lineError || !line) {
+      throw new Error('Failed to link document: journal entry line not found on this journal entry')
+    }
+  }
+
   const { data, error } = await supabase
     .from('document_attachments')
     .update({

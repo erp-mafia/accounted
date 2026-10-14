@@ -5,7 +5,9 @@
  * salary_run_employee). Cursor pagination on (created_at ASC, id ASC).
  *
  * The row carries the calculated aggregates (gross/tax/net/avgifter/vacation)
- * but NOT the payslip line items: drill into
+ * and `effective`, the same figures with the review overrides applied
+ * (lib/salary/effective-figures.ts effectiveRow, the booking's rule), but
+ * NOT the payslip line items: drill into
  * GET /salary-runs/{id}/employees/{employeeId} for those.
  *
  * GDPR Art.5(1)(c): personnummer is masked (birthdate visible, last-4 hidden)
@@ -31,6 +33,8 @@ import { maskPersonnummer } from '@/lib/salary/personnummer-format'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
 import { AddEmployeeToRunSchema } from '@/lib/api/schemas'
 import { addEmployeeToRun } from '@/lib/salary/run-employees'
+import { effectiveRow } from '@/lib/salary/effective-figures'
+import { EffectiveFiguresSchema } from '@/lib/salary/effective-figures-schema'
 
 const RunEmployeeSummary = z.object({
   /** Qualified id of the salary_run_employees join row (NOT the employee id). */
@@ -58,6 +62,7 @@ const RunEmployeeSummary = z.object({
   vab_days: z.number(),
   parental_days: z.number(),
   vacation_days_taken: z.number(),
+  effective: EffectiveFiguresSchema,
   created_at: z.string(),
   updated_at: z.string(),
 })
@@ -68,8 +73,8 @@ const RUN_EMPLOYEE_SUMMARY_COLUMNS =
   'id, employee_id, salary_type, employment_degree, monthly_salary, hours_worked, ' +
   'gross_salary, taxable_income, tax_withheld, tax_withheld_override, net_salary, ' +
   'avgifter_basis, avgifter_amount, avgifter_amount_override, avgifter_category, ' +
-  'vacation_accrual, sick_days, vab_days, parental_days, vacation_days_taken, ' +
-  'created_at, updated_at, employee:employees(first_name, last_name, personnummer)'
+  'vacation_accrual, vacation_accrual_avgifter, sick_days, vab_days, parental_days, vacation_days_taken, ' +
+  'created_at, updated_at, employee:employees(first_name, last_name, personnummer, f_skatt_status)'
 
 registerEndpoint({
   operation: 'salary-runs.employees.list',
@@ -84,7 +89,7 @@ registerEndpoint({
     'Payslip line items or the step-by-step calculation breakdown: use GET /salary-runs/{id}/employees/{employeeId}. The employee master record: use GET /employees/{id}.',
   pitfalls: [
     'Aggregates are 0 until POST /calculate has advanced the run to review.',
-    'tax_withheld_override / avgifter_amount_override are review-stage manual adjustments; the effective value is COALESCE(override, calculated).',
+    'effective is what is booked, declared and paid; the plain columns are the calculation\'s values. tax_withheld_override / avgifter_amount_override are review-stage manual adjustments: a tax override also moves the net payout, and an avgifter override is ignored for an F-skatt payee, so do not apply the overrides yourself.',
     'personnummer is masked on all payslip-shaped responses (GDPR Art.5(1)(c)); the employee detail endpoint returns the full value.',
   ],
   example: {
@@ -183,13 +188,19 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
       avgifter_amount_override: number | null
       avgifter_category: string | null
       vacation_accrual: number
+      vacation_accrual_avgifter: number
       sick_days: number
       vab_days: number
       parental_days: number
       vacation_days_taken: number
       created_at: string
       updated_at: string
-      employee: { first_name: string; last_name: string; personnummer: string } | null
+      employee: {
+        first_name: string
+        last_name: string
+        personnummer: string
+        f_skatt_status: string | null
+      } | null
     }
 
     const rows = ((data ?? []) as unknown) as Row[]
@@ -222,6 +233,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
       vab_days: r.vab_days,
       parental_days: r.parental_days,
       vacation_days_taken: r.vacation_days_taken,
+      effective: effectiveRow(r),
       created_at: r.created_at,
       updated_at: r.updated_at,
     }))

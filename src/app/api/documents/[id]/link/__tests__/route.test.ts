@@ -6,7 +6,7 @@ import {
   createQueuedMockSupabase,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -92,10 +92,23 @@ describe('POST /api/documents/[id]/link', () => {
     expect(mockSupabase.from).not.toHaveBeenCalled()
   })
 
-  it('links the document and stamps the inbox item when inbox_item_id is given', async () => {
-    enqueue({ data: { id: 'je-1' } }) // journal entry company check
-    enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-1', file_name: 'x.pdf' } }) // link update
-    enqueue({ data: null }) // inbox stamp update
+  // Query order (lib/documents/link-document.ts): the document and the
+  // verifikat, the holder when another verifikat has the document, the
+  // period, then linkToJournalEntry (verifikat check, update) and the stamp
+  // of the inbox item that carries the document.
+  function enqueueChecks(document: Record<string, unknown> = { id: 'doc-1', journal_entry_id: null, journal_entry_line_id: null }) {
+    enqueue({ data: { file_name: 'x.pdf', mime_type: 'application/pdf', ...document } }) // document
+    enqueue({ data: { id: JE_ID, status: 'posted', fiscal_period_id: null } }) // verifikat
+  }
+  function enqueueLink() {
+    enqueue({ data: { id: JE_ID } }) // linkToJournalEntry: verifikat company check
+    enqueue({ data: { id: 'doc-1', journal_entry_id: JE_ID, file_name: 'x.pdf' } }) // link update
+  }
+
+  it('links the document and stamps the inbox item that carries it, not the one inbox_item_id names', async () => {
+    enqueueChecks()
+    enqueueLink()
+    enqueue({ data: [{ id: 'inbox-carrying-doc-1' }] }) // inbox stamp
 
     const res = await POST(
       makeReq({ journal_entry_id: JE_ID, inbox_item_id: INBOX_ID }),
@@ -105,13 +118,16 @@ describe('POST /api/documents/[id]/link', () => {
 
     expect(status).toBe(200)
     expect(body.data.id).toBe('doc-1')
-    expect(mockSupabase.from).toHaveBeenCalledWith('document_attachments')
-    expect(mockSupabase.from).toHaveBeenCalledWith('invoice_inbox_items')
+    expect(findCalls('invoice_inbox_items', 'update')).toEqual([[{ created_journal_entry_id: JE_ID }]])
+    const inboxEq = findCalls('invoice_inbox_items', 'eq')
+    expect(inboxEq).toContainEqual(['document_id', 'doc-1'])
+    expect(inboxEq).not.toContainEqual(['id', INBOX_ID])
   })
 
-  it('does not touch the inbox when no inbox_item_id is given', async () => {
-    enqueue({ data: { id: 'je-1' } }) // journal entry company check
-    enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-1', file_name: 'x.pdf' } }) // link update
+  it('stamps the inbox item carrying the document without inbox_item_id too (one inbox rule on every door)', async () => {
+    enqueueChecks()
+    enqueueLink()
+    enqueue({ data: [] }) // inbox stamp
 
     const res = await POST(
       makeReq({ journal_entry_id: JE_ID }),
@@ -120,12 +136,13 @@ describe('POST /api/documents/[id]/link', () => {
     const { status } = await parseJsonResponse(res)
 
     expect(status).toBe(200)
-    expect(mockSupabase.from).not.toHaveBeenCalledWith('invoice_inbox_items')
+    expect(findCalls('invoice_inbox_items', 'update')).toHaveLength(1)
   })
 
   it('pins the document to the transaction when transaction_id is given', async () => {
-    enqueue({ data: { id: 'je-1' } }) // journal entry company check
-    enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-1', file_name: 'x.pdf' } }) // link update
+    enqueueChecks()
+    enqueueLink()
+    enqueue({ data: [] }) // inbox stamp
     enqueue({ data: null }) // transaction pin update
 
     const res = await POST(
@@ -139,8 +156,9 @@ describe('POST /api/documents/[id]/link', () => {
   })
 
   it('does not touch transactions when no transaction_id is given', async () => {
-    enqueue({ data: { id: 'je-1' } }) // journal entry company check
-    enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-1', file_name: 'x.pdf' } }) // link update
+    enqueueChecks()
+    enqueueLink()
+    enqueue({ data: [] }) // inbox stamp
 
     const res = await POST(
       makeReq({ journal_entry_id: JE_ID }),
@@ -153,8 +171,9 @@ describe('POST /api/documents/[id]/link', () => {
   })
 
   it('tolerates a failing transaction pin: the JE link is the primary effect', async () => {
-    enqueue({ data: { id: 'je-1' } }) // journal entry company check
-    enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-1', file_name: 'x.pdf' } }) // link update
+    enqueueChecks()
+    enqueueLink()
+    enqueue({ data: [] }) // inbox stamp
     enqueue({ data: null, error: { message: 'rls denied' } }) // transaction pin fails
 
     const res = await POST(
@@ -169,7 +188,8 @@ describe('POST /api/documents/[id]/link', () => {
   })
 
   it('maps a period-lock trigger error to PERIOD_LOCKED', async () => {
-    enqueue({ data: { id: 'je-1' } }) // journal entry company check
+    enqueueChecks()
+    enqueue({ data: { id: JE_ID } }) // linkToJournalEntry: verifikat company check
     enqueue({
       data: null,
       error: { message: 'new row violates ... locked/closed fiscal period' },
@@ -184,8 +204,21 @@ describe('POST /api/documents/[id]/link', () => {
     expect(mockSupabase.from).not.toHaveBeenCalledWith('invoice_inbox_items')
   })
 
+  it('refuses a verifikat in a locked period with PERIOD_LOCKED before the write', async () => {
+    enqueue({ data: { id: 'doc-1', journal_entry_id: null, journal_entry_line_id: null, file_name: 'x.pdf' } })
+    enqueue({ data: { id: JE_ID, status: 'posted', fiscal_period_id: 'fp-1' } })
+    enqueue({ data: { id: 'fp-1', period_start: '2025-01-01', is_closed: false, locked_at: '2026-01-31T00:00:00Z', closed_externally: false, closing_entry_id: null } })
+
+    const res = await POST(makeReq({ journal_entry_id: JE_ID }), createMockRouteParams({ id: 'doc-1' }))
+    const { body } = await parseJsonResponse<{ error: { code: string } }>(res)
+
+    expect(body.error.code).toBe('PERIOD_LOCKED')
+    expect(findCalls('document_attachments', 'update')).toHaveLength(0)
+  })
+
   it('maps an already-linked error to DOC_LINK_ALREADY_LINKED', async () => {
-    enqueue({ data: { id: 'je-1' } }) // journal entry company check
+    enqueueChecks()
+    enqueue({ data: { id: JE_ID } }) // linkToJournalEntry: verifikat company check
     enqueue({
       data: null,
       error: { message: 'document already linked to another entry' },
@@ -198,11 +231,12 @@ describe('POST /api/documents/[id]/link', () => {
     expect(body.error.code).toBe('DOC_LINK_ALREADY_LINKED')
   })
 
-  it('answers 409 DOC_LINK_ALREADY_LINKED, not a 500, when the immutability trigger refuses a move off a reversed verifikat', async () => {
+  it('answers 409 DOC_LINK_ALREADY_LINKED, not a 500, when the immutability trigger refuses a write that raced the check', async () => {
     // The trigger refuses any change of a set journal_entry_id whatever the
     // holder's status (agent feedback seq 932068): its raw text used to fall
     // through to DOC_LINK_FAILED.
-    enqueue({ data: { id: 'je-1' } }) // journal entry company check
+    enqueueChecks()
+    enqueue({ data: { id: JE_ID } }) // linkToJournalEntry: verifikat company check
     enqueue({
       data: null,
       error: {
@@ -219,17 +253,46 @@ describe('POST /api/documents/[id]/link', () => {
     expect(body.error.code).toBe('DOC_LINK_ALREADY_LINKED')
   })
 
+  it('refuses a document held by another verifikat (reversed) before the write, naming the holder', async () => {
+    enqueueChecks({ id: 'doc-1', journal_entry_id: OTHER_JE_ID, journal_entry_line_id: null })
+    enqueue({ data: { status: 'reversed', voucher_series: 'A', voucher_number: 57 } }) // holder
+
+    const res = await POST(makeReq({ journal_entry_id: JE_ID }), createMockRouteParams({ id: 'doc-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details?: Record<string, unknown> } }>(res)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('DOC_LINK_ALREADY_LINKED')
+    expect(findCalls('document_attachments', 'update')).toHaveLength(0)
+    expect(mockSupabase.from).not.toHaveBeenCalledWith('invoice_inbox_items')
+  })
+
+  it('refuses a line of another verifikat with 404 NOT_FOUND, writing nothing', async () => {
+    enqueueChecks()
+    enqueue({ data: null }) // the line lookup scoped to the verifikat finds nothing
+
+    const res = await POST(
+      makeReq({ journal_entry_id: JE_ID, journal_entry_line_id: '55555555-5555-4555-8555-555555555555' }),
+      createMockRouteParams({ id: 'doc-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+
+    expect(status).toBe(404)
+    expect(body.error.code).toBe('NOT_FOUND')
+    expect(findCalls('document_attachments', 'update')).toHaveLength(0)
+  })
+
   it('rejects a journal entry outside the active company with DOC_LINK_ENTRY_NOT_FOUND', async () => {
     // The company-scoped lookup finds no row: same result whether the id is
     // bogus or belongs to another tenant. The document must never be updated.
-    enqueue({ data: null }) // journal entry company check → no match
+    enqueue({ data: { id: 'doc-1', journal_entry_id: null, journal_entry_line_id: null, file_name: 'x.pdf' } })
+    enqueue({ data: null }) // journal entry company check: no match
     const res = await POST(
       makeReq({ journal_entry_id: OTHER_JE_ID }),
       createMockRouteParams({ id: 'doc-1' }),
     )
     const { body } = await parseJsonResponse<{ error: { code: string } }>(res)
     expect(body.error.code).toBe('DOC_LINK_ENTRY_NOT_FOUND')
-    expect(mockSupabase.from).not.toHaveBeenCalledWith('document_attachments')
+    expect(findCalls('document_attachments', 'update')).toHaveLength(0)
     expect(mockSupabase.from).not.toHaveBeenCalledWith('invoice_inbox_items')
   })
 })

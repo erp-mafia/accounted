@@ -9,6 +9,19 @@ const mocks = vi.hoisted(() => ({
   completePendingDocumentUpload: vi.fn(),
   uploadDocument: vi.fn(),
   extractInvoiceFields: vi.fn(),
+  hasCapability: vi.fn(),
+  mirrorExtractionToDocument: vi.fn(),
+}))
+
+// The paid OCR is gated at the OCR call (createDocumentInboxItem), not on the
+// tools: entitled unless a test says otherwise.
+vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/entitlements/has-capability')>()
+  return { ...actual, hasCapability: mocks.hasCapability }
+})
+
+vi.mock('@/lib/documents/inbox-extraction/mirror-extraction', () => ({
+  mirrorExtractionToDocument: mocks.mirrorExtractionToDocument,
 }))
 
 vi.mock('@/lib/core/documents/document-service', async (importOriginal) => {
@@ -60,6 +73,7 @@ describe('MCP model-free document upload tools', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.hasCapability.mockResolvedValue(true)
     mocks.createPendingDocumentUpload.mockResolvedValue({
       uploadId,
       signedUrl: 'https://storage.example/upload?token=signed',
@@ -183,6 +197,44 @@ describe('MCP model-free document upload tools', () => {
     expect(mocks.extractInvoiceFields).toHaveBeenCalledOnce()
   })
 
+  it('without the AI capability archives the underlag with an empty reading and no OCR call', async () => {
+    // A free-tier agent could not archive any underlag: the three upload
+    // tools were gated on `ai` at dispatch. Like the dashboard upload
+    // (no_ai_entitlement) the document is stored and the inbox item created;
+    // only the paid extraction is skipped.
+    mocks.hasCapability.mockResolvedValue(false)
+    const inboxInsert = makeQueryBuilder({ data: { id: uploadId, status: 'received' }, error: null })
+    const invoiceLookups = [
+      makeQueryBuilder({ data: null, error: null }),
+      makeQueryBuilder({ data: null, error: null }),
+      inboxInsert,
+    ]
+    const from = vi.fn((table: string) => {
+      if (table === 'invoice_inbox_items') return invoiceLookups.shift()
+      if (table === 'suppliers') return makeQueryBuilder({ data: null, error: null })
+      if (table === 'document_attachments') return makeQueryBuilder({ data: { journal_entry_id: null }, error: null })
+      throw new Error(`Unexpected table: ${table}`)
+    })
+
+    const result = await findTool('gnubok_complete_document_upload').execute(
+      { upload_id: uploadId, file_name: 'invoice.pdf', mime_type: 'application/pdf' },
+      companyId,
+      userId,
+      { from } as never,
+    )
+
+    expect(mocks.hasCapability).toHaveBeenCalledWith(expect.anything(), companyId, 'ai')
+    expect(mocks.extractInvoiceFields).not.toHaveBeenCalled()
+    expect(mocks.mirrorExtractionToDocument).toHaveBeenCalledWith(
+      uploadId,
+      expect.objectContaining({ rawText: null, skipped: 'no_ai_entitlement' }),
+    )
+    expect(inboxInsert.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ id: uploadId, document_id: uploadId, extraction_skipped: true }),
+    )
+    expect(result).toMatchObject({ document_id: uploadId, inbox_item_id: uploadId, status: 'received', extraction_skipped: true })
+  })
+
   it('stamps the new inbox item when the document was linked to a verifikat while extraction ran (agent feedback seq 1003926)', async () => {
     // The agent holds the document id (the upload id) before this call
     // returns, and linked it with gnubok_link_document_to_voucher while the
@@ -296,14 +348,14 @@ describe('MCP model-free document upload tools', () => {
     }))
   })
 
-  it('keeps scope and AI capability gates aligned across all upload paths', () => {
+  it('keeps the scope aligned across all upload paths, with no tool-level AI gate', () => {
     for (const name of [
       'gnubok_create_document_upload',
       'gnubok_complete_document_upload',
       'gnubok_upload_document',
     ]) {
       expect(TOOL_SCOPE_MAP[name]).toBe('transactions:write')
-      expect(MCP_TOOL_CAPABILITY_MAP[name]).toBe('ai')
+      expect(MCP_TOOL_CAPABILITY_MAP[name]).toBeUndefined()
     }
   })
 

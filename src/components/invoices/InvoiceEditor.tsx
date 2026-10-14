@@ -1590,7 +1590,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           // today + terms. This fill is the second writer of due_date, and the
           // only one that knows a term the date pair cannot show (fakturadatum
           // may be empty here), so it hands that term to the sync baseline.
-          if (customer.default_payment_terms) {
+          if (customer.default_payment_terms != null) {
             const fill = planCustomerTermsFill({
               invoiceDate: getValues('invoice_date') || '',
               terms: customer.default_payment_terms,

@@ -134,6 +134,23 @@ describe('POST /imports/sie', () => {
     expect(options.updateAccountNames).toBe(false)
   })
 
+  // The job's own options schema on every door (decision 5, 2026-10-13):
+  // vouchers the file gives no series go to B as on the dashboard and MCP
+  // (this route defaulted to A), series up to 16 characters, and
+  // markImportedNoDocRequired accepted.
+  it('leaves voucherSeries to the job (series B for series-less vouchers), as the dashboard does', async () => {
+    await callRoute()
+    const options = submitSIEJobMock.mock.calls[0][5] as Record<string, unknown>
+    expect(options.voucherSeries).toBeUndefined()
+    expect(options).toMatchObject({ createFiscalPeriod: true, importOpeningBalances: true, importTransactions: true })
+  })
+
+  it('accepts the job options the dashboard has: a longer series and markImportedNoDocRequired', async () => {
+    const res = await callRoute({ voucherSeries: 'IMP', markImportedNoDocRequired: true })
+    expect(res.status).toBe(202)
+    expect(submitSIEJobMock.mock.calls[0][5]).toMatchObject({ voucherSeries: 'IMP', markImportedNoDocRequired: true })
+  })
+
   it('rejects unknown options keys (schema stays strict)', async () => {
     const res = await callRoute({ updateAccountNamez: true })
 

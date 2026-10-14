@@ -111,7 +111,7 @@ function describeRevenueAccount(account: VatRevenueAccountWithoutRuta): string {
  * open founder decision). The user is told which accounts and how much, and
  * where to fix it: the momskod on the account in Kontoplan.
  */
-function revenueAccountWithoutRutaFinding(
+export function revenueAccountWithoutRutaFinding(
   accounts: readonly VatRevenueAccountWithoutRuta[],
 ): VatDeclarationCheck {
   const named = accounts.slice(0, REVENUE_ACCOUNTS_NAMED_MAX).map(describeRevenueAccount)

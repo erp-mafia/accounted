@@ -93,7 +93,7 @@ curl -X POST "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/fiscal-periods/
   -H "Idempotency-Key: $(uuidgen)"
 \`\`\`
 
-Unlocking a locked period is not exposed in v1 (dashboard only). A closed period can never be unlocked: closing is irreversible per BFL 5 kap 8 §.
+Unlock a locked period with \`POST /fiscal-periods/{id}/unlock\`. A closed period can never be unlocked: closing is irreversible per BFL 5 kap 8 §.
 
 ## 5. Run year-end
 
@@ -164,7 +164,7 @@ curl "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/reports/trial-balance?p
 
 The \`opening_balance\` column on every 1xxx/2xxx row should equal the \`closing_balance\` on the same row for the closed year. \`3xxx-8xxx\` accounts have zero opening balance: the year-end procedure cleared them into \`2099\`.
 
-You normally never touch \`POST /fiscal-periods/{id}/opening-balances\`: year-end already generates the IB, and this endpoint returns \`CONFLICT\` (\`opening_balance_already_posted\`) once an IB entry exists in the target period. It exists only to generate the IB in isolation — its body is \`{ "next_period_id": "<uuid>" }\` and it computes balances from the closed period's UB (no explicit values are accepted). To correct a wrong IB, post a storno/manual entry instead.
+You normally never touch \`POST /fiscal-periods/{id}/opening-balances\`: year-end already generates the IB, and this endpoint returns \`CONFLICT\` (\`opening_balance_already_posted\`) once an IB entry exists in the target period. It exists only to generate the IB in isolation: its body is \`{ "next_period_id": "<uuid>" }\` and it computes balances from the closed period's UB (no explicit values are accepted). To correct a wrong IB, use \`POST /fiscal-periods/{id}/opening-balances/correct\` (open, unlocked year without a bokslut on top): it books the corrected IB and stornos the old one, never editing the posted verifikat.
 
 ## 7. The period is already closed (\`/close\` is recovery-only)
 
@@ -224,7 +224,7 @@ The one exception: the VAT declaration cadence is monthly/kvartalsvis/årlig reg
 
 - **Don't year-end before the last month's moms is declared.** The year-end procedure expects every moms-account balance to reconcile. A pending declaration leaves dangling balances on 2611-2641.
 - **Periodiseringsfond is your entry, not the engine's.** \`/year-end\` does not accept a set-aside amount and does not post the reserve; it only revalues currency, posts the closing entry (class 3-8 → \`2099\`), and generates the IB. If you set aside a periodiseringsfond, book it yourself as an obeskattad reserv (\`21xx\`, against \`8811\`) **before** running year-end. For sizing it: per IL 30 kap 5 § and 30 kap 6 a §, an AB can set aside max 25% of the **taxable profit AFTER schablonintäkt has been added back and BEFORE the periodiseringsfond deduction itself**. The schablonintäkt is **(SLR + 1%) × outstanding prior-year periodiseringsfonder balance**, where SLR is Skatteverket's statslåneränta as published on 30 November of the preceding income year: for 2026 SLR is 2.55%, so the rate is **3.55%**. Under BFL/BFNAR 2016:10 (materiellt samband for AB), the periodiseringsfond is BOOKED as an obeskattad reserv, not just declared on INK2.
-- **Don't unlock a period after the AB's annual report is filed.** The signed annual report is a public document at Bolagsverket; unlocking and changing the books afterwards creates a discrepancy with the filed report (which is itself an audit finding). Use storno (\`POST /journal-entries/{id}/reverse\`) to correct in the current open period instead. (Unlocking is dashboard-only; it is not in v1.)
+- **Don't unlock a period after the AB's annual report is filed.** The signed annual report is a public document at Bolagsverket; unlocking and changing the books afterwards creates a discrepancy with the filed report (which is itself an audit finding). Book the correction as a new verifikation in the current open year instead (\`POST /journal-entries\`): a storno (\`POST /journal-entries/{id}/reverse\`) is numbered and dated in the original's fiscal year, so it is refused in a locked or closed year. (v1 has \`POST /fiscal-periods/{id}/unlock\`, but the same rule applies.)
 - **Year-end is async.** Don't block your request loop on it: poll \`GET /operations/{id}\` with reasonable backoff (every 5-10s). If you prefer webhooks, subscribe to \`period.year_closed\` — that is the event the engine emits on completion. (\`operation.completed\`, shown in the operation envelope, is the polling contract, not a separately deliverable subscription event.)
 
 ## Next steps

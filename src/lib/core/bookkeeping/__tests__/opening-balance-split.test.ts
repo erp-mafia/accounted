@@ -15,6 +15,12 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
   createJournalEntry: vi.fn(async () => ({ id: 'ib-2027' })),
   reverseEntry: vi.fn(),
 }))
+// The one-IB-per-year read runs first; it is covered in existing.test.ts and
+// year-end-service.test.ts, so these queues start at the next period's fetch.
+vi.mock('@/lib/import/opening-balance/existing', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/import/opening-balance/existing')>()),
+  assertNoOpeningBalance: vi.fn(async () => undefined),
+}))
 
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'

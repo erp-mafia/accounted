@@ -35,6 +35,12 @@ vi.mock('@/lib/salary/agi/generate-declaration', () => ({
   generateAgiDeclaration: (...a: unknown[]) => mockGenerateAgi(...a),
 }))
 
+const mockCreateRun = vi.fn()
+vi.mock('@/lib/salary/create-run', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/salary/create-run')>('@/lib/salary/create-run')
+  return { ...actual, createSalaryRunWithEmployees: (...a: unknown[]) => mockCreateRun(...a) }
+})
+
 import { commitPendingOperation } from '../commit'
 
 function makePendingOp(overrides: Partial<PendingOperation>): PendingOperation {
@@ -62,6 +68,74 @@ function makePendingOp(overrides: Partial<PendingOperation>): PendingOperation {
 beforeEach(() => {
   vi.clearAllMocks()
   eventBus.clear()
+})
+
+describe('commitPendingOperation: create_salary_run', () => {
+  const CREATED = {
+    run: { id: 'run-new' },
+    employeeCount: 2,
+    deviationWindow: { start: '2026-03-01', end: '2026-03-31' },
+  }
+  const BASE_PARAMS = {
+    period_year: 2026,
+    period_month: 3,
+    payment_date: '2026-03-25',
+    deviation_period_start: '2026-03-01',
+    deviation_period_end: '2026-03-31',
+  }
+
+  it('creates the run in the series the approver saw at staging', async () => {
+    mockCreateRun.mockResolvedValue(CREATED)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // finalize
+
+    const op = makePendingOp({
+      operation_type: 'create_salary_run',
+      params: { ...BASE_PARAMS, voucher_series: 'K' },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(mockCreateRun).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      'user-1',
+      expect.objectContaining({ periodYear: 2026, periodMonth: 3, voucherSeries: 'K' }),
+    )
+  })
+
+  it("commits an operation staged before the series was staged: the service resolves the company's series", async () => {
+    mockCreateRun.mockResolvedValue(CREATED)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // finalize
+
+    // The pre-fix params shape: no voucher_series key at all.
+    const op = makePendingOp({ operation_type: 'create_salary_run', params: { ...BASE_PARAMS } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ salary_run_id: 'run-new', employee_count: 2 })
+    const passed = mockCreateRun.mock.calls[0][3] as Record<string, unknown>
+    expect(passed.voucherSeries).toBeUndefined()
+  })
+
+  it('ignores a staged series that is not one letter A-Z', async () => {
+    mockCreateRun.mockResolvedValue(CREATED)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // finalize
+
+    const op = makePendingOp({
+      operation_type: 'create_salary_run',
+      params: { ...BASE_PARAMS, voucher_series: 'kk' },
+    })
+    await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    const passed = mockCreateRun.mock.calls[0][3] as Record<string, unknown>
+    expect(passed.voucherSeries).toBeUndefined()
+  })
 })
 
 describe('commitPendingOperation: update_payslip_line', () => {

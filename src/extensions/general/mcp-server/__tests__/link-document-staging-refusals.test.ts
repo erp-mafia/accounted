@@ -160,6 +160,29 @@ describe('gnubok_link_document_to_voucher: refusals at staging', () => {
     expect(result.preview).toMatchObject({ document_already_linked: true })
   })
 
+  it('refuses a line that is not on the target verifikat, dry run included: the pin would be permanent', async () => {
+    // The approval refuses it too (lib/documents/link-document.ts); staging
+    // used to let any existing line id through.
+    const { supabase, findCall } = createTableMockSupabase({
+      document_attachments: {
+        data: { id: DOC_ID, file_name: 'underlag.pdf', mime_type: 'application/pdf', journal_entry_id: null, journal_entry_line_id: null },
+      },
+      journal_entries: { data: TARGET },
+      journal_entry_lines: { data: null },
+      fiscal_periods: { data: OPEN_2026 },
+      pending_operations: [{ data: [] }, { data: { id: 'op-new' } }],
+    })
+    const LINE_OF_ANOTHER = '00000000-0000-4000-8000-000000000601'
+
+    const { error } = toToolError(
+      await refusal({ document_id: DOC_ID, journal_entry_id: TARGET_ID, journal_entry_line_id: LINE_OF_ANOTHER, dry_run: true }, supabase),
+    )
+
+    expect(error.code).toBe('NOT_FOUND')
+    expect(error.message_en).toContain(`no line with id ${LINE_OF_ANOTHER} on verifikat ${TARGET_ID}`)
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+
   describe('another waiting proposal holds the document (crm#1158)', () => {
     const OTHER_TARGET_ID = '00000000-0000-4000-8000-000000000202'
     const OTHER_OP_ID = '00000000-0000-4000-8000-000000000401'

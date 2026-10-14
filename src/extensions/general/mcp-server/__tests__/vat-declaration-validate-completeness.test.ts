@@ -26,11 +26,20 @@ vi.mock('@/extensions/general/skatteverket/lib/api-client', async (importOrigina
   return { ...actual, skvRequest: (...a: unknown[]) => mockSkvRequest(...a) }
 })
 
+// The declaration figures are the unit under test here, so they are supplied
+// directly instead of being reconstructed from a ledger fixture: the
+// declaration buildMomsuppgift maps the momsuppgift from is the one the
+// completeness verdict judges.
+const mockDeclaration = vi.fn()
 vi.mock('@/extensions/general/skatteverket/lib/declaration-prep', () => ({
   buildMomsuppgift: vi.fn(async () => ({
     redovisare: '165560000000',
     redovisningsperiod: '202601',
     momsuppgift: { summaMoms: 2500 },
+    declaration: {
+      period: { type: 'monthly', year: 2026, period: 1, start: '2026-01-01', end: '2026-01-31' },
+      ...(await mockDeclaration()),
+    },
   })),
   resolveRedovisare: vi.fn(async () => '165560000000'),
 }))
@@ -38,17 +47,6 @@ vi.mock('@/extensions/general/skatteverket/lib/declaration-prep', () => ({
 vi.mock('@/extensions/general/skatteverket/lib/audit', () => ({
   writeSkatteverketAudit: vi.fn(),
 }))
-
-// The declaration figures are the unit under test here, so they are supplied
-// directly instead of being reconstructed from a ledger fixture.
-const mockCalculateVatDeclaration = vi.fn()
-vi.mock('@/lib/reports/vat-declaration', async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>
-  return {
-    ...actual,
-    calculateVatDeclaration: (...a: unknown[]) => mockCalculateVatDeclaration(...a),
-  }
-})
 
 vi.mock('@/lib/reports/rc-basis-gaps', () => ({
   findRcBasisGaps: (...args: unknown[]) => mockFindRcBasisGaps(...args),
@@ -80,7 +78,7 @@ function makeRutor(partial: Partial<VatDeclarationRutor> = {}): VatDeclarationRu
 }
 
 /**
- * `rcInputAccountTotals` is the 2645/2647 pair the real calculateVatDeclaration
+ * `rcInputAccountTotals` is the 2645/2647 pair the real declaration
  * carries alongside the rutor. Omitting it here is not neutral: the tool then
  * runs RC_INPUT_VAT_MISMATCH against the ruta 48 aggregate instead of the
  * reverse-charge input accounts, which is exactly the weaker form.
@@ -90,7 +88,7 @@ function setDeclaration(
   rcInput?: Record<string, { debit: number; credit: number }>,
   rcBasisByRate?: { r25: number; r12: number; r6: number },
 ) {
-  mockCalculateVatDeclaration.mockResolvedValue({
+  mockDeclaration.mockResolvedValue({
     rutor,
     ...(rcInput ? { rcInputAccountTotals: rcInput } : {}),
     ...(rcBasisByRate ? { rcBasisByRate } : {}),
@@ -238,7 +236,7 @@ describe('gnubok_vat_declaration_validate', () => {
   // #3387: the declaration carries the class 3 accounts that reach no ruta.
   // The rutor look consistent, so only that list can surface the gap.
   it('warns about a revenue account without a ruta and still reports completeness ok', async () => {
-    mockCalculateVatDeclaration.mockResolvedValue({
+    mockDeclaration.mockResolvedValue({
       rutor: CLEAN,
       revenueAccountsWithoutRuta: [
         { account_number: '3543', account_name: 'Faktureringsavgift', amount: 1250 },

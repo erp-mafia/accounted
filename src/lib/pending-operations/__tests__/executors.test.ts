@@ -137,7 +137,6 @@ import { codedRefusal } from '@/lib/errors/refusal'
 import { parseSIEFile } from '@/lib/import/sie-parser'
 import { requestSIEJobAction, submitSIEJob } from '@/lib/import/sie-jobs'
 import { commitAnnualPostings } from '@/lib/bokslut/assets/depreciation-engine'
-import { createCreditNoteJournalEntry } from '@/lib/bookkeeping/invoice-entries'
 import { createSupplierCreditNoteEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { categorizeMatchedTransaction } from '@/lib/transactions/categorize-core'
 import { ensureInvoiceNumber } from '@/lib/invoices/ensure-invoice-number'
@@ -815,32 +814,8 @@ describe('commitPendingOperation: post_annual_depreciation', () => {
 // ─── create_transaction ─────────────────────────────────────────────
 
 describe('commitPendingOperation: create_transaction', () => {
-  it('happy path: inserts a transactions row with import_source=mcp and returns the id', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({ data: [{ id: 'ca-usd', is_primary: false, bank_connection_id: null }], error: null }) // default cash account
-    enqueue({ data: { id: 'tx-42' }, error: null }) // executor insert
-    enqueue({ data: null, error: null }) // dispatcher's update
-
-    const op = makePendingOp({
-      operation_type: 'create_transaction',
-      params: {
-        date: '2026-05-01',
-        amount: -129.5,
-        description: 'AWS subscription',
-        currency: 'USD',
-        external_id: 'recAirtable123',
-      },
-    })
-
-    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
-
-    expect(result.status).toBe('committed')
-    // The only USD account is the row's account, as a bank-file import of the
-    // same row would have bound it (crm#1171).
-    expect(result.data).toMatchObject({ transaction_id: 'tx-42', cash_account_id: 'ca-usd' })
-  })
-
+  // The stored row, its dedup and its kassakonto binding: the executor runs
+  // the shared ingest pipeline, covered in create-transaction-ingest.test.ts.
   it('rejects with 400 when required fields are missing', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
@@ -855,132 +830,6 @@ describe('commitPendingOperation: create_transaction', () => {
 
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(400)
-  })
-
-  it('returns 409 when external_id collides with an existing row', async () => {
-    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
-    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({ data: [], error: null }) // default cash account: none
-    enqueue({ data: null, error: { code: '23505', message: 'duplicate key' } as never }) // executor insert
-    enqueue({ data: null, error: null }) // dispatcher's reject update
-
-    const op = makePendingOp({
-      operation_type: 'create_transaction',
-      params: {
-        date: '2026-05-01',
-        amount: 100,
-        description: 'test',
-        external_id: 'recAirtable123',
-      },
-    })
-
-    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
-
-    // 409 collisions are treated as auto-rejected by the dispatcher.
-    expect(result.status).toBe('rejected')
-    expect(result.auto_rejected).toBe(true)
-    expect(result.http_status).toBe(409)
-    expect(result.error).toMatch(/already exists/)
-    // The system's rejection, told apart from a person's by its category.
-    const rejectUpdate = findCalls('pending_operations', 'update').map((c) => c[0] as Record<string, unknown>)
-      .find((payload) => payload.status === 'rejected')
-    expect(rejectUpdate).toMatchObject({ rejection_category: 'failed', result_data: { auto_rejected: true } })
-  })
-
-  it('binds cash_account_id when ledger_account is given, creating the manual account', async () => {
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({ data: null, error: null }) // ensureManualCashAccount lookup miss
-    enqueue({ data: { id: 'ca-1935' }, error: null }) // ensureManualCashAccount insert
-    enqueue({ data: { id: 'tx-9' }, error: null }) // executor transactions insert
-    enqueue({ data: null, error: null }) // dispatcher's update
-
-    const op = makePendingOp({
-      operation_type: 'create_transaction',
-      params: {
-        date: '2026-05-01',
-        amount: -200,
-        description: 'WISE KORT ST',
-        currency: 'SEK',
-        ledger_account: '1935',
-      },
-    })
-
-    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
-
-    expect(result.status).toBe('committed')
-    expect(result.data).toMatchObject({ transaction_id: 'tx-9', cash_account_id: 'ca-1935' })
-  })
-
-  // crm#1171: a row staged without ledger_account was stored with
-  // cash_account_id NULL, while every bank-feed and bank-file row is bound.
-  describe('without ledger_account: the default account in the row currency (crm#1171)', () => {
-    async function commitWith(
-      cashAccounts: { data: unknown; error: unknown },
-      params: Record<string, unknown> = {},
-    ) {
-      const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
-      enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-      enqueue(cashAccounts) // default cash account lookup
-      enqueue({ data: { id: 'tx-7' }, error: null }) // executor transactions insert
-      enqueue({ data: null, error: null }) // dispatcher's update
-      const op = makePendingOp({
-        operation_type: 'create_transaction',
-        params: { date: '2026-05-01', amount: -99, description: 'Kortköp', currency: 'SEK', ...params },
-      })
-      const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
-      const insert = findCall('transactions', 'insert')?.[0] as Record<string, unknown> | undefined
-      return { result, insert, lookupEqs: findCalls('cash_accounts', 'eq') }
-    }
-
-    it('binds the primary when the company has several enabled accounts in that currency', async () => {
-      const { result, insert, lookupEqs } = await commitWith({
-        data: [
-          { id: 'ca-1686', is_primary: false, bank_connection_id: null },
-          { id: 'ca-1930', is_primary: true, bank_connection_id: 'bc-1' },
-        ],
-        error: null,
-      })
-      expect(result.status).toBe('committed')
-      expect(insert?.cash_account_id).toBe('ca-1930')
-      expect(result.data).toMatchObject({ cash_account_id: 'ca-1930' })
-      // Only the company's own enabled accounts in the row's currency.
-      expect(lookupEqs).toEqual([['company_id', 'company-1'], ['enabled', true], ['currency', 'SEK']])
-    })
-
-    it('binds only an account of the given bank connection, never another bank', async () => {
-      const bound = await commitWith(
-        {
-          data: [
-            { id: 'ca-primary', is_primary: true, bank_connection_id: 'bc-1' },
-            { id: 'ca-other-bank', is_primary: false, bank_connection_id: 'bc-2' },
-          ],
-          error: null,
-        },
-        { bank_connection_id: 'bc-2' },
-      )
-      expect(bound.insert?.cash_account_id).toBe('ca-other-bank')
-
-      const ambiguous = await commitWith(
-        {
-          data: [
-            { id: 'ca-primary', is_primary: true, bank_connection_id: 'bc-1' },
-            { id: 'ca-a', is_primary: false, bank_connection_id: 'bc-2' },
-            { id: 'ca-b', is_primary: false, bank_connection_id: 'bc-2' },
-          ],
-          error: null,
-        },
-        { bank_connection_id: 'bc-2' },
-      )
-      expect(ambiguous.result.status).toBe('committed')
-      expect(ambiguous.insert?.cash_account_id).toBeNull()
-    })
-
-    it('leaves the row unassigned, and still creates it, when the lookup fails', async () => {
-      const { result, insert } = await commitWith({ data: null, error: { message: 'timeout' } })
-      expect(result.status).toBe('committed')
-      expect(insert?.cash_account_id).toBeNull()
-    })
   })
 
   it('rejects a non-19xx ledger_account with 400', async () => {
@@ -1112,6 +961,33 @@ describe('commitPendingOperation: import_sie', () => {
     )
   })
 
+  // Absent flags take the job's defaults (import everything); a row staged
+  // before stored explicit booleans and commits exactly as approved.
+  it.each([
+    ['absent flags', {}, { createFiscalPeriod: true, importOpeningBalances: true, importTransactions: true }],
+    [
+      'explicit false (an old row that omitted them)',
+      { create_fiscal_period: false, import_opening_balances: false, import_transactions: true },
+      { createFiscalPeriod: false, importOpeningBalances: false, importTransactions: true },
+    ],
+  ])('%s', async (_label, flags, expected) => {
+    vi.mocked(submitSIEJob).mockResolvedValueOnce({id:'imp-1',fiscal_period_id:'fp-1',job_state:'queued'} as never)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's update
+
+    const op = makePendingOp({
+      operation_type: 'import_sie',
+      params: { file_content: '#FLAGGA 0\n', filename: 'test.sie', mappings: [], ...flags },
+    })
+    await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(submitSIEJob).toHaveBeenCalledWith(
+      expect.anything(), 'company-1', 'user-1', expect.anything(), [],
+      expect.objectContaining(expected),
+    )
+  })
+
   it('rejects when required params are missing', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
@@ -1154,142 +1030,10 @@ describe('commitPendingOperation: import_sie', () => {
 // ─── credit_invoice ─────────────────────────────────────────────────
 
 describe('commitPendingOperation: credit_invoice', () => {
-  it('happy path (accrual): inserts negated credit note and books JE', async () => {
-    const original = makeInvoice({
-      id: 'inv-1',
-      invoice_number: 'F-2024001',
-      status: 'sent',
-      document_type: 'invoice',
-      subtotal: 1000,
-      vat_amount: 250,
-      total: 1250,
-    })
-    const originalWithItems = {
-      ...original,
-      items: [
-        { sort_order: 0, description: 'Service', quantity: 1, unit: 'st', unit_price: 1000, line_total: 1000, vat_rate: 25, vat_amount: 250 },
-      ],
-    }
-
-    const creditNoteRow = { ...original, id: 'cn-1', invoice_number: 'KR-F-2024001' }
-    const completeCreditNote = { ...creditNoteRow, customer: { name: 'Acme AB' }, items: [] }
-
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    // 0: CAS claim
-    enqueue({ data: { id: 'op-1' }, error: null })
-    // 1: fetch original with items
-    enqueue({ data: originalWithItems, error: null })
-    // 2: insert credit note
-    enqueue({ data: creditNoteRow, error: null })
-    // 3: insert items (await thenable)
-    enqueue({ data: null, error: null })
-    // 4: update original status='credited'
-    enqueue({ data: null, error: null })
-    // 5: re-fetch complete credit note with customer + items
-    enqueue({ data: completeCreditNote, error: null })
-    // 6: company_settings
-    enqueue({ data: { entity_type: 'aktiebolag', accounting_method: 'accrual' }, error: null })
-    // 7: update invoice with journal_entry_id
-    enqueue({ data: null, error: null })
-    // 8: dispatcher's pending_operations update
-    enqueue({ data: null, error: null })
-
-    vi.mocked(createCreditNoteJournalEntry).mockResolvedValueOnce({ id: 'je-1' } as never)
-
-    const op = makePendingOp({
-      operation_type: 'credit_invoice',
-      params: { invoice_id: 'inv-1', reason: 'Wrong amount' },
-    })
-
-    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
-
-    expect(result.status).toBe('committed')
-    expect(result.data).toMatchObject({ credit_note_id: 'cn-1', journal_entry_id: 'je-1' })
-    expect(createCreditNoteJournalEntry).toHaveBeenCalled()
-  })
-
-  it('skips JE on cash accounting while the original is still unpaid', async () => {
-    // Kontantmetoden books nothing at issue: an unpaid original never reached
-    // the ledger, so there is nothing for the credit note to reverse.
-    const original = makeInvoice({
-      id: 'inv-1',
-      status: 'sent',
-      document_type: 'invoice',
-      journal_entry_id: null,
-      paid_at: null,
-      paid_amount: null,
-    })
-    const originalWithItems = { ...original, items: [] }
-    const creditNoteRow = { ...original, id: 'cn-2', invoice_number: 'KR-F-2024001' }
-    const completeCreditNote = { ...creditNoteRow, customer: null, items: [] }
-
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({ data: originalWithItems, error: null })
-    enqueue({ data: creditNoteRow, error: null })
-    enqueue({ data: null, error: null })
-    enqueue({ data: null, error: null })
-    enqueue({ data: completeCreditNote, error: null })
-    enqueue({ data: { entity_type: 'enskild_firma', accounting_method: 'cash' }, error: null })
-    // no JE update; go straight to dispatcher update
-    enqueue({ data: null, error: null })
-
-    const op = makePendingOp({
-      operation_type: 'credit_invoice',
-      params: { invoice_id: 'inv-1' },
-    })
-
-    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
-
-    expect(result.status).toBe('committed')
-    expect(result.data).toMatchObject({ credit_note_id: 'cn-2', journal_entry_id: null })
-    expect(createCreditNoteJournalEntry).not.toHaveBeenCalled()
-  })
-
-  it('books the reversal on cash accounting when the original was paid (#2552)', async () => {
-    // The payment verifikat already booked revenue + utgående moms, so the
-    // credit note must reverse them: the same call the dashboard makes.
-    const original = makeInvoice({
-      id: 'inv-1',
-      status: 'paid',
-      document_type: 'invoice',
-      journal_entry_id: 'je-orig',
-      paid_at: '2026-03-12',
-      paid_amount: 12500,
-    })
-    const originalWithItems = { ...original, items: [] }
-    const creditNoteRow = { ...original, id: 'cn-3', invoice_number: 'KR-F-2024001' }
-    const completeCreditNote = { ...creditNoteRow, customer: { name: 'Acme AB' }, items: [] }
-
-    const { supabase, enqueue } = createQueuedMockSupabase()
-    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({ data: originalWithItems, error: null })
-    enqueue({ data: creditNoteRow, error: null })
-    enqueue({ data: null, error: null }) // items insert
-    enqueue({ data: null, error: null }) // original -> credited
-    enqueue({ data: completeCreditNote, error: null })
-    enqueue({ data: { entity_type: 'enskild_firma', accounting_method: 'cash' }, error: null })
-    // original voucher lookup (original.journal_entry_id is set)
-    enqueue({ data: { voucher_series: 'A', voucher_number: 42 }, error: null })
-    enqueue({ data: null, error: null }) // journal_entry_id write-back
-    enqueue({ data: null, error: null }) // dispatcher update
-
-    vi.mocked(createCreditNoteJournalEntry).mockResolvedValueOnce({ id: 'je-cash' } as never)
-
-    const op = makePendingOp({
-      operation_type: 'credit_invoice',
-      params: { invoice_id: 'inv-1' },
-    })
-
-    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
-
-    expect(result.status).toBe('committed')
-    expect(result.data).toMatchObject({ credit_note_id: 'cn-3', journal_entry_id: 'je-cash' })
-    expect(createCreditNoteJournalEntry).toHaveBeenCalledTimes(1)
-    // The reversal points back at the original verifikat (BFL 5 kap. 5 §).
-    expect(vi.mocked(createCreditNoteJournalEntry).mock.calls[0][6]).toBe('A-42')
-  })
-
+  // The credit itself (the mirrored credit note, the reversal, the period
+  // checked first, fail closed) runs in creditInvoice and is pinned in
+  // lib/invoices/__tests__/credit-invoice.test.ts; the executor's mapping in
+  // credit-invoice-executor.test.ts. These refusals run through both.
   it('auto-rejects when invoice is already credited (409)', async () => {
     const original = makeInvoice({ id: 'inv-1', status: 'credited', document_type: 'invoice' })
     const { supabase, enqueue } = createQueuedMockSupabase()
@@ -1775,6 +1519,7 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: null, error: null })            // doc fetch: not found
+    enqueue({ data: { id: 'je-1' }, error: null })                              // shared check: the verifikat
     enqueue({ data: null, error: null })            // dispatcher reject update
 
     const result = await commitPendingOperation(
@@ -1788,6 +1533,7 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null })                              // CAS claim
     enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-OTHER' }, error: null }) // doc fetch
+    enqueue({ data: { id: 'je-1' }, error: null })                              // shared check: the verifikat
     enqueue({ data: { status: 'posted', voucher_series: 'A', voucher_number: 12 }, error: null }) // holder
     enqueue({ data: null, error: null })                                         // dispatcher reject update
 
@@ -1810,6 +1556,7 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null })                              // CAS claim
     enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-REVERSED' }, error: null }) // doc fetch
+    enqueue({ data: { id: 'je-1' }, error: null })                              // shared check: the verifikat
     enqueue({ data: { status: 'reversed', voucher_series: 'a', voucher_number: 57 }, error: null }) // holder
     enqueue({ data: null, error: null })                                         // dispatcher reject update
 
@@ -1828,6 +1575,7 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null })                              // CAS claim
     enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-DRAFT' }, error: null }) // doc fetch
+    enqueue({ data: { id: 'je-1' }, error: null })                              // shared check: the verifikat
     enqueue({ data: { status: 'draft', voucher_series: 'A', voucher_number: null }, error: null }) // holder
     enqueue({ data: null, error: null })                                         // dispatcher reject update
 
@@ -1844,6 +1592,7 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null })                              // CAS claim
     enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-OTHER' }, error: null }) // doc fetch
+    enqueue({ data: { id: 'je-1' }, error: null })                              // shared check: the verifikat
     enqueue({ data: null, error: null })                                         // holder: not visible
     enqueue({ data: null, error: null })                                         // dispatcher reject update
 
@@ -1859,6 +1608,7 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null })                              // CAS claim
     enqueue({ data: { id: 'doc-1', journal_entry_id: null }, error: null })     // doc fetch: unlinked at precheck
+    enqueue({ data: { id: 'je-1' }, error: null })                              // shared check: the verifikat
     enqueue({ data: { id: 'je-1' }, error: null })                              // linkToJournalEntry: JE ownership
     enqueue({
       data: null,
@@ -1881,6 +1631,7 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
     const { supabase, enqueue, calls, findCall } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null })                              // CAS claim
     enqueue({ data: { id: 'doc-1', journal_entry_id: null }, error: null })     // doc fetch
+    enqueue({ data: { id: 'je-1' }, error: null })                              // shared check: the verifikat
     enqueue({ data: { id: 'je-1' }, error: null })                              // linkToJournalEntry: JE ownership
     enqueue({
       data: { id: 'doc-1', file_name: 'faktura.pdf', journal_entry_id: 'je-1', journal_entry_line_id: null },
@@ -1921,6 +1672,7 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
     const { supabase, enqueue, calls, findCall } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null })                              // CAS claim
     enqueue({ data: { id: 'doc-2', journal_entry_id: null }, error: null })     // doc fetch
+    enqueue({ data: { id: 'je-1' }, error: null })                              // shared check: the verifikat
     enqueue({ data: { id: 'je-1' }, error: null })                              // linkToJournalEntry: JE ownership
     enqueue({
       data: { id: 'doc-2', file_name: 'betalbekraftelse.pdf', journal_entry_id: 'je-1', journal_entry_line_id: null },
@@ -1951,6 +1703,7 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null })                              // CAS claim
     enqueue({ data: { id: 'doc-1', journal_entry_id: null }, error: null })     // doc fetch
+    enqueue({ data: { id: 'je-1' }, error: null })                              // shared check: the verifikat
     enqueue({ data: { id: 'je-1' }, error: null })                              // linkToJournalEntry: JE ownership
     enqueue({
       data: { id: 'doc-1', file_name: 'faktura.pdf', journal_entry_id: 'je-1', journal_entry_line_id: null },
@@ -1975,6 +1728,7 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null })                              // CAS claim
     enqueue({ data: { id: 'doc-1', journal_entry_id: null }, error: null })     // doc fetch
+    enqueue({ data: { id: 'je-1' }, error: null })                              // shared check: the verifikat
     enqueue({ data: { id: 'je-1' }, error: null })                              // linkToJournalEntry: JE ownership
     enqueue({
       data: { id: 'doc-1', file_name: 'faktura.pdf', journal_entry_id: 'je-1', journal_entry_line_id: null },
@@ -2002,6 +1756,7 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null })                              // CAS claim
     enqueue({ data: { id: 'doc-1', journal_entry_id: null }, error: null })     // doc fetch
+    enqueue({ data: { id: 'je-1' }, error: null })                              // shared check: the verifikat
     enqueue({ data: { id: 'je-1' }, error: null })                              // linkToJournalEntry: JE ownership
     enqueue({
       data: null,
@@ -2014,6 +1769,46 @@ describe('commitPendingOperation: link_document_to_voucher', () => {
     )
     expect(result.status).toBe('rejected')
     expect(result.http_status).toBe(409)
+  })
+
+  // The shared rules (lib/documents/link-document.ts) refuse before any write
+  // what the door used to let through to a permanent wrong pin or a trigger.
+  it('auto-rejects 404 for a line that is not on the verifikat, writing nothing', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })                              // CAS claim
+    enqueue({ data: { id: 'doc-1', journal_entry_id: null }, error: null })     // doc fetch
+    enqueue({ data: { id: 'je-1' }, error: null })                              // shared check: the verifikat
+    enqueue({ data: null, error: null })                                         // shared check: no such line on it
+    enqueue({ data: null, error: null })                                         // dispatcher reject update
+
+    const result = await commitPendingOperation(
+      supabase as never, 'user-1', 'company-1',
+      makePendingOp({ ...baseOp, params: { ...baseOp.params, journal_entry_line_id: 'line-of-je-9' } }),
+    )
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(404)
+    expect(result.error).toBe('Raden finns inte på verifikationen.')
+    expect(findCall('document_attachments', 'update')).toBeUndefined()
+  })
+
+  it('auto-rejects 409 for a verifikat in a locked period before the write', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null })                              // CAS claim
+    enqueue({ data: { id: 'doc-1', journal_entry_id: null }, error: null })     // doc fetch
+    enqueue({ data: { id: 'je-1', fiscal_period_id: 'fp-1' }, error: null })    // shared check: the verifikat
+    enqueue({
+      data: { id: 'fp-1', period_start: '2025-01-01', is_closed: true, locked_at: '2026-02-01T00:00:00Z', closed_externally: false, closing_entry_id: 'je-close' },
+      error: null,
+    })                                                                           // shared check: its period, closed
+    enqueue({ data: null, error: null })                                         // dispatcher reject update
+
+    const result = await commitPendingOperation(
+      supabase as never, 'user-1', 'company-1', makePendingOp(baseOp),
+    )
+    expect(result.status).toBe('rejected')
+    expect(result.http_status).toBe(409)
+    expect(result.error).toBe('Verifikationens period är låst: bilagan kan inte länkas.')
+    expect(findCall('document_attachments', 'update')).toBeUndefined()
   })
 })
 
@@ -2035,6 +1830,7 @@ describe('commitPendingOperation: link_documents_to_vouchers', () => {
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     // row 1: doc-1 -> je-1
     enqueue({ data: { id: 'doc-1', journal_entry_id: null }, error: null })  // doc fetch
+    enqueue({ data: { id: 'je-1' }, error: null })                              // shared check: the verifikat
     enqueue({ data: { id: 'je-1' }, error: null })                          // linkToJournalEntry: JE ownership
     enqueue({
       data: { id: 'doc-1', file_name: 'kvitto1.pdf', journal_entry_id: 'je-1', journal_entry_line_id: null },
@@ -2043,6 +1839,7 @@ describe('commitPendingOperation: link_documents_to_vouchers', () => {
     enqueue({ data: null, error: null })                                   // inbox stamp (best-effort)
     // row 2: doc-2 -> je-2
     enqueue({ data: { id: 'doc-2', journal_entry_id: null }, error: null })  // doc fetch
+    enqueue({ data: { id: 'je-1' }, error: null })                              // shared check: the verifikat
     enqueue({ data: { id: 'je-2' }, error: null })                          // linkToJournalEntry: JE ownership
     enqueue({
       data: { id: 'doc-2', file_name: 'kvitto2.pdf', journal_entry_id: 'je-2', journal_entry_line_id: null },
@@ -2066,8 +1863,10 @@ describe('commitPendingOperation: link_documents_to_vouchers', () => {
     enqueue({ data: { id: 'op-1' }, error: null })                          // CAS claim
     // row 1: doc-1 not found in this company
     enqueue({ data: null, error: null })                                   // doc fetch: not found
+    enqueue({ data: { id: 'je-1' }, error: null })                              // shared check: the verifikat
     // row 2: doc-2 -> je-2 succeeds
     enqueue({ data: { id: 'doc-2', journal_entry_id: null }, error: null }) // doc fetch
+    enqueue({ data: { id: 'je-1' }, error: null })                              // shared check: the verifikat
     enqueue({ data: { id: 'je-2' }, error: null })                         // linkToJournalEntry: JE ownership
     enqueue({
       data: { id: 'doc-2', file_name: 'kvitto2.pdf', journal_entry_id: 'je-2', journal_entry_line_id: null },
@@ -2095,9 +1894,11 @@ describe('commitPendingOperation: link_documents_to_vouchers', () => {
     enqueue({ data: { id: 'op-1' }, error: null })                                  // CAS claim
     // row 1: doc-1 already linked to je-OTHER (posted) -> skipped
     enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-OTHER' }, error: null })   // doc fetch
+    enqueue({ data: { id: 'je-1' }, error: null })                              // shared check: the verifikat
     enqueue({ data: { status: 'posted', voucher_series: 'A', voucher_number: 3 }, error: null }) // holder
     // row 2: doc-2 -> je-2 succeeds
     enqueue({ data: { id: 'doc-2', journal_entry_id: null }, error: null })         // doc fetch
+    enqueue({ data: { id: 'je-1' }, error: null })                              // shared check: the verifikat
     enqueue({ data: { id: 'je-2' }, error: null })                                 // linkToJournalEntry: JE ownership
     enqueue({
       data: { id: 'doc-2', file_name: 'kvitto2.pdf', journal_entry_id: 'je-2', journal_entry_line_id: null },
@@ -2118,9 +1919,11 @@ describe('commitPendingOperation: link_documents_to_vouchers', () => {
     enqueue({ data: { id: 'op-1' }, error: null })                                  // CAS claim
     // row 1: doc-1 already linked to a posted JE -> WORM skip
     enqueue({ data: { id: 'doc-1', journal_entry_id: 'je-OTHER' }, error: null })   // doc fetch
+    enqueue({ data: { id: 'je-1' }, error: null })                              // shared check: the verifikat
     enqueue({ data: { status: 'posted', voucher_series: 'A', voucher_number: 3 }, error: null }) // holder
     // row 2: doc-2 not found -> skip
     enqueue({ data: null, error: null })                                           // doc fetch: not found
+    enqueue({ data: { id: 'je-1' }, error: null })                              // shared check: the verifikat
     enqueue({ data: null, error: null })                                           // dispatcher reject update
 
     const result = await commitPendingOperation(

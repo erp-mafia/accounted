@@ -24,7 +24,15 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
 }))
 
+const appendMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/processing-history/append', () => ({
+  appendProcessingHistory: (...args: unknown[]) => appendMock(...args),
+}))
+
 import { POST } from '../route'
+
+/** The fetch row the shared reject service reads (an IN list, so an array). */
+const PENDING_ROW = { id: 'op-1', status: 'pending', operation_type: 'categorize_transaction', risk_level: 'low' }
 
 /** A person's rejection: the category is required. */
 function rejectRequest(body: Record<string, unknown> = { rejection_category: 'wrong_amount' }) {
@@ -39,6 +47,7 @@ describe('POST /api/pending-operations/:id/reject', () => {
     reset()
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: mockSupabase, error: null })
     requireWriteMock.mockResolvedValue({ ok: true })
+    appendMock.mockResolvedValue('event-1')
   })
 
   it('returns 401 when not authenticated', async () => {
@@ -69,7 +78,7 @@ describe('POST /api/pending-operations/:id/reject', () => {
   })
 
   it('returns 404 when not found', async () => {
-    enqueue({ data: null, error: { message: 'not found' } })
+    enqueue({ data: [] })
 
     const request = rejectRequest()
     const response = await POST(request, routeParams)
@@ -78,8 +87,17 @@ describe('POST /api/pending-operations/:id/reject', () => {
     expect(status).toBe(404)
   })
 
+  it('returns 500 when the operation cannot be read', async () => {
+    enqueue({ data: null, error: { message: 'connection reset' } })
+
+    const response = await POST(rejectRequest(), routeParams)
+
+    expect(response.status).toBe(500)
+    expect(findCalls('pending_operations', 'update')).toEqual([])
+  })
+
   it('returns 409 when already committed', async () => {
-    enqueue({ data: { id: 'op-1', status: 'committed' } })
+    enqueue({ data: [{ ...PENDING_ROW, status: 'committed' }] })
 
     const request = rejectRequest()
     const response = await POST(request, routeParams)
@@ -91,7 +109,7 @@ describe('POST /api/pending-operations/:id/reject', () => {
 
   it('rejects successfully', async () => {
     enqueueMany([
-      { data: { id: 'op-1', status: 'pending' } },   // fetch op
+      { data: [PENDING_ROW] },                         // fetch op
       { data: [{ id: 'op-1' }], error: null },         // guarded update returns the row
     ])
 
@@ -106,6 +124,29 @@ describe('POST /api/pending-operations/:id/reject', () => {
       rejection_category: 'wrong_amount',
       rejection_reason: 'fel belopp',
     })
+  })
+
+  it('records who rejected, and audits it, the way an agent rejection is recorded', async () => {
+    enqueueMany([
+      { data: [PENDING_ROW] },
+      { data: [{ id: 'op-1' }], error: null },
+    ])
+
+    const response = await POST(rejectRequest({ rejection_category: 'wrong_category' }), routeParams)
+
+    expect(response.status).toBe(200)
+    expect(findCalls('pending_operations', 'update')[0]?.[0]).toMatchObject({
+      result_data: { rejected_by: 'user-1', rejected_via: 'user' },
+    })
+    expect(appendMock).toHaveBeenCalledTimes(1)
+    expect(appendMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        companyId: 'company-1',
+        eventType: 'PendingOperationRejected',
+        payload: expect.objectContaining({ operation_id: 'op-1', channel: 'app' }),
+        actor: { type: 'user', id: 'user-1' },
+      }),
+    )
   })
 
   it('returns 400 when the category is missing: a person always says what was wrong', async () => {
@@ -126,7 +167,7 @@ describe('POST /api/pending-operations/:id/reject', () => {
 
   it("accepts 'superseded' from the assistant withdrawing a proposal for a new answer", async () => {
     enqueueMany([
-      { data: { id: 'op-1', status: 'pending' } },
+      { data: [PENDING_ROW] },
       { data: [{ id: 'op-1' }], error: null },
     ])
 
@@ -141,7 +182,7 @@ describe('POST /api/pending-operations/:id/reject', () => {
     // `rejected` over an operation that has since posted a verifikat, so the
     // UPDATE is guarded on status and matches zero rows here.
     enqueueMany([
-      { data: { id: 'op-1', status: 'pending' } },   // fetch op: still pending
+      { data: [PENDING_ROW] },                         // fetch op: still pending
       { data: [], error: null },                       // guarded update matches nothing
     ])
 

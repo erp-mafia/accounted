@@ -99,6 +99,22 @@ export const SIEJobOptionsSchema = z.object({
   // A submit-time gate only: submitSIEJob keeps it out of the job's input.
   confirmOrgNumberMismatch: z.boolean().optional(),
 })
+/**
+ * The import's what-to-bring flags as the job reads them: an omitted flag
+ * takes the job's own default (SIEJobOptionsSchema: create the year, bring
+ * the IB and every verifikation, keep the file's account names), the
+ * dashboard's and v1's "import everything". A migration brings the year's IB
+ * and every verifikation (post-migration check: trial balances and voucher
+ * counts per series). The MCP tool used to stage Boolean(undefined), so an
+ * omitted flag was an explicit false and the defaults never applied.
+ */
+export const SIEImportFlagsSchema = SIEJobOptionsSchema.pick({
+  createFiscalPeriod: true,
+  importOpeningBalances: true,
+  importTransactions: true,
+  updateAccountNames: true,
+})
+
 export const SIEJobMappingsSchema = z.array(z.object({
   sourceAccount: z.string().min(1).max(40), sourceName: z.string().max(500),
   // Match the chart and worker's account-number rule, including custom accounts.
@@ -4430,7 +4446,9 @@ export const CreateSalaryRunSchema = z.object({
   period_year: z.number().int().min(2020).max(2100),
   period_month: z.number().int().min(1).max(12),
   payment_date: isoDate,
-  voucher_series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A-Z').default('A'),
+  // Omitted: the company's salary series (lib/salary/create-run.ts
+  // resolveSalaryRunSeries), the same rule as the dashboard and MCP.
+  voucher_series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A-Z').optional(),
   notes: z.string().max(2000).optional(),
   // Avvikelseperiod: the calendar window absence + worked days are read
   // from. Both or neither; omitted = company_settings.salary_deviation_period
@@ -4445,8 +4463,8 @@ export const CreateSalaryRunSchema = z.object({
 // resolves defaults server-side (period = month after the latest
 // non-corrected run, payment date from company_settings.salary_pay_day,
 // series from the per-source-type map), so "Starta lönekörning" can POST {}.
-// The v1 REST surface keeps the strict CreateSalaryRunSchema above (it
-// inserts the fields verbatim and must 400 on omissions, not 500).
+// The v1 REST surface keeps the strict CreateSalaryRunSchema above (period
+// and payment date are required there and 400 on omissions).
 export const CreateSalaryRunWithDefaultsSchema = z.object({
   period_year: z.number().int().min(2020).max(2100).optional(),
   period_month: z.number().int().min(1).max(12).optional(),

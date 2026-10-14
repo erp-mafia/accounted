@@ -830,7 +830,22 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
       'The transaction is in a foreign currency but has neither amount_sek nor exchange_rate, so it cannot be booked: the verifikation must be in SEK. Fetch the exchange rate for the transaction date, then retry.',
     remediation: {
       description:
-        'POST /api/v1/companies/{companyId}/transactions/{id}/refresh-exchange-rate (operation transactions.refresh-exchange-rate) fetches the Riksbanken rate for the transaction date and stores amount_sek and exchange_rate on the unbooked row; then retry the same booking. In the app, the booking dialog fetches the rate automatically when it opens the row. A currency Riksbanken does not publish answers TX_EXCHANGE_RATE_UNAVAILABLE: book that row as a manual verifikat with the SEK amount from the bank statement.',
+        'POST /api/v1/companies/{companyId}/transactions/{id}/refresh-exchange-rate (operation transactions.refresh-exchange-rate) fetches the Riksbanken rate for the transaction date and stores amount_sek and exchange_rate on the unbooked row; then retry the same booking. In the app, the booking dialog fetches the rate automatically when it opens the row. Without the v1 API (an MCP agent: the refresh has no MCP tool), ask the user to open the transaction in Accounted for booking once (the dialog stores the rate), then retry. A currency Riksbanken does not publish answers TX_EXCHANGE_RATE_UNAVAILABLE: book that row as a manual verifikat with the SEK amount from the bank statement (gnubok_create_voucher), then attach the row to it (gnubok_link_transaction_to_journal_entry).',
+    },
+    retryable: false,
+  },
+  // gnubok_create_transactions: the shared ingest dedup found the movement
+  // already stored (the same external_id, or the same date, amount and text
+  // from a bank feed or an import). A second row would invite a second booking.
+  TX_CREATE_DUPLICATE: {
+    httpStatus: 409,
+    message_sv:
+      'Transaktionen finns redan: samma rörelse är redan inläst, med samma externa id eller från bankkopplingen eller en import. Bokför den befintliga transaktionen i stället för att skapa en till.',
+    message_en:
+      'The transaction is already stored: the same movement exists with the same external_id, or from the bank feed or an import. Book the stored transaction instead of creating another.',
+    remediation: {
+      description:
+        'Book the stored row (matched_transaction_id) with gnubok_categorize_transaction or POST /api/v1/companies/{companyId}/transactions/{id}/categorize. A row typed by hand is for a movement no bank feed or import delivers.',
     },
     retryable: false,
   },
@@ -1599,7 +1614,7 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_en: 'Bookkeeping is locked for today\'s date; the credit note cannot be created.',
     remediation: {
       description:
-        'The credit note is dated today (Europe/Stockholm) and that date falls in a closed or locked period, or on/before the company lock date (details.reason). Unlock the period in the dashboard or wait for the next open period; the API cannot backdate or forward-date a credit note.',
+        'The credit note is dated today (Europe/Stockholm) and that date falls in a closed or locked period, on/before the company lock date, or in no fiscal period at all (details.reason: no_fiscal_period; create the fiscal year first). Unlock the period in the dashboard or wait for the next open period; the API cannot backdate or forward-date a credit note.',
     },
   },
   INVOICE_CREDIT_NOT_SENT: {
@@ -2914,6 +2929,14 @@ const YEAR_END: Record<string, StructuredErrorEntry> = {
         'Do not retry, and do not work around it: never book the year-end receivables, payables or their moms by hand (gnubok_create_voucher or any other tool), and do not stage the cut-off again through gnubok_stage_tool. Tell the user the cut-off is temporarily unavailable and that the year-end close of this kontantmetoden period waits until it is back. A cut-off operation already staged stays pending; do not approve it again. Other year-end preparation (reconciliation, accruals, depreciation) can continue.',
     },
   },
+  // A voucher gap explanation is write-once (lib/core/bookkeeping/voucher-gaps.ts):
+  // a second one for the same gap would overwrite the first without a trace.
+  VOUCHER_GAP_ALREADY_EXPLAINED: {
+    httpStatus: 409,
+    message_sv: 'Luckan i verifikationsserien har redan en förklaring. En sparad förklaring kan inte ändras.',
+    message_en: 'This voucher number gap already has an explanation; an explanation is write-once.',
+    retryable: false,
+  },
 }
 
 const FX: Record<string, StructuredErrorEntry> = {
@@ -3109,6 +3132,21 @@ const VAT_FILING: Record<string, StructuredErrorEntry> = {
       'Perioden är inlämnad via Skatteverket-kopplingen med kvittens och kan inte avmarkeras.',
     message_en:
       'The period was filed through the Skatteverket connection with a receipt and cannot be unmarked.',
+  },
+  // The server-side "Kontroll av underlaget" gate (vatFilingVerdict,
+  // lib/reports/vat-close-check.ts) refused: nothing was sent to Skatteverket.
+  // A staged submit that meets it at approval is consumed, not released.
+  VAT_DECLARATION_INCOMPLETE: {
+    httpStatus: 422,
+    message_sv:
+      'Momsdeklarationen är ofullständig: kontrollen av underlaget hittade fel, så inget skickades till Skatteverket. Åtgärda felen under Kontroll av underlaget och försök igen.',
+    message_en:
+      'The momsdeklaration is incomplete: the completeness checks found an ERROR, so nothing was sent to Skatteverket. Fix the findings, then submit again.',
+    remediation: {
+      description:
+        'gnubok_vat_declaration_validate (completeness_checks) or gnubok_vat_close_check lists the findings and their fixes. The manual eSKD/PDF filing is not gated.',
+      tool: 'gnubok_vat_declaration_validate',
+    },
   },
 }
 

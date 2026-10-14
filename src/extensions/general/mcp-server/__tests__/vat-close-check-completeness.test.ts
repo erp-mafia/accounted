@@ -29,6 +29,7 @@ vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
 }))
 
 import { computeVatCloseCheck, RC_BASIS_MISSING_HINT, REVENUE_ACCOUNT_WITHOUT_RUTA_HINT } from '@/lib/reports/vat-close-check'
+import { calculateVatDeclaration } from '@/lib/reports/vat-declaration'
 import { vatTotalsRpcResult } from './vat-totals-rpc-double'
 
 interface MockLine {
@@ -560,5 +561,28 @@ describe('gnubok_vat_close_check: declaration completeness', () => {
 
     expect(result.rutor.ruta05).toBe(1250)
     expect(result.declaration_checks).toEqual([])
+  })
+})
+
+// Decision 3 (2026-10-13): the close check (and the v1 compliance check that
+// returns its rutor as details.rutor) shows the declaration as filed.
+describe('gnubok_vat_close_check: rutor are the filed declaration', () => {
+  it('returns the signed rutor calculateVatDeclaration files, a net-negative ruta 05 included', async () => {
+    const supabase = mockSupabase([
+      { entry: 'sale', account_number: '3001', credit_amount: 200 },
+      { entry: 'sale', account_number: '2611', credit_amount: 50 },
+      { entry: 'sale', account_number: '1510', debit_amount: 250 },
+      { entry: 'credit', account_number: '3001', debit_amount: 700 },
+      { entry: 'credit', account_number: '2611', debit_amount: 175 },
+      { entry: 'credit', account_number: '1510', credit_amount: 875 },
+    ])
+    const [result, declaration] = await Promise.all([
+      computeVatCloseCheck(PERIOD, 'company-1', supabase),
+      calculateVatDeclaration(supabase, 'company-1', 'monthly', 2026, 1),
+    ])
+
+    expect(result.rutor.ruta05).toBe(-500)
+    expect(result.rutor).toEqual(declaration.rutor)
+    expect(result.payment).toMatchObject({ net_due: -125, direction: 'refund' })
   })
 })

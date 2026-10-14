@@ -443,6 +443,44 @@ describe('POST /inbox-items/:id/convert', () => {
     expect((await res.json()).error.code).toBe('SI_CREATE_SLP_INVALID_ACCOUNT')
   })
 
+  // Omvänd skattskyldighet (ML 16 kap 6-16 §§): the seller charges no Swedish
+  // moms, so a line rate other than 0 is refused as POST /supplier-invoices
+  // refuses it, and a foreign supplier without the flag registers the net.
+  it('400 VALIDATION_ERROR for reverse charge with a non-zero line rate, writing nothing', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      invoice_inbox_items: { data: itemRow({ extracted_data: null }), error: null },
+      suppliers: { data: { id: SUPPLIER_ID, name: 'Cloud GmbH', supplier_type: 'eu_business' }, error: null },
+      company_settings: { data: { accounting_method: 'accrual', defer_invoice_booking: false }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ ...BODY, reverse_charge: true })
+    expect(res.status).toBe(400)
+    const { error } = await res.json()
+    expect(error.code).toBe('VALIDATION_ERROR')
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('a dry run for a foreign supplier without the flag previews reverse charge and the net payable', async () => {
+    const client = makeClient({
+      company_members: MEMBER,
+      invoice_inbox_items: { data: itemRow({ extracted_data: null }), error: null },
+      suppliers: { data: { id: SUPPLIER_ID, name: 'Cloud GmbH', supplier_type: 'eu_business' }, error: null },
+      company_settings: { data: { accounting_method: 'accrual', defer_invoice_booking: false }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const { vat_rate: _rate, ...line } = BODY.items[0]
+    const res = await post({ ...BODY, items: [line] }, '?dry_run=true')
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.preview).toMatchObject({
+      vat_treatment: 'reverse_charge',
+      reverse_charge: true,
+      subtotal: 399.2,
+      vat_amount: 0,
+      total: 399.2,
+    })
+  })
+
   it('a dry run computes the invoice without an ankomstnummer, a supplier backfill or any write', async () => {
     const client = makeClient({
       company_members: MEMBER,

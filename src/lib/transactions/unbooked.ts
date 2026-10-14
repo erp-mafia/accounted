@@ -45,6 +45,35 @@ export interface UnbookedRange {
   toDate?: string
 }
 
+/** The two filter methods the list predicates below use on a transactions query. */
+interface TransactionFilterChain {
+  eq(column: string, value: unknown): TransactionFilterChain
+  not(column: string, operator: string, value: unknown): TransactionFilterChain
+}
+
+/**
+ * The same definition as a filter on a paginated `transactions` query: the
+ * work queue a list of "unbooked" bank rows answers with (v1 GET
+ * /transactions?status=unbooked, gnubok_list_uncategorized_transactions).
+ * Not ignored, not triaged as private, and anchored to no verifikat, read
+ * server-side through the is_booked computed column (migration
+ * 20261014180000, public.is_booked calls public.is_transaction_booked), so a
+ * page holds exactly the rows countUnbookedBankTransactions counts and a
+ * cursor or an offset never skips any.
+ *
+ * Generic over the builder so the caller keeps its own select's row type;
+ * the PostgREST chain types are too deep to name here (TS2589).
+ */
+export function applyUnbookedFilter<Q>(query: Q): Q {
+  const chain = query as unknown as TransactionFilterChain
+  return chain.eq('is_ignored', false).not('is_business', 'is', false).eq('is_booked', false) as unknown as Q
+}
+
+/** The complement on the anchor: rows anchored to a verifikat in any of the four ways. */
+export function applyBookedFilter<Q>(query: Q): Q {
+  return (query as unknown as TransactionFilterChain).eq('is_booked', true) as unknown as Q
+}
+
 /** PostgREST rejects very long URLs, so `.in()` lists are chunked. */
 const ANCHOR_LOOKUP_CHUNK = 200
 const ANCHOR_TABLES = ['transaction_voucher_links', 'invoice_payments', 'supplier_invoice_payments'] as const

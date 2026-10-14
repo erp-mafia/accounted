@@ -227,7 +227,7 @@ async function getActiveCompanyIdViaQueriesGated(
  */
 export async function resolveDormantCompanyIds(
   supabase: SupabaseClient,
-  memberships: readonly { company_id: string; role: string; companies: { team_id: string | null } }[]
+  memberships: readonly { company_id: string; role: string }[]
 ): Promise<Set<string>> {
   const nonOwner = memberships.filter((m) => m.role !== 'owner')
   if (nonOwner.length === 0 || !isMultiUserEnforced()) return new Set()

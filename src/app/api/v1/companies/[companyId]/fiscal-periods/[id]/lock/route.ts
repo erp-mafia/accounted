@@ -25,9 +25,9 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/fiscal-periods/:id/lock',
   summary: 'Lock a fiscal period (no new entries can be posted into it).',
   description:
-    'Sets locked_at on the period. Refuses if uncategorised business transactions remain in the period: they must be bokfört first. The DB trigger blocks JE inserts into locked periods; locking is the application-level pre-step before /close. Sync.',
+    'Sets locked_at on the period. Refuses if uncategorised business transactions remain in the period: they must be bokfört first. The DB trigger blocks JE inserts into locked periods. /year-end locks and closes a fiscal year itself, so this is for interim locks. Sync.',
   useWhen:
-    'Finishing a period and you want to stop new postings. Step 1 of a three-step year-end flow: lock → year-end → close.',
+    'Freezing a finished period you are NOT year-end closing (an interim month or quarter). Do not lock a fiscal year before /year-end: year-end posts its closing entry into the open period, then locks and closes it itself, and refuses a locked one.',
   doNotUseFor:
     'Locking an already-closed period (no-op). Bypassing the uncategorised-transactions guard: categorise or mark-private first.',
   pitfalls: [

@@ -42,7 +42,22 @@ vi.mock('@/lib/invoices/clear-settled-invoice-suggestions', () => ({
   clearSettledInvoiceSuggestions: mockClearSuggestions,
 }))
 
+// The executor books through the dashboard's write path; wrapped (not
+// replaced) so the assertion is on the routing and the real service runs.
+vi.mock('@/lib/invoices/settle-invoice-payment', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/invoices/settle-invoice-payment')>(
+    '@/lib/invoices/settle-invoice-payment',
+  )
+  return { settleInvoicePayment: vi.fn(actual.settleInvoicePayment) }
+})
+
+const mockCancelOrphan = vi.fn()
+vi.mock('@/lib/bookkeeping/cancel-orphaned-entry', () => ({
+  cancelOrphanedPaymentEntry: (...args: unknown[]) => mockCancelOrphan(...args),
+}))
+
 import { commitPendingOperation } from '../commit'
+import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
 
 function makePendingOp(overrides: Partial<PendingOperation>): PendingOperation {
   return {
@@ -203,4 +218,118 @@ describe('commitPendingOperation: mark_invoice_paid state + invoice.paid', () =>
     expect(mockCreatePaymentEntry).not.toHaveBeenCalled()
     expect(mockCreateCashEntry).not.toHaveBeenCalled()
   })
+
+  // #1717: a partially_paid invoice is payable on every door, as on the
+  // dashboard; the remaining amount clears 1510.
+  it('completes a partially_paid invoice booked at issue', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        id: 'inv-1',
+        invoice_number: '2026001',
+        status: 'partially_paid',
+        total: 525,
+        remaining_amount: 325,
+        paid_amount: 200,
+        document_type: 'invoice',
+        journal_entry_id: 'je-issue',
+        customer: { name: 'Test AB' },
+      },
+      error: null,
+    }) // invoice fetch
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
+    enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+
+    const op = makePendingOp({ params: { invoice_id: 'inv-1', payment_date: '2026-03-30' } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ status: 'paid', remaining_amount: 0 })
+    expect(mockCreatePaymentEntry).toHaveBeenCalledTimes(1)
+    const update = findCalls('invoices', 'update')[0]?.[0]
+    expect(update).toMatchObject({ status: 'paid', paid_amount: 525, remaining_amount: 0 })
+  })
+
+  it('settles through settleInvoicePayment with the full remaining (old staged params shape)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        id: 'inv-1',
+        invoice_number: '2026001',
+        status: 'sent',
+        total: 525,
+        remaining_amount: 525,
+        paid_amount: null,
+        document_type: 'invoice',
+        journal_entry_id: null,
+        customer: { name: 'Test AB' },
+      },
+      error: null,
+    }) // invoice fetch
+    enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null }) // settings
+    enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+
+    const op = makePendingOp({
+      params: { invoice_id: 'inv-1', payment_date: '2026-03-30', allow_duplicate: false },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(settleInvoicePayment).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({
+        paymentAmountInInvoiceCurrency: 525,
+        paymentDate: '2026-03-30',
+        accountingMethod: 'cash',
+        paymentSource: 'manual',
+        settlementAccountNumber: '1930',
+      }),
+    )
+    expect(mockCreateCashEntry).toHaveBeenCalledTimes(1)
+  })
+
+  it('makulerar the posted voucher when the invoice update loses the race', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: {
+        id: 'inv-1',
+        invoice_number: '2026001',
+        status: 'sent',
+        total: 525,
+        remaining_amount: 525,
+        paid_amount: null,
+        document_type: 'invoice',
+        journal_entry_id: 'je-issue',
+        customer: { name: 'Test AB' },
+      },
+      error: null,
+    }) // invoice fetch
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null }) // settings
+    enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
+    enqueue({ data: [], error: null }) // invoice CAS update: lost
+    enqueue({ data: null, error: null }) // invoice_payments delete
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+
+    const op = makePendingOp({ params: { invoice_id: 'inv-1', payment_date: '2026-03-30' } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.http_status).toBe(409)
+    expect(mockCancelOrphan).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      'je-1',
+      expect.any(String),
+    )
+  })
 })
+

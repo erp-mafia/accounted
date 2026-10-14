@@ -661,11 +661,29 @@ describe('POST /api/invoices (create credit note)', () => {
     expect((body.error as unknown as { code: string }).code).toBe('INVOICE_CREDIT_NOT_SENT')
   })
 
+  // A credit note is document_type 'invoice' too: crediting it would post a
+  // second reversal of the same sale. Every credit door refuses it
+  // (creditNoteRefusal, lib/invoices/credit-invoice.ts).
+  it('returns 400 INVOICE_CREDIT_NOT_INVOICE for a credit note', async () => {
+    const original = makeInvoice({ id: VALID_UUID, status: 'sent', credited_invoice_id: VALID_UUID_2 })
+    enqueue({ data: original, error: null })
+
+    const request = createMockRequest('/api/invoices', {
+      method: 'POST',
+      body: { credited_invoice_id: VALID_UUID },
+    })
+    const response = await POST(request, createMockRouteParams({}))
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect((body.error as unknown as { code: string }).code).toBe('INVOICE_CREDIT_NOT_INVOICE')
+  })
+
   // Documents a KNOWN GAP, not a rule. ML (2023:200) 17 kap 22-23 SS permits an
   // aendringsfaktura against a part-paid invoice; the app refuses it because
   // issueCreditNote() cannot flip a 'partially_paid' original to 'credited' and
   // would strand a posted reversing verifikat (see the comment on the guard in
-  // route.ts and the DECISIONS.md entry). This test exists so lifting the gap
+  // lib/invoices/credit-invoice.ts and the DECISIONS.md entry). This test exists so lifting the gap
   // fails here and forces the coordinated change rather than passing silently.
   it('refuses a partially paid invoice (known gap: needs issue-credit-note.ts too)', async () => {
     const original = makeInvoice({ id: VALID_UUID, status: 'partially_paid' })

@@ -34,6 +34,16 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
   }
 })
 
+// The multi-user seat gate's membership check (MULTI_USER_SEAT_GATE).
+const mockIsMembershipActive = vi.fn()
+vi.mock('@/lib/entitlements/multi-user', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/entitlements/multi-user')>()
+  return {
+    ...actual,
+    isMembershipActive: (...args: unknown[]) => mockIsMembershipActive(...args),
+  }
+})
+
 import { DEFAULT_SCOPES } from '@/lib/auth/api-keys'
 import { GET } from '../route'
 
@@ -92,6 +102,7 @@ describe('GET /api/events', () => {
     vi.clearAllMocks()
     reset()
     mockExtractBearerToken.mockReturnValue(null)
+    mockIsMembershipActive.mockResolvedValue(true)
     requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase, error: null })
   })
 
@@ -227,6 +238,32 @@ describe('GET /api/events', () => {
 
     expect(status).toBe(404)
     expect(body.error.code).toBe('NOT_FOUND')
+  })
+
+  it('returns 403 for a non-owner key in a company paused by the multi-user seat gate, before reading events', async () => {
+    mockExtractBearerToken.mockReturnValue('gnubok_sk_frozen')
+    mockValidateApiKey.mockResolvedValue(apiKeyAuth())
+    mockIsMembershipActive.mockResolvedValue(false)
+    const keyClient = withKeyClient([{ data: { company_id: 'company-1', role: 'member' } }, { data: sampleEvents }])
+
+    const response = await GET(createMockRequest('/api/events'))
+    const { status, body } = await parseJsonResponse<ErrorEnvelope>(response)
+
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(mockIsMembershipActive).toHaveBeenCalledWith(keyClient.supabase, 'company-1', 'member')
+    expect(keyClient.findCalls('event_log', 'select')).toEqual([])
+  })
+
+  it('serves an owner key through the seat gate check', async () => {
+    mockExtractBearerToken.mockReturnValue('gnubok_sk_owner')
+    mockValidateApiKey.mockResolvedValue(apiKeyAuth())
+    const keyClient = withKeyClient([{ data: { company_id: 'company-1', role: 'owner' } }, { data: sampleEvents }])
+
+    const response = await GET(createMockRequest('/api/events'))
+
+    expect(response.status).toBe(200)
+    expect(mockIsMembershipActive).toHaveBeenCalledWith(keyClient.supabase, 'company-1', 'owner')
   })
 
   it('returns 500 when the membership lookup itself fails', async () => {

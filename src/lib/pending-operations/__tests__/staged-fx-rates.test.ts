@@ -48,6 +48,28 @@ vi.mock('@/lib/bookkeeping/supplier-invoice-entries', async () => {
   return { ...actual, createSupplierInvoiceRegistrationEntry: vi.fn() }
 })
 
+// The approved row is stored through the shared ingest pipeline, which
+// translates it from the rate this executor resolved (and cached). That
+// translation, with the real ingest, is covered in staged-fx-batch.test.ts;
+// here ingest is a stand-in and the tests are about the executor's own
+// refusal and lookup.
+vi.mock('@/lib/transactions/ingest', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/transactions/ingest')>('@/lib/transactions/ingest')
+  return {
+    ...actual,
+    ingestTransactions: vi.fn(async () => ({
+      imported: 1,
+      duplicates: 0,
+      skipped: [],
+      reconciled: 0,
+      auto_categorized: 0,
+      auto_matched_invoices: 0,
+      errors: 0,
+      transaction_ids: ['tx-1'],
+    })),
+  }
+})
+
 vi.mock('@/lib/core/documents/document-service', async () => {
   const actual = await vi.importActual<typeof import('@/lib/core/documents/document-service')>(
     '@/lib/core/documents/document-service',
@@ -58,6 +80,7 @@ vi.mock('@/lib/core/documents/document-service', async () => {
 import { commitPendingOperation } from '../commit'
 import { fetchExchangeRate, isExchangeRateTemporarilyUnavailable } from '@/lib/currency/riksbanken'
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
+import { ingestTransactions } from '@/lib/transactions/ingest'
 
 /**
  * Queue-based supabase mock that also records every `.insert()` payload per
@@ -150,21 +173,20 @@ function expectHandedBack(result: Awaited<ReturnType<typeof commitPendingOperati
 // ─── create_transaction ─────────────────────────────────────────────
 
 describe('commitPendingOperation: create_transaction FX', () => {
-  /** CAS claim → default cash account lookup (crm#1171) → transactions insert → dispatcher update. */
+  /** CAS claim → default cash account lookup (crm#1171) → dispatcher update; ingest is mocked. */
   const txQueue = () => [
     { data: { id: 'op-1' } },
     { data: [] },
-    { data: { id: 'tx-1' } },
     { data: null },
   ]
 
-  it('a 1500 USD staged transaction commits with amount_sek and exchange_rate', async () => {
+  it('a 1500 USD staged transaction resolves its rate, then is stored through ingest', async () => {
     vi.mocked(fetchExchangeRate).mockResolvedValueOnce({
       currency: 'USD',
       rate: 10.5,
       date: '2026-05-01',
     })
-    const { supabase, inserts } = createCapturingSupabase(txQueue())
+    const { supabase } = createCapturingSupabase(txQueue())
 
     const result = await commitPendingOperation(
       supabase as never,
@@ -181,16 +203,11 @@ describe('commitPendingOperation: create_transaction FX', () => {
     )
 
     expect(result.status).toBe('committed')
-    expect(inserts['transactions']).toHaveLength(1)
-    expect(inserts['transactions'][0]).toMatchObject({
-      amount: 1500,
-      currency: 'USD',
-      // 1500 * 10.5, not 1500. Before the fix these three were absent from the
-      // insert entirely, so the verifikat later debited 1500 kr.
-      amount_sek: 15750,
-      exchange_rate: 10.5,
-      exchange_rate_date: '2026-05-01',
-    })
+    // Ingest translates the row at the rate the lookup above cached (1500 *
+    // 10.5 = 15750 kr, asserted end to end in staged-fx-batch.test.ts).
+    expect(vi.mocked(ingestTransactions).mock.calls[0][3]).toEqual([
+      expect.objectContaining({ amount: 1500, currency: 'USD', date: '2026-05-01' }),
+    ])
   })
 
   it("fetches the rate for the row's OWN date, with the supabase client passed", async () => {
@@ -310,8 +327,8 @@ describe('commitPendingOperation: create_transaction FX', () => {
     expect(inserts['transactions']).toBeUndefined()
   })
 
-  it('a SEK transaction is unaffected: no rate lookup, no SEK columns', async () => {
-    const { supabase, inserts } = createCapturingSupabase(txQueue())
+  it('a SEK transaction is unaffected: no rate lookup', async () => {
+    const { supabase } = createCapturingSupabase(txQueue())
 
     const result = await commitPendingOperation(
       supabase as never,
@@ -329,15 +346,10 @@ describe('commitPendingOperation: create_transaction FX', () => {
 
     expect(result.status).toBe('committed')
     expect(fetchExchangeRate).not.toHaveBeenCalled()
-    expect(inserts['transactions'][0]).toMatchObject({
-      amount: -129.5,
-      currency: 'SEK',
-      // amount already IS kronor; the column means "SEK translation of a
-      // foreign amount". Mirrors lib/transactions/ingest.ts.
-      amount_sek: null,
-      exchange_rate: null,
-      exchange_rate_date: null,
-    })
+    // amount already IS kronor: ingest leaves the SEK columns NULL for it.
+    expect(vi.mocked(ingestTransactions).mock.calls[0][3]).toEqual([
+      expect.objectContaining({ amount: -129.5, currency: 'SEK' }),
+    ])
   })
 })
 

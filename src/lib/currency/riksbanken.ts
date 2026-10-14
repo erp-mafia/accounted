@@ -4,6 +4,7 @@ import { createLogger } from '@/lib/logger'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import type { Currency, ExchangeRate } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { roundOre } from '@/lib/money'
 
 const log = createLogger('riksbanken')
 
@@ -400,11 +401,13 @@ export async function fetchExchangeRate(
 }
 
 /**
- * Convert amount from one currency to SEK
+ * Convert amount from one currency to SEK, in whole öre. The result is stored
+ * as an invoice's *_sek twin and read back by booking builders, so it is
+ * rounded here once (roundOre) instead of by each caller.
  */
 export function convertToSEK(
   amount: number,
   exchangeRate: number
 ): number {
-  return amount * exchangeRate
+  return roundOre(amount * exchangeRate)
 }

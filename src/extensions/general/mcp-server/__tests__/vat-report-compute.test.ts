@@ -25,10 +25,20 @@ interface MockLine {
   journal_entries?: { source_type: string | null }
 }
 
+interface MockChartRow {
+  account_number: string
+  account_name: string
+  account_class: number
+  default_vat_rate: number | null
+  default_vat_treatment: string | null
+  vat_box?: string | null
+}
+
 function mockSupabaseWithLines(
   lines: MockLine[],
   fiscalPeriod?: { period_start: string; period_end: string },
   rpcExcludedEntryIds: string[] = [],
+  chart: MockChartRow[] = [],
 ) {
   // journal_entries / journal_entry_lines still serve the whole fixture, every
   // entry included, so a report that went back to scanning the journal itself
@@ -63,15 +73,16 @@ function mockSupabaseWithLines(
 
   return {
     // chart_of_accounts feeds fetchDynamicVatAccounts (the company's own
-    // ruta 05 konton). Empty here: these fixtures are plain BAS charts, and the
-    // dynamic path has its own coverage in lib/reports/__tests__.
+    // ruta 05 konton). Empty unless a test passes rows: most fixtures are
+    // plain BAS charts, and the dynamic path has its own coverage in
+    // lib/reports/__tests__.
     from: (table: string) => {
       // The report reads journal_entries only for the tagged vat_settlement
       // list; filters are no-ops here, so the tag is applied by hand.
       if (table === 'journal_entries') {
         return makeChain(entries.filter((e) => e.source_type === 'vat_settlement'))
       }
-      if (table === 'chart_of_accounts') return makeChain([])
+      if (table === 'chart_of_accounts') return makeChain(chart)
       if (table === 'fiscal_periods') return makeChain(fiscalPeriod ? [fiscalPeriod] : [])
       return makeChain(bareLines)
     },
@@ -290,27 +301,42 @@ describe('computeVatReport', () => {
     expect(result.warnings).toEqual([])
   })
 
-  it('expanded ruta05 includes alternative BAS revenue accounts (3041/3051/3071) AND taxable EU goods (3106)', async () => {
+  // Decision 3 (2026-10-13): the report shows the filed figures. It used to
+  // widen ruta 05 with a hard-coded list (3041-3078, 3106, ...) the filing
+  // never sums, so an agent read a ruta 05 Skatteverket does not receive.
+  it('shows the filed ruta 05: an account the declaration puts in no ruta is named in warnings, not widened in', async () => {
     const lines: MockLine[] = [
       { account_number: '3001', debit_amount: 0, credit_amount: 1000 },
-      { account_number: '3041', debit_amount: 0, credit_amount: 500 },  // service 25%
-      { account_number: '3051', debit_amount: 0, credit_amount: 300 },  // goods 25%
-      { account_number: '3071', debit_amount: 0, credit_amount: 200 },  // other domestic
-      { account_number: '3106', debit_amount: 0, credit_amount: 100 },  // momspliktig EU goods
+      // Inferred 25 % from its number and name: in the filing, so in the report.
+      { account_number: '3041', debit_amount: 0, credit_amount: 500 },
+      // No momskod, no momssats, no inference: in no ruta of the filing.
+      { account_number: '3044', debit_amount: 0, credit_amount: 300 },
+      { account_number: '3106', debit_amount: 0, credit_amount: 100 },
     ]
-
-    const result = await computeVatReport(
-      { period_type: 'yearly', year: 2026, period: 1 },
-      'company-1',
-      mockSupabaseWithLines(lines, {
-        period_start: '2025-07-01',
-        period_end: '2026-06-30',
-      })
+    const chart: MockChartRow[] = [
+      { account_number: '3041', account_name: 'Försäljning tjänster 25 % moms', account_class: 3, default_vat_rate: null, default_vat_treatment: null },
+      { account_number: '3044', account_name: 'Försäljning tjänster', account_class: 3, default_vat_rate: null, default_vat_treatment: null },
+      { account_number: '3106', account_name: 'Försäljning varor till annat EU-land, momspliktig', account_class: 3, default_vat_rate: null, default_vat_treatment: null },
+    ]
+    const supabase = mockSupabaseWithLines(
+      lines,
+      { period_start: '2025-07-01', period_end: '2026-06-30' },
+      [],
+      chart,
     )
 
-    expect(result.rutor.ruta05).toBe(2100)
+    const [result, declaration] = await Promise.all([
+      computeVatReport({ period_type: 'yearly', year: 2026, period: 1 }, 'company-1', supabase),
+      calculateVatDeclaration(supabase, 'company-1', 'yearly', 2026, 1),
+    ])
+
+    expect(declaration.rutor.ruta05).toBe(1500)
+    expect(result.rutor.ruta05).toBe(1500)
     expect(result.period.start).toBe('2025-07-01')
     expect(result.period.end).toBe('2026-06-30')
+    expect(result.warnings).toHaveLength(1)
+    expect(result.warnings[0]).toMatch(/3044/)
+    expect(result.warnings[0]).toMatch(/3106/)
   })
 
   it('excludes 3004 (momsfri) from ruta05: exempt sales must NOT be in the taxable base', async () => {
@@ -400,10 +426,30 @@ describe('computeVatReport', () => {
       calculateVatDeclaration(supabase, 'company-1', 'yearly', 2026, 1),
     ])
 
-    for (const [box, filed] of Object.entries(declaration.rutor)) {
-      const expected = box === 'ruta49' ? filed : Math.abs(filed)
-      expect(report.rutor[box as keyof typeof report.rutor], box).toBe(expected)
-    }
+    expect(report.rutor).toEqual(declaration.rutor)
+  })
+
+  // A period whose credit notes exceed its sales files a negative ruta 05 and
+  // ruta 10 (rutorToMomsuppgift sends the signed figure). The report used to
+  // show them as positive, the opposite of what Skatteverket receives.
+  it('shows a net-negative box signed, as it is filed', async () => {
+    const lines: MockLine[] = [
+      { journal_entry_id: 'sale', account_number: '3001', debit_amount: 0, credit_amount: 200 },
+      { journal_entry_id: 'sale', account_number: '2611', debit_amount: 0, credit_amount: 50 },
+      { journal_entry_id: 'credit', account_number: '3001', debit_amount: 700, credit_amount: 0 },
+      { journal_entry_id: 'credit', account_number: '2611', debit_amount: 175, credit_amount: 0 },
+    ]
+    const supabase = mockSupabaseWithLines(lines)
+    const [report, declaration] = await Promise.all([
+      computeVatReport({ period_type: 'monthly', year: 2026, period: 3 }, 'company-1', supabase),
+      calculateVatDeclaration(supabase, 'company-1', 'monthly', 2026, 3),
+    ])
+
+    expect(report.rutor.ruta05).toBe(-500)
+    expect(report.rutor.ruta10).toBe(-125)
+    expect(report.rutor.ruta49).toBe(-125)
+    expect(report.rutor).toEqual(declaration.rutor)
+    expect(report.summary).toContain('Moms att få tillbaka: 125 kr')
   })
 
   it('refund summary string when ruta49 is negative', async () => {

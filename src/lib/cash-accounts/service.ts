@@ -1258,32 +1258,34 @@ export async function ensureManualCashAccount(
  * cash_account_id filter, which a NULL row never matched.
  *
  * A failed read answers null (the row stays unassigned, as before) rather
- * than failing the write it rides along with.
+ * than failing the write it rides along with. The ledger account comes back
+ * with the id: ingestTransactions binds a batch by its settlement account
+ * (readBatchCashAccount), which is unique per company.
  */
-export async function resolveDefaultCashAccountId(
+export async function resolveDefaultCashAccount(
   supabase: SupabaseClient,
   companyId: string,
   currency: string,
   bankConnectionId?: string | null,
-): Promise<string | null> {
+): Promise<{ id: string; ledger_account: string } | null> {
   const { data, error } = await supabase
     .from('cash_accounts')
-    .select('id, is_primary, bank_connection_id')
+    .select('id, ledger_account, is_primary, bank_connection_id')
     .eq('company_id', companyId)
     .eq('enabled', true)
     .eq('currency', currency.toUpperCase())
   if (error) {
-    log.warn('resolveDefaultCashAccountId lookup failed; row stays unassigned', {
+    log.warn('resolveDefaultCashAccount lookup failed; row stays unassigned', {
       companyId,
       currency,
       error: error.message,
     })
     return null
   }
-  const rows = (data ?? []) as Array<{ id: string; is_primary: boolean | null; bank_connection_id: string | null }>
+  const rows = (data ?? []) as Array<{ id: string; ledger_account: string; is_primary: boolean | null; bank_connection_id: string | null }>
   const candidates = bankConnectionId ? rows.filter((row) => row.bank_connection_id === bankConnectionId) : rows
-  if (candidates.length === 1) return candidates[0].id
-  return candidates.find((row) => row.is_primary === true)?.id ?? null
+  const picked = candidates.length === 1 ? candidates[0] : candidates.find((row) => row.is_primary === true)
+  return picked ? { id: picked.id, ledger_account: picked.ledger_account } : null
 }
 
 /**

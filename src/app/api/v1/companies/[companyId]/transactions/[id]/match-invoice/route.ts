@@ -41,6 +41,7 @@ import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { logMatchEvent } from '@/lib/invoices/match-log'
@@ -85,6 +86,7 @@ registerEndpoint({
     'Proforma + delivery notes are rejected (MATCH_INVOICE_NOT_INVOICE_TYPE): only document_type=\'invoice\' can be matched.',
     'Transaction must be positive (amount > 0): negative transactions return MATCH_INVOICE_NOT_INCOME.',
     'Invoice must be in sent / overdue / partially_paid status: paid or draft invoices return MATCH_INVOICE_NOT_OPEN.',
+    'Kontantmetoden: an invoice never booked at issue is matched only by one payment of its whole amount. A partial payment, or the final payment of an invoice already part-paid, returns INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED (details.reason partial_payment | previously_partially_paid); book that payment as a manual journal entry.',
     'Idempotency-Key is mandatory.',
   ],
   example: {
@@ -419,6 +421,92 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
+    // Every refusal that can be decided from the request and the current state
+    // runs from here down to the storno, the dashboard route's order, so a
+    // refused match never reverses the transaction's prior verifikat.
+    const { data: settings } = await ctx.supabase
+      .from('company_settings')
+      .select('accounting_method, entity_type')
+      .eq('company_id', ctx.companyId!)
+      .single()
+    const accountingMethod = settings?.accounting_method || 'accrual'
+    const entityType: EntityType = await resolveCompanyEntityType(ctx.supabase, ctx.companyId!, settings?.entity_type)
+
+    // Debit the cash account THIS transaction actually belongs to, never a
+    // hardcoded 1930: cash_account_id -> cash_accounts.ledger_account is the
+    // only source of truth for which bank/cash account a real, matched
+    // transaction settled into.
+    const paymentAccount = await resolveSettlementAccount(
+      ctx.supabase,
+      ctx.companyId!,
+      transaction.cash_account_id,
+      txLog,
+    )
+
+    // The JE shape is driven by the INVOICE'S booking state, not the
+    // company's current setting. If the invoice already has a JE (Dr 1510
+    // posted at send), the match must clear 1510: otherwise the receivable
+    // stays orphaned and 30xx + 26xx get double-counted. The current
+    // accounting_method only governs the cash-method fast path for
+    // invoices that were never booked.
+    const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
+    const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash' && isFullyPaid
+
+    // Reject cash-method partial payments and part-paid completions for pure
+    // kontantmetoden invoices (no prior JE) through the predicate the dashboard
+    // and agent doors use. Under kontantmetoden utgående moms is reported per
+    // payment received (bokslutsmetoden), and createInvoiceCashEntry always
+    // books the FULL invoice: a completion after an installment already
+    // recognised elsewhere would book that installment's revenue and moms a
+    // second time. When the invoice was already booked under accrual, the
+    // clearing entry IS the correct partial path whatever the current setting.
+    const cashBlock = cashPartialBlockReason({
+      invoiceAlreadyBooked,
+      accountingMethod,
+      priorPaidAmount: (invoice as { paid_amount?: number | null }).paid_amount,
+      paysRemainingInFull: isFullyPaid,
+    })
+    if (cashBlock) {
+      return v1ErrorResponseFromCode('INVOICE_PAID_CASH_PARTIAL_UNSUPPORTED', txLog, {
+        requestId: ctx.requestId,
+        details: {
+          reason: cashBlock,
+          payment_amount: paidAmount,
+          invoice_total: invoice.total,
+        },
+      })
+    }
+
+    // Custom rows must balance.
+    if (customLines) {
+      const totalDebit = customLines.reduce((s, l) => s + l.debit_amount, 0)
+      const totalCredit = customLines.reduce((s, l) => s + l.credit_amount, 0)
+      if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
+        return v1ErrorResponseFromCode('INVOICE_PAID_LINES_UNBALANCED', txLog, {
+          requestId: ctx.requestId,
+          details: { totalDebit, totalCredit },
+        })
+      }
+    }
+
+    // Guard the resolved account against the chart (mirrors the categorize
+    // routes and the same fix on match-supplier-invoice): an inactive
+    // cash_accounts.ledger_account would otherwise reach the engine as a
+    // generic INVOICE_PAID_BOOK_FAILED instead of ACCOUNTS_NOT_IN_CHART.
+    // Only reachable where the account is actually used: customLines specify
+    // their own accounts directly and never consume paymentAccount.
+    if (!customLines) {
+      const missingAccounts = await findUnresolvableAccounts(ctx.supabase, ctx.companyId!, [
+        paymentAccount,
+      ])
+      if (missingAccounts.length > 0) {
+        txLog.warn('resolved settlement account is inactive/unknown', { missingAccounts })
+        return v1ErrorResponse(new AccountsNotInChartError(missingAccounts), txLog, {
+          requestId: ctx.requestId,
+        })
+      }
+    }
+
     // A RECONCILIATION link (reconciliation_method set) is not a conflicting
     // booking: the entry is an independent verifikat that may evidence OTHER
     // affärshändelser; reversing it wholesale would be an over-broad rättelse
@@ -455,74 +543,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       }
     }
 
-    const { data: settings } = await ctx.supabase
-      .from('company_settings')
-      .select('accounting_method, entity_type')
-      .eq('company_id', ctx.companyId!)
-      .single()
-    const accountingMethod = settings?.accounting_method || 'accrual'
-    const entityType: EntityType = await resolveCompanyEntityType(ctx.supabase, ctx.companyId!, settings?.entity_type)
-
-    // Debit the cash account THIS transaction actually belongs to, never a
-    // hardcoded 1930: cash_account_id -> cash_accounts.ledger_account is the
-    // only source of truth for which bank/cash account a real, matched
-    // transaction settled into.
-    const paymentAccount = await resolveSettlementAccount(
-      ctx.supabase,
-      ctx.companyId!,
-      transaction.cash_account_id,
-      txLog,
-    )
-
-    // The JE shape is driven by the INVOICE'S booking state, not the
-    // company's current setting. If the invoice already has a JE (Dr 1510
-    // posted at send), the match must clear 1510: otherwise the receivable
-    // stays orphaned and 30xx + 26xx get double-counted. The current
-    // accounting_method only governs the cash-method fast path for
-    // invoices that were never booked.
-    const invoiceAlreadyBooked = !!(invoice as { journal_entry_id?: string | null }).journal_entry_id
-    const useCashEntry = !invoiceAlreadyBooked && accountingMethod === 'cash' && isFullyPaid
-
-    // Reject cash-method partial payments ONLY for pure kontantmetoden
-    // invoices (no prior JE). Under kontantmetoden utgående moms must be
-    // reported in the period of actual receipt (bokslutsmetoden); the
-    // partial-payment branch uses the accrual-style clearing entry which
-    // doesn't model the per-installment moms event. When the invoice was
-    // already booked under accrual, the clearing entry IS the correct
-    // partial path regardless of the company's current setting.
-    if (!invoiceAlreadyBooked && accountingMethod === 'cash' && !isFullyPaid) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', txLog, {
-        requestId: ctx.requestId,
-        details: {
-          field: 'accounting_method',
-          message:
-            'Kontantmetoden does not support partial-payment matching via this endpoint. ' +
-            'Match the full payment when received, or switch to accrual (faktureringsmetoden).',
-          accounting_method: 'cash',
-          payment_amount: paidAmount,
-          invoice_total: invoice.total,
-        },
-      })
-    }
-
-    // Guard the resolved account against the chart (mirrors the categorize
-    // routes and the same fix on match-supplier-invoice): an inactive
-    // cash_accounts.ledger_account would otherwise reach the engine as a
-    // generic INVOICE_PAID_BOOK_FAILED instead of ACCOUNTS_NOT_IN_CHART.
-    // Only reachable where the account is actually used: customLines specify
-    // their own accounts directly and never consume paymentAccount.
-    if (!customLines) {
-      const missingAccounts = await findUnresolvableAccounts(ctx.supabase, ctx.companyId!, [
-        paymentAccount,
-      ])
-      if (missingAccounts.length > 0) {
-        txLog.warn('resolved settlement account is inactive/unknown', { missingAccounts })
-        return v1ErrorResponse(new AccountsNotInChartError(missingAccounts), txLog, {
-          requestId: ctx.requestId,
-        })
-      }
-    }
-
     // Strict-mode for the public API: if the payment JE can't be created we
     // ABORT before touching invoice / payment / transaction state. The
     // dashboard's internal route soft-fails here and surfaces a banner so
@@ -532,14 +552,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     let journalEntryId: string | null = null
     try {
       if (customLines) {
-        const totalDebit = customLines.reduce((s, l) => s + l.debit_amount, 0)
-        const totalCredit = customLines.reduce((s, l) => s + l.credit_amount, 0)
-        if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
-          return v1ErrorResponseFromCode('INVOICE_PAID_LINES_UNBALANCED', txLog, {
-            requestId: ctx.requestId,
-            details: { totalDebit, totalCredit },
-          })
-        }
         const sourceType = useCashEntry ? 'invoice_cash_payment' : 'invoice_paid'
         const je = await createJournalEntry(ctx.supabase, ctx.companyId!, ctx.userId, {
           fiscal_period_id: fiscalPeriodId,
@@ -690,15 +702,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    // The "intäkt bokförs vid slutbetalning" note only applies to genuine
-    // kontantmetoden partials: never-booked invoices. When the invoice was
-    // booked under accrual, the clearing entry handles the partial cleanly
-    // and the note would be misleading.
-    const cashMethodNote =
-      !invoiceAlreadyBooked && accountingMethod === 'cash' && !isFullyPaid
-        ? 'Kontantmetoden: intäkt bokförs vid slutbetalning'
-        : null
-
     // Provenance for a caller-supplied FX rate. A Riksbanken spot rate is
     // self-documenting (rate + date are reproducible); a rate passed in the
     // request body overrides the ML 8 kap 21-23§ obligation and must leave a
@@ -708,7 +711,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         ? `Manuell valutakurs ${fx.rate} ${invoice.currency}/SEK (betalningsdatum ${transaction.date})`
         : null
 
-    const paymentNotes = [cashMethodNote, manualRateNote].filter(Boolean).join(' · ') || null
+    const paymentNotes = manualRateNote
 
     // The AR sub-ledger row goes through the single writer
     // (lib/invoices/invoice-payment-row.ts): amount = the amount APPLIED to

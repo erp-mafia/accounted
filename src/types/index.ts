@@ -3576,6 +3576,7 @@ export type YearEndBlockerCode =
   | 'PRIOR_RESULT_NOT_DISPOSED'
   | 'PRIOR_RESULT_OVER_DISPOSED'
   | 'SIE_IMPORT_UNFINISHED'
+  | 'VOUCHER_GAP_CHECK_FAILED'
 
 export interface YearEndBlocker {
   code: YearEndBlockerCode

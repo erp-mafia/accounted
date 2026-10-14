@@ -40,6 +40,7 @@ import {
   DELETE as deleteSalaryRun,
 } from '../[id]/route'
 import { createTableMockSupabase } from '@/tests/helpers'
+import { eventBus } from '@/lib/events'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -208,14 +209,83 @@ describe('POST /api/v1/companies/:companyId/salary-runs', () => {
   }
 
   it('creates a salary run and emits salary_run.created (happy path)', async () => {
+    const emitSpy = vi.spyOn(eventBus, 'emit').mockResolvedValue()
+    try {
+      mockServiceClient.mockReturnValue(
+        createTableMockSupabase({
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          // 1. overlap guard reads live runs, 2. the insert returns the row
+          salary_runs: [
+            { data: [], error: null },
+            { data: { ...SAMPLE_RUN, user_id: USER_ID, company_id: COMPANY_ID }, error: null },
+          ],
+          idempotency_keys: { data: null, error: null },
+        }).supabase,
+      )
+
+      const res = await createSalaryRun(
+        makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs`, {
+          method: 'POST',
+          body: JSON.stringify(validBody),
+        }),
+        companyParams(COMPANY_ID),
+      )
+
+      expect(res.status).toBe(201)
+      const body = await res.json()
+      expect(body.data.id).toBe(RUN_ID)
+      expect(body.data.status).toBe('draft')
+      // The documented projection: no internal columns.
+      expect(body.data).not.toHaveProperty('user_id')
+      expect(body.data).not.toHaveProperty('company_id')
+      expect(emitSpy).toHaveBeenCalledTimes(1)
+      expect(emitSpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'salary_run.created' }))
+    } finally {
+      emitSpy.mockRestore()
+    }
+  })
+
+  it("books an omitted voucher_series into the company's salary series and leaves the run empty", async () => {
+    const emitSpy = vi.spyOn(eventBus, 'emit').mockResolvedValue()
+    try {
+      const mock = createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        // The standard series set: lön in K (the systemdokumentation's map).
+        company_settings: {
+          data: { default_voucher_series_per_source_type: { salary_payment: 'K' } },
+          error: null,
+        },
+        salary_runs: [
+          { data: [], error: null },
+          { data: { ...SAMPLE_RUN, voucher_series: 'K' }, error: null },
+        ],
+        idempotency_keys: { data: null, error: null },
+      })
+      mockServiceClient.mockReturnValue(mock.supabase)
+
+      const { voucher_series: _omitted, ...bodyWithoutSeries } = validBody
+      const res = await createSalaryRun(
+        makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs`, {
+          method: 'POST',
+          body: JSON.stringify(bodyWithoutSeries),
+        }),
+        companyParams(COMPANY_ID),
+      )
+
+      expect(res.status).toBe(201)
+      expect(mock.payloads('salary_runs', 'insert')[0]).toMatchObject({ voucher_series: 'K' })
+      // v1 documents an empty run: no roster read, no roster rows.
+      expect(mock.tables()).not.toContain('employees')
+      expect(mock.tables()).not.toContain('salary_run_employees')
+    } finally {
+      emitSpy.mockRestore()
+    }
+  })
+
+  it('returns 400 for a voucher_series that is not a single A-Z letter', async () => {
     mockServiceClient.mockReturnValue(
       createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-        // 1. overlap guard reads live runs, 2. the insert returns the row
-        salary_runs: [
-          { data: [], error: null },
-          { data: SAMPLE_RUN, error: null },
-        ],
         idempotency_keys: { data: null, error: null },
       }).supabase,
     )
@@ -223,15 +293,25 @@ describe('POST /api/v1/companies/:companyId/salary-runs', () => {
     const res = await createSalaryRun(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs`, {
         method: 'POST',
-        body: JSON.stringify(validBody),
+        body: JSON.stringify({ ...validBody, voucher_series: 'LK' }),
       }),
       companyParams(COMPANY_ID),
     )
 
-    expect(res.status).toBe(201)
-    const body = await res.json()
-    expect(body.data.id).toBe(RUN_ID)
-    expect(body.data.status).toBe('draft')
+    expect(res.status).toBe(400)
+  })
+
+  it('returns 401 without a bearer token', async () => {
+    mockValidate.mockResolvedValue({ error: 'Missing API key', status: 401 })
+    const res = await createSalaryRun(
+      new Request(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs`, {
+        method: 'POST',
+        headers: { 'Idempotency-Key': 'b1aaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' },
+        body: JSON.stringify(validBody),
+      }),
+      companyParams(COMPANY_ID),
+    )
+    expect(res.status).toBe(401)
   })
 
   it('returns 409 SALARY_RUN_DEVIATION_PERIOD_OVERLAP when another run already reads those days', async () => {
@@ -290,23 +370,16 @@ describe('POST /api/v1/companies/:companyId/salary-runs', () => {
     expect(body.error.code).toBe('SALARY_RUN_DEVIATION_PERIOD_INVALID')
   })
 
-  it('returns 409 SALARY_RUN_DUPLICATE_PERIOD on unique-constraint violation', async () => {
+  it('returns 409 SALARY_RUN_DUPLICATE_PERIOD on unique-constraint violation, naming the existing run', async () => {
     mockServiceClient.mockReturnValue(
       createTableMockSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         salary_runs: [
+          // 1. overlap guard, 2. the insert trips the live-run unique index,
+          // 3. the shared create service reads back the run that won.
           { data: [], error: null },
-          {
-            data: null,
-            error: {
-              code: '23505',
-              message: 'duplicate',
-              // The inline `UNIQUE (company_id, period_year, period_month)`
-              // constraint is auto-named `<table>_<columns>_key`. The route
-              // disambiguates 23505s by substring-matching on the columns.
-              constraint: 'salary_runs_company_id_period_year_period_month_key',
-            },
-          },
+          { data: null, error: { code: '23505', message: 'duplicate' } },
+          { data: { id: RUN_ID, status: 'review' }, error: null },
         ],
         idempotency_keys: { data: null, error: null },
       }).supabase,
@@ -323,6 +396,40 @@ describe('POST /api/v1/companies/:companyId/salary-runs', () => {
     expect(res.status).toBe(409)
     const body = await res.json()
     expect(body.error.code).toBe('SALARY_RUN_DUPLICATE_PERIOD')
+    expect(body.error.details).toMatchObject({
+      field: 'period',
+      period_year: 2026,
+      period_month: 5,
+      existing_id: RUN_ID,
+      existing_status: 'review',
+    })
+  })
+
+  it("previews the company's salary series on a dry run without writing", async () => {
+    const mock = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      company_settings: {
+        data: { default_voucher_series_per_source_type: { salary_payment: 'K' } },
+        error: null,
+      },
+      salary_runs: { data: [], error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock.supabase)
+
+    const { voucher_series: _omitted, ...bodyWithoutSeries } = validBody
+    const res = await createSalaryRun(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs?dry_run=true`, {
+        method: 'POST',
+        body: JSON.stringify(bodyWithoutSeries),
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.preview.voucher_series).toBe('K')
+    expect(mock.findCalls('salary_runs', 'insert')).toEqual([])
   })
 
   it('returns 400 for period_month out of range', async () => {
