@@ -198,9 +198,10 @@ describe('runSalaryCalculation: text rows never reach the pay', () => {
       sort_order: RECURRING_TEXT_SORT_ORDER,
     })
 
-    // The money recurring lines are derived as before, with an account.
+    // The money recurring lines are derived as before. Their account is
+    // resolved at booking (2794 for a union fee), never cached on the line.
     const union = db.rows('salary_line_items').find((row) => row.source_recurring_line_id === 'rec-union')
-    expect(union).toMatchObject({ quantity: 1, amount: -450, account_number: '2794', sort_order: 250 })
+    expect(union).toMatchObject({ quantity: 1, amount: -450, account_number: null, sort_order: 250 })
   }, 30_000)
 
   it('leaves the manual text row as entered and keeps one copy of the recurring text across recalculations', async () => {

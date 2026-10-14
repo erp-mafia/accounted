@@ -27,7 +27,7 @@ import { registerEndpoint, dataEnvelope, NoBodyResponse } from '@/lib/api/v1/reg
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
-import { UpdateEmployeeSchema } from '@/lib/api/schemas'
+import { PersonnelCategorySchema, UpdateEmployeeSchema } from '@/lib/api/schemas'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
 import { JAMKNING_END_REQUIRED, JAMKNING_START_REQUIRED } from '@/lib/salary/jamkning-rules'
 import { VAXA_START_REQUIRED, type EmployeeUpdateIssue } from '@/lib/salary/employee-update-rules'
@@ -45,6 +45,9 @@ const EmployeeDetail = z.object({
   /** Full personnummer (12 digits). Detail endpoint only: never echoed on list. */
   personnummer: z.string(),
   employment_type: EmploymentType,
+  // BAS wage series for employment_type employee: arbetare 70xx, tjansteman
+  // 72xx (lib/salary/account-mapping.ts). Owners and board members ignore it.
+  personnel_category: PersonnelCategorySchema,
   employment_start: z.string(),
   employment_end: z.string().nullable(),
   employment_degree: z.number(),
@@ -95,7 +98,7 @@ const EmployeeDetail = z.object({
 })
 
 const EMPLOYEE_DETAIL_COLUMNS =
-  'id, first_name, last_name, personnummer, employment_type, employment_start, employment_end, employment_degree, hours_per_week, workdays_per_week, salary_type, monthly_salary, hourly_rate, tax_table_number, tax_column, tax_municipality, is_sidoinkomst, f_skatt_status, clearing_number, bank_account_number, vacation_rule, vacation_days_per_year, semestertillagg_rate, vacation_pay_rate, email, phone, address_line1, postal_code, city, vaxa_stod_eligible, vaxa_stod_start, vaxa_stod_end, jamkning_percentage, jamkning_valid_from, jamkning_valid_to, extra_tax_amount, extra_tax_percentage, default_dimensions, is_active, created_at, updated_at'
+  'id, first_name, last_name, personnummer, employment_type, personnel_category, employment_start, employment_end, employment_degree, hours_per_week, workdays_per_week, salary_type, monthly_salary, hourly_rate, tax_table_number, tax_column, tax_municipality, is_sidoinkomst, f_skatt_status, clearing_number, bank_account_number, vacation_rule, vacation_days_per_year, semestertillagg_rate, vacation_pay_rate, email, phone, address_line1, postal_code, city, vaxa_stod_eligible, vaxa_stod_start, vaxa_stod_end, jamkning_percentage, jamkning_valid_from, jamkning_valid_to, extra_tax_amount, extra_tax_percentage, default_dimensions, is_active, created_at, updated_at'
 
 /**
  * Shape returned by PATCH (success + dry-run preview) and by no-change PATCH.
@@ -138,6 +141,7 @@ registerEndpoint({
         // ISO A.5.34: do not embed production-format PII in OpenAPI docs.
         personnummer: 'YYYYMMDDNNNN',
         employment_type: 'employee',
+        personnel_category: 'tjansteman',
         employment_start: '2024-01-15',
         employment_end: null,
         salary_type: 'monthly',
@@ -215,6 +219,7 @@ registerEndpoint({
     'A cleared field is checked against the stored row: nulling monthly_salary on a monthly employee, tax_table_number on an A-skatt employee without sidoinkomst, vaxa_stod_start while Växa-stöd is on, or only one of clearing_number/bank_account_number returns 400. To end an ongoing employment set employment_end; to reopen it send employment_end: null.',
     'tax_table_number changes only take effect on future salary runs; runs already in `review` or beyond use a frozen snapshot.',
     'extra_tax_amount and extra_tax_percentage are exclusive: setting one while the other is stored returns 400, so send the other as null in the same PATCH. A draft run picks the change up at its next calculation.',
+    'personnel_category (arbetare or tjansteman) is read when a salary run is booked: every unbooked run, including one already approved or paid, books on the new category. A booked run keeps the category it was booked with.',
     'An enskild firma cannot employ its owner or board: employment_type company_owner or board_member returns 400 VALIDATION_ERROR on employment_type (the owner takes eget uttag, not salary).',
     'vaxa_stod_eligible never lowers the arbetsgivaravgifter: from redovisningsperiod 202601 (Lag 2025:1334) the AGI declares the full avgifter and the company applies to Skatteverket for the refund after filing. A salary run paid inside vaxa_stod_start..vaxa_stod_end (end optional; never past the 24th calendar month counted from the start month) notes the expected refund per employee and warns to apply.',
   ],

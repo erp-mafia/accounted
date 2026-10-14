@@ -116,9 +116,9 @@ This step records the payment event but does NOT post the journal entry yet: tha
 
 \`POST /salary-runs/{id}/book\` is the engine-touching step. It posts **2-4 verifikationer** atomically — always the salary and avgifter entries, plus a semesterlöneskuld-accrual entry and/or a löneväxling-pension entry when those apply:
 
-- Verifikation 1: Bruttolön: debit → 7210 / 7220 / 7240 (Löner tjänstemän / företagsledare / styrelsearvoden, by \`employment_type\`), credit → 2710 (Personalskatt, avdragen skatt) + the company's primary bank account (utbetalning: the ledger account of its primary cash account, 1930 for a company that never changed it)
+- Verifikation 1: Bruttolön: debit → 7210 / 7010 / 7220 / 7240 (Löner tjänstemän / kollektivanställda / företagsledare / styrelsearvoden, by \`employment_type\` and the employee's \`personnel_category\`), credit → 2710 (Personalskatt, avdragen skatt) + the company's primary bank account (utbetalning: the ledger account of its primary cash account, 1930 for a company that never changed it)
 - Verifikation 2: Arbetsgivaravgifter: debit → 7510 (Lagstadgade sociala avgifter, exact öre), credit → 2731 (Avräkning sociala avgifter: whole kronor, the amount Skatteverket computes from the declared underlag and draws) + 3740 (Öres- och kronutjämning: the remainder, when the exact cost differs)
-- Verifikation 3 (if semesterlöneskuld): debit → 7290 (Förändring semesterlöneskuld) + 7519 (sociala avgifter på semester), credit → 2920 (Upplupna semesterlöner) + 2940 (Upplupna sociala avgifter)
+- Verifikation 3 (if semesterlöneskuld): debit → 7290 / 7090 (Förändring semesterlöneskuld, tjänstemän / kollektivanställda) + 7519 (sociala avgifter på semester), credit → 2920 (Upplupna semesterlöner) + 2940 (Upplupna sociala avgifter)
 - Verifikation 4 (if löneväxling): debit → 7410 (Pensionsförsäkringspremier) + 7533 (Särskild löneskatt på pensionskostnader), credit → 2740 (Skuld pensionsförsäkringar) + 2514 (Beräknad särskild löneskatt); pension = löneväxling × 1.058
 
 The 2731 series is the **employer-contributions-payable** liability per BAS 2026: not to be confused with 2615 (utgående moms vid import, unrelated to payroll). The arbetsgivardeklaration cycle posts the payable on book day and clears it via 1930 when the bank transfer to Skatteverket settles.

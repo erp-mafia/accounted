@@ -2,7 +2,6 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
 import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
-import { getLineItemAccount } from './account-mapping'
 import { degreeAdjustedMonthlySalary } from './work-schedule'
 import {
   assertNoDeviationOverlap,
@@ -210,7 +209,7 @@ export async function createSalaryRunWithEmployees(
         is_taxable: true,
         is_avgift_basis: true,
         is_vacation_basis: true,
-        account_number: getLineItemAccount(itemType as never, emp.employment_type),
+        account_number: null,
         sort_order: 0,
       })
       if (liErr) {

@@ -110,6 +110,7 @@ describe('POST /api/salary/runs/[id]/book: nollkörning', () => {
       { data: makePaidRun() }, // salary_runs (paid) lookup
       { data: [{ employee_id: 'e1', gross_salary: 0, line_items: [] }] }, // roster present but zero
       { data: 'booking-claim-1' }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
       { data: { id: 'run-1', status: 'booked' } }, // salary_runs update → booked
     ])
 
@@ -154,6 +155,7 @@ describe('POST /api/salary/runs/[id]/book: nollkörning', () => {
         ],
       }, // roster with dims from the employees join
       { data: 'booking-claim-1' }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
       { data: { id: 'run-1', status: 'booked' } }, // salary_runs update → booked
     ])
 

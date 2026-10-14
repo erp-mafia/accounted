@@ -98,9 +98,10 @@ function queuePreview(over: {
   ledger?: Array<Record<string, unknown>>
   opening?: Array<Record<string, unknown>>
   closure?: { id: string } | null
+  roster?: Array<Record<string, unknown>>
 } = {}) {
   mock.enqueue({ data: over.closure ?? null }) // vacation_year_closures check
-  mock.enqueue({ data: [ROSTER_ROW] }) // roster
+  mock.enqueue({ data: over.roster ?? [ROSTER_ROW] }) // roster
   mock.enqueue({ data: over.ledger ?? [] }) // ledger rows for the closing year
   mock.enqueue({ data: over.opening ?? [] }) // employee_opening_balances (advance pool)
   mock.enqueue({ data: { id: 'fp-2025', period_start: '2025-01-01', period_end: '2025-12-31' } }) // fiscal period
@@ -300,6 +301,53 @@ describe('commitVacationYearClose', () => {
     const totalCredit = input.lines.reduce((s, l) => s + l.credit_amount, 0)
     expect(totalDebit).toBeCloseTo(totalCredit, 2)
     expect(input.lines.map((l) => l.account_number).sort()).toEqual(['2920', '2940', '7290', '7519'])
+  })
+
+  // Plan 1: the drift's cost side splits per category, pro rata by each
+  // employee's liability (7090 arbetare, 7290 everyone else); 2920 stays one
+  // line.
+  it('splits the 2920 drift over 7090 and 7290 by liability', async () => {
+    const ARBETARE_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+    const ledgerRow = (employeeId: string) => ({
+      id: `vb-${employeeId}`,
+      employee_id: employeeId,
+      vacation_year_start: '2025-01-01',
+      entitled_days: 25,
+      accrued_days: 0,
+      taken_days: 15,
+      saved_days: {},
+      forced_payout_days: 0,
+      status: 'open',
+    })
+    queuePreview({
+      roster: [
+        { ...ROSTER_ROW, employment_type: 'employee', personnel_category: 'tjansteman' },
+        { ...ROSTER_ROW, id: ARBETARE_ID, employment_type: 'employee', personnel_category: 'arbetare' },
+      ],
+      ledger: [ledgerRow(EMPLOYEE_ID), ledgerRow(ARBETARE_ID)],
+    })
+    queueCommitAfterPreview()
+    mockCreateJournalEntry.mockResolvedValue({ id: 'je-adjust-1' })
+
+    const result = await commitVacationYearClose(supabase, COMPANY_ID, 'user-1', '2025-01-01', {
+      bookAdjustment: true,
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.report.rows.map((r) => r.liability_change_account)).toEqual(['7290', '7090'])
+    const input = mockCreateJournalEntry.mock.calls[0][3] as {
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }
+    const on = (account: string) => input.lines.filter((l) => l.account_number === account)
+    expect(on('2920')).toHaveLength(1)
+    const credit2920 = on('2920')[0].credit_amount
+    expect(credit2920).toBeGreaterThan(0)
+    const d7090 = on('7090')[0].debit_amount
+    const d7290 = on('7290')[0].debit_amount
+    // Equal liabilities: equal halves, and the parts sum to the 2920 leg.
+    expect(Math.abs(d7090 - d7290)).toBeLessThanOrEqual(0.01)
+    expect(d7090 + d7290).toBeCloseTo(credit2920, 2)
   })
 
   it('fails cleanly when the adjustment period is locked (before any writes)', async () => {

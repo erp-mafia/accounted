@@ -1,6 +1,10 @@
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
-import { generateSalaryJournal } from '@/lib/reports/salary-journal'
+import {
+  generateSalaryJournal,
+  type SalaryJournalGroup,
+  type SalaryJournalGroupTotals,
+} from '@/lib/reports/salary-journal'
 import {
   reportToWorkbook,
   textColumn,
@@ -12,6 +16,17 @@ import {
 } from '@/lib/reports/xlsx-export'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { fileResponse } from '@/lib/api/file-response'
+
+/** Personalkategori column: the category for employees, empty for owners and board. */
+const CATEGORY_LABELS: Record<string, string> = { arbetare: 'Arbetare', tjansteman: 'Tjänsteman' }
+
+/** The groups the totals sheet sums by (Fora reads arbetare, Collectum tjänstemän). */
+const GROUP_LABELS: Record<SalaryJournalGroup, string> = {
+  arbetare: 'Arbetare',
+  tjansteman: 'Tjänstemän',
+  company_owner: 'Företagsledare',
+  board_member: 'Styrelse',
+}
 
 export const GET = withRouteContext('report.salary_journal.xlsx', async (request, { supabase, companyId }) => {
   const { searchParams } = new URL(request.url)
@@ -35,6 +50,7 @@ export const GET = withRouteContext('report.salary_journal.xlsx', async (request
           textColumn('Anställd'),
           textColumn('Personnr (4)'),
           textColumn('Anställning'),
+          textColumn('Personalkategori'),
           integerColumn('År'),
           integerColumn('Månad'),
           dateColumn('Utbetalningsdatum'),
@@ -56,6 +72,7 @@ export const GET = withRouteContext('report.salary_journal.xlsx', async (request
           r.employeeName,
           r.personnummerLast4,
           r.employmentType,
+          r.personnelCategory ? CATEGORY_LABELS[r.personnelCategory] : '',
           r.periodYear,
           r.periodMonth,
           parseCellDate(r.paymentDate),
@@ -71,6 +88,32 @@ export const GET = withRouteContext('report.salary_journal.xlsx', async (request
           r.parentalDays,
           r.vacationDaysTaken,
           r.salaryRunStatus,
+        ],
+      },
+      {
+        name: 'Summa per kategori',
+        columns: [
+          textColumn('Kategori'),
+          integerColumn('Anställda'),
+          currencyColumn('Bruttolön'),
+          currencyColumn('Skatt'),
+          currencyColumn('Nettolön'),
+          currencyColumn('Arbetsgivaravgifter'),
+          currencyColumn('Semesterlönereservation'),
+          currencyColumn('Semesterskuld avgifter'),
+          currencyColumn('Total arbetsgivarkostnad'),
+        ],
+        rows: report.groupTotals,
+        mapRow: (g: SalaryJournalGroupTotals) => [
+          GROUP_LABELS[g.group],
+          g.employeeCount,
+          g.grossSalary,
+          g.taxWithheld,
+          g.netSalary,
+          g.avgifterAmount,
+          g.vacationAccrual,
+          g.vacationAccrualAvgifter,
+          g.totalEmployerCost,
         ],
       },
     ])

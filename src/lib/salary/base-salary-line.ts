@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { getLineItemAccount, type MoneyLineItemType } from '@/lib/salary/account-mapping'
+import type { MoneyLineItemType } from '@/lib/salary/account-mapping'
 
 const BASE_LINE_TYPES: MoneyLineItemType[] = ['monthly_salary', 'hourly_salary']
 
@@ -35,7 +35,6 @@ export async function refreshRunEmployeeSalaryType(
     companyId: string
     salaryRunEmployeeId: string
     salaryType: string
-    employmentType: string
     /** Initial figures for the new display line. */
     amount: number
     quantity: number | null
@@ -65,7 +64,7 @@ export async function refreshRunEmployeeSalaryType(
       is_taxable: true,
       is_avgift_basis: true,
       is_vacation_basis: true,
-      account_number: getLineItemAccount(lineType, args.employmentType),
+      account_number: null,
       sort_order: 0,
     })
     if (insError) return { error: insError }

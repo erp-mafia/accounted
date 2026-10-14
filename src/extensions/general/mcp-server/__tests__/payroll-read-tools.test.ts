@@ -47,6 +47,7 @@ describe('gnubok_get_employee', () => {
     last_name: 'Andersson',
     personnummer: SAMPLE_PERSONNUMMER,
     employment_type: 'employee',
+    personnel_category: 'arbetare',
     employment_start: '2024-01-15',
     employment_end: null,
     employment_degree: 100,
@@ -87,6 +88,7 @@ describe('gnubok_get_employee', () => {
     expect(result.personnummer_masked).toBe('19000101-XXXX')
     expect((result.tax as Record<string, unknown>).jamkning_percentage).toBe(15)
     expect((result.vacation as Record<string, unknown>).vacation_days_saved).toBe(3)
+    expect((result.employment as Record<string, unknown>).personnel_category).toBe('arbetare')
     // Raw personnummer never leaks anywhere in the payload, and there is no
     // bare `id` key (qualified ids only).
     expect(JSON.stringify(result)).not.toContain(SAMPLE_PERSONNUMMER)

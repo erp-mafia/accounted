@@ -63,7 +63,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     const { data: employees } = await supabase
       .from('salary_run_employees')
       .select(
-        '*, employee:employees(employment_type, default_dimensions, f_skatt_status), line_items:salary_line_items(*)',
+        '*, employee:employees(employment_type, personnel_category, default_dimensions, f_skatt_status), line_items:salary_line_items(*)',
       )
       .eq('salary_run_id', id)
 

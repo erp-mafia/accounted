@@ -16231,7 +16231,7 @@ export const tools: McpTool[] = [
         // personnummer_last4 is deliberately NOT selected: the mask is
         // YYYYMMDD-XXXX, so mask + last4 in one payload reconstructs the full
         // personnummer by concatenation (see maskEmployeeForResponse).
-        .select('id, first_name, last_name, personnummer, employment_type, monthly_salary, hourly_rate, employment_degree, tax_table_number, tax_column, salary_type, default_dimensions, is_active')
+        .select('id, first_name, last_name, personnummer, employment_type, personnel_category, monthly_salary, hourly_rate, employment_degree, tax_table_number, tax_column, salary_type, default_dimensions, is_active')
         .eq('company_id', companyId)
       if (activeOnly) query = query.eq('is_active', true)
       const { data, error } = await query.order('last_name')
@@ -17077,7 +17077,7 @@ export const tools: McpTool[] = [
         first_name: { type: 'string' },
         last_name: { type: 'string' },
         personnummer_masked: { type: 'string' },
-        employment: { type: 'object', description: 'Type, start/end, degree' },
+        employment: { type: 'object', description: 'Type, personnel_category, start/end, degree' },
         pay: { type: 'object', description: 'Salary type + amounts' },
         tax: { type: 'object', description: 'Table, column, municipality, jamkning, extra tax, F-skatt, sidoinkomst' },
         vacation: { type: 'object', description: 'Rule, paid days/year, days off/year, saved days, tillagg rate' },
@@ -17096,7 +17096,7 @@ export const tools: McpTool[] = [
       const { data: e, error } = await supabase
         .from('employees')
         .select(
-          'id, first_name, last_name, personnummer, employment_type, employment_start, employment_end, employment_degree, hours_per_week, workdays_per_week, salary_type, monthly_salary, hourly_rate, tax_table_number, tax_column, tax_municipality, is_sidoinkomst, f_skatt_status, f_skatt_verified_at, jamkning_percentage, jamkning_valid_from, jamkning_valid_to, extra_tax_amount, extra_tax_percentage, clearing_number, bank_account_number, vacation_rule, vacation_days_per_year, vacation_days_saved, semestertillagg_rate, vacation_pay_rate, vaxa_stod_eligible, vaxa_stod_start, vaxa_stod_end, email, phone, address_line1, postal_code, city, default_dimensions, is_active',
+          'id, first_name, last_name, personnummer, employment_type, personnel_category, employment_start, employment_end, employment_degree, hours_per_week, workdays_per_week, salary_type, monthly_salary, hourly_rate, tax_table_number, tax_column, tax_municipality, is_sidoinkomst, f_skatt_status, f_skatt_verified_at, jamkning_percentage, jamkning_valid_from, jamkning_valid_to, extra_tax_amount, extra_tax_percentage, clearing_number, bank_account_number, vacation_rule, vacation_days_per_year, vacation_days_saved, semestertillagg_rate, vacation_pay_rate, vaxa_stod_eligible, vaxa_stod_start, vaxa_stod_end, email, phone, address_line1, postal_code, city, default_dimensions, is_active',
         )
         .eq('id', employeeId)
         .eq('company_id', companyId)
@@ -17112,6 +17112,7 @@ export const tools: McpTool[] = [
         personnummer_masked: maskPersonnummer(decryptPersonnummer(e.personnummer as string)),
         employment: {
           employment_type: e.employment_type,
+          personnel_category: e.personnel_category,
           employment_start: e.employment_start,
           employment_end: e.employment_end,
           employment_degree: e.employment_degree,
@@ -17321,7 +17322,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_update_payslip_line',
     keywords: ['lönebesked', 'lönespecifikation', 'lönerad'],
     title: 'Update Payslip Line',
-    description: 'Stage an edit to one payslip line (amount, description, quantity, unit price) in a DRAFT salary run. Commit via gnubok_approve_pending_operation, then re-run gnubok_calculate_salary_run. NOTE: recalc rebuilds base salary lines: use gnubok_set_run_salary for this month\'s pay.',
+    description: 'Stage an edit to one payslip line (amount, description, quantity, unit price) in a DRAFT run. Commit via gnubok_approve_pending_operation, then gnubok_calculate_salary_run (it rebuilds base lines: use gnubok_set_run_salary).',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -17801,6 +17802,7 @@ export const tools: McpTool[] = [
         last_name: { type: 'string' },
         personnummer: { type: 'string', description: '12 digits (YYYYMMDDNNNN). Encrypted at staging.' },
         employment_type: { type: 'string', enum: ['employee', 'company_owner', 'board_member'] },
+        personnel_category: { type: 'string', enum: ['arbetare', 'tjansteman'], description: 'arbetare 70xx, tjansteman 72xx (default)' },
         employment_start: { type: 'string' },
         employment_end: { type: 'string' },
         employment_degree: { type: 'number', description: '1-100 (default 100)' },
@@ -17891,6 +17893,7 @@ export const tools: McpTool[] = [
           last_name: body.last_name,
           personnummer_masked: masked,
           employment_type: body.employment_type,
+          personnel_category: body.personnel_category,
           employment_start: body.employment_start,
           salary_type: body.salary_type,
           monthly_salary: body.monthly_salary ?? null,
@@ -17919,6 +17922,7 @@ export const tools: McpTool[] = [
         first_name: { type: 'string' },
         last_name: { type: 'string' },
         employment_type: { type: 'string', enum: ['employee', 'company_owner', 'board_member'] },
+        personnel_category: { type: 'string', enum: ['arbetare', 'tjansteman'] },
         employment_start: { type: 'string' },
         employment_end: { type: ['string', 'null'] },
         employment_degree: { type: 'number' },

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateVacationLiability } from '@/lib/reports/vacation-liability'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import { splitVacationLiabilityChange } from '@/lib/salary/account-mapping'
 import type { AccrualProposal, AccrualsProposal } from './types'
 
 /** Sociala avgifter on accrued salary/vacation (K3 BFNAR 2012:1 ch.19,
@@ -93,16 +94,23 @@ export async function assessVacationLiability(
   const deltaInt = Math.round(deltaLiability)
   const avgifterDelta = Math.round(deltaInt * AVGIFTER_RATE_ON_ACCRUED)
 
-  // Positive delta = more vacation liability accrued → debit 7090 expense.
-  // Negative delta = vacation taken / liability released → credit 7090.
+  // Positive delta = more vacation liability accrued → debit the
+  // förändring account. Negative delta = vacation taken / liability released
+  // → credit it. The cost side splits per category, pro rata by each
+  // employee's 2920 share (7090 arbetare, 7290 everyone else); 2920 stays
+  // one line.
   const isIncrease = deltaInt > 0
+  const changeParts = splitVacationLiabilityChange(
+    report.rows.map((row) => ({ account: row.liabilityChangeAccount, liability: row.accruedAmount })),
+    Math.abs(deltaInt),
+  )
   const lines = [
-    {
-      account_number: '7090',
-      debit_amount: isIncrease ? Math.abs(deltaInt) : 0,
-      credit_amount: isIncrease ? 0 : Math.abs(deltaInt),
+    ...changeParts.map((part) => ({
+      account_number: part.account,
+      debit_amount: isIncrease ? part.amount : 0,
+      credit_amount: isIncrease ? 0 : part.amount,
       line_description: 'Förändring av semesterlöneskuld',
-    },
+    })),
     {
       account_number: '2920',
       debit_amount: isIncrease ? 0 : Math.abs(deltaInt),
@@ -131,7 +139,7 @@ export async function assessVacationLiability(
       ? `Ökning av semesterlöneskuld (${Math.abs(deltaInt)} kr + avgifter)`
       : `Minskning av semesterlöneskuld (${Math.abs(deltaInt)} kr + avgifter)`,
     description:
-      'Justering av 2920 mot 7090 plus 31,42 % sociala avgifter på 2940 mot 7519. Saldot på 2920 rullas vidare till nästa år (ingen vändning).',
+      `Justering av 2920 mot ${changeParts.map((part) => part.account).join('/')} plus 31,42 % sociala avgifter på 2940 mot 7519. Saldot på 2920 rullas vidare till nästa år (ingen vändning).`,
     amount: totalAmount,
     lines,
     // null (not '') = no reversal. The future accrual-reversal cron will

@@ -7,7 +7,6 @@ const ARGS = {
   companyId: 'company-1',
   salaryRunEmployeeId: 'sre-1',
   salaryType: 'hourly',
-  employmentType: 'company_owner',
   amount: 4000,
   quantity: 20,
   unitPrice: 200,
@@ -49,7 +48,8 @@ describe('refreshRunEmployeeSalaryType', () => {
       quantity: 20,
       unit_price: 200,
       amount: 4000,
-      account_number: '7220',
+      // The default is resolved at booking (account-mapping.ts), never cached.
+      account_number: null,
     })
     // Only the OTHER base type is deleted: never the line just inserted.
     const inCalls = mock.findCalls('salary_line_items', 'in')

@@ -26,6 +26,7 @@ function underlag(over: Partial<SalaryRunUnderlagData> = {}): SalaryRunUnderlagD
         employeeName: 'Anna Ek',
         personnummerLast4: '1234',
         employmentType: 'employee',
+        personnelCategory: 'tjansteman',
         periodYear: 2026,
         periodMonth: 8,
         paymentDate: '2026-08-25',

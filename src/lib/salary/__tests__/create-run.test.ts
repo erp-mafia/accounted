@@ -6,10 +6,6 @@ import {
   SalaryRunExistsError,
 } from '../create-run'
 
-vi.mock('../account-mapping', () => ({
-  getLineItemAccount: vi.fn(() => '7210'),
-}))
-
 const mockEmit = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/events', () => ({ eventBus: { emit: (...a: unknown[]) => mockEmit(...a) } }))
 

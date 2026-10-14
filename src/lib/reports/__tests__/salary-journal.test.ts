@@ -96,3 +96,59 @@ describe('generateSalaryJournal', () => {
     expect(String(findCall('salary_run_employees', 'select')?.[0])).toContain('f_skatt_status')
   })
 })
+
+// Plan 1: the lönejournal carries the personnel category (Fora reads the
+// arbetare totals, Collectum the tjänstemän ones) and totals per group.
+describe('personnel category in the lönejournal', () => {
+  const employee = (employment_type: string, personnel_category: string) => ({
+    first_name: 'Test',
+    last_name: 'Testsson',
+    personnummer_last4: '0000',
+    employment_type,
+    personnel_category,
+    f_skatt_status: 'a_skatt',
+  })
+
+  it('reads the booking stamp on a booked run, not the employee category it has today', () => {
+    const row = toSalaryJournalRow(
+      sre({ personnel_category: 'tjansteman', employee: employee('employee', 'arbetare') }),
+      RUN,
+    )
+    expect(row.personnelCategory).toBe('tjansteman')
+  })
+
+  it('reads the live employee category on an unbooked run, as its booking will', () => {
+    const row = toSalaryJournalRow(
+      sre({ personnel_category: 'tjansteman', employee: employee('employee', 'arbetare') }),
+      { ...RUN, status: 'approved' },
+    )
+    expect(row.personnelCategory).toBe('arbetare')
+  })
+
+  it('leaves the category out for owners and board members', () => {
+    expect(toSalaryJournalRow(sre({ personnel_category: 'arbetare', employee: employee('company_owner', 'arbetare') }), RUN).personnelCategory).toBeNull()
+    expect(toSalaryJournalRow(sre({ personnel_category: 'tjansteman', employee: employee('board_member', 'tjansteman') }), RUN).personnelCategory).toBeNull()
+  })
+
+  it('totals per group: arbetare, tjänstemän, owners and board, only the groups with rows', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        sre({ employee_id: 'arb-1', personnel_category: 'arbetare', employee: employee('employee', 'arbetare') }),
+        sre({ employee_id: 'arb-2', personnel_category: 'arbetare', gross_salary: 20000, employee: employee('employee', 'arbetare') }),
+        sre({ employee_id: 'tj-1', personnel_category: 'tjansteman', employee: employee('employee', 'tjansteman') }),
+        sre({ employee_id: 'own-1', personnel_category: 'arbetare', employee: employee('company_owner', 'arbetare') }),
+      ],
+    })
+
+    const report = await generateSalaryJournal(supabase as never, 'company-1', 2026)
+
+    expect(report.groupTotals.map((g) => [g.group, g.employeeCount, g.grossSalary])).toEqual([
+      ['arbetare', 2, 50000],
+      ['tjansteman', 1, 30000],
+      ['company_owner', 1, 30000],
+    ])
+    const sum = report.groupTotals.reduce((s, g) => s + g.grossSalary, 0)
+    expect(sum).toBe(report.totals.grossSalary)
+  })
+})

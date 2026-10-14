@@ -59,6 +59,9 @@ function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) 
   }
   // Payloads handed to `.update()`, per table: what a PATCH actually writes.
   const updates: Record<string, unknown[]> = {}
+  // Payloads handed to `.insert()` and `.eq()` filters, per table.
+  const inserts: Record<string, unknown[]> = {}
+  const eqs: Record<string, unknown[][]> = {}
   const buildChain = (table: string): unknown => {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
@@ -71,13 +74,15 @@ function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) 
         }
         return (...args: unknown[]) => {
           if (prop === 'update') (updates[table] ??= []).push(args[0])
+          if (prop === 'insert') (inserts[table] ??= []).push(args[0])
+          if (prop === 'eq') (eqs[table] ??= []).push(args)
           return buildChain(table)
         }
       },
     }
     return new Proxy({}, handler)
   }
-  return { updates, from: vi.fn((table: string) => buildChain(table)) }
+  return { updates, inserts, eqs, from: vi.fn((table: string) => buildChain(table)) }
 }
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -129,6 +134,7 @@ const SAMPLE_EMPLOYEE = {
   last_name: 'Andersson',
   personnummer: SAMPLE_PERSONNUMMER,
   employment_type: 'employee',
+  personnel_category: 'tjansteman',
   employment_start: '2024-01-15',
   employment_end: null,
   employment_degree: 100,
@@ -1653,5 +1659,202 @@ describe('förhöjt skatteavdrag on the v1 employee doors', () => {
 
     expect(res.status).toBe(400)
     expect(JSON.stringify((await res.json()).error)).toContain('extra_tax_percentage')
+  })
+})
+
+describe('personnel_category on the v1 employees doors', () => {
+  const createBody = {
+    first_name: 'Anna',
+    last_name: 'Andersson',
+    personnummer: SAMPLE_PERSONNUMMER,
+    employment_start: '2024-01-15',
+    salary_type: 'monthly' as const,
+    monthly_salary: 35000,
+    tax_table_number: 33,
+    tax_municipality: 'Stockholm',
+  }
+
+  it('lists the category and filters on it', async () => {
+    const supabase = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      employees: { data: [{ ...SAMPLE_EMPLOYEE, personnel_category: 'arbetare' }], error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await listEmployees(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees?personnel_category=arbetare`),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data[0].personnel_category).toBe('arbetare')
+    expect(supabase.eqs.employees).toContainEqual(['personnel_category', 'arbetare'])
+  })
+
+  it('rejects an unknown category filter with 400 VALIDATION_ERROR', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: { data: [], error: null },
+      }),
+    )
+    const res = await listEmployees(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees?personnel_category=kollektiv`),
+      companyParams(COMPANY_ID),
+    )
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('returns the category on the detail endpoint', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: { data: { ...SAMPLE_EMPLOYEE, personnel_category: 'arbetare' }, error: null },
+      }),
+    )
+    const res = await getEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.personnel_category).toBe('arbetare')
+  })
+
+  it('creates a tjänsteman when the category is left out', async () => {
+    const supabase = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      employees: { data: SAMPLE_EMPLOYEE, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await createEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees`, {
+        method: 'POST',
+        body: JSON.stringify(createBody),
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(201)
+    expect(supabase.inserts.employees?.[0]).toMatchObject({ personnel_category: 'tjansteman' })
+  })
+
+  it('creates an arbetare', async () => {
+    const supabase = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      employees: { data: { ...SAMPLE_EMPLOYEE, personnel_category: 'arbetare' }, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await createEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees`, {
+        method: 'POST',
+        body: JSON.stringify({ ...createBody, personnel_category: 'arbetare' }),
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(201)
+    expect(supabase.inserts.employees?.[0]).toMatchObject({ personnel_category: 'arbetare' })
+    expect((await res.json()).data.personnel_category).toBe('arbetare')
+  })
+
+  it('rejects an unknown category on create with 400 and inserts nothing', async () => {
+    const supabase = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await createEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees`, {
+        method: 'POST',
+        body: JSON.stringify({ ...createBody, personnel_category: 'kollektiv' }),
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(400)
+    expect(supabase.inserts.employees).toBeUndefined()
+  })
+
+  it('changes the category with a PATCH that writes only that key', async () => {
+    const supabase = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      employees: [
+        { data: SAMPLE_EMPLOYEE, error: null },
+        { data: { ...SAMPLE_EMPLOYEE, personnel_category: 'arbetare' }, error: null },
+      ],
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await updateEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ personnel_category: 'arbetare' }),
+      }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect(supabase.updates.employees).toEqual([{ personnel_category: 'arbetare' }])
+    expect((await res.json()).data.personnel_category).toBe('arbetare')
+  })
+
+  it('refuses null on the category (NOT NULL) with 400 and writes nothing', async () => {
+    const supabase = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      employees: { data: SAMPLE_EMPLOYEE, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await updateEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ personnel_category: null }),
+      }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    expect(supabase.updates.employees).toBeUndefined()
+  })
+
+  it('returns 404 EMPLOYEE_NOT_FOUND for a category change on a missing employee', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: { data: null, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await updateEmployee(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ personnel_category: 'arbetare' }),
+      }),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(404)
+    expect((await res.json()).error.code).toBe('EMPLOYEE_NOT_FOUND')
+  })
+
+  it('returns 401 for a key that does not validate', async () => {
+    mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
+    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
+
+    const res = await listEmployees(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees?personnel_category=arbetare`),
+      companyParams(COMPANY_ID),
+    )
+    expect(res.status).toBe(401)
   })
 })

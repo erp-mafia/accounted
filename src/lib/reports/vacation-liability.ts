@@ -4,6 +4,10 @@ import { remainingSavedDays, sumDays } from '@/lib/salary/vacation-category'
 import { getVacationYearBasis } from '@/lib/salary/vacation-ledger'
 import { getVacationYearBounds, getVacationYearStart } from '@/lib/salary/vacation-year'
 import { paidDaysAsDaysOff, paidDaysPerDayOff, storedPaidDaysPerDayOff } from '@/lib/salary/vacation-net-days'
+import {
+  vacationLiabilityChangeAccount,
+  type VacationLiabilityChangeAccount,
+} from '@/lib/salary/account-mapping'
 
 /**
  * Semesterlöneskuld: Vacation liability report per BFNAR 2016:10.
@@ -49,6 +53,9 @@ export interface VacationLiabilityRow {
   advanceVacationDebt: number
   totalLiability: number      // 2920 + 2940 (the booked liability)
   netLiability: number        // totalLiability - förskottsskuld (information only)
+  /** Where a change of this employee's 2920 share books: 7090 arbetare,
+   *  7290 everyone else (vacationLiabilityChangeAccount). */
+  liabilityChangeAccount: VacationLiabilityChangeAccount
 }
 
 export interface VacationLiabilityReport {
@@ -126,7 +133,7 @@ export async function generateVacationLiability(
   const employees = await fetchAllRows(({ from, to }) =>
     supabase
       .from('employees')
-      .select('id, first_name, last_name, personnummer_last4, vacation_rule, vacation_days_per_year, vacation_days_saved, workdays_per_week')
+      .select('id, first_name, last_name, personnummer_last4, employment_type, personnel_category, vacation_rule, vacation_days_per_year, vacation_days_saved, workdays_per_week')
       .eq('company_id', companyId)
       .eq('is_active', true)
       .not('vacation_rule', 'in', '(none,semesterersattning)')
@@ -334,6 +341,10 @@ export async function generateVacationLiability(
       // net figure is informational.
       totalLiability: r(accruedAmount + accruedAvgifter),
       netLiability: r(accruedAmount + accruedAvgifter - advanceVacationDebt),
+      liabilityChangeAccount: vacationLiabilityChangeAccount({
+        employmentType: emp.employment_type,
+        personnelCategory: emp.personnel_category,
+      }),
     }
   })
 

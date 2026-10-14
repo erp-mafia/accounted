@@ -19,7 +19,7 @@ import {
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { cn, formatCurrency } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import type { SalaryJournalReport } from '@/lib/reports/salary-journal'
+import type { SalaryJournalReport, SalaryJournalRow } from '@/lib/reports/salary-journal'
 
 /**
  * Lönejournal on screen: booked salary runs per employee and month for a
@@ -28,6 +28,12 @@ import type { SalaryJournalReport } from '@/lib/reports/salary-journal'
  */
 
 const MONTHS = Array.from({ length: 12 }, (_, i) => i + 1)
+
+/** Translation key for a row's category cell: the category for employees, the role for owners and board members. */
+function categoryKey(row: Pick<SalaryJournalRow, 'employmentType' | 'personnelCategory'>): string {
+  if (row.personnelCategory) return `category_${row.personnelCategory}`
+  return row.employmentType === 'board_member' ? 'category_board_member' : 'category_company_owner'
+}
 
 export function LonejournalView() {
   const t = useTranslations('lonejournal')
@@ -148,6 +154,7 @@ export function LonejournalView() {
               <TableHeader>
                 <TableRow>
                   <TableHead>{t('col_employee')}</TableHead>
+                  <TableHead>{t('col_category')}</TableHead>
                   <TableHead>{t('col_period')}</TableHead>
                   <TableHead className="text-right">{t('col_gross')}</TableHead>
                   <TableHead className="text-right">{t('col_tax')}</TableHead>
@@ -161,6 +168,7 @@ export function LonejournalView() {
                 {report.rows.map((row, i) => (
                   <TableRow key={`${row.employeeId}-${row.periodYear}-${row.periodMonth}-${i}`}>
                     <TableCell data-ph-mask>{row.employeeName}</TableCell>
+                    <TableCell className="text-muted-foreground">{t(categoryKey(row))}</TableCell>
                     <TableCell className="tabular-nums">
                       {row.periodYear}-{String(row.periodMonth).padStart(2, '0')}
                     </TableCell>
@@ -175,7 +183,7 @@ export function LonejournalView() {
               </TableBody>
               <TableFooter>
                 <TableRow>
-                  <TableCell colSpan={2} className="font-medium">
+                  <TableCell colSpan={3} className="font-medium">
                     {t('total')}
                   </TableCell>
                   <TableCell className="text-right tabular-nums font-medium">{formatCurrency(report.totals.grossSalary)}</TableCell>
@@ -186,6 +194,40 @@ export function LonejournalView() {
                   <TableCell className="text-right tabular-nums font-medium">{formatCurrency(report.totals.totalEmployerCost)}</TableCell>
                 </TableRow>
               </TableFooter>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Per group: the arbetare total Fora reads, the tjänstemän total
+          Collectum reads, and owners and board members on their own
+          accounts. Only worth a block when the roster spans groups. */}
+      {report && (report.groupTotals ?? []).length > 1 && (
+        <Card>
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t('col_group')}</TableHead>
+                  <TableHead className="text-right">{t('col_employees')}</TableHead>
+                  <TableHead className="text-right">{t('col_gross')}</TableHead>
+                  <TableHead className="text-right">{t('col_avgifter')}</TableHead>
+                  <TableHead className="text-right">{t('col_vacation')}</TableHead>
+                  <TableHead className="text-right">{t('col_total')}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody className="stagger-enter">
+                {report.groupTotals.map((group) => (
+                  <TableRow key={group.group}>
+                    <TableCell>{t(`group_${group.group}`)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{group.employeeCount}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatCurrency(group.grossSalary)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatCurrency(group.avgifterAmount)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatCurrency(group.vacationAccrual)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatCurrency(group.totalEmployerCost)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
             </Table>
           </CardContent>
         </Card>

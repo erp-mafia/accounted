@@ -97,7 +97,7 @@ export async function buildSalaryRunUnderlag(
   const employees: any[] = await fetchAllRows(({ from, to }) =>
     supabase
       .from('salary_run_employees')
-      .select('*, employee:employees(first_name, last_name, personnummer_last4, employment_type, f_skatt_status)')
+      .select('*, employee:employees(first_name, last_name, personnummer_last4, employment_type, personnel_category, f_skatt_status)')
       .eq('company_id', companyId)
       .eq('salary_run_id', runId)
       .order('id', { ascending: true })

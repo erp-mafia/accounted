@@ -92,14 +92,18 @@ describe('PATCH /api/salary/runs/[id]/lines/[lineId] sparse patch', () => {
   })
 
   it('rejects null on a non-nullable field rather than quietly clearing it', async () => {
-    // No field on CreateSalaryLineItemSchema is .nullable(), so "clear this
-    // column" is not expressible on this endpoint. sparsePatchBody must keep
-    // that a 400 and not translate null into a write. (The null-survives-as-a-
-    // deliberate-clear path is covered where the schema allows it: see
-    // lib/api/__tests__/sparse-patch.test.ts and the accounts PUT tests.)
-    const response = await patch({ account_number: null })
+    // amount is not .nullable(), so "clear this column" is not expressible
+    // for it. sparsePatchBody must keep that a 400 and not translate null
+    // into a write.
+    const response = await patch({ amount: null })
     expect(response.status).toBe(400)
     expect(updatePayslipLine).not.toHaveBeenCalled()
+  })
+
+  it('forwards account_number null: the line drops its override and books on its default', async () => {
+    const response = await patch({ account_number: null })
+    expect(response.status).toBe(200)
+    expect(sentPatch()).toEqual({ account_number: null })
   })
 
   it('drops unknown keys instead of forwarding them to the update', async () => {

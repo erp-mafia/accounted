@@ -69,9 +69,14 @@ interface AccountComboboxProps {
   // The dropdown also narrows to the row's width so it cannot overflow a
   // dialog. Default (false) keeps the boxed Input every existing caller uses.
   flat?: boolean
+  // Text shown while the field is empty. Hosts where empty means "use the
+  // default" show that default here instead of the search prompt.
+  placeholder?: string
+  // id of the <input>, for a host <Label htmlFor>.
+  id?: string
 }
 
-export default function AccountCombobox({ value, accounts, onChange, onCommit, onCreateAccount, catalog, notActivatedLabel = 'Aktiveras vid bokföring', className, inputRef, disabled = false, selectedName, flat = false }: AccountComboboxProps) {
+export default function AccountCombobox({ value, accounts, onChange, onCommit, onCreateAccount, catalog, notActivatedLabel = 'Aktiveras vid bokföring', className, inputRef, disabled = false, selectedName, flat = false, placeholder = 'Sök konto…', id }: AccountComboboxProps) {
   const [search, setSearch] = useState(value)
   const [isOpen, setIsOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -409,13 +414,14 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
   )
 
   const triggerProps = {
+    id,
     ref: setInputRef,
     value: search,
     onChange: handleInputChange,
     onFocus: handleFocus,
     onBlur: handleBlur,
     onKeyDown: handleKeyDown,
-    placeholder: 'Sök konto…',
+    placeholder,
     autoComplete: 'off',
     disabled,
     'aria-describedby': showSelectedName ? selectedNameId : undefined,

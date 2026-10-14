@@ -21,11 +21,13 @@ Returns active employees in created-first order. Pass ?include_inactive=true to 
 - Inactive employees are hidden by default; soft-delete via DELETE sets is_active=false (BFL 7 kap retention).
 - personnummer is masked in the list response (GDPR Art.5(1)(c) data minimisation). The detail endpoint returns the full value.
 - salary_type drives which field is meaningful: monthly_salary for monthly, hourly_rate for hourly. The other is null.
+- personnel_category decides the wage account series for employment_type employee only: arbetare book 70xx (7010/7082/7090), tjansteman 72xx. Owners and board members keep their own accounts whatever it says.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `employment_type` | query | `"employee" \| "company_owner" \| "board_member"` | no | Only employees with this employment type. |
+| `personnel_category` | query | `"arbetare" \| "tjansteman"` | no | Only employees in this personnel category (arbetare or tjansteman). |
 | `search` | query | `string` | no | Case-insensitive match anywhere in the first or last name, 1-200 characters. |
 | `include_inactive` | query | `"true" \| "false"` | no | true also returns inactive employees. Default: active only. |
 | `cursor` | query | `string` | no | Opaque cursor from the previous page's meta.next_cursor. Omit for the first page. |
@@ -34,7 +36,7 @@ Returns active employees in created-first order. Pass ?include_inactive=true to 
 Response `200`:
 ```ts
 {
-  data: { id: string, first_name: string, last_name: string, personnummer_masked: string, employment_type: "employee" | "company_owner" | "board_member", employment_start: string, employment_end: string | null, salary_type: "monthly" | "hourly", monthly_salary: number | null, hourly_rate: number | null, f_skatt_status: "a_skatt" | "f_skatt" | "fa_skatt" | "not_verified", is_active: boolean, created_at: string }[],
+  data: { id: string, first_name: string, last_name: string, personnummer_masked: string, employment_type: "employee" | "company_owner" | "board_member", personnel_category: "arbetare" | "tjansteman", employment_start: string, employment_end: string | null, salary_type: "monthly" | "hourly", monthly_salary: number | null, hourly_rate: number | null, f_skatt_status: "a_skatt" | "f_skatt" | "fa_skatt" | "not_verified", is_active: boolean, created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -57,6 +59,7 @@ Example response `200`:
       "last_name": "Andersson",
       "personnummer_masked": "YYYYMMDD-XXXX",
       "employment_type": "employee",
+      "personnel_category": "tjansteman",
       "employment_start": "2024-01-15",
       "employment_end": null,
       "salary_type": "monthly",
@@ -93,6 +96,7 @@ Creates a new employee for the company. Requires Idempotency-Key (UUID). Support
 - Duplicate personnummer within a company returns 409 EMPLOYEE_DUPLICATE_PERSONNUMMER. Personnummer is unique per (company_id, personnummer).
 - For A-skatt employees who are not sidoinkomst, tax_table_number is required (29-42).
 - salary_type drives which salary field is required: monthly_salary for monthly, hourly_rate for hourly.
+- personnel_category defaults to tjansteman (72xx wage accounts). Set arbetare for kollektivanställda so their wages book on 7010, vacation pay on 7082 and the vacation liability change on 7090. Ignored for company_owner and board_member.
 - The response masks personnummer; never echo back the supplied value. Detail endpoint (deliberate drill-in) returns the full value.
 - vaxa_stod_eligible never lowers the arbetsgivaravgifter: from redovisningsperiod 202601 (Lag 2025:1334) the AGI declares the full avgifter and the company applies to Skatteverket for the refund after filing. A salary run paid inside vaxa_stod_start..vaxa_stod_end (end optional; never past the 24th calendar month counted from the start month) notes the expected refund per employee and warns to apply.
 
@@ -108,6 +112,7 @@ Request body:
   last_name: string,
   personnummer: string,
   employment_type?: "employee" | "company_owner" | "board_member",
+  personnel_category?: "arbetare" | "tjansteman",
   employment_start: string,
   employment_end?: string,
   employment_degree?: number,
@@ -169,6 +174,7 @@ Response `200`:
     last_name: string,
     personnummer_masked: string,
     employment_type: "employee" | "company_owner" | "board_member",
+    personnel_category: "arbetare" | "tjansteman",
     employment_start: string,
     employment_end: string | null,
     employment_degree: number,
@@ -206,6 +212,7 @@ Example response `200`:
     "last_name": "Andersson",
     "personnummer_masked": "YYYYMMDD-XXXX",
     "employment_type": "employee",
+    "personnel_category": "tjansteman",
     "employment_start": "2024-01-15",
     "employment_end": null,
     "employment_degree": 100,
@@ -259,6 +266,7 @@ Response `200`:
     last_name: string,
     personnummer: string,
     employment_type: "employee" | "company_owner" | "board_member",
+    personnel_category: "arbetare" | "tjansteman",
     employment_start: string,
     employment_end: string | null,
     employment_degree: number,
@@ -317,6 +325,7 @@ Example response `200`:
     "last_name": "Andersson",
     "personnummer": "YYYYMMDDNNNN",
     "employment_type": "employee",
+    "personnel_category": "tjansteman",
     "employment_start": "2024-01-15",
     "employment_end": null,
     "salary_type": "monthly",
@@ -350,6 +359,7 @@ Partial update of an employee. Only the fields supplied in the body are changed:
 - A cleared field is checked against the stored row: nulling monthly_salary on a monthly employee, tax_table_number on an A-skatt employee without sidoinkomst, vaxa_stod_start while Växa-stöd is on, or only one of clearing_number/bank_account_number returns 400. To end an ongoing employment set employment_end; to reopen it send employment_end: null.
 - tax_table_number changes only take effect on future salary runs; runs already in `review` or beyond use a frozen snapshot.
 - extra_tax_amount and extra_tax_percentage are exclusive: setting one while the other is stored returns 400, so send the other as null in the same PATCH. A draft run picks the change up at its next calculation.
+- personnel_category (arbetare or tjansteman) is read when a salary run is booked: every unbooked run, including one already approved or paid, books on the new category. A booked run keeps the category it was booked with.
 - An enskild firma cannot employ its owner or board: employment_type company_owner or board_member returns 400 VALIDATION_ERROR on employment_type (the owner takes eget uttag, not salary).
 - vaxa_stod_eligible never lowers the arbetsgivaravgifter: from redovisningsperiod 202601 (Lag 2025:1334) the AGI declares the full avgifter and the company applies to Skatteverket for the refund after filing. A salary run paid inside vaxa_stod_start..vaxa_stod_end (end optional; never past the 24th calendar month counted from the start month) notes the expected refund per employee and warns to apply.
 
@@ -366,6 +376,7 @@ Request body:
   last_name?: string,
   personnummer?: string,
   employment_type?: "employee" | "company_owner" | "board_member",
+  personnel_category?: "arbetare" | "tjansteman",
   employment_start?: string,
   employment_end?: string | null,
   employment_degree?: number,
@@ -419,6 +430,7 @@ Response `200`:
     first_name: string,
     last_name: string,
     employment_type: "employee" | "company_owner" | "board_member",
+    personnel_category: "arbetare" | "tjansteman",
     employment_start: string,
     employment_end: string | null,
     employment_degree: number,

@@ -68,6 +68,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { reverseEntry } from '@/lib/bookkeeping/engine'
 import { CannotReverseNonPostedError, EntryAlreadyReversedError } from '@/lib/bookkeeping/errors'
+import { isCachedDefaultAccount } from '@/lib/salary/account-mapping'
 import { revokeLinksForRun } from '@/lib/salary/payslips/links'
 import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
 
@@ -238,7 +239,11 @@ function copyColumns(row: Record<string, unknown>, omit: string[]): Record<strin
   return Object.fromEntries(Object.entries(row).filter(([column]) => !skip.has(column)))
 }
 
-type RosterRow = Record<string, unknown> & { employee_id: string; line_items?: Array<Record<string, unknown>> }
+type RosterRow = Record<string, unknown> & {
+  employee_id: string
+  employee?: { employment_type?: string | null } | null
+  line_items?: Array<Record<string, unknown>>
+}
 
 /**
  * Step 6: the original roster (snapshots, overrides, AGI flags) and every
@@ -246,6 +251,10 @@ type RosterRow = Record<string, unknown> & { employee_id: string; line_items?: A
  * Line provenance (calculation_source, source_benefit_id,
  * source_recurring_line_id) must survive: without it a recalculation treats
  * the copied engine rows as manual pay and derives them a second time.
+ *
+ * A line account the original run cached as a default (isCachedDefaultAccount,
+ * the backfill migration's rule) is not carried either: the correction books
+ * on the default resolved at its own booking, like any unbooked run.
  *
  * source_expense_claim_id is the one line column not carried: a partial unique
  * index keeps a claim on one payslip line, the original run's line keeps it,
@@ -260,7 +269,7 @@ async function copyRosterToCorrection(
 ): Promise<{ ok: true; roster: RosterRow[] } | { ok: false; error: unknown }> {
   const { data: originalEmployees, error: rosterError } = await supabase
     .from('salary_run_employees')
-    .select('*, line_items:salary_line_items(*)')
+    .select('*, employee:employees(employment_type), line_items:salary_line_items(*)')
     .eq('salary_run_id', originalRunId)
     .eq('company_id', companyId)
   if (rosterError) return { ok: false, error: rosterError }
@@ -275,7 +284,7 @@ async function copyRosterToCorrection(
     .from('salary_run_employees')
     .insert(
       roster.map((sre) => ({
-        ...copyColumns(sre, ['salary_run_id', 'line_items', 'calculation_breakdown']),
+        ...copyColumns(sre, ['salary_run_id', 'employee', 'line_items', 'calculation_breakdown']),
         salary_run_id: correctionRunId,
         company_id: companyId,
       })),
@@ -293,12 +302,19 @@ async function copyRosterToCorrection(
     if (!copiedId) {
       return { ok: false, error: new Error(`employee ${sre.employee_id} was not copied to the correction run`) }
     }
+    const employmentType = sre.employee?.employment_type || 'employee'
     for (const li of sre.line_items || []) {
+      const cachedDefault = isCachedDefaultAccount(
+        li.item_type as string,
+        li.account_number as string | null,
+        employmentType,
+      )
       lineItems.push({
         ...copyColumns(li, ['salary_run_employee_id']),
         salary_run_employee_id: copiedId,
         company_id: companyId,
         source_expense_claim_id: null,
+        ...(cachedDefault ? { account_number: null } : {}),
       })
     }
   }

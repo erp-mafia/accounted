@@ -433,6 +433,8 @@ export default function SalaryRunEmployeeDetailPage({
             runId={runId}
             salaryRunEmployeeId={runEmployee.id}
             taxFreeCaps={manualLineCapsFromRunParams(run.calculation_params)}
+            employmentType={employee.employment_type}
+            personnelCategory={employee.personnel_category}
             onAdded={load}
           />
         )}

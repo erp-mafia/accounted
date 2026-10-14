@@ -46,7 +46,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/salary-runs/:id/lines/:lineId',
   summary: 'Update a payslip line in a draft salary run.',
   description:
-    'Updates fields on a salary_line_items row (amount, description, quantity, unit_price, flags, account_number, one_off_tax_percent, vacation_category, vacation_saved_year) while the run is a draft. Amounts are rounded to whole öre. one_off_tax_percent: null removes the engångsskatt and returns the line to table taxation. vacation_category: null returns a vacation line to this year\'s paid days. A text row (item_type text) stays words only: its amount stays 0 and it has no flags or account.',
+    'Updates fields on a salary_line_items row (amount, description, quantity, unit_price, flags, account_number, one_off_tax_percent, vacation_category, vacation_saved_year) while the run is a draft. Amounts are rounded to whole öre. one_off_tax_percent: null removes the engångsskatt and returns the line to table taxation. vacation_category: null returns a vacation line to this year\'s paid days. A text row (item_type text) stays words only: its amount stays 0 and it has no flags or account. account_number is an override only: null drops it so the line books on the default resolved at booking (item_type, employment_type, personnel_category), and changing item_type drops a stored override unless the same PATCH sets account_number.',
   useWhen:
     'You spotted a wrong amount or description on a manual line before calculating: fix it in place instead of delete + recreate.',
   doNotUseFor:

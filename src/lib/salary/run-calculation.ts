@@ -57,7 +57,7 @@ import {
 import { fetchAllTaxTableRatesForRun, TaxTableUnavailableError } from './tax-tables'
 import { deriveEmployeeAbsence, loadRunAbsence } from './derive-absence-line-items'
 import { monthWindow, runDeviationWindow } from './deviation-period'
-import { getLineItemAccount, type MoneyLineItemType } from './account-mapping'
+import type { MoneyLineItemType } from './account-mapping'
 import { recurringLineFlags, type RecurringLineItemType } from './recurring-lines'
 import { RECURRING_TEXT_SORT_ORDER, isTextRow } from './text-rows'
 import { computePremiumLines } from './shift-premium-engine'
@@ -631,7 +631,7 @@ export async function runSalaryCalculation(
           is_vacation_basis: true,
           is_gross_deduction: false,
           is_net_deduction: false,
-          account_number: getLineItemAccount('hourly_salary'),
+          account_number: null,
           sort_order: 0,
         })
       }
@@ -685,7 +685,7 @@ export async function runSalaryCalculation(
           is_vacation_basis: false,
           is_gross_deduction: false,
           is_net_deduction: false,
-          account_number: getLineItemAccount(itemType, emp.employment_type),
+          account_number: null,
           sort_order: 200 + idx,
           source_benefit_id: b.id,
         }
@@ -719,7 +719,10 @@ export async function runSalaryCalculation(
         is_vacation_basis: flags.is_vacation_basis,
         is_gross_deduction: flags.is_gross_deduction,
         is_net_deduction: flags.is_net_deduction,
-        account_number: itemType === 'text' ? null : r.account_number || getLineItemAccount(itemType, emp.employment_type),
+        // A text row has no account; any other row carries its own
+        // override, else the default resolved at booking (account-mapping.ts
+        // lineItemAccount).
+        account_number: text ? null : r.account_number || null,
         sort_order: text ? RECURRING_TEXT_SORT_ORDER + textIdx++ : 250 + idx,
         source_recurring_line_id: r.id,
       }
@@ -738,7 +741,7 @@ export async function runSalaryCalculation(
       is_vacation_basis: li.is_vacation_basis,
       is_gross_deduction: li.is_gross_deduction,
       is_net_deduction: false,
-      account_number: getLineItemAccount(li.item_type),
+      account_number: null,
       sort_order: 100 + idx,
     }))
 
@@ -761,7 +764,7 @@ export async function runSalaryCalculation(
       is_vacation_basis: boolean
       is_gross_deduction: boolean
       is_net_deduction: boolean
-      account_number: string
+      account_number: string | null
       sort_order: number
     }> = []
 
@@ -797,7 +800,7 @@ export async function runSalaryCalculation(
         is_vacation_basis: true,
         is_gross_deduction: false,
         is_net_deduction: false,
-        account_number: getLineItemAccount(line.itemType, emp.employment_type),
+        account_number: null,
         sort_order: 300 + idx,
       }))
     }
@@ -1027,7 +1030,7 @@ export async function runSalaryCalculation(
         is_vacation_basis: false,
         is_gross_deduction: false,
         is_net_deduction: false,
-        account_number: getLineItemAccount('semesterersattning', emp.employment_type),
+        account_number: null,
         sort_order: 50,
       })
     }
@@ -1052,7 +1055,7 @@ export async function runSalaryCalculation(
         is_vacation_basis: false,
         is_gross_deduction: false,
         is_net_deduction: false,
-        account_number: getLineItemAccount('oresavrundning', emp.employment_type),
+        account_number: null,
         sort_order: 900,
       })
     }
@@ -1094,7 +1097,6 @@ export async function runSalaryCalculation(
       companyId,
       salaryRunEmployeeId: sre.id,
       salaryType: emp.salary_type,
-      employmentType: emp.employment_type,
       amount: hourly ? roundOre((emp.hourly_rate || 0) * (sre.hours_worked || 0)) : 0,
       quantity: hourly ? (sre.hours_worked ?? null) : null,
       unitPrice: hourly ? (emp.hourly_rate ?? null) : null,

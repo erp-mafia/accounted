@@ -21,6 +21,7 @@ const report: VacationLiabilityReport = {
       advanceVacationDebt: 1500,
       totalLiability: 18661.64,
       netLiability: 17161.64,
+      liabilityChangeAccount: '7290' as const,
     },
   ],
   totals: {
