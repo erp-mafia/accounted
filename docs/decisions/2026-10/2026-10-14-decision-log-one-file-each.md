@@ -1,0 +1,1 @@
+[2026-10-14] A decision is a file of its own under docs/decisions/YYYY-MM/, not a line appended to DECISIONS.md: 117 of 138 merged MRs (Oct 5-14) appended there and conflicted with each other; a union merge driver was rejected because GitLab's server-side rebase may not honor it.
