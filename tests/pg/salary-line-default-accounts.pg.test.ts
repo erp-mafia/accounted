@@ -140,6 +140,34 @@ describe('backfill: cached default accounts on unbooked runs', () => {
     expect(await accountOf(line)).toBeNull()
     expect(await accountOf(override)).toBe('7010')
   })
+
+  it('leaves a migration reset source alone instead of aborting on its frozen rows', async () => {
+    const source = await seedCompany()
+    const replacement = await seedCompany()
+    const employee = await insertEmployee(source.companyId, source.userId, 'employee')
+    const run = await insertRun(source.companyId, source.userId, 'draft', 9)
+    const sre = await insertRunEmployee(source.companyId, run, employee)
+    const frozen = await insertLine(source.companyId, sre, 'monthly_salary', '7210')
+    // Archived after the rows exist: block_migration_reset_source_mutation
+    // refuses every later write to them.
+    await getPool().query(
+      `INSERT INTO public.company_migration_resets
+         (source_company_id, replacement_company_id, reason, confirmation_snapshot, source_counts)
+       VALUES ($1, $2, 'backfill test: reset source stays immutable', '{}'::jsonb, '{}'::jsonb)`,
+      [source.companyId, replacement.companyId],
+    )
+
+    const live = await seedCompany()
+    const liveEmployee = await insertEmployee(live.companyId, live.userId, 'employee')
+    const liveRun = await insertRun(live.companyId, live.userId, 'draft', 9)
+    const liveSre = await insertRunEmployee(live.companyId, liveRun, liveEmployee)
+    const cleared = await insertLine(live.companyId, liveSre, 'monthly_salary', '7210')
+
+    await getPool().query(BACKFILL_SQL)
+
+    expect(await accountOf(frozen)).toBe('7210')
+    expect(await accountOf(cleared)).toBeNull()
+  })
 })
 
 describe('personnel_category', () => {

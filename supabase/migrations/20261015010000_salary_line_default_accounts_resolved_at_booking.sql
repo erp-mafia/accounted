@@ -19,7 +19,9 @@
 --   - booked and corrected runs: their verifikat is posted, the lines are the
 --     record of what was booked;
 --   - utlägg lines (expense_reimbursement): they carry the claim's own
---     liability account, never a default.
+--     liability account, never a default;
+--   - companies archived by a migration reset: their records are immutable
+--     (block_migration_reset_source_mutation refuses the update).
 --
 -- The value list mirrors the item-type map in account-mapping.ts; a vitest
 -- (src/lib/salary/__tests__/account-mapping.test.ts) pins it to the resolver.
@@ -86,6 +88,12 @@ cached as (
   where r.status in ('draft', 'review', 'approved', 'paid')
     and li.account_number is not null
     and li.account_number in (d.account_number, coalesce(t.account_number, d.account_number))
+    -- A company archived by a migration reset is frozen by
+    -- block_migration_reset_source_mutation: its rows stay as they are.
+    and not exists (
+      select 1 from public.company_migration_resets m
+      where m.source_company_id = li.company_id
+    )
 )
 update public.salary_line_items li
 set account_number = null
