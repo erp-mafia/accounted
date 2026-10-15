@@ -82,7 +82,7 @@ registerEndpoint({
   },
   scope: 'transactions:write',
   risk: 'medium',
-  idempotent: false,
+  idempotent: true,
   reversible: false,
   dryRunSupported: true,
   request: { body: ResidualRequest },

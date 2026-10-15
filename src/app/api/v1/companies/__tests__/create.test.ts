@@ -33,6 +33,7 @@ vi.mock('@/lib/company/create-company', () => ({
 }))
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { createIdempotencyKeysFake } from '@/tests/idempotency-fake'
 import { POST as createCompany } from '../route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
@@ -42,7 +43,7 @@ const USER_ID = '930abb54-c5ef-4ae0-b274-30fb16e9a295'
 const TEAM_ID = '44444444-4444-4444-8444-444444444444'
 const COMPANY_ID = '55555555-5555-4555-8555-555555555555'
 
-function makeSupabase(teamId: string | null) {
+function makeSupabase(teamId: string | null, idempotency = createIdempotencyKeysFake()) {
   const chain: Record<string, ReturnType<typeof vi.fn>> = {
     select: vi.fn(() => chain),
     eq: vi.fn(() => chain),
@@ -51,9 +52,10 @@ function makeSupabase(teamId: string | null) {
     maybeSingle: vi.fn().mockResolvedValue({ data: teamId ? { team_id: teamId } : null, error: null }),
   }
   return {
-    from: vi.fn(() => chain),
+    from: vi.fn((table: string) => (table === 'idempotency_keys' ? idempotency.table() : chain)),
     rpc: vi.fn().mockResolvedValue({ data: COMPANY_ID, error: null }),
     chain,
+    idempotency,
   }
 }
 
@@ -211,6 +213,116 @@ describe('POST /api/v1/companies', () => {
     expect(body.data.dry_run).toBe(true)
     expect(body.data.preview.name).toBe('Acme AB')
     expect(mocks.createCompanyCore).not.toHaveBeenCalled()
+  })
+
+  it('creates without an Idempotency-Key (kept optional for existing callers) and caches nothing', async () => {
+    const supabase = makeSupabase(TEAM_ID)
+    mockServiceClient.mockReturnValue(supabase)
+    const request = new Request('https://x.test/api/v1/companies', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer test-fixture-not-a-real-key', 'Content-Type': 'application/json' },
+      body: JSON.stringify(validBody),
+    })
+    const res = await createCompany(request, staticRouteContext())
+    expect(res.status).toBe(201)
+    expect(mocks.createCompanyCore).toHaveBeenCalledTimes(1)
+    expect(supabase.idempotency.rows).toHaveLength(0)
+  })
+
+  it('answers a retry with the same key and body with the same company, never a second one', async () => {
+    const supabase = makeSupabase(TEAM_ID)
+    mockServiceClient.mockReturnValue(supabase)
+
+    const first = await createCompany(makeRequest(validBody, { 'Idempotency-Key': 'retry-1' }), staticRouteContext())
+    expect(first.status).toBe(201)
+    const firstBody = await first.json()
+
+    const retry = await createCompany(makeRequest(validBody, { 'Idempotency-Key': 'retry-1' }), staticRouteContext())
+    expect(retry.status).toBe(200)
+    expect(retry.headers.get('Idempotent-Replayed')).toBe('true')
+    const retryBody = await retry.json()
+    expect(retryBody.data.id).toBe(firstBody.data.id)
+    expect(retryBody.data.id).toBe(COMPANY_ID)
+
+    expect(mocks.createCompanyCore).toHaveBeenCalledTimes(1)
+    expect(supabase.rpc).toHaveBeenCalledTimes(1)
+    // Stored under the company the first call created, scoped to company creation.
+    expect(supabase.idempotency.rows).toHaveLength(1)
+    expect(supabase.idempotency.rows[0]).toMatchObject({
+      user_id: USER_ID,
+      company_id: COMPANY_ID,
+      key: 'retry-1',
+      scope: 'company_create',
+      response_status: 'success',
+    })
+  })
+
+  it('refuses the same key with another body with 409 IDEMPOTENCY_KEY_REUSE', async () => {
+    const supabase = makeSupabase(TEAM_ID)
+    mockServiceClient.mockReturnValue(supabase)
+
+    const first = await createCompany(makeRequest(validBody, { 'Idempotency-Key': 'reuse-1' }), staticRouteContext())
+    expect(first.status).toBe(201)
+
+    const other = await createCompany(
+      makeRequest({ ...validBody, name: 'Another AB' }, { 'Idempotency-Key': 'reuse-1' }),
+      staticRouteContext(),
+    )
+    expect(other.status).toBe(409)
+    expect((await other.json()).error.code).toBe('IDEMPOTENCY_KEY_REUSE')
+    expect(mocks.createCompanyCore).toHaveBeenCalledTimes(1)
+  })
+
+  it('creates a second company for a fresh key', async () => {
+    const supabase = makeSupabase(TEAM_ID)
+    mockServiceClient.mockReturnValue(supabase)
+
+    await createCompany(makeRequest(validBody, { 'Idempotency-Key': 'one' }), staticRouteContext())
+    const second = await createCompany(makeRequest(validBody, { 'Idempotency-Key': 'two' }), staticRouteContext())
+    expect(second.status).toBe(201)
+    expect(mocks.createCompanyCore).toHaveBeenCalledTimes(2)
+  })
+
+  it('never caches a dry run: the real create that follows with the same key goes through', async () => {
+    const supabase = makeSupabase(TEAM_ID)
+    mockServiceClient.mockReturnValue(supabase)
+
+    const preview = await createCompany(
+      new Request('https://x.test/api/v1/companies?dry_run=true', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer test-fixture-not-a-real-key',
+          'Content-Type': 'application/json',
+          'Idempotency-Key': 'preview-then-commit',
+        },
+        body: JSON.stringify(validBody),
+      }),
+      staticRouteContext(),
+    )
+    expect(preview.status).toBe(200)
+    expect((await preview.json()).data.dry_run).toBe(true)
+    expect(supabase.idempotency.rows).toHaveLength(0)
+
+    const commit = await createCompany(
+      makeRequest(validBody, { 'Idempotency-Key': 'preview-then-commit' }),
+      staticRouteContext(),
+    )
+    expect(commit.status).toBe(201)
+    expect(mocks.createCompanyCore).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not cache a failed creation, so a retry with the same key runs again', async () => {
+    const supabase = makeSupabase(TEAM_ID)
+    mockServiceClient.mockReturnValue(supabase)
+    mocks.createCompanyCore.mockResolvedValueOnce({ error: 'Kunde inte skapa kontoplan. Försök igen.' })
+
+    const failed = await createCompany(makeRequest(validBody, { 'Idempotency-Key': 'fail-then-ok' }), staticRouteContext())
+    expect(failed.status).toBe(500)
+    expect(supabase.idempotency.rows).toHaveLength(0)
+
+    const retry = await createCompany(makeRequest(validBody, { 'Idempotency-Key': 'fail-then-ok' }), staticRouteContext())
+    expect(retry.status).toBe(201)
+    expect(mocks.createCompanyCore).toHaveBeenCalledTimes(2)
   })
 
   it('maps a creation failure to INTERNAL_ERROR', async () => {

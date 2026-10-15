@@ -23,7 +23,8 @@
 import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
-import { withApiV1 } from '@/lib/api/v1/with-api-v1'
+import { v1IdempotentReplay, v1RequestHash, withApiV1 } from '@/lib/api/v1/with-api-v1'
+import { checkIdempotencyKey, IdempotencyKeyReuseError, storeIdempotencyResponse } from '@/lib/api/idempotency'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { kickWebhookDispatch } from '@/lib/webhooks/dispatch-kick'
 import { minimisePayload } from '@/lib/webhooks/handler'
@@ -44,6 +45,7 @@ registerEndpoint({
     'Retrying live deliveries (pending / in_flight / failed): the dispatcher is already managing them.',
   pitfalls: [
     'Retrying a delivered delivery causes the receiver to see the event twice. Receivers MUST be idempotent (check the X-Gnubok-Delivery header).',
+    'Every call queues a new delivery with its own X-Gnubok-Delivery id. Send an Idempotency-Key: a repeat with the same key answers the first call\'s webhook_delivery_id (Idempotent-Replayed: true) instead of queueing another.',
     "The webhook must be deliverable: an endpoint whose verification_status is 'pending' or 'paused' answers 409 WEBHOOK_NOT_VERIFIED until it passes POST /webhooks/{id}/verify.",
   ],
   example: {
@@ -73,7 +75,7 @@ registerEndpoint({
 
 export const POST = withApiV1<{ params: Promise<{ id: string }> }>(
   'webhook_deliveries.retry',
-  async (_request, ctx, params) => {
+  async (request, ctx, params) => {
     const { id } = await params.params
 
     // Fetch the original delivery and its company to enforce tenancy.
@@ -104,6 +106,31 @@ export const POST = withApiV1<{ params: Promise<{ id: string }> }>(
     // allowlist both get the same 404 as an unknown delivery id.
     const denied = await ctx.checkCompanyAccess(o.company_id)
     if (denied) return denied
+
+    // Idempotency-Key replay. The wrapper's cache is keyed by the URL
+    // :companyId, which this route does not have, so it replays here, keyed
+    // by the delivery's company once the gate above has passed. Each retry
+    // inserts a NEW delivery row with its own X-Gnubok-Delivery id, so a
+    // repeated call is a second delivery the receiver cannot tell apart; a
+    // repeat with the same key answers the first retry's delivery instead.
+    // The route takes no body, so the hash is method + path.
+    const idempotencyKey = ctx.idempotencyKey
+    const requestHash = v1RequestHash(request, null, false)
+    if (idempotencyKey) {
+      try {
+        const hit = await checkIdempotencyKey(ctx.supabase, ctx.userId, o.company_id, idempotencyKey, requestHash)
+        if (hit) {
+          ctx.log.info('idempotent replay', { idempotencyKey })
+          return v1IdempotentReplay(hit, ctx.requestId)
+        }
+      } catch (err) {
+        if (!(err instanceof IdempotencyKeyReuseError)) throw err
+        return v1ErrorResponseFromCode('IDEMPOTENCY_KEY_REUSE', ctx.log, {
+          requestId: ctx.requestId,
+          details: { key: idempotencyKey },
+        })
+      }
+    }
 
     if (o.status !== 'dead' && o.status !== 'delivered') {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
@@ -229,9 +256,23 @@ export const POST = withApiV1<{ params: Promise<{ id: string }> }>(
     // cron stays the path for the automatic backoff retries.
     kickWebhookDispatch()
 
-    return ok(
+    const response = ok(
       { webhook_delivery_id: (replay as { id: string }).id, status: 'pending' as const },
       { requestId: ctx.requestId },
     )
+    if (idempotencyKey) {
+      await storeIdempotencyResponse(
+        ctx.supabase,
+        ctx.userId,
+        o.company_id,
+        idempotencyKey,
+        requestHash,
+        'success',
+        (await response.clone().json()) as Record<string, unknown>,
+        'api_route',
+      )
+    }
+    return response
   },
+  { handlerIdempotency: true },
 )

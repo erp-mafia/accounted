@@ -24,7 +24,12 @@
 import crypto from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
-export type IdempotencyScope = 'mcp_tool' | 'api_route'
+/**
+ * `company_create` marks a write that has no company until it runs (creating
+ * one): its key is looked up per (user, scope) and the row is stored under the
+ * company the write created, see checkUserScopedIdempotencyKey.
+ */
+export type IdempotencyScope = 'mcp_tool' | 'api_route' | 'company_create'
 
 export class IdempotencyKeyReuseError extends Error {
   readonly code = 'IDEMPOTENCY_KEY_REUSE'
@@ -87,6 +92,47 @@ export async function checkIdempotencyKey(
   if (data.expires_at && new Date(data.expires_at) < new Date()) {
     return null
   }
+
+  if (data.request_hash !== requestHash) {
+    throw new IdempotencyKeyReuseError(key)
+  }
+
+  return {
+    status: data.response_status as 'success' | 'error',
+    body: (data.response_body ?? {}) as Record<string, unknown>,
+  }
+}
+
+/**
+ * Look up a key for a write that has no company before it runs: creating a
+ * company (POST /api/v1/companies, gnubok_create_company). The row cannot be
+ * keyed by a company that does not exist yet, and idempotency_keys.company_id
+ * is NOT NULL, so the lookup is per (user, scope, key) and the caller stores
+ * the response under the company the write created. A key a user once spent
+ * on a company-scoped write never matches here: the scope differs.
+ *
+ * Same contract as checkIdempotencyKey: null on a miss (or an expired row),
+ * the cached body on a match, IdempotencyKeyReuseError for a different hash.
+ */
+export async function checkUserScopedIdempotencyKey(
+  supabase: SupabaseClient,
+  userId: string,
+  scope: IdempotencyScope,
+  key: string,
+  requestHash: string
+): Promise<IdempotencyHit | null> {
+  const { data, error } = await supabase
+    .from('idempotency_keys')
+    .select('request_hash, response_status, response_body, expires_at')
+    .eq('user_id', userId)
+    .eq('scope', scope)
+    .eq('key', key)
+    .gt('expires_at', new Date().toISOString())
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (error || !data) return null
 
   if (data.request_hash !== requestHash) {
     throw new IdempotencyKeyReuseError(key)

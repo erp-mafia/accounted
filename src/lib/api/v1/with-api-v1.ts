@@ -79,6 +79,7 @@ import {
 import {
   checkIdempotencyKey,
   hashRequest,
+  type IdempotencyHit,
   IdempotencyKeyReuseError,
   storeIdempotencyResponse,
 } from '@/lib/api/idempotency'
@@ -191,8 +192,22 @@ interface ApiV1Options {
    * When true, idempotency is enforced: POST/PATCH/DELETE without an
    * `Idempotency-Key` header return 400. Default false; can be flipped on
    * per-route once the integrator audience is sophisticated enough.
+   * Every v1 write sets it or is listed, with a reason, in
+   * `__tests__/v1-write-idempotency.test.ts`.
    */
   requireIdempotencyKey?: boolean
+  /**
+   * The handler replays `Idempotency-Key` itself. The wrapper's cache is keyed
+   * by the URL `:companyId`, so a route without one (`POST /companies`) gets
+   * no replay from it; declaring this records that the handler covers it.
+   */
+  handlerIdempotency?: boolean
+  /**
+   * The handler writes nothing: a read that takes its input as a POST body
+   * (an operation of kind 'read'). Recorded for the idempotency contract
+   * test, which has nothing to ask of a read; changes no request handling.
+   */
+  readOnly?: boolean
 }
 
 // Next.js 16 always passes `{ params: Promise<...> }` as the second arg.
@@ -306,6 +321,26 @@ function buildRequestHash(input: {
     body: input.body,
     ...(input.dryRun ? { dry_run: true } : {}),
   })
+}
+
+/**
+ * The wrapper's idempotency hash, for a handler that replays the key itself
+ * (handlerIdempotency: a route with no `:companyId`). `body` is the parsed
+ * JSON body, as the wrapper hashes it.
+ */
+export function v1RequestHash(request: Request, body: unknown, dryRun: boolean): string {
+  return buildRequestHash({ method: request.method, path: new URL(request.url).pathname, body, dryRun })
+}
+
+/**
+ * The answer to a replayed key, one shape for the wrapper and for the
+ * handlers that replay themselves: the cached body, 200 for a cached success
+ * (400 for a cached error) and `Idempotent-Replayed: true`.
+ */
+export function v1IdempotentReplay(hit: IdempotencyHit, requestId: string): Response {
+  const replay = NextResponse.json(hit.body, { status: hit.status === 'success' ? 200 : 400 })
+  replay.headers.set('Idempotent-Replayed', 'true')
+  return stampHeaders(replay, requestId)
 }
 
 async function readBodyForHash(request: Request): Promise<{ body: unknown; cloned: Request }> {
@@ -531,7 +566,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
   handler: V1Handler<P>,
   options: ApiV1Options = {},
 ): (request: Request, params: P) => Promise<Response> {
-  return async function wrapped(request: Request, params: P): Promise<Response> {
+  const wrapped = async function wrapped(request: Request, params: P): Promise<Response> {
     const requestId = generateRequestId()
     const start = Date.now()
     const log = createLogger(`api/v1/${operation}`, { requestId, operation })
@@ -773,9 +808,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
           const hit = await checkIdempotencyKey(supabase, auth.userId, companyId, idempotencyKey, reqHash)
           if (hit) {
             userLog.info('idempotent replay', { idempotencyKey })
-            const replay = NextResponse.json(hit.body, { status: hit.status === 'success' ? 200 : 400 })
-            replay.headers.set('Idempotent-Replayed', 'true')
-            return stampHeaders(replay, requestId)
+            return v1IdempotentReplay(hit, requestId)
           }
         } catch (err) {
           if (err instanceof IdempotencyKeyReuseError) {
@@ -910,6 +943,36 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       return response
     }
   }
+  return Object.assign(wrapped, {
+    [V1_HANDLER_CONTRACT]: {
+      operation,
+      requireIdempotencyKey: options.requireIdempotencyKey === true,
+      handlerIdempotency: options.handlerIdempotency === true,
+      readOnly: options.readOnly === true,
+    } satisfies V1HandlerContract,
+  })
+}
+
+const V1_HANDLER_CONTRACT = Symbol.for('accounted.api.v1.handler-contract')
+
+/**
+ * What a withApiV1 handler was declared with, as far as retries go. Read by
+ * the idempotency contract test (`__tests__/v1-write-idempotency.test.ts`),
+ * which fails a v1 write that neither requires `Idempotency-Key` nor is
+ * listed there with a reason. Undefined for anything withApiV1 did not wrap.
+ */
+export interface V1HandlerContract {
+  operation: string
+  requireIdempotencyKey: boolean
+  /** The handler replays the key itself (a route with no `:companyId`). */
+  handlerIdempotency: boolean
+  /** The handler writes nothing (a read taking a POST body). */
+  readOnly: boolean
+}
+
+export function v1HandlerContract(handler: unknown): V1HandlerContract | undefined {
+  if (typeof handler !== 'function') return undefined
+  return (handler as unknown as Record<symbol, V1HandlerContract | undefined>)[V1_HANDLER_CONTRACT]
 }
 
 function stampHeaders(response: Response, requestId: string): Response {

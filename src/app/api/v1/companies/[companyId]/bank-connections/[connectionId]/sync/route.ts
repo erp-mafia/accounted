@@ -91,7 +91,7 @@ registerEndpoint({
   },
   scope: 'transactions:write',
   risk: 'low',
-  idempotent: false,
+  idempotent: true,
   reversible: false,
   dryRunSupported: false,
   response: {

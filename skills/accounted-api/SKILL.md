@@ -264,7 +264,7 @@ GET /companies/{companyId}/invoices : List invoices for a company [scope:invoice
 POST /companies/{companyId}/invoices : Create a draft invoice, proforma, or delivery note [scope:invoices:write risk:medium idempotent dry-run reversible]
 GET /companies/{companyId}/invoices/{id} : Retrieve a single invoice by id [scope:invoices:read risk:low idempotent]
 PATCH /companies/{companyId}/invoices/{id} : Update a draft invoice (metadata fields, optionally replacing line items) [scope:invoices:write risk:low idempotent dry-run reversible]
-DELETE /companies/{companyId}/invoices/{id} : Delete a draft invoice (hard delete if unnumbered, makulering if numbered) [scope:invoices:write risk:high dry-run]
+DELETE /companies/{companyId}/invoices/{id} : Delete a draft invoice (hard delete if unnumbered, makulering if numbered) [scope:invoices:write risk:high idempotent dry-run]
 POST /companies/{companyId}/invoices/{id}/book : Book a sent customer invoice that was issued without a verifikat (the deferred Bokför step) [scope:invoices:write risk:high idempotent dry-run]
 POST /companies/{companyId}/invoices/{id}/cancel : Cancel (makulera) a quote or a proforma invoice [scope:invoices:write risk:low idempotent dry-run]
 POST /companies/{companyId}/invoices/{id}/credit : Issue a credit note (kreditfaktura) against an invoice [scope:invoices:write risk:high idempotent dry-run]
@@ -376,7 +376,7 @@ Full detail: [references/banking.md](references/banking.md)
 
 ```text
 GET /companies/{companyId}/bank-connections : List PSD2 bank connections with sync freshness and consent expiry [scope:companies:read risk:low idempotent]
-POST /companies/{companyId}/bank-connections/{connectionId}/sync : Sync one bank connection now instead of waiting for the nightly run [scope:transactions:write risk:low]
+POST /companies/{companyId}/bank-connections/{connectionId}/sync : Sync one bank connection now instead of waiting for the nightly run [scope:transactions:write risk:low idempotent]
 GET /companies/{companyId}/bank-feed : The company's Open Payments bank connections and whether it may make one [scope:transactions:read risk:low idempotent]
 GET /companies/{companyId}/bank-feed/banks : The banks a company can connect with BankID through Open Payments [scope:transactions:read risk:low idempotent]
 GET /companies/{companyId}/bank-feed/banks/{bic} : One bank's details: how a person signs there, and the sparbanker behind a shared BIC [scope:transactions:read risk:low idempotent]
@@ -407,11 +407,11 @@ GET /companies/{companyId}/reconciliation/accounts : List the accounts that can 
 GET /companies/{companyId}/reconciliation/accounts/{accountKey} : The reconciliation bridge for one account [scope:reconciliation:read risk:low idempotent]
 GET /companies/{companyId}/reconciliation/accounts/{accountKey}/items : List the rows behind one account's bridge, bucketed [scope:reconciliation:read risk:low idempotent]
 POST /companies/{companyId}/reconciliation/accounts/{accountKey}/items/{itemId}/ignore : Ignore or restore one outside row [scope:reconciliation:write risk:low idempotent dry-run reversible]
-POST /companies/{companyId}/reconciliation/accounts/{accountKey}/links : Link outside rows to existing verifikat (pairs or proposals) [scope:reconciliation:write risk:medium dry-run reversible]
+POST /companies/{companyId}/reconciliation/accounts/{accountKey}/links : Link outside rows to existing verifikat (pairs or proposals) [scope:reconciliation:write risk:medium idempotent dry-run reversible]
 DELETE /companies/{companyId}/reconciliation/accounts/{accountKey}/links/{linkId} : Remove a link between an outside row and a verifikat [scope:reconciliation:write risk:low idempotent dry-run reversible]
-POST /companies/{companyId}/reconciliation/accounts/{accountKey}/residual : Book the remainder of a bank selection as a fee/interest/rounding verifikat and link the selection [scope:transactions:write risk:medium dry-run]
+POST /companies/{companyId}/reconciliation/accounts/{accountKey}/residual : Book the remainder of a bank selection as a fee/interest/rounding verifikat and link the selection [scope:transactions:write risk:medium idempotent dry-run]
 GET /companies/{companyId}/reconciliation/accounts/{accountKey}/signoff : Sign-off history for one reconcilable account [scope:reconciliation:read risk:low idempotent reversible]
-POST /companies/{companyId}/reconciliation/accounts/{accountKey}/signoff : Mark an account reconciled through a date (sign-off) [scope:reconciliation:signoff risk:medium dry-run reversible]
+POST /companies/{companyId}/reconciliation/accounts/{accountKey}/signoff : Mark an account reconciled through a date (sign-off) [scope:reconciliation:signoff risk:medium idempotent dry-run reversible]
 POST /companies/{companyId}/reconciliation/accounts/{accountKey}/signoff/{signoffId}/reopen : Reopen (undo) a reconciliation sign-off [scope:reconciliation:signoff risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/reconciliation/bank/run : Run the bank-reconciliation matcher [scope:transactions:write risk:medium idempotent dry-run]
 GET /companies/{companyId}/reconciliation/bank/status : Bank-reconciliation health snapshot [scope:transactions:read risk:low idempotent]
@@ -555,7 +555,7 @@ GET /companies/{companyId}/assets : List the fixed-asset register (anläggningsr
 POST /companies/{companyId}/assets : Register a fixed asset (no voucher is posted) [scope:bookkeeping:write risk:low idempotent dry-run]
 GET /companies/{companyId}/assets/{id} : Get one fixed asset [scope:reports:read risk:low idempotent]
 PATCH /companies/{companyId}/assets/{id} : Partially update a fixed asset [scope:bookkeeping:write risk:low idempotent dry-run reversible]
-DELETE /companies/{companyId}/assets/{id} : Delete an asset that never reached the books [scope:bookkeeping:write risk:medium dry-run]
+DELETE /companies/{companyId}/assets/{id} : Delete an asset that never reached the books [scope:bookkeeping:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/assets/{id}/dispose : Dispose a fixed asset and post the avyttring voucher [scope:bookkeeping:write risk:medium idempotent dry-run reversible]
 ```
 
@@ -570,9 +570,9 @@ GET /companies/{companyId}/webhooks/{id} : Get a webhook subscription by id [sco
 PATCH /companies/{companyId}/webhooks/{id} : Update a webhook subscription [scope:webhooks:manage risk:low idempotent dry-run reversible]
 DELETE /companies/{companyId}/webhooks/{id} : Delete a webhook subscription [scope:webhooks:manage risk:medium idempotent]
 GET /companies/{companyId}/webhooks/{id}/deliveries : List deliveries for a webhook subscription [scope:webhooks:manage risk:low idempotent]
-POST /companies/{companyId}/webhooks/{id}/rotate-secret : Rotate the HMAC signing secret on a webhook [scope:webhooks:manage risk:medium]
+POST /companies/{companyId}/webhooks/{id}/rotate-secret : Rotate the HMAC signing secret on a webhook [scope:webhooks:manage risk:medium idempotent]
 POST /companies/{companyId}/webhooks/{id}/test : Send a synthetic test event to a webhook [scope:webhooks:manage risk:low]
-POST /companies/{companyId}/webhooks/{id}/verify : Verify a webhook endpoint's ownership now [scope:webhooks:manage risk:low]
+POST /companies/{companyId}/webhooks/{id}/verify : Verify a webhook endpoint's ownership now [scope:webhooks:manage risk:low idempotent]
 POST /webhook-deliveries/{id}/retry : Retry a webhook delivery [scope:webhooks:manage risk:medium]
 ```
 

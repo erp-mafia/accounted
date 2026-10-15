@@ -461,7 +461,7 @@ Example response `200`:
 ### `POST /api/v1/companies/{companyId}/webhooks/{id}/rotate-secret`
 
 **Rotate the HMAC signing secret on a webhook.**
-`scope:webhooks:manage · risk:medium`
+`scope:webhooks:manage · risk:medium · idempotent`
 
 Generates a fresh HMAC signing secret for the webhook and returns it EXACTLY ONCE. The previous secret is invalidated immediately. There is no grace period: coordinate the rotation on the receiver side BEFORE calling this endpoint, or temporarily disable the webhook (PATCH active=false) to pause delivery while you swap secrets.
 
@@ -564,7 +564,7 @@ Example response `200`:
 ### `POST /api/v1/companies/{companyId}/webhooks/{id}/verify`
 
 **Verify a webhook endpoint's ownership now.**
-`scope:webhooks:manage · risk:low`
+`scope:webhooks:manage · risk:low · idempotent`
 
 Runs the ownership handshake against the webhook URL immediately and returns the result. Accounted POSTs a signed webhook.verification event (same X-Gnubok-Signature scheme and envelope as every delivery) whose data.object.challenge is a random value; the endpoint passes by answering, within 10 seconds and without a redirect, any 2xx with the JSON body {"challenge": "<the same value>"}. A pass sets verified_at and opens the webhook to deliveries; a failure answers 422 WEBHOOK_VERIFICATION_FAILED with details.reason. A webhook that is already verified is returned as-is without contacting the URL.
 
@@ -643,6 +643,7 @@ Re-enqueues a dead (or delivered) delivery as a fresh pending row. The new deliv
 
 **Pitfalls:**
 - Retrying a delivered delivery causes the receiver to see the event twice. Receivers MUST be idempotent (check the X-Gnubok-Delivery header).
+- Every call queues a new delivery with its own X-Gnubok-Delivery id. Send an Idempotency-Key: a repeat with the same key answers the first call's webhook_delivery_id (Idempotent-Replayed: true) instead of queueing another.
 - The webhook must be deliverable: an endpoint whose verification_status is 'pending' or 'paused' answers 409 WEBHOOK_NOT_VERIFIED until it passes POST /webhooks/{id}/verify.
 
 | Parameter | In | Type | Required | Notes |

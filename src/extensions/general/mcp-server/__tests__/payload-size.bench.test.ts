@@ -3,7 +3,7 @@ import { tools, deriveToolMeta, isDefaultCatalogTool } from '../server'
 import { isMultiCompanyOnlyTool, projectToolInputSchema } from '../company-routing'
 
 // Ceiling for the catalog a single-company key is served (see the second case).
-const SIMPLE_CATALOG_CEILING = 60_900
+const SIMPLE_CATALOG_CEILING = 61_100
 import { projectToolReferences } from '../tool-namespace'
 
 // Mirror the real tools/list serializer, including the derived staging _meta
@@ -714,7 +714,16 @@ describe('tools/list payload size guard', () => {
     //     personal_number, payment_terms, customer_type and country notes on
     //     the same two tools. Measured 65 895 (single-company 60 886).
     //     Ceiling unchanged.
-    expect(approxTokens).toBeLessThan(65_900)
+    //   * 65.9K to 66.1K (and the single-company catalog 60.9K to 61.1K),
+    //     2026-10-15: idempotent writes. The six tools that write without
+    //     staging and could write twice on a resent call (gnubok_create_company,
+    //     gnubok_create_skill, gnubok_upload_document,
+    //     gnubok_generate_rot_rut_file, gnubok_create_transactions,
+    //     gnubok_auto_match_period) declare the shared idempotency_key
+    //     (withRetryKey, retry-key.ts), +192. Safety, not convenience: the
+    //     stateless MCP revision recovers a broken call by resending it.
+    //     Measured 66 087 (single-company 61 078).
+    expect(approxTokens).toBeLessThan(66_100)
   })
 
   it('serves a single-company key a smaller catalog than the multi-company one', () => {
@@ -776,6 +785,8 @@ describe('tools/list payload size guard', () => {
     // see the case above): measured 60 886. Ceiling unchanged.
     // 2026-10-15, invoice_reference on the customer tools (crm#1200, see the
     // case above): measured 60 886. Ceiling unchanged.
+    // 60 900 to 61 100 on 2026-10-15, idempotency_key on the six direct
+    // writes (see the case above): measured 61 078.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

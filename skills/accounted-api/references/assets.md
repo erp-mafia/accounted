@@ -446,7 +446,7 @@ Example response `200`:
 ### `DELETE /api/v1/companies/{companyId}/assets/{id}`
 
 **Delete an asset that never reached the books.**
-`scope:bookkeeping:write · risk:medium · dry-run`
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run`
 
 Removes a register row that has no posted depreciation and is not disposed, together with its own unposted depreciation drafts. No voucher is touched. A row that has reached the books is räkenskapsinformation (BFL 7 kap.) and is refused with 409 ASSET_DELETE_BLOCKED: dispose it, or reverse the posted voucher with storno first. Dry-run answers 204 without deleting, or the same 409.
 
