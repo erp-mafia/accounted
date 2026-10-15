@@ -117,13 +117,14 @@ describe('enableBankingSunset', () => {
 
 describe('bankCoveredByOpenPayments', () => {
   it('names the banks Open Payments does not reach, case aside, and treats every other bank as covered', () => {
-    for (const name of ['Wise', 'PayPal', 'Bank Norwegian', 'Nordea First Card', 'Juni', 'JUNI Technology']) {
+    // Svea until Open Payments takes its second consent (bank-coverage.ts).
+    for (const name of ['Wise', 'PayPal', 'Bank Norwegian', 'Nordea First Card', 'Juni', 'JUNI Technology', 'Svea Bank', 'Svea']) {
       expect(bankCoveredByOpenPayments(name)).toBe(false)
     }
     for (const name of ['Swedbank', 'Nordea', 'Länsförsäkringar Bank', 'Lunar', 'Revolut', null, '']) {
       expect(bankCoveredByOpenPayments(name)).toBe(true)
     }
-    expect(UNCOVERED_BANK_NEEDLES).toEqual(['wise', 'paypal', 'norwegian', 'first card', 'juni'])
+    expect(UNCOVERED_BANK_NEEDLES).toEqual(['wise', 'paypal', 'norwegian', 'first card', 'juni', 'svea'])
   })
 })
 
@@ -297,7 +298,7 @@ describe('the counter', () => {
   it('asks the RPC with the uncovered list and fills in missing totals', async () => {
     const mock = createTableMockSupabase({ 'rpc:bank_switch_progress': { data: { companies: { pending: 3 }, banks: [{ bank: 'SEB', pending: 2, uncovered: 0, switched: 1 }] } } })
     const totals = await bankSwitchProgressTotals(mock.supabase as unknown as SupabaseClient)
-    expect(mock.findCall('rpc:bank_switch_progress', 'rpc')).toEqual([{ p_uncovered: ['wise', 'paypal', 'norwegian', 'first card', 'juni'] }])
+    expect(mock.findCall('rpc:bank_switch_progress', 'rpc')).toEqual([{ p_uncovered: ['wise', 'paypal', 'norwegian', 'first card', 'juni', 'svea'] }])
     expect(totals).toEqual({
       companies: { pending: 3, uncovered: 0, done: 0 },
       connections: { pending: 0, uncovered: 0, switched: 0 },
