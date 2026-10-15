@@ -147,6 +147,52 @@ export function customerNameMatches(
 }
 
 /**
+ * A Swedish mobile number standing in free text as a whole token: +46 7x,
+ * 0046 7x or 07x, then eight more digits, single spaces or hyphens allowed
+ * between digits. The token may not touch a digit on either side, so the
+ * digits inside a 16-digit Swish id or any longer run never read as a number.
+ * Group 1 is the subscriber part from the 7.
+ */
+const SWEDISH_MOBILE_IN_TEXT = /(?<![\d+])(?:(?:\+|00)46[ -]?|0)(7(?:[ -]?\d){8})(?!\d)/g
+
+/**
+ * The Swedish mobile numbers in a bank text, normalised to `+467XXXXXXXX`.
+ */
+export function swedishMobileNumbersIn(text: string | null | undefined): string[] {
+  if (!text) return []
+  return Array.from(text.matchAll(SWEDISH_MOBILE_IN_TEXT), (m) => `+46${m[1].replace(/\D/g, '')}`)
+}
+
+/**
+ * A stored phone number (customers.phone, typed by hand in any format) as
+ * `+467XXXXXXXX`, or null when it is not a Swedish mobile number.
+ */
+export function normalizeSwedishMobile(phone: string | null | undefined): string | null {
+  if (!phone) return null
+  let digits = phone.replace(/[^\d+]/g, '')
+  if (digits.startsWith('+46')) digits = digits.slice(3)
+  else if (digits.startsWith('0046')) digits = digits.slice(4)
+  if (digits.startsWith('0')) digits = digits.slice(1)
+  return /^7\d{8}$/.test(digits) ? `+46${digits}` : null
+}
+
+/**
+ * True when the customer's mobile number appears in the bank row. Swish
+ * payments carry the payer's number in the bank text, often with no name at
+ * all, so this is the same "this is the customer" signal as a name match.
+ * Each field is searched on its own.
+ */
+export function customerPhoneMatches(
+  customerPhone: string | null | undefined,
+  transaction: Pick<Transaction, 'description' | 'merchant_name' | 'reference'>
+): boolean {
+  const phone = normalizeSwedishMobile(customerPhone)
+  if (!phone) return false
+  return [transaction.description, transaction.merchant_name, transaction.reference]
+    .some((text) => swedishMobileNumbersIn(text).includes(phone))
+}
+
+/**
  * Calculate confidence score and match reason for an invoice match
  */
 export function calculateMatchScore(
@@ -158,16 +204,21 @@ export function calculateMatchScore(
 
   const exactAmount = amountsMatchExact(transactionAmount, invoiceTotal)
   const fuzzyAmount = !exactAmount && amountsMatchFuzzy(transactionAmount, invoiceTotal)
-  const customerMatch = customerNameMatches(
+  const nameMatch = customerNameMatches(
     invoice.customer?.name,
     transaction.description,
     transaction.merchant_name
   )
+  // A phone hit counts as the customer, like a name hit; the amount is
+  // still required below. The name reason wins when both hold.
+  const phoneMatch = !nameMatch && customerPhoneMatches(invoice.customer?.phone, transaction)
+  const customerMatch = nameMatch || phoneMatch
+  const customerReason = phoneMatch ? 'kundens telefonnummer matchar' : 'kundnamn matchar'
 
   if (exactAmount && customerMatch) {
     return {
       confidence: CONFIDENCE.EXACT_AMOUNT_CUSTOMER,
-      matchReason: `Exakt belopp (${invoiceTotal} ${invoice.currency}) och kundnamn matchar`,
+      matchReason: `Exakt belopp (${invoiceTotal} ${invoice.currency}) och ${customerReason}`,
     }
   }
 
@@ -181,7 +232,7 @@ export function calculateMatchScore(
   if (fuzzyAmount && customerMatch) {
     return {
       confidence: CONFIDENCE.FUZZY_AMOUNT_CUSTOMER,
-      matchReason: `Belopp nära (±1%) och kundnamn matchar`,
+      matchReason: `Belopp nära (±1%) och ${customerReason}`,
     }
   }
 

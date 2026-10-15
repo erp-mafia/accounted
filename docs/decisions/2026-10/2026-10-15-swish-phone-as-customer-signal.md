@@ -1,0 +1,1 @@
+[2026-10-15] A Swish payer's mobile number in the bank text counts as the same customer signal as a name match in calculateMatchScore (crm#1248), not a learned payer-to-customer link: same tiers, amount still required, no new state; a learned link needs a table for low volume.
