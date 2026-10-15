@@ -8,6 +8,11 @@
  * - Provides a `forEach` helper that runs the iteratee in an isolated try/catch
  *   per item and logs the outcome at info/error level. A single failing item
  *   never aborts the run.
+ * - Runs the handler inside a commit-actor scope of type 'cron' labelled with
+ *   the operation name, so every verifikat the job commits through the engine
+ *   records which job posted it (journal_entries.committed_actor_* and the
+ *   audit_log COMMIT row). A path that opens its own scope inside the job
+ *   (a pending-operation approval) still records its own actor.
  *
  * Usage:
  *   export const GET = withCronContext('cron.invoice-reminders', async (ctx) => {
@@ -27,6 +32,8 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { extensionRegistry } from '@/lib/extensions/registry'
+import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
+import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 
 export interface CronItemContext {
   /** Per-item requestId, child of the run's parent requestId. */
@@ -78,6 +85,16 @@ export interface CronContextOptions {
 
 function generateRequestId(prefix: 'cron' | 'cron_item' = 'cron'): string {
   return `${prefix}_${crypto.randomUUID()}`
+}
+
+/**
+ * The commit actor a cron job's commits record: type 'cron', and the
+ * operation name (e.g. 'cron.accrual_postings') as the label, so the
+ * behandlingshistorik names the job that posted a verifikat. commit_method
+ * stays NULL for it (defaultCommitMethod; DECISIONS 2026-10-11).
+ */
+export function cronCommitActor(operation: string): CommitActor {
+  return { type: 'cron', label: operation }
 }
 
 export function withCronContext(
@@ -142,7 +159,7 @@ export function withCronContext(
           { headers: { 'X-Request-Id': requestId } },
         )
       }
-      const response = await handler(request, ctx)
+      const response = await runWithActor(cronCommitActor(operation), () => handler(request, ctx))
       if (response instanceof Response && !response.headers.get('X-Request-Id')) {
         response.headers.set('X-Request-Id', requestId)
       }

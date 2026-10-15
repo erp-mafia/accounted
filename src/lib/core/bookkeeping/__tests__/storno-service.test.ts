@@ -40,7 +40,10 @@ function makeClient() {
 
 vi.mock('@/lib/bookkeeping/engine', () => ({
   validateBalance: vi.fn().mockReturnValue({ valid: true, totalDebit: 1000, totalCredit: 1000 }),
-  allocateVoucherNumber: vi.fn(async () => ++resultIdx), // just increment
+  // Posting a draft through commit_journal_entry (number, status and commit
+  // stamp together). Consumes the queued result in the slot the client-side
+  // "update to posted" used to take, so the queues below keep their order.
+  commitStornoOrCorrectionDraft: vi.fn(),
   // The gated cleanup door (cancel_orphaned_entry RPC). Consumes no queued
   // result: rollbacks no longer issue client-side UPDATE/DELETE statements.
   cancelOrphanedEntry: vi.fn(async () => ({ error: null })),
@@ -64,7 +67,7 @@ vi.mock('@/lib/bookkeeping/account-backfill', () => ({
 
 import { correctEntry } from '../storno-service'
 import { CORRECTION_COLUMN_POLICY } from '../correction-column-policy'
-import { validateBalance, allocateVoucherNumber, cancelOrphanedEntry } from '@/lib/bookkeeping/engine'
+import { validateBalance, commitStornoOrCorrectionDraft, cancelOrphanedEntry } from '@/lib/bookkeeping/engine'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -75,8 +78,10 @@ beforeEach(() => {
 
   // Reset the mock implementations after clearAllMocks
   vi.mocked(validateBalance).mockReturnValue({ valid: true, totalDebit: 1000, totalCredit: 1000 })
-  let voucherNum = 0
-  vi.mocked(allocateVoucherNumber).mockImplementation(async () => ++voucherNum)
+  vi.mocked(commitStornoOrCorrectionDraft).mockImplementation(async () => {
+    const result = results[resultIdx++] ?? { data: null, error: null }
+    return { error: (result.error as { message: string } | null | undefined) ?? null }
+  })
   vi.mocked(cancelOrphanedEntry).mockResolvedValue({ error: null })
   mockBackfill.mockResolvedValue([])
 })
@@ -112,13 +117,13 @@ describe('correctEntry', () => {
       { data: reversalEntry, error: null },
       // 3: insert reversal lines (thenable)
       { data: null, error: null },
-      // 4: update reversal to posted (thenable)
+      // 4: post reversal (commit_journal_entry)
       { data: null, error: null },
       // 5: insert corrected entry (.single())
       { data: correctedEntry, error: null },
       // 6: insert corrected lines (thenable)
       { data: null, error: null },
-      // 7: update corrected to posted (thenable)
+      // 7: post corrected (commit_journal_entry)
       { data: null, error: null },
       // 8: CAS update original to reversed (thenable, needs array for .length check)
       { data: [{ id: 'orig-1' }], error: null },
@@ -134,6 +139,48 @@ describe('correctEntry', () => {
       { data: { ...correctedEntry, lines: correctedLines }, error: null },
     ]
   }
+
+  // WHO on the two new verifikat: both are posted through commit_journal_entry
+  // (commitStornoOrCorrectionDraft), which draws the number and stamps the
+  // acting user, key, OAuth client or cron job, instead of a client-side
+  // status update that left committed_actor_* NULL and the audit row 'user'.
+  it('posts the storno and then the rättelse through the commit RPC, as unnumbered drafts', async () => {
+    setupResults()
+    const supabase = makeClient()
+    await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines)
+
+    expect(vi.mocked(commitStornoOrCorrectionDraft).mock.calls).toEqual([
+      [supabase, 'company-1', 'reversal-1'],
+      [supabase, 'company-1', 'corrected-1'],
+    ])
+    const headers = inserts
+      .filter((i) => i.table === 'journal_entries')
+      .map((i) => i.payload as Record<string, unknown>)
+    expect(headers.map((h) => [h.source_type, h.status, h.voucher_number])).toEqual([
+      ['storno', 'draft', 0],
+      ['correction', 'draft', 0],
+    ])
+    // The stamp is the commit's own: nothing about the original's commit is
+    // written onto the new headers.
+    for (const header of headers) {
+      expect(header).not.toHaveProperty('committed_actor_type')
+      expect(header).not.toHaveProperty('commit_method')
+    }
+  })
+
+  it('cancels the storno and posts no rättelse when the commit RPC refuses the storno', async () => {
+    setupResults()
+    results[4] = { data: null, error: { message: 'balance trigger refused' } }
+    const supabase = makeClient()
+
+    await expect(
+      correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines),
+    ).rejects.toBeInstanceOf(BookkeepingDatabaseError)
+
+    expect(cancelOrphanedEntry).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', 'reversal-1')
+    expect(commitStornoOrCorrectionDraft).toHaveBeenCalledTimes(1)
+    expect(inserts.filter((i) => i.table === 'journal_entries')).toHaveLength(1)
+  })
 
   it('creates reversal with swapped debit/credit lines', async () => {
     setupResults()
@@ -161,7 +208,7 @@ describe('correctEntry', () => {
       'company-1',
       expect.objectContaining({ id: 'orig-1', fiscal_period_id: 'fp-1' }),
     )
-    expect(allocateVoucherNumber).not.toHaveBeenCalled()
+    expect(commitStornoOrCorrectionDraft).not.toHaveBeenCalled()
     expect(inserts.filter((i) => i.table === 'journal_entries')).toEqual([])
   })
 
@@ -575,7 +622,7 @@ describe('correctEntry', () => {
 
     // Guard fires before any write or voucher-number draw.
     expect(inserts).toHaveLength(0)
-    expect(allocateVoucherNumber).not.toHaveBeenCalled()
+    expect(commitStornoOrCorrectionDraft).not.toHaveBeenCalled()
   })
 
   it('allowDeepChain: true bypasses the chain-depth guard without walking the chain', async () => {
@@ -637,7 +684,7 @@ describe('correctEntry', () => {
     // Nothing was written to the journal and no voucher number was fetched.
     expect(inserts.filter((i) => i.table === 'journal_entries')).toHaveLength(0)
     expect(inserts.filter((i) => i.table === 'journal_entry_lines')).toHaveLength(0)
-    expect(allocateVoucherNumber).not.toHaveBeenCalled()
+    expect(commitStornoOrCorrectionDraft).not.toHaveBeenCalled()
   })
 
   it('seeds a standard BAS account missing from the chart and proceeds', async () => {

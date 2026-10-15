@@ -168,6 +168,18 @@ describe('commitEventFromEntry', () => {
     expect(ev.actor).toEqual({ type: 'api_key', user_id: 'user-1', actor_label: 'Zapier' })
   })
 
+  it('names an SIE-imported verifikat and who submitted the import', () => {
+    const ev = commitEventFromEntry({
+      ...baseEntry,
+      source_type: 'import',
+      commit_method: 'migration',
+      committed_actor_type: 'mcp_oauth',
+      committed_actor_label: 'SIE import: Claude (Anthropic)',
+    })!
+    expect(ev.details).toContain('Bokföringssätt: Importerad (SIE)')
+    expect(ev.actor).toEqual({ type: 'mcp_oauth', user_id: 'user-1', actor_label: 'SIE import: Claude (Anthropic)' })
+  })
+
   it('marks storno and rättelse vouchers', () => {
     const storno = commitEventFromEntry({ ...baseEntry, reverses_id: 'x', source_type: 'storno' })!
     expect(storno.details).toContain('Vändningsverifikation (storno)')

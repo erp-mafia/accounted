@@ -8,7 +8,9 @@ import {
   reverseEntry,
   assertLinesWellFormed,
   cancelOrphanedEntry,
+  commitStornoOrCorrectionDraft,
 } from '../engine'
+import { runWithActor } from '../actor-context-node'
 import {
   AccountsNotInChartError,
   BookkeepingDatabaseError,
@@ -318,7 +320,6 @@ describe('reverseEntry: legacy negative-side lines reverse on their net', () => 
     const jeResults = [
       { data: original, error: null },
       { data: reversal, error: null },
-      { data: null, error: null },
       { data: [{ id: 'entry-1' }], error: null },
       { data: { ...reversal, lines: [] }, error: null },
     ]
@@ -802,7 +803,6 @@ describe('reverseEntry: entry_date defaults to original entry date', () => {
     const jeResults = [
       { data: original, error: null },
       { data: reversal, error: null },
-      { data: null, error: null },
       { data: [{ id: 'entry-1' }], error: null },
       { data: { ...reversal, lines: [] }, error: null },
     ]
@@ -865,7 +865,6 @@ describe('reverseEntry: entry_date defaults to original entry date', () => {
     const jeResults = [
       { data: original, error: null },
       { data: reversal, error: null },
-      { data: null, error: null },
       { data: [{ id: 'entry-1' }], error: null },
       { data: { ...reversal, lines: [] }, error: null },
     ]
@@ -1002,7 +1001,6 @@ describe('reverseEntry: the storno carries no note (crm#1078)', () => {
     const jeResults = [
       { data: original, error: null },
       { data: reversal, error: null },
-      { data: null, error: null },
       { data: [{ id: 'entry-1' }], error: null },
       { data: { ...reversal, lines: [] }, error: null },
     ]
@@ -1044,8 +1042,10 @@ describe('reverseEntry: the storno carries no note (crm#1078)', () => {
   })
 })
 
-describe('reverseEntry: unused voucher allocation', () => {
-  it('exposes the exact allocated number when account resolution fails before the reversal insert', async () => {
+// The storno is a draft without a number until commit_journal_entry posts
+// it, so a failure before that draws no number and leaves no gap to explain.
+describe('reverseEntry: no voucher number before the commit', () => {
+  it('draws no number when account resolution fails before the reversal insert', async () => {
     const original = {
       id: 'entry-1',
       company_id: 'company-1',
@@ -1090,14 +1090,11 @@ describe('reverseEntry: unused voucher allocation', () => {
     }
 
     expect(caught).toBeInstanceOf(BookkeepingDatabaseError)
-    expect(getUnusedVoucherAllocation(caught)).toEqual({
-      fiscalPeriodId: 'period-1',
-      voucherSeries: 'B',
-      voucherNumber: 42,
-    })
+    expect(getUnusedVoucherAllocation(caught)).toBeNull()
+    expect(supabase.rpc).not.toHaveBeenCalled()
   })
 
-  it('does not label a preserved cancelled reversal header as an unused voucher', async () => {
+  it('cancels the unnumbered draft when its lines fail, and never posts it', async () => {
     const original = {
       id: 'entry-1',
       company_id: 'company-1',
@@ -1176,6 +1173,7 @@ describe('reverseEntry: unused voucher allocation', () => {
     expect(getUnusedVoucherAllocation(caught)).toBeNull()
     expect(cancelUpdate).toHaveBeenCalledWith({ status: 'cancelled' })
     expect(deleteLines).toHaveBeenCalled()
+    expect(supabase.rpc).not.toHaveBeenCalled()
   })
 })
 
@@ -1206,7 +1204,6 @@ describe('reverseEntry: orphan reversal cleanup goes through the gated door', ()
     const jeResults = [
       { data: original, error: null }, // fetch original (.single)
       { data: reversal, error: null }, // insert reversal (.single)
-      { data: null, error: opts.postError ?? null }, // post reversal (await)
       { data: opts.casData ?? [], error: null }, // CAS original -> reversed (await)
     ]
     const jeUpdates: unknown[] = []
@@ -1216,7 +1213,9 @@ describe('reverseEntry: orphan reversal cleanup goes through the gated door', ()
       rpc: vi.fn().mockImplementation(async (name: string) =>
         name === 'cancel_orphaned_entry'
           ? { data: { cancelled: true }, error: null }
-          : { data: 8, error: null },
+          : name === 'commit_journal_entry' // post reversal
+            ? { data: opts.postError ? null : [{ voucher_number: 8 }], error: opts.postError ?? null }
+            : { data: 8, error: null },
       ),
       from: vi.fn().mockImplementation((table: string) => {
         if (table === 'journal_entries') {
@@ -1287,6 +1286,140 @@ describe('reverseEntry: orphan reversal cleanup goes through the gated door', ()
     expect(supabase.rpc).toHaveBeenCalledWith('cancel_orphaned_entry', expectedRpcArgs)
     expect(jeUpdates).not.toContainEqual({ status: 'cancelled' })
     expect(lineDeletes).toHaveLength(0)
+  })
+})
+
+// WHO on a storno or rättelse: the new verifikat is posted through
+// commit_journal_entry with the actor of the surrounding scope, so
+// committed_actor_* and commit_method are stamped like any other commit and
+// the audit_log COMMIT row names the actor instead of defaulting to 'user'.
+describe('commitStornoOrCorrectionDraft', () => {
+  function rpcClient(result: { data: unknown; error: unknown } = { data: [{ voucher_number: 9 }], error: null }) {
+    return { rpc: vi.fn().mockResolvedValue(result) }
+  }
+
+  it.each([
+    [{ type: 'user' as const }, 'user_accept', 'user', null],
+    [{ type: 'api_key' as const, label: 'Bokföringsbyrån' }, 'api_key', 'api_key', 'Bokföringsbyrån'],
+    [{ type: 'mcp_oauth' as const, label: 'Claude (Anthropic)' }, 'api_key', 'mcp_oauth', 'Claude (Anthropic)'],
+    [{ type: 'cron' as const, label: 'cron.accrual_postings' }, null, 'cron', 'cron.accrual_postings'],
+  ])('stamps %o through commit_journal_entry', async (actor, method, type, label) => {
+    const supabase = rpcClient()
+
+    const { error } = await runWithActor(actor, () =>
+      commitStornoOrCorrectionDraft(supabase as never, 'company-1', 'storno-1'),
+    )
+
+    expect(error).toBeNull()
+    expect(supabase.rpc).toHaveBeenCalledExactlyOnceWith('commit_journal_entry', {
+      p_company_id: 'company-1',
+      p_entry_id: 'storno-1',
+      p_commit_method: method,
+      p_rubric_version: null,
+      p_actor_type: type,
+      p_actor_label: label,
+    })
+  })
+
+  it('records no actor outside a scope, as commitEntry does', async () => {
+    const supabase = rpcClient()
+
+    await commitStornoOrCorrectionDraft(supabase as never, 'company-1', 'storno-1')
+
+    expect(supabase.rpc).toHaveBeenCalledWith('commit_journal_entry', expect.objectContaining({
+      p_commit_method: null,
+      p_actor_type: null,
+      p_actor_label: null,
+    }))
+  })
+
+  it('returns the RPC refusal instead of throwing', async () => {
+    const supabase = rpcClient({ data: null, error: { message: 'unbalanced', code: '23514' } })
+
+    const { error } = await commitStornoOrCorrectionDraft(supabase as never, 'company-1', 'storno-1')
+
+    expect(error).toEqual({ message: 'unbalanced', code: '23514' })
+  })
+})
+
+describe('reverseEntry: the storno records who committed it', () => {
+  it('posts an unnumbered storno draft through commit_journal_entry with the acting key', async () => {
+    const original = {
+      id: 'entry-1',
+      company_id: 'company-1',
+      status: 'posted',
+      fiscal_period_id: 'period-1',
+      voucher_series: 'A',
+      voucher_number: 3,
+      entry_date: '2024-11-15',
+      description: 'Hyra november',
+      source_type: 'manual',
+      source_id: null,
+      lines: [
+        { account_number: '5010', debit_amount: 10000, credit_amount: 0 },
+        { account_number: '1930', debit_amount: 0, credit_amount: 10000 },
+      ],
+    }
+    const reversal = { id: 'reversal-1', reverses_id: 'entry-1' }
+    let jeCall = 0
+    const jeResults = [
+      { data: original, error: null }, // fetch original
+      { data: reversal, error: null }, // insert storno draft
+      { data: [{ id: 'entry-1' }], error: null }, // CAS original -> reversed
+      { data: { ...reversal, lines: [] }, error: null }, // fetch complete storno
+    ]
+    const headerInserts: Array<Record<string, unknown>> = []
+    const headerUpdates: Array<Record<string, unknown>> = []
+    function jeBuilder() {
+      const b: Record<string, unknown> = {}
+      for (const m of ['select', 'eq', 'in']) b[m] = vi.fn().mockReturnValue(b)
+      b.insert = vi.fn().mockImplementation((payload: Record<string, unknown>) => {
+        headerInserts.push(payload)
+        return b
+      })
+      b.update = vi.fn().mockImplementation((payload: Record<string, unknown>) => {
+        headerUpdates.push(payload)
+        return b
+      })
+      b.single = vi.fn().mockImplementation(async () => jeResults[jeCall++])
+      b.then = (resolve: (v: unknown) => void) => resolve(jeResults[jeCall++])
+      return b
+    }
+    const supabase = {
+      rpc: vi.fn().mockResolvedValue({ data: [{ voucher_number: 4 }], error: null }),
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === 'journal_entries') return jeBuilder()
+        if (table === 'chart_of_accounts') {
+          const b: Record<string, unknown> = {}
+          for (const m of ['select', 'eq', 'in']) b[m] = vi.fn().mockReturnValue(b)
+          b.then = (resolve: (v: unknown) => void) =>
+            resolve({ data: [{ id: 'acc-5010', account_number: '5010' }, { id: 'acc-1930', account_number: '1930' }], error: null })
+          return b
+        }
+        if (table === 'journal_entry_lines') return { insert: vi.fn().mockResolvedValue({ error: null }) }
+        return createMockChain()
+      }),
+    }
+
+    await runWithActor({ type: 'api_key', label: 'Bokföringsbyrån' }, () =>
+      reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1'),
+    )
+
+    expect(headerInserts).toEqual([
+      expect.objectContaining({ source_type: 'storno', status: 'draft', voucher_number: 0 }),
+    ])
+    expect(supabase.rpc).toHaveBeenCalledWith('commit_journal_entry', {
+      p_company_id: 'company-1',
+      p_entry_id: 'reversal-1',
+      p_commit_method: 'api_key',
+      p_rubric_version: null,
+      p_actor_type: 'api_key',
+      p_actor_label: 'Bokföringsbyrån',
+    })
+    expect(supabase.rpc).not.toHaveBeenCalledWith('next_voucher_number', expect.anything())
+    // Never a client-side post: the only header update is the original's
+    // CAS to reversed, which writes no commit stamp.
+    expect(headerUpdates).toEqual([{ status: 'reversed', reversed_by_id: 'reversal-1' }])
   })
 })
 
@@ -1403,7 +1536,6 @@ describe('reverseEntry: storno guard', () => {
       // (depth 1, well under the guard threshold).
       { data: { id: 'entry-0', correction_of_id: null, reverses_id: null, voucher_series: 'A', voucher_number: 1 }, error: null },
       { data: reversal, error: null },
-      { data: null, error: null },
       { data: [{ id: 'entry-1' }], error: null },
       { data: { ...reversal, lines: [] }, error: null },
     ]
@@ -1512,7 +1644,6 @@ describe('reverseEntry: bank transaction unlink', () => {
     const jeResults = [
       { data: original, error: null },                   // fetch original (.single)
       { data: reversal, error: null },                   // insert reversal (.single)
-      { data: null, error: null },                       // post reversal (await)
       { data: [{ id: 'entry-1' }], error: null },        // CAS original → reversed (await)
       { data: { ...reversal, lines: [] }, error: null }, // fetch complete (.single)
     ]
@@ -1806,7 +1937,6 @@ describe('reverseEntry: opening balance unlink', () => {
     const jeResults = [
       { data: original, error: null },
       { data: reversal, error: null },
-      { data: null, error: null },
       { data: [{ id: 'entry-1' }], error: null },
       { data: { ...reversal, lines: [] }, error: null },
     ]
@@ -1925,7 +2055,6 @@ describe('reverseEntry: depreciation schedule release', () => {
     const jeResults = [
       { data: original, error: null },
       { data: reversal, error: null },
-      { data: null, error: null },
       { data: [{ id: 'entry-1' }], error: null },
       { data: { ...reversal, lines: [] }, error: null },
     ]

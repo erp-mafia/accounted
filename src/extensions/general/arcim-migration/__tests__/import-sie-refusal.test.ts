@@ -117,7 +117,8 @@ describe('POST /import-sie: job refusals', () => {
     const { status, body } = await parseJsonResponse<{ importId: string; state: string; statusUrl: string }>(await post(BODY))
     expect(status).toBe(202)
     expect(body).toMatchObject({ importId: 'import-1', state: 'queued', statusUrl: '/api/import/sie/import-1' })
+    // 'provider_migration': the verifikat's commit label says how the books came in.
     expect(submitSIEJob).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', SIE, MAPPINGS,
-      expect.objectContaining({ onExistingPeriod: 'block' }), expect.any(File))
+      expect.objectContaining({ onExistingPeriod: 'block' }), expect.any(File), 'provider_migration')
   })
 })

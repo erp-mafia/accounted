@@ -189,8 +189,11 @@ describe('gnubok_approve_pending_operation', () => {
     }
   )
 
-  // Who decided: a key minted by the OAuth sign-in is named
-  // OAUTH_MCP_KEY_NAME, so its commits say mcp_oauth, not api_key. The key's
+  // Who decided: a key minted by the OAuth sign-in commits as mcp_oauth, not
+  // api_key. handleMcpRequest marks it (oauthKey) from the reserved name
+  // OAUTH_MCP_KEY_NAME and then renames the label to the client's display
+  // name, so the label here is 'Claude (Anthropic)', not the reserved name
+  // (oauth-commit-actor.test.ts covers that rename end to end). The key's
   // ceiling travels with it: the label must not lift the unattended limit.
   it('labels an OAuth connector approval mcp_oauth and keeps its ceiling', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
@@ -203,13 +206,32 @@ describe('gnubok_approve_pending_operation', () => {
       'company-1',
       'user-1',
       supabase as never,
-      { type: 'api_key', label: OAUTH_MCP_KEY_NAME, unattendedCommitLimit: 500 }
+      { type: 'api_key', label: 'Claude (Anthropic)', oauthKey: true, unattendedCommitLimit: 500 }
     )
 
     expect(commitSpy.mock.calls[0][4]).toMatchObject({
       commitMethod: 'api_key',
-      actor: { type: 'mcp_oauth', label: OAUTH_MCP_KEY_NAME, unattendedCommitLimit: 500 },
+      actor: { type: 'mcp_oauth', label: 'Claude (Anthropic)', unattendedCommitLimit: 500 },
     })
+  })
+
+  // The reserved name alone, without the mark handleMcpRequest sets, is a
+  // display string: the stamp no longer reads it.
+  it('does not classify an approval by its label', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const op = { id: 'op-1', operation_type: 'create_invoice', company_id: 'company-1', status: 'pending', risk_level: 'medium', params: {} }
+    enqueue({ data: op, error: null }) // fetch
+    commitSpy.mockResolvedValue({ status: 'committed' })
+
+    await approveTool.execute(
+      { operation_id: 'op-1' },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key', label: OAUTH_MCP_KEY_NAME }
+    )
+
+    expect(commitSpy.mock.calls[0][4]).toMatchObject({ actor: { type: 'api_key', label: OAUTH_MCP_KEY_NAME } })
   })
 
   it('keeps a hand-made API key as api_key', async () => {
