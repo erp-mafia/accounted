@@ -35,6 +35,10 @@ The first stable release of the public REST API. Six phases of development cover
 - **Reads**: \`GET /accounts\`, \`GET /fiscal-periods\`.
 - All write surfaces honour strict-mode (commit fully or error with no side effects).
 
+### Capabilities (2026-10)
+
+- **New: \`GET /companies/{companyId}/capabilities\`** (2026-10-15): which building blocks (the modules behind the OpenAPI tags) the company can use, each with \`status\`, \`reasons\` and a \`resolution\` sentence, like Stripe account capabilities. \`active\` is usable now; \`needs_plan\` means the paid plan does not include it (on a self-hosted instance, a connector key does); \`off\` means it is turned off for this company; \`unsupported\` means it is not offered for this company, because of its country or its legal form (payroll for an enskild firma that has not said it pays salaries). \`dependency_unavailable\` marks a module that needs a module which is unsupported or off, and takes that status. The kernels (\`platform\`, \`ledger\`) are always active. Read-only: it reports the gates that exist today, and the per-company module switch arrives later. The response also carries the company's \`jurisdiction\` (\`SE\`) and \`ledger_currency\` (\`SEK\`). Additive; the API version date is unchanged.
+
 ### Retries: Idempotency-Key (2026-10)
 
 - **\`POST /api/v1/companies\` honours \`Idempotency-Key\`** (2026-10-15). With the header, a retry with the same key and body returns the company the first call created (\`200\`, \`Idempotent-Replayed: true\`), never a second company; the same key with another body answers \`409 IDEMPOTENCY_KEY_REUSE\`. The header stays optional so existing callers keep working; without it a retry after a network failure still creates a second company, so send one. **Before**, the header was ignored on this route. A dry run is never cached, so the real create may reuse the preview's key. The API version date is unchanged.

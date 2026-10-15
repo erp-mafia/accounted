@@ -259,6 +259,64 @@ export async function hasCapability(
   return true
 }
 
+/**
+ * The two axes hasCapability() ANDs together, kept apart: which keys the
+ * company is ENTITLED to (an unexpired grant on the company or its team, or a
+ * bypass, decided exactly as hasCapability decides it) and which it has
+ * DISABLED (a company_capability_config row with enabled = false).
+ */
+export interface CapabilityAxes {
+  entitled: ReadonlySet<CapabilityKey>
+  disabled: ReadonlySet<CapabilityKey>
+}
+
+/**
+ * Both axes for several keys in one grant read and one config read, run in
+ * parallel. For a caller that has to say WHY a capability is unavailable, not
+ * only whether it is: the capabilities report (lib/modules/capabilities.ts).
+ *
+ * Unlike the gate, a failed read throws instead of failing closed: a report
+ * that says "needs a plan" because a query failed would tell the company to
+ * pay for something it may already have.
+ */
+export async function readCapabilityAxes(
+  supabase: SupabaseClient,
+  companyId: string,
+  keys: readonly CapabilityKey[],
+): Promise<CapabilityAxes> {
+  if (!isUuid(companyId)) throw new Error('readCapabilityAxes: companyId is not a uuid')
+  const unique = [...new Set(keys)]
+  if (unique.length === 0) return { entitled: new Set(), disabled: new Set() }
+  const queried = unique.filter((key) => !isBypassedFor(key))
+
+  const [grants, configs] = await Promise.all([
+    queried.length > 0
+      ? readGrants(supabase, companyId, queried)
+      : Promise.resolve({ data: [] as GrantRow[], error: null }),
+    supabase
+      .from('company_capability_config')
+      .select('capability_key')
+      .eq('company_id', companyId)
+      .eq('enabled', false)
+      .in('capability_key', unique as string[]),
+  ])
+  if (grants.error) {
+    const message = (grants.error as { message?: string }).message ?? String(grants.error)
+    throw new Error(`Failed to read capability grants: ${message}`)
+  }
+  if (configs.error) throw new Error(`Failed to read capability config: ${configs.error.message}`)
+
+  const now = Date.now()
+  const entitled = new Set<CapabilityKey>(unique.filter((key) => isBypassedFor(key)))
+  for (const row of grants.data ?? []) {
+    if (grantIsActive(row.expires_at, now)) entitled.add(row.capability_key as CapabilityKey)
+  }
+  const disabled = new Set<CapabilityKey>(
+    ((configs.data ?? []) as Array<{ capability_key: string }>).map((row) => row.capability_key as CapabilityKey),
+  )
+  return { entitled, disabled }
+}
+
 /** Bilingual paywall copy, shared by every transport (HTTP route, MCP tool, commit executor). */
 export const CAPABILITY_BLOCKED_MESSAGE_SV =
   'Den här funktionen kräver en betald prenumeration. Uppgradera för att fortsätta använda externa tjänster.'

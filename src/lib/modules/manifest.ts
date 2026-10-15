@@ -6,8 +6,9 @@
  * that needs to know "which module is this?" resolves from this list
  * (./resolve.ts): the operation registry (by operation id prefix), the v1
  * REST surface and its OpenAPI tags (by path), and the boundary ratchet
- * (by src/lib folder). Nothing here changes behaviour: no route, gate or
- * query reads it to decide anything a user sees.
+ * (by src/lib folder), and the per-company capabilities report
+ * (./capabilities.ts). Nothing here changes behaviour: no route, gate or
+ * query reads it to decide what a user may do.
  *
  * Two kinds:
  *   - kernel: always present. The ledger and the platform it runs on. A
@@ -105,7 +106,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     dependsOn: [],
     libFolders: ['auth', 'webhooks'],
     operationPrefixes: [],
-    v1Segments: ['health', 'api-key', 'companies', 'operations', 'pending-operations', 'webhooks', 'webhook-deliveries'],
+    // capabilities: the per-company module report (lib/modules/capabilities.ts).
+    v1Segments: ['health', 'api-key', 'companies', 'capabilities', 'operations', 'pending-operations', 'webhooks', 'webhook-deliveries'],
     jurisdictions: [],
   },
   {

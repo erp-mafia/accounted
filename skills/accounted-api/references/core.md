@@ -2,7 +2,7 @@
 
 # Core endpoints
 
-Connectivity, the calling key's own grant, company discovery, async-operation polling, and company settings. Every session starts with GET /companies to resolve the companyId that all other URLs need.
+Connectivity, the calling key's own grant, company discovery, which modules a company can use (capabilities), async-operation polling, and company settings. Every session starts with GET /companies to resolve the companyId that all other URLs need.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -240,6 +240,104 @@ Example response `200`:
   },
   "meta": {
     "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/capabilities`
+
+**Which building blocks this company can use, and why not.**
+`scope:companies:read · risk:low · idempotent`
+
+Lists every module (the OpenAPI tags) for the company with a status, the reasons behind it and a resolution sentence, like Stripe account capabilities. Statuses: active (usable now); needs_plan (the paid plan does not include it: upgrade, or on a self-hosted instance add a connector key); off (turned off for this company); unsupported (not offered for this company: its country, or its legal form, such as payroll for an enskild firma that has not said it pays salaries). Reasons, the deciding one first: unsupported_country, unsupported_legal_form, needs_plan, disabled_by_company, dependency_unavailable (a module it needs is unsupported or off; it then takes that status). Kernels (platform, ledger) are always active. This is a read-only report of the gates that already exist: there is no per-company module switch yet, it arrives later.
+
+**Use when:** At the start of an integration or agent session, before calling endpoints of an optional module (bank feed, payroll, Skatteverket filing, collections, the AI agent), or to explain to a user why something is unavailable.
+**Do not use for:** Turning a module on or off: nothing here writes. API key scopes are a separate axis (GET /api/v1/api-key); a module can be active while the key lacks the scope for its endpoints.
+
+**Pitfalls:**
+- A status is a snapshot: a plan change or a settings change moves it. Re-read it rather than caching it for a session.
+- needs_plan only covers the paid parts of a module; the module's free endpoints keep answering. The resolution says what unlocks it.
+- Modules, statuses and reasons may gain values as the product grows (module ids are experimental, like the OpenAPI tags): treat an unknown status as not active.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    jurisdiction: string,
+    ledger_currency: string,
+    modules: { id: string, kind: "kernel" | "block", name: string, name_sv: string, summary: string, depends_on: string[], status: "active" | "off" | "needs_plan" | "unsupported", reasons: ("unsupported_country" | "unsupported_legal_form" | "needs_plan" | "disabled_by_company" | "dependency_unavailable")[], resolution: string | null }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "jurisdiction": "SE",
+    "ledger_currency": "SEK",
+    "modules": [
+      {
+        "id": "ledger",
+        "kind": "kernel",
+        "name": "Ledger",
+        "name_sv": "Bokföring",
+        "summary": "Double-entry bookkeeping under Bokföringslagen: journal entries and corrections, ...",
+        "depends_on": [
+          "platform"
+        ],
+        "status": "active",
+        "reasons": [],
+        "resolution": null
+      },
+      {
+        "id": "bank-feed",
+        "kind": "block",
+        "name": "Bank feed",
+        "name_sv": "Bankkoppling",
+        "summary": "Reading the company bank through PSD2 aggregators and Open Payments, ...",
+        "depends_on": [
+          "transactions"
+        ],
+        "status": "needs_plan",
+        "reasons": [
+          "needs_plan"
+        ],
+        "resolution": "Upgrade the plan to use Bank feed."
+      },
+      {
+        "id": "payroll",
+        "kind": "block",
+        "name": "Payroll",
+        "name_sv": "Lön",
+        "summary": "Swedish payroll: the employee register, salary runs from calculation to booking, ...",
+        "depends_on": [],
+        "status": "unsupported",
+        "reasons": [
+          "unsupported_legal_form"
+        ],
+        "resolution": "Payroll is on for every legal person; an enskild firma turns it on by setting pays_salaries in the company tax profile."
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_...",
     "api_version": "2026-05-12"
   }
 }

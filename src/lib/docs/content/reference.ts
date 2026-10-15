@@ -41,6 +41,7 @@ interface ResourceGroup {
 
 const RESOURCES: ResourceGroup[] = [
   { slug: 'companies', label: 'Companies', description: 'List, create and read the companies the API key can access, and read and update their settings: payment, contact and invoicing, the tax and VAT profile, and the bookkeeping lock.', matcher: (p) => /\/companies(?:\/:companyId)?(?:\/settings(?:\/(?:tax-profile|bookkeeping-lock))?)?$/.test(p) },
+  { slug: 'capabilities', label: 'Capabilities', description: 'Which building blocks (the modules behind the OpenAPI tags) a company can use right now, each with a status, the reasons behind it and a resolution sentence. Read-only: the per-company module switch arrives later.', matcher: (p) => /\/companies\/:companyId\/capabilities$/.test(p) },
   { slug: 'portfolio', label: 'Portfolio', description: 'Cross-company reads for keys that reach more than one company: one overview call over a membership-checked scope (all, byrå team, or explicit ids) instead of one call per company.', matcher: (p) => /\/portfolio(\/|$)/.test(p) },
   { slug: 'customers', label: 'Customers', description: 'CRM-side: who you invoice. Business and individual (sole-trader) customers with VIES validation.', matcher: (p) => /\/customers(\/|$)/.test(p) },
   { slug: 'invoices', label: 'Invoices', description: 'Outbound invoicing: draft, send, mark paid, credit, PDF download. Mixed-rate VAT supported.', matcher: (p) => /\/invoices(\/|$)/.test(p) },
