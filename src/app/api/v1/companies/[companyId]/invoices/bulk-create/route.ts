@@ -48,6 +48,7 @@ import { readV1JsonBody } from '@/lib/api/v1/body'
 import { CreateInvoiceSchema } from '@/lib/api/schemas'
 import type { InvoiceVatWarning } from '@/lib/invoices/vat-rules'
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
+import { yourReferenceForNewInvoice } from '@/lib/customers/invoice-reference'
 import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
 import { getStructuredError } from '@/lib/errors/get-structured-error'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
@@ -238,7 +239,7 @@ async function createOneInvoice(
   // required key, so a column dropped from this literal no longer compiles.
   const { data: customer } = await supabase
     .from('customers')
-    .select('id, customer_type, vat_number, vat_number_validated, country')
+    .select('id, customer_type, vat_number, vat_number_validated, country, invoice_reference')
     .eq('company_id', companyId)
     .eq('id', input.customer_id)
     .maybeSingle()
@@ -263,7 +264,9 @@ async function createOneInvoice(
     // sends deduction_personnummer for a ROT/RUT line.
     customer: { ...customer, personal_number: null },
     documentType,
-    input,
+    // Er referens: the request's, else the customer card's Fakturareferens
+    // (crm#1200), as on POST /invoices.
+    input: { ...input, your_reference: yourReferenceForNewInvoice(input.your_reference, customer) ?? undefined },
   })
   if (!build.ok) {
     if ('dbError' in build) {

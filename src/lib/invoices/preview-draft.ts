@@ -119,6 +119,7 @@ export function previewPlaceholderCustomer(nowIso: string = new Date().toISOStri
     invoice_email_bcc_addresses: null,
     language: 'sv',
     default_payment_terms: 30,
+    invoice_reference: null,
     notes: null,
     created_at: nowIso,
     updated_at: nowIso,

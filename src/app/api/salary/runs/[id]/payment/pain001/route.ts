@@ -5,6 +5,8 @@ import {
   type SalaryPaymentFileError,
 } from '@/lib/salary/payment/build-payment-file'
 import { fileResponse } from '@/lib/api/file-response'
+import { validateBody } from '@/lib/api/validate'
+import { NewSalaryPaymentFileVersionSchema } from '@/lib/api/schemas'
 
 /**
  * Generate pain.001 (ISO 20022) payment file for a salary run.
@@ -53,6 +55,16 @@ function legacyError(result: SalaryPaymentFileError): NextResponse {
       return NextResponse.json({ error: result.details.message as string }, { status: 400 })
     case 'GENERATOR_FAILED':
       return NextResponse.json({ error: result.details.message as string }, { status: 400 })
+    case 'NEW_VERSION_UNCONFIRMED':
+      return NextResponse.json(
+        { error: 'Bekräfta att den tidigare betalfilen inte har godkänts i banken innan du skapar en ny version.' },
+        { status: 400 },
+      )
+    case 'NEW_VERSION_UNSUPPORTED':
+      return NextResponse.json(
+        { error: 'Bara en ISO 20022-fil (pain.001) kan få en ny version.' },
+        { status: 400 },
+      )
     case 'ARCHIVE_FAILED':
       // The file is räkenskapsinformation: never handed out unarchived.
       return NextResponse.json(
@@ -81,6 +93,37 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       runId: id,
       userId: user.id,
       format: 'pain001',
+    })
+    if (!result.ok) return legacyError(result)
+
+    return fileResponse(result.content, { filename: result.filename, contentType: 'application/xml; charset=utf-8' })
+  },
+  { requireWrite: true },
+)
+
+/**
+ * POST: a new version of the run's pain.001 (crm#1219), with new message and
+ * transaction ids so the bank takes it although an earlier file for the run
+ * reached it. The body must carry the person's confirmation that the earlier
+ * file was not approved at the bank; the builder and the archive trigger
+ * refuse a new version without it. Every later GET returns this version.
+ */
+export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
+  'salary.run.payment.pain001.new_version',
+  async (request, ctx, { params }) => {
+    const { id } = await params
+    const { supabase, companyId, user } = ctx
+
+    const validation = await validateBody(request, NewSalaryPaymentFileVersionSchema)
+    if (!validation.success) return validation.response
+
+    const result = await buildSalaryPaymentFile(supabase, {
+      companyId,
+      runId: id,
+      userId: user.id,
+      format: 'pain001',
+      newVersion: true,
+      confirmPreviousNotApproved: validation.data.confirm_previous_not_approved,
     })
     if (!result.ok) return legacyError(result)
 

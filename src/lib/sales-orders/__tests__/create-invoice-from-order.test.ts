@@ -324,6 +324,27 @@ describe('createInvoiceFromSalesOrder', () => {
     expect(findCall('invoices', 'insert')).toBeUndefined()
   })
 
+  // crm#1200: the order's Er referens, else the customer card's Fakturareferens.
+  async function builtYourReference(orderReference: string | null) {
+    enqueue({ data: orderWith([makeSalesOrderItem()], { your_reference: orderReference }) })
+    enqueue({ data: [] })
+    enqueue({ data: makeOrderCustomer({ invoice_reference: 'KST 4410', contact_person: 'Karin Ek' }) })
+    enqueue({ data: { id: IDS.invoice, status: 'draft', invoice_number: null, sales_order_id: IDS.order } })
+    enqueue({ data: null })
+    enqueue({ data: orderWith() })
+    enqueue({ data: [invoicedRow(IDS.item1, 10)] })
+    await createInvoiceFromSalesOrder(sb, { ...params, input: {} })
+    return (mockBuildInvoiceWriteData.mock.calls[0][0] as { input: { your_reference?: string } }).input.your_reference
+  }
+
+  it("builds the invoice with the customer card's Fakturareferens when the order has no Er referens", async () => {
+    expect(await builtYourReference(null)).toBe('KST 4410')
+  })
+
+  it("keeps the order's own Er referens over the customer card", async () => {
+    expect(await builtYourReference('Anna Andersson')).toBe('Anna Andersson')
+  })
+
   it('still creates the invoice for a foreign-currency order when the rate is present', async () => {
     enqueue({ data: orderWith([makeSalesOrderItem()], { currency: 'EUR' }) })
     enqueue({ data: [] })

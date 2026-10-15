@@ -4,6 +4,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateInvoiceFromWebshopOrderSchema } from '@/lib/api/schemas'
 import { buildInvoiceWriteData, type InvoiceWriteInput } from '@/lib/invoices/build-invoice-write'
+import { customerInvoiceReference } from '@/lib/customers/invoice-reference'
 import { roundOre } from '@/lib/money'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { EU_COUNTRIES } from '@/lib/vat/eu-countries'
@@ -244,7 +245,9 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       invoice_date: invoiceDate,
       due_date: dueDate,
       currency: order.currency.toUpperCase() as Currency,
-      your_reference: order.customer_name ?? undefined,
+      // The card's Fakturareferens (crm#1200) wins over the buyer's name, as
+      // in the web editor over the contact person.
+      your_reference: customerInvoiceReference(customer) ?? order.customer_name ?? undefined,
       notes: `Webshoporder ${order.order_number} (${order.store_label || order.store_scope})`,
       items,
     }

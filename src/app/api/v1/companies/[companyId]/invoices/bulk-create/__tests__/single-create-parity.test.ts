@@ -143,14 +143,14 @@ function post(url: string, body: unknown): Request {
 const params = { params: Promise.resolve({ companyId: COMPANY_ID }) }
 
 /** The invoices + invoice_items rows each door writes for the same body. */
-async function writesOf(invoice: Record<string, unknown>) {
+async function writesOf(invoice: Record<string, unknown>, tables: Record<string, unknown> = TABLES) {
   const single: Insert[] = []
-  mockServiceClient.mockReturnValue(makeSupabase(TABLES, single))
+  mockServiceClient.mockReturnValue(makeSupabase(tables, single))
   const singleRes = await createInvoice(post(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices`, invoice), params)
   expect(singleRes.status).toBe(201)
 
   const bulk: Insert[] = []
-  mockServiceClient.mockReturnValue(makeSupabase(TABLES, bulk))
+  mockServiceClient.mockReturnValue(makeSupabase(tables, bulk))
   const bulkRes = await bulkCreate(
     post(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/bulk-create`, { invoices: [invoice] }),
     params,
@@ -274,5 +274,31 @@ describe('bulk-create writes the invoice POST /invoices writes', () => {
     expect(strip(bulk.header)).toEqual(strip(single.header))
     expect(bulk.items).toEqual(single.items)
     expect(single.header[0]).toMatchObject({ deduction_total: 3750, remaining_amount: 8750 })
+  })
+})
+
+describe('bulk-create takes Er referens from the customer card as POST /invoices does (crm#1200)', () => {
+  const withReference = {
+    ...TABLES,
+    customers: { ...(TABLES.customers as Record<string, unknown>), invoice_reference: 'KST 4410' },
+  }
+  const body = {
+    customer_id: CUSTOMER_ID,
+    invoice_date: '2026-05-12',
+    due_date: '2026-06-11',
+    currency: 'SEK',
+    items: [{ description: 'Konsultation', quantity: 1, unit: 'tim', unit_price: 1000, vat_rate: 25 }],
+  }
+
+  it('writes the Fakturareferens when the request states none', async () => {
+    const { single, bulk } = await writesOf(body, withReference)
+    expect((single.header[0] as Record<string, unknown>).your_reference).toBe('KST 4410')
+    expect(bulk.header).toEqual(single.header)
+  })
+
+  it('keeps the your_reference the request states', async () => {
+    const { single, bulk } = await writesOf({ ...body, your_reference: 'Anna' }, withReference)
+    expect((single.header[0] as Record<string, unknown>).your_reference).toBe('Anna')
+    expect(bulk.header).toEqual(single.header)
   })
 })

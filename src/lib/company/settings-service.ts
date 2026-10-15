@@ -338,7 +338,8 @@ export async function updateCompanySettings(
   // SIE history and tax filings): writable only while the company has no valid
   // one, never replaced once it has (lib/company/org-number-rule.ts). A
   // company without one can fill it in itself; a valid one is kept on both
-  // copies. company_name stays editable (särskilt företagsnamn).
+  // copies. company_name stays editable (särskilt företagsnamn); the database
+  // mirrors it onto companies.name (company_settings_sync_company_name).
   let orgNumberFill: string | null = null
   if (body.org_number !== undefined) {
     const change = await resolveOrgNumberChange(supabase, companyId, body.org_number, {

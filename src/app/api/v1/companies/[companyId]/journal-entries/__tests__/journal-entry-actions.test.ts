@@ -799,6 +799,46 @@ describe('PATCH /journal-entries/:id/notes', () => {
     expect((await res.json()).data.preview).toMatchObject({ old_notes: 'Gammal', new_notes: 'Ny' })
     expect(wrote(client)).toBe(false)
   })
+
+  it('409 JOURNAL_ENTRY_NOTE_PERIOD_LOCKED on a dry run in a closed period, nothing written (crm#1234)', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      journal_entries: {
+        data: { id: ENTRY_ID, voucher_series: 'A', voucher_number: 42, status: 'posted', notes: null, entry_date: '2024-11-29', fiscal_period_id: PERIOD_ID },
+        error: null,
+      },
+      fiscal_periods: { data: { id: PERIOD_ID, is_closed: true, locked_at: '2025-02-01T00:00:00Z' }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await patch({ notes: 'Ny' }, '?dry_run=true')
+    expect(res.status).toBe(409)
+    const { error } = await res.json()
+    expect(error.code).toBe('JOURNAL_ENTRY_NOTE_PERIOD_LOCKED')
+    expect(error.message).toBe('Perioden är stängd eller låst, anteckningen kan inte ändras.')
+    expect(error.details).toMatchObject({
+      period_status: 'closed',
+      fiscal_period_id: PERIOD_ID,
+      reason: 'Perioden är stängd, anteckningen kan inte ändras.',
+    })
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('409 JOURNAL_ENTRY_NOTE_PERIOD_LOCKED when the period lock trigger refuses the write', async () => {
+    mockServiceClient.mockReturnValue(
+      makeClient({
+        company_members: OWNER,
+        journal_entries: {
+          data: null,
+          error: { code: 'P0001', message: 'Cannot write to locked/closed fiscal period "Räkenskapsår 2024" (is_closed=t, locked_at=<NULL>)' },
+        },
+      }),
+    )
+    const res = await patch({ notes: 'Ny' })
+    expect(res.status).toBe(409)
+    const { error } = await res.json()
+    expect(error.code).toBe('JOURNAL_ENTRY_NOTE_PERIOD_LOCKED')
+    expect(error.message).toBe('Perioden är stängd eller låst, anteckningen kan inte ändras.')
+  })
 })
 
 // ---------------------------------------------------------------------------

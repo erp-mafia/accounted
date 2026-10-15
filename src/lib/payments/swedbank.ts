@@ -115,8 +115,8 @@ export function swedbankIso2PaysPayee(payeeType: 'bankgiro' | 'plusgiro' | 'bank
  * Creditor routing for a domestic bank account in a Swedbank ISO 2.0 file
  * (Appendix, Payee Account Identification):
  *
- *  - A 4-digit clearing keeps the separate form every bank takes, Option 2:
- *    CdtrAgt MmbId CCCC, CdtrAcct BBAN the account without the clearing.
+ *  - A 4-digit clearing keeps the separate form, Option 2: CdtrAgt MmbId
+ *    CCCC, CdtrAcct BBAN the account without the clearing.
  *  - A clearing starting with 8 (Swedbank and the savings banks) "must always
  *    be stated" as MmbId 8CCCC and BBAN 8CCCC + zero fill + account, always
  *    15 digits. A clearing stored with four digits gets its fifth, the mod 10

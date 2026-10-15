@@ -16,6 +16,7 @@
  * account backfill, no cancel.
  */
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 import {
   assertLinesWellFormed,
   cancelDraftEntry,
@@ -306,6 +307,33 @@ export function normalizeNote(notes: string | null): string | null {
   return typeof notes === 'string' && notes.trim() !== '' ? notes : null
 }
 
+/**
+ * A closed or locked period is read-only, the note included: the note lives
+ * on the verifikat row, and enforce_period_lock (migration 017) refuses every
+ * write to a row whose fiscal period is closed or locked, whatever changed
+ * (20260608120000 kept it that way on purpose). This is the refusal that
+ * trigger reaches, as a code and a sentence about the note, never "a
+ * verifikation cannot be created". The company lock date does not apply: its
+ * trigger fires on entry_date only, so a note behind it is written.
+ */
+function notePeriodLocked(
+  periodStatus: 'closed' | 'locked' | null,
+  details: Record<string, unknown>,
+): Failure {
+  return {
+    ok: false,
+    code: 'JOURNAL_ENTRY_NOTE_PERIOD_LOCKED',
+    messageSv:
+      periodStatus === 'closed'
+        ? 'Perioden är stängd, anteckningen kan inte ändras.'
+        : periodStatus === 'locked'
+          ? 'Perioden är låst, anteckningen kan inte ändras.'
+          : 'Perioden är stängd eller låst, anteckningen kan inte ändras.',
+    // period_status, not reason: v1 carries the Swedish sentence in details.reason.
+    details: { ...(periodStatus ? { period_status: periodStatus } : {}), ...details },
+  }
+}
+
 export async function setJournalEntryNote(
   ctx: OperationContext,
   entryId: string,
@@ -316,12 +344,30 @@ export async function setJournalEntryNote(
   if (options.dryRun) {
     const { data: entry, error } = await ctx.supabase
       .from('journal_entries')
-      .select('id, voucher_series, voucher_number, entry_date, description, status, notes')
+      .select('id, voucher_series, voucher_number, entry_date, description, status, notes, fiscal_period_id')
       .eq('id', entryId)
       .eq('company_id', ctx.companyId)
       .maybeSingle()
     if (error) return { ok: false, code: 'JOURNAL_ENTRY_NOTE_FAILED', messageSv: getErrorMessage(error) }
     if (!entry) return { ok: false, code: 'JOURNAL_ENTRY_NOT_FOUND' }
+    // The same verdict enforce_period_lock reaches at commit, read off the
+    // entry's own period (not the date's), so a staged note is one that can
+    // be approved.
+    const { data: period, error: periodError } = await ctx.supabase
+      .from('fiscal_periods')
+      .select('id, is_closed, locked_at')
+      .eq('id', entry.fiscal_period_id)
+      .eq('company_id', ctx.companyId)
+      .maybeSingle()
+    if (periodError) {
+      return { ok: false, code: 'JOURNAL_ENTRY_NOTE_FAILED', messageSv: getErrorMessage(periodError) }
+    }
+    if (period?.is_closed || period?.locked_at) {
+      return notePeriodLocked(period.is_closed ? 'closed' : 'locked', {
+        fiscal_period_id: period.id,
+        entry_date: entry.entry_date,
+      })
+    }
     return {
       ok: true,
       dryRun: true,
@@ -339,7 +385,9 @@ export async function setJournalEntryNote(
   }
 
   // Notes-only UPDATE: the journal_entries immutability trigger allows
-  // exactly this on committed entries and raises on anything else.
+  // exactly this on committed entries and raises on anything else. The
+  // period lock trigger stays the authority here (a period can be closed
+  // between staging and approval); its refusal is put in the note's words.
   const { data, error } = await ctx.supabase
     .from('journal_entries')
     .update({ notes })
@@ -347,6 +395,7 @@ export async function setJournalEntryNote(
     .eq('company_id', ctx.companyId)
     .select('id, voucher_series, voucher_number')
     .maybeSingle()
+  if (error && isPeriodLockRefusal(error)) return notePeriodLocked(null, { journal_entry_id: entryId })
   if (error) return { ok: false, code: 'JOURNAL_ENTRY_NOTE_FAILED', messageSv: getErrorMessage(error) }
   // Zero rows = the entry doesn't exist in this company: report it instead
   // of a phantom success.

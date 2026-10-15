@@ -19,11 +19,14 @@
  *    (Nordea MIG: "No remittance info allowed"). The text on the employee's
  *    statement comes from the Dataclearing LÖN code derived from SALA.
  *  - The employee account is addressed domestically: the clearing number
- *    goes in CdtrAgt as a ClrSysMmbId under clearing system SESBA, and the
- *    account number WITHOUT the clearing goes in CdtrAcct/Id/Othr with
- *    SchmeNm BBAN. The clearing/account split is shared with the Bankgirot
- *    LB generator (resolveDomesticBankAccount) so both formats present
- *    identical routing for Swedbank 5-digit clearings and Nordea personkonto.
+ *    goes in CdtrAgt as a ClrSysMmbId under clearing system SESBA, and
+ *    CdtrAcct/Id/Othr with SchmeNm BBAN holds the account in the form the
+ *    company's bank reads (lib/payments/creditor-account.ts): without the
+ *    clearing for most banks, with it for Danske Bank and Nordea, whose
+ *    guides read the account from CdtrAcct alone. The clearing/account parts
+ *    are shared with the Bankgirot LB generator (resolveDomesticBankAccount)
+ *    so every format routes Swedbank 5-digit clearings and Nordea
+ *    personkonto identically.
  *  - MsgId, PmtInfId, InstrId and EndToEndId are Max35Text: bases are
  *    truncated so suffixes always fit.
  *
@@ -55,8 +58,8 @@ import { escapeXml } from '@/lib/xml/escape'
 import { formatPainAmount, max35, painControlSum, suffixId } from '@/lib/payments/pain001-format'
 import { previousBankDayIso } from '@/lib/payments/bank-days'
 import { sanitizeMigText } from '@/lib/payments/mig-text'
-import { SWEDBANK_BIC, swedbankCreditorAccount, type SwedbankFileIds } from '@/lib/payments/swedbank'
-import { payeeAccountParts } from './bank-account'
+import { SWEDBANK_BIC, type SwedbankFileIds } from '@/lib/payments/swedbank'
+import { creditorAccountForm, domesticCreditorAccount } from '@/lib/payments/creditor-account'
 
 export interface Pain001CompanyData {
   name: string
@@ -191,12 +194,17 @@ export function generatePain001(
   lines.push('      </DbtrAgt>')
 
   // ─── Per-employee credit transfers ───
+  // The account form is the debtor bank's: it is the bank that reads the file.
+  const accountForm = creditorAccountForm(company.bic, swedbank)
   for (let i = 0; i < employees.length; i++) {
     const emp = employees[i]
     const txId = pain001TransactionId(msgId, i)
-    const { memberId, accountId } = swedbank
-      ? swedbankCreditorAccount(emp.name, emp.clearingNumber, emp.bankAccountNumber)
-      : domesticRouting(emp)
+    const { memberId, accountId } = domesticCreditorAccount(
+      emp.name,
+      emp.clearingNumber,
+      emp.bankAccountNumber,
+      accountForm,
+    )
 
     lines.push('      <CdtTrfTxInf>')
     lines.push('        <PmtId>')
@@ -251,12 +259,6 @@ export function pain001TransactionId(messageId: string, index: number): string {
 // ============================================================
 // Helpers
 // ============================================================
-
-/** The routing every bank but Swedbank takes: 4-digit clearing, account without it. */
-function domesticRouting(emp: Pain001Employee): { memberId: string; accountId: string } {
-  const { clearing4, accountDigits } = payeeAccountParts(emp.name, emp.clearingNumber, emp.bankAccountNumber)
-  return { memberId: clearing4, accountId: accountDigits }
-}
 
 /** Party Id/OrgId/Othr carrying an id the bank assigned (SchmeNm BANK). */
 function pushBankAssignedId(lines: string[], indent: string, id: string): void {

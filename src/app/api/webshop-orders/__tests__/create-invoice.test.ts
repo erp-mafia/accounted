@@ -201,6 +201,32 @@ describe('POST /api/webshop-orders/[id]/create-invoice', () => {
     expect((linkUpdate![0] as Record<string, unknown>).invoice_id).toBe('inv-1')
   })
 
+  it("puts the matched customer's Fakturareferens in Er referens over the buyer's name (crm#1200)", async () => {
+    enqueue({ data: makeOrderRow() }) // order fetch
+    enqueue({
+      data: { id: 'cust-1', name: 'Testbolaget AB', customer_type: 'swedish_business', invoice_reference: 'KST 4410' },
+    }) // email match
+    enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } }) // invoices insert
+    enqueue({ data: null }) // invoice_items insert
+    enqueue({ data: [{ id: 'order-1' }] }) // order link-back matched
+
+    expect((await postCreate()).status).toBe(200)
+    const input = (mockBuildInvoiceWriteData.mock.calls[0][0] as { input: { your_reference?: string } }).input
+    expect(input.your_reference).toBe('KST 4410')
+  })
+
+  it("keeps the buyer's name in Er referens for a customer without a Fakturareferens", async () => {
+    enqueue({ data: makeOrderRow() })
+    enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB', customer_type: 'swedish_business', invoice_reference: null } })
+    enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } })
+    enqueue({ data: null })
+    enqueue({ data: [{ id: 'order-1' }] })
+
+    expect((await postCreate()).status).toBe(200)
+    const input = (mockBuildInvoiceWriteData.mock.calls[0][0] as { input: { your_reference?: string } }).input
+    expect(input.your_reference).toBe(makeOrderRow().customer_name)
+  })
+
   it('creates a customer from the order billing data when none matches', async () => {
     enqueue({ data: makeOrderRow() }) // order fetch
     enqueue({ data: null }) // email match: none

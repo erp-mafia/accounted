@@ -13,6 +13,7 @@ import {
   SALARY_PAYMENT_FILE_ALLOWED_STATUSES,
   SWEDBANK_IDS_MISSING_SV,
   salaryPaymentFileRefusal,
+  salaryPaymentMessageId,
 } from '../build-payment-file'
 
 const COMPANY_ID = 'company-1'
@@ -557,5 +558,155 @@ describe('buildSalaryPaymentFile for a Swedbank debtor', () => {
     expect(result.content).not.toContain('ORI0003')
     expect(result.content).not.toContain('<PstlAdr>')
     expect(result.content).toContain('<Othr><Id>5560000000</Id></Othr>')
+  })
+})
+
+// crm#1219: a corrected file for a run whose first file already reached the
+// bank needs new ids, or the bank refuses it as a duplicate. Only with the
+// person's confirmation that the earlier file was not approved.
+describe('payment file versions', () => {
+  const ids = (xml: string) => ({
+    msgId: xml.match(/<MsgId>([^<]+)<\/MsgId>/)![1],
+    pmtInfId: xml.match(/<PmtInfId>([^<]+)<\/PmtInfId>/)![1],
+    endToEndIds: [...xml.matchAll(/<EndToEndId>([^<]+)<\/EndToEndId>/g)].map((m) => m[1]),
+    instrIds: [...xml.matchAll(/<InstrId>([^<]+)<\/InstrId>/g)].map((m) => m[1]),
+  })
+  const QUEUE = (runRow: Record<string, unknown>) => [
+    { data: runRow },
+    { data: company },
+    { data: settings },
+    { data: [anna] },
+    { data: null }, // salary_payment_files insert
+    { data: null }, // salary_runs update
+  ]
+
+  it('refuses a new version without the confirmation, before reading anything', async () => {
+    for (const confirm of [undefined, false]) {
+      const { supabase, calls } = client()
+      const result = await buildSalaryPaymentFile(supabase, {
+        companyId: COMPANY_ID,
+        runId: RUN_ID,
+        userId: USER_ID,
+        format: 'pain001',
+        newVersion: true,
+        confirmPreviousNotApproved: confirm,
+      })
+      expect(result).toMatchObject({ ok: false, code: 'NEW_VERSION_UNCONFIRMED' })
+      expect(calls).toHaveLength(0)
+      if (!result.ok) {
+        expect(salaryPaymentFileRefusal(result)).toEqual({ code: 'SALARY_RUN_PAYMENT_FILE_NEW_VERSION_UNCONFIRMED' })
+      }
+    }
+  })
+
+  it('V1 to V2: new MsgId, PmtInfId, InstrId and EndToEndId, archived with the version and the confirmation', async () => {
+    const first = client()
+    first.enqueueMany(QUEUE({ ...run, payment_file_version: 1 }))
+    const v1 = await buildSalaryPaymentFile(first.supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
+
+    const second = client()
+    second.enqueueMany(QUEUE({ ...run, payment_file_version: 1 }))
+    const v2 = await buildSalaryPaymentFile(second.supabase, {
+      companyId: COMPANY_ID,
+      runId: RUN_ID,
+      userId: USER_ID,
+      format: 'pain001',
+      newVersion: true,
+      confirmPreviousNotApproved: true,
+    })
+
+    expect(v1.ok && v2.ok).toBe(true)
+    if (!v1.ok || !v2.ok) return
+    expect(v1.version).toBe(1)
+    expect(v2.version).toBe(2)
+    expect(v2.filename).toBe('pain001_lon_2026-04_v2.xml')
+
+    const a = ids(v1.content)
+    const b = ids(v2.content)
+    expect(a.msgId).not.toContain('-V')
+    expect(b).toEqual({
+      msgId: 'LON-5560000000-2026-04-V2',
+      pmtInfId: 'LON-5560000000-2026-04-V2-PMT',
+      endToEndIds: ['LON-5560000000-2026-04-V2-TX0001'],
+      instrIds: ['LON-5560000000-2026-04-V2-TX0001'],
+    })
+    expect(b.msgId).not.toBe(a.msgId)
+    expect(b.pmtInfId).not.toBe(a.pmtInfId)
+    expect(b.endToEndIds[0]).not.toBe(a.endToEndIds[0])
+    // The banklista names each payment by the id the file carries.
+    expect(v2.payees.map((p) => p.reference)).toEqual(b.endToEndIds)
+
+    expect(first.findCall('salary_payment_files', 'insert')?.[0]).toMatchObject({
+      version: 1,
+      previous_not_approved_confirmed: false,
+    })
+    // The audit: who, when, which version, and that the confirmation was given.
+    expect(second.findCall('salary_payment_files', 'insert')?.[0]).toMatchObject({
+      user_id: USER_ID,
+      generated_at: v2.generatedAt,
+      filename: 'pain001_lon_2026-04_v2.xml',
+      version: 2,
+      previous_not_approved_confirmed: true,
+      content: v2.content,
+    })
+  })
+
+  it('the default download returns the latest version, without a new confirmation', async () => {
+    const { supabase, enqueueMany, findCall } = client()
+    enqueueMany(QUEUE({ ...run, payment_file_version: 3 }))
+
+    const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.version).toBe(3)
+    expect(ids(result.content).msgId).toBe('LON-5560000000-2026-04-V3')
+    expect(findCall('salary_payment_files', 'insert')?.[0]).toMatchObject({
+      version: 3,
+      previous_not_approved_confirmed: false,
+    })
+  })
+
+  it('a dry run previews the next version without archiving or stamping', async () => {
+    const { supabase, enqueueMany, calls } = client()
+    enqueueMany(QUEUE({ ...run, payment_file_version: 1 }).slice(0, 4))
+
+    const result = await buildSalaryPaymentFile(supabase, {
+      companyId: COMPANY_ID,
+      runId: RUN_ID,
+      userId: USER_ID,
+      format: 'pain001',
+      dryRun: true,
+      newVersion: true,
+      confirmPreviousNotApproved: true,
+    })
+
+    expect(result).toMatchObject({ ok: true, version: 2, paymentFileId: null })
+    expect(calls.filter((c) => c.method === 'insert' || c.method === 'update')).toHaveLength(0)
+  })
+
+  it('refuses a new version of a Bankgirot LB file, which has no message id', async () => {
+    const { supabase, enqueueMany } = client()
+    enqueueMany(QUEUE({ ...run, payment_file_version: 1 }))
+
+    const result = await buildSalaryPaymentFile(supabase, {
+      companyId: COMPANY_ID,
+      runId: RUN_ID,
+      userId: USER_ID,
+      format: 'bg_lb',
+      newVersion: true,
+      confirmPreviousNotApproved: true,
+    })
+
+    expect(result).toMatchObject({ ok: false, code: 'NEW_VERSION_UNSUPPORTED', format: 'bg_lb' })
+  })
+
+  it('keeps the period and the version in every id up to version 99, within Max35Text', async () => {
+    for (const version of [2, 9, 10, 99]) {
+      const id = salaryPaymentMessageId('ACCOUNTED', '5590000000', '2026-10', version)
+      expect(id).toBe(`LON-5590000000-2026-10-V${version}`)
+      expect(`${id}-TX0001`.length).toBeLessThanOrEqual(35)
+    }
+    expect(salaryPaymentMessageId('ACCOUNTED', '5590000000', '2026-10', 1)).toBe('ACCOUNTED-5590000000-2026-10')
   })
 })

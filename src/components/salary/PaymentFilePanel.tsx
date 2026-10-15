@@ -4,6 +4,15 @@ import Link from 'next/link'
 import { useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { DetailSection, DefRow } from '@/components/ui/detail-section'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -24,6 +33,8 @@ interface PaymentFilePanelProps {
   periodLabel: string
   paymentFileFormat: string | null
   paymentFileGeneratedAt: string | null
+  /** salary_runs.payment_file_version: the version every pain.001 download carries. */
+  paymentFileVersion?: number
   defaultFormat: PaymentFormat
   /** company_settings.salary_default_bank: sorts and auto-expands the matching bank's instructions. */
   defaultBank?: string | null
@@ -61,6 +72,7 @@ export function PaymentFilePanel({
   periodLabel,
   paymentFileFormat,
   paymentFileGeneratedAt,
+  paymentFileVersion = 1,
   defaultFormat,
   defaultBank,
   senderBankgiro,
@@ -73,6 +85,11 @@ export function PaymentFilePanel({
   const { toast } = useToast()
   const [format, setFormat] = useState<PaymentFormat>(defaultFormat)
   const [downloading, setDownloading] = useState(false)
+  // A new version (crm#1219): the dialog and the person's confirmation that
+  // the earlier file was not approved at the bank. No confirmation, no file.
+  const [newVersionOpen, setNewVersionOpen] = useState(false)
+  const [newVersionConfirmed, setNewVersionConfirmed] = useState(false)
+  const nextVersion = paymentFileVersion + 1
 
   const banks = BANKS_BY_FORMAT[format]
   const matchedBank = banks.find((b) => b === defaultBank) ?? null
@@ -137,6 +154,36 @@ export function PaymentFilePanel({
     }
   }
 
+  async function handleNewVersion() {
+    if (downloading || !newVersionConfirmed) return
+    setDownloading(true)
+    try {
+      const result = await downloadFile({
+        url: `/api/salary/runs/${salaryRunId}/payment/pain001`,
+        filename: `lon_${periodLabel}_v${nextVersion}.xml`,
+        locale,
+        postJson: { confirm_previous_not_approved: true },
+      })
+      if (!result.ok) {
+        toast({
+          title: t('download_failed_title'),
+          description: failureDescription(result, {
+            timeout: t('download_timeout'),
+            network: t('download_network'),
+          }),
+          variant: 'destructive',
+        })
+        return
+      }
+      setNewVersionOpen(false)
+      setNewVersionConfirmed(false)
+      toast({ title: t('new_version_done', { version: nextVersion }) })
+      onDownloaded?.()
+    } finally {
+      setDownloading(false)
+    }
+  }
+
   // The flow looked clean all the way until the bank said no: the file
   // downloads fine and only fails at upload, on the pay date. Say the delivery
   // precondition of the chosen format up front. It is one sentence per
@@ -172,7 +219,10 @@ export function PaymentFilePanel({
       <div>
         {paymentFileFormat && paymentFileGeneratedAt && (
           <DefRow label={t('last_generated')}>
-            {FORMAT_LABEL[paymentFileFormat as PaymentFormat] ?? paymentFileFormat}{' '}
+            {FORMAT_LABEL[paymentFileFormat as PaymentFormat] ?? paymentFileFormat}
+            {paymentFileFormat === 'pain001' && paymentFileVersion > 1
+              ? `, ${t('last_generated_version', { version: paymentFileVersion })}`
+              : ''}{' '}
             <span className="text-muted-foreground tabular-nums">
               ({formatDateTime(paymentFileGeneratedAt)})
             </span>
@@ -244,6 +294,20 @@ export function PaymentFilePanel({
             </Button>
           </div>
 
+          {/* A new version only once a pain.001 has been made: it exists for a
+              file the bank refused or that named the wrong account. */}
+          {format === 'pain001' && paymentFileFormat === 'pain001' && paymentFileGeneratedAt && (
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => setNewVersionOpen(true)}
+                className="text-xs text-muted-foreground underline-offset-4 transition-colors duration-150 hover:text-foreground hover:underline"
+              >
+                {t('new_version_action')}
+              </button>
+            </div>
+          )}
+
           {showInstructions && (
             <div className="text-xs">
               <div className="divide-y divide-border">
@@ -262,6 +326,36 @@ export function PaymentFilePanel({
           )}
         </div>
       )}
+      <Dialog
+        open={newVersionOpen}
+        onOpenChange={(open) => {
+          setNewVersionOpen(open)
+          if (!open) setNewVersionConfirmed(false)
+        }}
+      >
+        <DialogContent className="sm:max-w-[440px]">
+          <DialogHeader>
+            <DialogTitle>{t('new_version_title')}</DialogTitle>
+            <DialogDescription>{t('new_version_body')}</DialogDescription>
+          </DialogHeader>
+          <label className="flex items-start gap-2 text-[13px]">
+            <Checkbox
+              className="mt-0.5"
+              checked={newVersionConfirmed}
+              onCheckedChange={(v) => setNewVersionConfirmed(v === true)}
+            />
+            {t('new_version_confirm')}
+          </label>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setNewVersionOpen(false)} disabled={downloading}>
+              {t('new_version_cancel')}
+            </Button>
+            <Button onClick={() => void handleNewVersion()} disabled={!newVersionConfirmed} loading={downloading}>
+              {t('new_version_submit', { version: nextVersion })}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </DetailSection>
   )
 }

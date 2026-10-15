@@ -388,7 +388,9 @@ export default function UserMenu({
             </div>
 
             {/* Account links. From the cockpit, settings open in byrå scope
-                (?ctx=byra): account-level sections only; Abonnemang is
+                (?ctx=byra): account-level sections only, so the row says
+                Kontoinställningar there (a client's own settings open from
+                its row in the client list, crm#1237); Abonnemang is
                 company-scoped and hidden there. */}
             <div className="px-1 pb-1">
               <Link
@@ -397,7 +399,7 @@ export default function UserMenu({
                 className={menuRow}
               >
                 <Settings className="h-4 w-4 flex-shrink-0" />
-                {tNav('settings')}
+                {tNav(cockpitMode ? 'account_settings' : 'settings')}
               </Link>
               <Link
                 href={cockpitMode ? '/settings/team?ctx=byra' : '/settings/members'}

@@ -76,6 +76,7 @@ const input = {
   org_number: '556677-8899',
   language: 'en',
   default_payment_terms: 14,
+  invoice_reference: 'KST 4410',
   notes: 'Ring före leverans.',
 }
 
@@ -159,6 +160,7 @@ describe('customer create: every door inserts the same row', () => {
       invoice_email_cc_addresses: ['ekonomi@konsult.example'],
       phone: '08-123 45',
       language: 'en',
+      invoice_reference: 'KST 4410',
       notes: 'Ring före leverans.',
       country: 'SE',
       default_payment_terms: 14,
@@ -274,7 +276,7 @@ describe('customer update: every door writes the same change', () => {
     org_number: '5566778899',
     personal_number: null,
   }
-  const change = { customer_number: '', email: '', notes: 'Ny adress', city: 'Göteborg' }
+  const change = { customer_number: '', email: '', notes: 'Ny adress', city: 'Göteborg', invoice_reference: 'KST 5520' }
 
   it('updates one row from the dashboard, v1 and the agent approval', async () => {
     const dashboard = createQueuedMockSupabase()
@@ -292,7 +294,13 @@ describe('customer update: every door writes the same change', () => {
     )
     expect(res.status, JSON.stringify(await res.clone().json())).toBe(200)
     const fromDashboard = written(dashboard.findCall, 'update')
-    expect(fromDashboard).toEqual({ customer_number: null, email: null, notes: 'Ny adress', city: 'Göteborg' })
+    expect(fromDashboard).toEqual({
+      customer_number: null,
+      email: null,
+      notes: 'Ny adress',
+      city: 'Göteborg',
+      invoice_reference: 'KST 5520',
+    })
 
     const v1 = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },

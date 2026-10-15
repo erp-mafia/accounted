@@ -10,7 +10,8 @@
  * key create_payment_orders derives and supplier_payee_confirmations stores.
  *
  *   - same:                 the invoice states no account, or one the card
- *                           already holds (any of its accounts);
+ *                           already holds (any of its accounts), or only an
+ *                           IBAN for a card that pays a domestic account;
  *   - new_supplier_account: the invoice states an account and the card has
  *                           none;
  *   - changed:              the card has accounts and the invoice states
@@ -22,6 +23,13 @@
  * Only changed, and new_supplier_account for a supplier the company has
  * already paid, alert: a first invoice from a new supplier has nothing to
  * differ from, and the pay dialog already confirms a first payment.
+ *
+ * What is compared is the account a payment would use, not every number the
+ * invoice prints. An IBAN decides a payment only when the card has no
+ * domestic account (resolveSupplierPayee pays a bankgiro, then a plusgiro,
+ * then a bank account, never an IBAN beside them), so an IBAN from an
+ * invoice's footer beside a card that pays a bankgiro changes nothing: the
+ * card may take it (the backfill), and nothing waits for a person (crm#1220).
  */
 
 import { formatBankgiroNumber, formatPlusgiroNumber } from '@/lib/bankgiro/luhn'
@@ -126,10 +134,18 @@ export function classifyPayeeChange(input: {
   const cardKeys = cardPayeeKeys(input.card)
   const cardKey = cardKeys[0] ?? null
   if (!statedKey) return { kind: 'same', statedKey: null, cardKey }
-  if (cardKeys.length === 0) return { kind: 'new_supplier_account', statedKey, cardKey }
-  if (!cardKeys.includes(statedKey)) return { kind: 'changed', statedKey, cardKey }
-  if (input.paidPayeeKeys && !input.paidPayeeKeys.includes(statedKey)) return { kind: 'first_payment', statedKey, cardKey }
+  if (!cardKey) return { kind: 'new_supplier_account', statedKey, cardKey }
+  // The account a payment of the invoice would use: what the invoice states,
+  // unless that is only an IBAN and the card pays a domestic account, which a
+  // payment then keeps using.
+  const paidTo = isIbanKey(statedKey) && !isIbanKey(cardKey) ? cardKey : statedKey
+  if (!cardKeys.includes(paidTo)) return { kind: 'changed', statedKey, cardKey }
+  if (input.paidPayeeKeys && !input.paidPayeeKeys.includes(paidTo)) return { kind: 'first_payment', statedKey, cardKey }
   return { kind: 'same', statedKey, cardKey }
+}
+
+function isIbanKey(key: string): boolean {
+  return key.startsWith('iban:')
 }
 
 /**

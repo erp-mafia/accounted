@@ -834,6 +834,7 @@ The note is annotation metadata beside the verifikat, not räkenskapsinformation
 **Pitfalls:**
 - At most 2000 characters.
 - The whole note is replaced, not appended to.
+- A closed or locked period is read-only, the note included: 409 JOURNAL_ENTRY_NOTE_PERIOD_LOCKED, on the dry run too.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

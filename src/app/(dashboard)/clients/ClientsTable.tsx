@@ -7,7 +7,7 @@ import { cn, formatDate } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { performCompanySwitch } from '@/lib/company/switch-client'
@@ -34,6 +34,11 @@ type NudgeTarget = { kind: 'one'; row: ClientOverviewRow } | { kind: 'all'; coun
  * performCompanySwitch (one full-page load to the target, no start-page
  * bounce). The way back is the Klienter nav entry, which needs no switch.
  *
+ * Each row also opens that client's own settings (Företag, where Radera
+ * företag lives for owners) through the same switch: the user menu's
+ * Inställningar in the cockpit is the account's, never a company's, since
+ * company settings are edited from inside the company (crm#1237).
+ *
  * While the bank connection switch campaign is on, a Bankkoppling column
  * says where each client stands (a chip only where the client deviates:
  * byt senast, stoppad) and the byrå can ask one client, or every client that
@@ -56,10 +61,10 @@ export default function ClientsTable({ clients, bankSwitchCampaign = null }: Cli
     [clients],
   )
 
-  const handleEnter = async (companyId: string) => {
+  const handleEnter = async (companyId: string, destination: '/' | '/settings/company' = '/') => {
     if (pendingId) return
     setPendingId(companyId)
-    const result = await performCompanySwitch(companyId, { destination: '/' })
+    const result = await performCompanySwitch(companyId, { destination })
     if (result?.error) {
       setPendingId(null)
       toast({ title: t('enter_failed'), variant: 'destructive' })
@@ -120,12 +125,15 @@ export default function ClientsTable({ clients, bankSwitchCampaign = null }: Cli
               <th className={TH_CLASS}>{t('col_next_deadline')}</th>
               <th className={TH_CLASS}>{t('col_last_booked')}</th>
               {showBankSwitch && <th className={TH_CLASS}>{t('col_bank_switch')}</th>}
+              <th className={TH_CLASS}>
+                <span className="sr-only">{t('col_actions')}</span>
+              </th>
             </tr>
           </thead>
           <tbody className="stagger-enter">
             {rows.length === 0 && (
               <tr>
-                <td className={cn(TD_CLASS, 'text-muted-foreground')} colSpan={showBankSwitch ? 6 : 5}>
+                <td className={cn(TD_CLASS, 'text-muted-foreground')} colSpan={showBankSwitch ? 7 : 6}>
                   {t('no_matches')}
                 </td>
               </tr>
@@ -135,7 +143,7 @@ export default function ClientsTable({ clients, bankSwitchCampaign = null }: Cli
                 key={row.companyId}
                 onClick={() => void handleEnter(row.companyId)}
                 className={cn(
-                  'cursor-pointer transition-colors duration-150 hover:bg-secondary/35',
+                  'group cursor-pointer transition-colors duration-150 hover:bg-secondary/35',
                   pendingId && pendingId !== row.companyId && 'opacity-50',
                 )}
               >
@@ -225,6 +233,20 @@ export default function ClientsTable({ clients, bankSwitchCampaign = null }: Cli
                     />
                   </td>
                 )}
+                <td className={cn(TD_CLASS, 'text-right')}>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      void handleEnter(row.companyId, '/settings/company')
+                    }}
+                    disabled={pendingId !== null}
+                    aria-label={t('company_settings_aria', { client: row.name })}
+                    className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS, 'whitespace-nowrap')}
+                  >
+                    {t('company_settings')}
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>

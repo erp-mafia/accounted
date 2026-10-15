@@ -1520,6 +1520,7 @@ Builds the salary batch payment file for an approved (or paid / booked) run and 
 - Every generated file is archived and listable: the response carries payment_file_id (the archived row) and sha256 (over the bytes as encoded for the bank: UTF-8 for pain001, ISO 8859-1 for bg_lb). Compare it with the checksum of what you uploaded, and use GET /salary-runs/{id}/payment-files to retrieve exactly what was generated earlier instead of regenerating: a regeneration after a bank-detail change (new employee account, changed company IBAN) is a different file, and the archive is the record of what the bank actually received. An archive failure returns an error and no file.
 - The file always uses the run's payment_date as the requested execution date; the body accepts no execution date (unknown fields return 400). Change the run's payment_date (PATCH while draft) if the transfer day must move.
 - Dry run (?dry_run=true) validates every precondition and returns format, filename, payment_date, employee_count, total_amount and warnings without the content, without archiving and without stamping the run.
+- Every call returns the run's current file version with the same MsgId and EndToEndIds, so the bank refuses a second upload of the month as a duplicate. If the bank refused or never approved the earlier pain001 file (for example a corrected bank account), send new_version: true with confirm_previous_not_approved: true: the file gets new ids and becomes the run's version from then on. Only confirm when the earlier file was NOT approved at the bank; two approved files pay the salaries twice. Without the confirmation the call returns 422 SALARY_RUN_PAYMENT_FILE_NEW_VERSION_UNCONFIRMED; bg_lb returns 422 SALARY_RUN_PAYMENT_FILE_NEW_VERSION_UNSUPPORTED.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -1529,7 +1530,7 @@ Builds the salary batch payment file for an approved (or paid / booked) run and 
 
 Request body:
 ```ts
-{ format?: "pain001" | "bg_lb" }
+{ format?: "pain001" | "bg_lb", new_version?: boolean, confirm_previous_not_approved?: boolean }
 ```
 
 Example request:
@@ -1546,6 +1547,7 @@ Response `200`:
     salary_run_id: string,
     payment_file_id: string,
     format: "pain001" | "bg_lb",
+    version: number,
     filename: string,
     content_type: "application/xml" | "text/plain",
     content: string,
@@ -1576,6 +1578,7 @@ Example response `200`:
     "salary_run_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
     "payment_file_id": "f0f0f0f0-f0f0-4f0f-8f0f-f0f0f0f0f0f0",
     "format": "pain001",
+    "version": 1,
     "filename": "pain001_lon_2026-05.xml",
     "content_type": "application/xml",
     "content": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Document xmlns=\"urn:iso:std:iso:20022:tech:xsd:pain.001.001.03\"><CstmrCdtTrfInitn>…</CstmrCdtTrfInitn></Document>",
@@ -1622,7 +1625,7 @@ Returns every payment file generated for the run (ISO 20022 pain.001 or Bankgiro
 Response `200`:
 ```ts
 {
-  data: { payment_file_id: string, format: "pain001" | "bg_lb", filename: string, content_type: "application/xml" | "text/plain", charset: "utf-8" | "iso-8859-1", sha256: string, byte_size: number, payment_date: string, employee_count: number, total_amount: number, generated_at: string, content: string }[],
+  data: { payment_file_id: string, format: "pain001" | "bg_lb", filename: string, content_type: "application/xml" | "text/plain", charset: "utf-8" | "iso-8859-1", sha256: string, byte_size: number, payment_date: string, employee_count: number, total_amount: number, generated_at: string, version: number, previous_not_approved_confirmed: boolean, content: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -1651,6 +1654,8 @@ Example response `200`:
       "employee_count": 3,
       "total_amount": 76500,
       "generated_at": "2026-05-20T08:00:00.000Z",
+      "version": 1,
+      "previous_not_approved_confirmed": false,
       "content": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Document xmlns=\"urn:iso:std:iso:20022:tech:xsd:pain.001.001.03\"><CstmrCdtTrfInitn>…</CstmrCdtTrfInitn></Document>"
     }
   ],

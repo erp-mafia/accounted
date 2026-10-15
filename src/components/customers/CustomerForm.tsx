@@ -108,6 +108,7 @@ export default function CustomerForm({
       .int(t('payment_terms_invalid'))
       .min(0, t('payment_terms_invalid'))
       .max(365, t('payment_terms_invalid')),
+    invoice_reference: z.string().max(200, t('invoice_reference_too_long')).optional(),
     notes: z.string().optional(),
   }).superRefine((customer, ctx) => {
     // Country vs customer type vs VAT prefix (#2025): an EU customer with
@@ -193,6 +194,7 @@ export default function CustomerForm({
       language: initialData?.language || 'sv',
       // ?? not ||: a stored 0 (betalning direkt) must not reopen as 30.
       default_payment_terms: initialData?.default_payment_terms ?? 30,
+      invoice_reference: initialData?.invoice_reference ?? '',
       notes: initialData?.notes || '',
     },
   })
@@ -320,6 +322,8 @@ export default function CustomerForm({
       // NULL means never configured and lets a migration enrich the row.
       // Empty values on an existing row are explicit clears and survive sync.
       contact_person: data.contact_person?.trim() || (isEditing ? '' : null),
+      // Blank is none; on an edit, null clears a stored value.
+      invoice_reference: data.invoice_reference?.trim() || null,
       personal_number: data.personal_number || null,
       invoice_email_cc_addresses: ccText
         ? parseInvoiceRecipientText(ccText)
@@ -621,6 +625,21 @@ export default function CustomerForm({
         <p className="text-xs text-muted-foreground">{t('payment_terms_help')}</p>
         {errors.default_payment_terms && (
           <p className="text-sm text-destructive">{errors.default_payment_terms.message}</p>
+        )}
+      </div>
+
+      {/* Fakturareferens: Er referens on new invoices (crm#1200) */}
+      <div className="space-y-2">
+        <Label htmlFor="invoice_reference">{t('invoice_reference_label')}</Label>
+        <Input
+          id="invoice_reference"
+          placeholder={t('invoice_reference_placeholder')}
+          {...register('invoice_reference')}
+        />
+        {errors.invoice_reference ? (
+          <p className="text-sm text-destructive">{errors.invoice_reference.message}</p>
+        ) : (
+          <p className="text-xs text-muted-foreground">{t('invoice_reference_hint')}</p>
         )}
       </div>
 

@@ -654,4 +654,57 @@ describe('POST /salary-runs/:id/payment-file', () => {
     const body = await res.json()
     expect(body.error.code).not.toBe('SALARY_RUN_NOT_FOUND')
   })
+
+  // crm#1219: a new version only with the confirmation, the same rule as the run page.
+  it('returns 422 SALARY_RUN_PAYMENT_FILE_NEW_VERSION_UNCONFIRMED and builds nothing without the confirmation', async () => {
+    const { supabase, calls } = makeRecordingSupabase(happyTables())
+    mockServiceClient.mockReturnValue(supabase)
+
+    for (const body of [{ new_version: true }, { new_version: true, confirm_previous_not_approved: false }]) {
+      const res = await paymentFile(makeRequest(URL, { body: JSON.stringify(body) }), detailParams(COMPANY_ID, RUN_ID))
+      expect(res.status).toBe(422)
+      expect((await res.json()).error.code).toBe('SALARY_RUN_PAYMENT_FILE_NEW_VERSION_UNCONFIRMED')
+    }
+    expect(calls.filter((c) => ['salary_runs', 'salary_payment_files'].includes(c.table))).toHaveLength(0)
+  })
+
+  it('returns the next version with new ids when confirmed, and the run version on a plain call', async () => {
+    const { supabase, calls } = makeRecordingSupabase(happyTables({ salary_runs: { data: { ...approvedRun, payment_file_version: 1 } } }))
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await paymentFile(
+      makeRequest(URL, { body: JSON.stringify({ new_version: true, confirm_previous_not_approved: true }) }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.version).toBe(2)
+    expect(body.data.filename).toBe('pain001_lon_2026-05_v2.xml')
+    expect(body.data.content).toContain('<MsgId>LON-5560000000-2026-05-V2</MsgId>')
+    expect(body.data.content).toContain('<EndToEndId>LON-5560000000-2026-05-V2-TX0001</EndToEndId>')
+    expect(archiveCalls(calls)[0].args[0]).toMatchObject({ version: 2, previous_not_approved_confirmed: true })
+
+    const later = makeRecordingSupabase(happyTables({ salary_runs: { data: { ...approvedRun, payment_file_version: 2 } } }))
+    mockServiceClient.mockReturnValue(later.supabase)
+    const plain = await paymentFile(
+      makeRequest(URL, { headers: { 'Idempotency-Key': 'b2aaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' } }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+    const plainBody = await plain.json()
+    expect(plainBody.data.version).toBe(2)
+    expect(plainBody.data.content).toContain('<MsgId>LON-5560000000-2026-05-V2</MsgId>')
+    expect(archiveCalls(later.calls)[0].args[0]).toMatchObject({ version: 2, previous_not_approved_confirmed: false })
+  })
+
+  it('returns 422 SALARY_RUN_PAYMENT_FILE_NEW_VERSION_UNSUPPORTED for a Bankgirot LB file', async () => {
+    const { supabase } = makeRecordingSupabase(happyTables())
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await paymentFile(
+      makeRequest(URL, { body: JSON.stringify({ format: 'bg_lb', new_version: true, confirm_previous_not_approved: true }) }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+    expect(res.status).toBe(422)
+    expect((await res.json()).error.code).toBe('SALARY_RUN_PAYMENT_FILE_NEW_VERSION_UNSUPPORTED')
+  })
 })

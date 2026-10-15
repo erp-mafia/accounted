@@ -1038,6 +1038,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
           periodLabel={periodLabel}
           paymentFileFormat={run.payment_file_format}
           paymentFileGeneratedAt={run.payment_file_generated_at}
+          paymentFileVersion={run.payment_file_version ?? 1}
           defaultFormat={preferredPaymentFormat}
           defaultBank={defaultBank}
           senderBankgiro={senderBankgiro}

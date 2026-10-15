@@ -623,7 +623,11 @@ export const journalEntriesSetNote = defineOperation({
       'The note is annotation metadata beside the verifikat, not räkenskapsinformation: it may be edited on posted entries too, while every bookkeeping field stays immutable (the journal_entries trigger allows a notes-only update and nothing else). null or a blank string clears it. Idempotent. Dry-runnable.',
     useWhen: 'Recording context for a verifikat (who approved it, what an odd booking is about) or clearing an outdated note.',
     doNotUseFor: 'Changing the verifikationstext (POST /journal-entries/{id}/correct-metadata) or anything that belongs in the books.',
-    pitfalls: ['At most 2000 characters.', 'The whole note is replaced, not appended to.'],
+    pitfalls: [
+      'At most 2000 characters.',
+      'The whole note is replaced, not appended to.',
+      'A closed or locked period is read-only, the note included: 409 JOURNAL_ENTRY_NOTE_PERIOD_LOCKED, on the dry run too.',
+    ],
     example: {
       request: { notes: 'Godkänd av Anna 2026-09-12' },
       response: {
@@ -642,7 +646,7 @@ export const journalEntriesSetNote = defineOperation({
     voucher_number: z.number().int().nullable(),
     notes: z.string().nullable(),
   }),
-  errorCodes: ['JOURNAL_ENTRY_NOT_FOUND', 'JOURNAL_ENTRY_NOTE_FAILED'],
+  errorCodes: ['JOURNAL_ENTRY_NOT_FOUND', 'JOURNAL_ENTRY_NOTE_PERIOD_LOCKED', 'JOURNAL_ENTRY_NOTE_FAILED'],
   http: {
     method: 'PATCH',
     path: '/api/v1/companies/:companyId/journal-entries/:id/notes',
@@ -652,7 +656,7 @@ export const journalEntriesSetNote = defineOperation({
     name: 'gnubok_set_voucher_note',
     title: 'Set Voucher Note (Anteckning)',
     description:
-      'Stage setting, replacing or clearing the internal note (anteckning) on a verifikat, posted ones too: only the note changes. Read notes via gnubok_query_journal (entry_notes).',
+      'Stage setting or clearing the internal note (anteckning) on a verifikat in an open period, posted ones too: only the note changes. Read via gnubok_query_journal (entry_notes).',
     visibility: 'default',
     keywords: ['verifikat', 'anteckning', 'notering'],
     hints: { idempotent: true },

@@ -477,6 +477,24 @@ describe('generatePeppolBisBillingInvoice', () => {
     expect(result.xml).toContain('<cac:OrderReference>\n    <cbc:ID>PO-2026-17</cbc:ID>')
   })
 
+  it('sends the Er referens the invoice was issued with as BT-10 only, never the card or BT-19 (crm#1200)', () => {
+    // The Fakturareferens is copied into your_reference when the invoice is
+    // written; a later change to the card must not reach an issued invoice.
+    // BT-19 AccountingCost stays unset: the field is free text (a cost centre
+    // or a person), and the skill documents only BT-10 for buyer routing.
+    const input = makeValidInput()
+    input.customer = makeCustomer({ ...input.customer, invoice_reference: 'KST 5520' })
+    input.invoice = makeInvoice({ ...input.invoice, your_reference: 'KST 4410' })
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).toContain('<cbc:BuyerReference>KST 4410</cbc:BuyerReference>')
+    expect(result.xml).not.toContain('KST 5520')
+    expect(result.xml).not.toContain('AccountingCost')
+  })
+
   it('renders a per-line discount as a BG-27 allowance with net LineExtensionAmount', () => {
     const input = makeValidInput()
     // 2 × 100 = 200 gross, 10% discount = 20, net 180, VAT 25% on net = 45.

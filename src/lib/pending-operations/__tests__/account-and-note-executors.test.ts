@@ -390,7 +390,33 @@ describe('commitPendingOperation: set_voucher_note', () => {
     })
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
 
-    expect(result.status).toBe('failed')
+    expect(result.status).toBe('rejected')
     expect(result.error).toMatch(/låst/)
+  })
+
+  it('a period closed after staging is refused in the note\'s words, never "a verifikation cannot be created" (crm#1234)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' } }) // CAS claim
+    enqueue({
+      data: null,
+      error: {
+        code: 'P0001',
+        message: 'Cannot write to locked/closed fiscal period "Räkenskapsår 2024" (is_closed=t, locked_at=2025-02-01 00:00:00+00)',
+      },
+    }) // enforce_period_lock refuses the notes-only update
+    enqueue({ data: null }) // dispatcher reject update
+
+    const op = makePendingOp({
+      operation_type: 'set_voucher_note',
+      params: { journal_entry_id: JE_ID, notes: 'x' },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('rejected')
+    expect(result.auto_rejected).toBe(true)
+    expect(result.code).toBe('JOURNAL_ENTRY_NOTE_PERIOD_LOCKED')
+    expect(result.http_status).toBe(409)
+    expect(result.error).toBe('Perioden är stängd eller låst, anteckningen kan inte ändras.')
+    expect(result.error).not.toMatch(/skapas/)
   })
 })

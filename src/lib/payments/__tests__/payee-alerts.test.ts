@@ -86,6 +86,23 @@ describe('loadPayeeHolds', () => {
     })
   })
 
+  it('never holds an invoice whose IBAN sits beside the bankgiro a payment uses, even after a rejection (crm#1220)', async () => {
+    // As the MCP approval stored it before accounted#15: the footer's IBAN, not the card's bankgiro it also printed.
+    const invoices = [invoiceRow('a', { payee_bankgiro: null, payee_iban: 'SE4550000000058398257466' })]
+    db.setTable('supplier_payee_confirmations', {
+      data: [{ supplier_id: 'sup-1', payee_key: 'iban:SE4550000000058398257466', decision: 'rejected', decided_at: '2026-10-15T08:40:00Z' }],
+    })
+    expect((await loadPayeeHolds(supabase(), COMPANY, invoices, new Map([['sup-1', CARD]]))).size).toBe(0)
+
+    // A card that pays only an IBAN still holds an invoice that states another.
+    const ibanCard = { ...CARD, bankgiro: null, iban: 'SE3550000000054910000003' }
+    expect((await loadPayeeHolds(supabase(), COMPANY, invoices, new Map([['sup-1', ibanCard]]))).get('a')).toMatchObject({
+      alert: 'changed',
+      stated_key: 'iban:SE4550000000058398257466',
+      card_key: 'iban:SE3550000000054910000003',
+    })
+  })
+
   it('reads nothing when no invoice states an account the card lacks', async () => {
     const states = await loadPayeeHolds(supabase(), COMPANY, [invoiceRow('a', { payee_bankgiro: null })], new Map([['sup-1', CARD]]))
     expect(states.size).toBe(0)
@@ -122,6 +139,33 @@ describe('assessRegisteredPayee: at registration, before the card is touched', (
     expect(await assessRegisteredPayee(supabase(), COMPANY, 'sup-1', { bankgiro: '9020-0007' })).toMatchObject({
       alert: 'new_supplier_account',
       backfill: false,
+    })
+  })
+
+  it('lets the card take an IBAN the invoice prints beside the card\'s bankgiro, and alerts nothing (crm#1220)', async () => {
+    db.setTable('suppliers', { data: CARD })
+    expect(
+      await assessRegisteredPayee(supabase(), COMPANY, 'sup-1', { bankgiro: '5050-1055', iban: 'SE45 5000 0000 0583 9825 7466', bic: 'ESSESESS' }),
+    ).toEqual({
+      stated: { payee_bankgiro: '5050-1055', payee_plusgiro: null, payee_iban: 'SE4550000000058398257466', payee_bic: 'ESSESESS' },
+      alert: null,
+      backfill: true,
+      statedKey: 'bankgiro:50501055',
+      cardKey: 'bankgiro:50501055',
+    })
+    // The scan read only the IBAN: a payment still uses the card's bankgiro.
+    expect(await assessRegisteredPayee(supabase(), COMPANY, 'sup-1', { iban: 'SE4550000000058398257466' })).toMatchObject({ alert: null, backfill: true })
+    // Another bankgiro beside it alerts, and the card stays as it is.
+    expect(
+      await assessRegisteredPayee(supabase(), COMPANY, 'sup-1', { bankgiro: '9020-0007', iban: 'SE4550000000058398257466' }),
+    ).toMatchObject({ alert: 'changed', backfill: false })
+    // A card that pays only an IBAN: another IBAN alerts.
+    db.setTable('suppliers', { data: { ...CARD, bankgiro: null, iban: 'SE3550000000054910000003' } })
+    expect(await assessRegisteredPayee(supabase(), COMPANY, 'sup-1', { iban: 'SE4550000000058398257466' })).toMatchObject({
+      alert: 'changed',
+      backfill: false,
+      statedKey: 'iban:SE4550000000058398257466',
+      cardKey: 'iban:SE3550000000054910000003',
     })
   })
 

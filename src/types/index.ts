@@ -1014,6 +1014,13 @@ export interface Customer {
   // Payment
   default_payment_terms: number  // Days
 
+  /**
+   * Fakturareferens (crm#1200): copied into Er referens (your_reference) on a
+   * new invoice to this customer when the caller states none
+   * (lib/customers/invoice-reference.ts).
+   */
+  invoice_reference: string | null
+
   // Notes
   notes: string | null
 
@@ -1909,6 +1916,7 @@ export interface CreateCustomerInput {
   personal_number?: string | null
   language?: 'sv' | 'en'
   default_payment_terms?: number
+  invoice_reference?: string | null
   notes?: string
 }
 
@@ -4534,6 +4542,8 @@ export interface SalaryRun {
   agi_submitted_at: string | null
   payment_file_format: 'bg_lb' | 'pain001' | null
   payment_file_generated_at: string | null
+  /** Version of the run's pain.001 (its MsgId and EndToEndIds), raised only by a confirmed new version. */
+  payment_file_version?: number
   calculation_params: Record<string, unknown> | null
   approved_by: string | null
   approved_at: string | null

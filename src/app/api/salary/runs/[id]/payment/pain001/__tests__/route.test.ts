@@ -25,7 +25,7 @@ vi.mock('@/lib/branding/service', () => ({
   getBranding: vi.fn(() => ({ appName: 'gnubok' })),
 }))
 
-import { GET } from '../route'
+import { GET, POST } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { requireWritePermission } from '@/lib/auth/require-write'
 import { generatePain001 } from '@/lib/salary/payment/pain001-generator'
@@ -33,13 +33,13 @@ import { generatePain001 } from '@/lib/salary/payment/pain001-generator'
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 
 function authed() {
-  const { supabase, enqueueMany } = createQueuedMockSupabase()
+  const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
   vi.mocked(requireAuth).mockResolvedValue({
     user: mockUser as never,
     supabase: supabase as never,
     error: null,
   })
-  return { supabase, enqueueMany }
+  return { supabase, enqueueMany, findCall }
 }
 
 describe('GET /api/salary/runs/[id]/payment/pain001', () => {
@@ -183,3 +183,73 @@ describe('GET /api/salary/runs/[id]/payment/pain001', () => {
     expect(response.headers.get('Content-Disposition')).toContain('pain001_lon_2026-03.xml')
   })
 })
+
+// crm#1219: a new version of the run's pain.001, only with the confirmation.
+describe('POST /api/salary/runs/[id]/payment/pain001 (new version)', () => {
+  const URL = '/api/salary/runs/run-1/payment/pain001'
+  const confirmed = { method: 'POST', body: { confirm_previous_not_approved: true } }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(requireWritePermission).mockResolvedValue({ ok: true } as never)
+  })
+
+  it('returns 401 when not authenticated', async () => {
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: null,
+      supabase: null as never,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+    const response = await POST(createMockRequest(URL, confirmed), createMockRouteParams({ id: 'run-1' }))
+    expect(response.status).toBe(401)
+  })
+
+  it.each([
+    ['no body field', {}],
+    ['a false confirmation', { confirm_previous_not_approved: false }],
+    ['an unknown field', { confirm_previous_not_approved: true, version: 7 }],
+  ])('returns 400 and builds nothing for %s', async (_label, body) => {
+    const { supabase } = authed()
+    const response = await POST(createMockRequest(URL, { method: 'POST', body }), createMockRouteParams({ id: 'run-1' }))
+    expect(response.status).toBe(400)
+    expect(vi.mocked(supabase.from)).not.toHaveBeenCalled()
+    expect(generatePain001).not.toHaveBeenCalled()
+  })
+
+  it('returns 404 when the run does not exist', async () => {
+    const { enqueueMany } = authed()
+    enqueueMany([{ data: null }])
+    const response = await POST(createMockRequest(URL, confirmed), createMockRouteParams({ id: 'run-1' }))
+    expect(response.status).toBe(404)
+  })
+
+  it('makes the next version with new ids and archives it with the confirmation', async () => {
+    const { enqueueMany, findCall } = authed()
+    enqueueMany([
+      { data: { id: 'run-1', status: 'booked', period_year: 2026, period_month: 10, payment_date: '2026-10-23', payment_file_version: 1 } },
+      { data: { name: 'Bolaget AB', org_number: '5560000000' } }, // companies
+      { data: { company_name: 'Bolaget AB', iban: 'SE7212000000012200111878', bic: 'DABASESX' } }, // settings
+      {
+        data: [
+          {
+            employee: { first_name: 'Anna', last_name: 'A', clearing_number: '1344', bank_account_number: '2045678' },
+          },
+        ],
+      }, // salary_run_employees
+      { data: null }, // salary_payment_files insert
+      { data: null }, // salary_runs update
+    ])
+
+    const response = await POST(createMockRequest(URL, confirmed), createMockRouteParams({ id: 'run-1' }))
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('Content-Disposition')).toContain('pain001_lon_2026-10_v2.xml')
+    expect(vi.mocked(generatePain001).mock.calls[0][2]).toMatchObject({ messageId: 'LON-5560000000-2026-10-V2' })
+    expect(findCall('salary_payment_files', 'insert')?.[0]).toMatchObject({
+      version: 2,
+      previous_not_approved_confirmed: true,
+      user_id: 'user-1',
+    })
+  })
+})
+
