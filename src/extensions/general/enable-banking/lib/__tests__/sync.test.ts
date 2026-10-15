@@ -336,6 +336,38 @@ describe('syncAccountTransactions', () => {
     expect(batch[0].external_id).toBe('eb_acc-uid-1_2026-03-01_-7500_0')
   })
 
+  it('skips entries the bank marks as not booked even when they carry a booking_date (Svea PDNG card purchase in USD)', async () => {
+    mockConvertTransaction.mockImplementation((tx: { transaction_amount: { amount: string, currency: string }, booking_date?: string, value_date?: string }) => ({
+      id: 'x',
+      date: tx.booking_date || tx.value_date,
+      booking_date: tx.booking_date || tx.value_date,
+      amount: -parseFloat(tx.transaction_amount.amount),
+      currency: tx.transaction_amount.currency,
+      description: 'T',
+    }))
+    mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+
+    mockGetAllTransactionsWithRaw.mockResolvedValue({
+      transactions: [
+        { status: 'BOOK', transaction_amount: { amount: '75', currency: 'SEK' }, booking_date: '2026-10-12' },
+        { status: 'PDNG', transaction_amount: { amount: '20', currency: 'USD' }, booking_date: '2026-10-11' }, // pending, dated: skipped
+        { status: 'hold', transaction_amount: { amount: '30', currency: 'SEK' }, booking_date: '2026-10-11' }, // held: skipped
+        { status: 'OTHR', transaction_amount: { amount: '40', currency: 'SEK' }, booking_date: '2026-10-10' }, // other: the date rule stands
+        { transaction_amount: { amount: '50', currency: 'SEK' }, booking_date: '2026-10-09' },                // no status: the date rule stands
+      ],
+      rawPages: ['{}'],
+    })
+
+    await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+      '2026-10-01', '2026-10-15', mockIngest
+    )
+
+    const batch = mockIngest.mock.calls[0][3]
+    expect(batch.map((row: { date: string }) => row.date)).toEqual(['2026-10-12', '2026-10-10', '2026-10-09'])
+    expect(batch.every((row: { currency: string }) => row.currency === 'SEK')).toBe(true)
+  })
+
   it('does not re-import a booked transaction when a later sync returns it pending (no booking_date)', async () => {
     // Regression for the 45→90 duplication. The same transaction is returned
     // booked in sync 1 (booking_date 2026-04-21) and pending in sync 2 (only

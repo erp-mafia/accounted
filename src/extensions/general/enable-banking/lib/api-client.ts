@@ -191,6 +191,8 @@ export interface BalanceResponse {
 export interface Transaction {
   entry_reference?: string
   transaction_id?: string
+  /** BOOK, PDNG, HOLD, SCHD, CNCL, RJCT or OTHR. Some banks date pending entries too, so this, not the date, tells pending. */
+  status?: string
   booking_date?: string
   value_date?: string
   transaction_amount: {

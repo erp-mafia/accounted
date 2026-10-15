@@ -231,6 +231,20 @@ async function fetchBookedViaConnector(
 }
 
 /**
+ * Entry statuses that are not booked, whatever date the bank puts on them.
+ * Svea dates its pending card purchases (status PDNG with a booking_date, in
+ * the purchase's own currency): taken as booked, such an entry was imported
+ * before it settled, and one in USD on a SEK account stopped the account's
+ * whole sync at the ingest guard. Any other status, or none, keeps the rule
+ * that a booking_date means booked.
+ */
+const NOT_BOOKED_STATUSES = new Set(['PDNG', 'HOLD', 'SCHD', 'CNCL', 'RJCT'])
+
+function isNotBookedStatus(status: string | undefined): boolean {
+  return typeof status === 'string' && NOT_BOOKED_STATUSES.has(status.trim().toUpperCase())
+}
+
+/**
  * Sync transactions for a single bank account via Enable Banking PSD2.
  *
  * Fetches transactions from the Enable Banking API, converts to RawTransaction
@@ -374,10 +388,13 @@ export async function syncAccountTransactions(
     //
     // booking_date is read from the RAW transaction, index-aligned with
     // bankTransactions: convertTransaction's booking_date already falls back to
-    // value_date/today, so it cannot tell booked from pending.
+    // value_date/today, so it cannot tell booked from pending. A date is not
+    // enough on its own either: an entry the bank marks as not booked
+    // (NOT_BOOKED_STATUSES) is skipped whatever date it carries.
     bookedEntries = bankTransactions.flatMap((tx, i) => {
-      const bookingDate = fetched.transactions[i]?.booking_date
-      return typeof bookingDate === 'string' && bookingDate.trim() !== ''
+      const raw = fetched.transactions[i]
+      const bookingDate = raw?.booking_date
+      return typeof bookingDate === 'string' && bookingDate.trim() !== '' && !isNotBookedStatus(raw?.status)
         ? [{ tx, bookingDate: bookingDate.trim(), page: rowPages?.[i] }]
         : []
     })
@@ -408,7 +425,7 @@ export async function syncAccountTransactions(
 
   const skippedPending = totalFetched - bookedEntries.length
   if (skippedPending > 0) {
-    console.log('[enable-banking] Skipped pending transactions (no booking_date)', {
+    console.log('[enable-banking] Skipped pending transactions (not booked or no booking_date)', {
       connectionId,
       accountUid: account.uid,
       skippedPending,
