@@ -1,0 +1,1 @@
+[2026-10-14] CI checks read a tsc/ESLint cache only main writes (checks-cache job) and the CI build skips Next's type check (SKIP_BUILD_TYPECHECK) since checks runs next typegen + tsc over a superset; Vercel still type-checks. Shared MR-written state made tsc 4-13 min.
