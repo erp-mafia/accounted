@@ -86,7 +86,10 @@ export function BankPaymentsSettingsContent() {
         if (cancelled) return
         setAvailability(data)
         if (data.available) {
-          void loadVerification()
+          // The verification rides on the availability (lib/payments/orders/readiness).
+          const known = data.verification ?? null
+          setVerification(known ?? 'failed')
+          setCheckedAt(known?.checked_at ? new Date(known.checked_at) : null)
           fetchBankPaymentsUsage()
             .then((u) => {
               if (!cancelled) setUsage(u)
@@ -102,7 +105,7 @@ export function BankPaymentsSettingsContent() {
     return () => {
       cancelled = true
     }
-  }, [loadVerification])
+  }, [])
 
   async function startVerification() {
     setBusy(true)

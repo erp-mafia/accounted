@@ -11,9 +11,10 @@
  * stays what it is today.
  *
  * Which references identify a customer invoice is not decided here:
- * lib/invoices/ocr-keys.ts owns that (the bare invoice number and the OCR the
- * invoice printed), exactly as the single-row OCR pass in
- * lib/invoices/invoice-matching.ts reads it. A supplier invoice is identified
+ * lib/invoices/ocr-keys.ts owns that (the bare invoice number, the OCR the
+ * invoice printed, and Bankgirot's length-digit OCR when neither names one),
+ * exactly as the single-row OCR pass in lib/invoices/invoice-matching.ts
+ * reads it. A supplier invoice is identified
  * by its payment reference (OCR) and the supplier's own invoice number, and a
  * payee account names the supplier through its bankgiro or plusgiro, as the
  * supplier heuristics do.
@@ -24,7 +25,7 @@
 import type { MatchableInvoice } from '@/lib/invoices/invoice-matching'
 import { normalizeOcrReference } from '@/lib/invoices/duplicate-payment-guard'
 import { normalizeCurrencyCode } from '@/lib/invoices/duplicate-guard-currency'
-import { matchesNormalizedReference } from '@/lib/invoices/ocr-keys'
+import { invoicesNamedByReference } from '@/lib/invoices/ocr-keys'
 import { amountToOre } from '@/lib/transactions/external-id'
 import type { BankTransactionPartInput, BankTransactionPartSuggestionReason, SupplierInvoice } from '@/types'
 
@@ -103,23 +104,30 @@ function suggestCustomerPart(
   if (partAmount === 0) return null
   const currency = normalizeCurrencyCode(part.currency)
   const remainingOf = (invoice: MatchableInvoice): number => Number(invoice.remaining_amount ?? invoice.total ?? 0)
-  const open = pool.filter(
-    (invoice) => !taken.has(invoice.id) && normalizeCurrencyCode(invoice.currency) === currency && remainingOf(invoice) > 0,
-  )
+  const isOpen = (invoice: MatchableInvoice): boolean =>
+    !taken.has(invoice.id) && normalizeCurrencyCode(invoice.currency) === currency && remainingOf(invoice) > 0
+  const open = pool.filter(isOpen)
   if (open.length === 0) return null
+  // What a reference names is read over the whole pool and only then narrowed
+  // to the invoices still open to this part: a reference that names an
+  // invoice another part already took must not fall through to a weaker
+  // reading of the same digits (invoicesNamedByReference).
+  const namedOpen = (references: string | string[]): MatchableInvoice[] =>
+    invoicesNamedByReference(pool, references).filter(isOpen)
 
   // 1. The OCR or invoice number the payer typed as the reference.
   const reference = digits(part.reference)
   if (reference) {
-    const named = open.filter((invoice) => matchesNormalizedReference(invoice.invoice_number, reference))
+    const named = namedOpen(reference)
     const pick = pickNamed(named, partAmount, remainingOf)
     if (pick) return { invoice: pick, reason: 'ocr_exact' }
   }
 
-  // 2. The invoice numbers the payer listed (referredDocumentInformation).
+  // 2. The invoice numbers the payer listed (referredDocumentInformation, or
+  //    the further references Bankgirot found for a BG Max payment).
   const numbers = (part.invoice_numbers ?? []).map(digits).filter((n) => n.length > 0)
   if (numbers.length > 0) {
-    const named = open.filter((invoice) => numbers.some((n) => matchesNormalizedReference(invoice.invoice_number, n)))
+    const named = namedOpen(numbers)
     const pick = pickNamed(named, partAmount, remainingOf)
     if (pick) return { invoice: pick, reason: 'invoice_number' }
   }

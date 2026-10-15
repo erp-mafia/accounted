@@ -36,6 +36,13 @@ describe('classifyBankCandidates', () => {
     expect(classify([row({ reference: OCR, amount: 99999 })])).toMatchObject([{ transactionId: 'tx-1', reason: 'reference', dismissed: false }])
   })
 
+  it("finds Bankgirot's length-digit OCR in the reference and as a whole number in the free text", () => {
+    const withLength = invoiceReferenceKeys(INVOICE.invoice_number).find((k) => k.form === 'ocr_length')!.key
+    expect(classify([row({ reference: withLength, amount: 99999 })])).toMatchObject([{ reason: 'reference' }])
+    expect(classify([row({ description: `Betalning ${withLength}`, amount: 99999 })])).toMatchObject([{ reason: 'reference' }])
+    expect(classify([row({ description: `Betalning 9${withLength}`, amount: 99999 })])).toEqual([])
+  })
+
   it('finds the invoice number in the free text', () => {
     expect(classify([row({ description: 'Betalning faktura 20261042' })])).toMatchObject([{ reason: 'reference' }])
   })

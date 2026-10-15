@@ -22,7 +22,7 @@ import {
   escapeLikePattern,
   normalizeOcrReference,
 } from '@/lib/invoices/duplicate-payment-guard'
-import { matchesNormalizedReference } from '@/lib/invoices/ocr-keys'
+import { invoicesNamedByReference } from '@/lib/invoices/ocr-keys'
 import {
   invoiceAmountSek,
   magnitudesWithinTolerance,
@@ -375,13 +375,16 @@ export async function findInvoiceMatchSuggestion(
       }
     }
 
-    // OCR pass: if the bank-tx reference matches an open invoice's reference
-    // keys (its invoice_number, or the OCR the invoice printed: same digits
-    // plus a Luhn check digit), surface it regardless of customer-name
-    // match. This catches the common case where the bank populated
-    // `reference` but neither merchant_name nor description carried the
-    // customer name.
+    // OCR pass: if the bank-tx reference names an open invoice (its
+    // invoice_number, the OCR the invoice printed, or Bankgirot's
+    // length-digit OCR: ocr-keys' one rule), surface it regardless of
+    // customer-name match. This catches the common case where the bank
+    // populated `reference` but neither merchant_name nor description
+    // carried the customer name.
     const normalizedTxRef = normalizeOcrReference(transaction.reference ?? null)
+    // The candidates the reference names, read over every row either pass
+    // fetched so the rule ranks its forms over one set.
+    let namedByReference = new Set<string>()
     if (normalizedTxRef) {
       const refSweepResults = await Promise.all(
         sweeps.map((sweep) =>
@@ -399,13 +402,14 @@ export async function findInvoiceMatchSuggestion(
             .limit(20),
         ),
       )
-      for (const res of refSweepResults) {
-        for (const row of (res.data ?? []) as unknown as CandidateRow[]) {
-          if (!matchesNormalizedReference(row.invoice_number, normalizedTxRef)) continue
-          if (!comparable(row)) continue
-          if (!openInvoiceCandidates.some((existing) => existing.id === row.id)) {
-            openInvoiceCandidates.unshift(row)
-          }
+      const refRows = refSweepResults.flatMap((res) => (res.data ?? []) as unknown as CandidateRow[]).filter(comparable)
+      namedByReference = new Set(
+        invoicesNamedByReference([...openInvoiceCandidates, ...refRows], normalizedTxRef).map((row) => row.id),
+      )
+      for (const row of refRows) {
+        if (!namedByReference.has(row.id)) continue
+        if (!openInvoiceCandidates.some((existing) => existing.id === row.id)) {
+          openInvoiceCandidates.unshift(row)
         }
       }
     }
@@ -415,7 +419,7 @@ export async function findInvoiceMatchSuggestion(
         code: 'TX_CATEGORIZE_SUGGEST_CI_MATCH',
         details: {
           candidates: openInvoiceCandidates.slice(0, 5).map((inv) => {
-            const reasonOcr = matchesNormalizedReference(inv.invoice_number, normalizedTxRef)
+            const reasonOcr = namedByReference.has(inv.id)
             return {
               invoice_id: inv.id,
               invoice_number: inv.invoice_number,

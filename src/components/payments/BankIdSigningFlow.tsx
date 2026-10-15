@@ -18,6 +18,7 @@ import { normalizePsuAuthoriserId, takesPsuAuthoriserId } from '@/lib/bank-feed/
 import type { PaymentSigningReturn } from '@/lib/payments/orders/return-url'
 import { PAYMENT_ORDER_STATUS_BADGE, PERMANENT_SIGNING_FAILURES } from './payment-order-status'
 import { VerificationStateText } from './VerificationStateText'
+import { verificationStep } from '@/lib/payments/orders/readiness'
 import { BankPaymentsAllowanceLine } from './BankPaymentsAllowance'
 import {
   allowanceRefusalOf,
@@ -357,8 +358,13 @@ export function BankIdSigningFlow({
     window.location.assign(url)
   }
 
+  // The provider refused the signing, so a stored valid is stale: the
+  // refusal reads it as not started, as it does without a state.
+  const refusedState = verification && verification.state !== 'valid' ? verification.state : 'not_started'
+  const verificationNext = verificationStep(refusedState, { formAtHand: verificationUrl !== null })
+
   async function openVerification() {
-    if (verificationUrl && verification && (verification.state === 'form_open' || verification.state === 'awaiting_signatory')) {
+    if (verificationUrl && verificationNext === 'open_form') {
       window.open(verificationUrl, '_blank', 'noopener,noreferrer')
       return
     }
@@ -381,17 +387,23 @@ export function BankIdSigningFlow({
     }
   }
 
-  // The refusal's way out follows the state: a form already out is opened
-  // again (or waits for the firmatecknare), a lapsed one is renewed, a dead
-  // link is replaced. Without a state the first verification is offered.
+  // The refusal's way out follows the state (lib/payments/orders/readiness
+  // verificationStep): a form already out is opened again (or waits for the
+  // firmatecknare), a lapsed one is renewed, a dead link is replaced.
+  // Without a state the first verification is offered.
   const verificationAction = (() => {
-    const state = verification?.state ?? 'not_started'
-    if (verificationUrl && (state === 'form_open' || state === 'awaiting_signatory')) return { label: t('open_verification_form'), onClick: openVerification }
-    // With the firmatecknare: wait for the signature rather than replacing their form.
-    if (state === 'awaiting_signatory') return undefined
-    if (state === 'link_expired' || state === 'form_open') return { label: t('new_verification_link'), onClick: openVerification }
-    if (state === 'expired' || state === 'expiring') return { label: t('renew_company'), onClick: openVerification }
-    return { label: t('verify_company'), onClick: openVerification }
+    switch (verificationNext) {
+      case 'open_form':
+        return { label: t('open_verification_form'), onClick: openVerification }
+      case 'new_link':
+        return { label: t('new_verification_link'), onClick: openVerification }
+      case 'renew':
+        return { label: t('renew_company'), onClick: openVerification }
+      case 'verify':
+        return { label: t('verify_company'), onClick: openVerification }
+      default:
+        return undefined
+    }
   })()
 
   // Poll while the person signs. One request at a time (the next is scheduled

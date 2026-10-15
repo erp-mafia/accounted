@@ -9,9 +9,10 @@
 
 import type { PaymentOrderStatus } from '@/lib/payments/orders/status'
 import type { VerificationState } from '@/lib/payments/orders/verification-state'
+import { paymentsReadiness, type PaymentAccountContext, type PaymentsReadiness } from '@/lib/payments/orders/readiness'
 import type { DocumentChecks, InvoiceDocumentFacts, InvoiceDocumentSource } from '@/lib/payments/orders/invoice-document'
 
-export type { PaymentOrderStatus, VerificationState }
+export type { PaymentOrderStatus, VerificationState, PaymentsReadiness }
 
 export interface PayableAccount {
   id: string
@@ -22,6 +23,8 @@ export interface PayableAccount {
   bank_name: string | null
   payable: boolean
   reason: 'account_disabled' | 'not_sek' | 'iban_missing' | 'bank_unknown' | null
+  /** private for the owner's personal agreement (no verification asked at signing), else corporate. Absent from servers before it. */
+  account_context?: PaymentAccountContext
 }
 
 export interface PaymentsAvailability {
@@ -32,6 +35,10 @@ export interface PaymentsAvailability {
   accounts: PayableAccount[]
   /** The person has a BankID login on file, so signing needs no typed personnummer. */
   signer_known: boolean
+  /** Where the company's verification stands; null when payments are not open or it could not be read. Absent from servers before it. */
+  verification?: CompanyVerification | null
+  /** What stands between the company and a signed payment (lib/payments/orders/readiness). Absent from servers before it. */
+  readiness?: PaymentsReadiness
 }
 
 /** GET /api/payments/verification: the provider's answer and where the verification stands (lib/payments/orders/verification-state). */
@@ -287,6 +294,20 @@ export function requestMoreBankPayments(input: { monthlyPaymentsWanted: number; 
 
 export function fetchPaymentsAvailability(): Promise<PaymentsAvailability> {
   return send<PaymentsAvailability>('/api/payments/availability')
+}
+
+/**
+ * The readiness of a payment from one account (the payment dialog's choice),
+ * derived by the same rule the server answers for the whole company
+ * (lib/payments/orders/readiness). An account without a context reads as
+ * corporate, as the signing does.
+ */
+export function paymentReadinessFor(availability: PaymentsAvailability, account: PayableAccount | null): PaymentsReadiness {
+  return paymentsReadiness({
+    available: availability.available,
+    accounts: account ? [{ payable: account.payable, account_context: account.account_context ?? 'corporate' }] : [],
+    verification: availability.verification ?? null,
+  })
 }
 
 /** `refresh` asks the provider even when the stored answer is fresh: the poll while a form is open. */

@@ -209,9 +209,9 @@ export async function findDuplicatePaymentCandidatesForInvoice(
   if (rows.length === 0) return aggregate()
 
   return rankCandidates(rows, {
-    // Both forms the payer could have quoted: the bare invoice number and the
-    // OCR the invoice printed. Same floor as ocrKeys(), so this is the same
-    // key set plus the one it was missing.
+    // Every form the payer could have quoted: the bare invoice number, the
+    // OCR the invoice printed and Bankgirot's length-digit OCR. Same floor as
+    // ocrKeys(), so this is the same key set plus the ones it was missing.
     invoiceOcrs: distinctiveReferenceKeys(invoice.invoice_number),
     searchTerms: counterpartySearchTerms(invoice.customer_name),
   })

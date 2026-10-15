@@ -47,7 +47,8 @@ import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { FiscalPeriod, SupplierInvoice } from '@/types'
 import { useCompanySettings } from '@/components/settings/useSettings'
-import { fetchPaymentsAvailability } from '@/components/payments/payments-client'
+import { fetchPaymentsAvailability, type CompanyVerification } from '@/components/payments/payments-client'
+import { PaymentsVerificationLine } from '@/components/payments/PaymentsVerificationLine'
 import { supplierInvoiceStatusDisplay } from '@/lib/supplier-invoices/status-display'
 import {
   openPaymentMarker,
@@ -182,6 +183,10 @@ export default function SupplierInvoicesPage() {
   // false (the default) hides every bank-payment control, so companies outside
   // the pilot see the list exactly as before.
   const [bankPaymentsAvailable, setBankPaymentsAvailable] = useState(false)
+  // The company's verification, when it stands between the company and a
+  // bank payment (readiness verification_needed or _pending): one line in
+  // the bulk bar beside the payment buttons, with the step that starts it.
+  const [verificationInTheWay, setVerificationInTheWay] = useState<CompanyVerification | null>(null)
 
   // The "Registrera leverantörsfaktura" modal is driven by the URL (?new=1,
   // optionally with inbox_item_id for the invoice-inbox conversion flow) so
@@ -416,7 +421,10 @@ export default function SupplierInvoicesPage() {
     let cancelled = false
     fetchPaymentsAvailability()
       .then((data) => {
-        if (!cancelled) setBankPaymentsAvailable(data.available)
+        if (cancelled) return
+        setBankPaymentsAvailable(data.available)
+        const inTheWay = data.readiness === 'verification_needed' || data.readiness === 'verification_pending'
+        setVerificationInTheWay(inTheWay && data.verification ? data.verification : null)
       })
       .catch(() => {
         if (!cancelled) setBankPaymentsAvailable(false)
@@ -608,6 +616,7 @@ export default function SupplierInvoicesPage() {
         selectAllLabel={t('bulk_select_all', { count: selectableInvoices.length })}
         clearLabel={t('bulk_clear')}
       >
+        {bankPaymentsAvailable && verificationInTheWay && <PaymentsVerificationLine verification={verificationInTheWay} compact onChange={setVerificationInTheWay} />}
         {bankPaymentsAvailable && (
           <Button size="sm" onClick={() => setShowPayViaBankDialog(true)}>
             {t('bulk_pay_via_bank')}

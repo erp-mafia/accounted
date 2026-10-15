@@ -15,7 +15,6 @@ import { TransactionPartsSection } from '@/components/transactions/TransactionPa
 import type { TransactionWithInvoice } from '@/components/transactions/transaction-types'
 import type { TransactionUnderlag } from '@/lib/transactions/underlag-read'
 import type { BatchAllocationPrefill } from '@/lib/transactions/parts-read'
-import { OPEN_PAYMENTS_AGGREGATOR } from '@/lib/bank-sync/aggregator'
 import type { GiroCounterparty } from '@/lib/transactions/giro-counterparty'
 import { useGiroText } from './use-giro-text'
 
@@ -287,9 +286,12 @@ export function TransactionDrawer({
           )}
         </div>
 
-        {/* The Bankgirot split, for the one feed that sends it (Open Payments):
-            the section renders nothing for a row without parts. */}
-        {transaction.import_source === OPEN_PAYMENTS_AGGREGATOR && (
+        {/* The Bankgirot split, whichever door brought it: Open Payments'
+            enrichment or a BG Max deposit file on a row from any feed
+            (crm#1170). Shown when the list counted parts on the row, and
+            fetched when the row came without the count; the section renders
+            nothing for a row without parts. */}
+        {(transaction.parts_count == null || (transaction.parts_count[0]?.count ?? 0) > 0) && (
           <TransactionPartsSection
             transactionId={transaction.id}
             onMatch={!booked ? onMatchParts : undefined}

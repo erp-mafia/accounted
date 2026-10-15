@@ -33,7 +33,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { normalizeCurrencyCode, invoiceAmountSek } from './duplicate-guard-currency'
 import { normalizeOcrReference } from './duplicate-payment-guard'
-import { matchesNormalizedReference, distinctiveReferenceKeys } from './ocr-keys'
+import { invoicesNamedByReference, invoicesNamedInTiers, distinctiveReferenceKeys } from './ocr-keys'
 import type { Invoice, Transaction, Customer } from '@/types'
 import { MATCHABLE_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
 
@@ -424,21 +424,20 @@ export function matchInvoiceCandidates(
   const unconvertedFxInvoices: InvoiceMatchExclusion[] = []
 
   // OCR/Bankgiro reference matching: highest confidence
-  // Swedish standard: match transaction reference to invoice OCR number. Both
-  // forms count, the bare invoice number and the OCR the invoice printed
-  // (same digits plus a Luhn check digit), because both are things a customer
-  // can legitimately have typed into the bank.
+  // Swedish standard: match transaction reference to invoice OCR number. The
+  // bare invoice number, the OCR the invoice printed (same digits plus a Luhn
+  // check digit) and Bankgirot's length-digit OCR all count, because each is
+  // something a customer can legitimately have typed into the bank; which
+  // invoices a reference names is ocr-keys' one rule.
   const txReference = (transaction as Transaction & { reference?: string | null }).reference
   const normalizedRef = normalizeOcrReference(txReference)
   if (normalizedRef) {
-    for (const invoice of filteredInvoices) {
-      if (matchesNormalizedReference(invoice.invoice_number, normalizedRef)) {
-        matches.push({
-          invoice,
-          confidence: CONFIDENCE.OCR_REFERENCE_MATCH,
-          matchReason: `OCR-referens matchar fakturanummer ${invoice.invoice_number}`,
-        })
-      }
+    for (const invoice of invoicesNamedByReference(filteredInvoices, normalizedRef)) {
+      matches.push({
+        invoice,
+        confidence: CONFIDENCE.OCR_REFERENCE_MATCH,
+        matchReason: `OCR-referens matchar fakturanummer ${invoice.invoice_number}`,
+      })
     }
 
     // If we found an OCR match, return immediately (highest possible confidence)
@@ -460,20 +459,25 @@ export function matchInvoiceCandidates(
   // only when the bare digits are distinctive themselves; otherwise "701"
   // would slip under the floor that its 4-digit OCR clears. Each field is
   // searched on its own, so the end of the description and the start of the
-  // merchant name never form a reference that exists in neither.
+  // merchant name never form a reference that exists in neither. The forms
+  // are ranked as for the reference field (invoicesNamedInTiers): a text
+  // that names an invoice by its number or printed OCR is read exactly as
+  // before, and Bankgirot's length-digit OCR is read only when it names none.
+  // Normalised once per row as descriptionMentionsReference would (it is
+  // idempotent on them): every invoice of the pool is searched for in them.
   const referenceHaystacks = [transaction.description, transaction.merchant_name]
     .filter((value): value is string => Boolean(value))
+    .map((value) => value.replace(/\s+/g, '').toLowerCase())
   const referenceInTextIds = new Set<string>()
   if (referenceHaystacks.length > 0) {
-    for (const invoice of filteredInvoices) {
-      const keys = distinctiveReferenceKeys(invoice.invoice_number)
+    const mentioned = invoicesNamedInTiers(filteredInvoices, (invoice, forms) => {
+      const keys = distinctiveReferenceKeys(invoice.invoice_number, forms)
       const needles = keys.includes(normalizeOcrReference(invoice.invoice_number))
         ? [...keys, invoice.invoice_number as string]
         : keys
-      if (needles.some((needle) => referenceHaystacks.some((text) => descriptionMentionsReference(text, needle)))) {
-        referenceInTextIds.add(invoice.id as string)
-      }
-    }
+      return needles.some((needle) => referenceHaystacks.some((text) => descriptionMentionsReference(text, needle)))
+    })
+    for (const invoice of mentioned) referenceInTextIds.add(invoice.id as string)
   }
   const inTextMatch = (invoice: MatchableInvoice): InvoiceMatch => ({
     invoice,

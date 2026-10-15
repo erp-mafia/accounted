@@ -245,8 +245,10 @@ export const WORKLIST_CATEGORIES = [
   'bank_switch',
   /**
    * The company's verification (know your customer) at the payment provider
-   * is about to run out or has ("Förnya verifieringen för betalningar"), one
-   * item at most. Bank payments are refused once it lapses.
+   * is about to run out or has ("Förnya verifieringen för betalningar"), or
+   * was never started by a company that pays its suppliers through Accounted
+   * ("Verifiera företaget för betalningar via banken"), one item at most.
+   * Bank payments are refused without it.
    * Pending:  payments through the bank are open to the company
    *           (lib/payments/orders/switched-on.ts) and the stored record
    *           (company_payment_verifications, refreshed by the payment status
@@ -254,11 +256,18 @@ export const WORKLIST_CATEGORIES = [
    *           (valid_until within 30 days) or expired (valid_until passed, or
    *           invalid after having been valid): lib/payments/orders/
    *           verification-state.ts.
+   *           Or, the first time: the provider has answered not verified
+   *           and no form was ever made here (not_started), the company made
+   *           a bank payment or a payment file within the last 60 days, and
+   *           an account it can pay from needs the verification
+   *           (lib/payments/orders/readiness.ts).
    * Done:     the provider answers valid with a new valid_until (a signatory
-   *           signed the renewal form), read by the dialog's poll, the page,
-   *           or the next sweep; or payments close for the company.
-   * A company that never verified is not counted: it has not switched
-   * payments on, and the Koppla banken step is where it starts.
+   *           signed the form), read by the dialog's poll, the page, or the
+   *           next sweep; a form is started (the first-time row); or
+   *           payments close for the company.
+   * A company with nothing on file, or that has not paid a supplier through
+   * Accounted for 60 days, is not counted for the first time: it has not
+   * shown it pays here, and the Koppla banken step is where it starts.
    */
   'payments_verification_renewal',
   /**
@@ -307,12 +316,12 @@ export interface SupplierPayeeChangeDue {
 }
 
 /**
- * The payments verification a company must renew: the Att göra row "Förnya
- * verifieringen för betalningar", which opens Betalningar, where the renewal
- * form is started.
+ * The payments verification a company must start or renew: the Att göra row
+ * "Verifiera företaget för betalningar via banken" or "Förnya verifieringen
+ * för betalningar", which opens Betalningar, where the form is started.
  */
 export interface PaymentsVerificationDue {
-  state: 'expiring' | 'expired'
+  state: 'not_started' | 'expiring' | 'expired'
   /** The date the provider holds the verification valid through (ISO date); null when it never said. */
   valid_until: string | null
   /** Whole days left; 0 on the day, negative after; null without a date. */

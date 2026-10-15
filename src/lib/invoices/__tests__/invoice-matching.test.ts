@@ -8,7 +8,7 @@ import {
   loadInvoiceMatchPool,
   matchInvoiceCandidates,
 } from '../invoice-matching'
-import { generateOcrReference } from '@/lib/bankgiro/luhn'
+import { generateLengthDigitOcrReference, generateOcrReference } from '@/lib/bankgiro/luhn'
 import type { Transaction, Invoice, Customer } from '@/types'
 import {
   makeTransaction,
@@ -276,6 +276,60 @@ describe('matchInvoiceCandidates', () => {
     expect(result).toHaveLength(1)
     expect(result[0].confidence).toBe(0.80)
     expect(result[0].matchReason).not.toContain('OCR-referens')
+  })
+
+  it("matches Bankgirot's length-digit OCR at 0.99, and not one whose length digit is wrong", async () => {
+    // An invoice printed by another system: 316 + length digit 5 + check digit 8.
+    expect(generateLengthDigitOcrReference('316')).toBe('31658')
+    const invoice = { ...makeInvoice({ id: 'inv-316', invoice_number: '316', total: 12500, status: 'sent', remaining_amount: 12500, currency: 'SEK' }) }
+    mockResult({ data: [invoice], error: null })
+    const result = await matchesFor(supabase, makeTransaction({ amount: 12500, reference: '31658' }))
+    expect(result).toHaveLength(1)
+    expect(result[0].invoice.id).toBe('inv-316')
+    expect(result[0].confidence).toBe(0.99)
+    expect(result[0].matchReason).toContain('OCR-referens')
+
+    // 3164 + Luhn 1 is a valid OCR, but its length digit is not its length.
+    mockResult({ data: [invoice], error: null })
+    const wrong = await matchesFor(supabase, makeTransaction({ amount: 12500, reference: '31641', merchant_name: null }))
+    expect(wrong).toHaveLength(1)
+    expect(wrong[0].confidence).toBe(0.80)
+    expect(wrong[0].matchReason).not.toContain('OCR-referens')
+  })
+
+  it('reads a reference as an invoice number before it reads it as another invoice\'s length-digit OCR', async () => {
+    // 31658 is invoice 31658's own number and invoice 316's length-digit OCR:
+    // the match it made before the length-digit form existed stands.
+    const base = { total: 12500, status: 'sent' as const, remaining_amount: 12500, currency: 'SEK' as const }
+    mockResult({
+      data: [
+        { ...makeInvoice({ id: 'inv-316', invoice_number: '316', ...base }) },
+        { ...makeInvoice({ id: 'inv-31658', invoice_number: '31658', ...base }) },
+      ],
+      error: null,
+    })
+    const result = await matchesFor(supabase, makeTransaction({ amount: 12500, reference: '31658' }))
+    expect(result.map((m) => m.invoice.id)).toEqual(['inv-31658'])
+  })
+
+  it('reads the length-digit OCR in the bank text as a whole number, ranked below the older forms', async () => {
+    // PSD2 feeds often write the payer's OCR into the text, not the reference.
+    const base = { total: 12500, status: 'sent' as const, remaining_amount: 12500, currency: 'SEK' as const }
+    const i1316 = { ...makeInvoice({ id: 'inv-1316', invoice_number: '1316', ...base }) }
+    const withLength = generateLengthDigitOcrReference('1316')!
+    expect(withLength).toBe('131664')
+    mockResult({ data: [i1316], error: null })
+    const inText = await matchesFor(supabase, makeTransaction({ amount: 400, description: `${withLength} Inbetalning`, merchant_name: null, reference: null }))
+    expect(inText.map((m) => [m.invoice.id, m.confidence])).toEqual([['inv-1316', 0.85]])
+
+    // Inside a longer digit run it is not the reference.
+    mockResult({ data: [i1316], error: null })
+    expect(await matchesFor(supabase, makeTransaction({ amount: 400, description: `9${withLength} Inbetalning`, merchant_name: null, reference: null }))).toEqual([])
+
+    // 131664 is also invoice 131664's own number: that reading stands alone.
+    mockResult({ data: [i1316, { ...makeInvoice({ id: 'inv-131664', invoice_number: '131664', ...base }) }], error: null })
+    const ranked = await matchesFor(supabase, makeTransaction({ amount: 400, description: `${withLength} Inbetalning`, merchant_name: null, reference: null }))
+    expect(ranked.map((m) => m.invoice.id)).toEqual(['inv-131664'])
   })
 
   it('falls back to 0.85 for an OCR buried in the bank text, and still scores every invoice on amount', async () => {

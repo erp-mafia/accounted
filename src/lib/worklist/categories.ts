@@ -36,6 +36,8 @@ import { switchStateFor } from '@/lib/bank-feed/switch-campaign'
 import { paymentsAdmitted } from '@/lib/payments/orders/pilot'
 import { readVerificationRecord } from '@/lib/payments/orders/verification-record'
 import { deriveVerificationState, RENEWAL_DUE_STATES } from '@/lib/payments/orders/verification-state'
+import { readPaymentAccounts } from '@/lib/payments/orders/payment-accounts'
+import { paymentsReadiness } from '@/lib/payments/orders/readiness'
 import { companyAttestsSupplierInvoices } from '@/lib/supplier-invoices/lifecycle'
 import { currentRound, invoiceNeedsAttest, mayAttest } from '@/lib/supplier-invoices/attest-policy'
 import { loadAttestPolicy } from '@/lib/supplier-invoices/attest-policy-read'
@@ -1153,12 +1155,27 @@ export async function countBankSwitchDue(
   return (await listBankSwitchDue(supabase, companyId, now)).length
 }
 
+/** How far back a bank payment or a payment file shows that a company pays its suppliers here. */
+export const PAYMENTS_VERIFICATION_ACTIVITY_DAYS = 60
+
+/** Whether the company made a bank payment or a payment file since `since` (cancelled ones too: the intent counts). */
+async function paidSuppliersSince(supabase: SupabaseClient, companyId: string, since: string): Promise<boolean> {
+  const [orders, files] = await Promise.all([
+    supabase.from('payment_orders').select('id').eq('company_id', companyId).gte('created_at', since).limit(1),
+    supabase.from('supplier_payment_batches').select('id').eq('company_id', companyId).gte('created_at', since).limit(1),
+  ])
+  if (orders.error) throw orders.error
+  if (files.error) throw files.error
+  return (orders.data?.length ?? 0) > 0 || (files.data?.length ?? 0) > 0
+}
+
 /**
- * The payments verification to renew, when one is due (see
+ * The payments verification to start or renew, when one is due (see
  * lib/worklist/types.ts payments_verification_renewal): the stored record
  * alone, never a provider call (the status cron and every status read keep it
- * fresh). Null for a company outside the pilot or the paid plan, or that
- * never verified.
+ * fresh). Null for a company outside the pilot or the paid plan, with
+ * nothing on file, or, for the first time, without a bank payment or payment
+ * file in the last 60 days or an account that needs the verification.
  */
 export async function listPaymentsVerificationDue(
   supabase: SupabaseClient,
@@ -1172,8 +1189,16 @@ export async function listPaymentsVerificationDue(
     const record = await readVerificationRecord(supabase, companyId)
     if (!record) return null
     const derived = deriveVerificationState(record, now)
-    if (!RENEWAL_DUE_STATES.has(derived.state)) return null
-    return { state: derived.state as PaymentsVerificationDue['state'], valid_until: derived.valid_until, days_left: derived.days_left }
+    if (RENEWAL_DUE_STATES.has(derived.state)) {
+      return { state: derived.state as PaymentsVerificationDue['state'], valid_until: derived.valid_until, days_left: derived.days_left }
+    }
+    // The first time: the provider said not verified and nobody made a form.
+    if (derived.state !== 'not_started' || !record.checked_at) return null
+    const since = new Date(now.getTime() - PAYMENTS_VERIFICATION_ACTIVITY_DAYS * 24 * 60 * 60 * 1000).toISOString()
+    if (!(await paidSuppliersSince(supabase, companyId, since))) return null
+    const accounts = await readPaymentAccounts(supabase, companyId)
+    if (paymentsReadiness({ available: true, accounts, verification: derived }) !== 'verification_needed') return null
+    return { state: 'not_started', valid_until: null, days_left: null }
   } catch (err) {
     logAndZero('payments_verification_renewal', companyId, err as { message?: string })
     return null
@@ -1203,7 +1228,7 @@ export async function countSupplierPayeeChangesDue(supabase: SupabaseClient, com
   return (await listSupplierPayeeChangesDue(supabase, companyId)).length
 }
 
-/** 1 when the payments verification is due for renewal, else 0 (see listPaymentsVerificationDue). */
+/** 1 when the payments verification is due to start or renew, else 0 (see listPaymentsVerificationDue). */
 export async function countPaymentsVerificationDue(
   supabase: SupabaseClient,
   companyId: string,

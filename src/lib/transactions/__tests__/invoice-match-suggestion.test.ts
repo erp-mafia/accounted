@@ -174,4 +174,39 @@ describe('findInvoiceMatchSuggestion', () => {
       },
     })
   })
+
+  it("names an invoice by Bankgirot's length-digit OCR, but never over an invoice the reference names by its number", async () => {
+    mock.setTable('customers', { data: [] })
+    const openInvoice = (id: string, invoice_number: string) => ({
+      id,
+      invoice_number,
+      invoice_date: '2026-04-12',
+      due_date: '2026-05-12',
+      remaining_amount: 5000,
+      total: 5000,
+      currency: 'SEK',
+      total_sek: 5000,
+      exchange_rate: null,
+      customer: { name: 'Kund AB' },
+    })
+    const receipt = {
+      transaction: { ...supplierPayment, amount: 5000, merchant_name: null, description: 'Bankgiro inbetalning', reference: '31658' },
+      debitAccount: '1930',
+      creditAccount: '1510',
+      isBusiness: true,
+    }
+    const reasons = async () => {
+      const suggestion = await findInvoiceMatchSuggestion(supabase(), 'company-1', receipt, log)
+      const candidates = (suggestion?.details as { candidates: { invoice_id: string; match_reason: string }[] }).candidates
+      return candidates.map((c) => [c.invoice_id, c.match_reason])
+    }
+
+    // 316 + length digit 5 + check digit 8.
+    mock.setTable('invoices', { data: [openInvoice('inv-316', '316')] })
+    expect(await reasons()).toEqual([['inv-316', 'ocr_exact']])
+
+    // 31658 is also invoice 31658's own number: that reading stands alone.
+    mock.setTable('invoices', { data: [openInvoice('inv-316', '316'), openInvoice('inv-31658', '31658')] })
+    expect(await reasons()).toEqual([['inv-31658', 'ocr_exact']])
+  })
 })

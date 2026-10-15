@@ -18,6 +18,7 @@ import { BankIdSigningFlow, type SigningFlowStage } from './BankIdSigningFlow'
 import { BankMark } from '@/components/banks/BankMark'
 import { RequestSigningLinkButton, RequestSigningLinkPanel } from './RequestSigningLinkDialog'
 import { BankPaymentsAllowanceLine } from './BankPaymentsAllowance'
+import { PaymentsVerificationLine } from './PaymentsVerificationLine'
 import { DocumentCheckLine, InvoiceDocumentButton, InvoiceDocumentSheet, PaymentBesideDocument, paymentFromPreviewLine } from './InvoiceDocumentPreview'
 import { earliestExecutionDateIso } from '@/lib/payments/bank-days'
 import {
@@ -27,6 +28,7 @@ import {
   lookupCreditorName,
   orderGiroForLookup,
   payeeLabel,
+  paymentReadinessFor,
   PaymentsClientError,
   preparePaymentOrders,
   previewPaymentOrders,
@@ -226,6 +228,13 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
 
   const payableAccounts = useMemo(() => availability?.accounts.filter((a) => a.payable) ?? [], [availability])
   const account = payableAccounts.find((a) => a.id === accountId) ?? null
+  // The company's verification, where a payment from this account needs it:
+  // said here, on the first screen, with the step that starts it.
+  const readiness = availability && account ? paymentReadinessFor(availability, account) : null
+  const verificationLine =
+    availability?.verification && (readiness === 'verification_needed' || readiness === 'verification_pending') ? (
+      <PaymentsVerificationLine verification={availability.verification} />
+    ) : null
   const lines = preview?.lines ?? []
   // More invoices than the month's cap still takes: nothing is prepared or
   // approved that could not go to the bank this month.
@@ -371,6 +380,7 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
               <AttnLine>{t('account_none')}</AttnLine>
             ) : (
               <>
+                {verificationLine}
                 <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-[13px]">
                   <div className="flex items-center gap-2">
                     <span className="text-muted-foreground">{t('account_from')}</span>
