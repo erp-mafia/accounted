@@ -1223,3 +1223,96 @@ describe('expected-condition log levels', () => {
     })
   })
 })
+
+// -------------------------------------------------------------------------
+// PSU headers: a read a person asked for is not a background read
+// -------------------------------------------------------------------------
+describe('PSU headers', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>
+  const PSU = { 'Psu-Ip-Address': '203.0.113.7', 'Psu-User-Agent': 'Mozilla/5.0 test' }
+  const REFUSED = '{"code":422,"message":"PSU header psuIpAddress is not provided","error":"PSU_HEADER_NOT_PROVIDED"}'
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+  const sentHeaders = (call: number) => new Headers((fetchSpy.mock.calls[call][1] as RequestInit).headers)
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    fetchSpy = vi.spyOn(globalThis, 'fetch')
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('sends the person on a transactions read when one is given', async () => {
+    fetchSpy.mockResolvedValueOnce(json({ transactions: [] }))
+
+    await getAllTransactionsWithRaw('acc-1', '2026-07-01', '2026-10-01', 'longest', { psu: PSU })
+
+    const headers = sentHeaders(0)
+    expect(headers.get('Psu-Ip-Address')).toBe('203.0.113.7')
+    expect(headers.get('Psu-User-Agent')).toBe('Mozilla/5.0 test')
+    expect(headers.get('Authorization')).toBe('Bearer test-jwt-token')
+  })
+
+  it('sends no PSU header on a background read', async () => {
+    fetchSpy.mockResolvedValueOnce(json({ transactions: [] }))
+
+    await getAllTransactionsWithRaw('acc-1', '2026-07-01', '2026-10-01')
+
+    const headers = sentHeaders(0)
+    expect(headers.get('Psu-Ip-Address')).toBeNull()
+    expect(headers.get('Psu-User-Agent')).toBeNull()
+  })
+
+  it('reads again in the background, same request, when the bank refuses the PSU headers', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(new Response(REFUSED, { status: 422 }))
+      .mockResolvedValueOnce(json({ transactions: [{ transaction_amount: { amount: '100', currency: 'SEK' } }] }))
+
+    const result = await getAllTransactionsWithRaw('acc-1', '2026-07-01', '2026-10-01', 'longest', { psu: PSU })
+
+    expect(result.transactions).toHaveLength(1)
+    expect(result.narrowed).toBe(false)
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    // Strategy and window are untouched: the refusal was about the headers.
+    expect(fetchSpy.mock.calls[1][0]).toBe(fetchSpy.mock.calls[0][0])
+    expect(sentHeaders(0).get('Psu-Ip-Address')).toBe('203.0.113.7')
+    expect(sentHeaders(1).get('Psu-Ip-Address')).toBeNull()
+    expect(sentHeaders(1).get('Psu-User-Agent')).toBeNull()
+  })
+
+  it('still answers a bank rate limit as one when the person was sent', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response('{"code":429,"message":"Consent daily limit 4 is exceeded","error":"ASPSP_RATE_LIMIT_EXCEEDED"}', { status: 429 })
+    )
+
+    const error = await getAllTransactionsWithRaw('acc-1', '2026-07-01', '2026-10-01', undefined, { psu: PSU }).catch((e) => e)
+
+    expect(error).toBeInstanceOf(AspspUnavailableError)
+    expect(error.reason).toBe('rate-limited')
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends the person on a balances read and falls back to the background on a refusal', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(new Response('{"code":422,"error":"PSU_HEADER_INVALID"}', { status: 422 }))
+      .mockResolvedValueOnce(json({ balances: [{ balance_type: 'closingBooked', balance_amount: { amount: '1500.00', currency: 'SEK' } }] }))
+
+    const balance = await getAccountBalance('acc-1', PSU)
+
+    expect(balance?.amount).toBe(1500)
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    expect(sentHeaders(0).get('Psu-User-Agent')).toBe('Mozilla/5.0 test')
+    expect(sentHeaders(1).get('Psu-User-Agent')).toBeNull()
+  })
+
+  it('sends no PSU header on a background balances read', async () => {
+    fetchSpy.mockResolvedValueOnce(json({ balances: [] }))
+
+    await getAccountBalances('acc-1')
+
+    expect(sentHeaders(0).get('Psu-Ip-Address')).toBeNull()
+  })
+})

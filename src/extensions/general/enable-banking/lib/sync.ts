@@ -11,6 +11,7 @@ import {
   isCredentialRejection,
 } from './api-client'
 import { historyWindowDays } from './history-window'
+import { psuHeadersOf } from './psu-headers'
 import { bankSyncResponseSchema, connectorErrorSchema } from '@accounted/connect-contract'
 import { bankConnectorMode } from '@/lib/connect/instance/upstreams'
 import { connectorHeaders } from '@/lib/connect/instance/connector-fetch'
@@ -45,9 +46,10 @@ export interface SyncOptions {
    */
   strategy?: TransactionsFetchStrategy
   /**
-   * Open Payments connections only: the person asking (IP and user agent), so
-   * the bank does not count the read against the consent's unattended budget.
-   * Ignored for Enable Banking.
+   * The person asking (IP and user agent), so the bank does not count the
+   * read against the consent's unattended budget. Sent to Open Payments and,
+   * as PSU headers (./psu-headers.ts), to Enable Banking; not through the
+   * hosted connector, whose sync contract has no field for it.
    */
   signer?: BankFeedSignerInput
 }
@@ -263,12 +265,15 @@ export async function syncAccountTransactions(
   if (aggregatorOf(bankRoute) === 'open_payments') {
     return syncOpenPaymentsAccountAsEnableBanking(supabase, companyId, userId, connectionId, account, fromDate, toDate, bankRoute, ingest, syncOptions)
   }
+  // The person asking, as PSU headers: absent on the cron and the agent sync.
+  const psu = psuHeadersOf(syncOptions?.signer)
   console.log('[enable-banking] syncAccountTransactions starting', {
     connectionId,
     accountUid: account.uid,
     fromDate,
     toDate,
     strategy: syncOptions?.strategy,
+    personPresent: psu !== undefined,
   })
 
   // Two ways to obtain booked transactions. Direct: this installation's own
@@ -331,7 +336,7 @@ export async function syncAccountTransactions(
       fromDate,
       toDate,
       syncOptions?.strategy,
-      { acceptedHistoryDays: account.accepted_history_days },
+      { acceptedHistoryDays: account.accepted_history_days, ...(psu ? { psu } : {}) },
     )
     rawPages = fetched.rawPages
     totalFetched = fetched.transactions.length
@@ -553,7 +558,7 @@ export async function syncAccountTransactions(
     })
   } else {
     try {
-      const balance = await getAccountBalance(account.uid)
+      const balance = await getAccountBalance(account.uid, psu)
       // null = the ASPSP returned no balances at all. Keep the previous
       // stored value and timestamp; writing a fabricated 0 with a fresh
       // timestamp would pin "the bank reports 0 kr" for the next 12h on

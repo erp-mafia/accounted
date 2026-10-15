@@ -16,6 +16,7 @@ import {
   type ASPSP,
 } from './lib/api-client'
 import { buildPrefilledCredentials, wantsCompanyId } from './lib/prefill-credentials'
+import { psuHeadersOf } from './lib/psu-headers'
 import { runConnectionSync } from './lib/run-connection-sync'
 import { emitBankSyncFailed } from './lib/sync-failure-event'
 import {
@@ -51,6 +52,8 @@ import { errorResponse } from '@/lib/errors/get-structured-error'
 import { aggregatorOf, ENABLE_BANKING_AGGREGATOR } from '@/lib/bank-sync/aggregator'
 import { enableBankingSunset, ENABLE_BANKING_SUNSET_MESSAGE } from '@/lib/bank-feed/switch-campaign'
 import { switchDeepLink } from '@/lib/bank-feed/switch-link'
+import { bankConnectorMode } from '@/lib/connect/instance/upstreams'
+import { signerFromRequest } from '@/lib/payments/orders/request-signer'
 import { ProviderCredentialError, PROVIDER_CREDENTIALS_REFUSED_MESSAGE } from './lib/api-client'
 
 // Per-user limits keep one tenant from spamming any single bank handler.
@@ -83,6 +86,19 @@ function bankRateLimitedResponse(connectionId: string, until: number, now: numbe
     },
     { status: 429, headers: { 'Retry-After': String(seconds) } }
   )
+}
+
+/**
+ * The person behind a sync they asked for, when the bank can be told of them
+ * as PSU headers (lib/psu-headers.ts): their reads are then not counted
+ * against the consent's background budget. Undefined when the request names
+ * no IP address and user agent, or the company's bank calls go through the
+ * hosted connector, whose sync contract has no field for them.
+ */
+function presentPerson(request: Request, companyId: string): ReturnType<typeof signerFromRequest> | undefined {
+  if (bankConnectorMode(companyId)) return undefined
+  const signer = signerFromRequest(request, null)
+  return psuHeadersOf(signer) ? signer : undefined
 }
 
 /**
@@ -802,11 +818,16 @@ export const enableBankingExtension: Extension = {
           return NextResponse.json({ error: 'Connection is not active' }, { status: 400 })
         }
 
+        const signer = presentPerson(request, companyId)
+
         // The bank rate-limited this consent (here, through a sibling company
         // on the same session, the cron or an agent): a person is never put
         // on the ordinary 15-minute lease, but a call the bank will refuse
         // only spends quota, so this one is answered from the held cooldown.
-        const rateLimitedUntil = rateLimitHoldUntil(connection, Date.now())
+        // A person present is let through: the hold guards the background
+        // budget their read does not draw on. Should the bank refuse them
+        // too, its 429 is answered and held below as before.
+        const rateLimitedUntil = signer ? null : rateLimitHoldUntil(connection, Date.now())
         if (rateLimitedUntil !== null) {
           return bankRateLimitedResponse(connection.id, rateLimitedUntil, Date.now())
         }
@@ -866,6 +887,7 @@ export const enableBankingExtension: Extension = {
             rawInsertOnly: isViewer,
             ingest: ctx.services.ingestTransactions,
             startedAt: syncStartedAt,
+            signer,
             log,
           })
           const totalImported = outcome.imported
@@ -1678,6 +1700,8 @@ export const enableBankingExtension: Extension = {
               ingest: ctx.services.ingestTransactions,
               startedAt: new Date().toISOString(),
               fetchTimeoutMs: 60_000,
+              // The person who just picked the accounts asked for this import.
+              signer: presentPerson(request, companyId),
               log,
             })
             initialSyncSummary = {

@@ -375,6 +375,21 @@ describe('PATCH /accounts (enable-banking)', () => {
     expect(mockedSync.mock.calls[0]).toContainEqual(expect.objectContaining({ balance: 987, dedup_scope: 'fresh-scope' }))
   })
 
+  it('hands the person who picked the accounts to the first import', async () => {
+    mockedSync.mockResolvedValue({ requestedFromDate: '2026-01-01', historyNarrowed: false, imported: 0, duplicates: 0, errors: 0 })
+    const fresh = { uid: 'acc-1', currency: 'SEK', enabled: true, ledger_account: '1930' }
+    const stub: SupabaseStub = { authUser: { id: 'user-1' }, returnedAccounts: [fresh],
+      connectionRow: { id: 'conn-1', status: 'pending_selection', accounts_data: [fresh] } }
+    const request = new Request('http://localhost/api/extensions/ext/enable-banking/accounts', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'x-forwarded-for': '203.0.113.7', 'user-agent': 'Mozilla/5.0 test' },
+      body: JSON.stringify({ connection_id: 'conn-1', enabled_uids: ['acc-1'] }),
+    })
+    const res = await accountsRoute.handler(request, makeContext(buildSupabase(stub)))
+    expect(res.status).toBe(200)
+    expect(mockedSync.mock.calls[0][8]?.signer).toMatchObject({ ipAddress: '203.0.113.7', userAgent: 'Mozilla/5.0 test' })
+  })
+
   it('does not reuse another currency cash row sharing an IBAN', async () => {
     const stub: SupabaseStub = { authUser: { id: 'user-1' },
       cashAccountRows: [{ id: 'eur-row', iban: 'SE1234', currency: 'EUR', ledger_account: '1932', bank_connection_id: 'old-connection', external_uid: 'old-uid' }],

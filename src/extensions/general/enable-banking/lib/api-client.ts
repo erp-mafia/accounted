@@ -21,6 +21,7 @@ import { CONTRACT_VERSION_HEADER } from '@/lib/connect/instance/connector-fetch'
 import { CONTRACT_VERSION } from '@accounted/connect-contract'
 import { normalizeBankTransactionCode } from '@accounted/connect-contract'
 import { dateFromDaysBefore, historyWindowDays } from './history-window'
+import { isPsuHeaderRefusal, type PsuHeaders } from './psu-headers'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
 // Prefer _PRODUCTION variant; sandbox uses api.tilisy.com, production uses api.enablebanking.com
@@ -941,9 +942,22 @@ export async function deleteSession(sessionId: string): Promise<void> {
  * Get account balances
  *
  * @param accountUid - The account UID (from session.accounts[].uid)
+ * @param psu - The person who asked (./psu-headers.ts); omit for a background read.
  */
-export async function getAccountBalances(accountUid: string): Promise<Balance[]> {
-  const response = await authenticatedFetchWithRetry(`/accounts/${accountUid}/balances`)
+export async function getAccountBalances(accountUid: string, psu?: PsuHeaders): Promise<Balance[]> {
+  const endpoint = `/accounts/${accountUid}/balances`
+  let response = await authenticatedFetchWithRetry(endpoint, psu ? { headers: psu } : {})
+
+  if (!response.ok && psu) {
+    const body = await response.clone().text().catch(() => '')
+    if (isPsuHeaderRefusal(body)) {
+      console.warn('[enable-banking] getAccountBalances: bank refused the PSU headers, reading in the background', {
+        status: response.status,
+        accountUid,
+      })
+      response = await authenticatedFetchWithRetry(endpoint)
+    }
+  }
 
   if (!response.ok) {
     const body = await response.text()
@@ -999,9 +1013,10 @@ function pickBalanceByType(balances: Balance[], preference: string[]): Balance |
  * stored value instead.
  */
 export async function getAccountBalance(
-  accountUid: string
+  accountUid: string,
+  psu?: PsuHeaders
 ): Promise<{ amount: number; date: string; available: number | null } | null> {
-  const balances = await getAccountBalances(accountUid)
+  const balances = await getAccountBalances(accountUid, psu)
 
   // Prefer closingBooked, then expected, then first available
   const balance = pickBalanceByType(balances, BOOKED_BALANCE_TYPES) || balances[0]
@@ -1258,7 +1273,10 @@ export async function getAllTransactionsWithRaw(
   dateFrom?: string,
   dateTo?: string,
   strategy?: TransactionsFetchStrategy,
-  options?: HistoryWindowOptions
+  options?: HistoryWindowOptions & {
+    /** The person who asked (./psu-headers.ts); omit for a background read. */
+    psu?: PsuHeaders
+  }
 ): Promise<TransactionsWithRaw> {
   const allTransactions: Transaction[] = []
   const rawPages: string[] = []
@@ -1267,6 +1285,8 @@ export async function getAllTransactionsWithRaw(
   let activeStrategy = strategy
   // date_from is narrowed in place when the ASPSP rejects the window (below).
   let activeDateFrom = dateFrom
+  // Dropped once if the bank refuses them; the read then goes on in the background.
+  let activePsu = options?.psu
 
   while (true) {
     const params = new URLSearchParams()
@@ -1279,10 +1299,21 @@ export async function getAllTransactionsWithRaw(
     const queryString = params.toString()
     const endpoint = `/accounts/${accountUid}/transactions${queryString ? `?${queryString}` : ''}`
 
-    const response = await authenticatedFetchWithRetry(endpoint)
+    const response = await authenticatedFetchWithRetry(endpoint, activePsu ? { headers: activePsu } : {})
 
     if (!response.ok) {
       const body = await response.text()
+      // Before any other recovery: a refused PSU header says nothing about
+      // the strategy or the window, so the same request goes again without.
+      if (activePsu && isPsuHeaderRefusal(body)) {
+        console.warn('[enable-banking] getAllTransactionsWithRaw: bank refused the PSU headers, reading in the background', {
+          status: response.status,
+          accountUid,
+          page,
+        })
+        activePsu = undefined
+        continue
+      }
       const recovery = planFirstPageRecovery({
         status: response.status,
         body,
