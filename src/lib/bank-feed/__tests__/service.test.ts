@@ -152,6 +152,17 @@ describe('listBankFeedBanks', () => {
 })
 
 describe('startBankFeedConsent', () => {
+  it('says another connection or attempt holds the company\'s place when Connect refuses over the quota, not that the bank refused', async () => {
+    const connect = fakeConnect({ createConsent: vi.fn().mockRejectedValue(new BankFeedRefusedError('Bank connection quota reached for this company', { code: 'CONNECTOR_QUOTA_EXCEEDED', status: 403 })) })
+    mocks.door.mockResolvedValue({ ok: true, connect })
+    const { supabase } = stub({
+      ...orgAnswers(),
+      companies: [{ data: { entity_type: 'aktiebolag' }, error: null }],
+      bank_connections: [{ data: [], error: null }],
+    })
+    expect(await startBankFeedConsent({ ...ctx, supabase }, { bic: 'SWEDSESS', method: 'qr', signer, replaceConnectionId: null, now: NOW })).toEqual({ ok: false, code: 'BANK_CONNECTION_IN_PROGRESS' })
+  })
+
   it('creates the consent, stores the pending attempt with provider open_payments and starts BankID', async () => {
     const connect = fakeConnect()
     mocks.door.mockResolvedValue({ ok: true, connect })
@@ -159,7 +170,7 @@ describe('startBankFeedConsent', () => {
       ...orgAnswers(),
       companies: [{ data: { entity_type: 'aktiebolag' }, error: null }],
       bank_connections: [
-        { data: [{ id: 'stale', bic: 'ESSESESS', created_at: '2026-10-01T00:00:00Z', consent_attempt: { state: 'pending', started_at: '2026-10-01T00:00:00Z' } }, { id: 'joint', bic: 'SWEDSESS', created_at: '2026-10-01T00:00:00Z', consent_attempt: { state: 'partially_authorised' } }], error: null },
+        { data: [{ id: 'stale', bic: 'ESSESESS', created_at: '2026-10-01T00:00:00Z', session_id: 'consent-old', consent_attempt: { state: 'pending', started_at: '2026-10-01T00:00:00Z' } }, { id: 'joint', bic: 'SWEDSESS', created_at: '2026-10-01T00:00:00Z', session_id: 'consent-joint', consent_attempt: { state: 'partially_authorised' } }], error: null },
         { data: [{ id: 'stale' }], error: null },
         { data: row({ authorization_id: null }), error: null },
         { data: null, error: null },
@@ -175,6 +186,12 @@ describe('startBankFeedConsent', () => {
       validUntil: '2027-04-10',
     })
     expect(calls).toContainEqual({ table: 'bank_connections', method: 'in', args: ['id', ['stale']] })
+    // The abandoned attempt's consent is ended before the new one is created, so
+    // it cannot hold the company's one bank connection at Connect; the joint
+    // attempt waiting for its second signatory is left alone.
+    expect(connect.revokeConsent).toHaveBeenCalledTimes(1)
+    expect(connect.revokeConsent).toHaveBeenCalledWith('co-1', expect.objectContaining({ consentId: 'consent-old' }))
+    expect((connect.revokeConsent as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]).toBeLessThan((connect.createConsent as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0])
     expect(payload('bank_connections', 'insert')[0]).toMatchObject({
       aggregator: 'open_payments', provider: 'open_payments', bank_name: 'Swedbank', bic: 'SWEDSESS', session_id: 'consent-1', status: 'pending', psu_type: 'business',
       consent_expires: '2027-04-10T21:59:59Z',
