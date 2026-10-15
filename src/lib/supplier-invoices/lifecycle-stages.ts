@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { deriveStage, type InvoiceLifecycle } from './stages'
+import { deriveStage, type InvoiceLifecycle, type OpenPaymentInstruction } from './stages'
 import { isOpenPaymentOrder, OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES } from '@/lib/payments/orders/status'
 
 /**
@@ -17,14 +17,9 @@ interface InvoiceRow {
   is_credit_note: boolean
 }
 
-interface BatchRow {
-  id: string
-  created_at: string
-}
-
 interface BatchItemRow {
-  batch_id: string
   supplier_invoice_id: string
+  batch: { id: string; status: string; created_at: string } | null
 }
 
 interface OrderRow {
@@ -57,6 +52,71 @@ async function inChunks<T>(ids: string[], run: (chunk: string[]) => Promise<T[]>
   return out
 }
 
+/**
+ * The open payment instructions covering these invoices, keyed by invoice id
+ * (invoices nothing covers are left out). The one reading of "in payment":
+ * the lifecycle stage, the supplier invoice list and its Att betala queue all
+ * come from here.
+ *
+ * A payment file is open while its batch is 'created' (the only other status
+ * is 'cancelled'). A bank payment order is open by isOpenPaymentOrder: not
+ * failed, rejected or cancelled, and an executed one only until its debit is
+ * matched, the same rule the database uses to refuse a second order or a file
+ * for the invoice. Reads by invoice id, so the rows read are bounded by the
+ * invoices asked about.
+ */
+export async function loadOpenPaymentInstructions(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoiceIds: string[],
+): Promise<Map<string, OpenPaymentInstruction>> {
+  const ids = [...new Set(invoiceIds)]
+  const out = new Map<string, OpenPaymentInstruction>()
+  if (ids.length === 0) return out
+  const entry = (id: string): OpenPaymentInstruction => {
+    let current = out.get(id)
+    if (!current) {
+      current = { batch: null, payment_order: null }
+      out.set(id, current)
+    }
+    return current
+  }
+
+  const items = await inChunks(ids, async (chunk) => {
+    const { data, error } = await supabase
+      .from('supplier_payment_batch_items')
+      .select('supplier_invoice_id, batch:supplier_payment_batches!inner(id, status, created_at)')
+      .eq('company_id', companyId)
+      .in('supplier_invoice_id', chunk)
+    if (error) throw error
+    return (data ?? []) as unknown as BatchItemRow[]
+  })
+  for (const item of items) {
+    if (item.batch?.status !== 'created') continue
+    const current = entry(item.supplier_invoice_id)
+    // The newest open file when an invoice sits in several.
+    if (!current.batch || item.batch.created_at > current.batch.created_at) {
+      current.batch = { id: item.batch.id, created_at: item.batch.created_at }
+    }
+  }
+
+  const orders = await inChunks(ids, async (chunk) => {
+    const { data, error } = await supabase
+      .from('payment_orders')
+      .select('id, supplier_invoice_id, status, created_at, supplier_invoice_payment_id')
+      .eq('company_id', companyId)
+      .in('supplier_invoice_id', chunk)
+      .in('status', OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES)
+    if (error) throw error
+    return (data ?? []) as OrderRow[]
+  })
+  for (const order of orders) {
+    if (!isOpenPaymentOrder(order)) continue
+    entry(order.supplier_invoice_id).payment_order = { id: order.id, status: order.status, created_at: order.created_at }
+  }
+  return out
+}
+
 export async function computeSupplierInvoiceLifecycle(
   supabase: SupabaseClient,
   companyId: string,
@@ -72,52 +132,11 @@ export async function computeSupplierInvoiceLifecycle(
   const invoices = (invoiceData ?? []) as InvoiceRow[]
   if (invoices.length === 0) return {}
 
-  // Open batches: created, not cancelled. A batch stays "open" until its
-  // invoices are paid; a paid invoice reads as paid regardless (deriveStage).
-  const { data: batchData, error: batchError } = await supabase
-    .from('supplier_payment_batches')
-    .select('id, created_at')
-    .eq('company_id', companyId)
-    .eq('status', 'created')
-  if (batchError) throw batchError
-  const batches = new Map((batchData ?? []).map((b) => [(b as BatchRow).id, b as BatchRow]))
-
-  const batchByInvoice = new Map<string, BatchRow>()
-  if (batches.size > 0) {
-    const items = await inChunks([...batches.keys()], async (chunk) => {
-      const { data, error } = await supabase
-        .from('supplier_payment_batch_items')
-        .select('batch_id, supplier_invoice_id')
-        .eq('company_id', companyId)
-        .in('batch_id', chunk)
-      if (error) throw error
-      return (data ?? []) as BatchItemRow[]
-    })
-    for (const item of items) {
-      const batch = batches.get(item.batch_id)
-      if (batch) batchByInvoice.set(item.supplier_invoice_id, batch)
-    }
-  }
-
-  // Open bank payment orders: the other evidence for "in payment". An
-  // executed order counts until its debit is matched to the invoice.
-  const orderByInvoice = new Map<string, OrderRow>()
-  const unpaidIds = invoices.filter((i) => i.status !== 'paid').map((i) => i.id)
-  if (unpaidIds.length > 0) {
-    const orders = await inChunks(unpaidIds, async (chunk) => {
-      const { data, error } = await supabase
-        .from('payment_orders')
-        .select('id, supplier_invoice_id, status, created_at, supplier_invoice_payment_id')
-        .eq('company_id', companyId)
-        .in('supplier_invoice_id', chunk)
-        .in('status', OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES)
-      if (error) throw error
-      return (data ?? []) as OrderRow[]
-    })
-    for (const order of orders) {
-      if (isOpenPaymentOrder(order)) orderByInvoice.set(order.supplier_invoice_id, order)
-    }
-  }
+  // Open files and open bank payment orders. A paid invoice still in an old
+  // file reads as paid regardless (deriveStage); an order only counts while
+  // the invoice is unpaid: an executed order counts until its debit is
+  // matched to the invoice.
+  const open = await loadOpenPaymentInstructions(supabase, companyId, invoices.map((i) => i.id))
 
   // Paying bank rows, then the sign-offs that cover them.
   const paidIds = invoices.filter((i) => i.status === 'paid').map((i) => i.id)
@@ -154,8 +173,8 @@ export async function computeSupplierInvoiceLifecycle(
 
   const result: Record<string, InvoiceLifecycle> = {}
   for (const inv of invoices) {
-    const batch = batchByInvoice.get(inv.id) ?? null
-    const order = orderByInvoice.get(inv.id) ?? null
+    const batch = open.get(inv.id)?.batch ?? null
+    const order = inv.status !== 'paid' ? (open.get(inv.id)?.payment_order ?? null) : null
     const txs = txByInvoice.get(inv.id) ?? []
     // Latest paying row decides the paid date; every row must be signed off
     // for the invoice to count as reconciled.
@@ -180,8 +199,8 @@ export async function computeSupplierInvoiceLifecycle(
         reconciled: reconciledThrough !== null,
       }),
       approved_at: inv.approved_at,
-      batch: batch ? { id: batch.id, created_at: batch.created_at } : null,
-      payment_order: order ? { id: order.id, status: order.status, created_at: order.created_at } : null,
+      batch,
+      payment_order: order,
       paid: latest ? { transaction_id: latest.id, date: latest.date } : null,
       reconciled_through: reconciledThrough,
     }

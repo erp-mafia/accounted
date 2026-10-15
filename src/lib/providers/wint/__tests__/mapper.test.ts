@@ -62,6 +62,15 @@ describe('WINT mappers', () => {
       expect(mapWintToSalesInvoice({ ...base, Status: 'NotSent' }).status).toBe('draft');
     });
 
+    it('never reads a zero LeftToPay as paid on an unsent invoice (crm#1245)', () => {
+      const dto = mapWintToSalesInvoice({ ...base, Status: 'NotSent', LeftToPay: 0 });
+      expect(dto.status).toBe('draft');
+      expect(dto.paymentStatus.paid).toBe(false);
+      expect(dto.paymentStatus.balance.value).toBe(1250);
+      // An explicit paid enum still wins.
+      expect(mapWintToSalesInvoice({ ...base, Status: 'NotSent', PaymentState: 'Paid' }).paymentStatus.paid).toBe(true);
+    });
+
     it('forces balance to 0 when paid', () => {
       const dto = mapWintToSalesInvoice({ ...base, Status: 'Paid', LeftToPay: 1250 });
       expect(dto.paymentStatus.balance.value).toBe(0);

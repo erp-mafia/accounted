@@ -46,6 +46,8 @@ import { RunEmployeesTable } from '@/components/salary/run/RunEmployeesTable'
 import { RunCalculationDetails } from '@/components/salary/run/RunCalculationDetails'
 import { RunJournalPreview, type PreviewData } from '@/components/salary/run/RunJournalPreview'
 import { formatRunAmount, periodLabelOf, type RunDetail } from '@/components/salary/run/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { formatDate } from '@/lib/utils'
 import {
   agiReportingPeriod,
   formatAgiPeriodCompact,
@@ -919,6 +921,27 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     handleAction('review')
   }
 
+  // Bokför posts the run's vouchers at once, dated on the payment date (frozen
+  // when the run left draft). Confirm up front with that outcome (design.md
+  // convention 10), and say plainly when the date has not come yet: nothing
+  // else on the page told the user the vouchers would be dated ahead of the
+  // payout (crm#1216).
+  async function handleBook() {
+    if (!run) return
+    const date = formatDate(run.payment_date)
+    const lines = [t('confirm_book_intro', { period: periodLabel, date })]
+    if (run.payment_date > todayIsoStockholm()) lines.push(t('confirm_book_ahead', { date }))
+    lines.push(t('confirm_book_correction'))
+    const ok = await confirmAction({
+      title: t('confirm_book_title'),
+      description: lines.join('\n\n'),
+      confirmLabel: t('action_book'),
+      variant: 'warning',
+    })
+    if (!ok) return
+    handleAction('book')
+  }
+
   // The one next step for the current status, mirrored as a prominent header
   // button - the rail alone buried it (nobody found Godkänn).
   const primaryAction = !canWrite
@@ -943,7 +966,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         : run.status === 'approved'
           ? { key: 'paid', label: noPayout ? t('action_continue') : t('action_mark_paid'), onClick: () => handleAction('paid') }
           : run.status === 'paid'
-            ? { key: 'book', label: t('action_book'), onClick: () => handleAction('book') }
+            ? { key: 'book', label: t('action_book'), onClick: handleBook }
             : null
 
   return (

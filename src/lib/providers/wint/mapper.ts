@@ -93,10 +93,13 @@ function deriveWintInvoiceStatus(raw: Record<string, unknown>): InvoiceStatusCod
 /**
  * Paid means WINT says so, from either enum. LeftToPay corroborates but a
  * missing LeftToPay never reads as paid (mirrors the Fortnox/Briox absent-
- * balance hardening).
+ * balance hardening), and neither does a zero LeftToPay on an invoice WINT
+ * says was never sent (`NotSent`): nothing was invoiced, so nothing was
+ * settled (the Fortnox mapper's unissued-draft rule, crm#1245).
  */
 function isWintInvoicePaid(raw: Record<string, unknown>): boolean {
   if (raw['Status'] === 'Paid' || raw['PaymentState'] === 'Paid') return true;
+  if (raw['Status'] === 'NotSent') return false;
   const total = num(raw['TotalAmount']);
   const leftToPay = num(raw['LeftToPay']);
   return total != null && total > 0 && leftToPay != null && leftToPay <= 0;
@@ -107,7 +110,10 @@ export function mapWintToSalesInvoice(raw: Record<string, unknown>): SalesInvoic
   const total = num(raw['TotalAmount']) ?? 0;
   const totalTax = num(raw['TotalTax']);
   const paid = isWintInvoicePaid(raw);
-  const balance = paid ? 0 : (num(raw['LeftToPay']) ?? total);
+  // An unsent invoice owes its whole total; its LeftToPay is not a payment.
+  const balance = paid ? 0
+    : raw['Status'] === 'NotSent' ? total
+      : (num(raw['LeftToPay']) ?? total);
   // 381 for a kreditfaktura: the one signal the importer reads (dto.ts).
   // No "is a credit invoice" flag is known on WINT's v1 surface. The one
   // credit field this mapper reads, `CreditStatus`, says what happened TO an

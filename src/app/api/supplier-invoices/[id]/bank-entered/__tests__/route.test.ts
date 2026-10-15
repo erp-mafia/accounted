@@ -24,6 +24,14 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: vi.fn().mockResolvedValue({ ok: true }),
 }))
 
+// Mocked so it consumes no slot in the queued Supabase mock: the read itself
+// is pinned by lib/payments/orders/__tests__/signed-payment.test.ts.
+const mockFindSignedBankPayment = vi.fn(async (..._args: unknown[]): Promise<unknown> => null)
+vi.mock('@/lib/payments/orders/signed-payment', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/payments/orders/signed-payment')>()),
+  findSignedBankPayment: (...args: unknown[]) => mockFindSignedBankPayment(...args),
+}))
+
 import { eventBus } from '@/lib/events'
 
 import { POST } from '../route'
@@ -109,6 +117,24 @@ describe('POST /api/supplier-invoices/[id]/bank-entered', () => {
     expect(findCalls('supplier_invoices', 'eq')).toContainEqual(['is_credit_note', false])
   })
 
+  it('refuses the mark while a bank payment signed for the invoice is under way (crm#1243)', async () => {
+    enqueue({ data: makeSupplierInvoice({ id: 'si-1', status: 'approved' }) })
+    mockFindSignedBankPayment.mockResolvedValueOnce({
+      id: 'order-1',
+      status: 'accepted',
+      requested_execution_date: '2026-10-30',
+    })
+
+    const response = await post({ entered: true })
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: Record<string, unknown> } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SI_BANK_PAYMENT_UNDER_WAY')
+    expect(body.error.details).toMatchObject({ payment_order_id: 'order-1', requested_execution_date: '2026-10-30' })
+    expect(mockFindSignedBankPayment).toHaveBeenCalledWith(mockSupabase, 'company-1', 'si-1')
+    expect(findCall('supplier_invoices', 'update')).toBeUndefined()
+  })
+
   it('keeps the first timestamp when marking an already-marked invoice', async () => {
     enqueue({
       data: makeSupplierInvoice({
@@ -145,6 +171,8 @@ describe('POST /api/supplier-invoices/[id]/bank-entered', () => {
     expect(body.data.bank_entered_at).toBeNull()
     expect(findCall('supplier_invoices', 'update')?.[0]).toEqual({ bank_entered_at: null })
     expect(findCall('supplier_invoices', 'in')).toBeUndefined()
+    // Taking a mark back never asks about bank payments.
+    expect(mockFindSignedBankPayment).not.toHaveBeenCalled()
   })
 
   it.each([

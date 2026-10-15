@@ -111,7 +111,11 @@ export function VoucherLinesTable({
     <table className={cn('w-full border-collapse text-[12.5px]', className)} aria-label={ariaLabel}>
       <thead>
         <tr>
-          <th className={cn(VTH_CLASS, 'w-[180px]')}>{head('account')}</th>
+          {/* No fixed width and no nowrap on Konto: a long account name
+              wraps instead of pushing Debet and Kredit out of a narrow
+              review panel behind a hidden sideways scroll (crm#1232). Where
+              there is room the column still sizes to the name on one line. */}
+          <th className={VTH_CLASS}>{head('account')}</th>
           <th className={VTH_CLASS}>{head('description')}</th>
           <th className={cn(VTH_CLASS, 'text-right')}>{head('debit')}</th>
           <th className={cn(VTH_CLASS, 'pr-0 text-right')}>{head('credit')}</th>
@@ -137,7 +141,7 @@ export function VoucherLinesTable({
             ) : null
           return (
             <tr key={line.key ?? i} className={line.struck ? 'text-muted-foreground' : undefined}>
-              <td className={cn(VTD_CLASS, 'whitespace-nowrap', strike)}>
+              <td className={cn(VTD_CLASS, strike)}>
                 {accountNames ? (
                   <>
                     <span className="font-mono text-sm">{line.account_number}</span>

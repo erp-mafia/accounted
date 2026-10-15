@@ -34,6 +34,14 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
   ),
 }))
 
+// Mocked so it consumes no slot in the queued Supabase mock: the read itself
+// is pinned by lib/payments/orders/__tests__/signed-payment.test.ts.
+const mockFindSignedBankPayment = vi.fn(async (..._args: unknown[]): Promise<unknown> => null)
+vi.mock('@/lib/payments/orders/signed-payment', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/payments/orders/signed-payment')>()),
+  findSignedBankPayment: (...args: unknown[]) => mockFindSignedBankPayment(...args),
+}))
+
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import {
   createSupplierInvoiceCashEntry,
@@ -92,6 +100,21 @@ describe('GET /api/supplier-invoices/[id]/mark-paid/preview', () => {
     enqueue({ data: null, error: { message: 'not found' } })
     const res = await GET(makeReq(), createMockRouteParams({ id: 'si-1' }))
     expect(res.status).toBe(404)
+  })
+
+  it('returns 409 SI_BANK_PAYMENT_UNDER_WAY while a signed bank payment covers the invoice, so the dialog says so up front (crm#1243)', async () => {
+    enqueue({
+      data: { ...roundedInvoice(), supplier: { supplier_type: 'swedish_business', name: 'Leverantören AB' }, items },
+      error: null,
+    })
+    mockFindSignedBankPayment.mockResolvedValueOnce({ id: 'order-1', status: 'accepted', requested_execution_date: '2026-10-30' })
+
+    const res = await GET(makeReq(), createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SI_BANK_PAYMENT_UNDER_WAY')
+    expect(mockFindSignedBankPayment).toHaveBeenCalledWith(mockSupabase, 'company-1', 'si-1')
   })
 
   it('kontantmetod + öresavrundning: previews the whole-krona payment and the 3740 residual', async () => {

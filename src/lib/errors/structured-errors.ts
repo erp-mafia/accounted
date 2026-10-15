@@ -5050,6 +5050,19 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
     message_en:
       'The invoice can only be marked as entered at the bank while it is approved and has an outstanding amount.',
   },
+  // crm#1243: a payment made another way beside a bank payment the bank will
+  // still execute (lib/payments/orders/signed-payment.ts).
+  SI_BANK_PAYMENT_UNDER_WAY: {
+    httpStatus: 409,
+    message_sv:
+      'Fakturan har redan en betalning via banken som är signerad eller signeras just nu. Har fakturan betalats på annat sätt, avbryt den betalningen under Betalningar först, annars betalas den två gånger.',
+    message_en:
+      'The invoice already has a bank payment that is signed or being signed. If the invoice was paid another way, cancel that payment under Payments first, or it is paid twice.',
+    remediation: {
+      description:
+        'details.payment_order_id is the open bank payment and details.requested_execution_date the day the bank pays it. Leave the invoice alone and let that payment settle it when its debit is matched, or cancel the payment order first (POST /api/payments/orders/{id}/cancel; the bank must confirm) and then record the other payment.',
+    },
+  },
   SI_PAID_PERIOD_LOCKED: {
     httpStatus: 400,
     message_sv: 'Bokföringen är låst. Betalningen kan inte registreras.',

@@ -53,6 +53,14 @@ vi.mock('@/lib/invoices/duplicate-guard-history', () => ({
   recordSupplierInvoiceDuplicateGuardBypass: vi.fn().mockResolvedValue(undefined),
 }))
 
+// Mocked so it consumes no slot in the queued Supabase mock: the read itself
+// is pinned by lib/payments/orders/__tests__/signed-payment.test.ts.
+const mockFindSignedBankPayment = vi.fn(async (..._args: unknown[]): Promise<unknown> => null)
+vi.mock('@/lib/payments/orders/signed-payment', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/payments/orders/signed-payment')>()),
+  findSignedBankPayment: (...args: unknown[]) => mockFindSignedBankPayment(...args),
+}))
+
 import { eventBus } from '@/lib/events'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
@@ -116,6 +124,37 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
 
     expect(status).toBe(400)
     expect((body.error as unknown as { code: string }).code).toBe('SI_PAID_NOT_PAYABLE')
+  })
+
+  it('returns 409 SI_BANK_PAYMENT_UNDER_WAY while a bank payment signed for the invoice is under way, and books nothing (crm#1243)', async () => {
+    enqueue({
+      data: makeSupplierInvoice({ id: 'si-1', status: 'registered', supplier: makeSupplier(), items: [] }),
+      error: null,
+    })
+    mockFindSignedBankPayment.mockResolvedValueOnce({
+      id: 'order-1',
+      status: 'accepted',
+      requested_execution_date: '2026-10-30',
+    })
+
+    const request = createMockRequest('/api/supplier-invoices/si-1/mark-paid', {
+      method: 'POST',
+      // force is the duplicate guard's override; it never overrides this one.
+      body: { force: true },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: Record<string, unknown> } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SI_BANK_PAYMENT_UNDER_WAY')
+    expect(body.error.details).toEqual({
+      payment_order_id: 'order-1',
+      payment_order_status: 'accepted',
+      requested_execution_date: '2026-10-30',
+    })
+    expect(mockFindSignedBankPayment).toHaveBeenCalledWith(mockSupabase, 'company-1', 'si-1')
+    expect(mockCreateSupplierInvoicePaymentEntry).not.toHaveBeenCalled()
+    expect(mockCreateSupplierInvoiceCashEntry).not.toHaveBeenCalled()
   })
 
   it('marks as fully paid with accrual method', async () => {

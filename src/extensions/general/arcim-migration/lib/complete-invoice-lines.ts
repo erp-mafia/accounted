@@ -15,6 +15,9 @@
  * the provider's register, joins each page to OUR row-less invoices on
  * invoice number AND date, hydrates only those, and writes an invoice's rows
  * once the provider's detail total agrees with the stored total to the öre.
+ * Row-less drafts count when their total is not 0: an imported unsent
+ * invoice is one (crm#1245), while a draft begun in Accounted has rows or
+ * nothing to total (migration 20261015233500).
  * This module holds the per-invoice planner it uses: what to write for one
  * stored row and one hydrated detail form, or why to leave the row alone.
  *

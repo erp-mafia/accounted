@@ -41,6 +41,20 @@ export const IN_FLIGHT_PAYMENT_ORDER_STATUSES: ReadonlySet<PaymentOrderStatus> =
   'accepted',
 ])
 
+/**
+ * Signed, or being signed: the bank pays it on its date unless it is
+ * cancelled there. A second payment of the invoice meanwhile pays the
+ * supplier twice (findSignedBankPayment). Not here: 'submitted' is unsigned
+ * and never executes (the status sync cancels it at the bank once its
+ * invoice is paid another way), and an executed order is settled by the
+ * payment that records it.
+ */
+export const SIGNED_PAYMENT_ORDER_STATUSES: ReadonlySet<PaymentOrderStatus> = new Set([
+  'awaiting_signature',
+  'awaiting_second_signer',
+  'accepted',
+])
+
 /** Statuses in which the instruction (amount, payee, reference, debtor, date) may still be edited. */
 export const EDITABLE_PAYMENT_ORDER_STATUSES: ReadonlySet<PaymentOrderStatus> = new Set(['draft'])
 

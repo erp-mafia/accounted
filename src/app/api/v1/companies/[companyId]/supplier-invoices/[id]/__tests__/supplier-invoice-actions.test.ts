@@ -544,6 +544,20 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/bank-entered',
     expect(client.calls).toContainEqual({ table: 'supplier_invoices', method: 'in', args: ['status', ['approved', 'overdue', 'partially_paid']] })
   })
 
+  it('409 SI_BANK_PAYMENT_UNDER_WAY while a bank payment signed for the invoice is under way (crm#1243)', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      supplier_invoices: { data: invoice({ status: 'approved' }) },
+      payment_orders: { data: [{ id: 'order-1', status: 'awaiting_second_signer', requested_execution_date: '2026-10-30' }] },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ entered: true })
+    expect(res.status).toBe(409)
+    expect((await res.json()).error.code).toBe('SI_BANK_PAYMENT_UNDER_WAY')
+    expect(client.calls).toContainEqual({ table: 'payment_orders', method: 'eq', args: ['supplier_invoice_id', SI_ID] })
+    expect(wrote(client)).toBe(false)
+  })
+
   it('a dry run writes nothing', async () => {
     const client = makeClient({ company_members: OWNER, supplier_invoices: { data: invoice({ status: 'approved' }) } })
     mockServiceClient.mockReturnValue(client)

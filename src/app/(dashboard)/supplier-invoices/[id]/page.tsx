@@ -39,7 +39,13 @@ import { DocumentViewButton } from '@/components/bookkeeping/DocumentViewButton'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import useSWR from 'swr'
 import { StageSteps } from '@/components/supplier-invoices/StageSteps'
-import { stagesFor, type InvoiceLifecycle, type SupplierInvoiceLadderStage } from '@/lib/supplier-invoices/stages'
+import {
+  openPaymentMarker,
+  OPEN_PAYMENT_MARKER_LABEL_KEYS,
+  stagesFor,
+  type InvoiceLifecycle,
+  type SupplierInvoiceLadderStage,
+} from '@/lib/supplier-invoices/stages'
 import { formatCurrency } from '@/lib/utils'
 import { supplierInvoiceDisplayFigures } from '@/lib/supplier-invoices/display-figures'
 import {
@@ -501,6 +507,10 @@ export default function SupplierInvoiceDetailPage() {
             variant: statusDisplay.chip ?? undefined,
           }
 
+  // The list row's marker, from the same derivation: a payment instruction
+  // already covers the invoice. It links to where that payment is followed.
+  const openPayment = openPaymentMarker({ ...invoice, open_payment: lifecycle ?? null })
+
   const metaParts = [
     invoice.supplier?.name ?? null,
     docNumber ? t('arrival_header', { number: invoice.arrival_number }) : null,
@@ -613,6 +623,11 @@ export default function SupplierInvoiceDetailPage() {
             ) : (
               <span className="text-sm text-muted-foreground">{status.label}</span>
             )}
+            {openPayment && (
+              <Link href={openPayment === 'bank_payment' ? '/payments' : '/supplier-invoices/payment-files'}>
+                <Badge variant="outline">{tList(OPEN_PAYMENT_MARKER_LABEL_KEYS[openPayment])}</Badge>
+              </Link>
+            )}
             {items.some(itemHasAccrual) && (
               <Badge variant="outline" className="gap-1">
                 <CalendarClock className="h-3 w-3" />
@@ -667,10 +682,11 @@ export default function SupplierInvoiceDetailPage() {
           )}
           {/* Attest gates payment: while attest is still pending, Markera
               betald steps back to a secondary so the header keeps one next
-              step (an aged-but-unattested invoice can have both). */}
+              step (an aged-but-unattested invoice can have both). With a
+              bank payment open it is never the next step (crm#1243). */}
           {canMarkPaid && (
             <Button size="sm"
-              variant={canApprove || canAddToFile ? 'outline' : 'default'}
+              variant={canApprove || canAddToFile || openPayment === 'bank_payment' ? 'outline' : 'default'}
               onClick={() => setIsPayDialogOpen(true)}
               disabled={isProcessing || !canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
@@ -907,7 +923,7 @@ export default function SupplierInvoiceDetailPage() {
         {/* The bock (#2220): "I have entered this payment in the bank". A
             labelled checkbox rather than a button, because it is a fact the
             user records, not an action that posts anything. */}
-        {showBankEntered && !lifecycle?.batch && (
+        {showBankEntered && !lifecycle?.batch && (!lifecycle?.payment_order || !!invoice.bank_entered_at) && (
           <DefRow label={t('bank_entered_label')}>
             <label className={cn('inline-flex select-none items-center gap-2', canWrite && !isProcessing ? 'cursor-pointer' : 'cursor-default', processingAction === 'bank_entered' && 'opacity-50')}>
               <Checkbox

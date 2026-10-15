@@ -84,14 +84,31 @@ function providerEmailAddresses(
 }
 
 /**
+ * Whether Fortnox states that the invoice was never issued: neither sent
+ * (`Sent`) nor booked (`Booked`), the two status flags both the list and the
+ * detail form carry. Both have to be stated false: a payload that omits them
+ * (the supplier-invoice forms have no `Sent`) says nothing, and the other
+ * signals decide as before.
+ *
+ * Such an invoice is a draft whatever its `Balance` says. Nothing has been
+ * invoiced yet, so nothing can have been settled, and a draft whose balance
+ * reads 0 (a zero total) used to be imported as a PAID invoice.
+ */
+function isUnissuedDraft(raw: Record<string, unknown>): boolean {
+  return raw['Sent'] === false && raw['Booked'] === false;
+}
+
+/**
  * Single source of truth for "is this invoice fully settled?", used by BOTH
  * deriveInvoiceStatus and the paymentStatus.paid flag so they can never diverge.
  * Numeric, not strict === 0, so a residual öre / float drift still reads as paid.
  * Number(undefined ?? NaN) = NaN and NaN <= 0 is false, so an ABSENT Balance is
  * treated as NOT paid (the supplier-invoice list payload omits Balance); only an
- * explicit FullyPaid flag or a present non-positive Balance counts as paid.
+ * explicit FullyPaid flag or a present non-positive Balance counts as paid, and
+ * never on an invoice that was not issued (isUnissuedDraft).
  */
 function isFullyPaid(raw: Record<string, unknown>): boolean {
+  if (isUnissuedDraft(raw)) return false;
   return raw['FullyPaid'] === true || Number(raw['Balance'] ?? NaN) <= 0;
 }
 
@@ -146,6 +163,9 @@ function creditedInvoiceRefOf(
 
 function deriveInvoiceStatus(raw: Record<string, unknown>, isCreditNote: boolean): InvoiceStatusCode {
   if (raw['Cancelled'] === true) return 'cancelled';
+  // Before the credit and paid checks: an unsent credit invoice has reduced
+  // nothing either, and the importer keeps a draft credit note a draft.
+  if (isUnissuedDraft(raw)) return 'draft';
   if (isCreditNote) return 'credited';
   if (isFullyPaid(raw)) return 'paid';
   if (raw['Booked'] === true) return 'booked';
@@ -222,7 +242,11 @@ export function mapFortnoxToSalesInvoice(raw: Record<string, unknown>): SalesInv
   // (paid ⇒ nothing outstanding): an explicit FullyPaid with no Balance field
   // would otherwise leave balance = total alongside paid = true.
   const paid = isFullyPaid(raw);
-  const balance = paid ? 0 : ((raw['Balance'] as number | undefined) ?? total);
+  // An unissued draft owes its whole total: no payment can have been taken
+  // against it, so its Balance is not read as a part payment either.
+  const balance = paid ? 0
+    : isUnissuedDraft(raw) ? total
+      : ((raw['Balance'] as number | undefined) ?? total);
   // 381 for a kreditfaktura: the one signal the importer reads (dto.ts).
   const invoiceTypeCode = creditNoteTypeCode(isFlaggedCredit(raw), total);
 

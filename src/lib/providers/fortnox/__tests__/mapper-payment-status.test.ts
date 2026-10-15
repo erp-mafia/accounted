@@ -95,6 +95,48 @@ describe('Fortnox mapper: paid-status consistency', () => {
     expect(dto.paymentStatus.balance.value).toBe(0)
   })
 
+  // crm#1245: an invoice saved but never sent or booked in Fortnox states
+  // Sent false and Booked false. It is a draft whatever its Balance reads.
+  it('sales: unsent, unbooked invoice with Balance 0 is a draft, not paid', () => {
+    const dto = mapFortnoxToSalesInvoice(salesRaw({ Sent: false, Booked: false, Total: 0, Balance: 0 }))
+    expect(dto.status).toBe('draft')
+    expect(dto.paymentStatus.paid).toBe(false)
+    expect(dto.paymentStatus.balance.value).toBe(0)
+  })
+
+  it('sales: unsent, unbooked invoice owes its whole total whatever Balance says', () => {
+    const dto = mapFortnoxToSalesInvoice(salesRaw({ Sent: false, Booked: false, Total: 1250, Balance: 0 }))
+    expect(dto.status).toBe('draft')
+    expect(dto.paymentStatus.paid).toBe(false)
+    expect(dto.paymentStatus.balance.value).toBe(1250)
+  })
+
+  it('sales: unsent, unbooked credit invoice stays a draft, not credited', () => {
+    const dto = mapFortnoxToSalesInvoice(salesRaw({ Sent: false, Booked: false, Credit: 'true', Total: -500, Balance: -500 }))
+    expect(dto.invoiceTypeCode).toBe('381')
+    expect(dto.status).toBe('draft')
+    expect(dto.paymentStatus.paid).toBe(false)
+  })
+
+  it('sales: a cancelled draft stays cancelled', () => {
+    const dto = mapFortnoxToSalesInvoice(salesRaw({ Sent: false, Booked: false, Cancelled: true, Balance: 0 }))
+    expect(dto.status).toBe('cancelled')
+  })
+
+  it('sales: only BOTH flags stated false make a draft; one issued flag keeps the balance reading', () => {
+    expect(mapFortnoxToSalesInvoice(salesRaw({ Sent: false, Booked: true, Balance: 0 })).status).toBe('paid')
+    expect(mapFortnoxToSalesInvoice(salesRaw({ Sent: true, Booked: false, Balance: 0 })).status).toBe('paid')
+    // Absent flags say nothing: the balance decides, as before.
+    expect(mapFortnoxToSalesInvoice(salesRaw({ Sent: undefined, Balance: 0 })).status).toBe('paid')
+    expect(mapFortnoxToSalesInvoice(salesRaw({ Sent: false, Balance: 0 })).status).toBe('paid')
+  })
+
+  it('supplier: no Sent flag on the supplier forms, so Booked false alone changes nothing', () => {
+    const dto = mapFortnoxToSupplierInvoice(supplierRaw({ Booked: false, Balance: 0 }))
+    expect(dto.status).toBe('paid')
+    expect(dto.paymentStatus.paid).toBe(true)
+  })
+
   it('status === paid iff paymentStatus.paid across a matrix (both paths)', () => {
     const balances = [undefined, 0, 0.004, 250, 1000]
     const flags = [undefined, true]

@@ -68,13 +68,52 @@ export function stagesFor(accountingMethod: 'accrual' | 'cash' | null | undefine
     : SUPPLIER_INVOICE_STAGES.filter((s) => s !== 'approved')
 }
 
-export interface InvoiceLifecycle {
-  stage: SupplierInvoiceStage
-  approved_at: string | null
+/**
+ * The open payment instructions covering an invoice: the evidence for the
+ * in_file step (lifecycle-stages.ts, loadOpenPaymentInstructions). At most one
+ * of the two is set in practice: the database refuses a file item for an
+ * invoice with an open order, and an order for an invoice in an open file.
+ */
+export interface OpenPaymentInstruction {
   /** The open payment batch carrying the invoice, if any. */
   batch: { id: string; created_at: string } | null
   /** The open bank payment order carrying the invoice, if any. */
   payment_order: { id: string; status: string; created_at: string } | null
+}
+
+/**
+ * What a person deciding what to pay is told about an unsettled invoice that
+ * a payment instruction already covers. 'bank_payment': a bank payment order
+ * is open (prepared, sent, signed, or executed and not yet matched), so every
+ * payment channel refuses the invoice and it is not waiting for a payment.
+ * 'payment_file': it sits in a payment file that was generated, which may or
+ * may not have reached the bank. Null when nothing covers it or it is settled.
+ */
+export type OpenPaymentMarker = 'bank_payment' | 'payment_file'
+
+/** Nothing left to pay on these: no payment instruction is relevant to them. */
+export const SETTLED_SUPPLIER_INVOICE_STATUSES: ReadonlySet<string> = new Set(['paid', 'credited', 'reversed'])
+
+export function openPaymentMarker(invoice: {
+  status: string
+  is_credit_note?: boolean | null
+  open_payment?: OpenPaymentInstruction | null
+}): OpenPaymentMarker | null {
+  if (invoice.is_credit_note || SETTLED_SUPPLIER_INVOICE_STATUSES.has(invoice.status)) return null
+  if (invoice.open_payment?.payment_order) return 'bank_payment'
+  if (invoice.open_payment?.batch) return 'payment_file'
+  return null
+}
+
+/** The chip label per marker, in the `supplier_invoices` namespace: a bank payment reads as the ladder's own step. */
+export const OPEN_PAYMENT_MARKER_LABEL_KEYS: Record<OpenPaymentMarker, string> = {
+  bank_payment: 'stage_in_file',
+  payment_file: 'in_batch_chip',
+}
+
+export interface InvoiceLifecycle extends OpenPaymentInstruction {
+  stage: SupplierInvoiceStage
+  approved_at: string | null
   /** The bank row that paid it, if matched. */
   paid: { transaction_id: string; date: string } | null
   /** Sign-off date that covers the payment, when reconciled. */

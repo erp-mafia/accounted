@@ -271,3 +271,27 @@ describe('gnubok_list_supplier_invoices: filters', () => {
     expect(findCalls('supplier_invoices', 'in')).toHaveLength(0)
   })
 })
+
+// crm#1229: "attested, paid by hand at the bank, money not landed" and
+// "attested, nothing paid" looked identical in this listing, and so did an
+// attested overdue invoice and an unattested one.
+describe('gnubok_list_supplier_invoices: attest and "I banken" marks', () => {
+  it('projects approved_at and bank_entered_at and returns them on each invoice', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        invoiceRow({ status: 'overdue', approved_at: '2026-04-01T08:00:00Z', bank_entered_at: '2026-04-08T09:00:00Z' }),
+        invoiceRow({ id: 'si-2', status: 'overdue', approved_at: null, bank_entered_at: null }),
+      ],
+      count: 2,
+    })
+
+    const result = (await tool().execute({ status: 'to_pay' }, COMPANY, USER, supabase as never)) as ListResult
+
+    const [columns] = findCall('supplier_invoices', 'select') as [string]
+    expect(columns).toMatch(/\bapproved_at\b/)
+    expect(columns).toMatch(/\bbank_entered_at\b/)
+    expect(result.invoices[0]).toMatchObject({ approved_at: '2026-04-01T08:00:00Z', bank_entered_at: '2026-04-08T09:00:00Z' })
+    expect(result.invoices[1]).toMatchObject({ approved_at: null, bank_entered_at: null })
+  })
+})

@@ -24,6 +24,7 @@ import {
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { fetchChartVatTreatments } from '@/lib/bookkeeping/chart-vat-treatments'
 import { roundOre } from '@/lib/money'
+import { findSignedBankPayment, signedBankPaymentDetails } from '@/lib/payments/orders/signed-payment'
 import type { CreateJournalEntryLineInput, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
 type PreviewLine = {
@@ -81,6 +82,16 @@ export const GET = withRouteContext(
       .single()
     if (invErr || !invoice) {
       return errorResponseFromCode('MATCH_INVOICE_NOT_FOUND', log, { requestId })
+    }
+
+    // The POST refuses a payment beside a signed bank payment (crm#1243); the
+    // dialog shows that refusal from the preview, before anything is typed.
+    const signedBankPayment = await findSignedBankPayment(supabase, companyId, id)
+    if (signedBankPayment) {
+      return errorResponseFromCode('SI_BANK_PAYMENT_UNDER_WAY', log, {
+        requestId,
+        details: signedBankPaymentDetails(signedBankPayment),
+      })
     }
 
     const sekInputIssue = supplierPaymentSekInputIssue({ currency: invoice.currency, amountSek: amount_sek })

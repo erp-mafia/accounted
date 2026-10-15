@@ -61,3 +61,27 @@ describe('surfaces on the shared voucher lines table', () => {
     expect(src).toMatch(/<VoucherLinesTable[\s\S]*?\bswedish\b/)
   })
 })
+
+/*
+ * crm#1232: a 59-character BAS name ("Valutakursvinster på fordringar och
+ * skulder av rörelsekarak...") on one unbreakable line made the table about
+ * 700px wide in the 640px review panel on /pending, so Debet and Kredit sat
+ * behind a hidden sideways scroll. The Konto cell wraps; the amounts stay on
+ * one line (a split amount reads as two numbers).
+ */
+describe('long account names wrap instead of pushing the amounts out', () => {
+  const src = fs.readFileSync(path.resolve(__dirname, '../VoucherLinesTable.tsx'), 'utf8')
+  const bodyCells = [...src.matchAll(/<td className=\{cn\(VTD_CLASS,([^}]*)\)\}>/g)].map((m) => m[1])
+
+  it('the Konto column has neither a fixed width nor nowrap', () => {
+    expect(src).not.toMatch(/w-\[180px\]/)
+    expect(bodyCells[0]).toBeDefined()
+    expect(bodyCells[0]).not.toContain('whitespace-nowrap')
+  })
+
+  it('the Debet and Kredit cells stay on one line', () => {
+    const amountCells = bodyCells.filter((cls) => cls.includes('tabular-nums'))
+    expect(amountCells).toHaveLength(2)
+    for (const cls of amountCells) expect(cls).toContain('whitespace-nowrap')
+  })
+})

@@ -131,7 +131,53 @@ describe('GET /api/supplier-invoices', () => {
     const { status, body } = await parseJsonResponse<{ data: unknown[] }>(response)
 
     expect(status).toBe(200)
-    expect(body.data).toEqual(invoices)
+    expect(body.data).toEqual(invoices.map((inv) => ({ ...inv, open_payment: null })))
+  })
+
+  it('marks each unsettled invoice with the payment instruction that already covers it (crm#1243)', async () => {
+    const inBank = makeSupplierInvoice({ id: 'si-bank', status: 'registered' })
+    const inFile = makeSupplierInvoice({ id: 'si-file', status: 'approved' })
+    const rejected = makeSupplierInvoice({ id: 'si-rejected', status: 'approved' })
+    const paid = makeSupplierInvoice({ id: 'si-paid', status: 'paid' })
+    setTable('supplier_invoices', { data: [inBank, inFile, rejected, paid] })
+    setTable('supplier_payment_batch_items', {
+      data: [
+        { supplier_invoice_id: 'si-file', batch: { id: 'batch-1', status: 'created', created_at: '2026-10-01T08:00:00Z' } },
+        { supplier_invoice_id: 'si-rejected', batch: { id: 'batch-0', status: 'cancelled', created_at: '2026-09-01T08:00:00Z' } },
+      ],
+    })
+    setTable('payment_orders', {
+      data: [
+        { id: 'order-1', supplier_invoice_id: 'si-bank', status: 'accepted', created_at: '2026-10-15T13:54:35Z', supplier_invoice_payment_id: null },
+      ],
+    })
+
+    const response = await GET(createMockRequest('/api/supplier-invoices', { searchParams: { status: 'all' } }))
+    const { status, body } = await parseJsonResponse<{ data: Array<{ id: string; open_payment: unknown }> }>(response)
+
+    expect(status).toBe(200)
+    const byId = new Map(body.data.map((row) => [row.id, row.open_payment]))
+    expect(byId.get('si-bank')).toEqual({
+      batch: null,
+      payment_order: { id: 'order-1', status: 'accepted', created_at: '2026-10-15T13:54:35Z' },
+    })
+    expect(byId.get('si-file')).toEqual({ batch: { id: 'batch-1', created_at: '2026-10-01T08:00:00Z' }, payment_order: null })
+    expect(byId.get('si-rejected')).toBeNull()
+    expect(byId.get('si-paid')).toBeNull()
+    // Only the unsettled invoices are asked about, inside the company.
+    expect(findCall('payment_orders', 'in')).toEqual(['supplier_invoice_id', ['si-bank', 'si-file', 'si-rejected']])
+    expect(findCalls('payment_orders', 'eq')).toContainEqual(['company_id', 'company-1'])
+  })
+
+  it('returns 500 when the payment instructions cannot be read', async () => {
+    setTable('supplier_invoices', { data: [makeSupplierInvoice({ status: 'approved' })] })
+    setTable('supplier_payment_batch_items', { data: [] })
+    setTable('payment_orders', { data: null, error: { message: 'DB error' } })
+
+    const response = await GET(createMockRequest('/api/supplier-invoices'))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(500)
   })
 
   it('applies status filter', async () => {
@@ -172,7 +218,7 @@ describe('GET /api/supplier-invoices', () => {
     const { status, body } = await parseJsonResponse<{ data: unknown[] }>(response)
 
     expect(status).toBe(200)
-    expect(body.data).toEqual(invoices)
+    expect(body.data).toEqual(invoices.map((inv) => ({ ...inv, open_payment: null })))
     expect(findCalls('supplier_invoices', 'eq')).toContainEqual(['supplier_id', 'supplier-1'])
   })
 

@@ -57,6 +57,14 @@ vi.mock('@/lib/invoices/duplicate-guard-history', () => ({
   recordSupplierInvoiceDuplicateGuardBypass: vi.fn().mockResolvedValue(undefined),
 }))
 
+// Mocked so it consumes no slot in the queued Supabase mock: the read itself
+// is pinned by lib/payments/orders/__tests__/signed-payment.test.ts.
+const mockFindSignedBankPayment = vi.fn(async (..._args: unknown[]): Promise<unknown> => null)
+vi.mock('@/lib/payments/orders/signed-payment', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/payments/orders/signed-payment')>()),
+  findSignedBankPayment: (...args: unknown[]) => mockFindSignedBankPayment(...args),
+}))
+
 import { eventBus } from '@/lib/events'
 import { buildSupplierInvoicePaymentLines } from '@/lib/bookkeeping/supplier-invoice-entries'
 import type { SupplierInvoice } from '@/types'
