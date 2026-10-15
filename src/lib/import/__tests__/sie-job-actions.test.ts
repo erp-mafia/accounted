@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { jobDatabaseError, requestSIEJobAction } from '../sie-jobs'
+import { jobDatabaseError, requestSIEJobAction, sieUndoCommitActor } from '../sie-jobs'
+import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import { errorResponse, getStructuredError } from '@/lib/errors/get-structured-error'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { userFacingCode } from '@/lib/errors/user-facing'
@@ -47,6 +48,52 @@ describe('SIE action legacy preflight', () => {
     db.enqueueMany([{ data: { id: 'import-1', job_state: 'completed' } }, { error: { code: 'P0001', message: 'period is locked' } }])
     await expect(call('undo')).rejects.toThrow('period is locked')
     expect(db.supabase.rpc).toHaveBeenCalledOnce()
+  })
+})
+
+// WHO asked for the undo (migration 20261016005200): request_sie_import_undo
+// records the actor of the request, labelled as an undo, and the undo's
+// stornos stamp it. A resume records nothing new.
+describe('SIE undo actor', () => {
+  beforeEach(() => { vi.clearAllMocks(); db.reset() })
+
+  it('labels the actor as an undo, keeping its credential name', () => {
+    expect(sieUndoCommitActor({ type: 'api_key', label: 'Byrånyckel' })).toEqual({ type: 'api_key', label: 'SIE undo: Byrånyckel' })
+    expect(sieUndoCommitActor({ type: 'user' })).toEqual({ type: 'user', label: 'SIE undo' })
+    expect(sieUndoCommitActor(undefined)).toBeUndefined()
+  })
+
+  it('sends the undo actor of the current scope to request_sie_import_undo', async () => {
+    const job = { id: 'import-1', job_state: 'undoing' }
+    db.enqueueMany([{ data: { id: 'import-1', job_state: 'completed' } }, { data: job }])
+    await runWithActor({ type: 'mcp_oauth', label: 'Claude' }, () => call('undo'))
+    expect(db.supabase.rpc).toHaveBeenCalledWith('request_sie_import_undo', {
+      p_company_id: 'company-1', p_import_id: 'import-1', p_actor: 'user-1',
+      p_actor_type: 'mcp_oauth', p_actor_label: 'SIE undo: Claude',
+    })
+  })
+
+  it('retries once without the actor against a database that predates it (PGRST202)', async () => {
+    const job = { id: 'import-1', job_state: 'undoing' }
+    db.enqueueMany([
+      { data: { id: 'import-1', job_state: 'completed' } },
+      { error: { code: 'PGRST202', message: 'Could not find the function public.request_sie_import_undo' } },
+      { data: job },
+    ])
+    expect(await runWithActor({ type: 'user' }, () => call('undo'))).toEqual(job)
+    expect(db.supabase.rpc).toHaveBeenCalledTimes(2)
+    expect(db.supabase.rpc).toHaveBeenLastCalledWith('request_sie_import_undo', {
+      p_company_id: 'company-1', p_import_id: 'import-1', p_actor: 'user-1',
+    })
+  })
+
+  it('never sends an actor with a resume', async () => {
+    const job = { id: 'import-1', job_state: 'paused' }
+    db.enqueueMany([{ data: job }, { data: job }])
+    await runWithActor({ type: 'api_key', label: 'Byrånyckel' }, () => call('resume'))
+    expect(db.supabase.rpc).toHaveBeenCalledWith('resume_sie_import_job', {
+      p_company_id: 'company-1', p_import_id: 'import-1', p_actor: 'user-1',
+    })
   })
 })
 

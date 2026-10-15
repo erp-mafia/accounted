@@ -179,6 +179,7 @@ describe('match_batch_allocate service actor', () => {
     expect(r.rows[0]!.result.code).toBe('BATCH_UNAUTHORIZED')
   })
 
+  // 20261016005100 appended p_actor_type / p_actor_label (defaulted).
   it('keeps least-privilege grants and drops the 3-arg overload', async () => {
     const { rows } = await getPool().query<{
       anon_can: boolean
@@ -186,9 +187,9 @@ describe('match_batch_allocate service actor', () => {
       service_role_can: boolean
       overloads: string
     }>(
-      `SELECT has_function_privilege('anon', 'public.match_batch_allocate(uuid,jsonb,uuid,uuid)', 'EXECUTE') AS anon_can,
-              has_function_privilege('authenticated', 'public.match_batch_allocate(uuid,jsonb,uuid,uuid)', 'EXECUTE') AS authenticated_can,
-              has_function_privilege('service_role', 'public.match_batch_allocate(uuid,jsonb,uuid,uuid)', 'EXECUTE') AS service_role_can,
+      `SELECT has_function_privilege('anon', 'public.match_batch_allocate(uuid,jsonb,uuid,uuid,text,text)', 'EXECUTE') AS anon_can,
+              has_function_privilege('authenticated', 'public.match_batch_allocate(uuid,jsonb,uuid,uuid,text,text)', 'EXECUTE') AS authenticated_can,
+              has_function_privilege('service_role', 'public.match_batch_allocate(uuid,jsonb,uuid,uuid,text,text)', 'EXECUTE') AS service_role_can,
               (SELECT count(*) FROM pg_proc p
                  JOIN pg_namespace n ON n.oid = p.pronamespace
                 WHERE n.nspname = 'public' AND p.proname = 'match_batch_allocate')::text AS overloads`,

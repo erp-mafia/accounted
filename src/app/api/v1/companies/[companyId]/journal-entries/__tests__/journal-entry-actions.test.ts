@@ -249,6 +249,9 @@ describe('POST /journal-entries/:id/correct-metadata', () => {
       p_description: 'Programvara Figma',
       p_entry_date: null,
       p_user_id: 'user-1',
+      // WHO beside the user: the API key that relayed the rättelse.
+      p_actor_type: 'api_key',
+      p_actor_label: 'CI key',
     })
     // Never a direct write to the posted verifikat.
     expect(client.calls.some((c) => c.table === 'journal_entries' && WRITES.has(c.method))).toBe(false)
@@ -399,6 +402,8 @@ describe('POST /journal-entries/:id/strike-lines', () => {
       p_strike_line_ids: [LINE_A],
       p_new_lines: [{ account_number: '5420', debit_amount: 500, credit_amount: 0, line_description: null, dimensions: {} }],
       p_user_id: 'user-1',
+      p_actor_type: 'api_key',
+      p_actor_label: 'CI key',
     })
     expect(client.calls.some((c) => c.table === 'journal_entry_lines' && WRITES.has(c.method))).toBe(false)
   })

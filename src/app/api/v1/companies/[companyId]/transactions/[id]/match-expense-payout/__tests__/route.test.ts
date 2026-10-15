@@ -208,6 +208,9 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-expense-payou
       p_notes: null,
       p_user_id: 'user-1',
       p_transaction_id: TX_ID,
+      // The payout verifikat records the API key that booked it (20261016005100).
+      p_actor_type: 'api_key',
+      p_actor_label: 'CI key',
     })
     // The payout verifikat is announced like any commit.
     expect(emit).toHaveBeenCalledWith({

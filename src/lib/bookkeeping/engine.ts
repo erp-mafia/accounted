@@ -48,6 +48,7 @@ import {
   syncMigratedDeductionAfterReversal,
 } from '@/lib/invoices/migrated-deduction-reversal'
 import { defaultCommitMethod, getActor } from '@/lib/bookkeeping/actor-context'
+import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
 import type {
   AssetDisposalType,
   AssetJamkningDirection,
@@ -1579,6 +1580,11 @@ export interface MatchBatchAllocationInput {
  * success posts one, so every success emits; a refusal or transport error
  * emits nothing. A dry run must never reach this door.
  *
+ * Attribution: the actor of the surrounding runWithActor scope is handed to
+ * the RPC, which forwards it to commit_journal_entry (migration
+ * 20261016005100); rpcWithActor retries without it on a database that does
+ * not have that migration yet.
+ *
  * Returns the RPC's answer unchanged: callers translate its refusals.
  */
 export async function commitMatchBatchAllocation(
@@ -1587,7 +1593,7 @@ export async function commitMatchBatchAllocation(
   userId: string,
   input: MatchBatchAllocationInput,
 ): Promise<PostingRpcAnswer> {
-  const { data, error } = await supabase.rpc('match_batch_allocate', {
+  const { data, error } = await rpcWithActor(supabase, 'match_batch_allocate', {
     p_tx_id: input.transactionId,
     p_allocations: input.allocations,
     p_company_id: companyId,
@@ -1621,7 +1627,7 @@ export interface ExpensePayoutBatchInput {
  * application door, so that its verifikat is announced with
  * journal_entry.committed. Every success posts one, so every success emits; a
  * refusal or transport error emits nothing. A dry run must never reach this
- * door.
+ * door. The actor is handed on as for commitMatchBatchAllocation.
  *
  * Returns the RPC's answer unchanged: callers translate its refusals.
  */
@@ -1631,7 +1637,7 @@ export async function commitExpensePayoutBatch(
   userId: string,
   input: ExpensePayoutBatchInput,
 ): Promise<PostingRpcAnswer> {
-  const { data, error } = await supabase.rpc('create_expense_payout_batch', {
+  const { data, error } = await rpcWithActor(supabase, 'create_expense_payout_batch', {
     p_company_id: companyId,
     p_claim_ids: input.claimIds,
     p_payout_date: input.payoutDate,
@@ -1665,7 +1671,8 @@ export interface VoucherLinkInput {
  * settles at another rate than it was booked at does the RPC post the
  * kursdifferens as its own verifikat (3960/7960), and only that verifikat is
  * announced with journal_entry.committed. This is the RPC's one application
- * door.
+ * door. The actor is handed on as for commitMatchBatchAllocation and stamped
+ * on that kursdifferens verifikat.
  *
  * Returns the RPC's answer unchanged: callers translate its refusals.
  */
@@ -1675,7 +1682,7 @@ export async function commitInvoiceVoucherLink(
   userId: string,
   input: VoucherLinkInput & { invoiceId: string },
 ): Promise<PostingRpcAnswer> {
-  const { data, error } = await supabase.rpc('link_invoice_to_voucher', {
+  const { data, error } = await rpcWithActor(supabase, 'link_invoice_to_voucher', {
     p_invoice_id: input.invoiceId,
     p_journal_entry_id: input.journalEntryId,
     p_user_id: userId,
@@ -1703,7 +1710,8 @@ export async function commitInvoiceVoucherLink(
  * verifikat pays several debts. `p_amount` is sent only when a share is
  * stated: a link without one then reads the same against a database that
  * does not have migration 20261011153000 yet (the deploy and the migration
- * land separately), where the five-argument function is the only one.
+ * land separately), where the five-argument function is the only one. The
+ * actor is handed on as for commitInvoiceVoucherLink.
  *
  * Returns the RPC's answer unchanged: callers translate its refusals.
  */
@@ -1715,14 +1723,14 @@ export async function commitSupplierInvoiceVoucherLink(
 ): Promise<PostingRpcAnswer> {
   const { data, error } =
     input.amount == null
-      ? await supabase.rpc('link_supplier_invoice_to_voucher', {
+      ? await rpcWithActor(supabase, 'link_supplier_invoice_to_voucher', {
           p_supplier_invoice_id: input.supplierInvoiceId,
           p_journal_entry_id: input.journalEntryId,
           p_user_id: userId,
           p_company_id: companyId,
           p_notes: input.notes,
         })
-      : await supabase.rpc('link_supplier_invoice_to_voucher', {
+      : await rpcWithActor(supabase, 'link_supplier_invoice_to_voucher', {
           p_supplier_invoice_id: input.supplierInvoiceId,
           p_journal_entry_id: input.journalEntryId,
           p_user_id: userId,

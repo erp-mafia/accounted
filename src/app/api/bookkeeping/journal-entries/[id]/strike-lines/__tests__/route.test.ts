@@ -149,6 +149,9 @@ describe('POST /api/bookkeeping/journal-entries/[id]/strike-lines', () => {
         },
       ],
       p_user_id: 'user-1',
+      // The cookie-session door runs as actor 'user' (withRouteContext).
+      p_actor_type: 'user',
+      p_actor_label: null,
     })
   })
 

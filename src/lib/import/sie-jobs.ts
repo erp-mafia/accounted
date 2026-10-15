@@ -12,6 +12,7 @@ import { isValidBASRange } from './account-mapper'
 import { SIELegacyReviewRequiredError } from './sie-legacy-recovery'
 import { checkSIEOrgNumber } from './sie-org-number'
 import { getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
+import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
 
 export interface SIEJobOptions {
   filename: string
@@ -62,6 +63,18 @@ export function sieImportCommitActor(
   if (!actor) return null
   const base = SIE_IMPORT_SOURCE_LABELS[source]
   return { type: actor.type, label: actor.label ? `${base}: ${actor.label}` : base }
+}
+
+/**
+ * WHO the stornos of an SIE undo record as their committer: the actor that
+ * asked for the undo, labelled as an undo. request_sie_import_undo records it
+ * on the job and undo_sie_import_chunk stamps it on each storno (commit_method
+ * 'migration', migration 20261016005200). Undefined outside an actor scope:
+ * no stamp, as before.
+ */
+export function sieUndoCommitActor(actor: CommitActor | undefined): CommitActor | undefined {
+  if (!actor) return undefined
+  return { type: actor.type, label: actor.label ? `SIE undo: ${actor.label}` : 'SIE undo' }
 }
 
 export interface SIEJobInput {
@@ -418,9 +431,12 @@ export async function requestSIEJobAction(supabase: SupabaseClient, companyId: s
   if (lookup.error) throw lookup.error
   if (!lookup.data) throw Object.assign(new Error('SIE import not found'), { code: 'NOT_FOUND' })
   if (!lookup.data.job_state) throw new SIELegacyReviewRequiredError()
-  const { data, error } = await supabase.rpc(action === 'undo' ? 'request_sie_import_undo' : 'resume_sie_import_job', {
-    p_company_id: companyId, p_import_id: importId, p_actor: userId,
-  })
+  const params = { p_company_id: companyId, p_import_id: importId, p_actor: userId }
+  // An undo records who asked for it, so its stornos can name them; a resume
+  // keeps the actor the undo request recorded.
+  const { data, error } = action === 'undo'
+    ? await rpcWithActor(supabase, 'request_sie_import_undo', params, sieUndoCommitActor(getActor()))
+    : await supabase.rpc('resume_sie_import_job', params)
   if (error) throw jobDatabaseError(error)
   return data as SIEJob
 }

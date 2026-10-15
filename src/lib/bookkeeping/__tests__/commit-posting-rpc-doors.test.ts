@@ -22,6 +22,7 @@ vi.mock('@/lib/bookkeeping/account-backfill', () => ({
   backfillStandardBASAccounts: vi.fn().mockResolvedValue([]),
 }))
 
+const { runWithActor } = await import('@/lib/bookkeeping/actor-context-node')
 const {
   commitMatchBatchAllocation,
   commitExpensePayoutBatch,
@@ -269,5 +270,40 @@ describe.each(DOORS.filter((d) => d.rpcName.startsWith('link_')))('$name without
     expect(result).toEqual({ data: linked, error: null })
     expect(calls).toHaveLength(0)
     expect(emit).not.toHaveBeenCalled()
+  })
+})
+
+// WHO posted the verifikat (migration 20261016005100): each door hands the
+// actor of the surrounding scope to its RPC, which forwards it to
+// commit_journal_entry. A database without the migration answers PGRST202,
+// and the door retries once without the actor instead of failing.
+describe.each(DOORS)('$name: the actor', (door) => {
+  it('sends the actor of the current scope beside the RPC arguments', async () => {
+    const { supabase, rpc } = makeSupabase({ data: door.posted })
+
+    await runWithActor({ type: 'api_key', label: 'Bokföringsagent' }, () => door.call(supabase))
+
+    expect(rpc).toHaveBeenCalledTimes(1)
+    expect(rpc).toHaveBeenCalledWith(door.rpcName, {
+      ...door.rpcArgs,
+      p_actor_type: 'api_key',
+      p_actor_label: 'Bokföringsagent',
+    })
+  })
+
+  it('retries once without the actor when the database predates it, and still announces the verifikat', async () => {
+    const { supabase, rpc } = makeSupabase({ data: door.posted })
+    rpc.mockResolvedValueOnce({
+      data: null,
+      error: { code: 'PGRST202', message: `Could not find the function public.${door.rpcName} in the schema cache` },
+    })
+
+    const result = await runWithActor({ type: 'user' }, () => door.call(supabase))
+
+    expect(result).toEqual({ data: door.posted, error: null })
+    expect(rpc).toHaveBeenCalledTimes(2)
+    expect(rpc).toHaveBeenNthCalledWith(1, door.rpcName, { ...door.rpcArgs, p_actor_type: 'user', p_actor_label: null })
+    expect(rpc).toHaveBeenNthCalledWith(2, door.rpcName, door.rpcArgs)
+    expect(emit).toHaveBeenCalledTimes(1)
   })
 })

@@ -180,6 +180,21 @@ describe('commitEventFromEntry', () => {
     expect(ev.actor).toEqual({ type: 'mcp_oauth', user_id: 'user-1', actor_label: 'SIE import: Claude (Anthropic)' })
   })
 
+  it('names the storno of an SIE undo apart from an import, and who asked for the undo (20261016005200)', () => {
+    const ev = commitEventFromEntry({
+      ...baseEntry,
+      source_type: 'storno',
+      reverses_id: 'imported-1',
+      commit_method: 'migration',
+      committed_actor_type: 'api_key',
+      committed_actor_label: 'SIE undo: Byrånyckel',
+    })!
+    expect(ev.details).toContain('Bokföringssätt: Makulering av importerad verifikation (SIE)')
+    expect(ev.details).not.toContain('Bokföringssätt: Importerad (SIE)')
+    expect(ev.details).toContain('Vändningsverifikation (storno)')
+    expect(ev.actor).toEqual({ type: 'api_key', user_id: 'user-1', actor_label: 'SIE undo: Byrånyckel' })
+  })
+
   it('marks storno and rättelse vouchers', () => {
     const storno = commitEventFromEntry({ ...baseEntry, reverses_id: 'x', source_type: 'storno' })!
     expect(storno.details).toContain('Vändningsverifikation (storno)')
@@ -223,6 +238,37 @@ describe('auditRowToEvent: journal_entries', () => {
       auditRow({ action: 'REVERSE', old_state: { voucher_series: 'A', voucher_number: 5, status: 'posted' }, new_state: { voucher_series: 'A', voucher_number: 5, status: 'reversed' } }),
     )!
     expect(ev).toMatchObject({ code: 'journal_entry.reversed', object: 'A5', category: 'verifikation' })
+  })
+
+  it('names who reversed from the storno, not the booker the REVERSE row carries', () => {
+    // The trigger row: the original's user_id and, over PostgREST, actor 'user'.
+    const reverse = auditRow({
+      action: 'REVERSE',
+      record_id: 'entry-1',
+      user_id: 'booker',
+      actor_id: 'booker',
+      old_state: { voucher_series: 'A', voucher_number: 5, status: 'posted' },
+      new_state: { voucher_series: 'A', voucher_number: 5, status: 'reversed', reversed_by_id: 'storno-1' },
+    })
+    type EntryRow = Parameters<typeof commitEventFromEntry>[0]
+    const storno: EntryRow = { ...baseEntry, id: 'storno-1', source_type: 'storno', reverses_id: 'entry-1', user_id: 'reverser' }
+    const ctx = (entry: EntryRow) => ({ rattelseMetadataAt: new Map<string, number[]>(), entryById: new Map([[entry.id, entry]]) })
+
+    // The storno records the credential (commit_journal_entry): it wins.
+    const byKey = auditRowToEvent(reverse, ctx({ ...storno, committed_actor_type: 'api_key', committed_actor_label: 'Bokföringsagent' }))!
+    expect(byKey.actor).toEqual({ type: 'api_key', user_id: 'reverser', actor_label: 'Bokföringsagent' })
+
+    // An older storno without the stamp: still the reverser, never the booker.
+    const byPerson = auditRowToEvent(reverse, ctx(storno))!
+    expect(byPerson.actor).toEqual({ type: 'user', user_id: 'reverser', actor_label: null })
+
+    // An actor on the row itself (an SIE undo) wins over an unstamped storno.
+    const byUndo = auditRowToEvent({ ...reverse, actor_type: 'cron', actor_label: 'cron.x' }, ctx(storno))!
+    expect(byUndo.actor).toEqual({ type: 'cron', user_id: 'booker', actor_label: 'cron.x' })
+
+    // No storno in the report: the row speaks for itself, as before.
+    const alone = auditRowToEvent(reverse)!
+    expect(alone.actor).toEqual({ type: 'user', user_id: 'booker', actor_label: null })
   })
 
   it('emits DELETE only for booked entries', () => {
@@ -560,6 +606,35 @@ describe('rattelseEvent', () => {
     )
     expect(ev.object).toBeNull()
     expect(ev.details).toEqual(['Beskrivning: Hyra → Hyra mars'])
+    // A row from before 20261016005000 records no actor type: the user, as before.
+    expect(ev.actor).toEqual({ type: 'user', user_id: 'user-2', actor_label: null })
+  })
+
+  it('names the API key, OAuth client or cron job that relayed the rättelse (20261016005000)', () => {
+    const row = {
+      id: 'r4',
+      journal_entry_id: 'entry-1',
+      rattelse_type: 'lines' as const,
+      old_description: null,
+      new_description: null,
+      old_entry_date: null,
+      new_entry_date: null,
+      struck_lines: [{ account_number: '6540', debit_amount: 1200, credit_amount: 0 }],
+      added_lines: [{ account_number: '6550', debit_amount: 1200, credit_amount: 0 }],
+      actor: 'user-2',
+      created_at: '2026-03-11T08:00:00Z',
+    }
+    const labels = new Map([['user-2', 'anna@example.se']])
+
+    const byKey = rattelseEvent({ ...row, actor_type: 'api_key', actor_label: 'Bokföringsagent' }, new Map([['entry-1', baseEntry]]))
+    expect(byKey.actor).toEqual({ type: 'api_key', user_id: 'user-2', actor_label: 'Bokföringsagent' })
+    expect(formatActorLabel(byKey.actor, labels)).toBe('API-nyckel: Bokföringsagent')
+
+    const byConnector = rattelseEvent({ ...row, actor_type: 'mcp_oauth', actor_label: 'Claude' }, new Map())
+    expect(formatActorLabel(byConnector.actor, labels)).toBe('MCP-anslutning: Claude')
+
+    const byPerson = rattelseEvent({ ...row, actor_type: 'user', actor_label: null }, new Map())
+    expect(formatActorLabel(byPerson.actor, labels)).toBe('anna@example.se')
   })
 })
 

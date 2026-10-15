@@ -1,0 +1,1 @@
+[2026-10-15] SIE undo stornos record who asked for the undo (sie_imports.undo_actor_*, set by request_sie_import_undo or a replacement's commit_actor) with commit_method 'migration' like the import; a resume keeps the requester: the request is the act, a resume only continues it.

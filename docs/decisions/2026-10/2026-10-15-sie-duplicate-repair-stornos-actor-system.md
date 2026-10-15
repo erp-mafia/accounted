@@ -1,0 +1,1 @@
+[2026-10-15] Reviewed SIE duplicate repair stornos record actor 'system' (label 'SIE duplicate repair') with commit_method 'migration': only the operator script stages a repair (service_role), so no user, key or connector acted; the approving uuid stays in user_id.
