@@ -1559,7 +1559,7 @@ export const arcimMigrationExtension: Extension = {
             filename: 'migration-sie-'+parsed.stats.fiscalYearStart+'.se',
             ...options,updateAccountNames:options.updateAccountNames ?? true,
             onExistingPeriod:options.supersedesImportId ? 'replace' : 'block',
-          },originalFile)
+          },originalFile,'provider_migration')
           after(async () => { await runSIEWorker({importId:job.id}) })
           return NextResponse.json({importId:job.id,state:job.job_state,
             warnings:artifactScan.flagged ? [formatSieArtifactWarning(artifactScan)] : [],

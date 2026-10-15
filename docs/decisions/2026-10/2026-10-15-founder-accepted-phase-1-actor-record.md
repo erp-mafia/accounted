@@ -1,0 +1,1 @@
+[2026-10-15] Founder accepted Phase 1 "actor record on every write", resolving the crm#1078 item left 2026-10-11: storno and rättelse insert an unnumbered draft posted via commit_journal_entry (commitStornoOrCorrectionDraft), so the new verifikat records its actor; a failed one burns no number.

@@ -5,7 +5,8 @@ import type { JournalEntry } from '@/types'
  * the rättelse, the verifikat that replaces the corrected one:
  *   carried:  copied from the corrected verifikat as it is
  *   written:  set by correctEntry (some values come from the original)
- *   database: generated for the new row by a column default or a trigger
+ *   database: generated for the new row by a column default, a trigger or
+ *             commit_journal_entry when it posts the row
  *   left:     deliberately not carried, so the new row gets NULL or the
  *             column default; the reason is on the line
  */
@@ -49,7 +50,7 @@ export const CORRECTION_COLUMN_POLICY = {
   company_id: 'written',
   user_id: 'written', // who made the correction, not who booked the original
   fiscal_period_id: 'written', // the original's, unless the correction moves it (recordateEntry)
-  voucher_number: 'written', // next number in the series
+  voucher_number: 'written', // 0 on the draft; commit_journal_entry draws the next number in the series
   voucher_series: 'written', // the original's series
   entry_date: 'written', // the original's, unless the correction moves it
   description: 'written', // the caller's text, else "Rättelse: <original>"
@@ -62,14 +63,16 @@ export const CORRECTION_COLUMN_POLICY = {
   updated_at: 'database',
   committed_at: 'database', // set_committed_at, when this verifikat is posted
   committed_by: 'database', // stamp_journal_entry_committed_by
+  // WHO and HOW of THIS commit, never the original's: commit_journal_entry
+  // stamps them from the correcting actor (commitStornoOrCorrectionDraft).
+  commit_method: 'database', // derived from that actor (defaultCommitMethod)
+  committed_actor_type: 'database', // the user, key, OAuth client or cron job correcting
+  committed_actor_label: 'database',
 
   reverses_id: 'left', // only a storno reverses
   reversed_by_id: 'left', // each verifikat's own link to its storno
   source_id: 'left', // polymorphic on source_type, which is 'correction' here; readers follow correction_of_id (DECISIONS 2026-09-06)
   attachment_urls: 'left', // legacy column nothing writes; underlag moves through relink_documents_to_correction
-  commit_method: 'left', // how the ORIGINAL was committed
-  committed_actor_type: 'left', // who relayed the ORIGINAL commit
-  committed_actor_label: 'left',
   rubric_version: 'left', // categorisation provenance of the original booking
   source_voucher_series: 'left', // the imported voucher's identity in its source system
   source_voucher_number: 'left',

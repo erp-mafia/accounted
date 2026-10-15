@@ -69,7 +69,6 @@ function supabaseFor(original: Record<string, unknown>) {
   const jeResults = [
     { data: original, error: null }, // fetch original (.single)
     { data: reversal, error: null }, // insert storno (.single)
-    { data: null, error: null }, // post storno (await)
     { data: [{ id: 'entry-1' }], error: null }, // CAS original -> reversed (await)
     { data: { ...reversal, lines: [] }, error: null }, // fetch the complete storno (.single)
   ]
@@ -101,7 +100,7 @@ function supabaseFor(original: Record<string, unknown>) {
   return {
     rpc: vi.fn().mockImplementation(async (name: string) => {
       order.push(`rpc:${name}`)
-      return name === 'next_voucher_number' ? { data: 13, error: null } : { data: {}, error: null }
+      return name === 'commit_journal_entry' ? { data: [{ voucher_number: 13 }], error: null } : { data: {}, error: null }
     }),
     from: vi.fn().mockImplementation((table: string) => {
       if (table === 'journal_entries') return journalEntries()
@@ -126,7 +125,7 @@ beforeEach(() => {
 })
 
 describe('reverseEntry: rot_rut_reclassification', () => {
-  it('checks the begäran before drawing a voucher number, and reverts the invoice after the storno is posted', async () => {
+  it('checks the begäran before writing the storno, and reverts the invoice after the storno is posted', async () => {
     const original = reclassification()
     const supabase = supabaseFor(original)
 
@@ -138,10 +137,10 @@ describe('reverseEntry: rot_rut_reclassification', () => {
 
     const at = (step: string) => order.indexOf(step)
     expect(at('assert')).toBeGreaterThanOrEqual(0)
-    expect(at('assert')).toBeLessThan(at('rpc:next_voucher_number'))
-    expect(at('rpc:next_voucher_number')).toBeLessThan(at('insert:storno'))
-    expect(at('insert:storno')).toBeLessThan(at('update:posted'))
-    expect(at('update:posted')).toBeLessThan(at('update:reversed'))
+    expect(at('assert')).toBeLessThan(at('insert:storno'))
+    // The storno draft takes its number when commit_journal_entry posts it.
+    expect(at('insert:storno')).toBeLessThan(at('rpc:commit_journal_entry'))
+    expect(at('rpc:commit_journal_entry')).toBeLessThan(at('update:reversed'))
     expect(at('update:reversed')).toBeLessThan(at('sync'))
   })
 

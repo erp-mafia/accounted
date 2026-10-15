@@ -181,13 +181,13 @@ describe('voucher number atomicity', () => {
   })
 
   /**
-   * allocateVoucherNumber is still used by reverseEntry and storno-service.
-   * Those flows INSERT a new entry (not UPDATE a draft), so the atomic
-   * commit_journal_entry RPC doesn't apply. Burned numbers can still occur
-   * in reversal/correction flows if the INSERT fails after the counter
-   * increments. This is documented and expected.
+   * reverseEntry and storno-service no longer draw a number up front: they
+   * insert an unnumbered draft and post it through commit_journal_entry
+   * (commitStornoOrCorrectionDraft), so a failed reversal or correction burns
+   * no number. allocateVoucherNumber stays exported as the primitive over
+   * next_voucher_number.
    */
-  it('allocateVoucherNumber remains available for reversal/storno flows', async () => {
+  it('allocateVoucherNumber draws from next_voucher_number in the given series', async () => {
     const supabase = {
       rpc: vi.fn().mockResolvedValue({ data: 7, error: null }),
     }

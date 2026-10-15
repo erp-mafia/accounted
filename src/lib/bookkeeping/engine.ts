@@ -16,7 +16,6 @@ import {
   EntryAlreadyReversedError,
   EntryDateOutsideFiscalPeriodError,
   FiscalPeriodNotFoundError,
-  withUnusedVoucherAllocation,
   JournalEntryNotBalancedError,
   JournalLineNegativeAmountError,
   JournalLineBothSidesNonZeroError,
@@ -938,6 +937,51 @@ export async function commitEntry(
   return result
 }
 
+/**
+ * Post the storno or rättelse draft a correction path built (reverseEntry
+ * below, correctEntry in storno-service) through commit_journal_entry, the
+ * RPC commitEntry uses. The voucher number is drawn, the status set and the
+ * commit stamp written in one transaction, so a failure burns no number, and
+ * the new verifikat records WHO (committed_actor_*, from the surrounding
+ * runWithActor scope) and HOW (commit_method, derived from that actor) like
+ * any other commit; the audit_log COMMIT row names the same actor. Only the
+ * new reversing or correcting verifikat is stamped: the corrected original
+ * is never touched here.
+ *
+ * Unlike commitEntry it runs no mandatory-dimension check (history always
+ * reverses, whatever the policy) and emits no journal_entry.committed: the
+ * correction paths announce the reversal or correction themselves.
+ *
+ * Returns the RPC error instead of throwing, so each caller keeps its own
+ * cleanup and error translation.
+ */
+export async function commitStornoOrCorrectionDraft(
+  supabase: SupabaseClient,
+  companyId: string,
+  entryId: string,
+): Promise<{ error: { message: string; code?: string } | null }> {
+  const actor = getActor()
+  const { error } = await supabase.rpc('commit_journal_entry', {
+    p_company_id: companyId,
+    p_entry_id: entryId,
+    p_commit_method: defaultCommitMethod(actor),
+    p_rubric_version: null,
+    p_actor_type: actor?.type ?? null,
+    p_actor_label: actor?.label ?? null,
+  })
+  if (error) {
+    log.error('commit_journal_entry RPC failed for a storno or rättelse draft', error, {
+      operation: 'commit_storno_or_correction',
+      companyId,
+      entityType: 'journal_entry',
+      entityId: entryId,
+      pgCode: (error as { code?: string }).code,
+    })
+    return { error }
+  }
+  return { error: null }
+}
+
 export interface CommitAssetDisposalInput {
   asset_id: string
   fiscal_period_id: string
@@ -1765,6 +1809,10 @@ export async function cancelOrphanedEntry(
 /**
  * Create a reversal entry for an existing journal entry
  * Sets reversed_by_id/reverses_id links for compliance tracking
+ *
+ * The reversal is posted through commit_journal_entry
+ * (commitStornoOrCorrectionDraft), so it records the actor of the
+ * surrounding runWithActor scope like any other commit.
  */
 export async function reverseEntry(
   supabase: SupabaseClient,
@@ -1847,48 +1895,27 @@ export async function reverseEntry(
 
   // The storno is numbered in the original's series and booked into the
   // original's fiscal year, so its date must lie inside that year and the year
-  // must be open (BFL 5 kap 5 §, BFNAR 2013:2 p. 2.17-2.18). Checked before the
-  // number is drawn: the period-lock trigger only refused the insert, after
-  // the sequence had moved on, and left an undocumented gap.
+  // must be open (BFL 5 kap 5 §, BFNAR 2013:2 p. 2.17-2.18). Checked before
+  // anything is written: the period-lock trigger only refused the insert.
   const entryDate = await assertStornoTarget(supabase, companyId, original, reversalDate)
-
-  // Get voucher number for the reversal
-  const voucherNumber = await allocateVoucherNumber(
-    supabase,
-    companyId,
-    original.fiscal_period_id,
-    original.voucher_series || 'A'
-  )
-  const unusedVoucherAllocation = {
-    fiscalPeriodId: original.fiscal_period_id,
-    voucherSeries: original.voucher_series || 'A',
-    voucherNumber,
-  }
 
   // Resolve account IDs: include inactive rows. The accounts on the
   // original committed entry were active at commit time; if the user has
   // since toggled one off, the storno must still be allowed to go through
   // (BFL 5 kap 5§). Only a truly missing chart row (rare: would require
   // the row to have been deleted) still throws AccountsNotInChartError.
-  let accountIdMap: Map<string, string>
-  try {
-    accountIdMap = await resolveAccountIds(supabase, companyId, reversedLines, { includeInactive: true })
-  } catch (resolveError) {
-    // The sequence RPC committed, but no reversal row exists yet. Carry the
-    // exact unused number so the caller can document this real gap.
-    throw withUnusedVoucherAllocation(resolveError, unusedVoucherAllocation)
-  }
+  const accountIdMap = await resolveAccountIds(supabase, companyId, reversedLines, { includeInactive: true })
 
   const reversalAccountNumbers = [...new Set(reversedLines.map(l => l.account_number))]
   const missingReversalAccounts = reversalAccountNumbers.filter(num => !accountIdMap.has(num))
   if (missingReversalAccounts.length > 0) {
-    throw withUnusedVoucherAllocation(
-      new AccountsNotInChartError(missingReversalAccounts),
-      unusedVoucherAllocation,
-    )
+    throw new AccountsNotInChartError(missingReversalAccounts)
   }
 
-  // Create reversal entry with reverses_id link. No `notes`: the note
+  // Create the reversal as a draft with reverses_id link. It holds no voucher
+  // number yet (drafts are outside the verifikationsserie): commit_journal_entry
+  // draws the next number in the original's series and period when it posts
+  // it below, so a failure before that burns none. No `notes`: the note
   // describes the affärshändelse, and a storno cancels it instead of
   // representing it. The reversed original keeps its own note, and this
   // entry's text names the verifikat it reverses (crm#1078).
@@ -1898,7 +1925,7 @@ export async function reverseEntry(
       company_id: companyId,
       user_id: userId,
       fiscal_period_id: original.fiscal_period_id,
-      voucher_number: voucherNumber,
+      voucher_number: 0,
       voucher_series: original.voucher_series || 'A',
       entry_date: entryDate,
       description: `Makulering: ${original.description}`,
@@ -1911,16 +1938,9 @@ export async function reverseEntry(
     .single()
 
   if (reversalError) {
-    // PostgreSQL rejected the insert, so the allocated number is confirmed
-    // unused and can be explained without guessing from the original entry.
-    throw withUnusedVoucherAllocation(
-      new BookkeepingDatabaseError('create_reversal_entry', reversalError.message, reversalError.code),
-      unusedVoucherAllocation,
-    )
+    throw new BookkeepingDatabaseError('create_reversal_entry', reversalError.message, reversalError.code)
   }
   if (!reversalEntry) {
-    // No database error means the outcome is ambiguous. Do not label the
-    // number unused unless the engine has a confirmed failure state.
     throw new BookkeepingDatabaseError('create_reversal_entry', undefined)
   }
 
@@ -1932,26 +1952,22 @@ export async function reverseEntry(
     .insert(lineInserts)
 
   if (linesError) {
-    // Keep the reversal header as cancelled bookkeeping evidence. The gap
-    // detector counts every non-draft header, including cancelled rows, so
-    // this allocation is still used and must not be labelled as a gap.
+    // Keep the reversal header as cancelled bookkeeping evidence. It is still
+    // a draft without a number, so no voucher number is used or lost.
     await supabase.from('journal_entries').update({ status: 'cancelled' }).eq('id', reversalEntry.id)
     await supabase.from('journal_entry_lines').delete().eq('journal_entry_id', reversalEntry.id)
     throw new BookkeepingDatabaseError('create_reversal_lines', linesError.message, linesError.code)
   }
 
-  // Post the reversal entry
-  const { error: postError } = await supabase
-    .from('journal_entries')
-    .update({ status: 'posted' })
-    .eq('id', reversalEntry.id)
+  // Post the reversal: number, status and the commit stamp (the acting
+  // user, key, OAuth client or cron job) in one transaction.
+  const { error: postError } = await commitStornoOrCorrectionDraft(supabase, companyId, reversalEntry.id)
 
   if (postError) {
-    // As above, cleanup preserves the allocated voucher on the cancelled
-    // header. A failed or ambiguous cleanup also cannot prove it unused.
-    // The post may still have landed (an ambiguous error), so this goes
-    // through the gated cleanup door, which cancels a draft or a fresh posted
-    // orphan alike and keeps its lines.
+    // The RPC rolls back on any error, so the reversal is normally still a
+    // draft without a number. The post may still have landed (an ambiguous
+    // error), so this goes through the gated cleanup door, which cancels a
+    // draft or a fresh posted orphan alike and keeps its lines.
     await cancelOrphanedEntry(supabase, companyId, userId, reversalEntry.id)
     throw new BookkeepingDatabaseError('post_reversal_entry', postError.message, postError.code)
   }

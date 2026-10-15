@@ -5,7 +5,7 @@ import type {
   JournalEntry,
   JournalEntryLine,
 } from '@/types'
-import { validateBalance, allocateVoucherNumber, cancelOrphanedEntry } from '@/lib/bookkeeping/engine'
+import { validateBalance, cancelOrphanedEntry, commitStornoOrCorrectionDraft } from '@/lib/bookkeeping/engine'
 import { buildStornoLines } from '@/lib/bookkeeping/line-side'
 import {
   dimensionsBagKey,
@@ -299,28 +299,25 @@ export async function correctEntry(
   }
 
   // The storno lands on the original's date in the original's year, which
-  // must be open: refused before the first voucher number is drawn, so a
-  // correction in a locked or closed year burns no number (the period-lock
-  // trigger only refused the insert, after the sequence had moved on).
+  // must be open: refused before anything is written, so a correction in a
+  // locked or closed year leaves no draft behind (the period-lock trigger
+  // would only refuse the insert).
   await assertStornoTarget(supabase, companyId, original)
 
   // ===== Step 1: Create storno (reversal) entry =====
   // No note on the storno: the note describes the affärshändelse, which the
-  // correction now represents (correction-column-policy.ts).
-  const reversalVoucherNumber = await allocateVoucherNumber(
-    supabase,
-    companyId,
-    original.fiscal_period_id,
-    original.voucher_series || 'A'
-  )
-
+  // correction now represents (correction-column-policy.ts). Both new
+  // verifikat are inserted as drafts without a number (voucher_number 0) and
+  // posted through commit_journal_entry, which draws the next number in the
+  // series and stamps WHO (the acting user, key, OAuth client or cron job)
+  // and HOW in the same transaction (commitStornoOrCorrectionDraft).
   const { data: reversalEntry, error: reversalError } = await supabase
     .from('journal_entries')
     .insert({
       company_id: companyId,
       user_id: userId,
       fiscal_period_id: original.fiscal_period_id,
-      voucher_number: reversalVoucherNumber,
+      voucher_number: 0,
       voucher_series: original.voucher_series || 'A',
       entry_date: original.entry_date,
       description: `Storno: ${original.description}`,
@@ -365,11 +362,12 @@ export async function correctEntry(
     throw new BookkeepingDatabaseError('create_reversal_lines', reversalLinesError.message)
   }
 
-  // Post the reversal entry
-  const { error: postReversalError } = await supabase
-    .from('journal_entries')
-    .update({ status: 'posted' })
-    .eq('id', reversalEntry.id)
+  // Post the reversal entry: number, status and commit stamp together.
+  const { error: postReversalError } = await commitStornoOrCorrectionDraft(
+    supabase,
+    companyId,
+    reversalEntry.id
+  )
 
   if (postReversalError) {
     await cancelEntry(supabase, companyId, userId, reversalEntry.id)
@@ -387,13 +385,6 @@ export async function correctEntry(
   let correctedEntry: typeof reversalEntry
 
   try {
-    const correctedVoucherNumber = await allocateVoucherNumber(
-      supabase,
-      companyId,
-      correctedPeriodId,
-      original.voucher_series || 'A'
-    )
-
     // Account IDs were resolved (and standard BAS accounts seeded) in Step 0,
     // before the storno existed: nothing to clean up if we got this far.
     // The header is the columns written here plus the ones carried from the
@@ -406,7 +397,7 @@ export async function correctEntry(
         company_id: companyId,
         user_id: userId,
         fiscal_period_id: correctedPeriodId,
-        voucher_number: correctedVoucherNumber,
+        voucher_number: 0, // drawn by commit_journal_entry when it is posted
         voucher_series: original.voucher_series || 'A',
         entry_date: correctedDate,
         // A caller-supplied verifikationstext wins; blank falls back to the
@@ -458,11 +449,12 @@ export async function correctEntry(
       throw new BookkeepingDatabaseError('create_corrected_lines', correctedLinesError.message)
     }
 
-    // Post the corrected entry
-    const { error: postCorrectedError } = await supabase
-      .from('journal_entries')
-      .update({ status: 'posted' })
-      .eq('id', correctedEntry.id)
+    // Post the corrected entry: number, status and commit stamp together.
+    const { error: postCorrectedError } = await commitStornoOrCorrectionDraft(
+      supabase,
+      companyId,
+      correctedEntry.id
+    )
 
     if (postCorrectedError) {
       await cancelEntry(supabase, companyId, userId, correctedEntry.id)

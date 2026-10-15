@@ -299,6 +299,8 @@ const COMMIT_METHOD_LABELS: Record<string, string> = {
   bulk_accept: 'Godkänd i massbokning',
   api_key: 'Via API-nyckel',
   agent_relay: 'Godkänd via assistenten',
+  // An SIE import or provider migration (write_sie_job_entries, 20261015235000).
+  migration: 'Importerad (SIE)',
 }
 
 const JOURNAL_ENTRY_FIELDS: Record<string, string> = {

@@ -29,9 +29,10 @@ import { resolvePeriodStatusForDate } from './period-service'
  *     before the company lock date (unlock first). Also when the lock lookup
  *     fails: resolvePeriodStatusForDate fails closed.
  *
- * Refusing here, before allocateVoucherNumber, is what keeps a refused storno
- * from burning a number: the period-lock trigger refused only the insert,
- * after the sequence had moved on, and left an undocumented gap.
+ * Refusing here, before anything is written, gives a refused storno a typed
+ * answer and leaves no draft behind. It once also kept a refused storno from
+ * burning a number (the number was drawn before the insert); the storno is
+ * now numbered by commit_journal_entry when it is posted.
  */
 export async function assertStornoTarget(
   supabase: SupabaseClient,

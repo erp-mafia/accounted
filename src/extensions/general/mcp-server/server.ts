@@ -836,6 +836,15 @@ export interface ActorContext {
    * enumerate companies list only this one under a pin.
    */
   pinnedCompanyId?: string | null
+  /**
+   * True when the key was minted by the OAuth sign-in (a connector such as
+   * claude.ai or ChatGPT), false or absent for a key a person created.
+   * Decided from the key's reserved name (OAUTH_MCP_KEY_NAME) before
+   * handleMcpRequest replaces the label with the client's display name, so
+   * the commit stamp never reads the classification off a display string.
+   * Only meaningful for `type: 'api_key'`.
+   */
+  oauthKey?: boolean
 }
 
 // ── JSON-RPC types ───────────────────────────────────────────
@@ -4011,12 +4020,15 @@ async function commitStagedOperation(params: {
   // journal_entries.committed_actor_* and the audit_log COMMIT row.
   const commitMethod =
     actor?.type === 'api_key' ? ('api_key' as const) : ('user_accept' as const)
-  // WHO, for the immutable layer: a key minted by the OAuth sign-in carries
-  // OAUTH_MCP_KEY_NAME, its only marker, so its commits say mcp_oauth. Named
-  // here, on the commit actor, and not on the connection's ActorContext,
-  // whose type 'api_key' decides company access and limits.
+  // WHO, for the immutable layer: a key minted by the OAuth sign-in commits
+  // as mcp_oauth. Read off actor.oauthKey, which handleMcpRequest decides
+  // from the key's reserved name before it swaps the label for the client's
+  // display name ('Claude (Anthropic)'); comparing the label here made every
+  // claude.ai and ChatGPT commit say api_key. Named here, on the commit
+  // actor, and not on the connection's ActorContext, whose type 'api_key'
+  // decides company access and limits.
   const commitActorType =
-    actor?.type !== 'api_key' ? 'user' : actor.label === OAUTH_MCP_KEY_NAME ? 'mcp_oauth' : 'api_key'
+    actor?.type !== 'api_key' ? 'user' : actor.oauthKey === true ? 'mcp_oauth' : 'api_key'
 
   const result = await commitPendingOperation(supabase, userId, companyId, operation, {
     commitMethod,
@@ -25787,9 +25799,13 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
     if (!rl.ok) return rl.response!
   }
   const supabase = createServiceClientNoCookies()
+  // Classify the key BEFORE its label is replaced below: the reserved name is
+  // the OAuth key's only marker, and the commit stamp reads this flag rather
+  // than the display label (actor.oauthKey).
+  const oauthKey = Boolean(apiKeyId) && apiKeyName === OAUTH_MCP_KEY_NAME
   // Keep the OAuth key's classification name stable: onboarding depends on it.
   // Display identity comes from the server-stored provider, never a client header.
-  if (apiKeyId && apiKeyName === 'MCP-klient (OAuth)') {
+  if (oauthKey && apiKeyId && apiKeyName) {
     const { data: key } = await supabase.from('api_keys').select('client').eq('id', apiKeyId).maybeSingle()
     apiKeyName = oauthActorLabel(key?.client, apiKeyName)
     if (typeof key?.client === 'string' && /^registered:[0-9a-f-]{36}$/i.test(key.client)) {
@@ -25873,6 +25889,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         allowedCompanyIds,
         readOnlyCompanyIds,
         pinnedCompanyId,
+        oauthKey,
       }
 
   // ── Simple company mode ──

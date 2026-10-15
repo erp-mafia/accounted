@@ -39,7 +39,9 @@ function makeClient() {
 
 vi.mock('@/lib/bookkeeping/engine', () => ({
   validateBalance: vi.fn().mockReturnValue({ valid: true, totalDebit: 1008.75, totalCredit: 1008.75 }),
-  allocateVoucherNumber: vi.fn(async () => 1),
+  // Posting through commit_journal_entry: consumes the queued result in the
+  // slot the client-side "update to posted" used to take.
+  commitStornoOrCorrectionDraft: vi.fn(),
 }))
 
 // On-demand BAS backfill: never triggered here (accounts resolve on the
@@ -61,7 +63,7 @@ vi.mock('@/lib/core/bookkeeping/storno-target', () => ({
 }))
 
 import { recordateEntry } from '../storno-service'
-import { validateBalance, allocateVoucherNumber } from '@/lib/bookkeeping/engine'
+import { validateBalance, commitStornoOrCorrectionDraft } from '@/lib/bookkeeping/engine'
 
 const original = makeJournalEntry({
   id: 'orig-1',
@@ -83,8 +85,10 @@ beforeEach(() => {
   results = []
   inserts = []
   vi.mocked(validateBalance).mockReturnValue({ valid: true, totalDebit: 1008.75, totalCredit: 1008.75 })
-  let v = 0
-  vi.mocked(allocateVoucherNumber).mockImplementation(async () => ++v)
+  vi.mocked(commitStornoOrCorrectionDraft).mockImplementation(async () => {
+    const result = results[resultIdx++] ?? { data: null, error: null }
+    return { error: (result.error as { message: string } | null | undefined) ?? null }
+  })
 })
 
 describe('recordateEntry', () => {

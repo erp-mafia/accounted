@@ -11,6 +11,7 @@ import { isAccountNumber } from '@/lib/invariants/account-number'
 import { isValidBASRange } from './account-mapper'
 import { SIELegacyReviewRequiredError } from './sie-legacy-recovery'
 import { checkSIEOrgNumber } from './sie-org-number'
+import { getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
 
 export interface SIEJobOptions {
   filename: string
@@ -27,6 +28,40 @@ export interface SIEJobOptions {
    *  registered under the wrong number). Checked at submit, never stored in
    *  the job's input: that input is the identity an identical retry matches. */
   confirmOrgNumberMismatch?: boolean
+}
+
+/** Which import a job's verifikat name in their commit label. */
+export type SIEImportSource = 'sie_file' | 'provider_migration'
+
+const SIE_IMPORT_SOURCE_LABELS: Record<SIEImportSource, string> = {
+  sie_file: 'SIE import',
+  provider_migration: 'Provider migration (SIE import)',
+}
+
+/** The commit actor sealed into a job's manifest as commit_actor. */
+export interface SIEImportCommitActor {
+  type: CommitActor['type']
+  label: string
+}
+
+/**
+ * WHO the verifikat of an SIE import (a file upload or a provider migration)
+ * record as their committer: the actor that submitted the job (the user, the
+ * API key or the OAuth client), with a label saying they came from an import.
+ * The chunks are written later by the job worker, which may run under a cron,
+ * so the actor is read here at submit and sealed into the job manifest;
+ * import_sie_chunk hands it to write_sie_job_entries, which stamps
+ * committed_actor_* (and commit_method 'migration') when it posts each chunk
+ * (migration 20261015235000). Null outside an actor scope: no stamp, as
+ * before.
+ */
+export function sieImportCommitActor(
+  actor: CommitActor | undefined,
+  source: SIEImportSource = 'sie_file',
+): SIEImportCommitActor | null {
+  if (!actor) return null
+  const base = SIE_IMPORT_SOURCE_LABELS[source]
+  return { type: actor.type, label: actor.label ? `${base}: ${actor.label}` : base }
 }
 
 export interface SIEJobInput {
@@ -286,7 +321,7 @@ export async function getSIEJob(supabase: SupabaseClient, companyId: string, imp
 /** Archive before reserving the execution. The path is immutable and tenant scoped. */
 export async function submitSIEJob(supabase: SupabaseClient, companyId: string, userId: string,
   content: string, mappings: AccountMapping[], options: SIEJobOptions,
-  originalFile?: File,
+  originalFile?: File, source: SIEImportSource = 'sie_file',
 ): Promise<SIEJob> {
   if (!acceptsSIEJobs()) throw new SIEJobValidationError(sieAdmissionRefusal())
   const checkedOptions = SIEJobOptionsSchema.safeParse(options)
@@ -359,9 +394,13 @@ export async function submitSIEJob(supabase: SupabaseClient, companyId: string, 
     .order('created_at',{ascending:false}).limit(1).maybeSingle()
   if (predecessorError) throw new Error(predecessorError.message)
   const replacing = options.onExistingPeriod === 'replace'
+  // commit_actor lives beside input, not in it: an identical retry by
+  // another actor is still the same import.
+  const commitActor = sieImportCommitActor(getActor(), source)
   const { data, error } = await supabase.rpc(replacing ? 'replace_sie_import_job' : 'start_sie_import_job', {
     p_company_id: companyId, p_actor: userId, p_period_id: periodId, p_filename: options.filename,
-    p_file_hash: sourceHash, p_manifest: { input, file_storage_path: path, originalSource },
+    p_file_hash: sourceHash, p_manifest: { input, file_storage_path: path, originalSource,
+      ...(commitActor ? { commit_actor: commitActor } : {}) },
     p_supersedes_import_id: replacing ? options.supersedesImportId : predecessor?.id ?? null,
   })
   if (error) throw jobDatabaseError(error)
