@@ -83,30 +83,15 @@ describe('buildEditorPaymentSummary', () => {
     ])
   })
 
-  it('says Meddelande and the bank-app code when only a bank account prints', () => {
+  it('says Meddelande and no code when only a bank account prints (crm#1191)', () => {
     const summary = buildEditorPaymentSummary(
       input({ settings: settings({ bankgiro: null, clearing_number: '6000', account_number: '658159712' }) }),
     )
     expect(summary.reference).toBe('message')
-    expect(summary.qr.kind).toBe('bank_app')
-    expect(summary.qr.kind && (JSON.parse(summary.qr.payload) as { pt: string }).pt).toBe('BBAN')
+    expect(summary.qr).toMatchObject({ kind: null, reason: 'bank_account_only' })
     expect(describeEditorPaymentSummary(summary)).toEqual([
       { kind: 'text', text: 'Exempelbanken' },
       { kind: 'key', key: 'method_bank_account', values: { number: '6000-658159712' } },
-      { kind: 'key', key: 'reference_message' },
-      { kind: 'key', key: 'qr_bank_app' },
-    ])
-    expect(paymentReason(summary, { lang: 'sv', showOcr: true })).toBeNull()
-  })
-
-  it('prints no code for a bank account whose check digit is wrong', () => {
-    const summary = buildEditorPaymentSummary(
-      input({ settings: settings({ bankgiro: null, clearing_number: '6000', account_number: '658159713' }) }),
-    )
-    expect(summary.qr).toMatchObject({ kind: null, reason: 'invalid_bank_account' })
-    expect(describeEditorPaymentSummary(summary)).toEqual([
-      { kind: 'text', text: 'Exempelbanken' },
-      { kind: 'key', key: 'method_bank_account', values: { number: '6000-658159713' } },
       { kind: 'key', key: 'reference_message' },
     ])
   })
@@ -213,21 +198,18 @@ describe('paymentReason', () => {
     expect(reason(noAccount, { lang: 'sv', showOcr: false })).toEqual({ key: 'reason_no_giro', action: 'add_account' })
   })
 
-  it('is silent when a bank account carries the code (no giro needed)', () => {
-    expect(reason({ settings: settings({ bankgiro: null, clearing_number: '6000', account_number: '658159712' }) })).toBeNull()
+  it('explains that a bank account alone gives no code, and that the account still prints', () => {
+    const bankOnly = { settings: settings({ bankgiro: null, clearing_number: '6000', account_number: '658159712' }) }
+    expect(reason(bankOnly)).toEqual({ key: 'reason_bank_account_only_ocr', action: 'add_account' })
+    expect(reason(bankOnly, { lang: 'en', showOcr: true })).toEqual({ key: 'reason_bank_account_only', action: 'add_account' })
+    expect(reason(bankOnly, { lang: 'sv', showOcr: false })).toEqual({ key: 'reason_bank_account_only', action: 'add_account' })
   })
 
-  it('explains a wrong giro or bank account check digit, and a bank it cannot check', () => {
+  it('explains a wrong giro check digit', () => {
     expect(reason({ settings: settings({ bankgiro: '5050-1056' }) })).toEqual({
       key: 'reason_invalid_giro',
       action: 'fix_account',
     })
-    expect(
-      reason({ settings: settings({ bankgiro: null, clearing_number: '6000', account_number: '658159713' }) }),
-    ).toEqual({ key: 'reason_invalid_bank_account', action: 'fix_account' })
-    expect(
-      reason({ settings: settings({ bankgiro: null, clearing_number: '9020', account_number: '1234567' }) }),
-    ).toEqual({ key: 'reason_unverified_bank_account', action: 'add_account' })
   })
 
   it('writes an IBAN in groups of four', () => {
@@ -301,7 +283,7 @@ describe('paymentReason', () => {
 
   it('promises the link code at send when Stripe creates the link', () => {
     expect(
-      reason({ autoPaymentLink: true, settings: settings({ bankgiro: null, clearing_number: '6000', account_number: '658159713' }) }),
+      reason({ autoPaymentLink: true, settings: settings({ bankgiro: null, clearing_number: '6000', account_number: '658159712' }) }),
     ).toEqual({ key: 'reason_link_at_send', action: null })
     expect(reason({ invoice: { qr_mode: 'payment_link' } })).toEqual({ key: 'reason_no_link', action: 'open_panel' })
   })
@@ -329,13 +311,15 @@ describe('paymentReason: every line exists in Swedish and English', () => {
     }
   })
 
-  it('no longer says the QR code needs a giro, in either language', () => {
+  it('says the bank-app code needs a giro and a bank account alone gives none, in either language', () => {
     for (const messages of [sv.invoice_editor_pay, en.invoice_editor_pay] as Record<string, string>[]) {
-      expect(messages.reason_no_giro).toMatch(/bankkonto|bank account/)
-      expect(messages.reason_no_giro_ocr).toMatch(/bankkonto|bank account/)
+      expect(messages.reason_no_giro).not.toMatch(/bankkonto|bank account/)
+      expect(messages.reason_no_giro_ocr).not.toMatch(/bankkonto|bank account/)
+      expect(messages.reason_bank_account_only).toMatch(/kontonumret|account number/)
+      expect(messages.reason_bank_account_only_ocr).toMatch(/kontonumret|account number/)
     }
-    expect(sv.settings_pdf_print.qr_mode_bank_app_hint).toContain('bankkonto')
-    expect(en.settings_pdf_print.qr_mode_bank_app_hint).toContain('bank account')
+    expect(sv.settings_pdf_print.qr_mode_bank_app_hint).toContain('Med bara ett bankkonto blir det ingen QR-kod')
+    expect(en.settings_pdf_print.qr_mode_bank_app_hint).toContain('With only a bank account there is no QR code')
   })
 })
 

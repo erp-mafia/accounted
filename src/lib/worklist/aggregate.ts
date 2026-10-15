@@ -24,7 +24,7 @@ import {
   countCollectionAttention,
   countCollectionBatchItems,
   countCollectionDecisions,
-  countOverdueInvoices,
+  getOverdueInvoicesDue,
   countPaymentsVerificationDue,
   countPendingOperations,
   countReconciliationDue,
@@ -110,7 +110,7 @@ export async function getWorklistCounts(
     suggestedMatch,
     supplierInvoiceApproval,
     verifikatMissingDocument,
-    overdueInvoice,
+    overdueInvoices,
     deadlineAction,
     pendingOperations,
     reconciliationDue,
@@ -139,7 +139,8 @@ export async function getWorklistCounts(
     options.missingUnderlag
       ? Promise.resolve(options.missingUnderlag).then((s) => s.total)
       : countVerifikatMissingDocument(supabase, companyId),
-    countOverdueInvoices(supabase, companyId),
+    // One read gives the grouped row's facts and its count.
+    getOverdueInvoicesDue(supabase, companyId),
     countDeadlinesNeedingAction(supabase, companyId),
     countPendingOperations(supabase, companyId),
     countReconciliationDue(supabase, companyId),
@@ -168,6 +169,11 @@ export async function getWorklistCounts(
       ? Promise.resolve(options.supplierPayeeChangesDue).then((rows) => rows.length)
       : countSupplierPayeeChangesDue(supabase, companyId),
   ])
+
+  // The overdue customer invoices are one grouped row (lib/worklist/types.ts
+  // OverdueInvoicesDue): the count says how many invoices, the total takes
+  // the row as one thing to do.
+  const overdueInvoice = overdueInvoices?.count ?? 0
 
   return {
     counts: {
@@ -202,7 +208,7 @@ export async function getWorklistCounts(
       inboxDocument +
       supplierInvoiceApproval +
       verifikatMissingDocument +
-      overdueInvoice +
+      (overdueInvoice > 0 ? 1 : 0) +
       deadlineAction +
       pendingOperations +
       reconciliationDue +
@@ -220,5 +226,6 @@ export async function getWorklistCounts(
       bankSwitch +
       paymentsVerificationRenewal +
       supplierPayeeChange,
+    overdueInvoices: overdueInvoice > 0 ? overdueInvoices : null,
   }
 }

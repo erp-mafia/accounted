@@ -52,6 +52,8 @@ interface Props {
   hasUnderlag?: boolean
   /** The business account the dialog currently books to, for the agree check. */
   currentAccount?: string | null
+  /** The reverse-charge box the dialog currently books, for the agree check (accounted#37). */
+  currentBox?: ReverseChargeKind | null
   /** Take the pick as soon as it lands; off when the dialog already has a template of its own. */
   autoApply?: boolean
   /** Take the pick into the dialog: `auto` when it landed on its own, false when the person clicked Använd. */
@@ -108,6 +110,7 @@ export default function AiCategorizeProposal({
   open,
   hasUnderlag = false,
   currentAccount,
+  currentBox = null,
   autoApply = true,
   onTake,
   onProposal,
@@ -193,7 +196,11 @@ export default function AiCategorizeProposal({
     )
   }
 
-  const agrees = !!currentAccount && pick.account === currentAccount
+  // The same account in another reverse-charge box (ruta 21 against 22) is
+  // not agreement: the line then offers the read's box.
+  const boxDiffers =
+    pick.vat === 'reverse_charge' && !!pick.reverseChargeKind && !!currentBox && currentBox !== pick.reverseChargeKind
+  const agrees = !!currentAccount && pick.account === currentAccount && !boxDiffers
 
   return (
     <p className={line}>

@@ -105,7 +105,9 @@ export interface CustomerCreditNoteOriginal {
  *
  * The test is "did the original reach the ledger", not "which accounting
  * method is configured". Under faktureringsmetoden the sale was booked at
- * issue, so the reversal always applies. Under kontantmetoden nothing is
+ * issue, so the reversal always applies; a deferred original that is still
+ * unbooked is booked first (creditBooksOriginalFirst), so the reversal
+ * applies there too. Under kontantmetoden nothing is
  * booked at issue, and skipping the credit note is correct while the invoice
  * is still unpaid: there is no entry to reverse and recognition waits for
  * cash. Once the invoice has been PAID, the payment verifikat already booked
@@ -124,6 +126,16 @@ export function creditNoteNeedsJournalEntry(
   original: CustomerCreditNoteOriginal | null | undefined,
 ): boolean {
   if ((accountingMethod || 'accrual') === 'accrual') return true
+  return customerOriginalReachedLedger(original)
+}
+
+/**
+ * Whether the customer invoice's sale is in the ledger: its own verifikat is
+ * linked (at issue, by the explicit Bokför step, or a migrated
+ * registration), or it was paid, and the payment booked the full cash-style
+ * entry because no entry existed yet.
+ */
+function customerOriginalReachedLedger(original: CustomerCreditNoteOriginal | null | undefined): boolean {
   if (!original) return false
   return (
     !!original.journal_entry_id ||
@@ -131,6 +143,37 @@ export function creditNoteNeedsJournalEntry(
     !!original.paid_at ||
     Math.round(Math.abs(original.paid_amount ?? 0) * 100) !== 0
   )
+}
+
+/**
+ * Whether crediting this customer invoice must first book the original's own
+ * verifikat (accounted#45).
+ *
+ * Under faktureringsmetoden with defer_invoice_booking (#967) an invoice is
+ * sent without a verifikat and booked later by the explicit Bokför step. The
+ * sent invoice and its kreditfaktura are both affärshändelser that must be
+ * bokförda (BFL 5 kap 1-2 §§; faktureringsmetoden books at fakturadatum),
+ * and the credit verifikat is the mirror of the original's (ML 17 kap
+ * 22-23 §§: utgående moms is reduced in the credit's period). Reversing a
+ * sale the books never recorded would understate revenue and utgående moms,
+ * and afterwards the original could not be booked at all (it is credited).
+ * So the credit books the original first through the same Bokför step, then
+ * posts its own reversal.
+ *
+ * Deferred companies only: there a missing link is what "unbooked" means,
+ * the way the worklist and the Bokför step read it. A company that books at
+ * issue can hold unlinked originals whose sale is in the ledger through
+ * migrated or SIE-imported verifikat (fxExposureScope reads them the same
+ * way), and booking those again would double the revenue. Kontantmetoden
+ * books the sale at payment, never here.
+ */
+export function creditBooksOriginalFirst(
+  settings: Parameters<typeof booksInvoicesOnIssue>[0],
+  original: CustomerCreditNoteOriginal | null | undefined,
+): boolean {
+  if (!original) return false
+  if (invoiceBookingMoment(settings) !== 'manual') return false
+  return !customerOriginalReachedLedger(original)
 }
 
 /** The booked-ness signals on a supplier invoice being credited. */

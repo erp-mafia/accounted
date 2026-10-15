@@ -132,9 +132,9 @@ describe('sortInvoiceList', () => {
       makeInvoice({ id: 'credited', status: 'credited' }),
       makeInvoice({ id: 'credit', status: 'sent', credited_invoice_id: 'original' }),
       makeInvoice({ id: 'paid', status: 'paid' }),
-      makeInvoice({ id: 'overdue', status: 'overdue' }),
+      makeInvoice({ id: 'overdue', status: 'overdue', due_date: '2024-01-31', remaining_amount: 100 }),
       makeInvoice({ id: 'partial', status: 'partially_paid' }),
-      makeInvoice({ id: 'sent', status: 'sent' }),
+      makeInvoice({ id: 'sent', status: 'sent', due_date: '2099-12-31', remaining_amount: 100 }),
       makeInvoice({ id: 'draft', status: 'draft' }),
     ]
 
@@ -148,6 +148,18 @@ describe('sortInvoiceList', () => {
       'credited',
       'cancelled-credit',
     ])
+  })
+
+  it('sorts a sent invoice past its due date with the overdue ones, as its status line reads (crm#1084)', () => {
+    const invoices = [
+      makeInvoice({ id: 'late', status: 'sent', due_date: '2026-09-30', remaining_amount: 100 }),
+      makeInvoice({ id: 'partial', status: 'partially_paid', due_date: '2026-11-30' }),
+      makeInvoice({ id: 'on-time', status: 'sent', due_date: '2026-10-30', remaining_amount: 100 }),
+    ]
+
+    expect(
+      sortInvoiceList(invoices, { column: 'status', direction: 'asc' }, true, '2026-10-13').map((i) => i.id),
+    ).toEqual(['on-time', 'partial', 'late'])
   })
 
   it('does not mutate input and uses newest date then id as stable tie-breakers', () => {

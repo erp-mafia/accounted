@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { orgNumberKey } from '@/lib/invariants/org-number'
+import { decideOrgNumberChange, validStoredOrgNumber, type OrgNumberChange } from '@/lib/company/org-number-rule'
 
 /**
  * The company's organisationsnummer as Accounted Connect's contract carries
@@ -24,4 +25,37 @@ export async function companyOrgNumber(supabase: SupabaseClient, companyId: stri
   if (fromSettings) return fromSettings
   const { data: company } = await supabase.from('companies').select('org_number').eq('id', companyId).maybeSingle()
   return orgNumberKey((company as { org_number?: string | null } | null)?.org_number ?? null)
+}
+
+/**
+ * What writing `incoming` as the company's org number does, under the one
+ * rule in lib/company/org-number-rule.ts, reading the stored copies it needs.
+ * The company row is read only when the settings copy does not already decide
+ * it (no change, or a valid number there). `settings` is the company_settings
+ * row the caller already holds; its entity_type leads, the company row's
+ * stands in for legacy rows without one. A failed read fails closed.
+ */
+export async function resolveOrgNumberChange(
+  supabase: SupabaseClient,
+  companyId: string,
+  incoming: string | null | undefined,
+  settings: { org_number?: unknown; entity_type?: unknown } | null,
+): Promise<OrgNumberChange | { kind: 'error'; error: unknown }> {
+  const storedSettings = typeof settings?.org_number === 'string' ? settings.org_number : null
+  const settingsOnly = decideOrgNumberChange({ incoming, storedSettings, storedCompany: null, entityType: settings?.entity_type })
+  if (settingsOnly.kind === 'unchanged' || validStoredOrgNumber(storedSettings) !== null) return settingsOnly
+
+  const { data: company, error } = await supabase
+    .from('companies')
+    .select('org_number, entity_type')
+    .eq('id', companyId)
+    .maybeSingle()
+  if (error) return { kind: 'error', error }
+  const row = company as { org_number?: string | null; entity_type?: string | null } | null
+  return decideOrgNumberChange({
+    incoming,
+    storedSettings,
+    storedCompany: row?.org_number ?? null,
+    entityType: settings?.entity_type || row?.entity_type,
+  })
 }

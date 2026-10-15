@@ -13,7 +13,8 @@ import {
   countDeadlinesNeedingAction,
   countFailedPeppolDeliveries,
   countInboxDocuments,
-  countOverdueInvoices,
+  getOverdueInvoicesDue,
+  summarizeOverdueInvoices,
   countPendingOperations,
   countCollectionBatchItems,
   countReconciliationDue,
@@ -244,13 +245,135 @@ describe('countVerifikatMissingDocument', () => {
 describe('simple head counts', () => {
   it.each([
     ['countSupplierInvoicesAwaitingApproval', countSupplierInvoicesAwaitingApproval, 'supplier_invoices'],
-    ['countOverdueInvoices', countOverdueInvoices, 'invoices'],
     ['countDeadlinesNeedingAction', countDeadlinesNeedingAction, 'deadlines'],
     ['countPendingOperations', countPendingOperations, 'pending_operations'],
   ] as const)('%s returns the count and targets the right table', async (_name, fn, table) => {
     enqueue({ count: 3 })
     await expect(fn(supabase, COMPANY)).resolves.toBe(3)
     expect(mockSupabase.from).toHaveBeenCalledWith(table)
+  })
+})
+
+describe('getOverdueInvoicesDue: one grouped row per company (crm#1084, accounted#19)', () => {
+  const TODAY = '2026-10-13'
+  const overdueRow = (overrides: Record<string, unknown> = {}) => ({
+    id: 'inv-1',
+    invoice_number: 'F-1',
+    customer_id: 'cust-1',
+    status: 'sent',
+    due_date: '2026-09-30',
+    total: 1250,
+    total_sek: 1250,
+    remaining_amount: 1250,
+    currency: 'SEK',
+    ...overrides,
+  })
+
+  it('reads the Förfallna rows by the due date and the open remainder, never the stored status', async () => {
+    enqueue({ data: [overdueRow()] })
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    await expect(getOverdueInvoicesDue(supabase, COMPANY, TODAY)).resolves.toMatchObject({ count: 1 })
+    expect(findCalls('invoices', 'in')).toContainEqual(['status', ['sent', 'overdue', 'partially_paid']])
+    expect(findCalls('invoices', 'eq')).toContainEqual(['company_id', COMPANY])
+    expect(findCalls('invoices', 'eq')).toContainEqual(['document_type', 'invoice'])
+    expect(findCalls('invoices', 'eq')).not.toContainEqual(['status', 'overdue'])
+    expect(findCalls('invoices', 'is')).toContainEqual(['credited_invoice_id', null])
+    expect(findCalls('invoices', 'lt')).toContainEqual(['due_date', TODAY])
+    expect(findCalls('invoices', 'gt')).toContainEqual(['remaining_amount', 0])
+    expect(mockSupabase.rpc).toHaveBeenCalledWith('collection_open_invoice_ids', { p_company_id: COMPANY })
+    expect(mockSupabase.rpc).toHaveBeenCalledWith('collection_attention_case_ids', { p_company_id: COMPANY })
+  })
+
+  it('groups every overdue invoice into one item: count, amount still owed, oldest due date', async () => {
+    enqueue({
+      data: [
+        overdueRow({ id: 'a', due_date: '2026-08-31', remaining_amount: 1000 }),
+        overdueRow({ id: 'b', status: 'partially_paid', due_date: '2026-09-15', total: 2000, total_sek: 2000, remaining_amount: 500.25 }),
+        overdueRow({ id: 'c', due_date: '2026-10-12', remaining_amount: 99.5 }),
+      ],
+    })
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    await expect(getOverdueInvoicesDue(supabase, COMPANY, TODAY)).resolves.toEqual({
+      count: 3,
+      remaining_sek: 1599.75,
+      unconverted_count: 0,
+      oldest_due_date: '2026-08-31',
+      oldest_days_overdue: 43,
+    })
+  })
+
+  it('leaves out the invoices "Hos inkasso" lists: an open case past delivery, or one a person must look at', async () => {
+    enqueue({
+      data: [
+        overdueRow({ id: 'with-provider' }),
+        overdueRow({ id: 'delivered-only' }),
+        overdueRow({ id: 'refused-handover' }),
+        overdueRow({ id: 'plain' }),
+      ],
+    })
+    enqueue({
+      data: [
+        { invoice_id: 'with-provider', in_collection: true },
+        // The provider only delivered the invoice: still the user's to follow up.
+        { invoice_id: 'delivered-only', in_collection: false },
+      ],
+    })
+    enqueue({ data: [{ invoice_id: 'refused-handover', reason: 'submission_failed' }] })
+    const group = await getOverdueInvoicesDue(supabase, COMPANY, TODAY)
+    expect(group).toMatchObject({ count: 2, remaining_sek: 2500 })
+  })
+
+  it('is null when nothing is overdue, or only invoices at the collections provider', async () => {
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    await expect(getOverdueInvoicesDue(supabase, COMPANY, TODAY)).resolves.toBeNull()
+
+    enqueue({ data: [overdueRow({ id: 'x' })] })
+    enqueue({ data: [{ invoice_id: 'x', in_collection: true }] })
+    enqueue({ data: [] })
+    await expect(getOverdueInvoicesDue(supabase, COMPANY, TODAY)).resolves.toBeNull()
+  })
+
+  it('a failed collections read leaves nothing out: shown, never hidden', async () => {
+    enqueue({ data: [overdueRow()] })
+    enqueue({ data: null, error: { message: 'boom' } })
+    enqueue({ data: null, error: { message: 'boom' } })
+    await expect(getOverdueInvoicesDue(supabase, COMPANY, TODAY)).resolves.toMatchObject({ count: 1 })
+  })
+
+  it('soft-fails to null when the invoice read fails', async () => {
+    enqueue({ data: null, error: { message: 'boom' } })
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    await expect(getOverdueInvoicesDue(supabase, COMPANY, TODAY)).resolves.toBeNull()
+  })
+})
+
+describe('summarizeOverdueInvoices', () => {
+  const TODAY = '2026-10-13'
+  const row = (overrides: Record<string, unknown>) =>
+    ({ due_date: '2026-10-01', total: 100, total_sek: 100, remaining_amount: 100, currency: 'SEK', ...overrides }) as never
+
+  it('sums a foreign invoice at its own SEK amount, the remainder pro rata', () => {
+    expect(
+      summarizeOverdueInvoices(
+        [row({ currency: 'EUR', total: 200, total_sek: 2300, remaining_amount: 50 }), row({ remaining_amount: 10.1 })],
+        TODAY,
+      ),
+    ).toMatchObject({ count: 2, remaining_sek: 585.1, unconverted_count: 0 })
+  })
+
+  it('counts a foreign invoice without a SEK amount instead of mixing currencies into the sum', () => {
+    expect(
+      summarizeOverdueInvoices([row({ currency: 'USD', total_sek: null, remaining_amount: 70 }), row({})], TODAY),
+    ).toMatchObject({ count: 2, remaining_sek: 100, unconverted_count: 1 })
+  })
+
+  it('is null for no rows', () => {
+    expect(summarizeOverdueInvoices([], TODAY)).toBeNull()
   })
 })
 

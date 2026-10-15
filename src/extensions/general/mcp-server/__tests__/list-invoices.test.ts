@@ -4,7 +4,7 @@
  * with status and total only, so its residual took a second call to see, and
  * the status enum had no partially_paid for a strict client to send.
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { tools } from '../server'
 
@@ -64,6 +64,8 @@ describe('gnubok_list_invoices: paid and remaining amounts', () => {
           total: 1000,
           paid_amount: null,
           remaining_amount: 1000,
+          // Not yet due: a sent invoice past its due date reports overdue.
+          due_date: '2099-12-31',
         }),
       ],
       count: 2,
@@ -87,5 +89,51 @@ describe('gnubok_list_invoices: paid and remaining amounts', () => {
       paid_amount: 0,
       remaining_amount: 1000,
     })
+  })
+})
+
+describe('gnubok_list_invoices: overdue follows the due date (crm#1084)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('status=overdue filters on the due date and the open remainder, never the stored status', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-13T08:00:00Z'))
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [invoiceRow({ id: 'inv-late', status: 'sent', due_date: '2026-09-30', remaining_amount: 1000 })], count: 1 })
+
+    const result = (await listInvoices.execute({ status: 'overdue' }, 'company-1', 'user-1', supabase as never)) as ListResult
+
+    expect(findCalls('invoices', 'eq')).not.toContainEqual(['status', 'overdue'])
+    expect(findCalls('invoices', 'in')).toContainEqual(['status', ['sent', 'overdue', 'partially_paid']])
+    expect(findCalls('invoices', 'lt')).toContainEqual(['due_date', '2026-10-13'])
+    expect(findCalls('invoices', 'gt')).toContainEqual(['remaining_amount', 0])
+    // The stored 'sent' reports as what it is: overdue.
+    expect(result.invoices[0]).toMatchObject({ id: 'inv-late', status: 'overdue' })
+  })
+
+  it('reports a sent invoice past due as overdue and keeps partially_paid as stored', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-13T08:00:00Z'))
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        invoiceRow({ id: 'a', status: 'sent', due_date: '2026-10-12', remaining_amount: 10 }),
+        invoiceRow({ id: 'b', status: 'sent', due_date: '2026-10-13', remaining_amount: 10 }),
+        invoiceRow({ id: 'c', status: 'overdue', due_date: '2026-11-01', remaining_amount: 10 }),
+        invoiceRow({ id: 'd', status: 'partially_paid', due_date: '2026-09-01', remaining_amount: 10 }),
+      ],
+      count: 4,
+    })
+
+    const result = (await listInvoices.execute({}, 'company-1', 'user-1', supabase as never)) as ListResult
+
+    expect(result.invoices.map((inv) => [inv.id, inv.status])).toEqual([
+      ['a', 'overdue'],
+      ['b', 'sent'],
+      ['c', 'sent'],
+      ['d', 'partially_paid'],
+    ])
   })
 })

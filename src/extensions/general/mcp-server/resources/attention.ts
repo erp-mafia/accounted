@@ -9,9 +9,13 @@ import {
   countReconciliationDue,
   countSupplierInvoicesAwaitingApproval,
   listExpensePayoutsDue,
+  listOverdueInvoiceRows,
+  summarizeOverdueInvoices,
+  type OverdueInvoiceRow,
 } from '@/lib/worklist/categories'
 import { countUnbookedBankTransactions, fetchAnchoredTransactionIds } from '@/lib/transactions/unbooked'
 import { createLogger } from '@/lib/logger'
+import { effectiveInvoiceStatus } from '@/lib/invoices/overdue'
 import { listVoucherGaps } from '@/lib/core/bookkeeping/voucher-gaps'
 import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 
@@ -22,6 +26,8 @@ interface AttentionCategory {
   label_sv: string
   severity: Severity
   count: number
+  /** Facts about the whole category beyond its count (the overdue group's amount and age). */
+  summary?: Record<string, unknown>
   samples: Array<Record<string, unknown>>
   next?: {
     description: string
@@ -93,17 +99,13 @@ export const attentionResource: McpResource = {
         .or('is_business.is.null,is_business.eq.true')
         .order('date', { ascending: true })
         .limit(SAMPLE_LIMIT * 4),
-      supabase
-        .from('invoices')
-        .select('id, invoice_number, customer_id, due_date, total, currency, status')
-        .eq('company_id', companyId)
-        // Proformas, delivery notes and quotes are never receivables: a sent
-        // quote past its valid_until is expired, not overdue.
-        .eq('document_type', 'invoice')
-        .in('status', ['sent', 'overdue'])
-        .lt('due_date', today)
-        .order('due_date', { ascending: true })
-        .limit(100),
+      // The Att göra group's rows (lib/worklist listOverdueInvoiceRows): the
+      // Förfallna view's invoices, oldest first, every one of them counted.
+      // A failed read skips the category rather than claiming zero.
+      listOverdueInvoiceRows(supabase, companyId, today).catch((err: unknown) => {
+        log.warn('attention overdue invoices unavailable', { companyId, reason: failureReason(err) })
+        return [] as OverdueInvoiceRow[]
+      }),
       // The Att göra counts (lib/worklist/categories.ts): the same number the
       // dashboard badge shows, so the agent and the user see one queue.
       countSupplierInvoicesAwaitingApproval(supabase, companyId),
@@ -210,22 +212,43 @@ export const attentionResource: McpResource = {
       })
     }
 
-    // ── Overdue invoices ────────────────────────────────────────────
-    const overdueAll = overdueRows.data ?? []
-    if (overdueAll.length > 0) {
-      const maxOverdueDays = overdueAll.reduce((max, inv) => {
-        const days = inv.due_date ? daysBetween(inv.due_date, today) : 0
-        return Math.max(max, days)
-      }, 0)
+    // ── Overdue customer invoices: one group, as on Att göra ────────
+    // The same group as the Att göra row "N kundfakturor har förfallit"
+    // (lib/worklist OverdueInvoicesDue): one category with the true count and
+    // the amount still owed, never one entry per invoice. A fact to follow
+    // up, not an alarm: severity stays at warning however old the oldest is.
+    const overdueGroup = summarizeOverdueInvoices(overdueRows, today)
+    if (overdueGroup) {
       categories.push({
         key: 'overdue_invoices',
-        label_sv: 'Förfallna fakturor',
-        severity: maxOverdueDays > 30 ? 'critical' : 'warning',
-        count: overdueAll.length,
-        samples: overdueAll.slice(0, SAMPLE_LIMIT),
+        label_sv: 'Förfallna kundfakturor',
+        severity: 'warning',
+        count: overdueGroup.count,
+        summary: {
+          remaining_sek: overdueGroup.remaining_sek,
+          unconverted_count: overdueGroup.unconverted_count,
+          oldest_due_date: overdueGroup.oldest_due_date,
+          oldest_days_overdue: overdueGroup.oldest_days_overdue,
+        },
+        // The oldest first, with the status gnubok_list_invoices reports.
+        samples: overdueRows.slice(0, SAMPLE_LIMIT).map((inv) => ({
+          id: inv.id,
+          invoice_number: inv.invoice_number,
+          customer_id: inv.customer_id,
+          due_date: inv.due_date,
+          total: inv.total,
+          remaining_amount: inv.remaining_amount,
+          currency: inv.currency,
+          status: effectiveInvoiceStatus(
+            { status: inv.status, due_date: inv.due_date, remaining_amount: Number(inv.remaining_amount) },
+            today,
+          ),
+        })),
         next: {
-          description: 'Granska förfallna fakturor och skicka påminnelser.',
-          resource: 'Accounted://recent-activity?limit=20',
+          description:
+            'Visa användaren gruppen (Kundfakturor › Förfallna). Har en betalning kommit in: matcha den mot fakturan. Resten följer användaren upp med kunden.',
+          tool: 'gnubok_list_invoices',
+          args: { status: 'overdue' },
         },
       })
     }

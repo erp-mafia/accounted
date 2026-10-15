@@ -9,7 +9,9 @@ import { getWorklistCounts } from '@/lib/worklist'
  * client-side refetch after an inline action completes. Read-only; every
  * count is a cheap head-only query that soft-fails to 0: see lib/worklist.
  *
- * Response: { data: { counts: Record<WorklistCategory, number>, total } }
+ * Response: { data: { counts: Record<WorklistCategory, number>, total,
+ * overdueInvoices } }: overdueInvoices is the grouped overdue row's facts
+ * (lib/worklist OverdueInvoicesDue) or null.
  */
 export const GET = withRouteContext('worklist.counts', async (_request, ctx) => {
   const { supabase, companyId } = ctx

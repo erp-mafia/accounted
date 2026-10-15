@@ -181,6 +181,9 @@ const RISK_TIERS = {
   set_voucher_note: 'low',
   // A draft holds no voucher number and the row survives as cancelled.
   cancel_draft_entry: 'low',
+  // Makulera a quote or proforma: neither carries a verifikat, and the row
+  // survives as cancelled (lib/operations/invoice-cancel.ts).
+  cancel_quote_or_proforma: 'low',
   // A fact in Arkiv: no journal impact, reverted in one call (revert_company_fact).
   arkiv_propose_fact: 'low',
   // Ignoring a bank transaction flips transactions.is_ignored and nothing

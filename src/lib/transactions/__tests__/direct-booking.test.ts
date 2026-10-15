@@ -20,6 +20,10 @@ describe('booksWithoutReview', () => {
     expect(booksWithoutReview({ source: 'counterparty', seen_count: 9, confidence: 0.9, rule_mode: 'auto', contested: true })).toBe(false)
     expect(booksWithoutReview({ source: 'counterparty', seen_count: 9, confidence: 0.9, rule_mode: 'propose', contested: true })).toBe(false)
   })
+  it('never books a proposal the assistant\'s read puts in another reverse-charge box (accounted#37)', () => {
+    expect(booksWithoutReview({ source: 'counterparty', seen_count: 9, confidence: 0.9, rule_mode: 'auto', read_reverse_charge_kind: 'non_eu_services' })).toBe(false)
+    expect(booksWithoutReview({ source: 'rule', confidence: 0.9, rule_own: true, read_reverse_charge_kind: 'eu_services' })).toBe(false)
+  })
   it('books the assistant only when sure and a receipt was read', () => {
     expect(booksWithoutReview({ source: 'assistant', confidence: 0.9, has_underlag: false })).toBe(false)
     expect(booksWithoutReview({ source: 'assistant', confidence: 0.7, has_underlag: true })).toBe(false)

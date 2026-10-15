@@ -152,7 +152,7 @@ describe('renderInvoicePdfBuffer', () => {
     expect(templateProps().paymentQr).toBeNull()
   })
 
-  it('draws the bank-app code for a frozen payee that is only a bank account', async () => {
+  it('draws no code for a frozen payee that is only a bank account, never the company\'s bankgiro (crm#1191)', async () => {
     const payee: InvoicePaymentAccount = {
       bank_name: 'Handelsbanken',
       clearing_number: '6000',
@@ -171,16 +171,9 @@ describe('renderInvoicePdfBuffer', () => {
       items: [],
       company: company(),
     })
-    expect(result.paymentQr.kind).toBe('bank_app')
-    // The payee's account, not the company's bankgiro: the code pays where the page says.
-    expect(result.paymentQr.kind && JSON.parse(result.paymentQr.payload)).toMatchObject({
-      pt: 'BBAN',
-      acc: '6000658159712',
-      bc: 'HANDSESS',
-    })
-    const qr = templateProps().paymentQr as { kind: string; vector?: { path: string; size: number } }
-    expect(qr.kind).toBe('bank_app')
-    expect(qr.vector?.path).toMatch(/^M\d+ \d+h\d+v1h-\d+z/)
+    // The payee's account decides, not the company's bankgiro: a code must pay where the page says.
+    expect(result.paymentQr).toEqual({ kind: null, mode: 'auto', reason: 'bank_account_only' })
+    expect(templateProps().paymentQr).toBeNull()
   })
 
   it('honours the invoice QR mode', async () => {

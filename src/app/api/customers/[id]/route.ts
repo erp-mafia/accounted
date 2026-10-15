@@ -39,7 +39,11 @@ export const GET = withRouteContext(
     const invoices = await fetchAllRows<Record<string, unknown>>(({ from, to }) =>
       supabase
         .from('invoices')
-        .select('id, invoice_number, invoice_date, due_date, status, total, currency')
+        // The status line columns (lib/invoices/status-display.ts
+        // invoiceRowStatus): the card says what the invoice list says.
+        .select(
+          'id, invoice_number, invoice_date, due_date, status, total, currency, remaining_amount, paid_at, document_type, credited_invoice_id, is_self_billed, quote_status, valid_until',
+        )
         .eq('customer_id', id)
         .eq('company_id', companyId)
         .order('invoice_date', { ascending: false })

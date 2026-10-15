@@ -22,7 +22,7 @@ export function CompanySettingsContent() {
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
   const { settings, isLoading, updateSettings, refetch } = useSettings()
-  const { role, isSandbox } = useCompany()
+  const { role, isSandbox, company } = useCompany()
   // The delete-company dialog lives in the danger zone at the foot of the
   // page and has two doors: its own row, and the locked org number row at the
   // top, where an owner who set up the wrong company looks for a way out.
@@ -96,6 +96,7 @@ export function CompanySettingsContent() {
       <SettingsFormWrapper onSave={handleSave}>
         <CompanyInfoForm
           settings={settings}
+          companyOrgNumber={company?.org_number ?? null}
           onWrongCompany={canReplaceCompany ? () => setDeleteDoor('wrong_company') : undefined}
         />
         {settings.entity_type === 'aktiebolag' && (

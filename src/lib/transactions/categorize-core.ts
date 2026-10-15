@@ -918,7 +918,11 @@ export async function categorizeTransaction(
     }
   }
   try {
-    await upsertCounterpartyTemplate(supabase, companyId, transaction, mappingResult, 'user_approved')
+    // Booked on a counterpart template: a text it does not carry yet becomes
+    // its alias instead of a second template (accounted#36).
+    await upsertCounterpartyTemplate(supabase, companyId, transaction, mappingResult, 'user_approved', {
+      bookedOnTemplateId: isBusiness ? input.counterparty_template_id : undefined,
+    })
   } catch (err) {
     txLog.warn('failed to upsert counterparty template (non-critical)', err as Error)
   }

@@ -8,7 +8,7 @@
  * an invoice where the seller charged moms.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createTableMockSupabase } from '@/tests/helpers'
+import { createTableMockSupabase, makeCategorizationTemplate } from '@/tests/helpers'
 
 const { createTxJE, propagate, saveRule, intercept, lock } = vi.hoisted(() => ({
   createTxJE: vi.fn(),
@@ -53,6 +53,7 @@ vi.mock('@/lib/transactions/invoice-match-suggestion', () => ({
 }))
 
 import { categorizeTransaction, type CategorizeOptions } from '../categorize-core'
+import { upsertCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
 
 const COMPANY_ID = 'company-1'
 const TX_ID = 'tx-1'
@@ -238,6 +239,44 @@ describe('categorizeTransaction: after the booking', () => {
     const lost = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, business, live)
     expect(lost).toMatchObject({ ok: false, code: 'TX_CATEGORIZE_RACE' })
     expect(saveRule).not.toHaveBeenCalled()
+  })
+
+  it('names the counterpart template the row was booked on to the learner (accounted#36)', async () => {
+    const template = makeCategorizationTemplate({
+      id: 'tmpl-1',
+      company_id: COMPANY_ID,
+      debit_account: '5410',
+      credit_account: '1930',
+      vat_treatment: null,
+      vat_account: null,
+    })
+    const { supabase } = ledger({ categorization_templates: { data: template, error: null } })
+
+    const booked = await categorizeTransaction(
+      supabase as never,
+      'user-1',
+      COMPANY_ID,
+      TX_ID,
+      { is_business: true, counterparty_template_id: 'tmpl-1' },
+      live,
+    )
+
+    expect(booked.ok).toBe(true)
+    expect(upsertCounterpartyTemplate).toHaveBeenCalledWith(
+      supabase,
+      COMPANY_ID,
+      expect.objectContaining({ id: TX_ID }),
+      expect.objectContaining({ debit_account: '5410' }),
+      'user_approved',
+      { bookedOnTemplateId: 'tmpl-1' },
+    )
+  })
+
+  it('names no template to the learner for a category booking', async () => {
+    const booked = await categorizeTransaction(ledger().supabase as never, 'user-1', COMPANY_ID, TX_ID, business, live)
+
+    expect(booked.ok).toBe(true)
+    expect(vi.mocked(upsertCounterpartyTemplate).mock.calls[0]?.[5]).toEqual({ bookedOnTemplateId: undefined })
   })
 })
 

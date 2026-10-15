@@ -8,7 +8,7 @@ import {
 import { loadCounterLegTopology, type CounterLegTopology } from '@/lib/cash-accounts/service'
 import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
 import { loadReads, readIsFresh, assistantSuggestionFromRead, mergeAssistantSuggestion, type AssistantRead } from '@/lib/agent/categorize/read'
-import { slateAccount, type BookingProposal } from '@/lib/bookkeeping/proposal'
+import { reverseChargeBoxesOf, slateAccount, type BookingProposal } from '@/lib/bookkeeping/proposal'
 import { COUNTERPART_SEEN_FOR_DIRECT } from './direct-booking'
 import type { Transaction, EntityType, CategorizationTemplate, MappingRule } from '@/types'
 
@@ -23,7 +23,9 @@ import type { Transaction, EntityType, CategorizationTemplate, MappingRule } fro
  * catalog's keyword and MCC matches, an unsure assistant read, and last
  * templates a rule merely points at (picker only). A weak counterpart match
  * the stored read booked differently keeps its place but is marked
- * contested, which takes it off the row (contestCounterpart below).
+ * contested, which takes it off the row (contestCounterpart below). A
+ * proposal the read puts in another reverse-charge box keeps its place and
+ * carries the read's box, which sends it to a review (disputeReverseChargeBox).
  */
 export interface Proposed {
   proposals: Record<string, BookingProposal[]>
@@ -170,6 +172,7 @@ export async function proposeForTransactions(
       if (s) proposals[tx.id] = mergeAssistantSuggestion(proposals[tx.id] ?? [], s)
       const cpMatch = counterpartyMatches.get(tx.id)
       if (cpMatch) proposals[tx.id] = contestCounterpart(proposals[tx.id] ?? [], cpMatch, read)
+      proposals[tx.id] = disputeReverseChargeBox(proposals[tx.id] ?? [], read)
     }
   }
 
@@ -215,3 +218,31 @@ export function contestCounterpart(
 
 /** The proposal a row wears and books from: the first that matched the row itself. */
 export { rowProposal }
+
+/**
+ * The stored read as a check on the reverse-charge box (accounted#37). When
+ * the read says which box the purchase belongs in (ruta 21, a service from
+ * another EU country, or ruta 22, one from outside the EU: the model's answer
+ * to where the seller is) and a proposal books another, the proposal carries
+ * the read's box (read_reverse_charge_kind). It stays the row's
+ * recommendation, but booksWithoutReview never books it from the row, and
+ * the review opens on the read's box with the proposal's one click away.
+ * The box depends on which company invoices, which is on the invoice: a
+ * counterpart learned as one pair never learned it (it books the EU-service
+ * default), and a catalog keyword names a vendor, not the company that
+ * bills. A read that names no box (none asked, or a reverse charge taken
+ * from a candidate's history) disputes nothing, and neither does a proposal
+ * that books no reverse charge.
+ */
+export function disputeReverseChargeBox(
+  list: BookingProposal[],
+  read: Pick<AssistantRead, 'vat_treatment' | 'reverse_charge_kind'>,
+): BookingProposal[] {
+  const readKind = read.vat_treatment === 'reverse_charge' ? read.reverse_charge_kind : null
+  if (!readKind) return list
+  return list.map((p) => {
+    if (p.source === 'assistant' || p.source === 'manual') return p
+    const boxes = reverseChargeBoxesOf(p)
+    return boxes.some((k) => k !== readKind) ? { ...p, read_reverse_charge_kind: readKind } : p
+  })
+}

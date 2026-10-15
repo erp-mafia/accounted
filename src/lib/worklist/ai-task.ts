@@ -34,8 +34,8 @@ export const AI_TASK_ORDER: readonly AiTaskCategory[] = [
   'inbox_document',
   'supplier_invoice_approval',
   'verifikat_missing_document',
-  'overdue_invoice',
   'deadline_action',
+  'overdue_invoice',
   'reconciliation_due',
 ]
 
@@ -46,7 +46,7 @@ export const AI_TASK_HREF: Record<AiTaskCategory, string> = {
   inbox_document: '/e/general/invoice-inbox',
   supplier_invoice_approval: '/supplier-invoices',
   verifikat_missing_document: '/bookkeeping?missingUnderlag=true',
-  overdue_invoice: '/invoices?status=unpaid',
+  overdue_invoice: '/invoices?status=overdue',
   deadline_action: '/deadlines',
   reconciliation_due: '/reconciliation',
 }

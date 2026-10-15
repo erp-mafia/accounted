@@ -241,6 +241,25 @@ describe('gnubok_get_invoice: execute', () => {
     expect(result.invoice_number).toBe('2026-0042')
   })
 
+  it('reports a sent invoice past its due date as overdue, as gnubok_list_invoices does (crm#1084)', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-13T08:00:00Z'))
+    try {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: invoiceRow({ status: 'sent', invoice_number: '2026-0042', journal_entry_id: 'je-1' }) })
+      const result = (await getInvoice.execute(
+        { invoice_id: INVOICE_ID },
+        COMPANY_ID,
+        USER_ID,
+        supabase as never,
+        { type: 'api_key' } as never,
+      )) as { status: string }
+      expect(result.status).toBe('overdue')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('returns an empty line list for a draft without lines', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: invoiceRow({ items: [] }) })
@@ -374,6 +393,8 @@ describe('gnubok_get_invoice: registered from the books', () => {
       invoice_number: 'OLD-7',
       journal_entry_id: JOURNAL_ENTRY_ID,
       items: [],
+      // Not yet due: past its due date a sent invoice reports overdue.
+      due_date: '2099-12-31',
       ...overrides,
     })
   const voucherRow = { id: JOURNAL_ENTRY_ID, voucher_series: 'A', voucher_number: 47 }

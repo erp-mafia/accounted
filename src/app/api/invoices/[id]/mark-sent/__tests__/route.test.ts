@@ -62,7 +62,8 @@ vi.mock('@/lib/bookkeeping/accruals/from-invoices', () => ({
 }))
 
 const mockIssueCreditNote = vi.fn()
-vi.mock('@/lib/invoices/issue-credit-note', () => ({
+vi.mock('@/lib/invoices/issue-credit-note', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/invoices/issue-credit-note')>()),
   issueCreditNote: (...args: unknown[]) => mockIssueCreditNote(...args),
   creditNoteNeedsJournalEntry: (method: string, original: { status: string; journal_entry_id?: string | null; paid_at?: string | null; paid_amount?: number | null }) =>
     method === 'accrual' ||
@@ -430,6 +431,94 @@ describe('POST /api/invoices/[id]/mark-sent: PDF archival', () => {
 
     expect(status).toBe(500)
     expect(mockUploadDocument).not.toHaveBeenCalled()
+  })
+
+  // accounted#45: under deferred booking an unbooked original is booked
+  // first by the shared issue step; the dashboard door passes the flag and
+  // answers with both verifikat, or the refusal that names the fix.
+  describe('a deferred original that was never booked (accounted#45)', () => {
+    const deferredCompany = makeCompanySettings({
+      accounting_method: 'accrual',
+      defer_invoice_booking: true,
+      entity_type: 'enskild_firma',
+      bankgiro: '123-4567',
+    })
+    const unbookedOriginal = {
+      id: 'inv-1',
+      invoice_number: 'F-2026010',
+      status: 'sent',
+      journal_entry_id: null,
+      paid_at: null,
+      paid_amount: 0,
+      total: 12500,
+    }
+    const creditNote = () =>
+      makeInvoice({
+        id: 'credit-1',
+        invoice_number: 'KR-F-2026010',
+        status: 'draft',
+        credited_invoice_id: 'inv-1',
+        customer,
+        items: invoice.items,
+      })
+
+    it('passes the defer flag and answers with the original\'s new verifikat', async () => {
+      enqueue({ data: creditNote(), error: null })
+      enqueue({ data: deferredCompany, error: null })
+      enqueue({ data: unbookedOriginal, error: null })
+      enqueue({ data: [{ id: 'credit-1' }], error: null })
+      mockIssueCreditNote.mockResolvedValue({
+        complete: true,
+        journalEntryId: 'credit-je-1',
+        journalEntryRequired: true,
+        repairRequired: false,
+        failures: [],
+        originalJournalEntryId: 'original-je-new',
+      })
+
+      const response = await POST(
+        createMockRequest('/api/invoices/credit-1/mark-sent', { method: 'POST' }),
+        createMockRouteParams({ id: 'credit-1' }),
+      )
+      const { status, body } = await parseJsonResponse<{ journal_entry_id: string; original_journal_entry_id: string }>(response)
+
+      expect(status).toBe(200)
+      expect(body.journal_entry_id).toBe('credit-je-1')
+      expect(body.original_journal_entry_id).toBe('original-je-new')
+      expect(mockIssueCreditNote).toHaveBeenCalledWith(
+        expect.objectContaining({ originalInvoice: unbookedOriginal, deferInvoiceBooking: true }),
+      )
+    })
+
+    it('refuses with the code that names the fix when the original\'s period is locked, and restores the draft', async () => {
+      enqueue({ data: creditNote(), error: null })
+      enqueue({ data: deferredCompany, error: null })
+      enqueue({ data: unbookedOriginal, error: null })
+      enqueue({ data: [{ id: 'credit-1' }], error: null })
+      mockIssueCreditNote.mockResolvedValue({
+        complete: false,
+        journalEntryId: null,
+        journalEntryRequired: true,
+        repairRequired: false,
+        failures: [{
+          step: 'original_booking',
+          reason: 'locked',
+          code: 'INVOICE_CREDIT_ORIGINAL_PERIOD_LOCKED',
+          details: { original_invoice_id: 'inv-1', reason: 'period_is_closed', invoice_date: '2024-06-15' },
+        }],
+      })
+      enqueue({ data: [{ id: 'credit-1' }], error: null }) // restored to draft
+
+      const response = await POST(
+        createMockRequest('/api/invoices/credit-1/mark-sent', { method: 'POST' }),
+        createMockRouteParams({ id: 'credit-1' }),
+      )
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+      expect(status).toBe(400)
+      expect(body.error.code).toBe('INVOICE_CREDIT_ORIGINAL_PERIOD_LOCKED')
+      expect(mockUploadDocument).not.toHaveBeenCalled()
+    })
   })
 
   it('repairs a sent credit note without running the draft status transition again', async () => {

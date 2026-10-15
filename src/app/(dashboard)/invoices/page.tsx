@@ -32,13 +32,11 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import { invoiceDisplayNumber } from '@/lib/invoices/display'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
-import { quoteDisplayStatus } from '@/lib/invoices/quote-status'
 import { matchesInvoiceSearch } from '@/lib/invoices/invoice-search'
 import {
   INVOICE_LIST_TABS,
   QUOTE_LIST_TABS,
   isQuoteRow,
-  isUnsentNumberedInvoice,
   matchesInvoiceListTab,
   matchesQuoteListTab,
   parseInvoiceListTab,
@@ -86,7 +84,8 @@ import { StartCard } from '@/components/dashboard/StartCard'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { FiscalPeriod, Invoice } from '@/types'
-import { invoiceStatusDisplay } from '@/lib/invoices/status-display'
+import { invoiceRowStatus } from '@/lib/invoices/status-display'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const RotRutPayoutDialog = dynamic(
   () => import('@/components/invoices/RotRutPayoutDialog'),
@@ -208,14 +207,6 @@ async function fetchPeppolFailedInvoiceIds(): Promise<string[]> {
   return Array.isArray(body.data) ? body.data.filter((id): id is string => typeof id === 'string') : []
 }
 
-function daysOverdue(dueDateStr: string): number {
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const dueDate = new Date(dueDateStr)
-  dueDate.setHours(0, 0, 0, 0)
-  return Math.round((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24))
-}
-
 export default function InvoicesPage() {
   // 'invoices' (default) or 'quotes': /quotes renders this same component
   // inside InvoiceListVariantProvider. A quote is not an invoice, so the two
@@ -224,6 +215,8 @@ export default function InvoicesPage() {
   const isQuotesList = variant === 'quotes'
   const listPath = isQuotesList ? '/quotes' : '/invoices'
   const listTabs: readonly ListTab[] = isQuotesList ? QUOTE_LIST_TABS : INVOICE_LIST_TABS
+  // The Swedish calendar day Förfallna and the overdue count read (lib/invoices/overdue.ts).
+  const today = todayIsoStockholm()
   // Open collection cases per invoice: the chips and the "Hos inkasso" view.
   const [collectionCases, setCollectionCases] = useState<ReadonlyMap<string, ListCollectionCase>>(() => new Map())
   const inCollectionIds = useMemo(
@@ -243,6 +236,7 @@ export default function InvoicesPage() {
       : matchesInvoiceListTab(invoice, tab as InvoiceListTab, {
           inCollection: inCollectionIds,
           collectionAttention: collectionAttention.all,
+          today,
         })
   const { company } = useCompany()
   const { canWrite } = useCanWrite()
@@ -482,8 +476,8 @@ export default function InvoicesPage() {
   )
   const filteredInvoices = useMemo(
     () => scopedInvoices.filter((invoice) => matchesTab(invoice, activeTab)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- matchesTab only varies with isQuotesList and the collection ids
-    [activeTab, isQuotesList, scopedInvoices, inCollectionIds, collectionAttention],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- matchesTab only varies with isQuotesList, the collection ids and today
+    [activeTab, isQuotesList, scopedInvoices, inCollectionIds, collectionAttention, today],
   )
   const sortedInvoices = useMemo(
     () => (sort ? sortInvoiceList(filteredInvoices, sort, oreRounding) : filteredInvoices),
@@ -564,8 +558,8 @@ export default function InvoicesPage() {
       }
     }
     return counts
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- listTabs/matchesTab only vary with isQuotesList and the collection ids
-  }, [isQuotesList, scopedInvoices, inCollectionIds, collectionAttention])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- listTabs/matchesTab only vary with isQuotesList, the collection ids and today
+  }, [isQuotesList, scopedInvoices, inCollectionIds, collectionAttention, today])
 
   const rotRutCounts = useMemo(() => {
     const counts = Object.fromEntries(ROT_RUT_LIST_FILTERS.map((f) => [f, 0])) as Record<
@@ -773,78 +767,38 @@ export default function InvoicesPage() {
   // One derivable status chip per row (concept scene 15). Doc-type markers
   // (proforma/följesedel/självfaktura) only appear in views where the type
   // isn't already implied.
-  // The plain status, as every invoice surface shows it
-  // (lib/invoices/status-display.ts); the list adds what only it knows.
-  function baseStatus(status: Invoice['status']): RowStatusDescriptor {
-    const display = invoiceStatusDisplay(status)
-    if (!display) return { label: status }
-    return { label: t(display.labelKey), exception: display.chip !== null, variant: display.chip ?? undefined }
-  }
-
+  // The row's own status line is shared with the customer card
+  // (lib/invoices/status-display.ts invoiceRowStatus); the list adds what
+  // only it knows: a collection case and a failed Peppol delivery.
   function statusDescriptor(invoice: Invoice): RowStatusDescriptor {
-    const isCreditNote = !!invoice.credited_invoice_id
-    if (invoice.status === 'cancelled') return baseStatus('cancelled')
-    if (isCreditNote && invoice.status !== 'paid') {
-      return { label: t('badge_credit'), exception: true, variant: 'destructive' }
-    }
-    if (invoice.status === 'credited') return baseStatus('credited')
-    // Offert: the decision (or derived expiry) is the status. Open and
-    // accepted are the normal states; declined, expired and an open quote
-    // that was never sent (crm#1202) deviate.
-    const quoteStatus =
-      (invoice as Invoice & { document_type?: string }).document_type === 'quote'
-        ? quoteDisplayStatus(invoice)
-        : null
-    if (quoteStatus === 'unsent') {
-      return { label: t('status_unsent'), exception: true, variant: 'outline' }
-    }
-    if (quoteStatus === 'expired') {
-      return { label: t('quote_status_expired'), exception: true, variant: 'warning' }
-    }
-    if (quoteStatus === 'declined') {
-      return { label: t('quote_status_declined'), exception: true, variant: 'secondary' }
-    }
-    if (quoteStatus === 'accepted') return { label: t('quote_status_accepted') }
-    if (quoteStatus === 'open') return { label: t('quote_status_open') }
-    if (invoice.status === 'draft') {
-      return isUnsentNumberedInvoice(invoice)
-        ? { label: t('status_unsent'), exception: true, variant: 'outline' }
-        : baseStatus('draft')
-    }
-    // An open collection case: where the provider has the invoice outranks
-    // the overdue count (chips mark exceptions; an invoice with a case is one).
-    const collectionCase = collectionCases.get(invoice.id)
-    const collectionKind = collectionCase && invoice.status !== 'paid' ? collectionChipKind(collectionCase.stage) : null
-    if (collectionCase && collectionKind) {
-      const words = providerWords(collectionCase.displayName, locale === 'en' ? 'en' : 'sv')
-      return {
-        label: capitalizeFirst(tCollections(CHIP_LABEL_KEYS[collectionKind], words)),
-        exception: true,
-        variant: CHIP_VARIANTS[collectionKind],
+    const row = invoiceRowStatus(invoice, today)
+    const inPaymentFlow = row.kind === 'partially_paid' || row.kind === 'overdue' || row.kind === 'sent' || row.kind === 'unknown'
+    if (inPaymentFlow) {
+      // An open collection case: where the provider has the invoice outranks
+      // the overdue count (chips mark exceptions; an invoice with a case is one).
+      const collectionCase = collectionCases.get(invoice.id)
+      const collectionKind = collectionCase ? collectionChipKind(collectionCase.stage) : null
+      if (collectionCase && collectionKind) {
+        const words = providerWords(collectionCase.displayName, locale === 'en' ? 'en' : 'sv')
+        return {
+          label: capitalizeFirst(tCollections(CHIP_LABEL_KEYS[collectionKind], words)),
+          exception: true,
+          variant: CHIP_VARIANTS[collectionKind],
+        }
+      }
+      // A refused handover on an invoice still owed: the Att göra row's item.
+      if (collectionAttention.failed.has(invoice.id)) {
+        return { label: tCollections('chip_failed'), exception: true, variant: 'destructive' }
+      }
+      // Issued, and the Peppol network did not take it: the likely reason it is
+      // unpaid outranks the overdue count.
+      if (row.kind !== 'partially_paid' && peppolFailedIds.has(invoice.id)) {
+        return { label: t('status_peppol_failed'), exception: true, variant: 'destructive' }
       }
     }
-    // A refused handover on an invoice still owed: the Att göra row's item.
-    if (collectionAttention.failed.has(invoice.id) && invoice.status !== 'paid') {
-      return { label: tCollections('chip_failed'), exception: true, variant: 'destructive' }
-    }
-    if (invoice.status === 'paid') {
-      return invoice.paid_at
-        ? { label: t('status_paid_date', { date: formatDate(invoice.paid_at) }) }
-        : baseStatus('paid')
-    }
-    if (invoice.status === 'partially_paid') return baseStatus('partially_paid')
-    // Issued, and the Peppol network did not take it: the likely reason it is
-    // unpaid outranks the overdue count.
-    if (peppolFailedIds.has(invoice.id)) {
-      return { label: t('status_peppol_failed'), exception: true, variant: 'destructive' }
-    }
-    if (invoice.status === 'overdue') {
-      const overdue = baseStatus('overdue')
-      return invoice.due_date
-        ? { ...overdue, label: t('status_overdue_days', { days: Math.max(1, daysOverdue(invoice.due_date)) }) }
-        : overdue
-    }
-    return baseStatus('sent')
+    if (!row.labelKey) return { label: invoice.status }
+    const values = row.values && 'date' in row.values ? { date: formatDate(row.values.date) } : row.values
+    return { label: t(row.labelKey, values), exception: row.chip !== null, variant: row.chip ?? undefined }
   }
 
   function rotRutDescriptor(state: NonNullable<RotRutListState>): RowStatusDescriptor {
@@ -1147,7 +1101,7 @@ export default function InvoicesPage() {
                   <tr
                     className={cn(
                       'group cursor-pointer transition-colors duration-150 hover:bg-secondary/35',
-                      ROW_TONE_CLASS[invoiceRowTone(invoice)],
+                      ROW_TONE_CLASS[invoiceRowTone(invoice, today)],
                       selectedIds.has(invoice.id) && 'bg-secondary/40',
                     )}
                     onClick={() => {

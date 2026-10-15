@@ -13,7 +13,8 @@
  *     role instead. The invoice-recipient and payment-instruction fields and
  *     Swedbank's payment-file ids are re-checked the same way on every door;
  *   - reminder thresholds strictly increasing;
- *   - org_number is fixed once onboarding is complete (legal identifier);
+ *   - org_number is writable only while no valid one is stored, then fixed
+ *     (legal identifier; lib/company/org-number-rule.ts);
  *   - enskild firma keeps a calendar fiscal year (BFL 3 kap.);
  *   - aktiekapital and antal aktier are set together (ÅRL 5 kap 34 §);
  *   - the vacation-year basis cannot move while open vacation balances exist;
@@ -50,6 +51,7 @@ import { importExistingDimensionCodes } from '@/lib/dimensions/import-existing'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
 import { requireCompanyAdmin } from '@/lib/operations/access'
 import { invoiceSeriesBehindMessages, readInvoiceSeries } from '@/lib/invoices/invoice-number-series'
+import { resolveOrgNumberChange } from '@/lib/company/org-number'
 
 /** The dashboard's settings body after validation: column names, all optional. */
 export type CompanySettingsChanges = z.output<typeof UpdateSettingsSchema>
@@ -332,11 +334,28 @@ export async function updateCompanySettings(
     return refuse('SETTINGS_REMINDER_DAYS_ORDER')
   }
 
-  // Lock org_number after onboarding is complete (legal identifier: changing it
-  // would orphan vouchers, SIE history, and tax filings). company_name remains
-  // editable so users can update their display/brand name (e.g. särskilt företagsnamn).
-  if (oldSettings?.onboarding_complete === true) {
-    delete body.org_number
+  // The org number is the legal identifier (changing it would orphan vouchers,
+  // SIE history and tax filings): writable only while the company has no valid
+  // one, never replaced once it has (lib/company/org-number-rule.ts). A
+  // company without one can fill it in itself; a valid one is kept on both
+  // copies. company_name stays editable (särskilt företagsnamn).
+  let orgNumberFill: string | null = null
+  if (body.org_number !== undefined) {
+    const change = await resolveOrgNumberChange(supabase, companyId, body.org_number, {
+      org_number: oldSettings?.org_number,
+      entity_type: body.entity_type ?? oldSettings?.entity_type,
+    })
+    if (change.kind === 'error') {
+      log.error('failed to read the stored org number before a settings save', change.error as Error)
+      return { ok: false, code: 'UNKNOWN_ERROR', error: change.error }
+    }
+    if (change.kind === 'refused') return refuse(change.code)
+    if (change.kind === 'unchanged') {
+      delete body.org_number
+    } else {
+      body.org_number = change.value
+      orgNumberFill = change.value
+    }
   }
 
   // Enskild firma must use calendar year (BFL 3 kap.)
@@ -526,6 +545,20 @@ export async function updateCompanySettings(
       return refuse('NOT_FOUND', 'Inställningarna hittades inte.', { resource: 'company_settings' })
     }
     return { ok: false, code: 'UNKNOWN_ERROR', error }
+  }
+
+  // A filled-in org number goes to the company row too, which the duplicate
+  // check and the company lists read. The settings copy just written leads
+  // for every bank and payment call (lib/company/org-number.ts), so a failed
+  // mirror is logged, not a failed save. The audit trigger on
+  // company_settings has recorded the change: old and new value, who, when.
+  if (orgNumberFill) {
+    log.info('company org number filled in', { previous: oldSettings?.org_number ? 'invalid' : 'empty' })
+    const { error: mirrorError } = await supabase
+      .from('companies')
+      .update({ org_number: orgNumberFill })
+      .eq('id', companyId)
+    if (mirrorError) log.error('failed to mirror the filled-in org number to the company row', mirrorError)
   }
 
   let deadlinesRegenerated = false

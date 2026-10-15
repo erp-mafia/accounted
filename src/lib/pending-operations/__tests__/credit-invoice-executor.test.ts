@@ -118,6 +118,9 @@ describe('commitPendingOperation: credit_invoice through creditInvoice', () => {
     ['INVOICE_CREDIT_PERIOD_LOCKED', 400],
     ['INVOICE_CREDIT_NOT_INVOICE', 400],
     ['INVOICE_CREDIT_NOT_SENT', 400],
+    // accounted#45: the deferred original could not be booked first.
+    ['INVOICE_CREDIT_ORIGINAL_PERIOD_LOCKED', 400],
+    ['INVOICE_CREDIT_ORIGINAL_BOOK_FAILED', 400],
   ])('rejects %s with its registry status', async (code, status) => {
     mockCreditInvoice.mockResolvedValue({ ok: false, code, details: { reason: 'x' } })
 
@@ -126,5 +129,42 @@ describe('commitPendingOperation: credit_invoice through creditInvoice', () => {
     expect(result.status).toBe('failed')
     expect(result.http_status).toBe(status)
     expect(result.code).toBe(code)
+  })
+
+  // accounted#45: a deferred original that was never booked is booked first.
+  it('answers the original\'s new verifikat beside the credit\'s', async () => {
+    mockCreditInvoice.mockResolvedValue({
+      ok: true,
+      creditNoteId: 'cn-1',
+      journalEntryId: 'je-credit',
+      originalJournalEntryId: 'je-original',
+      partialFailures: [],
+    })
+
+    const result = await commit({ invoice_id: 'inv-1' })
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({
+      credit_note_id: 'cn-1',
+      journal_entry_id: 'je-credit',
+      original_journal_entry_id: 'je-original',
+    })
+  })
+
+  it('lands in failed_partial when the original was booked but the credit then failed', async () => {
+    const postedIds = { credit_note_id: 'cn-1', original_invoice_id: 'inv-1', original_journal_entry_id: 'je-original' }
+    mockCreditInvoice.mockResolvedValue({
+      ok: false,
+      code: 'INVOICE_CREDIT_ISSUE_INCOMPLETE',
+      details: { failure_steps: ['journal_entry'] },
+      failures: [{ step: 'journal_entry', reason: 'Perioden är låst Originalfakturan har bokförts. Försök kreditera igen.' }],
+      postedIds,
+    })
+
+    const result = await commit({ invoice_id: 'inv-1' })
+
+    expect(result.code).toBe('partial_commit')
+    expect(result.data).toEqual({ posted_ids: postedIds })
+    expect(result.operation_status).toBe('failed_partial')
   })
 })

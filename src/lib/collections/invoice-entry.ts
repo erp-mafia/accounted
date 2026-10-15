@@ -1,6 +1,7 @@
 import type { CollectionsAction, CollectionsStage } from '@accounted/connect-contract'
 import type { CollectionsStartState } from './flags'
 import { NOT_STARTED_STAGES, isInCollectionStage } from './stages'
+import { isInvoiceOverdue } from '@/lib/invoices/overdue'
 
 /**
  * Where collections shows up on the invoice page (build spec 3.1, 3.4,
@@ -25,11 +26,9 @@ export interface EntryCase {
   actions: readonly CollectionsAction[]
 }
 
-/** The invoice is owed and its due date has passed (Stockholm date, never `status = 'overdue'`). */
+/** The invoice is owed and its due date has passed: the one overdue rule (lib/invoices/overdue.ts). */
 export function isOverdueUnpaid(invoice: EntryInvoice, today: string): boolean {
-  if (!OWED_STATUSES.has(invoice.status)) return false
-  if (typeof invoice.remaining_amount === 'number' && invoice.remaining_amount <= 0) return false
-  return !!invoice.due_date && invoice.due_date < today
+  return isInvoiceOverdue(invoice, today)
 }
 
 /**

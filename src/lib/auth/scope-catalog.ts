@@ -552,6 +552,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // Invoice conversion + crediting
   gnubok_convert_invoice:                 'invoices:write',
   gnubok_set_quote_status:                'invoices:write',
+  gnubok_cancel_quote_or_proforma:        'invoices:write',
   gnubok_credit_invoice:                  'invoices:write',
   // Phase 4: arbitrary-line bookkeeping primitives (high-risk, always staged)
   gnubok_create_voucher:                  'bookkeeping:write',

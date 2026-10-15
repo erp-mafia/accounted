@@ -17,7 +17,7 @@ import { loadOpenRotRutPayoutRequests } from '@/lib/invoices/rot-rut-payout-cand
 import { matchTransactionsToRotRutPayoutSets } from '@/lib/invoices/rot-rut-payout-set-matching'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
-import { roundOre } from '@/lib/money'
+import { roundOre, sumOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import {
   groupExpenseClaimsByPerson,
@@ -28,6 +28,7 @@ import {
   MATCHABLE_SUPPLIER_INVOICE_STATUSES,
 } from '@/lib/invoices/matchable-statuses'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { filterOverdueInvoices, invoiceDaysOverdue } from '@/lib/invoices/overdue'
 import { COLLECTIONS_BATCH_TYPE } from '@/lib/collections/batch'
 import { resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
 import { listPeppolFailedInvoiceIds } from '@/lib/invoices/peppol-failed-invoices'
@@ -42,6 +43,7 @@ import { listSupplierPayeeAlerts } from '@/lib/payments/payee-alerts'
 import type {
   BankSwitchDue,
   ExpensePayoutDue,
+  OverdueInvoicesDue,
   PaymentsVerificationDue,
   SkattekontoPaymentDue,
   SuggestedMatch,
@@ -495,19 +497,134 @@ export async function countCollectionAttention(supabase: SupabaseClient, company
   return Array.isArray(data) ? data.length : 0
 }
 
-/** Overdue customer invoices (not credited). */
-export async function countOverdueInvoices(
+/** An overdue invoice as the grouped Att göra row and the MCP attention resource read it. */
+export interface OverdueInvoiceRow {
+  id: string
+  invoice_number: string | null
+  customer_id: string | null
+  status: string
+  /** YYYY-MM-DD. */
+  due_date: string
+  total: number | string | null
+  total_sek: number | string | null
+  remaining_amount: number | string | null
+  currency: string | null
+}
+
+
+/**
+ * The invoices the "Hos inkasso" view lists (lib/invoices/invoice-list-tabs.ts
+ * 'collections'): an open case past delivery (collection_open_invoice_ids
+ * in_collection) or a case a person must look at
+ * (collection_attention_case_ids). Such an invoice has its own status chip
+ * and its own Att göra rows, so the overdue group and Förfallna leave it out.
+ * A failed read is logged and leaves nothing out: an overdue invoice is shown
+ * twice rather than hidden.
+ */
+export async function listCollectionsViewInvoiceIds(
   supabase: SupabaseClient,
   companyId: string,
-): Promise<number> {
-  const { count, error } = await supabase
-    .from('invoices')
-    .select('id', { count: 'exact', head: true })
-    .eq('company_id', companyId)
-    .eq('status', 'overdue')
-    .is('credited_invoice_id', null)
-  if (error) return logAndZero('overdue_invoice', companyId, error)
-  return count ?? 0
+): Promise<Set<string>> {
+  const [open, attention] = await Promise.all([
+    supabase.rpc('collection_open_invoice_ids', { p_company_id: companyId }),
+    supabase.rpc('collection_attention_case_ids', { p_company_id: companyId }),
+  ])
+  const ids = new Set<string>()
+  if (open.error) {
+    log.warn('worklist overdue_invoice: open collection cases unavailable', { companyId, reason: open.error.message })
+  } else {
+    for (const row of (open.data ?? []) as Array<{ invoice_id: string; in_collection: boolean }>) {
+      if (row.in_collection) ids.add(row.invoice_id)
+    }
+  }
+  if (attention.error) {
+    log.warn('worklist overdue_invoice: collection attention unavailable', { companyId, reason: attention.error.message })
+  } else {
+    for (const row of (attention.data ?? []) as Array<{ invoice_id: string }>) ids.add(row.invoice_id)
+  }
+  return ids
+}
+
+/**
+ * Overdue customer invoices, oldest due date first: the rows the Förfallna
+ * view lists, by the one rule in lib/invoices/overdue.ts (past due with an
+ * open remainder, partly paid included, never the stored status), without
+ * the "Hos inkasso" view's invoices. Throws on a failed invoice read; the
+ * callers soft-fail.
+ */
+export async function listOverdueInvoiceRows(
+  supabase: SupabaseClient,
+  companyId: string,
+  today: string = todayIsoStockholm(),
+): Promise<OverdueInvoiceRow[]> {
+  const [rows, held] = await Promise.all([
+    fetchAllRows<OverdueInvoiceRow>(({ from, to }) =>
+      filterOverdueInvoices(
+        supabase.from('invoices').select('id, invoice_number, customer_id, status, due_date, total, total_sek, remaining_amount, currency').eq('company_id', companyId),
+        today,
+      )
+        .order('due_date', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to),
+    ),
+    listCollectionsViewInvoiceIds(supabase, companyId),
+  ])
+  return held.size > 0 ? rows.filter((row) => !held.has(row.id)) : rows
+}
+
+/**
+ * The grouped row's facts from the overdue rows (pure). A SEK invoice adds
+ * its remaining_amount; one in another currency adds the same share of its
+ * stored total_sek (the rate it was booked at), or, without one, is counted
+ * in unconverted_count instead of mixing currencies into the sum.
+ */
+export function summarizeOverdueInvoices(
+  rows: ReadonlyArray<Pick<OverdueInvoiceRow, 'due_date' | 'total' | 'total_sek' | 'remaining_amount' | 'currency'>>,
+  today: string = todayIsoStockholm(),
+): OverdueInvoicesDue | null {
+  if (rows.length === 0) return null
+  const amounts: number[] = []
+  let unconverted = 0
+  let oldest = rows[0].due_date
+  for (const row of rows) {
+    if (row.due_date < oldest) oldest = row.due_date
+    const remaining = Number(row.remaining_amount ?? row.total ?? 0)
+    if (!row.currency || row.currency === 'SEK') {
+      amounts.push(remaining)
+      continue
+    }
+    const total = Number(row.total ?? 0)
+    if (row.total_sek == null || total === 0) {
+      unconverted++
+      continue
+    }
+    amounts.push((Number(row.total_sek) * remaining) / total)
+  }
+  return {
+    count: rows.length,
+    remaining_sek: sumOre(amounts),
+    unconverted_count: unconverted,
+    oldest_due_date: oldest,
+    oldest_days_overdue: invoiceDaysOverdue(oldest, today),
+  }
+}
+
+/**
+ * The company's overdue customer invoices as one Att göra item (see
+ * OverdueInvoicesDue): null when none is overdue. Soft-fails to null with a
+ * logged error, like every other category.
+ */
+export async function getOverdueInvoicesDue(
+  supabase: SupabaseClient,
+  companyId: string,
+  today: string = todayIsoStockholm(),
+): Promise<OverdueInvoicesDue | null> {
+  try {
+    return summarizeOverdueInvoices(await listOverdueInvoiceRows(supabase, companyId, today), today)
+  } catch (err) {
+    logAndZero('overdue_invoice', companyId, err as { message?: string })
+    return null
+  }
 }
 
 /**

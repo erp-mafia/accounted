@@ -22,6 +22,7 @@ import { expectedRotRutPayoutAmount } from '@/lib/invoices/rot-rut-payout-matchi
 import { loadOpenRotRutPayoutRequests } from '@/lib/invoices/open-rot-rut-payout-requests'
 import { PICKER_LIMIT, loadOpenInvoicesForMatch } from '@/lib/invoices/open-invoice-search'
 import { invoiceStatusDisplay } from '@/lib/invoices/status-display'
+import { effectiveInvoiceStatus } from '@/lib/invoices/overdue'
 import { supplierInvoiceStatusDisplay } from '@/lib/supplier-invoices/status-display'
 import { statusChipTextClass } from '@/lib/status-display'
 
@@ -336,9 +337,10 @@ export default function InvoicePicker(props: InvoicePickerProps) {
           // The invoice's own status (lib/invoices/status-display.ts or
           // lib/supplier-invoices/status-display.ts), shown only when it
           // deviates; the tone follows its chip.
+          // A customer invoice past its due date reads overdue (lib/invoices/overdue.ts).
           const statusDisplay = isSupplier
             ? supplierInvoiceStatusDisplay(invoice.status)
-            : invoiceStatusDisplay(invoice.status)
+            : invoiceStatusDisplay(effectiveInvoiceStatus(invoice as OpenInvoice))
 
           return (
             <button

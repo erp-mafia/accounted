@@ -17,10 +17,9 @@
  *                 Swedish bank): the payment-link QR when there is a link,
  *                 else none (foreign_customer)
  *   bank_app      the UsingQR code a Swedish bank app scans (SEK, org number,
- *                 a printed bankgiro or plusgiro with a valid check digit,
- *                 or, when the invoice prints no giro, a printed Swedish bank
- *                 account whose check digit is valid: UsingQR chapter 4.1,
- *                 lib/invoices/bank-payment-qr.ts)
+ *                 a printed bankgiro or plusgiro with a valid check digit;
+ *                 never a plain bank account, which bank apps cannot pay
+ *                 from the code: lib/invoices/bank-payment-qr.ts, crm#1191)
  *   swish         the Swish code (SEK, a printed, valid Swish number)
  *   payment_link  the invoice's payment link
  *   none          no code
@@ -74,10 +73,8 @@ export const INVOICE_QR_REASONS = [
   'no_org_number',
   /** The printed giro has a wrong check digit: a wrong machine-read account is worse than none. */
   'invalid_giro',
-  /** No giro prints and the printed bank account is malformed, too long or short for its bank, or has a wrong check digit. */
-  'invalid_bank_account',
-  /** No giro prints and the printed bank account's bank has no check-digit rule we know, so it cannot be verified. */
-  'unverified_bank_account',
+  /** No giro prints, only a bank account: the bank-app code needs a giro, the account prints as text. */
+  'bank_account_only',
   /** The bank-app code needs the invoice number as its reference (an unnumbered draft has none). */
   'no_invoice_number',
   /** The bank-app code lacks another mandatory field (company name or due date). */
@@ -201,7 +198,7 @@ type Candidate = { ok: true; payload: string } | { ok: false; reason: InvoiceQrR
 function bankAppCandidate(input: ResolveInvoicePaymentQrInput, amount: number): Candidate {
   const { invoice, company, lang } = input
   if ((invoice.currency ?? 'SEK') !== 'SEK') return { ok: false, reason: 'currency_not_sek' }
-  // The same account choice the payload makes: bankgiro, plusgiro, else the bank account.
+  // The same account choice the payload makes: bankgiro, else plusgiro.
   const payee = bankPaymentQrPayee(company)
   if (!payee.ok) return { ok: false, reason: payee.reason }
   if (!company.org_number?.trim()) return { ok: false, reason: 'no_org_number' }

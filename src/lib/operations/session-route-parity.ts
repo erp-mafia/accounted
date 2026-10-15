@@ -377,7 +377,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/invoices/:id/mark-paid': covered([`POST ${V}/invoices/:id/mark-paid`, 'gnubok_mark_invoice_as_paid']),
   'POST /api/invoices/:id/link-to-voucher': covered(['gnubok_link_invoice_to_voucher']),
   'POST /api/invoices/:id/quote-status': covered([`POST ${V}/invoices/:id/quote-status`, 'gnubok_set_quote_status']),
-  'POST /api/invoices/:id/cancel': gap('P3', 'makulera a quote or proforma (was a browser-direct write before this route)'),
+  'POST /api/invoices/:id/cancel': covered([`POST ${V}/invoices/:id/cancel`, 'gnubok_cancel_quote_or_proforma']),
   'POST /api/invoices/:id/convert': covered(['gnubok_convert_invoice']),
   'POST /api/invoices/:id/convert-to-order': covered(['gnubok_convert_invoice'], 'target order'),
   'POST /api/invoices/:id/peppol': covered([`POST ${V}/invoices/:id/send-peppol`, 'gnubok_send_invoice_peppol'], 'staging alone has no door; send stages first'),
@@ -773,4 +773,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 133
+export const GAP_CEILING = 132

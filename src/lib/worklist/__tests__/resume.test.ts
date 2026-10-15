@@ -244,6 +244,21 @@ describe('listResumeItems', () => {
     ])
   })
 
+  it('leaves overdue invoices to the Att göra group: the faktura read is drafts only (crm#1084)', async () => {
+    const { supabase, findCalls } = createTableMockSupabase({
+      invoices: [{ data: [] }, { data: [] }],
+    })
+
+    await listResumeItems(supabase as unknown as SupabaseClient, 'company-1', now)
+
+    // Fakturor: only status draft, so a sent invoice past its due date can
+    // never become a Fortsätt row; one item, one surface.
+    const statusFilters = findCalls('invoices', 'eq').filter((args) => args[0] === 'status')
+    expect(statusFilters).toEqual([['status', 'draft']])
+    // The quote read is the only other invoices read, and it is quotes only.
+    expect(findCalls('invoices', 'in')).not.toContainEqual(['status', ['sent', 'overdue', 'partially_paid']])
+  })
+
   it('soft-fails to an empty list when every read errors', async () => {
     const { supabase } = createTableMockSupabase({
       journal_entries: { error: { message: 'boom' } },

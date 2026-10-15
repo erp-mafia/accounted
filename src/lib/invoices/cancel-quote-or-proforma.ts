@@ -10,6 +10,17 @@
  *
  * The actor is an explicit parameter, as in delete-draft-invoice.ts: a
  * service-role caller has no auth.uid().
+ *
+ * One rule for every door: the dashboard route, v1 and the staged MCP tool
+ * (lib/operations/invoice-cancel.ts). A dry run runs the same checks and
+ * stops before the write, so a staged cancel that could never commit is
+ * refused at staging.
+ *
+ * A quote with live invoices converted from it (invoiced in parts or in
+ * full, crm#1196) is cancelled like any other: those invoices are separate
+ * documents and stay as they are, and the cancelled quote can no longer be
+ * converted (INVOICE_CONVERT_SOURCE_CANCELLED), so a part not yet invoiced
+ * is not invoiced from it.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -19,8 +30,11 @@ import type { Invoice } from '@/types'
 const CANCELLABLE_DOCUMENT_TYPES = new Set(['quote', 'proforma'])
 
 export type CancelQuoteOrProformaResult =
-  /** Cancelled now, or already cancelled (no second event). */
-  | { ok: true; invoice: Invoice; alreadyCancelled: boolean }
+  /**
+   * Cancelled now, or already cancelled (no second event). On a dry run the
+   * invoice is the row as read, before any write.
+   */
+  | { ok: true; invoice: Invoice; alreadyCancelled: boolean; dryRun?: boolean }
   | { ok: false; code: 'INVOICE_NOT_FOUND' }
   | { ok: false; code: 'INVOICE_CANCEL_NOT_QUOTE_OR_PROFORMA'; documentType: string }
   /** The status changed between the read and the write. */
@@ -32,8 +46,10 @@ export async function cancelQuoteOrProforma(params: {
   companyId: string
   userId: string
   invoiceId: string
+  /** Run every check and stop before the write. */
+  dryRun?: boolean
 }): Promise<CancelQuoteOrProformaResult> {
-  const { supabase, companyId, userId, invoiceId } = params
+  const { supabase, companyId, userId, invoiceId, dryRun = false } = params
 
   const { data: current, error: fetchError } = await supabase
     .from('invoices')
@@ -53,6 +69,9 @@ export async function cancelQuoteOrProforma(params: {
   }
   if (current.status === 'cancelled') {
     return { ok: true, invoice: current as Invoice, alreadyCancelled: true }
+  }
+  if (dryRun) {
+    return { ok: true, invoice: current as Invoice, alreadyCancelled: false, dryRun: true }
   }
 
   // Compare-and-set on the status just read: a conversion or a second
