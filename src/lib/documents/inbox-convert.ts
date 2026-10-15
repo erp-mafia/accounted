@@ -69,6 +69,7 @@ import {
   type ComputedSupplierInvoiceItem,
 } from '@/lib/supplier-invoices/create'
 import { loadEntryLines, recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
+import { passed, warned } from '@/lib/suggestion-log/checks'
 import { resultAccounts } from '@/lib/suggestion-log/inbox-classify'
 import type { InboxChannelContext, InvoiceInboxItem, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
@@ -524,7 +525,11 @@ export async function convertInboxItemToSupplierInvoice(
       accounts: resultAccounts(items.map((line) => line.account_number)),
     },
     lines: await loadEntryLines(supabase, companyId, registrationJournalEntryId),
-  }, userId)
+  }, userId, [
+    // The item was not converted yet, and the payee was compared with the supplier card.
+    passed('already_booked'),
+    payeeAssessment?.alert ? warned('payee_alert', payeeAlertWarning(payeeAssessment.alert).code) : passed('payee_alert'),
+  ])
 
   try {
     await emit({

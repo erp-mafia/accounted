@@ -1,0 +1,1 @@
+[2026-10-15] The receipt reader keeps pending_operations.result_data matching for rows without pending_operation_id: there is no backfill, and dropping it would erase proposed_by from every receipt recorded before 2026-10-16.

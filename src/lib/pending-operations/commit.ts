@@ -68,6 +68,7 @@ import { foldSellerVatIntoCost, sellerVatIsCost } from '@/lib/bookkeeping/vat-re
 import { isReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import type { CommitActor } from '@/lib/bookkeeping/actor-context'
+import { runInOperationCommit } from './commit-scope'
 import { correctEntry } from '@/lib/core/bookkeeping/storno-service'
 import {
   existingOpeningBalanceMessage,
@@ -206,6 +207,7 @@ import { everyRetagRefused, retagLines } from '@/lib/dimensions/retag-service'
 import { IgnoreTransactionParamsSchema } from '@/lib/pending-operations/schemas/ignore-transaction'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
 import { loadEntryLines, recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
+import { passed as checkPassed, warned as checkWarned } from '@/lib/suggestion-log/checks'
 import { resultAccounts } from '@/lib/suggestion-log/inbox-classify'
 import {
   CreateInvoiceFromSalesOrderParamsSchema,
@@ -4728,7 +4730,11 @@ async function commitCreateSupplierInvoiceFromInbox(
       accounts: resultAccounts(items.map((line) => line.account_number)),
     },
     lines: await loadEntryLines(supabase, companyId, registrationJournalEntryId),
-  }, userId)
+  }, userId, [
+    // The item was not converted yet, and the payee was compared with the supplier card.
+    checkPassed('already_booked'),
+    payeeAssessment.alert ? checkWarned('payee_alert', payeeAlertWarning(payeeAssessment.alert).code) : checkPassed('payee_alert'),
+  ])
 
   try {
     await eventBus.emit({
@@ -6624,7 +6630,9 @@ export async function commitPendingOperation(
   pendingOp: PendingOperation,
   opts: CommitOptions = {}
 ): Promise<CommitResult> {
-  const run = () => commitPendingOperationInner(supabase, userId, companyId, pendingOp, opts)
+  // The operation id rides along for suggestion_log.pending_operation_id.
+  const run = () =>
+    runInOperationCommit(pendingOp.id, () => commitPendingOperationInner(supabase, userId, companyId, pendingOp, opts))
   return opts.actor ? runWithActor(opts.actor, run) : run()
 }
 

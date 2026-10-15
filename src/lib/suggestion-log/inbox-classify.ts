@@ -14,6 +14,13 @@ import type { BankLineFinal } from './classify'
  *   - dismissed: the item was deleted.
  */
 
+/**
+ * The rules behind an underlag's suggestion, recorded as
+ * suggestion_log.rule_version (with the program version): bump by hand when
+ * what fieldsFromExtraction reads off a document reading changes.
+ */
+export const INBOX_EXTRACTION_RULES_REVISION = 'inbox-extraction.1'
+
 /** The fields compared between the extraction and the booking. */
 export interface InboxFields {
   supplier_name?: string | null
@@ -132,6 +139,31 @@ export function changedFields(original: InboxFields, booked: InboxFields): Array
   )
 }
 
+/**
+ * The suggestion on offer before anything was registered: the model's
+ * reading as compared fields. Empty without a reading. The snapshot hashes
+ * this list; the decision adds matches_final.
+ */
+export function offeredInboxSuggestions(input: {
+  extraction: unknown | null
+  model: string | null
+  sourceId: string
+}): Array<Omit<InboxSuggestion, 'matches_final'>> {
+  if (!input.extraction) return []
+  return [{
+    source: 'extraction',
+    source_id: input.sourceId,
+    rank: 0,
+    proposal: {
+      fields: fieldsFromExtraction(input.extraction),
+      suggested_template_id: str((input.extraction as { suggestedTemplateId?: unknown }).suggestedTemplateId),
+    },
+    confidence: num((input.extraction as { confidence?: unknown }).confidence),
+    model: input.model,
+    prompt_sha256: null,
+  }]
+}
+
 export function classifyInboxDecision(input: {
   /** The model's original reading; null when there is none or it failed. */
   extraction: unknown | null
@@ -141,25 +173,15 @@ export function classifyInboxDecision(input: {
   /** Null when the item was deleted. */
   booked: Omit<InboxFinal, 'changed_fields'> | null
 }): { suggestions: InboxSuggestion[]; acted_on: number | null; outcome: 'accepted' | 'changed' | 'manual' | 'dismissed'; final: InboxFinal | null } {
-  const original = input.extraction ? fieldsFromExtraction(input.extraction) : null
+  const offered = offeredInboxSuggestions(input)
+  const original = offered[0]?.proposal.fields ?? null
   const final: InboxFinal | null = input.booked
     ? { ...input.booked, changed_fields: original ? changedFields(original, input.booked.fields) : [] }
     : null
-  const suggestions: InboxSuggestion[] = original
-    ? [{
-        source: 'extraction',
-        source_id: input.sourceId,
-        rank: 0,
-        proposal: {
-          fields: original,
-          suggested_template_id: str((input.extraction as { suggestedTemplateId?: unknown }).suggestedTemplateId),
-        },
-        confidence: num((input.extraction as { confidence?: unknown }).confidence),
-        model: input.model,
-        prompt_sha256: null,
-        matches_final: final !== null && final.changed_fields.length === 0,
-      }]
-    : []
+  const suggestions: InboxSuggestion[] = offered.map((s) => ({
+    ...s,
+    matches_final: final !== null && final.changed_fields.length === 0,
+  }))
 
   if (!final) return { suggestions, acted_on: null, outcome: 'dismissed', final: null }
   if (suggestions.length === 0) return { suggestions, acted_on: null, outcome: 'manual', final }

@@ -133,6 +133,40 @@ describe('GET /journal-entries/:id decision_receipts', () => {
     expect(mockReceipts).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, { journalEntryId: ENTRY_ID })
   })
 
+  it('answers the rules, policy, inputs hash, guards and band a decision recorded', async () => {
+    const recorded = buildDecisionReceipt(
+      {
+        id: '33333333-3333-4333-8333-333333333333',
+        kind: 'bank_line',
+        transaction_id: '11111111-1111-4111-8111-111111111111',
+        inbox_item_id: null,
+        document_id: null,
+        suggestions: [],
+        acted_on: null,
+        final: { journal_entry_id: ENTRY_ID, booking: null, account: '6570', vat_treatment: null, lines: [] },
+        outcome: 'manual',
+        actor_type: 'user',
+        resolved_by: 'user-1',
+        created_at: '2026-10-16T09:00:00.000Z',
+        rule_version: 'bank-proposals.1+a38016f12abc',
+        policy_version: null,
+        input_hash: 'a'.repeat(64),
+        checks: [{ id: 'period_lock', result: 'pass', detail: null }],
+        confidence_band: null,
+      },
+      { entries: new Map(), operations: new Map() },
+    )
+    mockReceipts.mockResolvedValue([recorded])
+    const body = await (await GET(getRequest(), params)).json()
+    expect(DecisionReceiptSchema.safeParse(body.data.decision_receipts[0]).success).toBe(true)
+    expect(body.data.decision_receipts[0]).toMatchObject({
+      rule_version: 'bank-proposals.1+a38016f12abc',
+      input_hash: 'a'.repeat(64),
+      checks: [{ id: 'period_lock', result: 'pass', detail: null }],
+      confidence_band: null,
+    })
+  })
+
   it('answers an empty list for a voucher no recorded decision produced', async () => {
     mockReceipts.mockResolvedValue([])
     const body = await (await GET(getRequest(), params)).json()

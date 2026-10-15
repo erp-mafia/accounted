@@ -332,6 +332,9 @@ export async function createTransactionJournalEntry(
   // syfte directly on the journal entry (SKV's representationsregler /
   // ML 8 kap require the verifikation to document who attended and why).
   notes?: string,
+  // rubricVersion: the rules a recorded decision was made under
+  // (suggestion_log.rule_version), stamped on the verifikat by the commit RPC.
+  options: { rubricVersion?: string } = {},
 ): Promise<JournalEntry | null> {
   // Build lines first — throws InvalidMappingResultError on a broken mapping
   // before any period lookup, preserving the original validation order.
@@ -399,5 +402,5 @@ export async function createTransactionJournalEntry(
     ...(voucherSeries ? { voucher_series: voucherSeries } : {}),
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  return createJournalEntry(supabase, companyId, userId, input, undefined, options.rubricVersion)
 }

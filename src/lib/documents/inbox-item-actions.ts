@@ -34,6 +34,7 @@ import {
 import type { InvoiceExtractionResult } from '@/types'
 import { INBOX_DOCUMENT_KINDS } from '@/lib/documents/inbox-kind'
 import { recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
+import { passed } from '@/lib/suggestion-log/checks'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -357,7 +358,8 @@ export async function deleteInboxItem(
     .eq('id', inboxItemId)
     .eq('company_id', ctx.companyId)
   if (error) return failed(error)
-  await recordInboxDecision(ctx.supabase, extractionSnapshot, null, ctx.userId)
+  // Deleting ran one guard: the item was neither converted nor booked.
+  await recordInboxDecision(ctx.supabase, extractionSnapshot, null, ctx.userId, [passed('already_booked')])
   return { ok: true, data: { id: inboxItemId, deleted: true } }
 }
 

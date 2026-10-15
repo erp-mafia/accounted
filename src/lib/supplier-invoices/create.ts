@@ -58,6 +58,7 @@ import type { Logger } from '@/lib/logger'
 import { rejectSupersededInboxConversions } from '@/lib/pending-operations/supersede'
 import type { Currency, EntityType, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 import { loadEntryLines, recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
+import { passed, warned, type DecisionCheck } from '@/lib/suggestion-log/checks'
 import { resultAccounts } from '@/lib/suggestion-log/inbox-classify'
 
 export type CreateSupplierInvoiceInput = z.infer<typeof CreateSupplierInvoiceSchema>
@@ -907,6 +908,17 @@ export async function createSupplierInvoice(
   }
 
   if (extractionSnapshot) {
+    // The guards this registration ran: the underlag unbooked and its document
+    // free, the period open when a verifikat was posted now, the payee
+    // compared with the supplier card, and the representation VAT cap.
+    const payeeWarning = warnings.find((w) => w.code === 'SUPPLIER_PAYEE_CHANGED' || w.code === 'SUPPLIER_PAYEE_NEW')
+    const checks: DecisionCheck[] = [
+      passed('already_booked'),
+      ...(documentId ? [passed('document_reuse')] : []),
+      ...(booksOnRegistration || paidPrivately ? [passed('period_lock')] : []),
+      payeeWarning ? warned('payee_alert', payeeWarning.code) : passed('payee_alert'),
+      ...(warnings.some((w) => w.code === 'REPRESENTATION_VAT_CAP') ? [warned('representation_vat_cap', 'REPRESENTATION_VAT_CAP')] : []),
+    ]
     await recordInboxDecision(supabase, extractionSnapshot, {
       supplier_invoice_id: invoiceId,
       journal_entry_id: primaryJournalEntryId,
@@ -923,7 +935,7 @@ export async function createSupplierInvoice(
         accounts: resultAccounts(items.map((line) => line.account_number)),
       },
       lines: await loadEntryLines(supabase, companyId, primaryJournalEntryId),
-    }, userId)
+    }, userId, checks)
   }
 
   return {

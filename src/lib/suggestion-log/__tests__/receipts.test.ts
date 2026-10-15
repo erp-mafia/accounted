@@ -77,7 +77,7 @@ const op = {
 }
 
 describe('buildDecisionReceipt', () => {
-  it('turns a bank-line decision into a receipt with explicit nulls for what is not recorded yet', () => {
+  it('turns a bank-line decision recorded before step 2 into a receipt with explicit nulls for what it lacks', () => {
     const r = buildDecisionReceipt(bankRow(), { entries: new Map([[JE, entry]]), operations: new Map([[JE, op]]) })
     expect(r).toMatchObject({
       receipt_id: ROW,
@@ -139,6 +139,60 @@ describe('buildDecisionReceipt', () => {
     expect(DecisionReceiptSchema.safeParse(r).success).toBe(true)
   })
 
+  it('reads the rules, policy, inputs hash, guards and band as they were recorded', () => {
+    const checks = [
+      { id: 'already_booked', result: 'pass', detail: null },
+      { id: 'duplicate', result: 'warn', detail: 'force:journal_entry:je-0' },
+    ]
+    const r = buildDecisionReceipt(
+      bankRow({
+        rule_version: 'bank-proposals.1+a38016f12abc',
+        policy_version: 'direct-booking.1;assistant_sure=0.8;counterpart_seen=3;calibrator=none',
+        input_hash: 'a'.repeat(64),
+        checks,
+        confidence_band: 'direct',
+      }),
+      emptyCtx,
+    )
+    expect(r).toMatchObject({
+      rule_version: 'bank-proposals.1+a38016f12abc',
+      policy_version: 'direct-booking.1;assistant_sure=0.8;counterpart_seen=3;calibrator=none',
+      input_hash: 'a'.repeat(64),
+      checks,
+      confidence_band: 'direct',
+    })
+    expect(DecisionReceiptSchema.safeParse(r).success).toBe(true)
+  })
+
+  it("carries the assistant read's agreement, candidate origin and reasoning hash on its candidate", () => {
+    const r = buildDecisionReceipt(
+      bankRow({ suggestions: [rule, { ...assistant, agreement: 0.67, from_candidate: true, reasoning_sha256: 'r'.repeat(64) }] }),
+      emptyCtx,
+    )
+    expect(r.candidates[0]).toMatchObject({ agreement: null, from_candidate: null, reasoning_sha256: null })
+    expect(r.candidates[1]).toMatchObject({ agreement: 0.67, from_candidate: true, reasoning_sha256: 'r'.repeat(64) })
+  })
+
+  it('keeps only well-formed guards and a known band, and never invents either', () => {
+    const r = buildDecisionReceipt(
+      bankRow({ checks: [{ id: 'chart', result: 'pass' }, { id: 'x', result: 'maybe' }, 'junk'], confidence_band: 'auto' }),
+      emptyCtx,
+    )
+    expect(r.checks).toEqual([{ id: 'chart', result: 'pass', detail: null }])
+    expect(r.confidence_band).toBeNull()
+    expect(buildDecisionReceipt(bankRow({ checks: [] }), emptyCtx).checks).toEqual([])
+  })
+
+  it('reads the proposing operation by the id the row names, not by the voucher', () => {
+    const other = { ...op, id: 'op-other', actor_label: 'Claude' }
+    const r = buildDecisionReceipt(bankRow({ pending_operation_id: 'op-other' }), {
+      entries: new Map(),
+      operations: new Map([[JE, op]]),
+      operationsById: new Map([['op-other', other]]),
+    })
+    expect(r.proposed_by).toMatchObject({ pending_operation_id: 'op-other', label: 'Claude' })
+  })
+
   it('skips suggestion shapes it does not know and coerces an unknown actor to user', () => {
     const r = buildDecisionReceipt(bankRow({ suggestions: [{ source: 'oracle' }, 'junk', rule], acted_on: 2, actor_type: 'robot' }), emptyCtx)
     expect(r.candidates).toHaveLength(1)
@@ -164,6 +218,18 @@ describe('toCompactDecision', () => {
       evidence: { transaction_id: TX, document_ids: [DOC] },
       other_receipts: 1,
     })
+  })
+
+  it('adds the rules version and the band when they were recorded, nothing else', () => {
+    const r = buildDecisionReceipt(
+      bankRow({ rule_version: 'bank-proposals.1+a38016f12abc', policy_version: 'direct-booking.1', input_hash: 'a'.repeat(64), checks: [], confidence_band: 'review' }),
+      emptyCtx,
+    )
+    const compact = toCompactDecision([r])
+    expect(compact).toMatchObject({ rule_version: 'bank-proposals.1+a38016f12abc', confidence_band: 'review' })
+    expect(compact).not.toHaveProperty('policy_version')
+    expect(compact).not.toHaveProperty('input_hash')
+    expect(compact).not.toHaveProperty('checks')
   })
 
   it('returns null without a receipt', () => {
@@ -212,6 +278,17 @@ describe('getDecisionReceipts', () => {
   it('throws on a database error instead of answering "no decision"', async () => {
     mock.enqueue({ error: { message: 'boom', code: '57014' } })
     await expect(getDecisionReceipts(supabase, CO, { journalEntryId: JE })).rejects.toThrow()
+  })
+
+  it('reads a named operation by id and leaves voucher matching to rows that name none', async () => {
+    mock.enqueue({ data: [bankRow({ pending_operation_id: OP })] }) // suggestion_log
+    mock.enqueue({ data: [op] }) // pending_operations by id
+    mock.enqueue({ data: [entry] }) // journal_entries
+    const receipts = await getDecisionReceipts(supabase, CO, { journalEntryId: JE })
+    expect(receipts[0].proposed_by?.pending_operation_id).toBe(OP)
+    expect(mock.findCalls('pending_operations', 'in')).toEqual([['id', [OP]]])
+    // Company-scoped, and not limited to committed: the row exists because the approval booked it.
+    expect(mock.findCalls('pending_operations', 'eq')).toEqual([['company_id', CO]])
   })
 
   it('links an underlag registration through registration_journal_entry_id', async () => {

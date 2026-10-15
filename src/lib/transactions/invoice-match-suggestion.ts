@@ -32,6 +32,7 @@ import {
 } from '@/lib/invoices/duplicate-guard-currency'
 import { resolveTransactionAmountSek } from '@/lib/transactions/booking-duplicate-detection'
 import type { Logger } from '@/lib/logger'
+import { invoiceMatchSide } from '@/lib/transactions/invoice-match-side'
 import { MATCHABLE_INVOICE_STATUSES, MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/invoices/matchable-statuses'
 
 /** The `transactions` columns the intercept reads. */
@@ -164,13 +165,8 @@ export async function findInvoiceMatchSuggestion(
   // user into a duplicate "Markera som betald" later. Credit must be a
   // bank/cash account (1xxx): 244x against a clearing account, equity, etc.
   // isn't a supplier payment and the suggestion would misdirect the user.
-  if (
-    !confirmNoMatch &&
-    isBusiness &&
-    transaction.amount < 0 &&
-    /^244\d$/.test(debitAccount) &&
-    /^1\d{3}$/.test(creditAccount)
-  ) {
+  const side = invoiceMatchSide({ transaction, debitAccount, creditAccount, isBusiness })
+  if (!confirmNoMatch && side === 'supplier') {
     const { sweeps, crossCurrencyUnverifiable } = planAmountSweeps(
       txReferenceAmount,
       DUPLICATE_AMOUNT_TOLERANCE_PCT,
@@ -282,13 +278,7 @@ export async function findInvoiceMatchSuggestion(
   // with the supplier-side intercept above. The debit must be a bank/cash
   // account (^19\d{2}$, BAS class 19): a 1xxx debit outside class 19 isn't a
   // payment receipt and the suggestion would misdirect the user.
-  if (
-    !confirmNoMatch &&
-    isBusiness &&
-    transaction.amount > 0 &&
-    /^19\d{2}$/.test(debitAccount) &&
-    /^151\d$/.test(creditAccount)
-  ) {
+  if (!confirmNoMatch && side === 'customer') {
     const { sweeps, crossCurrencyUnverifiable } = planAmountSweeps(
       txReferenceAmount,
       DUPLICATE_AMOUNT_TOLERANCE_PCT,

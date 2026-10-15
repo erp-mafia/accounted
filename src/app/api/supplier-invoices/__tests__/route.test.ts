@@ -915,7 +915,36 @@ describe('POST /api/supplier-invoices', () => {
       expect.objectContaining({ inboxItemId: INBOX_UUID, documentId: DOCUMENT_UUID }),
       expect.objectContaining({ supplier_invoice_id: 'si-priv-4' }),
       expect.any(String),
+      // A privately paid underlag posts its verifikat now, so the period was checked.
+      [{ id: 'already_booked', result: 'pass', detail: null }, { id: 'document_reuse', result: 'pass', detail: null }, { id: 'period_lock', result: 'pass', detail: null }, { id: 'payee_alert', result: 'pass', detail: null }],
     )
+  })
+
+  it('records the representation VAT cap on an inbox registration as a warning among its checks', async () => {
+    const createdInvoice = makeSupplierInvoice({ id: 'si-priv-5', status: 'paid', document_id: DOCUMENT_UUID })
+    stubRegistration({ invoice: createdInvoice, arrival: 16 })
+    setTable('invoice_inbox_items', {
+      data: { id: INBOX_UUID, document_id: DOCUMENT_UUID, created_supplier_invoice_id: null, created_journal_entry_id: null },
+    })
+    setTable('document_attachments', { data: { id: DOCUMENT_UUID, journal_entry_id: null } })
+    setTable('supplier_invoices', [{ data: null }, { data: createdInvoice }])
+    setTable('companies', { data: { entity_type: 'aktiebolag' } })
+    mockRegisterExpenseClaim.mockResolvedValue(claimOk())
+
+    const response = await POST(createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: privatelyPaidBody({
+        inbox_item_id: INBOX_UUID,
+        items: [{ description: 'Kundlunch', quantity: 1, unit_price: 800, account_number: '6072', vat_rate: 0.12 }],
+      }),
+    }))
+
+    expect(response.status).toBe(200)
+    expect(vi.mocked(recordInboxDecision).mock.calls[0][4]).toContainEqual({
+      id: 'representation_vat_cap',
+      result: 'warn',
+      detail: 'REPRESENTATION_VAT_CAP',
+    })
   })
 
   it('refuses inbox_item_id unless a person paid: the convert endpoint owns the other answers', async () => {

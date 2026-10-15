@@ -32,6 +32,7 @@ import {
   type BookingTarget,
 } from '@/lib/transactions/booking-duplicate-detection'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
+import type { DuplicateVerdict } from '@/lib/suggestion-log/checks'
 import type { Logger } from '@/lib/logger'
 
 /** The override fields of CategorizeTransactionSchema / BookTransactionSchema. */
@@ -61,7 +62,8 @@ export interface BookingDuplicateGuardOptions {
 }
 
 export type BookingDuplicateGuardResult =
-  | { ok: true }
+  /** verdict: how the guard let the booking through, for the decision's checks. */
+  | { ok: true; verdict: DuplicateVerdict }
   | {
       ok: false
       code: 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE'
@@ -89,7 +91,7 @@ export async function runBookingDuplicateGuard(
       if (candidate) {
         return { ok: false, code: 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE', details: { candidate } }
       }
-      return { ok: true }
+      return { ok: true, verdict: { kind: 'clear' } }
     }
     // force=true is bound to the reviewed candidate. A sibling-transaction
     // candidate carries a transaction_id; a ledger-only voucher candidate
@@ -159,7 +161,10 @@ export async function runBookingDuplicateGuard(
         log.error('failed to append duplicate-dismissal behandlingshistorik', logErr as Error)
       }
     }
-    return { ok: true }
+    return {
+      ok: true,
+      verdict: { kind: 'forced', journal_entry_id: candidate.journal_entry_id ?? null, transaction_id: candidate.transaction_id ?? null },
+    }
   } catch (err) {
     if (override.force) {
       return {
@@ -169,6 +174,6 @@ export async function runBookingDuplicateGuard(
       }
     }
     log.warn('booking-time duplicate detection failed (continuing)', err as Error)
-    return { ok: true }
+    return { ok: true, verdict: { kind: 'detection_failed' } }
   }
 }

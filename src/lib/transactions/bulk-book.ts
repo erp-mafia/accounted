@@ -74,6 +74,7 @@ import {
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { finalFromLines, recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
+import { duplicateCheck, passed, type DecisionCheck, type DuplicateVerdict } from '@/lib/suggestion-log/checks'
 import { eventBus } from '@/lib/events/bus'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
@@ -414,10 +415,23 @@ export async function bulkBookTransactions(
     debit: l.debit_amount,
     credit: l.credit_amount,
   }))
+  // The guards this door ran, here and inside the RPC (which refuses a
+  // booked row, and for a new verifikat an unknown account or a locked
+  // period); the duplicate verdict is each row's own.
+  const checksFor = (txId: string): DecisionCheck[] => [
+    passed('already_booked'),
+    passed('currency'),
+    duplicateCheck(duplicate.verdicts.get(txId) ?? { kind: 'clear' }),
+    ...(newEntryPayload ? [passed('chart'), passed('dimension_policy'), passed('period_lock')] : []),
+  ]
   await recordDecisions(
     supabase,
     suggestionSnapshot,
-    body.tx_ids.map((txId) => ({ transactionId: txId, final: finalFromLines(result.journal_entry_id, postedLines) })),
+    body.tx_ids.map((txId) => ({
+      transactionId: txId,
+      final: finalFromLines(result.journal_entry_id, postedLines),
+      checks: checksFor(txId),
+    })),
     userId,
   )
 
@@ -595,7 +609,8 @@ export type BulkBookDuplicateTx = Pick<
 >
 
 export type BulkBookDuplicateGuardResult =
-  | { ok: true }
+  /** verdicts: how the guard let each row through, for its decision's checks (empty on a dry-run force). */
+  | { ok: true; verdicts: Map<string, DuplicateVerdict> }
   | {
       ok: false
       code: 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE'
@@ -651,6 +666,7 @@ export async function runBulkBookDuplicateGuard(
       },
       exclusions,
     )
+  const verdicts = new Map<string, DuplicateVerdict>()
   if (!opts.force) {
     for (const txId of opts.txIds) {
       const tx = txById.get(txId)
@@ -658,22 +674,39 @@ export async function runBulkBookDuplicateGuard(
       let candidate = null
       try {
         candidate = await detectForTx(tx)
+        verdicts.set(txId, { kind: 'clear' })
       } catch (err) {
         log.warn('bulk-book duplicate detection failed (continuing)', { err, txId })
+        verdicts.set(txId, { kind: 'detection_failed' })
       }
       if (candidate) {
         return { ok: false, code: 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE', details: { candidate, transaction_id: txId } }
       }
     }
-    return { ok: true }
+    return { ok: true, verdicts }
   }
-  if (!opts.recordDismissal) return { ok: true }
+  if (!opts.recordDismissal) return { ok: true, verdicts }
   for (const txId of opts.txIds) {
     const tx = txById.get(txId)
     if (!tx) continue
+    let dismissed: BookedDuplicateCandidate | null
     try {
-      const dismissed = await detectForTx(tx)
-      if (!dismissed) continue
+      dismissed = await detectForTx(tx)
+    } catch (err) {
+      log.warn('bulk-book duplicate detection failed under force (continuing)', { err, txId })
+      verdicts.set(txId, { kind: 'detection_failed' })
+      continue
+    }
+    if (!dismissed) {
+      verdicts.set(txId, { kind: 'clear' })
+      continue
+    }
+    verdicts.set(txId, {
+      kind: 'forced',
+      journal_entry_id: dismissed.journal_entry_id ?? null,
+      transaction_id: dismissed.transaction_id ?? null,
+    })
+    try {
       log.warn('bulk-book duplicate guard bypassed', {
         reason: 'force=true',
         txId,
@@ -705,7 +738,7 @@ export async function runBulkBookDuplicateGuard(
       log.error('failed to append duplicate-dismissal behandlingshistorik', err as Error)
     }
   }
-  return { ok: true }
+  return { ok: true, verdicts }
 }
 
 /** btl_select: system templates, the company's own, and the user's teams'. */

@@ -1896,6 +1896,47 @@ const INBOX_FIELD_LABELS: Record<string, string> = {
   accounts: 'konton',
 }
 
+/** The guards a booking door records (lib/suggestion-log/checks.ts), as the report names them. */
+const DECISION_CHECK_LABELS: Record<string, string> = {
+  already_booked: 'inte redan bokförd',
+  duplicate: 'dubblettkontroll',
+  currency: 'valuta',
+  reverse_charge_seller_vat: 'säljarens moms vid omvänd skattskyldighet',
+  counter_legs: 'motkonto',
+  bank_line_direction: 'bankradens sida',
+  chart: 'kontoplan',
+  dimension_policy: 'dimensionskrav',
+  invoice_match: 'öppen faktura',
+  period_lock: 'periodlås',
+  document_reuse: 'underlaget inte redan använt',
+  payee_alert: 'betalningsmottagare',
+  representation_vat_cap: 'representationsmoms',
+}
+
+const DECISION_BAND_LABELS: Record<NonNullable<DecisionReceipt['confidence_band']>, string> = {
+  direct: 'kunde bokföras direkt',
+  review: 'krävde granskning',
+}
+
+/** Rules, policy and guards the decision was made under, as recorded then. */
+function decisionProvenanceDetails(r: DecisionReceipt): string[] {
+  const details: string[] = []
+  if (r.rule_version) details.push(`Regelversion: ${r.rule_version}`)
+  if (r.policy_version) {
+    const band = r.confidence_band ? `, bedömning: ${DECISION_BAND_LABELS[r.confidence_band]}` : ''
+    details.push(`Policy: ${r.policy_version}${band}`)
+  }
+  if (r.checks) {
+    details.push(`Kontroller: ${r.checks.length}`)
+    for (const c of r.checks) {
+      if (c.result === 'pass') continue
+      const label = DECISION_CHECK_LABELS[c.id] ?? c.id
+      details.push(`Kontroll ${c.result === 'warn' ? 'med varning' : 'underkänd'}: ${label}${c.detail ? ` (${c.detail})` : ''}`)
+    }
+  }
+  return details
+}
+
 function decisionSubject(kind: DecisionReceipt['subject_kind']): string {
   return kind === 'bank_line' ? 'banktransaktion' : 'underlag'
 }
@@ -1942,6 +1983,7 @@ export function decisionDetails(r: DecisionReceipt): string[] {
     )
     details.push(`Föreslaget av: ${proposer}`)
   }
+  details.push(...decisionProvenanceDetails(r))
   return details
 }
 
@@ -2005,6 +2047,8 @@ export function decisionEvents(receipts: DecisionReceipt[]): RawBehandlingshisto
         `${sorted.length} ${first.subject_kind === 'bank_line' ? 'banktransaktioner' : 'underlag'} i en verifikation`,
         ...[...counts.entries()].map(([label, n]) => `${label}: ${n}`),
         ...(proposer ? [proposer] : []),
+        // One insert, one snapshot: the rows share their rules version.
+        ...(first.rule_version ? [`Regelversion: ${first.rule_version}`] : []),
       ],
       source: 'suggestion_log',
       count: sorted.length,

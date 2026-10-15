@@ -24,6 +24,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { dbError } from '@/lib/errors/db-error'
 import { isTransactionBooked } from '@/lib/transactions/is-booked'
 import { recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
+import { passed } from '@/lib/suggestion-log/checks'
 
 export type TransactionIgnoreRefusalCode = 'TX_CATEGORIZE_TX_NOT_FOUND' | 'TX_IGNORE_ALREADY_BOOKED'
 
@@ -130,7 +131,13 @@ export async function setTransactionIgnored(
   if (updateError) throw dbError(updateError, null)
 
   if (suggestionSnapshot) {
-    await recordDecisions(supabase, suggestionSnapshot, [{ transactionId: tx.id, final: null }], options.userId ?? null)
+    // Ignoring ran one guard: the row was not booked.
+    await recordDecisions(
+      supabase,
+      suggestionSnapshot,
+      [{ transactionId: tx.id, final: null, checks: [passed('already_booked')] }],
+      options.userId ?? null,
+    )
   }
 
   return { ok: true, transaction_id: tx.id, is_ignored: ignored, changed: true, dry_run: false }

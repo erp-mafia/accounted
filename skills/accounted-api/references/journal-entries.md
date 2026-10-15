@@ -193,7 +193,7 @@ Example response `200`:
 **Retrieve a single verifikation by id.**
 `scope:reports:read · risk:low · idempotent`
 
-Returns the full journal entry including all lines, dimensions, the storno chain (reverses_id, reversed_by_id, correction_of_id), and decision_receipts: who decided the booking (person, API key or agent), the suggestions on offer, which one was booked and its recorded confidence.
+Returns the full journal entry including all lines, dimensions, the storno chain (reverses_id, reversed_by_id, correction_of_id), and decision_receipts: who decided the booking (person, API key or agent), the suggestions on offer, which one was booked, its recorded confidence, and the rules, approval policy, inputs hash and guards it was decided under.
 
 **Use when:** You need the full verifikation for audit / reconciliation, or to display the line-by-line breakdown.
 **Do not use for:** Listing entries (use the list endpoint with filters).
@@ -201,8 +201,9 @@ Returns the full journal entry including all lines, dimensions, the storno chain
 **Pitfalls:**
 - Cancelled drafts are returned (no filter on status here); inspect status before assuming the entry is posted.
 - Lines are sorted by sort_order; the order matters for display but not for accounting (the sum across lines is the meaningful quantity).
-- decision_receipts holds at most 100 receipts: a samlingsverifikat carries one per bank line. It is null (unknown) when the receipts could not be read; an empty list means none were recorded. rule_version, policy_version, input_hash, checks and confidence_band are null until they are recorded at decision time.
+- decision_receipts holds at most 100 receipts: a samlingsverifikat carries one per bank line. It is null (unknown) when the receipts could not be read; an empty list means none were recorded. rule_version, policy_version, input_hash, checks and confidence_band are recorded at decision time from 2026-10-16 and null on earlier decisions; they are never derived when read.
 - confidence.basis 'model_reported' is the reading model's own score for an underlag, not evidence; only 'backing' comes from deterministic evidence.
+- checks lists only the guards that ran: an absent guard did not apply, it did not pass. A warn result is an override (force, allow_duplicate, confirm_no_match) or a guard that could not run; its detail says which.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -229,7 +230,7 @@ Response `200`:
     lines: { id: string, account_number: string, debit_amount: number, credit_amount: number, line_description: string | null, currency: string | null, amount_in_currency: number | null, exchange_rate: number | null, tax_code: string | null, dimensions: Record<string, string>, cost_center: string | null, project: string | null, sort_order: number }[],
     created_at: string,
     updated_at: string,
-    decision_receipts: { receipt_id: string, subject_kind: "bank_line" | "inbox_item", decided_at: string, outcome: "accepted" | "changed" | "manual" | "dismissed", decided_by: { actor_type: "user" | "api_key" | "mcp_oauth" | "cron" | "system" | "agent_chat", user_id: string | null, label: string | null, commit_method: string | null }, proposed_by: { pending_operation_id: string, operation_type: string, actor_type: string, actor_id: string | null, label: string | null, risk_level: string | null, model: string | null, prompt_hash: string | null, staged_at: string, approved_at: string | null } | null, candidates: { source: "assistant" | "rule" | "catalog" | "counterparty_template" | "recent" | "extraction", source_id: string, rank: number, accounts: string[], vat_treatment: string | null, confidence: number | null, model: string | null, prompt_sha256: string | null, matches_final: boolean, contested: boolean }[], chosen: { source: "assistant" | "rule" | "catalog" | "counterparty_template" | "recent" | "extraction", source_id: string, rank: number, accounts: string[], vat_treatment: string | null, confidence: number | null, model: string | null, prompt_sha256: string | null, matches_final: boolean, contested: boolean } | null, booked: { journal_entry_id: string | null, voucher: string | null, entry_status: string | null, account: string | null, vat_treatment: string | null, supplier_invoice_id: string | null, changed_fields: string[] } | null, evidence: { transaction_id: string | null, inbox_item_id: string | null, document_ids: string[] }, confidence: { value: number | null, basis: "backing" | "model_reported" | null }, rule_version: null, policy_version: null, input_hash: null, checks: null, confidence_band: null }[] | null
+    decision_receipts: { receipt_id: string, subject_kind: "bank_line" | "inbox_item", decided_at: string, outcome: "accepted" | "changed" | "manual" | "dismissed", decided_by: { actor_type: "user" | "api_key" | "mcp_oauth" | "cron" | "system" | "agent_chat", user_id: string | null, label: string | null, commit_method: string | null }, proposed_by: { pending_operation_id: string, operation_type: string, actor_type: string, actor_id: string | null, label: string | null, risk_level: string | null, model: string | null, prompt_hash: string | null, staged_at: string, approved_at: string | null } | null, candidates: { source: "assistant" | "rule" | "catalog" | "counterparty_template" | "recent" | "extraction", source_id: string, rank: number, accounts: string[], vat_treatment: string | null, confidence: number | null, model: string | null, prompt_sha256: string | null, matches_final: boolean, contested: boolean, agreement: number | null, from_candidate: boolean | null, reasoning_sha256: string | null }[], chosen: { source: "assistant" | "rule" | "catalog" | "counterparty_template" | "recent" | "extraction", source_id: string, rank: number, accounts: string[], vat_treatment: string | null, confidence: number | null, model: string | null, prompt_sha256: string | null, matches_final: boolean, contested: boolean, agreement: number | null, from_candidate: boolean | null, reasoning_sha256: string | null } | null, booked: { journal_entry_id: string | null, voucher: string | null, entry_status: string | null, account: string | null, vat_treatment: string | null, supplier_invoice_id: string | null, changed_fields: string[] } | null, evidence: { transaction_id: string | null, inbox_item_id: string | null, document_ids: string[] }, confidence: { value: number | null, basis: "backing" | "model_reported" | null }, rule_version: string | null, policy_version: string | null, input_hash: string | null, checks: { id: string, result: "pass" | "warn" | "fail", detail: string | null }[] | null, confidence_band: "direct" | "review" | null }[] | null
   },
   meta: {
     request_id: string,
@@ -301,7 +302,10 @@ Example response `200`:
             "model": null,
             "prompt_sha256": null,
             "matches_final": true,
-            "contested": false
+            "contested": false,
+            "agreement": null,
+            "from_candidate": null,
+            "reasoning_sha256": null
           }
         ],
         "chosen": {
@@ -316,7 +320,10 @@ Example response `200`:
           "model": null,
           "prompt_sha256": null,
           "matches_final": true,
-          "contested": false
+          "contested": false,
+          "agreement": null,
+          "from_candidate": null,
+          "reasoning_sha256": null
         },
         "booked": {
           "journal_entry_id": "0e9c…",
@@ -336,11 +343,37 @@ Example response `200`:
           "value": 0.92,
           "basis": "backing"
         },
-        "rule_version": null,
-        "policy_version": null,
-        "input_hash": null,
-        "checks": null,
-        "confidence_band": null
+        "rule_version": "bank-proposals.1+a38016f12abc",
+        "policy_version": "direct-booking.1;assistant_sure=0.8;counterpart_seen=3;calibrator=none",
+        "input_hash": "4f1c…",
+        "checks": [
+          {
+            "id": "already_booked",
+            "result": "pass",
+            "detail": null
+          },
+          {
+            "id": "duplicate",
+            "result": "pass",
+            "detail": null
+          },
+          {
+            "id": "counter_legs",
+            "result": "pass",
+            "detail": null
+          },
+          {
+            "id": "chart",
+            "result": "pass",
+            "detail": null
+          },
+          {
+            "id": "period_lock",
+            "result": "pass",
+            "detail": null
+          }
+        ],
+        "confidence_band": "direct"
       }
     ]
   },

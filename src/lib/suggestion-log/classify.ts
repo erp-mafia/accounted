@@ -1,5 +1,5 @@
 import { agentBookingFor, businessAccount, type BookingProposal, type ProposalBooking, type ProposalSource } from '@/lib/bookkeeping/proposal'
-import type { AssistantRead } from '@/lib/agent/categorize/read-shape'
+import { confidenceBand, type ConfidenceBand } from '@/lib/transactions/direct-booking'
 import type { EntityType, LinePatternEntry, VatTreatment } from '@/types'
 
 /**
@@ -14,6 +14,11 @@ import type { EntityType, LinePatternEntry, VatTreatment } from '@/types'
  *   - manual:    no suggestion was named, or the named one was not on offer
  *                when the decision was made. matches_final still says which
  *                suggestions agreed with the booking.
+ *
+ * The confidence band is the acted-on suggestion's band under the
+ * direct-booking policy (lib/transactions/direct-booking.ts), evaluated on
+ * the proposal as it was offered: deterministic evidence, never the model's
+ * own words. No suggestion acted on, no band.
  */
 
 export type DecisionOutcome = 'accepted' | 'changed' | 'manual' | 'dismissed'
@@ -38,6 +43,35 @@ export interface LoggedSuggestion {
   matches_final: boolean
   /** Set on a counterpart match the stored read took off the row (BookingProposal.contested). */
   contested?: true
+  /**
+   * Assistant only, from the stored read the suggestion came from: its
+   * self-consistency agreement, whether it chose a deterministic candidate,
+   * and a SHA-256 of its reasoning. Kept here because
+   * transaction_assistant_reads holds only the latest read per row.
+   */
+  agreement?: number | null
+  from_candidate?: boolean | null
+  reasoning_sha256?: string | null
+  /** What the direct-booking policy reads off the proposal, only the keys it carried. */
+  evidence?: SuggestionEvidence
+}
+
+export interface SuggestionEvidence {
+  seen_count?: number
+  rule_mode?: string
+  rule_own?: boolean
+  rule_requires_review?: boolean
+  has_underlag?: boolean
+  read_reverse_charge_kind?: string
+}
+
+/** The stored read as the log keeps it: the reasoning only as a hash. */
+export interface LoggedRead {
+  model?: string | null
+  prompt_sha256?: string | null
+  agreement?: number | null
+  from_candidate?: boolean | null
+  reasoning_sha256?: string | null
 }
 
 export interface BankLineFinal {
@@ -54,6 +88,7 @@ export interface ClassifiedDecision {
   suggestions: LoggedSuggestion[]
   acted_on: number | null
   outcome: DecisionOutcome
+  confidence_band: ConfidenceBand | null
 }
 
 const SOURCE: Record<ProposalSource, SuggestionLogSource | null> = {
@@ -98,9 +133,62 @@ export function businessAccountOfLines(lines: BankLineFinal['lines']): string | 
   return accounts.size === 1 ? [...accounts][0] : null
 }
 
+function evidenceOf(p: BookingProposal): SuggestionEvidence | undefined {
+  const evidence: SuggestionEvidence = {
+    ...(p.seen_count !== undefined ? { seen_count: p.seen_count } : {}),
+    ...(p.rule_mode !== undefined ? { rule_mode: p.rule_mode } : {}),
+    ...(p.rule_own !== undefined ? { rule_own: p.rule_own } : {}),
+    ...(p.rule_requires_review !== undefined ? { rule_requires_review: p.rule_requires_review } : {}),
+    ...(p.has_underlag !== undefined ? { has_underlag: p.has_underlag } : {}),
+    ...(p.read_reverse_charge_kind ? { read_reverse_charge_kind: p.read_reverse_charge_kind } : {}),
+  }
+  return Object.keys(evidence).length > 0 ? evidence : undefined
+}
+
+/**
+ * The suggestions on offer, in the log's shape, before anything was booked
+ * (matches_final is the booking's to decide). The snapshot hashes this list;
+ * the decision adds matches_final to it.
+ */
+export function offeredSuggestions(
+  proposals: BookingProposal[],
+  read?: LoggedRead | null,
+): { offered: BookingProposal[]; suggestions: Array<Omit<LoggedSuggestion, 'matches_final'>> } {
+  const offered = proposals.filter((p) => SOURCE[p.source] !== null)
+  const suggestions = offered.map((p, rank) => {
+    const assistant = p.source === 'assistant'
+    const evidence = evidenceOf(p)
+    return {
+      source: SOURCE[p.source]!,
+      source_id: p.template_id,
+      rank,
+      proposal: {
+        booking: p.booking,
+        debit_account: p.debit_account,
+        credit_account: p.credit_account,
+        vat_treatment: p.vat_treatment ?? null,
+        ...(p.line_pattern && p.line_pattern.length > 0 ? { line_pattern: p.line_pattern } : {}),
+      },
+      confidence: p.confidence,
+      model: assistant ? (read?.model ?? null) : null,
+      prompt_sha256: assistant ? (read?.prompt_sha256 ?? null) : null,
+      ...(p.contested ? { contested: true as const } : {}),
+      ...(assistant && read
+        ? {
+            agreement: read.agreement ?? null,
+            from_candidate: read.from_candidate ?? null,
+            reasoning_sha256: read.reasoning_sha256 ?? null,
+          }
+        : {}),
+      ...(evidence ? { evidence } : {}),
+    }
+  })
+  return { offered, suggestions }
+}
+
 export function classifyBankLineDecision(input: {
   proposals: BookingProposal[]
-  read?: Pick<AssistantRead, 'model' | 'prompt_sha256'> | null
+  read?: LoggedRead | null
   /** The stable id of the suggestion the caller acted on, when it said. */
   actedOn?: string | null
   /** Null when the bank line was dismissed. */
@@ -108,27 +196,19 @@ export function classifyBankLineDecision(input: {
   entityType?: EntityType
 }): ClassifiedDecision {
   const { final, entityType } = input
-  const offered = input.proposals.filter((p) => SOURCE[p.source] !== null)
-  const suggestions: LoggedSuggestion[] = offered.map((p, rank) => ({
-    source: SOURCE[p.source]!,
-    source_id: p.template_id,
-    rank,
-    proposal: {
-      booking: p.booking,
-      debit_account: p.debit_account,
-      credit_account: p.credit_account,
-      vat_treatment: p.vat_treatment ?? null,
-      ...(p.line_pattern && p.line_pattern.length > 0 ? { line_pattern: p.line_pattern } : {}),
-    },
-    confidence: p.confidence,
-    model: p.source === 'assistant' ? (input.read?.model ?? null) : null,
-    prompt_sha256: p.source === 'assistant' ? (input.read?.prompt_sha256 ?? null) : null,
-    matches_final: final ? matchesFinal(p, final, entityType) : false,
-    ...(p.contested ? { contested: true as const } : {}),
+  const { offered, suggestions: onOffer } = offeredSuggestions(input.proposals, input.read)
+  const suggestions: LoggedSuggestion[] = onOffer.map((s, i) => ({
+    ...s,
+    matches_final: final ? matchesFinal(offered[i], final, entityType) : false,
   }))
 
-  if (!final) return { suggestions, acted_on: null, outcome: 'dismissed' }
+  if (!final) return { suggestions, acted_on: null, outcome: 'dismissed', confidence_band: null }
   const index = input.actedOn ? suggestions.findIndex((s) => s.source_id === input.actedOn) : -1
-  if (index === -1) return { suggestions, acted_on: null, outcome: 'manual' }
-  return { suggestions, acted_on: index, outcome: suggestions[index].matches_final ? 'accepted' : 'changed' }
+  if (index === -1) return { suggestions, acted_on: null, outcome: 'manual', confidence_band: null }
+  return {
+    suggestions,
+    acted_on: index,
+    outcome: suggestions[index].matches_final ? 'accepted' : 'changed',
+    confidence_band: confidenceBand(offered[index]),
+  }
 }

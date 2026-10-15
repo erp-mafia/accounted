@@ -18,6 +18,26 @@ export const ASSISTANT_SURE = 0.8
 /** Worth putting ahead of a catalog keyword match on the row chip. */
 export const ASSISTANT_LIKELY = 0.5
 
+/**
+ * Bump by hand when booksWithoutReview decides differently for the same
+ * proposal (the test beside it pins this file's content to the revision).
+ * The thresholds are spelled into the version, so changing one changes the
+ * version on its own.
+ */
+export const DIRECT_BOOKING_POLICY_REVISION = 1
+
+/**
+ * The approval policy a decision's confidence band is evaluated under,
+ * recorded as suggestion_log.policy_version. No calibrator is fitted
+ * (lib/agent/categorize/calibration.ts is not wired), so the band is this
+ * rule over deterministic evidence, not a calibrated probability.
+ */
+export const DIRECT_BOOKING_POLICY_VERSION =
+  `direct-booking.${DIRECT_BOOKING_POLICY_REVISION};assistant_sure=${ASSISTANT_SURE};counterpart_seen=${COUNTERPART_SEEN_FOR_DIRECT};calibrator=none`
+
+/** direct: the row's Bokför books it without a review. review: it opens Granska bokföring. */
+export type ConfidenceBand = 'direct' | 'review'
+
 export function booksWithoutReview(
   s: Pick<
     SuggestedTemplate,
@@ -44,4 +64,9 @@ export function booksWithoutReview(
   }
   if (s.source === 'assistant') return !!s.has_underlag && s.confidence >= ASSISTANT_SURE
   return false
+}
+
+/** The band a proposal falls in under DIRECT_BOOKING_POLICY_VERSION. */
+export function confidenceBand(s: Parameters<typeof booksWithoutReview>[0]): ConfidenceBand {
+  return booksWithoutReview(s) ? 'direct' : 'review'
 }

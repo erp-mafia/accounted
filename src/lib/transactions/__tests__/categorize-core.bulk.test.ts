@@ -337,6 +337,7 @@ describe('bulkBookMatchedInboxItems: booking', () => {
       expect.objectContaining({ id: 'tx-1', cash_account_id: 'cash-1' }),
       expect.objectContaining({ debit_account: '5420', credit_account: '1931' }),
       undefined,
+      { rubricVersion: undefined },
     )
   })
 
@@ -379,6 +380,7 @@ describe('bulkBookMatchedInboxItems: booking', () => {
       expect.objectContaining({ id: 'tx-1' }),
       expect.objectContaining({ dimensions: { '6': 'P001' } }),
       undefined,
+      { rubricVersion: undefined },
     )
   })
 
@@ -477,6 +479,7 @@ describe('bulkBookMatchedInboxItems: WhatsApp channel-context notes threading', 
       expect.objectContaining({ id: 'tx-1' }),
       expect.anything(),
       RENDERED,
+      { rubricVersion: undefined },
     )
   })
 
@@ -496,6 +499,7 @@ describe('bulkBookMatchedInboxItems: WhatsApp channel-context notes threading', 
       expect.objectContaining({ id: 'tx-1' }),
       expect.anything(),
       `Gemensam batchanteckning · ${RENDERED}`,
+      { rubricVersion: undefined },
     )
   })
 
@@ -539,6 +543,7 @@ describe('bulkBookMatchedInboxItems: WhatsApp channel-context notes threading', 
       expect.objectContaining({ id: 'tx-1' }),
       expect.anything(),
       'Gemensam batchanteckning',
+      { rubricVersion: undefined },
     )
     const passedNotes = mockCreateJE.mock.calls[0][5] as string | undefined
     expect(passedNotes).not.toContain('sjukbesök')
@@ -575,6 +580,7 @@ describe('bulkBookMatchedInboxItems: WhatsApp channel-context notes threading', 
       expect.objectContaining({ id: 'tx-1' }),
       expect.anything(),
       RENDERED,
+      { rubricVersion: undefined },
     )
   })
 
@@ -602,6 +608,7 @@ describe('bulkBookMatchedInboxItems: WhatsApp channel-context notes threading', 
       expect.objectContaining({ id: 'tx-1' }),
       expect.anything(),
       'Bara batchanteckningen',
+      { rubricVersion: undefined },
     )
   })
 })
@@ -664,6 +671,14 @@ describe('bulkBookMatchedInboxItems: intra-batch duplicate handling', () => {
     expect(vi.mocked(recordInboxDecision)).toHaveBeenCalledTimes(2)
     expect(vi.mocked(recordInboxDecision).mock.calls.map((c) => (c[1] as { inboxItemId: string }).inboxItemId)).toEqual(['i1', 'i2'])
     expect(vi.mocked(recordInboxDecision).mock.calls[0][2]).toMatchObject({ journal_entry_id: 'je-1' })
+    // Its guards are the bank line's booking's, the item's own unbooked state first.
+    expect(vi.mocked(recordInboxDecision).mock.calls[0][4]).toEqual([
+      { id: 'already_booked', result: 'pass', detail: null },
+      { id: 'duplicate', result: 'pass', detail: null },
+      { id: 'counter_legs', result: 'pass', detail: null },
+      { id: 'chart', result: 'pass', detail: null },
+      { id: 'period_lock', result: 'pass', detail: null },
+    ])
   })
 
   it('STILL skips a pre-existing already-booked duplicate (cross-batch detection preserved)', async () => {

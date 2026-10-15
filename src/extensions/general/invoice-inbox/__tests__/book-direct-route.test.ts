@@ -230,6 +230,7 @@ describe('POST /items/:id/book-direct', () => {
       expect.objectContaining({ inboxItemId: item.id, documentId: 'doc-1' }),
       expect.objectContaining({ journal_entry_id: 'je-1', fields: { total: 99, vat_amount: 19.8 } }),
       'user-1',
+      [{ id: 'already_booked', result: 'pass', detail: null }, { id: 'currency', result: 'pass', detail: null }],
     )
     expect(vi.mocked(recordDecisions)).not.toHaveBeenCalled()
   })

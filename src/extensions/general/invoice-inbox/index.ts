@@ -95,6 +95,7 @@ import type { InboxChannelContext, InvoiceExtractionResult } from '@/types'
 import { recordInboxDecision, snapshotInboxExtraction } from '@/lib/suggestion-log/inbox'
 import { bookedTotals } from '@/lib/suggestion-log/inbox-classify'
 import { finalFromLines, linesOf, recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
+import { passed, type DecisionCheck } from '@/lib/suggestion-log/checks'
 
 const MAX_ATTACHMENTS_PER_EMAIL = 20
 // Received-mail panel window (#2181): 30 days covers "the mail I sent last
@@ -2141,16 +2142,20 @@ export const invoiceInboxExtension: Extension = {
           }
         }
 
+        // The guards this booking ran: the item and its bank row unbooked,
+        // and no foreign total booked as kronor.
+        const checks: DecisionCheck[] = [passed('already_booked'), passed('currency')]
         const postedLines = linesOf(journalEntry)
         await recordInboxDecision(ctx.supabase, extractionSnapshot, {
           journal_entry_id: journalEntry.id,
           fields: bookedTotals(postedLines),
           lines: postedLines,
-        }, ctx.userId)
+        }, ctx.userId, checks)
         if (bankSnapshot && bookedTransactionId) {
           await recordDecisions(ctx.supabase, bankSnapshot, [{
             transactionId: bookedTransactionId,
             final: finalFromLines(journalEntry.id, postedLines),
+            checks,
           }], ctx.userId)
         }
 

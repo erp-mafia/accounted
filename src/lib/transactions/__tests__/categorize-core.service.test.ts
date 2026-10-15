@@ -54,6 +54,8 @@ vi.mock('@/lib/transactions/invoice-match-suggestion', () => ({
 
 import { categorizeTransaction, type CategorizeOptions } from '../categorize-core'
 import { upsertCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
+import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
+import { recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
 
 const COMPANY_ID = 'company-1'
 const TX_ID = 'tx-1'
@@ -319,5 +321,76 @@ describe('categorizeTransaction: refusals every door shares', () => {
 
     expect(outcome).toMatchObject({ ok: false, code: 'VALIDATION_ERROR', details: { field: 'account_override' } })
     expect(createTxJE).not.toHaveBeenCalled()
+  })
+})
+
+describe('categorizeTransaction: the decision record', () => {
+  const pass = (id: string) => ({ id, result: 'pass', detail: null })
+  const recordedChecks = () => vi.mocked(recordDecisions).mock.calls[0]?.[2][0]?.checks
+
+  it('records the guards it ran, in order, and stamps the rules version on the voucher', async () => {
+    vi.mocked(snapshotSuggestions).mockResolvedValueOnce({
+      companyId: COMPANY_ID,
+      ruleVersion: 'bank-proposals.1+a38016f12abc',
+      byTransaction: new Map(),
+    })
+
+    const outcome = await categorizeTransaction(ledger().supabase as never, 'user-1', COMPANY_ID, TX_ID, business, live)
+
+    expect(outcome.ok).toBe(true)
+    expect(createTxJE.mock.calls[0][6]).toEqual({ rubricVersion: 'bank-proposals.1+a38016f12abc' })
+    const expected = [pass('already_booked'), pass('duplicate'), pass('counter_legs'), pass('chart'), pass('period_lock')]
+    expect(recordedChecks()).toEqual(expected)
+    if (outcome.ok && !outcome.dryRun) expect(outcome.booked.checks).toEqual(expected)
+  })
+
+  it('records the seller-VAT check only when a reverse charge met an underlag', async () => {
+    const { supabase } = ledger({
+      transactions: [{ data: row({ document_id: 'doc-1' }), error: null }, { data: [row({ journal_entry_id: 'je-1' })], error: null }],
+      document_attachments: { data: { id: 'doc-1', extracted_data: { totals: { total: 1250, vatAmount: 0 } } }, error: null },
+    })
+
+    await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, { ...business, vat_treatment: 'reverse_charge' }, live)
+
+    expect(recordedChecks()).toContainEqual(pass('reverse_charge_seller_vat'))
+  })
+
+  it('records the invoice-match intercept where it applies, and a confirmed no-match as a warning', async () => {
+    const supplierPayment = { ...business, category: 'expense_other' as const, account_override: '2440' }
+    const chart = { chart_of_accounts: { data: { account_number: '2440', account_class: 2, is_active: true }, error: null } }
+
+    await categorizeTransaction(ledger(chart).supabase as never, 'user-1', COMPANY_ID, TX_ID, supplierPayment, live)
+    expect(recordedChecks()).toContainEqual({ id: 'invoice_match', result: 'pass', detail: 'supplier' })
+
+    vi.mocked(recordDecisions).mockClear()
+    await categorizeTransaction(ledger(chart).supabase as never, 'user-1', COMPANY_ID, TX_ID, { ...supplierPayment, confirm_no_match: true }, live)
+    expect(recordedChecks()).toContainEqual({ id: 'invoice_match', result: 'warn', detail: 'confirm_no_match' })
+  })
+
+  it('records a duplicate booked over with force as a warning that names the candidate', async () => {
+    vi.mocked(detectBookingDuplicate).mockResolvedValue({ transaction_id: null, journal_entry_id: 'je-twin' } as never)
+
+    await categorizeTransaction(
+      ledger().supabase as never,
+      'user-1',
+      COMPANY_ID,
+      TX_ID,
+      { ...business, force: true, expected_duplicate_journal_entry_id: 'je-twin' },
+      live,
+    )
+
+    expect(recordedChecks()).toContainEqual({ id: 'duplicate', result: 'warn', detail: 'force:journal_entry:je-twin' })
+    vi.mocked(detectBookingDuplicate).mockResolvedValue(null)
+  })
+
+  it("records an agent's allow_duplicate: a warning when it bypassed a candidate, a pass when there was none", async () => {
+    vi.mocked(detectBookingDuplicate).mockResolvedValue({ transaction_id: 'tx-twin', journal_entry_id: null } as never)
+    await categorizeTransaction(ledger().supabase as never, 'user-1', COMPANY_ID, TX_ID, { ...business, allow_duplicate: true }, { onBooked: 'refuse' })
+    expect(recordedChecks()).toContainEqual({ id: 'duplicate', result: 'warn', detail: 'allow_duplicate:transaction:tx-twin' })
+
+    vi.mocked(recordDecisions).mockClear()
+    vi.mocked(detectBookingDuplicate).mockResolvedValue(null)
+    await categorizeTransaction(ledger().supabase as never, 'user-1', COMPANY_ID, TX_ID, { ...business, allow_duplicate: true }, { onBooked: 'refuse' })
+    expect(recordedChecks()).toContainEqual({ id: 'duplicate', result: 'pass', detail: 'allow_duplicate' })
   })
 })

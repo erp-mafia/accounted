@@ -199,7 +199,7 @@ describe('setTransactionIgnored: suggestion_log', () => {
     expect(vi.mocked(recordDecisions)).toHaveBeenCalledWith(
       supabase,
       expect.objectContaining({ companyId: 'company-1' }),
-      [{ transactionId: TX_ID, final: null }],
+      [{ transactionId: TX_ID, final: null, checks: [{ id: 'already_booked', result: 'pass', detail: null }] }],
       'user-1',
     )
   })
