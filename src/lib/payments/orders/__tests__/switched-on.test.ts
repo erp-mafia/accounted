@@ -39,13 +39,14 @@ describe('openPaymentsDoor', () => {
     expect(entitled).not.toHaveBeenCalled()
   })
 
-  it('opens for a company on a paid plan (bank_sync) and closes for one without', async () => {
+  it('opens for a company on a paid plan (a paid bank_sync grant, never the seeded trial) and closes for one without', async () => {
     const provider = fakeProvider()
     registerPaymentInitiationProvider(provider)
     entitled.mockResolvedValueOnce(true)
     const open = await openPaymentsDoor({ supabase, companyId: COMPANY })
     expect(open.ok && open.provider).toBe(provider)
-    expect(entitled).toHaveBeenCalledWith(supabase, COMPANY, 'bank_sync')
+    // Paid grants only: the provider charges per payment, so a cardless trial does not pay through the bank.
+    expect(entitled).toHaveBeenCalledWith(supabase, COMPANY, 'bank_sync', { excludeTrial: true })
 
     entitled.mockResolvedValueOnce(false)
     expect(await openPaymentsDoor({ supabase, companyId: COMPANY })).toEqual({ ok: false, reason: 'subscription' })
