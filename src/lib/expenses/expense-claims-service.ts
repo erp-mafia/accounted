@@ -28,6 +28,11 @@ import type { Currency } from '@/types'
 import type { CreateJournalEntryInput, CreateJournalEntryLineInput } from '@/types'
 import { commitExpensePayoutBatch, createJournalEntry, findFiscalPeriod, reverseEntry } from '@/lib/bookkeeping/engine'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
+import {
+  claimInboxItemForEntry,
+  readInboxItemBookingState,
+  releaseInboxItemClaim,
+} from '@/lib/documents/inbox-item-claim'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { findPayslipLineForClaim } from '@/lib/salary/expense-claim-lines'
 import type { PayslipLineForClaim } from '@/lib/salary/expense-claim-lines'
@@ -131,6 +136,8 @@ export type RegisterExpenseClaimResult =
         | 'CLAIM_INSERT_FAILED'
         | 'COMPANY_NOT_FOUND'
         | 'LINK_WRITE_FAILED'
+        | 'INBOX_ITEM_NOT_FOUND'
+        | 'INBOX_ITEM_BOOKED'
       detail?: string
     }
 
@@ -407,6 +414,19 @@ export async function registerExpenseClaim(
   if (!planned.ok) return planned
   const { plan } = planned
 
+  // The inbox item this claim settles must not be booked already: the stamp
+  // below used to overwrite any pointer, so registering the same underlag
+  // twice left two posted verifikat (accounted#14). A pointer at a reversed
+  // verifikat (a booking this claim replaces) is stale and is replaced.
+  let replacesEntryId: string | null = null
+  if (input.inbox_item_id) {
+    const booking = await readInboxItemBookingState(supabase, companyId, input.inbox_item_id)
+    if (booking.state === 'error') return { ok: false, code: 'CLAIM_INSERT_FAILED', detail: booking.error.message }
+    if (booking.state === 'missing') return { ok: false, code: 'INBOX_ITEM_NOT_FOUND' }
+    if (booking.state === 'booked') return { ok: false, code: 'INBOX_ITEM_BOOKED' }
+    replacesEntryId = booking.replaces
+  }
+
   // Claim row first, then the verifikat with source_id pointing back at it;
   // a failed booking removes the orphan row again.
   const { data: claim, error: insertError } = await supabase
@@ -467,8 +487,46 @@ export async function registerExpenseClaim(
     }
   }
 
-  // Attach the receipt to the verifikat and settle the inbox item, both
-  // best-effort: the booking above is the legally significant part.
+  // Settle the inbox item with a compare-and-set on the value read above.
+  // Two registrations that both passed that read each posted a verifikat;
+  // the loser takes its claim back out (storno of its verifikat, the row
+  // removed) before it attaches anything, so the receipt stays on the
+  // winner's verifikat. "Processed" is derived from created_journal_entry_id;
+  // the status column only tracks the extraction pipeline.
+  if (input.inbox_item_id) {
+    const itemClaim = await claimInboxItemForEntry(supabase, companyId, input.inbox_item_id, journalEntryId, {
+      expected: replacesEntryId,
+    })
+    if (itemClaim.status !== 'claimed') {
+      if (itemClaim.status === 'failed') {
+        await releaseInboxItemClaim(supabase, companyId, input.inbox_item_id, journalEntryId, replacesEntryId)
+      }
+      const undone: DeleteExpenseClaimResult = await deleteExpenseClaim(
+        supabase,
+        companyId,
+        userId,
+        claim.id as string,
+      ).catch((err: unknown) => ({
+        ok: false as const,
+        code: 'DELETE_FAILED' as const,
+        detail: err instanceof Error ? err.message : String(err),
+      }))
+      if (!undone.ok) {
+        log.error('expense claim lost its inbox item but could not be removed (manual storno needed)', new Error(undone.code), {
+          claim_id: claim.id,
+          journal_entry_id: journalEntryId,
+          inbox_item_id: input.inbox_item_id,
+          detail: undone.detail,
+        })
+      }
+      return itemClaim.status === 'taken'
+        ? { ok: false, code: 'INBOX_ITEM_BOOKED' }
+        : { ok: false, code: 'CLAIM_INSERT_FAILED', detail: itemClaim.error.message }
+    }
+  }
+
+  // Attach the receipt to the verifikat, best-effort: the booking above is
+  // the legally significant part.
   if (input.document_id) {
     try {
       const { data: doc } = await supabase
@@ -518,15 +576,6 @@ export async function registerExpenseClaim(
         error: err instanceof Error ? err.message : String(err),
       })
     }
-  }
-  if (input.inbox_item_id) {
-    // "Processed" is derived from created_journal_entry_id; the status column
-    // only tracks the extraction pipeline (received/processing/error).
-    await supabase
-      .from('invoice_inbox_items')
-      .update({ created_journal_entry_id: journalEntryId })
-      .eq('id', input.inbox_item_id)
-      .eq('company_id', companyId)
   }
 
   return {

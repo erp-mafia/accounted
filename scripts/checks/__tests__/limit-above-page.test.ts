@@ -28,7 +28,30 @@ describe('limit-above-page: literals', () => {
   })
 
   it('reports the line of the call', () => {
-    expect(scan(`const a = 1\nconst b = 2\nq.limit(3000)`)).toEqual([{ line: 3, limit: 3000, arg: '3000' }])
+    expect(scan(`const a = 1\nconst b = 2\nq.limit(3000)`)).toEqual([{ line: 3, limit: 3000, arg: '3000', call: '.limit(3000)' }])
+  })
+})
+
+describe('limit-above-page: a limit option handed to a reader', () => {
+  it('flags a numeric limit option above one page (accounted#16)', () => {
+    // The parties register asked getObservedParties for 5000 keys; the RPC
+    // behind it returns 1000 at most, and no .limit( was ever written.
+    expect(scan(`getObservedParties(supabase, companyId, { fromDate, limit: 5000 }),`)).toEqual([
+      { line: 1, limit: 5000, arg: '5000', call: 'limit: 5000' },
+    ])
+    expect(limits(`supabase.rpc('x', { p_company_id: id, p_limit: 2_000 })`)).toEqual([2000])
+    expect(limits(`read(db, {\n  limit: 1001\n})`)).toEqual([1001])
+  })
+
+  it('leaves a page or less, other keys and named constants alone', () => {
+    expect(limits(`getObservedParties(supabase, companyId, { limit: 1000 })`)).toEqual([])
+    expect(limits(`fetchAllRows(q, { maxRows: 5000 })`)).toEqual([])
+    expect(limits(`stripe.list({ limit: MAX_TXNS_PER_RUN })`)).toEqual([])
+    expect(limits(`const ratelimit = { limit: 100 }`)).toEqual([])
+  })
+
+  it('reports call and option findings in source order', () => {
+    expect(scan(`read({ limit: 5000 })\nq.limit(2000)`).map((f: { call: string }) => f.call)).toEqual(['limit: 5000', '.limit(2000)'])
   })
 })
 

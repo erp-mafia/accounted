@@ -3,9 +3,10 @@ import { z } from 'zod'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { ok } from '@/lib/api/v1/response'
+import { SIE_FILE_EXTENSION_PATTERN } from '@/lib/import/sie-file-extensions'
 
 const input = z.object({
-  filename: z.string().max(255).regex(/\.(se|sie|si)$/i),
+  filename: z.string().max(255).regex(SIE_FILE_EXTENSION_PATTERN),
   size: z.number().int().positive().max(50 * 1024 * 1024),
 })
 const output = z.object({ storagePath: z.string(), uploadUrl: z.string(), filename: z.string() })

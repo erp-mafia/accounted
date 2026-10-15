@@ -60,6 +60,7 @@ import { createJournalEntry, findFiscalPeriod, getSwedishLocalDate, reverseEntry
 import { approveSupplierInvoice } from '@/lib/supplier-invoices/attest-service'
 import { CreditSupplierInvoiceInputSchema, creditSupplierInvoice } from '@/lib/supplier-invoices/credit'
 import { resolveInboxKind } from '@/lib/documents/inbox-kind'
+import { claimInboxItemOrReverseEntry, readInboxItemBookingState } from '@/lib/documents/inbox-item-claim'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
@@ -255,8 +256,8 @@ import {
 import { z } from 'zod'
 import { operationForPendingType } from '@/lib/operations/registry'
 import { rejectSupersededInboxConversions } from './supersede'
-import { backfillSupplierPaymentDetails, type SupplierPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
-import { assessRegisteredPayee } from '@/lib/payments/payee-registration'
+import { backfillSupplierPaymentDetails, inboxStatedPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
+import { assessRegisteredPayee, payeeAlertWarning } from '@/lib/payments/payee-registration'
 import { COLLECTIONS_BATCH_TYPE } from '@/lib/collections/batch'
 import { batchApprovalRefusal, commitCollectionsDailyBatch } from '@/lib/collections/batch-commit'
 import type { AnyOperation, OperationOutcome } from '@/lib/operations/types'
@@ -4432,10 +4433,13 @@ async function commitCreateSupplierInvoiceFromInbox(
     extracted_data: inbox.extracted_data,
   })
 
-  // The supplier's giro, IBAN or BIC the scan read and staging showed the
-  // approver: what the invoice states, compared with the supplier card before
-  // the card is touched (lib/payments/payee-alerts.ts).
-  const paymentDetails = params.supplier_payment_details as SupplierPaymentDetails | undefined
+  // What the invoice states it is paid to, read from the item's extraction
+  // the same way as the dashboard and v1 doors, and compared with the
+  // supplier card before the card is touched (lib/payments/payee-alerts.ts).
+  // Never the staged supplier_payment_details (ops staged before accounted#15):
+  // that held only what the card lacked, so an account that differs from the
+  // card was dropped and its payment went to the card's account unchecked.
+  const paymentDetails = inboxStatedPaymentDetails(inbox.extracted_data)
   const payeeAssessment = await assessRegisteredPayee(supabase, companyId, supplierId, paymentDetails)
   if (payeeAssessment.alert) {
     log.info('Inbox invoice states bank details the supplier card lacks', { companyId, supplierId, alert: payeeAssessment.alert })
@@ -4719,6 +4723,8 @@ async function commitCreateSupplierInvoiceFromInbox(
       inbox_item_id: inboxItemId,
       registration_journal_entry_id: registrationJournalEntryId,
       arrival_number: arrivalNum,
+      // Why a payment of it waits, as the dashboard and v1 doors say it.
+      ...(payeeAssessment.alert ? { warnings: [payeeAlertWarning(payeeAssessment.alert)] } : {}),
     },
   }
 }
@@ -5155,6 +5161,37 @@ async function commitCreateVoucher(
     sourceType = 'opening_balance'
   }
 
+  // Optional inbox booking (gnubok_create_voucher with inbox_item_id, the
+  // book-direct flow for kvitton). Staging checked the item, but another
+  // booking can land between staging and approval: approving a second staged
+  // voucher for an item already booked posted a duplicate verifikat
+  // (accounted#14). Refused here before anything is posted.
+  // A pointer at a reversed verifikat is stale and is replaced (exactly that
+  // value); before, such an approval posted a verifikat with no underlag.
+  const inboxItemId = params.inbox_item_id as string | undefined
+  let replacesEntryId: string | null = null
+  if (inboxItemId) {
+    const booking = await readInboxItemBookingState(supabase, companyId, inboxItemId)
+    if (booking.state === 'error') {
+      return { error: 'Det gick inte att läsa underlaget. Försök igen.', status: 500 }
+    }
+    if (booking.state === 'missing') {
+      return { error: `Inbox item ${inboxItemId} not found for this company.`, status: 404 }
+    }
+    if (booking.state === 'booked') {
+      return {
+        error: getErrorEntry('INBOX_ITEM_ALREADY_BOOKED')?.message_sv ?? 'Underlaget är redan bokfört.',
+        errorCode: 'INBOX_ITEM_ALREADY_BOOKED',
+        status: 409,
+        data: {
+          ...(booking.journal_entry_id ? { journal_entry_id: booking.journal_entry_id } : {}),
+          ...(booking.supplier_invoice_id ? { supplier_invoice_id: booking.supplier_invoice_id } : {}),
+        },
+      }
+    }
+    replacesEntryId = booking.replaces
+  }
+
   try {
     const entry = await createJournalEntry(
       supabase,
@@ -5177,6 +5214,30 @@ async function commitCreateVoucher(
       opts.commitMethod ?? 'user_accept'
     )
 
+    // Claim the inbox item for this verifikat. Two approvals of different
+    // staged ops for the same item can both pass the read above; the
+    // compare-and-set lets one keep its verifikat and reverses the other's
+    // (storno), so the books never hold the underlag twice. Before the IB
+    // link and the document attach: a loser must leave neither behind.
+    if (inboxItemId) {
+      const claim = await claimInboxItemOrReverseEntry(supabase, companyId, userId, inboxItemId, entry.id, {
+        expected: replacesEntryId,
+      })
+      if (claim.status !== 'claimed') {
+        // Posted, then reversed: the voucher number is used, so the op lands
+        // in failed_partial carrying the id instead of passing as rejected.
+        return {
+          error:
+            claim.status === 'taken'
+              ? 'Underlaget bokfördes samtidigt i en annan verifikation. Verifikationen som skapades här har återförts med en storno.'
+              : `Verifikationen kunde inte kopplas till underlaget och har återförts med en storno: ${claim.error.message}`,
+          ...(claim.status === 'taken' ? { errorCode: 'INBOX_ITEM_ALREADY_BOOKED' } : {}),
+          status: claim.status === 'taken' ? 409 : 500,
+          partialPostedIds: { journal_entry_id: entry.id },
+        }
+      }
+    }
+
     // An IB points its year at itself, like every other IB writer: the
     // correction tools read the pointer, and an IB without one could only be
     // stornoed. The verifikat is posted either way; a failed link is logged.
@@ -5194,71 +5255,20 @@ async function commitCreateVoucher(
       }
     }
 
-    // Optional inbox linking: set when gnubok_create_voucher is called with
-    // inbox_item_id (book-direct flow for kvitton). The verifikat is already
-    // posted and immutable; failures here are non-fatal and only affect
-    // discoverability (inbox row stays in "needs action" with the document
-    // unlinked). Logged so the user can repair via the UI if needed.
-    const inboxItemId = params.inbox_item_id as string | undefined
+    // The OCR document goes onto the verifikat once the claim above is won;
+    // a loser returned before this, so it can never shift the winner's
+    // underlag. The verifikat is posted and immutable either way: a failed
+    // attach is logged, not rolled back.
     const documentId = params.document_id as string | undefined
-    let inboxLinked = false
-    if (inboxItemId) {
-      // Race guard: two concurrent commits of different staged ops on the
-      // same inbox item must not overwrite each other, and no constraint
-      // catches that (a second UPDATE of the same row is invisible to any
-      // cross-row UNIQUE; the one on created_journal_entry_id from migration
-      // 20260515090000 was dropped in 20260911120500 because several inbox
-      // items legitimately back one verifikat). The
-      // `.is('created_journal_entry_id', null)` predicate is the guard: only
-      // the first commit succeeds; the loser sees a zero-rows-updated result
-      // and surfaces a structured warning. We also require
-      // .is('created_supplier_invoice_id', null) so a concurrent
-      // create_supplier_invoice_from_inbox doesn't get clobbered either.
-      // Only the link column is written: the status CHECK allows received|error
-      // (migration 20260504180000), so writing 'confirmed' here would fail the
-      // whole UPDATE and silently leave the inbox item in "needs action".
-      const { data: updatedRows, error: linkInboxErr } = await supabase
-        .from('invoice_inbox_items')
-        .update({ created_journal_entry_id: entry.id })
-        .eq('id', inboxItemId)
-        .eq('company_id', companyId)
-        .is('created_journal_entry_id', null)
-        .is('created_supplier_invoice_id', null)
-        .select('id')
-
-      if (linkInboxErr) {
-        log.warn('Failed to link inbox item to new voucher (voucher still posted)', {
-          inboxItemId,
+    if (inboxItemId && documentId) {
+      try {
+        await linkToJournalEntry(supabase, companyId, documentId, entry.id)
+      } catch (linkDocErr) {
+        log.warn('Failed to attach inbox document to new voucher', {
+          documentId,
           journalEntryId: entry.id,
-          error: linkInboxErr.message,
+          error: linkDocErr instanceof Error ? linkDocErr.message : String(linkDocErr),
         })
-      } else if (!updatedRows || updatedRows.length === 0) {
-        // Race: another commit already claimed this inbox item (either as a
-        // journal entry or supplier invoice). The verifikat is already posted
-        // and immutable: we leave it; an operator can rättelse via storno
-        // if it's a true duplicate.
-        log.warn('Voucher posted but inbox item was already claimed by a concurrent commit', {
-          inboxItemId,
-          journalEntryId: entry.id,
-        })
-      } else {
-        inboxLinked = true
-      }
-
-      // Only attach the OCR document when the inbox link succeeded: if a
-      // racing commit already owns the inbox row, the document already lives
-      // on its JE and re-attaching here would either fail noisily (UNIQUE on
-      // document_attachments.journal_entry_id, if any) or silently shift it.
-      if (documentId && inboxLinked) {
-        try {
-          await linkToJournalEntry(supabase, companyId, documentId, entry.id)
-        } catch (linkDocErr) {
-          log.warn('Failed to attach inbox document to new voucher', {
-            documentId,
-            journalEntryId: entry.id,
-            error: linkDocErr instanceof Error ? linkDocErr.message : String(linkDocErr),
-          })
-        }
       }
     }
 
@@ -5268,7 +5278,9 @@ async function commitCreateVoucher(
         voucher_number: entry.voucher_number,
         voucher_series: entry.voucher_series,
         fiscal_period_id: fiscalPeriodId,
-        ...(inboxItemId ? { inbox_item_id: inboxItemId, inbox_linked: inboxLinked } : {}),
+        // inbox_linked stays in the result for callers that read it; a
+        // committed op with an inbox item has always claimed it now.
+        ...(inboxItemId ? { inbox_item_id: inboxItemId, inbox_linked: true } : {}),
       },
     }
   } catch (err) {

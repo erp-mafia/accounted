@@ -38,6 +38,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
+import { claimInboxItemForEntry } from '@/lib/documents/inbox-item-claim'
 import { createLogger } from '@/lib/logger'
 import { chunk } from '@/lib/utils'
 
@@ -491,21 +492,19 @@ export async function propagateUnderlagForBookedTransaction(
         )
       }
       if (!underlagSettled) continue
-      // CAS on the null predicate so a concurrent stamp stays a no-op. Every
-      // matched item gets its stamp: on a samlingsverifikat N items share one
-      // created_journal_entry_id (the UNIQUE that let only the first one land
-      // was dropped in migration 20260911120500).
-      const { error: stampError } = await supabase
-        .from('invoice_inbox_items')
-        .update({ created_journal_entry_id: journalEntryId })
-        .eq('id', inbox.id)
-        .eq('company_id', companyId)
-        .is('created_journal_entry_id', null)
-      if (stampError) {
+      // The shared compare-and-set (accounted#14), so a concurrent stamp or
+      // supplier-invoice conversion that landed after the read above stays
+      // untouched. Every matched item gets its stamp: on a samlingsverifikat
+      // N items share one created_journal_entry_id (the UNIQUE that let only
+      // the first one land was dropped in migration 20260911120500). The
+      // verifikat books the bank row, not this item alone, so a lost stamp
+      // reverses nothing.
+      const stamp = await claimInboxItemForEntry(supabase, companyId, inbox.id, journalEntryId)
+      if (stamp.status === 'failed') {
         log.error('Failed to stamp inbox item created_journal_entry_id', {
           inbox_item_id: inbox.id,
           journal_entry_id: journalEntryId,
-          error: stampError.message,
+          error: stamp.error.message,
         })
       }
     }

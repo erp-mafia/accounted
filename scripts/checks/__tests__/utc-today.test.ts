@@ -57,6 +57,74 @@ describe('utc-today guard', () => {
     expect(findUtcTodaySites(root)).toEqual([])
   })
 
+  // accounted#18: the same UTC date read off a clock variable, or off a
+  // horizon derived from one, a line after `new Date()`.
+  it('flags the date part of a clock variable and of a horizon derived from one', () => {
+    const root = fixture({
+      'lib/deadlines/status.ts': [
+        `export function run(supabase, now: Date = new Date()) {`,
+        `  const today = now.toISOString().slice(0, 10)`,
+        `  const horizonDate = new Date(now.getTime() + 14 * 86_400_000)`,
+        `  const horizon = horizonDate.toISOString().split('T')[0]`,
+        `  return { today, horizon }`,
+        `}`,
+      ].join('\n'),
+      'lib/b.ts': [
+        `const start = new Date()`,
+        `start.setMonth(start.getMonth() - 3)`,
+        `const since = start.toISOString().substring(0, 10)`,
+        `const later = new Date(Date.now() + 1000)`,
+        `const l = later.toISOString().slice(0, 10)`,
+      ].join('\n'),
+      'lib/c.ts': [
+        `export function read(opts: { now?: Date }) {`,
+        `  const at = opts.now ?? new Date()`,
+        `  const a = at.toISOString().slice(0, 10)`,
+        `  return [a, opts.now!.toISOString().slice(0, 10), opts.now?.toISOString().split('T')[0]]`,
+        `}`,
+      ].join('\n'),
+      'components/D.tsx': [
+        `function isoDay(date: Date): string {`,
+        `  return date.toISOString().slice(0, 10)`,
+        `}`,
+        `const iso = (d: Date) => d.toISOString().split('T')[0]`,
+        `export const max = isoDay(new Date())`,
+        `export const t = (now: Date) => iso(now) + toIsoDate(now)`,
+      ].join('\n'),
+    })
+    expect(findUtcTodaySites(root)).toEqual([
+      { file: 'components/D.tsx', line: 5 },
+      { file: 'components/D.tsx', line: 6 },
+      { file: 'lib/b.ts', line: 3 },
+      { file: 'lib/b.ts', line: 5 },
+      { file: 'lib/c.ts', line: 3 },
+      { file: 'lib/c.ts', line: 4 },
+      { file: 'lib/deadlines/status.ts', line: 2 },
+      { file: 'lib/deadlines/status.ts', line: 4 },
+    ])
+  })
+
+  it('leaves dates built from stored dates and other objects alone', () => {
+    const root = fixture({
+      'lib/ok-dates.ts': [
+        `export function due(invoiceDate: string, terms: number) {`,
+        `  const d = new Date(invoiceDate)`,
+        `  d.setDate(d.getDate() + terms)`,
+        `  return d.toISOString().slice(0, 10)`,
+        `}`,
+        `function isoDay(date: Date): string {`,
+        `  return date.toISOString().slice(0, 10)`,
+        `}`,
+        `export const first = isoDay(new Date(row.created_at))`,
+        `export const own = row.d.toISOString().slice(0, 10)`,
+        `export const at = now.toISOString()`,
+        `const notAClock = new Date(invoiceDate)`,
+        `export const n = notAClock.toISOString().slice(0, 10)`,
+      ].join('\n'),
+    })
+    expect(findUtcTodaySites(root)).toEqual([])
+  })
+
   it('finds no UTC "today" in the repository outside the allowlist', () => {
     const root = path.resolve(__dirname, '..', '..', '..', 'src')
     const outside = findUtcTodaySites(root).filter((f) => !UTC_TODAY_ALLOWED.has(f.file))

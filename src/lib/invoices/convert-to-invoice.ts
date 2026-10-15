@@ -12,6 +12,7 @@ import {
   type QuoteSourceLine,
 } from '@/lib/invoices/quote-partial-invoice'
 import type { Invoice } from '@/types'
+import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * Convert a proforma or a quote (offert) into a real invoice.
@@ -76,16 +77,6 @@ type SourceRow = Invoice & {
 
 const DEFAULT_PAYMENT_TERMS_DAYS = 30
 
-function isoDate(d: Date): string {
-  return d.toISOString().split('T')[0]
-}
-
-function addDays(iso: string, days: number): string {
-  const d = new Date(`${iso}T00:00:00Z`)
-  d.setUTCDate(d.getUTCDate() + days)
-  return isoDate(d)
-}
-
 export async function convertToInvoice(params: {
   supabase: SupabaseClient
   userId: string
@@ -121,7 +112,9 @@ export async function convertToInvoice(params: {
     return { ok: false, code: 'INVOICE_CONVERT_SOURCE_CANCELLED' }
   }
 
-  const today = isoDate(new Date())
+  // The invoice date is the Swedish calendar day (a UTC date is yesterday
+  // between midnight and 01:00/02:00), and the due date counts from it.
+  const today = todayIsoStockholm()
   let dueDate: string = source.due_date
   let conversions: QuoteConversion[] = []
   let quotePart: { amount: number; rest: boolean; invoicedBefore: number } | null = null
@@ -194,7 +187,7 @@ export async function convertToInvoice(params: {
       }
       termsDays = (settings as { invoice_default_days?: number | null } | null)?.invoice_default_days ?? null
     }
-    dueDate = addDays(today, termsDays ?? DEFAULT_PAYMENT_TERMS_DAYS)
+    dueDate = addDaysIso(today, termsDays ?? DEFAULT_PAYMENT_TERMS_DAYS)
   }
 
   // What the invoice bills: the source line for line, or a part of the

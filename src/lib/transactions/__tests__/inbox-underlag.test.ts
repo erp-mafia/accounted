@@ -177,6 +177,13 @@ describe('propagateUnderlagForBookedTransaction', () => {
       [{ created_journal_entry_id: JE1 }],
       [{ created_journal_entry_id: JE1 }],
     ])
+    // The shared compare-and-set (accounted#14): besides the read's filter,
+    // each stamp carries the supplier-invoice predicate, so a conversion
+    // that claimed an item after the read keeps it.
+    const siPredicates = findCalls('invoice_inbox_items', 'is').filter(
+      ([column]) => column === 'created_supplier_invoice_id',
+    )
+    expect(siPredicates).toHaveLength(3)
   })
 
   it('does NOT stamp when the document link fails, so a re-run can still repair it', async () => {

@@ -4,7 +4,7 @@ import { resolveTemplateAccountsForEntity } from './proposal-lines'
 import type { SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 import { accountHue, templateGroupHue, type TemplateHue } from './template-group-colors'
 import { getDefaultAccountForCategory, getDefaultVatTreatmentForCategory } from './category-mapping'
-import { REVERSE_CHARGE_TREATMENT_KINDS, type ReverseChargeKind } from './vat-entries'
+import { REVERSE_CHARGE_TREATMENT_KINDS, reverseChargeKindForSupplierType, type ReverseChargeKind } from './vat-entries'
 import type {
   CategorizationTemplate,
   EntityType,
@@ -177,6 +177,31 @@ function kindFor(
 }
 
 /**
+ * The basis boxes a bank booking can name (the categorize body's
+ * reverse_charge_kind), in momsdeklaration order: goods from another EU
+ * country (ruta 20, 4515), services from another EU country (ruta 21, 4535),
+ * services from outside the EU (ruta 22, 4531).
+ */
+export const PROPOSAL_REVERSE_CHARGE_KINDS: readonly ReverseChargeKind[] = Object.values(REVERSE_CHARGE_TREATMENT_KINDS)
+
+/**
+ * The basis box a proposal's reverse charge names: an account booking's
+ * reverse_charge_kind, or what a catalog template's supplier type books
+ * (it_saas_non_eu is ruta 22). Undefined when it is no reverse charge or names
+ * none (the server then books an EU service), and for a box a bank booking
+ * cannot name.
+ */
+export function reverseChargeKindOf(p: BookingProposal): ReverseChargeKind | undefined {
+  if (p.booking.kind === 'account') {
+    return p.booking.vat_treatment === 'reverse_charge' ? p.booking.reverse_charge_kind : undefined
+  }
+  const template = templateBehind(p)
+  if (template?.vat_treatment !== 'reverse_charge' || !template.reverse_charge_supplier_type) return undefined
+  const kind = reverseChargeKindForSupplierType(template.reverse_charge_supplier_type)
+  return PROPOSAL_REVERSE_CHARGE_KINDS.includes(kind) ? kind : undefined
+}
+
+/**
  * The booking after the person set its account or VAT in the review: one
  * account against the bank, and theirs from here on (source 'manual': Din
  * kontering, Vald av dig). What the proposal it replaces said about itself
@@ -185,9 +210,10 @@ function kindFor(
  * pick over an account the person had changed, and nothing could tell the
  * two apart when the review closed (PostHog 170). `label` names the account
  * the person picked; a VAT change alone keeps the name.
- * A reverse charge that stays one keeps its basis box across an account
- * change; a treatment the person picks anew is the plain one the VAT list
- * offers.
+ * A reverse charge keeps its basis box: the one the booking has across an
+ * account change, otherwise `lastKind`, the box the review last held, so a
+ * person who leaves reverse charge and picks it again gets the box back
+ * (ruta 22 stays ruta 22) instead of the EU-service default (accounted#35).
  */
 export function withAccount(
   p: BookingProposal,
@@ -195,15 +221,35 @@ export function withAccount(
   vat_treatment: VatTreatment,
   amount: number,
   label?: string,
+  lastKind?: ReverseChargeKind | null,
+): BookingProposal {
+  return personsBooking(p, account, vat_treatment, amount, label, reverseChargeKindOf(p) ?? lastKind)
+}
+
+/**
+ * The person's pick of the box a reverse-charge purchase reports its basis
+ * in (ruta 20, 21 or 22), on the account the booking has: the review's
+ * correction of a box the proposal got wrong (accounted#35).
+ */
+export function withReverseChargeKind(p: BookingProposal, kind: ReverseChargeKind, amount: number): BookingProposal {
+  const account = p.booking.kind === 'account' ? p.booking.account : businessAccount(p)
+  return personsBooking(p, account, 'reverse_charge', amount, undefined, kind)
+}
+
+function personsBooking(
+  p: BookingProposal,
+  account: string,
+  vat_treatment: VatTreatment,
+  amount: number,
+  label: string | undefined,
+  kind: ReverseChargeKind | null | undefined,
 ): BookingProposal {
   const category =
     p.booking.kind === 'counterparty' ? categoryFallback(amount) : carriedCategory(p.booking.category, account, amount)
-  const kept =
-    p.booking.kind === 'account' && p.booking.vat_treatment === 'reverse_charge' ? p.booking.reverse_charge_kind : undefined
   return {
     template_id: `account:${account}`,
     source: 'manual',
-    booking: { kind: 'account', account, vat_treatment, category, ...kindFor(vat_treatment, kept) },
+    booking: { kind: 'account', account, vat_treatment, category, ...kindFor(vat_treatment, kind) },
     name_sv: label ?? p.name_sv,
     name_en: label ?? p.name_en,
     group: 'account',

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import {
   createMockRequest,
+  createMockRouteParams,
   parseJsonResponse,
   createQueuedMockSupabase,
 } from '@/tests/helpers'
@@ -32,6 +33,63 @@ vi.mock('@/lib/auth/require-write', () => ({
 import { GET as listOrders } from '../route'
 import { GET as getSettings, PUT as putSettings } from '../settings/route'
 
+interface StoreRow {
+  id: string
+  company_id: string
+  platform: string
+  store_scope: string
+  store_label: string | null
+  row_type: 'order' | 'refund'
+}
+
+const storeRow = (store_scope: string, store_label: string, i: number): StoreRow => ({
+  id: `o${i}`,
+  company_id: 'company-1',
+  platform: 'woocommerce',
+  store_scope,
+  store_label,
+  row_type: 'order',
+})
+
+/**
+ * webshop_orders the way PostgREST serves it: eq/gt filters, order, range and
+ * limit, a count, and never more than 1,000 rows in one response.
+ */
+function postgrestLikeOrders(rows: StoreRow[]) {
+  const from = (table: string) => {
+    expect(table).toBe('webshop_orders')
+    const eqs: Array<[keyof StoreRow, unknown]> = []
+    const gts: Array<[keyof StoreRow, string]> = []
+    let orderBy: keyof StoreRow | null = null
+    let window: [number, number] = [0, 999]
+    let limit = 1000
+    let single = false
+    const run = () => {
+      let out = rows.filter((r) => eqs.every(([c, v]) => r[c] === v) && gts.every(([c, v]) => String(r[c]) > v))
+      const count = out.length
+      if (orderBy) {
+        const col = orderBy
+        out = [...out].sort((a, b) => (String(a[col]) < String(b[col]) ? -1 : String(a[col]) > String(b[col]) ? 1 : 0))
+      }
+      out = out.slice(window[0], Math.min(window[1] + 1, window[0] + limit, window[0] + 1000))
+      return { data: single ? (out[0] ?? null) : out, error: null, count }
+    }
+    const chain: Record<string, unknown> = {
+      select: () => chain,
+      eq: (c: keyof StoreRow, v: unknown) => (eqs.push([c, v]), chain),
+      gt: (c: keyof StoreRow, v: string) => (gts.push([c, v]), chain),
+      // The first order() wins; a column these rows lack (order_date) keeps seed order.
+      order: (c: keyof StoreRow) => ((orderBy = orderBy ?? c), chain),
+      range: (a: number, b: number) => ((window = [a, b]), chain),
+      limit: (n: number) => ((limit = n), chain),
+      maybeSingle: () => ((single = true), chain),
+      then: (resolve: (v: unknown) => unknown) => Promise.resolve(run()).then(resolve),
+    }
+    return chain
+  }
+  return { from, auth: mockSupabase.auth } as never
+}
+
 describe('GET /api/webshop-orders', () => {
   const mockUser = { id: 'user-1', email: 'test@test.se' }
 
@@ -60,32 +118,56 @@ describe('GET /api/webshop-orders', () => {
     expect(response.status).toBe(400)
   })
 
-  it('lists rows with a deduped store facet', async () => {
+  it('lists rows with the store facet, one entry per store', async () => {
     enqueue({
       data: [{ id: 'o1' }, { id: 'o2' }],
       count: 2,
-    })
-    enqueue({
-      data: [
-        { platform: 'woocommerce', store_scope: 'a.se', store_label: 'A' },
-        { platform: 'woocommerce', store_scope: 'a.se', store_label: 'A' },
-        { platform: 'woocommerce', store_scope: 'b.se', store_label: 'B' },
-      ],
     })
     const { status, body } = await parseJsonResponse<{
       data: unknown[]
       count: number
       stores: Array<{ store_scope: string }>
-    }>(await listOrders(createMockRequest('/api/webshop-orders?paid=paid&booked=unbooked')))
+    }>(await listOrders(createMockRequest('/api/webshop-orders?paid=paid&booked=unbooked'), createMockRouteParams({})))
 
     expect(status).toBe(200)
     expect(body.data).toHaveLength(2)
-    expect(body.stores.map((s) => s.store_scope)).toEqual(['a.se', 'b.se'])
+    // The facet reads one row per store (maybeSingle), never a page of orders.
+    expect(findCalls('webshop_orders', 'maybeSingle').length).toBeGreaterThan(0)
+    expect(findCalls('webshop_orders', 'limit')).toEqual(findCalls('webshop_orders', 'limit').map(() => [1]))
+  })
+
+  it('lists a store whose orders all sit past the first 1,000 rows (accounted#17)', async () => {
+    // 1,500 orders from one store, then one from a second. The old facet read
+    // the store list off order rows with .limit(5000), which PostgREST answers
+    // with 1,000 rows: the second store never reached the dropdown.
+    const rows = [
+      ...Array.from({ length: 1500 }, (_, i) => storeRow('a.se', 'A', i)),
+      storeRow('b.se', 'B', 1500),
+    ]
+    requireAuthMock.mockResolvedValue({ user: mockUser, supabase: postgrestLikeOrders(rows) })
+
+    const { status, body } = await parseJsonResponse<{
+      count: number
+      stores: Array<{ platform: string; store_scope: string; store_label: string | null }>
+    }>(await listOrders(createMockRequest('/api/webshop-orders'), createMockRouteParams({})))
+
+    expect(status).toBe(200)
+    expect(body.count).toBe(1501)
+    expect(body.stores).toEqual([
+      { platform: 'woocommerce', store_scope: 'a.se', store_label: 'A' },
+      { platform: 'woocommerce', store_scope: 'b.se', store_label: 'B' },
+    ])
+  })
+
+  it('returns the error when the store facet read fails', async () => {
+    enqueue({ data: [], count: 0 })
+    enqueue({ data: null, error: { message: 'facet boom', code: 'XX000' } })
+    const response = await listOrders(createMockRequest('/api/webshop-orders'), createMockRouteParams({}))
+    expect(response.status).toBe(500)
   })
 
   it('unbooked filter excludes manually marked rows (#1879)', async () => {
     enqueue({ data: [], count: 0 })
-    enqueue({ data: [] })
     const response = await listOrders(
       createMockRequest('/api/webshop-orders?booked=unbooked'),
     )
@@ -101,7 +183,6 @@ describe('GET /api/webshop-orders', () => {
 
   it('booked filter includes manually marked rows (#1879)', async () => {
     enqueue({ data: [], count: 0 })
-    enqueue({ data: [] })
     const response = await listOrders(
       createMockRequest('/api/webshop-orders?booked=booked'),
     )

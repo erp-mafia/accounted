@@ -226,6 +226,51 @@ describe('reconcileStrandedInboxUnderlag', () => {
     expect(propagate).toHaveBeenCalledTimes(1)
   })
 
+  // Since 2026-10-02 the daily run retried items of a company archived by a
+  // migration reset and the immutability trigger refused every write.
+  it('skips companies archived by a migration reset: no resolve, no write, counted', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [item('i1', C1, TX1), item('i2', C2, TX2), item('i3', C2, TX3)] })
+    enqueue({ data: [{ source_company_id: C2 }] }) // company_migration_resets
+    resolveBooked.mockResolvedValue(new Map([[TX1, JE1]]))
+    resolveAnchoring
+      .mockResolvedValueOnce(anchoring({ i1: 'unlinked' }))
+      .mockResolvedValueOnce(anchoring({ i1: 'anchored' }))
+
+    const summary = await reconcileStrandedInboxUnderlag(supabase as unknown as SupabaseClient, {
+      execute: true,
+      log: log as never,
+    })
+
+    expect(findCalls('company_migration_resets', 'select')).toEqual([['source_company_id']])
+    expect(resolveBooked).toHaveBeenCalledTimes(1)
+    expect(resolveBooked).toHaveBeenCalledWith(expect.anything(), C1, [TX1])
+    expect(propagate).toHaveBeenCalledTimes(1)
+    expect(propagate).toHaveBeenCalledWith(expect.anything(), C1, TX1, JE1)
+    expect(summary).toMatchObject({ scanned: 3, skippedResetArchives: 2, repaired: 1, failures: 0 })
+  })
+
+  it('still runs, skipping nothing, when the reset archives cannot be read', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [item('i1', C1, TX1)] })
+    enqueue({ data: null, error: { message: 'connection reset' } }) // company_migration_resets
+    resolveBooked.mockResolvedValue(new Map([[TX1, JE1]]))
+    resolveAnchoring
+      .mockResolvedValueOnce(anchoring({ i1: 'unlinked' }))
+      .mockResolvedValueOnce(anchoring({ i1: 'anchored' }))
+
+    const summary = await reconcileStrandedInboxUnderlag(supabase as unknown as SupabaseClient, {
+      execute: true,
+      log: log as never,
+    })
+
+    expect(summary).toMatchObject({ skippedResetArchives: 0, repaired: 1, failures: 0 })
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('migration reset archives'),
+      expect.anything(),
+    )
+  })
+
   it('reads every candidate and spends maxItems on unlinked items only, deferring the rest', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     // Six candidates: two already anchored, one anchored elsewhere, three

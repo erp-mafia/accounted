@@ -51,7 +51,7 @@ import { parseEntityType } from '@/lib/company/entity-type'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import {
   backfillSupplierPaymentDetails,
-  type SupplierPaymentDetails,
+  inboxStatedPaymentDetails,
 } from '@/lib/supplier-invoices/payment-details-backfill'
 import { assessRegisteredPayee, payeeAlertWarning } from '@/lib/payments/payee-registration'
 import type { Logger } from '@/lib/logger'
@@ -549,7 +549,7 @@ export async function createSupplierInvoice(
   // a betalfil without a detour to the supplier card. Compared with the card
   // first: an account the card does not have is an alert, and the card stays
   // as it is until a person approves the new one (lib/payments/payee-alerts.ts).
-  const scannedSupplier = (inboxItem?.extracted_data as { supplier?: SupplierPaymentDetails } | null)?.supplier
+  const scannedSupplier = inboxStatedPaymentDetails(inboxItem?.extracted_data)
   const payeeAssessment = await assessRegisteredPayee(supabase, companyId, supplier.id as string, scannedSupplier)
   const statedPayee = payeeAssessment.stated
   if (payeeAssessment.alert) {

@@ -654,6 +654,21 @@ export function getErrorMessage(
         }
       }
 
+      // A refused re-date names each blocker (a verifikat, a lock date, a
+      // filed declaration) in Swedish domain copy, and the blockers are what
+      // the user can act on: an English UI gets the English lead with them,
+      // not the lead alone (accounted#18).
+      if (locale === 'en' && structured.code === 'FISCAL_PERIOD_DATES_BLOCKED') {
+        const blockers = (structured.details as { blockers?: unknown } | undefined)?.blockers
+        const named = Array.isArray(blockers)
+          ? blockers.flatMap((b: unknown) => {
+              const sv = (b as { message_sv?: unknown } | null)?.message_sv
+              return typeof sv === 'string' && sv.trim() ? [sv.trim()] : []
+            })
+          : []
+        return [getErrorEntry(structured.code)?.message_en ?? '', ...named].join(' ').trim()
+      }
+
       // For English UI, return the registry's English message for any known
       // code instead of falling through to the Swedish branches below (which
       // ignored locale: English users were shown Swedish prose). The Swedish

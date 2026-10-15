@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { createLogger } from '@/lib/logger'
+import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { getSkatteverketEnvironment, skvRequestWithAuth, SkatteverketAuthError, type SkvAudit } from './api-client'
 import type { SkvAuditActor } from './audit'
 import type { SkvBehorighet } from './connection-store'
@@ -381,8 +382,9 @@ export async function createUtseOmbudDeepLink(
     log.warn('deep link rejected', { issues: parsed.error.issues.map((i) => i.message) })
     throw new OmbudApiError('Djuplänken från Ombudshantering kunde inte tolkas.', 'OBR_BAD_RESPONSE')
   }
-  const expires = new Date(now.getTime() + OMBUD_DEEP_LINK_VALIDITY_WEEKS * 7 * 24 * 60 * 60 * 1000)
-  return { djuplank: parsed.data.djuplank, roller, expiresOn: expires.toISOString().slice(0, 10) }
+  // Shown to the user as a date: counted from the Swedish calendar day.
+  const expiresOn = addDaysIso(todayIsoStockholm(now), OMBUD_DEEP_LINK_VALIDITY_WEEKS * 7)
+  return { djuplank: parsed.data.djuplank, roller, expiresOn }
 }
 
 // ── Pure helpers over behörighetsposter ──────────────────────────────

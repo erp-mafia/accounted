@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
+import { addMonthsIso, todayIsoStockholm } from '@/lib/dates/iso'
 
 // Ledger context: derived booking patterns for the Accounted://ledger/context
 // MCP resource. Everything here is computed by code from ledger data; the LLM
@@ -121,12 +122,6 @@ interface UsageStatsRow {
   median_booking_lag_days: number | null
 }
 
-function windowFrom(now: Date): string {
-  const from = new Date(now)
-  from.setUTCMonth(from.getUTCMonth() - WINDOW_MONTHS)
-  return from.toISOString().slice(0, 10)
-}
-
 // Not money, but roundOre is the repo's canonical 2dp rounding helper.
 function share(agree: number, seen: number): number {
   return seen > 0 ? roundOre(agree / seen) : 0
@@ -137,8 +132,9 @@ export async function buildLedgerContext(
   companyId: string,
   now: Date = new Date(),
 ): Promise<LedgerContext> {
-  const fromDate = windowFrom(now)
-  const today = now.toISOString().slice(0, 10)
+  // The window ends on the Swedish calendar day and reaches back from it.
+  const today = todayIsoStockholm(now)
+  const fromDate = addMonthsIso(today, -WINDOW_MONTHS)
 
   const [statsRes, settingsRes, rulesRes, templatesRes, entryCountRes, voucherSeriesRes, salaryRes] =
     await Promise.all([

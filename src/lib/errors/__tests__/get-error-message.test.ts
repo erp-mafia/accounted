@@ -811,3 +811,61 @@ describe('getErrorMessage: the bank\'s organisationsnummer refusals (crm#1206)',
     expect(getErrorMessage(body, { locale: 'en' })).toContain('Settings, Company, General')
   })
 })
+
+// accounted#18: the fiscal-year dialog reads its refusals in the UI locale.
+describe('getErrorMessage: fiscal-year refusals in an English UI', () => {
+  const blocked = {
+    error: {
+      code: 'FISCAL_PERIOD_DATES_BLOCKED',
+      message:
+        'Datumen kan inte ändras. En bokförd verifikation ligger utanför de nya datumen: A1 (2025-04-24). ' +
+        'Bokföringen är låst t.o.m. 2025-06-30 och ändringen rör dagar i den låsta delen. Flytta låsdatumet först.',
+      details: {
+        blockers: [
+          { code: 'entries_outside', message_sv: 'En bokförd verifikation ligger utanför de nya datumen: A1 (2025-04-24).', count: 1 },
+          {
+            code: 'company_lock_date',
+            message_sv: 'Bokföringen är låst t.o.m. 2025-06-30 och ändringen rör dagar i den låsta delen. Flytta låsdatumet först.',
+          },
+        ],
+      },
+    },
+  }
+
+  it('keeps the named blockers after the English lead, never the agent text', () => {
+    const msg = getErrorMessage(blocked, { locale: 'en' })
+    expect(msg).toBe(
+      'The dates cannot be changed: something in the fiscal year would be affected. The name can still be changed. ' +
+        'En bokförd verifikation ligger utanför de nya datumen: A1 (2025-04-24). ' +
+        'Bokföringen är låst t.o.m. 2025-06-30 och ändringen rör dagar i den låsta delen. Flytta låsdatumet först.',
+    )
+    expect(msg).not.toContain('details.')
+  })
+
+  it('reads the thrown Swedish sentence unchanged in a Swedish UI', () => {
+    expect(getErrorMessage(blocked, { locale: 'sv' })).toBe(blocked.error.message)
+  })
+
+  it('falls back to the English lead when no blocker is named', () => {
+    expect(getErrorMessage({ error: { code: 'FISCAL_PERIOD_DATES_BLOCKED', message: 'Datumen kan inte ändras.' } }, { locale: 'en' })).toBe(
+      'The dates cannot be changed: something in the fiscal year would be affected. The name can still be changed.',
+    )
+  })
+
+  it.each([
+    'FISCAL_PERIOD_INVALID_DATES',
+    'FISCAL_PERIOD_START_NOT_FIRST_OF_MONTH',
+    'FISCAL_PERIOD_END_NOT_MONTH_END',
+    'FISCAL_PERIOD_TOO_LONG',
+    'FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR',
+    'FISCAL_PERIOD_NOT_CONTIGUOUS',
+    'FISCAL_PERIOD_OVERLAP',
+    'FISCAL_PERIOD_DATES_BLOCKED',
+    'FISCAL_PERIOD_UPDATE_CLOSED',
+    'FISCAL_PERIOD_UPDATE_LOCKED',
+  ])('%s: the English is written for a person, the agent pointers live in the remediation', (code) => {
+    const entry = getErrorEntry(code)
+    expect(entry?.message_en).toBeTruthy()
+    expect(entry?.message_en).not.toMatch(/details\.|period_start|period_end/)
+  })
+})

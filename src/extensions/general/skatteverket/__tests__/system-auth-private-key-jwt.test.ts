@@ -7,6 +7,8 @@ const { privateKey } = crypto.generateKeyPairSync('rsa', {
   publicKeyEncoding: { type: 'spki', format: 'pem' },
 })
 
+const tokenUrl = vi.hoisted(() => ({ value: 'https://sysoauth.test.example/token' }))
+
 vi.mock('../lib/system-auth/config', () => ({
   getSystemAuthMechanism: () => 'private_key_jwt',
   getSystemCaPem: () => null,
@@ -14,7 +16,7 @@ vi.mock('../lib/system-auth/config', () => ({
   getSystemClientId: () => 'system-client',
   getSystemKeyPassphrase: () => null,
   getSystemKeyPem: () => privateKey,
-  getSystemTokenUrl: () => 'https://sysoauth.test.example/token',
+  getSystemTokenUrl: () => tokenUrl.value,
 }))
 
 import { privateKeyJwtTransport } from '../lib/system-auth/transport'
@@ -33,5 +35,19 @@ describe('privateKeyJwtTransport', () => {
     expect(url).toBe('https://sysoauth.test.example/token')
     expect(new URLSearchParams(init.body as string).get('client_assertion')).toBeTruthy()
     expect(init.redirect).toBe('error')
+  })
+
+  it('refuses a plaintext token URL before the signed client_assertion leaves (accounted#21)', async () => {
+    tokenUrl.value = 'http://sysoauth.test.example/token'
+    const fetchMock = vi.fn()
+    global.fetch = fetchMock as unknown as typeof fetch
+    try {
+      await expect(privateKeyJwtTransport.fetchToken(['agd'])).rejects.toThrow(
+        /SKATTEVERKET_SYSTEM_OAUTH_TOKEN_URL must be https/,
+      )
+      expect(fetchMock).not.toHaveBeenCalled()
+    } finally {
+      tokenUrl.value = 'https://sysoauth.test.example/token'
+    }
   })
 })

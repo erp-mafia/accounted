@@ -1,4 +1,5 @@
 import type { UiWidget } from './types'
+import { SIE_FILE_EXTENSIONS, SIE_FILE_EXTENSIONS_SV } from '@/lib/import/sie-file-extensions'
 
 /**
  * SIE Drop Widget: MCP Apps inline HTML rendered by gnubok_create_sie_upload.
@@ -107,7 +108,7 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
   <p class="lede">Släpp SIE-filen här så kontrolleras den innan något bokförs.</p>
   <p class="target hidden" id="target"></p>
   <div class="drop" id="drop">Släpp .se/.sie-filen här, eller klicka för att välja</div>
-  <input type="file" id="picker" accept=".se,.sie,.si" />
+  <input type="file" id="picker" accept="${SIE_FILE_EXTENSIONS.join(',')}" />
   <div class="report hidden" id="report"></div>
   <div class="actions hidden" id="actions">
     <button class="primary" id="import">Importera</button>
@@ -227,8 +228,8 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
 
   function handleFile(file) {
     const lower = file.name.toLowerCase();
-    if (!lower.endsWith('.se') && !lower.endsWith('.sie') && !lower.endsWith('.si')) {
-      note('Filen måste vara en SIE-export (.se eller .sie).');
+    if (!${JSON.stringify(SIE_FILE_EXTENSIONS)}.some(function(x) { return lower.endsWith(x); })) {
+      note('Filen måste vara en SIE-export (${SIE_FILE_EXTENSIONS_SV}).');
       return;
     }
     drop.textContent = 'Kontrollerar ' + file.name + '…';

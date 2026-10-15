@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { addDaysIso, daysBetweenIso, endOfDayIsoStockholm, todayIsoStockholm, toIsoDate } from '../iso'
+import { addDaysIso, addMonthsIso, daysBetweenIso, endOfDayIsoStockholm, todayIsoStockholm, toIsoDate } from '../iso'
 
 describe('todayIsoStockholm', () => {
   it('rolls over to the next Swedish calendar day before UTC midnight (CEST, UTC+2)', () => {
@@ -25,6 +25,14 @@ describe('UTC helpers', () => {
     expect(addDaysIso('2026-02-28', 1)).toBe('2026-03-01')
     expect(addDaysIso('2026-03-29', 1)).toBe('2026-03-30')
     expect(addDaysIso('2026-01-01', -1)).toBe('2025-12-31')
+  })
+
+  it('addMonthsIso clamps to the last day of the target month', () => {
+    expect(addMonthsIso('2026-03-31', -1)).toBe('2026-02-28')
+    expect(addMonthsIso('2028-02-29', -12)).toBe('2027-02-28')
+    expect(addMonthsIso('2026-01-16', -12)).toBe('2025-01-16')
+    expect(addMonthsIso('2026-11-30', 3)).toBe('2027-02-28')
+    expect(addMonthsIso('2026-07-02', 12)).toBe('2027-07-02')
   })
 
   it('daysBetweenIso is signed', () => {

@@ -48,6 +48,7 @@ const SUMMARY = {
   companiesTouched: 1,
   historyAppended: 2,
   failures: 0,
+  skippedResetArchives: 0,
 }
 
 beforeEach(() => {

@@ -181,6 +181,7 @@ export const expenseClaimsCreate = defineOperation({
     'EXPENSE_CLAIM_NO_FISCAL_PERIOD',
     'EXPENSE_CLAIM_DOCUMENT_NOT_FOUND',
     'EXPENSE_CLAIM_INBOX_ITEM_NOT_FOUND',
+    'INBOX_ITEM_ALREADY_BOOKED',
   ],
   http: { method: 'POST', path: '/api/v1/companies/:companyId/expense-claims' },
   mcp: {

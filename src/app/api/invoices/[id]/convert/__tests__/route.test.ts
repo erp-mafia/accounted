@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import {
   createMockRequest,
@@ -7,6 +7,7 @@ import {
   createQueuedMockSupabase,
 } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
+import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 
 const mockFetchExchangeRate = vi.fn()
 vi.mock('@/lib/currency/riksbanken', async () => {
@@ -339,15 +340,47 @@ describe('POST /api/invoices/[id]/convert', () => {
       expect(inserted.valid_until).toBeNull()
       expect(inserted.remaining_amount).toBe(12500)
       // invoice_date is today; due_date is today + the customer's 20 days, never the quote's valid_until.
-      const today = new Date().toISOString().split('T')[0]
-      const expectedDue = new Date(`${today}T00:00:00Z`)
-      expectedDue.setUTCDate(expectedDue.getUTCDate() + 20)
+      const today = todayIsoStockholm()
       expect(inserted.invoice_date).toBe(today)
-      expect(inserted.due_date).toBe(expectedDue.toISOString().split('T')[0])
+      expect(inserted.due_date).toBe(addDaysIso(today, 20))
 
       const updates = findCalls('invoices', 'update').map((args) => args[0] as Record<string, unknown>)
       expect(updates.some((u) => u.quote_status === 'accepted')).toBe(true)
       expect(updates.some((u) => u.status === 'cancelled')).toBe(false)
+    })
+
+    // accounted#18: 23:30 UTC is already the next day in Stockholm, in summer
+    // (UTC+2) and in winter (UTC+1). The invoice is dated that day and the
+    // terms count from it.
+    describe('dates on the Swedish day', () => {
+      afterEach(() => {
+        vi.useRealTimers()
+      })
+
+      it.each([
+        ['summer', '2026-07-01T23:30:00Z', '2026-07-02', '2026-07-22'],
+        ['winter', '2026-01-15T23:30:00Z', '2026-01-16', '2026-02-05'],
+      ])('%s: a quote converted at %s is dated %s and due %s', async (_season, instant, invoiceDate, dueDate) => {
+        vi.useFakeTimers({ toFake: ['Date'] })
+        vi.setSystemTime(new Date(instant))
+        enqueue({ data: baseQuote, error: null }) // fetch quote
+        enqueue({ data: null, error: null }) // no existing conversion
+        enqueue({ data: null, count: 0, error: null }) // no live sales order
+        enqueue({ data: { id: 'inv-1', invoice_number: null, document_type: 'invoice' }, error: null }) // insert invoice
+        enqueue({ data: null, error: null }) // insert items
+        enqueue({ data: [{ id: 'q-1' }], error: null }) // quote -> accepted
+        enqueue({ data: 'F-042', error: null }) // generate_invoice_number
+        enqueue({ data: { id: 'inv-1', invoice_number: 'F-042', document_type: 'invoice', items: [] }, error: null }) // refetch
+
+        const response = await POST(
+          createMockRequest('/api/invoices/q-1/convert', { method: 'POST' }),
+          createMockRouteParams({ id: 'q-1' })
+        )
+        expect(response.status).toBe(200)
+        const inserted = findCall('invoices', 'insert')?.[0] as Record<string, unknown>
+        expect(inserted.invoice_date).toBe(invoiceDate)
+        expect(inserted.due_date).toBe(dueDate)
+      })
     })
 
     // crm#1084: the invoice prints what the accepted quote printed. The line

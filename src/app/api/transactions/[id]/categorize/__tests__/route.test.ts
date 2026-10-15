@@ -2448,6 +2448,35 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect(mapping.vat_lines.map((l) => l.account_number)).toEqual(['2645', '2614', '4531', '4598'])
   })
 
+  // accounted#35: the review books the box the person picked, on the account
+  // they set, in the body categorizeBodyFor sends.
+  it.each(['eu_goods', 'eu_services', 'non_eu_services'] as const)('hands the review\'s box %s to the category mapping on an overridden account', async (kind) => {
+    const tx = makeTransaction({ id: 'tx-1', amount: -250, merchant_name: 'Vercel', journal_entry_id: null })
+    mockBuildMappingResultFromCategory.mockReturnValue({ ...defaultMappingResult, debit_account: '5420', credit_account: '1930', vat_lines: [] })
+
+    enqueue({ data: tx, error: null })
+    enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: { account_number: '6540', account_class: 6, is_active: true }, error: null })
+    enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
+    mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    mockSaveUserMappingRule.mockResolvedValue(undefined)
+    enqueue({ data: [{ id: 'tx-1' }], error: null }) // CAS update
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: true, category: 'expense_software', account_override: '6540', vat_treatment: 'reverse_charge', reverse_charge_kind: kind },
+      }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+    const { status, body } = await parseJsonResponse<unknown>(response)
+    expect(status, JSON.stringify(body)).toBe(200)
+    expect(mockBuildMappingResultFromCategory.mock.calls[0][4]).toBe('reverse_charge')
+    expect(mockBuildMappingResultFromCategory.mock.calls[0][7]).toBe(kind)
+    expect((mockCreateTransactionJournalEntry.mock.calls[0][4] as { debit_account: string }).debit_account).toBe('6540')
+  })
+
   it('rejects a reverse-charge kind on a treatment that is not reverse charge with 400', async () => {
     const response = await POST(
       createMockRequest('/api/transactions/tx-1/categorize', {

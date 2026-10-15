@@ -841,8 +841,9 @@ describe('gnubok_create_supplier_invoice_from_inbox: execute', () => {
 /**
  * The scanned bankgiro, plusgiro, IBAN or BIC fills what the supplier lacks,
  * but only once the human approves: staging is a proposal and writes nothing
- * outside pending_operations. The details to fill are staged and shown, the
- * executor writes them (lib/pending-operations commit tests).
+ * outside pending_operations. Staging shows what approval will do; the
+ * executor reads the account from the item's extraction, as every door does
+ * (lib/pending-operations commit tests), so nothing payee-shaped is staged.
  */
 describe('gnubok_create_supplier_invoice_from_inbox: supplier payment details wait for approval', () => {
   beforeEach(() => {
@@ -858,14 +859,14 @@ describe('gnubok_create_supplier_invoice_from_inbox: supplier payment details wa
     document_id: 'doc-1',
   }
 
-  it('stages the bankgiro the supplier lacks and writes nothing to the supplier', async () => {
+  it('shows the bankgiro the supplier lacks and writes nothing to the supplier', async () => {
     const supplierUpdates: Array<Record<string, unknown>> = []
     const inserts: Array<Record<string, unknown>> = []
     const supabase = makeMock({
       inbox: inboxWithBankgiro,
       supplierRecord: { id: 'supplier-1', default_expense_account: '6540', bankgiro: null, plusgiro: null, iban: null, bic: null },
-      // What a direct backfill would read back before writing.
-      supplierByOrg: { bankgiro: null, plusgiro: null, iban: null, bic: null },
+      // The payee check's read of the card: empty.
+      supplierByOrg: { bankgiro: null, plusgiro: null, bank_account: null, clearing_number: null, account_number: null, iban: null },
       supplierUpdates,
       inserts,
     })
@@ -878,24 +879,38 @@ describe('gnubok_create_supplier_invoice_from_inbox: supplier payment details wa
     expect(result.staged).toBe(true)
     expect(supplierUpdates).toEqual([])
     expect(inserts).toHaveLength(1)
-    expect((inserts[0].params as Record<string, unknown>).supplier_payment_details).toEqual({ bankgiro: '5050-1055' })
+    expect(inserts[0].params).not.toHaveProperty('supplier_payment_details')
     expect(result.preview.supplier_payment_details_fill).toEqual({ bankgiro: '5050-1055' })
+    expect(result.preview).not.toHaveProperty('invoice_account')
+    expect(inserts[0].preview_data).not.toHaveProperty('compliance_warning')
   })
 
-  it('stages nothing to fill when the supplier already has a bankgiro', async () => {
+  it('names both accounts when the bankgiro differs from the card, fills nothing and writes nothing (accounted#15)', async () => {
+    const supplierUpdates: Array<Record<string, unknown>> = []
     const inserts: Array<Record<string, unknown>> = []
     const supabase = makeMock({
       inbox: inboxWithBankgiro,
       supplierRecord: { id: 'supplier-1', default_expense_account: '6540', bankgiro: '991-2346', plusgiro: null, iban: null, bic: null },
+      supplierByOrg: { bankgiro: '991-2346', plusgiro: null, bank_account: null, clearing_number: null, account_number: null, iban: null },
+      supplierUpdates,
       inserts,
     })
     const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
     const result = (await tool.execute({ inbox_item_id: 'inbox-bg' }, 'company-1', 'user-1', supabase)) as {
+      staged: boolean
       preview: Record<string, unknown>
     }
 
+    expect(result.staged).toBe(true)
+    expect(supplierUpdates).toEqual([])
+    // Staging never touches a supplier invoice: the stated account is stored at approval.
+    const tables = (supabase as unknown as { from: { mock: { calls: unknown[][] } } }).from.mock.calls.map((call) => call[0])
+    expect(tables).not.toContain('supplier_invoices')
     expect(inserts[0].params).not.toHaveProperty('supplier_payment_details')
     expect(result.preview).not.toHaveProperty('supplier_payment_details_fill')
+    expect(result.preview).toMatchObject({ invoice_account: 'BG 5050-1055', current_supplier_account: 'BG 991-2346' })
+    // The approval card's note: the payment waits for a person.
+    expect(inserts[0].preview_data).toMatchObject({ compliance_warning: expect.stringContaining('andra bankuppgifter än leverantörskortet') })
   })
 })
 

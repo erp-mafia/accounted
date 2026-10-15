@@ -102,12 +102,20 @@ describe('assessRegisteredPayee: at registration, before the card is touched', (
       stated: { payee_bankgiro: '9020-0007', payee_plusgiro: null, payee_iban: null, payee_bic: null },
       alert: null,
       backfill: true,
+      statedKey: 'bankgiro:90200007',
+      cardKey: null,
     })
   })
 
   it('alerts and leaves the card alone for a changed account, and for a new one at a supplier paid before', async () => {
     db.setTable('suppliers', { data: { ...CARD, bankgiro: null, plusgiro: '1234566' } })
-    expect(await assessRegisteredPayee(supabase(), COMPANY, 'sup-1', { bankgiro: '9020-0007' })).toMatchObject({ alert: 'changed', backfill: false })
+    // Both accounts as keys, so a staging preview can name them (accounted#15).
+    expect(await assessRegisteredPayee(supabase(), COMPANY, 'sup-1', { bankgiro: '9020-0007' })).toMatchObject({
+      alert: 'changed',
+      backfill: false,
+      statedKey: 'bankgiro:90200007',
+      cardKey: 'plusgiro:1234566',
+    })
 
     db.setTable('suppliers', { data: { bankgiro: null, plusgiro: null, bank_account: null, clearing_number: null, account_number: null, iban: null } })
     db.setTable('supplier_invoices', { data: [{ id: 'old', supplier_id: 'sup-1' }] })

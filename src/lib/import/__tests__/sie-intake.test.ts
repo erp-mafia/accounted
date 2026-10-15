@@ -78,6 +78,14 @@ describe('readSIEIntakeFile', () => {
     const read = readSIEIntakeFile(supabase, 'company-1', OWN, 'export.exe')
     await expect(read).rejects.toBeInstanceOf(SIEJobValidationError)
     await expect(read).rejects.not.toBeInstanceOf(SIEIntakePathError)
+    await expect(readSIEIntakeFile(supabase, 'company-1', OWN, 'export')).rejects.toBeInstanceOf(SIEJobValidationError)
+  })
+
+  it('takes every extension of the shared list, .si included', async () => {
+    const { supabase } = memoryBucket({ [OWN]: SIE })
+    for (const filename of ['export.se', 'EXPORT.SIE', 'lon.si']) {
+      expect((await readSIEIntakeFile(supabase, 'company-1', OWN, filename)).name).toBe(filename)
+    }
   })
 })
 

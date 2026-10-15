@@ -12,6 +12,7 @@ import { SIE_FIRST_PROVIDERS } from '@/lib/onboarding-books/reducer'
 import { defaultOpeningBalanceSeries } from '@/lib/import/opening-balance-defaults'
 import { resolveOnboardingMappings } from '@/lib/onboarding-books/mappings'
 import { obsAccountsOf } from '@/lib/import/sie-preview-mappings'
+import { hasSIEFileExtension, lacksFileExtension, SIE_FILE_EXTENSIONS_EN, SIE_FILE_EXTENSIONS_SV } from '@/lib/import/sie-file-extensions'
 import type { AccountMapping, ImportPreview, SIEAccount, SIEHeader } from '@/lib/import/types'
 import { InkText } from '@/components/onboarding/journey/ink'
 import type { TheaterApi } from '../engines/theater-engine'
@@ -136,12 +137,17 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
     }
   }, [t])
 
+  // The name rule is the one every SIE surface applies (sie-file-extensions.ts):
+  // a file outside it gets its row and the reason at once instead of a parse
+  // round trip, and a file saved without any extension is told to be renamed.
   function addFiles(list: FileList | File[]) {
-    const incoming = Array.from(list).filter((f) => /\.(se|sie)$/i.test(f.name) || f.size > 0)
-    if (incoming.length === 0) return
-    const entries = incoming.map((file) => ({ id: crypto.randomUUID(), file, status: 'parsing' as const }))
+    const extensions = locale === 'en' ? SIE_FILE_EXTENSIONS_EN : SIE_FILE_EXTENSIONS_SV
+    const entries: FileEntry[] = Array.from(list).map((file) => (hasSIEFileExtension(file.name)
+      ? { id: crypto.randomUUID(), file, status: 'parsing' }
+      : { id: crypto.randomUUID(), file, status: 'error', error: t(lacksFileExtension(file.name) ? 'sie_no_extension' : 'sie_wrong_type', { extensions }) }))
+    if (entries.length === 0) return
     setFiles((prev) => [...prev, ...entries])
-    entries.forEach(({ file, id }) => void parseOne(file, id))
+    entries.forEach(({ file, id, status }) => { if (status === 'parsing') void parseOne(file, id) })
   }
 
   async function replaceDup(id: string) {
@@ -456,7 +462,8 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
 
       {showDrop ? (
         <>
-          <input ref={inputRef} type="file" accept=".se,.sie" multiple hidden onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = '' }} />
+          {/* No accept attribute, as in SIEUploadStep: Safari greys out unregistered extensions like .se/.sie/.si and files without one, so addFiles filters with a visible reason instead. */}
+          <input ref={inputRef} type="file" multiple hidden onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = '' }} />
           {files.length === 0 ? (
             <button
               type="button"

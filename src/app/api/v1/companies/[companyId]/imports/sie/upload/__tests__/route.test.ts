@@ -69,6 +69,7 @@ describe('POST /imports/sie/upload', () => {
 
   it.each([
     { filename: 'bok.pdf', size: 1024 },
+    { filename: 'bok', size: 1024 },
     { filename: 'x'.repeat(256) + '.se', size: 1024 },
     { filename: 'bok.se', size: 0 },
     { filename: 'bok.se', size: -1 },

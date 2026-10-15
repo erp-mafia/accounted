@@ -68,6 +68,10 @@ function buildCtx(supabase: unknown, overrides: Partial<ExtensionContext> = {}):
   } as ExtensionContext
 }
 
+// The item claim is a compare-and-set returning the rows it stamped: one row
+// means this call won the item, none means another booking holds it.
+const CLAIMED = [{ id: 'item-1' }]
+
 const PERIOD_UUID = '00000000-0000-4000-8000-000000000010'
 const TX_UUID = '00000000-0000-4000-8000-000000000020'
 
@@ -171,7 +175,7 @@ describe('POST /items/:id/book-direct', () => {
     // 1. fetch inbox item
     enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1' }) })
     // 2. update inbox item (status=confirmed, created_journal_entry_id)
-    enqueue({ data: null })
+    enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)
 
     const ctx = buildCtx(supabase)
     const request = createMockRequest('/items/item-1/book-direct', {
@@ -208,7 +212,7 @@ describe('POST /items/:id/book-direct', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const item = makeInvoiceInboxItem({ document_id: 'doc-1' })
     enqueue({ data: item })
-    enqueue({ data: null })
+    enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)
     createJournalEntryMock.mockResolvedValue({
       id: 'je-1',
       lines: VALID_BODY.lines.map((l) => ({ ...l })),
@@ -248,7 +252,7 @@ describe('POST /items/:id/book-direct', () => {
   it('posts each line with its own dimensions bag (the dialog tags lines one by one)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: makeInvoiceInboxItem({ document_id: null }) })
-    enqueue({ data: null })
+    enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)
 
     const ctx = buildCtx(supabase)
     const request = createMockRequest('/items/item-1/book-direct', {
@@ -365,7 +369,7 @@ describe('POST /items/:id/book-direct', () => {
     enqueue({ data: [{ id: 'je-reversed', status: 'reversed' }] })
     enqueue({ data: [{ ledger_account: '1930' }] }) // settlement account
     enqueue({ data: [{ id: TX_UUID }] }) // transaction link
-    enqueue({ data: null }) // inbox item update
+    enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)
 
     const ctx = buildCtx(supabase)
     const request = createMockRequest('/items/item-1/book-direct', {
@@ -441,6 +445,90 @@ describe('POST /items/:id/book-direct', () => {
     expect(findCalls('invoice_inbox_items', 'update')).toHaveLength(0)
   })
 
+  // accounted#14: an item with no bank row had no guard after the read, so
+  // two calls that both passed it each kept a verifikat. The item stamp is
+  // now a compare-and-set; the second claim loses and its verifikat goes.
+  it('claims the item only while nothing holds it', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1' }) })
+    enqueue({ data: CLAIMED })
+
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: VALID_BODY,
+      searchParams: { _id: 'item-1' },
+    })
+    const { status } = await parseJsonResponse(await route.handler(request, buildCtx(supabase)))
+
+    expect(status).toBe(200)
+    expect(findCalls('invoice_inbox_items', 'update')).toEqual([
+      [{ matched_transaction_id: null, created_journal_entry_id: 'je-1' }],
+    ])
+    expect(findCalls('invoice_inbox_items', 'is')).toEqual([
+      ['created_journal_entry_id', null],
+      ['created_supplier_invoice_id', null],
+    ])
+    expect(reverseOrphanedJournalEntryMock).not.toHaveBeenCalled()
+  })
+
+  it('reverses the new verifikat and answers 409 when a concurrent booking claimed the item first', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    // The read sees an unbooked item: the other call has not stamped yet.
+    enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1' }) })
+    enqueue({ data: [] }) // item claim: compare-and-set matched no row
+
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: VALID_BODY,
+      searchParams: { _id: 'item-1' },
+    })
+    const { status, body } = await parseJsonResponse(await route.handler(request, buildCtx(supabase)))
+
+    expect(status).toBe(409)
+    expect(body).toMatchObject({ error: { code: 'INBOX_ITEM_ALREADY_BOOKED' } })
+    expect(createJournalEntryMock).toHaveBeenCalledTimes(1)
+    expect(reverseOrphanedJournalEntryMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      'je-1',
+      expect.any(String),
+    )
+    // The winner keeps the underlag: the loser never links the document,
+    // never records a decision, and never releases a claim that is not its own.
+    expect(linkToJournalEntryMock).not.toHaveBeenCalled()
+    expect(vi.mocked(recordInboxDecision)).not.toHaveBeenCalled()
+    expect(findCalls('invoice_inbox_items', 'update')).toHaveLength(1)
+  })
+
+  it('releases its own claim and reverses the verifikat when the claim write errors', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1' }) })
+    enqueue({ error: { message: 'connection reset', code: '08006' } }) // item claim
+    enqueue({ data: null }) // release, keyed on this verifikat's id
+
+    const request = createMockRequest('/items/item-1/book-direct', {
+      method: 'POST',
+      body: VALID_BODY,
+      searchParams: { _id: 'item-1' },
+    })
+    const { status } = await parseJsonResponse(await route.handler(request, buildCtx(supabase)))
+
+    expect(status).toBeGreaterThanOrEqual(500)
+    const updates = findCalls('invoice_inbox_items', 'update')
+    expect(updates).toHaveLength(2)
+    expect(updates[1]).toEqual([{ created_journal_entry_id: null }])
+    expect(findCalls('invoice_inbox_items', 'eq')).toContainEqual(['created_journal_entry_id', 'je-1'])
+    expect(reverseOrphanedJournalEntryMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      'je-1',
+      expect.any(String),
+    )
+    expect(linkToJournalEntryMock).not.toHaveBeenCalled()
+  })
+
   // ── WhatsApp channel-context notes default ──────────────────
   // The chat answers (representation deltagare + syfte, sender note) reach
   // the verifikat even through callers that never saw the chat: absent/empty
@@ -470,7 +558,7 @@ describe('POST /items/:id/book-direct', () => {
         channel_context: WA_CONTEXT,
       }),
     })
-    enqueue({ data: null }) // inbox item update
+    enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)
 
     const ctx = buildCtx(supabase)
     const request = createMockRequest('/items/item-1/book-direct', {
@@ -501,7 +589,7 @@ describe('POST /items/:id/book-direct', () => {
         channel_context: WA_CONTEXT,
       }),
     })
-    enqueue({ data: null })
+    enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)
 
     const ctx = buildCtx(supabase)
     const request = createMockRequest('/items/item-1/book-direct', {
@@ -535,7 +623,7 @@ describe('POST /items/:id/book-direct', () => {
         channel_context: WA_CONTEXT,
       }),
     })
-    enqueue({ data: null }) // inbox item update
+    enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)
 
     const ctx = buildCtx(supabase)
     const request = createMockRequest('/items/item-1/book-direct', {
@@ -567,7 +655,7 @@ describe('POST /items/:id/book-direct', () => {
         channel_context: WA_CONTEXT,
       }),
     })
-    enqueue({ data: null })
+    enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)
 
     const ctx = buildCtx(supabase)
     const request = createMockRequest('/items/item-1/book-direct', {
@@ -601,7 +689,7 @@ describe('POST /items/:id/book-direct', () => {
         },
       }),
     })
-    enqueue({ data: null })
+    enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)
 
     const ctx = buildCtx(supabase)
     const request = createMockRequest('/items/item-1/book-direct', {
@@ -624,7 +712,7 @@ describe('POST /items/:id/book-direct', () => {
   it('leaves notes undefined when the item has no channel context', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1' }) })
-    enqueue({ data: null })
+    enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)
 
     const ctx = buildCtx(supabase)
     const request = createMockRequest('/items/item-1/book-direct', {
@@ -650,7 +738,7 @@ describe('POST /items/:id/book-direct', () => {
     enqueue({ data: { ...makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -99 }), transaction_voucher_links: [] } })
     enqueue({ data: [{ ledger_account: '1930' }] }) // settlement account
     enqueue({ data: [{ id: TX_UUID }] })  // transaction link
-    enqueue({ data: null })  // inbox item update
+    enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)
 
     const ctx = buildCtx(supabase)
     const request = createMockRequest('/items/item-1/book-direct', {
@@ -807,7 +895,7 @@ describe('POST /items/:id/book-direct', () => {
   it('books kronor typed by hand against 2893 with reverse-charge lines, with no bank row', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1', extracted_data: extraction('EUR') }) })
-    enqueue({ data: null }) // inbox item update
+    enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)
 
     const res = await route.handler(bookRequest({ ...VALID_BODY, lines: SEK_PRIVATE_OUTLAY }), buildCtx(supabase))
     const { status, body } = await parseJsonResponse(res)
@@ -831,7 +919,7 @@ describe('POST /items/:id/book-direct', () => {
   it('books kronor typed by hand against 1930, with no bank row', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: makeInvoiceInboxItem({ extracted_data: extraction('EUR') }) })
-    enqueue({ data: null }) // inbox item update
+    enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)
 
     const res = await route.handler(bookRequest({ ...VALID_BODY, lines: SEK_AGAINST_BANK }), buildCtx(supabase))
 
@@ -850,7 +938,7 @@ describe('POST /items/:id/book-direct', () => {
     enqueue({ data: { ...makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -1150 }), transaction_voucher_links: [] } })
     enqueue({ data: [{ ledger_account: '1930' }] }) // settlement account
     enqueue({ data: [{ id: TX_UUID }] }) // transaction link
-    enqueue({ data: null }) // inbox item update
+    enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)
 
     const res = await route.handler(
       bookRequest({ ...VALID_BODY, lines: SEK_AGAINST_BANK, transaction_id: TX_UUID }),
@@ -874,7 +962,7 @@ describe('POST /items/:id/book-direct', () => {
     enqueue({ data: { ...makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -100 }), transaction_voucher_links: [] } })
     enqueue({ data: [{ ledger_account: '1930' }] }) // settlement account
     enqueue({ data: [{ id: TX_UUID }] }) // transaction link
-    enqueue({ data: null }) // inbox item update
+    enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)
 
     const res = await route.handler(
       bookRequest({ ...VALID_BODY, lines: FACE_COST_AND_BANK, transaction_id: TX_UUID }),
@@ -888,7 +976,7 @@ describe('POST /items/:id/book-direct', () => {
   it('does not compare when no total was read from a foreign underlag', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: makeInvoiceInboxItem({ extracted_data: extraction('EUR', null) }) })
-    enqueue({ data: null }) // inbox item update
+    enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)
 
     const res = await route.handler(bookRequest({ ...VALID_BODY, lines: FACE_COST_AND_BANK }), buildCtx(supabase))
 
@@ -928,7 +1016,7 @@ describe('POST /items/:id/book-direct', () => {
     })
     enqueue({ data: [{ ledger_account: '1931' }] }) // settlement account
     enqueue({ data: [{ id: TX_UUID }] }) // transaction link
-    enqueue({ data: null }) // inbox item update
+    enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)
 
     const res = await route.handler(
       bookRequest({
@@ -954,7 +1042,7 @@ describe('POST /items/:id/book-direct', () => {
   ])('still books a standalone verifikat for a SEK underlag at its own total (%s)', async (_label, currency) => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1', extracted_data: extraction(currency, 99) }) })
-    enqueue({ data: null }) // inbox item update
+    enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)
 
     const res = await route.handler(bookRequest(VALID_BODY), buildCtx(supabase))
     const { status } = await parseJsonResponse(res)
@@ -980,7 +1068,7 @@ describe('POST /items/:id/book-direct', () => {
     enqueue({ data: { ...makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -99 }), transaction_voucher_links: [] } })
     enqueue({ data: [{ ledger_account: '1930' }] }) // settlement account
     enqueue({ data: [{ id: TX_UUID }] }) // transaction link
-    enqueue({ data: null }) // inbox item update
+    enqueue({ data: CLAIMED }) // inbox item claim (compare-and-set)
 
     const ctx = buildCtx(supabase)
     const request = createMockRequest('/items/item-1/book-direct', {

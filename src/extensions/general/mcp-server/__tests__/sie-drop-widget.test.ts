@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import { tools } from '../server'
 import { findUiWidget } from '../widgets'
+import { SIE_FILE_EXTENSIONS, SIE_FILE_EXTENSIONS_SV } from '@/lib/import/sie-file-extensions'
 
 describe('SIE drop widget', () => {
   const widget = findUiWidget('ui://sie-drop/app.html')
@@ -44,6 +45,13 @@ describe('SIE drop widget', () => {
     expect(html).toContain("sendRequest('ui/initialize'")
     expect(html).toContain("sendNotification('ui/notifications/initialized')")
     expect(html).toContain("sendNotification('ui/updateContext'")
+  })
+
+  it('takes the SIE extensions from the shared list (accounted#32)', () => {
+    const html = widget!.html
+    expect(html).toContain(`accept="${SIE_FILE_EXTENSIONS.join(',')}"`)
+    expect(html).toContain(`${JSON.stringify(SIE_FILE_EXTENSIONS)}.some(`)
+    expect(html).toContain(`SIE-export (${SIE_FILE_EXTENSIONS_SV})`)
   })
 
   it('is attached definition-level to gnubok_create_sie_upload', () => {

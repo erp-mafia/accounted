@@ -20,7 +20,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { roundOre } from '@/lib/money'
 import { coreKey, displayNameFromVoucherText, legacyLedgerKey } from './ledger-key'
 import { extractNameCandidates, extractVatNumbers } from './name-extract'
-import { getObservedParties, type ObservedParty } from './observed'
+import { getObservedParties, OBSERVED_PARTIES_MAX, type ObservedParty } from './observed'
 
 export interface IdentityEvidence {
   value: string
@@ -426,7 +426,7 @@ export async function suggestPartiesForCompany(
 ): Promise<SuggestSummary> {
   const observed = await getObservedParties(supabase, companyId, {
     fromDate: options.fromDate ?? null,
-    limit: options.limit ?? 5000,
+    limit: options.limit ?? OBSERVED_PARTIES_MAX,
   })
   const { data: evidenceData, error: evidenceError } = await supabase.rpc('get_ledger_key_evidence', {
     p_company_id: companyId,

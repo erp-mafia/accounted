@@ -59,6 +59,20 @@ describe('buildLedgerContext', () => {
     expect(ctx.meta.computed_at).toBe(NOW.toISOString())
   })
 
+  // accounted#18: 23:30 UTC is already the next day in Stockholm, in summer
+  // (UTC+2) and in winter (UTC+1); the window ends on that day and every
+  // read starts twelve months before it.
+  it.each([
+    ['summer', '2026-07-01T23:30:00Z', '2025-07-02', '2026-07-02'],
+    ['winter', '2026-01-15T23:30:00Z', '2025-01-16', '2026-01-16'],
+  ])('%s: the window at %s runs %s to %s', async (_season, instant, from, to) => {
+    enqueueAll(mock)
+    const ctx = await buildLedgerContext(mock.supabase as unknown as SupabaseClient, COMPANY_ID, new Date(instant))
+
+    expect(ctx.meta.window).toEqual({ from, to })
+    expect(mock.supabase.rpc).toHaveBeenCalledWith('get_ledger_usage_stats', { p_company_id: COMPANY_ID, p_from_date: from })
+  })
+
   it('maps account usage rows', async () => {
     enqueueAll(mock, {
       stats: {

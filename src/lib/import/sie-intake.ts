@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { SIE_LIMITS } from './sie-job-contract'
+import { hasSIEFileExtension } from './sie-file-extensions'
 import { SIEIntakeNotFoundError, SIEIntakePathError, SIEJobValidationError } from './sie-jobs'
 
 const INVALID_INTAKE = 'Importens uppladdningslänk eller filnamn är ogiltigt.'
@@ -13,7 +14,7 @@ export function isSIEIntakePath(companyId: string, path: string): boolean {
 
 export async function readSIEIntakeFile(supabase:SupabaseClient,companyId:string,path:string,filename:string):Promise<File> {
   if (!isSIEIntakePath(companyId, path)) throw new SIEIntakePathError(INVALID_INTAKE)
-  if (!/\.(se|sie|si)$/i.test(filename) || filename.length > 255) throw new SIEJobValidationError(INVALID_INTAKE)
+  if (!hasSIEFileExtension(filename) || filename.length > 255) throw new SIEJobValidationError(INVALID_INTAKE)
   const {data,error} = await supabase.storage.from('sie-files').download(path)
   if (error || !data) throw new SIEIntakeNotFoundError('Den uppladdade SIE-filen hittades inte.')
   if (!data.size || data.size > SIE_LIMITS.fileBytes) throw new SIEJobValidationError('SIE-filen måste vara mellan 1 byte och 50 MB.')

@@ -310,6 +310,55 @@ describe('skvRequest: gateway credentials', () => {
   })
 })
 
+// accounted#21: the direct path sends the bearer, Client_Secret and the
+// filing, so a plaintext base URL must fail before anything leaves.
+describe('skvRequest: base URL must be https', () => {
+  const fetchMock = () => global.fetch as unknown as ReturnType<typeof vi.fn>
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('refuses an http SKATTEVERKET_API_BASE_URL without calling fetch', async () => {
+    process.env.SKATTEVERKET_API_BASE_URL = 'http://api.test.example/x'
+    mockFetchStatus(200, '{}')
+    await expect(skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)).rejects.toThrow(
+      /must be https/,
+    )
+    expect(fetchMock()).not.toHaveBeenCalled()
+  })
+
+  it('refuses an http per-service base URL (skattekonto, AGI, ombud) the same way', async () => {
+    mockFetchStatus(200, '{}')
+    await expect(
+      skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/saldo', AUDIT, undefined, {
+        baseUrl: 'http://api.test.example/beskattning/skattekonto/v2',
+      }),
+    ).rejects.toThrow(/must be https/)
+    expect(fetchMock()).not.toHaveBeenCalled()
+  })
+
+  it('sends to an https base URL', async () => {
+    mockFetchStatus(200, '{}')
+    await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)
+    expect(fetchMock().mock.calls[0][0]).toBe('https://api.test.example/x/x')
+  })
+
+  it('accepts a localhost mock only outside production', async () => {
+    process.env.SKATTEVERKET_API_BASE_URL = 'http://localhost:4010/x'
+    mockFetchStatus(200, '{}')
+    await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)
+    expect(fetchMock().mock.calls[0][0]).toBe('http://localhost:4010/x/x')
+
+    vi.stubEnv('NODE_ENV', 'production')
+    mockFetchStatus(200, '{}')
+    await expect(skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)).rejects.toThrow(
+      /must be https/,
+    )
+    expect(fetchMock()).not.toHaveBeenCalled()
+  })
+})
+
 describe('SkatteverketAuthError', () => {
   it('exposes the new TOKEN_CORRUPTED and RATE_LIMITED codes', () => {
     const a = new SkatteverketAuthError('msg', 'TOKEN_CORRUPTED')

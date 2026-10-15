@@ -183,6 +183,22 @@ describe('roles and deep links', () => {
     expect(await resolveOmbudRoleCodes(['lasombud', 'moms_ombud'])).toEqual({ lasombud: 'A1', moms_ombud: 'C3' })
   })
 
+  // accounted#18: 23:30 UTC is already the next day in Stockholm, in summer
+  // (UTC+2) and in winter (UTC+1); the expiry is three weeks from that day.
+  it.each([
+    ['summer', '2026-07-01T23:30:00Z', '2026-07-23'],
+    ['winter', '2026-01-15T23:30:00Z', '2026-02-06'],
+  ])('createUtseOmbudDeepLink, %s: a link minted at %s expires on %s', async (_season, instant, expiresOn) => {
+    process.env.SKATTEVERKET_OMBUD_ROLL_LASOMBUD = 'JLO'
+    mockSkvRequestWithAuth.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ djuplank: 'https://sso.skatteverket.se/ombud?x=1' }),
+    })
+    const link = await createUtseOmbudDeepLink('165560000000', ACTOR, ['lasombud'], undefined, new Date(instant))
+    expect(link.expiresOn).toBe(expiresOn)
+  })
+
   it('createUtseOmbudDeepLink posts the resolved codes for the huvudman and returns the link', async () => {
     process.env.SKATTEVERKET_OMBUD_ROLL_LASOMBUD = 'JLO'
     process.env.SKATTEVERKET_OMBUD_ROLL_MOMS = 'MOMS'

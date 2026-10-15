@@ -12,6 +12,7 @@ import { SIE_LIMITS } from '@/lib/import/sie-job-contract'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { SIEAccountMappingRecord } from '@/lib/import/types'
 import { readSIERequestFile } from '@/lib/import/sie-intake'
+import { hasSIEFileExtension } from '@/lib/import/sie-file-extensions'
 
 export const maxDuration = 300
 
@@ -22,7 +23,7 @@ export const POST = withRouteContext('sie_import.execute', async (request,ctx) =
     const form = await request.formData()
     const file = await readSIERequestFile(form,supabase,companyId)
     if (!(file instanceof File)) return errorResponseFromCode('SIE_PARSE_NO_FILE',log,{requestId})
-    if (!/\.(sie|se|si)$/i.test(file.name)) return errorResponseFromCode('SIE_PARSE_INVALID_TYPE',log,{requestId})
+    if (!hasSIEFileExtension(file.name)) return errorResponseFromCode('SIE_PARSE_INVALID_TYPE',log,{requestId})
     if (file.size > SIE_LIMITS.fileBytes) return errorResponseFromCode('SIE_PARSE_FILE_TOO_LARGE',log,{requestId})
     if (!file.size) return errorResponseFromCode('SIE_PARSE_EMPTY',log,{requestId})
     const options = SIEJobOptionsSchema.parse(JSON.parse(String(form.get('options') ?? '{}')))
