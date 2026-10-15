@@ -2,7 +2,8 @@
  * GET /api/v1/companies/{companyId}/journal-entries/{id}
  *
  * Returns the full verifikation including lines, source links
- * (reverses_id, reversed_by_id, correction_of_id), and dimensions.
+ * (reverses_id, reversed_by_id, correction_of_id), dimensions, and the
+ * decision receipts recorded for it (src/lib/suggestion-log/receipts.ts).
  *
  * PATCH edits a DRAFT in place (operation journal-entries.update-draft,
  * contract and rules in src/lib/operations/journal-entries.ts).
@@ -16,6 +17,7 @@ import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { cancelDraftJournalEntry } from '@/lib/core/bookkeeping/journal-entry-edits'
 import { v1OperationHandler, v1OutcomeResponse } from '@/lib/operations/v1'
 import { journalEntriesUpdateDraft } from '@/lib/operations/journal-entries'
+import { DecisionReceiptSchema, MAX_RECEIPTS_PER_SUBJECT, getDecisionReceipts } from '@/lib/suggestion-log/receipts'
 
 // `dimensions` is the line's whole SIE tag bag; cost_center/project only
 // mirror keys '1'/'6', so a read without the bag hid dims 2, 7-9 and 20+.
@@ -61,13 +63,22 @@ const JournalEntryDetail = z.object({
   updated_at: z.string(),
 })
 
+const JournalEntryRead = JournalEntryDetail.extend({
+  decision_receipts: z
+    .array(DecisionReceiptSchema)
+    .nullable()
+    .describe(
+      'How the verifikation was decided, newest first: one receipt per recorded decision (bank line or underlag) that booked it. Empty for a voucher no recorded decision produced (hand-made, imported, or booked before decisions were logged). Null when the receipts could not be read this time: unknown, not "none"; retry the read.',
+    ),
+})
+
 registerEndpoint({
   operation: 'journal-entries.get',
   method: 'GET',
   path: '/api/v1/companies/:companyId/journal-entries/:id',
   summary: 'Retrieve a single verifikation by id.',
   description:
-    'Returns the full journal entry including all lines, dimensions, and the storno chain (reverses_id, reversed_by_id, correction_of_id).',
+    'Returns the full journal entry including all lines, dimensions, the storno chain (reverses_id, reversed_by_id, correction_of_id), and decision_receipts: who decided the booking (person, API key or agent), the suggestions on offer, which one was booked and its recorded confidence.',
   useWhen:
     'You need the full verifikation for audit / reconciliation, or to display the line-by-line breakdown.',
   doNotUseFor:
@@ -75,6 +86,8 @@ registerEndpoint({
   pitfalls: [
     'Cancelled drafts are returned (no filter on status here); inspect status before assuming the entry is posted.',
     'Lines are sorted by sort_order; the order matters for display but not for accounting (the sum across lines is the meaningful quantity).',
+    `decision_receipts holds at most ${MAX_RECEIPTS_PER_SUBJECT} receipts: a samlingsverifikat carries one per bank line. It is null (unknown) when the receipts could not be read; an empty list means none were recorded. rule_version, policy_version, input_hash, checks and confidence_band are null until they are recorded at decision time.`,
+    "confidence.basis 'model_reported' is the reading model's own score for an underlag, not evidence; only 'backing' comes from deterministic evidence.",
   ],
   example: {
     response: {
@@ -88,6 +101,28 @@ registerEndpoint({
           { account_number: '6570', debit_amount: 50, credit_amount: 0, dimensions: { '6': 'P001', '20': 'SYD' }, cost_center: null, project: 'P001', sort_order: 0 },
           { account_number: '1930', debit_amount: 0, credit_amount: 50, dimensions: {}, cost_center: null, project: null, sort_order: 1 },
         ],
+        decision_receipts: [
+          {
+            receipt_id: '5c1e…',
+            subject_kind: 'bank_line',
+            decided_at: '2026-05-12T09:14:00Z',
+            outcome: 'accepted',
+            decided_by: { actor_type: 'api_key', user_id: '3f2a…', label: 'Integration', commit_method: 'api_key' },
+            proposed_by: null,
+            candidates: [
+              { source: 'rule', source_id: 'rule:9d1f…', rank: 0, accounts: ['6570'], vat_treatment: 'exempt', confidence: 0.92, model: null, prompt_sha256: null, matches_final: true, contested: false },
+            ],
+            chosen: { source: 'rule', source_id: 'rule:9d1f…', rank: 0, accounts: ['6570'], vat_treatment: 'exempt', confidence: 0.92, model: null, prompt_sha256: null, matches_final: true, contested: false },
+            booked: { journal_entry_id: '0e9c…', voucher: 'A142', entry_status: 'posted', account: '6570', vat_treatment: 'exempt', supplier_invoice_id: null, changed_fields: [] },
+            evidence: { transaction_id: '7b3a…', inbox_item_id: null, document_ids: [] },
+            confidence: { value: 0.92, basis: 'backing' },
+            rule_version: null,
+            policy_version: null,
+            input_hash: null,
+            checks: null,
+            confidence_band: null,
+          },
+        ],
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
@@ -97,7 +132,7 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: false,
-  response: { success: dataEnvelope(JournalEntryDetail) },
+  response: { success: dataEnvelope(JournalEntryRead) },
 })
 
 export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }> }>(
@@ -123,7 +158,17 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
     if (!data) {
       return v1ErrorResponseFromCode('JOURNAL_ENTRY_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
     }
-    return ok(data, { requestId: ctx.requestId })
+    // Additive: read after the entry, so an unknown id never costs the lookup.
+    // A failed lookup must not take the verifikation read down with it, and
+    // must not pass for "no decision" either: it answers null (unknown).
+    let receipts: Awaited<ReturnType<typeof getDecisionReceipts>> | null
+    try {
+      receipts = await getDecisionReceipts(ctx.supabase, ctx.companyId!, { journalEntryId: idParse.data })
+    } catch (err) {
+      ctx.log.error('journal-entries.get decision receipts failed', err as Error)
+      receipts = null
+    }
+    return ok({ ...data, decision_receipts: receipts }, { requestId: ctx.requestId })
   },
 )
 

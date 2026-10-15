@@ -8851,6 +8851,7 @@
     "bh_cat_import": "Imports",
     "bh_cat_atkomst": "Access",
     "bh_cat_arkiv": "Archive",
+    "bh_cat_beslut": "Decisions and proposals",
     "bh_cat_ovrigt": "Other",
     "bh_empty_title": "No events in the period",
     "bh_empty_desc": "The processing history lists posted vouchers, corrections and changes to the system. Pick another fiscal year or date range.",

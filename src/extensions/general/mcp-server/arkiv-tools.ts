@@ -15,6 +15,10 @@ import { neighbourhoodOf } from '@/lib/arkiv/graph/neighbourhood'
 import { ensureDocumentRead } from '@/lib/documents/read/on-demand'
 import { listRecords, LIST_LIMIT_DEFAULT, LIST_LIMIT_MAX, originalsOf, typesFor } from '@/lib/arkiv/list-records'
 import { NOT_STRUCTURED_MIME_FILTER } from '@/lib/documents/read/types'
+import { getDecisionReceipts, toCompactDecision } from '@/lib/suggestion-log/receipts'
+import { createLogger } from '@/lib/logger'
+
+const receiptLog = createLogger('mcp-get-record')
 
 /**
  * Arkiv phase 5: the six tools an agent reads the record with, and the one
@@ -352,7 +356,28 @@ async function journalEntryRecord(supabase: SupabaseClient, companyId: string, j
     if (record) documents.push({ ...record, duplicate_of: originals.has(d.id) ? `document:${originals.get(d.id)}` : null })
   }
   const e = entry as Record<string, unknown> & { id: string }
-  return { journal_entry_id: e.id, voucher: `${e.voucher_series ?? ''}${e.voucher_number ?? ''}`, entry_date: e.entry_date, description: e.description, documents }
+  // The decision receipt, only when one was recorded: who decided, which
+  // suggestions were on offer and which was booked. Lives inside the open
+  // journal_entry object, so tools/list pays nothing for it.
+  // A failed lookup must not fail the record read, and must not pass for "no
+  // decision": it says so with decision_unavailable instead.
+  let decision: ReturnType<typeof toCompactDecision> = null
+  let decisionUnavailable = false
+  try {
+    decision = toCompactDecision(await getDecisionReceipts(supabase, companyId, { journalEntryId }))
+  } catch (err) {
+    decisionUnavailable = true
+    receiptLog.warn('decision receipt lookup failed', { journalEntryId, error: err instanceof Error ? err.message : String(err) })
+  }
+  return {
+    journal_entry_id: e.id,
+    voucher: `${e.voucher_series ?? ''}${e.voucher_number ?? ''}`,
+    entry_date: e.entry_date,
+    description: e.description,
+    documents,
+    ...(decision ? { decision } : {}),
+    ...(decisionUnavailable ? { decision_unavailable: true } : {}),
+  }
 }
 
 export function createArkivTools(deps: Deps): McpTool[] {

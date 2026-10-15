@@ -205,6 +205,53 @@ describe('Arkiv tools', () => {
     expect(out.journal_entry.documents.map((d) => [d.document_id, d.duplicate_of])).toEqual([[DOC, null], [COPY, `document:${DOC}`]])
   })
 
+  it('get_record on a journal entry carries a compact decision receipt only when one was recorded', async () => {
+    const TX = '11111111-1111-4111-8111-111111111111'
+    const OP = '0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a'
+    const RECEIPT = '22222222-2222-4222-8222-222222222222'
+    enqueue({ data: { id: JE, voucher_series: 'A', voucher_number: 12, entry_date: '2026-09-01', description: 'Kontorsstol' } })
+    enqueue({ data: [] }) // no attachments
+    enqueue({
+      data: [{
+        id: RECEIPT, kind: 'bank_line', transaction_id: TX, inbox_item_id: null, document_id: null,
+        suggestions: [{ source: 'rule', source_id: 'rule:r1', rank: 0, proposal: { booking: { kind: 'account', account: '5410', vat_treatment: 'standard_25', category: 'expense_equipment' }, debit_account: '5410', credit_account: '1930', vat_treatment: 'standard_25' }, confidence: 0.92, model: null, prompt_sha256: null, matches_final: true }],
+        acted_on: 0, final: { journal_entry_id: JE, booking: null, account: '5410', vat_treatment: 'standard_25', lines: [] },
+        outcome: 'accepted', actor_type: 'api_key', resolved_by: 'user-1', created_at: '2026-09-01T10:00:00.000Z',
+      }],
+    })
+    enqueue({ data: [{ id: JE, voucher_series: 'A', voucher_number: 12, status: 'posted', committed_actor_label: 'Zapier', commit_method: 'api_key' }] })
+    enqueue({ data: [{ id: OP, operation_type: 'categorize_transaction', actor_type: 'api_key', actor_id: 'key-1', actor_label: 'Zapier', risk_level: 'low', agent_metadata: null, created_at: '2026-09-01T09:59:00.000Z', resolved_at: '2026-09-01T10:00:01.000Z', journal_entry_id: JE, registration_journal_entry_id: null }] })
+    enqueue({ data: [] })
+    const out = (await tool('gnubok_get_record').execute({ record_ref: `journal_entry:${JE}` }, CO, 'user-1', supabase)) as { journal_entry: { decision?: Record<string, unknown> } }
+    expect(out.journal_entry.decision).toEqual({
+      receipt_id: RECEIPT,
+      decided_at: '2026-09-01T10:00:00.000Z',
+      outcome: 'accepted',
+      decided_by: { actor_type: 'api_key', label: 'Zapier' },
+      proposed_by: { pending_operation_id: OP, actor_type: 'api_key', label: 'Zapier' },
+      chosen: { source: 'rule', accounts: ['5410'], confidence: 0.92, confidence_basis: 'backing' },
+      evidence: { transaction_id: TX },
+    })
+
+    // A hand-made voucher has no receipt, and the record says nothing about one.
+    reset()
+    enqueue({ data: { id: JE, voucher_series: 'A', voucher_number: 13, entry_date: '2026-09-02', description: 'Manuell' } })
+    enqueue({ data: [] })
+    enqueue({ data: [] }) // no suggestion_log rows
+    const plain = (await tool('gnubok_get_record').execute({ record_ref: `journal_entry:${JE}` }, CO, 'user-1', supabase)) as { journal_entry: Record<string, unknown> }
+    expect(plain.journal_entry).not.toHaveProperty('decision')
+
+    // A failed receipt lookup keeps the record and says the decision is unavailable.
+    reset()
+    enqueue({ data: { id: JE, voucher_series: 'A', voucher_number: 14, entry_date: '2026-09-03', description: 'Timeout' } })
+    enqueue({ data: [] })
+    enqueue({ data: null, error: { message: 'canceling statement due to statement timeout', code: '57014' } })
+    const failed = (await tool('gnubok_get_record').execute({ record_ref: `journal_entry:${JE}` }, CO, 'user-1', supabase)) as { journal_entry: Record<string, unknown> }
+    expect(failed.journal_entry.voucher).toBe('A14')
+    expect(failed.journal_entry).not.toHaveProperty('decision')
+    expect(failed.journal_entry.decision_unavailable).toBe(true)
+  })
+
   it('get_record reports a missing record', async () => {
     enqueue({ data: null })
     await expect(tool('gnubok_get_record').execute({ record_ref: `party:${AGR}` }, CO, 'user-1', supabase)).rejects.toThrow('Record not found')

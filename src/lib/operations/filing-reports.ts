@@ -557,7 +557,7 @@ export const reportsBehandlingshistorik = defineOperation({
   docs: {
     summary: 'Behandlingshistorik (BFL 5 kap. 11 §): who changed what in the books, and when, for a räkenskapsår.',
     description:
-      'The processing history the system documentation must include (BFNAR 2013:2 p. 9.16): verifikationer posted, corrected and reversed, chart of accounts and settings changes, period locks and closings, imports, access changes and program versions, each with time, actor (user, API key, MCP connection, cron) and detail lines. Filter by from_date / to_date inside the period and by one category, as the dashboard report. For an enskild firma the owner\'s personnummer is masked. Read-only.',
+      'The processing history the system documentation must include (BFNAR 2013:2 p. 9.16): verifikationer posted, corrected and reversed, chart of accounts and settings changes, period locks and closings, imports, access changes and program versions, and decisions on bank lines and underlag (category beslut: the suggestions on offer, the one booked, who decided and which agent proposed it), each with time, actor (user, API key, MCP connection, cron) and detail lines. Filter by from_date / to_date inside the period and by one category, as the dashboard report. For an enskild firma the owner\'s personnummer is masked. Read-only.',
     useWhen: 'An auditor or Skatteverket asks how the books were processed, or you need to know who posted or changed something.',
     doNotUseFor: 'The raw row-level audit log (GET /audit-trail) or the verifikationslista (GET /reports/journal-register).',
     pitfalls: [
