@@ -219,6 +219,14 @@ export interface Operation<I = Record<string, unknown>, O = unknown> {
   errorCodes?: string[]
   http?: OperationHttpBinding
   mcp?: OperationMcpBinding
+  /**
+   * Top-level keys of the dry run's preview that its preview token leaves
+   * out (./preview-token.ts): a value recomputed on every call that the
+   * commit recomputes too (a timestamp defaulting to now), which would
+   * otherwise make every token stale. Never a value that moves with the
+   * calendar or with other writers: a pin exists to notice those.
+   */
+  volatilePreviewKeys?: readonly string[]
   run: (ctx: OperationContext, input: I, options: { dryRun: boolean }) => Promise<OperationOutcome<O>>
 }
 

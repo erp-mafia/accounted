@@ -140,6 +140,18 @@ The writes an agent stages over MCP (\`x-stage-supported: true\` in the OpenAPI 
 
 ---
 
+## Pinned previews
+
+An agent that shows a person a preview needs the commit to book exactly that. Every operation write (\`x-preview-token-supported: true\` in the OpenAPI spec) answers its dry run with \`data.preview_token\`, a fingerprint of the operation, the company, the validated input and the preview. Send it back on the commit in the \`Preview-Token\` header:
+
+1. Dry run the write and show the person \`data.preview\`.
+2. When they confirm, send the same request without \`dry_run\`, with \`Preview-Token: <data.preview_token>\` and the same \`Idempotency-Key\`.
+3. The server recomputes the dry run first. If it still fingerprints the same, the write commits as usual. If anything moved in between (a period was locked, an account deactivated, a rate changed, another write landed), it answers **HTTP 409** \`PREVIEW_STALE\` and writes nothing; \`error.details.preview\` is what the write would do now and \`error.details.preview_token\` its token. Show that, ask again, and resend with the new token (the refusal is not cached against the key).
+
+A token is a fingerprint, not a credential: it never passes for another operation, company or input, and it carries nothing beyond what the client sent and received. It works with \`?stage=true\` too: the write is staged only while the preview still holds (the approval itself commits against the state at approval time, as before). The header on an endpoint without \`x-preview-token-supported\`, or a malformed value, answers \`400 VALIDATION_ERROR\`, so a pin is never silently ignored. Without the header nothing changes. Over MCP, the generated write tools take the same token as a \`preview_token\` argument when staging and answer \`PREVIEW_STALE\` the same way.
+
+---
+
 ## Strict-mode write semantics
 
 A v1 mutation either commits fully or returns a structured error code with no side effects. The dashboard soft-fails on partial writes (a human is there to retry); the v1 surface aborts. This means you never see "the invoice was sent but the email failed" or "the journal entry posted but the payment row didn't": either both happened or neither did.

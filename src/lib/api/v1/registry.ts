@@ -178,6 +178,16 @@ export interface EndpointDefinition {
    */
   stageSupported?: boolean
 
+  /**
+   * True for writes whose dry run answers a `preview_token` and whose commit
+   * accepts it back in the Preview-Token header, refusing with 409
+   * PREVIEW_STALE when the preview no longer holds (lib/operations/
+   * preview-token.ts). Set by v1OperationHandler for every operation write;
+   * withApiV1 refuses the header everywhere else, so a token is never
+   * silently ignored.
+   */
+  previewTokenSupported?: boolean
+
   /** Optional Zod schemas. */
   request?: {
     /** Path params (companyId, id, ...). */
@@ -619,6 +629,7 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
       'x-reversible': def.reversible,
       'x-dry-run-supported': def.dryRunSupported,
       ...(def.stageSupported ? { 'x-stage-supported': true } : {}),
+      ...(def.previewTokenSupported ? { 'x-preview-token-supported': true } : {}),
       // 'authenticated' is not a scope: such an endpoint carries the global
       // bearer requirement and no x-required-scope.
       ...(def.scope && def.scope !== 'authenticated' ? { 'x-required-scope': def.scope } : {}),

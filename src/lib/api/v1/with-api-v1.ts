@@ -31,14 +31,16 @@
  *      of that company.
  *   5. Resolves the dry-run flag (`?dry_run=true` query OR `X-Dry-Run` header)
  *      and the stage flag (`?stage=true`), refusing stage on an endpoint that
- *      does not stage (STAGE_NOT_SUPPORTED) and any value but true/false.
+ *      does not stage (STAGE_NOT_SUPPORTED) and any value but true/false,
+ *      and the `Preview-Token` header, refusing it (VALIDATION_ERROR) where
+ *      the endpoint does not pin previews and when it is malformed.
  *   6. Resolves `Idempotency-Key` (header) and claims it before the write
  *      runs: a finished first call is replayed, the same key with another
  *      body is 409 IDEMPOTENCY_KEY_REUSE, and a repeat while the first call
  *      still runs is 409 IDEMPOTENCY_KEY_IN_PROGRESS with Retry-After. The
  *      dry-run flag is part of the cache identity and a dry run is never
  *      claimed or cached, so a simulation can never be replayed in place of
- *      the real write that follows it.
+ *      the real write that follows it. Neither is a 409 PREVIEW_STALE.
  *   7. Invokes the handler with a typed RouteContext.
  *   8. Stamps `X-Request-Id` and `Gnubok-Version` on the response, plus
  *      `Retry-After` on a 429.
@@ -92,6 +94,7 @@ import {
   IdempotencyKeyReuseError,
 } from '@/lib/api/idempotency'
 import { createLogger, type Logger } from '@/lib/logger'
+import { isPreviewToken, MALFORMED_PREVIEW_TOKEN_MESSAGE, PREVIEW_TOKEN_HEADER } from '@/lib/operations/preview-token'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from './errors'
 import { WRAPPED_RESPONSE_HEADERS } from './security-headers'
 import { API_V1_VERSION, API_V1_VERSION_HEADER } from './version'
@@ -197,6 +200,15 @@ export interface ApiV1Context {
    * can never commit a request its caller sent to be staged.
    */
   stage: boolean
+  /**
+   * The `Preview-Token` header (lib/operations/preview-token.ts), or null.
+   * Only ever set on an endpoint registered with `previewTokenSupported`
+   * (an operation write, served by v1OperationHandler) and only in the
+   * shape a dry run issues: the wrapper refuses it everywhere else, so a
+   * hand-written write can never commit while ignoring the pin its caller
+   * sent.
+   */
+  previewToken: string | null
   /** Resolved idempotency key, if supplied. */
   idempotencyKey: string | null
 }
@@ -709,6 +721,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
           companyWritable: false,
           dryRun: false,
           stage: false,
+          previewToken: null,
           idempotencyKey: null,
         }
         if (token) {
@@ -862,6 +875,28 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         })
       }
 
+      // 5d. Preview-Token. A pin the endpoint cannot check is refused, never
+      //     ignored: a hand-written write would otherwise commit whatever the
+      //     current state produces while its caller believes the preview it
+      //     showed is pinned. An empty or malformed value is refused too, so
+      //     a templated header that lost its value never commits unpinned.
+      const previewTokenHeader = request.headers.get(PREVIEW_TOKEN_HEADER)
+      if (previewTokenHeader !== null) {
+        const refusal = !endpoint?.previewTokenSupported
+          ? 'This endpoint does not accept a preview token: only writes marked x-preview-token-supported in the OpenAPI spec do. Send the request without the header.'
+          : !isPreviewToken(previewTokenHeader.trim())
+            ? MALFORMED_PREVIEW_TOKEN_MESSAGE
+            : null
+        if (refusal) {
+          userLog.warn('preview token refused', { path, method: request.method })
+          return await v1ErrorResponseFromCode('VALIDATION_ERROR', userLog, {
+            requestId,
+            details: { issues: [{ field: PREVIEW_TOKEN_HEADER, message: refusal }] },
+          })
+        }
+      }
+      const previewToken = previewTokenHeader === null ? null : previewTokenHeader.trim()
+
       // 6. Idempotency. Mandatory for state-changing methods when the route
       //    opts in (or when an Idempotency-Key header is supplied).
       const idempotencyKey = request.headers.get(IDEMPOTENCY_HEADER)
@@ -957,6 +992,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         companyWritable,
         dryRun,
         stage,
+        previewToken,
         idempotencyKey,
       }
 
@@ -1009,10 +1045,15 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       //     turn a 15-minute cooldown into the cache's 24-hour TTL (the
       //     documented retry is "same request after Retry-After", which is
       //     exactly a same-key retry).
+      //
+      //     So is a 409 PREVIEW_STALE: it says "not in this state", wrote
+      //     nothing, and its documented retry is the same request and key
+      //     with the fresh preview token, which a cached refusal would
+      //     answer forever (the token is a header, not part of the hash).
       if (heldClaim) {
         const claim = heldClaim
         heldClaim = null
-        if (response.status < 500 && response.status !== 429) {
+        if (response.status < 500 && response.status !== 429 && !(await isPreviewStaleResponse(response))) {
           const body = await response.clone().json().catch(() => ({}))
           await claim.complete(response.status >= 400 ? 'error' : 'success', body as Record<string, unknown>)
         } else {
@@ -1071,6 +1112,13 @@ export interface V1HandlerContract {
 export function v1HandlerContract(handler: unknown): V1HandlerContract | undefined {
   if (typeof handler !== 'function') return undefined
   return (handler as unknown as Record<symbol, V1HandlerContract | undefined>)[V1_HANDLER_CONTRACT]
+}
+
+/** A 409 PREVIEW_STALE (lib/operations/preview-token.ts): it wrote nothing and is never cached. */
+async function isPreviewStaleResponse(response: Response): Promise<boolean> {
+  if (response.status !== 409) return false
+  const body = (await response.clone().json().catch(() => null)) as { error?: { code?: unknown } } | null
+  return body?.error?.code === 'PREVIEW_STALE'
 }
 
 function stampHeaders(response: Response, requestId: string): Response {

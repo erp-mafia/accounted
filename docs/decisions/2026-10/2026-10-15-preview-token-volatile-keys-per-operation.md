@@ -1,0 +1,1 @@
+[2026-10-15] Preview tokens exclude volatile preview keys per operation (volatilePreviewKeys), never by global key name: a survey of every write's dry run found payment_date, status, action and signed_at are volatile in one preview and booking data in another.
