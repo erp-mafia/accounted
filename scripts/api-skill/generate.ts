@@ -211,8 +211,29 @@ function methodRank(method: string): number {
   return ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].indexOf(method)
 }
 
+/**
+ * The spec without its per-operation module tags (lib/modules): the
+ * inventory groups by tag when one is present, and the reference files keep
+ * the editorial path grouping in GROUPS above.
+ */
+function withoutOperationTags(spec: ReturnType<typeof generateOpenApiSpec>): ReturnType<typeof generateOpenApiSpec> {
+  const paths = Object.fromEntries(
+    Object.entries(spec.paths).map(([path, item]) => [
+      path,
+      Object.fromEntries(
+        Object.entries(item).map(([method, op]) => {
+          const copy = { ...(op as Record<string, unknown>) }
+          delete copy.tags
+          return [method, copy]
+        }),
+      ),
+    ]),
+  )
+  return { ...spec, paths }
+}
+
 function buildFiles(): Map<string, string> {
-  const spec = generateOpenApiSpec(MACHINE_BASE)
+  const spec = withoutOperationTags(generateOpenApiSpec(MACHINE_BASE))
   const ops = listOperations(spec)
 
   const memberToFile = new Map<string, (typeof GROUPS)[number]>()
