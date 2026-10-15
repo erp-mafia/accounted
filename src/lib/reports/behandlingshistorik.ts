@@ -5,6 +5,13 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchAppReleases, type AppReleaseRow } from '@/lib/reports/app-releases'
 import { SOURCE_TYPE_LABELS_SV } from '@/lib/reports/systemdokumentation'
 import {
+  buildDecisionReceipts,
+  fetchDecisionRowsInWindow,
+  loadReceiptContext,
+  type DecisionCandidate,
+  type DecisionReceipt,
+} from '@/lib/suggestion-log/receipts'
+import {
   reportToWorkbook,
   textColumn,
   integerColumn,
@@ -29,8 +36,9 @@ import {
  * (`journal_entries.committed_at` + the trigger-written immutable `audit_log`,
  * `journal_entry_rattelse_log`, `company_migration_resets`, `sie_imports`,
  * `bank_file_imports`, `collection_cases` and the company's decisions in
- * `collection_case_events`) and turns them into one chronological list of
- * human-readable events. It never writes.
+ * `collection_case_events`, and the decisions on bank lines and underlag in
+ * `suggestion_log`, read as decision receipts) and turns them into one
+ * chronological list of human-readable events. It never writes.
  *
  * Event labels are Swedish in both locales: the report is räkenskapsinformation
  * that is archived for seven years and handed to revisorer, the same rule as
@@ -1856,6 +1864,155 @@ export function appReleaseEvents(rows: AppReleaseRow[]): RawBehandlingshistorikE
   return out
 }
 
+// ============================================================
+// Beslut och förslag: decisions on bank lines and underlag
+// ============================================================
+
+const DECISION_SOURCE_LABELS: Record<DecisionCandidate['source'], string> = {
+  assistant: 'assistenten',
+  rule: 'regel',
+  catalog: 'mall',
+  counterparty_template: 'motpartsmall',
+  recent: 'tidigare bokning',
+  extraction: 'dokumentläsning',
+}
+
+const DECISION_OUTCOME_LABELS: Record<Exclude<DecisionReceipt['outcome'], 'dismissed'>, string> = {
+  accepted: 'Förslag följt',
+  changed: 'Förslag ändrat före bokföring',
+  manual: 'Bokfört utan förslag',
+}
+
+const INBOX_FIELD_LABELS: Record<string, string> = {
+  supplier_name: 'leverantör',
+  supplier_org_number: 'organisationsnummer',
+  invoice_number: 'fakturanummer',
+  invoice_date: 'fakturadatum',
+  due_date: 'förfallodatum',
+  payment_reference: 'betalningsreferens',
+  currency: 'valuta',
+  total: 'belopp',
+  vat_amount: 'moms',
+  accounts: 'konton',
+}
+
+function decisionSubject(kind: DecisionReceipt['subject_kind']): string {
+  return kind === 'bank_line' ? 'banktransaktion' : 'underlag'
+}
+
+function decisionEventLabel(r: DecisionReceipt): string {
+  if (r.outcome === 'dismissed') return r.subject_kind === 'bank_line' ? 'Banktransaktion ignorerad' : 'Underlag raderat'
+  return DECISION_OUTCOME_LABELS[r.outcome]
+}
+
+function percent(value: number): string {
+  return `${Math.round(value * 100)} %`
+}
+
+/** What was on offer, what was taken and on what basis, what was booked, and who proposed it. */
+export function decisionDetails(r: DecisionReceipt): string[] {
+  const details: string[] = []
+  if (r.booked?.voucher) details.push(`Gäller: ${decisionSubject(r.subject_kind)}`)
+  if (r.candidates.length === 0) {
+    details.push('Inga förslag fanns')
+  } else {
+    const sources = [...new Set(r.candidates.map((c) => DECISION_SOURCE_LABELS[c.source]))]
+    details.push(`Förslag: ${r.candidates.length} (${sources.join(', ')})`)
+  }
+  if (r.chosen) {
+    const accounts = r.chosen.accounts.length > 0 ? `, konto ${r.chosen.accounts.join(', ')}` : ''
+    details.push(`Valt förslag: ${DECISION_SOURCE_LABELS[r.chosen.source]}${accounts}`)
+  }
+  if (r.confidence.value != null) {
+    details.push(
+      r.confidence.basis === 'model_reported'
+        ? `Modellens egen säkerhet: ${percent(r.confidence.value)}`
+        : `Säkerhet: ${percent(r.confidence.value)}`,
+    )
+  }
+  if (r.chosen?.model) details.push(`Modell: ${r.chosen.model}`)
+  if (r.booked?.account) details.push(`Bokfört konto: ${r.booked.account}`)
+  if (r.booked && r.booked.changed_fields.length > 0) {
+    details.push(`Ändrade fält: ${r.booked.changed_fields.map((f) => INBOX_FIELD_LABELS[f] ?? f).join(', ')}`)
+  }
+  if (r.proposed_by && r.proposed_by.actor_type !== 'user') {
+    const proposer = formatActorLabel(
+      { type: normaliseActorType(r.proposed_by.actor_type), user_id: null, actor_label: r.proposed_by.label },
+      new Map(),
+    )
+    details.push(`Föreslaget av: ${proposer}`)
+  }
+  return details
+}
+
+function decisionEvent(r: DecisionReceipt): RawBehandlingshistorikEvent {
+  return {
+    id: `decision:${r.receipt_id}`,
+    occurred_at: toIso(r.decided_at) ?? r.decided_at,
+    category: 'beslut',
+    code: `decision.${r.outcome}`,
+    event: decisionEventLabel(r),
+    object: r.booked?.voucher ?? (r.subject_kind === 'bank_line' ? 'Banktransaktion' : 'Underlag'),
+    actor: { type: r.decided_by.actor_type, user_id: r.decided_by.user_id, actor_label: r.decided_by.label },
+    details: decisionDetails(r),
+    source: 'suggestion_log',
+    count: 1,
+  }
+}
+
+/**
+ * One event per decision. A samlingsverifikat books many bank lines in one
+ * decision, written as one insert (one timestamp), so the receipts that
+ * booked the same voucher at the same moment become one event carrying
+ * their count, the way bursts of identical changes are collapsed. Decisions
+ * on one voucher at different moments stay separate events.
+ */
+export function decisionEvents(receipts: DecisionReceipt[]): RawBehandlingshistorikEvent[] {
+  const byVoucher = new Map<string, DecisionReceipt[]>()
+  const events: RawBehandlingshistorikEvent[] = []
+  for (const r of receipts) {
+    const entryId = r.booked?.journal_entry_id
+    if (!entryId) {
+      events.push(decisionEvent(r))
+      continue
+    }
+    const key = `${entryId}|${r.decided_at}`
+    const group = byVoucher.get(key) ?? []
+    group.push(r)
+    byVoucher.set(key, group)
+  }
+  for (const group of byVoucher.values()) {
+    if (group.length === 1) {
+      events.push(decisionEvent(group[0]))
+      continue
+    }
+    const sorted = [...group].sort((a, b) => a.decided_at.localeCompare(b.decided_at) || a.receipt_id.localeCompare(b.receipt_id))
+    const first = sorted[0]
+    const counts = new Map<string, number>()
+    for (const r of sorted) counts.set(decisionEventLabel(r), (counts.get(decisionEventLabel(r)) ?? 0) + 1)
+    const proposer = first.proposed_by && first.proposed_by.actor_type !== 'user'
+      ? decisionDetails(first).find((d) => d.startsWith('Föreslaget av: '))
+      : undefined
+    events.push({
+      id: `decision:${first.receipt_id}:batch`,
+      occurred_at: toIso(first.decided_at) ?? first.decided_at,
+      category: 'beslut',
+      code: 'decision.batch',
+      event: 'Samlingsbeslut',
+      object: first.booked?.voucher ?? null,
+      actor: { type: first.decided_by.actor_type, user_id: first.decided_by.user_id, actor_label: first.decided_by.label },
+      details: [
+        `${sorted.length} ${first.subject_kind === 'bank_line' ? 'banktransaktioner' : 'underlag'} i en verifikation`,
+        ...[...counts.entries()].map(([label, n]) => `${label}: ${n}`),
+        ...(proposer ? [proposer] : []),
+      ],
+      source: 'suggestion_log',
+      count: sorted.length,
+    })
+  }
+  return events
+}
+
 /**
  * Audit rows for the global tables (no company_id): only reachable with the
  * service role, which the route supplies. Windowed on created_at.
@@ -1890,6 +2047,7 @@ const SOURCE_ORDER: Record<BehandlingshistorikSource, number> = {
   sie_import: 4,
   bank_file_import: 5,
   collection_case: 6,
+  suggestion_log: 7,
 }
 
 export function sortEvents<T extends { occurred_at: string; source: BehandlingshistorikSource; id: string }>(
@@ -2411,7 +2569,7 @@ export async function generateBehandlingshistorik(
   const entryIds = entries.map((e) => e.id)
   const unionIds = mode === 'fiscal_year' ? entryIds : []
 
-  const [auditRows, rattelseRows, resets, sieImports, bankImports, releases, globalAuditRows, companyFacts, arkivActivities, collectionCases, collectionDecisions] = await Promise.all([
+  const [auditRows, rattelseRows, resets, sieImports, bankImports, releases, globalAuditRows, companyFacts, arkivActivities, collectionCases, collectionDecisions, decisionRows] = await Promise.all([
     fetchAuditRows(supabase, companyId, window, unionIds, mode === 'fiscal_year'
       ? [...new Set(entries.map(entry => entry.import_batch_id).filter((id): id is string => !!id))] : []),
     fetchRattelseRows(supabase, companyId, window, unionIds),
@@ -2424,6 +2582,10 @@ export async function generateBehandlingshistorik(
     fetchArkivActivities(supabase, companyId),
     fetchCollectionCases(supabase, companyId),
     fetchCollectionDecisions(supabase, companyId, window),
+    // Decisions on bank lines and underlag: those registered in the window,
+    // plus in fiscal-year mode every one that booked one of the year's
+    // vouchers, the same record-id union the audit rows get.
+    fetchDecisionRowsInWindow(supabase, companyId, window, unionIds),
   ])
 
   const raw: RawBehandlingshistorikEvent[] = []
@@ -2486,6 +2648,12 @@ export async function generateBehandlingshistorik(
   }
   for (const row of collectionDecisions) {
     if (isWithin(row.occurred_at, fromMs, toMsBound)) raw.push(collectionDecisionEvent(row, caseById.get(row.case_id)))
+  }
+  // Beslut och förslag: each decision read as its receipt (suggestions on
+  // offer, the one taken, who decided, the agent proposal that carried it).
+  if (decisionRows.length > 0) {
+    const receiptContext = await loadReceiptContext(supabase, companyId, decisionRows, { knownEntries: entryById })
+    raw.push(...decisionEvents(buildDecisionReceipts(decisionRows, receiptContext)))
   }
 
   let events = collapseBursts(sortEvents(raw))

@@ -16,6 +16,7 @@ import {
 import { ACCOUNT_VAT_TREATMENTS } from '@/lib/vat/account-vat-treatment'
 import { ACCOUNT_VAT_BOXES } from '@/lib/vat/account-vat-box'
 import { VAT_DECLARATION_CHECK_CODES } from '@/lib/reports/vat-declaration-checks'
+import { BEHANDLINGSHISTORIK_CATEGORIES } from '@/lib/reports/behandlingshistorik-types'
 import { PERSON_REJECTION_CATEGORIES } from '@/lib/pending-operations/rejection-categories'
 import {
   accountNumberSchema,
@@ -3811,9 +3812,9 @@ export const BehandlingshistorikQuerySchema = z.object({
   period_id: z.string().min(1),
   from_date: isoDate.optional(),
   to_date: isoDate.optional(),
-  category: z
-    .enum(['verifikation', 'kontoplan', 'installningar', 'period', 'import', 'atkomst', 'ovrigt'])
-    .optional(),
+  // The report's own list, so a new category (beslut) cannot drift out of
+  // the filter the way arkiv did.
+  category: z.enum(BEHANDLINGSHISTORIK_CATEGORIES).optional(),
   format: z.enum(['json', 'csv', 'xlsx', 'pdf']).default('json'),
 })
 

@@ -13,6 +13,7 @@ export const BEHANDLINGSHISTORIK_CATEGORIES = [
   'import',
   'atkomst',
   'arkiv',
+  'beslut',
   'ovrigt',
 ] as const
 
@@ -34,6 +35,7 @@ export type BehandlingshistorikSource =
   | 'sie_import'
   | 'bank_file_import'
   | 'collection_case'
+  | 'suggestion_log'
 
 export interface BehandlingshistorikActor {
   type: BehandlingshistorikActorType
@@ -87,5 +89,6 @@ export const BEHANDLINGSHISTORIK_CATEGORY_LABELS: Record<BehandlingshistorikCate
   import: 'Import',
   atkomst: 'Åtkomst',
   arkiv: 'Arkiv',
+  beslut: 'Beslut och förslag',
   ovrigt: 'Övrigt',
 }

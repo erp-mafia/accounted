@@ -14,6 +14,7 @@ import {
   collectionCaseEvents,
   collectionDecisionEvent,
   commitEventFromEntry,
+  decisionEvents,
   diffFields,
   formatActorLabel,
   formatStockholmTimestamp,
@@ -24,6 +25,7 @@ import {
 } from '../behandlingshistorik'
 import { SOURCE_TYPE_LABELS_SV } from '../systemdokumentation'
 import { JournalEntrySourceTypeSchema } from '@/lib/api/schemas'
+import { buildDecisionReceipts, type SuggestionLogRow } from '@/lib/suggestion-log/receipts'
 
 // ============================================================
 // Fixtures
@@ -798,7 +800,7 @@ describe('buildBehandlingshistorikExport', () => {
     generated_at: '2026-08-21T12:00:00.000Z',
     app_version: 'abc1234',
     total_events: 1,
-    by_category: { verifikation: 1, kontoplan: 0, installningar: 0, period: 0, import: 0, atkomst: 0, arkiv: 0, ovrigt: 0 },
+    by_category: { verifikation: 1, kontoplan: 0, installningar: 0, period: 0, import: 0, atkomst: 0, arkiv: 0, beslut: 0, ovrigt: 0 },
     events: [
       {
         id: 'entry:1',
@@ -1260,5 +1262,162 @@ describe('collection cases', () => {
     expect(report!.events[1].details).toEqual(['Till och med 2026-03-31'])
     expect(report!.by_category.ovrigt).toBe(3)
     expect(client.from).toHaveBeenCalledWith('collection_case_events')
+  })
+})
+
+// ============================================================
+// Beslut och förslag (suggestion_log, read as decision receipts)
+// ============================================================
+
+describe('decisionEvents', () => {
+  const rule = {
+    source: 'rule',
+    source_id: 'rule:r1',
+    rank: 0,
+    proposal: { booking: { kind: 'account', account: '5410', vat_treatment: 'standard_25', category: 'expense_equipment' }, debit_account: '5410', credit_account: '1930', vat_treatment: 'standard_25' },
+    confidence: 0.92,
+    model: null,
+    prompt_sha256: null,
+    matches_final: true,
+  }
+  const assistant = { ...rule, source: 'assistant', source_id: 'assistant:tx-1', rank: 1, confidence: 0.64, model: 'claude-x', matches_final: false }
+  const row = (overrides: Partial<SuggestionLogRow> = {}): SuggestionLogRow => ({
+    id: 'sl-1',
+    kind: 'bank_line',
+    transaction_id: 'tx-1',
+    inbox_item_id: null,
+    document_id: null,
+    suggestions: [rule, assistant],
+    acted_on: 0,
+    final: { journal_entry_id: 'entry-1', booking: null, account: '5410', vat_treatment: 'standard_25', lines: [] },
+    outcome: 'accepted',
+    actor_type: 'api_key',
+    resolved_by: 'user-1',
+    created_at: '2026-03-10T09:30:01.000Z',
+    ...overrides,
+  })
+  const op = {
+    id: 'op-1', operation_type: 'categorize_transaction', actor_type: 'mcp_oauth', actor_id: 'key-1', actor_label: 'Claude', risk_level: 'low',
+    agent_metadata: null, created_at: '2026-03-10T09:29:00.000Z', resolved_at: '2026-03-10T09:30:02.000Z', journal_entry_id: 'entry-1', registration_journal_entry_id: null,
+  }
+  const ctx = {
+    entries: new Map([['entry-1', { id: 'entry-1', voucher_series: 'A', voucher_number: 12, status: 'posted', committed_actor_label: 'Claude', commit_method: 'agent' }]]),
+    operations: new Map([['entry-1', op]]),
+  }
+
+  it('one decision: what was on offer, what was taken on what basis, what was booked and who proposed it', () => {
+    const [ev] = decisionEvents(buildDecisionReceipts([row({ actor_type: 'mcp_oauth' })], ctx))
+    expect(ev).toMatchObject({
+      id: 'decision:sl-1',
+      category: 'beslut',
+      code: 'decision.accepted',
+      event: 'Förslag följt',
+      object: 'A12',
+      actor: { type: 'mcp_oauth', user_id: 'user-1', actor_label: 'Claude' },
+      source: 'suggestion_log',
+      count: 1,
+    })
+    expect(ev.details).toEqual([
+      'Gäller: banktransaktion',
+      'Förslag: 2 (regel, assistenten)',
+      'Valt förslag: regel, konto 5410',
+      'Säkerhet: 92 %',
+      'Bokfört konto: 5410',
+      'Föreslaget av: MCP-anslutning: Claude',
+    ])
+  })
+
+  it("says so when an underlag's score is the model's own and names the changed fields", () => {
+    const [ev] = decisionEvents(buildDecisionReceipts([row({
+      kind: 'inbox_item',
+      transaction_id: null,
+      suggestions: [{ source: 'extraction', source_id: 'doc-1', rank: 0, proposal: { fields: { total: 100 } }, confidence: 0.9, model: 'reader-1', prompt_sha256: null, matches_final: false }],
+      outcome: 'changed',
+      final: { supplier_invoice_id: 'si-1', journal_entry_id: null, fields: { total: 120 }, lines: [], changed_fields: ['total', 'due_date'] },
+    })], { entries: new Map(), operations: new Map() }))
+    expect(ev).toMatchObject({ code: 'decision.changed', event: 'Förslag ändrat före bokföring', object: 'Underlag' })
+    expect(ev.details).toEqual([
+      'Förslag: 1 (dokumentläsning)',
+      'Valt förslag: dokumentläsning',
+      'Modellens egen säkerhet: 90 %',
+      'Modell: reader-1',
+      'Ändrade fält: belopp, förfallodatum',
+    ])
+  })
+
+  it('an ignored bank line and a booking with nothing on offer', () => {
+    const events = decisionEvents(buildDecisionReceipts([
+      row({ id: 'sl-2', suggestions: [], acted_on: null, outcome: 'dismissed', final: null, actor_type: 'user' }),
+      row({ id: 'sl-3', suggestions: [], acted_on: null, outcome: 'manual', final: { journal_entry_id: 'entry-9', booking: null, account: null, vat_treatment: null, lines: [] }, actor_type: 'user' }),
+    ], { entries: new Map(), operations: new Map() }))
+    const byId = Object.fromEntries(events.map((e) => [e.id, e]))
+    expect(byId['decision:sl-2']).toMatchObject({ event: 'Banktransaktion ignorerad', object: 'Banktransaktion', details: ['Inga förslag fanns'] })
+    // The voucher is outside the year this context knows: the subject stands in for its number.
+    expect(byId['decision:sl-3']).toMatchObject({ event: 'Bokfört utan förslag', object: 'Banktransaktion', details: ['Inga förslag fanns'] })
+  })
+
+  it('a samlingsverifikat is one event carrying its count', () => {
+    const events = decisionEvents(buildDecisionReceipts([
+      row({ id: 'sl-a', created_at: '2026-03-10T09:30:01.000Z' }),
+      row({ id: 'sl-b', created_at: '2026-03-10T09:30:01.000Z', acted_on: null, outcome: 'manual' }),
+      row({ id: 'sl-c', created_at: '2026-03-10T09:30:01.000Z' }),
+    ], ctx))
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      id: 'decision:sl-a:batch',
+      code: 'decision.batch',
+      event: 'Samlingsbeslut',
+      object: 'A12',
+      count: 3,
+      details: ['3 banktransaktioner i en verifikation', 'Förslag följt: 2', 'Bokfört utan förslag: 1', 'Föreslaget av: MCP-anslutning: Claude'],
+    })
+  })
+})
+
+describe('generateBehandlingshistorik: Beslut och förslag', () => {
+  it("reads decisions in the window and those that booked the year's vouchers, labelled from the voucher it already holds", async () => {
+    const decision = {
+      id: 'sl-1', kind: 'bank_line', transaction_id: 'tx-1', inbox_item_id: null, document_id: null,
+      suggestions: [], acted_on: null, final: { journal_entry_id: 'entry-1', booking: null, account: '5410', vat_treatment: null, lines: [] },
+      outcome: 'manual', actor_type: 'user', resolved_by: 'user-1', created_at: '2026-03-10T09:30:01.000Z',
+    }
+    // Booked in January for the year before: outside the window, inside the year.
+    const late = { ...decision, id: 'sl-2', created_at: '2027-01-12T08:00:00.000Z' }
+    mockResults = {
+      fiscal_periods: [{ data: period }],
+      company_settings: [{ data: { company_name: 'T', org_number: null } }],
+      journal_entries: [{ data: [baseEntry] }],
+      audit_log: [{ data: [] }, { data: [] }],
+      journal_entry_rattelse_log: [{ data: [] }, { data: [] }],
+      company_migration_resets: [{ data: [] }],
+      app_releases: [{ data: [] }],
+      sie_imports: [{ data: [] }],
+      bank_file_imports: [{ data: [] }],
+      suggestion_log: [{ data: [decision] }, { data: [decision, late] }],
+      pending_operations: [{ data: [] }, { data: [] }],
+    }
+    const client = makeClient()
+    const report = await generateBehandlingshistorik(client, 'company-1', { periodId: 'period-1' }, {
+      resolveUserLabels: vi.fn().mockResolvedValue(new Map([['user-1', 'anna@example.se']])),
+    })
+    const decisions = report!.events.filter((e) => e.category === 'beslut')
+    expect(decisions.map((e) => e.id)).toEqual(['decision:sl-1', 'decision:sl-2'])
+    expect(decisions[0]).toMatchObject({ object: 'A12', event: 'Bokfört utan förslag', actor: { type: 'user', label: 'anna@example.se' } })
+    expect(report!.by_category.beslut).toBe(2)
+    // The voucher came from the year's entries: no second journal_entries read.
+    expect(client.from.mock.calls.filter((c: string[]) => c[0] === 'journal_entries')).toHaveLength(1)
+    expect(client.from).toHaveBeenCalledWith('pending_operations')
+  })
+
+  it('reads no voucher or operation when the year has no decision', async () => {
+    mockResults = {
+      fiscal_periods: [{ data: period }],
+      company_settings: [{ data: { company_name: 'T', org_number: null } }],
+      journal_entries: [{ data: [] }],
+    }
+    const client = makeClient()
+    const report = await generateBehandlingshistorik(client, 'company-1', { periodId: 'period-1' })
+    expect(report!.by_category.beslut).toBe(0)
+    expect(client.from).not.toHaveBeenCalledWith('pending_operations')
   })
 })

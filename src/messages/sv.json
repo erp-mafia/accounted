@@ -8831,6 +8831,7 @@
     "bh_cat_import": "Import",
     "bh_cat_atkomst": "Åtkomst",
     "bh_cat_arkiv": "Arkiv",
+    "bh_cat_beslut": "Beslut och förslag",
     "bh_cat_ovrigt": "Övrigt",
     "bh_empty_title": "Inga händelser i perioden",
     "bh_empty_desc": "Behandlingshistoriken visar bokförda verifikationer, rättelser och ändringar i systemet. Välj ett annat räkenskapsår eller datumintervall.",

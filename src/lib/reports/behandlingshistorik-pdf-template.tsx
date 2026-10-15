@@ -165,8 +165,9 @@ export interface BehandlingshistorikPDFProps {
 }
 
 export function BehandlingshistorikPDF({ report }: BehandlingshistorikPDFProps) {
-  const systemEvents = report.events.filter((e) => e.category !== 'verifikation')
+  const systemEvents = report.events.filter((e) => e.category !== 'verifikation' && e.category !== 'beslut')
   const voucherEvents = report.events.filter((e) => e.category === 'verifikation')
+  const decisionEvents = report.events.filter((e) => e.category === 'beslut')
   const scope =
     report.mode === 'fiscal_year'
       ? 'Hela räkenskapsåret'
@@ -219,7 +220,7 @@ export function BehandlingshistorikPDF({ report }: BehandlingshistorikPDFProps) 
           </View>
           <View style={styles.metaItem}>
             <Text style={styles.metaLabel}>Källor</Text>
-            <Text style={styles.metaValue}>Verifikationer, oföränderlig ändringslogg, rättelselogg, importer</Text>
+            <Text style={styles.metaValue}>Verifikationer, oföränderlig ändringslogg, rättelselogg, importer, beslutslogg</Text>
           </View>
         </View>
         {summary ? <Text style={styles.summary}>{summary}</Text> : null}
@@ -240,6 +241,11 @@ export function BehandlingshistorikPDF({ report }: BehandlingshistorikPDFProps) 
           title="Bokföringsposter i registreringsordning"
           note="Varje bokförd verifikation med registreringstidpunkt och utförare, samt makuleringar, rättelser och raderingar (BFNAR 2013:2 punkt 9.16 första stycket)."
           events={voucherEvents}
+        />
+        <Section
+          title="Beslut och förslag"
+          note="Beslut om banktransaktioner och underlag: vilka förslag som fanns (regler, mallar, tidigare bokningar, assistenten, dokumentläsning), vilket som valdes, vem som beslutade och om beslutet kom via API-nyckel eller agent."
+          events={decisionEvents}
         />
 
         <View style={styles.footer} fixed>

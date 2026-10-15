@@ -279,7 +279,7 @@ Response `200` (`application/pdf`).
 **Behandlingshistorik (BFL 5 kap. 11 §): who changed what in the books, and when, for a räkenskapsår.**
 `scope:reports:read · risk:low · idempotent`
 
-The processing history the system documentation must include (BFNAR 2013:2 p. 9.16): verifikationer posted, corrected and reversed, chart of accounts and settings changes, period locks and closings, imports, access changes and program versions, each with time, actor (user, API key, MCP connection, cron) and detail lines. Filter by from_date / to_date inside the period and by one category, as the dashboard report. For an enskild firma the owner's personnummer is masked. Read-only.
+The processing history the system documentation must include (BFNAR 2013:2 p. 9.16): verifikationer posted, corrected and reversed, chart of accounts and settings changes, period locks and closings, imports, access changes and program versions, and decisions on bank lines and underlag (category beslut: the suggestions on offer, the one booked, who decided and which agent proposed it), each with time, actor (user, API key, MCP connection, cron) and detail lines. Filter by from_date / to_date inside the period and by one category, as the dashboard report. For an enskild firma the owner's personnummer is masked. Read-only.
 
 **Use when:** An auditor or Skatteverket asks how the books were processed, or you need to know who posted or changed something.
 **Do not use for:** The raw row-level audit log (GET /audit-trail) or the verifikationslista (GET /reports/journal-register).
@@ -295,7 +295,7 @@ The processing history the system documentation must include (BFNAR 2013:2 p. 9.
 | `period_id` | query | `string` | yes | The fiscal period (räkenskapsår) id, from GET /fiscal-periods. |
 | `from_date` | query | `string` | no | YYYY-MM-DD inside the period. Omit for the whole period. |
 | `to_date` | query | `string` | no | YYYY-MM-DD inside the period, not before from_date. |
-| `category` | query | `"verifikation" \| "kontoplan" \| "installningar" \| "period" \| "import" \| "atkomst" \| "arkiv" \| "ovrigt"` | no | Only events of this category. |
+| `category` | query | `"verifikation" \| "kontoplan" \| "installningar" \| "period" \| "import" \| "atkomst" \| "arkiv" \| "beslut" \| "ovrigt"` | no | Only events of this category. |
 
 Response `200`:
 ```ts

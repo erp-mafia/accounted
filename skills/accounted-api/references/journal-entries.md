@@ -193,7 +193,7 @@ Example response `200`:
 **Retrieve a single verifikation by id.**
 `scope:reports:read · risk:low · idempotent`
 
-Returns the full journal entry including all lines, dimensions, and the storno chain (reverses_id, reversed_by_id, correction_of_id).
+Returns the full journal entry including all lines, dimensions, the storno chain (reverses_id, reversed_by_id, correction_of_id), and decision_receipts: who decided the booking (person, API key or agent), the suggestions on offer, which one was booked and its recorded confidence.
 
 **Use when:** You need the full verifikation for audit / reconciliation, or to display the line-by-line breakdown.
 **Do not use for:** Listing entries (use the list endpoint with filters).
@@ -201,6 +201,8 @@ Returns the full journal entry including all lines, dimensions, and the storno c
 **Pitfalls:**
 - Cancelled drafts are returned (no filter on status here); inspect status before assuming the entry is posted.
 - Lines are sorted by sort_order; the order matters for display but not for accounting (the sum across lines is the meaningful quantity).
+- decision_receipts holds at most 100 receipts: a samlingsverifikat carries one per bank line. It is null (unknown) when the receipts could not be read; an empty list means none were recorded. rule_version, policy_version, input_hash, checks and confidence_band are null until they are recorded at decision time.
+- confidence.basis 'model_reported' is the reading model's own score for an underlag, not evidence; only 'backing' comes from deterministic evidence.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -226,7 +228,8 @@ Response `200`:
     correction_of_id: string | null,
     lines: { id: string, account_number: string, debit_amount: number, credit_amount: number, line_description: string | null, currency: string | null, amount_in_currency: number | null, exchange_rate: number | null, tax_code: string | null, dimensions: Record<string, string>, cost_center: string | null, project: string | null, sort_order: number }[],
     created_at: string,
-    updated_at: string
+    updated_at: string,
+    decision_receipts: { receipt_id: string, subject_kind: "bank_line" | "inbox_item", decided_at: string, outcome: "accepted" | "changed" | "manual" | "dismissed", decided_by: { actor_type: "user" | "api_key" | "mcp_oauth" | "cron" | "system" | "agent_chat", user_id: string | null, label: string | null, commit_method: string | null }, proposed_by: { pending_operation_id: string, operation_type: string, actor_type: string, actor_id: string | null, label: string | null, risk_level: string | null, model: string | null, prompt_hash: string | null, staged_at: string, approved_at: string | null } | null, candidates: { source: "assistant" | "rule" | "catalog" | "counterparty_template" | "recent" | "extraction", source_id: string, rank: number, accounts: string[], vat_treatment: string | null, confidence: number | null, model: string | null, prompt_sha256: string | null, matches_final: boolean, contested: boolean }[], chosen: { source: "assistant" | "rule" | "catalog" | "counterparty_template" | "recent" | "extraction", source_id: string, rank: number, accounts: string[], vat_treatment: string | null, confidence: number | null, model: string | null, prompt_sha256: string | null, matches_final: boolean, contested: boolean } | null, booked: { journal_entry_id: string | null, voucher: string | null, entry_status: string | null, account: string | null, vat_treatment: string | null, supplier_invoice_id: string | null, changed_fields: string[] } | null, evidence: { transaction_id: string | null, inbox_item_id: string | null, document_ids: string[] }, confidence: { value: number | null, basis: "backing" | "model_reported" | null }, rule_version: null, policy_version: null, input_hash: null, checks: null, confidence_band: null }[] | null
   },
   meta: {
     request_id: string,
@@ -270,6 +273,74 @@ Example response `200`:
         "cost_center": null,
         "project": null,
         "sort_order": 1
+      }
+    ],
+    "decision_receipts": [
+      {
+        "receipt_id": "5c1e…",
+        "subject_kind": "bank_line",
+        "decided_at": "2026-05-12T09:14:00Z",
+        "outcome": "accepted",
+        "decided_by": {
+          "actor_type": "api_key",
+          "user_id": "3f2a…",
+          "label": "Integration",
+          "commit_method": "api_key"
+        },
+        "proposed_by": null,
+        "candidates": [
+          {
+            "source": "rule",
+            "source_id": "rule:9d1f…",
+            "rank": 0,
+            "accounts": [
+              "6570"
+            ],
+            "vat_treatment": "exempt",
+            "confidence": 0.92,
+            "model": null,
+            "prompt_sha256": null,
+            "matches_final": true,
+            "contested": false
+          }
+        ],
+        "chosen": {
+          "source": "rule",
+          "source_id": "rule:9d1f…",
+          "rank": 0,
+          "accounts": [
+            "6570"
+          ],
+          "vat_treatment": "exempt",
+          "confidence": 0.92,
+          "model": null,
+          "prompt_sha256": null,
+          "matches_final": true,
+          "contested": false
+        },
+        "booked": {
+          "journal_entry_id": "0e9c…",
+          "voucher": "A142",
+          "entry_status": "posted",
+          "account": "6570",
+          "vat_treatment": "exempt",
+          "supplier_invoice_id": null,
+          "changed_fields": []
+        },
+        "evidence": {
+          "transaction_id": "7b3a…",
+          "inbox_item_id": null,
+          "document_ids": []
+        },
+        "confidence": {
+          "value": 0.92,
+          "basis": "backing"
+        },
+        "rule_version": null,
+        "policy_version": null,
+        "input_hash": null,
+        "checks": null,
+        "confidence_band": null
       }
     ]
   },

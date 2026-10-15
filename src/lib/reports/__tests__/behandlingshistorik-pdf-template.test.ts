@@ -28,8 +28,9 @@ function report(overrides: Partial<BehandlingshistorikReport> = {}): Behandlings
     event({ id: 'a2', category: 'installningar', code: 'settings.updated', event: 'Företagsinställningar ändrade', object: null, details: ['Momsperiod: Kvartal → Helår'], source: 'audit_log', occurred_at: '2026-02-01T08:00:00.000Z' }),
     event({ id: 'e1' }),
     event({ id: 'e2', object: 'A13', code: 'journal_entry.reversed', event: 'Verifikation makulerad (storno)', actor: { type: 'api_key', user_id: null, label: 'API-nyckel: Revisorn' }, occurred_at: '2026-04-02T10:00:00.000Z' }),
+    event({ id: 'd1', category: 'beslut', code: 'decision.accepted', event: 'Förslag följt', object: 'A12', details: ['Gäller: banktransaktion', 'Förslag: 2 (regel, assistenten)', 'Valt förslag: regel, konto 5410', 'Säkerhet: 92 %'], source: 'suggestion_log', actor: { type: 'api_key', user_id: null, label: 'API-nyckel: Zapier' }, occurred_at: '2026-03-10T09:30:01.000Z' }),
   ]
-  const by_category = { verifikation: 0, kontoplan: 0, installningar: 0, period: 0, import: 0, atkomst: 0, arkiv: 0, ovrigt: 0 }
+  const by_category = { verifikation: 0, kontoplan: 0, installningar: 0, period: 0, import: 0, atkomst: 0, arkiv: 0, beslut: 0, ovrigt: 0 }
   for (const e of events) by_category[e.category] += 1
   return {
     company: { name: 'Testbolaget AB', org_number: '5566778899' },
@@ -56,7 +57,7 @@ describe('pdfText', () => {
 
 describe('BehandlingshistorikPDF', () => {
   it(
-    'renders a valid PDF with both sections',
+    'renders a valid PDF with every section, decisions included',
     async () => {
       const buffer = await renderToBuffer(BehandlingshistorikPDF({ report: report() }))
       expect(buffer).toBeInstanceOf(Buffer)
@@ -71,7 +72,7 @@ describe('BehandlingshistorikPDF', () => {
     async () => {
       const empty = await renderToBuffer(
         BehandlingshistorikPDF({
-          report: report({ events: [], total_events: 0, by_category: { verifikation: 0, kontoplan: 0, installningar: 0, period: 0, import: 0, atkomst: 0, arkiv: 0, ovrigt: 0 } }),
+          report: report({ events: [], total_events: 0, by_category: { verifikation: 0, kontoplan: 0, installningar: 0, period: 0, import: 0, atkomst: 0, arkiv: 0, beslut: 0, ovrigt: 0 } }),
         }),
       )
       expect(empty.slice(0, 5).toString()).toBe('%PDF-')
