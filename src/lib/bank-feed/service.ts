@@ -1162,6 +1162,19 @@ export async function selectBankFeedAccounts(
     const party = await partyFor(ctx, row, input.signer ?? UNATTENDED_SIGNER, true)
     if (!party.ok) return party.outcome
     const now = input.now ?? Date.now()
+    // A company holds one bank connection (Connect counts consents, and
+    // every active consent is billed): the listing consent is ended before
+    // the second one is created, so Svea never holds two at once. The
+    // accounts it listed stay on the row, so a second consent that fails is
+    // created again from them without listing anew. An end that fails (one
+    // already ended answers so) does not stop the second consent.
+    if (row.session_id) {
+      try {
+        await connect.revokeConsent(ctx.companyId, { party: party.party, consentId: row.session_id })
+      } catch (error) {
+        ctx.log.warn('svea listing consent not ended before the second consent', { connectionId: row.id, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
     let created
     try {
       created = await connect.createConsent(ctx.companyId, { party: party.party, validUntil: validUntilRequested(now), accounts: ibans.map((iban) => ({ iban })) })
@@ -1169,8 +1182,6 @@ export async function selectBankFeedAccounts(
       return providerFailure(error)
     }
     await rememberConsentPsu(ctx, row.id, party)
-    // The listing consent stays until the second one is valid: should the
-    // second signing fail, the accounts can still be listed and chosen again.
     const attempt: ConsentAttempt = {
       method,
       state: 'pending',
