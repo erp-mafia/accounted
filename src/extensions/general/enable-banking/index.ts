@@ -38,6 +38,7 @@ import { INITIAL_SYNC_DEFERRED } from '@/lib/bank-sync/initial-sync-error'
 import { triggerConnectionSync } from './lib/trigger-sync'
 import { findReusableSessions } from './lib/session-sharing'
 import { retireBankConnection } from './lib/retire-connection'
+import { findOpenPaymentsSibling, openPaymentsSiblingMessage } from './lib/open-payments-sibling'
 import { hasSelectableAccounts } from './lib/claimed-accounts'
 import { isMirrorCardAccount, isSyncedAccount } from '@/lib/bank-sync/mirror-card-account'
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
@@ -337,6 +338,24 @@ export const enableBankingExtension: Extension = {
               { error: 'aspsp_name and aspsp_country are required' },
               { status: 400 }
             )
+          }
+
+          // A bank the company already reads through Open Payments is not
+          // connected again here: that connection holds the accounts, so the
+          // callback would refuse them after the person signed at the bank.
+          // Asked before anything reaches the bank; force_new does not pass it.
+          if (!isReconnect) {
+            const sibling = await findOpenPaymentsSibling(supabase, companyId, resolvedAspspName)
+            if (sibling) {
+              log.info('[enable-banking] Fresh connect refused: Open Payments already reads this bank', {
+                existing_id: sibling.id,
+                bank: resolvedAspspName,
+              })
+              return NextResponse.json(
+                { error: openPaymentsSiblingMessage(sibling), code: 'OPEN_PAYMENTS_CONNECTION_EXISTS', existing_connection_id: sibling.id },
+                { status: 409 }
+              )
+            }
           }
 
           // Detect PSU type: explicit override > stored type (reconnect) >

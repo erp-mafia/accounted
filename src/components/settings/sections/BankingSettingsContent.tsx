@@ -37,12 +37,16 @@ export function BankingSettingsContent() {
   const hasBankingExtension = ENABLED_EXTENSION_IDS.has('enable-banking')
   // Bank reading through Open Payments, when switched on for the company:
   // its own section above the Enable Banking panel, which keeps managing
-  // the older connections until they are switched over.
+  // the older connections until they are switched over. The section also
+  // stands when the company may no longer start a consent but holds one (a
+  // cardless trial): its connection stays visible and removable, else the
+  // panel below would offer the same bank again and fail after the BankID.
   const companyId = useCompanyOptional()?.company?.id ?? null
   const openPayments = useOpenPaymentsAvailability()
   const opAvailable = openPayments.status === 'available'
   const bankFlow = useBankConnectFlow('banking')
-  const opConnections = useOpenPaymentsConnections(opAvailable ? companyId : null)
+  const opConnections = useOpenPaymentsConnections(companyId)
+  const showOpSection = opAvailable || opConnections.openPayments.length > 0
   // A bank that signs on its own page sends the person back here with
   // ?bank_connect=<id>: reopen the flow at its BankID step, once.
   useBankConnectResume(bankFlow, opAvailable)
@@ -159,19 +163,17 @@ export function BankingSettingsContent() {
         </div>
       )}
 
-      {opAvailable && (
-        <>
-          <OpenPaymentsBankSection flow={bankFlow} connections={opConnections.openPayments} onChanged={opConnections.refresh} />
-          <BankConnectDialog flow={bankFlow} onConnected={opConnections.refresh} />
-        </>
+      {showOpSection && (
+        <OpenPaymentsBankSection flow={bankFlow} connections={opConnections.openPayments} onChanged={opConnections.refresh} canConnect={opAvailable} />
       )}
+      {opAvailable && <BankConnectDialog flow={bankFlow} onConnected={opConnections.refresh} />}
 
       {hasBankingExtension && BankingPanel ? (
         // No BankSyncStatusChip here: on this page the chip links to itself,
         // and the panel now carries its own single attention sentence. The
         // chip stays on /transactions.
         <BankingPanel />
-      ) : opAvailable ? null : (
+      ) : showOpSection ? null : (
         <div className="pt-8">
           <EmptyState
             icon={CreditCard}

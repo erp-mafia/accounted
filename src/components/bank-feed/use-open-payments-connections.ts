@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { LIVE_CONNECTION_STATUSES } from '@/lib/bank-sync/aggregator'
 import { createClient } from '@/lib/supabase/client'
 import { onBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
 import { connectionKind, type ConnectionKind } from './connection-kind'
@@ -26,8 +27,11 @@ export interface BankConnectionsState {
 
 /**
  * The company's live bank connections, split by the service that reads them.
- * Revoked rows are left out; an expired consent stays listed so the row can
- * say "Förnya". Refetches when a sync or a connect signals a change
+ * Revoked rows and attempts in progress are left out; an expired consent
+ * stays listed so the row can say "Förnya", and a connection whose sync
+ * failed so the row can say so. Hiding that one left a company with a
+ * connection it could neither see nor remove, and every new attempt at the
+ * same bank was refused for it. Refetches when a sync or a connect signals a change
  * (lib/transactions/bank-sync-signal), so a flow that just finished shows up
  * without a reload.
  */
@@ -44,7 +48,7 @@ export function useOpenPaymentsConnections(companyId: string | null): BankConnec
       .from('bank_connections')
       .select('id, bank_name, provider, status, consent_expires')
       .eq('company_id', companyId)
-      .in('status', ['active', 'expired', 'pending_selection'])
+      .in('status', [...LIVE_CONNECTION_STATUSES])
       .order('created_at', { ascending: false })
       .then(({ data }) => {
         if (cancelled) return

@@ -23,6 +23,14 @@ export const AGGREGATOR_SESSION_NAMESPACE: Readonly<Record<BankAggregator, strin
 /** bank_connections.provider for an Open Payments row: the bank is named by bic and bank_name instead. */
 export const OPEN_PAYMENTS_PROVIDER_SLUG = 'open_payments'
 
+/**
+ * The states in which a bank_connections row is a connection the company
+ * holds: settings lists it, and it keeps the accounts it was given. A failed
+ * sync ('error') or a lapsed consent ('expired') is still that connection;
+ * 'pending' is an attempt in progress and 'revoked' is gone.
+ */
+export const LIVE_CONNECTION_STATUSES = ['active', 'pending_selection', 'expired', 'error'] as const
+
 export function isBankAggregator(value: unknown): value is BankAggregator {
   return value === 'enable_banking' || value === 'open_payments'
 }

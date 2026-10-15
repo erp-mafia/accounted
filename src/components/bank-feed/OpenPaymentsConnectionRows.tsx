@@ -38,14 +38,17 @@ interface OpenPaymentsConnectionRowProps {
   flow: BankConnectFlow
   /** Called after a disconnect went through. */
   onChanged: () => void
+  /** Whether Förnya is offered: a new consent, which the company may not start everywhere. Default true. */
+  canRenew?: boolean
 }
 
 /**
- * One Open Payments connection as a flat hairline row: the bank, where its
- * consent stands (muted when fine, the one ochre sentence when it needs a
- * renewal inside 14 days), and the two actions, Förnya and Koppla bort.
+ * One Open Payments connection as a flat hairline row: the bank, where it
+ * stands (muted when fine, the one ochre sentence when its last sync failed
+ * or it needs a renewal inside 14 days), and the two actions, Förnya and
+ * Koppla bort.
  */
-export function OpenPaymentsConnectionRow({ connection, flow, onChanged }: OpenPaymentsConnectionRowProps) {
+export function OpenPaymentsConnectionRow({ connection, flow, onChanged, canRenew = true }: OpenPaymentsConnectionRowProps) {
   const t = useTranslations('settings_connections')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
@@ -55,15 +58,17 @@ export function OpenPaymentsConnectionRow({ connection, flow, onChanged }: OpenP
   const [confirmOpen, setConfirmOpen] = useState(false)
 
   const consent = consentState(connection.consent_expires, now)
-  const stateText =
-    consent.kind === 'active'
+  const syncFailed = connection.status === 'error' && consent.kind !== 'expired'
+  const stateText = syncFailed
+    ? t('sync_failed')
+    : consent.kind === 'active'
       ? t('op_active_until', { date: formatDateLong(consent.until) })
       : consent.kind === 'renew_by'
         ? t('op_renew_by', { date: formatDateLong(consent.until) })
         : consent.kind === 'expired'
           ? t('op_expired')
           : t('op_active')
-  const attention = consent.kind === 'renew_by' || consent.kind === 'expired'
+  const attention = syncFailed || consent.kind === 'renew_by' || consent.kind === 'expired'
   const bankName = connection.bank_name ?? ''
 
   async function disconnect() {
@@ -92,9 +97,11 @@ export function OpenPaymentsConnectionRow({ connection, flow, onChanged }: OpenP
         <SettingsRowNote className={cn(attention ? 'text-attn' : 'text-foreground')}>{stateText}</SettingsRowNote>
         {canWrite && (
           <SettingsRowEnd>
-            <Button variant="outline" size="sm" onClick={() => flow.open('renew', { bank: { bic: '', name: bankName }, replaceConnectionId: connection.id })}>
-              {t('renew')}
-            </Button>
+            {canRenew && (
+              <Button variant="outline" size="sm" onClick={() => flow.open('renew', { bank: { bic: '', name: bankName }, replaceConnectionId: connection.id })}>
+                {t('renew')}
+              </Button>
+            )}
             <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" onClick={() => setConfirmOpen(true)}>
               {t('disconnect')}
             </Button>

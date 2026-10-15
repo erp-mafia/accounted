@@ -381,7 +381,9 @@ export function ConnectionsSettingsContent() {
                 ? t('switch_stopped')
                 : pendingSwitch && switchDeadline
                   ? t('switch_by', { date: formatDateLong(switchDeadline) })
-                  : t('connected')
+                  : connection.status === 'error'
+                    ? t('sync_failed')
+                    : t('connected')
           return (
             <div key={connection.id}>
               {row({
@@ -392,7 +394,7 @@ export function ConnectionsSettingsContent() {
                 state,
                 href: '/settings/banking',
                 connected: true,
-                attention: pendingSwitch || (stoppedFeed && !replacedStopped),
+                attention: pendingSwitch || (stoppedFeed && !replacedStopped) || connection.status === 'error',
                 actions: (
                   <>
                     <Button variant="outline" size="sm" asChild>
