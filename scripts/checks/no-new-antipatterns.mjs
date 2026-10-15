@@ -190,6 +190,19 @@
  *      date expects. A decision is a file of its own, because merge requests
  *      that append to one shared file conflict. No allowlist. Implementation
  *      and rationale in decision-log.mjs.
+ *   22. bas-account-literal: a BAS account number ('1930') or account-prefix
+ *      check (acc.startsWith('19'), /^19\d{2}$/) outside the SE pack
+ *      territory. Accounted is going multi-country with Sweden as jurisdiction
+ *      pack one (docs/decisions/2026-09.md, 2026-09-30); every such site is a place the next
+ *      country's chart cannot reach. Per-file count ratchet: a file's count
+ *      may only go down, a new file may not introduce one. Implementation,
+ *      territory list and rationale in jurisdiction-welds.mjs.
+ *   23. sek-literal: a comparison against the literal 'SEK' outside the
+ *      currency-conversion code; the ledger currency becomes a pack setting.
+ *      Per-file count ratchet, same rules and module as 22.
+ *   24. kernel-import: lib/bookkeeping/engine.ts or lib/core/** importing an
+ *      outer business module (invoices, reports, bokslut, import, api, ...).
+ *      Tracked as (file, module) edges; a new edge fails. Same module as 22.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -232,6 +245,12 @@ import {
   HINT as PROVIDER_NAME_HINT,
   NO_NAMES_NOTE as PROVIDER_NAMES_UNSET_NOTE,
 } from './unsigned-provider-names.mjs'
+import {
+  findJurisdictionWelds,
+  countByFile,
+  compareFileCounts,
+  compareFileEdges,
+} from './jurisdiction-welds.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const SOURCE_ROOT = path.join(ROOT, 'src')
@@ -1242,11 +1261,16 @@ const current = {
   unsignedProviderNames: checkUnsignedProviderNames(),
   functiondefPatch: findFunctiondefPatches(ROOT),
   decisionLog: findDecisionLogFindings(ROOT),
+  jurisdictionWelds: findJurisdictionWelds(SOURCE_ROOT),
 }
 
 const dialogOverflowFiles = [...new Set(current.dialogOverflowRisk.map((f) => f.file))].sort()
 const tableWithoutGrantFiles = [...new Set(current.tableWithoutGrant.map((f) => f.file))].sort()
 const functiondefPatchFiles = [...new Set(current.functiondefPatch.map((f) => f.file))].sort()
+const basLiteralCounts = countByFile(current.jurisdictionWelds.basAccountLiteral)
+const sekLiteralCounts = countByFile(current.jurisdictionWelds.sekLiteral)
+const kernelImportEdges = current.jurisdictionWelds.kernelImports
+const kernelImportEdgeCount = Object.values(kernelImportEdges).reduce((n, mods) => n + mods.length, 0)
 
 const isUpdate = process.argv.includes('--update')
 
@@ -1299,11 +1323,51 @@ if (isUpdate) {
       files: grandfatheredPatchFiles,
     },
     lazyInitReach,
+    basAccountLiteral: {
+      count: current.jurisdictionWelds.basAccountLiteral.length,
+      files: basLiteralCounts,
+    },
+    sekLiteral: {
+      count: current.jurisdictionWelds.sekLiteral.length,
+      files: sekLiteralCounts,
+    },
+    kernelImports: {
+      count: kernelImportEdgeCount,
+      files: kernelImportEdges,
+    },
   }
+  // The jurisdiction-weld ratchets may only be raised with a decision file
+  // (docs/decisions/YYYY-MM/): say so loudly when this re-baseline raises any of them. A ratchet
+  // the previous baseline did not have yet is being introduced, not raised.
+  const previous = frozenBaseline
+  const raised = [
+    ...(previous.basAccountLiteral
+      ? compareFileCounts(previous.basAccountLiteral.files ?? {}, basLiteralCounts).grown.map(
+          (g) => `bas-account-literal ${g.file}: ${g.baseline} -> ${g.current}`,
+        )
+      : []),
+    ...(previous.sekLiteral
+      ? compareFileCounts(previous.sekLiteral.files ?? {}, sekLiteralCounts).grown.map(
+          (g) => `sek-literal ${g.file}: ${g.baseline} -> ${g.current}`,
+        )
+      : []),
+    ...(previous.kernelImports
+      ? compareFileEdges(previous.kernelImports.files ?? {}, kernelImportEdges).added.map(
+          (e) => `kernel-import ${e.file} -> ${e.module}`,
+        )
+      : []),
+  ]
   fs.writeFileSync(BASELINE_PATH, JSON.stringify(baseline, null, 2) + '\n')
   console.log(
     `Baseline written: ${current.rawRouteAuth.length} raw-route-auth files, ${current.naiveOreRound} naive-ore-round occurrences.`,
   )
+  if (raised.length) {
+    console.log(
+      `\n! This re-baseline RAISES ${raised.length} jurisdiction-weld baseline ${raised.length === 1 ? 'entry' : 'entries'}. A pure move or\n` +
+        '  rename is fine; anything else needs a decision file (docs/decisions/YYYY-MM/) saying why, in the same PR:',
+    )
+    raised.forEach((r) => console.log(`    ${r}`))
+  }
   process.exit(0)
 }
 
@@ -1923,6 +1987,84 @@ if (current.literalLegalForm.length > literalLegalFormBaseline) {
   )
 }
 
+// 1j. jurisdiction welds (bas-account-literal, sek-literal, kernel-import):
+// per-file ratchets from jurisdiction-welds.mjs. A file above its baseline
+// count, or a kernel file with an import edge the baseline does not list, is
+// a violation. Each file's sites are printed because a count cannot say which
+// one is new.
+const printSites = (sites, file, baselineCount) => {
+  const inFile = sites.filter((s) => s.file === file)
+  inFile.slice(0, 40).forEach((s) => console.error(`        :${s.line}  ${s.kind ? `${s.kind}  ` : ''}${s.match}`))
+  if (inFile.length > 40) console.error(`        ... ${inFile.length - 40} more`)
+  if (baselineCount > 0) console.error('        (a count cannot say which site is new: find it in your diff of this file)')
+}
+const NEVER_RAISE =
+  '    Never raise the baseline to make this pass without a decision file saying why; a pure\n' +
+  '    move or rename re-baselines with --update and says so in the PR.'
+
+const basLiteralRatchet = compareFileCounts(baseline.basAccountLiteral?.files ?? {}, basLiteralCounts)
+if (baseline.basAccountLiteral && basLiteralRatchet.grown.length) {
+  failed = true
+  console.error(
+    `\n✗ bas-account-literal: ${basLiteralRatchet.grown.length} file(s) gained a BAS account number or ` +
+      'account-prefix check outside the SE pack territory:',
+  )
+  for (const g of basLiteralRatchet.grown) {
+    console.error(`    ${g.file}: ${g.current} (baseline ${g.baseline})`)
+    printSites(current.jurisdictionWelds.basAccountLiteral, g.file, g.baseline)
+  }
+  console.error(
+    '  → Accounted is going multi-country with Sweden as jurisdiction pack one, and an account number\n' +
+      "    at a call site is a place the next country's chart cannot reach. Read the account from one\n" +
+      '    named role instead: an existing constant (RESULT_ACCOUNT, VAT_SETTLEMENT_ACCOUNT,\n' +
+      '    SALARY_ACCOUNTS, ...), the legal-form profile (lib/company/forms), or the chart data\n' +
+      '    (getBASReference). If the logic is Swedish-only (a Swedish filing, a BAS-shaped rule), put it,\n' +
+      '    or the new named role, in SE pack territory: SE_PACK_TERRITORY in\n' +
+      '    scripts/checks/jurisdiction-welds.mjs.\n' +
+      NEVER_RAISE,
+  )
+}
+
+const sekLiteralRatchet = compareFileCounts(baseline.sekLiteral?.files ?? {}, sekLiteralCounts)
+if (baseline.sekLiteral && sekLiteralRatchet.grown.length) {
+  failed = true
+  console.error(
+    `\n✗ sek-literal: ${sekLiteralRatchet.grown.length} file(s) gained a comparison against the literal 'SEK' ` +
+      'outside the currency-conversion code:',
+  )
+  for (const g of sekLiteralRatchet.grown) {
+    console.error(`    ${g.file}: ${g.current} (baseline ${g.baseline})`)
+    printSites(current.jurisdictionWelds.sekLiteral, g.file, g.baseline)
+  }
+  console.error(
+    "  → the ledger currency becomes a per-company jurisdiction setting, and every in-place 'SEK' is a\n" +
+      '    site someone has to find then. Let the conversion helpers decide instead\n' +
+      '    (resolveSekAmountOrNull / resolveSekAmount / buildCurrencyMetadata in\n' +
+      '    lib/bookkeeping/currency-utils.ts, lib/currency/*). If you need a new "is this already the\n' +
+      '    ledger currency?" decision, add it there as a named function: CURRENCY_CONVERSION_CODE in\n' +
+      '    scripts/checks/jurisdiction-welds.mjs.\n' +
+      NEVER_RAISE,
+  )
+}
+
+const kernelImportRatchet = compareFileEdges(baseline.kernelImports?.files ?? {}, kernelImportEdges)
+if (baseline.kernelImports && kernelImportRatchet.added.length) {
+  failed = true
+  console.error(
+    `\n✗ kernel-import: ${kernelImportRatchet.added.length} new import(s) of an outer business module from ` +
+      'the ledger kernel (lib/bookkeeping/engine.ts, lib/core/**):',
+  )
+  kernelImportRatchet.added.forEach((e) => console.error(`    ${e.file} -> ${e.module}`))
+  console.error(
+    '  → the kernel is what every jurisdiction pack shares, so it must not reach up into features.\n' +
+      '    Invert the dependency (the caller passes the value or a callback in), or move the shared\n' +
+      '    primitive down into lib/core or lib/bookkeeping. Shared infrastructure without business\n' +
+      '    logic may be added to KERNEL_INNER_MODULES in scripts/checks/jurisdiction-welds.mjs, one\n' +
+      '    module at a time when its directory also holds features.\n' +
+      NEVER_RAISE,
+  )
+}
+
 // 2. naive-ore-round: count may not increase.
 if (current.naiveOreRound > baseline.naiveOreRound.count) {
   failed = true
@@ -1941,10 +2083,24 @@ if (
   fixedRawRefs.length ||
   fixedProviderHosts.length ||
   (lazyInitBaseline && current.lazyInitEntries.length < lazyInitBaseline.count) ||
+  basLiteralRatchet.shrunk.length ||
+  sekLiteralRatchet.shrunk.length ||
+  kernelImportRatchet.removed.length ||
   current.naiveOreRound < baseline.naiveOreRound.count ||
   current.literalLegalForm.length < literalLegalFormBaseline
 ) {
   console.log('\n✓ Progress since baseline:')
+  const shrunkBy = (r) => r.shrunk.reduce((n, s) => n + s.baseline - s.current, 0)
+  if (basLiteralRatchet.shrunk.length)
+    console.log(
+      `    bas-account-literal: -${shrunkBy(basLiteralRatchet)} site(s) in ${basLiteralRatchet.shrunk.length} file(s)`,
+    )
+  if (sekLiteralRatchet.shrunk.length)
+    console.log(
+      `    sek-literal: -${shrunkBy(sekLiteralRatchet)} site(s) in ${sekLiteralRatchet.shrunk.length} file(s)`,
+    )
+  if (kernelImportRatchet.removed.length)
+    console.log(`    kernel-import: -${kernelImportRatchet.removed.length} import edge(s)`)
   if (current.literalLegalForm.length < literalLegalFormBaseline)
     console.log(
       `    literal-legal-form: -${literalLegalFormBaseline - current.literalLegalForm.length} site(s)`,
@@ -2009,5 +2165,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, hand-written-sie-extensions: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, static-init-import: 0, lazy-init-reach: ${current.lazyInitEntries.length}/${lazyInitBaseline?.count ?? 'no baseline'}, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, client-server-only: ${current.clientServerOnly.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), unsigned-provider-names: ${current.unsignedProviderNames.skipped ? 'skipped' : current.unsignedProviderNames.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), functiondef-patch: ${functiondefPatchFiles.length}/${functiondefPatchBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s), decision-log: 0).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, hand-written-sie-extensions: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, static-init-import: 0, lazy-init-reach: ${current.lazyInitEntries.length}/${lazyInitBaseline?.count ?? 'no baseline'}, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, client-server-only: ${current.clientServerOnly.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), unsigned-provider-names: ${current.unsignedProviderNames.skipped ? 'skipped' : current.unsignedProviderNames.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), functiondef-patch: ${functiondefPatchFiles.length}/${functiondefPatchBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s), bas-account-literal: ${current.jurisdictionWelds.basAccountLiteral.length} in ${Object.keys(basLiteralCounts).length} file(s), sek-literal: ${current.jurisdictionWelds.sekLiteral.length} in ${Object.keys(sekLiteralCounts).length} file(s), kernel-import: ${kernelImportEdgeCount} edge(s), decision-log: 0).`,
 )
