@@ -272,7 +272,7 @@ import { UpdateInvoiceParamsSchema } from '@/lib/pending-operations/schemas/upda
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { isRegisteredFromBooks } from '@/lib/invoices/registered-from-books'
 import { registrationVoucherLabel } from '@/lib/invoices/register-booked-rules'
-import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
+import { effectiveQuoteStatus, quoteAwaitsSending } from '@/lib/invoices/quote-status'
 import {
   ensureCompanyDimensions,
   fetchDimensionRegistry,
@@ -419,10 +419,17 @@ import {
   type RotRutPayoutRequestCandidate,
 } from '@/lib/invoices/rot-rut-payout-matching'
 import {
+  quoteInvoicingProgress,
+  resolveQuotePart,
+  type QuoteInvoicePart,
+  type ResolvedQuotePart,
+} from '@/lib/invoices/quote-partial-invoice'
+import {
   CreateArticleSchema,
   CreateCustomerSchema,
   CreateInvoiceFromSalesOrderSchema,
   CreateSupplierSchema,
+  ConvertQuotePartSchema,
   CreateSalesOrderSchema,
   RegisterSalesOrderDeliverySchema,
   RotRutBeslutFileSchema,
@@ -8166,6 +8173,28 @@ export const tools: McpTool[] = [
         document_type: { type: 'string' },
         valid_until: { type: ['string', 'null'] },
         quote_status: { type: ['string', 'null'], description: 'Quotes only; expired is derived' },
+        quote_invoicing: {
+          type: 'object',
+          description: 'Quotes only (crm#1196): net invoiced so far by the live invoices converted from it, what remains, and those invoices. Done once fully_invoiced.',
+          properties: {
+            invoiced: { type: 'number' },
+            remaining: { type: 'number' },
+            fully_invoiced: { type: 'boolean' },
+            invoices: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  invoice_id: { type: 'string' },
+                  invoice_number: { type: ['string', 'null'] },
+                  status: { type: 'string' },
+                  subtotal: { type: 'number' },
+                },
+              },
+            },
+          },
+        },
+        converted_from_id: { type: ['string', 'null'], description: 'The quote or proforma this invoice was converted from' },
         customer_id: { type: 'string' },
         customer_name: { type: ['string', 'null'] },
         invoice_date: { type: 'string' },
@@ -8239,7 +8268,7 @@ export const tools: McpTool[] = [
       const { data: invoice, error } = await supabase
         .from('invoices')
         .select(
-          'id, invoice_number, status, document_type, valid_until, quote_status, customer_id, invoice_date, due_date, delivery_date, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, your_reference, our_reference, invoice_marking, notes, default_dimensions, journal_entry_id, is_self_billed, credited_invoice_id, customer:customers(name), items:invoice_items(id, sort_order, line_type, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, vat_amount, article_id, revenue_account, sales_order_item_id, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions)',
+          'id, invoice_number, status, document_type, valid_until, quote_status, converted_from_id, customer_id, invoice_date, due_date, delivery_date, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, your_reference, our_reference, invoice_marking, notes, default_dimensions, journal_entry_id, is_self_billed, credited_invoice_id, customer:customers(name), items:invoice_items(id, sort_order, line_type, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, vat_amount, article_id, revenue_account, sales_order_item_id, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions)',
         )
         .eq('id', invoiceId)
         .eq('company_id', companyId)
@@ -8348,6 +8377,34 @@ export const tools: McpTool[] = [
         }
       }
 
+      // crm#1196: a quote can be invoiced in parts. Its progress is derived
+      // from the live invoices converted from it, which are listed so an
+      // agent sees the link instead of concluding nothing was invoiced.
+      let quoteInvoicing: Record<string, unknown> | null = null
+      if (invoice.document_type === 'quote') {
+        const { data: conversionRows, error: conversionsError } = await supabase
+          .from('invoices')
+          .select('id, invoice_number, status, subtotal')
+          .eq('company_id', companyId)
+          .eq('converted_from_id', invoice.id)
+          .neq('status', 'cancelled')
+          .order('created_at', { ascending: true })
+        if (conversionsError) throw dbError(conversionsError)
+        const conversions = (conversionRows ?? []) as Array<{ id: string; invoice_number: string | null; status: string; subtotal: number | null }>
+        const progress = quoteInvoicingProgress(invoice, conversions)
+        quoteInvoicing = {
+          invoiced: progress.invoiced,
+          remaining: progress.remaining,
+          fully_invoiced: progress.fullyInvoiced,
+          invoices: conversions.map((row) => ({
+            invoice_id: row.id,
+            invoice_number: row.invoice_number ?? null,
+            status: row.status,
+            subtotal: Number(row.subtotal ?? 0),
+          })),
+        }
+      }
+
       return {
         invoice_id: invoice.id,
         invoice_number: invoice.invoice_number ?? null,
@@ -8355,6 +8412,8 @@ export const tools: McpTool[] = [
         document_type: invoice.document_type ?? 'invoice',
         valid_until: invoice.valid_until ?? null,
         quote_status: effectiveQuoteStatus(invoice),
+        ...(quoteInvoicing ? { quote_invoicing: quoteInvoicing } : {}),
+        converted_from_id: invoice.converted_from_id ?? null,
         customer_id: invoice.customer_id,
         customer_name: (invoice.customer as { name?: string } | null)?.name ?? null,
         invoice_date: invoice.invoice_date,
@@ -9840,11 +9899,19 @@ export const tools: McpTool[] = [
           ...issue,
         },
         actor,
-        next: {
-          description: 'After the customer pays, mark the invoice paid via gnubok_mark_invoice_as_paid (or match it to the inbound bank transaction with gnubok_match_transaction_to_invoice).',
-          tool: 'gnubok_mark_invoice_as_paid',
-          args: { invoice_id: invoiceId },
-        },
+        // crm#1202: a quote is an offer, not a claim. Its next step is the
+        // customer's answer, never a payment.
+        next: invoice.document_type === 'quote'
+          ? {
+              description: 'A quote books nothing and is never paid. When the customer answers, record it with gnubok_set_quote_status, or turn the accepted quote into an invoice or kundorder with gnubok_convert_invoice.',
+              tool: 'gnubok_set_quote_status',
+              args: { invoice_id: invoiceId },
+            }
+          : {
+              description: 'After the customer pays, mark the invoice paid via gnubok_mark_invoice_as_paid (or match it to the inbound bank transaction with gnubok_match_transaction_to_invoice).',
+              tool: 'gnubok_mark_invoice_as_paid',
+              args: { invoice_id: invoiceId },
+            },
       })
     },
   },
@@ -20936,18 +21003,18 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_convert_invoice',
     keywords: ['proforma', 'offert', 'quote', 'kundfaktura', 'kundorder', 'omvandla'],
-    title: 'Convert Proforma or Quote to Invoice or Order',
-    description: 'Stage conversion of a proforma or quote (offert) to a real invoice (F-number, items copied) or, with target order, to a draft kundorder. Proforma is cancelled; the quote stays accepted.',
+    title: 'Convert Proforma or Quote',
+    // tools/list sits at its payload ceiling: percent and amount (crm#1196)
+    // were paid for by trimming this tool's own title and texts.
+    description: 'Stage a proforma or quote (offert) as an invoice (F-number) or, with target order, a draft kundorder. Proforma is cancelled; a quote stays accepted and bills in parts.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         invoice_id: { type: 'string', description: 'Proforma or quote UUID' },
-        target: {
-          type: 'string',
-          enum: ['invoice', 'order'],
-          description: 'invoice (default) creates the faktura; order creates a draft kundorder to deliver and invoice from.',
-        },
+        target: { type: 'string', enum: ['invoice', 'order'] },
+        percent: { type: 'number', description: 'Quote part: % of net' },
+        amount: { type: 'number', description: 'Quote part: net amount. Neither: the rest' },
       },
       required: ['invoice_id'],
     },
@@ -20959,10 +21026,26 @@ export const tools: McpTool[] = [
       const target = (args.target as string | undefined) ?? 'invoice'
       if (target !== 'invoice' && target !== 'order') throw badArgument('target', 'target must be invoice or order')
       const toOrder = target === 'order'
+      // crm#1196: the part of a quote to invoice. Same schema as the
+      // dashboard route; a kundorder is always made of the whole quote.
+      const partArgs = ConvertQuotePartSchema.safeParse({
+        ...(args.percent !== undefined ? { percent: args.percent } : {}),
+        ...(args.amount !== undefined ? { amount: args.amount } : {}),
+      })
+      if (!partArgs.success) {
+        throw badArgument(args.percent !== undefined ? 'percent' : 'amount', 'percent must be above 0 and at most 100, amount above 0, and not both')
+      }
+      const part: QuoteInvoicePart | null =
+        partArgs.data.percent !== undefined
+          ? { percent: partArgs.data.percent }
+          : partArgs.data.amount !== undefined
+            ? { amount: partArgs.data.amount }
+            : null
+      if (part && toOrder) throw badArgument('target', 'percent and amount invoice a part of a quote; a kundorder takes the whole quote')
 
       const { data: inv } = await supabase
         .from('invoices')
-        .select('id, invoice_number, document_type, status, quote_status, total, currency, customer:customers(name)')
+        .select('id, invoice_number, document_type, status, quote_status, subtotal, total, currency, customer:customers(name)')
         .eq('id', id).eq('company_id', companyId).single()
       if (!inv) throw registryError('INVOICE_NOT_FOUND')
       const isQuote = inv.document_type === 'quote'
@@ -20972,6 +21055,7 @@ export const tools: McpTool[] = [
       if (inv.document_type !== 'proforma' && !isQuote) {
         throw registryError(toOrder ? 'SALES_ORDER_SOURCE_NOT_PROFORMA' : 'INVOICE_CONVERT_NOT_CONVERTIBLE')
       }
+      if (part && !isQuote) throw registryError('INVOICE_CONVERT_PART_QUOTE_ONLY')
       if (inv.status === 'cancelled') {
         throw registryError(toOrder ? 'SALES_ORDER_SOURCE_ALREADY_CONVERTED' : 'INVOICE_CONVERT_SOURCE_CANCELLED')
       }
@@ -20985,19 +21069,32 @@ export const tools: McpTool[] = [
         if (ordersError) throw dbError(ordersError)
         if ((liveOrders ?? 0) > 0) throw registryError('SALES_ORDER_SOURCE_ALREADY_CONVERTED')
       }
+      let quotePart: ResolvedQuotePart | null = null
       if (isQuote) {
         if (inv.quote_status === 'declined') throw registryError('INVOICE_CONVERT_QUOTE_DECLINED')
         const { data: converted, error: convertedError } = await supabase
           .from('invoices')
-          .select('id')
+          .select('id, status, subtotal')
           .eq('company_id', companyId)
           .eq('converted_from_id', id)
           .neq('status', 'cancelled')
-          .limit(1)
-          .maybeSingle()
         if (convertedError) throw dbError(convertedError)
-        if (converted) throw registryError('INVOICE_QUOTE_ALREADY_INVOICED')
+        const conversions = (converted ?? []) as Array<{ status: string; subtotal: number | null }>
+        // A kundorder takes the whole quote, so any invoice from it blocks
+        // one; an invoice is refused only once the invoices cover the quote.
+        if (toOrder && conversions.length > 0) throw registryError('INVOICE_QUOTE_ALREADY_INVOICED')
         if (!toOrder) {
+          quotePart = resolveQuotePart(inv, conversions, part)
+          if (!quotePart.ok) {
+            const { quoteSubtotal, invoiced, remaining } = quotePart.progress
+            throw codedRefusal(
+              quotePart.code,
+              `Quote ${inv.invoice_number ?? id}: net ${quoteSubtotal}, invoiced ${invoiced}, remaining ${remaining} ${inv.currency} excl. VAT.` +
+                (quotePart.code === 'INVOICE_QUOTE_PART_OUT_OF_RANGE'
+                  ? ` Requested ${quotePart.requested}: ask for at most the remaining amount, or leave out percent and amount to invoice the rest.`
+                  : ' Nothing is left to invoice.'),
+            )
+          }
           const { count: liveOrders, error: ordersError } = await supabase
             .from('sales_orders')
             .select('id', { count: 'exact', head: true })
@@ -21014,23 +21111,48 @@ export const tools: McpTool[] = [
       const sourceLabel = isQuote ? 'offert' : 'proforma'
       const targetLabel = toOrder ? 'kundorder' : 'faktura'
       const sourceUpdate = isQuote ? 'mark the quote accepted (the quote stays)' : 'cancel proforma'
+      const partTitle =
+        quotePart?.ok && !(quotePart.rest && quotePart.progress.invoiceCount === 0)
+          ? ` (del: ${roundOre(quotePart.amount)} ${inv.currency} exkl. moms)`
+          : ''
       return stage({
         supabase,
         companyId,
         userId,
         type: 'convert_invoice',
-        title: `Konvertera ${sourceLabel} → ${targetLabel}: ${isQuote ? inv.invoice_number ?? '' : ''} ${customerName} ${amount}`.replace(/\s+/g, ' '),
-        params: toOrder ? { invoice_id: id, target: 'order' } : { invoice_id: id },
+        title: `Konvertera ${sourceLabel} → ${targetLabel}: ${isQuote ? inv.invoice_number ?? '' : ''} ${customerName} ${amount}${partTitle}`.replace(/\s+/g, ' '),
+        params: toOrder
+          ? { invoice_id: id, target: 'order' }
+          : { invoice_id: id, ...(part?.percent !== undefined ? { percent: part.percent } : {}), ...(part?.amount !== undefined ? { amount: part.amount } : {}) },
         preview: {
           customer_name: (inv.customer as { name?: string } | null)?.name,
           source_document_type: inv.document_type,
           source_invoice_number: inv.invoice_number ?? null,
           target,
+          // crm#1196: what this invoice bills of the quote (net, excl. VAT).
+          // A part invoice bills each quote line's share; VAT per line.
+          ...(quotePart?.ok && !(quotePart.rest && quotePart.progress.invoiceCount === 0)
+            ? {
+                quote_part: {
+                  net_amount: quotePart.amount,
+                  quote_net: quotePart.progress.quoteSubtotal,
+                  invoiced_before: quotePart.progress.invoiced,
+                  remaining_after: roundOre(quotePart.progress.remaining - quotePart.amount),
+                },
+              }
+            : {}),
           total: inv.total,
           currency: inv.currency,
           will: toOrder
             ? `allocate OR-series number, copy items into a draft kundorder, ${sourceUpdate}`
             : `allocate F-series number, copy items, ${sourceUpdate}`,
+          // crm#1202: the web page confirms the same thing before converting.
+          ...(isQuote && quoteAwaitsSending(inv)
+            ? {
+                quote_sent: false,
+                note: 'This quote has not been sent to the customer (status draft). Converting records their acceptance: send it first with gnubok_send_invoice unless they already said yes.',
+              }
+            : {}),
         },
         actor,
         next: toOrder
@@ -21148,6 +21270,10 @@ export const tools: McpTool[] = [
         effective_quote_status: effectiveQuoteStatus(updated) ?? updated.quote_status,
         quote_decided_at: updated.quote_decided_at ?? null,
         valid_until: updated.valid_until ?? null,
+        // crm#1202: a yes recorded on a quote the customer was never sent.
+        ...(nextStatus === 'accepted' && updated.status === 'draft'
+          ? { note: 'This quote has not been sent to the customer (status draft). If they have not seen it, send it with gnubok_send_invoice.' }
+          : {}),
       }
     },
   },
@@ -21379,6 +21505,7 @@ export const tools: McpTool[] = [
 
       const currency = ((invoice.currency as string) || 'SEK') as Currency
       const customerName = (invoice.customer as { name?: string } | null)?.name
+      const isQuote = invoice.document_type === 'quote'
 
       // Items branch (issue #1642): article prefill + default-set VAT
       // adoption exactly like gnubok_create_invoice, the permitted-set VAT
@@ -21589,13 +21716,16 @@ export const tools: McpTool[] = [
         companyId,
         userId,
         type: 'update_invoice',
-        title: `Uppdatera fakturautkast: ${customerName ?? invoice.invoice_number ?? invoice.id}`,
+        title: `${isQuote ? 'Uppdatera offert' : 'Uppdatera fakturautkast'}: ${customerName ?? invoice.invoice_number ?? invoice.id}`,
         params: parsed.data,
         preview: {
           invoice_id: invoice.id,
           invoice_number: invoice.invoice_number ?? null,
           customer_name: customerName ?? null,
           status: invoice.status,
+          // crm#1202: on a quote, status 'draft' means "not sent yet"; the
+          // decision lives in quote_status and an edit never changes either.
+          ...(isQuote ? { document_type: 'quote', quote_status: invoice.quote_status ?? null } : {}),
           currency,
           changes: parsed.data.changes,
           ...(stagedItems
@@ -21630,10 +21760,16 @@ export const tools: McpTool[] = [
           ...(vatWarnings.length > 0 ? { vat_warnings: vatWarnings } : {}),
         },
         actor,
-        next: {
-          description: 'Once approved, the draft is rewritten in place (totals and VAT recomputed; items fully replaced when provided). Send it with gnubok_send_invoice when ready.',
-          tool: 'gnubok_send_invoice',
-        },
+        next: isQuote
+          ? {
+              description: 'Once approved, the quote is rewritten in place; it stays unsent (status draft) and its quote_status is unchanged. Email it to the customer with gnubok_send_invoice: a quote never books.',
+              tool: 'gnubok_send_invoice',
+              args: { invoice_id: invoice.id },
+            }
+          : {
+              description: 'Once approved, the draft is rewritten in place (totals and VAT recomputed; items fully replaced when provided). Send it with gnubok_send_invoice when ready.',
+              tool: 'gnubok_send_invoice',
+            },
         ...stagingOptions(args),
         ...vatWarningsStageOptions(vatWarnings),
       })

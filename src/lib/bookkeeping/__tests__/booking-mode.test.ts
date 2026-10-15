@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   booksInvoicesOnIssue,
+  issueBooksDocument,
   invoiceBookingMoment,
   cashPartialBlockReason,
   creditNoteNeedsJournalEntry,
@@ -26,6 +27,23 @@ describe('booksInvoicesOnIssue (#967)', () => {
     expect(booksInvoicesOnIssue(null)).toBe(true)
     expect(booksInvoicesOnIssue(undefined)).toBe(true)
     expect(booksInvoicesOnIssue({})).toBe(true)
+  })
+})
+
+describe('issueBooksDocument (crm#1202)', () => {
+  const accrual = { accounting_method: 'accrual', defer_invoice_booking: false }
+
+  it('books a faktura at issue exactly when the company books invoices on issue', () => {
+    expect(issueBooksDocument({ document_type: 'invoice' }, accrual)).toBe(true)
+    expect(issueBooksDocument({ document_type: null }, accrual)).toBe(true)
+    expect(issueBooksDocument({}, null)).toBe(true)
+    expect(issueBooksDocument({ document_type: 'invoice' }, { accounting_method: 'cash' })).toBe(false)
+    expect(issueBooksDocument({ document_type: 'invoice' }, { accounting_method: 'accrual', defer_invoice_booking: true })).toBe(false)
+  })
+
+  it.each(['quote', 'proforma', 'delivery_note'])('never books a %s, even under faktureringsmetoden', (documentType) => {
+    expect(issueBooksDocument({ document_type: documentType }, accrual)).toBe(false)
+    expect(issueBooksDocument({ document_type: documentType }, null)).toBe(false)
   })
 })
 

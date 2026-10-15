@@ -42,9 +42,18 @@ export default function ResumePane({ items }: { items: ResumeItem[] }) {
             .join(' · '),
         }
       case 'invoice_unsent':
+      case 'quote_unsent':
+      case 'quote_to_invoice':
         return {
           icon: FileText,
-          title: t('resume_invoice_unsent', { number: item.number ?? '' }),
+          title: t(
+            item.kind === 'quote_unsent'
+              ? 'resume_quote_unsent'
+              : item.kind === 'quote_to_invoice'
+                ? 'resume_quote_to_invoice'
+                : 'resume_invoice_unsent',
+            { number: item.number ?? '' },
+          ),
           sub: [
             item.context,
             item.amount != null ? formatCurrency(item.amount, item.currency ?? 'SEK') : null,

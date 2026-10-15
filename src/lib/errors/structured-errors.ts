@@ -2000,6 +2000,20 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Offerten har redan en kundorder. Fakturera från kundordern i stället.',
     message_en: 'This quote already has a sales order. Invoice from the sales order instead.',
   },
+  INVOICE_QUOTE_PART_OUT_OF_RANGE: {
+    httpStatus: 409,
+    message_sv: 'Delen måste vara större än noll och får inte överstiga det som återstår att fakturera på offerten.',
+    message_en: 'The part must be above zero and at most what remains to be invoiced on the quote.',
+    remediation: {
+      description:
+        'details.remaining is what is left (net, excl. VAT). Ask for at most that amount, or leave out percent and amount to invoice the rest.',
+    },
+  },
+  INVOICE_CONVERT_PART_QUOTE_ONLY: {
+    httpStatus: 400,
+    message_sv: 'Bara en offert kan faktureras i delar. En proformafaktura omvandlas i sin helhet.',
+    message_en: 'Only a quote can be invoiced in parts; a proforma converts in full.',
+  },
   INVOICE_CONVERT_NOT_CONVERTIBLE: {
     httpStatus: 400,
     message_sv: 'Endast proformafakturor och offerter kan omvandlas till faktura.',

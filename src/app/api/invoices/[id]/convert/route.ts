@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { ConvertQuotePartSchema } from '@/lib/api/schemas'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { convertToInvoice } from '@/lib/invoices/convert-to-invoice'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -12,17 +13,43 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
  * copies the data, generates an F-series number LAST, marks a proforma
  * cancelled and a quote accepted; the new invoice links back through
  * converted_from_id.
+ *
+ * Optional body (quotes only, crm#1196): { percent } or { amount } invoices
+ * that part of the quote's net; without a body the invoice bills everything
+ * not yet invoiced (the whole quote the first time).
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'invoice.convert',
-  async (_request, { supabase, user, companyId, log, requestId }, { params }) => {
+  async (request, { supabase, user, companyId, log, requestId }, { params }) => {
     const { id } = await params
+
+    let rawBody: unknown = {}
+    try {
+      const text = await request.text()
+      if (text.trim()) rawBody = JSON.parse(text)
+    } catch {
+      return errorResponseFromCode('VALIDATION_ERROR', log, {
+        requestId,
+        details: { field: 'body', message: 'Body is not valid JSON.' },
+      })
+    }
+    const parsed = ConvertQuotePartSchema.safeParse(rawBody ?? {})
+    if (!parsed.success) {
+      return errorResponseFromCode('VALIDATION_ERROR', log, {
+        requestId,
+        details: {
+          issues: parsed.error.issues.map((issue) => ({ field: issue.path.join('.'), message: issue.message })),
+        },
+      })
+    }
+    const { percent, amount } = parsed.data
 
     const result = await convertToInvoice({
       supabase,
       userId: user.id,
       companyId,
       sourceId: id,
+      part: percent !== undefined ? { percent } : amount !== undefined ? { amount } : null,
     })
 
     if (!result.ok) {
@@ -38,7 +65,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
           details: result.details,
         })
       }
-      return errorResponseFromCode(result.code, log, { requestId })
+      return errorResponseFromCode(result.code, log, { requestId, details: result.details })
     }
 
     return NextResponse.json({ data: result.invoice })

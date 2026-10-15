@@ -189,6 +189,9 @@ export function singleActionWarning(operationType: string, params?: Record<strin
   if (operationType === 'convert_invoice' && params?.target === 'order') {
     return 'Genom att klicka godkänn så skapas en kundorder (utkast, OR-nummer) från proforman eller offerten. Ingen faktura skapas och inget bokförs; fakturan skapas senare från kundordern.'
   }
+  if (operationType === 'convert_invoice' && (params?.percent !== undefined || params?.amount !== undefined)) {
+    return 'Genom att klicka godkänn så skapas en faktura med F-nummer för den angivna delen av offerten (delfakturering). Offerten finns kvar och visar vad som är fakturerat och vad som återstår.'
+  }
   const ledger = registerBookedLedgerOf(operationType, params)
   if (ledger) return REGISTER_BOOKED_SENTENCES[ledger]
   return singleActionWarnings[operationType] ?? ''

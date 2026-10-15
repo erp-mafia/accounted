@@ -267,11 +267,11 @@ describe('POST /api/invoices/[id]/convert', () => {
       expect(mockSupabase.rpc).not.toHaveBeenCalled()
     })
 
-    it('refuses a second conversion while the first invoice lives', async () => {
+    it('refuses another conversion once the live invoices cover the quote', async () => {
       // 1. fetch quote
       enqueue({ data: baseQuote, error: null })
-      // 2. existing active invoice with converted_from_id = quote
-      enqueue({ data: { id: 'inv-9' }, error: null })
+      // 2. the live invoices converted from the quote already bill all of it
+      enqueue({ data: [{ id: 'inv-9', status: 'sent', subtotal: 10000, items: [] }], error: null })
 
       const response = await POST(
         createMockRequest('/api/invoices/q-1/convert', { method: 'POST' }),
@@ -453,7 +453,7 @@ describe('POST /api/invoices/[id]/convert', () => {
     })
   })
 
-  it('maps the one-live-conversion unique index violation to INVOICE_QUOTE_ALREADY_INVOICED', async () => {
+  it('maps the unique index the guard replaced (a deploy ahead of migration 20261015120000) to INVOICE_QUOTE_ALREADY_INVOICED', async () => {
     enqueue({ data: { ...baseProforma, id: 'q-1', document_type: 'quote', status: 'sent', quote_status: 'open', customer: { default_payment_terms: 30 } }, error: null })
     enqueue({ data: null, error: null }) // existence check passed (race)
     enqueue({ data: null, count: 0, error: null }) // no live sales order
@@ -485,6 +485,169 @@ describe('POST /api/invoices/[id]/convert', () => {
     expect(status).toBe(409)
     expect(body.error.code).toBe('INVOICE_QUOTE_ALREADY_ORDERED')
     expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  describe('a quote in parts (crm#1196)', () => {
+    const partQuote = {
+      ...baseProforma,
+      id: 'q-1',
+      document_type: 'quote',
+      status: 'sent',
+      invoice_number: 'OF-012',
+      valid_until: '2026-06-30',
+      quote_status: 'accepted',
+      quote_decided_at: '2026-06-01T10:00:00Z',
+      subtotal: 25000,
+      vat_amount: 6250,
+      total: 31250,
+      notes: 'Tack för förtroendet',
+      customer: { default_payment_terms: 30, language: 'sv' },
+      items: [
+        {
+          sort_order: 0,
+          line_type: 'product',
+          description: 'Webbprojekt, fast pris',
+          quantity: 1,
+          unit: 'st',
+          unit_price: 25000,
+          discount_percent: 0,
+          line_total: 25000,
+          vat_rate: 25,
+          vat_amount: 6250,
+          revenue_account: '3041',
+          article_id: null,
+          dimensions: {},
+        },
+      ],
+    }
+
+    function post(body?: unknown) {
+      return POST(
+        createMockRequest('/api/invoices/q-1/convert', { method: 'POST', body }),
+        createMockRouteParams({ id: 'q-1' }),
+      )
+    }
+
+    function enqueueHappyPath(conversions: unknown[]) {
+      enqueue({ data: partQuote, error: null }) // fetch quote
+      enqueue({ data: conversions, error: null }) // live conversions
+      enqueue({ data: null, count: 0, error: null }) // no live sales order
+      enqueue({ data: { id: 'inv-2', invoice_number: null, document_type: 'invoice' }, error: null }) // insert
+      enqueue({ data: null, error: null }) // items
+      enqueue({ data: [{ id: 'q-1' }], error: null }) // quote stays accepted
+      enqueue({ data: 'F-007', error: null }) // number
+      enqueue({ data: { id: 'inv-2', invoice_number: 'F-007', document_type: 'invoice', items: [] }, error: null })
+    }
+
+    it('rejects a body that is not JSON, or names both a percent and an amount, with 400', async () => {
+      const bad = await POST(
+        new Request('http://localhost:3000/api/invoices/q-1/convert', { method: 'POST', body: '{' }),
+        createMockRouteParams({ id: 'q-1' }),
+      )
+      expect((await parseJsonResponse(bad)).status).toBe(400)
+
+      for (const body of [{ percent: 50, amount: 100 }, { percent: 120 }, { amount: -5 }, { share: 50 }]) {
+        const { status, body: res } = await parseJsonResponse<{ error: { code: string } }>(await post(body))
+        expect(status).toBe(400)
+        expect(res.error.code).toBe('VALIDATION_ERROR')
+      }
+      expect(findCall('invoices', 'select')).toBeUndefined()
+    })
+
+    it('refuses a part of a proforma: it converts in full', async () => {
+      enqueue({ data: baseProforma, error: null })
+      const response = await POST(
+        createMockRequest('/api/invoices/pf-1/convert', { method: 'POST', body: { percent: 50 } }),
+        createMockRouteParams({ id: 'pf-1' }),
+      )
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+      expect(status).toBe(400)
+      expect(body.error.code).toBe('INVOICE_CONVERT_PART_QUOTE_ONLY')
+      expect(findCall('invoices', 'insert')).toBeUndefined()
+    })
+
+    it('bills 50 % of the quote: each line its share, VAT per line, a note naming the quote', async () => {
+      enqueueHappyPath([])
+
+      const { status, body } = await parseJsonResponse<{ data: { invoice_number: string } }>(await post({ percent: 50 }))
+
+      expect(status).toBe(200)
+      expect(body.data.invoice_number).toBe('F-007')
+      const inserted = findCall('invoices', 'insert')?.[0] as Record<string, unknown>
+      expect(inserted).toMatchObject({
+        converted_from_id: 'q-1',
+        subtotal: 12500,
+        vat_amount: 3125,
+        total: 15625,
+        remaining_amount: 15625,
+        subtotal_sek: 12500,
+        total_sek: 15625,
+      })
+      expect(inserted.notes).toBe(
+        'Delfakturering av offert OF-012: 12\u00a0500,00 av 25\u00a0000,00 SEK exkl. moms (50 %).\n\nTack för förtroendet',
+      )
+      const items = findCall('invoice_items', 'insert')?.[0] as Array<Record<string, unknown>>
+      expect(items).toEqual([
+        expect.objectContaining({
+          invoice_id: 'inv-2',
+          description: 'Webbprojekt, fast pris',
+          quantity: 1,
+          unit_price: 12500,
+          line_total: 12500,
+          vat_rate: 25,
+          vat_amount: 3125,
+          revenue_account: '3041',
+        }),
+      ])
+    })
+
+    it('bills what remains when called without a body after a part, and says what came before', async () => {
+      enqueueHappyPath([
+        {
+          id: 'inv-1',
+          status: 'sent',
+          subtotal: 12500,
+          items: [{ line_type: 'product', line_total: 12500, vat_rate: 25, revenue_account: '3041', article_id: null, dimensions: {} }],
+        },
+      ])
+
+      const { status } = await parseJsonResponse(await post())
+
+      expect(status).toBe(200)
+      const inserted = findCall('invoices', 'insert')?.[0] as Record<string, unknown>
+      expect(inserted).toMatchObject({ subtotal: 12500, vat_amount: 3125, total: 15625 })
+      expect(String(inserted.notes)).toContain('Tidigare fakturerat: 12\u00a0500,00 SEK.')
+    })
+
+    it('refuses a part above what remains with 409 and the remaining amount', async () => {
+      enqueue({ data: partQuote, error: null })
+      enqueue({ data: [{ id: 'inv-1', status: 'sent', subtotal: 12500, items: [] }], error: null })
+
+      const { status, body } = await parseJsonResponse<{ error: { code: string; details: Record<string, number> } }>(
+        await post({ amount: 15000 }),
+      )
+
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('INVOICE_QUOTE_PART_OUT_OF_RANGE')
+      expect(body.error.details).toMatchObject({ quote_subtotal: 25000, invoiced: 12500, remaining: 12500, requested: 15000 })
+      expect(findCall('invoices', 'insert')).toBeUndefined()
+    })
+
+    it('maps the guard refusing a part that a concurrent conversion made too large', async () => {
+      enqueue({ data: partQuote, error: null })
+      enqueue({ data: [], error: null })
+      enqueue({ data: null, count: 0, error: null })
+      enqueue({
+        data: null,
+        error: { code: 'P0001', message: 'INVOICE_QUOTE_PART_OUT_OF_RANGE: invoice x would bill 12500 of quote q-1 with 0 left' },
+      })
+
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await post({ percent: 50 }))
+
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('INVOICE_QUOTE_PART_OUT_OF_RANGE')
+      expect(mockSupabase.rpc).not.toHaveBeenCalled()
+    })
   })
 
   it('removes the orphan invoice and refuses when the proforma was cancelled concurrently (0-row compare-and-set)', async () => {

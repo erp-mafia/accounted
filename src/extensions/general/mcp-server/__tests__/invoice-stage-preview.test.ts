@@ -309,3 +309,38 @@ describe('gnubok_mark_invoice_as_sent / gnubok_send_invoice: a draft without a n
     expect(result.preview.will_post_journal_entry).toBe(true)
   })
 })
+
+// crm#1202: sending a quote sends the quote. It books nothing even under
+// faktureringsmetoden, and its next step is the customer's answer, never a
+// payment.
+describe('gnubok_send_invoice: a quote', () => {
+  it('stages the quote with no verifikat and points at the decision, not at payment', async () => {
+    const { supabase, findCall } = setup(
+      { accounting_method: 'accrual', defer_invoice_booking: false },
+      sentInvoice({ status: 'draft', invoice_number: 'OF-001', document_type: 'quote', quote_status: 'open' }),
+    )
+
+    const result = (await sendInvoice.execute(
+      { invoice_id: INVOICE_ID }, 'company-1', 'user-1', supabase as never, { type: 'api_key' } as never,
+    )) as { preview: Record<string, unknown>; next: { tool: string; description: string; args: Record<string, unknown> } }
+
+    expect(stagedInsert(findCall).title).toBe('Skicka: OF-001 till ekonomi@example.com')
+    expect(result.preview.will_post_journal_entry).toBe(false)
+    expect(result.next.tool).toBe('gnubok_set_quote_status')
+    expect(result.next.args).toMatchObject({ invoice_id: INVOICE_ID })
+    expect(result.next.description).toContain('gnubok_convert_invoice')
+  })
+
+  it('still points a faktura at payment', async () => {
+    const { supabase } = setup(
+      { accounting_method: 'accrual', defer_invoice_booking: false },
+      sentInvoice({ status: 'draft', invoice_number: 'F-007' }),
+    )
+
+    const result = (await sendInvoice.execute(
+      { invoice_id: INVOICE_ID }, 'company-1', 'user-1', supabase as never, { type: 'api_key' } as never,
+    )) as { next: { tool: string } }
+
+    expect(result.next.tool).toBe('gnubok_mark_invoice_as_paid')
+  })
+})

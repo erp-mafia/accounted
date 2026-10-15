@@ -34,6 +34,14 @@ describe('singleActionWarning', () => {
     expect(sentence).not.toContain('F-nummer')
   })
 
+  it('names a part of the quote for convert_invoice with percent or amount (crm#1196)', () => {
+    for (const params of [{ invoice_id: 'q-1', percent: 50 }, { invoice_id: 'q-1', amount: 12500 }]) {
+      const sentence = singleActionWarning('convert_invoice', params)
+      expect(sentence).toContain('F-nummer')
+      expect(sentence).toContain('delen av offerten')
+    }
+  })
+
   it('ignores params for every other operation type', () => {
     expect(singleActionWarning('credit_invoice', { target: 'order' })).toBe(singleActionWarnings.credit_invoice)
     expect(singleActionWarning('unknown_type', { target: 'order' })).toBe('')

@@ -32,7 +32,7 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import { invoiceDisplayNumber } from '@/lib/invoices/display'
 import { getDisplayTotal } from '@/lib/invoices/rounding'
-import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
+import { quoteDisplayStatus } from '@/lib/invoices/quote-status'
 import { matchesInvoiceSearch } from '@/lib/invoices/invoice-search'
 import {
   INVOICE_LIST_TABS,
@@ -789,11 +789,15 @@ export default function InvoicesPage() {
     }
     if (invoice.status === 'credited') return baseStatus('credited')
     // Offert: the decision (or derived expiry) is the status. Open and
-    // accepted are the normal states; declined and expired deviate.
+    // accepted are the normal states; declined, expired and an open quote
+    // that was never sent (crm#1202) deviate.
     const quoteStatus =
       (invoice as Invoice & { document_type?: string }).document_type === 'quote'
-        ? effectiveQuoteStatus(invoice)
+        ? quoteDisplayStatus(invoice)
         : null
+    if (quoteStatus === 'unsent') {
+      return { label: t('status_unsent'), exception: true, variant: 'outline' }
+    }
     if (quoteStatus === 'expired') {
       return { label: t('quote_status_expired'), exception: true, variant: 'warning' }
     }

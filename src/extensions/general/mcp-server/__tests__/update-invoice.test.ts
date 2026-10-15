@@ -317,6 +317,51 @@ describe('gnubok_update_invoice: validation and staging', () => {
     expect(result.preview.current_items).toBeUndefined()
   })
 
+  // crm#1202: an agent read status 'draft' in the preview as "the edit
+  // turned my open quote into a draft". The preview now names the quote's
+  // decision, and the next step fits a quote.
+  it('stages a quote edit that names the quote, keeps its decision and points at sending it', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: draftInvoice({ invoice_number: 'OF-001', document_type: 'quote', quote_status: 'open' }) })
+    enqueue({ data: { id: 'op-quote-1' } })
+
+    const result = (await tool().execute(
+      { invoice_id: INVOICE_ID, notes: 'Ny text' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: Record<string, unknown>; next: { tool: string; description: string } }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview).toMatchObject({ status: 'draft', document_type: 'quote', quote_status: 'open' })
+    expect(result.next.tool).toBe('gnubok_send_invoice')
+    expect(result.next.description).toContain('quote_status is unchanged')
+    expect(result.next.description).toContain('never books')
+    const row = findCall('pending_operations', 'insert')![0] as { title: string; params: { changes: Record<string, unknown> } }
+    expect(row.title).toBe('Uppdatera offert: Acme AB')
+    // The edit carries no lifecycle field: the executor cannot move the quote.
+    expect(row.params.changes).not.toHaveProperty('status')
+    expect(row.params.changes).not.toHaveProperty('quote_status')
+  })
+
+  it('keeps the invoice wording and preview shape for a plain draft', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: draftInvoice() })
+    enqueue({ data: { id: 'op-invoice-9' } })
+
+    const result = (await tool().execute(
+      { invoice_id: INVOICE_ID, notes: 'x' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { preview: Record<string, unknown>; next: { tool: string; description: string } }
+
+    expect(result.preview.document_type).toBeUndefined()
+    expect(result.preview.quote_status).toBeUndefined()
+    expect(result.next.description).toContain('Send it with gnubok_send_invoice')
+    expect((findCall('pending_operations', 'insert')![0] as { title: string }).title).toBe('Uppdatera fakturautkast: Acme AB')
+  })
+
   it('stages a QR mode change, and null as the way back to the company default', async () => {
     for (const qrMode of ['bank_app', null]) {
       const { supabase, enqueue } = createQueuedMockSupabase()
