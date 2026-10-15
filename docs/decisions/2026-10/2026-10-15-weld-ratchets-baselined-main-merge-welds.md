@@ -1,0 +1,1 @@
+[2026-10-15] Weld ratchets baselined on main at merge: welds that landed before them (proposal.ts +3, a SEK check in worklist/categories.ts, two year literals read as accounts in forenklat-arsbokslut.ts) are grandfathered; the ratchet stops growth, removal is plan work.
