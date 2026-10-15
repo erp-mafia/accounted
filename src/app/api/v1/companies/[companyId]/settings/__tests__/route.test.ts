@@ -43,6 +43,7 @@ import { propagateLegacyPayeeWrite } from '@/lib/cash-accounts/invoice-payee'
 import { GET as getSettings, PATCH as updateSettings } from '../route'
 import { PATCH as updateTaxProfile } from '../tax-profile/route'
 import { PATCH as updateLock } from '../bookkeeping-lock/route'
+import { routeRpcCalls } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -381,7 +382,7 @@ describe('PATCH /api/v1/companies/:companyId/settings: turning dimensions on', (
     expect(res.status).toBe(200)
     const { data } = await res.json()
     expect(data.preview).toMatchObject({ dimensions_enabled: true, dimension_codes_will_import: true })
-    expect(client.rpc).not.toHaveBeenCalled()
+    expect(routeRpcCalls(client.rpc)).toEqual([])
     expect(client.updates('company_settings')).toHaveLength(0)
   })
 
@@ -395,7 +396,7 @@ describe('PATCH /api/v1/companies/:companyId/settings: turning dimensions on', (
     mockServiceClient.mockReturnValue(client)
     const res = await updateSettings(patch(BASE, { dimensions_enabled: true }), params)
     expect(res.status).toBe(200)
-    expect(client.rpc).not.toHaveBeenCalled()
+    expect(routeRpcCalls(client.rpc)).toEqual([])
     expect((await res.json()).meta.warnings).toBeUndefined()
   })
 })

@@ -1,0 +1,1 @@
+[2026-10-15] A company_create idempotency claim keeps company_id NULL until it completes (a CHECK allows that only while in progress) rather than a separate claims table: one table, and every completed response stays scoped per (user, company, key).

@@ -32,10 +32,13 @@
  *   5. Resolves the dry-run flag (`?dry_run=true` query OR `X-Dry-Run` header)
  *      and the stage flag (`?stage=true`), refusing stage on an endpoint that
  *      does not stage (STAGE_NOT_SUPPORTED) and any value but true/false.
- *   6. Resolves `Idempotency-Key` (header) and replays cached responses. The
- *      dry-run flag is part of the cache identity and dry-run responses are
- *      never cached, so a simulation can never be replayed in place of the
- *      real write that follows it.
+ *   6. Resolves `Idempotency-Key` (header) and claims it before the write
+ *      runs: a finished first call is replayed, the same key with another
+ *      body is 409 IDEMPOTENCY_KEY_REUSE, and a repeat while the first call
+ *      still runs is 409 IDEMPOTENCY_KEY_IN_PROGRESS with Retry-After. The
+ *      dry-run flag is part of the cache identity and a dry run is never
+ *      claimed or cached, so a simulation can never be replayed in place of
+ *      the real write that follows it.
  *   7. Invokes the handler with a typed RouteContext.
  *   8. Stamps `X-Request-Id` and `Gnubok-Version` on the response, plus
  *      `Retry-After` on a 429.
@@ -80,10 +83,13 @@ import {
 } from './report-period'
 import {
   checkIdempotencyKey,
+  claimIdempotencyKey,
   hashRequest,
+  type IdempotencyClaim,
+  type IdempotencyClaimTarget,
   type IdempotencyHit,
+  IdempotencyKeyInProgressError,
   IdempotencyKeyReuseError,
-  storeIdempotencyResponse,
 } from '@/lib/api/idempotency'
 import { createLogger, type Logger } from '@/lib/logger'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from './errors'
@@ -371,6 +377,57 @@ export function v1IdempotentReplay(hit: IdempotencyHit, requestId: string): Resp
   return stampHeaders(replay, requestId)
 }
 
+/**
+ * The 409 for a key the request cannot run under, or null for any other
+ * error: IDEMPOTENCY_KEY_REUSE (the key belongs to another body) or
+ * IDEMPOTENCY_KEY_IN_PROGRESS (the same request is still running; retry it
+ * after Retry-After, when it replays the first answer).
+ */
+async function v1IdempotencyRefusal(
+  err: unknown,
+  key: string,
+  ctx: { requestId: string; log: Logger },
+): Promise<Response | null> {
+  if (err instanceof IdempotencyKeyReuseError) {
+    ctx.log.warn('idempotency key reused with different body')
+    return v1ErrorResponseFromCode('IDEMPOTENCY_KEY_REUSE', ctx.log, { requestId: ctx.requestId, details: { key } })
+  }
+  if (err instanceof IdempotencyKeyInProgressError) {
+    ctx.log.warn('idempotency key in progress')
+    return v1ErrorResponseFromCode('IDEMPOTENCY_KEY_IN_PROGRESS', ctx.log, {
+      requestId: ctx.requestId,
+      details: { key },
+      retryAfterSeconds: err.retryAfterSeconds,
+    })
+  }
+  return null
+}
+
+/**
+ * Claim `Idempotency-Key` before a v1 write runs, one shape for the wrapper
+ * and the handlers that replay the key themselves (handlerIdempotency).
+ * Answers the claim to settle once the write has run (complete() with the
+ * response, or release() on a failure), or the response that ends the
+ * request: the replay of a finished first call, or a 409 (see
+ * v1IdempotencyRefusal).
+ */
+export async function claimV1IdempotencyKey(
+  supabase: SupabaseClient,
+  target: IdempotencyClaimTarget,
+  ctx: { requestId: string; log: Logger },
+): Promise<{ claim: IdempotencyClaim } | { response: Response }> {
+  try {
+    const outcome = await claimIdempotencyKey(supabase, target)
+    if ('claim' in outcome) return outcome
+    ctx.log.info('idempotent replay', { idempotencyKey: target.key })
+    return { response: v1IdempotentReplay(outcome.replay, ctx.requestId) }
+  } catch (err) {
+    const refusal = await v1IdempotencyRefusal(err, target.key, ctx)
+    if (refusal) return { response: refusal }
+    throw err
+  }
+}
+
 async function readBodyForHash(request: Request): Promise<{ body: unknown; cloned: Request }> {
   // We need the body to hash it, but the handler also needs it. Read from a
   // CLONE for the hash and pass the original through to the handler: that
@@ -602,6 +659,8 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
     const url = new URL(request.url)
     const path = url.pathname
     const forensic = extractForensicContext(request, log)
+    // The Idempotency-Key claim this request holds until it is settled.
+    let heldClaim: IdempotencyClaim | null = null
 
     try {
       // 1. Determine required scope before auth, from the route's own
@@ -846,29 +905,34 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       //    entry.
       const dryRun = isDryRun(request, url) || forceDryRun
 
-      // 8. If idempotency-key supplied, check for cached response.
-      let bodyForHash: unknown = null
+      // 8. If idempotency-key supplied, claim it before the write runs. A
+      //    dry run writes nothing, so it claims nothing: it only looks the
+      //    key up (a finished call with another body is still key reuse).
       let workingRequest = request
       if (idempotencyKey && isMutation && companyId) {
         const { body, cloned } = await readBodyForHash(request)
-        bodyForHash = body
         workingRequest = cloned
         const reqHash = buildRequestHash({ method: request.method, path, body, dryRun, stage })
-        try {
-          const hit = await checkIdempotencyKey(supabase, auth.userId, companyId, idempotencyKey, reqHash)
-          if (hit) {
-            userLog.info('idempotent replay', { idempotencyKey })
-            return v1IdempotentReplay(hit, requestId)
+        if (dryRun) {
+          try {
+            const hit = await checkIdempotencyKey(supabase, auth.userId, companyId, idempotencyKey, reqHash)
+            if (hit) {
+              userLog.info('idempotent replay', { idempotencyKey })
+              return v1IdempotentReplay(hit, requestId)
+            }
+          } catch (err) {
+            const refusal = await v1IdempotencyRefusal(err, idempotencyKey, { requestId, log: userLog })
+            if (refusal) return refusal
+            throw err
           }
-        } catch (err) {
-          if (err instanceof IdempotencyKeyReuseError) {
-            userLog.warn('idempotency key reused with different body')
-            return await v1ErrorResponseFromCode('IDEMPOTENCY_KEY_REUSE', userLog, {
-              requestId,
-              details: { key: idempotencyKey },
-            })
-          }
-          throw err
+        } else {
+          const claimed = await claimV1IdempotencyKey(
+            supabase,
+            { userId: auth.userId, companyId, scope: 'api_route', key: idempotencyKey, requestHash: reqHash },
+            { requestId, log: userLog },
+          )
+          if ('response' in claimed) return claimed.response
+          heldClaim = claimed.claim
         }
       }
 
@@ -932,47 +996,27 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         response.headers.set(IGNORED_QUERY_PARAMS_HEADER, ignoredQueryParams.join(', '))
       }
 
-      // 10. Persist idempotency cache (best-effort).
+      // 10. Settle the claim: store the response (best-effort), or give the
+      //     key back so a retry runs again.
       //
-      //     Never cache a dry-run: the response describes a write that did not
-      //     happen, and caching it under a real Idempotency-Key is exactly how
-      //     the documented "preview, then commit with the same key" flow used
-      //     to lose the commit. A simulation has nothing worth replaying.
+      //     A dry run never holds a claim: its response describes a write that
+      //     did not happen, and caching it under a real Idempotency-Key is
+      //     exactly how the documented "preview, then commit with the same
+      //     key" flow used to lose the commit.
       //
-      //     Never cache a 429 either: a throttle says "not now", and replaying
-      //     it under the same key would turn a 15-minute cooldown into the
-      //     cache's 24-hour TTL (the documented retry is "same request after
-      //     Retry-After", which is exactly a same-key retry).
-      if (
-        idempotencyKey &&
-        isMutation &&
-        companyId &&
-        !dryRun &&
-        response.status < 500 &&
-        response.status !== 429
-      ) {
-        try {
+      //     A 5xx is released: a failure is never cached. So is a 429: a
+      //     throttle says "not now", and replaying it under the same key would
+      //     turn a 15-minute cooldown into the cache's 24-hour TTL (the
+      //     documented retry is "same request after Retry-After", which is
+      //     exactly a same-key retry).
+      if (heldClaim) {
+        const claim = heldClaim
+        heldClaim = null
+        if (response.status < 500 && response.status !== 429) {
           const body = await response.clone().json().catch(() => ({}))
-          const reqHash = buildRequestHash({
-            method: request.method,
-            path,
-            body: bodyForHash,
-            dryRun,
-            stage,
-          })
-          const status: 'success' | 'error' = response.status >= 400 ? 'error' : 'success'
-          await storeIdempotencyResponse(
-            supabase,
-            auth.userId,
-            companyId,
-            idempotencyKey,
-            reqHash,
-            status,
-            body as Record<string, unknown>,
-            'api_route',
-          )
-        } catch (err) {
-          userLog.warn('failed to persist idempotency response', err as Error)
+          await claim.complete(response.status >= 400 ? 'error' : 'success', body as Record<string, unknown>)
+        } else {
+          await claim.release()
         }
       }
 
@@ -984,6 +1028,8 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
 
       return stampHeaders(response, requestId)
     } catch (err) {
+      // A thrown failure wrote nothing to replay: give the key back.
+      if (heldClaim) await heldClaim.release()
       // Resolve the envelope first so the log level can follow the mapped
       // status — thrown 4xx domain errors are expected outcomes (warn), only
       // 5xx are runtime errors. v1ErrorResponse logs the error itself at the

@@ -945,6 +945,34 @@ export function createTableMockSupabase(
   return { supabase, setTable, reset, calls, findCall, findCalls, payloads, tables }
 }
 
+/**
+ * The RPC withApiV1 (and the MCP retry key) makes to claim an Idempotency-Key
+ * before the write runs (src/lib/api/idempotency.ts). It is the wrapper's
+ * bookkeeping of the key, not a write of the route under test, so an
+ * assertion that reads "the route wrote nothing" off "no rpc was called"
+ * leaves it out.
+ */
+export const IDEMPOTENCY_CLAIM_RPC = 'claim_idempotency_key'
+
+/**
+ * A recorded call that is the idempotency claim, in each shape the mocks
+ * record an rpc: createTableMockSupabase on table 'rpc:<name>'; hand-rolled
+ * per-test clients on table 'rpc' with the name as the method, or as the
+ * first argument.
+ */
+export function isIdempotencyClaim(call: { table: string; method?: string; args?: unknown[] }): boolean {
+  return (
+    call.table === `rpc:${IDEMPOTENCY_CLAIM_RPC}` ||
+    call.method === IDEMPOTENCY_CLAIM_RPC ||
+    ((call.table === 'rpc' || call.method === 'rpc') && call.args?.[0] === IDEMPOTENCY_CLAIM_RPC)
+  )
+}
+
+/** The `rpc` calls a route made itself: every call but the idempotency claim. */
+export function routeRpcCalls(rpc: { mock: { calls: unknown[][] } }): unknown[][] {
+  return rpc.mock.calls.filter(([name]) => name !== IDEMPOTENCY_CLAIM_RPC)
+}
+
 // ============================================================
 // Paging Supabase mock
 // ============================================================

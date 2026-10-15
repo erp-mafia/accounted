@@ -51,6 +51,23 @@ vi.mock('@/lib/api/idempotency', async () => {
         idempotency.store.set(key, { hash, status, body })
       },
     ),
+    // The wrapper claims a key before the write runs (in-flight claims): the
+    // same store answers the claim, so a stored stage still refuses a commit.
+    claimIdempotencyKey: vi.fn(async (_s: unknown, target: { key: string; requestHash: string }) => {
+      const hit = idempotency.store.get(target.key)
+      if (hit) {
+        if (hit.hash !== target.requestHash) throw new actual.IdempotencyKeyReuseError(target.key)
+        return { replay: { status: hit.status, body: hit.body } }
+      }
+      return {
+        claim: {
+          complete: async (status: string, body: unknown) => {
+            idempotency.store.set(target.key, { hash: target.requestHash, status, body })
+          },
+          release: async () => {},
+        },
+      }
+    }),
   }
 })
 

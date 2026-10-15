@@ -121,7 +121,10 @@ operation as it stands.
 several endpoints reject writes without one (`400`). Replaying the same
 key+body returns the original response with the `Idempotent-Replayed: true`
 header; the same key with a different body returns `409 IDEMPOTENCY_KEY_REUSE`
-(24h window). Safe retry loop: keep the key, keep the body.
+(24h window). A repeat sent while the first request with that key is still
+running returns `409 IDEMPOTENCY_KEY_IN_PROGRESS` with `Retry-After` and runs
+nothing: wait, then resend the identical request to get the first answer.
+Safe retry loop: keep the key, keep the body.
 
 **Test keys are simulation-only.** With a `gnubok_sk_test_*` key, reads
 return real company data (responses carry `X-Gnubok-Mode: test`) and every
