@@ -13017,6 +13017,7 @@
     "op_active_until": "Aktiv till {date}",
     "op_renew_by": "Förnya senast {date}",
     "op_expired": "Kopplingen har gått ut",
+    "sync_failed": "Hämtningen från banken misslyckades",
     "disconnect_title": "Koppla bort {bank}?",
     "disconnect_description": "Hämtningen stoppas. Bokförda transaktioner och kontona behålls.",
     "disconnect_confirm": "Koppla bort",

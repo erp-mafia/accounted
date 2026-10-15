@@ -13017,6 +13017,7 @@
     "op_active_until": "Active until {date}",
     "op_renew_by": "Renew by {date}",
     "op_expired": "The connection has expired",
+    "sync_failed": "Fetching from the bank failed",
     "disconnect_title": "Disconnect {bank}?",
     "disconnect_description": "Fetching stops. Booked transactions and the accounts are kept.",
     "disconnect_confirm": "Disconnect",
