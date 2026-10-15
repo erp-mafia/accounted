@@ -927,3 +927,72 @@ input[type="number"] {
 .page-header-action > * {
   width: auto;
 }
+
+/* Print (crm#1203). A dashboard page prints as a document: the panel's
+   content on plain paper at the full page width, without the chrome around
+   it. Defined once here for every dashboard page instead of per page.
+
+   Scoped to pages that render the page panel (#main-content): standalone
+   documents (the årsredovisning, payslips, invoice previews) keep their own
+   print rules. Structural on purpose: whatever sits beside the panel in the
+   frame (sidebar, mobile nav, banners, the command palette) or beside the
+   shell at body level (the assistant and its button, toasts, open popovers,
+   the deploy prompt) is chrome, including chrome added later. Unlayered like
+   the top bar rules above, so they beat the panel's Tailwind utilities.
+
+   A page whose period or company lives in a top bar picker states it on
+   paper with ReportPrintHeader (components/reports). */
+@media print {
+  body:has(#main-content) > :not(:has(#main-content)),
+  :has(> #main-content) > :not(#main-content) {
+    display: none !important;
+  }
+
+  /* The frame: no warm backdrop, and no viewport-tall minimum, which can
+     push a blank page out after a short printout. */
+  body:has(#main-content),
+  :has(> #main-content) {
+    min-height: 0;
+    background: none;
+  }
+
+  /* The panel stops being a floating, self-scrolling card: no frame margin
+     or offset for the sidebar and assistant, no clipping to the viewport
+     height (which cut the printout at one screen), no border. */
+  #main-content {
+    margin: 0;
+    padding: 0;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+  }
+
+  /* MainContainer's padding: the printer's page margin is the margin. */
+  #main-content > div {
+    padding: 0;
+  }
+
+  /* The top bar becomes the document heading: static, no bar styling, the
+     title in the display face. Its controls (help "?", pickers, actions) do
+     nothing on paper. */
+  .page-header {
+    position: static;
+    min-height: 0;
+    margin: 0 0 1rem;
+    padding: 0;
+    border: 0;
+    background: none;
+  }
+  .page-header-title {
+    font-family: var(--font-display);
+    font-size: 20px;
+    line-height: 28px;
+    font-weight: 400;
+  }
+  .page-header-action,
+  .page-header-lead button {
+    display: none;
+  }
+}

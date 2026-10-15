@@ -159,7 +159,10 @@ export interface SkattekontoLedgerCoverInfo {
  * `journal_entry_id` is present on success AND on COMMIT_FAILED (the draft
  * was created and stays linked; only the commit step failed).
  * `ledger_twins` is present on LEDGER_TWIN_EXISTS, `ledger_cover` on
- * LEDGER_COVER_EXISTS.
+ * LEDGER_COVER_EXISTS, `ledger_direct` on LEDGER_DIRECT_EXISTS: the bank
+ * verifikat without any skattekonto line that already book the event
+ * (PH 171). They cannot be linked; the row is left unbooked or booked anyway
+ * with a reason.
  */
 export interface SkattekontoBatchRowResult {
   id: string
@@ -177,11 +180,13 @@ export interface SkattekontoBatchRowResult {
     | 'TRANSACTION_NOT_FOUND'
     | 'LEDGER_TWIN_EXISTS'
     | 'LEDGER_COVER_EXISTS'
+    | 'LEDGER_DIRECT_EXISTS'
     | 'COMMIT_FAILED'
     | 'UNKNOWN'
   error_message?: string
   ledger_twins?: SkattekontoLedgerTwin[]
   ledger_cover?: SkattekontoLedgerCoverInfo
+  ledger_direct?: SkattekontoLedgerTwin[]
 }
 
 /** Response envelope body for the bokfor-batch endpoint. */

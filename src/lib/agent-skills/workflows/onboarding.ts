@@ -134,8 +134,11 @@ Call \`gnubok_create_company\` WITHOUT \`confirm\`. Read the preview back in
 plain Swedish (form, orgnr, fiscal period dates, VAT + period, method).
 After the user's "ja": call it again with \`confirm: true\`, and in the SAME
 turn continue with step 3 or 4. Creation sets up chart, settings, first
-fiscal period, tax deadlines, and starts the 30-day trial; the connection
-uses the new company automatically.
+fiscal period, tax deadlines, and starts the 30-day trial. For the user's
+first company the connection uses it automatically; when they already have
+one, that stays the default and the result says so: pass the new
+\`company_id\` on every later call, \`gnubok_create_sie_upload\` included
+(its card imports into the company it names).
 
 ## Step 3 (existing bookkeeping): import it FIRST
 

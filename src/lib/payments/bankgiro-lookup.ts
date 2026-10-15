@@ -28,10 +28,10 @@
 import { PAYMENTS_OPERATIONS, type PaymentsLookupUnavailableReason } from '@accounted/connect-contract'
 import { signerPersonalNumberOnFile } from '@/lib/auth/bankid-signer'
 import { validateBankgiroNumber, validatePlusgiroNumber } from '@/lib/bankgiro/luhn'
+import { companyOrgNumber } from '@/lib/company/org-number'
 import { callConnectorOperation } from '@/lib/connect/instance/connector-fetch'
 import { paymentsConnectorMode } from '@/lib/connect/instance/upstreams'
 import type { OperationContext } from '@/lib/operations/types'
-import { companyOrgNumber } from '@/lib/payments/orders/party'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 
 /** The environment flag that switches the premium lookups on: exactly 'true'. */
@@ -143,13 +143,12 @@ function invoiceRefForWire(ref: string | null | undefined): string | null {
 }
 
 async function lookupParty(ctx: OperationContext): Promise<{ orgNumber: string; signerPersonalNumber: string | null } | null> {
-  const orgNumber = digits(await companyOrgNumber(ctx))
-  if (!/^\d{10,12}$/.test(orgNumber)) return null
+  const orgNumber = await companyOrgNumber(ctx.supabase, ctx.companyId)
+  if (!orgNumber) return null
   // Never thrown: a person with no BankID login still gets the lookup.
   const signer = await signerPersonalNumberOnFile(ctx.userId).catch(() => null)
   return {
-    // 12-digit forms are reduced to the 10 digits the bank has.
-    orgNumber: orgNumber.length === 12 ? orgNumber.slice(2) : orgNumber,
+    orgNumber,
     signerPersonalNumber: signer ? digits(signer) : null,
   }
 }

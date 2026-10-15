@@ -4,6 +4,7 @@ import { eventBus } from '@/lib/events/bus'
 import { hashRequest } from '@/lib/api/idempotency'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
 import { tools } from '../server'
+import { findUnknownArgKeys } from '../arg-guard'
 
 const tool = () => tools.find((candidate) => candidate.name === 'gnubok_create_customer')!
 
@@ -431,5 +432,86 @@ describe('gnubok_create_customer: payment terms', () => {
       .default_payment_terms
     expect(property.minimum).toBe(0)
     expect(property.maximum).toBe(365)
+  })
+})
+
+// crm#1198: the tool listed its arguments by hand and the dispatcher refuses
+// any key a tool does not list, so contact_person never reached the schema.
+describe('gnubok_create_customer: contact person, invoice copies and the rest of the card', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+  })
+
+  const card = {
+    name: 'Kund AB',
+    customer_type: 'swedish_business',
+    contact_person: ' Anna Andersson ',
+    invoice_email_cc_addresses: ['ekonomi@kund.example'],
+    phone: '08-123 45',
+    address: 'Gatan 1',
+    address_line2: 'c/o Kontoret',
+    language: 'en',
+    notes: 'Märk fakturan med projektnummer.',
+  }
+
+  it('lets every field of the card past the dispatcher\'s argument guard', () => {
+    expect(findUnknownArgKeys(tool().inputSchema as Record<string, unknown>, card)).toEqual([])
+  })
+
+  it('stages the contact person, the cc list and the rest of the card in params and preview', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: null }) // company_settings read (payment-terms default)
+    enqueue({ data: { id: 'op-create-customer-card' } })
+
+    const result = (await tool().execute(card, 'company-1', 'user-1', supabase as never)) as {
+      staged: boolean
+      preview: Record<string, unknown>
+    }
+
+    const expected = {
+      contact_person: 'Anna Andersson',
+      invoice_email_cc_addresses: ['ekonomi@kund.example'],
+      phone: '08-123 45',
+      address_line1: 'Gatan 1',
+      address_line2: 'c/o Kontoret',
+      language: 'en',
+      notes: 'Märk fakturan med projektnummer.',
+    }
+    expect(result.staged).toBe(true)
+    expect(result.preview).toMatchObject(expected)
+    const inserted = findCall('pending_operations', 'insert')?.[0] as { params: Record<string, unknown> }
+    expect(inserted.params).toMatchObject(expected)
+  })
+
+  it('refuses a cc address that is not an email before staging, naming the field', async () => {
+    const { supabase } = createQueuedMockSupabase()
+
+    await expect(
+      tool().execute(
+        { name: 'Kund AB', customer_type: 'swedish_business', invoice_email_cc_addresses: ['ekonomi'] },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toMatchObject({
+      code: 'VALIDATION_ERROR',
+      issues: [expect.objectContaining({ field: 'invoice_email_cc_addresses.0' })],
+    })
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('refuses a contact person over 200 characters before staging', async () => {
+    const { supabase } = createQueuedMockSupabase()
+
+    await expect(
+      tool().execute(
+        { name: 'Kund AB', customer_type: 'swedish_business', contact_person: 'A'.repeat(201) },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', issues: [expect.objectContaining({ field: 'contact_person' })] })
+    expect(supabase.from).not.toHaveBeenCalled()
   })
 })

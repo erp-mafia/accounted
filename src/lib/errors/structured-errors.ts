@@ -3496,6 +3496,15 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Det valda bankkontot kan inte användas för den här filen. Inget importerades.',
     message_en: 'The selected bank account cannot be used for this file. Nothing was imported.',
   },
+  // crm#1204: the file names a bank account that is already a cash account on
+  // another ledger. The route interpolates both ledgers into the message.
+  BANK_FILE_ACCOUNT_MISMATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Filen gäller ett bankkonto som redan finns på ett annat bokföringskonto. Importera den dit, eller byt konto under Inställningar > Kopplingar > Bank > Välj konton. Inget importerades.',
+    message_en:
+      'This file is for a bank account already set up on another ledger account. Import it there, or change the account under Settings > Connections > Bank > Choose accounts. Nothing was imported.',
+  },
   // ── Wave 3: bank transaction actions and import undo (lib/transactions/manage.ts,
   // lib/import/bank-file/undo-operation.ts, lib/import/sie-job-action-service.ts) ──
   TRANSACTION_DELETE_BOOKED: {
@@ -4355,12 +4364,12 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
   DOC_LINK_PROPOSED_ELSEWHERE: {
     httpStatus: 409,
     message_sv:
-      'Underlaget är redan föreslaget för en annan verifikation, och ett underlag kan bara kopplas till en verifikation. Ska båda verifikationerna ha det, till exempel ett kontoutdrag med flera avgifter, ladda upp filen igen som ett eget underlag för den här verifikationen. Annars avvisa det andra förslaget först.',
+      'Underlaget är redan föreslaget för en annan verifikation, och ett underlag kan bara kopplas till en verifikation. Ska båda verifikationerna ha det, till exempel ett kontoutdrag med flera avgifter eller en rättelse som vilar på originalets faktura, kopplas en exakt kopia till den här verifikationen. Annars avvisa det andra förslaget först.',
     message_en:
       'The document is already proposed for another verifikat, and a document can be linked to only one verifikat.',
     remediation: {
       description:
-        'If both verifikat need this underlag (a bank statement covering several fees), upload the file again as a separate document with gnubok_upload_document, which stores a new copy (gnubok_complete_document_upload returns the existing document for identical bytes), and link that copy. If the other proposal is the wrong one, reject it first, then stage this link again.',
+        'If both verifikat need this underlag (a bank statement covering several fees, a correction resting on the original\'s invoice), stage gnubok_link_documents_to_vouchers with the row { document_id, journal_entry_id, copy: true }: approval archives a byte-identical copy on this verifikat. Do not re-upload or alter the file. If the other proposal is the wrong one, reject it first, then stage this link again.',
     },
   },
   DOC_LINK_FAILED: {
@@ -6632,6 +6641,26 @@ const SKATTEVERKET: Record<string, StructuredErrorEntry> = {
     },
     thrown_message_sv: true,
   },
+  // A skattekonto row whose event a bank verifikat without any line on the
+  // skattekonto account already books (PH 171): a previous system that paid
+  // the tax straight from the bank to the tax accounts, or a bank line booked
+  // as 1930 against 2510. Booking it would record the event twice, and there
+  // is no skattekonto line to link. The thrown Swedish text names the
+  // verifikat and the account it books.
+  SKATTEKONTO_BOOK_LEDGER_DIRECT_EXISTS: {
+    httpStatus: 409,
+    message_sv:
+      'Händelsen finns redan i bokföringen utan skattekontot: ett verifikat bokför den redan direkt mot banken. Låt raden vara obokförd (ignorera den) i stället för att bokföra den en gång till.',
+    message_en:
+      'The event is already in the ledger without the skattekonto: a verifikat books it straight from the bank. Leave the row unbooked (ignore it) instead of booking it a second time.',
+    retryable: false,
+    remediation: {
+      description:
+        'Ignore the row with gnubok_ignore_transaction (transaction_id = the row id), together with the other rows of the month the same verifikat holds, or have the user correct the verifikat to go via the skattekonto account and then link the row. Book anyway (allow_duplicate / allow_duplicate_ids, with the reason the user gives in duplicate_reason) only when the user confirms the event is really missing from the ledger.',
+      tool: 'gnubok_ignore_transaction',
+    },
+    thrown_message_sv: true,
+  },
   SKATTEVERKET_ACCESS_DENIED: {
     httpStatus: 403,
     message_sv:
@@ -8054,6 +8083,12 @@ const PAYMENT_ORDERS: Record<string, StructuredErrorEntry> = {
     message_sv: 'Ange personnumret för den som signerar med BankID.',
     message_en: 'Enter the personal identity number of the person signing with BankID.',
   },
+  // Same cause and way out as BANK_CONSENT_ORG_NUMBER_MISSING, for a payment.
+  PAYMENT_ORG_NUMBER_MISSING: {
+    httpStatus: 400,
+    message_sv: 'Företagets organisationsnummer saknas eller är ogiltigt, och banken behöver det för betalningen. Fyll i det under Inställningar, Företag, Allmänt och försök igen. Går fältet inte att ändra, kontakta supporten.',
+    message_en: 'The company\'s organisation number is missing or invalid, and the bank needs it for the payment. Fill it in under Settings, Company, General and try again. If the field cannot be changed, contact support.',
+  },
   PAYMENT_COMPANY_VERIFICATION_REQUIRED: {
     httpStatus: 409,
     message_sv: 'Företaget behöver verifieras hos betalningsleverantören innan första betalningen.',
@@ -8134,10 +8169,13 @@ const OPEN_BANKING: Record<string, StructuredErrorEntry> = {
     message_sv: 'Ange personnumret för den som loggar in med BankID.',
     message_en: 'Enter the personal identity number of the person logging in with BankID.',
   },
+  // No stored organisationsnummer reads as one (lib/company/org-number.ts).
+  // After onboarding the field is locked (settings-service.ts), so the text
+  // also names the way out when it cannot be filled in.
   BANK_CONSENT_ORG_NUMBER_MISSING: {
     httpStatus: 400,
-    message_sv: 'Företaget saknar organisationsnummer, och banken behöver det för kopplingen. Lägg in det under Inställningar och försök igen.',
-    message_en: 'The company has no organisation number, and the bank needs it for the connection. Add it under Settings and try again.',
+    message_sv: 'Företagets organisationsnummer saknas eller är ogiltigt, och banken behöver det för kopplingen. Fyll i det under Inställningar, Företag, Allmänt och försök igen. Går fältet inte att ändra, kontakta supporten.',
+    message_en: 'The company\'s organisation number is missing or invalid, and the bank needs it for the connection. Fill it in under Settings, Company, General and try again. If the field cannot be changed, contact support.',
   },
   BANK_CONSENT_UNKNOWN_BANK: {
     httpStatus: 400,

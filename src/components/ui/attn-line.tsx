@@ -24,7 +24,8 @@ export function AttnLine({ children, action, trailing, className }: AttnLineProp
     <p className={cn('text-[12.5px] leading-5 text-attn', className)}>
       {children}
       {action && (
-        <>
+        // A link or button does nothing on paper: the sentence prints, its action does not.
+        <span className="print:hidden">
           {' '}
           {action.href ? (
             <Link
@@ -42,7 +43,7 @@ export function AttnLine({ children, action, trailing, className }: AttnLineProp
               {action.label}
             </button>
           )}
-        </>
+        </span>
       )}
       {trailing}
     </p>

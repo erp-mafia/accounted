@@ -203,6 +203,50 @@ describe('gnubok_list_uncategorized_transactions', () => {
     expect(findCalls('bank_transaction_parts', 'eq')).toEqual([['company_id', 'company-1']])
   })
 
+  it('says whose giro a nameless row shows: the own bankgiro, or the one supplier card (crm#1204)', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    const base = { currency: 'SEK', merchant_name: null, reference: null, is_business: null, category: null, cash_account_id: null, potential_match_method: null }
+    enqueuePage(enqueue, [
+      { ...base, id: 't-deposit', date: '2026-10-12', description: 'BG 123-4566  00012', original_description: 'BG 123-4566  00012', amount: 1500, counterparty_account: null },
+      { ...base, id: 't-unknown', date: '2026-10-12', description: 'BG 555-0009', original_description: 'BG 555-0009', amount: 700, counterparty_account: null },
+      { ...base, id: 't-supplier', date: '2026-10-11', description: '40012345678', original_description: '40012345678', amount: -900, counterparty_account: '999-0003' },
+      { ...base, id: 't-named', date: '2026-10-11', description: 'Spotify AB', original_description: 'Spotify AB', amount: -120, counterparty_account: null },
+    ])
+    enqueue({ data: [], error: null }) // bank_transaction_parts
+    enqueue({ data: { bankgiro: '123-4566', plusgiro: null }, error: null }) // company_settings
+    enqueue({ data: [], error: null }) // cash_accounts
+    enqueue({ data: [{ id: 's-1', name: 'Leverantör AB', bankgiro: '999-0003', plusgiro: null }], error: null }) // suppliers
+
+    const result = (await tool.execute({ limit: 20 }, 'company-1', 'user-1', supabase as never)) as {
+      transactions: Array<Record<string, unknown>>
+    }
+
+    const byId = new Map(result.transactions.map((t) => [t.transaction_id, t]))
+    expect(byId.get('t-deposit')?.giro_counterparty).toEqual({ kind: 'own_deposit', scheme: 'bankgiro', giro: '123-4566', on_file: true })
+    expect(byId.get('t-unknown')?.giro_counterparty).toEqual({ kind: 'own_deposit', scheme: 'bankgiro', giro: '555-0009', on_file: false })
+    expect(byId.get('t-supplier')?.giro_counterparty).toEqual({ kind: 'supplier', scheme: 'bankgiro', giro: '999-0003', name: 'Leverantör AB' })
+    expect(byId.get('t-named')).not.toHaveProperty('giro_counterparty')
+    // The bank text is read, not returned; the register is the company's own.
+    expect(byId.get('t-deposit')).not.toHaveProperty('original_description')
+    expect(findCalls('suppliers', 'eq')).toEqual([['company_id', 'company-1']])
+    expect(findCalls('company_settings', 'eq')).toEqual([['company_id', 'company-1']])
+  })
+
+  it('reads no register when no row on the page can carry a giro reading', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueuePage(enqueue, [
+      { id: 't-1', date: '2026-10-11', description: 'Spotify AB', original_description: 'Spotify AB', amount: -120, currency: 'SEK', merchant_name: null, reference: null, is_business: null, category: null, cash_account_id: null, counterparty_account: null },
+    ])
+
+    const result = (await tool.execute({ limit: 20 }, 'company-1', 'user-1', supabase as never)) as {
+      transactions: Array<Record<string, unknown>>
+    }
+
+    expect(result.transactions[0]).not.toHaveProperty('giro_counterparty')
+    expect(findCalls('suppliers', 'select')).toHaveLength(0)
+    expect(findCalls('company_settings', 'select')).toHaveLength(0)
+  })
+
   it('fails instead of listing a booked row when the page read fails', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: null, error: { message: 'statement timeout' } })

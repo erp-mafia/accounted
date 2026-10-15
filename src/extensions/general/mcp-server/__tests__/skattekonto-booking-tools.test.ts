@@ -34,6 +34,14 @@ const mockTwins = vi.fn()
 // the message and info builders stay real.
 const mockCover = vi.fn()
 const mockPlanned = vi.fn()
+// The direct-booking search (a bank verifikat without any 1630 line already
+// books the event, PH 171) is mocked the same way: the holders are given,
+// the counter line and the message stay real.
+const mockDirect = vi.fn()
+vi.mock('@/extensions/general/skatteverket/lib/skattekonto-direct', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/extensions/general/skatteverket/lib/skattekonto-direct')>()),
+  findDirectLedgerHolders: (...a: unknown[]) => mockDirect(...a),
+}))
 vi.mock('@/extensions/general/skatteverket/lib/skattekonto-booking', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/extensions/general/skatteverket/lib/skattekonto-booking')>()
   return {
@@ -45,6 +53,8 @@ vi.mock('@/extensions/general/skatteverket/lib/skattekonto-booking', async (impo
     DUPLICATE_REASON_MAX_LENGTH: actual.DUPLICATE_REASON_MAX_LENGTH,
     // Real: the staged verifikat must be the executor's own lines.
     buildSkattekontoEntry: actual.buildSkattekontoEntry,
+    counterLineOf: actual.counterLineOf,
+    ledgerDirectMessage: actual.ledgerDirectMessage,
     attachBookingSuggestions: (...a: unknown[]) => mockAttach(...a),
     findSkattekontoLedgerTwins: (...a: unknown[]) => mockTwins(...a),
     findSkattekontoLedgerHolding: async (...a: unknown[]) => {
@@ -140,6 +150,10 @@ beforeEach(() => {
   // Default: no unlinked verifikat on 1630 covers any row, none is planned.
   mockCover.mockResolvedValue(null)
   mockPlanned.mockReturnValue(new Map())
+  // Default: no bank verifikat books any row without the skattekonto.
+  mockDirect.mockImplementation(async (_supabase, _companyId, probes: Array<{ id: string }>) =>
+    new Map(probes.map((p) => [p.id, []])),
+  )
 })
 
 const REASON = 'Räntan debiterades två gånger'
@@ -749,6 +763,137 @@ describe('book skattekonto tools: the override needs a reason', () => {
     await expect(
       batch.execute({ skattekonto_transaction_ids: ['skv-a'], allow_duplicate_ids: ['skv-a'] }, 'company-1', 'user-1', supabase as never),
     ).rejects.toThrow(/duplicate_reason/)
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+})
+
+describe('book skattekonto tools: direct-booking guard (a bank verifikat already books the row without 1630, PH 171)', () => {
+  type Refusal = Error & {
+    code?: string
+    remediation?: { tool?: string; description?: string; args?: Record<string, unknown> }
+  }
+  const HOLDER = {
+    journal_entry_id: 'je-a14',
+    voucher_series: 'A',
+    voucher_number: 14,
+    entry_date: '2026-03-31',
+    description: 'Avstämning skattekonto',
+    status: 'posted',
+  }
+
+  /** A bank verifikat already books these rows without 1630. */
+  function directFor(...ids: string[]): void {
+    mockDirect.mockImplementation(async (_supabase, _companyId, probes: Array<{ id: string }>) =>
+      new Map(probes.map((p) => [p.id, ids.includes(p.id) ? [HOLDER] : []])),
+    )
+  }
+
+  it('row: refuses to stage, names the verifikat, and hands back the ignore to make', async () => {
+    directFor(ROW.id)
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { ...ROW } })
+
+    const err = (await single
+      .execute({ skattekonto_transaction_id: ROW.id }, 'company-1', 'user-1', supabase as never)
+      .catch((e: unknown) => e)) as Refusal
+
+    expect(err.code).toBe('SKATTEKONTO_BOOK_LEDGER_DIRECT_EXISTS')
+    expect(err.message).toContain('Händelsen finns redan i bokföringen utan skattekontot: verifikat A14 (2026-03-31)')
+    expect(err.message).toContain('konto 2518 direkt mot banken')
+    expect(err.remediation?.tool).toBe('gnubok_ignore_transaction')
+    expect(err.remediation?.args).toEqual({ transaction_id: ROW.id })
+    // Searched on the counter line the preview would show: D 2518 5000.
+    expect(mockDirect.mock.calls[0][2]).toEqual([
+      { id: ROW.id, transaktionsdatum: ROW.transaktionsdatum, counter: { account: '2518', net: 5000 } },
+    ])
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+    expect(mockBokforSingle).not.toHaveBeenCalled()
+  })
+
+  it('row: allow_duplicate with a reason stages the override, the verifikat in the preview and a reviewer warning', async () => {
+    directFor(ROW.id)
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { ...ROW } })
+    enqueue({ data: null })                // period check: company_settings
+    enqueue({ data: null })                // period check: fiscal_periods
+    enqueue({ data: { id: 'op-d1' } })     // pending_operations insert
+
+    const result = (await single.execute(
+      { skattekonto_transaction_id: ROW.id, allow_duplicate: true, duplicate_reason: REASON },
+      'company-1', 'user-1', supabase as never,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    const inserted = findCall('pending_operations', 'insert')?.[0] as { params: Record<string, unknown> }
+    expect(inserted.params).toEqual({ transaction_id: ROW.id, allow_duplicate: true, duplicate_reason: REASON })
+    expect(result.preview.ledger_direct).toEqual([HOLDER])
+    expect(String(result.preview.compliance_warning)).toContain('already book this event from the bank without 1630')
+  })
+
+  it('row: a twin answers first, the direct search never runs', async () => {
+    twinsFor(ROW.id)
+    directFor(ROW.id)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...ROW } })
+
+    const err = (await single
+      .execute({ skattekonto_transaction_id: ROW.id }, 'company-1', 'user-1', supabase as never)
+      .catch((e: unknown) => e)) as Refusal
+    expect(err.code).toBe('SKATTEKONTO_BOOK_LEDGER_TWIN_EXISTS')
+    expect(mockDirect).not.toHaveBeenCalled()
+  })
+
+  it('rows: held rows are skipped with LEDGER_DIRECT_EXISTS and their verifikat, one search, an allowed one staged with the override', async () => {
+    directFor('skv-held', 'skv-allowed')
+    const rows = [
+      { ...ROW, id: 'skv-fresh' },
+      { ...ROW, id: 'skv-held' },
+      { ...ROW, id: 'skv-allowed' },
+      { ...ROW, id: 'skv-ignored', is_ignored: true },
+    ]
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: rows })                // batch row fetch
+    enqueue({ data: null })                // period check: company_settings
+    enqueue({ data: null })                // period check: fiscal_periods
+    enqueue({ data: { id: 'op-d2' } })     // pending_operations insert
+
+    const result = (await batch.execute(
+      {
+        skattekonto_transaction_ids: rows.map((r) => r.id),
+        allow_duplicate_ids: ['skv-allowed'],
+        duplicate_reason: REASON,
+      },
+      'company-1', 'user-1', supabase as never,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(mockDirect).toHaveBeenCalledTimes(1)
+    // Only the open, settled rows with a rule are searched.
+    expect((mockDirect.mock.calls[0][2] as Array<{ id: string }>).map((p) => p.id)).toEqual([
+      'skv-fresh',
+      'skv-held',
+      'skv-allowed',
+    ])
+    const inserted = findCall('pending_operations', 'insert')?.[0] as { params: Record<string, unknown> }
+    expect(inserted.params).toEqual({ ids: ['skv-fresh', 'skv-allowed'], allow_duplicate_ids: ['skv-allowed'], duplicate_reason: REASON })
+    expect(result.preview.skipped).toEqual([
+      { skattekonto_transaction_id: 'skv-held', reason: 'LEDGER_DIRECT_EXISTS', ledger_direct: [HOLDER] },
+      { skattekonto_transaction_id: 'skv-ignored', reason: 'ROW_IGNORED' },
+    ])
+    expect(String(result.preview.compliance_warning)).toContain('already book this event from the bank')
+  })
+
+  it('rows: when every row is held nothing is staged, and the refusal names the first row\'s verifikat', async () => {
+    directFor('skv-a', 'skv-b')
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: [{ ...ROW, id: 'skv-a' }, { ...ROW, id: 'skv-b' }] })
+
+    const err = (await batch
+      .execute({ skattekonto_transaction_ids: ['skv-a', 'skv-b'] }, 'company-1', 'user-1', supabase as never)
+      .catch((e: unknown) => e)) as Refusal
+
+    expect(err.code).toBe('SKATTEKONTO_BOOK_LEDGER_DIRECT_EXISTS')
+    expect(err.message).toContain('Alla 2 rader finns redan i bokföringen. Första raden: Händelsen finns redan i bokföringen utan skattekontot')
+    expect(err.remediation?.args).toEqual({ transaction_id: 'skv-a' })
     expect(findCall('pending_operations', 'insert')).toBeUndefined()
   })
 })

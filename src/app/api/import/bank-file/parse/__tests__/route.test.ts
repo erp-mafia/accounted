@@ -89,3 +89,75 @@ describe('POST /api/import/bank-file/parse (skattekonto redirect)', () => {
     expect(body.data.parse_result.transactions).toHaveLength(1)
   })
 })
+
+// crm#1204: the parse response says which cash account the file's own bank
+// account already is, so the wizard can pre-select it.
+describe('POST /api/import/bank-file/parse (account match)', () => {
+  const SWEDBANK_CSV = [
+    'Radnr,Clnr,Kontonr,Produkt,Valuta,Bokfdag,Transdag,Valutadag,Referens,Text,Belopp,Saldo',
+    '1,8327-9,123 456 789-0,Företagskonto,SEK,2024-01-15,2024-01-15,2024-01-15,SPOTIFY,Kortköp,-99.00,12345.67',
+  ].join('\n')
+  const cashAccounts = [
+    { ledger_account: '1930', iban: 'SE5580000832799876543210', bban: null, clearing_number: null, account_number: null, currency: 'SEK', enabled: true, is_primary: false, bank_connection_id: 'conn-1' },
+    { ledger_account: '1931', iban: 'SE1280000832791234567890', bban: null, clearing_number: null, account_number: null, currency: 'SEK', enabled: true, is_primary: true, bank_connection_id: 'conn-1' },
+  ]
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
+  })
+
+  it('returns 401 when unauthenticated', async () => {
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase,
+      error: new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 }),
+    })
+    const response = await POST(makeFileRequest(SWEDBANK_CSV, 'swedbank.csv'), emptyParams)
+    expect(response.status).toBe(401)
+    expect(supabase.from).not.toHaveBeenCalledWith('cash_accounts')
+  })
+
+  it('returns 400 without a file', async () => {
+    const request = new Request('http://localhost:3000/api/import/bank-file/parse', {
+      method: 'POST',
+      body: new FormData(),
+    })
+    const response = await POST(request, emptyParams)
+    const body = await response.json()
+    expect(response.status).toBe(400)
+    expect(body.error.code).toBe('BANK_FILE_NO_FILE')
+  })
+
+  it('returns the statement account and the cash account it already is', async () => {
+    enqueue({ data: null }) // no prior bank_file_imports row
+    enqueue({ data: cashAccounts }) // cash_accounts for the match
+    const response = await POST(makeFileRequest(SWEDBANK_CSV, 'swedbank.csv'), emptyParams)
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body.data.parse_result.account).toEqual({ iban: null, clearing: '8327-9', account_number: '123 456 789-0' })
+    expect(body.data.account_match).toEqual({ ledger_account: '1931', ledger_accounts: ['1931'] })
+  })
+
+  it('still parses when the cash accounts cannot be read, leaving the choice to the user', async () => {
+    enqueue({ data: null })
+    enqueue({ error: { message: 'connection reset' } })
+    const response = await POST(makeFileRequest(SWEDBANK_CSV, 'swedbank.csv'), emptyParams)
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body.data.account_match).toBeNull()
+  })
+
+  it('reads no cash account for a file that names none', async () => {
+    enqueue({ data: null })
+    const response = await POST(makeFileRequest(SEB_BANK_CSV, 'kontoutdrag.csv'), emptyParams)
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body.data.account_match).toBeNull()
+    expect(supabase.from).not.toHaveBeenCalledWith('cash_accounts')
+  })
+})

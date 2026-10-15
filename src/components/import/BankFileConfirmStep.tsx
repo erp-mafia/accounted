@@ -18,11 +18,12 @@ import {
   Link2,
   Calendar,
   Landmark,
-  AlertTriangle,
+  AlertCircle,
 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import { summarizeByCurrency } from '@/lib/import/bank-file/currency-summary'
 import type { BankFileParseResult, BankFileDuplicateInfo } from '@/lib/import/bank-file/types'
+import { fileAccountLabel, type FileAccountMatch } from '@/lib/cash-accounts/file-account'
 
 interface BankAccount {
   account_number: string
@@ -32,6 +33,13 @@ interface BankAccount {
 interface BankFileConfirmStepProps {
   parseResult: BankFileParseResult
   duplicateInfo?: BankFileDuplicateInfo | null
+  /**
+   * The cash account the file's own bank account already is (crm#1204): the
+   * only ledgers offered, since execute refuses any other.
+   */
+  accountMatch?: FileAccountMatch | null
+  /** Why the last import attempt failed, if it did. */
+  error?: string | null
   onExecute: (options: { skip_duplicates: boolean; auto_categorize: boolean; settlement_account?: string }) => void
   onBack: () => void
   isLoading: boolean
@@ -40,6 +48,8 @@ interface BankFileConfirmStepProps {
 export default function BankFileConfirmStep({
   parseResult,
   duplicateInfo,
+  accountMatch,
+  error,
   onExecute,
   onBack,
   isLoading,
@@ -56,20 +66,28 @@ export default function BankFileConfirmStep({
   // automatically rather than promising an exact final number.
   const duplicateCount = Math.min(Math.max(duplicateInfo?.duplicate_count ?? 0, 0), stats.parsed_rows)
 
-  const [selectedAccount, setSelectedAccount] = useState('1930')
+  const [selectedAccount, setSelectedAccount] = useState(accountMatch?.ledger_account ?? '1930')
   // Active 19xx accounts from the session-cached chart (lib/reference-data):
-  // the account select is populated on the first paint.
+  // the account select is populated on the first paint. A file whose bank
+  // account is already a cash account offers only that account's ledger(s).
   const { accounts } = useAccounts()
-  const bankAccounts = useMemo<BankAccount[]>(
-    () =>
-      accounts
-        .filter((a) => a.account_number >= '1900' && a.account_number <= '1999')
-        .sort((a, b) => a.account_number.localeCompare(b.account_number))
-        .map((a) => ({ account_number: a.account_number, account_name: a.account_name })),
-    [accounts],
-  )
-  // Default to 1930 if available, otherwise the first account (once).
-  const defaultedRef = useRef(false)
+  const bankAccounts = useMemo<BankAccount[]>(() => {
+    const chart = accounts
+      .filter((a) => a.account_number >= '1900' && a.account_number <= '1999')
+      .sort((a, b) => a.account_number.localeCompare(b.account_number))
+      .map((a) => ({ account_number: a.account_number, account_name: a.account_name }))
+    if (!accountMatch) return chart
+    return accountMatch.ledger_accounts.map((ledger) => ({
+      account_number: ledger,
+      account_name: chart.find((a) => a.account_number === ledger)?.account_name ?? '',
+    }))
+  }, [accounts, accountMatch])
+  const matchedAccount = accountMatch
+    ? bankAccounts.find((a) => a.account_number === selectedAccount) ?? bankAccounts[0]
+    : null
+  // Default to 1930 if available, otherwise the first account (once). A
+  // matched file starts on its own account instead.
+  const defaultedRef = useRef(Boolean(accountMatch))
   useEffect(() => {
     if (defaultedRef.current || bankAccounts.length === 0) return
     defaultedRef.current = true
@@ -180,6 +198,26 @@ export default function BankFileConfirmStep({
             </div>
           )}
 
+          {/* The file's own bank account is already a cash account here */}
+          {accountMatch && parseResult.account && matchedAccount && (
+            <div className="space-y-1">
+              {bankAccounts.length <= 1 && (
+                <p className="flex items-center gap-2 text-sm font-medium">
+                  <Landmark className="h-4 w-4 text-muted-foreground" />
+                  <span className="font-mono">{matchedAccount.account_number}</span>
+                  {matchedAccount.account_name}
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">
+                {t('import_file_account_matched', {
+                  account: fileAccountLabel(parseResult.account),
+                  ledger: matchedAccount.account_number,
+                })}
+              </p>
+              <p className="text-xs text-muted-foreground">{t('import_file_account_change_hint')}</p>
+            </div>
+          )}
+
           {/* Additional info */}
           {refsCount > 0 && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -201,6 +239,13 @@ export default function BankFileConfirmStep({
           ...noticesFromParseIssues(warnings),
         ]}
       />
+
+      {error && (
+        <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-lg flex gap-3">
+          <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
+          <p className="text-sm text-muted-foreground">{error}</p>
+        </div>
+      )}
 
       {/* Actions */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">

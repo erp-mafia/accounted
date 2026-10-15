@@ -1,6 +1,7 @@
 import type { PosProvider, PosVenue } from '@accounted/connect-contract'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { isStandardBASAccount } from '@/lib/bookkeeping/bas-reference'
+import { companyOrgNumber } from '@/lib/company/org-number'
 import { todayIsoStockholm, addDaysIso } from '@/lib/dates/iso'
 import { isSaneDateString } from '@/lib/invariants'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
@@ -69,14 +70,6 @@ function connectFailure(err: unknown): { ok: false; code: string; details?: Reco
   throw err
 }
 
-async function companyOrgNumber(ctx: OperationContext): Promise<string | null> {
-  const { data } = await ctx.supabase.from('company_settings').select('org_number').eq('company_id', ctx.companyId).maybeSingle()
-  const digits = String((data as { org_number?: string | null } | null)?.org_number ?? '').replace(/\D/g, '')
-  // A sole trader's organisation number is the personnummer: ten digits without the century.
-  if (digits.length === 12) return digits.slice(2)
-  return digits.length === 10 ? digits : null
-}
-
 // ---------------------------------------------------------------------------
 // Connections
 // ---------------------------------------------------------------------------
@@ -110,7 +103,7 @@ export async function listPosConnections(
 export async function listAvailablePosVenues(
   ctx: OperationContext,
 ): Promise<OperationOutcome<{ venues: PosVenue[]; providers: PosProvider[]; org_number: string }>> {
-  const orgNumber = await companyOrgNumber(ctx)
+  const orgNumber = await companyOrgNumber(ctx.supabase, ctx.companyId)
   if (!orgNumber) return { ok: false, code: 'POS_ORG_NUMBER_MISSING' }
   try {
     const answer = await listPosVenues(ctx.companyId, orgNumber, connectDeps)
@@ -133,7 +126,7 @@ export async function connectPosVenue(
   options: { dryRun?: boolean } = {},
 ): Promise<OperationOutcome<{ connection: PosConnectionView }>> {
   if (await isSandboxCompany(ctx.supabase, ctx.companyId)) return { ok: false, code: 'POS_SANDBOX_BLOCKED' }
-  const orgNumber = await companyOrgNumber(ctx)
+  const orgNumber = await companyOrgNumber(ctx.supabase, ctx.companyId)
   if (!orgNumber) return { ok: false, code: 'POS_ORG_NUMBER_MISSING' }
 
   const today = todayIsoStockholm()

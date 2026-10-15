@@ -6,6 +6,8 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { loadFileAccountMatch, type FileAccountMatch } from '@/lib/cash-accounts/file-account'
+import { dominantCurrency } from '@/lib/import/bank-file/currency-summary'
 
 /**
  * POST /api/import/bank-file/parse
@@ -72,6 +74,18 @@ export const POST = withRouteContext(
 
       const parseResult = parseBankFile(content, file.name, formatOverride || undefined)
 
+      // The cash account the file's own account already is (crm#1204): the
+      // wizard pre-selects it and execute refuses any other. Advisory here: a
+      // failed read leaves the choice to the user, and execute reads again.
+      let accountMatch: FileAccountMatch | null = null
+      try {
+        accountMatch = await loadFileAccountMatch(
+          supabase, companyId, parseResult.account, dominantCurrency(parseResult.transactions),
+        )
+      } catch (err) {
+        opLog.warn('bank file account match failed', err as Error)
+      }
+
       // Per-row duplicate detection deliberately does NOT live here: the
       // wizard calls POST /api/import/bank-file/check-duplicates after every
       // (re-)parse, including the client-side generic_csv re-parse that never
@@ -85,6 +99,7 @@ export const POST = withRouteContext(
           detected_format_name: detectedFormat?.name || parseResult.format_name,
           file_hash: fileHash,
           filename: file.name,
+          account_match: accountMatch,
           headers: parseResult.format === 'generic_csv'
             ? content.split('\n')[0]?.split(',').map((h) => h.trim()) || []
             : null,

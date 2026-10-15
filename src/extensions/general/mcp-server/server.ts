@@ -210,7 +210,7 @@ import { loadSkillProvenance, skillBodyHash, oauthActorLabel } from '@/lib/agent
 import { loadCompanySkillRows, ownSkill } from '@/lib/agent-skills/company-skills'
 import { skillAppliesToCompany } from '@/lib/agent-skills/applicability'
 import { buildOwnSkill, buildOwnText, OWN_SKILL_COPY } from '@/lib/agent-skills/own-skill-body'
-import { conflictingVoucherClaims, loadDocumentClaims, sharedDocumentWarning } from '@/lib/receipt-hunt/document-claims'
+import { conflictingVoucherClaims, loadDocumentClaims, loadDocumentClaimsAndWaitingLinks, sharedDocumentWarning } from '@/lib/receipt-hunt/document-claims'
 import { SkillBodySchema } from '@/lib/agent-skills/validation'
 import { recordCommunityFeedback } from '@/lib/agent-skills/community'
 import type { SkillTier } from './skills'
@@ -465,6 +465,8 @@ import {
 import { applyUnbookedFilter } from '@/lib/transactions/unbooked'
 import { previewIngestDedup } from '@/lib/transactions/dedup-preview'
 import { batchAllocationsFromParts } from '@/lib/transactions/parts-read'
+import { giroCounterpartyForWire, mayReadGiro, readGiroCounterparty, type GiroRow } from '@/lib/transactions/giro-counterparty'
+import { loadGiroRegister } from '@/lib/transactions/giro-register'
 import { BANKGIRO_SPLIT_METHOD } from '@/lib/transactions/part-suggestions'
 import { buildReportDataStatus } from '@/lib/reports/data-status'
 import { generateSIEExport } from '@/lib/reports/sie-export'
@@ -519,7 +521,8 @@ import { openBankFeedDoor } from '@/lib/bank-feed/door'
 import { matchBankByName } from '@/lib/bank-feed/bank-match'
 import { switchDeepLink } from '@/lib/bank-feed/switch-link'
 import { enableBankingSunset } from '@/lib/bank-feed/switch-campaign'
-import { aggregatorOf } from '@/lib/bank-sync/aggregator'
+import { aggregatorOf, ENABLE_BANKING_AGGREGATOR } from '@/lib/bank-sync/aggregator'
+import { isOneSessionBank } from '@/extensions/general/enable-banking/lib/connection-warning'
 import {
   completePendingDocumentUpload,
   createPendingDocumentUpload,
@@ -557,14 +560,20 @@ import { suggestToolNames } from './tool-suggest'
 import {
   attachBookingSuggestions,
   buildSkattekontoEntry,
+  counterLineOf,
   DUPLICATE_REASON_MAX_LENGTH,
   findSkattekontoLedgerHolding,
   findSkattekontoLedgerTwins,
   ledgerCoverMessage,
+  ledgerDirectMessage,
   ledgerHoldOf,
   ledgerTwinMessage,
   normaliseDuplicateReason,
 } from '@/extensions/general/skatteverket/lib/skattekonto-booking'
+import {
+  findDirectLedgerHolders,
+  type SkattekontoCounterLine,
+} from '@/extensions/general/skatteverket/lib/skattekonto-direct'
 import type { SkattekontoBookingSuggestion, SkattekontoLedgerCoverInfo, SkattekontoLedgerTwin } from '@/types/skatteverket'
 import {
   resolveSkattekontoAccount,
@@ -1964,22 +1973,28 @@ interface SkattekontoStageRow {
  * rule match, so the reviewer reads accounts and amounts, not field names
  * (crm#1104).
  */
+function skattekontoBuiltEntry(
+  row: SkattekontoStageRow,
+  suggestion: SkattekontoBookingSuggestion,
+  skattekontoAccount: SkattekontoLedgerAccount,
+) {
+  return buildSkattekontoEntry(
+    row,
+    {
+      account: suggestion.account,
+      label: suggestion.label ?? row.transaktionstext,
+      ...(suggestion.ore_rounding ? { oreRounding: suggestion.ore_rounding } : {}),
+    },
+    skattekontoAccount,
+  )
+}
+
 function skattekontoEntryPreview(
   row: SkattekontoStageRow,
   suggestion: SkattekontoBookingSuggestion,
   skattekontoAccount: SkattekontoLedgerAccount,
 ): EntryPreview {
-  return toEntryPreview(
-    buildSkattekontoEntry(
-      row,
-      {
-        account: suggestion.account,
-        label: suggestion.label ?? row.transaktionstext,
-        ...(suggestion.ore_rounding ? { oreRounding: suggestion.ore_rounding } : {}),
-      },
-      skattekontoAccount,
-    ),
-  )
+  return toEntryPreview(skattekontoBuiltEntry(row, suggestion, skattekontoAccount))
 }
 
 /**
@@ -2167,6 +2182,40 @@ function skattekontoLedgerCoverRefusal(
       ],
     },
   })
+}
+
+/**
+ * The event is already in the ledger without the skattekonto: a bank
+ * verifikat with no line on the skattekonto account books the row's counter
+ * line in its month (PH 171). Nothing to link (the verifikat has no
+ * skattekonto line), so the way out is to leave the row unbooked: ignore it.
+ */
+function skattekontoLedgerDirectRefusal(
+  rowId: string,
+  holders: SkattekontoLedgerTwin[],
+  counter: SkattekontoCounterLine,
+  skattekontoAccount: SkattekontoLedgerAccount,
+  rowCount = 1,
+): Error {
+  const lead = rowCount > 1 ? `Alla ${rowCount} rader finns redan i bokföringen. Första raden: ` : ''
+  return codedRefusal(
+    'SKATTEKONTO_BOOK_LEDGER_DIRECT_EXISTS',
+    `${lead}${ledgerDirectMessage(holders, counter, skattekontoAccount)}`,
+    {
+      description: `Do not book. The named verifikat already books this event straight from the bank, without ${skattekontoAccount}, so there is nothing to link: ignore the row with gnubok_ignore_transaction (args), together with the month's other rows the same verifikat holds, or have the user correct the verifikat to go via ${skattekontoAccount} and then link. Book anyway (allow_duplicate=true, or allow_duplicate_ids for the batch tool, with the reason in duplicate_reason) only when the user confirms the event is really missing from the ledger.`,
+      tool: 'gnubok_ignore_transaction',
+      args: { transaction_id: rowId },
+    },
+  )
+}
+
+/** Reviewer warning when a staged booking was told to book a row a bank verifikat already books without the skattekonto. */
+function skattekontoDirectNote(holders: SkattekontoLedgerTwin[], skattekontoAccount: SkattekontoLedgerAccount): string {
+  const refs = holders
+    .slice(0, 5)
+    .map((t) => (t.voucher_number ? `${t.voucher_series ?? ''}${t.voucher_number}` : `draft ${t.entry_date}`))
+    .join(', ')
+  return `DUPLICATE_OVERRIDE: verifikat ${refs} already book this event from the bank without ${skattekontoAccount}. Approving books it a second time; approve only if the event is really missing from the ledger, otherwise reject and ignore the row.`
 }
 
 /** Reviewer warning when a staged booking was told to book rows the ledger already covers. */
@@ -2402,6 +2451,23 @@ function lockedLinkPeriod(
  * was refused after approval because the years had been klarmarkerade (closed
  * and locked) 30 minutes before staging.
  */
+/**
+ * What a refused link says when the document belongs to another verifikat
+ * and this one needs the same underlag (crm#1207: a rättelse resting on the
+ * original's invoice). Re-uploading the file is no way out: the signed-URL
+ * upload returns the existing document for identical bytes, and an agent
+ * then changed a byte to get a new id. A copy row in the bulk tool archives
+ * a byte-identical copy at approval instead.
+ */
+function sharedUnderlagCopyHint(documentId: string, journalEntryId: string): string {
+  return (
+    'If this verifikat needs the same underlag too (a correction resting on the original\'s invoice, a statement covering ' +
+    'several fees), stage gnubok_link_documents_to_vouchers with links: [{ document_id: ' +
+    `"${documentId}", journal_entry_id: "${journalEntryId}", copy: true }]: approval archives a byte-identical copy ` +
+    'on this verifikat and the original stays where it is. Do not re-upload or alter the file.'
+  )
+}
+
 function lockedPeriodLinkError(total: number, periods: LockedLinkPeriod[], otherMisses: unknown[]): Error {
   const rows = (n: number) => `${n} ${n === 1 ? 'row' : 'rows'}`
   const lockedRows = periods.reduce((sum, p) => sum + p.row_count, 0)
@@ -2779,7 +2845,9 @@ async function resolveSieToolContent(
     if (error || !data) {
       throw codedError(
         'NOT_FOUND',
-        'No uploaded file found for this upload_id. PUT the raw file bytes to the upload_url from gnubok_create_sie_upload first (same upload_id and filename).'
+        // The pending key carries the company: an upload_id made for one
+        // company is not found from another, so name that cause too.
+        'No uploaded file found for this upload_id in this company. PUT the raw file bytes to the upload_url from gnubok_create_sie_upload first (same upload_id and filename), and pass the company_id that upload was created for.'
       )
     }
     const buffer = Buffer.from(await data.arrayBuffer())
@@ -2817,6 +2885,126 @@ async function resolveSieToolContent(
   return null
 }
 
+/** The company a SIE file is imported into, as the drop card and the agent are shown it. */
+interface SieTargetCompany {
+  company_id: string
+  name: string | null
+  org_number: string | null
+}
+
+/**
+ * Which company the SIE tools are about to import into: its display name
+ * (company_settings.company_name, else companies.name, the order the company
+ * echo uses) and its org number by the same read the org-number check uses
+ * (readCompanyOrgNumber), so the number the card shows is the number the
+ * file was compared with.
+ */
+async function readSieTargetCompany(supabase: SupabaseClient, companyId: string): Promise<SieTargetCompany> {
+  const { readCompanyOrgNumber } = await import('@/lib/import/sie-org-number')
+  const [orgNumber, company, settings] = await Promise.all([
+    readCompanyOrgNumber(supabase, companyId),
+    supabase.from('companies').select('name').eq('id', companyId).maybeSingle(),
+    supabase.from('company_settings').select('company_name').eq('company_id', companyId).maybeSingle(),
+  ])
+  const companyName = (company.data as { name?: string | null } | null)?.name?.trim()
+  const settingsName = (settings.data as { company_name?: string | null } | null)?.company_name?.trim()
+  return { company_id: companyId, name: settingsName || companyName || null, org_number: orgNumber }
+}
+
+/**
+ * Other companies this connection reaches whose org number is the SIE file's
+ * #ORGNR: where a file that does not belong to the current company most
+ * likely belongs. In prod, 10 of the 15 imports in 90 days whose #ORGNR
+ * differed from the company's (all before the confirm gate) carried the
+ * number of another company the same user is a member of. Same reach as a
+ * wrong company_id's candidates (listAccessibleCompanies: key allowlist or
+ * pin, no archived or seat-paused company) and the same number key as the
+ * check itself (orgNumberKey). Best effort: a failed lookup names nothing.
+ */
+async function findCompaniesWithSieOrgNumber(
+  supabase: SupabaseClient,
+  userId: string,
+  actor: ActorContext | undefined,
+  fileOrgNumber: string | null,
+  currentCompanyId: string,
+): Promise<Array<{ company_id: string; name: string }>> {
+  const { orgNumberKey } = await import('@/lib/invariants/org-number')
+  const wanted = orgNumberKey(fileOrgNumber)
+  if (!wanted) return []
+  try {
+    const reachable = (await listAccessibleCompanies(supabase, userId, effectiveCompanyRestriction(actor)))
+      .filter((company) => company.company_id !== currentCompanyId)
+    if (reachable.length === 0) return []
+    const ids = reachable.map((company) => company.company_id)
+    const [companies, settings] = await Promise.all([
+      supabase.from('companies').select('id, org_number').in('id', ids),
+      supabase.from('company_settings').select('company_id, org_number').in('company_id', ids),
+    ])
+    const numbers = new Map<string, string>()
+    for (const row of (Array.isArray(settings.data) ? settings.data : []) as Array<{ company_id: string; org_number: string | null }>) {
+      if (row.org_number?.trim()) numbers.set(row.company_id, row.org_number)
+    }
+    // companies.org_number outranks settings, as in readCompanyOrgNumber.
+    for (const row of (Array.isArray(companies.data) ? companies.data : []) as Array<{ id: string; org_number: string | null }>) {
+      if (row.org_number?.trim()) numbers.set(row.id, row.org_number)
+    }
+    return reachable.filter((company) => orgNumberKey(numbers.get(company.company_id)) === wanted).slice(0, 3)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * One-session banks this user already reads through Enable Banking in OTHER
+ * companies, with those companies (crm#1201). At such a bank (SEB, see
+ * ONE_SESSION_BANKS) a person's login holds one active Enable Banking
+ * consent, so connecting it for a second company stops the first company's
+ * feed; the web page warns before BankID, and gnubok_connect_bank has to say
+ * it before it hands out the link. Only companies this connection reaches are
+ * named (listAccessibleCompanies). Best effort: a failed read names nothing.
+ */
+async function oneSessionBankElsewhere(
+  supabase: SupabaseClient,
+  userId: string,
+  actor: ActorContext | undefined,
+  companyId: string,
+): Promise<Array<{ bank: string; companies: Array<{ company_id: string; name: string }> }>> {
+  try {
+    const { data, error } = await supabase
+      .from('bank_connections')
+      .select('company_id, bank_name')
+      .eq('user_id', userId)
+      .eq('aggregator', ENABLE_BANKING_AGGREGATOR)
+      .eq('status', 'active')
+      .neq('company_id', companyId)
+    if (error || !Array.isArray(data)) return []
+    const rows = (data as Array<{ company_id: string; bank_name: string | null }>).filter(
+      (row) => row.bank_name && isOneSessionBank(row.bank_name),
+    )
+    if (rows.length === 0) return []
+    const names = new Map(
+      (await listAccessibleCompanies(supabase, userId, effectiveCompanyRestriction(actor))).map(
+        (company) => [company.company_id, company.name] as const,
+      ),
+    )
+    const byBank = new Map<string, Map<string, string>>()
+    for (const row of rows) {
+      const name = names.get(row.company_id)
+      if (!name) continue
+      const bank = row.bank_name!.trim()
+      const companies = byBank.get(bank) ?? new Map<string, string>()
+      companies.set(row.company_id, name)
+      byBank.set(bank, companies)
+    }
+    return [...byBank].map(([bank, companies]) => ({
+      bank,
+      companies: [...companies].map(([id, name]) => ({ company_id: id, name })),
+    }))
+  } catch {
+    return []
+  }
+}
+
 /**
  * Absolute origin for links the user opens in a browser. A deployment
  * without NEXT_PUBLIC_APP_URL falls back to localhost in getCanonicalBaseUrl,
@@ -2830,6 +3018,40 @@ function connectLinkBaseUrl(): string {
     )
   }
   return getCanonicalBaseUrl()
+}
+
+/**
+ * How the connection that just created a company reaches it:
+ *   - 'default': the user had no other company, so the key binds to the new
+ *     one on its next call (bindUnboundKey) and company_id can be omitted;
+ *   - 'explicit': the user has another company, which stays the default, so
+ *     every call for the new one must name it;
+ *   - 'unreachable': the connection is pinned or limited to a list of
+ *     companies that does not include the new one.
+ * A failed membership read answers 'explicit': naming the company is right
+ * in every case, omitting it is right in one.
+ */
+async function newCompanyReach(
+  supabase: SupabaseClient,
+  userId: string,
+  actor: ActorContext | undefined,
+  newCompanyId: string,
+): Promise<'default' | 'explicit' | 'unreachable'> {
+  const restriction = effectiveCompanyRestriction(actor)
+  if (restriction && !restriction.some((id) => id.toLowerCase() === newCompanyId.toLowerCase())) return 'unreachable'
+  try {
+    const { data, error } = await supabase
+      .from('company_members')
+      .select('company_id, companies!inner(archived_at)')
+      .eq('user_id', userId)
+      .neq('company_id', newCompanyId)
+      .is('companies.archived_at', null)
+      .limit(1)
+    if (error || !Array.isArray(data)) return 'explicit'
+    return data.length === 0 ? 'default' : 'explicit'
+  } catch {
+    return 'explicit'
+  }
 }
 
 /**
@@ -4942,7 +5164,7 @@ export const tools: McpTool[] = [
       },
     },
     annotations: ANNOTATIONS_STAGED_WRITE,
-    async execute(args, _companyId, userId, supabase) {
+    async execute(args, _companyId, userId, supabase, actor) {
       const { confirm, ...setup } = args
       const parsed = CompanySetupSchema.safeParse(setup)
       if (!parsed.success) {
@@ -5013,6 +5235,22 @@ export const tools: McpTool[] = [
         : 0
       const historyFirst = daysOfHistory > 90
 
+      // Which company this connection's calls land on from now (crm#1201).
+      // A key binds to a company on its first call after one exists
+      // (bindUnboundKey), so the new company becomes the default only for a
+      // user who had none. Anyone with another company keeps that default:
+      // an agent told "this connection uses it automatically" sent the next
+      // SIE card to the old company. A restricted or pinned connection does
+      // not reach the new company at all.
+      const reach = await newCompanyReach(supabase, userId, actor, result.companyId)
+      const companyArg = reach === 'explicit' ? ` with company_id=${result.companyId}` : ''
+      const connectionLine =
+        reach === 'default'
+          ? 'This connection uses it automatically from the next call.'
+          : reach === 'explicit'
+            ? `This connection's default company is unchanged: pass company_id=${result.companyId} on every call for the new company (every company tool accepts it, also when your tool list does not show the parameter).`
+            : `This connection is limited to selected companies and does not reach it: the user adds it to the connection under Settings > API & MCP, then pass company_id=${result.companyId}.`
+
       return {
         created: true,
         company_id: result.companyId,
@@ -5020,16 +5258,16 @@ export const tools: McpTool[] = [
         trial: 'A 30-day trial with every paid capability (bank sync, Skatteverket, AI, e-mail) is active from now.',
         ...(historyFirst
           ? {
-              history_note: `The fiscal period started ${daysOfHistory} days ago but bank PSD2 history reaches ~90 days: ask which system the bookkeeping lived in and run the SIE import BEFORE connecting the bank (call gnubok_create_sie_upload to render the drag-and-drop import card).`,
+              history_note: `The fiscal period started ${daysOfHistory} days ago but bank PSD2 history reaches ~90 days: ask which system the bookkeeping lived in and run the SIE import BEFORE connecting the bank (call gnubok_create_sie_upload${companyArg} to render the drag-and-drop import card).`,
             }
           : {}),
         message: historyFirst
-          ? 'Company created; this connection uses it automatically from the next call. Remaining setup IN ORDER: (1) import existing bookkeeping via SIE (see history_note), (2) bank connection (pass bank=<name>), (3) Skatteverket.'
-          : 'Company created and ready for bookkeeping. This connection uses it automatically from the next call. Remaining setup: bank connection (pass bank=<name> for a direct consent link), Skatteverket connection, and the first transactions.',
+          ? `Company created. ${connectionLine} Remaining setup IN ORDER: (1) import existing bookkeeping via SIE (see history_note), (2) bank connection (pass bank=<name>), (3) Skatteverket.`
+          : `Company created and ready for bookkeeping. ${connectionLine} Remaining setup: bank connection (pass bank=<name> for a direct consent link), Skatteverket connection, and the first transactions.`,
         next: {
           description: 'Load the onboarding skill for the remaining setup steps (history import, bank, Skatteverket, first transactions).',
           tool: 'gnubok_load_skill',
-          args: { slug: 'onboarding' },
+          args: reach === 'explicit' ? { slug: 'onboarding', company_id: result.companyId } : { slug: 'onboarding' },
         },
       }
     },
@@ -5085,7 +5323,7 @@ export const tools: McpTool[] = [
     },
     _meta: { ui: { resourceUri: 'ui://connect-card/app.html' } },
     annotations: ANNOTATIONS_READ_ONLY,
-    async execute(args, companyId, _userId, supabase) {
+    async execute(args, companyId, userId, supabase, actor) {
       const { data, error } = await supabase
         .from('bank_connections')
         .select('id, bank_name, aggregator, status, created_at, last_synced_at, consent_expires, error_message')
@@ -5144,6 +5382,26 @@ export const tools: McpTool[] = [
             ? ' This company still reads through Enable Banking on the connections that carry switch_url: the switch is one click from that link (the person signs the new consent with BankID and the old connection is retired at account selection); gnubok_bank_feed_switch_progress has the deadline.'
             : '')
         : ''
+      // A one-session bank the user already reads for another company
+      // (crm#1201): say what connecting it here does to that feed, and the
+      // ways that keep it, before the agent hands out the link. Not once the
+      // Enable Banking feed is over: those feeds have stopped anyway.
+      const activeBanks = new Set(active.map((c) => (c.bank_name ?? '').trim().toUpperCase()))
+      const elsewhere = enableBankingSunset()
+        ? []
+        : (await oneSessionBankElsewhere(supabase, userId, actor, companyId)).filter(
+            (entry) =>
+              !activeBanks.has(entry.bank.toUpperCase()) &&
+              (!requestedBank || entry.bank.toUpperCase() === requestedBank.toUpperCase()),
+          )
+      const oneSessionNote = elsewhere
+        .map(({ bank, companies }) => {
+          const who = companies.map((c) => `${c.name} (${c.company_id})`).join(', ')
+          return door.ok
+            ? ` ${bank} is read through Enable Banking for ${who} with this user's BankID login, and ${bank} keeps one active Enable Banking consent per login. This company connects through Open Payments with its own consent; whether ${bank} then ends that Enable Banking consent is not known yet, so afterwards check ${who} with gnubok_connect_bank (company_id) and offer the switch (switch_url) if its feed stopped.`
+            : ` ONE CONSENT PER LOGIN: ${bank} is already read through Enable Banking for ${who} with this user's BankID login, and ${bank} keeps one active Enable Banking consent per login, so completing a new ${bank} consent here stops that feed (the page warns before BankID). Tell the user before sending the link. Ways that keep it: (1) if that consent also sees this company's accounts, the page at connect_url offers Återanvänd above the bank list (no new BankID; the accounts are picked per company); (2) another person with their own BankID access to this company's ${bank} accounts connects it, logged in to Accounted as a member of this company; (3) the bank statements are imported as files meanwhile.`
+        })
+        .join('')
       return {
         connected: active.length > 0,
         connections: connections.map((c) => ({
@@ -5167,6 +5425,7 @@ export const tools: McpTool[] = [
                 : 'BETTER LINK AVAILABLE: if you know (or can ask) which bank the company uses, call this tool again with bank=<name>; the link then opens that bank directly instead of a picker. ') +
               'On claude.ai/Claude Desktop a connect card with an open-in-browser button is rendered with this result; on other clients give the user the connect_url as a link. They must be logged in to Accounted there. They approve with BankID (consent up to 180 days), then CONFIRM WHICH ACCOUNTS to sync in the dialog that opens; the first transactions arrive within a minute of that save. Banks cap PSD2 history (often ~90 days): older history comes via SIE import, not the bank. When the user is back, call this tool again to verify status=active, then continue straight to gnubok_list_uncategorized_transactions without asking.') +
           openPaymentsNote +
+          oneSessionNote +
           sunsetNote,
       }
     },
@@ -6655,7 +6914,8 @@ export const tools: McpTool[] = [
         .from('transactions')
         .select(
           'id, date, description, amount, currency, merchant_name, reference, is_business, category, cash_account_id, ' +
-          'counterparty_org_number, instructed_amount, instructed_currency, balance_after, is_enriched, potential_match_method',
+          'counterparty_org_number, instructed_amount, instructed_currency, balance_after, is_enriched, potential_match_method, ' +
+          'counterparty_account, original_description',
           { count: 'exact' },
         )
         .eq('company_id', companyId)
@@ -6709,14 +6969,28 @@ export const tools: McpTool[] = [
         }
       }
 
+      // crm#1204: whose giro number a row that names nobody shows, read by the
+      // shared reading (lib/transactions/giro-counterparty): Bankgirot through
+      // the company's own giro (one row for many payers or payees, matched by
+      // amount or the split, never a counterparty called "123-4567"), or the
+      // one supplier card that carries it. The register is read only when a
+      // row on the page can carry a reading; undeclared like the rest.
+      const giroRegister = (pageRows as unknown as GiroRow[]).some(mayReadGiro)
+        ? await loadGiroRegister(supabase, companyId)
+        : null
+
       const rows = pageRows.map((t) => {
         const parts = partsByTransaction.get(t.id) ?? []
         const allocations =
           (t as { potential_match_method?: string | null }).potential_match_method === BANKGIRO_SPLIT_METHOD
             ? batchAllocationsFromParts(parts)
             : null
+        const giro = giroRegister ? readGiroCounterparty(t as unknown as GiroRow, giroRegister) : null
+        // The bank text is read for the giro, not returned: description carries the row's text.
+        const { original_description: _bankText, ...row } = t as typeof t & { original_description?: string | null }
         return {
-          ...t,
+          ...row,
+          ...(giro ? { giro_counterparty: giroCounterpartyForWire(giro) } : {}),
           transaction_id: t.id,
           cash_account_id: t.cash_account_id ?? null,
           cash_account_ledger: t.cash_account_id ? ledgerByCashAccount.get(t.cash_account_id) ?? null : null,
@@ -7344,30 +7618,41 @@ export const tools: McpTool[] = [
     name: 'gnubok_create_customer',
     keywords: ['kund', 'ny kund'],
     title: 'Create Customer',
-    description: 'Stage a new customer. Stages for user approval: NOT created until approved in the web app. EU VAT numbers trigger VIES validation.',
+    description: 'Stage a new customer, created on approval. EU VAT numbers are validated with VIES.',
     outputSchema: STAGED_OPERATION_SCHEMA,
+    // The fields of CreateCustomerSchema (the register's one rule set, which
+    // execute parses), written out by hand to keep tools/list small. The
+    // dispatcher refuses any key not listed here, so a field missing from
+    // this list cannot be set over MCP at all (crm#1198: contact_person).
+    // customer-doors.parity.test.ts fails on a schema field that is neither
+    // here nor named there with the reason it is left out.
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        name: { type: 'string', description: 'Customer name' },
+        name: { type: 'string' },
         customer_type: {
           type: 'string',
           enum: ['individual', 'swedish_business', 'eu_business', 'non_eu_business'],
-          description: 'Customer type',
         },
         customer_number: { type: 'string', maxLength: 32 },
-        email: { type: 'string', description: 'Email address' },
+        contact_person: { type: 'string' },
+        email: { type: 'string' },
+        invoice_email_cc_addresses: { type: 'array', items: { type: 'string', format: 'email' } },
         // Kept no longer than the sentence it replaced: the tool catalog is
         // within ~5 tokens of its payload-size ceiling (payload-size.bench).
         org_number: { type: 'string', description: 'Swedish org number (business types). An enskild firma\'s is its personnummer.' },
         personal_number: { type: 'string', description: 'Personnummer for customer_type=individual. Encrypted at staging, masked on read.' },
-        vat_number: { type: 'string', description: 'EU VAT number' },
+        vat_number: { type: 'string' },
         payment_terms: { type: 'number', description: 'Days. Default: the company setting, else 30.' },
-        address: { type: 'string', description: 'Street address' },
+        phone: { type: 'string' },
+        address: { type: 'string' },
+        address_line2: { type: 'string' },
         postal_code: { type: 'string' },
         city: { type: 'string' },
         country: { type: 'string', description: 'ISO 3166-1 alpha-2 (default SE; a name is normalised). Must agree with customer_type and the VAT prefix.' },
+        language: { type: 'string', enum: ['sv', 'en'] },
+        notes: { type: 'string' },
         dry_run: STAGING_ARGS_PROPERTIES.dry_run,
         idempotency_key: STAGING_ARGS_PROPERTIES.idempotency_key,
       },
@@ -7431,8 +7716,12 @@ export const tools: McpTool[] = [
     name: 'gnubok_update_customer',
     keywords: ['kund', 'ändra kund'],
     title: 'Update Customer',
-    description: 'Stage a partial update to an existing customer. Find customer_id with gnubok_list_customers. Requires approval before customer data is changed.',
+    description: 'Stage a partial update to a customer, applied on approval. EU VAT numbers are revalidated with VIES.',
     outputSchema: STAGED_OPERATION_SCHEMA,
+    // The fields of UpdateCustomerSchema, written out by hand as on
+    // gnubok_create_customer and pinned by the same parity test. A clear of
+    // contact_person or the cc list is '' or [], as the web form sends: NULL
+    // means never configured, which a later migration sync may fill in again.
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -7442,10 +7731,12 @@ export const tools: McpTool[] = [
         customer_type: {
           type: 'string',
           enum: ['individual', 'swedish_business', 'eu_business', 'non_eu_business'],
-          description: 'Changing an individual customer to a business type clears its stored personal number.',
+          description: 'Individual to a business type clears the personnummer.',
         },
-        customer_number: { type: ['string', 'null'], maxLength: 32, description: 'Null or empty string clears the customer number.' },
-        email: { type: ['string', 'null'], format: 'email', description: 'Null clears the email.' },
+        customer_number: { type: ['string', 'null'], maxLength: 32, description: 'Null or empty clears.' },
+        contact_person: { type: 'string' },
+        email: { type: ['string', 'null'], format: 'email', description: 'Null clears.' },
+        invoice_email_cc_addresses: { type: 'array', items: { type: 'string', format: 'email' } },
         phone: { type: 'string' },
         address_line1: { type: 'string' },
         address_line2: { type: 'string' },
@@ -7455,9 +7746,9 @@ export const tools: McpTool[] = [
         org_number: { type: 'string' },
         personal_number: {
           type: ['string', 'null'],
-          description: 'Personnummer, individual customers only. Encrypted at staging, masked on read. Null clears; a masked value (********-1234) means unchanged.',
+          description: 'Individual customers only. Encrypted at staging, masked on read. Null clears; a mask (********-1234) means unchanged.',
         },
-        vat_number: { type: 'string', description: 'EU VAT numbers are revalidated with VIES when the update is approved.' },
+        vat_number: { type: 'string' },
         language: { type: 'string', enum: ['sv', 'en'] },
         default_payment_terms: { type: 'integer', minimum: 0, maximum: 365 },
         notes: { type: 'string' },
@@ -13665,7 +13956,7 @@ export const tools: McpTool[] = [
         allow_duplicate: {
           type: 'boolean',
           description:
-            'Book although the ledger already holds this event on 1630: one verifikat carries it, or unlinked (summarised) verifikat cover it (the refusal names them). Only when the user confirms it is really missing from the ledger; otherwise link the row with gnubok_reconcile_match.',
+            'Book although the ledger already holds this event: one verifikat carries it on 1630, unlinked (summarised) verifikat cover it, or a bank verifikat books it without 1630 (the refusal names them). Only when the user confirms it is really missing from the ledger; otherwise link (or ignore) the row as the refusal says.',
         },
         duplicate_reason: {
           type: 'string',
@@ -13738,6 +14029,26 @@ export const tools: McpTool[] = [
             : 'Ingen motkontoregel matchade raden. Bokför den manuellt med gnubok_create_voucher.',
         )
       }
+      // Nothing on the account holds the event, yet a bank verifikat may book
+      // it without the skattekonto (PH 171). Same check as the commit path,
+      // on the counter line the preview below shows.
+      const counter =
+        twins.length === 0 && !cover
+          ? counterLineOf(skattekontoBuiltEntry(tx, enriched.booking_suggestion, skattekontoAccount), skattekontoAccount)
+          : null
+      const direct = counter
+        ? ((
+            await findDirectLedgerHolders(
+              supabase,
+              companyId,
+              [{ id: tx.id, transaktionsdatum: tx.transaktionsdatum, counter }],
+              skattekontoAccount,
+            )
+          ).get(tx.id) ?? [])
+        : []
+      if (counter && direct.length > 0 && !allowDuplicate) {
+        throw skattekontoLedgerDirectRefusal(tx.id, direct, counter, skattekontoAccount)
+      }
 
       return stage({
         supabase,
@@ -13750,7 +14061,9 @@ export const tools: McpTool[] = [
         // the guard on.
         params: {
           transaction_id: tx.id,
-          ...(allowDuplicate && (twins.length > 0 || cover) ? { allow_duplicate: true, duplicate_reason: duplicateReason } : {}),
+          ...(allowDuplicate && (twins.length > 0 || cover || direct.length > 0)
+            ? { allow_duplicate: true, duplicate_reason: duplicateReason }
+            : {}),
         },
         preview: {
           skattekonto_transaction_id: tx.id,
@@ -13771,6 +14084,7 @@ export const tools: McpTool[] = [
             : {}),
           ...(twins.length > 0 ? { ledger_twins: twins } : {}),
           ...(cover ? { ledger_cover: cover } : {}),
+          ...(direct.length > 0 ? { ledger_direct: direct } : {}),
           // The verifikat itself, lines as the executor builds them.
           journal_entry: skattekontoEntryPreview(tx, enriched.booking_suggestion, skattekontoAccount),
         },
@@ -13787,7 +14101,9 @@ export const tools: McpTool[] = [
           ? { complianceNote: skattekontoDuplicateNote(twins, skattekontoAccount) }
           : cover
             ? { complianceNote: skattekontoCoverNote(cover) }
-            : {}),
+            : direct.length > 0
+              ? { complianceNote: skattekontoDirectNote(direct, skattekontoAccount) }
+              : {}),
       })
     },
   },
@@ -13815,7 +14131,7 @@ export const tools: McpTool[] = [
           items: { type: 'string' },
           maxItems: 200,
           description:
-            'Rows to book although the ledger already holds the event on 1630 (skipped as LEDGER_TWIN_EXISTS or LEDGER_COVER_EXISTS otherwise). Only rows the user confirms are really missing from the ledger; link the others with gnubok_reconcile_match.',
+            'Rows to book although the ledger already holds the event (skipped as LEDGER_TWIN_EXISTS, LEDGER_COVER_EXISTS or LEDGER_DIRECT_EXISTS otherwise). Only rows the user confirms are really missing from the ledger; link the others with gnubok_reconcile_match, ignore the LEDGER_DIRECT_EXISTS ones.',
         },
         duplicate_reason: {
           type: 'string',
@@ -13858,6 +14174,7 @@ export const tools: McpTool[] = [
         reason: string
         ledger_twins?: SkattekontoLedgerTwin[]
         ledger_cover?: SkattekontoLedgerCoverInfo
+        ledger_direct?: SkattekontoLedgerTwin[]
       }> = []
       // The override needs the user's reason: each verifikat carries it.
       const duplicateReason = allowDuplicate.size > 0 ? normaliseDuplicateReason(args.duplicate_reason) : null
@@ -13893,12 +14210,33 @@ export const tools: McpTool[] = [
         found.filter((r) => !r.journal_entry_id && !r.is_ignored),
         skattekontoAccount,
       )
+      // The direct-booking check (PH 171) for the open, settled rows neither
+      // a twin nor the holding answers, in one search, on the counter line
+      // each row's preview shows. Same check as the commit path.
+      const counterById = new Map<string, SkattekontoCounterLine>()
+      for (const r of enriched) {
+        if (r.journal_entry_id || r.is_ignored || r.status !== 'booked' || !r.booking_suggestion) continue
+        if ((twinsByRow.get(r.id)?.length ?? 0) > 0 || holdOf(r.id)) continue
+        const counter = counterLineOf(skattekontoBuiltEntry(r, r.booking_suggestion, skattekontoAccount), skattekontoAccount)
+        if (counter) counterById.set(r.id, counter)
+      }
+      const directByRow = await findDirectLedgerHolders(
+        supabase,
+        companyId,
+        enriched.flatMap((r) => {
+          const counter = counterById.get(r.id)
+          return counter ? [{ id: r.id, transaktionsdatum: r.transaktionsdatum, counter }] : []
+        }),
+        skattekontoAccount,
+      )
       const bookable: typeof enriched = []
       const approvedTwins: SkattekontoLedgerTwin[] = []
+      const approvedDirect: SkattekontoLedgerTwin[] = []
       for (const r of enriched) {
         const twins = twinsByRow.get(r.id) ?? []
         const hold = twins.length === 0 && r.status === 'booked' ? holdOf(r.id) : null
         const covered = hold !== null
+        const direct = directByRow.get(r.id) ?? []
         if (hold) holdById.set(r.id, hold)
         if (hold && hold.kind !== 'planned_link') cover ??= hold
         const reason = r.journal_entry_id
@@ -13913,7 +14251,9 @@ export const tools: McpTool[] = [
                   ? 'LEDGER_COVER_EXISTS'
                   : !r.booking_suggestion
                     ? 'NO_COUNTER_ACCOUNT'
-                    : null
+                    : direct.length > 0 && !allowDuplicate.has(r.id)
+                      ? 'LEDGER_DIRECT_EXISTS'
+                      : null
         if (reason) {
           skipped.push({
             skattekonto_transaction_id: r.id,
@@ -13921,10 +14261,12 @@ export const tools: McpTool[] = [
             ...(reason === 'LEDGER_TWIN_EXISTS' ? { ledger_twins: twins } : {}),
             // A planned row's verifikat is its own: name it on the row.
             ...(reason === 'LEDGER_COVER_EXISTS' && hold?.kind === 'planned_link' ? { ledger_cover: hold } : {}),
+            ...(reason === 'LEDGER_DIRECT_EXISTS' ? { ledger_direct: direct } : {}),
           })
           continue
         }
         approvedTwins.push(...twins)
+        approvedDirect.push(...direct)
         if (hold) {
           approvedHold ??= hold
           if (hold.kind !== 'planned_link') approvedCover = true
@@ -13933,6 +14275,20 @@ export const tools: McpTool[] = [
       }
       const coverSkips = skipped.filter((s) => s.reason === 'LEDGER_COVER_EXISTS')
       if (bookable.length === 0) {
+        const directSkips = skipped.filter((s) => s.reason === 'LEDGER_DIRECT_EXISTS')
+        const firstDirect = directSkips[0]
+        const firstCounter = firstDirect ? counterById.get(firstDirect.skattekonto_transaction_id) : undefined
+        if (firstDirect && firstCounter && directSkips.length === skipped.length) {
+          // Every row is booked without the skattekonto already: name the
+          // first one's verifikat, so the agent ignores instead of retrying.
+          throw skattekontoLedgerDirectRefusal(
+            firstDirect.skattekonto_transaction_id,
+            firstDirect.ledger_direct ?? [],
+            firstCounter,
+            skattekontoAccount,
+            directSkips.length,
+          )
+        }
         const twinSkips = skipped.filter((s) => s.reason === 'LEDGER_TWIN_EXISTS')
         if (twinSkips.length === skipped.length) {
           // Every row is already in the ledger: say where, so the agent links
@@ -13962,7 +14318,9 @@ export const tools: McpTool[] = [
 
       const bookableIds = bookable.map((r) => r.id)
       const approvedDuplicateIds = bookableIds.filter(
-        (id) => allowDuplicate.has(id) && ((twinsByRow.get(id)?.length ?? 0) > 0 || holdOf(id) !== null),
+        (id) =>
+          allowDuplicate.has(id) &&
+          ((twinsByRow.get(id)?.length ?? 0) > 0 || holdOf(id) !== null || (directByRow.get(id)?.length ?? 0) > 0),
       )
       // Oldest row first: lock conflicts live in the past, so the period
       // check should probe the earliest affärshändelse date in the batch.
@@ -13999,6 +14357,7 @@ export const tools: McpTool[] = [
                 : {}),
               ...(twins.length > 0 ? { ledger_twins: twins } : {}),
               ...(holdById.get(r.id)?.kind === 'planned_link' ? { ledger_cover: holdById.get(r.id) } : {}),
+              ...((directByRow.get(r.id)?.length ?? 0) > 0 ? { ledger_direct: directByRow.get(r.id) } : {}),
             }
           }),
           ...(bookable.length > 50 ? { rows_truncated: true } : {}),
@@ -14027,7 +14386,9 @@ export const tools: McpTool[] = [
           ? { complianceNote: skattekontoDuplicateNote(approvedTwins, skattekontoAccount) }
           : approvedHold
             ? { complianceNote: skattekontoCoverNote(approvedCover && cover ? cover : approvedHold) }
-            : {}),
+            : approvedDirect.length > 0
+              ? { complianceNote: skattekontoDirectNote(approvedDirect, skattekontoAccount) }
+              : {}),
       })
     },
   },
@@ -15637,13 +15998,17 @@ export const tools: McpTool[] = [
     name: 'gnubok_link_document_to_voucher',
     keywords: ['koppla underlag', 'verifikat', 'kvitto'],
     title: 'Link Document to Voucher',
-    description: 'Stage linking a document to an already-POSTED verifikation (no bank-tx row). For an unbooked handling prefer gnubok_create_voucher with inbox_item_id (BFL 5 kap 6§). Targets: gnubok_list_verifikat_without_documents via gnubok_call_tool.',
+    // The bulk tool is search-only, so this description is where an agent
+    // linking 130 receipts one at a time learns it exists (crm#1207). Paid
+    // for by the two property descriptions below: tools/list sits at its
+    // ceiling (payload-size.bench.test.ts).
+    description: 'Stage linking a document to a POSTED verifikation (no bank-tx row); unbooked: gnubok_create_voucher with inbox_item_id (BFL 5 kap 6§). Targets: gnubok_list_verifikat_without_documents via gnubok_call_tool. Many links, or a shared underlag: gnubok_link_documents_to_vouchers.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        document_id: { type: 'string', description: 'UUID of the document_attachments row' },
-        journal_entry_id: { type: 'string', description: 'UUID of the target journal entry (verifikation)' },
+        document_id: { type: 'string', description: 'Document UUID' },
+        journal_entry_id: { type: 'string', description: 'Verifikat UUID' },
         journal_entry_line_id: { type: 'string', description: 'Optional UUID to pin the doc to a specific debit/credit line' },
         ...STAGING_ARGS_PROPERTIES,
       },
@@ -15676,7 +16041,7 @@ export const tools: McpTool[] = [
             'DOC_LINK_ALREADY_LINKED',
             check.details.line_change
               ? `The document is already linked to a line of this verifikat (journal_entry_line_id cannot change once set, BFL 5 kap 6 §).`
-              : documentHeldElsewhereReasonEn(check.details.holder),
+              : `${documentHeldElsewhereReasonEn(check.details.holder)} ${sharedUnderlagCopyHint(documentId, journalEntryId)}`,
           )
         }
         if (check.code === 'PERIOD_LOCKED') {
@@ -15702,7 +16067,9 @@ export const tools: McpTool[] = [
 
       const currentlyLinkedToSameJe = doc.journal_entry_id === journalEntryId
       const currentlyLinkedToOther = !!doc.journal_entry_id && !currentlyLinkedToSameJe
-      const claims = (await loadDocumentClaims(supabase, companyId, [documentId])).get(documentId) ?? []
+      const { claims: claimsByDocument, waitingVoucherLinks } =
+        await loadDocumentClaimsAndWaitingLinks(supabase, companyId, [documentId])
+      const claims = claimsByDocument.get(documentId) ?? []
       // Another waiting proposal links this document to a different
       // verifikat: whichever is approved second is refused by the same
       // immutability trigger, so the warning used to invite an approval that
@@ -15714,9 +16081,7 @@ export const tools: McpTool[] = [
           `The document is already proposed for another verifikat: ${proposedElsewhere
             .map((c) => `pending operation ${c.operation_id} (journal_entry_id ${c.journal_entry_id})`)
             .join('; ')}. A document can be linked to only one verifikat, so at most one of these links can be approved. ` +
-            'If both verifikat need this underlag (a bank statement covering several fees), upload the file again with ' +
-            'gnubok_upload_document, which stores a separate copy (gnubok_complete_document_upload returns the existing ' +
-            'document for identical bytes), and link that copy here. If the other proposal is the wrong one, reject it ' +
+            `${sharedUnderlagCopyHint(documentId, journalEntryId)} If the other proposal is the wrong one, reject it ` +
             'with gnubok_reject_pending_operation first, then stage this link again.',
         )
       }
@@ -15745,6 +16110,21 @@ export const tools: McpTool[] = [
         ...stagingOptions(args),
         dateForPeriodCheck: je.entry_date,
         ...(sharedNote ? { complianceNote: sharedNote } : {}),
+        // Two waiting already, this is the third: an agent working down a
+        // list, each link its own approval (crm#1207: 131 of them). Said at
+        // the third and then every tenth, not on every call: in prod 65 % of
+        // single links were staged with two or more already waiting.
+        ...(waitingVoucherLinks % 10 === 2
+          ? {
+              next: {
+                description:
+                  `${waitingVoucherLinks + 1} single document links are waiting for approval, each its own approval. ` +
+                  'Stage the rest with gnubok_link_documents_to_vouchers: up to 300 rows ({ document_id, journal_entry_id }) ' +
+                  'as ONE approval. Not in tools/list: call it through gnubok_stage_tool if your client cannot.',
+                tool: 'gnubok_link_documents_to_vouchers',
+              },
+            }
+          : {}),
       })
     },
   },
@@ -15752,7 +16132,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_link_documents_to_vouchers',
     keywords: ['koppla underlag', 'verifikat', 'kvitton'],
     title: 'Bulk-Link Documents to Vouchers',
-    description: 'Bulk receipt migration: stage up to 300 document-to-verifikat links as ONE approval, addressed by voucher_series/voucher_number/fiscal_year (server resolves the UUID). Returns per-row hit/miss, so a wrong fiscal_year shows before approval. Only resolved rows are staged.',
+    description: 'Stage up to 300 document-to-verifikat links as ONE approval, each by journal_entry_id or voucher_series/voucher_number/fiscal_year. copy: true gives a verifikat its own copy of a document another holds (a rättelse on the original\'s invoice). Per-row hit/miss; only hits staged.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -15766,12 +16146,14 @@ export const tools: McpTool[] = [
             additionalProperties: false,
             properties: {
               document_id: { type: 'string', description: 'UUID of the document_attachments row' },
+              journal_entry_id: { type: 'string', description: 'UUID of the verifikat. Instead of voucher_series/voucher_number/fiscal_year.' },
               voucher_series: { type: 'string', minLength: 1, maxLength: 10, description: 'Voucher series letter, e.g. "A"' },
               voucher_number: { type: 'integer', minimum: 1, description: 'Voucher number within the series and fiscal year' },
-              fiscal_year: { type: 'integer', minimum: 2000, maximum: 2100, description: 'Calendar year of the fiscal period (matched against fiscal_periods.period_start), e.g. 2025' },
+              fiscal_year: { type: 'integer', minimum: 2000, maximum: 2100, description: 'Calendar year the fiscal period STARTS in (fiscal_periods.period_start), e.g. 2025 for 2025-09-01..2026-08-31' },
               journal_entry_line_id: { type: 'string', description: 'Optional UUID to pin the doc to a specific debit/credit line' },
+              copy: { type: 'boolean', description: 'When the document is already on, proposed for or linked in this call to another verifikat, approval archives a byte-identical copy for this one instead of refusing. The original never moves.' },
             },
-            required: ['document_id', 'voucher_series', 'voucher_number', 'fiscal_year'],
+            required: ['document_id'],
           },
         },
         ...STAGING_ARGS_PROPERTIES,
@@ -15791,16 +16173,23 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase, actor) {
       const rawLinks = args.links as Array<{
         document_id: string
+        journal_entry_id?: string
         voucher_series: string
         voucher_number: number
         fiscal_year: number
         journal_entry_line_id?: string
+        copy?: boolean
       }>
       if (!Array.isArray(rawLinks) || rawLinks.length === 0) throw badArgument('links', 'links is required (non-empty)')
       if (rawLinks.length > 300) throw new Error('links: max 300 per call')
       for (const [i, l] of rawLinks.entries()) {
         if (!l.document_id) throw badArgument(`links.${i}.document_id`, `links[${i}]: document_id is required`)
-        if (!l.voucher_series) throw badArgument(`links.${i}.voucher_series`, `links[${i}]: voucher_series is required`)
+        // A row names its verifikat by id (what gnubok_list_verifikat_without_documents
+        // and gnubok_link_document_to_voucher use) or by voucher number.
+        if (typeof l.journal_entry_id === 'string' && l.journal_entry_id) continue
+        if (!l.voucher_series) {
+          throw badArgument(`links.${i}.voucher_series`, `links[${i}]: journal_entry_id, or voucher_series/voucher_number/fiscal_year, is required`)
+        }
         if (!Number.isInteger(l.voucher_number) || l.voucher_number < 1) {
           throw badArgument(`links.${i}.voucher_number`, `links[${i}]: voucher_number must be a positive integer`)
         }
@@ -15851,12 +16240,15 @@ export const tools: McpTool[] = [
       // ── Batch-fetch candidate journal entries: every resolved period id ×
       //    every series named in the payload, then match tuples in JS (the
       //    unique key is (company_id, fiscal_period_id, voucher_series,
-      //    voucher_number); see migration 20260402100000).
+      //    voucher_number); see migration 20260402100000). Rows that name
+      //    their verifikat by journal_entry_id skip the tuple and are read
+      //    by id below.
+      const byNumber = rawLinks.filter((l) => !l.journal_entry_id)
       const resolvedPeriodIds = [...new Set(
-        rawLinks.flatMap((l) => (periodsByYear.get(l.fiscal_year) ?? []).map((p) => p.id))
+        byNumber.flatMap((l) => (periodsByYear.get(l.fiscal_year) ?? []).map((p) => p.id))
       )]
-      const seriesList = [...new Set(rawLinks.map((l) => l.voucher_series))]
-      const voucherNumbers = [...new Set(rawLinks.map((l) => l.voucher_number))]
+      const seriesList = [...new Set(byNumber.map((l) => l.voucher_series))]
+      const voucherNumbers = [...new Set(byNumber.map((l) => l.voucher_number))]
       type CandidateJe = {
         id: string; entry_date: string; description: string
         voucher_series: string | null; voucher_number: number | null; status: string; fiscal_period_id: string
@@ -15886,32 +16278,48 @@ export const tools: McpTool[] = [
           je,
         ]))
       }
+      // By id: at most 300 per call, under the 1000-row cap.
+      const entryIds = [...new Set(rawLinks.flatMap((l) => (l.journal_entry_id ? [l.journal_entry_id] : [])))]
+      let jesById = new Map<string, CandidateJe>()
+      if (entryIds.length > 0) {
+        const { data: byId, error: byIdError } = await supabase
+          .from('journal_entries')
+          .select('id, entry_date, description, voucher_series, voucher_number, status, fiscal_period_id')
+          .eq('company_id', companyId)
+          .in('id', entryIds)
+        if (byIdError) throw dbError(byIdError)
+        jesById = new Map(((byId ?? []) as CandidateJe[]).map((je) => [je.id, je]))
+      }
+      const periodsById = new Map((periods ?? []).map((p) => [p.id as string, p as LinkPeriod]))
 
       // ── Resolve each row to a hit or a miss. Only hits are carried into the
       //    staged params; misses are returned in the preview so the caller
       //    sees them without having to approve anything first.
       type RowResult = {
         document_id: string
-        voucher_series: string
-        voucher_number: number
-        fiscal_year: number
-        status: 'matched' | 'ambiguous_fiscal_year' | 'unknown_fiscal_year' | 'document_not_found'
+        journal_entry_id?: string
+        voucher_series?: string
+        voucher_number?: number
+        fiscal_year?: number
+        status: 'matched' | 'matched_copy' | 'ambiguous_fiscal_year' | 'unknown_fiscal_year' | 'document_not_found'
           | 'voucher_not_found' | 'already_linked' | 'duplicate_in_batch' | 'period_locked' | 'proposed_elsewhere'
         document_file_name?: string
         /** For proposed_elsewhere: the waiting operation that links the document to another verifikat. */
         conflicting_operation_id?: string
-        journal_entry_id?: string
         voucher_label?: string
         voucher_date?: string
       }
       // Identifying fields only: spreading the raw row would leak
       // journal_entry_line_id into a response shape that does not declare it.
-      const rowKey = (l: typeof rawLinks[number]) => ({
-        document_id: l.document_id,
-        voucher_series: l.voucher_series,
-        voucher_number: l.voucher_number,
-        fiscal_year: l.fiscal_year,
-      })
+      const rowKey = (l: typeof rawLinks[number]) =>
+        l.journal_entry_id
+          ? { document_id: l.document_id, journal_entry_id: l.journal_entry_id }
+          : {
+              document_id: l.document_id,
+              voucher_series: l.voucher_series,
+              voucher_number: l.voucher_number,
+              fiscal_year: l.fiscal_year,
+            }
 
       // ── A document already attached to ANOTHER verifikat previews as
       //    already_linked, whatever that verifikat's status: the executor's
@@ -15922,79 +16330,120 @@ export const tools: McpTool[] = [
 
       const results: RowResult[] = []
       const matchedLinks: Array<{
-        document_id: string; journal_entry_id: string; journal_entry_line_id: string | null
+        document_id: string; journal_entry_id: string; journal_entry_line_id: string | null; copy?: true
       }> = []
       // Same document twice in one payload: the executor applies rows in order,
       // so the second row would be refused once the first has linked the
       // document. Reject the repeat here instead of staging a batch whose
-      // outcome depends on order.
+      // outcome depends on order. A copy row is the exception (crm#1207): it
+      // never links the document itself.
       const seenDocumentIds = new Set<string>()
       const lockedByPeriod = new Map<string, { period: LinkPeriod; fiscalYear: number; rows: number }>()
+      // The verifikat each document is already staged for in this call.
+      const stagedTargets = new Map<string, Set<string>>()
+      // Documents a row without copy links itself, and documents a copy row
+      // took because nothing else held them: with these the later copy rows
+      // of the same document copy instead of competing for it.
+      const linkedByPlainRow = new Set(rawLinks.filter((l) => l.copy !== true).map((l) => l.document_id))
+      const takenByCopyRow = new Set<string>()
 
       for (const l of rawLinks) {
-        if (seenDocumentIds.has(l.document_id)) {
-          results.push({ ...rowKey(l), status: 'duplicate_in_batch' })
-          continue
+        const asCopy = l.copy === true
+        if (!asCopy) {
+          if (seenDocumentIds.has(l.document_id)) {
+            results.push({ ...rowKey(l), status: 'duplicate_in_batch' })
+            continue
+          }
+          seenDocumentIds.add(l.document_id)
         }
-        seenDocumentIds.add(l.document_id)
 
-        const yearPeriods = periodsByYear.get(l.fiscal_year) ?? []
-        if (yearPeriods.length === 0) {
-          results.push({ ...rowKey(l), status: 'unknown_fiscal_year' })
-          continue
+        let je: CandidateJe | undefined
+        let period: LinkPeriod | undefined
+        if (l.journal_entry_id) {
+          const doc = docsById.get(l.document_id)
+          if (!doc) {
+            results.push({ ...rowKey(l), status: 'document_not_found' })
+            continue
+          }
+          je = jesById.get(l.journal_entry_id)
+          period = je ? periodsById.get(je.fiscal_period_id) : undefined
+        } else {
+          const yearPeriods = periodsByYear.get(l.fiscal_year) ?? []
+          if (yearPeriods.length === 0) {
+            results.push({ ...rowKey(l), status: 'unknown_fiscal_year' })
+            continue
+          }
+          if (yearPeriods.length > 1) {
+            results.push({ ...rowKey(l), status: 'ambiguous_fiscal_year' })
+            continue
+          }
+          if (!docsById.get(l.document_id)) {
+            results.push({ ...rowKey(l), status: 'document_not_found' })
+            continue
+          }
+          period = yearPeriods[0]!
+          je = jesByKey.get(`${period.id}::${l.voucher_series}::${l.voucher_number}`)
         }
-        if (yearPeriods.length > 1) {
-          results.push({ ...rowKey(l), status: 'ambiguous_fiscal_year' })
-          continue
-        }
-        const doc = docsById.get(l.document_id)
-        if (!doc) {
-          results.push({ ...rowKey(l), status: 'document_not_found' })
-          continue
-        }
-        const period = yearPeriods[0]!
-        const je = jesByKey.get(`${period.id}::${l.voucher_series}::${l.voucher_number}`)
+        const doc = docsById.get(l.document_id)!
         if (!je) {
           results.push({ ...rowKey(l), status: 'voucher_not_found', document_file_name: doc.file_name })
           continue
         }
-        const existingJeId = doc.journal_entry_id
-        if (existingJeId && existingJeId !== je.id) {
-          results.push({ ...rowKey(l), status: 'already_linked', document_file_name: doc.file_name })
+        if (stagedTargets.get(l.document_id)?.has(je.id)) {
+          results.push({ ...rowKey(l), status: 'duplicate_in_batch', document_file_name: doc.file_name })
           continue
         }
+        const existingJeId = doc.journal_entry_id
         const proposedElsewhere = conflictingVoucherClaims(claimsByDocument.get(l.document_id) ?? [], je.id)[0]
-        if (proposedElsewhere) {
-          results.push({
-            ...rowKey(l),
-            status: 'proposed_elsewhere',
-            document_file_name: doc.file_name,
-            conflicting_operation_id: proposedElsewhere.operation_id!,
-          })
-          continue
+        let copy = false
+        if (!asCopy) {
+          if (existingJeId && existingJeId !== je.id) {
+            results.push({ ...rowKey(l), status: 'already_linked', document_file_name: doc.file_name })
+            continue
+          }
+          if (proposedElsewhere) {
+            results.push({
+              ...rowKey(l),
+              status: 'proposed_elsewhere',
+              document_file_name: doc.file_name,
+              conflicting_operation_id: proposedElsewhere.operation_id!,
+            })
+            continue
+          }
+        } else if (existingJeId !== je.id) {
+          // Already on this verifikat: nothing to copy, a plain (no-op) link.
+          copy = Boolean(existingJeId) || Boolean(proposedElsewhere) ||
+            linkedByPlainRow.has(l.document_id) || takenByCopyRow.has(l.document_id)
+          if (!copy) takenByCopyRow.add(l.document_id)
         }
         const target = {
           document_file_name: doc.file_name,
           journal_entry_id: je.id,
-          voucher_label: `${je.voucher_series ?? l.voucher_series}${je.voucher_number ?? l.voucher_number}`,
+          ...(je.voucher_series ? { voucher_series: je.voucher_series } : {}),
+          ...(je.voucher_number ? { voucher_number: je.voucher_number } : {}),
+          voucher_label: `${je.voucher_series ?? l.voucher_series ?? ''}${je.voucher_number ?? l.voucher_number ?? ''}`,
           voucher_date: je.entry_date,
         }
+        const fiscalYear = l.fiscal_year ?? (period ? new Date(period.period_start).getUTCFullYear() : undefined)
         // enforce_period_lock_documents refuses a link into a closed or locked
         // period, so staging the row only moves its refusal to approval. The
-        // verifikat sits in `period` by construction (jesByKey is keyed on it).
-        if (isPeriodLocked(period)) {
+        // verifikat sits in `period` by construction (jesByKey is keyed on it;
+        // a row by id reads the verifikat's own period).
+        if (period && isPeriodLocked(period)) {
           results.push({ ...rowKey(l), status: 'period_locked', ...target })
-          const locked = lockedByPeriod.get(period.id) ?? { period, fiscalYear: l.fiscal_year, rows: 0 }
+          const locked = lockedByPeriod.get(period.id) ?? { period, fiscalYear: fiscalYear!, rows: 0 }
           locked.rows += 1
           lockedByPeriod.set(period.id, locked)
           continue
         }
-        results.push({ ...rowKey(l), status: 'matched', ...target })
+        results.push({ ...rowKey(l), status: copy ? 'matched_copy' : 'matched', ...target })
         matchedLinks.push({
           document_id: l.document_id,
           journal_entry_id: je.id,
           journal_entry_line_id: l.journal_entry_line_id ?? null,
+          ...(copy ? { copy: true as const } : {}),
         })
+        stagedTargets.set(l.document_id, (stagedTargets.get(l.document_id) ?? new Set()).add(je.id))
       }
 
       const matchedCount = matchedLinks.length
@@ -16017,14 +16466,19 @@ export const tools: McpTool[] = [
       // batch of 38 of 42 is not approved as if it were all of them (agent
       // feedback seq 921931). Range by series then number.
       const matchedVouchers = results
-        .filter((r) => r.status === 'matched' && r.voucher_label)
-        .sort((a, b) => a.voucher_series.localeCompare(b.voucher_series) || a.voucher_number - b.voucher_number)
+        .filter((r) => (r.status === 'matched' || r.status === 'matched_copy') && r.voucher_label)
+        .sort((a, b) =>
+          (a.voucher_series ?? '').localeCompare(b.voucher_series ?? '') || (a.voucher_number ?? 0) - (b.voucher_number ?? 0))
       const firstVoucher = matchedVouchers[0]?.voucher_label
       const lastVoucher = matchedVouchers[matchedVouchers.length - 1]?.voucher_label
       const voucherRange = firstVoucher
         ? ` ${firstVoucher === lastVoucher ? firstVoucher : `${firstVoucher}-${lastVoucher}`}`
         : ''
+      // A copy is a new archived file, not a link of the uploaded one: the
+      // approver sees how many before approving (crm#1207).
+      const copyCount = matchedLinks.filter((m) => m.copy).length
       const titleNotes = [
+        ...(copyCount > 0 ? [`${copyCount} som kopia`] : []),
         ...(lockedCount > 0 ? [`${lockedCount} i låst period`] : []),
         ...(missedCount - lockedCount > 0 ? [`${missedCount - lockedCount} utan träff`] : []),
       ]
@@ -16039,6 +16493,7 @@ export const tools: McpTool[] = [
         preview: {
           total: rawLinks.length,
           matched_count: matchedCount,
+          ...(copyCount > 0 ? { copy_count: copyCount } : {}),
           missed_count: missedCount,
           period_locked_count: lockedCount,
           ...(lockedPeriods.length > 0 ? { locked_periods: lockedPeriods } : {}),
@@ -21266,7 +21721,7 @@ export const tools: McpTool[] = [
     keywords: ['sie', 'sie-fil', 'importera bokföring'],
     title: 'Create SIE Upload',
     description:
-      'The SIE-file intake: on claude.ai/Desktop this renders a DRAG-AND-DROP card that reads exact bytes, preflights and imports: call it first. Elsewhere: PUT raw bytes (max 50 MB) to upload_url, then pass upload_id + sha256 to preflight/import. reports:read suffices.',
+      'SIE-file intake: on claude.ai/Desktop a DRAG-AND-DROP card reads exact bytes, preflights and imports into the company it names: call it first. Elsewhere: PUT raw bytes (max 50 MB) to upload_url, pass upload_id + sha256 to preflight/import. reports:read suffices.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -21310,13 +21765,26 @@ export const tools: McpTool[] = [
         throw codedError('VALIDATION_ERROR', `filename must end in ${SIE_FILE_EXTENSIONS_EN}`)
       }
       const uploadId = crypto.randomUUID()
-      const reservation = await createPendingDocumentUpload(supabase, companyId, userId, uploadId, fileName)
+      const [reservation, targetCompany] = await Promise.all([
+        createPendingDocumentUpload(supabase, companyId, userId, uploadId, fileName),
+        // The id is what binds the card; a failed name read must not cost
+        // the user the upload.
+        readSieTargetCompany(supabase, companyId).catch(
+          (): SieTargetCompany => ({ company_id: companyId, name: null, org_number: null }),
+        ),
+      ])
       // Served from the app origin: agent sandboxes only reach the MCP host,
       // not <project>.supabase.co. See storage-proxy.ts.
       return {
         upload_id: reservation.uploadId,
         upload_url: toSameOriginStorageUrl(reservation.signedUrl),
         expires_at: reservation.expiresAt,
+        // The company this card imports into (crm#1201). The card shows it
+        // and passes its company_id on the preflight and the import, so a
+        // card opened for one company never lands a file in the default one.
+        // Undeclared in outputSchema like connect_bank's sunset: every byte
+        // there is charged to the tools/list ceiling.
+        target_company: targetCompany,
       }
     },
   },
@@ -21344,6 +21812,7 @@ export const tools: McpTool[] = [
       type: 'object',
       properties: {
         verdict: { type: 'string', enum: ['ok', 'ok_with_warnings', 'invalid', 'duplicate'] },
+        target_company: { type: 'object' },
         file: { type: 'object' },
         validation: { type: 'object' },
         org_number_match: { type: ['object', 'null'] },
@@ -21356,7 +21825,7 @@ export const tools: McpTool[] = [
       required: ['verdict', 'file', 'validation', 'org_number_match', 'duplicate', 'mappings', 'mapping_stats', 'instructions'],
     },
     annotations: ANNOTATIONS_READ_ONLY,
-    async execute(args, companyId, userId, supabase) {
+    async execute(args, companyId, userId, supabase, actor) {
       const content = await resolveSieToolContent(args, companyId, userId)
       if (!content) {
         throw codedError(
@@ -21399,14 +21868,27 @@ export const tools: McpTool[] = [
       // the worst silent failure this flow can have. The comparison the
       // submit gate uses, so 10- and 12-digit forms of one number match;
       // missing on either side reports unverified instead of ok.
-      const { compareSIEOrgNumber, readCompanyOrgNumber } = await import('@/lib/import/sie-org-number')
-      const orgCheck = compareSIEOrgNumber(
-        parsed.header.orgNumber,
-        await readCompanyOrgNumber(supabase, companyId),
-      )
+      // The company read once: its org number is what the file is compared
+      // with, and the whole record goes back as target_company so the card
+      // (and the agent) can show where the file will land.
+      const { compareSIEOrgNumber } = await import('@/lib/import/sie-org-number')
+      const targetCompany = await readSieTargetCompany(supabase, companyId)
+      const orgCheck = compareSIEOrgNumber(parsed.header.orgNumber, targetCompany.org_number)
+      // Where the file most likely belongs instead (crm#1201): another
+      // company this connection reaches under the file's #ORGNR. Looked up
+      // only on a mismatch.
+      const fileCompanies = orgCheck.mismatch
+        ? await findCompaniesWithSieOrgNumber(supabase, userId, actor, orgCheck.fileOrgNumber, companyId)
+        : []
       const orgMatch =
         orgCheck.companyOrgNumber && orgCheck.fileOrgNumber
-          ? { verified: true, match: !orgCheck.mismatch, company_org_number: orgCheck.companyOrgNumber, file_org_number: orgCheck.fileOrgNumber }
+          ? {
+              verified: true,
+              match: !orgCheck.mismatch,
+              company_org_number: orgCheck.companyOrgNumber,
+              file_org_number: orgCheck.fileOrgNumber,
+              ...(fileCompanies.length > 0 ? { file_org_number_companies: fileCompanies } : {}),
+            }
           : { verified: false, match: null, company_org_number: orgCheck.companyOrgNumber, file_org_number: orgCheck.fileOrgNumber }
 
       const duplicateFile = await checkDuplicateImport(supabase, companyId, content)
@@ -21478,15 +21960,24 @@ export const tools: McpTool[] = [
           code: 'sie_org_mismatch',
           severity: 'action',
           blocking: true,
-          text: `Filen tillhör organisationsnummer ${orgMatch.file_org_number ?? '?'}, inte det här företaget (${orgMatch.company_org_number ?? '?'}).`,
+          text:
+            `Filen tillhör organisationsnummer ${orgMatch.file_org_number ?? '?'}, inte det här företaget (${orgMatch.company_org_number ?? '?'}).` +
+            (fileCompanies.length > 0
+              ? ` Numret tillhör ${fileCompanies[0].name}: be agenten öppna importkortet för det företaget.`
+              : ''),
         })
       }
       for (const w of encodingWarnings) notices.push({ code: 'sie_encoding_artifacts', severity: 'action', text: w })
       for (const w of continuityTexts) notices.push({ code: 'sie_ib_continuity', severity: 'action', text: w })
       for (const w of validation.warnings) notices.push({ code: 'legacy', severity: 'notice', text: w })
 
+      const fileCompanyHint =
+        fileCompanies.length > 0
+          ? ` The file's #ORGNR is the org number of ${fileCompanies.map((c) => `${c.name} (${c.company_id})`).join(', ')}, which this connection also reaches: if it belongs there, call gnubok_create_sie_upload again with that company_id instead of confirming.`
+          : ''
       return {
         verdict,
+        target_company: targetCompany,
         file: {
           filename: args.filename,
           company_name: parsed.header.companyName,
@@ -21511,8 +22002,8 @@ export const tools: McpTool[] = [
             : verdict === 'duplicate'
               ? 'This file or fiscal year has import history. Read gnubok_sie_import_status for the import before proposing replacement. Legacy imports need outcome review; do not retry or undo them automatically.'
               : orgMatch.match === false
-                ? 'STOP: the file belongs to a different organisation than this company. Ask the user whether it belongs here (an ombildning or a company registered under the wrong number can be legitimate). Only on their yes, call gnubok_import_sie with confirm_org_number_mismatch=true; without it the import is refused.'
-                : 'Summarize the scan for the user (source system, fiscal year, voucher count, balance status, any warnings). On their go-ahead call gnubok_import_sie with this same file and the returned mappings; the import stages for approval.',
+                ? `STOP: the file belongs to a different organisation than this company (${targetCompany.name ?? companyId}).${fileCompanyHint} Ask the user whether it belongs here (an ombildning or a company registered under the wrong number can be legitimate). Only on their yes, call gnubok_import_sie with confirm_org_number_mismatch=true; without it the import is refused.`
+                : `Summarize the scan for the user (source system, fiscal year, voucher count, balance status, any warnings) and name the company it imports into (target_company: ${targetCompany.name ?? companyId}). On their go-ahead call gnubok_import_sie with this same file, the returned mappings and the same company_id; the import stages for approval.`,
       }
     },
   },
@@ -21635,9 +22126,13 @@ export const tools: McpTool[] = [
       const { checkSIEOrgNumber } = await import('@/lib/import/sie-org-number')
       const orgCheck = await checkSIEOrgNumber(supabase, companyId, parsed.header.orgNumber)
       if (orgCheck.mismatch && args.confirm_org_number_mismatch !== true) {
+        const fileCompanies = await findCompaniesWithSieOrgNumber(supabase, userId, actor, orgCheck.fileOrgNumber, companyId)
         throw codedRefusal(
           'SIE_IMPORT_ORG_NUMBER_MISMATCH',
           `The file's #ORGNR ${orgCheck.fileOrgNumber} is not this company's organisation number (${orgCheck.companyOrgNumber}). ` +
+            (fileCompanies.length > 0
+              ? `It is the number of ${fileCompanies.map((c) => `${c.name} (${c.company_id})`).join(', ')}, which this connection also reaches: if the file belongs there, import it with that company_id. `
+              : '') +
             'Ask the user whether the file belongs in this company; only on their yes, call again with confirm_org_number_mismatch=true.',
         )
       }

@@ -63,6 +63,8 @@ import type { TransactionWithInvoice, CategorizeHandler } from './transaction-ty
 import type { BatchAllocationPrefill } from '@/lib/transactions/parts-read'
 import type { CashAccount } from '@/types'
 import type { TxColumnId } from '@/lib/transactions/columns-v2'
+import type { GiroCounterparty } from '@/lib/transactions/giro-counterparty'
+import { useGiroText } from './use-giro-text'
 
 interface TransactionInboxCardProps {
   transaction: TransactionWithInvoice
@@ -134,6 +136,8 @@ interface TransactionInboxCardProps {
   proposal?: RowProposal | null
   /** Book the row with its proposal (opens the review with the template set). */
   onBookProposal?: (transaction: TransactionWithInvoice) => void
+  /** Whose giro number a row that names nobody shows (lib/transactions/giro-counterparty, crm#1204). */
+  giroCounterparty?: GiroCounterparty | null
 }
 
 /**
@@ -172,9 +176,11 @@ export default function TransactionInboxCard({
   accountLogo = null,
   proposal = null,
   onBookProposal,
+  giroCounterparty = null,
 }: TransactionInboxCardProps) {
   const show = (c: TxColumnId) => columns.has(c)
   const t = useTranslations('tx_inbox_card')
+  const giroText = useGiroText()
   const tDetach = useTranslations('tx_detach')
   const tMethod = useTranslations('tx_method')
   // Radix' onCheckedChange carries no mouse event, so the shift state is
@@ -421,6 +427,15 @@ export default function TransactionInboxCard({
         <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden')}>
           <span className="row-collapsible flex min-w-0 items-center gap-2">
             <span className="truncate">{transaction.description}</span>
+            {/* Derived, beside the bank's text: whose giro the row shows. */}
+            {giroCounterparty && (
+              <span
+                className="hidden max-w-[16rem] shrink-0 truncate text-xs text-muted-foreground md:inline-block"
+                title={giroText.sentence(giroCounterparty)}
+              >
+                {giroText.short(giroCounterparty)}
+              </span>
+            )}
             <TransactionAttachmentIndicator documentId={attachedDocumentId} />
             {/* The markers below are desktop-only (hidden md:*): on mobile
                 they overflowed the cell into Belopp; their info stays
@@ -585,6 +600,7 @@ export default function TransactionInboxCard({
             originalName={originalName ?? null}
             skvCounterpartDate={skvCounterpartDate}
             isPreMigration={isPreMigration}
+            giroCounterparty={giroCounterparty}
             attachedDocumentId={attachedDocumentId}
             onMatchParts={showSplitItem ? (prefill) => onOpenSplitMatch!(transaction, prefill) : undefined}
             extra={

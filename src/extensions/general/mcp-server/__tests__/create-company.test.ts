@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 import { eventBus } from '@/lib/events/bus'
 
@@ -10,6 +10,7 @@ vi.mock('@/lib/company/create-company', () => ({
   createCompanyCore: (...args: unknown[]) => mocks.createCompanyCore(...args),
 }))
 
+import { createTableMockSupabase } from '@/tests/helpers'
 import { tools } from '../server'
 import { isCompanyDependentTool } from '../company-routing'
 
@@ -193,5 +194,93 @@ describe('gnubok_create_company', () => {
     await expect(
       tool.execute({ ...setup, confirm: true }, '', 'user-1', supabase as never)
     ).rejects.toMatchObject({ code: 'COMPANY_CREATE_FAILED' })
+  })
+})
+
+/**
+ * crm#1201: "this connection uses it automatically from the next call" is
+ * only true for a user's FIRST company (an unbound key binds to it). A user
+ * with another company keeps that default, so the agent must name the new
+ * one on every call; an agent that believed the old sentence rendered the
+ * SIE card for the old company.
+ */
+describe('gnubok_create_company: which company the connection uses next', () => {
+  const OTHER_COMPANY = '77777777-7777-4777-8777-777777777777'
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.createCompanyCore.mockImplementation(
+      async (_client: unknown, _input: unknown, createRow: () => Promise<{ data: unknown; error: unknown }>) => {
+        const { data } = await createRow()
+        return { companyId: data as string }
+      }
+    )
+    // Mid-year, so the created result carries the SIE-first history_note.
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(`${new Date().getFullYear()}-08-15T12:00:00Z`))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** team_members answers the personal team; company_members the user's OTHER memberships (or an error). */
+  function supabaseWithMemberships(others: string[] | 'error') {
+    const { supabase, calls } = createTableMockSupabase({
+      team_members: { data: { team_id: TEAM_ID } },
+      company_members: others === 'error' ? { error: { message: 'boom' } } : { data: others.map((id) => ({ company_id: id })) },
+      'rpc:create_company_for_user': { data: COMPANY_ID },
+    })
+    const memberCalls = () => calls.filter((c) => c.table === 'company_members').map((c) => [c.method, c.args])
+    return { supabase, memberCalls }
+  }
+
+  async function create(others: string[] | 'error', actor?: Record<string, unknown>) {
+    const { supabase, memberCalls } = supabaseWithMemberships(others)
+    const result = (await tool.execute({ ...setup, confirm: true }, '', 'user-1', supabase as never, actor as never)) as {
+      message: string
+      history_note?: string
+      next: { tool: string; args: Record<string, unknown> }
+    }
+    return { result, memberCalls: memberCalls() }
+  }
+
+  it('says the connection switches to it for a user\'s first company', async () => {
+    const { result, memberCalls } = await create([])
+
+    expect(result.message).toContain('This connection uses it automatically from the next call.')
+    expect(result.message).toContain('IN ORDER')
+    expect(result.history_note).toContain('call gnubok_create_sie_upload to render')
+    expect(result.next.args).toEqual({ slug: 'onboarding' })
+    // The OTHER memberships of this user, archived companies not counted.
+    expect(memberCalls).toEqual(
+      expect.arrayContaining([
+        ['eq', ['user_id', 'user-1']],
+        ['neq', ['company_id', COMPANY_ID]],
+        ['is', ['companies.archived_at', null]],
+      ])
+    )
+  })
+
+  it('tells the agent to name the new company on every call when the user has another one', async () => {
+    const { result } = await create([OTHER_COMPANY])
+
+    expect(result.message).not.toContain('uses it automatically')
+    expect(result.message).toContain(`default company is unchanged: pass company_id=${COMPANY_ID} on every call`)
+    expect(result.message).toContain('IN ORDER')
+    expect(result.history_note).toContain(`call gnubok_create_sie_upload with company_id=${COMPANY_ID}`)
+    expect(result.next).toMatchObject({ tool: 'gnubok_load_skill', args: { slug: 'onboarding', company_id: COMPANY_ID } })
+  })
+
+  it('names the company when the membership read fails: right in every case', async () => {
+    const { result } = await create('error')
+    expect(result.message).toContain(`pass company_id=${COMPANY_ID}`)
+  })
+
+  it('says a restricted connection does not reach the new company', async () => {
+    const { result } = await create([OTHER_COMPANY], { type: 'api_key', allowedCompanyIds: [OTHER_COMPANY] })
+
+    expect(result.message).toContain('does not reach it')
+    expect(result.message).toContain('Settings > API & MCP')
+    expect(result.next.args).toEqual({ slug: 'onboarding' })
   })
 })

@@ -189,17 +189,19 @@ describe('buildReportDataStatus', () => {
           { status: 'active', last_synced_at: '2026-09-20T08:00:00Z' },
         ],
       })
-      expect(stale.status.bank).toMatchObject({ feed_status: 'active', last_sync_at: '2026-09-20T08:00:00Z' })
+      expect(stale.status.bank).toMatchObject({ feed_status: 'active', last_sync_at: '2026-09-20T08:00:00Z', stale: true })
       expect(feedCaveat(stale.status)).toBe('A bank feed last synced 2026-09-20: its transactions after that date are not imported yet.')
 
       const fresh = await build({ connections: [{ status: 'active', last_synced_at: '2026-09-26T06:00:00Z' }] })
       expect(fresh.status.bank.feed_status).toBe('active')
+      expect(fresh.status.bank.stale).toBe(false)
       expect(feedCaveat(fresh.status)).toBeUndefined()
 
       const earlierRange = await build(
         { connections: [{ status: 'active', last_synced_at: '2026-09-20T08:00:00Z' }] },
         { toDate: '2026-06-30' },
       )
+      expect(earlierRange.status.bank.stale).toBe(false)
       expect(feedCaveat(earlierRange.status)).toBeUndefined()
     })
 
@@ -222,14 +224,14 @@ describe('buildReportDataStatus', () => {
           { status: 'error', last_synced_at: null },
         ],
       })
-      expect(status.bank).toMatchObject({ feed_status: 'stopped', last_sync_at: '2026-08-12T05:00:00Z' })
+      expect(status.bank).toMatchObject({ feed_status: 'stopped', last_sync_at: '2026-08-12T05:00:00Z', stale: true })
       expect(feedCaveat(status)).toBe(
         'The bank feed has stopped syncing (last synced 2026-08-12): transactions after that date are not imported unless added another way.',
       )
 
       // A feed that stopped hours ago is still stopped: no 36 h grace.
       const recent = await build({ connections: [{ status: 'error', last_synced_at: '2026-09-26T06:00:00Z' }] })
-      expect(recent.status.bank.feed_status).toBe('stopped')
+      expect(recent.status.bank).toMatchObject({ feed_status: 'stopped', stale: true })
       expect(feedCaveat(recent.status)).toMatch(/^The bank feed has stopped syncing \(last synced 2026-09-26\)/)
 
       // A range that ends before the last sync lost nothing.
@@ -237,7 +239,14 @@ describe('buildReportDataStatus', () => {
         { connections: [{ status: 'expired', last_synced_at: '2026-08-12T05:00:00Z' }] },
         { toDate: '2026-06-30' },
       )
+      expect(earlier.status.bank.stale).toBe(false)
       expect(feedCaveat(earlier.status)).toBeUndefined()
+    })
+
+    it('never calls a feed that has not synced yet stale: there is no date to measure from', async () => {
+      const { status } = await build({ connections: [{ status: 'active', last_synced_at: null }] })
+      expect(status.bank).toMatchObject({ feed_status: 'active', last_sync_at: null, stale: false })
+      expect(feedCaveat(status)).toBeUndefined()
     })
 
     it('ignores revoked and pending_selection connections', async () => {
@@ -247,7 +256,7 @@ describe('buildReportDataStatus', () => {
           { status: 'pending_selection', last_synced_at: null },
         ],
       })
-      expect(status.bank).toMatchObject({ feed_status: null, last_sync_at: null })
+      expect(status.bank).toMatchObject({ feed_status: null, last_sync_at: null, stale: false })
       expect(feedCaveat(status)).toBeUndefined()
     })
   })

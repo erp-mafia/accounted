@@ -24,21 +24,37 @@ interface LinkParams {
   document_id?: string
   transaction_id?: string
   journal_entry_id?: string
-  links?: { document_id?: string; journal_entry_id?: string }[]
+  /** copy: the row links a new copy of the document, never the document itself (crm#1207). */
+  links?: { document_id?: string; journal_entry_id?: string; copy?: boolean }[]
 }
 
 /** Every claim on the given documents, keyed by document id. */
 export async function loadDocumentClaims(supabase: SupabaseClient, companyId: string, documentIds: string[]): Promise<Map<string, DocumentClaim[]>> {
+  return (await loadDocumentClaimsAndWaitingLinks(supabase, companyId, documentIds)).claims
+}
+
+/**
+ * loadDocumentClaims, plus how many single link_document_to_voucher
+ * proposals the company already has waiting, read from the same rows. An
+ * agent staging the third one in a row is told about the bulk tool, which
+ * stages them as one approval (crm#1207: 131 single links approved one by
+ * one).
+ */
+export async function loadDocumentClaimsAndWaitingLinks(
+  supabase: SupabaseClient,
+  companyId: string,
+  documentIds: string[],
+): Promise<{ claims: Map<string, DocumentClaim[]>; waitingVoucherLinks: number }> {
   const wanted = new Set(documentIds)
   const claims = new Map<string, DocumentClaim[]>()
-  if (wanted.size === 0) return claims
+  if (wanted.size === 0) return { claims, waitingVoucherLinks: 0 }
   const add = (claim: DocumentClaim) => claims.set(claim.document_id, [...(claims.get(claim.document_id) ?? []), claim])
 
   const [pending, attached] = await Promise.all([
-    fetchAllRows<{ id: string; params: LinkParams | null }>((range) =>
+    fetchAllRows<{ id: string; operation_type?: string; params: LinkParams | null }>((range) =>
       supabase
         .from('pending_operations')
-        .select('id, params')
+        .select('id, operation_type, params')
         .eq('company_id', companyId)
         .in('operation_type', [...LINK_OPERATION_TYPES])
         .in('status', [...WAITING_STATUSES])
@@ -55,6 +71,10 @@ export async function loadDocumentClaims(supabase: SupabaseClient, companyId: st
       add({ document_id: p.document_id, operation_id: op.id, transaction_id: p.transaction_id ?? null, journal_entry_id: p.journal_entry_id ?? null })
     }
     for (const link of p.links ?? []) {
+      // A copy row leaves the document itself free: approving it archives a
+      // new row for its verifikat, so it claims nothing another link could
+      // collide with.
+      if (link.copy === true) continue
       if (link.document_id && wanted.has(link.document_id)) {
         add({ document_id: link.document_id, operation_id: op.id, transaction_id: null, journal_entry_id: link.journal_entry_id ?? null })
       }
@@ -63,7 +83,8 @@ export async function loadDocumentClaims(supabase: SupabaseClient, companyId: st
   for (const row of (attached.data ?? []) as { id: string; document_id: string }[]) {
     add({ document_id: row.document_id, operation_id: null, transaction_id: row.id, journal_entry_id: null })
   }
-  return claims
+  const waitingVoucherLinks = pending.filter((op) => op.operation_type === 'link_document_to_voucher').length
+  return { claims, waitingVoucherLinks }
 }
 
 /**
@@ -97,7 +118,7 @@ export function sharedDocumentWarning(claims: DocumentClaim[], target: { transac
     : `banktransaktion ${c.transaction_id!.slice(0, 8)}`)
   const verifikatInvolved = target.journal_entry_id !== undefined || others.some((c) => c.journal_entry_id !== null)
   if (verifikatInvolved) {
-    return `Samma underlag är redan kopplat eller föreslaget: ${where.join('; ')}. Ett underlag kan bara kopplas till en verifikation, så bara en av verifikationerna kan få det. Ett kontoutdrag som täcker flera transaktioner behöver en egen kopia per verifikation: ladda upp det igen för den andra verifikationen, annars avvisa det som är fel.`
+    return `Samma underlag är redan kopplat eller föreslaget: ${where.join('; ')}. Ett underlag kan bara kopplas till en verifikation, så bara en av verifikationerna kan få det. Ett kontoutdrag som täcker flera transaktioner, eller en rättelse som vilar på originalets faktura, får en egen kopia per verifikation: koppla en exakt kopia till den andra verifikationen, annars avvisa det som är fel.`
   }
   return `Samma underlag är redan kopplat eller föreslaget: ${where.join('; ')}. Ett underlag hör normalt till ett köp. Godkänn båda bara om det är en faktura som betalats i flera delar, annars avvisa det som är fel.`
 }

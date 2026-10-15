@@ -37,12 +37,18 @@
  * as before.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { linkToJournalEntry } from '@/lib/core/documents/document-service'
+import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import {
+  computeSHA256,
+  DOCUMENTS_BUCKET,
+  linkToJournalEntry,
+  uploadDocument,
+} from '@/lib/core/documents/document-service'
 import { dbError } from '@/lib/errors/db-error'
 import { isPeriodLocked } from '@/lib/documents/underlag-import'
 import type { DocumentLinkHolder } from '@/lib/documents/link-holder'
 import { stampInboxItemsForLinkedDocument } from '@/lib/transactions/inbox-underlag'
-import type { DocumentAttachment } from '@/types'
+import type { DocumentAttachment, DocumentUploadSource } from '@/types'
 
 export interface LinkDocumentInput {
   document_id: string
@@ -121,11 +127,16 @@ function isLookupMiss(error: { code?: string | null } | null): boolean {
 /**
  * Every rule a link must pass, without writing anything: what a dry run, a
  * staging and the commit all ask first. Throws on a database failure.
+ *
+ * `asCopy`: the link will carry a copy of the document (see
+ * linkDocumentCopyToVoucher), a new row, so where the source document is
+ * held does not matter. Every other rule still applies.
  */
 export async function checkDocumentLink(
   supabase: SupabaseClient,
   companyId: string,
   input: LinkDocumentInput,
+  options: { asCopy?: boolean } = {},
 ): Promise<{ ok: true; target: LinkDocumentTarget } | LinkDocumentRefusal> {
   const [docRes, entryRes] = await Promise.all([
     supabase
@@ -168,7 +179,7 @@ export async function checkDocumentLink(
     document.journal_entry_id === entry.id &&
     document.journal_entry_line_id != null &&
     document.journal_entry_line_id !== lineId
-  if (heldElsewhere || lineChange) {
+  if (!options.asCopy && (heldElsewhere || lineChange)) {
     const holderId = document.journal_entry_id as string
     // Read only to name the holder: the refusal does not depend on it.
     const { data: holderRow, error: holderError } = await supabase
@@ -238,4 +249,101 @@ export async function linkDocumentToVoucher(
     expectInboxItem: options.expectInboxItem ?? Boolean(input.inbox_item_id),
   })
   return { ok: true, dryRun: false, target: check.target, document }
+}
+
+export type LinkDocumentCopyResult =
+  | {
+      ok: true
+      /** The row now on the verifikat: the new copy, or one already there. */
+      document: DocumentAttachment
+      source_document_id: string
+      /** True when the verifikat already held these exact bytes: nothing was written. */
+      reused: boolean
+    }
+  | LinkDocumentRefusal
+
+/**
+ * The same underlag on a second verifikat (crm#1207): a rättelse verifikat
+ * resting on the original's invoice, a bank statement covering several fees.
+ * A document row holds one verifikat for good
+ * (enforce_document_journal_entry_immutability), so the second verifikat gets
+ * a row of its own: a byte-identical copy archived straight onto it, the
+ * source left where it is. Agents used to get there by re-uploading, and the
+ * upload door returns the existing document for identical bytes, so one
+ * changed a byte to get a new id: an underlag that no longer matched what was
+ * received (BFL 7 kap 1 § 3 st). Here the bytes are checked against the
+ * source's SHA-256 before anything is written.
+ *
+ * Every link rule except "held elsewhere" applies (checkDocumentLink with
+ * asCopy). A verifikat that already holds these bytes gets nothing new, and
+ * the copy's id is derived from (source, verifikat), so a retried approval
+ * converges on one row. No inbox item and no model pass: the booking is
+ * known, as for the provider underlag import.
+ */
+export async function linkDocumentCopyToVoucher(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  input: LinkDocumentInput,
+): Promise<LinkDocumentCopyResult> {
+  const check = await checkDocumentLink(supabase, companyId, input, { asCopy: true })
+  if (!check.ok) return check
+
+  const { data: sourceRow, error: sourceError } = await supabase
+    .from('document_attachments')
+    .select('id, storage_path, sha256_hash, file_name, mime_type, upload_source')
+    .eq('id', input.document_id)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (!isLookupMiss(sourceError)) throw dbError(sourceError, 'document copy: source lookup failed')
+  const source = (sourceError ? null : sourceRow) as {
+    id: string
+    storage_path: string
+    sha256_hash: string
+    file_name: string
+    mime_type: string | null
+    upload_source: DocumentUploadSource | null
+  } | null
+  if (!source) return { ok: false, code: 'NOT_FOUND', details: { resource: 'document' } }
+
+  const { data: present, error: presentError } = await supabase
+    .from('document_attachments')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('journal_entry_id', input.journal_entry_id)
+    .eq('sha256_hash', source.sha256_hash)
+    .eq('is_current_version', true)
+    .limit(1)
+  if (presentError) throw dbError(presentError, 'document copy: target lookup failed')
+  const already = (present as DocumentAttachment[] | null)?.[0]
+  if (already) return { ok: true, document: already, source_document_id: source.id, reused: true }
+
+  // The row was read through the caller's client, company-scoped; the
+  // service role only fetches the bytes that row names (as the upload
+  // completion does).
+  const { data: blob, error: downloadError } = await createServiceClientNoCookies()
+    .storage.from(DOCUMENTS_BUCKET)
+    .download(source.storage_path)
+  if (downloadError || !blob) {
+    throw new Error(`document copy: failed to read the source file: ${downloadError?.message ?? 'no data returned'}`)
+  }
+  const buffer = await blob.arrayBuffer()
+  if ((await computeSHA256(buffer)) !== source.sha256_hash) {
+    throw new Error('document copy: the source file failed its integrity check')
+  }
+
+  const document = await uploadDocument(
+    supabase,
+    userId,
+    companyId,
+    { name: source.file_name, buffer, type: source.mime_type ?? undefined },
+    {
+      upload_source: source.upload_source ?? 'api',
+      journal_entry_id: input.journal_entry_id,
+      ...(input.journal_entry_line_id ? { journal_entry_line_id: input.journal_entry_line_id } : {}),
+      idempotency_key: `document-copy:${source.id}:${input.journal_entry_id}`,
+      extractionOwner: 'none',
+    },
+  )
+  return { ok: true, document, source_document_id: source.id, reused: false }
 }

@@ -57,7 +57,7 @@ export interface SupplierInvoiceFormData {
 }
 
 export function inferVatTreatment(
-  items: SupplierInvoiceLineItem[],
+  items: ReadonlyArray<Pick<SupplierInvoiceLineItem, 'vat_rate'>>,
   reverseCharge: boolean,
 ): VatTreatment {
   if (reverseCharge) return 'reverse_charge'

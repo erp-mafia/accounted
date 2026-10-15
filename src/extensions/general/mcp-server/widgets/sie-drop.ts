@@ -10,6 +10,13 @@ import type { UiWidget } from './types'
  * Importera → gnubok_import_sie with the preflight's mappings (stages for
  * approval as always). The tool's upload_url stays available as a fallback
  * for hosts without the widget.
+ *
+ * Company binding (crm#1201): the tool result names target_company, the
+ * company the card was opened for. The card shows it before anything is
+ * dropped and passes its company_id on the preflight and the import, so a
+ * card opened for one company never imports into the connection's default
+ * company. The preflight answers with the company it actually checked
+ * against; a different one blocks Importera.
  */
 
 export const SIE_DROP_HTML = `<!DOCTYPE html>
@@ -89,6 +96,8 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
   button:disabled { opacity: 0.5; cursor: not-allowed; }
   button:focus-visible { outline: 2px solid var(--success); outline-offset: 2px; }
   .note { margin-top: 10px; color: var(--text-muted); font-size: 12px; }
+  .target { margin-bottom: 12px; }
+  .target strong { font-weight: 600; }
   input[type="file"] { display: none; }
 </style>
 </head>
@@ -96,6 +105,7 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
 <div class="card">
   <h1>Importera bokföring (SIE)</h1>
   <p class="lede">Släpp SIE-filen här så kontrolleras den innan något bokförs.</p>
+  <p class="target hidden" id="target"></p>
   <div class="drop" id="drop">Släpp .se/.sie-filen här, eller klicka för att välja</div>
   <input type="file" id="picker" accept=".se,.sie,.si" />
   <div class="report hidden" id="report"></div>
@@ -111,6 +121,9 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
   let rpcId = 1;
   const pending = new Map();
   let fileState = null; // { name, base64, sha256, preflight }
+  // The company this card imports into: target_company from the tool result
+  // ({ company_id, name, org_number }). null until the host delivers it.
+  let target = null;
 
   function sendRequest(method, params) {
     const id = rpcId++;
@@ -134,6 +147,14 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
       if (msg.error) reject(msg.error); else resolve(msg.result);
       return;
     }
+    if (msg.method === 'ui/notifications/tool-result') {
+      const sc = msg.params && msg.params.structuredContent;
+      if (sc && sc.target_company && sc.target_company.company_id) {
+        target = sc.target_company;
+        renderTarget();
+      }
+      return;
+    }
     if (msg.method === 'ui/notifications/host-context-changed') applyTheme(msg.params);
   });
   function applyTheme(ctx) {
@@ -153,6 +174,22 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
   function show(id) { el(id).classList.remove('hidden'); }
   function hide(id) { el(id).classList.add('hidden'); }
   function note(text) { el('note').textContent = text; show('note'); }
+
+  function companyLabel(c) {
+    if (!c) return '?';
+    return (c.name || 'okänt företag') + (c.org_number ? ' (' + c.org_number + ')' : '');
+  }
+  function renderTarget() {
+    if (!target) return;
+    el('target').textContent = 'Importeras till ' + companyLabel(target) + '.';
+    show('target');
+  }
+  // Every call that reads or writes the company's books names the card's
+  // company. Without it the call runs for the connection's default company.
+  function forTarget(args) {
+    if (target && target.company_id) args.company_id = target.company_id;
+    return args;
+  }
 
   function toBase64(buffer) {
     const u8 = new Uint8Array(buffer);
@@ -203,13 +240,13 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
         const sha256 = toHex(hash);
         fileState = { name: file.name, base64: base64, sha256: sha256, preflight: null };
         sendNotification('ui/updateContext', {
-          content: 'Användaren släppte ' + file.name + ' på importkortet; preflight körs med exakta bytes (sha256 ' + sha256.slice(0, 12) + '…).'
+          content: 'Användaren släppte ' + file.name + ' på importkortet' + (target ? ' för ' + companyLabel(target) + ' (company_id ' + target.company_id + ')' : '') + '; preflight körs med exakta bytes (sha256 ' + sha256.slice(0, 12) + '…).'
         });
-        callTool('gnubok_sie_preflight', {
+        callTool('gnubok_sie_preflight', forTarget({
           filename: file.name,
           file_content_base64: base64,
           sha256: sha256
-        }).then(function(res) {
+        })).then(function(res) {
           const sc = parseResult(res);
           if (!sc) { drop.textContent = 'Kunde inte läsa svaret. Försök igen.'; return; }
           fileState.preflight = sc;
@@ -253,11 +290,16 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
 
   function renderReport(sc) {
     drop.textContent = fileState.name;
-    const blocked = ((sc.validation || {}).notices || []).some(function(n) { return n.blocking; });
+    // The company the server checked the file against. It must be the card's
+    // own: anything else means the call ran for another company.
+    const checked = sc.target_company || null;
+    const wrongTarget = !!(target && checked && checked.company_id !== target.company_id);
+    const blocked = wrongTarget || ((sc.validation || {}).notices || []).some(function(n) { return n.blocking; });
     const ok = (sc.verdict === 'ok' || sc.verdict === 'ok_with_warnings') && !blocked;
     const f = sc.file || {};
     const rows = [
-      ['Företag', (f.company_name || '?') + ' (' + (f.org_number || '?') + ')'],
+      ['Importeras till', companyLabel(checked || target)],
+      ['Företag i filen', (f.company_name || '?') + ' (' + (f.org_number || '?') + ')'],
       ['Räkenskapsår', ((f.fiscal_year || {}).start || '?') + ' – ' + ((f.fiscal_year || {}).end || '?')],
       ['Verifikat', String(f.voucher_count != null ? f.voucher_count : '?')],
       ['Konton', String(f.account_count != null ? f.account_count : '?')],
@@ -271,6 +313,10 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
     rows.forEach(function(r) {
       html += '<div class="row"><span class="k">' + esc(r[0]) + '</span><span class="v">' + esc(r[1]) + '</span></div>';
     });
+    if (wrongTarget) {
+      html += '<div class="notices"><div class="error">Kontrollen kördes för ' + esc(companyLabel(checked)) +
+        ', inte för ' + esc(companyLabel(target)) + '. Importera inte härifrån; be agenten öppna importkortet igen.</div></div>';
+    }
     html += renderNotices(sc);
     el('report').innerHTML = html;
     const toggle = document.getElementById('toggle-notices');
@@ -299,7 +345,7 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
     if (!fileState || !fileState.preflight) return;
     el('import').disabled = true;
     el('import').textContent = 'Importerar…';
-    callTool('gnubok_import_sie', {
+    callTool('gnubok_import_sie', forTarget({
       filename: fileState.name,
       file_content_base64: fileState.base64,
       sha256: fileState.sha256,
@@ -307,7 +353,7 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
       create_fiscal_period: true,
       import_opening_balances: true,
       import_transactions: true
-    }).then(function(res) {
+    })).then(function(res) {
       const sc = parseResult(res);
       if (sc && sc.operation_id) {
         // Stage + arm in ONE step: the next click is already the deliberate

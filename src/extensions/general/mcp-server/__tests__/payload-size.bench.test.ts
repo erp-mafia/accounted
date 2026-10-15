@@ -694,6 +694,14 @@ describe('tools/list payload size guard', () => {
     //     gnubok_update_employee gain personnel_category (arbetare 70xx,
     //     tjansteman 72xx); gnubok_update_payslip_line's description was
     //     tightened to pay for it. Measured 65 899. Ceiling unchanged.
+    //   * Customer card on the agent tools (crm#1198, 2026-10-15):
+    //     gnubok_create_customer and gnubok_update_customer gain
+    //     contact_person and invoice_email_cc_addresses, and create also
+    //     phone, address_line2, language and notes, all as bare types. Paid
+    //     for by dropping descriptions that restated a property name (name,
+    //     type, email, VAT number, address) and shortening both tool
+    //     descriptions. Measured 65 890 (single-company 60 881). Ceiling
+    //     unchanged.
     expect(approxTokens).toBeLessThan(65_900)
   })
 
@@ -750,6 +758,8 @@ describe('tools/list payload size guard', () => {
     // note above: measured 60 862.
     // 2026-10-14, personnel_category on the employee tools (see the case
     // above): measured 60 890. Ceiling unchanged.
+    // 2026-10-15, the customer card on the agent tools (crm#1198, see the
+    // case above): measured 60 881. Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

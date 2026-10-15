@@ -16,6 +16,8 @@ import type { TransactionWithInvoice } from '@/components/transactions/transacti
 import type { TransactionUnderlag } from '@/lib/transactions/underlag-read'
 import type { BatchAllocationPrefill } from '@/lib/transactions/parts-read'
 import { OPEN_PAYMENTS_AGGREGATOR } from '@/lib/bank-sync/aggregator'
+import type { GiroCounterparty } from '@/lib/transactions/giro-counterparty'
+import { useGiroText } from './use-giro-text'
 
 async function fetchUnderlag(url: string): Promise<TransactionUnderlag> {
   const res = await fetch(url)
@@ -55,6 +57,8 @@ interface TransactionDrawerProps {
   originalName: string | null
   skvCounterpartDate?: string
   isPreMigration: boolean
+  /** Whose giro number a row that names nobody shows (lib/transactions/giro-counterparty, crm#1204). */
+  giroCounterparty?: GiroCounterparty | null
   /** Kept for callers; the drawer reads the underlag route, which covers both doors. */
   attachedDocumentId?: string | null
   /** Anything the foldout showed that has no slot here (extraction status). */
@@ -80,12 +84,14 @@ export function TransactionDrawer({
   originalName,
   skvCounterpartDate,
   isPreMigration,
+  giroCounterparty = null,
   extra,
   onMatchParts,
   processing,
   onClose,
 }: TransactionDrawerProps) {
   const t = useTranslations('tx_inbox_card')
+  const giroText = useGiroText()
   const isIncome = transaction.amount > 0
   // Pointer plus junction anchors: a row split over several verifikat has
   // journal_entry_id NULL but is booked (crm#48).
@@ -293,7 +299,7 @@ export function TransactionDrawer({
 
         {/* Only when there is a fact to show: a heading over nothing reads as
             something missing. */}
-        {(accountLabel || originalName || transaction.original_description || methodLabel || booked || skvCounterpartDate || isPreMigration || extra || orgNumber || instructed || balanceAfter || (transaction.currency !== 'SEK' && transaction.amount_sek != null)) && (
+        {(accountLabel || originalName || transaction.original_description || giroCounterparty || methodLabel || booked || skvCounterpartDate || isPreMigration || extra || orgNumber || instructed || balanceAfter || (transaction.currency !== 'SEK' && transaction.amount_sek != null)) && (
         <div className="px-5 py-3">
           <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{t('drawer_details')}</p>
           <dl className="grid grid-cols-[110px_1fr] gap-x-3 gap-y-1.5 text-[12.5px]">
@@ -310,6 +316,7 @@ export function TransactionDrawer({
               ) : null,
             )}
             {fact(t('drawer_bank_text'), originalName ?? transaction.original_description ?? null)}
+            {fact(t('drawer_counterparty'), giroCounterparty ? giroText.sentence(giroCounterparty) : null)}
             {fact(t('drawer_method'), methodLabel)}
             {transaction.currency !== 'SEK' && transaction.amount_sek != null
               ? fact(t('drawer_amount_fx'), <span className="tabular-nums">{formatCurrency(transaction.amount_sek)}</span>)

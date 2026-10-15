@@ -7,20 +7,16 @@ import { Separator } from '@/components/ui/separator'
 import { AccountNumber } from '@/components/ui/account-number'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import { formatAmount, formatCurrency, formatDate } from '@/lib/utils'
-import {
-  resolveReverseChargeRate,
-  generateReverseChargePurchaseLines,
-  reverseChargeKindForSupplierType,
-  reverseChargeOnAccount,
-  type ChartVatTreatments,
-} from '@/lib/bookkeeping/vat-entries'
-import { generateSlpLines, isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
+import type { ChartVatTreatments } from '@/lib/bookkeeping/vat-entries'
 import { buildSupplierDescription } from '@/lib/bookkeeping/supplier-invoice-description'
+import {
+  supplierInvoiceRegistrationLines,
+  type SupplierInvoiceBookingItem,
+} from '@/lib/bookkeeping/supplier-invoice-registration-lines'
 import { supplierInvoiceEditorAmounts } from '@/lib/supplier-invoices/editor-amounts'
-import { isSupplierInvoiceRoundingItem } from '@/lib/supplier-invoices/rounding-item'
-import { debitNatural } from '@/lib/bookkeeping/line-side'
+import { inferVatTreatment } from '@/lib/supplier-invoices/form-payload'
 import { roundOre } from '@/lib/money'
-import { resolveBookingAccount, itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
+import { itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
 import type { InvoiceBookingMoment } from '@/lib/bookkeeping/booking-mode'
 import type { Supplier } from '@/types'
 
@@ -38,6 +34,9 @@ interface ReviewLineItem {
   // Särskild löneskatt på pensionskostnader: previews the self-balancing
   // 7533 D / 2514 K pair the engine injects for flagged 741x lines.
   apply_slp?: boolean
+  // Per-row dimensions bag: two rows on one account with different tags
+  // book as two lines.
+  dimensions?: Record<string, string>
   // Periodisering: when both dates are set, the registration entry books the
   // net to the 17xx interim account instead of account_number (mirrored via
   // resolveBookingAccount so this preview matches the saved verifikat).
@@ -74,6 +73,8 @@ interface SupplierInvoiceReviewContentProps {
    * and that account's momssats, as the registration books it.
    */
   chartVatTreatments: ChartVatTreatments
+  /** The invoice's default dimensions bag (kostnadsställe/projekt), when picked. */
+  defaultDimensions?: Record<string, string>
 }
 
 interface JournalPreviewLine {
@@ -83,173 +84,41 @@ interface JournalPreviewLine {
   credit: number
 }
 
-function buildJournalPreview(
+/**
+ * The rows as the create paths store them (lib/supplier-invoices/create.ts
+ * over buildSupplierInvoicePayload): the line total and its moms as the
+ * editor totals them, a reverse charge with no supplier moms and its
+ * self-assessed rate, periodisering and SLP only where the payload sends
+ * them, and the invoice's rounding as its own zero-VAT row.
+ */
+function bookingItems(
   items: ReviewLineItem[],
-  subtotal: number,
-  totalVat: number,
-  total: number,
+  itemTotals: Array<{ lineTotal: number; vatAmount: number }>,
   reverseCharge: boolean,
-  supplierType: string | undefined,
-  currency: string,
-  // FX multiplier applied to every amount. 1 when the invoice is in SEK or
-  // when no rate is set. Matches what the backend writes: items go through
-  // resolveSekAmount(item.line_total, null, currency, exchange_rate), so the
-  // saved verifikation is always in SEK, never in invoice currency.
-  fxRate: number,
-  // The verifikat description the engine will write to EVERY line of this
-  // entry (createSupplierInvoiceRegistrationEntry builds one `desc` and reuses
-  // it). The preview showed the bare account number here instead, so a user
-  // reviewing "Verifikation som bokförs" saw "5615" where the books would say
-  // "Leverantörsfaktura 123, ACME AB".
-  desc: string,
-  chartVatTreatments: ChartVatTreatments,
-): JournalPreviewLine[] {
-  const lines: JournalPreviewLine[] = []
-  const toSek = (n: number) => Math.round(n * fxRate * 100) / 100
-
-  // Aggregate expense amounts by booking account (in SEK). Periodiserade
-  // lines book their net to the 17xx interim account instead of the cost
-  // account: same resolveBookingAccount the entry generator uses, so the
-  // preview matches the saved verifikat.
-  const expenseByAccount = new Map<string, number>()
-  for (const item of items) {
-    const bookingAccount = resolveBookingAccount('expense', item, item.account_number)
-    const current = expenseByAccount.get(bookingAccount) || 0
-    expenseByAccount.set(bookingAccount, current + toSek(item.amount))
-  }
-
-  // Debit: Expense accounts
-  for (const [accountNumber, amount] of expenseByAccount) {
-    if (roundOre(amount) === 0) continue
-    const sides = debitNatural(amount)
-    lines.push({
-      account_number: accountNumber,
-      description: desc,
-      debit: sides.debit_amount,
-      credit: sides.credit_amount,
-    })
-  }
-
-  // Per-line effective VAT: manual override wins over computed amount × rate.
-  // The engine reads stored vat_amount; the preview must reflect the same.
-  const itemVat = (item: ReviewLineItem) =>
-    item.vat_amount != null
-      ? Math.round(item.vat_amount * 100) / 100
-      : Math.round(item.amount * item.vat_rate * 100) / 100
-
-  // Särskild löneskatt på pensionskostnader: same self-balancing pair the
-  // engine injects (7533 D / 2514 K at 24.26 % of flagged 741x lines), via
-  // the same generator, so this preview matches the saved verifikat. The
-  // pair nets to zero and never moves the 2440 credit below.
-  const slpBase = items.reduce(
-    (sum, item) =>
-      item.apply_slp && isSlpPensionAccount(item.account_number)
-        ? sum + toSek(item.amount)
-        : sum,
-    0,
-  )
-  const slpPreviewLines: JournalPreviewLine[] = generateSlpLines(slpBase).map((sl) => ({
-    account_number: sl.account_number,
-    description: sl.line_description ?? sl.account_number,
-    debit: sl.debit_amount,
-    credit: sl.credit_amount,
+  roundingItem: { account_number: string; amount: number } | null,
+): SupplierInvoiceBookingItem[] {
+  const rows: SupplierInvoiceBookingItem[] = items.map((item, index) => ({
+    account_number: item.account_number,
+    line_total: itemTotals[index].lineTotal,
+    vat_rate: reverseCharge ? 0 : item.vat_rate,
+    vat_amount: reverseCharge ? 0 : itemTotals[index].vatAmount,
+    reverse_charge_rate: reverseCharge ? (item.reverse_charge_rate ?? 0.25) : null,
+    accrual_period_start: itemHasAccrual(item) ? item.accrual_period_start : null,
+    accrual_period_end: itemHasAccrual(item) ? item.accrual_period_end : null,
+    accrual_balance_account: itemHasAccrual(item) ? (item.accrual_balance_account ?? null) : null,
+    dimensions: item.dimensions,
+    apply_slp: item.apply_slp === true && !itemHasAccrual(item),
   }))
-
-  if (reverseCharge) {
-    // Reverse charge: the supplier charges no VAT, so the buyer self-assesses at
-    // the Swedish statutory rate (resolveReverseChargeRate: 25% huvudregel
-    // default, or the per-item reverse_charge_rate). We book BOTH the fiktiv-moms
-    // pair (2645/2647 + 2614/2624/2634) AND the basbeloppsrader (44xx/45xx +
-    // 4598), exactly as the engine does, so this preview matches the saved
-    // verifikat. ML 16 kap requires both sides reported; silent netting is
-    // prohibited (Skatteverket felkod FK004). Driving off the resolved rate (not
-    // item.vat_rate) is what makes a 0%-rate RC line book its VAT at all.
-    const rcSupplierType: 'eu_business' | 'non_eu_business' | 'swedish_business' =
-      supplierType === 'non_eu_business' || supplierType === 'swedish_business'
-        ? supplierType
-        : 'eu_business'
-
-    // Base per self-assessed rate, plus the portion that needs parallel
-    // basbeloppsrader, decided on the account each item is booked on, as
-    // groupReverseChargeByRate does: an item on an account that reports ruta
-    // 20-24 itself (a 44xx/45xx basis account or one whose momskod is a
-    // reverse-charge purchase) already populates it via the expense line, so
-    // it takes no basis pair and that account's momssats.
-    const baseByRate = new Map<number, number>()
-    const nonBasisBaseByRate = new Map<number, number>()
-    for (const item of items) {
-      if (isSupplierInvoiceRoundingItem(item, item.amount, currency)) continue
-      const { rate, basisPair } = reverseChargeOnAccount(
-        resolveBookingAccount('expense', item, item.account_number),
-        resolveReverseChargeRate(item),
-        chartVatTreatments,
-      )
-      const sek = toSek(item.amount)
-      baseByRate.set(rate, (baseByRate.get(rate) || 0) + sek)
-      if (basisPair) nonBasisBaseByRate.set(rate, (nonBasisBaseByRate.get(rate) || 0) + sek)
-    }
-
-    for (const [rate, netAmount] of baseByRate) {
-      if (netAmount <= 0) continue
-      // Same generator the engine calls, so the account pair AND the
-      // "Fiktiv in-/utgående moms" wording come from one place instead of
-      // being re-derived here (they used to render as bare account numbers).
-      for (const rcLine of generateReverseChargePurchaseLines({
-        base: netAmount,
-        rate,
-        kind: reverseChargeKindForSupplierType(rcSupplierType),
-        basisBase: nonBasisBaseByRate.get(rate) || 0,
-      })) {
-        lines.push({
-          account_number: rcLine.account_number,
-          description: rcLine.line_description ?? rcLine.account_number,
-          debit: rcLine.debit_amount,
-          credit: rcLine.credit_amount,
-        })
-      }
-    }
-
-    lines.push(...slpPreviewLines)
-
-    // Credit: 2440 at subtotal (no real VAT for reverse charge)
-    lines.push({
-      account_number: '2440',
-      description: desc,
-      debit: 0,
-      credit: toSek(subtotal),
-    })
-  } else {
-    if (totalVat > 0) {
-      // Sum per-rate using effective (manual-or-computed) VAT, so the preview
-      // matches what groupVatByRate will write to 2641 server-side.
-      const vatByRate = new Map<number, number>()
-      for (const item of items) {
-        const v = itemVat(item)
-        if (v > 0) {
-          vatByRate.set(item.vat_rate, (vatByRate.get(item.vat_rate) || 0) + v)
-        }
-      }
-      for (const [rate, vat] of vatByRate) {
-        lines.push({
-          account_number: '2641',
-          description: `Ingående moms ${Math.round(rate * 100)}% ${desc}`,
-          debit: toSek(vat),
-          credit: 0,
-        })
-      }
-    }
-    lines.push(...slpPreviewLines)
-
-    // Credit: 2440 at total incl. VAT
-    lines.push({
-      account_number: '2440',
-      description: desc,
-      debit: 0,
-      credit: toSek(total),
+  if (roundingItem) {
+    rows.push({
+      account_number: roundingItem.account_number,
+      line_total: roundingItem.amount,
+      vat_rate: 0,
+      vat_amount: 0,
+      reverse_charge_rate: reverseCharge ? 0.25 : null,
     })
   }
-
-  return lines
+  return rows
 }
 
 export function SupplierInvoiceReviewContent({
@@ -266,6 +135,7 @@ export function SupplierInvoiceReviewContent({
   oreRounding,
   bookingMoment,
   chartVatTreatments,
+  defaultDimensions,
 }: SupplierInvoiceReviewContentProps) {
   const t = useTranslations('supplier_invoice_editor')
   const { itemTotals, subtotal, totalVat, total, figures, roundingItem } = supplierInvoiceEditorAmounts(
@@ -282,29 +152,37 @@ export function SupplierInvoiceReviewContent({
     invoiceNumber,
     supplier.name,
   )
-  // The payload normalizes reverse-charge supplier VAT to zero before saving.
-  const previewItems = items.map((item, index) => ({
-    ...item,
-    amount: itemTotals[index].lineTotal,
-    vat_rate: reverseCharge ? 0 : item.vat_rate,
-    vat_amount: reverseCharge ? 0 : itemTotals[index].vatAmount,
-  }))
   // Only a confirm that posts the registration verifikat gets its preview:
   // under kontantmetoden or deferred booking the 2440 shape below is never
   // written at registration.
   const showsVoucher = bookingMoment === 'issue'
-  const journalLines = !showsVoucher ? [] : buildJournalPreview(
-    roundingItem ? [...previewItems, roundingItem] : previewItems,
-    roundOre(subtotal + (roundingItem?.amount ?? 0)),
-    totalVat,
-    figures.toPay,
-    reverseCharge,
+  // The verifikat comes from supplierInvoiceRegistrationLines, the function
+  // createSupplierInvoiceRegistrationEntry posts, over the rows as they will
+  // be stored (crm#1190: a hand-kept copy here dropped the moms of every row
+  // below zero). A foreign invoice without a rate previews at 1, as before;
+  // the create paths refuse it. A line that nets to nothing on both sides is
+  // left out of the table: it books nothing anyone can read.
+  const journalLines: JournalPreviewLine[] = !showsVoucher ? [] : supplierInvoiceRegistrationLines(
+    {
+      currency,
+      exchange_rate: currency === 'SEK' ? null : fxRate,
+      reverse_charge: reverseCharge,
+      vat_treatment: inferVatTreatment(items, reverseCharge),
+      default_dimensions: defaultDimensions,
+      total,
+    },
+    bookingItems(items, itemTotals, reverseCharge, roundingItem),
     supplier.supplier_type,
-    currency,
-    fxRate,
     voucherDescription,
     chartVatTreatments,
   )
+    .filter((line) => roundOre(line.debit_amount) !== 0 || roundOre(line.credit_amount) !== 0)
+    .map((line) => ({
+      account_number: line.account_number,
+      description: line.line_description ?? line.account_number,
+      debit: line.debit_amount,
+      credit: line.credit_amount,
+    }))
   const showingSek = fxRate !== 1
 
   // No account-label lookup any more: the BESKRIVNING column shows the

@@ -1,29 +1,18 @@
 import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import { createJournalEntry, findFiscalPeriod } from './engine'
-import { resolveSekAmount, buildCurrencyMetadata } from './currency-utils'
 import { fxDifferenceLine } from './ore-rounding'
-import { resolveBookingAccount } from './accruals/account-suggestions'
 import { buildSupplierDescription, supplierInvoiceReference } from './supplier-invoice-description'
 import {
   generateReverseChargePurchaseLines,
-  resolveReverseChargeRate,
   reverseChargeKindForSupplierType,
-  reverseChargeOnAccount,
   type ChartVatTreatments,
 } from './vat-entries'
 import { fetchChartVatTreatments } from './chart-vat-treatments'
 import { generateSlpLines, isSlpPensionAccount } from './slp-lines'
-import { treatmentDeductsInputVat } from '@/lib/vat/supplier-invoice-line-checks'
-import {
-  coerceDimensionsBag,
-  dimensionsBagKey,
-  mergeDimensionBags,
-  type LineDimensions,
-} from './dimension-resolver'
+import { coerceDimensionsBag } from './dimension-resolver'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { creditNatural, debitNatural } from './line-side'
-import { isSupplierInvoiceRoundingItem } from '@/lib/supplier-invoices/rounding-item'
 import { supplierInvoiceTotalsTolerance } from '@/lib/supplier-invoices/line-totals'
 import {
   addSupplierBankFeeLine,
@@ -31,6 +20,18 @@ import {
   resolveSupplierCashSettlement,
   supplierOreRoundingLine,
 } from './supplier-payment-lines'
+import {
+  groupExpenseBuckets,
+  groupReverseChargeByRate,
+  groupVatByRate,
+  inputVatLines,
+  isSupplierInvoiceReverseCharge,
+  itemsHaveVat,
+  slpBaseSek,
+  supplierInvoiceRegistrationLines,
+  supplierInvoiceRowLines,
+  toSekOrThrow,
+} from './supplier-invoice-registration-lines'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ExpenseClaimLineInput } from '@/lib/expenses/expense-claims-service'
 import type {
@@ -42,14 +43,16 @@ import type {
   SupplierInvoiceItem,
 } from '@/types'
 
-const log = createLogger('supplier-invoice-entries')
+// The FX refusal and the SEK conversion moved with the registration builder
+// (client-safe, so the review dialog can preview it); their callers import
+// them from here.
+export {
+  SI_FX_RATE_MISSING,
+  SupplierInvoiceFxRateMissingError,
+  toSekOrThrow,
+} from './supplier-invoice-registration-lines'
 
-/**
- * Stable code for the "foreign-currency supplier invoice without a rate"
- * refusal. Registered in lib/errors/structured-errors.ts so REST routes, the
- * MCP server and getErrorMessage() all translate it the same way.
- */
-export const SI_FX_RATE_MISSING = 'SI_FX_RATE_MISSING' as const
+const log = createLogger('supplier-invoice-entries')
 
 /**
  * BAS account credited for a supplier payment when the caller names none.
@@ -61,35 +64,6 @@ export const SI_FX_RATE_MISSING = 'SI_FX_RATE_MISSING' as const
  * are the only place that fallback may be decided. Issue #2550.
  */
 export const DEFAULT_SUPPLIER_PAYMENT_ACCOUNT = '1930' as const
-
-/**
- * Raised when a booking path is asked to translate a foreign-currency supplier
- * invoice that has no usable exchange rate.
- *
- * resolveSekAmount() answers that case by returning the RAW foreign amount (a
- * legacy "assume SEK" fallback that is tolerable in read-only code but not
- * when posting a verifikat): a 1 000 EUR invoice would post as 1 000 SEK, and
- * because every leg is scaled by the same wrong factor the entry still
- * balances, so no DB trigger fires and nothing errors. Under omvänd
- * skattskyldighet that silently books 250,00 kr of fiktiv moms on 2614/2645
- * instead of 2 875,00 kr at 11,50 SEK/EUR, understating both ruta 20 (or 21)
- * and ruta 30 of the momsdeklaration by the same amount: an oriktig uppgift
- * exposed to skattetillägg under SFL 49 kap 4 §.
- *
- * The in-house precedent for failing loudly instead is the
- * `match_batch_allocate` RPC, which hard-fails with BATCH_FX_RATE_MISSING, and
- * lib/reports/supplier-ledger.ts, which skips any FX invoice lacking a rate
- * rather than faking a 1:1 conversion.
- */
-export class SupplierInvoiceFxRateMissingError extends Error {
-  readonly code = SI_FX_RATE_MISSING
-  constructor(public readonly currency: string) {
-    super(
-      `Supplier invoice is in ${currency} but has no exchange rate on file; refusing to post it as if 1 ${currency} = 1 SEK.`
-    )
-    this.name = 'SupplierInvoiceFxRateMissingError'
-  }
-}
 
 /**
  * The least a credit note's tolerance ever is, in SEK (see
@@ -136,59 +110,6 @@ export class SupplierCreditNoteRowsMismatchError extends Error {
     )
     this.name = 'SupplierCreditNoteRowsMismatchError'
   }
-}
-
-/**
- * Convert an invoice-currency amount to SEK for a journal entry line.
- *
- * SEK invoices short-circuit exactly as before, and so does any invoice with a
- * legitimately supplied positive rate: the only new behaviour is the refusal
- * above when a foreign invoice reaches a booking path with no rate at all.
- * Every conversion in this file goes through here so no leg (expense, moms,
- * fiktiv moms, basbelopp, 2440) can be posted at a fabricated 1:1 rate.
- * Exported for the paths that must reproduce a posted registration's SEK
- * figures exactly (lib/supplier-invoices/item-account.ts).
- */
-export function toSekOrThrow(
-  amount: number,
-  currency: string,
-  exchangeRate: number | null | undefined
-): number {
-  if (currency && currency !== 'SEK' && !(exchangeRate != null && exchangeRate > 0)) {
-    throw new SupplierInvoiceFxRateMissingError(currency)
-  }
-  return resolveSekAmount(amount, null, currency, exchangeRate)
-}
-
-/**
- * Aggregate item amounts per (booking account, merged dimensions bag):
- * dimensions PR7. The merged bag (item.dimensions over the invoice's
- * default_dimensions) is part of the aggregation identity so two items on the
- * same account but different tags stay on separate journal lines instead of
- * collapsing. Insertion order is first-seen, matching the old per-account map.
- */
-interface ExpenseBucket {
-  account: string
-  dimensions?: LineDimensions
-  amount: number
-}
-
-function groupExpenseBuckets(
-  items: SupplierInvoiceItem[],
-  resolveAccount: (item: SupplierInvoiceItem) => string,
-  toSek: (item: SupplierInvoiceItem) => number,
-  defaultDimensions?: LineDimensions
-): ExpenseBucket[] {
-  const buckets = new Map<string, ExpenseBucket>()
-  for (const item of items) {
-    const account = resolveAccount(item)
-    const dimensions = mergeDimensionBags(defaultDimensions, item.dimensions)
-    const key = `${account}\u0000${dimensionsBagKey(dimensions)}`
-    const bucket = buckets.get(key) ?? { account, dimensions, amount: 0 }
-    bucket.amount += toSek(item)
-    buckets.set(key, bucket)
-  }
-  return [...buckets.values()]
 }
 
 /**
@@ -252,22 +173,12 @@ export async function buildSupplierInvoiceRegistrationEntryInput(
   }
 
   const desc = buildSupplierDescription('Leverantörsfaktura', invoice.supplier_invoice_number, supplierName, `(ankomstnr ${invoice.arrival_number})`)
-  const lines = await buildSupplierInvoiceRowLines(supabase, companyId, invoice, items, supplierType, desc)
-
-  // Credit: Leverantörsskulder, balance guarantee: ensures sum(debits) === sum(credits)
-  // For reverse charge, intermediate credits (2614/2624/2634) already exist, so we subtract them
-  const totalDebits = lines.reduce((sum, l) => sum + l.debit_amount, 0)
-  const totalCredits = lines.reduce((sum, l) => sum + l.credit_amount, 0)
-  const isForeign = invoice.currency !== 'SEK'
-  // An invoice whose rows net below zero (a leverantörskreditfaktura keyed in
-  // as an invoice) books 2440 on the debit side instead of a negative credit.
-  lines.push({
-    account_number: '2440',
-    ...creditNatural(totalDebits - totalCredits),
-    line_description: desc,
-    dimensions: coerceDimensionsBag(invoice.default_dimensions),
-    ...buildCurrencyMetadata(invoice.currency, isForeign ? invoice.total : undefined, invoice.exchange_rate),
-  })
+  // The same pure builder the review dialog previews before the invoice
+  // exists (crm#1190): the cost, moms and reverse-charge rows, and 2440 by
+  // their balance.
+  const lines = supplierInvoiceRegistrationLines(
+    invoice, items, supplierType, desc, await chartForRowLines(supabase, companyId, invoice, supplierType),
+  )
 
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
@@ -282,14 +193,25 @@ export async function buildSupplierInvoiceRegistrationEntryInput(
 }
 
 /**
+ * The company's momskoder when the invoice books omvänd skattskyldighet (the
+ * only case the row lines read them), else undefined without a read.
+ */
+async function chartForRowLines(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoice: SupplierInvoice,
+  supplierType: string,
+): Promise<ChartVatTreatments | undefined> {
+  return isSupplierInvoiceReverseCharge(invoice, supplierType)
+    ? fetchChartVatTreatments(supabase, companyId)
+    : undefined
+}
+
+/**
  * Every line the registration books for the invoice's rows, all but the skuld
- * on 2440: cost per (account, dimensions), ingående moms per rate or the
- * reverse-charge sets, and the SLP pair, each on the side the row's sign
- * gives it. The kreditfaktura (createSupplierCreditNoteEntry) books these same
- * lines on the other side, so an invoice and its credit note net to zero on
- * every account and dimension cell, a row that nets to a credit (rabatt,
- * öresavrundning downwards, the output side of a reverse charge) included.
- * The company's momskoder are read only for a reverse-charge invoice.
+ * on 2440 (supplierInvoiceRowLines), with the company's momskoder read for a
+ * reverse-charge invoice. The kreditfaktura (createSupplierCreditNoteEntry)
+ * books these same lines on the other side.
  */
 async function buildSupplierInvoiceRowLines(
   supabase: SupabaseClient,
@@ -299,108 +221,9 @@ async function buildSupplierInvoiceRowLines(
   supplierType: string,
   desc: string,
 ): Promise<CreateJournalEntryLineInput[]> {
-  const lines: CreateJournalEntryLineInput[] = []
-  // Dimensions PR7: expense lines carry item bags merged over the invoice
-  // default; every other line (VAT, RC/basis, 2440) carries the default only.
-  const defaultDimensions = coerceDimensionsBag(invoice.default_dimensions)
-
-  // Aggregate expense amounts by (account, dimensions) and convert to SEK.
-  // Periodiserade lines book their net to the 17xx interim account instead
-  // of the cost account (resolveBookingAccount); VAT and 2440 are untouched:
-  // moms is never deferred (redovisas på fakturadatum).
-  const expenseBuckets = groupExpenseBuckets(
-    items,
-    (item) => resolveBookingAccount('expense', item, item.account_number),
-    (item) => toSekOrThrow(item.line_total, invoice.currency, invoice.exchange_rate),
-    defaultDimensions
+  return supplierInvoiceRowLines(
+    invoice, items, supplierType, desc, await chartForRowLines(supabase, companyId, invoice, supplierType),
   )
-
-  // Debit: Expense accounts (in SEK). A bucket that nets below zero (rabatt
-  // row, öresavrundning on 3740) books as a credit of the absolute value:
-  // every line carries exactly one non-negative side (debitNatural).
-  const debitLines: CreateJournalEntryLineInput[] = []
-  for (const bucket of expenseBuckets) {
-    debitLines.push({
-      account_number: bucket.account,
-      ...debitNatural(bucket.amount),
-      line_description: desc,
-      dimensions: bucket.dimensions,
-    })
-  }
-  lines.push(...debitLines)
-
-  const isReverseCharge = (supplierType === 'eu_business' || supplierType === 'non_eu_business' || supplierType === 'swedish_business') && invoice.reverse_charge
-
-  if (isReverseCharge) {
-    // Reverse charge: fiktiv moms entries per rate group
-    // Domestic (byggtjänster etc.): 2647/26x4, EU/non-EU: 2645/26x4
-    //
-    // Also generate basbeloppsrader on 44xx/45xx + motkonto 4598 so SKV's
-    // momsdeklaration ruta 20-24 reflects the underlying purchase amount.
-    // Without these the fiktiv moms (2614/2624/2634) populates ruta 30-32
-    // but ruta 20-24 stay at 0, which Skatteverket rejects with felkod
-    // FK004 ("silent netting prohibited"; ML 13 kap kräver båda sidor).
-    //
-    // The basis-account check is done per item, on the account its net is
-    // booked on (groupReverseChargeByRate): an item on an account that reports
-    // ruta 20-24 itself (a 44xx/45xx basis account, or one whose momskod in
-    // the kontoplan is a reverse-charge purchase) already populates ruta 20-24
-    // via the expense line, so it takes no basbeloppsrader and is
-    // self-assessed at that account's momssats; only the rest of a rate's base
-    // gets them. Mixed invoices (4535 + 6540 at 25%) used to skip basis lines
-    // entirely under a per-invoice flag, leaving ruta 30 larger than ruta 21
-    // by the 6540 portion, the exact FK004 pattern.
-    //
-    // Drive iteration off the basis (line_total per rate), not stored
-    // vat_amount: fiktiv moms is always statutory base × rate. This keeps
-    // RC immune to per-line manual VAT overrides (which only make sense for
-    // domestic deductible-VAT adjustments).
-    const chart = await fetchChartVatTreatments(supabase, companyId)
-    const rcByRate = groupReverseChargeByRate(
-      items, chart, (item) => resolveBookingAccount('expense', item, item.account_number),
-      invoice.currency, invoice.exchange_rate,
-    )
-    const rcSupplierType = supplierType as 'eu_business' | 'non_eu_business' | 'swedish_business'
-    for (const [rate, { base, basisBase }] of rcByRate) {
-      if (rate > 0 && base > 0) {
-        const rcLines = generateReverseChargePurchaseLines({
-          base,
-          rate,
-          kind: reverseChargeKindForSupplierType(rcSupplierType),
-          basisBase,
-        })
-        lines.push(...rcLines.map((l) => ({ ...l, dimensions: defaultDimensions })))
-      }
-    }
-  } else if (itemsHaveVat(items, invoice.vat_treatment)) {
-    // Domestic standard: Debit ingående moms per rate group
-    const vatByRate = groupVatByRate(items, invoice.currency, invoice.exchange_rate, invoice.vat_treatment)
-    for (const [rate, amount] of vatByRate) {
-      if (amount > 0) {
-        lines.push({
-          account_number: '2641',
-          debit_amount: Math.round(amount * 100) / 100,
-          credit_amount: 0,
-          line_description: `Ingående moms ${Math.round(rate * 100)}% ${desc}`,
-          dimensions: defaultDimensions,
-        })
-      }
-    }
-  }
-
-  // Särskild löneskatt på pensionskostnader (SLP, 24.26 %): items flagged
-  // apply_slp (tjänstepensionspremier on 741x) get a self-balancing
-  // 7533 D / 2514 K pair, injected the same way the reverse-charge pairs are.
-  // The pair nets to zero, so the callers' 2440 balance guarantee keeps the
-  // payable at the invoice total: SLP is the buyer's own tax, never part of
-  // the supplier's fordran.
-  const slpBase = slpBaseSek(items, invoice.currency, invoice.exchange_rate)
-  if (slpBase > 0) {
-    const slpLines = generateSlpLines(slpBase)
-    lines.push(...slpLines.map((l) => ({ ...l, dimensions: defaultDimensions })))
-  }
-
-  return lines
 }
 
 export interface SupplierInvoicePaymentLinesOptions {
@@ -729,18 +552,12 @@ export function buildSupplierInvoiceCashLines(
   } else if (itemsHaveVat(items, invoice.vat_treatment)) {
     // Domestic standard: Debit ingående moms per rate group (at the payment-
     // date rate when settling a foreign invoice, see effectiveRate above).
-    const vatByRate = groupVatByRate(items, invoice.currency, effectiveRate, invoice.vat_treatment)
-    for (const [rate, amount] of vatByRate) {
-      if (amount > 0) {
-        lines.push({
-          account_number: '2641',
-          debit_amount: Math.round(amount * 100) / 100,
-          credit_amount: 0,
-          line_description: `Ingående moms ${Math.round(rate * 100)}% ${desc}`,
-          dimensions: defaultDimensions,
-        })
-      }
-    }
+    const vatByRate = groupVatByRate(
+      items,
+      (vat) => toSekOrThrow(vat, invoice.currency, effectiveRate),
+      invoice.vat_treatment,
+    )
+    lines.push(...inputVatLines(vatByRate, desc, defaultDimensions))
   }
 
   // Särskild löneskatt på pensionskostnader (SLP): same self-balancing
@@ -919,32 +736,14 @@ export function buildSupplierInvoicePrivatelyPaidLines(
     })
   }
 
-  // Debit: Ingående moms per rate group (mixed-rate kvitto support). Same
-  // per-item rule as groupVatByRate, without the SEK conversion: a stored
-  // override wins over the computed line_total x rate. Gated on the same
-  // vat_treatment contract as the AP paths: an exempt or export kvitto has
-  // no moms to lift off, so its gross belongs on the cost account.
+  // Ingående moms per rate group (mixed-rate kvitto support), by the same
+  // rule as the AP paths (groupVatByRate, inputVatLines) without the SEK
+  // conversion. Gated on the same vat_treatment contract: an exempt or
+  // export kvitto has no moms to lift off, so its gross belongs on the cost
+  // account.
   if (itemsHaveVat(items, invoice.vat_treatment)) {
-    const vatByRate = new Map<number, number>()
-    for (const item of items) {
-      const rate = item.vat_rate ?? 0.25
-      const storedVat = item.vat_amount ?? 0
-      const computedVat = rate > 0 ? roundOre((item.line_total ?? 0) * rate) : 0
-      const vat = storedVat > 0 ? storedVat : computedVat
-      vatByRate.set(rate, (vatByRate.get(rate) || 0) + vat)
-    }
-    for (const [rate, amount] of vatByRate) {
-      const vat = roundOre(amount)
-      if (vat > 0) {
-        lines.push({
-          account_number: '2641',
-          debit_amount: vat,
-          credit_amount: 0,
-          line_description: `Ingående moms ${Math.round(rate * 100)}% ${description}`,
-          dimensions: defaultDimensions,
-        })
-      }
-    }
+    const vatByRate = groupVatByRate(items, (vat) => vat, invoice.vat_treatment)
+    lines.push(...inputVatLines(vatByRate, description, defaultDimensions))
   }
 
   // Särskild löneskatt på pensionskostnader (SLP): same self-balancing
@@ -1133,134 +932,4 @@ async function buildSupplierCreditNoteLines(
   }
 
   return lines
-}
-
-/**
- * Group items by VAT rate and sum the stored VAT amount per rate.
- * Returns a Map<rate, totalVatAmount> in SEK for per-rate 2641 journal lines.
- *
- * Reads `item.vat_amount` directly: set by the API from the line's manual
- * override when present, else computed line_total × rate. This is the path
- * for partial-deductible cases (bilförmån 50%, representation 300 kr-tak),
- * foreign-currency rounding, and supplier POS rounding.
- *
- * Fallback to line_total × rate when vat_amount is null/0 but rate > 0:
- * legacy import paths (SIE, CSV, demo seed) sometimes leave vat_amount at
- * the column DEFAULT of 0. Silently dropping input VAT to 2641 would
- * understate ruta 48 in the momsdeklaration.
- *
- * Reverse-charge fiktiv moms doesn't use this: see groupReverseChargeByRate,
- * which derives the basis directly so fiktiv VAT is always base × statutory rate.
- */
-/**
- * True if any item would produce a non-zero ingående moms line: mirrors the
- * same stored-vs-computed fallback groupVatByRate uses (stored vat_amount,
- * else line_total × rate). Callers must gate the VAT branch on this instead
- * of invoice.vat_amount: that header field can come from a source (e.g. the
- * MCP inbox-conversion tool's OCR-extracted totals) that is never
- * reconciled against the items, so a stale or zero header would otherwise
- * silently suppress a correct per-line VAT posting.
- *
- * The invoice's vat_treatment is a required argument, not an optional one:
- * under `exempt` or `export` the supplier charged no Swedish moms at all, so
- * no 2641 line may be emitted whatever the stored rates say (issue #2553).
- * The rate cannot answer that on its own, because supplier_invoice_items
- * .vat_rate defaults to 0.25 in the database and every create path used to
- * fill an omitted rate with 25 %.
- */
-function itemsHaveVat(
-  items: SupplierInvoiceItem[],
-  vatTreatment: string | null | undefined
-): boolean {
-  if (!treatmentDeductsInputVat(vatTreatment)) return false
-  return items.some((item) => {
-    if ((item.vat_amount ?? 0) > 0) return true
-    const rate = item.vat_rate ?? 0.25
-    return rate > 0 && (item.line_total ?? 0) > 0
-  })
-}
-
-function groupVatByRate(
-  items: SupplierInvoiceItem[],
-  currency: string,
-  exchangeRate: number | null,
-  vatTreatment: string | null | undefined,
-): Map<number, number> {
-  const vatByRate = new Map<number, number>()
-  // Second gate on the same contract as itemsHaveVat, which every caller
-  // checks first: a stale stored 0.25 must never resurrect 2641.
-  if (!treatmentDeductsInputVat(vatTreatment)) return vatByRate
-  for (const item of items) {
-    const rate = item.vat_rate ?? 0.25
-    const storedVat = item.vat_amount ?? 0
-    const computedVat = rate > 0
-      ? Math.round((item.line_total ?? 0) * rate * 100) / 100
-      : 0
-    const sourceVat = storedVat > 0 ? storedVat : computedVat
-    const vatSek = toSekOrThrow(sourceVat, currency, exchangeRate)
-    vatByRate.set(rate, (vatByRate.get(rate) || 0) + vatSek)
-  }
-  return vatByRate
-}
-
-/**
- * Group items by their self-assessed reverse-charge rate and sum, per rate,
- * the base (line_total in SEK) and the part of it that needs the basis pair.
- * Used by reverse-charge paths to compute fiktiv moms from the basis,
- * decoupled from any manual VAT override on the items.
- *
- * Each item is assessed on the account its net is booked on (`bookedAccount`:
- * a periodiserad line sits on its 17xx interim account, which reports
- * nothing) by reverseChargeOnAccount with the company's momskoder (crm#1096).
- * An item on an account that reports ruta 20-24 itself (a 44xx/45xx basis
- * account, or a class 4-6 account whose momskod in the kontoplan is a
- * reverse-charge purchase) populates ruta 20-24 directly via the expense
- * line, so it takes no basis pair (that would count it twice) and is
- * self-assessed at that account's momssats, where the declaration buckets its
- * basis. Any other item keys on its *self-assessed* rate
- * (resolveReverseChargeRate), not the line's vat_rate: under omvänd
- * skattskyldighet the supplier charges 0%, so the line vat_rate is 0, but the
- * buyer self-assesses at 25% (huvudregeln) or the explicit per-item
- * reverse_charge_rate. Without this a 0%-rate RC line would key on rate 0 and
- * the `rate > 0` guard of the callers would skip its VAT lines.
- */
-function groupReverseChargeByRate(
-  items: SupplierInvoiceItem[],
-  chart: ChartVatTreatments,
-  bookedAccount: (item: SupplierInvoiceItem) => string,
-  currency: string,
-  exchangeRate: number | null,
-): Map<number, { base: number; basisBase: number }> {
-  const byRate = new Map<number, { base: number; basisBase: number }>()
-  for (const item of items) {
-    if (isSupplierInvoiceRoundingItem(item, item.line_total, currency)) continue
-    const { rate, basisPair } = reverseChargeOnAccount(bookedAccount(item), resolveReverseChargeRate(item), chart)
-    const baseSek = toSekOrThrow(item.line_total, currency, exchangeRate)
-    const group = byRate.get(rate) ?? { base: 0, basisBase: 0 }
-    group.base += baseSek
-    if (basisPair) group.basisBase += baseSek
-    byRate.set(rate, group)
-  }
-  return byRate
-}
-
-/**
- * Sum, in SEK, the base for särskild löneskatt på pensionskostnader: items
- * flagged apply_slp whose account is a 741x pension-premium account
- * (tjänstepensionspremier). The create routes reject apply_slp on any other
- * account; the account check here is defense in depth so a tampered or
- * legacy row can never SLP-flag an arbitrary expense.
- */
-function slpBaseSek(
-  items: SupplierInvoiceItem[],
-  currency: string,
-  exchangeRate: number | null | undefined,
-): number {
-  let base = 0
-  for (const item of items) {
-    if (item.apply_slp !== true) continue
-    if (!isSlpPensionAccount(item.account_number)) continue
-    base += toSekOrThrow(item.line_total, currency, exchangeRate)
-  }
-  return base
 }

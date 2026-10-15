@@ -26,6 +26,13 @@ import {
   type LedgerTwinProbe,
   type SkattekontoMatchCandidate,
 } from './skattekonto-match'
+import {
+  findDirectLedgerHolders,
+  findDirectLedgerHoldersForIds,
+  isCashAccount,
+  sameCounterLine,
+  type SkattekontoCounterLine,
+} from './skattekonto-direct'
 import type {
   CreateJournalEntryInput,
   CreateJournalEntryLineInput,
@@ -103,11 +110,14 @@ export class SkattekontoBookingError extends Error {
       | 'ROW_IGNORED'
       | 'TRANSACTION_NOT_FOUND'
       | 'LEDGER_TWIN_EXISTS'
-      | 'LEDGER_COVER_EXISTS',
+      | 'LEDGER_COVER_EXISTS'
+      | 'LEDGER_DIRECT_EXISTS',
     /** The verifikat that already carry the event (LEDGER_TWIN_EXISTS only). */
     public readonly ledgerTwins?: SkattekontoLedgerTwin[],
     /** The unlinked verifikat that already hold the event (LEDGER_COVER_EXISTS only). */
     public readonly ledgerCover?: SkattekontoLedgerCoverInfo,
+    /** The verifikat that hold the event without the skattekonto (LEDGER_DIRECT_EXISTS only). */
+    public readonly ledgerDirect?: SkattekontoLedgerTwin[],
   ) {
     super(message)
     this.name = 'SkattekontoBookingError'
@@ -845,6 +855,41 @@ export function ledgerCoverMessage(cover: SkattekontoLedgerCoverInfo): string {
   )
 }
 
+/** "verifikat A14 (2026-02-28)", up to three, "och N till" for the rest. */
+function verifikatList(entries: SkattekontoLedgerTwin[]): string {
+  const ref = (t: SkattekontoLedgerTwin) =>
+    t.voucher_number != null && t.voucher_number !== 0
+      ? `verifikat ${formatVoucher(t)} (${t.entry_date})`
+      : `ett utkast (${t.entry_date})`
+  const shown = entries.slice(0, 3).map(ref)
+  const rest = entries.length - shown.length
+  if (rest > 0) return `${shown.join(', ')} och ${rest} till`
+  return shown.length > 1 ? `${shown.slice(0, -1).join(', ')} och ${shown[shown.length - 1]}` : shown[0]
+}
+
+/**
+ * Swedish refusal for a row whose event the ledger already holds without the
+ * skattekonto (skattekonto-direct.ts): which verifikat, what it books, and
+ * the ways out. Linking is no way out here: the verifikat has no line on
+ * the skattekonto account to link (matchSkattekontoToEntry refuses it).
+ */
+export function ledgerDirectMessage(
+  holders: SkattekontoLedgerTwin[],
+  counter: SkattekontoCounterLine,
+  account: SkattekontoLedgerAccount,
+): string {
+  const amount = formatCurrency(Math.abs(counter.net), 'SEK', { minimumFractionDigits: 2 })
+  const what = isCashAccount(counter.account)
+    ? `betalningen, ${amount} på konto ${counter.account},`
+    : `${amount} på konto ${counter.account} direkt mot banken,`
+  return (
+    `Händelsen finns redan i bokföringen utan skattekontot: ${verifikatList(holders)} bokför redan ${what} utan någon rad på konto ${account}. ` +
+    'Bokförs raden kommer händelsen med två gånger. ' +
+    `Låt raden vara obokförd (ignorera den), eller rätta verifikatet så att betalningen går via konto ${account} och koppla sedan raden till det. ` +
+    'Bokför ändå bara om händelsen verkligen saknas i bokföringen.'
+  )
+}
+
 /** The longest reason an override keeps: what the verifikat notes carry. */
 export const DUPLICATE_REASON_MAX_LENGTH = 500
 
@@ -865,10 +910,11 @@ export function duplicateOverrideNote(
   twins: SkattekontoLedgerTwin[],
   held: SkattekontoLedgerCoverInfo | null,
   account: SkattekontoLedgerAccount,
+  direct: SkattekontoLedgerTwin[] = [],
 ): string {
   const ref = (t: SkattekontoLedgerTwin) =>
     t.voucher_number != null && t.voucher_number !== 0 ? formatVoucher(t) : `utkast ${t.entry_date}`
-  const refs = (twins.length > 0 ? twins : (held?.entries ?? [])).slice(0, 5).map(ref).join(', ')
+  const refs = (twins.length > 0 ? twins : held ? held.entries : direct).slice(0, 5).map(ref).join(', ')
   return `Bokförd trots att bokföringen redan innehåller händelsen (${refs || `verifikat på konto ${account}`}). Skäl: ${reason}`
 }
 
@@ -968,6 +1014,25 @@ export function buildSkattekontoEntry(
 }
 
 /**
+ * The counter line of a built skattekonto verifikat: the line that is not on
+ * the skattekonto account and not the 3740 öresavrundning, in ledger sign.
+ * What the direct-booking check (skattekonto-direct.ts) looks for.
+ */
+export function counterLineOf(
+  entry: Pick<CreateJournalEntryInput, 'lines'>,
+  account: SkattekontoLedgerAccount,
+): SkattekontoCounterLine | null {
+  const line = entry.lines.find(
+    (l) => l.account_number !== account && l.account_number !== VAT_ROUNDING_ACCOUNT,
+  )
+  if (!line) return null
+  return {
+    account: line.account_number,
+    net: roundOre(Number(line.debit_amount || 0) - Number(line.credit_amount || 0)),
+  }
+}
+
+/**
  * Create a draft journal entry for one skattekonto_transactions row.
  *
  * Throws SkattekontoBookingError on:
@@ -978,6 +1043,9 @@ export function buildSkattekontoEntry(
  *   - a ledger hold: unlinked verifikat on 1630 already hold the event, in
  *     aggregate or by the ledger plan (LEDGER_COVER_EXISTS, ledgerHoldOf),
  *     unless overridden with a reason
+ *   - a direct booking: a bank verifikat without any 1630 line already books
+ *     the counter line in the event's month (LEDGER_DIRECT_EXISTS,
+ *     skattekonto-direct.ts), unless overridden with a reason
  *   - missing/locked fiscal period for the transaktionsdatum
  *   - no rule match → user must categorize manually
  *
@@ -1012,6 +1080,11 @@ export async function bokforSkattekontoTransaction(
     // ledgerHolding: the company's holding (null = no skattekonto), computed
     // once by a batch caller. Omitted → computed here.
     ledgerHolding?: SkattekontoLedgerHolding | null
+    // ledgerDirect: this row's direct holders, precomputed by a batch caller
+    // for the counter line it resolved then. Used only while the counter
+    // line is still the same (a refund booked earlier in the batch can move
+    // the next one from 1650 to 2650); otherwise searched here.
+    ledgerDirect?: { counter: SkattekontoCounterLine; holders: SkattekontoLedgerTwin[] }
   },
 ): Promise<JournalEntry> {
   // 1. Load the transaction
@@ -1104,10 +1177,6 @@ export async function bokforSkattekontoTransaction(
   if (held && !reason) {
     throw new SkattekontoBookingError(ledgerCoverMessage(held), 'LEDGER_COVER_EXISTS', undefined, held)
   }
-  // Booked over a twin or a hold: the verifikat itself says so, what it
-  // overrode and why, so the decision stays with the record (BFNAR 2013:2
-  // p. 9.16) whichever door booked it.
-  const overrideNote = reason && (twins.length > 0 || held) ? duplicateOverrideNote(reason, twins, held, account) : null
 
   // 2+3. Resolve counter-account via skattekonto_rules (entity_type decides
   // AB/EF-specific accounts; requires_employer gates payroll rules for a
@@ -1141,6 +1210,50 @@ export async function bokforSkattekontoTransaction(
     )
   }
 
+  // The verifikat, from the builder the staging preview shows too.
+  const built = buildSkattekontoEntry(tx, guess, ctx.account)
+
+  // Nothing on the skattekonto account holds the event, yet the ledger may
+  // hold it without that account: a previous system that paid the tax
+  // straight from the bank to the tax accounts, or a bank line booked here
+  // as 1930 against 2510 (PH 171). Every guard above reads the skattekonto
+  // account and finds nothing. The check is the counter line itself: a bank
+  // verifikat in the event's month that already books exactly it
+  // (skattekonto-direct.ts). It needs the counter account, so it runs after
+  // the rule match. Linking is no way out (no skattekonto line to link):
+  // the answer is to leave the row unbooked, or to correct the verifikat;
+  // the same override books it anyway.
+  const counter = counterLineOf(built, ctx.account)
+  const direct =
+    twins.length === 0 && !held && counter
+      ? options?.ledgerDirect && sameCounterLine(options.ledgerDirect.counter, counter)
+        ? options.ledgerDirect.holders
+        : ((
+            await findDirectLedgerHolders(
+              supabase,
+              companyId,
+              [{ id: tx.id, transaktionsdatum: tx.transaktionsdatum, counter }],
+              ctx.account,
+            )
+          ).get(tx.id) ?? [])
+      : []
+  if (direct.length > 0 && counter && !reason) {
+    throw new SkattekontoBookingError(
+      ledgerDirectMessage(direct, counter, ctx.account),
+      'LEDGER_DIRECT_EXISTS',
+      undefined,
+      undefined,
+      direct,
+    )
+  }
+  // Booked over a twin, a hold or a direct booking: the verifikat itself
+  // says so, what it overrode and why, so the decision stays with the record
+  // (BFNAR 2013:2 p. 9.16) whichever door booked it.
+  const overrideNote =
+    reason && (twins.length > 0 || held || direct.length > 0)
+      ? duplicateOverrideNote(reason, twins, held, account, direct)
+      : null
+
   // 4. Resolve fiscal period for entry date
   const fiscalPeriodId = await findFiscalPeriod(
     supabase,
@@ -1172,8 +1285,7 @@ export async function bokforSkattekontoTransaction(
     )
   }
 
-  // 5. The verifikat, from the builder the staging preview shows too.
-  const built = buildSkattekontoEntry(tx, guess, ctx.account)
+  // 5. The verifikat built above, in its fiscal period.
   const input: CreateJournalEntryInput = {
     ...built,
     ...(overrideNote ? { notes: `${built.notes} ${overrideNote}` } : {}),
@@ -1257,9 +1369,11 @@ function isPeriodLockTriggerError(err: unknown): boolean {
  *
  * A row whose event the ledger already holds is skipped with
  * LEDGER_TWIN_EXISTS and its twins listed, or with LEDGER_COVER_EXISTS when
- * unlinked verifikat on 1630 hold it (ledgerHoldOf), unless its id is in
- * `allowDuplicateIds` and a `duplicateReason` is given: then it is booked
- * and the verifikat notes the reason. The twins of all rows are searched once
+ * unlinked verifikat on 1630 hold it (ledgerHoldOf), or with
+ * LEDGER_DIRECT_EXISTS when a bank verifikat without 1630 already books it
+ * (skattekonto-direct.ts), unless its id is in `allowDuplicateIds` and a
+ * `duplicateReason` is given: then it is booked and the verifikat notes the
+ * reason. The twins of all rows are searched once
  * up front, and the holding is one bridge computation for the whole batch:
  * booking a row moves the same amount onto both sides of its date, so the
  * holding does not move while the other rows are booked.
@@ -1285,6 +1399,30 @@ export async function bokforSkattekontoTransactionsBatch(
   )
   const ledgerHolding =
     ids.length > 0 ? await findSkattekontoLedgerHolding(supabase, companyId, ruleContext.account) : null
+  // The direct-booking check (skattekonto-direct.ts) for the rows neither a
+  // twin nor the holding answers, in one search: each row's counter line is
+  // resolved the way its booking resolves it. A row whose line has changed
+  // by its turn (a refund before it cleared 1650) searches for itself.
+  const directByRow = await findDirectLedgerHoldersForIds(
+    supabase,
+    companyId,
+    ids.filter((id) => (twinsByRow.get(id)?.length ?? 0) === 0 && !ledgerHoldOf(ledgerHolding, id)),
+    ruleContext.account,
+    async (row) => {
+      const outcome = await resolveCounterAccount(
+        ruleContext,
+        {
+          transaktionstext: row.transaktionstext,
+          belopp: Number(row.belopp_skatteverket),
+          transaktionsdatum: row.transaktionsdatum,
+        },
+        readVatReceivableBalance(supabase, companyId),
+      )
+      return outcome.kind === 'match'
+        ? counterLineOf(buildSkattekontoEntry(row, outcome.match, ruleContext.account), ruleContext.account)
+        : null
+    },
+  )
   // A one-row batch is the inline single-row flow: attribute it as a normal
   // user acceptance; real bulk runs are attributed as bulk_accept.
   const commitMethod = ids.length === 1 ? 'user_accept' : 'bulk_accept'
@@ -1306,6 +1444,7 @@ export async function bokforSkattekontoTransactionsBatch(
           ...(reason && allowDuplicate.has(id) ? { duplicateReason: reason } : {}),
           ledgerTwins: twinsByRow.get(id),
           ledgerHolding,
+          ledgerDirect: directByRow.get(id),
         },
       )
     } catch (err) {
@@ -1317,6 +1456,7 @@ export async function bokforSkattekontoTransactionsBatch(
           error_message: err.message,
           ...(err.ledgerTwins ? { ledger_twins: err.ledgerTwins } : {}),
           ...(err.ledgerCover ? { ledger_cover: err.ledgerCover } : {}),
+          ...(err.ledgerDirect ? { ledger_direct: err.ledgerDirect } : {}),
         })
       } else if (isPeriodLockTriggerError(err)) {
         results.push({

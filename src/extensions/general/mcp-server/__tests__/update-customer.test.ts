@@ -5,6 +5,7 @@ import { OPERATION_RISK_TIERS } from '@/lib/pending-operations/risk-tiers'
 import { hashRequest } from '@/lib/api/idempotency'
 import { decryptPersonnummer, encryptPersonnummer } from '@/lib/salary/personnummer'
 import { tools, isDefaultCatalogTool } from '../server'
+import { findUnknownArgKeys } from '../arg-guard'
 
 const CUSTOMER_ID = '11111111-1111-4111-8111-111111111111'
 const tool = () => tools.find((candidate) => candidate.name === 'gnubok_update_customer')!
@@ -496,5 +497,71 @@ describe('gnubok_update_customer: org_number on an individual', () => {
         supabase as never,
       ),
     ).rejects.toMatchObject({ code: 'CUSTOMER_ORG_NUMBER_ON_INDIVIDUAL' })
+  })
+})
+
+// crm#1198: contact_person and the cc list were missing from the tool's
+// argument list, which the dispatcher enforces before the schema is reached.
+describe('gnubok_update_customer: contact person and invoice copies', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  const change = { contact_person: 'Anna Andersson', invoice_email_cc_addresses: ['ekonomi@kund.example'] }
+
+  it('lets both fields past the dispatcher\'s argument guard', () => {
+    expect(findUnknownArgKeys(tool().inputSchema as Record<string, unknown>, { customer_id: CUSTOMER_ID, ...change })).toEqual([])
+  })
+
+  it('stages the change with what it replaces', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: currentCustomer({ contact_person: null, invoice_email_cc_addresses: null }) })
+    enqueue({ data: { id: 'op-contact-1' } })
+
+    const result = (await tool().execute(
+      { customer_id: CUSTOMER_ID, ...change },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: { current: Record<string, unknown>; changes: Record<string, unknown> } }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.current).toMatchObject({ contact_person: null, invoice_email_cc_addresses: null })
+    expect(result.preview.changes).toEqual(change)
+    const inserted = findCall('pending_operations', 'insert')?.[0] as { params: { changes: Record<string, unknown> } }
+    expect(inserted.params).toEqual({ customer_id: CUSTOMER_ID, changes: change })
+  })
+
+  it('stages an empty contact person and an empty list as clears, as the web form sends them', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: currentCustomer({ contact_person: 'Anna Andersson', invoice_email_cc_addresses: ['ekonomi@kund.example'] }) })
+    enqueue({ data: { id: 'op-contact-clear' } })
+
+    await tool().execute(
+      { customer_id: CUSTOMER_ID, contact_person: '', invoice_email_cc_addresses: [] },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )
+
+    const inserted = findCall('pending_operations', 'insert')?.[0] as { params: { changes: Record<string, unknown> } }
+    expect(inserted.params.changes).toEqual({ contact_person: '', invoice_email_cc_addresses: [] })
+  })
+
+  it('refuses a cc address that is not an email before reading the customer', async () => {
+    const { supabase } = createQueuedMockSupabase()
+
+    await expect(
+      tool().execute(
+        { customer_id: CUSTOMER_ID, invoice_email_cc_addresses: ['ekonomi'] },
+        'company-1',
+        'user-1',
+        supabase as never,
+      ),
+    ).rejects.toMatchObject({
+      code: 'VALIDATION_ERROR',
+      issues: [expect.objectContaining({ field: 'invoice_email_cc_addresses.0' })],
+    })
+    expect(supabase.from).not.toHaveBeenCalled()
   })
 })

@@ -185,4 +185,17 @@ describe('POST /skattekonto/transaktioner/:id/bokfor', () => {
     expect(res.status).toBe(409)
     expect(await res.json()).toMatchObject({ code: 'LEDGER_COVER_EXISTS', ledger_cover: cover })
   })
+
+  it('answers LEDGER_DIRECT_EXISTS with 409 and the bank verifikat that already book the event (PH 171)', async () => {
+    const holder: SkattekontoLedgerTwin = { ...TWIN, journal_entry_id: 'je-14', voucher_number: 14, description: 'Avstämning skattekonto' }
+    vi.mocked(bokforSkattekontoTransaction).mockRejectedValue(
+      new SkattekontoBookingError('Händelsen finns redan i bokföringen utan skattekontot.', 'LEDGER_DIRECT_EXISTS', undefined, undefined, [holder]),
+    )
+    const res = await findRoute().handler(makeRequest(), makeContext())
+    expect(res.status).toBe(409)
+    const json = await res.json()
+    expect(json).toMatchObject({ code: 'LEDGER_DIRECT_EXISTS', ledger_direct: [holder] })
+    expect(json).not.toHaveProperty('ledger_twins')
+    expect(json).not.toHaveProperty('ledger_cover')
+  })
 })

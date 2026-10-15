@@ -21,6 +21,7 @@
 
 import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFileParseIssue } from '../types'
 import { prepareContent } from '../../shared/encoding'
+import { preambleAccountIdentity } from '../account-identity'
 import { normalizeDate } from '../date-utils'
 import { parseCSVLine } from './nordea'
 import { parseSwedishAmount } from '@/lib/money'
@@ -186,6 +187,8 @@ export const handelsbankenFormat: BankFileFormat = {
       format: 'handelsbanken',
       format_name: 'Handelsbanken',
       transactions,
+      // The "Kontonummer" line above the header (crm#1204).
+      account: preambleAccountIdentity(lines, headerLineIdx),
       date_from: dates[0] || null,
       date_to: dates[dates.length - 1] || null,
       issues,

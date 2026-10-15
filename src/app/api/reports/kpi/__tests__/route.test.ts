@@ -37,16 +37,35 @@ vi.mock('@/lib/reports/monthly-breakdown', async (importOriginal) => {
   return { ...actual, generateMonthlyBreakdown: vi.fn() }
 })
 
+// The data status reads its own tables; it is covered in
+// lib/reports/__tests__/data-status.test.ts. Mocked here so its reads do not
+// draw from the queued client the report consumes in order.
+vi.mock('@/lib/reports/data-status', () => ({ buildReportDataStatus: vi.fn() }))
+
 import { GET } from '../route'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { generateARLedger } from '@/lib/reports/ar-ledger'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { generateMonthlyBreakdown } from '@/lib/reports/monthly-breakdown'
+import { buildReportDataStatus, type ReportDataStatus } from '@/lib/reports/data-status'
 
 const mockTrialBalance = vi.mocked(generateTrialBalance)
 const mockARLedger = vi.mocked(generateARLedger)
 const mockIncomeStatement = vi.mocked(generateIncomeStatement)
 const mockMonthlyBreakdown = vi.mocked(generateMonthlyBreakdown)
+const mockDataStatus = vi.mocked(buildReportDataStatus)
+
+const DATA_STATUS: ReportDataStatus = {
+  computed_at: '2026-03-15T09:00:00.000Z',
+  range: { from: '2026-01-01', to: '2026-03-31' },
+  period: { period_id: 'period-1', name: '2026', status: 'open', lock_date: null },
+  accounting_method: 'accrual',
+  unbooked_transactions: 7,
+  draft_entries: 0,
+  bank: { feed_status: 'active', last_sync_at: '2026-02-20T06:00:00Z', stale: true, reconciled_through: null },
+  preliminary: true,
+  caveats: [],
+}
 
 const noParams = { params: Promise.resolve({}) }
 
@@ -174,6 +193,7 @@ beforeEach(() => {
   reset()
   authed()
   mockARLedger.mockResolvedValue({ total_outstanding: 1500, total_overdue: 500 } as never)
+  mockDataStatus.mockResolvedValue(DATA_STATUS)
 })
 
 describe('GET /api/reports/kpi', () => {
@@ -182,17 +202,21 @@ describe('GET /api/reports/kpi', () => {
     const res = await GET(kpiRequest(), noParams)
     expect(res.status).toBe(401)
     expect(supabase.rpc).not.toHaveBeenCalled()
+    expect(mockDataStatus).not.toHaveBeenCalled()
   })
 
   it('returns 400 when period_id is missing', async () => {
     const res = await GET(kpiRequest({}), noParams)
     expect(res.status).toBe(400)
+    expect(mockDataStatus).not.toHaveBeenCalled()
   })
 
   it('returns 404 for an unknown fiscal period', async () => {
     enqueue({ data: null, error: { message: 'not found' } })
     const res = await GET(kpiRequest(), noParams)
-    expect(res.status).toBe(404)
+    const { status, body } = await parseJsonResponse<Record<string, unknown>>(res)
+    expect(status).toBe(404)
+    expect(body).not.toHaveProperty('data_status')
   })
 
   it('returns 400 for a half-provided dimension pair', async () => {
@@ -256,6 +280,48 @@ describe('GET /api/reports/kpi', () => {
     expect(mockTrialBalance).not.toHaveBeenCalled()
     expect(mockIncomeStatement).not.toHaveBeenCalled()
     expect(mockMonthlyBreakdown).not.toHaveBeenCalled()
+  })
+
+  it('returns the data status beside the report: unbooked bank rows and the feed\'s last sync over the period', async () => {
+    enqueue({ data: makePeriod() })
+    enqueueHotPath(SUPPLIER_ROWS)
+
+    const res = await GET(kpiRequest(), noParams)
+    const { status, body } = await parseJsonResponse<{ data: KPIReport; data_status: ReportDataStatus }>(res)
+
+    expect(status).toBe(200)
+    expect(body.data.netResult).toBe(7000)
+    expect(body.data_status).toEqual(DATA_STATUS)
+    // The fiscal period decides the range, same call as the MCP tool makes.
+    expect(mockDataStatus).toHaveBeenCalledWith(supabase, 'company-1', { periodId: 'period-1' })
+  })
+
+  it('stays company-wide under a dimension filter: the status gets the period, never the dimension', async () => {
+    enqueue({ data: makePeriod() })
+    mockTrialBalance.mockResolvedValue({ rows: [] } as never)
+    mockIncomeStatement.mockResolvedValue({ net_result: 0, total_revenue: 0, total_expenses: 0 } as never)
+    mockMonthlyBreakdown.mockResolvedValue({ months: [] } as never)
+    enqueue({ data: null }) // extension_data prefs
+    enqueue({ data: [] }) // invoices
+    enqueue({ data: [] }) // supplier_invoices
+
+    await GET(kpiRequest({ period_id: 'period-1', dim_no: '6', dim_code: 'P001' }), noParams)
+
+    expect(mockDataStatus).toHaveBeenCalledTimes(1)
+    expect(mockDataStatus).toHaveBeenCalledWith(supabase, 'company-1', { periodId: 'period-1' })
+  })
+
+  it('still answers with the report when the data status could not be read', async () => {
+    mockDataStatus.mockResolvedValue({ unavailable: true, reason: 'bank connection read failed' })
+    enqueue({ data: makePeriod() })
+    enqueueHotPath(SUPPLIER_ROWS)
+
+    const res = await GET(kpiRequest(), noParams)
+    const { status, body } = await parseJsonResponse<{ data: KPIReport; data_status: unknown }>(res)
+
+    expect(status).toBe(200)
+    expect(body.data.netResult).toBe(7000)
+    expect(body.data_status).toEqual({ unavailable: true, reason: 'bank connection read failed' })
   })
 
   it('reads the same account overrides, as-of receivables and period payments as the MCP tool', async () => {

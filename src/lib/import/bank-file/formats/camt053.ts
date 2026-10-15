@@ -22,9 +22,10 @@
  * payer or OCR is attributed to the whole batch.
  */
 
-import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFileParseIssue } from '../types'
+import type { BankFileAccountIdentity, BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFileParseIssue } from '../types'
 import { prepareContent } from '../../shared/encoding'
 import { ISO_DATE_RE } from '@/lib/invariants'
+import { accountIdentity, sharedAccountIdentity } from '../account-identity'
 
 /** Markers of a camt.053 statement: its namespace, root element or long name. */
 const CAMT053_MARKERS = ['camt.053', 'bktocstmrstmt', 'banktocustomerstatement']
@@ -192,6 +193,7 @@ export const camt053Format: BankFileFormat = {
       format: 'camt053',
       format_name: 'ISO 20022 camt.053',
       transactions,
+      account: statementAccount(prepared),
       date_from: dates[0] || null,
       date_to: dates[dates.length - 1] || null,
       issues,
@@ -217,6 +219,28 @@ export const camt053Format: BankFileFormat = {
 function entryKey(date: string, acctSvcrRef: string | null, entryRef: string | null): string | null {
   if (!acctSvcrRef && !entryRef) return null
   return [date, acctSvcrRef, entryRef].filter(Boolean).join('_')
+}
+
+/**
+ * The account the statements are for (crm#1204): <Stmt><Acct><Id>, an <IBAN>
+ * or a domestic number in <Othr><Id>. Read from each statement's header, the
+ * part before its first <Ntry>, so a counterparty's <DbtrAcct>/<CdtrAcct> is
+ * never taken for it. Null when a statement names none, or the statements
+ * name different accounts (a SEK and a EUR account in one file).
+ */
+function statementAccount(xml: string): BankFileAccountIdentity | null {
+  const statements = extractElements(xml, 'Stmt')
+  const identities = statements.map((statement) => {
+    const ntryIdx = statement.search(/<Ntry(?=[\s>/])/i)
+    const header = ntryIdx === -1 ? statement : statement.slice(0, ntryIdx)
+    const account = extractElements(header, 'Acct')[0]
+    if (!account) return null
+    return accountIdentity({
+      iban: extractTextContent(account, 'IBAN'),
+      account_number: extractNestedText(account, 'Othr', 'Id'),
+    })
+  })
+  return identities.length > 0 ? sharedAccountIdentity(identities) : null
 }
 
 /**

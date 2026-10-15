@@ -43,6 +43,7 @@ import type { ImportExecuteOptions } from '@/components/import/ImportReviewStep'
 import { applyMappingOverride, isValidBASRange } from '@/lib/import/account-mapper'
 import { decodeFileContent } from '@/lib/import/shared/encoding'
 import type { BankFileParseResult, BankFileFormatId, BankFileDuplicateInfo, GenericCSVColumnMapping } from '@/lib/import/bank-file/types'
+import type { FileAccountMatch } from '@/lib/cash-accounts/file-account'
 import type { SkattekontoFileParseResult } from '@/lib/import/skattekonto-file/types'
 import type { SkattekontoFileImportResult } from '@/components/import/SkattekontoFileResultStep'
 import type { IngestResult } from '@/types'
@@ -166,14 +167,25 @@ function BankFileImportWizard() {
   // (execute-side dedup still skips, and the result step reports the count).
   const [duplicateInfo, setDuplicateInfo] = useState<BankFileDuplicateInfo | null>(null)
 
-  const checkDuplicates = useCallback(async (transactions: BankFileParseResult['transactions'], format: BankFileFormatId) => {
+  // The cash account the file's own bank account already is (crm#1204), from
+  // the parse route. The confirm step pre-selects it and offers no other;
+  // execute refuses any other ledger.
+  const [accountMatch, setAccountMatch] = useState<FileAccountMatch | null>(null)
+
+  const checkDuplicates = useCallback(async (
+    transactions: BankFileParseResult['transactions'],
+    format: BankFileFormatId,
+    settlementAccount?: string,
+  ) => {
     setDuplicateInfo(null)
     if (transactions.length === 0) return
     try {
       const res = await fetch('/api/import/bank-file/check-duplicates', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transactions, format }),
+        // A known settlement account makes the preview guard accounts the way
+        // execute does, so rows of another bank account are not flagged.
+        body: JSON.stringify({ transactions, format, settlement_account: settlementAccount }),
       })
       if (!res.ok) return
       const data = await res.json()
@@ -264,6 +276,8 @@ function BankFileImportWizard() {
       }
 
       setParseResult(data.data.parse_result)
+      const match: FileAccountMatch | null = data.data.account_match ?? null
+      setAccountMatch(match)
       setDetectedFormat(data.data.detected_format)
       setDetectedFormatName(data.data.detected_format_name)
       setFileHash(data.data.file_hash)
@@ -287,7 +301,11 @@ function BankFileImportWizard() {
       } else if (txCount > 0) {
         // Fire-and-forget: the warning card/badges appear when the answer
         // lands; the wizard never waits for it.
-        void checkDuplicates(data.data.parse_result.transactions, data.data.parse_result.format)
+        void checkDuplicates(
+          data.data.parse_result.transactions,
+          data.data.parse_result.format,
+          match?.ledger_account,
+        )
         setBankStep('preview')
         toast({
           title: 'Fil analyserad',
@@ -343,6 +361,8 @@ function BankFileImportWizard() {
           format: parseResult.format,
           filename,
           file_hash: fileHash,
+          // The file's own account: execute refuses a ledger of another one.
+          account: parseResult.account ?? null,
           ...options,
         }),
       })
@@ -384,6 +404,7 @@ function BankFileImportWizard() {
     setSkattekontoDetected(false)
     setRawFileContent('')
     setDuplicateInfo(null)
+    setAccountMatch(null)
   }
 
   return (
@@ -463,6 +484,8 @@ function BankFileImportWizard() {
         <BankFileConfirmStep
           parseResult={parseResult}
           duplicateInfo={duplicateInfo}
+          accountMatch={accountMatch}
+          error={bankError}
           onExecute={handleExecuteImport}
           onBack={() => {
             if (parseResult.format === 'generic_csv') {

@@ -38,6 +38,7 @@ import { SKATTEKONTO_ACCOUNT_KEY } from '@/lib/reconciliation/schemas'
 import { SkattekontoLinkError } from '@/lib/skatteverket/skattekonto-link'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { createCustomer, PERSONAL_NUMBER_CIPHERTEXT_RE, updateCustomer } from '@/lib/customers/customer-commands'
+import { toCustomerRecord } from '@/lib/customers/customer-record'
 import {
   normalizeVatRateToDecimal,
   treatmentDeductsInputVat,
@@ -141,7 +142,7 @@ import {
   documentHeldElsewhereReasonSv,
   isDocumentImmutabilityRefusal,
 } from '@/lib/documents/link-holder'
-import { linkDocumentToVoucher, type LinkDocumentRefusal } from '@/lib/documents/link-document'
+import { linkDocumentCopyToVoucher, linkDocumentToVoucher, type LinkDocumentRefusal } from '@/lib/documents/link-document'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { classifyError, isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 import { requiresWebApproval } from '@/lib/pending-operations/risk-tiers'
@@ -759,32 +760,16 @@ async function commitUpdateCustomer(
   })
   if (!outcome.ok) return registerCommandFailure(outcome)
   if (outcome.dryRun) throw new Error('update_customer: unexpected dry-run outcome')
-  const data = outcome.data
-  return {
-    data: {
-      customer_id: data.id,
-      name: data.name,
-      customer_type: data.customer_type,
-      customer_number: data.customer_number ?? null,
-      email: data.email ?? null,
-      phone: data.phone ?? null,
-      address_line1: data.address_line1 ?? null,
-      address_line2: data.address_line2 ?? null,
-      postal_code: data.postal_code ?? null,
-      city: data.city ?? null,
-      country: data.country,
-      org_number: data.org_number ?? null,
-      vat_number: data.vat_number ?? null,
-      vat_number_validated: data.vat_number_validated ?? false,
-      language: data.language ?? 'sv',
-      default_payment_terms: data.default_payment_terms,
-      notes: data.notes ?? null,
-      // Never the stored ciphertext, and never plaintext: result_data is
-      // persisted on the pending operation and rendered in approval UIs. The
-      // command's row is already masked.
-      personal_number_masked: data.personal_number ?? null,
-    },
-  }
+  // The record gnubok_get_customer reads (lib/customers/customer-record.ts),
+  // so every field an update can change comes back: a hand-kept list here
+  // left out contact_person and the invoice copy lists (crm#1198).
+  // Never the stored ciphertext, and never plaintext: result_data is
+  // persisted on the pending operation and rendered in approval UIs. The
+  // command's row is already masked.
+  const { id, personal_number: personalNumberMasked, ...record } = toCustomerRecord(
+    outcome.data as unknown as Record<string, unknown>,
+  )
+  return { data: { customer_id: id, ...record, personal_number_masked: personalNumberMasked } }
 }
 
 async function commitCreateRecurringSchedule(
@@ -3657,18 +3642,20 @@ async function commitLinkDocumentToVoucher(
 
 async function commitLinkDocumentsToVouchers(
   supabase: SupabaseClient,
-  _userId: string,
+  userId: string,
   companyId: string,
   params: Record<string, unknown>
 ): Promise<ExecutorResult> {
   const links = params.links as Array<{
     document_id: string; journal_entry_id: string; journal_entry_line_id: string | null
+    /** Link a byte-identical copy; the document itself stays where it is (crm#1207). */
+    copy?: boolean
   }> | undefined
   if (!Array.isArray(links) || links.length === 0) {
     return { error: 'links is required (non-empty)', status: 400 }
   }
 
-  const linked: Array<{ document_id: string; journal_entry_id: string }> = []
+  const linked: Array<{ document_id: string; journal_entry_id: string; copy_of_document_id?: string }> = []
   const skipped: Array<{ document_id: string; journal_entry_id: string; reason: string }> = []
 
   // Sequential, not Promise.all: each row re-validates against the current DB
@@ -3686,6 +3673,19 @@ async function commitLinkDocumentsToVouchers(
     }
 
     try {
+      if (link.copy === true) {
+        const copied = await linkDocumentCopyToVoucher(supabase, companyId, userId, {
+          document_id: documentId,
+          journal_entry_id: journalEntryId,
+          journal_entry_line_id: link.journal_entry_line_id ?? null,
+        })
+        if (!copied.ok) {
+          skipped.push({ document_id: documentId, journal_entry_id: journalEntryId, reason: documentLinkRefusalResult(copied).error })
+          continue
+        }
+        linked.push({ document_id: copied.document.id, journal_entry_id: journalEntryId, copy_of_document_id: documentId })
+        continue
+      }
       const outcome = await linkDocumentToVoucher(
         supabase,
         companyId,

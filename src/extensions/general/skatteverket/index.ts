@@ -151,7 +151,7 @@ async function coverForRows(
 // a full year of skattekonto events fits comfortably, and the sequential
 // draft+commit loop stays well inside the dispatcher's time budget.
 // allow_duplicate_ids: rows to book even though the ledger already holds the
-// event (LEDGER_TWIN_EXISTS, LEDGER_COVER_EXISTS); an explicit per-row
+// event (LEDGER_TWIN_EXISTS, LEDGER_COVER_EXISTS, LEDGER_DIRECT_EXISTS); an explicit per-row
 // choice that needs duplicate_reason, which the verifikat notes carry.
 const SkattekontoBokforBatchSchema = z
   .object({
@@ -2204,6 +2204,7 @@ export const skatteverketExtension: Extension = {
               : err.code === 'ROW_IGNORED' ? 409
               : err.code === 'LEDGER_TWIN_EXISTS' ? 409
               : err.code === 'LEDGER_COVER_EXISTS' ? 409
+              : err.code === 'LEDGER_DIRECT_EXISTS' ? 409
               : err.code === 'PERIOD_LOCKED' ? 423
               : err.code === 'NO_COUNTER_ACCOUNT' ? 422
               : 400
@@ -2213,6 +2214,7 @@ export const skatteverketExtension: Extension = {
                 code: err.code,
                 ...(err.ledgerTwins ? { ledger_twins: err.ledgerTwins } : {}),
                 ...(err.ledgerCover ? { ledger_cover: err.ledgerCover } : {}),
+                ...(err.ledgerDirect ? { ledger_direct: err.ledgerDirect } : {}),
               },
               { status },
             )
