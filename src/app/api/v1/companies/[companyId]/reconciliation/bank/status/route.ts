@@ -52,6 +52,17 @@ const StatusResponse = z.object({
    *  settled_gl_line_total: what is left once the work lists and the settled
    *  verifikat are accounted for. null when the GL total is. */
   unexplained_difference: z.number().nullable(),
+  /** The first day the bank side covers: the account's earliest bank row (feed, file or created). null without rows. */
+  history_start: z.string().nullable(),
+  /** Verifikat in the window dated before history_start with no bank link: outside difference, the counts and unexplained_difference. */
+  before_history_count: z.number().int(),
+  before_history_total: z.number(),
+  /** Ledger balance just before the comparison starts; null when history_start is not inside the window. */
+  ledger_balance_before_start: z.number().nullable(),
+  /** The bank's saldo at history_start from its last reported balance; null when it reports none. */
+  saldo_at_start: z.number().nullable(),
+  /** saldo_at_start minus ledger_balance_before_start. Informational: in neither difference nor is_reconciled. */
+  opening_difference: z.number().nullable(),
 })
 
 const StatusQuery = z.object({

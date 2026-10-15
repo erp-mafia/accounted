@@ -7,6 +7,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+import { septemberFile } from '@/lib/import/bgmax/__tests__/bgmax-fixture'
 
 const { supabase, enqueue, reset } = createQueuedMockSupabase()
 
@@ -78,6 +79,19 @@ describe('POST /api/import/bank-file/parse (skattekonto redirect)', () => {
     // Not the redirect: the override forces a bank parse attempt.
     const body = await response.json()
     expect(body?.error?.code).not.toBe('BANK_FILE_SKATTEKONTO_DETECTED')
+  })
+
+  // crm#1170: Bankgirot's deposit specification is never a statement; with
+  // or without a format override it goes to the deposit route instead of
+  // creating rows that double the deposits.
+  it('refuses a BG Max deposit specification, with or without a format override', async () => {
+    for (const format of [undefined, 'generic_csv']) {
+      const response = await POST(makeFileRequest(septemberFile(), 'BGMAX.txt', format), emptyParams)
+      const body = await response.json()
+      expect(response.status).toBe(400)
+      expect(body.error.code).toBe('BANK_FILE_DEPOSIT_SPEC_DETECTED')
+    }
+    expect(supabase.from).not.toHaveBeenCalledWith('bank_file_imports')
   })
 
   it('parses a real bank file normally', async () => {

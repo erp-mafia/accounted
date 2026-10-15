@@ -5,6 +5,7 @@ const skvStatusMock = vi.fn()
 const fetchUnlinkedMock = vi.fn()
 const junctionMock = vi.fn()
 const alignMock = vi.fn()
+const historyStartMock = vi.fn()
 
 vi.mock('../skattekonto-reconciliation', () => ({
   getSkattekontoReconciliationStatus: (...args: unknown[]) => skvStatusMock(...args),
@@ -16,6 +17,7 @@ vi.mock('../bank-reconciliation', async (importOriginal) => {
     fetchJunctionLinkMap: (...args: unknown[]) => junctionMock(...args),
     scopeTransactionsToAccount: (q: unknown) => q,
     alignLinkedTransactionsToWindow: (...args: unknown[]) => alignMock(...args),
+    fetchBankHistoryStart: (...args: unknown[]) => historyStartMock(...args),
     // Pure: the real per-verifikat rule.
     openAmountByEntry: actual.openAmountByEntry,
   }
@@ -48,6 +50,8 @@ describe('listAccountItems', () => {
     }))
     coveringSetsMock.mockReset()
     coveringSetsMock.mockResolvedValue(new Map())
+    historyStartMock.mockReset()
+    historyStartMock.mockResolvedValue(null)
   })
 
   it('returns null for an invalid key', async () => {
@@ -382,6 +386,76 @@ describe('listAccountItems', () => {
     const result = await listAccountItems(supabase as never, COMPANY, `bank:${CASH}`, { bucket: 'unmatched_ledger' })
 
     expect(result?.items[0]).toMatchObject({ item_id: 'e-ib', ib_eligible: false })
+  })
+
+  describe('verifikat before the bank history (crm#1221)', () => {
+    const line = { credit_amount: 0, line_description: null, voucher_series: 'A', source_type: 'import', remaining_amount: null }
+    const lines = [
+      { ...line, line_id: 'l1', journal_entry_id: 'e-sie-1', debit_amount: 5000, entry_date: '2026-03-10', voucher_number: 12, entry_description: 'Kundbetalning' },
+      { ...line, line_id: 'l2', journal_entry_id: 'e-sie-2', debit_amount: 0, credit_amount: 2000, entry_date: '2026-05-20', voucher_number: 40, entry_description: 'Hyra' },
+      { ...line, line_id: 'l3', journal_entry_id: 'e-open', debit_amount: 0, credit_amount: 50000, entry_date: '2026-08-01', voucher_number: 7, source_type: 'manual', entry_description: 'Överföring' },
+    ]
+
+    it('lists them only by name, as review rows, and says how many there are on every bank listing', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: CASH, ledger_account: '1930', currency: 'SEK', is_primary: true } })
+      fetchUnlinkedMock.mockResolvedValue(lines)
+      enqueue({ data: [] })
+      historyStartMock.mockResolvedValue('2026-07-17')
+
+      const before = await listAccountItems(supabase as never, COMPANY, `bank:${CASH}`, {
+        bucket: 'before_history',
+        windowFrom: '2026-01-01',
+        windowTo: '2026-10-15',
+      })
+
+      expect(historyStartMock).toHaveBeenCalledWith(supabase, COMPANY, CASH, 'SEK', true)
+      expect(before?.items.map((i) => i.item_id)).toEqual(['e-sie-1', 'e-sie-2'])
+      expect(before?.items[0]).toMatchObject({
+        bucket: 'before_history',
+        side: 'ledger',
+        before_history: true,
+        amount: 5000,
+        actions: ['review'],
+      })
+      expect(before?.before_history).toEqual({ count: 2, total: 3000, history_start: '2026-07-17' })
+
+      const { supabase: s2, enqueue: enqueue2 } = createQueuedMockSupabase()
+      enqueue2({ data: { id: CASH, ledger_account: '1930', currency: 'SEK', is_primary: true } })
+      enqueue2({ data: [] })
+      const open = await listAccountItems(s2 as never, COMPANY, `bank:${CASH}`, {
+        bucket: 'unmatched_ledger',
+        windowFrom: '2026-01-01',
+        windowTo: '2026-10-15',
+      })
+      // The verifikat inside the history stays work; the two before it are not.
+      expect(open?.items.map((i) => i.item_id)).toEqual(['e-open'])
+      expect(open?.before_history).toEqual({ count: 2, total: 3000, history_start: '2026-07-17' })
+    })
+
+    it('splits nothing when the window starts inside the history or ends before it', async () => {
+      historyStartMock.mockResolvedValue('2026-07-17')
+      for (const window of [
+        { windowFrom: '2026-08-01', windowTo: '2026-08-31' },
+        { windowFrom: '2026-01-01', windowTo: '2026-06-30' },
+      ]) {
+        const { supabase, enqueue } = createQueuedMockSupabase()
+        enqueue({ data: { id: CASH, ledger_account: '1930', currency: 'SEK', is_primary: true } })
+        fetchUnlinkedMock.mockResolvedValue(lines)
+        enqueue({ data: [] })
+        const result = await listAccountItems(supabase as never, COMPANY, `bank:${CASH}`, { bucket: 'unmatched_ledger', ...window })
+        expect(result?.items).toHaveLength(3)
+        expect(result).not.toHaveProperty('before_history')
+      }
+    })
+
+    it('does not read the history start when no ledger bucket is asked for', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: CASH, ledger_account: '1930', currency: 'SEK', is_primary: true } })
+      enqueue({ data: [] })
+      await listAccountItems(supabase as never, COMPANY, `bank:${CASH}`, { bucket: 'unmatched_external' })
+      expect(historyStartMock).not.toHaveBeenCalled()
+    })
   })
 
   it('returns null for an unknown cash account', async () => {

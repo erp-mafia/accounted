@@ -24,14 +24,7 @@ import { amountToOre, contentBucketKey, descriptionsBridge, normalizeImportedDes
 import { OPEN_PAYMENTS_AGGREGATOR } from '@/lib/bank-sync/aggregator'
 import { classifyTransactionMethod } from '@/lib/transactions/transaction-method'
 import { isImportedTransaction } from '@/lib/transactions/origin'
-import {
-  BANKGIRO_SPLIT_CONFIDENCE,
-  BANKGIRO_SPLIT_METHOD,
-  splitIsComplete,
-  suggestPartInvoices,
-  type PartSuggestion,
-} from '@/lib/transactions/part-suggestions'
-import { storeTransactionParts } from '@/lib/transactions/parts-store'
+import { applyTransactionSplit } from '@/lib/transactions/parts-apply'
 import { createLogger } from '@/lib/logger'
 import { findOrderForDebit, type OrderDebit } from '@/lib/payments/orders/debit-match'
 import { loadOpenPaymentOrders, PAYMENT_ORDER_MATCH_METHOD, settleOrderWithDebit } from '@/lib/payments/orders/auto-settle'
@@ -1397,7 +1390,9 @@ export async function ingestTransactions(
   }
 
   /**
-   * The Bankgirot split of an Open Payments row (raw.parts): store the parts
+   * The Bankgirot split of an Open Payments row (raw.parts), applied through
+   * applyTransactionSplit (lib/transactions/parts-apply.ts, shared with the
+   * BG Max import): store the parts
    * beside the row, replacing what it had, and suggest the open invoice
    * behind each part (suggestPartInvoices) for a row a person has not yet
    * decided. When two or more parts all resolved and sum to the row, the row
@@ -1414,55 +1409,22 @@ export async function ingestTransactions(
     try {
       const open =
         !options?.rawInsertOnly && !tx.journal_entry_id && !tx.invoice_id && !tx.supplier_invoice_id && !tx.is_ignored
-      let suggestions: PartSuggestion[] | undefined
-      if (open) {
-        if (tx.amount > 0) invoiceMatchPool ??= await loadInvoiceMatchPool(supabase, companyId)
-        suggestions = suggestPartInvoices({
-          parentAmount: tx.amount,
-          parts,
-          customerInvoices: tx.amount > 0 ? invoiceMatchPool?.invoices ?? [] : [],
-          supplierInvoices: tx.amount < 0 ? unpaidSupplierInvoices : [],
-          excludeInvoiceIds: tx.amount > 0 ? matchedInvoiceIds : matchedSupplierInvoiceIds,
-        })
-      }
-      await storeTransactionParts(supabase, { companyId, transactionId: tx.id, parts, suggestions })
-      if (!open || !suggestions) return false
+      if (open && tx.amount > 0) invoiceMatchPool ??= await loadInvoiceMatchPool(supabase, companyId)
+      const { suggestions, complete } = await applyTransactionSplit(supabase, {
+        companyId,
+        userId,
+        tx,
+        parts,
+        pools: open
+          ? {
+              customerInvoices: tx.amount > 0 ? invoiceMatchPool?.invoices ?? [] : [],
+              supplierInvoices: tx.amount < 0 ? unpaidSupplierInvoices : [],
+              excludeInvoiceIds: tx.amount > 0 ? matchedInvoiceIds : matchedSupplierInvoiceIds,
+            }
+          : null,
+      })
+      if (!complete || !suggestions) return false
 
-      const complete = splitIsComplete(tx.amount, parts, suggestions)
-      // A voucher suggestion (potential_journal_entry_id) owns the method and
-      // confidence columns: the split never writes over it.
-      const marker = !tx.potential_journal_entry_id
-      if (!complete) {
-        if (marker && tx.potential_match_method === BANKGIRO_SPLIT_METHOD) {
-          // The split no longer explains the row (an invoice closed another
-          // way, the bank changed the parts): the marker goes, the parts stay.
-          await supabase
-            .from('transactions')
-            .update({ potential_match_method: null, potential_match_confidence: null })
-            .eq('id', tx.id)
-            .eq('company_id', companyId)
-        }
-        return false
-      }
-
-      const allocations = suggestions.map((s, index) => ({
-        seq: s.seq,
-        amount: Math.abs(parts[index]!.amount),
-        ...(s.suggested_invoice_id ? { invoice_id: s.suggested_invoice_id } : {}),
-        ...(s.suggested_supplier_invoice_id ? { supplier_invoice_id: s.suggested_supplier_invoice_id } : {}),
-      }))
-      // Two literal payloads rather than one spread: the schema guard
-      // (tests/schema/no-phantom-columns) can only check columns it can read.
-      const marking = marker
-        ? supabase.from('transactions').update({
-            potential_match_method: BANKGIRO_SPLIT_METHOD,
-            potential_match_confidence: BANKGIRO_SPLIT_CONFIDENCE,
-            potential_invoice_id: null,
-            potential_supplier_invoice_id: null,
-          })
-        : supabase.from('transactions').update({ potential_invoice_id: null, potential_supplier_invoice_id: null })
-      const { error: markError } = await marking.eq('id', tx.id).eq('company_id', companyId)
-      if (markError) throw markError
       // The split claims its invoices for the batch: no other row's single
       // hint may name them, and a supplier invoice leaves the heuristics' pool.
       for (const s of suggestions) {
@@ -1472,11 +1434,6 @@ export async function ingestTransactions(
           unpaidSupplierInvoices = unpaidSupplierInvoices.filter((inv) => inv.id !== s.suggested_supplier_invoice_id)
         }
       }
-      await logMatchEvent(supabase, userId, tx.id, 'auto_suggested', {
-        matchConfidence: BANKGIRO_SPLIT_CONFIDENCE,
-        matchMethod: BANKGIRO_SPLIT_METHOD,
-        newState: { allocations },
-      })
       result.auto_matched_invoices++
       return true
     } catch (error) {

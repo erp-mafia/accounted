@@ -194,12 +194,16 @@ function suggestSupplierPart(
  * One suggestion per part, in the parts' order. A deposit (parentAmount > 0)
  * resolves against the open customer invoices, a payout (parentAmount < 0)
  * against the open supplier invoices; an invoice is suggested to at most one
- * part of the row, and never to a part whose currency differs from its own.
+ * part of the row, never to a part whose currency differs from its own, and
+ * never to a part signed against the row (a deduction).
  */
 export function suggestPartInvoices(input: PartSuggestionInput): PartSuggestion[] {
   const taken = new Set<string>(input.excludeInvoiceIds ?? [])
   return input.parts.map((part, index) => {
     const seq = index + 1
+    // A part signed against its row is a deduction (BG Max TK21, a credit
+    // note the payer subtracted): it pays no invoice, so nothing is offered.
+    if (Math.sign(part.amount) !== Math.sign(input.parentAmount)) return noSuggestion(seq)
     if (input.parentAmount > 0) {
       const hit = suggestCustomerPart(part, input.customerInvoices, taken)
       if (!hit) return noSuggestion(seq)

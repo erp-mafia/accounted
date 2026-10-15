@@ -320,6 +320,44 @@ describe('gnubok_vat_close_check: verifikat without bank rows', () => {
     })
   })
 
+  it('keeps the gate when Stäm av moved those verifikat before the bank history (crm#1221)', async () => {
+    // The same period as above, after the split: Stäm av compares from the
+    // bank's first row and calls it avstämt, the twelve verifikat sit in
+    // before_history. The gate reads them exactly as before.
+    const blocker = await bankBlockerFor({
+      is_reconciled: true,
+      difference: 0,
+      unmatched_transaction_count: 0,
+      unmatched_gl_line_count: 0,
+      unexplained_difference: 0,
+      before_history_count: 12,
+      before_history_total: 45210.5,
+    })
+
+    expect(blocker).toMatchObject({
+      kind: 'bank_unreconciled',
+      severity: 'high',
+      count: 12,
+      message: '12 verifikat på 1930 saknar banktransaktion: banken har inga rader för de datumen',
+      hint: BANK_ROWS_MISSING_HINT,
+    })
+  })
+
+  it('opens the gate when nothing before the bank history is in the period and the account reconciles', async () => {
+    getReconciliationStatusMock.mockResolvedValue({
+      is_reconciled: true,
+      difference: 0,
+      unmatched_transaction_count: 0,
+      unmatched_gl_line_count: 0,
+      unexplained_difference: 0,
+      before_history_count: 0,
+      before_history_total: 0,
+    } as never)
+    const { supabase } = mockSupabase([PRIMARY_1930])
+    const result = await computeVatCloseCheck(PERIOD, COMPANY_ID, supabase)
+    expect(result.blockers.find((b) => b.kind === 'bank_unreconciled')).toBeUndefined()
+  })
+
   it('names verifikat settled against a rättelse outside the period instead of "0 omatchade" with a difference (crm#1074)', async () => {
     // Nothing is left to match: the one verifikat without a bank row is a
     // wrong booking whose hand-made correction is dated in the next period.

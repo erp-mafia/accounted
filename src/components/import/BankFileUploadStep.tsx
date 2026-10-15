@@ -64,13 +64,16 @@ export default function BankFileUploadStep({
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [formatOverride, setFormatOverride] = useState<BankFileFormatId | undefined>(undefined)
 
-  const acceptedExtensions = '.csv,.txt,.xml'
+  // A BG Max file (Bankgirot's deposit specification, crm#1170) comes as
+  // .txt, .bgm, .dat or with no extension at all: the content decides what it is.
+  const acceptedExtensions = '.csv,.txt,.xml,.bgm,.bgmax,.dat'
 
   // One rule for a dropped and a picked file: the picker's accept filter can
   // be switched to "all files", and a dropped file never had it.
   const handleFile = useCallback((file: File) => {
     const name = file.name.toLowerCase()
-    if (!(name.endsWith('.csv') || name.endsWith('.txt') || name.endsWith('.xml'))) return
+    const extension = name.includes('.') ? name.slice(name.lastIndexOf('.')) : ''
+    if (!['.csv', '.txt', '.xml', '.bgm', '.bgmax', '.dat', ''].includes(extension)) return
     setSelectedFile(file)
     onFileSelect(file, formatOverride)
   }, [onFileSelect, formatOverride])
@@ -92,7 +95,8 @@ export default function BankFileUploadStep({
             Ladda upp kontoutdrag
           </CardTitle>
           <CardDescription>
-            Exportera transaktioner som CSV eller XML från din internetbank och ladda upp filen.
+            Exportera transaktioner som CSV eller XML från din internetbank och ladda upp filen.{' '}
+            {t('bgmax_upload_hint')}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">

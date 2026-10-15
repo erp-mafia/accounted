@@ -204,12 +204,13 @@ export const ReconciliationItemBucketSchema = z.enum([
   'ignored',
   'upcoming',
   /**
-   * Skattekonto only, and only when asked for by name: open rows (not
-   * linked, not ignored) dated before skattekonto.history_start. The 1630
-   * ingående balans carries that time, so these rows are outside the bridge,
-   * its counts and the opening difference (crm#1153). Listed so an agent can
-   * link them to the imported verifikat (a standing proposal rides along) or
-   * ignore them.
+   * Only when asked for by name: rows dated before history_start, outside
+   * the bridge and its counts. Skattekonto: open rows (not linked, not
+   * ignored) the 1630 ingående balans carries (crm#1153), listed so an agent
+   * can link them to the imported verifikat (a standing proposal rides
+   * along) or ignore them. Bank: verifikat with no bank link dated before the
+   * first day the bank side covers (bank.history_start, crm#1221); no bank
+   * row can match them until older bank history is imported.
    */
   'before_history',
 ])
@@ -352,10 +353,11 @@ export const ReconciliationItemSchema = z.object({
    */
   covered_by_ledger: z.boolean().optional(),
   /**
-   * Skattekonto outside rows only (bucket before_history): the row is dated
-   * before skattekonto.history_start, so the ingående balans on 1630 carries
-   * it and it counts in no bridge line. Link it to the verifikat that holds
-   * it, or ignore it.
+   * Bucket before_history: the row is dated before history_start and counts
+   * in no bridge line. Skattekonto outside row: the ingående balans on 1630
+   * carries it; link it to the verifikat that holds it, or ignore it. Bank
+   * ledger row: the bank has no row that early; import the older history to
+   * match it.
    */
   before_history: z.boolean().optional(),
   /** Ledger rows: the settlement the verifikat is part of, when any (bank, and the skattekonto's 1:N links). */

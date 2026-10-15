@@ -1,0 +1,1 @@
+[2026-10-15] crm#1170: a BG Max file's payments become the deposit row's split (bank_transaction_parts, the Open Payments write path), not one reference or payer written on the row as triage proposed: one deposit row holds many payments. Unmatched deposits are not stored; re-uploading attaches them.

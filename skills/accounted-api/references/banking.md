@@ -2293,6 +2293,7 @@ Returns external_balance (Skatteverket saldo; null for bank accounts until a sta
 - skattekonto.before_history_count (and before_history_total) are the open Skatteverket rows dated before history_start: the 1630 opening balance carries them, so no bridge line or count holds them, while the app's to-do list still counts them as unbooked. List them with ?bucket=before_history on the items endpoint and link each to the imported verifikat that holds it (POST .../links), or ignore it (POST .../items/{itemId}/ignore); do not book them while opening_difference is 0.
 - skattekonto.covered (through_date, kind, event_count, event_total, journal_entry_ids, entry_count) is set when unbooked rows are already in the ledger through verifikat on 1630 that no row is linked to, typically one summarised year-end or month-end verifikat: up to through_date those verifikat sum exactly to the open rows (events_equal), or 1630 already equals Skatteverket although the rows are unbooked (ledger_agrees). Do not book such rows (skattekonto booking, in the app and through the MCP tools, refuses them with LEDGER_COVER_EXISTS; v1 has no skattekonto booking endpoint): link them with POST .../links and allow_remainder: true.
 - Bank accounts carry the legacy field set in the bank block (bank_transaction_total, gl_1930_period_movement, …) unchanged from /reconciliation/bank/status.
+- bank.history_start is the first day the bank side covers (its earliest bank row, feed or imported file). When it falls inside the window, the verifikat dated before it with no bank link (bank.before_history_count, before_history_total) are outside difference, the counts and unexplained_difference: no bank row can match them. List them with ?bucket=before_history; importing the older history as a bank file moves history_start earlier. bank.opening_difference (saldo_at_start minus ledger_balance_before_start) is informational and null when the bank reports no balance.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -2421,7 +2422,7 @@ Example response `200`:
 **List the rows behind one account's bridge, bucketed.**
 `scope:reconciliation:read · risk:low · idempotent`
 
-Returns reconciliation items for one account. ?bucket selects one of proposed | unmatched_external | unmatched_ledger | matched | ignored | upcoming | before_history (default: all open buckets first, then matched; before_history only when asked for: skattekonto rows dated before history_start, which the 1630 opening balance carries, outside every bridge line). Each item carries its side (external | ledger), a qualified item_id (skattekonto_transaction / transaction / journal_entry), date, description, signed amount, the proposal when one exists (journal_entry_id, voucher, confidence, reasons[]), link_problem when a link points at a reversed or draft entry, awaiting_external for fresh ledger lines, and the actions the row allows. Skattekonto only: a ledger row carries partially_linked (entry_amount, linked_amount, linked_count) when rows are linked to the verifikat without explaining all of it, and its amount is then what remains (entry_amount - linked_amount, either sign); an outside row carries covered_by_ledger: true when unlinked verifikat on 1630 already hold its event (link it, never book it). ?date_from / ?date_to scope the lists; rows outside the window are never hidden from the counts (older_unmatched_count).
+Returns reconciliation items for one account. ?bucket selects one of proposed | unmatched_external | unmatched_ledger | matched | ignored | upcoming | before_history (default: all open buckets first, then matched; before_history only when asked for: rows dated before history_start, outside every bridge line; skattekonto rows the 1630 opening balance carries, or bank verifikat dated before the earliest bank row). Each item carries its side (external | ledger), a qualified item_id (skattekonto_transaction / transaction / journal_entry), date, description, signed amount, the proposal when one exists (journal_entry_id, voucher, confidence, reasons[]), link_problem when a link points at a reversed or draft entry, awaiting_external for fresh ledger lines, and the actions the row allows. Skattekonto only: a ledger row carries partially_linked (entry_amount, linked_amount, linked_count) when rows are linked to the verifikat without explaining all of it, and its amount is then what remains (entry_amount - linked_amount, either sign); an outside row carries covered_by_ledger: true when unlinked verifikat on 1630 already hold its event (link it, never book it). ?date_from / ?date_to scope the lists; rows outside the window are never hidden from the counts (older_unmatched_count).
 
 **Use when:** You are about to link, book or ignore rows and need to see what is open and what is proposed.
 **Do not use for:** The totals: those are on GET /reconciliation/accounts/{accountKey}.
@@ -3176,7 +3177,13 @@ Response `200`:
     unmatched_gl_line_total: number | null,
     settled_gl_entry_count: number,
     settled_gl_line_total: number,
-    unexplained_difference: number | null
+    unexplained_difference: number | null,
+    history_start: string | null,
+    before_history_count: number,
+    before_history_total: number,
+    ledger_balance_before_start: number | null,
+    saldo_at_start: number | null,
+    opening_difference: number | null
   },
   meta: {
     request_id: string,
