@@ -1,0 +1,1 @@
+[2026-10-15] Amends crm#202 (2026-09-30): the run row's payslip icon opens the employee copy as a preview (?audience=employee&preview=1), which follows the switches and never issues the run, instead of the employer view; the run page already shows the employer cost and every step.

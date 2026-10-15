@@ -9,6 +9,7 @@ import {
   buildPayslipData,
   issuedPayslipSections,
   parsePayslipAudienceParam,
+  parsePayslipPreviewParam,
   payslipFileName,
   payslipSectionsFor,
   type PayslipAudience,
@@ -471,6 +472,22 @@ describe('parsePayslipAudienceParam', () => {
     expect(parsePayslipAudienceParam('employee')).toBe('employee')
     expect(parsePayslipAudienceParam('Employee')).toBeNull()
     expect(parsePayslipAudienceParam('auditor')).toBeNull()
+  })
+})
+
+describe('parsePayslipPreviewParam', () => {
+  it('reads an absent, empty or off value as no preview', () => {
+    expect(parsePayslipPreviewParam(null)).toBe(false)
+    expect(parsePayslipPreviewParam('')).toBe(false)
+    expect(parsePayslipPreviewParam('0')).toBe(false)
+    expect(parsePayslipPreviewParam('false')).toBe(false)
+  })
+
+  it('reads 1 or true as a preview and refuses anything else', () => {
+    expect(parsePayslipPreviewParam('1')).toBe(true)
+    expect(parsePayslipPreviewParam('true')).toBe(true)
+    expect(parsePayslipPreviewParam('yes')).toBeNull()
+    expect(parsePayslipPreviewParam('TRUE')).toBeNull()
   })
 })
 

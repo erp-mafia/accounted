@@ -102,6 +102,19 @@ export function parsePayslipAudienceParam(value: string | null): 'employer' | 'e
 }
 
 /**
+ * The dashboard PDF route's `?preview=` query parameter: the employer looking
+ * at the employee copy before handing it out (the run row's payslip icon). A
+ * preview never issues the run, so opening it cannot fix the sections the
+ * employee will later receive. Absent means no preview; anything but the
+ * listed values is null so the route can refuse it.
+ */
+export function parsePayslipPreviewParam(value: string | null): boolean | null {
+  if (value === null || value === '' || value === '0' || value === 'false') return false
+  if (value === '1' || value === 'true') return true
+  return null
+}
+
+/**
  * The sections fixed on a run when its payslips were issued, or null when
  * they have not been issued yet. The breakdown rule below holds here too
  * (the database refuses a snapshot that breaks it; this keeps a hand-built

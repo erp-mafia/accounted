@@ -367,6 +367,119 @@ describe('GET /api/salary/runs/[id]/payslips/[employeeId]/pdf', () => {
     expect(vi.mocked(issuePayslipSections)).not.toHaveBeenCalled()
   })
 
+  describe('preview (the run row icon)', () => {
+    const PREVIEW = { audience: 'employee', preview: '1' }
+
+    it('renders an approved run with the live switches and never issues it, even for a writer', async () => {
+      const { enqueueMany, findCall } = authed()
+      const run = { id: 'run-1', status: 'approved', period_year: 2026, period_month: 6, payment_date: '2026-06-25', ...NOT_ISSUED }
+      const hiddenNow = { salary_payslip_show_employer_cost: false, salary_payslip_show_breakdown: false }
+      enqueueMany([
+        { data: run },
+        { data: { employee: { first_name: 'Anna', last_name: 'A', personnummer: 'enc' }, line_items: [] } },
+        { data: { name: 'Bolaget AB', org_number: '5560000000' } },
+        { data: hiddenNow },
+      ])
+
+      const response = await GET(
+        createMockRequest('/api/salary/runs/run-1/payslips/emp-1/pdf', { searchParams: PREVIEW }),
+        createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+      )
+
+      // Looking at the copy must not fix the sections the employee later gets.
+      expect(response.status).toBe(200)
+      expect(vi.mocked(requireWritePermission)).not.toHaveBeenCalled()
+      expect(vi.mocked(issuePayslipSections)).not.toHaveBeenCalled()
+      expect(findCall('salary_runs', 'update')).toBeUndefined()
+      expect(vi.mocked(createServiceClient)).not.toHaveBeenCalled()
+      expect(vi.mocked(buildPayslipData)).toHaveBeenCalledWith(
+        expect.objectContaining({ run, audience: { kind: 'employee', settings: hiddenNow } }),
+      )
+    })
+
+    it('renders an issued run with the sections it was issued with, writing nothing', async () => {
+      const { enqueueMany } = authed()
+      const run = {
+        id: 'run-1',
+        status: 'paid',
+        period_year: 2026,
+        period_month: 6,
+        payment_date: '2026-06-25',
+        payslip_sections_issued_at: '2026-06-24T08:00:00.000Z',
+        payslip_show_employer_cost: false,
+        payslip_show_breakdown: false,
+      }
+      enqueueMany([
+        { data: run },
+        { data: { employee: { first_name: 'Anna', last_name: 'A', personnummer: 'enc' }, line_items: [] } },
+        { data: { name: 'Bolaget AB', org_number: '5560000000' } },
+        { data: { salary_payslip_show_employer_cost: true, salary_payslip_show_breakdown: true } },
+      ])
+
+      const response = await GET(
+        createMockRequest('/api/salary/runs/run-1/payslips/emp-1/pdf', { searchParams: PREVIEW }),
+        createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+      )
+
+      expect(response.status).toBe(200)
+      expect(vi.mocked(issuePayslipSections)).not.toHaveBeenCalled()
+      // The stored snapshot travels on the run; payslipSectionsFor prints it
+      // whatever the switches say now, so the preview is what was handed out.
+      expect(vi.mocked(buildPayslipData)).toHaveBeenCalledWith(expect.objectContaining({ run }))
+    })
+
+    it('still issues the run when the copy is handed out without preview', async () => {
+      const { enqueueMany } = authed()
+      enqueueMany([
+        { data: { id: 'run-1', status: 'approved', period_year: 2026, period_month: 6, payment_date: '2026-06-25' } },
+        { data: { employee: { first_name: 'Anna', last_name: 'A', personnummer: 'enc' }, line_items: [] } },
+        { data: { name: 'Bolaget AB', org_number: '5560000000' } },
+        { data: { salary_payslip_show_employer_cost: true, salary_payslip_show_breakdown: true } },
+      ])
+
+      const response = await GET(
+        createMockRequest('/api/salary/runs/run-1/payslips/emp-1/pdf', {
+          searchParams: { audience: 'employee', preview: '0' },
+        }),
+        createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+      )
+
+      expect(response.status).toBe(200)
+      expect(vi.mocked(issuePayslipSections)).toHaveBeenCalledTimes(1)
+    })
+
+    it('returns 400 in the canonical envelope for a preview of the employer view', async () => {
+      authed()
+      const employerPreviews: Array<Record<string, string>> = [{ preview: '1' }, { audience: 'employer', preview: '1' }]
+      for (const searchParams of employerPreviews) {
+        const response = await GET(
+          createMockRequest('/api/salary/runs/run-1/payslips/emp-1/pdf', { searchParams }),
+          createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+        )
+        const envelope = await expectEnvelope(response, 400, 'VALIDATION_ERROR')
+        expect(envelope).toMatchObject({
+          message: 'Ogiltig förhandsvisning av lönespecifikationen',
+          details: { field: 'preview' },
+        })
+      }
+      expect(vi.mocked(buildPayslipData)).not.toHaveBeenCalled()
+    })
+
+    it('returns 400 in the canonical envelope for an unknown preview value', async () => {
+      authed()
+      const response = await GET(
+        createMockRequest('/api/salary/runs/run-1/payslips/emp-1/pdf', {
+          searchParams: { audience: 'employee', preview: 'yes' },
+        }),
+        createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+      )
+      const envelope = await expectEnvelope(response, 400, 'VALIDATION_ERROR')
+      expect(envelope).toMatchObject({ details: { field: 'preview' } })
+      expect(vi.mocked(issuePayslipSections)).not.toHaveBeenCalled()
+      expect(vi.mocked(buildPayslipData)).not.toHaveBeenCalled()
+    })
+  })
+
   it('returns 400 in the canonical envelope for an unknown audience', async () => {
     authed()
     const response = await GET(
