@@ -1,7 +1,7 @@
 'use client'
 
 import { Invoice, Deadline } from '@/types'
-import { cn } from '@/lib/utils'
+import { cn, formatCurrency } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Plus } from 'lucide-react'
 import {
@@ -28,9 +28,9 @@ interface CalendarDayViewProps {
 // amount "kr" would misstate it.
 function invoiceAmountLabel(invoice: Invoice): string {
   if (invoice.total_sek != null || !invoice.currency || invoice.currency === 'SEK') {
-    return `${(invoice.total_sek ?? invoice.total).toLocaleString('sv-SE')} kr`
+    return formatCurrency(invoice.total_sek ?? invoice.total, 'SEK')
   }
-  return `${invoice.total.toLocaleString('sv-SE')} ${invoice.currency}`
+  return formatCurrency(invoice.total, invoice.currency)
 }
 
 export function CalendarDayView({

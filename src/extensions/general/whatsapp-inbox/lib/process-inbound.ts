@@ -77,6 +77,7 @@ const log = createLogger('whatsapp-inbox/process-inbound')
 export { CHAT_ALLOWED_MIME_TYPES } from './chat-mime'
 import { CHAT_ALLOWED_MIME_TYPES, normalizeChatMime } from './chat-mime'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { formatCurrency } from '@/lib/utils'
 
 /** M17 is sent at most once per this window per sender, not once per file. */
 const RATE_LIMIT_NOTICE_WINDOW_MS = 10 * 60 * 1000
@@ -114,12 +115,7 @@ function fallbackFilename(mime: string): string {
  * their receipt was filed correctly.
  */
 function formatAmount(amount: number, currency: string | null | undefined): string {
-  const formatted = new Intl.NumberFormat('sv-SE', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2,
-  }).format(amount)
-  const code = (currency ?? '').trim().toUpperCase()
-  return code === '' || code === 'SEK' ? `${formatted} kr` : `${formatted} ${code}`
+  return formatCurrency(amount, (currency ?? '').trim().toUpperCase())
 }
 
 async function loadRow(

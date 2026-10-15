@@ -1,6 +1,6 @@
+import { formatCurrency } from '@/lib/utils'
 import {
   findDoubleBenefitAdjustments,
-  formatKronor,
   resolveTaxableBenefits,
 } from './benefit-payments'
 
@@ -101,5 +101,5 @@ export function describeRow(row: StoredPayslipRow): string {
       ? 'benefit register'
       : 'hand-entered'
   const sign = row.amount < 0 ? '-' : ''
-  return `${row.item_type.padEnd(32)} ${`${sign}${formatKronor(row.amount)}`.padStart(12)}  ${origin.padEnd(16)} ${row.description ?? ''}`
+  return `${row.item_type.padEnd(32)} ${`${sign}${formatCurrency(Math.abs(row.amount))}`.padStart(15)}  ${origin.padEnd(16)} ${row.description ?? ''}`
 }

@@ -34,6 +34,7 @@ import { Badge } from '@/components/ui/badge'
 import Link from 'next/link'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { formatCurrency } from '@/lib/utils'
 import type { TICCompanyProfile } from '@/extensions/general/tic/lib/tic-types'
 
 /**
@@ -71,7 +72,7 @@ function normalizeProfile(raw: unknown): TICCompanyProfile {
 
 function formatKSEK(value: number | null): string {
   if (value === null) return '-'
-  return `${(value * 1000).toLocaleString('sv-SE')} kr`
+  return formatCurrency(value * 1000)
 }
 
 function formatPercent(value: number | null): string {
@@ -81,7 +82,7 @@ function formatPercent(value: number | null): string {
 
 function formatSek(value: number | null): string {
   if (value === null || value === undefined) return '-'
-  return `${value.toLocaleString('sv-SE')} kr`
+  return formatCurrency(value)
 }
 
 function formatIsoDate(iso: string | null): string {

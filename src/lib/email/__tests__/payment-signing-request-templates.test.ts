@@ -23,7 +23,7 @@ describe('payment_signing_request mail', () => {
     expect(generatePaymentSigningRequestEmailSubject(data)).toBe('Signera 3 betalningar från Bolaget & Co AB med BankID')
     const text = generatePaymentSigningRequestEmailText(data)
     expect(text).toContain('Byrån AB har förberett 3 betalningar från Bolaget & Co AB på totalt')
-    expect(text).toMatch(/12\s500,5\s*kr/)
+    expect(text).toMatch(/12\s500,50\s*kr/)
     expect(text).toContain('ber dig som firmatecknare att signera med BankID')
     expect(text).toContain('Leverantörerna för oktober <3')
     expect(text).toContain('Granska och signera: https://app.accounted.se/betala/abc')

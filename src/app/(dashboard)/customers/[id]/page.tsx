@@ -21,7 +21,7 @@ import { Lock, Eye, EyeOff } from 'lucide-react'
 import { useLocale } from 'next-intl'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage, getResponseErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { cn, formatDate } from '@/lib/utils'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { invoiceNumberDisplay } from '@/lib/invoices/display'
 import { getCountryName } from '@/lib/vat/country-codes'
 import type { Customer, CustomerType, CreateCustomerInput, InvoiceStatus } from '@/types'
@@ -237,16 +237,6 @@ export default function CustomerDetailPage({
         variant: 'destructive',
       })
     }
-  }
-
-  const formatCurrency = (amount: number | null, currency: string | null) => {
-    if (!amount) return '-'
-    return new Intl.NumberFormat('sv-SE', {
-      style: 'currency',
-      currency: currency || 'SEK',
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(amount)
   }
 
   if (isLoading) {

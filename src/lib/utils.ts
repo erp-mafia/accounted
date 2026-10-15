@@ -15,8 +15,33 @@ export function cn(...inputs: ClassValue[]) {
  */
 const INVALID_DATE_PLACEHOLDER = '-'
 
+type FractionDigitOptions = { minimumFractionDigits?: number; maximumFractionDigits?: number }
+
 /**
- * Money with a currency symbol, sv-SE grouping: `1234.5` -> `1 234,50 kr`.
+ * Öre are shown as two digits or not at all: `174.5` -> `174,50 kr`, `1000` ->
+ * `1 000 kr`. A minimum of 0 made Intl drop the trailing zero and print
+ * `174,5 kr`, which reads as a typo on an amount. A caller that passes
+ * `minimumFractionDigits` gets exactly what it asked for; one that passes only
+ * a maximum below 2 gets that maximum as the minimum too (min above max throws).
+ */
+function currencyFractionDigits(options?: FractionDigitOptions): Intl.NumberFormatOptions {
+  if (options?.minimumFractionDigits !== undefined) {
+    return {
+      minimumFractionDigits: options.minimumFractionDigits,
+      maximumFractionDigits: options.maximumFractionDigits ?? 2,
+    }
+  }
+  const max = options?.maximumFractionDigits ?? 2
+  return {
+    minimumFractionDigits: Math.min(2, max),
+    maximumFractionDigits: max,
+    trailingZeroDisplay: 'stripIfInteger',
+  }
+}
+
+/**
+ * Money with a currency symbol, sv-SE grouping: `1234.5` -> `1 234,50 kr`,
+ * `1000` -> `1 000 kr` (see currencyFractionDigits).
  *
  * `currency` defaults to SEK and stays sv-SE in both locales: that is a Swedish
  * accounting convention, not a UI string (.claude/rules/i18n.md), and the
@@ -25,7 +50,7 @@ const INVALID_DATE_PLACEHOLDER = '-'
  *
  * What the default cannot know is that the number came off a record carrying
  * its own currency. `formatCurrency(invoice.total)` on a 1 000 EUR invoice
- * prints "1 000,00 kr", and nothing downstream can tell that apart from a real
+ * prints "1 000 kr", and nothing downstream can tell that apart from a real
  * SEK total. So: pass `record.currency` whenever the record has one, or format
  * the kronor twin (`total_sek` / `amount_sek`). Journal entry line amounts are
  * always SEK already (lib/bookkeeping/ledger-line-amount.ts).
@@ -36,7 +61,7 @@ const INVALID_DATE_PLACEHOLDER = '-'
 export function formatCurrency(
   amount: number,
   currency?: string | null,
-  options?: { minimumFractionDigits?: number; maximumFractionDigits?: number },
+  options?: FractionDigitOptions,
 ): string {
   // A `= 'SEK'` default only covers undefined. `transactions.currency` is a
   // nullable column whose NULL is legacy for the 'SEK' default (see migration
@@ -44,10 +69,7 @@ export function formatCurrency(
   // reached Intl unguarded: `currency: null` throws RangeError and a single
   // legacy row blanked the whole transactions list into the error boundary.
   const code = currency || 'SEK'
-  const digits = {
-    minimumFractionDigits: options?.minimumFractionDigits ?? 0,
-    maximumFractionDigits: options?.maximumFractionDigits ?? 2,
-  }
+  const digits = currencyFractionDigits(options)
   try {
     return new Intl.NumberFormat('sv-SE', { style: 'currency', currency: code, ...digits }).format(
       amount,

@@ -1,0 +1,1 @@
+[2026-10-15] formatCurrency's default shows öre as two digits or none (174,50 kr, 1 000 kr) via trailingZeroDisplay, changed once in the default instead of patching ~630 call sites; always two decimals (1 000,00 kr) is the founder's one-line alternative.

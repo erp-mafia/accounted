@@ -334,7 +334,7 @@ describe('the run-level warning, from rows as run-calculation sees them', () => 
     const lines = [...collectDescribedLines(stored, recurring), CAR_LINE]
     const entries = describeDoubleBenefitAdjustments('Anna Andersson', lines, benefitsOf(lines))
     expect(entries).toEqual([
-      'Anna Andersson: bruttolöneavdraget "Bilförmån justering vid nettolöneavdrag" (6\u00a0664 kr) ' +
+      'Anna Andersson: bruttolöneavdraget "Bilförmån justering vid nettolöneavdrag" (6\u00a0664\u00a0kr) ' +
         'tas bort under Återkommande lönerader på den anställde',
     ])
     const warning = doubleBenefitAdjustmentWarning(entries)
