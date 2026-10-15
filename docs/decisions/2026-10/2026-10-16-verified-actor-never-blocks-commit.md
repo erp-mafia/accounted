@@ -1,0 +1,1 @@
+[2026-10-16] The verified stamp never refuses or fails a commit (lookups in an exception block, no CHECK, no FK). Planned refusals, once verified_actor_disagreements() shows no legitimate hits: an authenticated request asserting cron or system, and a verified uid other than the asserted user.

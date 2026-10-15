@@ -8849,6 +8849,7 @@
     "bh_col_time": "Tidpunkt",
     "bh_col_event": "Händelse",
     "bh_col_actor": "Utförd av",
+    "bh_verified_by_database": "Verifierat av databasen",
     "bh_col_details": "Detaljer",
     "bh_filter_all": "Alla",
     "bh_filter_aria": "Filtrera händelser per kategori",

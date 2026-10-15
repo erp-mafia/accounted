@@ -6,6 +6,7 @@ import {
   AUDITED_TABLES,
   AUDIT_ROW_FILTER,
   GLOBAL_ACTIONS,
+  actorWithVerified,
   appReleaseEvent,
   appReleaseEvents,
   auditRowToEvent,
@@ -18,6 +19,7 @@ import {
   diffFields,
   formatActorLabel,
   formatStockholmTimestamp,
+  formatVerifiedLabel,
   generateBehandlingshistorik,
   rattelseEvent,
   sortEvents,
@@ -193,6 +195,26 @@ describe('commitEventFromEntry', () => {
     expect(ev.details).not.toContain('Bokföringssätt: Importerad (SIE)')
     expect(ev.details).toContain('Vändningsverifikation (storno)')
     expect(ev.actor).toEqual({ type: 'api_key', user_id: 'user-1', actor_label: 'SIE undo: Byrånyckel' })
+  })
+
+  it('carries the principal the database verified next to the asserted actor (20261016110000)', () => {
+    const ev = commitEventFromEntry({
+      ...baseEntry,
+      committed_actor_type: 'cron',
+      committed_actor_label: 'bank-sync',
+      committed_auth_role: 'service_role',
+      committed_auth_uid: null,
+    })!
+    expect(ev.actor).toEqual({ type: 'cron', user_id: 'user-1', actor_label: 'bank-sync' })
+    expect(ev.verified).toEqual({ role: 'service_role', user_id: null })
+
+    const byUser = commitEventFromEntry({ ...baseEntry, committed_auth_role: 'authenticated', committed_auth_uid: 'user-2' })!
+    expect(byUser.verified).toEqual({ role: 'authenticated', user_id: 'user-2' })
+  })
+
+  it('leaves a verifikat posted before the stamp exactly as it was: no verified key at all', () => {
+    expect(commitEventFromEntry(baseEntry)).not.toHaveProperty('verified')
+    expect(commitEventFromEntry({ ...baseEntry, committed_auth_role: null, committed_auth_uid: null })).not.toHaveProperty('verified')
   })
 
   it('marks storno and rättelse vouchers', () => {
@@ -724,6 +746,26 @@ describe('formatActorLabel', () => {
   })
 })
 
+describe('formatVerifiedLabel', () => {
+  const labels = new Map([['user-1', 'anna@example.se']])
+  it('names the role the request ran as, and the signed-in user', () => {
+    expect(formatVerifiedLabel({ role: 'authenticated', user_id: 'user-1' }, labels)).toBe('Inloggad användare: anna@example.se')
+    expect(formatVerifiedLabel({ role: 'authenticated', user_id: 'deadbeef-0000' }, labels)).toBe('Inloggad användare: Användare deadbeef')
+    expect(formatVerifiedLabel({ role: 'authenticated', user_id: null }, labels)).toBe('Inloggad användare (inget användar-id)')
+    expect(formatVerifiedLabel({ role: 'service_role', user_id: null }, labels)).toBe('Applikationsservern (service_role)')
+    expect(formatVerifiedLabel({ role: 'anon', user_id: null }, labels)).toBe('Ej inloggad (anon)')
+    expect(formatVerifiedLabel({ role: 'postgres', user_id: null }, labels)).toBe('Direkt databasanslutning (postgres)')
+  })
+
+  it('puts the verified principal beside the actor in the export cell, and leaves the actor alone without one', () => {
+    const actor = { type: 'cron' as const, user_id: null, label: 'Schemalagd körning: bank-sync' }
+    expect(actorWithVerified({ actor })).toBe('Schemalagd körning: bank-sync')
+    expect(
+      actorWithVerified({ actor, verified: { role: 'service_role', user_id: null, label: 'Applikationsservern (service_role)' } }),
+    ).toBe('Schemalagd körning: bank-sync (verifierat av databasen: Applikationsservern (service_role))')
+  })
+})
+
 describe('formatStockholmTimestamp', () => {
   it('renders Swedish local time', () => {
     expect(formatStockholmTimestamp('2026-03-10T10:00:00.000Z')).toBe('2026-03-10 11:00:00')
@@ -871,6 +913,73 @@ describe('generateBehandlingshistorik', () => {
     expect(report!.by_category.kontoplan).toBe(0)
     // No record-id union in date-range mode: audit_log queried once.
     expect(client.from.mock.calls.filter((c: string[]) => c[0] === 'audit_log')).toHaveLength(1)
+  })
+
+  it('shows the verified principal beside the asserted actor, resolving its user, and nothing on older verifikat', async () => {
+    const verifiedEntry = {
+      ...baseEntry,
+      id: 'entry-2',
+      voucher_number: 13,
+      committed_at: '2026-03-11T10:00:00.000Z',
+      committed_actor_type: 'user',
+      committed_auth_role: 'authenticated',
+      committed_auth_uid: 'user-2',
+    }
+    mockResults = {
+      fiscal_periods: [{ data: period }],
+      company_settings: [{ data: { company_name: 'T', org_number: null } }],
+      journal_entries: [{ data: [baseEntry, verifiedEntry] }],
+    }
+    const resolve = vi.fn().mockResolvedValue(new Map([['user-1', 'anna@example.se'], ['user-2', 'bo@example.se']]))
+
+    const report = await generateBehandlingshistorik(makeClient(), 'company-1', { periodId: 'period-1' }, {
+      resolveUserLabels: resolve,
+    })
+
+    expect(resolve).toHaveBeenCalledWith(expect.arrayContaining(['user-1', 'user-2']))
+    const byId = Object.fromEntries(report!.events.map((e) => [e.id, e]))
+    expect(byId['entry:entry-1']).not.toHaveProperty('verified')
+    expect(byId['entry:entry-2'].actor.label).toBe('anna@example.se')
+    expect(byId['entry:entry-2'].verified).toEqual({
+      role: 'authenticated',
+      user_id: 'user-2',
+      label: 'Inloggad användare: bo@example.se',
+    })
+  })
+
+  it('reads without the verified principal on a database the migration has not reached yet', async () => {
+    mockResults = {
+      fiscal_periods: [{ data: period }],
+      company_settings: [{ data: { company_name: 'T', org_number: null } }],
+      journal_entries: [
+        { data: null, error: { code: '42703', message: 'column journal_entries.committed_auth_role does not exist' } },
+        { data: [baseEntry] },
+      ],
+    }
+    const client = makeClient()
+
+    const report = await generateBehandlingshistorik(client, 'company-1', { periodId: 'period-1' })
+
+    expect(report!.events.map((e) => e.id)).toEqual(['entry:entry-1'])
+    expect(report!.events[0]).not.toHaveProperty('verified')
+    const entrySelects = client.from.mock.calls
+      .map((call: string[], i: number) => [call[0], client.from.mock.results[i].value.select.mock.calls[0]?.[0]])
+      .filter(([table]: string[]) => table === 'journal_entries')
+      .map(([, columns]: string[]) => columns)
+    expect(entrySelects).toHaveLength(2)
+    expect(entrySelects[0]).toContain('committed_auth_role')
+    expect(entrySelects[1]).not.toContain('committed_auth_role')
+  })
+
+  it('still fails on any other read error', async () => {
+    mockResults = {
+      fiscal_periods: [{ data: period }],
+      company_settings: [{ data: { company_name: 'T', org_number: null } }],
+      journal_entries: [{ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }],
+    }
+    await expect(generateBehandlingshistorik(makeClient(), 'company-1', { periodId: 'period-1' })).rejects.toMatchObject({
+      code: '57014',
+    })
   })
 })
 

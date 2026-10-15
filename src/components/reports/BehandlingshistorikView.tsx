@@ -166,7 +166,14 @@ export function BehandlingshistorikView({
                         <div className="font-mono text-xs text-muted-foreground">{e.object}</div>
                       )}
                     </td>
-                    <td className="px-4 py-2 text-muted-foreground break-words">{e.actor.label}</td>
+                    <td className="px-4 py-2 text-muted-foreground break-words">
+                      {e.actor.label}
+                      {e.verified && (
+                        <div className="mt-0.5 text-xs">
+                          {t('bh_verified_by_database')}: {e.verified.label}
+                        </div>
+                      )}
+                    </td>
                     <td className="px-4 py-2">
                       {e.details.length > 0 && (
                         <ul className="space-y-0.5 text-xs text-muted-foreground">
