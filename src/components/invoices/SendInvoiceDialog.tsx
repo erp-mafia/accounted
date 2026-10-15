@@ -28,7 +28,7 @@ import { createClient } from '@/lib/supabase/client'
 import { getResponseErrorMessage } from '@/lib/errors/get-error-message'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-import { creditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
+import { creditNoteNeedsJournalEntry, issueBooksDocument } from '@/lib/bookkeeping/booking-mode'
 import { itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { explainVatTreatment, requiresSwedishVatAcknowledgement } from '@/lib/invoices/vat-rules'
 import { VatTreatmentNotice } from '@/components/invoices/VatTreatmentNotice'
@@ -82,6 +82,10 @@ export default function SendInvoiceDialog({
   const locale = useLocale() as 'sv' | 'en'
   const isCreditNote = !!invoice.credited_invoice_id
   const isCreditRepair = isCreditNote && invoice.status === 'sent'
+  // crm#1202: an offert is sent as an offert. It never books, so the dialog
+  // must not title it "Skicka faktura" or show a verifikat it will not post.
+  const isQuote = invoice.document_type === 'quote'
+  const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
 
   const [isSubmitting, setIsSubmitting] = useState(false)
   // Session-cached reference data (lib/reference-data), seeded by the
@@ -215,9 +219,11 @@ export default function SendInvoiceDialog({
         const method = (companySettings?.accounting_method || 'accrual') as 'accrual' | 'cash'
         // #967: deferred companies mark-sent WITHOUT booking; ekonomi books
         // later via a separate step, so neither preview nor editor applies.
+        // Only a faktura books at issue (the issue step's own predicate): a
+        // proforma or an offert gets no verifikat preview (crm#1202).
         const bookOnIssue = invoice.credited_invoice_id && originalResult.data
           ? creditNoteNeedsJournalEntry(method, originalResult.data)
-          : method === 'accrual' && !companySettings?.defer_invoice_booking
+          : issueBooksDocument(invoice, companySettings)
 
         // Line editing needs the BAS catalogue; only the accrual
         // book-at-issue path renders the editor, so skip the load elsewhere.
@@ -422,7 +428,9 @@ export default function SendInvoiceDialog({
 
       if (mode === 'email') {
         onOpenChange(false)
-        const successMessage = data.message || t('send_success_default', { email: invoice.customer?.email ?? '' })
+        const successMessage = data.message || t(isQuote ? 'send_quote_success_default' : 'send_success_default', {
+          email: invoice.customer?.email ?? '',
+        })
         toast({
           title: t(
             shouldBookOnIssue && !data.partial
@@ -431,7 +439,9 @@ export default function SendInvoiceDialog({
                 : 'send_book_success_title'
               : isCreditNote
                 ? 'credit_send_success_title'
-                : 'send_success_title',
+                : isQuote
+                  ? 'send_quote_success_title'
+                  : 'send_success_title',
           ),
           description: data.partial
             ? t('partial_success', { message: successMessage })
@@ -452,7 +462,9 @@ export default function SendInvoiceDialog({
                   : 'mark_book_success_title'
               : isCreditNote
                 ? 'credit_mark_success_title'
-                : 'mark_success_title',
+                : isQuote
+                  ? 'mark_quote_success_title'
+                  : 'mark_success_title',
           ),
           description: data.partial
             ? t('mark_partial_success')
@@ -481,7 +493,7 @@ export default function SendInvoiceDialog({
       }
     } catch (error) {
       toast({
-        title: t(isCreditNote ? 'credit_send_failed_title' : 'send_failed_title'),
+        title: t(isCreditNote ? 'credit_send_failed_title' : isQuote ? 'send_quote_failed_title' : 'send_failed_title'),
         description: error instanceof Error ? getUserErrorMessage(error) : t('try_again'),
         variant: 'destructive',
       })
@@ -509,7 +521,9 @@ export default function SendInvoiceDialog({
                     ? 'title_credit_email'
                     : 'title_credit_manual'
                   : mode === 'email'
-                    ? 'title_email'
+                    ? isQuote
+                      ? 'title_quote_email'
+                      : 'title_email'
                     : 'title_manual',
             )}
             {/* data-ph-mask: the invoice number is user data */}
@@ -670,17 +684,21 @@ export default function SendInvoiceDialog({
               </>
             ) : (
               <p className="text-sm text-muted-foreground">
-                {!shouldBookOnIssue
-                  ? t(
-                      isCreditNote
-                        ? 'explain_credit_cash'
-                        : deferBooking
-                          ? 'explain_deferred'
-                          : 'explain_cash',
-                    )
-                  : mode === 'email'
-                    ? t('explain_email', { email: invoice.customer?.email ?? '' })
-                    : t('explain_manual')}
+                {isQuote
+                  ? mode === 'email'
+                    ? t('explain_quote_email', { email: invoice.customer?.email ?? '' })
+                    : t('explain_quote_manual')
+                  : !shouldBookOnIssue && isRealInvoice
+                    ? t(
+                        isCreditNote
+                          ? 'explain_credit_cash'
+                          : deferBooking
+                            ? 'explain_deferred'
+                            : 'explain_cash',
+                      )
+                    : mode === 'email'
+                      ? t('explain_email', { email: invoice.customer?.email ?? '' })
+                      : t('explain_manual')}
               </p>
             )}
           </div>
@@ -761,7 +779,9 @@ export default function SendInvoiceDialog({
                   : mode === 'email'
                     ? shouldBookOnIssue
                       ? 'send_invoice_and_book'
-                      : 'send_invoice'
+                      : isQuote
+                        ? 'send_quote'
+                        : 'send_invoice'
                     : shouldBookOnIssue
                       ? 'mark_as_sent_and_book'
                       : 'mark_as_sent',

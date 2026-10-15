@@ -1,7 +1,7 @@
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createInvoiceJournalEntry } from '@/lib/bookkeeping/invoice-entries'
-import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
+import { issueBooksDocument } from '@/lib/bookkeeping/booking-mode'
 import { createSchedulesForCustomerInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
 import { eventBus } from '@/lib/events'
 import { ensureInvoiceNumber, invoiceNumberingFailure } from '@/lib/invoices/ensure-invoice-number'
@@ -224,8 +224,9 @@ export async function markInvoiceSentAndBook(
     return { ok: false, errorCode: 'INVOICE_MARK_SENT_RACE' }
   }
 
-  // Only create journal entries for real invoices (not proformas or delivery notes)
-  const isRealInvoice = !invoice.document_type || invoice.document_type === 'invoice'
+  // Only a faktura books at issue (not proformas, quotes or delivery notes):
+  // the same predicate the send dialog describes the outcome with.
+  const booksOnIssue = issueBooksDocument(invoice, settings)
   let journalEntryId: string | null = null
   const partialFailures: IssuePartialFailure[] = []
   let bookingReason = 'Fakturans verifikat kunde inte skapas.'
@@ -234,14 +235,14 @@ export async function markInvoiceSentAndBook(
   // Custom lines only apply where issuance books inline; elsewhere they are
   // deliberately ignored (documented in MarkInvoiceSentSchema). Log it so the
   // mismatch is visible in audit review instead of vanishing silently.
-  if (customLines && (!isRealInvoice || !booksInvoicesOnIssue(settings))) {
+  if (customLines && !booksOnIssue) {
     log.warn('issue: custom lines ignored (not on accrual book-at-issue path)', {
       invoiceId: id,
       lineCount: customLines.length,
     })
   }
 
-  if (isRealInvoice && booksInvoicesOnIssue(settings)) {
+  if (booksOnIssue) {
     // #967: deferred companies fall past this branch (mark sent WITHOUT
     // booking); ekonomi books later via POST /api/invoices/[id]/book, like
     // under kontantmetoden.
@@ -333,7 +334,7 @@ export async function markInvoiceSentAndBook(
 
   // Fail-closed only when inline booking was supposed to happen: deferred
   // (#967) and cash-method invoices are legitimately unbooked at this point.
-  if (isRealInvoice && booksInvoicesOnIssue(settings) && !journalEntryId) {
+  if (booksOnIssue && !journalEntryId) {
     await restoreUnbookedDraft(supabase, companyId, id, log)
     return {
       ok: false,

@@ -663,6 +663,20 @@ export const SetQuoteStatusSchema = z.object({
   valid_until: optionalIsoDate,
 })
 
+// POST /api/invoices/[id]/convert and gnubok_convert_invoice (crm#1196): the
+// part of a quote to invoice, a percent of its net or a net amount (excl.
+// VAT, in the quote's currency, rounded to the öre). Neither: everything not
+// yet invoiced.
+export const ConvertQuotePartSchema = z
+  .object({
+    percent: z.number().gt(0).max(100).optional(),
+    amount: z.number().gt(0).optional(),
+  })
+  .strict()
+  .refine((part) => part.percent === undefined || part.amount === undefined, {
+    message: 'Give percent or amount, not both',
+  })
+
 /**
  * Skattereduktion claim completeness (HUSFL: art av arbete + antal
  * arbetstimmar; for grön teknik the installation type and the hours per

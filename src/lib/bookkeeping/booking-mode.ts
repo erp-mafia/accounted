@@ -24,6 +24,22 @@ export function booksInvoicesOnIssue(
 }
 
 /**
+ * Whether issuing THIS customer document (send or mark sent) posts its own
+ * verifikat. Only a faktura books at issue: a proforma, an offert and a
+ * följesedel are marked sent without one in every accounting method. One rule
+ * for the issue step and the send dialog that describes it beforehand, so the
+ * dialog never promises a booking for a quote (crm#1202). Credit notes have
+ * their own rule (creditNoteNeedsJournalEntry).
+ */
+export function issueBooksDocument(
+  document: { document_type?: string | null },
+  settings: Parameters<typeof booksInvoicesOnIssue>[0],
+): boolean {
+  const isRealInvoice = !document.document_type || document.document_type === 'invoice'
+  return isRealInvoice && booksInvoicesOnIssue(settings)
+}
+
+/**
  * When an invoice's own verifikat is posted, for the surfaces that describe
  * it before the user confirms (review dialogs, ready lines). Derived from
  * booksInvoicesOnIssue so a UI never re-derives it from accounting_method:

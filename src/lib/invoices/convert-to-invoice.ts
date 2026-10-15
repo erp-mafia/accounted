@@ -2,6 +2,15 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
 import { ensureInvoiceNumber, InvoiceNumberSeriesBehindError } from '@/lib/invoices/ensure-invoice-number'
 import { convertToSEK, fetchExchangeRate } from '@/lib/currency/riksbanken'
+import {
+  buildQuotePartLines,
+  quotePartNote,
+  quotePartTotals,
+  resolveQuotePart,
+  type QuoteConversion,
+  type QuoteInvoicePart,
+  type QuoteSourceLine,
+} from '@/lib/invoices/quote-partial-invoice'
 import type { Invoice } from '@/types'
 
 /**
@@ -18,10 +27,14 @@ import type { Invoice } from '@/types'
  *   - quote: the source stays, flips to quote_status = 'accepted', and the
  *     invoice links back via converted_from_id. A quote has no due date, so
  *     the invoice gets invoice_date + the customer's payment terms (falling
- *     back to company_settings.invoice_default_days, then 30). A second
- *     conversion is refused while an active converted invoice exists or
- *     while a live kundorder was created from the quote (invoice from the
- *     order instead); a declined quote must be re-accepted first.
+ *     back to company_settings.invoice_default_days, then 30). A quote can
+ *     be invoiced in parts (crm#1196, lib/invoices/quote-partial-invoice.ts):
+ *     `part` bills a percent or a net amount of it, and without `part` the
+ *     conversion bills everything not yet invoiced (the whole quote, copied
+ *     line for line, the first time). A conversion is refused once the live
+ *     invoices from the quote cover it, or while a live kundorder was
+ *     created from the quote (invoice from the order instead); a declined
+ *     quote must be re-accepted first.
  *
  * Ordering: ensureInvoiceNumber() is the LAST side effect. The F-series
  * counter only advances after items are inserted and the source is updated,
@@ -37,10 +50,13 @@ export type ConvertToInvoiceFailureCode =
   | 'INVOICE_CONVERT_QUOTE_DECLINED'
   | 'INVOICE_QUOTE_ALREADY_INVOICED'
   | 'INVOICE_QUOTE_ALREADY_ORDERED'
+  | 'INVOICE_QUOTE_PART_OUT_OF_RANGE'
+  | 'INVOICE_CONVERT_PART_QUOTE_ONLY'
 
 export type ConvertToInvoiceResult =
   | { ok: true; invoice: Invoice }
-  | { ok: false; code: ConvertToInvoiceFailureCode }
+  /** details: the quote's progress when a part does not fit (quote_subtotal, invoiced, remaining, requested). */
+  | { ok: false; code: ConvertToInvoiceFailureCode; details?: Record<string, unknown> }
   | { ok: false; code: 'INVOICE_CONVERT_FAILED'; cause: Error | { message: string } }
   /** The series already has a higher number: nothing was used up, the source is restored. */
   | {
@@ -51,27 +67,11 @@ export type ConvertToInvoiceResult =
       details: Record<string, unknown>
     }
 
-interface SourceItem {
-  sort_order: number
-  line_type?: 'product' | 'text' | null
-  description: string
-  quantity: number
-  unit: string
-  unit_price: number
-  discount_percent?: number | null
-  line_total: number
-  vat_rate?: number | null
-  vat_amount?: number | null
-  revenue_account?: string | null
-  article_id?: string | null
-  article_number?: string | null
-  sales_order_item_id?: string | null
-  dimensions?: Record<string, string> | null
-}
+type SourceItem = QuoteSourceLine
 
 type SourceRow = Invoice & {
   items?: SourceItem[] | null
-  customer?: { default_payment_terms?: number | null } | null
+  customer?: { default_payment_terms?: number | null; language?: string | null } | null
 }
 
 const DEFAULT_PAYMENT_TERMS_DAYS = 30
@@ -91,12 +91,14 @@ export async function convertToInvoice(params: {
   userId: string
   companyId: string
   sourceId: string
+  /** Quotes only: the part to invoice. Absent: everything not yet invoiced. */
+  part?: QuoteInvoicePart | null
 }): Promise<ConvertToInvoiceResult> {
-  const { supabase, userId, companyId, sourceId } = params
+  const { supabase, userId, companyId, sourceId, part } = params
 
   const { data: sourceRaw, error: sourceError } = await supabase
     .from('invoices')
-    .select('*, items:invoice_items(*), customer:customers(default_payment_terms)')
+    .select('*, items:invoice_items(*), customer:customers(default_payment_terms, language)')
     .eq('id', sourceId)
     .eq('company_id', companyId)
     .single()
@@ -110,33 +112,54 @@ export async function convertToInvoice(params: {
   if (source.document_type !== 'proforma' && !isQuote) {
     return { ok: false, code: 'INVOICE_CONVERT_NOT_CONVERTIBLE' }
   }
+  // A proforma is the invoice-to-be for the whole sale and is cancelled by
+  // its conversion: there is nothing left to bill a second part from.
+  if (part && !isQuote) {
+    return { ok: false, code: 'INVOICE_CONVERT_PART_QUOTE_ONLY' }
+  }
   if (source.status === 'cancelled') {
     return { ok: false, code: 'INVOICE_CONVERT_SOURCE_CANCELLED' }
   }
 
   const today = isoDate(new Date())
   let dueDate: string = source.due_date
+  let conversions: QuoteConversion[] = []
+  let quotePart: { amount: number; rest: boolean; invoicedBefore: number } | null = null
 
   if (isQuote) {
     if (source.quote_status === 'declined') {
       return { ok: false, code: 'INVOICE_CONVERT_QUOTE_DECLINED' }
     }
 
-    // One invoice per quote while that invoice lives. A cancelled converted
-    // invoice frees the quote for another attempt.
-    const { data: existing, error: existingError } = await supabase
+    // What the live invoices from this quote already bill (crm#1196). A
+    // cancelled converted invoice counts for nothing and frees its part.
+    const { data: conversionRows, error: conversionsError } = await supabase
       .from('invoices')
-      .select('id')
+      .select('id, status, subtotal, items:invoice_items(line_type, line_total, vat_rate, revenue_account, article_id, dimensions)')
       .eq('company_id', companyId)
       .eq('converted_from_id', sourceId)
       .neq('status', 'cancelled')
-      .limit(1)
-      .maybeSingle()
-    if (existingError) {
-      return { ok: false, code: 'INVOICE_CONVERT_FAILED', cause: existingError }
+    if (conversionsError) {
+      return { ok: false, code: 'INVOICE_CONVERT_FAILED', cause: conversionsError }
     }
-    if (existing) {
-      return { ok: false, code: 'INVOICE_QUOTE_ALREADY_INVOICED' }
+    conversions = (conversionRows ?? []) as QuoteConversion[]
+    const resolved = resolveQuotePart(source, conversions, part)
+    if (!resolved.ok) {
+      return {
+        ok: false,
+        code: resolved.code,
+        details: {
+          quote_subtotal: resolved.progress.quoteSubtotal,
+          invoiced: resolved.progress.invoiced,
+          remaining: resolved.progress.remaining,
+          ...(resolved.code === 'INVOICE_QUOTE_PART_OUT_OF_RANGE' ? { requested: resolved.requested } : {}),
+        },
+      }
+    }
+    // The first conversion of the whole quote copies it line for line, as it
+    // always has; anything else is a part invoice.
+    if (!(resolved.rest && resolved.progress.invoiceCount === 0)) {
+      quotePart = { amount: resolved.amount, rest: resolved.rest, invoicedBefore: resolved.progress.invoiced }
     }
 
     // A quote that became a kundorder is invoiced from the order (full or
@@ -174,15 +197,47 @@ export async function convertToInvoice(params: {
     dueDate = addDays(today, termsDays ?? DEFAULT_PAYMENT_TERMS_DAYS)
   }
 
+  // What the invoice bills: the source line for line, or a part of the
+  // quote (its lines each billing their share, crm#1196). The note on a part
+  // says which quote and how much of it, on the PDF and in Peppol alike.
+  const partLines = quotePart
+    ? buildQuotePartLines({
+        lines: source.items ?? [],
+        amount: quotePart.amount,
+        rest: quotePart.rest,
+        conversions,
+      })
+    : null
+  const amounts = partLines
+    ? quotePartTotals(partLines)
+    : { subtotal: source.subtotal, vat_amount: source.vat_amount, total: source.total }
+  const notes = quotePart
+    ? [
+        quotePartNote({
+          language: source.customer?.language === 'en' ? 'en' : 'sv',
+          quoteNumber: source.invoice_number ?? null,
+          quoteSubtotal: source.subtotal,
+          amount: amounts.subtotal,
+          invoicedBefore: quotePart.invoicedBefore,
+          currency: source.currency,
+        }),
+        source.notes,
+      ]
+        .filter(Boolean)
+        .join('\n\n')
+    : source.notes
+
   // The invoice is a new taxable event dated today (ML 8 kap 21-23 §): a
   // quote can sit for weeks, so the SEK twins must use today's rate, not
   // the one stamped when the offer was written. Fail closed if no rate can
   // be had (the create paths refuse a NULL rate for the same reason).
   let exchangeRate = source.exchange_rate
   let exchangeRateDate = source.exchange_rate_date
-  let subtotalSek = source.subtotal_sek
-  let vatAmountSek = source.vat_amount_sek
-  let totalSek = source.total_sek
+  // A SEK part carries its own amounts as the SEK twins, as the invoice
+  // builder stores them; a whole copy keeps the source's.
+  let subtotalSek = partLines ? amounts.subtotal : source.subtotal_sek
+  let vatAmountSek = partLines ? amounts.vat_amount : source.vat_amount_sek
+  let totalSek = partLines ? amounts.total : source.total_sek
   if (source.currency !== 'SEK') {
     const rate = await fetchExchangeRate(source.currency, new Date(`${today}T00:00:00Z`), supabase)
     if (!rate) {
@@ -194,9 +249,9 @@ export async function convertToInvoice(params: {
     }
     exchangeRate = rate.rate
     exchangeRateDate = rate.date
-    subtotalSek = convertToSEK(source.subtotal, rate.rate)
-    vatAmountSek = convertToSEK(source.vat_amount, rate.rate)
-    totalSek = convertToSEK(source.total, rate.rate)
+    subtotalSek = convertToSEK(amounts.subtotal, rate.rate)
+    vatAmountSek = convertToSEK(amounts.vat_amount, rate.rate)
+    totalSek = convertToSEK(amounts.total, rate.rate)
   }
 
   const { data: invoice, error: invoiceError } = await supabase
@@ -211,17 +266,17 @@ export async function convertToInvoice(params: {
       currency: source.currency,
       exchange_rate: exchangeRate,
       exchange_rate_date: exchangeRateDate,
-      subtotal: source.subtotal,
+      subtotal: amounts.subtotal,
       subtotal_sek: subtotalSek,
-      vat_amount: source.vat_amount,
+      vat_amount: amounts.vat_amount,
       vat_amount_sek: vatAmountSek,
-      total: source.total,
+      total: amounts.total,
       total_sek: totalSek,
       // The converted invoice is a fresh unpaid receivable: proformas and
       // quotes carry no ROT/RUT deduction, so the customer owes the full
       // total. Omitting this left the NOT NULL DEFAULT 0, which every payment
       // surface reads as "nothing open".
-      remaining_amount: source.total,
+      remaining_amount: amounts.total,
       paid_amount: 0,
       vat_treatment: source.vat_treatment,
       vat_rate: source.vat_rate,
@@ -235,7 +290,7 @@ export async function convertToInvoice(params: {
       our_reference: source.our_reference,
       // Buyer routing survives conversion (Peppol BT-10 may rely on it alone).
       invoice_marking: source.invoice_marking ?? null,
-      notes: source.notes,
+      notes,
       document_type: 'invoice',
       converted_from_id: sourceId,
       // Quote-only columns must not travel: the CHECK pairs quote_status
@@ -250,19 +305,28 @@ export async function convertToInvoice(params: {
     .single()
 
   if (invoiceError) {
-    // idx_invoices_one_live_conversion: a concurrent conversion won the race.
+    // invoices_converted_source_guard (migration 20261015120000) serializes
+    // conversions on the source row and refuses what a concurrent one made
+    // impossible: a second invoice from a proforma, a part past what remains
+    // of a quote, or any invoice while a kundorder from the quote is live.
+    // 23505 is the unique index the guard replaced, for a deploy that runs
+    // ahead of the migration.
+    const message = String((invoiceError as { message?: string }).message ?? '')
+    for (const code of [
+      'INVOICE_QUOTE_ALREADY_ORDERED',
+      'INVOICE_QUOTE_ALREADY_INVOICED',
+      'INVOICE_QUOTE_PART_OUT_OF_RANGE',
+      'INVOICE_CONVERT_SOURCE_CHANGED',
+    ] as const) {
+      if (message.includes(code)) return { ok: false, code }
+    }
     if ((invoiceError as { code?: string }).code === '23505') {
       return { ok: false, code: isQuote ? 'INVOICE_QUOTE_ALREADY_INVOICED' : 'INVOICE_CONVERT_SOURCE_CHANGED' }
-    }
-    // invoices_converted_source_guard (migration 20260908165000): a kundorder
-    // from the quote became live between the pre-check and this insert.
-    if (String((invoiceError as { message?: string }).message ?? '').includes('INVOICE_QUOTE_ALREADY_ORDERED')) {
-      return { ok: false, code: 'INVOICE_QUOTE_ALREADY_ORDERED' }
     }
     return { ok: false, code: 'INVOICE_CONVERT_FAILED', cause: invoiceError }
   }
 
-  const items = (source.items ?? []).map((item) => ({
+  const items = (partLines ?? source.items ?? []).map((item) => ({
     invoice_id: invoice.id,
     sort_order: item.sort_order,
     line_type: item.line_type ?? 'product',

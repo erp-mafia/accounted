@@ -40,7 +40,7 @@ import {
   fetchInvoicePaymentVouchers,
   type PaymentVoucherRef,
 } from '@/lib/invoices/payment-history-gap'
-import { effectiveQuoteStatus, isQuoteExpired } from '@/lib/invoices/quote-status'
+import { effectiveQuoteStatus, isQuoteExpired, quoteAwaitsSending, quoteDisplayStatus } from '@/lib/invoices/quote-status'
 import {
   draftDownloadDecision,
   type DraftDownloadDecision,
@@ -86,6 +86,8 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import PaymentBookingDialog from '@/components/invoices/PaymentBookingDialog'
 import SendInvoiceDialog from '@/components/invoices/SendInvoiceDialog'
+import QuotePartDialog from '@/components/invoices/QuotePartDialog'
+import { quoteInvoicingProgress } from '@/lib/invoices/quote-partial-invoice'
 import { VatTreatmentNotice } from '@/components/invoices/VatTreatmentNotice'
 import {
   InvoiceDeliveryHistory,
@@ -284,6 +286,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // Offert: the invoice created from this quote (converted_from_id points
   // back here), and the accept/decline round trip.
   const [quoteInvoice, setQuoteInvoice] = useState<Invoice | null>(null)
+  // crm#1196: every live invoice made from the quote, oldest first: a quote
+  // can be invoiced in parts, and the page shows invoiced so far.
+  const [quoteInvoices, setQuoteInvoices] = useState<
+    Array<{ id: string; invoice_number: string | null; status: string; subtotal: number | null }>
+  >([])
+  const [showQuotePartDialog, setShowQuotePartDialog] = useState(false)
   // Offert -> kundorder: the live order created from this quote, if any. Its
   // presence locks the decision and moves invoicing to the order.
   const [quoteOrder, setQuoteOrder] = useState<{ id: string; order_number: string | null } | null>(null)
@@ -291,6 +299,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const [isDeciding, setIsDeciding] = useState(false)
   const [showExpiredAcceptDialog, setShowExpiredAcceptDialog] = useState(false)
   const [showExpiredConvertDialog, setShowExpiredConvertDialog] = useState(false)
+  // crm#1202: a yes recorded on a quote the customer has not been sent is
+  // confirmed first (which action, so the dialog can name it).
+  const [unsentQuoteAction, setUnsentQuoteAction] = useState<'accept' | 'invoice' | 'order' | null>(null)
   const [showPaymentDialog, setShowPaymentDialog] = useState(false)
   const [showSendDialog, setShowSendDialog] = useState(false)
   const [sendDialogMode, setSendDialogMode] = useState<'email' | 'manual'>('email')
@@ -699,11 +710,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         data.document_type === 'quote'
           ? supabase
               .from('invoices')
-              .select('id, invoice_number, status')
+              .select('id, invoice_number, status, subtotal')
               .eq('converted_from_id', id)
               .neq('status', 'cancelled')
               .order('created_at', { ascending: false })
-              .limit(1)
           : Promise.resolve(null),
         data.document_type === 'quote'
           ? supabase
@@ -731,6 +741,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           setConvertedFromInvoice(convertedRes.data as Invoice)
         }
         setQuoteInvoice((invoicedRes?.data?.[0] as Invoice | undefined) ?? null)
+        setQuoteInvoices(
+          [...((invoicedRes?.data ?? []) as Array<{ id: string; invoice_number: string | null; status: string; subtotal: number | null }>)].reverse(),
+        )
         setQuoteOrder(
           (orderedRes?.data?.[0] as { id: string; order_number: string | null } | undefined) ?? null,
         )
@@ -897,6 +910,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
    *  startQuoteConvert; an accepted quote past valid_until converts directly. */
   function startQuoteOrder() {
     if (!invoice) return
+    if (quoteAwaitsSending(invoice)) {
+      setUnsentQuoteAction('order')
+      return
+    }
     if (isQuoteExpired(invoice)) {
       setShowExpiredOrderDialog(true)
       return
@@ -992,6 +1009,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
   function acceptQuote() {
     if (!invoice) return
+    if (quoteAwaitsSending(invoice)) {
+      setUnsentQuoteAction('accept')
+      return
+    }
     if (isQuoteExpired(invoice)) {
       setShowExpiredAcceptDialog(true)
       return
@@ -1003,6 +1024,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
    *  accepted quote past valid_until is not expired and converts directly. */
   function startQuoteConvert() {
     if (!invoice) return
+    if (quoteAwaitsSending(invoice)) {
+      setUnsentQuoteAction('invoice')
+      return
+    }
     if (isQuoteExpired(invoice)) {
       setShowExpiredConvertDialog(true)
       return
@@ -1624,8 +1649,20 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // Offert: the effective status (expired is derived, never stored) and what
   // can still happen to it. Once an invoice exists the decision is final.
   const quoteStatus = isQuote ? effectiveQuoteStatus(invoice) : null
+  // crm#1196: a quote is invoiced, whole or in parts, until fully invoiced.
+  // The first invoice locks its decision and the kundorder path
+  // (canDecideQuote); a part needs the customer's yes recorded first.
+  const quoteProgress = isQuote ? quoteInvoicingProgress(invoice, quoteInvoices) : null
+  const canInvoiceQuote =
+    isQuote && invoice.status !== 'cancelled' && !quoteOrder && quoteStatus !== 'declined' && !quoteProgress?.fullyInvoiced
+  const canPartInvoiceQuote = canInvoiceQuote && quoteStatus === 'accepted' && (quoteProgress?.quoteSubtotal ?? 0) > 0
+
   const canDecideQuote = isQuote && invoice.status !== 'cancelled' && !quoteInvoice && !quoteOrder
   const canConvertQuote = canDecideQuote && quoteStatus !== 'declined'
+  // crm#1202: an unsent quote's one next step is sending it (convention 9).
+  // Accept and Skapa faktura move into the menu until it has gone out or the
+  // customer has said yes, and confirm there (unsentQuoteAction).
+  const quoteDecisionInMenu = isQuote && quoteAwaitsSending(invoice)
   // #1693: only a fully paid faktura has a betalningsbekräftelse to offer.
   const canSendPaymentConfirmation = isPaymentConfirmationEligible(invoice)
   // Paid header but no payment row (#2213): the row must state where the
@@ -1773,18 +1810,22 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             ? t('title_invoice', { number: titleNumber })
             : t('title_draft')
 
-  // Offert: open and accepted are the normal states (muted text); declined
-  // and the derived expiry deviate and get a chip. Same map as the list page.
-  const quoteStatusDescriptor: { label: string; exception: boolean; variant?: 'secondary' | 'warning' } | null =
-    quoteStatus === 'expired'
-      ? { label: tInvoices('quote_status_expired'), exception: true, variant: 'warning' }
-      : quoteStatus === 'declined'
-        ? { label: tInvoices('quote_status_declined'), exception: true, variant: 'secondary' }
-        : quoteStatus === 'accepted'
-          ? { label: tInvoices('quote_status_accepted'), exception: false }
-          : quoteStatus === 'open'
-            ? { label: tInvoices('quote_status_open'), exception: false }
-            : null
+  // Offert: open and accepted are the normal states (muted text); declined,
+  // the derived expiry and an open quote that never left ("Ej skickad", not
+  // "Öppen": crm#1202) deviate and get a chip. Same map as the list page.
+  const quoteDisplay = isQuote ? quoteDisplayStatus(invoice) : null
+  const quoteStatusDescriptor: { label: string; exception: boolean; variant?: 'secondary' | 'warning' | 'outline' } | null =
+    quoteDisplay === 'unsent'
+      ? { label: t('status_unsent'), exception: true, variant: 'outline' }
+      : quoteDisplay === 'expired'
+        ? { label: tInvoices('quote_status_expired'), exception: true, variant: 'warning' }
+        : quoteDisplay === 'declined'
+          ? { label: tInvoices('quote_status_declined'), exception: true, variant: 'secondary' }
+          : quoteDisplay === 'accepted'
+            ? { label: tInvoices('quote_status_accepted'), exception: false }
+            : quoteDisplay === 'open'
+              ? { label: tInvoices('quote_status_open'), exception: false }
+              : null
   // One status element, same rule as the list page (chips mark exceptions):
   // sent and paid render as muted text, everything that deviates gets a chip.
   const status: { label: string; exception: boolean; variant?: StatusChip } =
@@ -1891,6 +1932,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const hasMenu =
     showCollectionItem ||
     canCreateOrder ||
+    (quoteDecisionInMenu && canDecideQuote) ||
     offersOwnPdf ||
     (isCopyable && canWrite) ||
     showManualSendAlternative ||
@@ -2024,7 +2066,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               {t('convert_to_invoice')}
             </Button>
           )}
-          {canDecideQuote && quoteStatus !== 'accepted' && (
+          {canDecideQuote && quoteStatus !== 'accepted' && !quoteDecisionInMenu && (
             <Button size="sm"
               variant="outline"
               onClick={acceptQuote}
@@ -2036,7 +2078,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               {t('quote_accept')}
             </Button>
           )}
-          {canConvertQuote && (
+          {canInvoiceQuote && !quoteDecisionInMenu && (
             <Button size="sm"
               onClick={startQuoteConvert}
               disabled={isDeciding || !canWrite}
@@ -2048,7 +2090,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               ) : (
                 <FileText className="mr-2 h-4 w-4" />
               )}
-              {t('quote_create_invoice')}
+              {t(quoteInvoice ? 'quote_invoice_rest' : 'quote_create_invoice')}
             </Button>
           )}
           {isUnnumberedDraft && (
@@ -2135,6 +2177,27 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-[240px]">
+                {/* An unsent quote's decisions (crm#1202): reachable for a yes
+                    given another way, confirmed before anything is recorded. */}
+                {quoteDecisionInMenu && canDecideQuote && quoteStatus !== 'accepted' && (
+                  <DropdownMenuItem
+                    onSelect={acceptQuote}
+                    disabled={isDeciding || isConverting || !canWrite}
+                  >
+                    <CheckCircle className="h-4 w-4" />
+                    {t('quote_accept')}
+                  </DropdownMenuItem>
+                )}
+                {quoteDecisionInMenu && canConvertQuote && (
+                  <DropdownMenuItem
+                    onSelect={startQuoteConvert}
+                    disabled={isDeciding || isConverting || !canWrite}
+                  >
+                    <FileText className="h-4 w-4" />
+                    {t('quote_create_invoice')}
+                  </DropdownMenuItem>
+                )}
+                {quoteDecisionInMenu && canDecideQuote && !canCreateOrder && <DropdownMenuSeparator />}
                 {canCreateOrder && (
                   <>
                     <DropdownMenuItem
@@ -2143,6 +2206,18 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     >
                       <ClipboardList className="h-4 w-4" />
                       {t('create_order')}
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
+                {canPartInvoiceQuote && (
+                  <>
+                    <DropdownMenuItem
+                      onSelect={() => setShowQuotePartDialog(true)}
+                      disabled={isConverting || isDeciding || !canWrite}
+                    >
+                      <FileText className="h-4 w-4" />
+                      {t('quote_create_part')}
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                   </>
@@ -2582,11 +2657,23 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               </Link>
             </DefRow>
           )}
-          {isQuote && quoteInvoice && (
+          {isQuote && quoteProgress && quoteInvoices.length > 0 && (
             <DefRow label={t('def_invoiced')}>
-              <Link href={`/invoices/${quoteInvoice.id}`} className="hover:underline">
-                {t('title_invoice', { number: quoteInvoice.invoice_number ?? '' })}
-              </Link>
+              <span className="tabular-nums">
+                {t('def_quote_invoiced_progress', {
+                  invoiced: formatCurrency(quoteProgress.invoiced, invoice.currency),
+                  total: formatCurrency(quoteProgress.quoteSubtotal, invoice.currency),
+                })}
+                {': '}
+                {quoteInvoices.map((row, index) => (
+                  <span key={row.id}>
+                    {index > 0 && ', '}
+                    <Link href={`/invoices/${row.id}`} className="hover:underline">
+                      {t('title_invoice', { number: row.invoice_number ?? '' })}
+                    </Link>
+                  </span>
+                ))}
+              </span>
             </DefRow>
           )}
           {isQuote && quoteOrder && (
@@ -3312,6 +3399,44 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         }}
       />
 
+      {/* crm#1202: the customer has not been sent this quote. Recording their
+          yes (or building on it) is confirmed first; expiry is moot then. */}
+      <ConfirmDialog
+        open={unsentQuoteAction !== null}
+        onOpenChange={(open) => {
+          if (!open) setUnsentQuoteAction(null)
+        }}
+        title={t(
+          unsentQuoteAction === 'invoice'
+            ? 'quote_unsent_convert_title'
+            : unsentQuoteAction === 'order'
+              ? 'quote_unsent_order_title'
+              : 'quote_unsent_accept_title',
+        )}
+        description={t(
+          unsentQuoteAction === 'invoice'
+            ? 'quote_unsent_convert_description'
+            : unsentQuoteAction === 'order'
+              ? 'quote_unsent_order_description'
+              : 'quote_unsent_accept_description',
+          { number: invoiceDisplayNumber(invoice as Invoice) },
+        )}
+        confirmLabel={t(
+          unsentQuoteAction === 'invoice'
+            ? 'quote_create_invoice'
+            : unsentQuoteAction === 'order'
+              ? 'create_order'
+              : 'quote_accept',
+        )}
+        onConfirm={async () => {
+          const action = unsentQuoteAction
+          setUnsentQuoteAction(null)
+          if (action === 'invoice') await convertToInvoice()
+          else if (action === 'order') await convertToOrder()
+          else if (action === 'accept') await setQuoteDecision('accepted')
+        }}
+      />
+
       <ConfirmDialog
         open={showConfirmationSendDialog}
         onOpenChange={setShowConfirmationSendDialog}
@@ -3323,6 +3448,20 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         confirmLabel={t('payment_confirmation_confirm_action')}
         onConfirm={sendPaymentConfirmation}
       />
+
+      {isQuote && quoteProgress && (
+        <QuotePartDialog
+          quote={{
+            id: invoice.id,
+            invoice_number: invoice.invoice_number ?? null,
+            subtotal: quoteProgress.quoteSubtotal,
+            currency: invoice.currency,
+          }}
+          conversions={quoteInvoices}
+          open={showQuotePartDialog}
+          onOpenChange={setShowQuotePartDialog}
+        />
+      )}
 
       <ConfirmDialog
         open={showBookConfirm}

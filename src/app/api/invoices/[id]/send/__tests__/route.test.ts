@@ -763,6 +763,36 @@ describe('POST /api/invoices/[id]/send', () => {
     expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
   })
 
+  // crm#1202: sending an offert sends the offert. It never books, its
+  // decision (quote_status) is left alone, and the reply names it.
+  it('sends a quote as a quote: no verifikat, decision untouched, "Offerten" in the reply', async () => {
+    const quote = makeInvoice({
+      ...invoice,
+      id: 'quote-1',
+      invoice_number: 'OF-001',
+      document_type: 'quote',
+      quote_status: 'open',
+      valid_until: '2024-07-15',
+    })
+    enqueue({ data: quote, error: null })
+    enqueue({ data: company, error: null })
+    mockSendEmail.mockResolvedValue({ success: true, messageId: 'msg-q' })
+    // Update the quote's status to 'sent' (optimistic lock: returns the row)
+    enqueue({ data: [{ id: 'quote-1' }], error: null })
+
+    const request = createMockRequest('/api/invoices/quote-1/send', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'quote-1' }))
+    const { status, body } = await parseJsonResponse<{ success: boolean; message: string }>(response)
+
+    expect(status).toBe(200)
+    expect(body.message).toBe('Offerten har skickats till kund@test.se')
+    expect(mockSendEmail).toHaveBeenCalledTimes(1)
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+    const updates = findCalls('invoices', 'update').map((call) => call[0] as Record<string, unknown>)
+    expect(updates.length).toBeGreaterThan(0)
+    for (const payload of updates) expect(payload).not.toHaveProperty('quote_status')
+  })
+
   it('never emails an invoice whose verifikat the engine refuses: the draft is restored and the refusal returned', async () => {
     enqueue({ data: invoice, error: null })
     enqueue({ data: company, error: null })

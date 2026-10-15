@@ -664,7 +664,7 @@ export const POST = withRouteContext(
     return NextResponse.json(
       {
         success: true,
-        message: `${isCreditNote ? 'Kreditfakturan' : 'Fakturan'} har skickats till ${customer.email}`,
+        message: `${isCreditNote ? 'Kreditfakturan' : invoice.document_type === 'quote' ? 'Offerten' : 'Fakturan'} har skickats till ${customer.email}`,
         messageId: result.messageId,
         deliveryId: result.deliveryId,
         recipient_counts: {

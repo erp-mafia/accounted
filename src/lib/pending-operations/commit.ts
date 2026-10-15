@@ -244,6 +244,7 @@ import { toRecurringScheduleItemRow } from '@/lib/invoices/recurring-schedule-it
 import { periodPlaceholderProblem } from '@/lib/invoices/recurring-placeholders'
 import {
   BulkBookInboxSchema,
+  ConvertQuotePartSchema,
   CreateArticleSchema,
   CreateCustomerSchema,
   CreateSupplierSchema,
@@ -4910,8 +4911,27 @@ async function commitConvertInvoice(
 
   // Shared with POST /api/invoices/[id]/convert: proforma or quote to
   // invoice, F-number allocated last, source cancelled (proforma) or
-  // accepted (quote).
-  const result = await convertToInvoice({ supabase, userId, companyId, sourceId: id })
+  // accepted (quote). percent / amount bill a part of a quote (crm#1196),
+  // resolved again here against the invoices that exist at approval.
+  const part = ConvertQuotePartSchema.safeParse({
+    ...(params.percent !== undefined ? { percent: params.percent } : {}),
+    ...(params.amount !== undefined ? { amount: params.amount } : {}),
+  })
+  if (!part.success) {
+    return { error: 'percent must be above 0 and at most 100, amount above 0, and not both', errorCode: 'VALIDATION_ERROR', status: 400 }
+  }
+  const result = await convertToInvoice({
+    supabase,
+    userId,
+    companyId,
+    sourceId: id,
+    part:
+      part.data.percent !== undefined
+        ? { percent: part.data.percent }
+        : part.data.amount !== undefined
+          ? { amount: part.data.amount }
+          : null,
+  })
 
   if (!result.ok) {
     if (result.code === 'INVOICE_CONVERT_FAILED') {

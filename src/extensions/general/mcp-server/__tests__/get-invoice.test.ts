@@ -502,3 +502,43 @@ describe('gnubok_get_invoice: registered from the books', () => {
     expect(supabase.from).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('gnubok_get_invoice: quote progress (crm#1196)', () => {
+  it('lists the live invoices converted from a quote with invoiced so far and what remains', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: invoiceRow({ document_type: 'quote', invoice_number: 'OF-012', quote_status: 'accepted', subtotal: 25000 }) })
+    enqueue({ data: [{ id: 'inv-1', invoice_number: 'F-001', status: 'sent', subtotal: 12500 }] })
+
+    const result = (await getInvoice.execute(
+      { invoice_id: INVOICE_ID },
+      COMPANY_ID,
+      USER_ID,
+      supabase as never,
+      { type: 'api_key' } as never,
+    )) as { quote_invoicing: Record<string, unknown> }
+
+    expect(result.quote_invoicing).toEqual({
+      invoiced: 12500,
+      remaining: 12500,
+      fully_invoiced: false,
+      invoices: [{ invoice_id: 'inv-1', invoice_number: 'F-001', status: 'sent', subtotal: 12500 }],
+    })
+    expect(findCalls('invoices', 'eq')).toContainEqual(['converted_from_id', INVOICE_ID])
+  })
+
+  it('names the source of a converted invoice and reads nothing more for it', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: invoiceRow({ converted_from_id: 'quote-1' }) })
+
+    const result = (await getInvoice.execute(
+      { invoice_id: INVOICE_ID },
+      COMPANY_ID,
+      USER_ID,
+      supabase as never,
+      { type: 'api_key' } as never,
+    )) as Record<string, unknown>
+
+    expect(result.converted_from_id).toBe('quote-1')
+    expect(result.quote_invoicing).toBeUndefined()
+  })
+})
