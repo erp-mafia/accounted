@@ -57,7 +57,6 @@ vi.mock('@/lib/import/opening-balance/cascade', async () => {
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST as setManual } from '../manual/route'
 import { POST as correct } from '../correct/route'
-import { isIdempotencyClaim } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -101,7 +100,7 @@ function makeClient(byTable: Record<string, TableResp | TableResp[]>) {
 const WRITES = new Set(['insert', 'update', 'upsert', 'delete'])
 const BOOKS = new Set(['fiscal_periods', 'chart_of_accounts', 'journal_entries', 'journal_entry_lines'])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.method === 'rpc' && !isIdempotencyClaim(c)))
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.method === 'rpc')
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const PERIOD_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'

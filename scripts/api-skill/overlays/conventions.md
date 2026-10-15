@@ -35,31 +35,11 @@ Commit by re-issuing without the flag and with the SAME `Idempotency-Key`
 (the dry run is not cached against the key). Preview first on any financial
 write; it is free.
 
-**Stage for approval** (`stage` query parameter in the endpoint entry,
-`x-stage-supported` in the spec). A write that agents stage over MCP can be
-staged over REST too: send it with `?stage=true` and nothing is committed;
-the answer is `202` with a pending operation (`pending_operation_id`,
-`status: "pending"`, `task_state: "working"`, the `preview` an approver sees).
-It commits only when approved: `POST /pending-operations/{id}/approve` (scope
-`pending_operations:approve`, `{"confirmed": true}` for `risk_level` high),
-or a person in the app; `POST /pending-operations/{id}/reject` discards it.
-Poll `GET /pending-operations/{id}` until `task_state` is terminal:
-`completed` (committed, `result` holds the outcome), `failed` (the approved
-commit did not go through) or `cancelled` (rejected, expired or superseded).
-`stage=true` on any other endpoint is `400 STAGE_NOT_SUPPORTED`; values other
-than `true`/`false` are `400`. With `dry_run=true` (or a test key) the staging
-is previewed and nothing is stored. Approving twice never commits twice: the
-second approval answers `409 PENDING_OPERATION_NOT_PENDING` with the
-operation as it stands.
-
 **Idempotency-Key.** Send a fresh UUID header on every POST/PATCH/DELETE;
 several endpoints reject writes without one (`400`). Replaying the same
 key+body returns the original response with the `Idempotent-Replayed: true`
 header; the same key with a different body returns `409 IDEMPOTENCY_KEY_REUSE`
-(24h window). A repeat sent while the first request with that key is still
-running returns `409 IDEMPOTENCY_KEY_IN_PROGRESS` with `Retry-After` and runs
-nothing: wait, then resend the identical request to get the first answer.
-Safe retry loop: keep the key, keep the body.
+(24h window). Safe retry loop: keep the key, keep the body.
 
 **Test keys are simulation-only.** With a `gnubok_sk_test_*` key, reads
 return real company data (responses carry `X-Gnubok-Mode: test`) and every

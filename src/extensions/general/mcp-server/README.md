@@ -34,6 +34,6 @@ For internal Anthropic API usage (the SDK is called from `lib/ai/provider.ts` an
 - `public-tools.ts`: lazy authentication (issue #1814). `ANONYMOUS_METHODS` (initialize, ping, tools/prompts/resources listing) and the three `PUBLIC_TOOLS` (`gnubok_search_tools`, `gnubok_list_skills`, `gnubok_load_skill`) answer without credentials, rate-limited per truncated IP; every other `tools/call` gets a transport-level 401 + `WWW-Authenticate` from `handleMcpRequest` in `server.ts`, which is the challenge clients turn into their Connect prompt
 - `tasks.ts`: MCP Tasks extension (`io.modelcontextprotocol/tasks`): durable handles for long-running tool calls, rows in `mcp_tasks` (service-role writes only)
 - `origin-guard.ts`: Origin-header validation on the Streamable HTTP endpoint (DNS-rebinding defence required by the MCP spec)
-- `src/lib/pending-operations/staging-pii-guard.ts` (core, shared with the v1 stage mode): refuses a plaintext personnummer in staged `pending_operations` params/preview, so every staging door inherits the encrypt-at-staging rule
+- `staging-pii-guard.ts`: refuses a plaintext personnummer in staged `pending_operations` params/preview, so every staging tool inherits the encrypt-at-staging rule
 - `tool-namespace.ts`: `?tool_namespace=accounted` handling (`accounted_*` aliases for the canonical `gnubok_*` ids)
 - `__tests__/`: strictness guards + per-tool coverage

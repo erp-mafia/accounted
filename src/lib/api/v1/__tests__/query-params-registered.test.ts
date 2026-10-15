@@ -10,8 +10,8 @@
  * `searchParams.get('x')` calls plus the shared helpers below) and compares
  * them with what the file's endpoints register.
  *
- * `dry_run` and `stage` are excluded: the withApiV1 wrapper reads them, and
- * the generator advertises each on the endpoints that honour it.
+ * `dry_run` is excluded: the withApiV1 wrapper reads it, and the generator
+ * advertises it on every dry-run-capable endpoint.
  */
 
 import { readFileSync } from 'node:fs'
@@ -32,7 +32,7 @@ const HELPER_PARAMS: Array<[RegExp, string[]]> = [
   [/\bparseDimensionFilterParams\(/, ['dim_no', 'dim_code']],
 ]
 
-const WRAPPER_PARAMS = new Set(['dry_run', 'stage'])
+const WRAPPER_PARAMS = new Set(['dry_run'])
 
 function routeFile(path: string): string {
   const segments = path.replace(/^\//, '').replace(/:([^/]+)/g, '[$1]')
@@ -100,15 +100,5 @@ describe('v1 query parameters are registered', () => {
       const hasDryRun = queryParameters(ep).some((p) => p.name === 'dry_run')
       expect(hasDryRun, `${ep.method} ${ep.path}`).toBe(ep.dryRunSupported)
     }
-  })
-
-  it('advertises stage exactly on the stage-capable endpoints, all of them writes', () => {
-    const staging = listEndpoints().filter((ep) => ep.stageSupported)
-    expect(staging.length).toBeGreaterThan(0)
-    for (const ep of listEndpoints()) {
-      const hasStage = queryParameters(ep).some((p) => p.name === 'stage')
-      expect(hasStage, `${ep.method} ${ep.path}`).toBe(ep.stageSupported === true)
-    }
-    for (const ep of staging) expect(ep.method, `${ep.method} ${ep.path}`).not.toBe('GET')
   })
 })

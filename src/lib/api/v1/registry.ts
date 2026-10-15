@@ -19,7 +19,6 @@
 import { z } from 'zod'
 import type { ZodTypeAny } from 'zod'
 import type { V1RequiredScope } from '@/lib/auth/scopes'
-import { PendingOperationView } from '@/lib/pending-operations/view'
 import { API_V1_VERSION } from './version'
 
 /**
@@ -168,15 +167,6 @@ export interface EndpointDefinition {
 
   /** True for write endpoints that accept ?dry_run=true. */
   dryRunSupported: boolean
-
-  /**
-   * True for writes that accept ?stage=true: instead of committing, the
-   * request creates a pending operation for approval (answered 202 with it)
-   * through POST /pending-operations/{id}/approve or the app. Set by
-   * v1OperationHandler for an operation write that stages over MCP
-   * (`mcp.stage`); withApiV1 refuses stage=true everywhere else.
-   */
-  stageSupported?: boolean
 
   /** Optional Zod schemas. */
   request?: {
@@ -451,14 +441,12 @@ interface OpenApiSpec {
   openapi: '3.1.0'
   info: { title: string; version: string; description: string }
   servers: Array<{ url: string }>
-  components: { schemas: Record<string, unknown>; securitySchemes: Record<string, unknown> }
+  components: { securitySchemes: Record<string, unknown> }
   security: Array<Record<string, unknown[]>>
   paths: Record<string, Record<string, unknown>>
 }
 
 const SCHEME_NAME = 'ApiKey'
-/** components.schemas entry for the 202 a staged write answers. */
-const STAGED_SCHEMA_NAME = 'StagedPendingOperation'
 
 export interface QueryParameter {
   name: string
@@ -490,16 +478,6 @@ export function queryParameters(def: EndpointDefinition): QueryParameter[] {
       name: 'dry_run',
       required: false,
       description: 'true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits.',
-      schema: { type: 'string' },
-    })
-  }
-  // withApiV1 reads ?stage on every request and refuses it where unsupported.
-  if (def.stageSupported && !params.some((p) => p.name === 'stage')) {
-    params.push({
-      name: 'stage',
-      required: false,
-      description:
-        'true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400.',
       schema: { type: 'string' },
     })
   }
@@ -537,16 +515,6 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
     const successResponse = def.response.success === NoBodyResponse
       ? { '204': { description: 'No Content' } }
       : { '200': { description: 'Success', content: successContent } }
-    // ?stage=true answers 202 with the pending operation instead (one shared
-    // component, so 75 writes do not each inline the same schema).
-    const stagedResponse = def.stageSupported
-      ? {
-          '202': {
-            description: 'Staged for approval (stage=true): the pending operation, task_state working. Nothing was committed.',
-            content: { 'application/json': { schema: { $ref: `#/components/schemas/${STAGED_SCHEMA_NAME}` } } },
-          },
-        }
-      : {}
 
     // Path parameters, derived from the `:param` pattern itself so every
     // templated segment is declared even though routes don't register a
@@ -618,7 +586,6 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
       'x-idempotent': def.idempotent,
       'x-reversible': def.reversible,
       'x-dry-run-supported': def.dryRunSupported,
-      ...(def.stageSupported ? { 'x-stage-supported': true } : {}),
       // 'authenticated' is not a scope: such an endpoint carries the global
       // bearer requirement and no x-required-scope.
       ...(def.scope && def.scope !== 'authenticated' ? { 'x-required-scope': def.scope } : {}),
@@ -626,7 +593,6 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
       ...(requestBody ? { requestBody } : {}),
       responses: {
         ...successResponse,
-        ...stagedResponse,
         '400': { description: 'Validation error', $ref: '#/components/responses/Error' },
         '401': { description: 'Unauthorized', $ref: '#/components/responses/Error' },
         '403': { description: 'Insufficient scope', $ref: '#/components/responses/Error' },
@@ -652,9 +618,6 @@ export function generateOpenApiSpec(serverUrl: string): OpenApiSpec {
     },
     servers: [{ url: serverUrl }],
     components: {
-      schemas: {
-        [STAGED_SCHEMA_NAME]: zodToJsonSchema(dataEnvelope(PendingOperationView)),
-      },
       securitySchemes: {
         [SCHEME_NAME]: {
           type: 'http',

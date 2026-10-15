@@ -271,9 +271,7 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // its own and embedded in the payment order list of
 // app/api/payments/orders/route.ts. Each MR fitted alone; together they are
 // one over, so the ceiling rises by exactly that one site.
-// 433 (2026-10-15): +1 for the v1 pending-operations list's keyset cursor,
-// the same (created_at, id) .or() predicate every v1 list builds at runtime.
-const UNRESOLVED_CEILING = 433
+const UNRESOLVED_CEILING = 432
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

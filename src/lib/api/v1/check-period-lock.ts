@@ -23,7 +23,7 @@
  * helper is for ergonomics, not security.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { resolvePeriodLockForDate } from '@/lib/core/bookkeeping/period-status'
+import { resolvePeriodLockForDate } from '@/lib/core/bookkeeping/period-service'
 
 export interface PeriodLockVerdict {
   locked: boolean

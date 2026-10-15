@@ -490,7 +490,6 @@ For companies with defer_invoice_booking=true (Registrera men bokför inte): :se
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
-| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Response `200`:
 ```ts
@@ -558,7 +557,6 @@ Sets status cancelled on a quote (document_type=quote) or a proforma (document_t
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
-| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Response `200`:
 ```ts
@@ -1253,7 +1251,6 @@ Builds the BIS Billing 3 UBL document, stages it as a delivery (retained with th
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
-| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Response `200`:
 ```ts
@@ -1344,7 +1341,6 @@ The bulk Bokför of the invoice list. Per invoice id (at most 200, duplicates pr
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
-| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
 
 Request body:
 ```ts

@@ -39,7 +39,6 @@ import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-key
 import { POST as undoBank } from '../bank/[id]/undo/route'
 import { POST as undoSie } from '../sie/[id]/undo/route'
 import { POST as resumeSie } from '../sie/[id]/resume/route'
-import { isIdempotencyClaim } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -85,7 +84,7 @@ const BOOKS = new Set(['transactions', 'bank_file_imports', 'sie_imports', 'jour
 const READ_ONLY_RPCS = new Set(['sie_undo_lock_refusal'])
 const wrote = (client: ReturnType<typeof makeClient>) =>
   client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) ||
-    (c.method === 'rpc' && !READ_ONLY_RPCS.has(String(c.args[0])) && !isIdempotencyClaim(c)))
+    (c.method === 'rpc' && !READ_ONLY_RPCS.has(String(c.args[0]))))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const IMPORT_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'

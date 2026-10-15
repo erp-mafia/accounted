@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 335 endpoints.
+  pagination, scopes), and all 331 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -100,31 +100,11 @@ Commit by re-issuing without the flag and with the SAME `Idempotency-Key`
 (the dry run is not cached against the key). Preview first on any financial
 write; it is free.
 
-**Stage for approval** (`stage` query parameter in the endpoint entry,
-`x-stage-supported` in the spec). A write that agents stage over MCP can be
-staged over REST too: send it with `?stage=true` and nothing is committed;
-the answer is `202` with a pending operation (`pending_operation_id`,
-`status: "pending"`, `task_state: "working"`, the `preview` an approver sees).
-It commits only when approved: `POST /pending-operations/{id}/approve` (scope
-`pending_operations:approve`, `{"confirmed": true}` for `risk_level` high),
-or a person in the app; `POST /pending-operations/{id}/reject` discards it.
-Poll `GET /pending-operations/{id}` until `task_state` is terminal:
-`completed` (committed, `result` holds the outcome), `failed` (the approved
-commit did not go through) or `cancelled` (rejected, expired or superseded).
-`stage=true` on any other endpoint is `400 STAGE_NOT_SUPPORTED`; values other
-than `true`/`false` are `400`. With `dry_run=true` (or a test key) the staging
-is previewed and nothing is stored. Approving twice never commits twice: the
-second approval answers `409 PENDING_OPERATION_NOT_PENDING` with the
-operation as it stands.
-
 **Idempotency-Key.** Send a fresh UUID header on every POST/PATCH/DELETE;
 several endpoints reject writes without one (`400`). Replaying the same
 key+body returns the original response with the `Idempotent-Replayed: true`
 header; the same key with a different body returns `409 IDEMPOTENCY_KEY_REUSE`
-(24h window). A repeat sent while the first request with that key is still
-running returns `409 IDEMPOTENCY_KEY_IN_PROGRESS` with `Retry-After` and runs
-nothing: wait, then resend the identical request to get the first answer.
-Safe retry loop: keep the key, keep the body.
+(24h window). Safe retry loop: keep the key, keep the body.
 
 **Test keys are simulation-only.** With a `gnubok_sk_test_*` key, reads
 return real company data (responses carry `X-Gnubok-Mode: test`) and every
@@ -172,7 +152,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 335 operations. Paths are shown without
+API version `2026-05-12`, 331 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (12)
@@ -577,17 +557,6 @@ GET /companies/{companyId}/assets/{id} : Get one fixed asset [scope:reports:read
 PATCH /companies/{companyId}/assets/{id} : Partially update a fixed asset [scope:bookkeeping:write risk:low idempotent dry-run reversible]
 DELETE /companies/{companyId}/assets/{id} : Delete an asset that never reached the books [scope:bookkeeping:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/assets/{id}/dispose : Dispose a fixed asset and post the avyttring voucher [scope:bookkeeping:write risk:medium idempotent dry-run reversible]
-```
-
-### Pending operations (approvals) (4)
-
-Full detail: [references/pending-operations.md](references/pending-operations.md)
-
-```text
-GET /companies/{companyId}/pending-operations : List pending operations (staged writes waiting for approval) [scope:pending_operations:read risk:low idempotent]
-GET /companies/{companyId}/pending-operations/{id} : Read one pending operation and its outcome [scope:pending_operations:read risk:low idempotent]
-POST /companies/{companyId}/pending-operations/{id}/approve : Approve a pending operation: commit it and answer the outcome [scope:pending_operations:approve risk:high idempotent]
-POST /companies/{companyId}/pending-operations/{id}/reject : Reject a pending operation without committing it [scope:pending_operations:approve risk:low idempotent]
 ```
 
 ### Webhooks (10)

@@ -127,16 +127,6 @@ const GENERIC: Record<string, StructuredErrorEntry> = {
         'Use a fresh UUID for a new operation, or send the original request body to replay.',
     },
   },
-  IDEMPOTENCY_KEY_IN_PROGRESS: {
-    httpStatus: 409,
-    message_sv: 'En begäran med samma idempotensnyckel pågår fortfarande. Försök igen om en liten stund.',
-    message_en: 'A request with the same idempotency key and body is still in progress.',
-    retryable: true,
-    remediation: {
-      description:
-        'The first request with this key is still running. Retry the identical request with the same key after Retry-After seconds: once the first one has finished, the retry returns its response without writing again. Do not switch to a fresh key, which would run the write a second time.',
-    },
-  },
   INSUFFICIENT_SCOPE: {
     httpStatus: 403,
     message_sv: 'API-nyckeln saknar behörighet för denna åtgärd.',
@@ -8495,64 +8485,6 @@ const PAYMENT_SIGNING_LINKS: Record<string, StructuredErrorEntry> = {
   },
 }
 
-// ─────────────────────────────────────────────────────────────────
-// Pending operations: the v1 REST approval door and the stage mode
-// ─────────────────────────────────────────────────────────────────
-
-const PENDING_OPERATIONS: Record<string, StructuredErrorEntry> = {
-  PENDING_OPERATION_NOT_FOUND: {
-    httpStatus: 404,
-    message_sv: 'Åtgärden som väntar på godkännande hittades inte.',
-    message_en: 'Pending operation not found in this company.',
-    remediation: {
-      description: "List the company's pending operations with GET /pending-operations and use a pending_operation_id from it.",
-    },
-  },
-  // Approving or rejecting an operation that is no longer pending. The
-  // atomic claim in commitPendingOperation is what makes a second approval
-  // land here instead of committing again.
-  PENDING_OPERATION_NOT_PENDING: {
-    httpStatus: 409,
-    message_sv: 'Åtgärden är redan hanterad och kan inte godkännas eller avvisas igen.',
-    message_en: 'The pending operation is already resolved or being committed: it cannot be approved or rejected again. Nothing was done.',
-    remediation: {
-      description:
-        'Read details.pending_operation. task_state completed: it was committed and result holds the outcome. failed or cancelled: it was not committed. working with status committing: another approval is running it, so poll GET /pending-operations/{id}. Do not stage it again to retry.',
-    },
-  },
-  PENDING_OPERATION_CONFIRMATION_REQUIRED: {
-    httpStatus: 400,
-    message_sv: 'Åtgärden går inte att ångra (BFL 5 kap. 5 §): bekräfta godkännandet uttryckligen.',
-    message_en:
-      'The operation is risk_level high and cannot be undone (BFL 5 kap. 5 §): approve it with confirmed=true once a person has acknowledged that.',
-    remediation: {
-      description:
-        'Show the preview and its irreversibility to the person approving, then repeat the approve with the body {"confirmed": true} and a new Idempotency-Key.',
-    },
-  },
-  // The approval was accepted and the commit ran, but refused or failed
-  // without a more specific registered code.
-  PENDING_OPERATION_COMMIT_FAILED: {
-    httpStatus: 422,
-    message_sv: 'Åtgärden godkändes men kunde inte genomföras.',
-    message_en: 'The approval was accepted but the commit refused or failed.',
-    remediation: {
-      description:
-        'details.reason says why and details.pending_operation where it landed: status pending means nothing was consumed and it can be approved again once the cause is fixed; rejected or failed_partial means it is resolved (failed_partial posted result.posted_ids first: correct that with a storno).',
-    },
-  },
-  STAGE_NOT_SUPPORTED: {
-    httpStatus: 400,
-    message_sv: 'Den här åtgärden kan inte läggas fram för godkännande.',
-    message_en:
-      'This endpoint does not stage: stage=true is accepted only on the writes that stage for approval (x-stage-supported in the OpenAPI spec).',
-    remediation: {
-      description:
-        'Send the request without stage=true to commit it directly, or stage through an endpoint that lists the stage query parameter.',
-    },
-  },
-}
-
 const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...GENERIC,
   ...DB_CONFLICTS,
@@ -8611,7 +8543,6 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...COLLECTIONS,
   ...OPEN_BANKING,
   ...PAYMENT_SIGNING_LINKS,
-  ...PENDING_OPERATIONS,
 }
 
 export function getErrorEntry(code: string): StructuredErrorEntry | undefined {

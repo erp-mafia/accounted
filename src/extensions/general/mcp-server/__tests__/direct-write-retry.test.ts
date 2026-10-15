@@ -25,7 +25,6 @@ vi.mock('@/lib/company/create-company', () => ({
 import { createIdempotencyKeysFake } from '@/tests/idempotency-fake'
 import { tools, isStagingTool, type McpTool } from '../server'
 import { IDEMPOTENCY_KEY_PROPERTY, withRetryKey } from '../retry-key'
-import { toToolError } from '../tool-result'
 
 const DIRECT_WRITES_WITHOUT_KEY: Record<string, string> = {
   gnubok_stage_tool:
@@ -121,7 +120,7 @@ describe('withRetryKey', () => {
       options,
     )
     const idempotency = createIdempotencyKeysFake()
-    const supabase = { from: () => idempotency.table(), rpc: idempotency.rpc } as never
+    const supabase = { from: () => idempotency.table() } as never
     const call = (args: Record<string, unknown>, companyId = COMPANY) => tool.execute(args, companyId, 'user-1', supabase)
     return { tool, execute, idempotency, call }
   }
@@ -179,52 +178,6 @@ describe('withRetryKey', () => {
     await call({ amount: 100, idempotency_key: 'k1' })
     expect(execute).toHaveBeenCalledTimes(2)
   })
-
-  it('answers a resend that arrives while the first call still runs with IDEMPOTENCY_KEY_IN_PROGRESS, not a second write', async () => {
-    const { execute, call } = fakeTool()
-    let finishFirst: () => void = () => {}
-    execute.mockImplementationOnce(
-      (args: Record<string, unknown>) =>
-        new Promise((resolve) => {
-          finishFirst = () => resolve({ created_id: 'row-1', echoed: args })
-        }),
-    )
-
-    const first = call({ amount: 100, idempotency_key: 'k1' })
-    await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1))
-    await expect(call({ amount: 100, idempotency_key: 'k1' })).rejects.toMatchObject({
-      code: 'IDEMPOTENCY_KEY_IN_PROGRESS',
-      retryAfterSeconds: 2,
-    })
-
-    finishFirst()
-    const answer = (await first) as Record<string, unknown>
-    expect(await call({ amount: 100, idempotency_key: 'k1' })).toEqual({ ...answer, idempotency_replay: true })
-    expect(execute).toHaveBeenCalledTimes(1)
-  })
-
-  it('surfaces the in-progress refusal in the structured tool-error shape, marked retryable', async () => {
-    const { execute, call } = fakeTool()
-    execute.mockImplementationOnce(() => new Promise(() => {}))
-    void call({ amount: 100, idempotency_key: 'k1' })
-    await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1))
-
-    const refusal = await call({ amount: 100, idempotency_key: 'k1' }).catch((err: unknown) => err)
-    expect(toToolError(refusal).error).toMatchObject({ code: 'IDEMPOTENCY_KEY_IN_PROGRESS', retryable: true })
-  })
-
-  it('lets a new call take over a claim whose first call never finished, once it is past the claim TTL', async () => {
-    const { execute, call, idempotency } = fakeTool()
-    execute.mockImplementationOnce(() => new Promise(() => {}))
-    void call({ amount: 100, idempotency_key: 'k1' })
-    await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1))
-
-    idempotency.expireAll()
-    await call({ amount: 100, idempotency_key: 'k1' })
-    expect(execute).toHaveBeenCalledTimes(2)
-    expect(idempotency.rows).toHaveLength(1)
-    expect(idempotency.rows[0]).toMatchObject({ key: 'k1', state: 'completed', response_status: 'success' })
-  })
 })
 
 describe('gnubok_create_company with idempotency_key', () => {
@@ -250,9 +203,7 @@ describe('gnubok_create_company with idempotency_key', () => {
       idempotency,
       supabase: {
         from: vi.fn((table: string) => (table === 'idempotency_keys' ? idempotency.table() : team)),
-        rpc: vi.fn((fn: string, params: Record<string, unknown>) =>
-          fn === 'claim_idempotency_key' ? idempotency.rpc(fn, params) : Promise.resolve({ data: CREATED, error: null }),
-        ),
+        rpc: vi.fn().mockResolvedValue({ data: CREATED, error: null }),
       },
     }
   }

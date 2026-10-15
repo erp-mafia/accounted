@@ -20,13 +20,6 @@ import '@/app/api/v1/api-key/route'
 // Phase 4 PR-2 (foundation): async operations polling endpoint.
 import '@/app/api/v1/operations/[id]/route'
 
-// Pending operations: the approval door for staged writes (an attest flow
-// outside Accounted approves over REST as it does over MCP).
-import '@/app/api/v1/companies/[companyId]/pending-operations/route'
-import '@/app/api/v1/companies/[companyId]/pending-operations/[id]/route'
-import '@/app/api/v1/companies/[companyId]/pending-operations/[id]/approve/route'
-import '@/app/api/v1/companies/[companyId]/pending-operations/[id]/reject/route'
-
 // Phase 4 PR-2: journal-entries primitives + voucher-gap-explanations.
 import '@/app/api/v1/companies/[companyId]/journal-entries/route'
 import '@/app/api/v1/companies/[companyId]/journal-entries/[id]/route'
