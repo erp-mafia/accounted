@@ -71,6 +71,7 @@ const RESOURCES: ResourceGroup[] = [
   { slug: 'peppol', label: 'Peppol', description: 'Peppol e-invoicing for the company: participant registration status, registering to receive, and requesting access. Sending an invoice over Peppol is on the invoices page.', matcher: (p) => /\/companies\/:companyId\/peppol(\/|$)/.test(p) },
   { slug: 'webhooks', label: 'Webhooks', description: 'Subscribe to events with HMAC-signed delivery, exponential retries, and dead-letter replay.', matcher: (p) => /\/webhooks|\/webhook-deliveries/.test(p) },
   { slug: 'operations', label: 'Operations', description: 'Poll long-running async operations (year-end closing, imports, currency revaluation).', matcher: (p) => /\/operations(\/|$)/.test(p) },
+  { slug: 'pending-operations', label: 'Pending operations', description: 'The approval door for staged writes: list and read pending operations with their status and task_state, approve one (commit it and get the outcome) or reject it. A write sent with ?stage=true waits here until it is decided.', matcher: (p) => /\/pending-operations(\/|$)/.test(p) },
   { slug: 'health', label: 'Health', description: 'Unauthenticated liveness check.', matcher: (p) => /^\/api\/v1\/health$/.test(p) },
   { slug: 'api-key', label: 'API key', description: 'What the calling key may do: its mode, scopes, and the companies it reaches with write access per company. Any valid key may call it.', matcher: (p) => /^\/api\/v1\/api-key$/.test(p) },
 ]
@@ -212,6 +213,7 @@ function renderEndpoint(ep: EndpointDefinition): string {
   flags.push(`**Idempotent:** ${ep.idempotent ? 'yes' : 'no'}`)
   flags.push(`**Reversible:** ${ep.reversible ? 'yes' : 'no'}`)
   flags.push(`**Dry-run supported:** ${ep.dryRunSupported ? 'yes' : 'no'}`)
+  if (ep.stageSupported) flags.push('**Stage for approval:** yes (`?stage=true`)')
   lines.push(flags.join(' · '))
   lines.push('')
   // The same schemas the OpenAPI spec publishes, as tables: before #2515 the

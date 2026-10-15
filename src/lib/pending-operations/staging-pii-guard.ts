@@ -8,9 +8,10 @@
  * store only `personnummer_encrypted` / `personnummer_last4` /
  * `personnummer_masked` (employees) or `personal_number_encrypted` /
  * `personal_number_masked` (customers).
- * This guard runs inside stagePendingOperation, so every current and FUTURE
- * staging tool inherits the rule: a tool that forgets to encrypt fails loudly
- * at staging instead of silently persisting PII.
+ * This guard runs inside the MCP server's stagePendingOperation and inside
+ * insertStagedOperation (./stage.ts, the v1 stage mode), so every current and
+ * FUTURE staging door inherits the rule: a tool that forgets to encrypt fails
+ * loudly at staging instead of silently persisting PII.
  *
  * Detection is key-based, not value-based: for enskild firma the org number
  * IS the owner's personnummer, so value-pattern matching would false-positive

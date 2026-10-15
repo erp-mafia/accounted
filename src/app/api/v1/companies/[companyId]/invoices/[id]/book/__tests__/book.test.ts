@@ -10,7 +10,7 @@
  * the real generator's lines and writes nothing.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { makeInvoice } from '@/tests/helpers'
+import { makeInvoice, isIdempotencyClaim } from '@/tests/helpers'
 
 beforeAll(() => {
   if (process.env.NODE_ENV !== 'test') throw new Error('NODE_ENV=test required')
@@ -101,7 +101,7 @@ const WRITES = new Set(['insert', 'update', 'upsert', 'delete'])
 /** Business tables only: withApiV1's own bookkeeping (idempotency, usage) is not the operation's. */
 const BOOKS = new Set(['invoices', 'journal_entries', 'journal_entry_lines', 'document_attachments'])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.method === 'rpc')
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.method === 'rpc' && !isIdempotencyClaim(c)))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const INV_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'

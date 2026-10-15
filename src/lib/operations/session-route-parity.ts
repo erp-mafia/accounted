@@ -577,10 +577,16 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'DELETE /api/salary/runs/:id/lines/:lineId': covered([`DELETE ${V}/salary-runs/:id/lines/:lineId`, 'gnubok_delete_payslip_line']),
 
   // ── Staged operations (Granskning) ─────────────────────────────────
-  'POST /api/pending-operations/:id/commit': covered(['gnubok_approve_pending_operation']),
-  'POST /api/pending-operations/:id/reject': covered(['gnubok_reject_pending_operation']),
-  'POST /api/pending-operations/bulk-commit': covered(['gnubok_approve_pending_operation'], 'one at a time'),
-  'POST /api/pending-operations/bulk-reject': covered(['gnubok_reject_pending_operation'], 'one at a time'),
+  'POST /api/pending-operations/:id/commit': covered([`POST ${V}/pending-operations/:id/approve`, 'gnubok_approve_pending_operation']),
+  'POST /api/pending-operations/:id/reject': covered([`POST ${V}/pending-operations/:id/reject`, 'gnubok_reject_pending_operation']),
+  'POST /api/pending-operations/bulk-commit': covered(
+    [`POST ${V}/pending-operations/:id/approve`, 'gnubok_approve_pending_operation'],
+    'one at a time',
+  ),
+  'POST /api/pending-operations/bulk-reject': covered(
+    [`POST ${V}/pending-operations/:id/reject`, 'gnubok_reject_pending_operation'],
+    'one at a time',
+  ),
   'PATCH /api/pending-operations/:id': gap('P3', 'edit a staged categorization before approval (reject and restage works)'),
   'PATCH /api/pending-operations/:id/items': uiOnly(
     'taking invoices out of the daily collections batch in the review dialog; only a person approves that batch, in the browser',

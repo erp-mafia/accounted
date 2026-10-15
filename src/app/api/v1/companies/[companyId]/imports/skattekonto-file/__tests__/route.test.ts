@@ -32,6 +32,7 @@ vi.mock('@/lib/entitlements/multi-user', async () => {
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { POST } from '../route'
+import { isIdempotencyClaim, routeRpcCalls } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -75,7 +76,7 @@ function makeClient(byTable: Record<string, TableResp | TableResp[]>) {
 const WRITES = new Set(['insert', 'update', 'upsert', 'delete'])
 const BOOKS = new Set(['skattekonto_file_imports', 'skattekonto_transactions', 'journal_entries'])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.method === 'rpc')
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.method === 'rpc' && !isIdempotencyClaim(c)))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const OWNER = { data: { company_id: COMPANY_ID, role: 'owner' }, error: null }
@@ -299,7 +300,7 @@ describe('POST /api/v1/companies/:companyId/imports/skattekonto-file', () => {
     expect(client.calls.some((c) => c.table === 'journal_entries')).toBe(false)
     // Only reads: the skattekonto account the first rows derive (PH 175),
     // never a committing RPC.
-    const rpcs = (client.rpc as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((c) => c[0])
+    const rpcs = routeRpcCalls(client.rpc as unknown as { mock: { calls: unknown[][] } }).map((c) => c[0])
     expect(rpcs.every((fn) => fn === 'company_skattekonto_account' || fn === 'derive_skattekonto_account')).toBe(true)
   })
 })

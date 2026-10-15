@@ -18,13 +18,9 @@ import {
   PaginationQueryShape,
 } from '@/lib/api/v1/pagination'
 import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/registry'
-import { v1IdempotentReplay, v1RequestHash, withApiV1 } from '@/lib/api/v1/with-api-v1'
+import { claimV1IdempotencyKey, v1RequestHash, withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
-import {
-  checkUserScopedIdempotencyKey,
-  IdempotencyKeyReuseError,
-  storeIdempotencyResponse,
-} from '@/lib/api/idempotency'
+import type { IdempotencyClaim } from '@/lib/api/idempotency'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { createCompanyCore } from '@/lib/company/create-company'
@@ -213,47 +209,50 @@ export const POST = withApiV1('companies.create', async (request, ctx) => {
     })
   }
 
-  // Idempotency-Key replay. The wrapper's cache is keyed by the URL
-  // :companyId, which this route does not have, so it replays here instead:
-  // per (user, key) under the company_create scope, stored under the company
+  // Idempotency-Key. The wrapper's claim is keyed by the URL :companyId,
+  // which this route does not have, so it claims here instead: per
+  // (user, key) under the company_create scope, completed under the company
   // the first call created. The key is optional for compatibility (the route
-  // documented it as ignored until 2026-10-15): with it a retry can never
-  // create a second company; without it nothing is checked or cached.
-  // A dry run returned above and is never cached.
+  // documented it as ignored until 2026-10-15): with it a retry, or a repeat
+  // sent while the first call still runs (409 IDEMPOTENCY_KEY_IN_PROGRESS),
+  // can never create a second company; without it nothing is claimed or
+  // cached. A dry run returned above and is never cached.
   const idempotencyKey = ctx.idempotencyKey ?? null
-  const requestHash = v1RequestHash(request, rawBody, false)
+  let claim: IdempotencyClaim | null = null
   if (idempotencyKey) {
-    try {
-      const hit = await checkUserScopedIdempotencyKey(
-        ctx.supabase,
-        ctx.userId,
-        'company_create',
-        idempotencyKey,
-        requestHash,
-      )
-      if (hit) {
-        ctx.log.info('idempotent replay', { idempotencyKey })
-        return v1IdempotentReplay(hit, ctx.requestId)
-      }
-    } catch (err) {
-      if (!(err instanceof IdempotencyKeyReuseError)) throw err
-      return v1ErrorResponseFromCode('IDEMPOTENCY_KEY_REUSE', ctx.log, {
-        requestId: ctx.requestId,
-        details: { key: idempotencyKey },
-      })
-    }
+    const claimed = await claimV1IdempotencyKey(
+      ctx.supabase,
+      {
+        userId: ctx.userId,
+        companyId: null,
+        scope: 'company_create',
+        key: idempotencyKey,
+        requestHash: v1RequestHash(request, rawBody, false),
+      },
+      ctx,
+    )
+    if ('response' in claimed) return claimed.response
+    claim = claimed.claim
   }
 
-  const result = await createCompanyCore(ctx.supabase, plan.input, () =>
-    ctx.supabase.rpc('create_company_for_user', {
-      p_user_id: ctx.userId,
-      p_name: setup.name,
-      p_entity_type: setup.entity_type,
-      p_team_id: teamId,
-    }),
-  )
+  let result: Awaited<ReturnType<typeof createCompanyCore>>
+  try {
+    result = await createCompanyCore(ctx.supabase, plan.input, () =>
+      ctx.supabase.rpc('create_company_for_user', {
+        p_user_id: ctx.userId,
+        p_name: setup.name,
+        p_entity_type: setup.entity_type,
+        p_team_id: teamId,
+      }),
+    )
+  } catch (err) {
+    // A failure is never cached: a retry with the same key runs again.
+    await claim?.release()
+    throw err
+  }
 
   if (result.error !== undefined) {
+    await claim?.release()
     if (result.error === 'org_number_invalid') {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
@@ -270,18 +269,9 @@ export const POST = withApiV1('companies.create', async (request, ctx) => {
   const response = created(shape(result.companyId), { requestId: ctx.requestId })
   // Best-effort like the wrapper's cache: the company exists either way, and
   // a failed write only weakens a later retry (logged inside).
-  if (idempotencyKey) {
-    await storeIdempotencyResponse(
-      ctx.supabase,
-      ctx.userId,
-      result.companyId,
-      idempotencyKey,
-      requestHash,
-      'success',
-      (await response.clone().json()) as Record<string, unknown>,
-      'company_create',
-    )
-  }
+  await claim?.complete('success', (await response.clone().json()) as Record<string, unknown>, {
+    companyId: result.companyId,
+  })
   return response
 }, { requireIdempotencyKey: false, handlerIdempotency: true })
 

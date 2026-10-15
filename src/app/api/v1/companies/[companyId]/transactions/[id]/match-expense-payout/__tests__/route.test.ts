@@ -31,6 +31,7 @@ vi.mock('@/lib/entitlements/multi-user', async () => {
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { eventBus } from '@/lib/events/bus'
 import { POST as matchPayout } from '../route'
+import { isIdempotencyClaim, routeRpcCalls } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -73,7 +74,7 @@ function makeClient(byTable: Record<string, TableResp | TableResp[]>) {
 const WRITES = new Set(['insert', 'update', 'upsert', 'delete'])
 const BOOKS = new Set(['expense_claims', 'expense_payout_batches', 'journal_entries', 'journal_entry_lines', 'transactions'])
 const wrote = (client: ReturnType<typeof makeClient>) =>
-  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || c.method === 'rpc')
+  client.calls.some((c) => (BOOKS.has(c.table) && WRITES.has(c.method)) || (c.method === 'rpc' && !isIdempotencyClaim(c)))
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const TX_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -249,7 +250,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-expense-payou
       { account_number: '2893', debit_amount: 1596, credit_amount: 0 },
       { account_number: '1920', debit_amount: 0, credit_amount: 1596 },
     ])
-    expect(client.rpc).not.toHaveBeenCalled()
+    expect(routeRpcCalls(client.rpc)).toEqual([])
     expect(wrote(client)).toBe(false)
     expect(emit).not.toHaveBeenCalled()
   })
