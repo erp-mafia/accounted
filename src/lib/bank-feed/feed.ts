@@ -124,17 +124,31 @@ export interface BankHistoryLimits {
 
 export const DEFAULT_BANK_HISTORY_LIMITS: BankHistoryLimits = { maxDays: DEFAULT_TRANSACTION_HISTORY_MAX_DAYS, extendedWindowMinutes: DEFAULT_EXTENDED_HISTORY_WINDOW_MINUTES }
 
-/** The bank's history limits from the adapter's cached details, an ordinary read never past UNATTENDED_MAX_LOOKBACK_DAYS; the defaults when the bank or the adapter cannot say. */
+/**
+ * Banks whose extended history closes sooner than the details or the default
+ * say, by BIC: Länsförsäkringar serves past 90 days for 20 minutes after the
+ * consent is created (Open Payments support, 2026-10-15). The shorter one
+ * counts, so a first import made later asks for the ordinary window at once
+ * instead of being refused first.
+ */
+export const EXTENDED_HISTORY_WINDOW_CAP_MINUTES: Readonly<Record<string, number>> = { ELLFSESS: 20 }
+
+function capExtendedWindow(bic: string, limits: BankHistoryLimits): BankHistoryLimits {
+  const cap = EXTENDED_HISTORY_WINDOW_CAP_MINUTES[bic.toUpperCase()]
+  return cap === undefined ? limits : { ...limits, extendedWindowMinutes: Math.min(limits.extendedWindowMinutes, cap) }
+}
+
+/** The bank's history limits from the adapter's cached details, an ordinary read never past UNATTENDED_MAX_LOOKBACK_DAYS and the extended window never past the bank's known cap; the defaults when the bank or the adapter cannot say. */
 export async function bankHistoryLimits(connect: BankFeedConnect, companyId: string, bic: string): Promise<BankHistoryLimits> {
-  if (typeof connect.getBankDetails !== 'function') return DEFAULT_BANK_HISTORY_LIMITS
+  if (typeof connect.getBankDetails !== 'function') return capExtendedWindow(bic, DEFAULT_BANK_HISTORY_LIMITS)
   try {
     const bank = await connect.getBankDetails(companyId, bic)
-    return {
+    return capExtendedWindow(bic, {
       maxDays: Math.min(UNATTENDED_MAX_LOOKBACK_DAYS, bank.transactionHistoryMaxDays && bank.transactionHistoryMaxDays > 0 ? bank.transactionHistoryMaxDays : DEFAULT_TRANSACTION_HISTORY_MAX_DAYS),
       extendedWindowMinutes: bank.extendedTransactionHistoryAvailableWindowMinutes ?? DEFAULT_EXTENDED_HISTORY_WINDOW_MINUTES,
-    }
+    })
   } catch {
-    return DEFAULT_BANK_HISTORY_LIMITS
+    return capExtendedWindow(bic, DEFAULT_BANK_HISTORY_LIMITS)
   }
 }
 

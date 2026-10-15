@@ -141,6 +141,21 @@ describe('bank history limits (Länsförsäkringar)', () => {
     expect(incrementalWindow(stale, NOW, (await bankHistoryLimits(lf, 'co-1', 'ELLFSESS')).maxDays).lookbackDays).toBe(89)
   })
 
+  it('closes the extended window after 20 minutes, whatever the details or the default say', async () => {
+    const lf = connectWithBank({ transactionHistoryMaxDays: 180, extendedTransactionHistoryAvailableWindowMinutes: 60 })
+    expect((await bankHistoryLimits(lf, 'co-1', 'ELLFSESS')).extendedWindowMinutes).toBe(20)
+    expect((await bankHistoryLimits(connectWithBank({ transactionHistoryMaxDays: 180, extendedTransactionHistoryAvailableWindowMinutes: null }), 'co-1', 'ELLFSESS')).extendedWindowMinutes).toBe(20)
+    expect((await bankHistoryLimits({ getBankDetails: vi.fn().mockRejectedValue(new Error('down')) } as unknown as BankFeedConnect, 'co-1', 'ELLFSESS')).extendedWindowMinutes).toBe(20)
+    // A shorter window the bank lists stands.
+    expect((await bankHistoryLimits(connectWithBank({ transactionHistoryMaxDays: 180, extendedTransactionHistoryAvailableWindowMinutes: 10 }), 'co-1', 'ellfsess')).extendedWindowMinutes).toBe(10)
+    // Swedbank keeps its hour.
+    expect((await bankHistoryLimits(connectWithBank({ transactionHistoryMaxDays: 88, extendedTransactionHistoryAvailableWindowMinutes: 60 }), 'co-1', 'SWEDSESS')).extendedWindowMinutes).toBe(60)
+    // 25 minutes after the consent: the first import asks for the ordinary window.
+    const limits = await bankHistoryLimits(lf, 'co-1', 'ELLFSESS')
+    expect(extendedHistoryWindowOpen({ created_at: new Date(NOW - 25 * 60_000).toISOString() }, limits.extendedWindowMinutes, NOW)).toBe(false)
+    expect(extendedHistoryWindowOpen({ created_at: new Date(NOW - 15 * 60_000).toISOString() }, limits.extendedWindowMinutes, NOW)).toBe(true)
+  })
+
   it('keeps the first import three days off the extended edge the bank lists (395 days refused as past 13 months)', async () => {
     const lf = connectWithBank({ transactionHistoryMaxDays: 180, extendedTransactionHistoryAvailableWindowMinutes: 60 })
     const { supabase } = stub({
