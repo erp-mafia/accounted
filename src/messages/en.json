@@ -8849,6 +8849,7 @@
     "bh_col_time": "Time",
     "bh_col_event": "Event",
     "bh_col_actor": "Performed by",
+    "bh_verified_by_database": "Verified by the database",
     "bh_col_details": "Details",
     "bh_filter_all": "All",
     "bh_filter_aria": "Filter events by category",

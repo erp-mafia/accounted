@@ -1,0 +1,1 @@
+[2026-10-16] Commits record the verified principal beside the asserted actor, record-only: committed_auth_role (database role of the request) and committed_auth_uid (auth.uid()), stamped at commit, older rows NULL: the asserted actor is caller-supplied and nothing showed what the database checked.

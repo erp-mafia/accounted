@@ -68,6 +68,7 @@ import {
   type BehandlingshistorikEvent,
   type BehandlingshistorikReport,
   type BehandlingshistorikSource,
+  type BehandlingshistorikVerifiedPrincipal,
 } from '@/lib/reports/behandlingshistorik-types'
 
 export {
@@ -79,6 +80,7 @@ export {
   type BehandlingshistorikEvent,
   type BehandlingshistorikReport,
   type BehandlingshistorikSource,
+  type BehandlingshistorikVerifiedPrincipal,
 } from '@/lib/reports/behandlingshistorik-types'
 
 export interface BehandlingshistorikParams {
@@ -131,6 +133,12 @@ interface EntryRow {
   reverses_id: string | null
   correction_of_id: string | null
   import_batch_id?: string | null
+  /**
+   * The principal the database verified at commit (20261016110000). NULL on
+   * verifikat posted before it; absent when the database predates it.
+   */
+  committed_auth_role?: string | null
+  committed_auth_uid?: string | null
 }
 
 interface RattelseRow {
@@ -231,8 +239,12 @@ interface RawActor {
   actor_label: string | null
 }
 
-export interface RawBehandlingshistorikEvent extends Omit<BehandlingshistorikEvent, 'actor'> {
+/** Verified principal before its user label is resolved. */
+type RawVerifiedPrincipal = Omit<BehandlingshistorikVerifiedPrincipal, 'label'>
+
+export interface RawBehandlingshistorikEvent extends Omit<BehandlingshistorikEvent, 'actor' | 'verified'> {
   actor: RawActor
+  verified?: RawVerifiedPrincipal
 }
 
 // ============================================================
@@ -680,18 +692,48 @@ export function formatActorLabel(actor: RawActor, userLabels: Map<string, string
   }
 }
 
+/**
+ * Label for the principal the database verified at commit. The role is what
+ * the request ran as (20261016110000): a signed-in user's JWT, the
+ * application server's service key, or a direct database connection.
+ */
+export function formatVerifiedLabel(verified: RawVerifiedPrincipal, userLabels: Map<string, string>): string {
+  switch (verified.role) {
+    case 'authenticated': {
+      if (!verified.user_id) return 'Inloggad användare (inget användar-id)'
+      return `Inloggad användare: ${userLabels.get(verified.user_id) ?? `Användare ${verified.user_id.slice(0, 8)}`}`
+    }
+    case 'service_role':
+      return 'Applikationsservern (service_role)'
+    case 'anon':
+      return 'Ej inloggad (anon)'
+    default:
+      return `Direkt databasanslutning (${verified.role})`
+  }
+}
+
+/** The "Utförd av" cell of the exports: the actor, and the verified principal when the event has one. */
+export function actorWithVerified(event: Pick<BehandlingshistorikEvent, 'actor' | 'verified'>): string {
+  return event.verified
+    ? `${event.actor.label} (verifierat av databasen: ${event.verified.label})`
+    : event.actor.label
+}
+
 function finaliseEvent(
   raw: RawBehandlingshistorikEvent,
   userLabels: Map<string, string>,
 ): BehandlingshistorikEvent {
-  return {
-    ...raw,
+  const { verified, ...rest } = raw
+  const event: BehandlingshistorikEvent = {
+    ...rest,
     actor: {
       type: raw.actor.type,
       user_id: raw.actor.user_id,
       label: formatActorLabel(raw.actor, userLabels),
     },
   }
+  if (verified) event.verified = { ...verified, label: formatVerifiedLabel(verified, userLabels) }
+  return event
 }
 
 // ============================================================
@@ -730,7 +772,7 @@ export function commitEventFromEntry(entry: EntryRow): RawBehandlingshistorikEve
     : entry.commit_method === 'api_key'
       ? 'api_key'
       : 'user'
-  return {
+  const event: RawBehandlingshistorikEvent = {
     id: `entry:${entry.id}`,
     occurred_at: toIso(entry.committed_at)!,
     category: 'verifikation',
@@ -742,6 +784,12 @@ export function commitEventFromEntry(entry: EntryRow): RawBehandlingshistorikEve
     source: 'journal_entries',
     count: 1,
   }
+  // The database's own stamp, next to the asserted actor. Verifikat posted
+  // before 20261016110000 have none and read exactly as before.
+  if (entry.committed_auth_role) {
+    event.verified = { role: entry.committed_auth_role, user_id: entry.committed_auth_uid ?? null }
+  }
+  return event
 }
 
 function describeLine(line: unknown): string {
@@ -2280,18 +2328,39 @@ async function fetchCompany(supabase: SupabaseClient, companyId: string): Promis
   return { name: row?.company_name ?? '', org_number: row?.org_number ?? null }
 }
 
+/** Postgres: the column does not exist. */
+const UNDEFINED_COLUMN = '42703'
+
 async function fetchPeriodEntries(supabase: SupabaseClient, companyId: string, periodId: string): Promise<EntryRow[]> {
-  return fetchAllRows<EntryRow>(({ from, to }) =>
-    supabase
-      .from('journal_entries')
-      .select(
-        'id, voucher_series, voucher_number, entry_date, description, source_type, status, committed_at, user_id, committed_actor_type, committed_actor_label, commit_method, reverses_id, correction_of_id, import_batch_id',
-      )
-      .eq('company_id', companyId)
-      .eq('fiscal_period_id', periodId)
-      .order('id', { ascending: true })
-      .range(from, to),
-  )
+  try {
+    return await fetchAllRows<EntryRow>(({ from, to }) =>
+      supabase
+        .from('journal_entries')
+        .select(
+          'id, voucher_series, voucher_number, entry_date, description, source_type, status, committed_at, user_id, committed_actor_type, committed_actor_label, commit_method, reverses_id, correction_of_id, import_batch_id, committed_auth_role, committed_auth_uid',
+        )
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', periodId)
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+  } catch (err) {
+    // A deploy can reach a database that migration 20261016110000 has not
+    // reached yet (CI applies migrations after the merge). Read without the
+    // verified principal then: the report shows the asserted actor alone.
+    if ((err as { code?: string } | null)?.code !== UNDEFINED_COLUMN) throw err
+    return fetchAllRows<EntryRow>(({ from, to }) =>
+      supabase
+        .from('journal_entries')
+        .select(
+          'id, voucher_series, voucher_number, entry_date, description, source_type, status, committed_at, user_id, committed_actor_type, committed_actor_label, commit_method, reverses_id, correction_of_id, import_batch_id',
+        )
+        .eq('company_id', companyId)
+        .eq('fiscal_period_id', periodId)
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+  }
 }
 
 async function fetchAuditRows(
@@ -2753,7 +2822,9 @@ export async function generateBehandlingshistorik(
     events = events.filter((e) => wanted.has(e.category))
   }
 
-  const userIds = [...new Set(events.map((e) => e.actor.user_id).filter((id): id is string => !!id))]
+  const userIds = [
+    ...new Set(events.flatMap((e) => [e.actor.user_id, e.verified?.user_id]).filter((id): id is string => !!id)),
+  ]
   const userLabels = options.resolveUserLabels && userIds.length > 0
     ? await options.resolveUserLabels(userIds)
     : new Map<string, string>()
@@ -2819,7 +2890,7 @@ export function behandlingshistorikSheetSpecs(report: BehandlingshistorikReport)
       BEHANDLINGSHISTORIK_CATEGORY_LABELS[e.category],
       e.event,
       e.object,
-      e.actor.label,
+      actorWithVerified(e),
       e.details.join(' | '),
       e.code,
       e.count,

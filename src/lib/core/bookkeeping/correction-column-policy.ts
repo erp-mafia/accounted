@@ -68,6 +68,10 @@ export const CORRECTION_COLUMN_POLICY = {
   commit_method: 'database', // derived from that actor (defaultCommitMethod)
   committed_actor_type: 'database', // the user, key, OAuth client or cron job correcting
   committed_actor_label: 'database',
+  // The principal the database verified for THIS commit, never the
+  // original's: stamp_journal_entry_verified_principal (20261016110000).
+  committed_auth_role: 'database',
+  committed_auth_uid: 'database',
 
   reverses_id: 'left', // only a storno reverses
   reversed_by_id: 'left', // each verifikat's own link to its storno
